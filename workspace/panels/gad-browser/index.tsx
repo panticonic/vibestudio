@@ -16,15 +16,24 @@ import {
   Table,
   Tabs,
   Text,
+  TextField,
   Tooltip,
   Theme,
 } from "@radix-ui/themes";
 import {
+  ActivityLogIcon,
+  CheckCircledIcon,
+  ChevronDownIcon,
+  ChevronRightIcon,
   Cross2Icon,
   DotsHorizontalIcon,
   DownloadIcon,
+  ExclamationTriangleIcon,
   ExternalLinkIcon,
+  FileIcon,
+  GearIcon,
   LightningBoltIcon,
+  MagnifyingGlassIcon,
   ReloadIcon,
   TrashIcon,
   UploadIcon,
@@ -337,6 +346,759 @@ function DataTable({ rows, columns }: { rows: Row[]; columns: string[] }) {
   );
 }
 
+function formatBytes(value: unknown): string {
+  if (typeof value !== "number" || !Number.isFinite(value)) return "—";
+  if (value < 1_000) return `${value} B`;
+  if (value < 1_000_000) return `${(value / 1_000).toFixed(value < 10_000 ? 1 : 0)} KB`;
+  return `${(value / 1_000_000).toFixed(value < 10_000_000 ? 1 : 0)} MB`;
+}
+
+function splitFilePath(path: string): { directory: string; name: string } {
+  const slash = path.lastIndexOf("/");
+  return slash < 0
+    ? { directory: "", name: path }
+    : { directory: path.slice(0, slash), name: path.slice(slash + 1) };
+}
+
+function shortId(value: unknown): string {
+  const text = asText(value);
+  if (!text) return "—";
+  const suffix = text.includes(":") ? text.slice(text.lastIndexOf(":") + 1) : text;
+  return suffix.length > 10 ? suffix.slice(0, 10) : suffix;
+}
+
+function humanize(value: unknown, fallback: string): string {
+  const text = asText(value).trim();
+  if (!text) return fallback;
+  const words = text
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/[_-]+/g, " ")
+    .toLocaleLowerCase();
+  return words.charAt(0).toLocaleUpperCase() + words.slice(1);
+}
+
+function EmptyState({ children }: { children: React.ReactNode }) {
+  return (
+    <Flex
+      align="center"
+      justify="center"
+      direction="column"
+      gap="2"
+      style={{ minHeight: 180, color: "var(--gray-10)", textAlign: "center" }}
+    >
+      <FileIcon width="24" height="24" />
+      <Text size="2" color="gray">
+        {children}
+      </Text>
+    </Flex>
+  );
+}
+
+function InitialLoadingState() {
+  return (
+    <Flex
+      align="center"
+      justify="center"
+      direction="column"
+      gap="3"
+      role="status"
+      aria-live="polite"
+      style={{ minHeight: 320 }}
+    >
+      <Spinner size="3" />
+      <Flex direction="column" gap="1" align="center">
+        <Text size="3" weight="medium">
+          Loading workspace history…
+        </Text>
+        <Text size="2" color="gray">
+          Reading repositories, files, and agent activity
+        </Text>
+      </Flex>
+    </Flex>
+  );
+}
+
+function SummaryCard({ value, label, detail }: { value: number; label: string; detail: string }) {
+  return (
+    <Box
+      style={{
+        border: "1px solid var(--gray-a5)",
+        borderRadius: 8,
+        background: "var(--gray-a2)",
+        padding: "14px 16px",
+      }}
+    >
+      <Text size="6" weight="bold" as="div">
+        {value.toLocaleString()}
+      </Text>
+      <Text size="2" weight="medium" as="div">
+        {label}
+      </Text>
+      <Text size="1" color="gray" as="div" mt="1">
+        {detail}
+      </Text>
+    </Box>
+  );
+}
+
+function OverviewTab({
+  branches,
+  files,
+  events,
+  invocations,
+  onNavigate,
+}: {
+  branches: Row[];
+  files: Row[];
+  events: Row[];
+  invocations: Row[];
+  onNavigate: (tab: string) => void;
+}) {
+  const repositories = new Set(files.map((row) => asText(row["repoPath"]))).size;
+  return (
+    <Flex direction="column" gap="5" style={{ maxWidth: 960 }}>
+      <Flex direction="column" gap="1">
+        <Heading size="5">Workspace history</Heading>
+        <Text size="2" color="gray">
+          See what is in the workspace, how agents changed it, and whether its recorded history is
+          healthy.
+        </Text>
+      </Flex>
+      <Grid columns={{ initial: "2", md: "4" }} gap="3">
+        <SummaryCard value={repositories} label="Repositories" detail="Tracked in this workspace" />
+        <SummaryCard value={files.length} label="Files" detail="In the current workspace state" />
+        <SummaryCard
+          value={branches.length}
+          label="Conversations"
+          detail="Recorded agent branches"
+        />
+        <SummaryCard
+          value={events.length}
+          label="Recent events"
+          detail="On the selected conversation"
+        />
+      </Grid>
+      <Grid columns={{ initial: "1", md: "2" }} gap="3">
+        <Button
+          variant="soft"
+          color="gray"
+          size="3"
+          onClick={() => onNavigate("files")}
+          style={{ height: "auto", padding: 16, justifyContent: "flex-start" }}
+        >
+          <FileIcon />
+          <Flex direction="column" align="start">
+            <Text weight="medium">Browse workspace files</Text>
+            <Text size="1" color="gray">
+              Find files by repository, folder, or name
+            </Text>
+          </Flex>
+        </Button>
+        <Button
+          variant="soft"
+          color="gray"
+          size="3"
+          onClick={() => onNavigate("activity")}
+          style={{ height: "auto", padding: 16, justifyContent: "flex-start" }}
+        >
+          <ActivityLogIcon />
+          <Flex direction="column" align="start">
+            <Text weight="medium">Review agent activity</Text>
+            <Text size="1" color="gray">
+              {invocations.length} recorded agent run{invocations.length === 1 ? "" : "s"}
+            </Text>
+          </Flex>
+        </Button>
+      </Grid>
+    </Flex>
+  );
+}
+
+function WorkspaceFilesTab({
+  rows,
+  loading,
+  focusedPath,
+}: {
+  rows: Row[];
+  loading: boolean;
+  focusedPath?: string;
+}) {
+  const [query, setQuery] = useState("");
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [selectedFile, setSelectedFile] = useState<Row | null>(null);
+  const matchingRows = useMemo(() => {
+    const needle = query.trim().toLocaleLowerCase();
+    return needle
+      ? rows.filter((row) =>
+          `${asText(row["repoPath"])} ${asText(row["path"])}`.toLocaleLowerCase().includes(needle)
+        )
+      : rows;
+  }, [query, rows]);
+  const repositories = useMemo(() => {
+    const grouped = new Map<string, Row[]>();
+    for (const row of matchingRows) {
+      const repo = asText(row["repoPath"]) || "Workspace root";
+      const current = grouped.get(repo);
+      if (current) current.push(row);
+      else grouped.set(repo, [row]);
+    }
+    return [...grouped.entries()].sort(([a], [b]) => a.localeCompare(b));
+  }, [matchingRows]);
+
+  if (loading && rows.length === 0) return <InitialLoadingState />;
+  return (
+    <Flex direction="column" gap="3" style={{ minWidth: 0 }}>
+      <Flex align="center" justify="between" gap="3" wrap="wrap">
+        <Flex direction="column" gap="1">
+          <Heading size="4">Workspace files</Heading>
+          <Text size="2" color="gray">
+            {rows.length.toLocaleString()} file{rows.length === 1 ? "" : "s"} across{" "}
+            {new Set(rows.map((row) => asText(row["repoPath"]))).size} repositories
+          </Text>
+        </Flex>
+        <TextField.Root
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          placeholder="Search files…"
+          aria-label="Search workspace files"
+          style={{ width: "min(320px, 100%)" }}
+        >
+          <TextField.Slot>
+            <MagnifyingGlassIcon />
+          </TextField.Slot>
+          {query ? (
+            <TextField.Slot side="right">
+              <IconButton
+                size="1"
+                variant="ghost"
+                color="gray"
+                aria-label="Clear search"
+                onClick={() => setQuery("")}
+              >
+                <Cross2Icon />
+              </IconButton>
+            </TextField.Slot>
+          ) : null}
+        </TextField.Root>
+      </Flex>
+      {focusedPath && rows.length === 0 ? (
+        <EmptyState>
+          No current file matches “{focusedPath}”. Clear the focus filter above.
+        </EmptyState>
+      ) : matchingRows.length === 0 ? (
+        <EmptyState>
+          {query ? `No files match “${query}”.` : "This workspace has no files."}
+        </EmptyState>
+      ) : (
+        <Grid
+          columns={{
+            initial: "1",
+            md: selectedFile ? "minmax(360px, 1fr) minmax(320px, 0.8fr)" : "1",
+          }}
+          gap="4"
+        >
+          <Flex direction="column" gap="4" style={{ minWidth: 0 }}>
+            {repositories.map(([repo, repoRows]) => (
+              <Box key={repo} style={{ minWidth: 0 }}>
+                <Flex align="center" gap="2" mb="2">
+                  <Heading size="2" style={{ fontFamily: "var(--code-font-family, monospace)" }}>
+                    {repo}
+                  </Heading>
+                  <Badge color="gray" variant="soft">
+                    {repoRows.length}
+                  </Badge>
+                </Flex>
+                <Table.Root size="1" variant="surface">
+                  <Table.Header>
+                    <Table.Row>
+                      <Table.ColumnHeaderCell>File</Table.ColumnHeaderCell>
+                      <Table.ColumnHeaderCell style={{ width: 90 }}>Size</Table.ColumnHeaderCell>
+                      <Table.ColumnHeaderCell style={{ width: 44 }} aria-label="Details" />
+                    </Table.Row>
+                  </Table.Header>
+                  <Table.Body>
+                    {repoRows.map((row) => {
+                      const path = asText(row["path"]);
+                      const { name, directory } = splitFilePath(path);
+                      const key = `${asText(row["repositoryId"])}:${path}`;
+                      const isExpanded = expanded.has(key);
+                      return (
+                        <Table.Row
+                          key={key}
+                          style={{
+                            background: selectedFile === row ? "var(--accent-a3)" : undefined,
+                          }}
+                        >
+                          <Table.Cell>
+                            <button
+                              type="button"
+                              onClick={() => setSelectedFile(row)}
+                              aria-label={`Preview ${path}`}
+                              style={{
+                                display: "flex",
+                                alignItems: "center",
+                                gap: 8,
+                                width: "100%",
+                                padding: 0,
+                                border: 0,
+                                background: "transparent",
+                                color: "inherit",
+                                textAlign: "left",
+                                cursor: "pointer",
+                                minWidth: 0,
+                              }}
+                            >
+                              <FileIcon style={{ flexShrink: 0, color: "var(--gray-9)" }} />
+                              <Flex direction="column" style={{ minWidth: 0 }}>
+                                <Text size="2" weight="medium" truncate>
+                                  {name || path}
+                                </Text>
+                                {directory ? (
+                                  <Text size="1" color="gray" truncate>
+                                    {directory}
+                                  </Text>
+                                ) : null}
+                                {isExpanded ? (
+                                  <Text
+                                    size="1"
+                                    color="gray"
+                                    style={{ fontFamily: "monospace", overflowWrap: "anywhere" }}
+                                  >
+                                    content {shortId(row["contentHash"])} · mode{" "}
+                                    {asText(row["mode"]) || "—"}
+                                    {row["binary"] === true ? " · binary" : ""}
+                                  </Text>
+                                ) : null}
+                              </Flex>
+                            </button>
+                          </Table.Cell>
+                          <Table.Cell>
+                            <Text size="1" color="gray" style={{ whiteSpace: "nowrap" }}>
+                              {formatBytes(row["size"])}
+                            </Text>
+                          </Table.Cell>
+                          <Table.Cell>
+                            <IconButton
+                              size="1"
+                              variant="ghost"
+                              color="gray"
+                              aria-label={`${isExpanded ? "Hide" : "Show"} details for ${path}`}
+                              onClick={() =>
+                                setExpanded((current) => {
+                                  const next = new Set(current);
+                                  if (next.has(key)) next.delete(key);
+                                  else next.add(key);
+                                  return next;
+                                })
+                              }
+                            >
+                              {isExpanded ? <ChevronDownIcon /> : <ChevronRightIcon />}
+                            </IconButton>
+                          </Table.Cell>
+                        </Table.Row>
+                      );
+                    })}
+                  </Table.Body>
+                </Table.Root>
+              </Box>
+            ))}
+          </Flex>
+          {selectedFile ? (
+            <FilePreview row={selectedFile} onClose={() => setSelectedFile(null)} />
+          ) : null}
+        </Grid>
+      )}
+    </Flex>
+  );
+}
+
+function FilePreview({ row, onClose }: { row: Row; onClose: () => void }) {
+  const [content, setContent] = useState<string | null>(null);
+  const [contentLoading, setContentLoading] = useState(false);
+  const [contentError, setContentError] = useState<string | null>(null);
+  const path = asText(row["path"]);
+  const hash = asText(row["contentHash"]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setContent(null);
+    setContentError(null);
+    if (row["binary"] === true)
+      return () => {
+        cancelled = true;
+      };
+    if (typeof row["size"] === "number" && row["size"] > 1_000_000) {
+      setContentError("This file is too large to preview here.");
+      return () => {
+        cancelled = true;
+      };
+    }
+    if (!hash) {
+      setContentError("This file has no readable content reference.");
+      return () => {
+        cancelled = true;
+      };
+    }
+    setContentLoading(true);
+    void blobstore
+      .getText(hash)
+      .then((text) => {
+        if (cancelled) return;
+        if (text == null) setContentError("The stored content is unavailable.");
+        else setContent(text);
+      })
+      .catch((error) => {
+        if (!cancelled) setContentError(error instanceof Error ? error.message : String(error));
+      })
+      .finally(() => {
+        if (!cancelled) setContentLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [hash, row]);
+
+  return (
+    <Box
+      style={{
+        minWidth: 0,
+        alignSelf: "start",
+        position: "sticky",
+        top: 0,
+        border: "1px solid var(--gray-a5)",
+        borderRadius: 8,
+        overflow: "hidden",
+      }}
+    >
+      <Flex align="center" justify="between" gap="2" p="3" style={{ background: "var(--gray-a2)" }}>
+        <Flex direction="column" style={{ minWidth: 0 }}>
+          <Text size="2" weight="medium" truncate>
+            {splitFilePath(path).name || path}
+          </Text>
+          <Text size="1" color="gray" truncate>
+            {asText(row["repoPath"])} · {path}
+          </Text>
+        </Flex>
+        <IconButton
+          size="1"
+          variant="ghost"
+          color="gray"
+          aria-label="Close file preview"
+          onClick={onClose}
+        >
+          <Cross2Icon />
+        </IconButton>
+      </Flex>
+      <Box style={{ maxHeight: "min(65vh, 720px)", overflow: "auto", background: "var(--gray-1)" }}>
+        {contentLoading ? (
+          <Flex align="center" justify="center" gap="2" p="6" role="status">
+            <Spinner />
+            <Text size="2" color="gray">
+              Loading file…
+            </Text>
+          </Flex>
+        ) : row["binary"] === true ? (
+          <EmptyState>Binary preview is not available.</EmptyState>
+        ) : contentError ? (
+          <Callout.Root size="1" color="red" m="3">
+            <Callout.Icon>
+              <ExclamationTriangleIcon />
+            </Callout.Icon>
+            <Callout.Text>{contentError}</Callout.Text>
+          </Callout.Root>
+        ) : (
+          <pre
+            style={{
+              margin: 0,
+              padding: 16,
+              fontFamily: "var(--code-font-family, monospace)",
+              fontSize: "var(--font-size-1)",
+              color: "var(--gray-12)",
+              lineHeight: 1.55,
+              whiteSpace: "pre-wrap",
+              overflowWrap: "anywhere",
+            }}
+          >
+            {content ?? ""}
+          </pre>
+        )}
+      </Box>
+    </Box>
+  );
+}
+
+function ActivityTab({
+  branches,
+  selectedBranchId,
+  onSelectBranch,
+  events,
+  invocations,
+  envelopes,
+}: {
+  branches: Row[];
+  selectedBranchId: string | null;
+  onSelectBranch: (id: string) => void;
+  events: Row[];
+  invocations: Row[];
+  envelopes: Row[];
+}) {
+  const [section, setSection] = useState("events");
+  return (
+    <Flex direction="column" gap="4" style={{ minWidth: 0 }}>
+      <Flex direction="column" gap="1">
+        <Heading size="4">Agent activity</Heading>
+        <Text size="2" color="gray">
+          Follow what happened in a conversation without reading the underlying provenance records.
+        </Text>
+      </Flex>
+      {branches.length === 0 ? (
+        <EmptyState>No agent conversations have been recorded yet.</EmptyState>
+      ) : (
+        <>
+          <Box>
+            <Text
+              size="1"
+              weight="bold"
+              color="gray"
+              as="div"
+              mb="2"
+              style={{ letterSpacing: "0.06em" }}
+            >
+              CONVERSATION
+            </Text>
+            <ScrollArea type="auto" scrollbars="horizontal">
+              <Flex gap="2" pb="2">
+                {branches.map((branch) => {
+                  const id = asText(branch["branch_id"]);
+                  return (
+                    <Button
+                      key={id}
+                      size="1"
+                      variant={id === selectedBranchId ? "solid" : "soft"}
+                      color={id === selectedBranchId ? undefined : "gray"}
+                      onClick={() => onSelectBranch(id)}
+                      style={{ flexShrink: 0 }}
+                    >
+                      {asText(branch["name"]) || `Conversation ${shortId(id)}`}
+                    </Button>
+                  );
+                })}
+              </Flex>
+            </ScrollArea>
+          </Box>
+          <Tabs.Root value={section} onValueChange={setSection}>
+            <Tabs.List>
+              <Tabs.Trigger value="events">Timeline ({events.length})</Tabs.Trigger>
+              <Tabs.Trigger value="runs">Agent runs ({invocations.length})</Tabs.Trigger>
+              <Tabs.Trigger value="messages">Workspace messages ({envelopes.length})</Tabs.Trigger>
+            </Tabs.List>
+            <Box pt="3">
+              <Tabs.Content value="events">
+                {events.length === 0 ? (
+                  <EmptyState>No activity in this conversation.</EmptyState>
+                ) : (
+                  <Table.Root size="1" variant="surface">
+                    <Table.Header>
+                      <Table.Row>
+                        <Table.ColumnHeaderCell>Event</Table.ColumnHeaderCell>
+                        <Table.ColumnHeaderCell>Turn</Table.ColumnHeaderCell>
+                        <Table.ColumnHeaderCell>When</Table.ColumnHeaderCell>
+                      </Table.Row>
+                    </Table.Header>
+                    <Table.Body>
+                      {events.map((row, index) => (
+                        <Table.Row key={asText(row["eventId"]) || index}>
+                          <Table.Cell>
+                            <Flex align="center" gap="2">
+                              <ActivityLogIcon color="var(--gray-9)" />
+                              <Text size="2" weight="medium">
+                                {humanize(row["kind"], "Activity")}
+                              </Text>
+                            </Flex>
+                          </Table.Cell>
+                          <Table.Cell>
+                            <Text size="1" color="gray">
+                              {shortId(row["turnId"])}
+                            </Text>
+                          </Table.Cell>
+                          <Table.Cell>
+                            <Text size="1" color="gray" style={{ whiteSpace: "nowrap" }}>
+                              {formatWhen(row["createdAt"])}
+                            </Text>
+                          </Table.Cell>
+                        </Table.Row>
+                      ))}
+                    </Table.Body>
+                  </Table.Root>
+                )}
+              </Tabs.Content>
+              <Tabs.Content value="runs">
+                {invocations.length === 0 ? (
+                  <EmptyState>No agent runs in this conversation.</EmptyState>
+                ) : (
+                  <Table.Root size="1" variant="surface">
+                    <Table.Header>
+                      <Table.Row>
+                        <Table.ColumnHeaderCell>Run</Table.ColumnHeaderCell>
+                        <Table.ColumnHeaderCell>Status</Table.ColumnHeaderCell>
+                        <Table.ColumnHeaderCell>Updated</Table.ColumnHeaderCell>
+                      </Table.Row>
+                    </Table.Header>
+                    <Table.Body>
+                      {invocations.map((row, index) => (
+                        <Table.Row key={asText(row["invocation_id"]) || index}>
+                          <Table.Cell>
+                            <Text size="2" weight="medium">
+                              {humanize(row["kind"], "Agent run")}
+                            </Text>
+                          </Table.Cell>
+                          <Table.Cell>
+                            <Badge color={asText(row["status"]) === "completed" ? "green" : "gray"}>
+                              {humanize(row["status"], "Unknown")}
+                            </Badge>
+                          </Table.Cell>
+                          <Table.Cell>
+                            <Text size="1" color="gray" style={{ whiteSpace: "nowrap" }}>
+                              {formatWhen(row["updated_at"])}
+                            </Text>
+                          </Table.Cell>
+                        </Table.Row>
+                      ))}
+                    </Table.Body>
+                  </Table.Root>
+                )}
+              </Tabs.Content>
+              <Tabs.Content value="messages">
+                {envelopes.length === 0 ? (
+                  <EmptyState>No messages have been published in this workspace.</EmptyState>
+                ) : (
+                  <Table.Root size="1" variant="surface">
+                    <Table.Header>
+                      <Table.Row>
+                        <Table.ColumnHeaderCell>Message</Table.ColumnHeaderCell>
+                        <Table.ColumnHeaderCell>Channel</Table.ColumnHeaderCell>
+                        <Table.ColumnHeaderCell>Published</Table.ColumnHeaderCell>
+                      </Table.Row>
+                    </Table.Header>
+                    <Table.Body>
+                      {envelopes.map((row, index) => (
+                        <Table.Row key={asText(row["envelope_id"]) || index}>
+                          <Table.Cell>
+                            <Text size="2" weight="medium">
+                              {humanize(row["payload_kind"], "Message")}
+                            </Text>
+                          </Table.Cell>
+                          <Table.Cell>
+                            <Text size="1" color="gray">
+                              {shortId(row["channel_id"])}
+                            </Text>
+                          </Table.Cell>
+                          <Table.Cell>
+                            <Text size="1" color="gray" style={{ whiteSpace: "nowrap" }}>
+                              {formatWhen(row["published_at"])}
+                            </Text>
+                          </Table.Cell>
+                        </Table.Row>
+                      ))}
+                    </Table.Body>
+                  </Table.Root>
+                )}
+              </Tabs.Content>
+            </Box>
+          </Tabs.Root>
+        </>
+      )}
+    </Flex>
+  );
+}
+
+function DiagnosticsTab({
+  status,
+  integrity,
+  loading,
+  onCheckIntegrity,
+  onValidateHashes,
+  onReplay,
+}: {
+  status: Row[];
+  integrity: Row[];
+  loading: boolean;
+  onCheckIntegrity: () => void;
+  onValidateHashes: () => void;
+  onReplay: () => void;
+}) {
+  return (
+    <Flex direction="column" gap="5" style={{ maxWidth: 960 }}>
+      <Flex direction="column" gap="1">
+        <Heading size="4">Workspace health</Heading>
+        <Text size="2" color="gray">
+          Verify recorded history when something looks wrong. These checks do not change workspace
+          content.
+        </Text>
+      </Flex>
+      <Flex align="center" gap="2" wrap="wrap">
+        <Button size="2" variant="soft" onClick={onCheckIntegrity} disabled={loading}>
+          <CheckCircledIcon /> Check history
+        </Button>
+        <Button size="2" variant="soft" color="gray" onClick={onValidateHashes} disabled={loading}>
+          Validate stored data
+        </Button>
+      </Flex>
+      {integrity.length === 0 ? (
+        <Callout.Root size="1" color="gray">
+          <Callout.Icon>
+            <CheckCircledIcon />
+          </Callout.Icon>
+          <Callout.Text>
+            Run a check to verify that workspace history is complete and internally consistent.
+          </Callout.Text>
+        </Callout.Root>
+      ) : (
+        <Callout.Root size="1" color="red">
+          <Callout.Icon>
+            <ExclamationTriangleIcon />
+          </Callout.Icon>
+          <Callout.Text>
+            {integrity.length} issue{integrity.length === 1 ? "" : "s"} found. Expand the technical
+            details below for the recorded identifiers.
+          </Callout.Text>
+        </Callout.Root>
+      )}
+      {integrity.length > 0 ? (
+        <DataTable
+          rows={integrity}
+          columns={["type", "message", "entryId", "eventId", "stateHash"]}
+        />
+      ) : null}
+      <details>
+        <summary style={{ cursor: "pointer", color: "var(--gray-11)", fontSize: 13 }}>
+          Technical workspace counters
+        </summary>
+        <Box pt="3">
+          <DataTable rows={status} columns={["metric", "value"]} />
+        </Box>
+      </details>
+      <Box
+        style={{
+          borderTop: "1px solid var(--gray-a5)",
+          paddingTop: 20,
+        }}
+      >
+        <Flex direction="column" gap="2" align="start">
+          <Heading size="2">Repair recorded projections</Heading>
+          <Text size="2" color="gray">
+            Rebuild the derived activity views from canonical history. Use this only when a health
+            check reports stale projections; it does not rewrite the canonical event log.
+          </Text>
+          <Button size="1" variant="soft" color="amber" onClick={onReplay} disabled={loading}>
+            <GearIcon /> Rebuild activity views
+          </Button>
+        </Flex>
+      </Box>
+    </Flex>
+  );
+}
+
 function gitStateColor(state: GitUpstreamState): ComponentProps<typeof Badge>["color"] {
   if (state === "in-sync") return "green";
   if (state === "ahead" || state === "exporting" || state === "pushing") return "blue";
@@ -463,7 +1225,7 @@ function GitTab({
                     <Text size="1" style={{ fontFamily: "monospace", whiteSpace: "nowrap" }}>
                       {row.repoPath}
                     </Text>
-                    {row.error ?? row.lastFailureReason ? (
+                    {(row.error ?? row.lastFailureReason) ? (
                       <Text size="1" color="red" truncate as="div">
                         {row.error ?? row.lastFailureReason}
                       </Text>
@@ -698,7 +1460,7 @@ function GovernanceTab({
     <Flex direction="column" gap="4" style={{ minWidth: 0 }}>
       <Flex align="center" justify="between" gap="2" wrap="wrap">
         <Text size="2" color="gray">
-          Read-only provenance — who approved what, and who changed membership.
+          A read-only record of who approved agent actions and who changed workspace access.
         </Text>
         <Button
           size="1"
@@ -719,9 +1481,9 @@ function GovernanceTab({
       ) : null}
 
       <Flex direction="column" gap="2" style={{ minWidth: 0 }}>
-        <Heading size="2">Agent tool-call approvals</Heading>
+        <Heading size="2">Agent action approvals</Heading>
         <Text size="1" color="gray">
-          GAD trajectory projection ({approvals.length}).
+          {approvals.length} recorded approval{approvals.length === 1 ? "" : "s"}.
         </Text>
         {gadError ? (
           <Box
@@ -807,7 +1569,7 @@ function GovernanceTab({
       </Flex>
 
       <Flex direction="column" gap="2" style={{ minWidth: 0 }}>
-        <Heading size="2">Host approvals &amp; membership</Heading>
+        <Heading size="2">Workspace access &amp; approvals</Heading>
         {hostError ? (
           <Box
             role="alert"
@@ -872,7 +1634,7 @@ function GovernanceTab({
   );
 }
 
-function App() {
+export function App() {
   const appearance = usePanelTheme();
   const appTheme = useAppTheme();
   const isMobile = useIsMobile();
@@ -905,7 +1667,7 @@ function App() {
   );
   const highlightAppearance = appearance === "dark" ? "dark" : "light";
   const [focusActive, setFocusActive] = useState(true);
-  const [activeTab, setActiveTab] = useState("files");
+  const [activeTab, setActiveTab] = useState("overview");
   const [branches, setBranches] = useState<Row[]>([]);
   const [selectedBranchId, setSelectedBranchId] = useState<string | null>(
     stateArgs.branchId ?? null
@@ -934,10 +1696,7 @@ function App() {
   const [operationStatus, setOperationStatus] = useState<string>("");
   const [operationFailed, setOperationFailed] = useState(false);
   const [loading, setLoading] = useState(false);
-  const selectedBranch = useMemo(
-    () => branches.find((branch) => asText(branch["branch_id"]) === selectedBranchId) ?? null,
-    [branches, selectedBranchId]
-  );
+  const [hasLoaded, setHasLoaded] = useState(false);
 
   async function refresh() {
     setLoading(true);
@@ -975,6 +1734,7 @@ function App() {
         `Couldn't load repository data: ${err instanceof Error ? err.message : String(err)}`
       );
     } finally {
+      setHasLoaded(true);
       setLoading(false);
     }
   }
@@ -1168,11 +1928,11 @@ function App() {
   // Contribute GAD actions to the app-level command palette (Cmd/Ctrl+K).
   const paletteCommands = useMemo(
     () => [
-      { id: "gad-refresh", label: "Refresh", section: "GAD Browser" },
-      { id: "gad-git-refresh", label: "Refresh Git Upstreams", section: "GAD Browser" },
-      { id: "gad-check-integrity", label: "Check integrity", section: "GAD Browser" },
-      { id: "gad-validate-hashes", label: "Validate hashes", section: "GAD Browser" },
-      { id: "gad-replay-events", label: "Replay events", section: "GAD Browser" },
+      { id: "gad-refresh", label: "Refresh workspace history", section: "Workspace History" },
+      { id: "gad-git-refresh", label: "Refresh repository sync", section: "Workspace History" },
+      { id: "gad-check-integrity", label: "Check workspace history", section: "Workspace History" },
+      { id: "gad-validate-hashes", label: "Validate stored data", section: "Workspace History" },
+      { id: "gad-replay-events", label: "Rebuild activity views", section: "Workspace History" },
     ],
     []
   );
@@ -1198,7 +1958,7 @@ function App() {
   // Lazily load the governance timeline the first time (and whenever) the tab is
   // opened, so the panel's default view never pays for the extra queries.
   useEffect(() => {
-    if (activeTab !== "governance") return;
+    if (activeTab !== "access") return;
     void loadGovernance();
   }, [activeTab]);
 
@@ -1270,36 +2030,10 @@ function App() {
     [diffTarget, focusActive, files]
   );
 
-  const actionButtons = (
-    <>
-      {operationStatus ? (
-        <Text
-          color={operationFailed ? "red" : "gray"}
-          size="2"
-          role={operationFailed ? "alert" : "status"}
-        >
-          {operationStatus}
-        </Text>
-      ) : null}
-      <Button size="2" variant="soft" onClick={() => void checkIntegrity()} disabled={loading}>
-        {isMobile ? "Integrity" : "Check Integrity"}
-      </Button>
-      <Button size="2" variant="soft" onClick={() => void validateHashes()} disabled={loading}>
-        {isMobile ? "Hashes" : "Validate Hashes"}
-      </Button>
-      <Button size="2" variant="soft" onClick={() => void replayEvents()} disabled={loading}>
-        Replay
-      </Button>
-      <Button
-        size="2"
-        variant="soft"
-        onClick={() => void refresh()}
-        disabled={loading}
-        title="Refresh"
-      >
-        <ReloadIcon /> Refresh
-      </Button>
-    </>
+  const refreshButton = (
+    <Button size="2" variant="soft" color="gray" onClick={() => void refresh()} disabled={loading}>
+      {loading ? <Spinner /> : <ReloadIcon />} {loading ? "Refreshing…" : "Refresh"}
+    </Button>
   );
 
   return (
@@ -1316,22 +2050,32 @@ function App() {
           header={
             <Box style={{ minWidth: 0 }}>
               <Heading size={isMobile ? "3" : "4"} truncate>
-                gad Browser
+                Workspace History
               </Heading>
               <Text color="gray" size="2" truncate as="div">
-                {selectedBranch ? asText(selectedBranch["name"]) : "Workspace provenance"}
+                Files, agent activity, access, and repository sync
               </Text>
             </Box>
           }
-          // On narrow viewports the actions move into the body (a wrapping row)
-          // so the chrome header stays a calm title strip and nothing overflows.
-          headerActions={isMobile ? undefined : actionButtons}
+          headerActions={isMobile ? undefined : refreshButton}
         >
           <Flex direction="column" gap="3" style={{ height: "100%", minHeight: 0 }}>
             {isMobile ? (
               <Flex align="center" gap="2" wrap="wrap" justify="end" style={{ flexShrink: 0 }}>
-                {actionButtons}
+                {refreshButton}
               </Flex>
+            ) : null}
+            {operationStatus ? (
+              <Callout.Root
+                size="1"
+                color={operationFailed ? "red" : "gray"}
+                role={operationFailed ? "alert" : "status"}
+              >
+                <Callout.Icon>
+                  {operationFailed ? <ExclamationTriangleIcon /> : <CheckCircledIcon />}
+                </Callout.Icon>
+                <Callout.Text>{operationStatus}</Callout.Text>
+              </Callout.Root>
             ) : null}
             {diffTarget ? (
               <DiffTargetBanner
@@ -1340,34 +2084,9 @@ function App() {
                 onToggleFilter={() => setFocusActive((active) => !active)}
               />
             ) : null}
-            <Grid
-              columns={{ initial: "1", md: "260px 1fr" }}
-              gap="3"
-              style={{ minHeight: 0, flex: 1 }}
-            >
-              <ScrollArea
-                type="auto"
-                scrollbars={isMobile ? "horizontal" : "vertical"}
-                style={{ maxHeight: isMobile ? 112 : undefined }}
-              >
-                <Flex direction="column" gap="2" pr="2">
-                  {branches.map((branch) => {
-                    const id = asText(branch["branch_id"]);
-                    return (
-                      <Button
-                        key={id}
-                        variant={id === selectedBranchId ? "solid" : "soft"}
-                        color={id === selectedBranchId ? "blue" : "gray"}
-                        onClick={() => setSelectedBranchId(id)}
-                        style={{ justifyContent: "flex-start" }}
-                      >
-                        {asText(branch["name"] || branch["branch_id"])}
-                      </Button>
-                    );
-                  })}
-                </Flex>
-              </ScrollArea>
-
+            {!hasLoaded && loading ? (
+              <InitialLoadingState />
+            ) : (
               <Tabs.Root
                 value={activeTab}
                 onValueChange={setActiveTab}
@@ -1380,22 +2099,15 @@ function App() {
                   }}
                 >
                   {diffTarget ? <Tabs.Trigger value="compare">Compare</Tabs.Trigger> : null}
-                  <Tabs.Trigger value="branches">Branches</Tabs.Trigger>
-                  <Tabs.Trigger value="events">
-                    {isMobile ? "Events" : "Trajectory Events"}
-                  </Tabs.Trigger>
-                  <Tabs.Trigger value="envelopes">
-                    {isMobile ? "Envelopes" : "Channel Envelopes"}
-                  </Tabs.Trigger>
-                  <Tabs.Trigger value="files">Workspace Files</Tabs.Trigger>
-                  <Tabs.Trigger value="git">Git</Tabs.Trigger>
-                  <Tabs.Trigger value="invocations">Invocations</Tabs.Trigger>
-                  <Tabs.Trigger value="governance">Governance</Tabs.Trigger>
-                  <Tabs.Trigger value="integrity">Integrity</Tabs.Trigger>
-                  <Tabs.Trigger value="status">Status</Tabs.Trigger>
+                  <Tabs.Trigger value="overview">Overview</Tabs.Trigger>
+                  <Tabs.Trigger value="files">Files</Tabs.Trigger>
+                  <Tabs.Trigger value="activity">Activity</Tabs.Trigger>
+                  <Tabs.Trigger value="git">Sync</Tabs.Trigger>
+                  <Tabs.Trigger value="access">Access history</Tabs.Trigger>
+                  <Tabs.Trigger value="diagnostics">Diagnostics</Tabs.Trigger>
                 </Tabs.List>
                 <Box pt="3" style={{ flex: 1, minHeight: 0 }}>
-                  <ScrollArea type="auto" scrollbars="both" style={{ height: "100%" }}>
+                  <ScrollArea type="auto" scrollbars="vertical" style={{ height: "100%" }}>
                     {diffTarget && compareEntry ? (
                       <Tabs.Content value="compare">
                         <CompareView
@@ -1406,67 +2118,43 @@ function App() {
                         />
                       </Tabs.Content>
                     ) : null}
-                    <Tabs.Content value="branches">
-                      <DataTable
-                        rows={branches}
-                        columns={[
-                          "trajectory_id",
-                          "branch_id",
-                          "head_event_id",
-                          "head_event_hash",
-                          "updated_at",
-                        ]}
-                      />
-                    </Tabs.Content>
-                    <Tabs.Content value="events">
-                      <DataTable
-                        rows={events}
-                        columns={[
-                          "seq",
-                          "eventId",
-                          "eventHash",
-                          "prevEventHash",
-                          "kind",
-                          "turnId",
-                          "createdAt",
-                        ]}
-                      />
-                    </Tabs.Content>
-                    <Tabs.Content value="envelopes">
-                      <DataTable
-                        rows={envelopes}
-                        columns={[
-                          "channel_id",
-                          "seq",
-                          "envelope_id",
-                          "payload_kind",
-                          "published_at",
-                        ]}
+                    <Tabs.Content value="overview">
+                      <OverviewTab
+                        branches={branches}
+                        files={files}
+                        events={events}
+                        invocations={invocations}
+                        onNavigate={setActiveTab}
                       />
                     </Tabs.Content>
                     <Tabs.Content value="files">
-                      {diffTarget && focusActive && visibleFiles.length === 0 ? (
-                        <Text color="gray" size="2">
-                          No file matching “{diffTarget.path}” in the current semantic workspace.
-                          Clear the filter above to browse every current file.
-                        </Text>
-                      ) : (
-                        <DataTable
-                          rows={visibleFiles}
-                          columns={[
-                            "repositoryId",
-                            "repoPath",
-                            "path",
-                            "fileId",
-                            "contentHash",
-                            "mode",
-                            "size",
-                            "binary",
-                          ]}
-                        />
-                      )}
+                      <WorkspaceFilesTab
+                        rows={visibleFiles}
+                        loading={loading}
+                        focusedPath={diffTarget && focusActive ? diffTarget.path : undefined}
+                      />
+                    </Tabs.Content>
+                    <Tabs.Content value="activity">
+                      <ActivityTab
+                        branches={branches}
+                        selectedBranchId={selectedBranchId}
+                        onSelectBranch={setSelectedBranchId}
+                        events={events}
+                        invocations={invocations}
+                        envelopes={envelopes}
+                      />
                     </Tabs.Content>
                     <Tabs.Content value="git">
+                      {gitPollError ? (
+                        <Callout.Root size="1" color="red" mb="3">
+                          <Callout.Icon>
+                            <ExclamationTriangleIcon />
+                          </Callout.Icon>
+                          <Callout.Text>
+                            Repository sync status is unavailable: {gitPollError}
+                          </Callout.Text>
+                        </Callout.Root>
+                      ) : null}
                       <GitTab
                         rows={gitRows}
                         loading={gitLoading}
@@ -1483,20 +2171,7 @@ function App() {
                         onViewDiff={viewGitDiff}
                       />
                     </Tabs.Content>
-                    <Tabs.Content value="invocations">
-                      <DataTable
-                        rows={invocations}
-                        columns={[
-                          "invocation_id",
-                          "kind",
-                          "status",
-                          "started_event_id",
-                          "completed_event_id",
-                          "updated_at",
-                        ]}
-                      />
-                    </Tabs.Content>
-                    <Tabs.Content value="governance">
+                    <Tabs.Content value="access">
                       <GovernanceTab
                         approvals={govApprovals}
                         hostRecords={hostGovernance}
@@ -1507,26 +2182,20 @@ function App() {
                         onRefresh={() => void loadGovernance()}
                       />
                     </Tabs.Content>
-                    <Tabs.Content value="integrity">
-                      <DataTable
-                        rows={integrity}
-                        columns={[
-                          "type",
-                          "message",
-                          "entryId",
-                          "eventId",
-                          "stateHash",
-                          "manifestRootHash",
-                        ]}
+                    <Tabs.Content value="diagnostics">
+                      <DiagnosticsTab
+                        status={status}
+                        integrity={integrity}
+                        loading={loading}
+                        onCheckIntegrity={() => void checkIntegrity()}
+                        onValidateHashes={() => void validateHashes()}
+                        onReplay={() => void replayEvents()}
                       />
-                    </Tabs.Content>
-                    <Tabs.Content value="status">
-                      <DataTable rows={status} columns={["metric", "value"]} />
                     </Tabs.Content>
                   </ScrollArea>
                 </Box>
               </Tabs.Root>
-            </Grid>
+            )}
           </Flex>
         </PanelChrome>
       </Box>

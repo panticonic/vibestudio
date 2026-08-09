@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "vibestudio": {
-    "title": "gad Browser",
+    "title": "Workspace History",
     "entry": "index.tsx",
     "exposeModules": [
       "react",
