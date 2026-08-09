@@ -141,41 +141,17 @@ function bounded(text: unknown, max = TEXT_BOUND): string {
   return value.length > max ? `${value.slice(0, max)}…` : value;
 }
 
-function recordValue(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
-function lowerString(value: unknown): string | null {
-  return typeof value === "string" ? value.toLowerCase() : null;
-}
-
-function metadataMarksExternalIngress(metadata: unknown): boolean {
-  const record = recordValue(metadata);
-  if (!record) return false;
-  if (record["webhook"] === true || record["webhookIngress"] === true) return true;
-  for (const key of ["type", "kind", "source", "origin", "transport", "ingress", "provenance"]) {
-    const value = lowerString(record[key]);
-    if (!value) continue;
-    if (value === "external" || value === "webhook" || value === "webhook-ingress") return true;
-    if (value.includes("webhook-ingress")) return true;
+function sealedContentClass(event: ChannelEvent): "internal" | "external" {
+  const { contentClass, externalKeys } = event;
+  if (
+    (contentClass !== "internal" && contentClass !== "external") ||
+    !Array.isArray(externalKeys) ||
+    !externalKeys.every((key) => typeof key === "string") ||
+    (contentClass === "internal" && externalKeys.length > 0)
+  ) {
+    throw new Error("linked-agent input is missing valid durable content provenance");
   }
-  return false;
-}
-
-function isExternallyFedInput(event: ChannelEvent): boolean {
-  const agentic = recordValue(event.payload);
-  const actor = recordValue(agentic?.["actor"]);
-  const payload = recordValue(agentic?.["payload"]);
-  const annotations = recordValue((event as { annotations?: unknown }).annotations);
-  return (
-    lowerString(actor?.["kind"]) === "external" ||
-    metadataMarksExternalIngress(event.senderMetadata) ||
-    metadataMarksExternalIngress(actor?.["metadata"]) ||
-    metadataMarksExternalIngress(payload?.["metadata"]) ||
-    metadataMarksExternalIngress(annotations?.["metadata"])
-  );
+  return contentClass;
 }
 
 export class LinkedAgentWorker extends AgentWorkerBase {
@@ -343,9 +319,8 @@ export class LinkedAgentWorker extends AgentWorkerBase {
   }
 
   protected override async shouldRespond(channelId: string, event: ChannelEvent): Promise<boolean> {
-    if (!(await super.shouldRespond(channelId, event))) return false;
-    if (isExternallyFedInput(event)) return false;
-    return true;
+    if (sealedContentClass(event) === "external") return false;
+    return super.shouldRespond(channelId, event);
   }
 
   // ── Response-owned bridge lifetime (plan §5.1) ─────────────────────────────

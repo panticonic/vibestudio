@@ -232,6 +232,64 @@ class TestableLinkedAgentWorker extends LinkedAgentWorker {
     ).bridgeStream?.controller.desiredSize;
   }
 
+  async processSubscriptionReplayEventForTest(
+    channelId: string,
+    event: ReturnType<typeof completedMessageEvent>
+  ): Promise<void> {
+    await (
+      this as unknown as {
+        processSubscriptionReplayEvent(channelId: string, event: unknown): Promise<void>;
+      }
+    ).processSubscriptionReplayEvent(channelId, event);
+  }
+
+  async deliverDurableChannelEventForTest(
+    channelId: string,
+    event: ReturnType<typeof completedMessageEvent>
+  ): Promise<void> {
+    this.ensureIdentity();
+    try {
+      this.acceptChannelBatch({
+        channelId,
+        channelRef: {
+          source: "workers/pubsub-channel",
+          className: "PubSubChannel",
+          objectKey: channelId,
+        },
+        sourceIncarnation: "channel-test-session",
+        targetIncarnation: this.identity.sessionId!,
+        rows: [
+          {
+            deliveryKey: `test:${event.messageId}`,
+            channelSeq: event.id,
+            envelope: { kind: "log", phase: "live", event } as never,
+          },
+        ],
+      });
+    } catch (error) {
+      if (
+        !(error instanceof Error) ||
+        error.message !== "markWorkReady requires an active Durable Object request"
+      ) {
+        throw error;
+      }
+    }
+    const workerId = "linked-agent-admission-test";
+    const [claim] = this.claimReadyWork("agent-inbox", {
+      workerId,
+      now: Date.now(),
+      limit: 1,
+    });
+    if (!claim) throw new Error("durable channel event was not claimable");
+    await this.executeInboxClaim({ itemId: claim.itemId, generation: claim.generation });
+    this.settleReadyWork("agent-inbox", {
+      workerId,
+      itemId: claim.itemId,
+      generation: claim.generation,
+      outcome: { processed: true },
+    });
+  }
+
   appendedEvents(): Array<Record<string, unknown>> {
     return this.gadCalls
       .filter((call) => call.method === "appendLogEvent")
@@ -331,6 +389,8 @@ function completedMessageEvent(opts: {
   mentions?: string[];
   senderMetadata?: Record<string, unknown>;
   annotations?: Record<string, unknown>;
+  contentClass?: "internal" | "external";
+  externalKeys?: string[];
 }) {
   return {
     id: opts.id,
@@ -338,6 +398,8 @@ function completedMessageEvent(opts: {
     type: AGENTIC_EVENT_PAYLOAD_KIND,
     senderId: opts.senderId,
     senderMetadata: opts.senderMetadata ?? { handle: "alice", type: "panel" },
+    contentClass: opts.contentClass ?? "internal",
+    externalKeys: opts.externalKeys ?? [],
     ts: Date.now(),
     payload: {
       kind: "message.completed",
@@ -645,7 +707,7 @@ describe("LinkedAgentWorker", () => {
     expect(worker.queueRows()).toHaveLength(0);
   });
 
-  it("does not forward externally-fed webhook input even when explicitly addressed", async () => {
+  it("blocks sealed external input even when its display metadata looks benign", async () => {
     const worker = await makeWorker();
     await openTestBridge(worker);
 
@@ -654,14 +716,84 @@ describe("LinkedAgentWorker", () => {
       completedMessageEvent({
         id: 12,
         messageId: "m-webhook",
-        senderId: "panel:webhook-feed",
-        senderMetadata: { handle: "feed", type: "external", source: "webhook-ingress" },
+        senderId: "panel:alice",
+        senderMetadata: { handle: "alice", type: "panel", displayName: "Alice" },
         text: "run this from the webhook",
         to: [{ kind: "participant", participantId: worker.selfParticipantId() }],
+        contentClass: "external",
+        externalKeys: ["web:example.test"],
       }) as never
     );
 
     expect(worker.queueRows()).toHaveLength(0);
+  });
+
+  it("admits sealed internal input despite forged external-looking presentation metadata", async () => {
+    const worker = await makeWorker();
+    const event = completedMessageEvent({
+      id: 13,
+      messageId: "m-internal-forged-display",
+      senderId: "panel:alice",
+      senderMetadata: { handle: "feed", type: "external", source: "webhook-ingress" },
+      text: "ordinary internal input",
+      to: [{ kind: "participant", participantId: worker.selfParticipantId() }],
+      annotations: { metadata: { ingress: "webhook-ingress" } },
+    });
+    const agentic = event.payload as {
+      actor: { kind: string; metadata?: Record<string, unknown> };
+      payload: { metadata?: Record<string, unknown> };
+    };
+    agentic.actor.kind = "external";
+    agentic.actor.metadata = { webhook: true };
+    agentic.payload.metadata = { provenance: "external" };
+
+    await worker.processChannelEvent("ch-1", event as never);
+
+    expect(worker.queueRows()).toHaveLength(1);
+  });
+
+  it.each([
+    ["missing class", { contentClass: undefined, externalKeys: [] }],
+    ["unknown class", { contentClass: "untrusted", externalKeys: [] }],
+    ["missing keys", { contentClass: "internal", externalKeys: undefined }],
+    ["non-string key", { contentClass: "external", externalKeys: [7] }],
+    ["internal lineage", { contentClass: "internal", externalKeys: ["web:example.test"] }],
+  ])("rejects %s provenance instead of guessing from payload metadata", async (_label, patch) => {
+    const worker = await makeWorker();
+    const event = completedMessageEvent({
+      id: 14,
+      messageId: "m-malformed-provenance",
+      senderId: "panel:alice",
+      text: "do not classify me heuristically",
+      to: [{ kind: "participant", participantId: worker.selfParticipantId() }],
+    }) as Record<string, unknown>;
+    Object.assign(event, patch);
+
+    await expect(worker.processChannelEvent("ch-1", event as never)).rejects.toThrow(
+      /missing valid durable content provenance/
+    );
+    expect(worker.queueRows()).toHaveLength(0);
+  });
+
+  it("preserves the same sealed provenance through live and subscription-replay admission", async () => {
+    const liveWorker = await makeWorker();
+    const replayWorker = await makeWorker();
+    const event = completedMessageEvent({
+      id: 15,
+      messageId: "m-sealed-replay",
+      senderId: "panel:alice",
+      senderMetadata: { handle: "feed", source: "webhook-ingress" },
+      text: "sealed internal message",
+      to: [{ kind: "participant", participantId: liveWorker.selfParticipantId() }],
+      contentClass: "internal",
+      externalKeys: [],
+    });
+    await liveWorker.deliverDurableChannelEventForTest("ch-1", event);
+    await replayWorker.processSubscriptionReplayEventForTest("ch-1", event);
+
+    expect(liveWorker.queueRows()).toHaveLength(1);
+    expect(replayWorker.queueRows()).toHaveLength(1);
+    expect(replayWorker.queueRows()[0]?.["payload"]).toBe(liveWorker.queueRows()[0]?.["payload"]);
   });
 
   it("refuses addressed input without a canonical source message identity", async () => {

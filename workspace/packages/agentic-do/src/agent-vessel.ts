@@ -109,7 +109,6 @@ import {
   derivedTurnStatus,
   ids,
   type AgentLoopConfig,
-  type AgentState,
   type AgentTurnMetadata,
   type EffectOutcome,
   type RespondPolicy,
@@ -2433,6 +2432,8 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     channelId: string,
     event: ChannelReplayEnvelope["logEvents"][number]
   ): Promise<void> {
+    const contentIntegrity = event as typeof event &
+      Pick<ChannelEvent, "contentClass" | "externalKeys">;
     await this.processChannelEvent(channelId, {
       id: event.id,
       messageId: event.messageId,
@@ -2443,6 +2444,8 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       ...(event.senderMetadata ? { senderMetadata: event.senderMetadata } : {}),
       ...(event.contentType ? { contentType: event.contentType } : {}),
       ...(event.attachments ? { attachments: event.attachments } : {}),
+      contentClass: contentIntegrity.contentClass,
+      externalKeys: contentIntegrity.externalKeys,
       ...((event as unknown as { annotations?: Record<string, unknown> }).annotations
         ? {
             annotations: (event as unknown as { annotations: Record<string, unknown> }).annotations,
