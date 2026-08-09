@@ -6,6 +6,7 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import * as os from "node:os";
@@ -93,6 +94,9 @@ import { activate, parseClaudeStreamCompletion } from "./index.js";
 
 const CHANNEL = "chan-1";
 const CONTEXT = "ctx-1";
+const agentId = (sequence: number): string => `agt_${String(sequence).padStart(24, "0")}`;
+const agentToken = (sequence: number): string =>
+  `agent:${agentId(sequence)}:${String(sequence).padStart(43, "s")}`;
 const activationSubscriptions: Array<Array<{ dispose(): void }>> = [];
 
 function makeCtx(
@@ -110,6 +114,9 @@ function makeCtx(
 
   const rpcCall = vi.fn(async (target: string, method: string, ...args: unknown[]) => {
     if (method === "getContextId") return CONTEXT;
+    if (method === "auth.getConnectionInfo") {
+      return { serverId: `srv_${"s".repeat(24)}`, workspaceId: "ws" };
+    }
     if (method === "runtime.createEntity") {
       const spec = args[0] as { kind: string; key: string };
       if (spec.kind === "session") {
@@ -124,8 +131,8 @@ function makeCtx(
     if (method === "subscribeChannel") return { ok: true, participantId: "p1" };
     if (method === "auth.mintAgentCredential") {
       mintSeq += 1;
-      lifecycleEvents.push(`mint:agt_${mintSeq}`);
-      return { agentId: `agt_${mintSeq}`, agentToken: `agent:agt_${mintSeq}:tok` };
+      lifecycleEvents.push(`mint:${agentId(mintSeq)}`);
+      return { agentId: agentId(mintSeq), agentToken: agentToken(mintSeq) };
     }
     if (method === "auth.revokeAgentCredential") {
       lifecycleEvents.push(`revoke:${String(args[0])}`);
@@ -284,7 +291,7 @@ describe("@workspace-extensions/claude-code prepare", () => {
     expect(result.contextId).toBe(CONTEXT);
     expect(result.channelId).toBe(CHANNEL);
     expect(result.profile.environment.VIBESTUDIO_CHANNEL_ID).toBe(CHANNEL);
-    expect(result.profile.environment.VIBESTUDIO_AGENT_TOKEN).toBe("agent:agt_1:tok");
+    expect(result.profile.environment.VIBESTUDIO_AGENT_TOKEN).toBe(agentToken(1));
     expect(result.profile.executable).toBe("claude");
     expect(JSON.stringify(result.profile)).not.toMatch(
       /contextFolder|SERVER_URL|LAUNCH_PROFILE|SKILLS_DIR/
@@ -343,16 +350,16 @@ describe("@workspace-extensions/claude-code prepare", () => {
     // Receiver authority is acquired before invocation; prepare does not prompt inline.
     expect(approvalsRequest).not.toHaveBeenCalled();
     // The prior credential was revoked and a fresh one minted.
-    expect(revoked).toEqual(["agt_1"]);
-    expect(second.profile.environment.VIBESTUDIO_AGENT_TOKEN).toBe("agent:agt_2:tok");
-    const replacement = lifecycleEvents.slice(lifecycleEvents.indexOf("mint:agt_2"));
-    expect(replacement.findIndex((event) => event === "mint:agt_2")).toBeLessThan(
+    expect(revoked).toEqual([agentId(1)]);
+    expect(second.profile.environment.VIBESTUDIO_AGENT_TOKEN).toBe(agentToken(2));
+    const replacement = lifecycleEvents.slice(lifecycleEvents.indexOf(`mint:${agentId(2)}`));
+    expect(replacement.findIndex((event) => event === `mint:${agentId(2)}`)).toBeLessThan(
       replacement.findIndex((event) => event.includes("launches/") && event.includes("preparing"))
     );
     expect(
       replacement.findIndex((event) => event.includes("launches/") && event.includes("preparing"))
-    ).toBeLessThan(replacement.findIndex((event) => event === "revoke:agt_1"));
-    expect(replacement.findIndex((event) => event === "revoke:agt_1")).toBeLessThan(
+    ).toBeLessThan(replacement.findIndex((event) => event === `revoke:${agentId(1)}`));
+    expect(replacement.findIndex((event) => event === `revoke:${agentId(1)}`)).toBeLessThan(
       replacement.findIndex((event) => event.includes("channels/") && event.includes("active"))
     );
   });
@@ -373,10 +380,10 @@ describe("@workspace-extensions/claude-code prepare", () => {
     const prepared = makeCtx(tmpRoot, storage, failures);
     const api = (await activate(prepared.ctx as never)).providerContracts.claudeCode;
     const first = await api.prepare({ channelId: CHANNEL });
-    failures.failRevocationOnce = "agt_1";
+    failures.failRevocationOnce = agentId(1);
 
     await expect(api.prepare({ channelId: CHANNEL })).rejects.toThrow(
-      /revocation failed for agt_1/
+      new RegExp(`revocation failed for ${agentId(1)}`)
     );
 
     const pointer = JSON.parse(storage.get("channels/chan-1.json")!) as {
@@ -384,8 +391,8 @@ describe("@workspace-extensions/claude-code prepare", () => {
       phase: string;
     };
     expect(pointer).toMatchObject({ launchId: first.profile.launchId, phase: "active" });
-    expect(prepared.revoked).toContain("agt_2");
-    expect(prepared.revoked).not.toContain("agt_1");
+    expect(prepared.revoked).toContain(agentId(2));
+    expect(prepared.revoked).not.toContain(agentId(1));
   });
 
   it("records the context→channel binding for resolvePrimaryChannel", async () => {
@@ -549,6 +556,25 @@ describe("@workspace-extensions/claude-code prepare", () => {
     ]) {
       expect(options.env).not.toHaveProperty(secret);
     }
+    const cliCredentialPath = path.join(
+      path.dirname(result.logPath),
+      "home",
+      ".config",
+      "vibestudio",
+      "cli-credentials.json"
+    );
+    expect(statSync(cliCredentialPath).mode & 0o777).toBe(0o600);
+    expect(JSON.parse(readFileSync(cliCredentialPath, "utf8"))).toMatchObject({
+      kind: "agent",
+      entityId: result.entityId,
+      contextId: CONTEXT,
+      agentId: agentId(1),
+      agentToken: agentToken(1),
+      workspaceId: "ws",
+    });
+    expect(options.env["XDG_CONFIG_HOME"]).toBe(
+      path.join(path.dirname(result.logPath), "home", ".config")
+    );
     expect(options.env["VIBESTUDIO_SUBAGENT_CONTRACT"]).toContain("## Subagent Operating Contract");
     expect(options.env["VIBESTUDIO_SUBAGENT_CONTRACT"]).toContain("typed terminal result");
     expect(options.env["VIBESTUDIO_SUBAGENT_CONTRACT"]).toContain(
@@ -569,7 +595,7 @@ describe("@workspace-extensions/claude-code prepare", () => {
         },
       },
     });
-    expect(JSON.stringify(durableLaunch)).not.toContain("agent:agt_1:tok");
+    expect(JSON.stringify(durableLaunch)).not.toContain(agentToken(1));
     expect(durableLaunch).not.toHaveProperty("vesselRef");
     expect(brokerApiMock.start).toHaveBeenCalledBefore(childProcessMock.spawn);
 
@@ -631,7 +657,7 @@ describe("@workspace-extensions/claude-code prepare", () => {
 
     const releasing = api.release({ entityId: result.entityId, generationId: result.generationId });
     await vi.waitFor(() => expect(processOwnerMock.retire).toHaveBeenCalledTimes(1));
-    expect(revoked).not.toContain("agt_1");
+    expect(revoked).not.toContain(agentId(1));
     expect(brokerApiMock.brokers[0]!.close).not.toHaveBeenCalled();
     expect(existsSync(path.dirname(result.logPath))).toBe(true);
 
@@ -639,7 +665,7 @@ describe("@workspace-extensions/claude-code prepare", () => {
     await releasing;
     expect(brokerApiMock.brokers[0]!.close).toHaveBeenCalledOnce();
     expect(processOwnerMock.retire).toHaveBeenCalledBefore(brokerApiMock.brokers[0]!.close);
-    expect(revoked).toContain("agt_1");
+    expect(revoked).toContain(agentId(1));
     expect(existsSync(path.dirname(result.logPath))).toBe(false);
   });
 
@@ -667,7 +693,7 @@ describe("@workspace-extensions/claude-code prepare", () => {
       })
     ).rejects.toThrow("broker bind failed");
     expect(childProcessMock.spawn).not.toHaveBeenCalled();
-    expect(revoked).toContain("agt_1");
+    expect(revoked).toContain(agentId(1));
     expect(existsSync(path.join(tmpRoot, "state", "agent-launch"))).toBe(true);
     expect(readdirSync(path.join(tmpRoot, "state", "agent-launch"))).toEqual([]);
   });
@@ -702,7 +728,7 @@ describe("@workspace-extensions/claude-code prepare", () => {
     expect(processOwnerApiMock.adopt).toHaveBeenCalledWith(
       expect.objectContaining({ pid: 4242, startCoordinate: "test-start" })
     );
-    expect(restarted.revoked).toContain("agt_1");
+    expect(restarted.revoked).toContain(agentId(1));
     expect(existsSync(path.dirname(result.logPath))).toBe(false);
     expect(brokerApiMock.start).toHaveBeenCalledTimes(1);
   });
@@ -805,7 +831,7 @@ describe("@workspace-extensions/claude-code prepare", () => {
     expect(report![2]).toEqual({ runId: "run-1", code: 1, signal: null });
     await vi.waitFor(() => expect(existsSync(path.dirname(result.logPath))).toBe(false));
     expect(brokerApiMock.brokers[0]!.close).toHaveBeenCalledOnce();
-    expect(revoked).toContain("agt_1");
+    expect(revoked).toContain(agentId(1));
 
     // Relaunch, then a deliberate release-kill: no exit report.
     rpcCall.mockClear();
@@ -922,7 +948,7 @@ describe("@workspace-extensions/claude-code prepare", () => {
       generationId: prepared.profile.launchId,
     });
     expect(out.released).toBe(true);
-    expect(revoked).toContain("agt_1");
+    expect(revoked).toContain(agentId(1));
   });
 
   it("a stale generation release cannot revoke the current credential", async () => {
@@ -936,11 +962,11 @@ describe("@workspace-extensions/claude-code prepare", () => {
       generationId: first.profile.launchId,
     });
 
-    expect(revoked).not.toContain("agt_2");
+    expect(revoked).not.toContain(agentId(2));
     await api.release({
       entityId: second.entityId,
       generationId: second.profile.launchId,
     });
-    expect(revoked).toContain("agt_2");
+    expect(revoked).toContain(agentId(2));
   });
 });

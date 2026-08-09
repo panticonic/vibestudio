@@ -7,6 +7,7 @@ import {
   credentialPath,
   loadCliCredentials,
   saveCliCredentials,
+  type CliAgentCredentials,
   type CliCredentials,
 } from "./credentialStore.js";
 
@@ -36,6 +37,21 @@ const CURRENT: CliCredentials = {
   pairedAt: 1,
 };
 
+const AGENT: CliAgentCredentials = {
+  schemaVersion: 1,
+  kind: "agent",
+  url: "webrtc://room-current/_workspace/dev",
+  workspaceId: "workspace-dev",
+  workspaceName: "dev",
+  serverId: `srv_${"s".repeat(24)}`,
+  entityId: "session:channel-one",
+  contextId: "context-one",
+  agentId: `agt_${"a".repeat(24)}`,
+  agentToken: `agent:agt_${"a".repeat(24)}:${"t".repeat(43)}`,
+  workspacePairing: CURRENT.workspacePairing,
+  signedInAt: 2,
+};
+
 describe("CLI persisted device credential", () => {
   let home: string;
 
@@ -57,6 +73,17 @@ describe("CLI persisted device credential", () => {
   it("round-trips only the exact canonical schema", () => {
     saveCliCredentials(CURRENT);
     expect(loadCliCredentials()).toEqual(CURRENT);
+    if (process.platform !== "win32") {
+      expect(fs.statSync(credentialPath()).mode & 0o777).toBe(0o600);
+    }
+  });
+
+  it("round-trips an entity-scoped agent login without a human device identity", () => {
+    saveCliCredentials(AGENT);
+    expect(loadCliCredentials()).toEqual(AGENT);
+    expect(loadCliCredentials()).not.toHaveProperty("deviceId");
+    expect(loadCliCredentials()).not.toHaveProperty("refreshToken");
+    expect(loadCliCredentials()).not.toHaveProperty("controlPairing");
     if (process.platform !== "win32") {
       expect(fs.statSync(credentialPath()).mode & 0o777).toBe(0o600);
     }
@@ -93,6 +120,12 @@ describe("CLI persisted device credential", () => {
         workspacePairing: { ...CURRENT.workspacePairing, sig: "wss://signal.example" },
       },
       { ...CURRENT, workspacePairing: { ...CURRENT.workspacePairing, srv: "server" } },
+      { ...AGENT, agentId: `agt_${"b".repeat(24)}` },
+      { ...AGENT, agentToken: `agent:agt_${"a".repeat(24)}:short` },
+      { ...AGENT, deviceId: CURRENT.deviceId },
+      { ...AGENT, workspacePairing: undefined, url: "https://server.example/arbitrary" },
+      { ...AGENT, workspacePairing: undefined, url: "https://server.example/_workspace/other" },
+      { ...AGENT, workspacePairing: undefined, url: "https://user@server.example/" },
     ]) {
       write(invalid);
       expect(loadCliCredentials()).toBeNull();
@@ -110,7 +143,7 @@ describe("CLI persisted device credential", () => {
 
     expect(loadCliCredentials()).toBeNull();
     expect(warning).toHaveBeenCalledWith(
-      expect.stringMatching(/not a canonical device credential.*pair again/su)
+      expect.stringMatching(/not a canonical CLI credential.*sign in again/su)
     );
     expect(warning).not.toHaveBeenCalledWith(expect.stringMatching(/schema|migrat/iu));
   });
@@ -118,16 +151,16 @@ describe("CLI persisted device credential", () => {
   it("rejects invalid writes without replacing the valid credential", () => {
     saveCliCredentials(CURRENT);
     const before = fs.readFileSync(credentialPath());
-    expect(() => saveCliCredentials(null as never)).toThrow(/non-canonical CLI device credential/u);
+    expect(() => saveCliCredentials(null as never)).toThrow(/non-canonical CLI credential/u);
     expect(() => saveCliCredentials({ ...CURRENT, workspacePairing: undefined } as never)).toThrow(
-      /non-canonical CLI device credential/u
+      /non-canonical CLI credential/u
     );
     expect(() =>
       saveCliCredentials({
         ...CURRENT,
         workspacePairing: { ...CURRENT.workspacePairing, sig: "wss://signal.example" },
       })
-    ).toThrow(/non-canonical CLI device credential/u);
+    ).toThrow(/non-canonical CLI credential/u);
     expect(fs.readFileSync(credentialPath())).toEqual(before);
   });
 
@@ -136,10 +169,10 @@ describe("CLI persisted device credential", () => {
     const before = fs.readFileSync(credentialPath());
 
     expect(() => saveCliCredentials({ ...CURRENT, serverId: `srv_${"x".repeat(24)}` })).toThrow(
-      /remote logout.*another server or device/u
+      /remote logout.*another server or principal/u
     );
     expect(() => saveCliCredentials({ ...CURRENT, deviceId: `dev_${"x".repeat(24)}` })).toThrow(
-      /remote logout.*another server or device/u
+      /remote logout.*another server or principal/u
     );
     expect(fs.readFileSync(credentialPath())).toEqual(before);
   });

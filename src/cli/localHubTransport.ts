@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { getCentralDataPath } from "@vibestudio/env-paths";
 import { CentralDataManager, type HubProcessLeaseRecord } from "@vibestudio/shared/centralData";
-import type { CliCredentials } from "./credentialStore.js";
+import type { CliDeviceCredentials } from "./credentialStore.js";
 
 interface HubHealth {
   serverId: string;
@@ -63,7 +63,7 @@ async function readJson(response: Response): Promise<unknown> {
 }
 
 async function resolveLiveLocalHub(
-  credentials: CliCredentials,
+  credentials: CliDeviceCredentials,
   deps: LocalHubTransportDeps
 ): Promise<{
   serverUrl: string;
@@ -97,7 +97,7 @@ async function resolveLiveLocalHub(
 
 /** Resolve the machine control endpoint without touching any workspace runtime. */
 export async function resolveLocalHubControlTransport(
-  credentials: CliCredentials,
+  credentials: CliDeviceCredentials,
   deps: LocalHubTransportDeps = {}
 ): Promise<LocalHubControlTransport | null> {
   const live = await resolveLiveLocalHub(credentials, deps);

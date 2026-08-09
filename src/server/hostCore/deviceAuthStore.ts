@@ -6,6 +6,11 @@ import {
   DEVICE_REFRESH_TOKEN_PATTERN,
   SERVER_ID_PATTERN,
 } from "@vibestudio/shared/deviceCredentials";
+import {
+  AGENT_ID_PATTERN,
+  AGENT_SECRET_PATTERN,
+  AGENT_TOKEN_PATTERN,
+} from "@vibestudio/shared/cliCredentials";
 import type {
   AgentCredentialRow,
   ControlRoomRow,
@@ -26,9 +31,7 @@ export type DeviceRecord = DeviceRow;
 export type AgentCredentialRecord = AgentCredentialRow;
 
 /** Exact agent credential grammar emitted by this pre-release server. */
-export const AGENT_ID_PATTERN = /^agt_[A-Za-z0-9_-]{24}$/;
-export const AGENT_SECRET_PATTERN = /^[A-Za-z0-9_-]{43}$/;
-export const AGENT_TOKEN_PATTERN = /^agent:agt_[A-Za-z0-9_-]{24}:[A-Za-z0-9_-]{43}$/;
+export { AGENT_ID_PATTERN, AGENT_SECRET_PATTERN, AGENT_TOKEN_PATTERN };
 
 /** Identity authenticated by an agent credential. Semantic authority is resolved live. */
 export interface AuthenticatedAgentEntity {

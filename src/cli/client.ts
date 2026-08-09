@@ -15,6 +15,7 @@ import {
   loadCliCredentials,
   saveCliCredentials,
   credentialPath,
+  requireDeviceCliCredentials,
 } from "./credentialStore.js";
 import {
   addRemoteWorkspaceMember,
@@ -110,10 +111,11 @@ async function remotePair(inv: ParsedInvocation): Promise<number> {
 async function remoteStatus(inv: ParsedInvocation): Promise<number> {
   const json = jsonMode(inv.flags["json"] === true);
   try {
-    const creds = loadCliCredentials();
-    if (!creds) {
+    const loaded = loadCliCredentials();
+    if (!loaded) {
       throw new AuthError(NOT_PAIRED_GUIDANCE);
     }
+    const creds = requireDeviceCliCredentials(loaded, "remote status");
     if (!creds.workspaceName || !isSelectedWorkspaceUrl(creds.url)) {
       throw new AuthError(
         "no remote workspace selected - run `vibestudio remote select <workspace>`"
@@ -147,7 +149,7 @@ async function remoteStatus(inv: ParsedInvocation): Promise<number> {
 function requirePairedCredentials(): DeviceCredential {
   const credentials = loadCliCredentials();
   if (!credentials) throw new AuthError(NOT_PAIRED_GUIDANCE);
-  return credentials;
+  return requireDeviceCliCredentials(credentials, "remote device management");
 }
 
 function ttlFrom(inv: ParsedInvocation): number | undefined {
@@ -318,8 +320,9 @@ async function remoteRevokeDevice(inv: ParsedInvocation): Promise<number> {
 async function remoteWorkspaceList(inv: ParsedInvocation): Promise<number> {
   const json = jsonMode(inv.flags["json"] === true);
   try {
-    const creds = loadCliCredentials();
-    if (!creds) throw new AuthError(NOT_PAIRED_GUIDANCE);
+    const loaded = loadCliCredentials();
+    if (!loaded) throw new AuthError(NOT_PAIRED_GUIDANCE);
+    const creds = requireDeviceCliCredentials(loaded, "remote workspace listing");
     const workspaces = await listRemoteWorkspaces(creds);
     printResult(
       { workspaces },
@@ -375,8 +378,9 @@ async function remoteWorkspaceCreate(inv: ParsedInvocation): Promise<number> {
           ...(templateCredential ? { credential: templateCredential } : {}),
         })
       : undefined;
-    const credentials = loadCliCredentials();
-    if (!credentials) throw new AuthError(NOT_PAIRED_GUIDANCE);
+    const loaded = loadCliCredentials();
+    if (!loaded) throw new AuthError(NOT_PAIRED_GUIDANCE);
+    const credentials = requireDeviceCliCredentials(loaded, "remote workspace creation");
     const created = await createRemoteWorkspace(credentials, {
       workspace,
       ...(rootTemplate ? { rootTemplate } : {}),
@@ -403,8 +407,9 @@ async function remoteWorkspaceSelect(inv: ParsedInvocation): Promise<number> {
       inv.positionals[0] ??
       (typeof inv.flags["workspace"] === "string" ? inv.flags["workspace"] : "");
     if (!name) throw new UsageError("workspace name is required");
-    const creds = loadCliCredentials();
-    if (!creds) throw new AuthError(NOT_PAIRED_GUIDANCE);
+    const loaded = loadCliCredentials();
+    if (!loaded) throw new AuthError(NOT_PAIRED_GUIDANCE);
+    const creds = requireDeviceCliCredentials(loaded, "remote workspace selection");
     const selected = await selectRemoteWorkspace(creds, name);
     saveCliCredentials(selected);
     printResult(
@@ -478,7 +483,7 @@ async function terminalCredentials(
         'not paired - run `vibestudio terminal start --pair "vibestudio://connect?room=...&fp=...&code=...&sig=...&v=2"`'
       );
     }
-    creds = loaded;
+    creds = requireDeviceCliCredentials(loaded, "terminal start");
   }
 
   if (requestedWorkspace) {
@@ -842,9 +847,15 @@ const remoteCommands: CliCommand[] = [
     flags: [JSON_FLAG],
     run: async (inv) => {
       const json = jsonMode(inv.flags["json"] === true);
-      clearCliCredentials();
-      printResult({ loggedOut: true }, { json, human: () => console.log("logged out") });
-      return 0;
+      try {
+        const credentials = loadCliCredentials();
+        if (credentials) requireDeviceCliCredentials(credentials, "remote logout");
+        clearCliCredentials();
+        printResult({ loggedOut: true }, { json, human: () => console.log("logged out") });
+        return 0;
+      } catch (error) {
+        return printError(error, { json });
+      }
     },
   },
   {

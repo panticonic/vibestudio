@@ -20,7 +20,7 @@ import {
   type FlagSpec,
   type ParsedInvocation,
 } from "./commandTable.js";
-import { loadCliCredentials } from "./credentialStore.js";
+import { loadCliCredentials, requireDeviceCliCredentials } from "./credentialStore.js";
 import { AuthError, jsonMode, printError, printResult, UsageError } from "./output.js";
 import { RpcClient } from "./rpcClient.js";
 import { createTemplateComposerClient } from "./templateComposerClient.js";
@@ -130,7 +130,7 @@ function requireClient(): { rpc: RpcClient; templates: TemplatesClient } {
       "no remote workspace selected — run `vibestudio remote select <workspace>`"
     );
   }
-  const rpc = new RpcClient(credentials);
+  const rpc = new RpcClient(requireDeviceCliCredentials(credentials, "template management"));
   return { rpc, templates: createTemplateComposerClient(rpc) };
 }
 

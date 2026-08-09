@@ -9,6 +9,22 @@ import { claudeLaunchProfile } from "@vibestudio/shared/claudeLaunchProfile";
 import type { MaterializedClaudeLaunch } from "@vibestudio/shared/claudeLaunchProfile";
 
 let tmpRoot: string;
+const AGENT_ID = `agt_${"a".repeat(24)}`;
+const AGENT_TOKEN = `agent:${AGENT_ID}:${"s".repeat(43)}`;
+const SERVER_ID = `srv_${"s".repeat(24)}`;
+const PAIRING = {
+  room: "paired",
+  fp: "AA".repeat(32),
+  sig: "wss://signal.example/",
+  v: 2 as const,
+  ice: "all" as const,
+};
+const directRoute = (url = "http://local") => ({
+  url,
+  serverId: SERVER_ID,
+  workspaceId: "workspace-dev",
+  workspaceName: "dev",
+});
 
 beforeEach(() => {
   tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "claude-cli-test-"));
@@ -65,7 +81,7 @@ describe("remote Claude launch materialization", () => {
       profile: claudeLaunchProfile({
         launchId: "entity-remote",
         environment: {
-          VIBESTUDIO_AGENT_TOKEN: "agent:remote:secret",
+          VIBESTUDIO_AGENT_TOKEN: AGENT_TOKEN,
           VIBESTUDIO_ENTITY_ID: "entity-remote",
           VIBESTUDIO_CONTEXT_ID: contextId,
           VIBESTUDIO_CHANNEL_ID: "channel-remote",
@@ -98,7 +114,10 @@ describe("remote Claude launch materialization", () => {
         expectedContextId: "ctx-remote",
         contextDirectory,
         profilesRoot,
-        serverUrl: "webrtc://paired/_workspace/dev",
+        cliRoute: {
+          ...directRoute("webrtc://paired/_workspace/dev"),
+          workspacePairing: PAIRING,
+        },
         release,
         spawnLaunch,
         startBroker,
@@ -108,7 +127,7 @@ describe("remote Claude launch materialization", () => {
     expect(release).toHaveBeenCalledExactlyOnceWith("entity-remote", "entity-remote");
     expect(startBroker).toHaveBeenCalledWith(
       expect.objectContaining({
-        agentToken: "agent:remote:secret",
+        agentToken: AGENT_TOKEN,
         serverUrl: "webrtc://paired/_workspace/dev",
         vesselRef: expect.stringContaining("LinkedAgentWorker"),
       })
@@ -130,7 +149,7 @@ describe("remote Claude launch materialization", () => {
         expectedContextId: "ctx-remote",
         contextDirectory: tmpRoot,
         profilesRoot: path.join(tmpRoot, "profiles"),
-        serverUrl: "http://local",
+        cliRoute: directRoute(),
         release: vi.fn(async () => undefined),
         startBroker: vi.fn(async (input) => ({ ...input, close: vi.fn(async () => undefined) })),
         spawnLaunch: vi.fn(async (launch: MaterializedClaudeLaunch) => {
@@ -158,7 +177,7 @@ describe("remote Claude launch materialization", () => {
         expectedContextId: "ctx-local",
         contextDirectory: tmpRoot,
         profilesRoot: path.join(tmpRoot, "profiles"),
-        serverUrl: "http://local",
+        cliRoute: directRoute(),
         release,
         spawnLaunch,
         startBroker: vi.fn(),
@@ -180,7 +199,7 @@ describe("remote Claude launch materialization", () => {
         expectedContextId: "ctx-remote",
         contextDirectory,
         profilesRoot: path.join(tmpRoot, "profiles"),
-        serverUrl: "http://local",
+        cliRoute: directRoute(),
         release: vi.fn(async () => {
           throw cleanupError;
         }),

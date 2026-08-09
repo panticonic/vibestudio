@@ -20,7 +20,6 @@ import {
 import { loadCliCredentials } from "../credentialStore.js";
 import { AuthError, EXIT_ERROR, jsonMode, printError, printResult, UsageError } from "../output.js";
 import { RpcClient as CliRpcClient } from "../rpcClient.js";
-import { normalizeServerBaseUrl } from "../serverUrl.js";
 import { normalizeRepoPath, REPO_FLAG, requireRepo } from "./vcsCommandShared.js";
 
 const GIT_REMOTE_FLAG: FlagSpec = {
@@ -130,17 +129,9 @@ interface VcsGitCommand {
 }
 
 function resolveGitRpcClient(): CliRpcClient {
-  const token = process.env["VIBESTUDIO_AGENT_TOKEN"];
-  if (token) {
-    const rawUrl = process.env["VIBESTUDIO_SERVER_URL"];
-    if (!rawUrl) {
-      throw new AuthError("VIBESTUDIO_AGENT_TOKEN is set but VIBESTUDIO_SERVER_URL is missing");
-    }
-    return new CliRpcClient({ url: normalizeServerBaseUrl(rawUrl), token });
-  }
   const creds = loadCliCredentials();
   if (!creds) {
-    throw new AuthError('not paired — run `vibestudio remote pair "<pair-link>"` first');
+    throw new AuthError("not signed in — pair a device or use a managed agent profile");
   }
   if (!creds.workspaceName) {
     throw new AuthError(

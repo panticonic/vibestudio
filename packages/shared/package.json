@@ -36,6 +36,7 @@
     "./claudeBridgeAuthority": "./src/claudeBridgeAuthority.ts",
     "./claudeReadOnlyLaunch": "./src/claudeReadOnlyLaunch.ts",
     "./chromeTrust": "./src/chromeTrust.ts",
+    "./cliCredentials": "./src/cliCredentials.ts",
     "./connect": "./src/connect.ts",
     "./contentType": "./src/contentType.ts",
     "./connectionGrants": "./src/connectionGrants.ts",

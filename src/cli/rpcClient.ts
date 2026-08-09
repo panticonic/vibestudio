@@ -9,6 +9,7 @@ import {
   canonicalStoredPairing,
   saveCliCredentials,
   type CliCredentials,
+  type CliDeviceCredentials,
   type CliStoredPairing,
 } from "./credentialStore.js";
 import { resolveLocalHubControlTransport } from "./localHubTransport.js";
@@ -31,25 +32,13 @@ import type { z } from "zod";
  * refresh + retry before failing with an AuthError.
  */
 
-export interface DeviceCredential {
-  schemaVersion: 4;
-  kind: "device";
-  url: string;
-  workspaceId: string;
-  workspaceName: string;
-  serverId: string;
-  deviceId: string;
-  refreshToken: string;
-  controlPairing: CliStoredPairing;
-  workspacePairing: CliStoredPairing;
-  pairedAt: number;
-}
+export type DeviceCredential = CliDeviceCredentials;
 
 export type RefreshShellResponse = z.infer<typeof RefreshShellResponseSchema>;
 
 /**
- * A raw-token credential: an entity-scoped agent credential
- * `agent:<agentId>:<token>`, typically supplied via `VIBESTUDIO_AGENT_TOKEN`.
+ * A raw-token credential for internal callers and focused transport tests.
+ * Ordinary CLI agent login always uses the canonical persisted agent profile.
  * The `agent:` token IS the auth; there is no
  * refresh-shell device exchange; WS/WebRTC auth and the HTTP `/refresh-agent`
  * bearer exchange all use it verbatim.
@@ -75,7 +64,7 @@ export interface DeviceEndpointCredential {
   pairing?: CliStoredPairing;
 }
 
-export type RpcClientCredential = DeviceCredential | DeviceEndpointCredential | RawTokenCredential;
+export type RpcClientCredential = CliCredentials | DeviceEndpointCredential | RawTokenCredential;
 
 /** Shared surface of the persistent WS and WebRTC clients. */
 interface PersistentRpcClient {
@@ -96,8 +85,14 @@ function isRawTokenCredential(creds: RpcClientCredential): creds is RawTokenCred
   return typeof (creds as RawTokenCredential).token === "string";
 }
 
-function isCompleteCliCredentials(creds: RpcClientCredential): creds is CliCredentials {
-  const candidate = creds as Partial<CliCredentials>;
+function isAgentCliCredentials(
+  creds: RpcClientCredential
+): creds is Extract<CliCredentials, { kind: "agent" }> {
+  return (creds as Partial<CliCredentials>).kind === "agent";
+}
+
+function isCompleteDeviceCredentials(creds: RpcClientCredential): creds is CliDeviceCredentials {
+  const candidate = creds as Partial<CliDeviceCredentials>;
   return (
     candidate.schemaVersion === 4 &&
     candidate.kind === "device" &&
@@ -239,13 +234,21 @@ export class RpcClient {
   private webRtcClient: Promise<import("./webrtcClient.js").WebRtcRpcClient> | null = null;
   private wsClient: Promise<import("./wsClient.js").WsRpcClient> | null = null;
   private localWorkspaceClient: Promise<RpcClient | null> | null = null;
-  private readonly cliCredentials: CliCredentials | null;
+  private readonly cliCredentials: CliDeviceCredentials | null;
   private keepPushOpen = false;
   private retainedConnections = 0;
 
   constructor(creds: RpcClientCredential) {
     this.url = creds.url;
-    if (isRawTokenCredential(creds)) {
+    if (isAgentCliCredentials(creds)) {
+      this.pairing = creds.workspacePairing;
+      this.cliCredentials = null;
+      this.rawToken = creds.agentToken;
+      this.deviceId = null;
+      this.refreshToken = null;
+      this.callerId = `agent:${creds.entityId}`;
+      this.callerKind = "agent";
+    } else if (isRawTokenCredential(creds)) {
       this.pairing = creds.workspacePairing;
       this.cliCredentials = null;
       this.rawToken = creds.token;
@@ -254,7 +257,7 @@ export class RpcClient {
       this.callerId = `agent:${agentIdFromToken(creds.token)}`;
       this.callerKind = "agent";
     } else {
-      if (isCompleteCliCredentials(creds)) {
+      if (isCompleteDeviceCredentials(creds)) {
         this.cliCredentials = creds;
         this.pairing = creds.workspacePairing;
       } else {
@@ -634,7 +637,7 @@ export class RpcClient {
     ) {
       throw new Error("The local hub routed the paired device to a different server or workspace");
     }
-    const refreshedCredentials: CliCredentials = {
+    const refreshedCredentials: CliDeviceCredentials = {
       ...credentials,
       url: `webrtc://${route.workspaceReach.room}${expectedPath}`,
       workspacePairing: canonicalStoredPairing(route.workspaceReach),

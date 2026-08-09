@@ -10,13 +10,12 @@ import {
 import type { TokenManager } from "@vibestudio/shared/tokenManager";
 import type { ServiceRouteDecl } from "../routeRegistry.js";
 import type { ServiceWithRoutes } from "../serviceWithHttpRoutes.js";
+import { type DeviceAuthStore, type PairedDeviceCredential } from "../hostCore/deviceAuthStore.js";
 import {
   AGENT_ID_PATTERN,
   AGENT_SECRET_PATTERN,
   AGENT_TOKEN_PATTERN,
-  type DeviceAuthStore,
-  type PairedDeviceCredential,
-} from "../hostCore/deviceAuthStore.js";
+} from "@vibestudio/shared/cliCredentials";
 import {
   DEVICE_ID_PATTERN,
   DEVICE_REFRESH_TOKEN_PATTERN,

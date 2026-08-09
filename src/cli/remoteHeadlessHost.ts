@@ -3,7 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { isSelectedWorkspaceUrl } from "@vibestudio/shared/connect";
-import { loadCliCredentials } from "./credentialStore.js";
+import { loadCliCredentials, requireDeviceCliCredentials } from "./credentialStore.js";
 import type { ParsedInvocation } from "./commandTable.js";
 import { CliError, UsageError, jsonMode, printError, redactCliSecrets } from "./output.js";
 import { NOT_PAIRED_GUIDANCE } from "./pairingGuidance.js";
@@ -163,9 +163,16 @@ async function runRemoteHeadlessHost(inv: ParsedInvocation): Promise<number> {
   const idleExitMs = flagMin("idle-exit-min", true);
   const entryPath = resolveRemoteHeadlessHostEntryPath();
 
-  const creds = loadCliCredentials();
-  if (!creds) {
+  const loaded = loadCliCredentials();
+  if (!loaded) {
     console.error(NOT_PAIRED_GUIDANCE);
+    return 3;
+  }
+  let creds: DeviceCredential;
+  try {
+    creds = requireDeviceCliCredentials(loaded, "remote headless host");
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
     return 3;
   }
   if (!isSelectedWorkspaceUrl(creds.url)) {

@@ -3,7 +3,6 @@ import { RpcClient, shellCallerId } from "../rpcClient.js";
 import { isValidSessionName, loadAgentSession } from "../sessionStore.js";
 import { AuthError, CliError, StaleSessionError, UsageError } from "../output.js";
 import type { FlagSpec, ParsedInvocation } from "../commandTable.js";
-import { normalizeServerBaseUrl } from "../serverUrl.js";
 import {
   assertBindingWorkspace,
   findContextBinding,
@@ -17,16 +16,15 @@ import {
  * (docs/claude-code-channels-plan.md §6.2, breaking change §9.3):
  *
  *   1. explicit `--context <id>` / `--session <name>` flags;
- *   2. env `VIBESTUDIO_CONTEXT_ID` (+ `VIBESTUDIO_AGENT_TOKEN` ⇒ the raw agent
- *      credential and `VIBESTUDIO_SERVER_URL`, caller kind `agent` — no device
- *      credential or session file is involved);
+ *   2. ambient `VIBESTUDIO_CONTEXT_ID`, dispatched over the canonical CLI
+ *      credential (it never supplies authentication);
  *   3. cwd-upward search for `.vibestudio-context.json` (stable workspace +
- *      context identity, dispatched over the paired device credential);
+ *      context identity, dispatched over the canonical CLI credential);
  *   4. the named default session file.
  *
  * The returned `session` is a {@link ScopeIdentity}: a session-file loaded from
- * disk in tier 4, or a synthesized identity (entity/scope from env or the
- * binding) in tiers 2/3 where no `AgentSession` file exists. All callers read
+ * disk in tier 4, or a synthesized identity from the selected context and
+ * credential in tiers 2/3 where no `AgentSession` file exists. All callers read
  * only the {@link ScopeIdentity} subset, so the shape is uniform across tiers.
  */
 
@@ -88,52 +86,11 @@ function scopeKeyForContext(contextId: string): string {
   return `ctx:${contextId}`;
 }
 
-/**
- * Tier 2 — env agent credential. `VIBESTUDIO_AGENT_TOKEN` selects the raw
- * `agent:<agentId>:<token>` credential and caller kind `agent`; scope comes
- * entirely from env (no device credential, no session file).
- */
-function resolveAgentEnvScope(contextOverride: string | undefined): SessionScope {
-  const token = process.env["VIBESTUDIO_AGENT_TOKEN"];
-  if (!token) {
-    // Caller only invokes this when a token is present; keep the guard honest.
-    throw new CliError("VIBESTUDIO_AGENT_TOKEN is not set");
-  }
-  const rawUrl = process.env["VIBESTUDIO_SERVER_URL"];
-  if (!rawUrl) {
-    throw new AuthError(
-      "VIBESTUDIO_AGENT_TOKEN is set but VIBESTUDIO_SERVER_URL is missing — cannot reach the workspace"
-    );
-  }
-  const url = normalizeServerBaseUrl(rawUrl);
-  const contextId = contextOverride ?? process.env["VIBESTUDIO_CONTEXT_ID"];
-  if (!contextId) {
-    throw new UsageError(
-      "no context — set VIBESTUDIO_CONTEXT_ID (or pass --context <id>) alongside VIBESTUDIO_AGENT_TOKEN"
-    );
-  }
-  const entityId = process.env["VIBESTUDIO_ENTITY_ID"] ?? scopeKeyForContext(contextId);
-  const client = new RpcClient({ url, token });
-  return {
-    client,
-    contextId,
-    callerId: `agent:${entityId}`,
-    session: {
-      name: `agent:${contextId}`,
-      serverUrl: url,
-      entityId,
-      contextId,
-      scopeKey: scopeKeyForContext(contextId),
-    },
-  };
-}
-
-/** Load + validate the paired device credential (shared by tiers 3/4 and
- *  explicit `--context` without an agent token). */
-function requireDeviceCredential(): NonNullable<ReturnType<typeof loadCliCredentials>> {
+/** Load the canonical device or agent credential for workspace commands. */
+function requireWorkspaceCredential(): NonNullable<ReturnType<typeof loadCliCredentials>> {
   const creds = loadCliCredentials();
   if (!creds) {
-    throw new AuthError('not paired — run `vibestudio remote pair "<pair-link>"` first');
+    throw new AuthError("not signed in — pair a device or use a managed agent profile");
   }
   if (!creds.workspaceName) {
     throw new AuthError(
@@ -144,7 +101,7 @@ function requireDeviceCredential(): NonNullable<ReturnType<typeof loadCliCredent
 }
 
 /**
- * Tier 3 — cwd-upward context binding, dispatched over the paired device
+ * Tier 3 — cwd-upward context binding, dispatched over the canonical CLI
  * credential. The binding is accepted only when its durable workspace id
  * matches the selected credential. Reachability always comes from that
  * credential's current WebRTC/hub route.
@@ -153,19 +110,24 @@ function resolveBindingScope(
   binding: ContextBinding,
   contextOverride: string | undefined
 ): SessionScope {
-  const creds = requireDeviceCredential();
+  const creds = requireWorkspaceCredential();
   try {
     assertBindingWorkspace(binding, creds);
   } catch (error) {
     throw new StaleSessionError(error instanceof Error ? error.message : String(error));
   }
   const contextId = contextOverride ?? binding.contextId;
-  const entityId = process.env["VIBESTUDIO_ENTITY_ID"] ?? scopeKeyForContext(contextId);
+  if (creds.kind === "agent" && contextId !== creds.contextId) {
+    throw new StaleSessionError(
+      `agent credential is bound to context ${creds.contextId}, not ${contextId}`
+    );
+  }
+  const entityId = creds.kind === "agent" ? creds.entityId : scopeKeyForContext(contextId);
   const client = new RpcClient(creds);
   return {
     client,
     contextId,
-    callerId: shellCallerId(creds.deviceId),
+    callerId: creds.kind === "agent" ? `agent:${creds.entityId}` : shellCallerId(creds.deviceId),
     session: {
       name: `context:${contextId}`,
       serverUrl: creds.url,
@@ -176,16 +138,20 @@ function resolveBindingScope(
   };
 }
 
-/** Explicit `--context <id>` over the device credential, when neither an agent
- *  token nor a context binding applies. */
+/** Explicit `--context <id>` over the canonical CLI credential. */
 function resolveExplicitContextScope(contextId: string): SessionScope {
-  const creds = requireDeviceCredential();
-  const entityId = process.env["VIBESTUDIO_ENTITY_ID"] ?? scopeKeyForContext(contextId);
+  const creds = requireWorkspaceCredential();
+  if (creds.kind === "agent" && contextId !== creds.contextId) {
+    throw new StaleSessionError(
+      `agent credential is bound to context ${creds.contextId}, not ${contextId}`
+    );
+  }
+  const entityId = creds.kind === "agent" ? creds.entityId : scopeKeyForContext(contextId);
   const client = new RpcClient(creds);
   return {
     client,
     contextId,
-    callerId: shellCallerId(creds.deviceId),
+    callerId: creds.kind === "agent" ? `agent:${creds.entityId}` : shellCallerId(creds.deviceId),
     session: {
       name: `context:${contextId}`,
       serverUrl: creds.url,
@@ -203,7 +169,7 @@ function resolveSessionFileScope(name: string): SessionScope {
   }
   // Pairing is the prerequisite for session lookup. Checking it first avoids
   // sending a brand-new user through a misleading attach-then-not-paired chain.
-  const creds = requireDeviceCredential();
+  const creds = requireWorkspaceCredential();
   const session = loadAgentSession(name);
   if (!session) {
     throw new CliError(
@@ -217,11 +183,19 @@ function resolveSessionFileScope(name: string): SessionScope {
         `credential targets ${creds.serverId}/${creds.workspaceId}`
     );
   }
+  if (
+    creds.kind === "agent" &&
+    (session.entityId !== creds.entityId || session.contextId !== creds.contextId)
+  ) {
+    throw new StaleSessionError(
+      `session ${name} does not match agent ${creds.entityId}/${creds.contextId}`
+    );
+  }
   return {
     client: new RpcClient(creds),
     contextId: session.contextId,
     session: { ...session, serverUrl: creds.url },
-    callerId: shellCallerId(creds.deviceId),
+    callerId: creds.kind === "agent" ? `agent:${creds.entityId}` : shellCallerId(creds.deviceId),
   };
 }
 
@@ -240,21 +214,22 @@ export function resolveSessionScope(inv: ParsedInvocation): SessionScope {
     return resolveSessionFileScope(explicitSession);
   }
 
-  // Tier 2: an env agent token selects the agent credential + env scope. An
-  // explicit --context (tier 1) only overrides WHICH context, not the credential.
-  if (process.env["VIBESTUDIO_AGENT_TOKEN"]) {
-    return resolveAgentEnvScope(explicitContext);
-  }
-
-  // Tier 3: a cwd-upward stable context binding over the device credential.
-  const binding = findContextBinding();
-  if (binding) {
-    return resolveBindingScope(binding, explicitContext);
-  }
-
-  // Tier 1b: an explicit --context with no token/binding → device credential.
+  // Tier 1b: explicit context uses the canonical credential. Authentication
+  // never comes from environment variables.
   if (explicitContext !== undefined) {
     return resolveExplicitContextScope(explicitContext);
+  }
+
+  // Tier 2: a managed launch may provide a non-secret context coordinate.
+  const ambientContext = process.env["VIBESTUDIO_CONTEXT_ID"];
+  if (ambientContext) {
+    return resolveExplicitContextScope(ambientContext);
+  }
+
+  // Tier 3: a cwd-upward stable context binding over the canonical credential.
+  const binding = findContextBinding();
+  if (binding) {
+    return resolveBindingScope(binding, undefined);
   }
 
   // Tier 4: the default named session file.

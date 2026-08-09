@@ -1022,11 +1022,26 @@ export async function activate(ctx: ExtensionContext) {
   }> {
     await assertClaudeCodeVersion();
     const workspace = await ctx.workspace.getInfo();
+    const connection = await ctx.rpc.call<{
+      serverId: string;
+      workspaceId: string;
+    }>("main", "auth.getConnectionInfo");
+    if (connection.workspaceId !== workspace.id) {
+      throw error(
+        "EIDENTITY",
+        `Claude launch route belongs to workspace ${connection.workspaceId}, not ${workspace.id}`
+      );
+    }
     const { dir: contextFolder } = await ctx.workspace.ensureContextFolder(prepared.contextId);
     const launch = await materializeClaudeLaunch({
       profile: prepared.profile,
       profilesRoot: path.join(workspace.statePath, "agent-launch"),
-      serverUrl: currentServerUrl(),
+      cliRoute: {
+        url: currentServerUrl(),
+        serverId: connection.serverId,
+        workspaceId: connection.workspaceId,
+        workspaceName: workspace.name,
+      },
     });
     const record = await readLaunchRecord(launchKey(prepared.profile.launchId));
     if (!record || record.ownerKind !== "extension-headless" || record.phase !== "preparing") {

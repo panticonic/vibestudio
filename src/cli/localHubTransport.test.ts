@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { HubProcessLeaseRecord } from "@vibestudio/shared/centralData";
-import type { CliCredentials } from "./credentialStore.js";
+import type { CliDeviceCredentials } from "./credentialStore.js";
 import {
   localHubIdentityDatabasePath,
   resolveLocalHubControlTransport,
@@ -10,7 +10,7 @@ const serverId = `srv_${"S".repeat(24)}`;
 const hubBootId = `boot_${"H".repeat(24)}`;
 const credentials = {
   serverId,
-} as CliCredentials;
+} as CliDeviceCredentials;
 const lease: HubProcessLeaseRecord = {
   ownerBootId: hubBootId,
   gatewayPort: 46247,

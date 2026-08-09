@@ -10,6 +10,7 @@ import {
   removeMaterializedClaudeLaunch,
   type ClaudeLaunchProfile,
   type MaterializedClaudeLaunch,
+  type ClaudeCliRoute,
 } from "@vibestudio/shared/claudeLaunchProfile";
 import type { ClaudeBridgeBroker } from "@vibestudio/shared/claudeBridgeBroker";
 import { ClaudeBridgeBrokerClient } from "@vibestudio/shared/claudeBridgeBroker";
@@ -129,7 +130,13 @@ async function runLauncher(argv: string[]): Promise<number> {
       expectedContextId: location.binding.contextId,
       contextDirectory: location.directory,
       profilesRoot,
-      serverUrl: creds.url,
+      cliRoute: {
+        url: creds.url,
+        serverId: creds.serverId,
+        workspaceId: creds.workspaceId,
+        workspaceName: creds.workspaceName,
+        ...(creds.workspacePairing ? { workspacePairing: creds.workspacePairing } : {}),
+      },
       release: async (entityId, launchId) => {
         await invokeExtension(client, "release", [{ entityId, launchId }]);
       },
@@ -145,7 +152,7 @@ export async function executePreparedClaudeLaunch(input: {
   expectedContextId: string;
   contextDirectory: string;
   profilesRoot: string;
-  serverUrl: string;
+  cliRoute: ClaudeCliRoute;
   release: (entityId: string, launchId: string) => Promise<void>;
   spawnLaunch?: typeof spawnClaude;
   startBroker?: typeof startCliClaudeBridgeBroker;
@@ -164,12 +171,12 @@ export async function executePreparedClaudeLaunch(input: {
     launch = await materializeClaudeLaunch({
       profile: prepared.profile,
       profilesRoot: input.profilesRoot,
-      serverUrl: input.serverUrl,
+      cliRoute: input.cliRoute,
     });
     broker = await (input.startBroker ?? startCliClaudeBridgeBroker)({
       socketPath: launch.broker.socketPath,
       generation: launch.broker.generation,
-      serverUrl: input.serverUrl,
+      serverUrl: input.cliRoute.url,
       agentToken: prepared.profile.environment.VIBESTUDIO_AGENT_TOKEN,
       vesselRef: prepared.profile.environment.VIBESTUDIO_VESSEL_REF,
     });

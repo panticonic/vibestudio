@@ -70,6 +70,19 @@ const deviceCreds = {
   },
   pairedAt: 1,
 };
+const agentCreds = {
+  schemaVersion: 1 as const,
+  kind: "agent" as const,
+  url: "https://workspace.example/",
+  workspaceId: "workspace-1",
+  workspaceName: "ws",
+  serverId: `srv_${"S".repeat(24)}`,
+  entityId: "ent-agent",
+  contextId: "ctx-agent",
+  agentId: `agt_${"A".repeat(24)}`,
+  agentToken: `agent:agt_${"A".repeat(24)}:${"T".repeat(43)}`,
+  signedInAt: 1,
+};
 
 beforeEach(() => {
   savedEnv = Object.fromEntries(ENV_KEYS.map((k) => [k, process.env[k]]));
@@ -111,18 +124,18 @@ describe("resolveSessionScope precedence", () => {
     expect(scope.session.entityId).toBe("ent-s");
   });
 
-  it("tier 2: VIBESTUDIO_AGENT_TOKEN builds an agent-credential client from env alone", () => {
-    process.env["VIBESTUDIO_AGENT_TOKEN"] = "agent:ag-1:secret";
-    process.env["VIBESTUDIO_SERVER_URL"] = "http://srv";
-    process.env["VIBESTUDIO_CONTEXT_ID"] = "ctx-env";
-    process.env["VIBESTUDIO_ENTITY_ID"] = "ent-env";
+  it("uses the canonical agent profile and ignores ambient bearer/server variables", () => {
+    state.creds = agentCreds;
+    process.env["VIBESTUDIO_AGENT_TOKEN"] = "agent:must-not-be-read";
+    process.env["VIBESTUDIO_SERVER_URL"] = "https://must-not-be-read.invalid";
+    process.env["VIBESTUDIO_ENTITY_ID"] = "must-not-be-read";
+    process.env["VIBESTUDIO_CONTEXT_ID"] = "ctx-agent";
     const scope = resolveSessionScope(inv());
-    expect(scope.contextId).toBe("ctx-env");
-    expect(scope.callerId).toBe("agent:ent-env"); // server-derived principal
-    expect(scope.session.serverUrl).toBe("http://srv");
-    expect(scope.session.entityId).toBe("ent-env");
-    // No device credential or session file was consulted.
-    expect(state.loadCredsCalls).toBe(0);
+    expect(scope.contextId).toBe("ctx-agent");
+    expect(scope.callerId).toBe("agent:ent-agent");
+    expect(scope.session.serverUrl).toBe("https://workspace.example/");
+    expect(scope.session.entityId).toBe("ent-agent");
+    expect(state.loadCredsCalls).toBe(1);
     expect(state.loadSessionCalls).toBe(0);
   });
 
@@ -158,19 +171,25 @@ describe("resolveSessionScope precedence", () => {
     expect(() => resolveSessionScope(inv())).toThrow(/unknown field/);
   });
 
-  it("tier 2 wins over a present binding (env token beats cwd binding)", () => {
+  it("uses a matching binding with the canonical agent profile", () => {
     const root = mkTemp();
     fs.writeFileSync(
       path.join(root, ".vibestudio-context.json"),
-      JSON.stringify(contextBinding({ contextId: "ctx-binding", workspaceId: "workspace-1" }))
+      JSON.stringify(contextBinding({ contextId: "ctx-agent", workspaceId: "workspace-1" }))
     );
     process.chdir(root);
-    process.env["VIBESTUDIO_AGENT_TOKEN"] = "agent:ag-1:secret";
-    process.env["VIBESTUDIO_SERVER_URL"] = "http://srv";
-    process.env["VIBESTUDIO_CONTEXT_ID"] = "ctx-env";
+    state.creds = agentCreds;
+    process.env["VIBESTUDIO_AGENT_TOKEN"] = "agent:must-not-be-read";
     const scope = resolveSessionScope(inv());
-    expect(scope.contextId).toBe("ctx-env");
-    expect(scope.callerId).toMatch(/^agent:/);
+    expect(scope.contextId).toBe("ctx-agent");
+    expect(scope.callerId).toBe("agent:ent-agent");
+  });
+
+  it("rejects a context that exceeds the canonical agent login", () => {
+    state.creds = agentCreds;
+    expect(() => resolveSessionScope(inv({ context: "ctx-other" }))).toThrow(
+      /bound to context ctx-agent/
+    );
   });
 
   it("refuses a binding for a different durable workspace", () => {

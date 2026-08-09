@@ -1,52 +1,24 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import {
-  normalizeFingerprint,
-  PAIRING_PROTOCOL_VERSION,
-  PAIRING_ROOM_PATTERN,
-  parseSignalingEndpoint,
-  selectedWorkspacePath,
-  type ConnectPairing,
-  type TurnPolicy,
-} from "@vibestudio/shared/connect";
-import { isDeviceId, isDeviceRefreshToken, isServerId } from "@vibestudio/shared/deviceCredentials";
+  canonicalStoredPairing,
+  isCliCredentials,
+  isCliStoredPairing,
+  type CliAgentCredentials,
+  type CliCredentials,
+  type CliDeviceCredentials,
+  type CliStoredPairing,
+} from "@vibestudio/shared/cliCredentials";
 import { writeFileAtomicSync } from "../atomicFile.js";
 import { cliCredentialPath } from "./configPaths.js";
 
-export type CliStoredPairing = Omit<ConnectPairing, "code" | "v" | "ice"> & {
-  v: typeof PAIRING_PROTOCOL_VERSION;
-  ice: TurnPolicy;
+export {
+  canonicalStoredPairing,
+  type CliAgentCredentials,
+  type CliCredentials,
+  type CliDeviceCredentials,
+  type CliStoredPairing,
 };
-
-export interface CliCredentials {
-  schemaVersion: 4;
-  kind: "device";
-  url: string;
-  workspaceId: string;
-  workspaceName: string;
-  serverId: string;
-  deviceId: string;
-  refreshToken: string;
-  controlPairing: CliStoredPairing;
-  workspacePairing: CliStoredPairing;
-  pairedAt: number;
-}
-
-const CREDENTIAL_KEYS = new Set([
-  "schemaVersion",
-  "kind",
-  "url",
-  "workspaceId",
-  "workspaceName",
-  "serverId",
-  "deviceId",
-  "refreshToken",
-  "controlPairing",
-  "workspacePairing",
-  "pairedAt",
-]);
-
-const STORED_PAIRING_KEYS = new Set(["room", "fp", "sig", "v", "ice"]);
 
 export const credentialPath = cliCredentialPath;
 
@@ -67,10 +39,24 @@ export function loadCliCredentials(filePath: string = credentialPath()): CliCred
   }
   if (isCliCredentials(parsed)) return parsed;
   console.warn(
-    `[vibestudio] credential file is not a canonical device credential: ${p}\n` +
-      "             delete it and pair again, or restore a good copy."
+    `[vibestudio] credential file is not a canonical CLI credential: ${p}\n` +
+      "             delete it and sign in again, or restore a good copy."
   );
   return null;
+}
+
+/** Narrow an ordinary CLI login for human-device lifecycle operations. Agent
+ * profiles are workspace principals and must never impersonate a paired device. */
+export function requireDeviceCliCredentials(
+  credentials: CliCredentials,
+  operation: string
+): CliDeviceCredentials {
+  if (credentials.kind !== "device") {
+    throw new Error(
+      `${operation} requires a paired human device profile; agent profiles cannot manage device identity`
+    );
+  }
+  return credentials;
 }
 
 export function saveCliCredentials(
@@ -78,15 +64,24 @@ export function saveCliCredentials(
   filePath: string = credentialPath()
 ): void {
   if (!isCliCredentials(creds)) {
-    throw new Error("Refusing to persist a non-canonical CLI device credential");
+    throw new Error("Refusing to persist a non-canonical CLI credential");
   }
   const p = path.resolve(filePath);
   if (fs.existsSync(p)) {
     const existing = readCanonicalCredentialForWrite(p);
-    if (existing.serverId !== creds.serverId || existing.deviceId !== creds.deviceId) {
+    if (
+      existing.serverId !== creds.serverId ||
+      existing.kind !== creds.kind ||
+      (existing.kind === "device" &&
+        creds.kind === "device" &&
+        existing.deviceId !== creds.deviceId) ||
+      (existing.kind === "agent" &&
+        creds.kind === "agent" &&
+        (existing.agentId !== creds.agentId || existing.entityId !== creds.entityId))
+    ) {
       throw new Error(
-        "Refusing to replace the paired CLI device identity; run " +
-          "`vibestudio remote logout` before pairing another server or device"
+        "Refusing to replace the signed-in CLI identity; run " +
+          "`vibestudio remote logout` before using another server or principal"
       );
     }
   }
@@ -116,43 +111,7 @@ export function clearCliCredentials(): void {
 export function isWebRtcCredential<T extends { workspacePairing?: unknown }>(
   creds: T | null | undefined
 ): creds is T & { workspacePairing: CliStoredPairing } {
-  return !!creds?.workspacePairing && isStoredPairing(creds.workspacePairing);
-}
-
-/** Canonical persisted form of a hub-returned WebRTC reach record. */
-export function canonicalStoredPairing(reach: CliStoredPairing): CliStoredPairing {
-  const signaling = parseSignalingEndpoint(reach.sig);
-  if (signaling.kind === "error") throw new Error(signaling.reason);
-  const canonical: CliStoredPairing = {
-    room: reach.room,
-    fp: normalizeFingerprint(reach.fp),
-    sig: signaling.url,
-    v: reach.v,
-    ice: reach.ice,
-  };
-  if (!isStoredPairing(canonical)) {
-    throw new Error("Hub returned non-canonical WebRTC reach coordinates");
-  }
-  return canonical;
-}
-
-function isStoredPairing(value: unknown): value is CliStoredPairing {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  if (Object.keys(value).some((key) => !STORED_PAIRING_KEYS.has(key))) return false;
-  const pairing = value as Partial<CliStoredPairing>;
-  const signaling = typeof pairing.sig === "string" ? parseSignalingEndpoint(pairing.sig) : null;
-  return (
-    typeof pairing.room === "string" &&
-    PAIRING_ROOM_PATTERN.test(pairing.room) &&
-    typeof pairing.fp === "string" &&
-    pairing.fp === normalizeFingerprint(pairing.fp) &&
-    /^[0-9A-F]{64}$/.test(pairing.fp) &&
-    typeof pairing.sig === "string" &&
-    signaling?.kind === "ok" &&
-    signaling.url === pairing.sig &&
-    pairing.v === PAIRING_PROTOCOL_VERSION &&
-    (pairing.ice === "all" || pairing.ice === "relay")
-  );
+  return !!creds?.workspacePairing && isCliStoredPairing(creds.workspacePairing);
 }
 
 function readCanonicalCredentialForWrite(filePath: string): CliCredentials {
@@ -172,30 +131,4 @@ function readCanonicalCredentialForWrite(filePath: string): CliCredentials {
     );
   }
   return parsed;
-}
-
-function isCliCredentials(value: unknown): value is CliCredentials {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  if (Object.keys(value).some((key) => !CREDENTIAL_KEYS.has(key))) return false;
-  const candidate = value as Partial<CliCredentials>;
-  if (
-    candidate.schemaVersion !== 4 ||
-    candidate.kind !== "device" ||
-    typeof candidate.workspaceId !== "string" ||
-    candidate.workspaceId.length === 0 ||
-    candidate.workspaceId.trim() !== candidate.workspaceId ||
-    typeof candidate.workspaceName !== "string" ||
-    !/^[A-Za-z0-9_-]{1,64}$/.test(candidate.workspaceName) ||
-    !isServerId(candidate.serverId) ||
-    !isDeviceId(candidate.deviceId) ||
-    !isDeviceRefreshToken(candidate.refreshToken) ||
-    !isStoredPairing(candidate.controlPairing) ||
-    !isStoredPairing(candidate.workspacePairing) ||
-    !Number.isSafeInteger(candidate.pairedAt) ||
-    (candidate.pairedAt ?? 0) <= 0
-  ) {
-    return false;
-  }
-  const expectedUrl = `webrtc://${candidate.workspacePairing.room}${selectedWorkspacePath(candidate.workspaceName)}`;
-  return candidate.url === expectedUrl;
 }

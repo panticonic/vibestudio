@@ -15,7 +15,7 @@ import type {
 } from "@vibestudio/shared/approvals";
 import { defaultAcceptance } from "@vibestudio/shared/authority/unitInstallReview";
 import { JSON_FLAG, type CliCommand, type ParsedInvocation } from "./commandTable.js";
-import { loadCliCredentials } from "./credentialStore.js";
+import { loadCliCredentials, requireDeviceCliCredentials } from "./credentialStore.js";
 import {
   CliError,
   ConnectionError,
@@ -150,11 +150,10 @@ async function resolveSystemTestScope(
 
   // System tests are a self-contained CLI workflow. When no ordinary scope
   // source exists, create/recover a dedicated session instead of requiring a
-  // prior `agent attach default`. Preserve explicit context, agent-token,
-  // mirrored-folder, and an existing default-session precedence.
+  // prior `agent attach default`. Preserve explicit context, mirrored-folder,
+  // and an existing default-session precedence.
   const hasAmbientScope =
     typeof inv.flags["context"] === "string" ||
-    Boolean(process.env["VIBESTUDIO_AGENT_TOKEN"]) ||
     findContextBinding() !== null ||
     loadAgentSession(DEFAULT_SESSION) !== null;
   if (!hasAmbientScope) {
@@ -1417,10 +1416,11 @@ function startupApprovalPort(): {
   waitForChange(afterRevision: number): Promise<void>;
   close(): Promise<void>;
 } {
-  const credentials = loadCliCredentials();
-  if (!credentials?.workspaceName) {
+  const loaded = loadCliCredentials();
+  if (!loaded?.workspaceName) {
     throw new CliError("system-test startup preparation requires a selected workspace");
   }
+  const credentials = requireDeviceCliCredentials(loaded, "system-test startup preparation");
   const client = typedClient("shellApproval", shellApprovalMethods, new RpcClient(credentials));
   const eventsRpc = new RpcClient(credentials);
   const events = new EventsClient(eventsRpc);

@@ -16,6 +16,25 @@ import {
 
 let root: string;
 const execFileAsync = promisify(execFile);
+const AGENT_ID = `agt_${"a".repeat(24)}`;
+const AGENT_TOKEN = `agent:${AGENT_ID}:${"s".repeat(43)}`;
+const SERVER_ID = `srv_${"s".repeat(24)}`;
+const PAIRING = {
+  room: "local-pairing",
+  fp: "AA".repeat(32),
+  sig: "wss://signal.example/",
+  v: 2 as const,
+  ice: "all" as const,
+};
+
+function directRoute(url: string) {
+  return {
+    url,
+    serverId: SERVER_ID,
+    workspaceId: "workspace-dev",
+    workspaceName: "dev",
+  };
+}
 
 const installedClaude = (process.env["PATH"] ?? "")
   .split(path.delimiter)
@@ -34,7 +53,7 @@ function profile() {
   return claudeLaunchProfile({
     launchId: "session:channel/one",
     environment: {
-      VIBESTUDIO_AGENT_TOKEN: "agent:one:secret",
+      VIBESTUDIO_AGENT_TOKEN: AGENT_TOKEN,
       VIBESTUDIO_ENTITY_ID: "entity-one",
       VIBESTUDIO_CONTEXT_ID: "context-one",
       VIBESTUDIO_CHANNEL_ID: "channel-one",
@@ -66,7 +85,10 @@ describe("ClaudeLaunchProfile", () => {
     const launch = await materializeClaudeLaunch({
       profile: profile(),
       profilesRoot,
-      serverUrl: "webrtc://local-pairing/_workspace/dev",
+      cliRoute: {
+        ...directRoute("webrtc://local-pairing/_workspace/dev"),
+        workspacePairing: PAIRING,
+      },
       hostClaudeConfigDirectory: path.join(root, "missing-host-config"),
     });
 
@@ -109,8 +131,23 @@ describe("ClaudeLaunchProfile", () => {
     });
     expect((await stat(launch.profileDir)).mode & 0o777).toBe(0o700);
     expect((await stat(path.join(launch.profileDir, "env.json"))).mode & 0o777).toBe(0o600);
+    expect((await stat(launch.cliCredentialPath)).mode & 0o777).toBe(0o600);
+    expect(JSON.parse(await readFile(launch.cliCredentialPath, "utf8"))).toEqual({
+      schemaVersion: 1,
+      kind: "agent",
+      url: "webrtc://local-pairing/_workspace/dev",
+      workspaceId: "workspace-dev",
+      workspaceName: "dev",
+      serverId: SERVER_ID,
+      entityId: "entity-one",
+      contextId: "context-one",
+      agentId: AGENT_ID,
+      agentToken: AGENT_TOKEN,
+      workspacePairing: PAIRING,
+      signedInAt: expect.any(Number),
+    });
     const diagnostic = await readFile(path.join(launch.profileDir, "env.json"), "utf8");
-    expect(diagnostic).not.toContain("agent:one:secret");
+    expect(diagnostic).not.toContain(AGENT_TOKEN);
     expect(diagnostic).not.toContain("webrtc://local-pairing");
   });
 
@@ -134,19 +171,19 @@ describe("ClaudeLaunchProfile", () => {
     const first = await materializeClaudeLaunch({
       profile: profile(),
       profilesRoot,
-      serverUrl: "http://first",
+      cliRoute: directRoute("http://first"),
       hostClaudeConfigDirectory: path.join(root, "missing-host-config"),
     });
     const second = await materializeClaudeLaunch({
       profile: profile(),
       profilesRoot,
-      serverUrl: "http://second",
+      cliRoute: directRoute("http://second"),
       hostClaudeConfigDirectory: path.join(root, "missing-host-config"),
     });
     expect(second.profileDir).not.toBe(first.profileDir);
     const secondDiagnostic = await readFile(path.join(second.profileDir, "env.json"), "utf8");
     expect(secondDiagnostic).not.toContain("http://second");
-    expect(secondDiagnostic).not.toContain("agent:one:secret");
+    expect(secondDiagnostic).not.toContain(AGENT_TOKEN);
     await removeMaterializedClaudeLaunch(first);
     await expect(stat(first.profileDir)).rejects.toMatchObject({ code: "ENOENT" });
     await expect(stat(second.profileDir)).resolves.toBeDefined();
@@ -164,7 +201,7 @@ describe("ClaudeLaunchProfile", () => {
     const launch = await materializeClaudeLaunch({
       profile: profile(),
       profilesRoot,
-      serverUrl: "http://local",
+      cliRoute: directRoute("http://local"),
       hostClaudeConfigDirectory: hostConfig,
     });
     const isolatedCredential = path.join(launch.env.CLAUDE_CONFIG_DIR, ".credentials.json");
@@ -182,7 +219,7 @@ describe("ClaudeLaunchProfile", () => {
     const conflicting = await materializeClaudeLaunch({
       profile: profile(),
       profilesRoot,
-      serverUrl: "http://local",
+      cliRoute: directRoute("http://local"),
       hostClaudeConfigDirectory: hostConfig,
     });
     await writeFile(

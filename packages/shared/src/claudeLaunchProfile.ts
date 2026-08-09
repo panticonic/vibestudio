@@ -4,6 +4,12 @@ import { chmod, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises"
 import * as path from "node:path";
 import { promisify } from "node:util";
 import { z } from "zod";
+import {
+  cliCredentialJson,
+  parseAgentToken,
+  type CliAgentCredentials,
+  type CliStoredPairing,
+} from "./cliCredentials.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -56,7 +62,16 @@ export interface MaterializedClaudeLaunch {
     VIBESTUDIO_SUBAGENT_CONTRACT?: string;
   };
   broker: { socketPath: string; generation: string };
+  cliCredentialPath: string;
   credentialState: ClaudeCredentialState | null;
+}
+
+export interface ClaudeCliRoute {
+  url: string;
+  serverId: string;
+  workspaceId: string;
+  workspaceName: string;
+  workspacePairing?: CliStoredPairing;
 }
 
 export interface ClaudeCredentialState {
@@ -103,12 +118,12 @@ const HOOK_EVENTS = [
 export async function materializeClaudeLaunch(input: {
   profile: ClaudeLaunchProfile;
   profilesRoot: string;
-  serverUrl: string;
+  cliRoute: ClaudeCliRoute;
   /** Test seam; defaults to CLAUDE_CONFIG_DIR or ~/.claude on the launch host. */
   hostClaudeConfigDirectory?: string;
 }): Promise<MaterializedClaudeLaunch> {
   const profile = parseClaudeLaunchProfile(input.profile);
-  if (!input.serverUrl) throw new Error("Claude launch owner requires a serverUrl");
+  if (!input.cliRoute.url) throw new Error("Claude launch owner requires a server route");
 
   const name = Buffer.from(profile.launchId, "utf8").toString("base64url");
   const materializationId = randomUUID();
@@ -126,7 +141,17 @@ export async function materializeClaudeLaunch(input: {
     const finalSettingsPath = path.join(profileDir, "settings.json");
     const finalClaudeConfigDirectory = path.join(profileDir, "claude-config");
     const bridgeSocketPath = path.join(profileDir, "bridge.sock");
+    const cliConfigDirectory = path.join(stageDir, "home", ".config", "vibestudio");
+    const cliCredentialPath = path.join(cliConfigDirectory, "cli-credentials.json");
+    const finalCliCredentialPath = path.join(
+      profileDir,
+      "home",
+      ".config",
+      "vibestudio",
+      "cli-credentials.json"
+    );
     await mkdir(claudeConfigDirectory, { mode: 0o700 });
+    await mkdir(cliConfigDirectory, { recursive: true, mode: 0o700 });
 
     const hostClaudeConfigDirectory = path.resolve(
       input.hostClaudeConfigDirectory ??
@@ -188,10 +213,31 @@ export async function materializeClaudeLaunch(input: {
         : {}),
     };
 
+    const parsedAgentToken = parseAgentToken(profile.environment.VIBESTUDIO_AGENT_TOKEN);
+    if (!parsedAgentToken)
+      throw new Error("Claude launch profile contains a malformed agent token");
+    const cliCredentials: CliAgentCredentials = {
+      schemaVersion: 1,
+      kind: "agent",
+      url: input.cliRoute.url,
+      workspaceId: input.cliRoute.workspaceId,
+      workspaceName: input.cliRoute.workspaceName,
+      serverId: input.cliRoute.serverId,
+      entityId: profile.environment.VIBESTUDIO_ENTITY_ID,
+      contextId: profile.environment.VIBESTUDIO_CONTEXT_ID,
+      agentId: parsedAgentToken.agentId,
+      agentToken: profile.environment.VIBESTUDIO_AGENT_TOKEN,
+      ...(input.cliRoute.workspacePairing
+        ? { workspacePairing: input.cliRoute.workspacePairing }
+        : {}),
+      signedInAt: Date.now(),
+    };
+
     await Promise.all([
       writeFile(mcpPath, `${JSON.stringify(mcp, null, 2)}\n`, { mode: 0o600 }),
       writeFile(settingsPath, `${JSON.stringify(settings, null, 2)}\n`, { mode: 0o600 }),
       writeFile(envPath, `${JSON.stringify({ ...env, argv }, null, 2)}\n`, { mode: 0o600 }),
+      writeFile(cliCredentialPath, cliCredentialJson(cliCredentials), { mode: 0o600 }),
     ]);
     await rename(stageDir, profileDir);
     return {
@@ -199,6 +245,7 @@ export async function materializeClaudeLaunch(input: {
       argv,
       env,
       broker: { socketPath: bridgeSocketPath, generation: profile.launchId },
+      cliCredentialPath: finalCliCredentialPath,
       credentialState,
     };
   } catch (error) {
