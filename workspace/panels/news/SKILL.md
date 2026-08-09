@@ -12,9 +12,9 @@ Agentic news aggregation in three tiers:
 - **Tier 1.5 — triage** (agent, light): `runTriage` batches un-triaged items
   into a `news_triage` turn that categorizes, clusters same-event coverage,
   one-line-summarizes, and drops noise. The reader only shows triaged items
-  (`listArticles triagedOnly`), so nothing raw/un-curated surfaces. Fired on
-  demand (the reader's `triageNow` when it opens with a backlog) and at
-  briefing time.
+  (`listArticles triagedOnly`), so nothing raw/un-curated surfaces. Each tool
+  result schedules the next batch until the durable backlog is empty; the
+  panel only starts or retries that worker-owned drain.
 - **Tier 2 — briefing** (agent, deep): a scheduled/cold-start briefing turn
   web-searches followed topics, reads the top stories, and publishes a
   structured TLDR briefing card. A manual "Brief me now" runs the same turn
@@ -26,13 +26,14 @@ Agentic news aggregation in three tiers:
   followed topics, articles (deduped by canonical-URL sha256), briefings, and
   a `RecurringScheduler` driving `poll:{channelId}` / `briefing:{channelId}`
   jobs off the single DO alarm.
-- **Panel**: `panels/news` — reader UI (latest TLDR + article list, a first-run
-  quick-start with one-click feeds/topics, and an in-progress briefing hero)
-  with the full `AgenticChat` embedded on the same channel. It resolves the
-  workspace-configured model and subscribes the agent with it. Story "Deep-dive"
-  forks the channel via `@workspace/channel-fork` (cloning the agent DO) into a
-  fresh analysis chat and calls `startDeepDive` on the clone to seed the
-  analyst's opening turn.
+- **Panel**: `panels/news` — a reader-first UI with Inbox, Saved, Briefings,
+  archive search, cursor pagination, explicit request states, a first-run
+  source picker, and one canonical settings dialog. `AgenticChat` is mounted
+  only when the user opens the assistant drawer. It resolves the
+  workspace-configured model and subscribes the agent with it. Story "Explore"
+  forks the channel via `@workspace/channel-fork` (cloning the agent DO),
+  requires `startDeepDive` to succeed on the News clone, and only then opens a
+  focused analysis chat.
 - **Renderers** (this skill): `renderers/news-briefing.tsx` and
   `renderers/news-setup.tsx`, registered as `news.briefing` / `news.setup`
   message types by the agent on subscribe.
@@ -47,9 +48,10 @@ tools, `onMethodCall` methods, and the participant descriptor: `news_add_feed`,
 `news_import_opml`, `news_remove_feed`, `news_follow_topic`,
 `news_unfollow_topic`, `news_set_preferences`, `news_list_articles`,
 `news_publish_briefing`, `news_get_briefing_history`, plus method-only
-`setSchedule`, `markRead`, `refreshNow`, `requestDeepDive`, `getOverview`,
-`setFeedEnabled`. `startDeepDive` is a direct DO method the panel calls on a
-freshly-cloned agent after forking.
+`setSchedule`, `markRead`, `markAllRead`, `setSaved`, `searchArchive`,
+`refreshNow`, `requestDeepDive`, `getOverview`, `setFeedEnabled`.
+`listArticles` is the canonical cursor-paginated reader query. `startDeepDive`
+is a channel method the panel calls on a freshly-cloned agent after forking.
 
 ## Channel modes
 

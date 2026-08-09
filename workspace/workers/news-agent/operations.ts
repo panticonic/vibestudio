@@ -21,6 +21,7 @@ export interface NewsHandlers {
   setSchedule(channelId: string, args: Record<string, unknown>): Promise<unknown>;
   setBriefingPaused(channelId: string, args: Record<string, unknown>): Promise<unknown>;
   markRead(channelId: string, args: Record<string, unknown>): Promise<unknown>;
+  markAllRead(channelId: string, args: Record<string, unknown>): Promise<unknown>;
   setSaved(channelId: string, args: Record<string, unknown>): Promise<unknown>;
   reactToStory(channelId: string, args: Record<string, unknown>): Promise<unknown>;
   searchArchive(channelId: string, args: Record<string, unknown>): Promise<unknown>;
@@ -156,6 +157,7 @@ export const NEWS_OPERATIONS: NewsOperation[] = [
         triagedOnly: { type: "boolean" },
         untriagedOnly: { type: "boolean" },
         sinceMs: { type: "number" },
+        cursor: { type: "string" },
       },
       additionalProperties: false,
     },
@@ -259,6 +261,14 @@ export const NEWS_OPERATIONS: NewsOperation[] = [
     },
     exposure: ["method"],
     run: (ctx, channelId, args) => ctx.handlers.markRead(channelId, args),
+  },
+  {
+    name: NEWS_METHODS.markAllRead,
+    description:
+      "Mark every currently curated article read. This is a semantic bulk operation and is not limited to one reader page.",
+    schema: NO_ARGS,
+    exposure: ["method"],
+    run: (ctx, channelId, args) => ctx.handlers.markAllRead(channelId, args),
   },
   {
     name: NEWS_METHODS.setSaved,

@@ -8,7 +8,7 @@ import type { NewsBriefingCardState } from "@workspace/feeds/card-types";
 
 import { NewsAgentWorker } from "./news-agent-worker.js";
 import { NEWS_MESSAGE_TYPES } from "./cards.js";
-import { INITIAL_BRIEFING_DELAY_MS } from "./types.js";
+import { ARTICLE_RETENTION_MS, INITIAL_BRIEFING_DELAY_MS } from "./types.js";
 
 const FEED_URL = "https://example.com/feed.xml";
 
@@ -645,6 +645,58 @@ describe("NewsAgentWorker", () => {
     ).toHaveLength(0);
   });
 
+  it("retention preserves saved articles while pruning stale unsaved articles", async () => {
+    const worker = await makeWorker();
+    await addExampleFeed(worker, [
+      { title: "Keep this", link: "https://example.com/keep" },
+      { title: "Let this expire", link: "https://example.com/expire" },
+    ]);
+    const keepId = await articleId("https://example.com/keep");
+    await worker.setSaved("ch-1", { articleId: keepId, saved: true });
+    worker.execSqlForTest(
+      `UPDATE news_articles SET fetched_at = ? WHERE channel_id = ?`,
+      worker.clock - ARTICLE_RETENTION_MS - 1,
+      "ch-1"
+    );
+
+    await worker.refreshNow("ch-1", {});
+
+    const rows = worker.rowsForTest(
+      `SELECT title, saved FROM news_articles WHERE channel_id = ? ORDER BY title`,
+      "ch-1"
+    );
+    expect(rows).toEqual([{ title: "Keep this", saved: 1 }]);
+  });
+
+  it("paginates the canonical article query without duplicates", async () => {
+    const worker = await makeWorker();
+    await addExampleFeed(
+      worker,
+      Array.from({ length: 25 }, (_, index) => ({
+        title: `Story ${index}`,
+        link: `https://example.com/story-${index}`,
+      }))
+    );
+    worker.execSqlForTest(`UPDATE news_articles SET triaged = 1 WHERE channel_id = ?`, "ch-1");
+
+    const first = (await worker.listArticles("ch-1", { triagedOnly: true, limit: 10 })) as {
+      articles: Array<{ articleId: string }>;
+      hasMore: boolean;
+      nextCursor: string;
+    };
+    const second = (await worker.listArticles("ch-1", {
+      triagedOnly: true,
+      limit: 10,
+      cursor: first.nextCursor,
+    })) as typeof first;
+
+    expect(first.hasMore).toBe(true);
+    expect(second.hasMore).toBe(true);
+    expect(
+      new Set([...first.articles, ...second.articles].map((item) => item.articleId)).size
+    ).toBe(20);
+  });
+
   it("searchArchive matches article fields and past briefing TLDRs", async () => {
     const worker = await makeWorker();
     await addExampleFeed(worker, [
@@ -734,6 +786,68 @@ describe("NewsAgentWorker", () => {
     expect(new Set(after.articles.map((a) => a.clusterKey))).toEqual(new Set(["quake-2026"]));
     // Backlog cleared → a second triageNow is a no-op.
     expect(((await worker.triageNow("ch-1", {})) as { pending: number }).pending).toBe(0);
+  });
+
+  it("continues triage until a backlog larger than one batch is drained", async () => {
+    const worker = await makeWorker();
+    await addExampleFeed(
+      worker,
+      Array.from({ length: 55 }, (_, index) => ({
+        title: `Backlog ${index}`,
+        link: `https://example.com/backlog-${index}`,
+      }))
+    );
+    // Feed parsing deliberately bounds one document. Insert the remaining five
+    // canonical rows directly so this test targets the triage batch boundary.
+    const existing = Number(
+      worker.rowsForTest(
+        `SELECT COUNT(*) AS n FROM news_articles WHERE channel_id = ?`,
+        "ch-1"
+      )[0]!["n"]
+    );
+    for (let index = existing; index < 55; index += 1) {
+      const url = `https://example.com/backlog-extra-${index}`;
+      worker.execSqlForTest(
+        `INSERT INTO news_articles
+         (channel_id, article_id, origin, canonical_url, title, fetched_at)
+         VALUES (?, ?, 'feed', ?, ?, ?)`,
+        "ch-1",
+        await articleId(url),
+        url,
+        `Extra backlog ${index}`,
+        worker.clock
+      );
+    }
+    expect((await worker.triageNow("ch-1", {})) as unknown).toMatchObject({
+      started: true,
+      pending: 55,
+    });
+    expect(worker.agentInitiatedTurns).toHaveLength(1);
+
+    const ids = worker
+      .rowsForTest(
+        `SELECT article_id FROM news_articles WHERE channel_id = ? ORDER BY COALESCE(published_at, fetched_at) DESC LIMIT 50`,
+        "ch-1"
+      )
+      .map((row) => String(row["article_id"]));
+    const first = await worker.triageStories("ch-1", {
+      items: ids.map((articleId) => ({ articleId, category: "Latest" })),
+    });
+
+    expect(first).toMatchObject({ triaged: 50, remaining: 5, continued: true });
+    expect(worker.agentInitiatedTurns).toHaveLength(2);
+
+    const remainingIds = worker
+      .rowsForTest(
+        `SELECT article_id FROM news_articles WHERE channel_id = ? AND triaged = 0`,
+        "ch-1"
+      )
+      .map((row) => String(row["article_id"]));
+    expect(
+      await worker.triageStories("ch-1", {
+        items: remainingIds.map((articleId) => ({ articleId, category: "Latest" })),
+      })
+    ).toMatchObject({ triaged: 5, remaining: 0, continued: false });
   });
 
   it("scheduler alarm drives polls and watchdogs stuck briefings", async () => {
@@ -852,6 +966,30 @@ describe("NewsAgentWorker", () => {
     const turn = worker.agentInitiatedTurns[worker.agentInitiatedTurns.length - 1]!;
     expect(turn.content).toContain("Fresh");
     expect(turn.content).not.toContain("Read me not");
+  });
+
+  it("markAllRead applies beyond the currently requested reader page", async () => {
+    const worker = await makeWorker();
+    await addExampleFeed(
+      worker,
+      Array.from({ length: 25 }, (_, index) => ({
+        title: `Unread ${index}`,
+        link: `https://example.com/unread-${index}`,
+      }))
+    );
+    worker.execSqlForTest(`UPDATE news_articles SET triaged = 1 WHERE channel_id = ?`, "ch-1");
+    expect(
+      (
+        (await worker.listArticles("ch-1", { triagedOnly: true, limit: 10 })) as {
+          articles: unknown[];
+        }
+      ).articles
+    ).toHaveLength(10);
+
+    expect(await worker.markAllRead("ch-1", {})).toEqual({ markedRead: 25 });
+    expect(worker.rowsForTest(`SELECT article_id FROM news_articles WHERE read = 0`)).toHaveLength(
+      0
+    );
   });
 
   it("startDeepDive switches a forked channel to analyst mode and seeds an analyst turn", async () => {

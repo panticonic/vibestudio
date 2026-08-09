@@ -1,13 +1,41 @@
 /**
- * News panel — a reader app wrapped around the reusable agentic stack.
+ * News — a reader-first personal briefing app.
  *
- * Left region: deterministic reader UI (latest TLDR, article list with filters,
- * past briefings, a first-run quick-start, and a model-connect nudge) fed by
- * direct DO method calls on the news agent. Right region: the full AgenticChat
- * on the same channel. Story deep-dives fork the channel (cloning the agent DO)
- * into a fresh analysis chat and seed the analyst's opening turn on the clone.
+ * The durable news agent owns ingestion, curation, briefings, and preferences.
+ * This panel is intentionally a projection of that state: it never coordinates
+ * background work with local-only flags and never substitutes an empty state
+ * for a request that is still loading or has failed.
  */
 
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  Badge,
+  Box,
+  Button,
+  Callout,
+  Dialog,
+  Flex,
+  Heading,
+  IconButton,
+  ScrollArea,
+  SegmentedControl,
+  Select,
+  Separator,
+  Spinner,
+  Text,
+  TextField,
+  Theme,
+} from "@radix-ui/themes";
+import {
+  ChatBubbleIcon,
+  Cross2Icon,
+  ExclamationTriangleIcon,
+  GearIcon,
+  LightningBoltIcon,
+  MagnifyingGlassIcon,
+  ReloadIcon,
+  SpeakerLoudIcon,
+} from "@radix-ui/react-icons";
 import {
   contextId as runtimeContextId,
   createDurableObjectServiceClient,
@@ -18,52 +46,9 @@ import {
 } from "@workspace/runtime";
 import { recoveryCoordinator } from "@workspace/runtime/internal/diagnostics";
 import { usePaletteCommands, usePanelTheme, useStateArgs } from "@workspace/react";
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import {
-  Badge,
-  Box,
-  Button,
-  Callout,
-  Card,
-  Flex,
-  Heading,
-  IconButton,
-  Link,
-  ScrollArea,
-  SegmentedControl,
-  Select,
-  Separator,
-  Spinner,
-  Switch,
-  Text,
-  TextArea,
-  TextField,
-  Theme,
-} from "@radix-ui/themes";
-import {
-  CheckIcon,
-  CopyIcon,
-  Cross2Icon,
-  ExclamationTriangleIcon,
-  EyeNoneIcon,
-  GearIcon,
-  GlobeIcon,
-  LightningBoltIcon,
-  MagnifyingGlassIcon,
-  PlusIcon,
-  ReloadIcon,
-  StarFilledIcon,
-  StarIcon,
-  ThickArrowDownIcon,
-  ThickArrowUpIcon,
-} from "@radix-ui/react-icons";
-import { AgenticChat, ErrorBoundary, markdownComponents } from "@workspace/agentic-chat";
-import type { ConnectionConfig } from "@workspace/agentic-chat";
 import { useAppTheme } from "@workspace/ui/panel";
-import "@workspace/ui/tokens.css";
-import ReactMarkdown from "react-markdown";
-import type { Components } from "react-markdown";
-import remarkGfm from "remark-gfm";
+import { AgenticChat, ErrorBoundary } from "@workspace/agentic-chat";
+import type { ConnectionConfig } from "@workspace/agentic-chat";
 import {
   createPanelSandboxConfig,
   launchAgentIntoChannel,
@@ -88,13 +73,10 @@ import {
 } from "@workspace/feeds/card-types";
 import { NEWS_METHODS } from "@workspace/feeds";
 import {
+  isNewsReaderDataEvent,
   newsAgentKey,
   newsChannelName,
-  relativeAge,
   requireNewsContextId,
-  isNewsReaderDataEvent,
-  SUGGESTED_FEEDS,
-  SUGGESTED_TOPICS,
 } from "./bootstrap.js";
 import {
   NEWS_AGENT_CLASS,
@@ -102,139 +84,50 @@ import {
   NEWS_AGENT_SOURCE,
   type NewsStateArgs,
 } from "./types.js";
+import {
+  ArticleCard,
+  BriefingHero,
+  Markdown,
+  Onboarding,
+  SettingsContent,
+  clusterArticles,
+  type ArticleRow,
+  type BriefingRow,
+} from "./components.js";
+import "@workspace/ui/tokens.css";
+import "./style.css";
 
-interface ArticleRow {
-  articleId: string;
-  title: string;
-  url: string;
-  source: string;
-  blurb?: string;
-  publishedAt?: string;
-  /** Epoch ms we first ingested it — drives the "new since last visit" marker. */
-  fetchedAt?: number;
-  /** Agent-assigned section. */
-  category?: string;
-  /** Agent-assigned key shared by same-event coverage (semantic clustering). */
-  clusterKey?: string;
-  briefedIn?: string;
-  read: boolean;
-  saved?: boolean;
-}
-
-/** A cluster of near-duplicate coverage: one primary story + other sources. */
-interface ArticleCluster {
-  primary: ArticleRow;
-  others: ArticleRow[];
-}
-
-type FeedView = "all" | "unread" | "saved";
-
-interface SearchResults {
-  query: string;
-  articles: ArticleRow[];
-  briefings: BriefingRow[];
-}
-
-/** Group articles by the agent's cluster key so same-event coverage collapses
- *  into one row, preserving the input order by primary. */
-function clusterArticles(articles: ArticleRow[]): ArticleCluster[] {
-  const clusters: ArticleCluster[] = [];
-  const byKey = new Map<string, ArticleCluster>();
-  for (const article of articles) {
-    const key = article.clusterKey;
-    if (!key) {
-      clusters.push({ primary: article, others: [] });
-      continue;
-    }
-    const existing = byKey.get(key);
-    if (existing) {
-      existing.others.push(article);
-    } else {
-      const cluster: ArticleCluster = { primary: article, others: [] };
-      byKey.set(key, cluster);
-      clusters.push(cluster);
-    }
-  }
-  return clusters;
-}
-
-/** Render a briefing as portable markdown for the clipboard. */
-function briefingToMarkdown(createdAt: string, tldr: string): string {
-  const date = new Date(createdAt).toLocaleString();
-  return `# News briefing — ${date}\n\n${tldr}\n`;
-}
-
-const MARKDOWN_REMARK_PLUGINS = [remarkGfm];
-
-/** Minutes-after-midnight → "HH:MM" for a native time input ("" when unset). */
-function minutesToHHMM(minutes: number | undefined): string {
-  if (typeof minutes !== "number") return "";
-  const hh = String(Math.floor(minutes / 60)).padStart(2, "0");
-  const mm = String(minutes % 60).padStart(2, "0");
-  return `${hh}:${mm}`;
-}
-
-/** "3h ago" / "just now" / a date for older briefings. */
-function agoLabel(iso: string): string {
-  const age = relativeAge(iso);
-  if (!age) return new Date(iso).toLocaleDateString();
-  return age === "now" ? "just now" : `${age} ago`;
-}
-
-/** A site favicon with a graceful globe fallback. Derives the icon from the
- *  article's OWN origin (no third-party favicon service → no domain leak). */
-function Favicon({ url }: { url: string }) {
-  const [failed, setFailed] = useState(false);
-  let origin: string | null = null;
-  try {
-    origin = new URL(url).origin;
-  } catch {
-    origin = null;
-  }
-  if (!origin || failed) {
-    return <GlobeIcon style={{ flexShrink: 0, color: "var(--gray-9)" }} />;
-  }
-  return (
-    <img
-      src={`${origin}/favicon.ico`}
-      alt=""
-      width={16}
-      height={16}
-      onError={() => setFailed(true)}
-      style={{ flexShrink: 0, borderRadius: 3, objectFit: "contain" }}
-    />
-  );
-}
-
-/** Render a briefing TLDR / story blurb as markdown, reusing the chat's
- *  component mapping so the reader matches the embedded AgenticChat. */
-function Markdown({ children }: { children: string }) {
-  return (
-    <div className="message-prose">
-      <ReactMarkdown
-        remarkPlugins={MARKDOWN_REMARK_PLUGINS}
-        components={markdownComponents as Components}
-      >
-        {children}
-      </ReactMarkdown>
-    </div>
-  );
-}
-
-interface BriefingRow {
-  briefingId: string;
-  createdAt: string;
-  status: string;
-  tldr?: string;
-  sourcesRead?: number;
-}
+type ReaderTab = "inbox" | "saved" | "briefings";
+type InboxView = "all" | "unread";
+type RequestStatus = "idle" | "loading" | "ready" | "error";
 
 interface Overview {
   setup: NewsSetupCardState;
   articleCount: number;
   unbriefedCount: number;
-  untriagedCount?: number;
+  untriagedCount: number;
   lastBriefingId?: string;
+}
+
+interface ArticlePage {
+  status: RequestStatus;
+  articles: ArticleRow[];
+  cursor?: string;
+  hasMore: boolean;
+  error?: string;
+}
+
+interface SearchState {
+  status: RequestStatus;
+  query: string;
+  articles: ArticleRow[];
+  briefings: BriefingRow[];
+  error?: string;
+}
+
+interface Notice {
+  tone: "red" | "green" | "blue";
+  text: string;
 }
 
 interface DeepDiveStory {
@@ -242,10 +135,32 @@ interface DeepDiveStory {
   url: string;
   title: string;
   source?: string;
-  briefingId?: string;
 }
 
-/** A model is "connected" when a stored credential matches its base URL. */
+const EMPTY_PAGE: ArticlePage = { status: "idle", articles: [], hasMore: false };
+const EMPTY_SEARCH: SearchState = {
+  status: "idle",
+  query: "",
+  articles: [],
+  briefings: [],
+};
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function assertOperationResult(value: unknown): unknown {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    const error = (value as { error?: unknown }).error;
+    if (typeof error === "string" && error) throw new Error(error);
+  }
+  return value;
+}
+
+function settle(promise: Promise<unknown>): void {
+  void promise.catch(() => undefined);
+}
+
 function modelHasMatchingCredential(
   baseUrl: string | undefined,
   audiences: UrlAudience[]
@@ -258,50 +173,47 @@ function modelHasMatchingCredential(
   }
 }
 
-/** Returns the provider/baseUrl to connect when the resolved model lacks a
- *  credential, or null when connected / undetectable (never blocks startup). */
 async function detectMissingModelCredential(
   catalog: ModelCatalog,
   modelRef: string
 ): Promise<{ providerId: string; baseUrl: string } | null> {
   const entry = catalog.models.find((model) => model.ref === modelRef);
-  if (!entry || !entry.connectable) return null;
+  if (!entry?.connectable) return null;
   try {
-    const creds = await rpc.call<Array<{ audience: UrlAudience[] }>>(
+    const credentials = await rpc.call<Array<{ audience: UrlAudience[] }>>(
       "main",
       "credentials.listStoredCredentials",
       []
     );
-    const audiences = creds.flatMap((cred) => cred.audience ?? []);
-    if (modelHasMatchingCredential(entry.baseUrl, audiences)) return null;
-    return { providerId: entry.provider, baseUrl: entry.baseUrl };
+    const audiences = credentials.flatMap((credential) => credential.audience ?? []);
+    return modelHasMatchingCredential(entry.baseUrl, audiences)
+      ? null
+      : { providerId: entry.provider, baseUrl: entry.baseUrl };
   } catch {
     return null;
   }
 }
 
-async function ensureAgentSubscribed(args: {
+async function ensureAgentSubscribed(input: {
   agentKey: string;
   channelId: string;
-  channelContextId: string;
+  contextId: string;
   config?: Record<string, unknown>;
 }): Promise<string> {
   const { subscription } = await launchAgentIntoChannel(rpc, {
     source: NEWS_AGENT_SOURCE,
     className: NEWS_AGENT_CLASS,
-    key: args.agentKey,
-    channelId: args.channelId,
-    contextId: args.channelContextId,
-    config: { handle: NEWS_AGENT_HANDLE, ...(args.config ?? {}) },
+    key: input.agentKey,
+    channelId: input.channelId,
+    contextId: input.contextId,
+    config: { handle: NEWS_AGENT_HANDLE, ...(input.config ?? {}) },
     replay: true,
   });
-  if (!subscription.participantId) {
-    throw new Error("News agent subscription did not return a participant identity");
-  }
+  if (!subscription.participantId) throw new Error("News agent did not join the reader");
   return subscription.participantId;
 }
 
-async function callChannelParticipant(
+async function callParticipant(
   client: PubSubClient,
   participantId: string,
   method: string,
@@ -309,578 +221,206 @@ async function callChannelParticipant(
 ): Promise<unknown> {
   await client.ready();
   const result = await client.callMethod(participantId, method, args).result;
-  return unwrapChatMethodResult(result);
+  return assertOperationResult(unwrapChatMethodResult(result));
 }
 
-/** True when the panel is too narrow for the side-by-side reader+chat layout. */
-function useNarrow(breakpoint = 720): boolean {
-  const [narrow, setNarrow] = useState(
-    typeof window !== "undefined" ? window.innerWidth < breakpoint : false
-  );
-  useEffect(() => {
-    const onResize = () => setNarrow(window.innerWidth < breakpoint);
-    onResize();
-    window.addEventListener("resize", onResize);
-    return () => window.removeEventListener("resize", onResize);
-  }, [breakpoint]);
-  return narrow;
-}
-
-/** One story row: title + summary + source/age + actions (deep-dive, save,
- *  feedback, mark-read), plus an "also covered by" line for clustered coverage.
- *  Extracted so the feed, the Saved view, and search results share one row. */
-function ArticleItem({
-  article,
-  others,
-  busy,
-  fresh,
-  selected,
-  innerRef,
-  onDeepDive,
-  onReact,
-  onSetSaved,
-  onMarkRead,
-}: {
-  article: ArticleRow;
-  others: ArticleRow[];
-  busy: boolean;
-  fresh: boolean;
-  selected: boolean;
-  innerRef?: (el: HTMLDivElement | null) => void;
-  onDeepDive: (article: ArticleRow) => void;
-  onReact: (articleId: string, reaction: "more" | "less" | "mute_source") => void;
-  onSetSaved: (articleId: string, saved: boolean) => void;
-  onMarkRead: (articleId: string) => void;
-}) {
-  const age = relativeAge(article.publishedAt);
-  return (
-    <Box
-      ref={innerRef}
-      px="2"
-      py="1"
-      style={{
-        opacity: article.read ? 0.55 : 1,
-        borderRadius: "var(--radius-2)",
-        boxShadow: selected ? "inset 0 0 0 1px var(--accent-8)" : undefined,
-        background: selected ? "var(--accent-a2)" : undefined,
-      }}
-    >
-      <Flex direction="column" gap="1">
-        <Flex align="center" gap="2" style={{ minWidth: 0 }}>
-          <Favicon url={article.url} />
-          <Link
-            href={article.url}
-            target="_blank"
-            rel="noreferrer"
-            size="2"
-            weight={article.read ? "regular" : "medium"}
-            style={{ minWidth: 0, wordBreak: "break-word" }}
-            onClick={() => onMarkRead(article.articleId)}
-          >
-            {article.title}
-          </Link>
-          {fresh ? (
-            <Badge size="1" color="blue" variant="soft" style={{ flexShrink: 0 }}>
-              New
-            </Badge>
-          ) : null}
-        </Flex>
-        {article.blurb ? (
-          <Text size="1" color="gray" style={{ wordBreak: "break-word" }}>
-            {article.blurb}
-          </Text>
-        ) : null}
-        {others.length > 0 ? (
-          <Text size="1" color="gray">
-            also covered by{" "}
-            {others.map((other, index) => (
-              <span key={other.articleId}>
-                {index > 0 ? ", " : ""}
-                <Link
-                  href={other.url}
-                  target="_blank"
-                  rel="noreferrer"
-                  size="1"
-                  onClick={() => onMarkRead(other.articleId)}
-                >
-                  {other.source}
-                </Link>
-              </span>
-            ))}
-          </Text>
-        ) : null}
-        <Flex align="center" gap="2" wrap="wrap">
-          <Text size="1" color="gray">
-            {article.source}
-            {age ? ` · ${age}` : ""}
-          </Text>
-          <Button size="1" variant="soft" disabled={busy} onClick={() => onDeepDive(article)}>
-            Deep-dive
-          </Button>
-          <IconButton
-            size="1"
-            variant="ghost"
-            color={article.saved ? "amber" : "gray"}
-            title={article.saved ? "Saved — click to remove" : "Save for later"}
-            aria-label="Save for later"
-            onClick={() => onSetSaved(article.articleId, !article.saved)}
-          >
-            {article.saved ? <StarFilledIcon /> : <StarIcon />}
-          </IconButton>
-          <IconButton
-            size="1"
-            variant="ghost"
-            color="grass"
-            title="More like this"
-            aria-label="More like this"
-            onClick={() => onReact(article.articleId, "more")}
-          >
-            <ThickArrowUpIcon />
-          </IconButton>
-          <IconButton
-            size="1"
-            variant="ghost"
-            color="gray"
-            title="Less like this"
-            aria-label="Less like this"
-            onClick={() => onReact(article.articleId, "less")}
-          >
-            <ThickArrowDownIcon />
-          </IconButton>
-          <IconButton
-            size="1"
-            variant="ghost"
-            color="gray"
-            title={`Mute ${article.source}`}
-            aria-label={`Mute ${article.source}`}
-            onClick={() => onReact(article.articleId, "mute_source")}
-          >
-            <EyeNoneIcon />
-          </IconButton>
-          {!article.read ? (
-            <Button
-              size="1"
-              variant="ghost"
-              disabled={busy}
-              onClick={() => onMarkRead(article.articleId)}
-            >
-              Mark read
-            </Button>
-          ) : null}
-        </Flex>
-      </Flex>
-    </Box>
-  );
+function statusCopy(overview: Overview | null, loading: boolean): string {
+  if (loading) return "Connecting your reader…";
+  if (!overview) return "Reader unavailable";
+  if (overview.untriagedCount > 0) {
+    return `Organizing ${overview.untriagedCount} new ${overview.untriagedCount === 1 ? "story" : "stories"}`;
+  }
+  if (overview.setup.lastRunAt) {
+    return `Up to date · ${overview.setup.scheduleSummary}`;
+  }
+  return overview.setup.scheduleSummary;
 }
 
 export default function NewsPanel() {
   const theme = usePanelTheme();
   const appTheme = useAppTheme();
   const stateArgs = useStateArgs<NewsStateArgs>();
-  const resolvedContextId = requireNewsContextId(runtimeContextId);
+  const contextId = requireNewsContextId(runtimeContextId);
 
   const [bootstrapChannel, setBootstrapChannel] = useState<string | null>(null);
-  const [agentParticipantId, setAgentParticipantId] = useState<string | null>(null);
+  const [participantId, setParticipantId] = useState<string | null>(null);
+  const [bootstrapStatus, setBootstrapStatus] = useState<RequestStatus>("loading");
+  const [bootstrapNonce, setBootstrapNonce] = useState(0);
   const [overview, setOverview] = useState<Overview | null>(null);
-  const [articles, setArticles] = useState<ArticleRow[]>([]);
   const [briefings, setBriefings] = useState<BriefingRow[]>([]);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [feedDraft, setFeedDraft] = useState("");
+  const [inbox, setInbox] = useState<ArticlePage>(EMPTY_PAGE);
+  const [saved, setSaved] = useState<ArticlePage>(EMPTY_PAGE);
+  const [search, setSearch] = useState<SearchState>(EMPTY_SEARCH);
+  const [tab, setTab] = useState<ReaderTab>("inbox");
+  const [inboxView, setInboxView] = useState<InboxView>("all");
+  const [source, setSource] = useState("");
+  const [query, setQuery] = useState("");
+  const [selectedIndex, setSelectedIndex] = useState(0);
+  const [assistantOpen, setAssistantOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [activeAction, setActiveAction] = useState<string | null>(null);
+  const [notice, setNotice] = useState<Notice | null>(null);
+  const [triageError, setTriageError] = useState<string | null>(null);
   const [modelConnect, setModelConnect] = useState<{ providerId: string; baseUrl: string } | null>(
     null
   );
-  const [connecting, setConnecting] = useState(false);
-  const [view, setView] = useState<FeedView>("all");
-  const [sourceFilter, setSourceFilter] = useState("");
-  const [pastOpen, setPastOpen] = useState(false);
-  const [savedArticles, setSavedArticles] = useState<ArticleRow[]>([]);
-  const [pendingArticles, setPendingArticles] = useState<ArticleRow[]>([]);
-  const [pendingError, setPendingError] = useState<string | null>(null);
-  const [pendingOpen, setPendingOpen] = useState(false);
-  const [searchInput, setSearchInput] = useState("");
-  const [searchResults, setSearchResults] = useState<SearchResults | null>(null);
-  const [selectedIndex, setSelectedIndex] = useState(0);
-  const [copiedId, setCopiedId] = useState<string | null>(null);
-  const [mobilePane, setMobilePane] = useState<"reader" | "chat">("reader");
-  const narrow = useNarrow();
-  const selectedRowRef = useRef<HTMLDivElement | null>(null);
-  const triageInFlightRef = useRef(false);
-  const lastSeenEventId = useRef(0);
-  const latestTldrRef = useRef<string | undefined>(undefined);
-  const bootstrapAttempted = useRef(false);
-  const [bootstrapNonce, setBootstrapNonce] = useState(0);
-  const modelServiceRef = useRef<DurableObjectServiceClient | null>(null);
-  const modelProbeRef = useRef<{ catalog: ModelCatalog; modelRef: string } | null>(null);
-  const readerClientRef = useRef<PubSubClient | null>(null);
-  const refreshRef = useRef<() => Promise<void>>(async () => undefined);
-  const handleDeepDiveRef = useRef<(story: DeepDiveStory) => Promise<void>>(async () => undefined);
-  // Snapshot the last-visit time at mount; articles fetched after it are "new".
-  // 0 (first ever visit) means "don't badge everything", so isNew requires > 0.
-  const previousVisitRef = useRef<number>(
-    typeof stateArgs.lastVisitAt === "number" ? stateArgs.lastVisitAt : 0
-  );
+  const [connectingModel, setConnectingModel] = useState(false);
 
   const channelName = stateArgs.channelName ?? bootstrapChannel;
+  const clientRef = useRef<PubSubClient | null>(null);
+  const refreshRef = useRef<() => Promise<void>>(async () => undefined);
+  const deepDiveRef = useRef<(story: DeepDiveStory) => Promise<void>>(async () => undefined);
+  const lastPubsubId = useRef(0);
+  const bootstrapAttempted = useRef(false);
+  const triageRequested = useRef(false);
+  const previousVisit = useRef(
+    typeof stateArgs.lastVisitAt === "number" ? stateArgs.lastVisitAt : 0
+  );
+  const modelService = useRef<DurableObjectServiceClient | null>(null);
+  const modelProbe = useRef<{ catalog: ModelCatalog; modelRef: string } | null>(null);
 
-  // Stamp this visit so the next open can mark what's arrived since.
   useEffect(() => {
     void panel.stateArgs.set({ lastVisitAt: Date.now() });
   }, []);
 
-  // ── bootstrap: mint channel + agent, resolve model, ensure-subscribe ──────
   useEffect(() => {
-    if (!resolvedContextId || bootstrapAttempted.current) return;
+    if (bootstrapAttempted.current) return;
     bootstrapAttempted.current = true;
+    setBootstrapStatus("loading");
+    setNotice(null);
     void (async () => {
       try {
-        // Identity is a deterministic function of the panel's contextId, so a
-        // reload that lost its stateArgs still re-resolves the same reader.
-        // stateArgs stays as a fast-path cache (and keeps any pre-existing
-        // random-keyed reader attached).
-        const channel = stateArgs.channelName ?? newsChannelName(resolvedContextId);
-        const agentKey = stateArgs.agentKey ?? newsAgentKey(resolvedContextId);
+        const channel = stateArgs.channelName ?? newsChannelName(contextId);
+        const agentKey = stateArgs.agentKey ?? newsAgentKey(contextId);
         if (!stateArgs.channelName || !stateArgs.agentKey) {
-          void panel.stateArgs.set({
-            channelName: channel,
-            agentKey,
-          });
+          void panel.stateArgs.set({ channelName: channel, agentKey });
         }
         if (!stateArgs.channelName) setBootstrapChannel(channel);
 
-        // Honor the workspace-configured model like the chat panel does.
-        modelServiceRef.current ??= createDurableObjectServiceClient(
-          MODEL_SETTINGS_SERVICE_PROTOCOL
-        );
+        modelService.current ??= createDurableObjectServiceClient(MODEL_SETTINGS_SERVICE_PROTOCOL);
         let settings: ModelSettingsSnapshot | null = null;
         try {
-          settings = await modelServiceRef.current.call<ModelSettingsSnapshot>("getSettings");
-        } catch (err) {
-          console.warn("[NewsPanel] Failed to load model settings:", err);
+          settings = await modelService.current.call<ModelSettingsSnapshot>("getSettings");
+        } catch (error) {
+          console.warn("[News] Could not read model settings", error);
         }
         const model =
           (stateArgs.agentConfig?.["model"] as string | undefined) ??
           settings?.defaultModel ??
           DEFAULT_AGENT_MODEL_REF;
-
-        const participantId = await ensureAgentSubscribed({
+        const nextParticipant = await ensureAgentSubscribed({
           agentKey,
           channelId: channel,
-          channelContextId: resolvedContextId,
+          contextId,
           config: { model, ...(stateArgs.agentConfig ?? {}) },
         });
-        setAgentParticipantId(participantId);
-
-        // Nudge the user to connect a model if the agent's turns would stall.
-        // Stash the catalog so refresh() can re-reconcile (the credential may
-        // be connected later, e.g. by the agent's own recovery flow).
+        setParticipantId(nextParticipant);
+        setBootstrapStatus("ready");
         if (settings?.catalog) {
-          modelProbeRef.current = { catalog: settings.catalog, modelRef: model };
+          modelProbe.current = { catalog: settings.catalog, modelRef: model };
           setModelConnect(await detectMissingModelCredential(settings.catalog, model));
         }
-      } catch (err) {
-        setError(err instanceof Error ? err.message : String(err));
+      } catch (error) {
+        setBootstrapStatus("error");
+        setNotice({ tone: "red", text: `News could not start: ${errorMessage(error)}` });
       }
     })();
-  }, [
-    resolvedContextId,
-    stateArgs.agentConfig,
-    stateArgs.agentKey,
-    stateArgs.channelName,
-    bootstrapNonce,
-  ]);
+  }, [bootstrapNonce, contextId, stateArgs.agentConfig, stateArgs.agentKey, stateArgs.channelName]);
 
   const retryBootstrap = useCallback(() => {
-    setError(null);
-    setAgentParticipantId(null);
     bootstrapAttempted.current = false;
+    setParticipantId(null);
     setBootstrapNonce((value) => value + 1);
   }, []);
 
-  const callAgentParticipant = useCallback(
-    async (method: string, args: Record<string, unknown>): Promise<unknown> => {
-      const client = readerClientRef.current;
-      if (!client) throw new Error("News reader is not connected to its channel");
-      if (!agentParticipantId) throw new Error("News agent has no channel participant identity");
-      return callChannelParticipant(client, agentParticipantId, method, args);
+  const callAgent = useCallback(
+    async (method: string, args: Record<string, unknown>) => {
+      const client = clientRef.current;
+      if (!client || !participantId) throw new Error("News is still connecting");
+      return callParticipant(client, participantId, method, args);
     },
-    [agentParticipantId]
+    [participantId]
   );
 
-  const handleConnectModel = useCallback(async () => {
-    if (!modelConnect) return;
-    setConnecting(true);
-    setError(null);
-    try {
-      const request = toPanelConnectRequest(modelConnect.providerId);
-      if (!request) {
-        setError(`No connect flow available for ${modelConnect.providerId}`);
-        return;
-      }
-      await rpc.call("main", "credentials.connect", [request]);
-      setModelConnect(null);
-    } catch (err) {
-      setError(`connect failed: ${err instanceof Error ? err.message : String(err)}`);
-    } finally {
-      setConnecting(false);
-    }
-  }, [modelConnect]);
-
-  // ── reader data ────────────────────────────────────────────────────────────
   const refresh = useCallback(async () => {
-    if (!agentParticipantId || !channelName) return;
+    if (!participantId || !channelName) return;
+    setInbox((current) =>
+      current.status === "idle" ? { ...current, status: "loading" } : current
+    );
     try {
-      const [nextOverview, articleList, history] = await Promise.all([
-        callAgentParticipant(NEWS_METHODS.getOverview, {}) as Promise<Overview>,
-        callAgentParticipant(NEWS_METHODS.listArticles, {
-          limit: 60,
-          triagedOnly: true,
-        }) as Promise<{ articles: ArticleRow[] }>,
-        callAgentParticipant(NEWS_METHODS.getBriefingHistory, {
-          limit: 12,
-        }) as Promise<{ briefings: BriefingRow[] }>,
+      const [nextOverview, articleResult, historyResult] = await Promise.all([
+        callAgent(NEWS_METHODS.getOverview, {}) as Promise<Overview>,
+        callAgent(NEWS_METHODS.listArticles, { limit: 40, triagedOnly: true }) as Promise<{
+          articles: ArticleRow[];
+          hasMore?: boolean;
+          nextCursor?: string;
+        }>,
+        callAgent(NEWS_METHODS.getBriefingHistory, { limit: 20 }) as Promise<{
+          briefings: BriefingRow[];
+        }>,
       ]);
       setOverview(nextOverview);
-      setArticles(articleList.articles);
-      setBriefings(history.briefings);
-      latestTldrRef.current = history.briefings.find(
-        (briefing) => briefing.status === "ready" && briefing.tldr
-      )?.tldr;
-      setError(null);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setInbox({
+        status: "ready",
+        articles: articleResult.articles,
+        hasMore: Boolean(articleResult.hasMore),
+        cursor: articleResult.nextCursor,
+      });
+      setBriefings(historyResult.briefings);
+    } catch (error) {
+      const message = errorMessage(error);
+      setInbox((current) => ({ ...current, status: "error", error: message }));
+      setNotice({ tone: "red", text: `Could not update the reader: ${message}` });
     }
-    // Reconcile the connect nudge against current credentials so a model that
-    // gets connected later clears the banner without a reload. Only flip state
-    // when connectedness actually changes, to avoid re-render churn.
-    const probe = modelProbeRef.current;
+
+    const probe = modelProbe.current;
     if (probe) {
       try {
-        const next = await detectMissingModelCredential(probe.catalog, probe.modelRef);
-        setModelConnect((prev) => {
-          if (prev === null && next === null) return prev;
-          if (
-            prev &&
-            next &&
-            prev.providerId === next.providerId &&
-            prev.baseUrl === next.baseUrl
-          ) {
-            return prev;
-          }
-          return next;
-        });
+        setModelConnect(await detectMissingModelCredential(probe.catalog, probe.modelRef));
       } catch {
-        // leave the existing nudge state untouched on a transient failure
+        /* keep the last known state */
       }
     }
-  }, [agentParticipantId, callAgentParticipant, channelName]);
+  }, [callAgent, channelName, participantId]);
   refreshRef.current = refresh;
 
   useEffect(() => {
-    if (!agentParticipantId) return;
+    if (!participantId) return;
     void refresh();
-    const timer = setInterval(() => void refresh(), 60_000);
-    return () => clearInterval(timer);
-  }, [agentParticipantId, refresh]);
+    const timer = window.setInterval(() => void refresh(), 60_000);
+    return () => window.clearInterval(timer);
+  }, [participantId, refresh]);
 
-  // ── lightweight agent calls (no busy/refresh churn) + optimistic updates ──
-  const quietAgentCall = useCallback(
-    (method: string, args: Record<string, unknown>, onFailure?: () => void) => {
-      if (!agentParticipantId || !channelName) return;
-      void callAgentParticipant(method, args).catch((err) => {
-        onFailure?.();
-        setError(`Couldn't save that change: ${err instanceof Error ? err.message : String(err)}`);
-      });
-    },
-    [agentParticipantId, callAgentParticipant, channelName]
-  );
-
-  /** Apply an optimistic patch to a story across every list it may appear in
-   *  (the feed, the Saved view, and search results). */
-  const patchArticle = useCallback((articleId: string, patch: Partial<ArticleRow>) => {
-    const apply = (list: ArticleRow[]) =>
-      list.map((article) => (article.articleId === articleId ? { ...article, ...patch } : article));
-    setArticles(apply);
-    setSavedArticles(apply);
-    setSearchResults((prev) => (prev ? { ...prev, articles: apply(prev.articles) } : prev));
-  }, []);
-
-  const markReadLocal = useCallback(
-    (articleId: string) => {
-      const previous =
-        [...articles, ...savedArticles, ...(searchResults?.articles ?? [])].find(
-          (article) => article.articleId === articleId
-        )?.read ?? false;
-      patchArticle(articleId, { read: true });
-      quietAgentCall(NEWS_METHODS.markRead, { articleIds: [articleId] }, () =>
-        patchArticle(articleId, { read: previous })
-      );
-    },
-    [articles, savedArticles, searchResults, patchArticle, quietAgentCall]
-  );
-
-  const setSavedLocal = useCallback(
-    (articleId: string, saved: boolean) => {
-      patchArticle(articleId, { saved });
-      if (!saved) setSavedArticles((prev) => prev.filter((a) => a.articleId !== articleId));
-      quietAgentCall(NEWS_METHODS.setSaved, { articleId, saved }, () => {
-        patchArticle(articleId, { saved: !saved });
-        void refresh();
-      });
-    },
-    [patchArticle, quietAgentCall, refresh]
-  );
-
-  /** Reader feedback tap. "less"/"mute" also drop the story from view at once. */
-  const reactToStory = useCallback(
-    (articleId: string, reaction: "more" | "less" | "mute_source") => {
-      if (reaction === "mute_source") {
-        const article = [...articles, ...savedArticles, ...(searchResults?.articles ?? [])].find(
-          (candidate) => candidate.articleId === articleId
-        );
-        if (
-          !window.confirm(
-            `Mute ${article?.source ?? "this source"}? This disables its feed until you re-enable it in Sources & preferences.`
-          )
-        )
-          return;
-      }
-      const previousRead =
-        [...articles, ...savedArticles, ...(searchResults?.articles ?? [])].find(
-          (article) => article.articleId === articleId
-        )?.read ?? false;
-      if (reaction !== "more") patchArticle(articleId, { read: true });
-      quietAgentCall(NEWS_METHODS.reactToStory, { articleId, reaction }, () =>
-        patchArticle(articleId, { read: previousRead })
-      );
-    },
-    [articles, savedArticles, searchResults, patchArticle, quietAgentCall]
-  );
-
-  /** Copy a briefing to the clipboard as portable markdown. */
-  const exportBriefing = useCallback((id: string, createdAt: string, tldr: string) => {
-    void navigator.clipboard?.writeText(briefingToMarkdown(createdAt, tldr)).then(
-      () => {
-        setCopiedId(id);
-        setTimeout(() => setCopiedId((current) => (current === id ? null : current)), 1500);
-      },
-      (err) => console.warn("[NewsPanel] copy failed:", err)
-    );
-  }, []);
-
-  // ── deep-dive: fork the channel into a per-story analysis chat ────────────
-  const handleDeepDive = useCallback(
-    async (story: DeepDiveStory) => {
-      if (!channelName || !resolvedContextId) return;
-      // Opening a story to dig in counts as reading it.
-      markReadLocal(story.articleId);
-      setBusy(true);
-      setError(null);
-      try {
-        const result = await forkConversation(rpc, {
-          channelId: channelName,
-          forkPointPubsubId: lastSeenEventId.current,
-          reason: "deep-dive",
-        });
-        const agent =
-          result.clonedAgents.find((entry) => entry.className === NEWS_AGENT_CLASS) ??
-          result.clonedAgents[0];
-        if (agent) {
-          // Address the clone through its authenticated participant identity.
-          // This is the same channel method plane used by every other reader
-          // operation; the caller never supplies a channel id to the vessel.
-          const forkClient = connectViaRpc({
-            rpc,
-            channel: result.forkedChannelId,
-            contextId: result.forkedContextId,
-            clientId: `${rpc.selfId}:deep-dive:${result.forkId}`,
-            name: "News reader",
-            type: "panel",
-            handle: "news-reader",
-            replayMode: "skip",
-          });
-          try {
-            await callChannelParticipant(
-              forkClient,
-              agent.participantId,
-              NEWS_METHODS.startDeepDive,
-              {
-                articleId: story.articleId,
-                url: story.url,
-                title: story.title,
-                source: story.source,
-                briefingTldr: latestTldrRef.current,
-              }
-            );
-          } catch (err) {
-            console.warn("[NewsPanel] startDeepDive failed:", err);
-          } finally {
-            await forkClient.close?.();
-          }
-        }
-        await openPanel("panels/chat", {
-          title: `Deep-dive: ${story.title.slice(0, 40)}`,
-          focus: true,
-          contextId: result.forkedContextId,
-          stateArgs: {
-            channelName: result.forkedChannelId,
-            // Surface the news agent in the deep-dive chat (mentions + launcher).
-            ...(agent
-              ? {
-                  installedAgents: [
-                    {
-                      agentId: agent.className,
-                      handle: NEWS_AGENT_HANDLE,
-                      key: agent.objectKey,
-                      source: agent.source,
-                      className: agent.className,
-                    },
-                  ],
-                }
-              : {}),
-          },
-        });
-      } catch (err) {
-        setError(`deep-dive failed: ${err instanceof Error ? err.message : String(err)}`);
-      } finally {
-        setBusy(false);
-      }
-    },
-    [channelName, resolvedContextId, markReadLocal]
-  );
-  handleDeepDiveRef.current = handleDeepDive;
-
-  // ── channel listener: live refresh + card-initiated deep-dive signals ─────
   useEffect(() => {
-    if (!channelName || !resolvedContextId) return;
+    if (!channelName) return;
     const client = connectViaRpc({
       rpc,
       channel: channelName,
-      contextId: resolvedContextId,
-      clientId: `${rpc.selfId}:reader`,
+      contextId,
+      clientId: `${rpc.selfId}:news-reader`,
       name: "News reader",
       type: "panel",
       handle: "news-reader",
-      replayMode: "skip",
+      replayMode: "collect",
+      replayMessageLimit: 1,
     });
-    readerClientRef.current = client;
+    clientRef.current = client;
     let cancelled = false;
-    let refreshTimer: ReturnType<typeof setTimeout> | null = null;
+    let refreshTimer: number | null = null;
     const scheduleRefresh = () => {
-      if (refreshTimer) return;
-      refreshTimer = setTimeout(() => {
+      if (refreshTimer !== null) return;
+      refreshTimer = window.setTimeout(() => {
         refreshTimer = null;
         void refreshRef.current();
-      }, 750);
+      }, 500);
     };
     void (async () => {
       try {
         await client.ready();
-        for await (const event of client.events()) {
+        for await (const event of client.events({ includeReplay: true, includeSignals: true })) {
           if (cancelled) break;
-          const id = (event as { id?: number }).id;
-          if (typeof id === "number" && id > lastSeenEventId.current) {
-            lastSeenEventId.current = id;
+          if (typeof event.pubsubId === "number") {
+            lastPubsubId.current = Math.max(lastPubsubId.current, event.pubsubId);
           }
           if (event.type === "signal") {
             const payload = parseSignalEvent<NewsDeepDiveRequested>(
@@ -888,294 +428,426 @@ export default function NewsPanel() {
               NEWS_DEEPDIVE_SIGNAL
             );
             if (payload) {
-              void handleDeepDiveRef.current(payload);
+              void deepDiveRef.current(payload);
               continue;
             }
           }
           if (isNewsReaderDataEvent(event)) scheduleRefresh();
         }
-      } catch (err) {
-        if (!cancelled) console.warn("[NewsPanel] channel listener stopped:", err);
+      } catch (error) {
+        if (!cancelled)
+          setNotice({ tone: "red", text: `Live updates paused: ${errorMessage(error)}` });
       }
     })();
     return () => {
       cancelled = true;
-      if (readerClientRef.current === client) readerClientRef.current = null;
-      if (refreshTimer) clearTimeout(refreshTimer);
-      void client.close?.();
+      if (refreshTimer !== null) window.clearTimeout(refreshTimer);
+      if (clientRef.current === client) clientRef.current = null;
+      void client.close();
     };
-  }, [channelName, resolvedContextId]);
+  }, [channelName, contextId]);
 
-  const callAgent = useCallback(
+  const perform = useCallback(
     async (method: string, args: Record<string, unknown>) => {
-      if (!agentParticipantId || !channelName) return;
-      setBusy(true);
-      setError(null);
+      setActiveAction(method);
+      setNotice(null);
       try {
-        await callAgentParticipant(method, args);
+        const result = await callAgent(method, args);
         await refresh();
-      } catch (err) {
-        setError(err instanceof Error ? err.message : String(err));
+        return result;
+      } catch (error) {
+        const message = errorMessage(error);
+        setNotice({ tone: "red", text: message });
+        throw error;
       } finally {
-        setBusy(false);
+        setActiveAction(null);
       }
     },
-    [agentParticipantId, callAgentParticipant, channelName, refresh]
+    [callAgent, refresh]
   );
+
+  useEffect(() => {
+    const pending = overview?.untriagedCount ?? 0;
+    if (pending === 0) {
+      triageRequested.current = false;
+      setTriageError(null);
+      return;
+    }
+    if (triageRequested.current || !participantId) return;
+    triageRequested.current = true;
+    void callAgent(NEWS_METHODS.triageNow, {}).catch((error) => {
+      triageRequested.current = false;
+      setTriageError(errorMessage(error));
+    });
+  }, [callAgent, overview?.untriagedCount, participantId]);
+
+  useEffect(() => {
+    if (tab !== "saved" || !participantId) return;
+    let cancelled = false;
+    setSaved({ ...EMPTY_PAGE, status: "loading" });
+    void (
+      callAgent(NEWS_METHODS.listArticles, { savedOnly: true, limit: 40 }) as Promise<{
+        articles: ArticleRow[];
+        hasMore?: boolean;
+        nextCursor?: string;
+      }>
+    ).then(
+      (result) => {
+        if (!cancelled)
+          setSaved({
+            status: "ready",
+            articles: result.articles,
+            hasMore: Boolean(result.hasMore),
+            cursor: result.nextCursor,
+          });
+      },
+      (error) => {
+        if (!cancelled)
+          setSaved({ status: "error", articles: [], hasMore: false, error: errorMessage(error) });
+      }
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [callAgent, participantId, tab]);
+
+  useEffect(() => {
+    const normalized = query.trim();
+    if (!normalized || !participantId) {
+      setSearch(EMPTY_SEARCH);
+      return;
+    }
+    let cancelled = false;
+    setSearch({ status: "loading", query: normalized, articles: [], briefings: [] });
+    const timer = window.setTimeout(() => {
+      void (
+        callAgent(NEWS_METHODS.searchArchive, { query: normalized, limit: 60 }) as Promise<{
+          query: string;
+          articles: ArticleRow[];
+          briefings: BriefingRow[];
+        }>
+      ).then(
+        (result) => {
+          if (!cancelled && result.query === normalized) {
+            setSearch({
+              status: "ready",
+              query: normalized,
+              articles: result.articles,
+              briefings: result.briefings,
+            });
+          }
+        },
+        (error) => {
+          if (!cancelled)
+            setSearch({
+              status: "error",
+              query: normalized,
+              articles: [],
+              briefings: [],
+              error: errorMessage(error),
+            });
+        }
+      );
+    }, 250);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [callAgent, participantId, query]);
+
+  const patchArticle = useCallback((articleId: string, patch: Partial<ArticleRow>) => {
+    const apply = (articles: ArticleRow[]) =>
+      articles.map((item) => (item.articleId === articleId ? { ...item, ...patch } : item));
+    setInbox((current) => ({ ...current, articles: apply(current.articles) }));
+    setSaved((current) => ({ ...current, articles: apply(current.articles) }));
+    setSearch((current) => ({ ...current, articles: apply(current.articles) }));
+  }, []);
+
+  const markRead = useCallback(
+    (article: ArticleRow) => {
+      if (article.read) return;
+      patchArticle(article.articleId, { read: true });
+      void callAgent(NEWS_METHODS.markRead, { articleIds: [article.articleId] }).catch((error) => {
+        patchArticle(article.articleId, { read: false });
+        setNotice({ tone: "red", text: `Could not mark this story read: ${errorMessage(error)}` });
+      });
+    },
+    [callAgent, patchArticle]
+  );
+
+  const setSavedState = useCallback(
+    (article: ArticleRow, nextSaved: boolean) => {
+      patchArticle(article.articleId, { saved: nextSaved });
+      if (!nextSaved)
+        setSaved((current) => ({
+          ...current,
+          articles: current.articles.filter((item) => item.articleId !== article.articleId),
+        }));
+      void callAgent(NEWS_METHODS.setSaved, {
+        articleId: article.articleId,
+        saved: nextSaved,
+      }).catch((error) => {
+        patchArticle(article.articleId, { saved: !nextSaved });
+        void refresh();
+        setNotice({ tone: "red", text: `Could not update Saved: ${errorMessage(error)}` });
+      });
+    },
+    [callAgent, patchArticle, refresh]
+  );
+
+  const react = useCallback(
+    (article: ArticleRow, reaction: "more" | "less" | "mute_source") => {
+      if (reaction !== "more") patchArticle(article.articleId, { read: true });
+      void callAgent(NEWS_METHODS.reactToStory, { articleId: article.articleId, reaction }).then(
+        (result) => {
+          const muted =
+            result && typeof result === "object"
+              ? (result as { muted?: string; feedDisabled?: boolean })
+              : null;
+          setNotice({
+            tone: "blue",
+            text:
+              reaction === "more"
+                ? "Got it — your future briefings will lean this way."
+                : reaction === "less"
+                  ? "Got it — you’ll see fewer stories like this."
+                  : muted?.feedDisabled
+                    ? `${muted.muted ?? article.source} is paused. You can restore it in Sources.`
+                    : `You’ll see less from ${article.source}.`,
+          });
+          void refresh();
+        },
+        (error) => {
+          if (reaction !== "more") patchArticle(article.articleId, { read: article.read });
+          setNotice({ tone: "red", text: errorMessage(error) });
+        }
+      );
+    },
+    [callAgent, patchArticle, refresh]
+  );
+
+  const deepDive = useCallback(
+    async (story: DeepDiveStory) => {
+      if (!channelName) return;
+      setActiveAction("deep-dive");
+      setNotice({ tone: "blue", text: "Preparing a focused research thread…" });
+      try {
+        const fork = await forkConversation(rpc, {
+          channelId: channelName,
+          forkPointPubsubId: lastPubsubId.current,
+          reason: "deep-dive",
+        });
+        const agent = fork.clonedAgents.find(
+          (candidate) => candidate.className === NEWS_AGENT_CLASS
+        );
+        if (!agent) throw new Error("The News analyst was not present in the fork");
+        const forkClient = connectViaRpc({
+          rpc,
+          channel: fork.forkedChannelId,
+          contextId: fork.forkedContextId,
+          clientId: `${rpc.selfId}:news-deep-dive:${fork.forkId}`,
+          name: "News reader",
+          type: "panel",
+          handle: "news-reader",
+          replayMode: "skip",
+        });
+        try {
+          const started = (await callParticipant(
+            forkClient,
+            agent.participantId,
+            NEWS_METHODS.startDeepDive,
+            {
+              articleId: story.articleId,
+              url: story.url,
+              title: story.title,
+              source: story.source,
+              briefingTldr: briefings.find((item) => item.status === "ready" && item.tldr)?.tldr,
+            }
+          )) as { ok?: boolean; error?: string };
+          if (!started.ok) throw new Error(started.error ?? "The analyst could not start");
+        } finally {
+          await forkClient.close();
+        }
+        await openPanel("panels/chat", {
+          title: `Explore: ${story.title.slice(0, 48)}`,
+          focus: true,
+          contextId: fork.forkedContextId,
+          stateArgs: {
+            channelName: fork.forkedChannelId,
+            installedAgents: [
+              {
+                agentId: agent.className,
+                handle: NEWS_AGENT_HANDLE,
+                key: agent.objectKey,
+                source: agent.source,
+                className: agent.className,
+              },
+            ],
+          },
+        });
+        const article = [...inbox.articles, ...saved.articles, ...search.articles].find(
+          (item) => item.articleId === story.articleId
+        );
+        if (article) markRead(article);
+        setNotice(null);
+      } catch (error) {
+        setNotice({
+          tone: "red",
+          text: `Could not open the research thread: ${errorMessage(error)}`,
+        });
+      } finally {
+        setActiveAction(null);
+      }
+    },
+    [briefings, channelName, inbox.articles, markRead, saved.articles, search.articles]
+  );
+  deepDiveRef.current = deepDive;
+
+  const handleConnectModel = useCallback(async () => {
+    if (!modelConnect) return;
+    setConnectingModel(true);
+    try {
+      const request = toPanelConnectRequest(modelConnect.providerId);
+      if (!request)
+        throw new Error(`No connection flow is available for ${modelConnect.providerId}`);
+      await rpc.call("main", "credentials.connect", [request]);
+      setModelConnect(null);
+      setNotice({ tone: "green", text: `${modelConnect.providerId} is connected.` });
+    } catch (error) {
+      setNotice({ tone: "red", text: `Could not connect the model: ${errorMessage(error)}` });
+    } finally {
+      setConnectingModel(false);
+    }
+  }, [modelConnect]);
+
+  const loadMore = useCallback(async () => {
+    const target = tab === "saved" ? saved : inbox;
+    if (!target.cursor || !target.hasMore || activeAction) return;
+    setActiveAction("load-more");
+    try {
+      const result = (await callAgent(NEWS_METHODS.listArticles, {
+        limit: 40,
+        cursor: target.cursor,
+        ...(tab === "saved" ? { savedOnly: true } : { triagedOnly: true }),
+      })) as { articles: ArticleRow[]; hasMore?: boolean; nextCursor?: string };
+      const update = (current: ArticlePage): ArticlePage => ({
+        status: "ready",
+        articles: [...current.articles, ...result.articles],
+        hasMore: Boolean(result.hasMore),
+        cursor: result.nextCursor,
+      });
+      if (tab === "saved") setSaved(update);
+      else setInbox(update);
+    } catch (error) {
+      setNotice({ tone: "red", text: `Could not load older stories: ${errorMessage(error)}` });
+    } finally {
+      setActiveAction(null);
+    }
+  }, [activeAction, callAgent, inbox, saved, tab]);
+
+  const searching = query.trim().length > 0;
+  const activePage = tab === "saved" ? saved : inbox;
+  const baseArticles = searching
+    ? search.status === "ready" && search.query === query.trim()
+      ? search.articles
+      : []
+    : tab === "saved"
+      ? saved.articles
+      : inbox.articles.filter((article) => inboxView === "all" || !article.read);
+  const visibleArticles = source
+    ? baseArticles.filter((article) => article.source === source)
+    : baseArticles;
+  const sources = [
+    ...new Set([...inbox.articles, ...saved.articles].map((article) => article.source)),
+  ].sort();
+  const clusters = useMemo(() => clusterArticles(visibleArticles), [visibleArticles]);
+  const grouped = useMemo(() => {
+    const result: Array<{
+      cluster: ReturnType<typeof clusterArticles>[number];
+      category: string;
+      starts: boolean;
+    }> = [];
+    const groups = new Map<string, ReturnType<typeof clusterArticles>>();
+    for (const cluster of clusters) {
+      const category = cluster.primary.category?.trim() || "Latest";
+      const items = groups.get(category) ?? [];
+      items.push(cluster);
+      groups.set(category, items);
+    }
+    for (const [category, items] of groups)
+      items.forEach((cluster, index) => result.push({ cluster, category, starts: index === 0 }));
+    return result;
+  }, [clusters]);
+
+  useEffect(() => setSelectedIndex(0), [inboxView, query, source, tab]);
+  useEffect(
+    () => setSelectedIndex((index) => Math.min(index, Math.max(0, grouped.length - 1))),
+    [grouped.length]
+  );
+
+  const handleReaderKeyDown = (event: React.KeyboardEvent) => {
+    if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return;
+    const target = event.target as HTMLElement;
+    if (
+      target.closest(
+        "input, textarea, select, button, a, [role='dialog'], [contenteditable='true']"
+      )
+    )
+      return;
+    const current = grouped[selectedIndex]?.cluster.primary;
+    if (!current) return;
+    if (event.key === "j") setSelectedIndex((value) => Math.min(value + 1, grouped.length - 1));
+    else if (event.key === "k") setSelectedIndex((value) => Math.max(value - 1, 0));
+    else if (event.key === "o") {
+      window.open(current.url, "_blank", "noopener");
+      markRead(current);
+    } else if (event.key === "s") setSavedState(current, !current.saved);
+    else if (event.key === "m") markRead(current);
+    else if (event.key === "d") void deepDive(current);
+    else return;
+    event.preventDefault();
+  };
+
+  const latestReady = briefings.find((item) => item.status === "ready" && item.tldr);
+  const currentBriefing = briefings[0];
+  const latestPending =
+    currentBriefing?.status === "collecting" || currentBriefing?.status === "summarizing"
+      ? currentBriefing
+      : undefined;
+  const heroBriefing =
+    currentBriefing?.status === "ready" || currentBriefing?.status === "error"
+      ? currentBriefing
+      : latestReady;
+  const hasSources = Boolean(
+    overview && (overview.setup.feeds.length > 0 || overview.setup.followedTopics.length > 0)
+  );
+  const modelProven = Boolean(latestReady || overview?.lastBriefingId);
+  const showModelConnect = Boolean(modelConnect) && !modelProven;
 
   const config: ConnectionConfig = useMemo(
     () => ({ clientId: rpc.selfId, rpc, recoveryCoordinator }),
     []
   );
-  const sandboxConfig = useMemo(() => createPanelSandboxConfig(rpc), []);
+  const sandbox = useMemo(() => createPanelSandboxConfig(rpc), []);
   const installedAgents = useMemo(
     () => [{ agentId: NEWS_AGENT_CLASS, handle: NEWS_AGENT_HANDLE }],
     []
   );
 
-  // On-demand triage: when the reader has a backlog of un-triaged items, ask the
-  // agent to categorize/cluster/summarize them. Fired once per backlog (the flag
-  // resets when the count returns to 0), so refreshes don't spam triage turns.
-  useEffect(() => {
-    const pending = overview?.untriagedCount ?? 0;
-    if (pending === 0) {
-      triageInFlightRef.current = false;
-      return;
-    }
-    if (triageInFlightRef.current || !agentParticipantId || !channelName) return;
-    triageInFlightRef.current = true;
-    void callAgentParticipant(NEWS_METHODS.triageNow, {}).catch((err) =>
-      console.warn("[NewsPanel] triageNow failed:", err)
-    );
-  }, [overview?.untriagedCount, agentParticipantId, callAgentParticipant, channelName]);
-
-  // Peek at the un-triaged backlog when the "Categorizing…" disclosure is open,
-  // so an impatient reader can click through before the agent finishes. Re-fetch
-  // as the count shrinks (triage processes items).
-  useEffect(() => {
-    if (!pendingOpen || !agentParticipantId || !channelName) return;
-    if ((overview?.untriagedCount ?? 0) === 0) {
-      setPendingArticles([]);
-      setPendingError(null);
-      return;
-    }
-    setPendingError(null);
-    let cancelled = false;
-    void (
-      callAgentParticipant(NEWS_METHODS.listArticles, {
-        untriagedOnly: true,
-        limit: 50,
-      }) as Promise<{ articles: ArticleRow[] }>
-    )
-      .then((res) => {
-        if (!cancelled) {
-          setPendingArticles(res.articles);
-          setPendingError(null);
-        }
-      })
-      .catch((err) => {
-        if (!cancelled) {
-          setPendingError(err instanceof Error ? err.message : String(err));
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [
-    pendingOpen,
-    overview?.untriagedCount,
-    agentParticipantId,
-    callAgentParticipant,
-    channelName,
-  ]);
-
-  // Saved view: fetch on demand (saved items can be older than the feed window).
-  useEffect(() => {
-    if (view !== "saved" || !agentParticipantId || !channelName) return;
-    let cancelled = false;
-    void (
-      callAgentParticipant(NEWS_METHODS.listArticles, {
-        savedOnly: true,
-        limit: 200,
-      }) as Promise<{ articles: ArticleRow[] }>
-    )
-      .then((res) => {
-        if (!cancelled) setSavedArticles(res.articles);
-      })
-      .catch((err) => {
-        if (!cancelled)
-          setError(
-            `Couldn't load saved stories: ${err instanceof Error ? err.message : String(err)}`
-          );
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [view, agentParticipantId, callAgentParticipant, channelName]);
-
-  // Archive search: debounced; empty query clears results back to the feed.
-  useEffect(() => {
-    const query = searchInput.trim();
-    if (!query || !agentParticipantId || !channelName) {
-      setSearchResults(null);
-      return;
-    }
-    let cancelled = false;
-    const timer = setTimeout(() => {
-      void (
-        callAgentParticipant(NEWS_METHODS.searchArchive, {
-          query,
-          limit: 60,
-        }) as Promise<SearchResults>
-      )
-        .then((res) => {
-          if (!cancelled) setSearchResults(res);
-        })
-        .catch((err) => {
-          if (!cancelled)
-            setError(`Search failed: ${err instanceof Error ? err.message : String(err)}`);
-        });
-    }, 300);
-    return () => {
-      cancelled = true;
-      clearTimeout(timer);
-    };
-  }, [searchInput, agentParticipantId, callAgentParticipant, channelName]);
-
-  // The list the reader is showing right now (search > saved > feed), with the
-  // source filter applied, grouped into same-event clusters and then into the
-  // agent's category sections. `flatRows` is the render+selection order.
-  const searching = searchInput.trim().length > 0;
-  const flatRows = useMemo(() => {
-    const base = searching
-      ? (searchResults?.articles ?? [])
-      : view === "saved"
-        ? savedArticles
-        : articles.filter((article) => view !== "unread" || !article.read);
-    const filtered = sourceFilter
-      ? base.filter((article) => article.source === sourceFilter)
-      : base;
-    const clusters = clusterArticles(filtered);
-    // Group clusters by category, category order = first appearance (≈ recency).
-    const byCategory = new Map<string, ArticleCluster[]>();
-    const order: string[] = [];
-    for (const cluster of clusters) {
-      const category = cluster.primary.category?.trim() || "Other";
-      if (!byCategory.has(category)) {
-        byCategory.set(category, []);
-        order.push(category);
-      }
-      byCategory.get(category)!.push(cluster);
-    }
-    const rows: Array<{ cluster: ArticleCluster; category: string; sectionStart: boolean }> = [];
-    for (const category of order) {
-      byCategory.get(category)!.forEach((cluster, index) => {
-        rows.push({ cluster, category, sectionStart: index === 0 });
-      });
-    }
-    return rows;
-  }, [searching, searchResults, view, savedArticles, articles, sourceFilter]);
-  const selectable = useMemo(() => flatRows.map((row) => row.cluster.primary), [flatRows]);
-
-  // Reset + keep the keyboard selection in range as the visible list changes.
-  useEffect(() => setSelectedIndex(0), [view, searchInput, sourceFilter]);
-  useEffect(() => {
-    selectedRowRef.current?.scrollIntoView({ block: "nearest" });
-  }, [selectedIndex]);
-
-  // Reader keyboard shortcuts (ignored while typing or when the chat pane shows).
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      const target = event.target as HTMLElement | null;
-      if (
-        target &&
-        (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)
-      ) {
-        return;
-      }
-      if (narrow && mobilePane !== "reader") return;
-      if (selectable.length === 0) return;
-      const current = selectable[Math.min(selectedIndex, selectable.length - 1)];
-      switch (event.key) {
-        case "j":
-          setSelectedIndex((index) => Math.min(index + 1, selectable.length - 1));
-          break;
-        case "k":
-          setSelectedIndex((index) => Math.max(index - 1, 0));
-          break;
-        case "o":
-          if (current) {
-            window.open(current.url, "_blank", "noopener");
-            markReadLocal(current.articleId);
-          }
-          break;
-        case "s":
-          if (current) setSavedLocal(current.articleId, !current.saved);
-          break;
-        case "m":
-          if (current) markReadLocal(current.articleId);
-          break;
-        case "d":
-          if (current) void handleDeepDive(current);
-          break;
-        default:
-          return;
-      }
-      event.preventDefault();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [selectable, selectedIndex, narrow, mobilePane, markReadLocal, setSavedLocal, handleDeepDive]);
-
-  const feeds = overview?.setup.feeds ?? [];
-  const topics = overview?.setup.followedTopics ?? [];
-  const existingFeedUrls = new Set(feeds.map((feed) => feed.url));
-  const existingTopics = new Set(topics.map((topic) => topic.topic.toLowerCase()));
-  const hasSources = feeds.length > 0 || topics.length > 0;
-  const failingFeeds = feeds.filter((feed) => feed.failCount > 0);
-
-  const latestBriefing = briefings[0];
-  const preparing =
-    latestBriefing?.status === "summarizing" || latestBriefing?.status === "collecting";
-  const readyBriefings = briefings.filter(
-    (briefing) => briefing.status === "ready" && briefing.tldr
-  );
-  const latestReady = readyBriefings[0];
-  const pastReady = readyBriefings.slice(1);
-
-  // A completed briefing is hard proof the model resolved a credential and ran,
-  // so never nag to "connect a model" once one exists — the client-side
-  // credential probe can false-negative (e.g. OAuth providers like openai-codex
-  // whose stored audience doesn't path-match the catalog baseUrl).
-  const modelProvenWorking = readyBriefings.length > 0 || Boolean(overview?.lastBriefingId);
-  const showConnectNudge = Boolean(modelConnect) && !modelProvenWorking;
-
-  const sources = [...new Set(articles.map((article) => article.source))].sort();
-  const unreadIds = articles.filter((article) => !article.read).map((article) => article.articleId);
-  // "New since your last visit": arrived after the snapshotted visit time. The
-  // 0 guard avoids badging the entire feed on a first-ever visit.
-  const previousVisit = previousVisitRef.current;
-  const isNewSinceVisit = (article: ArticleRow): boolean =>
-    previousVisit > 0 && typeof article.fetchedAt === "number" && article.fetchedAt > previousVisit;
-  const newCount = articles.filter(isNewSinceVisit).length;
-  const searchBriefings = searchResults?.briefings ?? [];
-
-  // Contribute reader actions to the app-level command palette (Cmd/Ctrl+K).
   const paletteCommands = useMemo(
     () => [
-      { id: "news-refresh", label: "Refresh", section: "News" },
-      { id: "news-brief-now", label: "Brief me now", section: "News" },
-      { id: "news-mark-all-read", label: "Mark all read", section: "News" },
-      { id: "news-view-unread", label: "View unread", section: "News" },
+      { id: "news-update", label: "Update sources", section: "News" },
+      { id: "news-brief", label: "Create briefing", section: "News" },
+      { id: "news-saved", label: "Open Saved", section: "News" },
+      { id: "news-assistant", label: "Open News assistant", section: "News" },
     ],
     []
   );
   usePaletteCommands(paletteCommands, (id) => {
-    if (id === "news-refresh") void refresh();
-    else if (id === "news-brief-now") void callAgent(NEWS_METHODS.refreshNow, { briefing: true });
-    else if (id === "news-mark-all-read")
-      void callAgent(NEWS_METHODS.markRead, { articleIds: unreadIds.slice(0, 200) });
-    else if (id === "news-view-unread") setView("unread");
+    if (id === "news-update") settle(perform(NEWS_METHODS.refreshNow, {}));
+    else if (id === "news-brief") settle(perform(NEWS_METHODS.refreshNow, { briefing: true }));
+    else if (id === "news-saved") setTab("saved");
+    else if (id === "news-assistant") setAssistantOpen(true);
   });
 
   if (!channelName) {
@@ -1185,7 +857,7 @@ export default function NewsPanel() {
           <Flex align="center" justify="center" gap="2" style={{ height: "100dvh" }}>
             <Spinner />
             <Text size="2" color="gray">
-              Starting news…
+              Opening your reader…
             </Text>
           </Flex>
         </Theme>
@@ -1196,865 +868,529 @@ export default function NewsPanel() {
   return (
     <ErrorBoundary>
       <Theme appearance={theme} {...appTheme}>
-        <Flex direction="column" style={{ height: "100dvh" }}>
-          {/* On narrow panels the two panes don't fit side by side — toggle. */}
-          {narrow ? (
-            <Flex p="2" justify="center" style={{ borderBottom: "1px solid var(--gray-a5)" }}>
-              <SegmentedControl.Root
-                size="1"
-                value={mobilePane}
-                onValueChange={(value) => setMobilePane(value as "reader" | "chat")}
-              >
-                <SegmentedControl.Item value="reader">📰 Reader</SegmentedControl.Item>
-                <SegmentedControl.Item value="chat">💬 Chat</SegmentedControl.Item>
-              </SegmentedControl.Root>
-            </Flex>
-          ) : null}
-          <Flex style={{ flex: 1, minHeight: 0 }}>
-            {/* ── reader region ── */}
-            {!narrow || mobilePane === "reader" ? (
-              <Flex
-                direction="column"
-                style={{ flex: narrow ? "1 1 auto" : "1 1 55%", minWidth: 0 }}
-              >
-                <Flex align="center" gap="2" p="3">
-                  <Text size="3" weight="bold">
-                    📰 News
-                  </Text>
-                  {overview ? (
-                    <Badge size="1" color="gray">
-                      {overview.articleCount} articles · {overview.unbriefedCount} unbriefed
-                    </Badge>
-                  ) : null}
-                  {failingFeeds.length > 0 ? (
-                    <Badge
-                      size="1"
-                      color="red"
-                      title={failingFeeds.map((feed) => feed.title ?? feed.url).join("\n")}
-                    >
-                      <ExclamationTriangleIcon /> {failingFeeds.length} feed
-                      {failingFeeds.length > 1 ? "s" : ""} failing
-                    </Badge>
-                  ) : null}
+        <Box className="news-app">
+          <Flex className="news-shell">
+            <Flex
+              className="news-reader"
+              direction="column"
+              onKeyDown={handleReaderKeyDown}
+              tabIndex={-1}
+            >
+              <header className="news-header">
+                <Flex className="news-header-inner news-toolbar" align="center" gap="3" wrap="wrap">
+                  <Box className="news-brand-mark">
+                    <SpeakerLoudIcon width="19" height="19" />
+                  </Box>
+                  <Box style={{ minWidth: 0 }}>
+                    <Heading size="4">News</Heading>
+                    <Flex align="center" gap="1">
+                      {(overview?.untriagedCount ?? 0) > 0 ? <Spinner size="1" /> : null}
+                      <Text size="1" color="gray" truncate>
+                        {statusCopy(overview, bootstrapStatus === "loading")}
+                      </Text>
+                    </Flex>
+                  </Box>
                   <Box flexGrow="1" />
-                  <Button
-                    size="1"
-                    variant="soft"
-                    disabled={busy || !agentParticipantId}
-                    onClick={() => void callAgent(NEWS_METHODS.refreshNow, {})}
+                  <TextField.Root
+                    className="news-search"
+                    size="2"
+                    placeholder="Search your news"
+                    aria-label="Search your news"
+                    value={query}
+                    onChange={(event) => setQuery(event.target.value)}
                   >
-                    <ReloadIcon /> Refresh
-                  </Button>
-                  <Button
-                    size="1"
-                    disabled={busy || !agentParticipantId}
-                    onClick={() => void callAgent(NEWS_METHODS.refreshNow, { briefing: true })}
-                  >
-                    <LightningBoltIcon /> Brief me now
-                  </Button>
+                    <TextField.Slot>
+                      <MagnifyingGlassIcon />
+                    </TextField.Slot>
+                    {query ? (
+                      <TextField.Slot side="right">
+                        <IconButton
+                          size="1"
+                          variant="ghost"
+                          aria-label="Clear search"
+                          onClick={() => setQuery("")}
+                        >
+                          <Cross2Icon />
+                        </IconButton>
+                      </TextField.Slot>
+                    ) : null}
+                  </TextField.Root>
+                  <Flex className="news-header-actions" gap="2">
+                    <Button
+                      size="2"
+                      variant="soft"
+                      disabled={Boolean(activeAction) || !participantId}
+                      onClick={() => settle(perform(NEWS_METHODS.refreshNow, {}))}
+                    >
+                      {activeAction === NEWS_METHODS.refreshNow ? <Spinner /> : <ReloadIcon />}
+                      <span className="news-action-label">Update</span>
+                    </Button>
+                    <Button
+                      size="2"
+                      disabled={Boolean(activeAction) || !participantId}
+                      onClick={() => settle(perform(NEWS_METHODS.refreshNow, { briefing: true }))}
+                    >
+                      <LightningBoltIcon />
+                      <span className="news-action-label">Brief me</span>
+                    </Button>
+                    <IconButton
+                      size="2"
+                      variant="soft"
+                      aria-label="Sources and preferences"
+                      disabled={!overview}
+                      onClick={() => setSettingsOpen(true)}
+                    >
+                      <GearIcon />
+                    </IconButton>
+                    <IconButton
+                      size="2"
+                      variant={assistantOpen ? "solid" : "soft"}
+                      aria-label={assistantOpen ? "Close News assistant" : "Open News assistant"}
+                      onClick={() => setAssistantOpen((value) => !value)}
+                    >
+                      <ChatBubbleIcon />
+                    </IconButton>
+                  </Flex>
                 </Flex>
-                {overview ? (
-                  <Text size="1" color="gray" style={{ paddingLeft: "var(--space-3)" }}>
-                    {overview.setup.scheduleSummary}
-                  </Text>
-                ) : null}
-                {!narrow ? (
-                  <Text
-                    size="1"
-                    color="gray"
-                    style={{ padding: "2px var(--space-3) 0" }}
-                    title="Reader keyboard shortcuts"
-                  >
-                    Shortcuts: j/k next/previous · o open · s save · m read · d deep-dive
-                  </Text>
-                ) : null}
-                {error ? (
-                  <Flex align="center" gap="2" style={{ padding: "0 var(--space-3)" }}>
-                    <Text size="1" color="red" role="alert">
-                      {error}
-                    </Text>
-                    {!agentParticipantId ? (
+              </header>
+
+              <ScrollArea style={{ flex: 1 }}>
+                <main className="news-content">
+                  <Flex direction="column" gap="4">
+                    {notice ? (
+                      <Callout.Root
+                        size="1"
+                        color={notice.tone}
+                        role={notice.tone === "red" ? "alert" : "status"}
+                      >
+                        <Callout.Text>
+                          <Flex align="center" gap="2">
+                            <Text size="2">{notice.text}</Text>
+                            <Box flexGrow="1" />
+                            <IconButton
+                              size="1"
+                              variant="ghost"
+                              aria-label="Dismiss message"
+                              onClick={() => setNotice(null)}
+                            >
+                              <Cross2Icon />
+                            </IconButton>
+                          </Flex>
+                        </Callout.Text>
+                      </Callout.Root>
+                    ) : null}
+                    {bootstrapStatus === "error" ? (
                       <Button size="1" variant="soft" color="red" onClick={retryBootstrap}>
                         Retry startup
                       </Button>
                     ) : null}
-                  </Flex>
-                ) : null}
+                    {showModelConnect && modelConnect ? (
+                      <Callout.Root color="amber" size="1">
+                        <Callout.Icon>
+                          <ExclamationTriangleIcon />
+                        </Callout.Icon>
+                        <Callout.Text>
+                          <Flex align="center" gap="3" wrap="wrap">
+                            <Text size="2">
+                              Connect {modelConnect.providerId} to create briefings and explore
+                              stories.
+                            </Text>
+                            <Button
+                              size="1"
+                              disabled={connectingModel}
+                              onClick={() => void handleConnectModel()}
+                            >
+                              {connectingModel ? <Spinner /> : null} Connect
+                            </Button>
+                          </Flex>
+                        </Callout.Text>
+                      </Callout.Root>
+                    ) : null}
+                    {triageError ? (
+                      <Callout.Root color="red" size="1">
+                        <Callout.Text>
+                          <Flex align="center" gap="2" wrap="wrap">
+                            <Text size="2">Organizing paused: {triageError}</Text>
+                            <Button
+                              size="1"
+                              variant="soft"
+                              onClick={() => {
+                                triageRequested.current = true;
+                                setTriageError(null);
+                                void callAgent(NEWS_METHODS.triageNow, {}).catch((error) => {
+                                  triageRequested.current = false;
+                                  setTriageError(errorMessage(error));
+                                });
+                              }}
+                            >
+                              Retry
+                            </Button>
+                          </Flex>
+                        </Callout.Text>
+                      </Callout.Root>
+                    ) : null}
 
-                {showConnectNudge && modelConnect ? (
-                  <Box px="3" pt="2">
-                    <Callout.Root color="amber" size="1">
-                      <Callout.Icon>
-                        <ExclamationTriangleIcon />
-                      </Callout.Icon>
-                      <Callout.Text>
-                        <Flex align="center" gap="3" wrap="wrap">
-                          <Text size="1">
-                            Connect <Text weight="medium">{modelConnect.providerId}</Text> to enable
-                            briefings and chat.
-                          </Text>
-                          <Button
-                            size="1"
-                            disabled={connecting}
-                            onClick={() => void handleConnectModel()}
-                          >
-                            {connecting ? <Spinner size="1" /> : null} Connect model
-                          </Button>
-                        </Flex>
-                      </Callout.Text>
-                    </Callout.Root>
-                  </Box>
-                ) : null}
-
-                <Separator size="4" my="2" />
-                <ScrollArea style={{ flex: 1 }}>
-                  <Flex direction="column" gap="3" p="3" pt="0">
                     {overview && hasSources ? (
-                      <ReaderSettings
-                        setup={overview.setup}
-                        busy={busy}
-                        callAgent={(method, args) => void callAgent(method, args)}
+                      <BriefingHero
+                        briefing={heroBriefing}
+                        pending={latestPending}
+                        busy={Boolean(activeAction)}
+                        onCreate={() =>
+                          settle(perform(NEWS_METHODS.refreshNow, { briefing: true }))
+                        }
                       />
                     ) : null}
 
-                    {(overview?.untriagedCount ?? 0) > 0 ? (
-                      <Box>
-                        <Flex align="center" gap="1">
-                          <Spinner size="1" />
-                          <Button
-                            size="1"
-                            variant="ghost"
-                            onClick={() => setPendingOpen((open) => !open)}
-                          >
-                            {pendingOpen ? "▾" : "▸"} Categorizing {overview?.untriagedCount} new
-                            stor
-                            {overview?.untriagedCount === 1 ? "y" : "ies"}…
-                          </Button>
-                        </Flex>
-                        {pendingOpen ? (
-                          <Flex direction="column" gap="2" pt="2" pl="3">
-                            {pendingError ? (
-                              <Text size="1" color="red" role="alert">
-                                Couldn't load uncategorized stories: {pendingError}. Close and
-                                reopen this section to retry.
-                              </Text>
-                            ) : pendingArticles.length === 0 ? (
-                              <Text size="1" color="gray">
-                                Loading…
-                              </Text>
-                            ) : (
-                              pendingArticles.map((article) => {
-                                const age = relativeAge(article.publishedAt);
-                                return (
-                                  <Flex
-                                    key={article.articleId}
-                                    direction="column"
-                                    gap="1"
-                                    style={{ opacity: article.read ? 0.55 : 1 }}
-                                  >
-                                    <Flex align="center" gap="2" style={{ minWidth: 0 }}>
-                                      <Favicon url={article.url} />
-                                      <Link
-                                        href={article.url}
-                                        target="_blank"
-                                        rel="noreferrer"
-                                        size="2"
-                                        style={{ minWidth: 0, wordBreak: "break-word" }}
-                                        onClick={() => {
-                                          markReadLocal(article.articleId);
-                                          setPendingArticles((prev) =>
-                                            prev.filter(
-                                              (item) => item.articleId !== article.articleId
-                                            )
-                                          );
-                                        }}
-                                      >
-                                        {article.title}
-                                      </Link>
-                                    </Flex>
-                                    <Text size="1" color="gray">
-                                      {article.source}
-                                      {age ? ` · ${age}` : ""} · not yet categorized
-                                    </Text>
-                                    {article.blurb ? (
-                                      <Text
-                                        size="1"
-                                        color="gray"
-                                        style={{ wordBreak: "break-word" }}
-                                      >
-                                        {article.blurb}
-                                      </Text>
-                                    ) : null}
-                                  </Flex>
-                                );
-                              })
-                            )}
-                          </Flex>
-                        ) : null}
-                      </Box>
+                    {overview && !hasSources ? (
+                      <Onboarding action={perform} activeAction={activeAction} />
                     ) : null}
 
-                    {preparing ? (
-                      <Card variant="surface">
-                        <Flex align="center" gap="2">
-                          <Spinner size="2" />
-                          <Flex direction="column">
-                            <Text size="2" weight="medium">
-                              Preparing your briefing…
-                            </Text>
-                            <Text size="1" color="gray">
-                              Scanning sources and writing your digest.
-                            </Text>
-                          </Flex>
-                        </Flex>
-                      </Card>
-                    ) : null}
-
-                    {latestReady?.tldr ? (
-                      <Flex direction="column" gap="1">
-                        <Flex align="center" gap="2">
-                          <Text
-                            size="1"
-                            weight="bold"
-                            color="gray"
-                            title={new Date(latestReady.createdAt).toLocaleString()}
-                          >
-                            LATEST BRIEFING · {agoLabel(latestReady.createdAt)}
-                            {latestReady.sourcesRead
-                              ? ` · synthesized from ${latestReady.sourcesRead} source${latestReady.sourcesRead > 1 ? "s" : ""}`
-                              : ""}
-                          </Text>
-                          <IconButton
-                            size="1"
-                            variant="ghost"
-                            color={copiedId === latestReady.briefingId ? "green" : "gray"}
-                            title="Copy briefing as markdown"
-                            aria-label="Copy briefing"
-                            onClick={() =>
-                              exportBriefing(
-                                latestReady.briefingId,
-                                latestReady.createdAt,
-                                latestReady.tldr ?? ""
-                              )
-                            }
-                          >
-                            {copiedId === latestReady.briefingId ? <CheckIcon /> : <CopyIcon />}
-                          </IconButton>
-                        </Flex>
-                        <Markdown>{latestReady.tldr}</Markdown>
-                      </Flex>
-                    ) : null}
-
-                    {pastReady.length > 0 ? (
-                      <Box>
+                    <Flex className="news-tabs" align="center" gap="2" wrap="wrap">
+                      <SegmentedControl.Root
+                        value={tab}
+                        onValueChange={(value) => setTab(value as ReaderTab)}
+                      >
+                        <SegmentedControl.Item value="inbox">Inbox</SegmentedControl.Item>
+                        <SegmentedControl.Item value="saved">Saved</SegmentedControl.Item>
+                        <SegmentedControl.Item value="briefings">Briefings</SegmentedControl.Item>
+                      </SegmentedControl.Root>
+                      {tab === "inbox" ? (
+                        <SegmentedControl.Root
+                          size="1"
+                          value={inboxView}
+                          onValueChange={(value) => setInboxView(value as InboxView)}
+                        >
+                          <SegmentedControl.Item value="all">All</SegmentedControl.Item>
+                          <SegmentedControl.Item value="unread">Unread</SegmentedControl.Item>
+                        </SegmentedControl.Root>
+                      ) : null}
+                      <Box flexGrow="1" />
+                      {tab !== "briefings" && sources.length > 1 ? (
+                        <Select.Root
+                          value={source || "__all"}
+                          onValueChange={(value) => setSource(value === "__all" ? "" : value)}
+                        >
+                          <Select.Trigger variant="soft" aria-label="Filter by source" />
+                          <Select.Content>
+                            <Select.Item value="__all">All sources</Select.Item>
+                            {sources.map((item) => (
+                              <Select.Item key={item} value={item}>
+                                {item}
+                              </Select.Item>
+                            ))}
+                          </Select.Content>
+                        </Select.Root>
+                      ) : null}
+                      {tab === "inbox" && inbox.articles.some((article) => !article.read) ? (
                         <Button
                           size="1"
                           variant="ghost"
-                          onClick={() => setPastOpen((open) => !open)}
+                          disabled={Boolean(activeAction)}
+                          onClick={() => settle(perform(NEWS_METHODS.markAllRead, {}))}
                         >
-                          {pastOpen ? "▾" : "▸"} Past briefings ({pastReady.length})
+                          Mark all read
                         </Button>
-                        {pastOpen ? (
-                          <Flex direction="column" gap="2" pt="2">
-                            {pastReady.map((briefing) => (
-                              <Flex key={briefing.briefingId} direction="column" gap="1">
-                                <Flex align="center" gap="2">
-                                  <Text
-                                    size="1"
-                                    weight="bold"
-                                    color="gray"
-                                    title={new Date(briefing.createdAt).toLocaleString()}
-                                  >
-                                    {agoLabel(briefing.createdAt)}
-                                    {briefing.sourcesRead
-                                      ? ` · ${briefing.sourcesRead} sources`
-                                      : ""}
-                                  </Text>
-                                  {briefing.tldr ? (
-                                    <IconButton
-                                      size="1"
-                                      variant="ghost"
-                                      color={copiedId === briefing.briefingId ? "green" : "gray"}
-                                      title="Copy briefing as markdown"
-                                      aria-label="Copy briefing"
-                                      onClick={() =>
-                                        exportBriefing(
-                                          briefing.briefingId,
-                                          briefing.createdAt,
-                                          briefing.tldr ?? ""
-                                        )
-                                      }
-                                    >
-                                      {copiedId === briefing.briefingId ? (
-                                        <CheckIcon />
-                                      ) : (
-                                        <CopyIcon />
-                                      )}
-                                    </IconButton>
-                                  ) : null}
-                                </Flex>
-                                {briefing.tldr ? <Markdown>{briefing.tldr}</Markdown> : null}
-                              </Flex>
-                            ))}
-                          </Flex>
+                      ) : null}
+                    </Flex>
+
+                    {tab === "briefings" ? (
+                      <Flex direction="column" gap="4">
+                        {briefings.length === 0 ? (
+                          <EmptyState
+                            title="No briefings yet"
+                            detail="Create one when you want a concise view across all your sources."
+                          />
                         ) : null}
-                      </Box>
-                    ) : null}
-
-                    {latestReady || pastReady.length > 0 || articles.length > 0 ? (
-                      <Separator size="4" my="1" />
-                    ) : null}
-
-                    {articles.length > 0 ? (
-                      <Flex direction="column" gap="2">
-                        <Flex align="center" gap="2" wrap="wrap">
-                          <SegmentedControl.Root
-                            size="1"
-                            value={view}
-                            onValueChange={(value) => setView(value as FeedView)}
-                          >
-                            <SegmentedControl.Item value="all">All</SegmentedControl.Item>
-                            <SegmentedControl.Item value="unread">Unread</SegmentedControl.Item>
-                            <SegmentedControl.Item value="saved">Saved</SegmentedControl.Item>
-                          </SegmentedControl.Root>
-                          {newCount > 0 && !searching ? (
-                            <Badge size="1" color="blue" variant="soft">
-                              {newCount} new since last visit
-                            </Badge>
-                          ) : null}
-                          {sources.length > 1 && !searching && view !== "saved" ? (
-                            <Select.Root
-                              size="1"
-                              value={sourceFilter || "__all"}
-                              onValueChange={(value) =>
-                                setSourceFilter(value === "__all" ? "" : value)
-                              }
-                            >
-                              <Select.Trigger placeholder="All sources" variant="soft" />
-                              <Select.Content>
-                                <Select.Item value="__all">All sources</Select.Item>
-                                {sources.map((source) => (
-                                  <Select.Item key={source} value={source}>
-                                    {source}
-                                  </Select.Item>
-                                ))}
-                              </Select.Content>
-                            </Select.Root>
-                          ) : null}
-                          <Box flexGrow="1" />
-                          {unreadIds.length > 0 ? (
-                            <Button
-                              size="1"
-                              variant="ghost"
-                              disabled={busy}
-                              onClick={() =>
-                                void callAgent(NEWS_METHODS.markRead, {
-                                  articleIds: unreadIds.slice(0, 200),
-                                })
-                              }
-                            >
-                              Mark all read
-                            </Button>
-                          ) : null}
-                        </Flex>
-                        <TextField.Root
-                          size="1"
-                          placeholder="Search your news…"
-                          value={searchInput}
-                          onChange={(event) => setSearchInput(event.target.value)}
-                        >
-                          <TextField.Slot>
-                            <MagnifyingGlassIcon />
-                          </TextField.Slot>
-                          {searchInput ? (
-                            <TextField.Slot side="right">
-                              <IconButton
-                                size="1"
-                                variant="ghost"
-                                color="gray"
-                                title="Clear search"
-                                aria-label="Clear search"
-                                onClick={() => setSearchInput("")}
-                              >
-                                <Cross2Icon />
-                              </IconButton>
-                            </TextField.Slot>
-                          ) : null}
-                        </TextField.Root>
-                      </Flex>
-                    ) : null}
-
-                    {searching && searchBriefings.length > 0 ? (
-                      <Flex direction="column" gap="2">
-                        <Text size="1" weight="bold" color="gray">
-                          BRIEFINGS MENTIONING “{searchInput.trim()}”
-                        </Text>
-                        {searchBriefings.map((briefing) => (
-                          <Flex key={briefing.briefingId} direction="column" gap="1">
-                            <Text
-                              size="1"
-                              color="gray"
-                              title={new Date(briefing.createdAt).toLocaleString()}
-                            >
-                              {agoLabel(briefing.createdAt)}
-                            </Text>
-                            {briefing.tldr ? <Markdown>{briefing.tldr}</Markdown> : null}
-                          </Flex>
-                        ))}
-                        <Separator size="4" my="1" />
-                      </Flex>
-                    ) : null}
-
-                    {flatRows.map((row, index) => (
-                      <Fragment key={row.cluster.primary.articleId}>
-                        {row.sectionStart ? (
-                          <Text
-                            size="1"
-                            weight="bold"
-                            color="gray"
-                            style={{ marginTop: index > 0 ? "var(--space-3)" : 0 }}
-                          >
-                            {row.category.toUpperCase()}
-                          </Text>
-                        ) : null}
-                        <ArticleItem
-                          article={row.cluster.primary}
-                          others={row.cluster.others}
-                          busy={busy}
-                          fresh={isNewSinceVisit(row.cluster.primary)}
-                          selected={index === selectedIndex}
-                          innerRef={
-                            index === selectedIndex
-                              ? (el) => {
-                                  selectedRowRef.current = el;
+                        {briefings.map((briefing) => (
+                          <Box key={briefing.briefingId}>
+                            <Flex align="center" gap="2" mb="2" wrap="wrap">
+                              <Badge
+                                color={
+                                  briefing.status === "ready"
+                                    ? "blue"
+                                    : briefing.status === "error"
+                                      ? "red"
+                                      : "gray"
                                 }
-                              : undefined
-                          }
-                          onDeepDive={(item) => void handleDeepDive(item)}
-                          onReact={reactToStory}
-                          onSetSaved={setSavedLocal}
-                          onMarkRead={markReadLocal}
+                              >
+                                {briefing.status}
+                              </Badge>
+                              <Text size="1" color="gray">
+                                {new Date(briefing.createdAt).toLocaleString()}
+                              </Text>
+                              {briefing.sourcesRead ? (
+                                <Text size="1" color="gray">
+                                  · {briefing.sourcesRead} sources read
+                                </Text>
+                              ) : null}
+                            </Flex>
+                            {briefing.tldr ? (
+                              <Markdown>{briefing.tldr}</Markdown>
+                            ) : (
+                              <Text size="2" color={briefing.status === "error" ? "red" : "gray"}>
+                                {briefing.lastError ?? "This briefing is still being prepared."}
+                              </Text>
+                            )}
+                            <Separator size="4" mt="4" />
+                          </Box>
+                        ))}
+                      </Flex>
+                    ) : searching ? (
+                      search.status === "loading" ? (
+                        <LoadingState label={`Searching for “${query.trim()}”…`} />
+                      ) : search.status === "error" ? (
+                        <EmptyState title="Search failed" detail={search.error ?? "Try again."} />
+                      ) : search.status === "ready" &&
+                        search.articles.length === 0 &&
+                        search.briefings.length === 0 ? (
+                        <EmptyState
+                          title="No matches"
+                          detail="Try a broader term or another source name."
                         />
-                      </Fragment>
-                    ))}
-
-                    {flatRows.length === 0 && (searching || view === "saved" || hasSources) ? (
-                      <Text size="2" color="gray">
-                        {searching
-                          ? "No matches in your news."
-                          : view === "saved"
-                            ? "No saved stories yet — tap the ☆ on any story to keep it here."
-                            : (overview?.untriagedCount ?? 0) > 0
-                              ? "Your latest stories are being categorized…"
-                              : sourceFilter
-                                ? "No stories match this filter."
-                                : "No stories yet — hit Refresh, or wait for your next briefing."}
-                      </Text>
-                    ) : null}
-
-                    {!hasSources && !searching && view !== "saved" && overview ? (
-                      <QuickStart
-                        busy={busy}
-                        hasSources={hasSources}
-                        scheduleSummary={overview.setup.scheduleSummary}
-                        existingFeedUrls={existingFeedUrls}
-                        existingTopics={existingTopics}
-                        feedDraft={feedDraft}
-                        onFeedDraft={setFeedDraft}
-                        onAddFeed={(url) => void callAgent(NEWS_METHODS.addFeed, { url })}
-                        onFollowTopic={(topic) =>
-                          void callAgent(NEWS_METHODS.followTopic, { topic })
-                        }
-                        onImportOpml={(opml) => void callAgent(NEWS_METHODS.importOpml, { opml })}
+                      ) : (
+                        <>
+                          {search.briefings.length > 0 ? (
+                            <Flex direction="column" gap="3">
+                              <Text
+                                className="news-section-label"
+                                size="1"
+                                weight="bold"
+                                color="gray"
+                              >
+                                Briefings
+                              </Text>
+                              {search.briefings.map((briefing) => (
+                                <Box key={briefing.briefingId}>
+                                  {briefing.tldr ? <Markdown>{briefing.tldr}</Markdown> : null}
+                                </Box>
+                              ))}
+                              <Separator size="4" />
+                            </Flex>
+                          ) : null}
+                          <ArticleList
+                            rows={grouped}
+                            selectedIndex={selectedIndex}
+                            busy={Boolean(activeAction)}
+                            previousVisit={previousVisit.current}
+                            onOpen={markRead}
+                            onSave={setSavedState}
+                            onDeepDive={deepDive}
+                            onRead={markRead}
+                            onReact={react}
+                          />
+                        </>
+                      )
+                    ) : activePage.status === "loading" ? (
+                      <LoadingState
+                        label={tab === "saved" ? "Loading Saved…" : "Loading your reader…"}
                       />
+                    ) : activePage.status === "error" ? (
+                      <EmptyState
+                        title={
+                          tab === "saved" ? "Saved could not load" : "The reader could not load"
+                        }
+                        detail={activePage.error ?? "Try updating again."}
+                      />
+                    ) : grouped.length === 0 ? (
+                      <EmptyState
+                        title={
+                          tab === "saved"
+                            ? "Nothing saved yet"
+                            : inboxView === "unread"
+                              ? "You’re all caught up"
+                              : source
+                                ? `No stories from ${source}`
+                                : hasSources
+                                  ? "Nothing new yet"
+                                  : "Your inbox is ready"
+                        }
+                        detail={
+                          tab === "saved"
+                            ? "Save a story from Inbox and it will stay here."
+                            : inboxView === "unread"
+                              ? "New stories will appear here as they arrive."
+                              : hasSources
+                                ? "Update sources now or come back after the next check."
+                                : "Add a source above to begin."
+                        }
+                      />
+                    ) : (
+                      <ArticleList
+                        rows={grouped}
+                        selectedIndex={selectedIndex}
+                        busy={Boolean(activeAction)}
+                        previousVisit={previousVisit.current}
+                        onOpen={markRead}
+                        onSave={setSavedState}
+                        onDeepDive={deepDive}
+                        onRead={markRead}
+                        onReact={react}
+                      />
+                    )}
+
+                    {!searching && tab !== "briefings" && activePage.hasMore ? (
+                      <Button
+                        size="2"
+                        variant="soft"
+                        disabled={Boolean(activeAction)}
+                        onClick={() => void loadMore()}
+                        style={{ alignSelf: "center" }}
+                      >
+                        {activeAction === "load-more" ? <Spinner /> : null} Load older stories
+                      </Button>
                     ) : null}
                   </Flex>
-                </ScrollArea>
+                </main>
+              </ScrollArea>
+            </Flex>
+
+            {assistantOpen ? (
+              <Flex className="news-assistant" direction="column">
+                <Flex align="center" gap="2" p="2">
+                  <ChatBubbleIcon />
+                  <Text size="2" weight="medium">
+                    News assistant
+                  </Text>
+                  <Box flexGrow="1" />
+                  <IconButton
+                    size="1"
+                    variant="ghost"
+                    aria-label="Close News assistant"
+                    onClick={() => setAssistantOpen(false)}
+                  >
+                    <Cross2Icon />
+                  </IconButton>
+                </Flex>
+                <Separator size="4" />
+                <Box style={{ flex: 1, minHeight: 0 }}>
+                  <AgenticChat
+                    config={config}
+                    channelName={channelName}
+                    contextId={contextId}
+                    theme={theme}
+                    heightMode="container"
+                    installedAgents={installedAgents}
+                    sandbox={sandbox}
+                  />
+                </Box>
               </Flex>
             ) : null}
-
-            {!narrow ? <Separator orientation="vertical" size="4" /> : null}
-
-            {/* ── embedded agentic chat ── */}
-            {!narrow || mobilePane === "chat" ? (
-              <Box style={{ flex: narrow ? "1 1 auto" : "1 1 45%", minWidth: 0 }}>
-                <AgenticChat
-                  config={config}
-                  channelName={channelName}
-                  contextId={resolvedContextId}
-                  theme={theme}
-                  heightMode="container"
-                  installedAgents={installedAgents}
-                  sandbox={sandboxConfig}
-                />
-              </Box>
-            ) : null}
           </Flex>
-        </Flex>
+
+          <Dialog.Root open={settingsOpen} onOpenChange={setSettingsOpen}>
+            <Dialog.Content maxWidth="940px" style={{ maxHeight: "88dvh", overflow: "auto" }}>
+              <Dialog.Title>Sources & preferences</Dialog.Title>
+              <Dialog.Description size="2" color="gray" mb="5">
+                Shape what News gathers and how it briefs you.
+              </Dialog.Description>
+              {overview ? (
+                <SettingsContent
+                  setup={overview.setup}
+                  action={perform}
+                  activeAction={activeAction}
+                />
+              ) : (
+                <LoadingState label="Loading settings…" />
+              )}
+              <Flex justify="end" mt="5">
+                <Dialog.Close>
+                  <Button variant="soft">Done</Button>
+                </Dialog.Close>
+              </Flex>
+            </Dialog.Content>
+          </Dialog.Root>
+        </Box>
       </Theme>
     </ErrorBoundary>
   );
 }
 
-/** Always-available, collapsible view of the reader's persisted configuration
- *  — preferences, feeds, and followed topics — fed by overview.setup (which the
- *  agent DO persists). Keeps your curation visible and editable in the reader
- *  itself, not only in the chat setup card, so it survives any reload. */
-function ReaderSettings({
-  setup,
-  busy,
-  callAgent,
-}: {
-  setup: NewsSetupCardState;
-  busy: boolean;
-  callAgent: (method: string, args: Record<string, unknown>) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const [newFeedUrl, setNewFeedUrl] = useState("");
-  const [newTopic, setNewTopic] = useState("");
-  const [prefsDraft, setPrefsDraft] = useState<string | null>(null);
-  const feeds = setup.feeds ?? [];
-  const topics = setup.followedTopics ?? [];
-  const prefsDirty = prefsDraft !== null && prefsDraft !== (setup.preferencesText ?? "");
+function LoadingState({ label }: { label: string }) {
   return (
-    <Box>
-      <Button size="1" variant="ghost" onClick={() => setOpen((value) => !value)}>
-        <GearIcon /> {open ? "▾" : "▸"} Sources & preferences
-        <Text size="1" color="gray">
-          · {feeds.length} feed{feeds.length === 1 ? "" : "s"} · {topics.length} topic
-          {topics.length === 1 ? "" : "s"}
+    <Flex className="news-empty" direction="column" gap="2">
+      <Spinner />
+      <Text size="2" color="gray">
+        {label}
+      </Text>
+    </Flex>
+  );
+}
+
+function EmptyState({ title, detail }: { title: string; detail: string }) {
+  return (
+    <Box className="news-empty">
+      <Flex direction="column" gap="2" align="center" style={{ maxWidth: 420 }}>
+        <Heading size="4">{title}</Heading>
+        <Text size="2" color="gray">
+          {detail}
         </Text>
-      </Button>
-      {open ? (
-        <Flex direction="column" gap="3" pt="2">
-          <Flex direction="column" gap="1">
-            <Text size="1" weight="bold" color="gray">
-              PREFERENCES
-            </Text>
-            <Flex gap="2">
-              <TextField.Root
-                size="1"
-                placeholder="e.g. more open source, less crypto, terse blurbs"
-                value={prefsDraft ?? setup.preferencesText ?? ""}
-                onChange={(event) => setPrefsDraft(event.target.value)}
-                style={{ flex: 1 }}
-              />
-              {prefsDirty ? (
-                <Button
-                  size="1"
-                  disabled={busy}
-                  onClick={() => {
-                    callAgent(NEWS_METHODS.setPreferences, { text: prefsDraft ?? "" });
-                    setPrefsDraft(null);
-                  }}
-                >
-                  Save
-                </Button>
-              ) : null}
-            </Flex>
-          </Flex>
-
-          <Flex direction="column" gap="1">
-            <Text size="1" weight="bold" color="gray">
-              FEEDS
-            </Text>
-            {feeds.map((feed) => (
-              <Flex key={feed.feedId} align="center" gap="2" style={{ minWidth: 0 }}>
-                <Switch
-                  size="1"
-                  checked={feed.enabled}
-                  disabled={busy}
-                  onCheckedChange={(enabled) =>
-                    callAgent(NEWS_METHODS.setFeedEnabled, { feedId: feed.feedId, enabled })
-                  }
-                />
-                <Text size="1" truncate style={{ flex: 1, minWidth: 0 }}>
-                  {feed.title ?? feed.url}
-                </Text>
-                {!feed.enabled ? (
-                  <Badge size="1" color="gray">
-                    Muted / disabled
-                  </Badge>
-                ) : null}
-                {feed.failCount > 0 ? (
-                  <Badge size="1" color="red" title={feed.lastStatus}>
-                    {feed.failCount} fail{feed.failCount === 1 ? "" : "s"}
-                  </Badge>
-                ) : null}
-                <IconButton
-                  size="1"
-                  variant="ghost"
-                  color="red"
-                  disabled={busy}
-                  title="Remove feed"
-                  aria-label="Remove feed"
-                  onClick={() => callAgent(NEWS_METHODS.removeFeed, { feedId: feed.feedId })}
-                >
-                  <Cross2Icon />
-                </IconButton>
-              </Flex>
-            ))}
-            <Flex gap="2">
-              <TextField.Root
-                size="1"
-                placeholder="https://example.com/feed.xml"
-                value={newFeedUrl}
-                onChange={(event) => setNewFeedUrl(event.target.value)}
-                style={{ flex: 1 }}
-              />
-              <Button
-                size="1"
-                disabled={busy || newFeedUrl.trim().length === 0}
-                onClick={() => {
-                  callAgent(NEWS_METHODS.addFeed, { url: newFeedUrl.trim() });
-                  setNewFeedUrl("");
-                }}
-              >
-                <PlusIcon /> Add
-              </Button>
-            </Flex>
-          </Flex>
-
-          <Flex direction="column" gap="1">
-            <Text size="1" weight="bold" color="gray">
-              FOLLOWED TOPICS
-            </Text>
-            {topics.length > 0 ? (
-              <Flex gap="2" wrap="wrap">
-                {topics.map((topic) => (
-                  <Badge key={topic.topic} size="2" color={topic.enabled ? "blue" : "gray"}>
-                    {topic.topic}
-                    <IconButton
-                      size="1"
-                      variant="ghost"
-                      color="red"
-                      disabled={busy}
-                      title="Unfollow topic"
-                      aria-label="Unfollow topic"
-                      onClick={() => callAgent(NEWS_METHODS.unfollowTopic, { topic: topic.topic })}
-                    >
-                      <Cross2Icon />
-                    </IconButton>
-                  </Badge>
-                ))}
-              </Flex>
-            ) : null}
-            <Flex gap="2">
-              <TextField.Root
-                size="1"
-                placeholder="e.g. AI agents"
-                value={newTopic}
-                onChange={(event) => setNewTopic(event.target.value)}
-                style={{ flex: 1 }}
-              />
-              <Button
-                size="1"
-                disabled={busy || newTopic.trim().length === 0}
-                onClick={() => {
-                  callAgent(NEWS_METHODS.followTopic, { topic: newTopic.trim() });
-                  setNewTopic("");
-                }}
-              >
-                <PlusIcon /> Follow
-              </Button>
-            </Flex>
-          </Flex>
-
-          <Flex direction="column" gap="1">
-            <Text size="1" weight="bold" color="gray">
-              BRIEFING
-            </Text>
-            <Flex align="center" gap="2" wrap="wrap">
-              <Text size="1" color="gray">
-                Daily at
-              </Text>
-              <input
-                type="time"
-                value={minutesToHHMM(setup.briefingAtMinutes)}
-                disabled={busy}
-                onChange={(event) => {
-                  if (event.target.value)
-                    callAgent(NEWS_METHODS.setSchedule, { briefingAt: event.target.value });
-                }}
-                style={{
-                  fontSize: "var(--font-size-1)",
-                  padding: "2px 6px",
-                  borderRadius: "var(--radius-2)",
-                  border: "1px solid var(--gray-a6)",
-                  background: "var(--color-surface)",
-                  color: "var(--gray-12)",
-                }}
-              />
-              <Box flexGrow="1" />
-              <Text size="1" color="gray">
-                {setup.briefingPaused ? "Paused" : "Active"}
-              </Text>
-              <Switch
-                size="1"
-                checked={!setup.briefingPaused}
-                disabled={busy}
-                onCheckedChange={(active) =>
-                  callAgent(NEWS_METHODS.setBriefingPaused, { paused: !active })
-                }
-              />
-            </Flex>
-            {setup.scheduleSummary ? (
-              <Text size="1" color="gray">
-                {setup.scheduleSummary}
-              </Text>
-            ) : null}
-          </Flex>
-        </Flex>
-      ) : null}
+      </Flex>
     </Box>
   );
 }
 
-/** First-run quick start: one-click curated sources, a paste-a-feed field, and
- *  OPML bulk import. Stays available while the reader is empty. */
-function QuickStart({
+function ArticleList({
+  rows,
+  selectedIndex,
   busy,
-  hasSources,
-  scheduleSummary,
-  existingFeedUrls,
-  existingTopics,
-  feedDraft,
-  onFeedDraft,
-  onAddFeed,
-  onFollowTopic,
-  onImportOpml,
+  previousVisit,
+  onOpen,
+  onSave,
+  onDeepDive,
+  onRead,
+  onReact,
 }: {
+  rows: Array<{
+    cluster: ReturnType<typeof clusterArticles>[number];
+    category: string;
+    starts: boolean;
+  }>;
+  selectedIndex: number;
   busy: boolean;
-  hasSources: boolean;
-  scheduleSummary: string;
-  existingFeedUrls: Set<string>;
-  existingTopics: Set<string>;
-  feedDraft: string;
-  onFeedDraft: (value: string) => void;
-  onAddFeed: (url: string) => void;
-  onFollowTopic: (topic: string) => void;
-  onImportOpml: (opml: string) => void;
+  previousVisit: number;
+  onOpen: (article: ArticleRow) => void;
+  onSave: (article: ArticleRow, saved: boolean) => void;
+  onDeepDive: (article: ArticleRow) => Promise<void>;
+  onRead: (article: ArticleRow) => void;
+  onReact: (article: ArticleRow, reaction: "more" | "less" | "mute_source") => void;
 }) {
-  const [opmlOpen, setOpmlOpen] = useState(false);
-  const [opmlDraft, setOpmlDraft] = useState("");
   return (
-    <Card variant="surface">
-      <Flex direction="column" gap="3">
-        <Flex direction="column" gap="1">
-          <Heading size="3">{hasSources ? "Add more sources" : "Welcome to News 📰"}</Heading>
-          <Text size="2" color="gray">
-            {hasSources
-              ? `Sources are set — ${scheduleSummary}. No stories yet; hit Refresh to check now, or add more below.`
-              : "Add a few sources and I'll gather them — plus anything you ask me to follow — into a digest and brief you on what matters. Pick a starter below, or just tell me what you're into in the chat."}
-          </Text>
-        </Flex>
-
-        <Flex direction="column" gap="2">
-          <Text size="1" weight="bold" color="gray">
-            POPULAR FEEDS
-          </Text>
-          <Flex gap="2" wrap="wrap">
-            {SUGGESTED_FEEDS.map((feed) => {
-              const added = existingFeedUrls.has(feed.url);
-              return (
-                <Button
-                  key={feed.url}
-                  size="1"
-                  variant={added ? "soft" : "outline"}
-                  color={added ? "green" : undefined}
-                  disabled={busy || added}
-                  title={feed.blurb}
-                  onClick={() => onAddFeed(feed.url)}
-                >
-                  {added ? <CheckIcon /> : <PlusIcon />} {feed.label}
-                </Button>
-              );
-            })}
-          </Flex>
-        </Flex>
-
-        <Flex direction="column" gap="2">
-          <Text size="1" weight="bold" color="gray">
-            FOLLOW A TOPIC
-          </Text>
-          <Flex gap="2" wrap="wrap">
-            {SUGGESTED_TOPICS.map((topic) => {
-              const added = existingTopics.has(topic.toLowerCase());
-              return (
-                <Button
-                  key={topic}
-                  size="1"
-                  variant={added ? "soft" : "outline"}
-                  color={added ? "green" : undefined}
-                  disabled={busy || added}
-                  onClick={() => onFollowTopic(topic)}
-                >
-                  {added ? <CheckIcon /> : <PlusIcon />} {topic}
-                </Button>
-              );
-            })}
-          </Flex>
-        </Flex>
-
-        <Flex direction="column" gap="1">
-          <Text size="1" weight="bold" color="gray">
-            OR PASTE A FEED URL
-          </Text>
-          <Flex gap="2">
-            <TextField.Root
-              size="1"
-              placeholder="https://example.com/feed.xml"
-              value={feedDraft}
-              onChange={(event) => onFeedDraft(event.target.value)}
-              style={{ flex: 1 }}
-            />
-            <Button
-              size="1"
-              disabled={busy || feedDraft.trim().length === 0}
-              onClick={() => {
-                onAddFeed(feedDraft.trim());
-                onFeedDraft("");
-              }}
-            >
-              <PlusIcon /> Add
-            </Button>
-          </Flex>
-        </Flex>
-
-        <Flex direction="column" gap="1">
-          <Button
-            size="1"
-            variant="ghost"
-            onClick={() => setOpmlOpen((open) => !open)}
-            style={{ alignSelf: "flex-start" }}
-          >
-            {opmlOpen ? "▾" : "▸"} Import from OPML
-          </Button>
-          {opmlOpen ? (
-            <Flex direction="column" gap="2">
-              <TextArea
+    <Flex direction="column">
+      {rows.map(({ cluster, category, starts }, index) => {
+        const article = cluster.primary;
+        const fresh =
+          previousVisit > 0 &&
+          typeof article.fetchedAt === "number" &&
+          article.fetchedAt > previousVisit;
+        return (
+          <Fragment key={article.articleId}>
+            {starts ? (
+              <Text
+                className="news-section-label"
                 size="1"
-                placeholder="Paste an OPML export from another reader…"
-                value={opmlDraft}
-                onChange={(event) => setOpmlDraft(event.target.value)}
-                rows={4}
-              />
-              <Button
-                size="1"
-                disabled={busy || opmlDraft.trim().length === 0}
-                onClick={() => {
-                  onImportOpml(opmlDraft.trim());
-                  setOpmlDraft("");
-                  setOpmlOpen(false);
-                }}
-                style={{ alignSelf: "flex-start" }}
+                weight="bold"
+                color="gray"
+                mt={index > 0 ? "5" : "2"}
+                mb="1"
               >
-                <PlusIcon /> Import feeds
-              </Button>
-            </Flex>
-          ) : null}
-        </Flex>
-      </Flex>
-    </Card>
+                {category}
+              </Text>
+            ) : null}
+            <ArticleCard
+              article={article}
+              others={cluster.others}
+              selected={index === selectedIndex}
+              fresh={fresh}
+              disabled={busy}
+              onOpen={() => onOpen(article)}
+              onSave={(saved) => onSave(article, saved)}
+              onDeepDive={() => void onDeepDive(article)}
+              onRead={() => onRead(article)}
+              onReact={(reaction) => onReact(article, reaction)}
+            />
+          </Fragment>
+        );
+      })}
+    </Flex>
   );
 }

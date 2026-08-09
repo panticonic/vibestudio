@@ -591,22 +591,38 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
     });
 
     const previousTldr = this.previousTldr(channelId, briefingId);
-    await this.submitAgentInitiatedTurn(
-      channelId,
-      {
-        content: buildBriefingPrompt({
-          briefingId,
-          dateLabel: new Date(now).toDateString(),
-          stories,
-          followedTopics: topics,
-          previousTldr,
-          preferencesText: state.preferencesText,
-          feedbackLines: this.feedbackLines(channelId),
-          articleCountScanned: scanned,
-        }),
-      },
-      { mode: "sequential", steeringId: `news-briefing:${channelId}:${briefingId}` }
-    );
+    try {
+      await this.submitAgentInitiatedTurn(
+        channelId,
+        {
+          content: buildBriefingPrompt({
+            briefingId,
+            dateLabel: new Date(now).toDateString(),
+            stories,
+            followedTopics: topics,
+            previousTldr,
+            preferencesText: state.preferencesText,
+            feedbackLines: this.feedbackLines(channelId),
+            articleCountScanned: scanned,
+          }),
+        },
+        { mode: "sequential", steeringId: `news-briefing:${channelId}:${briefingId}` }
+      );
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.sql.exec(
+        `UPDATE news_briefings SET status = 'error' WHERE channel_id = ? AND briefing_id = ?`,
+        channelId,
+        briefingId
+      );
+      state.lastError = `Briefing could not start: ${message}`;
+      this.saveChannelState(state);
+      await this.updateBriefingCard(channelId, briefingId, {
+        status: "error",
+        lastError: state.lastError,
+      });
+      throw err;
+    }
   }
 
   // ── Tier 1.5: triage ────────────────────────────────────────────────────────
@@ -645,7 +661,7 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
          LEFT JOIN news_feeds f ON f.channel_id = a.channel_id AND f.feed_id = a.feed_id
          WHERE a.channel_id = ? AND a.triaged = 0 AND a.read = 0
            AND (a.briefed_in IS NULL OR a.briefed_in NOT LIKE 'dropped:%')
-         ORDER BY COALESCE(a.published_at, a.fetched_at) DESC
+         ORDER BY COALESCE(a.published_at, a.fetched_at) DESC, a.article_id DESC
          LIMIT ?`,
         channelId,
         TRIAGE_BATCH_SIZE
@@ -656,6 +672,7 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
       articleId: String(row["article_id"]),
       title: String(row["title"]),
       url: String(row["canonical_url"]),
+      origin: String(row["origin"]) === "search" ? "search" : "feed",
       source:
         (row["feed_title"] as string | null) ??
         (row["source"] as string | null) ??
@@ -1134,6 +1151,7 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
     // (so an impatient user can click straight through while triage runs).
     const untriagedOnly = booleanArg(args, "untriagedOnly") ?? false;
     const sinceMs = numberArg(args, "sinceMs");
+    const cursor = stringArg(args, "cursor");
     const clauses = ["a.channel_id = ?"];
     const params: unknown[] = [channelId];
     if (savedOnly) {
@@ -1154,19 +1172,41 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
       clauses.push("a.fetched_at >= ?");
       params.push(sinceMs);
     }
+    if (cursor) {
+      const match = /^(\d+):([a-f0-9]+)$/.exec(cursor);
+      if (!match) return { error: "invalid article cursor" };
+      const cursorTime = Number(match[1]);
+      const cursorId = match[2];
+      clauses.push(
+        "(COALESCE(a.published_at, a.fetched_at) < ? OR (COALESCE(a.published_at, a.fetched_at) = ? AND a.article_id < ?))"
+      );
+      params.push(cursorTime, cursorTime, cursorId);
+    }
     const rows = this.sql
       .exec(
         `SELECT ${ARTICLE_COLUMNS}
          FROM news_articles a
          LEFT JOIN news_feeds f ON f.channel_id = a.channel_id AND f.feed_id = a.feed_id
          WHERE ${clauses.join(" AND ")}
-         ORDER BY COALESCE(a.published_at, a.fetched_at) DESC
+         ORDER BY COALESCE(a.published_at, a.fetched_at) DESC, a.article_id DESC
          LIMIT ?`,
         ...params,
-        limit
+        limit + 1
       )
       .toArray();
-    return { count: rows.length, articles: rows.map((row) => this.mapArticleRow(row)) };
+    const hasMore = rows.length > limit;
+    const page = rows.slice(0, limit);
+    const last = page.at(-1);
+    const nextCursor =
+      hasMore && last
+        ? `${Number(last["published_at"] ?? last["fetched_at"])}:${String(last["article_id"])}`
+        : undefined;
+    return {
+      count: page.length,
+      articles: page.map((row) => this.mapArticleRow(row)),
+      hasMore,
+      nextCursor,
+    };
   }
 
   /** Full-text-ish archive search over ingested articles and past briefing
@@ -1286,7 +1326,19 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
       );
       triaged += 1;
     }
-    return { triaged, dropped };
+    const remaining = this.countUntriaged(channelId);
+    let continued = false;
+    if (remaining > 0) {
+      try {
+        continued = await this.runTriage(channelId);
+      } catch (err) {
+        const state = this.getChannelState(channelId);
+        state.lastError = `Categorization paused: ${err instanceof Error ? err.message : String(err)}`;
+        this.saveChannelState(state);
+        await this.publishSetupCard(channelId);
+      }
+    }
+    return { triaged, dropped, remaining, continued };
   }
 
   /** On-demand triage entry point (the reader calls this when it opens with a
@@ -1462,6 +1514,7 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
         limit
       )
       .toArray();
+    const channelError = this.getChannelState(channelId).lastError;
     return {
       briefings: rows.map((row) => ({
         briefingId: String(row["briefing_id"]),
@@ -1469,6 +1522,10 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
         status: String(row["status"]),
         tldr: (row["tldr"] as string | null) ?? undefined,
         sourcesRead: row["sources_read"] === null ? undefined : Number(row["sources_read"]),
+        lastError:
+          String(row["status"]) === "error"
+            ? (channelError ?? "This briefing did not complete. Try creating it again.")
+            : undefined,
       })),
     };
   }
@@ -1536,6 +1593,25 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
       );
     }
     return { markedRead: ids.length };
+  }
+
+  async markAllRead(channelId: string, _args: Record<string, unknown>): Promise<unknown> {
+    const row = this.sql
+      .exec(
+        `SELECT COUNT(*) AS n FROM news_articles
+         WHERE channel_id = ? AND triaged = 1 AND read = 0
+           AND (briefed_in IS NULL OR briefed_in NOT LIKE 'dropped:%')`,
+        channelId
+      )
+      .toArray()[0];
+    const markedRead = Number(row?.["n"] ?? 0);
+    this.sql.exec(
+      `UPDATE news_articles SET read = 1
+       WHERE channel_id = ? AND triaged = 1 AND read = 0
+         AND (briefed_in IS NULL OR briefed_in NOT LIKE 'dropped:%')`,
+      channelId
+    );
+    return { markedRead };
   }
 
   /** Reader tap that teaches curation: more/less of this kind, or mute the

@@ -67,6 +67,6 @@ describe("NewsPanel bootstrap", () => {
     // effect. That state transition used to cross an early return which skipped
     // the palette hooks, triggering React's "Rendered more hooks" invariant.
     expect(() => render(<NewsPanel />)).not.toThrow();
-    expect(screen.getByText(/📰 News/)).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "News" })).toBeTruthy();
   });
 });

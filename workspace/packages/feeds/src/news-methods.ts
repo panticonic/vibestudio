@@ -19,6 +19,7 @@ export const NEWS_METHODS = {
   setSchedule: "setSchedule",
   setBriefingPaused: "setBriefingPaused",
   markRead: "markRead",
+  markAllRead: "markAllRead",
   setSaved: "setSaved",
   searchArchive: "searchArchive",
   triage: "news_triage",

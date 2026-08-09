@@ -69,7 +69,7 @@ export class NewsSyncEngine {
     }
     this.deps.sql.exec(
       `DELETE FROM news_articles
-       WHERE channel_id = ? AND briefed_in IS NULL AND fetched_at < ?`,
+       WHERE channel_id = ? AND saved = 0 AND briefed_in IS NULL AND fetched_at < ?`,
       channelId,
       now - ARTICLE_RETENTION_MS
     );
@@ -85,7 +85,8 @@ export class NewsSyncEngine {
     const waitMs = this.politeness.delayFor(feed.url, now);
     if (waitMs > 0) {
       const sleep =
-        this.deps.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+        this.deps.sleep ??
+        ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
       await sleep(waitMs);
     }
 
@@ -208,7 +209,9 @@ export class NewsSyncEngine {
           (String(row["origin"]) === "search" ? "web search" : "feed"),
         origin: String(row["origin"]) === "search" ? "search" : "feed",
         publishedAt:
-          row["published_at"] === null ? undefined : new Date(Number(row["published_at"])).toISOString(),
+          row["published_at"] === null
+            ? undefined
+            : new Date(Number(row["published_at"])).toISOString(),
         score,
         blurb: ((row["blurb"] as string | null) ?? summary)?.slice(0, 280),
       };
