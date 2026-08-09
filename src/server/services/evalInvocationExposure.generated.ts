@@ -6405,7 +6405,7 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     authorityPrincipals: ["code", "host"],
     owner: "auth",
     method: "revokeAgentCredential",
-    sensitivity: "admin",
+    sensitivity: "destructive",
     resourceDerivation: {
       kind: "literal",
       key: "service:auth.revokeAgentCredential",

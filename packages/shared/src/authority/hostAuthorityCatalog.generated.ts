@@ -629,40 +629,32 @@ export const HOST_AUTHORITY_METHODS = {
       residency: "grant-authority",
       family: "auth.control",
       rationale:
-        "G3: state change exceeds the calling task's scratch; §2 durable code identity or host approval plumbing",
+        "Delegating a caller-owned live session to an external agent is the credential-bearing consequence of the reviewed subagents.create operation; the handler independently binds the credential to that exact owned session and the authenticated agent acts on behalf of its owning user.",
     },
-    capability: "agent.credentials.manage",
+    capability: "subagents.create",
     presentation: {
-      title: "Create a sign-in key for an agent",
-      action: "create a sign-in key for an agent",
-      description: "Allows {requesterKind} to create a sign-in key for an agent.",
-      group: "accounts",
+      title: "Launch an external subagent",
+      action: "launch an external subagent",
+      description:
+        "Allows {requesterKind} to launch an external subagent that can act on your behalf in this workspace.",
+      group: "automation",
       authorityCategory: {
-        domain: "accounts",
-        verb: "manage",
+        domain: "automation",
+        verb: "act",
       },
     },
   },
   "auth.revokeAgentCredential": {
     tier: {
-      tier: "gated",
-      session: "codeOnly",
-      residency: "grant-authority",
+      tier: "open",
+      session: "family",
+      residency: "identity",
       family: "auth.retire",
       rationale:
-        "G3: state change exceeds the calling task's scratch; §2 durable code identity or host approval plumbing",
+        "Revoking an exact caller-owned agent credential only removes authority and is required lifecycle cleanup; the handler rejects foreign session ownership.",
     },
-    capability: "agent.credentials.manage",
-    presentation: {
-      title: "Revoke an agent's sign-in key",
-      action: "revoke an agent's sign-in key",
-      description: "Allows {requesterKind} to revoke an agent's sign-in key.",
-      group: "accounts",
-      authorityCategory: {
-        domain: "accounts",
-        verb: "manage",
-      },
-    },
+    capability: null,
+    presentation: null,
   },
   "authority.awaitDecision": {
     tier: {
@@ -7102,10 +7094,6 @@ export const HOST_CAPABILITY_CATEGORIES = {
     domain: "web",
     verb: "manage",
   },
-  "agent.credentials.manage": {
-    domain: "accounts",
-    verb: "manage",
-  },
   "application.shutdown": {
     domain: "computer",
     verb: "act",
@@ -7500,16 +7488,6 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
     group: "network",
     authorityCategory: {
       domain: "web",
-      verb: "manage",
-    },
-  },
-  "agent.credentials.manage": {
-    title: "Create a sign-in key for an agent",
-    action: "create a sign-in key for an agent",
-    description: "Allows {requesterKind} to create a sign-in key for an agent.",
-    group: "accounts",
-    authorityCategory: {
-      domain: "accounts",
       verb: "manage",
     },
   },
@@ -8131,10 +8109,11 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
     },
   },
   "subagents.create": {
-    title: "Create a workspace for a subagent",
-    action: "create a workspace for a subagent",
-    description: "Allows {requesterKind} to create a workspace for a subagent.",
-    group: "runtime",
+    title: "Launch an external subagent",
+    action: "launch an external subagent",
+    description:
+      "Allows {requesterKind} to launch an external subagent that can act on your behalf in this workspace.",
+    group: "automation",
     authorityCategory: {
       domain: "automation",
       verb: "act",

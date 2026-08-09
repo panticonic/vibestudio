@@ -16,14 +16,14 @@ const AUTH_READ_ACCESS: MethodAccessDescriptor = {
 const AUTH_CONNECTION_INFO_POLICY: ServiceAuthorityPolicy = {
   principals: ["host", "user", "code"],
 };
-const AUTH_PAIRING_ACCESS: MethodAccessDescriptor = {
+const AUTH_AGENT_LAUNCH_ACCESS: MethodAccessDescriptor = {
   sensitivity: "admin",
 };
 const AUTH_GRANT_ACCESS: MethodAccessDescriptor = {
   sensitivity: "admin",
 };
 const AUTH_REVOKE_ACCESS: MethodAccessDescriptor = {
-  sensitivity: "admin",
+  sensitivity: "destructive",
 };
 
 /** Live entity/context/channel projection surfaced for an `agent` connection. */
@@ -125,27 +125,28 @@ export const authMethods = defineServiceMethods({
     access: AUTH_READ_ACCESS,
   },
   mintAgentCredential: {
-    capability: "agent.credentials.manage",
+    capability: "subagents.create",
     tier: {
       tier: "gated",
       session: "codeOnly",
       residency: "grant-authority",
       family: "auth.control",
       rationale:
-        "G3: state change exceeds the calling task's scratch; §2 durable code identity or host approval plumbing",
+        "Delegating a caller-owned live session to an external agent is the credential-bearing consequence of the reviewed subagents.create operation; the handler independently binds the credential to that exact owned session and the authenticated agent acts on behalf of its owning user.",
     },
     presentation: {
-      title: "Create a sign-in key for an agent",
-      action: "create a sign-in key for an agent",
-      description: "Allows {requesterKind} to create a sign-in key for an agent.",
-      group: "accounts",
+      title: "Launch an external subagent",
+      action: "launch an external subagent",
+      description:
+        "Allows {requesterKind} to launch an external subagent that can act on your behalf in this workspace.",
+      group: "automation",
       authorityCategory: {
-        domain: "accounts",
-        verb: "manage",
+        domain: "automation",
+        verb: "act",
       },
     },
     description:
-      "Rotate the authentication secret for a live self-bound agent session. The credential proves only the exact entity id; context, channel, and owner are resolved from the session entity whenever it authenticates. Returns { agentId, agentToken }. Callable only by the server or by the extension that owns the target session.",
+      "Issue or rotate the authentication proof for a live caller-owned agent session as part of an authorized subagent launch. The credential proves only the exact entity id; context, channel, and owner are resolved from the live session whenever it authenticates. The authenticated agent acts on behalf of that owner for ordinary open and gated workspace operations, while critical effects still require fresh confirmation. Returns { agentId, agentToken }. Callable only by the server or by the code unit that owns the target session.",
     args: z.tuple([
       z
         .object({
@@ -161,28 +162,17 @@ export const authMethods = defineServiceMethods({
     ]),
     returns: z.object({ agentId: z.string(), agentToken: z.string() }),
     authority: { principals: ["code", "host"] },
-    access: AUTH_PAIRING_ACCESS,
+    access: AUTH_AGENT_LAUNCH_ACCESS,
     examples: [{ args: [{ entityId: "session:s1" }] }],
   },
   revokeAgentCredential: {
-    capability: "agent.credentials.manage",
     tier: {
-      tier: "gated",
-      session: "codeOnly",
-      residency: "grant-authority",
+      tier: "open",
+      session: "family",
+      residency: "identity",
       family: "auth.retire",
       rationale:
-        "G3: state change exceeds the calling task's scratch; §2 durable code identity or host approval plumbing",
-    },
-    presentation: {
-      title: "Revoke an agent's sign-in key",
-      action: "revoke an agent's sign-in key",
-      description: "Allows {requesterKind} to revoke an agent's sign-in key.",
-      group: "accounts",
-      authorityCategory: {
-        domain: "accounts",
-        verb: "manage",
-      },
+        "Revoking an exact caller-owned agent credential only removes authority and is required lifecycle cleanup; the handler rejects foreign session ownership.",
     },
     description:
       "Revoke a single entity-scoped agent credential by agentId. Callable only by the server or by the extension that owns the target session. Returns whether a credential was revoked.",

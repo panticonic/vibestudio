@@ -19775,7 +19775,7 @@
       "sessionAdmission": "codeOnly",
       "residency": "grant-authority",
       "mechanismFamily": "auth.control",
-      "reviewRationale": "G3: state change exceeds the calling task's scratch; §2 durable code identity or host approval plumbing",
+      "reviewRationale": "Delegating a caller-owned live session to an external agent is the credential-bearing consequence of the reviewed subagents.create operation; the handler independently binds the credential to that exact owned session and the authenticated agent acts on behalf of its owning user.",
       "resourceDerivation": {
         "kind": "literal",
         "key": "service:auth.mintAgentCredential"
@@ -19805,8 +19805,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:auth.mintAgentCredential),allOf(capability(code,service:auth.mintAgentCredential),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "reviewed-subagent-launch-agent-login",
+        "change": "Reuses the existing subagents.create decision for the credential-bearing portion of an external subagent launch. The receiver still requires a live exact agent session and restricts code callers to a session they own. The authenticated agent retains that relationship for ownership and audit and deliberately acts on behalf of the owning user for open and gated workspace operations; critical effects remain on the fresh-confirmation path."
       },
       "capability": "service:auth.mintAgentCredential",
       "parityAssertion": "generated-census:host-authority"
@@ -19816,11 +19816,11 @@
       "rpcPlane": "host-service",
       "owner": "auth",
       "method": "revokeAgentCredential",
-      "tier": "gated",
-      "sessionAdmission": "codeOnly",
-      "residency": "grant-authority",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "identity",
       "mechanismFamily": "auth.retire",
-      "reviewRationale": "G3: state change exceeds the calling task's scratch; §2 durable code identity or host approval plumbing",
+      "reviewRationale": "Revoking an exact caller-owned agent credential only removes authority and is required lifecycle cleanup; the handler rejects foreign session ownership.",
       "resourceDerivation": {
         "kind": "literal",
         "key": "service:auth.revokeAgentCredential"
@@ -19829,7 +19829,7 @@
         "code",
         "host"
       ],
-      "sensitivity": "admin",
+      "sensitivity": "destructive",
       "authenticatedFacts": [
         "session",
         "acting-user",
@@ -19850,8 +19850,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:auth.revokeAgentCredential),allOf(capability(code,service:auth.revokeAgentCredential),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "caller-owned-agent-login-retirement",
+        "change": "Makes exact agent credential retirement non-prompting lifecycle cleanup. The receiver admits only host or code principals, restricts code callers to the owner of the live bound session, and only revokes the selected credential and its derived ephemeral bearer."
       },
       "capability": "service:auth.revokeAgentCredential",
       "parityAssertion": "generated-census:host-authority"

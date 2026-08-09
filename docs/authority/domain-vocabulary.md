@@ -193,7 +193,6 @@ destination outside the workspace belongs here, regardless of its API family.
 | `credential.use`              | act    | use a saved sign-in                    |
 | `credentials.connect`         | manage | save a new sign-in                     |
 | `credentials.audit.read`      | see    | see how saved sign-ins were used       |
-| `agent.credentials.manage`    | manage | create or revoke an agent's credential |
 | `browser-passwords.read`      | see    | see saved website passwords            |
 | `browser-passwords.manage`    | manage | change saved website passwords         |
 | `browser-passwords.delete`    | act    | delete a saved website password        |

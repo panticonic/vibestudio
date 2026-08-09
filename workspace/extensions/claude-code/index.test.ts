@@ -249,6 +249,9 @@ describe("@workspace-extensions/claude-code prepare", () => {
           providerContracts: { claudeCode: { methods: string[] } };
           methodAuthority: Record<string, unknown>;
         };
+        authority: {
+          requests: Array<{ capability: string }>;
+        };
       };
     };
 
@@ -256,6 +259,12 @@ describe("@workspace-extensions/claude-code prepare", () => {
     expect(manifest.vibestudio.extension.methodAuthority).toEqual({});
     expect(Object.keys(activated.providerContracts.claudeCode)).toEqual(
       manifest.vibestudio.extension.providerContracts.claudeCode.methods
+    );
+    expect(manifest.vibestudio.authority.requests).toContainEqual(
+      expect.objectContaining({ capability: "subagents.create" })
+    );
+    expect(manifest.vibestudio.authority.requests).not.toContainEqual(
+      expect.objectContaining({ capability: "agent.credentials.manage" })
     );
   });
 

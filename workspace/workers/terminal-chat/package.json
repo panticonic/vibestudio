@@ -32,15 +32,6 @@
           "evidence": "intentional-broad"
         },
         {
-          "capability": "agent.credentials.manage",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          },
-          "tier": "gated",
-          "evidence": "intentional-broad"
-        },
-        {
           "capability": "context.boundary",
           "resource": {
             "kind": "prefix",

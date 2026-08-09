@@ -43,7 +43,6 @@ const CONTEXTUAL_KEYS: readonly string[] = [
   "account-providers.",
   "accounts.connect",
   "accounts.disconnect",
-  "agent.credentials.manage",
   "credential.use",
   "credentials.audit.read",
   "keychain",

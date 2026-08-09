@@ -42,7 +42,6 @@ const REVIEWED_NOTABILITY: readonly NotabilityEntry[] = [
   { key: "accounts.disconnect", notability: "headline" },
   { key: "account.profile.read", notability: "everyday" },
   { key: "account.profile.update", notability: "everyday" },
-  { key: "agent.credentials.manage", notability: "headline" },
   { key: "credential.use", notability: "headline" },
   { key: "credentials.audit.read", notability: "headline" },
   { key: "keychain", notability: "headline" },

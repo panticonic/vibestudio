@@ -446,6 +446,62 @@ describe("authority runtime", () => {
     ).toBe(false);
   });
 
+  it("treats an exact agent login as delegated user authority without preauthorizing critical effects", () => {
+    const capability = "service:workspace.write";
+    const caller = createVerifiedCaller(
+      "agent:session:claude",
+      "agent",
+      null,
+      {
+        entityId: "session:claude",
+        contextId: "ctx-claude",
+        channelId: "channel-claude",
+        agentId: "agt_claude",
+      },
+      { userId: "u1", handle: "u1" }
+    );
+    const facts = {
+      workspaceId: "ws-1",
+      workspaceMember: true,
+      sessionId: "channel-claude",
+      audience: "service:workspace",
+      capability,
+      resourceKey: capability,
+      now: 100,
+    } as const;
+    const ordinary = authorizeVerifiedCaller(caller, { ...facts, tier: "gated" });
+
+    expect(ordinary.context.authorizingOrigin).toEqual({
+      kind: "user",
+      principal: "user:u1",
+    });
+    expect(ordinary.context.agentBinding).toMatchObject({
+      entity: "entity:session:claude",
+      contextId: "ctx-claude",
+      channelId: "channel-claude",
+    });
+    expect(
+      evaluateAuthority({
+        context: ordinary.context,
+        requirement: requirementForPrincipals(["user"], capability),
+        resourceKey: capability,
+        grants: ordinary.grants,
+        now: 101,
+      }).allowed
+    ).toBe(true);
+
+    const critical = authorizeVerifiedCaller(caller, { ...facts, tier: "critical" });
+    expect(
+      evaluateAuthority({
+        context: critical.context,
+        requirement: requirementForPrincipals(["user"], capability),
+        resourceKey: capability,
+        grants: critical.grants,
+        now: 101,
+      }).allowed
+    ).toBe(false);
+  });
+
   it("keeps a harness-owned agent call on its sealed code origin", () => {
     const capability = "service:credentials.resolveCredential";
     const caller = createVerifiedCaller(
