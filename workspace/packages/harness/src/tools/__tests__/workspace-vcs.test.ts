@@ -234,6 +234,62 @@ describe("workspace VCS agent tool", () => {
     });
   });
 
+  it("compares the local working application directly against protected main", async () => {
+    const f = fixture();
+    const tool = createWorkspaceVcsTool("/", f.vcs, {
+      contextId: "context:test",
+      commandId: "command:local-compare",
+    });
+
+    const compared = await tool.execute("call:local-compare", {
+      operation: "compare",
+      view: "local",
+    });
+
+    expect(f.compare).toHaveBeenCalledWith(
+      expect.objectContaining({
+        target: { kind: "event", eventId: "event:main" },
+        source: f.working,
+      })
+    );
+    expect(compared.content[0]).toMatchObject({
+      type: "text",
+      text: expect.stringContaining("Local working state relative to protected main"),
+    });
+  });
+
+  it("exposes one compare command schema with both explicit source selectors", () => {
+    const f = fixture();
+    const tool = createWorkspaceVcsTool("/", f.vcs, {
+      contextId: "context:test",
+      commandId: "command:compare-schema",
+    });
+    const compareBranches = (tool.parameters as { anyOf: Array<Record<string, unknown>> }).anyOf
+      .filter((branch) => JSON.stringify(branch).includes('"const":"compare"'));
+
+    expect(compareBranches).toHaveLength(1);
+    expect(JSON.stringify(compareBranches[0])).toContain('"sourceEventId"');
+    expect(JSON.stringify(compareBranches[0])).toContain('"view"');
+  });
+
+  it("rejects an ambiguous compare selector before reading semantic state", async () => {
+    const f = fixture();
+    const tool = createWorkspaceVcsTool("/", f.vcs, {
+      contextId: "context:test",
+      commandId: "command:ambiguous-compare",
+    });
+
+    await expect(
+      tool.execute("call:ambiguous-compare", {
+        operation: "compare",
+        view: "local",
+        sourceEventId: "event:source",
+      })
+    ).rejects.toThrow(/exactly one source selector/);
+    expect(f.status).not.toHaveBeenCalled();
+    expect(f.compare).not.toHaveBeenCalled();
+  });
+
   it("leaves filesystem browsing to the dedicated filesystem tools", () => {
     const f = fixture();
     const tool = createWorkspaceVcsTool("/", f.vcs, {

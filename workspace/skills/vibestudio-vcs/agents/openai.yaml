@@ -1,4 +1,4 @@
 interface:
   display_name: "Vibestudio VCS"
   short_description: "Semantic workspace VCS and provenance workflows"
-  default_prompt: "Use $vibestudio-vcs to edit or integrate this context incrementally. Merge directly through the shared driver, trust its final review without compare sandwiches, resolve whole reviewed remainders with explicit allRemaining decisions, preserve move/copy provenance, and commit the complete local chain."
+  default_prompt: "Use $vibestudio-vcs to edit or integrate this context incrementally. Inspect current uncommitted work with the direct local comparison; merge incoming committed work through the shared driver without compare sandwiches; preserve intent and provenance; commit the complete local chain."

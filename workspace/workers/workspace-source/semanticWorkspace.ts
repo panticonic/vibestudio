@@ -311,7 +311,10 @@ interface NetMergeCoordinate {
 }
 interface NetMergeComparison {
   targetState: StateNodeRef;
-  source: { kind: "event"; eventId: string } | { kind: "external-delta"; deltaId: string };
+  source:
+    | { kind: "event"; eventId: string }
+    | { kind: "application"; applicationId: string }
+    | { kind: "external-delta"; deltaId: string };
   sourceEventId: string | null;
   sourceDeltaId: string | null;
   base: StateNodeRef;
@@ -4816,7 +4819,9 @@ export class SemanticWorkspace {
     const source =
       input.source.kind === "event"
         ? { kind: "event" as const, eventId: input.source.eventId }
-        : { kind: "external-delta" as const, deltaId: input.source.deltaId };
+        : input.source.kind === "application"
+          ? { kind: "application" as const, applicationId: input.source.applicationId }
+          : { kind: "external-delta" as const, deltaId: input.source.deltaId };
     const comparison = this.mergeComparison(asState(input.target), source, observed ?? new Map());
     if (!observed) {
       const contentHashes = this.mergeTextContentHashes(comparison);
@@ -7367,7 +7372,7 @@ export class SemanticWorkspace {
 
   private reachableCoordinateDecisions(
     applicationIds: readonly string[],
-    source: NetMergeComparison["source"]
+    source: VcsMergeInput["source"]
   ): Map<string, string> {
     if (!applicationIds.length) return new Map();
     const rows = this.deps.sql
@@ -7419,6 +7424,20 @@ export class SemanticWorkspace {
         eventId: source.eventId,
       }).applicationIds;
       sourceChanges = [];
+    } else if (source.kind === "application") {
+      if (!this.deps.store.application(source.applicationId)) {
+        throw new SemanticVcsError(
+          "InvalidReference",
+          `Unknown application ${source.applicationId}`
+        );
+      }
+      const sourceState = { kind: "application" as const, applicationId: source.applicationId };
+      baseStates = this.maximalMergeBases(targetState, this.stateEvent(sourceState)).map(
+        (eventId) => ({ kind: "event" as const, eventId })
+      );
+      sourceRoot = this.deps.store.stateRoot(sourceState);
+      sourceApplicationIds = this.firstParentLineage(sourceState).applicationIds;
+      sourceChanges = [];
     } else {
       const delta = this.deps.store.externalDelta(source.deltaId);
       if (!delta)
@@ -7450,7 +7469,10 @@ export class SemanticWorkspace {
     }
     const baseRoot = this.deps.store.stateRoot(base);
     const targetRoot = this.deps.store.stateRoot(targetState);
-    const decisions = this.reachableCoordinateDecisions(targetLine.applicationIds, source);
+    const decisions =
+      source.kind === "application"
+        ? new Map<string, string>()
+        : this.reachableCoordinateDecisions(targetLine.applicationIds, source);
     const sourceCoordinates = new Map<string, MergeCoordinate>();
     for (const change of sourceChanges) {
       const coordinate = this.mergeChangeCoordinate(change);
@@ -7747,9 +7769,13 @@ export class SemanticWorkspace {
     const sourceAlreadyAncestor =
       source.kind === "event" &&
       this.eventAncestors(this.stateEvent(targetState)).has(source.eventId);
+    const applicationAlreadyAncestor =
+      source.kind === "application" && targetLine.applicationIds.includes(source.applicationId);
     const concluded =
       sourceAlreadyAncestor ||
-      (targetLine.applicationIds.length > 0 &&
+      applicationAlreadyAncestor ||
+      (source.kind !== "application" &&
+        targetLine.applicationIds.length > 0 &&
         this.integrationDecisionForSource(targetLine.applicationIds, source) !== null);
     this.applyStructuralMergeConstraints(
       coordinates,
@@ -8146,7 +8172,7 @@ export class SemanticWorkspace {
 
   private integrationDecisionForSource(
     applicationIds: readonly string[],
-    source: NetMergeComparison["source"]
+    source: VcsMergeInput["source"]
   ): string | null {
     if (!applicationIds.length) return null;
     const row = this.deps.sql

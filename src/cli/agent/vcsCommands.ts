@@ -58,6 +58,11 @@ const DELTA_FLAG: FlagSpec = {
   takesValue: true,
   description: "Coordinator-owned external delta to compare",
 };
+const LOCAL_FLAG: FlagSpec = {
+  name: "local",
+  takesValue: false,
+  description: "Compare the complete local working state against protected main",
+};
 const DRY_RUN_FLAG: FlagSpec = {
   name: "dry-run",
   takesValue: false,
@@ -207,14 +212,17 @@ const compare = (inv: ParsedInvocation) =>
   run(inv, async (vcs, contextId) => {
     const current = await vcs.status({ contextId });
     const sourceDeltaId = typeof inv.flags["delta"] === "string" ? inv.flags["delta"] : undefined;
-    if (sourceDeltaId && inv.positionals[0]) {
-      throw new UsageError("pass either SOURCE_EVENT_ID or --delta DELTA_ID, not both");
+    const local = inv.flags["local"] === true;
+    if ([Boolean(sourceDeltaId), Boolean(inv.positionals[0]), local].filter(Boolean).length > 1) {
+      throw new UsageError("pass only one of SOURCE_EVENT_ID, --delta DELTA_ID, or --local");
     }
     return vcs.compare({
-      target: current.workingHead,
-      source: sourceDeltaId
-        ? { kind: "external-delta", deltaId: sourceDeltaId }
-        : { kind: "event", eventId: inv.positionals[0] ?? current.mainEventId },
+      target: local ? { kind: "event", eventId: current.mainEventId } : current.workingHead,
+      source: local
+        ? current.workingHead
+        : sourceDeltaId
+          ? { kind: "external-delta", deltaId: sourceDeltaId }
+          : { kind: "event", eventId: inv.positionals[0] ?? current.mainEventId },
       limit: pageLimit(inv),
     });
   });
@@ -460,8 +468,8 @@ export const vcsCommands: CliCommand[] = [
     group: "vcs",
     name: "compare",
     summary: "Compare the working state with an event or external delta",
-    usage: "vibestudio vcs compare [SOURCE_EVENT_ID] [--delta DELTA_ID]",
-    flags: [DELTA_FLAG, LIMIT_FLAG, ...common],
+    usage: "vibestudio vcs compare [SOURCE_EVENT_ID] [--delta DELTA_ID | --local]",
+    flags: [DELTA_FLAG, LOCAL_FLAG, LIMIT_FLAG, ...common],
     run: compare,
   },
   {

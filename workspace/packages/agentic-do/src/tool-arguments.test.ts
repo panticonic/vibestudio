@@ -68,6 +68,38 @@ describe("prepareAgentToolArguments", () => {
     ).toThrow("/decision/evidence: Expected required property");
   });
 
+  it("reports extra fields from the selected branch when it has an optional literal", () => {
+    const parameters = Type.Union([
+      Type.Object({ operation: Type.Literal("status") }, { additionalProperties: false }),
+      Type.Object(
+        {
+          operation: Type.Literal("compare"),
+          sourceEventId: Type.Optional(Type.String()),
+          view: Type.Optional(Type.Literal("local")),
+          status: Type.Optional(Type.Literal("conflict")),
+        },
+        { additionalProperties: false }
+      ),
+    ]);
+    const selected = { ...tool(), parameters } as AgentTool;
+
+    expect(() =>
+      prepareAgentToolArguments(selected, {
+        operation: "compare",
+        view: "local",
+        intent: "Inspect local work",
+      })
+    ).toThrow("/intent: Unexpected property");
+
+    expect(() =>
+      prepareAgentToolArguments(selected, {
+        operation: "compare",
+        view: "local",
+        status: "working",
+      })
+    ).toThrow("/status: Expected 'conflict'");
+  });
+
   it("leaves plain JSON-schema tools to their own executor validation", () => {
     const plain = {
       ...tool(),

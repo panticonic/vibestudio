@@ -4,11 +4,11 @@
   "files": [
     {
       "path": "SKILL.md",
-      "sha256": "e903f8f2e05a0ab418e84c5a67261056e906bd54d7ebd0b54bb576c435acf8ea"
+      "sha256": "70d853fd290f10d805c27537f3378ef06ddd0ae0041adba0c8e4faa94a4e0ea2"
     },
     {
       "path": "agents/openai.yaml",
-      "sha256": "b82d8e45304d2adf6273d1b3950adc8def368a1263fff3a362221327c46a7c1f"
+      "sha256": "5a939a11ed40ec60dc571638c15af3bb2018a06780c8ce8afc5212ee800b881f"
     },
     {
       "path": "evaluations/schema-fixtures.json",
@@ -28,11 +28,11 @@
     },
     {
       "path": "references/compare-and-merge.md",
-      "sha256": "96de525d329cc91ee22f3234aa15a361f2889faf94cfa844147ca482e11c6d6d"
+      "sha256": "b64d8f8961970c904d8bdde718f5722155be1286fe1a41517ac400d00120474e"
     },
     {
       "path": "references/contexts-and-state.md",
-      "sha256": "4c340fb85e4a45f9db52cf05517c1b49a595572c2b4a26bf420573796227bb9c"
+      "sha256": "7041768a90a2c1dc22c69a3ff733d423b86b4b213189b8616627a5c6b3a93d77"
     },
     {
       "path": "references/external-snapshot-import.md",
@@ -48,7 +48,7 @@
     },
     {
       "path": "references/public-contract.json",
-      "sha256": "ad723e39d56db3f3b15861610fd4dc473f7120fe85b28669c1880bf41d029246"
+      "sha256": "2b44f0d4a1a1c1b2f1fbeb671cd44a924f9eddce0878f4183dc3fb59a623949c"
     },
     {
       "path": "references/public-contract.md",
@@ -71,5 +71,5 @@
       "sha256": "da812b84a24fb5faf50d0dba3732f5569637dfb609d1615e956f1292910c9564"
     }
   ],
-  "packageDigest": "fbeed22eb2fed2159f1afa974d9fc972a989ac7753d2c8dbaa3d4298b8822534"
+  "packageDigest": "e58456eba29eadc6f3faf012cdd83452a78dd905919c166dd6f82ea2b1ad959e"
 }

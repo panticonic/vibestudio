@@ -1289,7 +1289,10 @@ const intentCountsSchema = z
 
 const compareInput = {
   target: vcsStateNodeRefSchema,
-  source: vcsMergeSourceSchema,
+  source: z.union([
+    vcsStateNodeRefSchema,
+    z.object({ kind: z.literal("external-delta"), deltaId: id("Exact external delta.") }).strict(),
+  ]),
   statusFilter: z.literal("conflict").optional(),
   cursor: cursor.optional(),
   limit: pageLimit,
@@ -1300,7 +1303,7 @@ export type VcsCompareInput = z.infer<typeof vcsCompareInputSchema>;
 export const vcsCompareResultSchema = z
   .object({
     target: vcsStateNodeRefSchema,
-    source: vcsMergeSourceSchema,
+    source: compareInput.source,
     base: vcsStateNodeRefSchema,
     bases: z.array(vcsStateNodeRefSchema).min(2).max(200).optional(),
     resolution: vcsMergeResolutionStateSchema,

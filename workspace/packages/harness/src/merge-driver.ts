@@ -68,8 +68,12 @@ const sameState = (left: VcsStateNodeRef, right: VcsStateNodeRef): boolean =>
     : left.applicationId ===
       (right as Extract<VcsStateNodeRef, { kind: "application" }>).applicationId);
 
-const sourceLabel = (source: VcsMergeSource): string =>
-  source.kind === "event" ? source.eventId : source.deltaId;
+const sourceLabel = (source: VcsCompareResult["source"]): string =>
+  source.kind === "event"
+    ? source.eventId
+    : source.kind === "application"
+      ? source.applicationId
+      : source.deltaId;
 
 function sourceHeadline(intents: VcsMergeResult["intents"]): string | undefined {
   return intents.find((entry) => entry.side === "theirs" && entry.intent.tier === "trigger")?.intent
@@ -229,7 +233,9 @@ export function renderMergeReview(review: MergeReview): string {
     const key = `${intent.intent.tier}\u0000${intent.intent.text}`;
     if (renderedIntents.has(key)) continue;
     renderedIntents.add(key);
-    lines.push(`Intent: ${intent.intent.tier} · ${intent.intent.text}`);
+    lines.push(
+      `Intent: ${intent.side}${intent.state ? `/${intent.state}` : ""} · ${intent.intent.tier} · ${intent.intent.text}`
+    );
   }
   if (review.intentsTruncated)
     lines.push(

@@ -57,7 +57,18 @@ const workspaceVcsSchema = Type.Union([
   Type.Object(
     {
       operation: Type.Literal("compare"),
-      sourceEventId: Type.String({ minLength: 1 }),
+      sourceEventId: Type.Optional(
+        Type.String({
+          minLength: 1,
+          description: "Exact incoming committed event; omit when view is local.",
+        })
+      ),
+      view: Type.Optional(
+        Type.Literal("local", {
+          description:
+            "Compare the complete current working state, including uncommitted applications, against protected main; omit when sourceEventId is present.",
+        })
+      ),
       status: Type.Optional(Type.Literal("conflict")),
       after: Type.Optional(Type.String()),
       limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 500 })),
@@ -157,7 +168,8 @@ export type WorkspaceVcsToolInput =
   | { operation: "neighbors"; root: VcsSemanticNodeRef; after?: string; limit?: number }
   | {
       operation: "compare";
-      sourceEventId: string;
+      sourceEventId?: string;
+      view?: "local";
       status?: "conflict";
       after?: string;
       limit?: number;
@@ -240,7 +252,7 @@ export function createWorkspaceVcsTool(
     name: "vcs",
     label: "vcs",
     description:
-      "Inspect and change semantic workspace history: compare intent and coordinate net effects, merge, review composed results, revert, commit, discard, blame, or push. Browse and edit ordinary paths with the dedicated filesystem tools.",
+      "Inspect and change semantic workspace history: compare intent and coordinate net effects (use compare view:'local' for working state relative to protected main), merge, review composed results, revert, commit, discard, blame, or push. Browse and edit ordinary paths with the dedicated filesystem tools.",
     parameters: workspaceVcsSchema,
     execute: async (
       _toolCallId,
@@ -318,15 +330,32 @@ export function createWorkspaceVcsTool(
       }
 
       if (command.operation === "compare") {
-        const target = await resolveToolWorkingState(vcs, context);
+        const localView = command.view === "local";
+        const sourceEventId = command.sourceEventId;
+        if (localView === (sourceEventId !== undefined)) {
+          throw new Error(
+            "Compare requires exactly one source selector: view:'local' for current working state, or sourceEventId for incoming committed work."
+          );
+        }
+        const status = localView ? await vcs.status({ contextId }) : null;
+        const target = localView
+          ? ({ kind: "event", eventId: status!.mainEventId } as const)
+          : await resolveToolWorkingState(vcs, context);
+        const source = sourceEventId
+          ? ({ kind: "event", eventId: sourceEventId } as const)
+          : status!.workingHead;
         const result = await vcs.compare({
           target,
-          source: { kind: "event", eventId: command.sourceEventId },
+          source,
           ...(command.status ? { statusFilter: command.status } : {}),
           ...(command.after ? { cursor: command.after } : {}),
           limit: command.limit ?? 100,
         });
-        return resultOf(command.operation, renderCompareReview(result), result);
+        return resultOf(
+          command.operation,
+          `${localView ? "Local working state relative to protected main.\n" : ""}${renderCompareReview(result)}`,
+          result
+        );
       }
 
       if (command.operation === "merge") {

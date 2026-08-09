@@ -312,6 +312,52 @@ describe("canonical VCS CLI", () => {
     });
   });
 
+  it("compares the complete local working state against protected main", async () => {
+    const localWorking = { kind: "application", applicationId: "application:local" } as const;
+    fixture.handler = (method, args) => {
+      if (method === "vcs.status") {
+        return {
+          ...(semanticFixture(method, args) as Record<string, unknown>),
+          workingHead: localWorking,
+          clean: false,
+        };
+      }
+      if (method === "vcs.compare") {
+        const input = args[0] as Record<string, unknown>;
+        return {
+          target: input["target"],
+          source: input["source"],
+          base: { kind: "event", eventId: "event:main" },
+          resolution: { complete: false, remainingCoordinateCount: 1, concluded: false },
+          counts: { adopt: 1, convergent: 0, composed: 0, conflict: 0, resolved: 0 },
+          intentCounts: { merged: 0, settled: 0, split: 0, contested: 0, pending: 1 },
+          coordinates: [],
+          intents: [],
+          intentsTruncated: false,
+          nextCursor: null,
+        };
+      }
+      throw new Error(`unexpected ${method}`);
+    };
+    const command = findCommand(vcsCommands, "vcs", "compare")!;
+
+    await expect(command.run(parseInvocation(command, ["--local", "--json"]), [])).resolves.toBe(0);
+    expect(fixture.calls.at(-1)).toEqual({
+      method: "vcs.compare",
+      args: [
+        {
+          target: { kind: "event", eventId: "event:main" },
+          source: localWorking,
+          limit: 50,
+        },
+      ],
+    });
+    expect(() => parseInvocation(command, ["event:source", "--local", "--json"])).not.toThrow();
+    await expect(
+      command.run(parseInvocation(command, ["event:source", "--local", "--json"]), [])
+    ).resolves.toBe(2);
+  });
+
   it("resolves one working state and dry-runs without mutation", async () => {
     const command = findCommand(vcsCommands, "vcs", "copy-file")!;
     const invocation = parseInvocation(command, [

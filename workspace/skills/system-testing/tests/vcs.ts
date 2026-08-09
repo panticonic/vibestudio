@@ -129,6 +129,51 @@ function requireCanonicalStatus(result: TestExecutionResult) {
     : { passed: false, reason: "Status orientation unexpectedly mutated the workspace" };
 }
 
+function requireLocalWorkingComparison(result: TestExecutionResult) {
+  const call = getToolCalls(result).find(
+    (candidate) =>
+      candidate.name === "vcs" &&
+      candidate.arguments?.["operation"] === "compare" &&
+      candidate.arguments?.["view"] === "local" &&
+      candidate.execution?.status === "complete" &&
+      candidate.execution.isError !== true
+  );
+  const envelope = call?.execution?.result;
+  const details = isRecord(envelope) ? envelope["details"] : null;
+  const comparison = isRecord(details) ? details["result"] : null;
+  const source = isRecord(comparison) ? comparison["source"] : null;
+  const target = isRecord(comparison) ? comparison["target"] : null;
+  const coordinates = isRecord(comparison) ? comparison["coordinates"] : null;
+  const intents = isRecord(comparison) ? comparison["intents"] : null;
+  if (
+    !isRecord(source) ||
+    source["kind"] !== "application" ||
+    typeof source["applicationId"] !== "string" ||
+    !isRecord(target) ||
+    target["kind"] !== "event" ||
+    !Array.isArray(coordinates) ||
+    coordinates.length === 0 ||
+    !Array.isArray(intents) ||
+    intents.length === 0
+  ) {
+    return {
+      passed: false,
+      reason:
+        "No completed local comparison exposed an application source, protected-main target, coordinates, and intents",
+    };
+  }
+  const committed = getToolCalls(result).some(
+    (candidate) =>
+      candidate.name === "vcs" &&
+      candidate.arguments?.["operation"] === "commit" &&
+      candidate.execution?.status === "complete" &&
+      candidate.execution.isError !== true
+  );
+  return committed
+    ? { passed: false, reason: "The local working comparison committed before inspection" }
+    : { passed: true };
+}
+
 function requirePhaseEvidence(
   session: HeadlessSession,
   startMessageIndex: number,
@@ -319,6 +364,18 @@ export const vcsTests: TestCase[] = [
     validate: (result) => {
       const base = checked(result, ["vcs.edit", "vcs.commit"]);
       return base.passed ? requireWholeChainCommitEvidence(result) : base;
+    },
+  },
+  {
+    name: "vcs-local-working-compare",
+    description: "Inspect uncommitted local intent and coordinate effects relative to protected main",
+    category: "vcs",
+    workspaceRepoFixture: CONTENT_WORKSPACE_REPO_FIXTURE,
+    prompt:
+      "Make one small distinctive edit in the disposable project. Do not commit it. Use the semantic local comparison to inspect the complete working state relative to protected main, then report the intent and coordinate evidence it returns.",
+    validate: (result) => {
+      const base = checked(result, ["vcs.compare"]);
+      return base.passed ? requireLocalWorkingComparison(result) : base;
     },
   },
   {

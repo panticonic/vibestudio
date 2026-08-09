@@ -858,6 +858,11 @@ describe("walkable bounded reads", () => {
       limit: 50,
     };
     expect(vcsCompareInputSchema.parse(input)).toEqual(input);
+    expect(vcsCompareInputSchema.parse({ ...input, target: event, source: application })).toEqual({
+      ...input,
+      target: event,
+      source: application,
+    });
     expect(
       vcsCompareInputSchema.safeParse({ ...input, sourceFrontierId: "frontier:1" }).success
     ).toBe(false);

@@ -188,6 +188,23 @@ describe("SemanticWorkspace net-effect merge", () => {
       changeIds: string[];
     }>(moveDispatch);
     acknowledge(moveDispatch);
+    const workingComparison = await semantic.dispatch("compare", {
+      ingress,
+      input: {
+        target: baseCommit.event,
+        source: moved.workingHead,
+        limit: 100,
+      },
+    });
+    if (workingComparison.kind !== "complete") {
+      throw new Error("working-state compare did not complete");
+    }
+    expect(workingComparison.result).toMatchObject({
+      source: moved.workingHead,
+      resolution: { complete: false, remainingCoordinateCount: 2, concluded: false },
+      counts: { adopt: 2, conflict: 0 },
+      intentCounts: { pending: 3 },
+    });
     const sourceCommitDispatch = await semantic.dispatch("commit", {
       ingress,
       input: {

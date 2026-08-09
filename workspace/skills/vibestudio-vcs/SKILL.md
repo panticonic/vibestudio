@@ -22,17 +22,25 @@ Managed workspace state is semantic history, not a Git worktree. Use the agent-f
 1. Run `vcs({ operation: "status" })` when you need to orient to the current chain. Agent-facing mutations derive and bind the exact live `workingHead`; a separate status preflight is not required for every call.
 2. Inspect or read the smallest relevant surface. Managed reads may include a bounded memory attachment with intent and causality.
 3. Author with `edit`, `write`, `move_file`, or `copy_file`. Give `intent` only when it adds purpose beyond the request.
-4. For incoming work, call merge directly in the normal case. The agent-facing tool drains every clean page in one call, never selects a conflict implicitly, and returns final global resolution, counts, intents, composed-review evidence, and a bounded conflict page. Use compare first only when you deliberately need a read-only preview:
+4. To inspect everything currently changed in this context, including uncommitted applications, use the local comparison directly. It resolves the complete working head as source and protected main as target; no status or history preflight is needed:
+
+   ```js
+   vcs({ operation: "compare", view: "local" })
+   ```
+
+   Compare is read-only and has no `intent` field. Pass only the selector and optional paging fields. Do not pass main as `sourceEventId` for this job. `sourceEventId` always means incoming source, so naming main reverses the comparison and can truthfully show no changes.
+
+5. For incoming committed work, call merge directly in the normal case. The agent-facing tool drains every clean page in one call, never selects a conflict implicitly, and returns final global resolution, counts, intents, composed-review evidence, and a bounded conflict page. Use compare first only when you deliberately need a read-only preview:
 
    ```js
    vcs({ operation: "compare", sourceEventId: "event:...", limit: 500 })
    ```
 
-5. When you compare, review both views in the result:
+6. When you compare, review both views in the result:
    - `coordinates` is the mechanical surface: `adopt`, `convergent`, `composed`, `conflict`, or `resolved`, with aspect values and full attribution.
    - `intents` is the semantic surface. Its visible tier is `stated`, `trigger`, or `mechanical`; `split` and `contested` are prompts to inspect more deeply, never machine gates.
 
-6. Merge clean work. Omitting `coordinates` lets the shared driver drain bounded engine pages; explicit `coordinates` deliberately performs one selected page only:
+7. Merge clean work. Omitting `coordinates` lets the shared driver drain bounded engine pages; explicit `coordinates` deliberately performs one selected page only:
 
    ```js
    vcs({
@@ -42,8 +50,8 @@ Managed workspace state is semantic history, not a Git worktree. Use the agent-f
    })
    ```
 
-7. Review every returned `composed` entry. Deterministic non-overlapping text composition is mechanically safe, not a semantic approval.
-8. Resolve conflicts per coordinate:
+8. Review every returned `composed` entry. Deterministic non-overlapping text composition is mechanically safe, not a semantic approval.
+9. Resolve conflicts per coordinate:
    - `theirs`: accept the source coordinate;
    - `ours`: keep ours and explicitly decline the source coordinate;
    - `current`: accept the current head after you author the truthful combined result with ordinary edit tools.
@@ -63,8 +71,8 @@ Managed workspace state is semantic history, not a Git worktree. Use the agent-f
 
    To explicitly decline every unseen remainder, including clean coordinates, use `resolutions: { allRemaining: { resolution: "ours" } }`. After authoring and reviewing a combined parent result, use `current` with a required rationale. The blanket is repeated safely across whole-group pages and never accepts source content implicitly.
 
-9. Use the merge result as the normal completion receipt. `status: "unchanged"` is an idempotent structured receipt, not an error; still inspect `resolution.complete`. If conflicts exceed the bounded result, continue only the filtered sequence with the returned cursor. A convergent or net-zero source still gets one decision-only merge call to establish conclusion and ancestry.
-10. Run focused tests and commit the complete application chain. The compact commit operation verifies that the context is clean at the committed event; request status separately only when you need additional orientation, then push if requested.
+10. Use the merge result as the normal completion receipt. `status: "unchanged"` is an idempotent structured receipt, not an error; still inspect `resolution.complete`. If conflicts exceed the bounded result, continue only the filtered sequence with the returned cursor. A convergent or net-zero source still gets one decision-only merge call to establish conclusion and ancestry.
+11. Run focused tests and commit the complete application chain. The compact commit operation verifies that the context is clean at the committed event; request status separately only when you need additional orientation, then push if requested.
 
 ## Commit and publication
 

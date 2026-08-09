@@ -2,6 +2,34 @@
 
 One engine handles child events, cross-context work, external deltas, and publication revalidation. It compares fact state at stable file and repository identities. Recorded operations explain the state and remain traversable provenance; the engine never replays them as ordered merge instructions.
 
+## Choose the comparison direction
+
+For the current context's complete working state—including uncommitted
+applications—compare the local view. The tool resolves working head as source
+and protected main as target, so a status or history preflight adds no value:
+
+```js
+vcs({ operation: "compare", view: "local" })
+```
+
+Compare is read-only and does not accept `intent`; use intent on authoring or
+merge calls where it records purpose. Compare accepts only its source selector
+and optional paging/filter fields.
+
+For a read-only preview of committed work arriving from another context, name
+that exact incoming event as the source:
+
+```js
+vcs({ operation: "compare", sourceEventId: "event:source", limit: 500 })
+```
+
+The source is always the state whose changes are under review. Do not pass main
+as `sourceEventId` to ask what changed locally; that reverses the comparison and
+may correctly produce an empty result. Both forms return the same coordinate,
+intent, attribution, and resolution model. Only committed incoming events can
+be merged; local applications are already present and can be committed or
+discarded after review.
+
 ## Read the coordinate view
 
 Compare returns a primary common base, any additional maximal bases, global counts and resolution, a bounded coordinate page, and a bounded intent projection. Page boundaries never change global classification or intent state.

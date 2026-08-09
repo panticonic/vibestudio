@@ -101,6 +101,37 @@ describe("joined VCS scenario validators", () => {
     expect(test.validate(execution(report, [call, mutating])).passed).toBe(false);
   });
 
+  it("requires a true working-application comparison without an intervening commit", () => {
+    const test = vcsTests.find(({ name }) => name === "vcs-local-working-compare")!;
+    const compared = invocation(
+      "compare:local",
+      "vcs",
+      { operation: "compare", view: "local" },
+      {
+        operation: "compare",
+        result: {
+          target: { kind: "event", eventId: "event:main" },
+          source: { kind: "application", applicationId: "application:working" },
+          coordinates: [{ coordinate: { kind: "file", id: "file:one" } }],
+          intents: [{ intent: { tier: "stated", text: "Update the fixture" } }],
+        },
+      }
+    );
+
+    expect(test.validate(execution("The local comparison found the intended file update.", [compared])))
+      .toEqual({ passed: true });
+    const committed = invocation(
+      "commit",
+      "vcs",
+      { operation: "commit", message: "Too early" },
+      commit("event:committed", ["application:working"])
+    );
+    expect(
+      test.validate(execution("The local comparison found the intended file update.", [committed, compared]))
+        .passed
+    ).toBe(false);
+  });
+
   it("joins two application results through the whole-chain commit and final clean status", () => {
     const test = vcsTests.find(({ name }) => name === "vcs-edit-whole-chain-commit")!;
     const eventId = "event:whole-chain";

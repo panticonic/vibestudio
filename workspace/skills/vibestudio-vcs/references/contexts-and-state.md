@@ -2,7 +2,10 @@
 
 ## Orient from status
 
-Call `vcs.status` before a mutation or comparison. It returns:
+Call `vcs.status` when you need explicit chain orientation. Agent-facing mutations
+bind the live working head themselves, and `vcs({ operation: "compare", view:
+"local" })` resolves the exact local source and protected-main target itself, so
+neither needs a status preflight. Status returns:
 
 - `committed`: the context's immutable committed event;
 - `workingHead`: that event when clean, or the latest local application;
@@ -97,8 +100,15 @@ metadata for `blame`.
 drops the complete chain and restores the committed event as the working head.
 Neither operation accepts a subset.
 
-Use `compare` with a target state and an exact committed source event. Keep the
-same source event through bounded coordinate decisions. Commit
-only after all effective source changes are truthfully accounted for. Commit
-derives the source parent from those decisions and rejects mixed sources or a
-mismatched caller-supplied parent.
+Use local compare to inspect this context's complete working state, including
+uncommitted applications, against protected main. Use incoming compare with a
+target state and an exact committed source event when reviewing work from
+another context. The source is always the state whose changes are being
+considered; do not name main as the source when asking what changed locally.
+
+Keep the same incoming source event through bounded coordinate decisions.
+Commit only after all effective source changes are truthfully accounted for.
+Commit derives the source parent from those decisions and rejects mixed sources
+or a mismatched caller-supplied parent. Local applications are already in the
+current context and therefore are inspected or committed, not merged back into
+that same context.

@@ -394,7 +394,8 @@ describe("renderMergeReview", () => {
       nextConflictCursor: null,
     });
 
-    expect(text.match(/Intent: trigger · Build the task app/g)).toHaveLength(1);
+    expect(text.match(/Build the task app/g)).toHaveLength(1);
+    expect(text).toContain("Intent: ours/settled · trigger · Build the task app");
     expect(text).toContain("Integration: semantically complete");
     expect(text).toContain("remain local until the parent commits them");
   });

@@ -37,9 +37,7 @@ function findDiscriminatorMismatch(
   if (alternatives) {
     const discriminators = new Map<string, unknown[]>();
     for (const candidate of alternatives) {
-      if (!isRecord(candidate) || !isRecord(candidate["properties"])) continue;
-      for (const [key, property] of Object.entries(candidate["properties"])) {
-        if (!isRecord(property) || !Object.hasOwn(property, "const")) continue;
+      for (const [key, property] of requiredLiteralDiscriminators(candidate)) {
         const values = discriminators.get(key) ?? [];
         if (!values.includes(property["const"])) values.push(property["const"]);
         discriminators.set(key, values);
@@ -87,15 +85,27 @@ function specializeDiscriminatedUnions(schema: unknown, value: unknown): unknown
 }
 
 function branchMatches(candidate: unknown, value: Record<string, unknown>): boolean {
-  if (!isRecord(candidate) || !isRecord(candidate["properties"])) return false;
-  const discriminators = Object.entries(candidate["properties"]).filter(
-    ([, property]) => isRecord(property) && Object.hasOwn(property, "const")
-  );
+  const discriminators = requiredLiteralDiscriminators(candidate);
   return (
     discriminators.length > 0 &&
     discriminators.every(
       ([key, property]) => isRecord(property) && value[key] === property["const"]
     )
+  );
+}
+
+function requiredLiteralDiscriminators(
+  candidate: unknown
+): Array<[string, Record<string, unknown>]> {
+  if (!isRecord(candidate) || !isRecord(candidate["properties"])) return [];
+  const required = new Set(
+    Array.isArray(candidate["required"])
+      ? candidate["required"].filter((key): key is string => typeof key === "string")
+      : []
+  );
+  return Object.entries(candidate["properties"]).filter(
+    (entry): entry is [string, Record<string, unknown>] =>
+      required.has(entry[0]) && isRecord(entry[1]) && Object.hasOwn(entry[1], "const")
   );
 }
 
