@@ -246,6 +246,10 @@ describe("system-test durable driver lifecycle", () => {
     expect(code).toContain("await releaseDriverResources()");
     expect(code).toContain('"releaseSystemTestRunResult"');
     expect(code).toContain("let driverResultReleased = false");
+    expect(code).toContain("let driverContextDestroyed = false");
+    expect(code).toContain("await services.runtime.createContext({})");
+    expect(code).toContain("await services.runtime.destroyContext({");
+    expect(code).toContain("contextId: driverContextId");
     expect(code).toContain('snapshot?.status === "cancelling"');
     expect(code.indexOf("await services.runtime.retireEntity")).toBeLessThan(
       code.indexOf("driverRetired = true")
@@ -264,6 +268,9 @@ describe("system-test durable driver lifecycle", () => {
       code.indexOf("await retireDriver()")
     );
     expect(code.indexOf("await retireDriver()")).toBeLessThan(
+      code.indexOf("await services.runtime.destroyContext")
+    );
+    expect(code.indexOf("await services.runtime.destroyContext")).toBeLessThan(
       code.indexOf("driverResourcesReleased = true")
     );
     expect(code.indexOf("driverRetired = true")).toBeLessThan(
@@ -281,7 +288,7 @@ describe("system-test durable driver lifecycle", () => {
     const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor as new (
       ...args: string[]
     ) => (...args: unknown[]) => Promise<unknown>;
-    const run = async (failure: "release" | "retire") => {
+    const run = async (failure: "release" | "retire" | "destroy") => {
       const generated = systemTestRunCode(`st_retry_${failure}`, {
         names: ["probe"],
         all: false,
@@ -301,14 +308,22 @@ describe("system-test durable driver lifecycle", () => {
       );
       let releaseAttempts = 0;
       let retirementAttempts = 0;
+      let destructionAttempts = 0;
       const driver = { id: "do:driver", targetId: "do:driver" };
       const services = {
         runtime: {
+          createContext: async () => ({ contextId: "ctx:driver" }),
           createEntity: async () => driver,
           retireEntity: async () => {
             retirementAttempts += 1;
             if (failure === "retire" && retirementAttempts === 1) {
               throw new Error("lost retirement acknowledgement");
+            }
+          },
+          destroyContext: async () => {
+            destructionAttempts += 1;
+            if (failure === "destroy" && destructionAttempts === 1) {
+              throw new Error("lost context destruction acknowledgement");
             }
           },
         },
@@ -341,16 +356,23 @@ describe("system-test durable driver lifecycle", () => {
       await expect(execute(services, rpc, ctx, {})).rejects.toThrow(
         /System-test driver cleanup failed/
       );
-      return { releaseAttempts, retirementAttempts };
+      return { releaseAttempts, retirementAttempts, destructionAttempts };
     };
 
     await expect(run("release")).resolves.toEqual({
       releaseAttempts: 2,
       retirementAttempts: 1,
+      destructionAttempts: 1,
     });
     await expect(run("retire")).resolves.toEqual({
       releaseAttempts: 1,
       retirementAttempts: 2,
+      destructionAttempts: 1,
+    });
+    await expect(run("destroy")).resolves.toEqual({
+      releaseAttempts: 1,
+      retirementAttempts: 1,
+      destructionAttempts: 2,
     });
   });
 });

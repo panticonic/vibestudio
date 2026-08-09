@@ -229,6 +229,23 @@ describe("AgentExecutionSessionRegistry admission", () => {
     expect(registry.resolveInvocation(first.eval.runtimeId, first.nonce)).toBe(second);
   });
 
+  it("names trust dimensions without exposing their values when a warm notebook drifts", () => {
+    const registry = new AgentExecutionSessionRegistry();
+    const first = registry.admit(admission());
+    expect(registry.close(first.eval.runtimeId, first.eval.runId)).toBe(true);
+
+    expect(() =>
+      registry.admit({
+        ...admission(first.eval.runtimeId, "run:two"),
+        contextId: "context:other",
+        harness: {
+          ...first.harness,
+          effectiveVersion: "ev:other",
+        },
+      })
+    ).toThrow(/changed: contextId, harness/);
+  });
+
   it("resolves evaluated effects only with the exact live admission nonce", () => {
     const registry = new AgentExecutionSessionRegistry();
     const fact = registry.admit(admission());

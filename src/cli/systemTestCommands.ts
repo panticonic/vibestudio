@@ -236,7 +236,9 @@ export function systemTestRunCode(runId: string, config: StoredSystemTestRun["co
       (ctx as any).reportProgress(durable);
     };
     let driver = null;
+    let driverContextId = null;
     let driverRetired = false;
+    let driverContextDestroyed = false;
     let driverResultReleased = false;
     let driverResourcesReleased = false;
     let cancellationCleanup = null;
@@ -254,12 +256,21 @@ export function systemTestRunCode(runId: string, config: StoredSystemTestRun["co
           driverResultReleased = true;
         }
         await retireDriver();
+        if (driverContextId && !driverContextDestroyed) {
+          await services.runtime.destroyContext({
+            contextId: driverContextId,
+            recursive: true,
+          });
+          driverContextDestroyed = true;
+        }
         driverResourcesReleased = true;
       } catch (error) {
         throw new AggregateError([error], "System-test driver cleanup failed");
       }
     };
     try {
+      const driverContext = await services.runtime.createContext({});
+      driverContextId = driverContext.contextId;
       driver = await services.runtime.createEntity({
         kind: "do",
         execution: {
@@ -268,11 +279,11 @@ export function systemTestRunCode(runId: string, config: StoredSystemTestRun["co
         },
         className: "SystemTestRunnerDO",
         key: progressKey,
-        contextId: ctx.contextId,
+        contextId: driverContextId,
       });
       await rpc.call(driver.targetId, "startSystemTestRun", [{
         ...${options},
-        contextId: ctx.contextId,
+        contextId: driverContextId,
       }]);
       ctx.onCancel(async () => {
         cancellationRequested = true;

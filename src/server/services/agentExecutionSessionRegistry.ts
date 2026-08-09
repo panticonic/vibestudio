@@ -159,9 +159,11 @@ export class AgentExecutionSessionRegistry {
         `Evaluated runtime ${input.eval.runtimeId} is already admitted for run ${activeRunId}`
       );
     }
-    if (retained && !sameTrustUnit(retained, input)) {
+    const trustDrift = retained ? trustUnitDrift(retained, input) : [];
+    if (retained && trustDrift.length > 0) {
       throw new Error(
-        `Evaluated runtime ${input.eval.runtimeId} was reused by a different notebook trust unit`
+        `Evaluated runtime ${input.eval.runtimeId} was reused by a different notebook trust unit ` +
+          `(changed: ${trustDrift.join(", ")})`
       );
     }
     const fact: AgentExecutionSessionFact = Object.freeze({
@@ -422,19 +424,21 @@ function sameAdmission(fact: AgentExecutionSessionFact, input: AdmissionInput): 
  * not participate: those facts advance on every cell without changing who
  * owns the surviving modules and objects.
  */
-function sameTrustUnit(fact: AgentExecutionSessionFact, input: AdmissionInput): boolean {
-  return (
-    fact.mode === input.mode &&
-    fact.ownerUser === input.ownerUser &&
-    fact.workspaceId === input.workspaceId &&
-    fact.contextId === input.contextId &&
-    JSON.stringify(fact.agentBinding) === JSON.stringify(input.agentBinding) &&
-    JSON.stringify(fact.harness) === JSON.stringify(input.harness) &&
-    JSON.stringify(fact.attachedHost ?? null) === JSON.stringify(input.attachedHost ?? null) &&
-    JSON.stringify(fact.reviewedClosure ?? null) ===
-      JSON.stringify(input.reviewedClosure ?? null) &&
-    JSON.stringify(fact.testPolicy ?? null) === JSON.stringify(input.testPolicy ?? null)
-  );
+function trustUnitDrift(fact: AgentExecutionSessionFact, input: AdmissionInput): string[] {
+  const drift: string[] = [];
+  const changed = (name: string, left: unknown, right: unknown): void => {
+    if (JSON.stringify(left) !== JSON.stringify(right)) drift.push(name);
+  };
+  changed("mode", fact.mode, input.mode);
+  changed("ownerUser", fact.ownerUser, input.ownerUser);
+  changed("workspaceId", fact.workspaceId, input.workspaceId);
+  changed("contextId", fact.contextId, input.contextId);
+  changed("agentBinding", fact.agentBinding, input.agentBinding);
+  changed("harness", fact.harness, input.harness);
+  changed("attachedHost", fact.attachedHost ?? null, input.attachedHost ?? null);
+  changed("reviewedClosure", fact.reviewedClosure ?? null, input.reviewedClosure ?? null);
+  changed("testPolicy", fact.testPolicy ?? null, input.testPolicy ?? null);
+  return drift;
 }
 
 function admissionAbortError(runtimeId: string): Error {
