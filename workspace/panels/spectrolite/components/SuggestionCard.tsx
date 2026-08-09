@@ -75,10 +75,6 @@ function SuggestionRow({ id, collision }: { id: string; collision: Collision }) 
   const app = useApp();
 
   const resolve = (choice: "accept" | "keep" | "merge") => {
-    if (choice === "keep") {
-      app.resolveSuggestion(id, null);
-      return;
-    }
     const text = resolveSuggestion(choice, userText(collision), scribeText(collision));
     // The live blocks are `liveIds`; anchor the replacement before the first
     // block after the run (the next live id is its own anchor on removal).
@@ -99,7 +95,7 @@ function SuggestionRow({ id, collision }: { id: string; collision: Collision }) 
       <Flex direction="column" gap="2">
         <Flex align="center" justify="between" gap="2">
           <Text size="1" weight="medium" color="iris">
-            @scribe suggested a change here
+            Incoming change overlaps your edit
           </Text>
           <Button
             size="1"

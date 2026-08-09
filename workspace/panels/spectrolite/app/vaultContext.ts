@@ -11,7 +11,19 @@
 
 /** Strip leading/trailing slashes + backslashes; collapse to posix. */
 export function normalizeVaultPath(p: string): string {
-  return p.replace(/\\/g, "/").replace(/^\/+/, "").replace(/\/+$/, "");
+  return p.replace(/\\/g, "/").replace(/\/+/g, "/").replace(/^\/+/, "").replace(/\/+$/, "");
+}
+
+/** Validate a user-authored path before it crosses the vault boundary. */
+export function safeVaultRelativePath(input: string): string {
+  if (/^[\\/]/u.test(input)) throw new Error("Note paths must be relative to the vault");
+  const normalized = normalizeVaultPath(input.trim());
+  if (!normalized) throw new Error("Enter a note name");
+  if (normalized.includes("\0")) throw new Error("Note paths cannot contain a null byte");
+  if (normalized.split("/").some((segment) => segment === "." || segment === "..")) {
+    throw new Error("Note paths cannot traverse outside the vault");
+  }
+  return normalized;
 }
 
 export interface VaultPathMapping {

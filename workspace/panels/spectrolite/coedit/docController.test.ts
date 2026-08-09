@@ -115,6 +115,99 @@ describe("DocController", () => {
     controller.dispose();
   });
 
+  it("adds an observed agent-authored document transition to semantic undo", async () => {
+    const state = editorState();
+    const timers: Array<{ fn: () => void; delay: number }> = [];
+    const remote = { kind: "application" as const, applicationId: "application:remote" };
+    const refresh = vi
+      .fn<DocVcs["refresh"]>()
+      .mockResolvedValueOnce({ status: { workingHead: working } })
+      .mockResolvedValue({ status: { workingHead: remote } });
+    const readFile = vi
+      .fn<DocVcs["readFile"]>()
+      .mockResolvedValueOnce({
+        repositoryId: "repo:notes",
+        repoPath: "projects/default",
+        fileId: "file:note",
+        path: "Note.mdx",
+        content: { kind: "text", text: "# Base\n" },
+        contentHash: "blob:base",
+        authoredChangeId: "change:base",
+        authoredByWorkUnitId: "work:base",
+        contentClass: "internal",
+        externalKeys: [],
+        mode: 0o644,
+      })
+      .mockResolvedValue({
+        repositoryId: "repo:notes",
+        repoPath: "projects/default",
+        fileId: "file:note",
+        path: "Note.mdx",
+        content: { kind: "text", text: "# Agent edit\n" },
+        contentHash: "blob:remote",
+        authoredChangeId: "change:agent",
+        authoredByWorkUnitId: "work:scribe",
+        contentClass: "internal",
+        externalKeys: [],
+        mode: 0o644,
+      });
+    const sealCommit = vi.fn();
+    const controller = new DocController({
+      editor: state.editor,
+      vcs: vcs({ refresh, readFile }),
+      splitBlocks: () => [],
+      onCollisions: vi.fn(),
+      undo: { sealCommit },
+      observationMs: 5,
+      setTimer: (fn, delay) => {
+        timers.push({ fn, delay });
+        return timers.length;
+      },
+      clearTimer: vi.fn(),
+    });
+
+    await controller.load("projects/default/Note.mdx");
+    timers.find((timer) => timer.delay === 5)?.fn();
+
+    await vi.waitFor(() => expect(sealCommit).toHaveBeenCalledWith(["change:agent"]));
+    controller.dispose();
+  });
+
+  it("reports canonical MDX failures as unsaved instead of leaking a timer rejection", async () => {
+    const state = editorState();
+    const timers: Array<{ fn: () => void; delay: number }> = [];
+    const onSaveError = vi.fn();
+    const controller = new DocController({
+      editor: state.editor,
+      vcs: vcs(),
+      splitBlocks: () => [],
+      onCollisions: vi.fn(),
+      onSaveError,
+      editDebounceMs: 5,
+      setTimer: (fn, delay) => {
+        timers.push({ fn, delay });
+        return timers.length;
+      },
+      clearTimer: vi.fn(),
+    });
+
+    await controller.load("projects/default/Note.mdx");
+    state.editor.getDirtyCommit = () => {
+      throw new Error("Unexpected end of MDX expression");
+    };
+    state.setCanonical("{broken");
+    state.callbacks[0]?.();
+    timers.find((timer) => timer.delay === 5)?.fn();
+
+    await vi.waitFor(() => expect(onSaveError).toHaveBeenCalledWith(
+      "projects/default/Note.mdx",
+      expect.objectContaining({ message: "Unexpected end of MDX expression" })
+    ));
+    expect(controller.isDirty()).toBe(true);
+    await expect(controller.flushNow()).rejects.toThrow("Cannot leave or publish this note");
+    controller.dispose();
+  });
+
   it("flushes the newest editor text when disposal races an in-flight edit", async () => {
     const state = editorState();
     const timers: Array<{ fn: () => void; delay: number }> = [];

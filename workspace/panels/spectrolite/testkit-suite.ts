@@ -123,7 +123,10 @@ function largeVaultFiles(): Record<string, string> {
   return files;
 }
 
-export const spectrolite = suite("spectrolite", { timeoutMs: 120_000 })
+export const spectrolite = suite("spectrolite", {
+  timeoutMs: 120_000,
+  usesPanelAutomation: true,
+})
   .test("opens a preselected vault and renders the requested document", async () => {
     await ensureVault(VAULT, FIXTURES);
     await withPanel(
@@ -148,16 +151,18 @@ export const spectrolite = suite("spectrolite", { timeoutMs: 120_000 })
       "panels/spectrolite",
       async (handle) => {
         await waitForText(handle, "points at", { timeoutMs: 60_000 });
-        const clicked = await evalInPanel<boolean>(
-          handle,
-          `(() => {
-          const target = Array.from(document.querySelectorAll('[data-wikilink], .wikilink'))[0];
-          if (!(target instanceof HTMLElement)) return false;
-          target.click();
-          return true;
-        })()`
+        await waitFor(
+          () =>
+            evalInPanel<boolean>(
+              handle,
+              `Boolean(document.querySelector('[data-wikilink], .wikilink'))`
+            ),
+          { timeoutMs: 30_000, label: "wikilink renders" }
         );
-        expect(clicked, "wikilink clickable").toBe(true);
+        await evalInPanel(
+          handle,
+          `document.querySelector('[data-wikilink], .wikilink')?.click()`
+        );
         await waitForText(handle, "E2E Note", { timeoutMs: 30_000 });
       },
       vaultPanelOptions(VAULT, "Linked.mdx")

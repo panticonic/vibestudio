@@ -38,6 +38,8 @@ export interface JsxEditorProps {
   mdastNode: MdxJsxFlowElement | MdxJsxTextElement
   /** The descriptor that activated the editor */
   descriptor: JsxComponentDescriptor
+  /** Replace the represented JSX node with an edited mdast node. */
+  onChange?: (node: MdxJsxFlowElement | MdxJsxTextElement) => void
 }
 
 /**

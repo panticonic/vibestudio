@@ -38,6 +38,7 @@
     "@workspace/agentic-protocol": "workspace:*",
     "@workspace/runtime": "workspace:*",
     "@workspace/testkit": "workspace:*",
+    "@workspace-panels/spectrolite": "workspace:*",
     "@workspace-skills/vibestudio-vcs": "workspace:*"
   }
 }

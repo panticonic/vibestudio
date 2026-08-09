@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { vaultPathMapping, normalizeVaultPath } from "./vaultContext.js";
+import {
+  vaultPathMapping,
+  normalizeVaultPath,
+  safeVaultRelativePath,
+} from "./vaultContext.js";
 
 describe("vaultPathMapping", () => {
   it("maps vault-relative ↔ workspace-relative vcs paths", () => {
@@ -40,4 +44,15 @@ describe("normalizeVaultPath", () => {
     expect(normalizeVaultPath("a\\b")).toBe("a/b");
     expect(normalizeVaultPath("")).toBe("");
   });
+});
+
+describe("safeVaultRelativePath", () => {
+  it("normalizes a valid nested note path", () => {
+    expect(safeVaultRelativePath(" notes\\Daily//Today ")).toBe("notes/Daily/Today");
+  });
+
+  it.each(["../outside", "notes/../../outside", "/absolute", "", "notes/./today"])(
+    "rejects unsafe note path %j",
+    (path) => expect(() => safeVaultRelativePath(path)).toThrow()
+  );
 });

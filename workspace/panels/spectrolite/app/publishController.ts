@@ -1,4 +1,4 @@
-/** Commit local work, integrate protected main locally, then publish. */
+/** Commit the complete workspace branch, integrate protected main, then publish. */
 
 import {
   VaultSemanticVcs,
@@ -50,7 +50,7 @@ export class PublishController {
     private readonly commitWorkingCopy?: CommitWorkingCopy
   ) {}
 
-  /** Bind publishing to one repository without changing the panel context. */
+  /** Bind the selected repository adapter; publication still targets its owning context branch. */
   bindSession(session: VaultPublishingSession | null): void {
     if (this.session === session) return;
     this.session = session;

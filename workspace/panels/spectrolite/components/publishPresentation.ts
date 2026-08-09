@@ -20,9 +20,11 @@ export function getPublishPresentation(
   const ahead = snapshot.relationship === "ahead";
   const needsSync = snapshot.relationship === "behind" || snapshot.relationship === "diverged";
   const hasChanges = hasUncommitted || ahead;
-  const local = hasUncommitted
-    ? `${uncommittedCount} local change${uncommittedCount === 1 ? "" : "s"}`
-    : null;
+  const local = dirtyCount > 0
+    ? `Saving ${dirtyCount} note${dirtyCount === 1 ? "" : "s"}…`
+    : count > 0
+      ? `${count} saved local change${count === 1 ? "" : "s"}`
+      : null;
   const statusLabel = needsSync
     ? local
       ? `Needs sync, ${local}`

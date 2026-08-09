@@ -52,6 +52,7 @@ const WARN_KIND = new Set(["console-warn"]);
 
 export class Supervisor {
   private readonly panels = new Map<string, PanelWatch>();
+  private readonly archivedPanelFindings: SupervisionFinding[] = [];
   private readonly units = new Map<string, UnitWatch>();
   private readonly probes: ProbeWatch[] = [];
   private stopped = false;
@@ -67,6 +68,15 @@ export class Supervisor {
   }
 
   unwatchPanel(panelId: string): void {
+    this.panels.delete(panelId);
+  }
+
+  /** Capture a test-owned panel's diagnostics before its lifecycle helper
+   * closes it, then retain those findings for the final suite report. */
+  async capturePanel(panelId: string): Promise<void> {
+    const watch = this.panels.get(panelId);
+    if (!watch) return;
+    this.archivedPanelFindings.push(...(await this.collectPanel(watch)));
     this.panels.delete(panelId);
   }
 
@@ -116,44 +126,10 @@ export class Supervisor {
 
   /** Sample all watched targets and return everything observed in the window. */
   async collect(): Promise<SupervisionReport> {
-    const findings: SupervisionFinding[] = [];
+    const findings: SupervisionFinding[] = [...this.archivedPanelFindings];
 
     for (const watch of this.panels.values()) {
-      try {
-        const history = await watch.handle.cdp.consoleHistory();
-        for (const entry of [...history.entries, ...history.errors]) {
-          if (entry.timestamp < watch.since) continue;
-          if (entry.source === "lifecycle") {
-            findings.push({
-              target: watch.handle.id,
-              kind: "lifecycle",
-              message: entry.message,
-              timestamp: entry.timestamp,
-            });
-          } else if (entry.level === "error" && watch.levels.has("error")) {
-            findings.push({
-              target: watch.handle.id,
-              kind: "console-error",
-              message: entry.message,
-              timestamp: entry.timestamp,
-            });
-          } else if (entry.level === "warning" && watch.levels.has("warn")) {
-            findings.push({
-              target: watch.handle.id,
-              kind: "console-warn",
-              message: entry.message,
-              timestamp: entry.timestamp,
-            });
-          }
-        }
-      } catch (error) {
-        findings.push({
-          target: watch.handle.id,
-          kind: "lifecycle",
-          message: `console history unavailable: ${error instanceof Error ? error.message : String(error)}`,
-          timestamp: Date.now(),
-        });
-      }
+      findings.push(...(await this.collectPanel(watch)));
     }
 
     for (const watch of this.units.values()) {
@@ -213,6 +189,46 @@ export class Supervisor {
         probes: this.probes.map((probe) => probe.name),
       },
     };
+  }
+
+  private async collectPanel(watch: PanelWatch): Promise<SupervisionFinding[]> {
+    const findings: SupervisionFinding[] = [];
+    try {
+      const history = await watch.handle.cdp.consoleHistory();
+      for (const entry of [...history.entries, ...history.errors]) {
+        if (entry.timestamp < watch.since) continue;
+        if (entry.source === "lifecycle") {
+          findings.push({
+            target: watch.handle.id,
+            kind: "lifecycle",
+            message: entry.message,
+            timestamp: entry.timestamp,
+          });
+        } else if (entry.level === "error" && watch.levels.has("error")) {
+          findings.push({
+            target: watch.handle.id,
+            kind: "console-error",
+            message: entry.message,
+            timestamp: entry.timestamp,
+          });
+        } else if (entry.level === "warning" && watch.levels.has("warn")) {
+          findings.push({
+            target: watch.handle.id,
+            kind: "console-warn",
+            message: entry.message,
+            timestamp: entry.timestamp,
+          });
+        }
+      }
+    } catch (error) {
+      findings.push({
+        target: watch.handle.id,
+        kind: "lifecycle",
+        message: `console history unavailable: ${error instanceof Error ? error.message : String(error)}`,
+        timestamp: Date.now(),
+      });
+    }
+    return findings;
   }
 
   /** Throw a serializable assertion error if any error-level finding exists. */

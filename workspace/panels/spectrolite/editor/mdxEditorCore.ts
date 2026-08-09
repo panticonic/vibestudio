@@ -100,6 +100,9 @@ export class MdxEditorCore implements CoEditEditor {
         toMarkdownOptions: {},
         jsxComponentDescriptors: this.config.jsxComponentDescriptors,
         jsxIsAvailable: true,
+        // Spectrolite components are runtime globals. Preserve authored ESM
+        // exactly instead of synthesizing a second import channel.
+        addImportStatements: false,
       })
     );
     return wikilinksFromJsx(jsx);

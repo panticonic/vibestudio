@@ -83,8 +83,15 @@ export class LexicalJsxNode extends DecoratorNode<JSX.Element> {
     this.__focusEmitter.publish()
   }
 
-  decorate(_parentEditor: LexicalEditor, _config: EditorConfig): JSX.Element {
-    return <JsxEditorContainer mdastNode={this.getMdastNode()} />
+  decorate(parentEditor: LexicalEditor, _config: EditorConfig): JSX.Element {
+    return (
+      <JsxEditorContainer
+        mdastNode={this.getMdastNode()}
+        onChange={(mdastNode) => {
+          parentEditor.update(() => this.setMdastNode(mdastNode))
+        }}
+      />
+    )
   }
 
   isInline(): boolean {
@@ -96,8 +103,11 @@ export class LexicalJsxNode extends DecoratorNode<JSX.Element> {
   }
 }
 
-const JsxEditorContainer: React.FC<{ mdastNode: MdastJsx }> = (props) => {
-  const { mdastNode } = props
+const JsxEditorContainer: React.FC<{
+  mdastNode: MdastJsx
+  onChange: (node: MdastJsx) => void
+}> = (props) => {
+  const { mdastNode, onChange } = props
   const { jsxComponentDescriptors } = useDescriptors()
   const descriptor =
     jsxComponentDescriptors.find((descriptor) => descriptor.name === mdastNode.name) ??
@@ -106,7 +116,7 @@ const JsxEditorContainer: React.FC<{ mdastNode: MdastJsx }> = (props) => {
     throw new Error(`No JSX descriptor found for ${mdastNode.name ?? '(fragment)'}`)
   }
   const Editor = descriptor.Editor
-  return <Editor descriptor={descriptor} mdastNode={mdastNode} />
+  return <Editor descriptor={descriptor} mdastNode={mdastNode} onChange={onChange} />
 }
 
 /**

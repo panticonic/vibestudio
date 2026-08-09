@@ -15,7 +15,12 @@ import { panel } from "@workspace/runtime";
 import type { Store } from "./store";
 import type { SpectroliteState } from "./state";
 import { createQueuedRefresh } from "./queuedRefresh";
-import { vaultPathMapping, normalizeVaultPath, type VaultPathMapping } from "./vaultContext";
+import {
+  vaultPathMapping,
+  normalizeVaultPath,
+  safeVaultRelativePath,
+  type VaultPathMapping,
+} from "./vaultContext";
 import type { VaultSemanticVcs } from "./semanticVcs";
 
 export interface VaultFileSession {
@@ -175,7 +180,8 @@ export class VaultController {
   async createFile(relPath: string, initialContent: string): Promise<string> {
     const root = this.store.getState().repoRoot;
     if (root === null) throw new Error("No vault selected");
-    const finalPath = relPath.endsWith(".mdx") ? relPath : `${relPath}.mdx`;
+    const safePath = safeVaultRelativePath(relPath);
+    const finalPath = safePath.endsWith(".mdx") ? safePath : `${safePath}.mdx`;
     const mapping = vaultPathMapping(root);
     const vcsPath = mapping.toVcsPath(finalPath);
 

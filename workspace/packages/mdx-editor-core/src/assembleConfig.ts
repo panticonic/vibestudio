@@ -33,6 +33,7 @@ import { CodeBlockNode } from './nodes/CodeBlockNode'
 import { FrontmatterNode } from './nodes/FrontmatterNode'
 import { LexicalJsxNode } from './nodes/LexicalJsxNode'
 import { LexicalMdxExpressionNode } from './nodes/LexicalMdxExpressionNode'
+import { LexicalMdxEsmNode } from './nodes/LexicalMdxEsmNode'
 
 // import (mdast -> lexical) visitors
 import { MdastRootVisitor } from './visitors/MdastRootVisitor'
@@ -69,6 +70,7 @@ import { CodeBlockVisitor } from './visitors/CodeBlockVisitor'
 import { LexicalFrontmatterVisitor } from './visitors/LexicalFrontmatterVisitor'
 import { LexicalJsxVisitor } from './visitors/LexicalJsxVisitor'
 import { LexicalMdxExpressionVisitor } from './visitors/LexicalMdxExpressionVisitor'
+import { LexicalMdxEsmVisitor } from './visitors/LexicalMdxEsmVisitor'
 
 import type { JsxComponentDescriptor } from './jsx-types'
 import type {
@@ -183,6 +185,7 @@ export function assembleMdxConfig(opts: AssembleMdxConfigOptions = {}): Assemble
     LexicalFrontmatterVisitor as LexicalVisitor,
     // jsx
     LexicalJsxVisitor as LexicalVisitor,
+    LexicalMdxEsmVisitor as LexicalVisitor,
     LexicalMdxExpressionVisitor as LexicalVisitor
   ]
 
@@ -209,6 +212,7 @@ export function assembleMdxConfig(opts: AssembleMdxConfigOptions = {}): Assemble
     FrontmatterNode,
     // jsx
     LexicalJsxNode,
+    LexicalMdxEsmNode,
     LexicalMdxExpressionNode
   ]
 

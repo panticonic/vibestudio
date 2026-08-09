@@ -78,6 +78,12 @@ export interface DocControllerDeps {
   onCollisions(collisions: Collision[], vcsPath: string): void;
   onSaveError?(vcsPath: string, error: unknown): void;
   onDirtyChange?(vcsPath: string, dirty: boolean): void;
+  onWorkingStateChange?(
+    vcsPath: string,
+    reason: "local-edit" | "observed" | "commit"
+  ): void | Promise<void>;
+  onUnavailable?(vcsPath: string, reason: "missing" | "unreadable", error?: unknown): void;
+  onAvailabilityRestored?(vcsPath: string): void;
   undo?: UndoSink;
   editDebounceMs?: number;
   observationMs?: number;
@@ -98,11 +104,13 @@ export class DocController {
   private baseState: VcsStateNodeRef | null = null;
   private baseText = "";
   private readonly authoredChangeIds = new Set<string>();
+  private readonly observationSuppressedChangeIds = new Set<string>();
   private editTimer: unknown = null;
   private observationTimer: unknown = null;
   private editPromise: Promise<void> | null = null;
   private editAgain = false;
   private editAgainForce = false;
+  private lastSaveError: unknown = null;
   private disposed = false;
   private offUserEdit: (() => void) | null = null;
 
@@ -115,12 +123,26 @@ export class DocController {
     return this.editCount === 0 ? 0 : this.fallbackCount / this.editCount;
   }
 
+  /** Mark semantic counteractions initiated by this editor so observation does
+   * not misclassify undo/redo as a new incoming author transition. */
+  noteAuthoredChanges(changeIds: string[]): void {
+    changeIds.forEach((id) => this.observationSuppressedChangeIds.add(id));
+  }
+
+  /** Include an explicit working mutation (for example, file recovery) in the
+   * next deliberate commit and semantic undo boundary. */
+  noteLocalChanges(changeIds: string[]): void {
+    changeIds.forEach((id) => this.authoredChangeIds.add(id));
+  }
+
   async load(vcsPath: string): Promise<void> {
     this.offUserEdit?.();
     this.vcsPath = vcsPath;
     const revision = await this.deps.vcs.refresh();
     const file = await this.deps.vcs.readFile(vcsPath, revision.status.workingHead);
-    const original = file?.content.kind === "text" ? file.content.text : "";
+    if (!file) throw new Error(`Document no longer exists: ${vcsPath}`);
+    if (file.content.kind !== "text") throw new Error(`Document is not editable text: ${vcsPath}`);
+    const original = file.content.text;
     this.baseState = revision.status.workingHead;
 
     this.deps.editor.setCanonical(original);
@@ -191,23 +213,32 @@ export class DocController {
 
   private async recordEditOnce(force: boolean): Promise<void> {
     if ((this.disposed && !force) || !this.vcsPath) return;
-    const { canonical, dirty } = this.deps.editor.getDirtyCommit();
-    const built = buildEditOps({
-      path: this.vcsPath,
-      baseText: this.baseText,
-      currentCanonical: canonical,
-      dirtyBlocks: dirty,
-    });
-    if (!built.changed) return this.emitDirty();
-    this.editCount += 1;
-    if (built.usedFallback) this.fallbackCount += 1;
     try {
+      // Canonicalization includes a full MDX parse. Keep syntax errors inside
+      // the normal unsaved-error path rather than letting a timer rejection
+      // escape and strand the controller.
+      const { canonical, dirty } = this.deps.editor.getDirtyCommit();
+      const built = buildEditOps({
+        path: this.vcsPath,
+        baseText: this.baseText,
+        currentCanonical: canonical,
+        dirtyBlocks: dirty,
+      });
+      if (!built.changed) {
+        this.lastSaveError = null;
+        return this.emitDirty();
+      }
+      this.editCount += 1;
+      if (built.usedFallback) this.fallbackCount += 1;
       const result = await this.deps.vcs.edit(built.edits, this.baseState ?? undefined);
       this.baseState = result.workingHead;
       result.changeIds.forEach((id) => this.authoredChangeIds.add(id));
       this.baseText = canonical;
       this.deps.editor.rebase(canonical);
+      await this.deps.onWorkingStateChange?.(this.vcsPath, "local-edit");
+      this.lastSaveError = null;
     } catch (error) {
+      this.lastSaveError = error;
       this.deps.onSaveError?.(this.vcsPath, error);
       await this.observeRemote();
     }
@@ -221,6 +252,7 @@ export class DocController {
       this.editTimer = null;
     }
     await this.recordEdit();
+    if (this.lastSaveError) throw this.saveFailure();
     if (this.authoredChangeIds.size === 0) return { eventId: "", changed: false };
     const result = await this.deps.vcs.commit(message, this.baseState);
     if (!result) return { eventId: "", changed: false };
@@ -228,8 +260,27 @@ export class DocController {
     this.authoredChangeIds.clear();
     this.deps.undo?.sealCommit(sealed);
     this.baseState = (await this.deps.vcs.refresh()).status.workingHead;
+    await this.deps.onWorkingStateChange?.(this.vcsPath, "commit");
     this.emitDirty();
     return { eventId: result.event.eventId, changed: true };
+  }
+
+  /** Persist the visible editor into the semantic working state without sealing a commit. */
+  async flushNow(): Promise<void> {
+    if (this.editTimer !== null) {
+      this.clearTimer(this.editTimer);
+      this.editTimer = null;
+    }
+    await this.recordEdit();
+    if (this.lastSaveError) throw this.saveFailure();
+  }
+
+  private saveFailure(): Error {
+    const detail =
+      this.lastSaveError instanceof Error
+        ? this.lastSaveError.message
+        : String(this.lastSaveError ?? "unknown error");
+    return new Error(`Cannot leave or publish this note until it is saved: ${detail}`);
   }
 
   private async observeRemote(): Promise<void> {
@@ -238,13 +289,30 @@ export class DocController {
       const current = await this.deps.vcs.refresh();
       if (sameState(current.status.workingHead, this.baseState)) return;
       const file = await this.deps.vcs.readFile(this.vcsPath, current.status.workingHead);
-      if (!file || file.content.kind !== "text") return;
-      if (file.content.text === this.baseText) {
-        this.baseState = current.status.workingHead;
+      if (!file) {
+        this.deps.onUnavailable?.(this.vcsPath, "missing");
         return;
       }
+      if (file.content.kind !== "text") {
+        this.deps.onUnavailable?.(this.vcsPath, "unreadable");
+        return;
+      }
+      this.deps.onAvailabilityRestored?.(this.vcsPath);
+      if (file.content.text === this.baseText) {
+        this.baseState = current.status.workingHead;
+        await this.deps.onWorkingStateChange?.(this.vcsPath, "observed");
+        return;
+      }
+      if (
+        !this.authoredChangeIds.has(file.authoredChangeId) &&
+        !this.observationSuppressedChangeIds.delete(file.authoredChangeId)
+      ) {
+        this.deps.undo?.sealCommit([file.authoredChangeId]);
+      }
       this.applyIncoming(current.status.workingHead, file.content.text);
+      await this.deps.onWorkingStateChange?.(this.vcsPath, "observed");
     } catch (error) {
+      this.deps.onUnavailable?.(this.vcsPath, "unreadable", error);
       if (this.vcsPath) this.deps.onSaveError?.(this.vcsPath, error);
     }
   }

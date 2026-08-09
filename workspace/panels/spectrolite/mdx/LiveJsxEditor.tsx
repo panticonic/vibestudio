@@ -18,18 +18,19 @@
  *   - `globalThis.__spectroliteUseDocState__` — useDocState hook
  *   - `globalThis.__spectroliteRuntime__`     — `runtime.Eval`, etc.
  *
- * Each JSX node compiles in ISOLATION (local incremental render — a node
- * recompiles only when its own serialized source changes). There is no
- * whole-doc compile, so doc-level cross-node exports (a `<Counter/>` that
- * references an `export const Counter` declared elsewhere in the same doc)
- * are intentionally NOT in scope.
+ * Each JSX node compiles incrementally, while preserved top-level MDX module
+ * declarations are injected into its module scope. Thus `<Counter/>` can use
+ * an `export const Counter` authored elsewhere in the same document without
+ * replacing the whole rich editor on every keystroke.
  *
- * On compile failure we surface a small error card pointing the user to
- * the diff/source toggle so they can edit the JSX by hand.
+ * Every rendered node has a source affordance; compile failures keep the same
+ * source editor available instead of trapping the user in a broken preview.
  */
 
 import {
   Component as ReactComponent,
+  createContext,
+  useContext,
   useEffect,
   useMemo,
   useState,
@@ -45,6 +46,10 @@ import { rpc } from "@workspace/runtime";
 import { mdxComponents } from "@workspace/agentic-chat";
 import { nodeToMdxSource } from "./mdastSerialize";
 import { WikiLink as SpectroliteWikiLink } from "./components";
+import { fromMarkdown } from "mdast-util-from-markdown";
+import { assembleMdxConfig } from "@workspace/mdx-editor-core";
+import type { MdastJsx } from "@workspace/mdx-editor-core";
+import { wikilinkValue } from "./wikilink";
 
 // Inline MDX is compiled as an isolated module. Publish the host component so
 // the compiled module renders the same context-aware wikilink as the rest of
@@ -66,17 +71,20 @@ const importedNames = Object.keys(mdxComponents as Record<string, unknown>).filt
 );
 const importList = importedNames.join(", ");
 
+/** Preserved top-level MDX module declarations visible to each live JSX node. */
+export const DocModuleSourceContext = createContext("");
+
+const sourceConfig = assembleMdxConfig();
+
 interface MdastJsxLike {
   type: string;
   name?: string | null;
 }
 
 /**
- * Build the wrapper source. Each JSX node is compiled in isolation (local
- * incremental render); doc-level cross-node exports are intentionally not in
- * scope (the whole-doc compile that bridged them was removed).
+ * Build an incremental wrapper with the document's preserved module scope.
  */
-function wrapForSandbox(source: string): string {
+function wrapForSandbox(source: string, moduleSource: string): string {
   return `
 import * as React from "react";
 import { mdxComponents } from "@workspace/agentic-chat";
@@ -102,7 +110,7 @@ function ActionButton({ children, message, variant = "soft", size = "1" }) {
 
 // useDocState — Spectrolite publishes the hook on globalThis (see
 // DocumentEditor) so sandboxed components can persist state into the
-// doc's frontmatter without an import the sandbox can't resolve.
+// panel-local view state without an import the sandbox can't resolve.
 const useDocState = (globalThis.__spectroliteUseDocState__) ||
   function useDocStateFallback(_key, initial) {
     return React.useState(initial);
@@ -122,6 +130,8 @@ const useViewportHeight = (globalThis.__spectroliteUseViewportHeight__) ||
 const runtime = globalThis.__spectroliteRuntime__ ||
   { useDocState, useIsMobile, useTouchDevice, useViewportHeight };
 
+${moduleSource}
+
 export default function LiveJsx() {
   return (<>
     ${source}
@@ -136,12 +146,21 @@ export interface LiveJsxEditorOwnProps {
 }
 
 export function LiveJsxEditor(props: JsxEditorProps & LiveJsxEditorOwnProps) {
-  const { mdastNode, descriptor, dependencies } = props;
+  const { mdastNode, descriptor, dependencies, onChange } = props;
+  const moduleSource = useContext(DocModuleSourceContext);
   const tagName = (mdastNode as unknown as MdastJsxLike).name ?? descriptor.name ?? "Fragment";
   const source = useMemo(() => nodeToMdxSource(mdastNode), [mdastNode]);
-  const wrapped = useMemo(() => wrapForSandbox(source), [source]);
+  const wrapped = useMemo(() => wrapForSandbox(source, moduleSource), [source, moduleSource]);
   const [Component, setComponent] = useState<ComponentType | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(source);
+  const [sourceError, setSourceError] = useState<string | null>(null);
+  const nativeWikilink = wikilinkValue(mdastNode);
+
+  useEffect(() => {
+    if (!editing) setDraft(source);
+  }, [editing, source]);
 
   useEffect(() => {
     let cancelled = false;
@@ -173,8 +192,83 @@ export function LiveJsxEditor(props: JsxEditorProps & LiveJsxEditorOwnProps) {
     };
   }, [wrapped, tagName, source, dependencies]);
 
+  const saveSource = () => {
+    if (!onChange) return;
+    try {
+      const tree = fromMarkdown(draft, {
+        extensions: sourceConfig.syntaxExtensions,
+        mdastExtensions: sourceConfig.mdastExtensions,
+      });
+      const direct = tree.children[0];
+      const candidate =
+        direct?.type === "mdxJsxFlowElement" || direct?.type === "mdxJsxTextElement"
+          ? direct
+          : direct?.type === "paragraph" && direct.children.length === 1
+            ? direct.children[0]
+            : null;
+      if (
+        tree.children.length !== 1 ||
+        !candidate ||
+        (candidate.type !== "mdxJsxFlowElement" && candidate.type !== "mdxJsxTextElement")
+      ) {
+        throw new Error("Source must contain exactly one JSX element");
+      }
+      onChange(candidate as MdastJsx);
+      setSourceError(null);
+      setEditing(false);
+    } catch (nextError) {
+      setSourceError(nextError instanceof Error ? nextError.message : String(nextError));
+    }
+  };
+
+  if (editing) {
+    return (
+      <Card className="spectrolite-jsx-source-editor">
+        <Flex direction="column" gap="2">
+          <textarea
+            aria-label={`Edit ${tagName} source`}
+            value={draft}
+            spellCheck={false}
+            onChange={(event) => setDraft(event.target.value)}
+          />
+          {sourceError ? <Text size="1" color="red">{sourceError}</Text> : null}
+          <Flex gap="2" justify="end">
+            <button type="button" onClick={() => setEditing(false)}>Cancel</button>
+            <button type="button" onClick={saveSource}>Apply source</button>
+          </Flex>
+        </Flex>
+      </Card>
+    );
+  }
+
+  if (nativeWikilink) {
+    return (
+      <Box className="spectrolite-jsx-block" style={{ position: "relative", display: "inline" }}>
+        <SpectroliteWikiLink target={nativeWikilink.target}>
+          {nativeWikilink.label}
+        </SpectroliteWikiLink>
+        {onChange ? (
+          <button
+            type="button"
+            className="spectrolite-jsx-edit-source"
+            aria-label="Edit WikiLink source"
+            onClick={() => setEditing(true)}
+          >
+            <Pencil1Icon />
+          </button>
+        ) : null}
+      </Box>
+    );
+  }
+
   if (error) {
-    return <LiveJsxErrorCard tagName={tagName} error={error} />;
+    return (
+      <LiveJsxErrorCard
+        tagName={tagName}
+        error={error}
+        onEdit={onChange ? () => setEditing(true) : undefined}
+      />
+    );
   }
 
   if (!Component) {
@@ -198,11 +292,29 @@ export function LiveJsxEditor(props: JsxEditorProps & LiveJsxEditorOwnProps) {
       <LiveJsxRuntimeBoundary tagName={tagName}>
         <Component />
       </LiveJsxRuntimeBoundary>
+      {onChange ? (
+        <button
+          type="button"
+          className="spectrolite-jsx-edit-source"
+          aria-label={`Edit ${tagName} source`}
+          onClick={() => setEditing(true)}
+        >
+          <Pencil1Icon />
+        </button>
+      ) : null}
     </Box>
   );
 }
 
-function LiveJsxErrorCard({ tagName, error }: { tagName: string; error: string }) {
+function LiveJsxErrorCard({
+  tagName,
+  error,
+  onEdit,
+}: {
+  tagName: string;
+  error: string;
+  onEdit?: () => void;
+}) {
   return (
     <Card data-testid="spectrolite-live-jsx-error">
       <Flex direction="column" gap="1">
@@ -218,9 +330,11 @@ function LiveJsxErrorCard({ tagName, error }: { tagName: string; error: string }
         <Code size="1" style={{ whiteSpace: "pre-wrap" }}>
           {error}
         </Code>
-        <Text size="1" color="gray">
-          <Pencil1Icon /> Use the diff/source toggle to edit the JSX by hand.
-        </Text>
+        {onEdit ? (
+          <button type="button" onClick={onEdit}>
+            <Pencil1Icon /> Edit JSX source
+          </button>
+        ) : null}
       </Flex>
     </Card>
   );

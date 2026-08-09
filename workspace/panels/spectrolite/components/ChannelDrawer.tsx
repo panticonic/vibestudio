@@ -28,9 +28,11 @@ export function ChannelDrawer() {
   const messages = useAppState((s) => s.messages);
   const clientReady = useAppState((s) => s.client !== null);
   const openSignal = useAppState((s) => s.dockOpenSignal);
+  const roster = useAppState((s) => s.roster);
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
+  const [sendError, setSendError] = useState<string | null>(null);
   // Initialise to mount time so replay backlog isn't counted as unread.
   const [lastReadAt, setLastReadAt] = useState(() => Date.now());
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -69,11 +71,23 @@ export function ChannelDrawer() {
     const content = draft.trim();
     if (!content || !clientReady) return;
     setSending(true);
+    setSendError(null);
     try {
-      await app.session.send(content);
+      const addressedHandles = new Set(
+        [...content.matchAll(/(^|[\s([{])@([A-Za-z0-9_.-]+)/g)].map((match) =>
+          match[2]!.toLowerCase()
+        )
+      );
+      const mentionedIds = roster.flatMap((agent) =>
+        agent.participantId && addressedHandles.has(agent.handle.toLowerCase())
+          ? [agent.participantId]
+          : []
+      );
+      await app.session.send(content, { mentions: mentionedIds });
       setDraft("");
     } catch (err) {
       console.warn("[Spectrolite] send failed:", err);
+      setSendError(err instanceof Error ? err.message : String(err));
     } finally {
       setSending(false);
     }
@@ -153,7 +167,7 @@ export function ChannelDrawer() {
               <Flex direction="column" gap="2" p="1">
                 {messages.length === 0 ? (
                   <Text size="1" color="gray">
-                    No messages yet. @-mention an agent in a doc, or say hi below.
+                    No messages yet. Address a resident agent below, or use the Ask button in a note.
                   </Text>
                 ) : (
                   messages.map((m) => {
@@ -185,7 +199,7 @@ export function ChannelDrawer() {
           <Flex gap="2" align="end" style={{ flexShrink: 0 }}>
             <TextArea
               size={isMobile ? "2" : "1"}
-              placeholder="Talk to the agents…"
+              placeholder="Message @scribe…"
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
               onKeyDown={(e) => {
@@ -208,6 +222,11 @@ export function ChannelDrawer() {
               <PaperPlaneIcon />
             </IconButton>
           </Flex>
+          {sendError ? (
+            <Text size="1" color="red" role="alert">
+              Couldn't send: {sendError}
+            </Text>
+          ) : null}
         </Flex>
       ) : null}
     </Box>

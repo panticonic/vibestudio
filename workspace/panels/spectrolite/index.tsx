@@ -3,7 +3,7 @@
  *
  * `app/createApp` builds a small external store plus the session + vault
  * controllers and the publish/view-state pieces. Each open document owns a
- * `DocController` (commit-on-quiescence + narrow remote reconcile) and an
+ * `DocController` (working-state autosave + narrow remote reconcile) and an
  * `UndoCoordinator` (one ⌘Z stack over Lexical undo + GAD revert). The React
  * tree is a pure view of the store; editing keystrokes never re-render the shell.
  *

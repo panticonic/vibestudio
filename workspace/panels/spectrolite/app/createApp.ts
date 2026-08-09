@@ -45,7 +45,7 @@ export interface SpectroliteApp {
   readonly semanticVcs: VaultSemanticVcs | null;
   viewState: ViewStateStore;
   /** Open a document (vault-relative path) in the editor. */
-  openFile(path: string): void;
+  openFile(path: string): Promise<void>;
   /** Recompute the active doc's frontmatter dependency map (feeds inline JSX). */
   setActiveDocSource(path: string, markdown: string): void;
   /** Mark/unmark a vault-relative path as having uncommitted edits. */
@@ -63,11 +63,17 @@ export interface SpectroliteApp {
   /** DocumentEditor registers the active doc's deliberate commit (Publish /
    *  Send-to-scribe flush). Carries a commit message. */
   registerCommitActiveDoc(commit: CommitActiveDoc | null): void;
+  registerFlushActiveDoc(flush: FlushActiveDoc | null): void;
   /** DocumentEditor registers a reload-now after Sync advances the working state. */
   registerReloadActiveDoc(reload: ReloadActiveDoc | null): void;
   /** Commit the active doc's working copy now with a message (Send-to-scribe
    *  flush-first). NOT called on typing — only on deliberate user gestures. */
   commitActiveDoc(message: string): Promise<{ eventId: string; changed: boolean } | null>;
+  flushActiveDoc(): Promise<void>;
+  workingStateChanged(
+    path: string,
+    reason: "local-edit" | "observed" | "commit"
+  ): Promise<void>;
   start(): void;
   dispose(): void;
 }
@@ -75,6 +81,7 @@ export interface SpectroliteApp {
 export type CommitActiveDoc = (
   message: string
 ) => Promise<{ eventId: string; changed: boolean } | null>;
+export type FlushActiveDoc = () => Promise<void>;
 /** Re-read the active document at the current exact working state. */
 export type ReloadActiveDoc = () => Promise<void>;
 
@@ -135,6 +142,7 @@ export function createSpectroliteApp(): SpectroliteApp {
   // controller's commit-then-push step can close over it. Publish ties the
   // commit and the push into one user gesture.
   let commitActiveDocFn: CommitActiveDoc | null = null;
+  let flushActiveDocFn: FlushActiveDoc | null = null;
   const publish = new PublishController(
     semanticVcs,
     () => (reloadActiveDocFn ? reloadActiveDocFn() : Promise.resolve()),
@@ -144,12 +152,13 @@ export function createSpectroliteApp(): SpectroliteApp {
   const bindVault = (nextRepoRoot: string | null): VaultSemanticVcs | null => {
     semanticVcs = contextId && nextRepoRoot ? new VaultSemanticVcs(contextId, nextRepoRoot) : null;
     publish.bindSession(semanticVcs);
+    lastObservedWorkingState = null;
     return semanticVcs;
   };
 
   // A panel sandbox used solely to prefetch frontmatter-declared dependencies
-  // into the panel's module map so inline JSX (LiveJsxEditor) + Preview-mode
-  // compilation can resolve them. Mirrors the local sandbox LiveJsxEditor and
+  // into the panel's module map so inline JSX compilation can resolve them.
+  // Mirrors the local sandbox LiveJsxEditor and
   // runtimeNamespace each build for live compile.
   const depSandbox = createPanelSandboxConfig(rpc);
 
@@ -182,19 +191,20 @@ export function createSpectroliteApp(): SpectroliteApp {
     store,
     {
       beforeVaultSwitch: async () => {
-        if (!store.getState().activePath || !commitActiveDocFn) return;
-        await commitActiveDocFn("Save active note before switching vault");
+        if (!store.getState().activePath || !flushActiveDocFn) return;
+        await flushActiveDocFn();
       },
       bindVault,
       onVaultSelected: (repoRoot) => {
         session.onVaultSelected(repoRoot);
         void publish.refresh();
+        scheduleSemanticWatch();
       },
     },
     semanticVcs
   );
 
-  const openFileInternal = (path: string, extraStateArgs?: Record<string, unknown>): void => {
+  const applyOpenFile = (path: string, extraStateArgs?: Record<string, unknown>): void => {
     if (store.getState().activePath === path) {
       if (extraStateArgs) void panel.stateArgs.set({ openPath: path, ...extraStateArgs });
       return;
@@ -212,9 +222,28 @@ export function createSpectroliteApp(): SpectroliteApp {
     lastDeps = {};
     void panel.stateArgs.set({ openPath: path, ...(extraStateArgs ?? {}) });
   };
+  let documentTransition: Promise<void> = Promise.resolve();
+  const openFileInternal = (
+    path: string,
+    extraStateArgs?: Record<string, unknown>
+  ): Promise<void> => {
+    documentTransition = documentTransition
+      .then(async () => {
+        if (store.getState().activePath !== path) await flushActiveDocFn?.();
+        applyOpenFile(path, extraStateArgs);
+      })
+      .catch((error) => {
+        // The active editor owns the visible save error. Keep it mounted and
+        // keep the queue usable once the user repairs the document.
+        console.warn("[Spectrolite] navigation paused for an unsaved note:", error);
+      });
+    return documentTransition;
+  };
 
   let started = false;
   let startupRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+  let semanticWatchTimer: ReturnType<typeof setTimeout> | null = null;
+  let lastObservedWorkingState: string | null = null;
   const semanticEvents = contextId ? new EventsClient(rpc) : null;
   const unsubscribePublication = semanticEvents?.on("vcs:publication", () => {
     refreshVaultSidebars();
@@ -222,6 +251,28 @@ export function createSpectroliteApp(): SpectroliteApp {
   const refreshVaultSidebars = (): void => {
     void vault.refreshPaths();
     void publish.refresh();
+  };
+  const stateIdentity = (state: { kind: string; eventId?: string; applicationId?: string }) =>
+    state.kind === "event" ? `event:${state.eventId ?? ""}` : `application:${state.applicationId ?? ""}`;
+  const scheduleSemanticWatch = (): void => {
+    if (!started || semanticWatchTimer || !semanticVcs) return;
+    semanticWatchTimer = setTimeout(() => {
+      semanticWatchTimer = null;
+      const watched = semanticVcs;
+      if (!watched || !started) return;
+      void watched
+        .refresh()
+        .then((revision) => {
+          if (watched !== semanticVcs || !started) return;
+          const next = stateIdentity(revision.status.workingHead);
+          if (lastObservedWorkingState !== null && next !== lastObservedWorkingState) {
+            refreshVaultSidebars();
+          }
+          lastObservedWorkingState = next;
+        })
+        .catch((error) => console.debug("[Spectrolite] semantic watch failed:", error))
+        .finally(scheduleSemanticWatch);
+    }, 1200);
   };
   const spectroliteApp: SpectroliteApp = {
     store,
@@ -233,7 +284,7 @@ export function createSpectroliteApp(): SpectroliteApp {
     },
     viewState,
     openFile(path) {
-      openFileInternal(path);
+      return openFileInternal(path);
     },
     setActiveDocSource,
     setDirty(path, dirty) {
@@ -282,11 +333,30 @@ export function createSpectroliteApp(): SpectroliteApp {
     registerCommitActiveDoc(commit) {
       commitActiveDocFn = commit;
     },
+    registerFlushActiveDoc(flush) {
+      flushActiveDocFn = flush;
+    },
     registerReloadActiveDoc(reload) {
       reloadActiveDocFn = reload;
     },
     commitActiveDoc(message) {
       return commitActiveDocFn ? commitActiveDocFn(message) : Promise.resolve(null);
+    },
+    flushActiveDoc() {
+      return flushActiveDocFn ? flushActiveDocFn() : Promise.resolve();
+    },
+    async workingStateChanged(path, reason) {
+      const relPath = vault.mapping().toVaultRelPath(path);
+      if (relPath) {
+        store.setState((prev) => {
+          if (!(relPath in prev.pathContentHashes)) return {};
+          const pathContentHashes = { ...prev.pathContentHashes };
+          delete pathContentHashes[relPath];
+          return { pathContentHashes };
+        });
+      }
+      await publish.refresh();
+      if (reason === "observed") await vault.refreshPaths();
     },
     start() {
       if (started) return;
@@ -307,14 +377,22 @@ export function createSpectroliteApp(): SpectroliteApp {
           console.warn("[Spectrolite] failed to subscribe to VCS publications:", error);
         });
       }
+      scheduleSemanticWatch();
     },
     dispose() {
+      void flushActiveDocFn?.().catch((error) => {
+        console.warn("[Spectrolite] final document flush failed:", error);
+      });
       unsubscribePublication?.();
       void semanticEvents?.unsubscribeAll();
       session.dispose();
       if (startupRefreshTimer) {
         clearTimeout(startupRefreshTimer);
         startupRefreshTimer = null;
+      }
+      if (semanticWatchTimer) {
+        clearTimeout(semanticWatchTimer);
+        semanticWatchTimer = null;
       }
       const g = globalThis as SpectroliteE2EGlobal;
       if (g.__spectroliteE2E__ === e2e) {

@@ -219,7 +219,7 @@ export function WorkspaceSettingsContent({ onSwitchVault }: { onSwitchVault: () 
 
       <Separator size="4" />
 
-      <Section title="Publish">
+      <Section title="Workspace branch">
         <PublishSummary />
       </Section>
 
@@ -248,7 +248,7 @@ function PublishSummary() {
           {presentation.statusLabel}
         </Text>
         <Text size="1" color="gray">
-          Changes stay local to this workspace branch until you publish.
+          Publishes the full workspace branch; the selected vault is only the editing focus.
         </Text>
       </Flex>
       <Button
@@ -259,7 +259,7 @@ function PublishSummary() {
         onClick={() => void app.publish.publish()}
         data-testid="spectrolite-settings-publish"
       >
-        {snapshot.publishing ? "Publishing…" : "Publish"}
+        {snapshot.publishing ? "Publishing…" : "Publish branch"}
       </Button>
     </Flex>
   );

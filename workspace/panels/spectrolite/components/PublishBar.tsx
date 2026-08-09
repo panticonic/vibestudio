@@ -1,4 +1,4 @@
-/** Compact status and explicit sync/publish controls for one vault repository. */
+/** Compact status and explicit sync/publish controls for the workspace branch. */
 
 import { useSyncExternalStore, type ReactNode } from "react";
 import { Button, Flex, Text } from "@radix-ui/themes";
@@ -88,9 +88,10 @@ export function PublishBar({
             }
             onClick={() => void app.publish.publish()}
             data-testid="spectrolite-publish-button"
+            title="Publish all committed changes on this workspace branch"
             style={mobile ? { minHeight: 40 } : undefined}
           >
-            <UploadIcon /> {snapshot.publishing ? "Publishing…" : "Publish"}
+            <UploadIcon /> {snapshot.publishing ? "Publishing…" : "Publish branch"}
           </Button>
         </Flex>
       </Flex>
@@ -104,7 +105,7 @@ export function PublishBar({
           style={{ width: "100%", borderTop: "1px solid var(--amber-6)" }}
         >
           <Text size="1" color="amber">
-            Published changes conflict with this vault. Review the summaries, edit the document to
+            Published changes conflict with this workspace branch. Review the summaries, edit the document to
             reconcile them, or explicitly keep the local result.
           </Text>
           {snapshot.conflicts.map((conflict) => (

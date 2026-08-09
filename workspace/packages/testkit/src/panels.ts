@@ -129,6 +129,9 @@ export async function withPanel<T>(
   try {
     return await fn(handle);
   } finally {
+    // Console history belongs to the live panel endpoint. Snapshot it before
+    // closing while preserving it in the test's final supervision report.
+    await activeTestContext()?.supervisor.capturePanel(handle.id);
     try {
       await handle.close();
     } catch {

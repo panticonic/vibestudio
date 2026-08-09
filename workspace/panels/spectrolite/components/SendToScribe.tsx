@@ -37,14 +37,19 @@ export function SendToScribe({
 }) {
   const app = useApp();
   const activePath = useAppState((s) => s.activePath);
-  const scribeHandle = useAppState(
-    (s) => s.roster.find((a) => a.handle.startsWith("scribe"))?.handle ?? "scribe"
+  const recipient = useAppState(
+    (s) =>
+      s.roster.find((agent) => agent.handle === "scribe" && agent.participantId) ??
+      s.roster.find((agent) => agent.participantId) ??
+      null
   );
+  const scribeHandle = recipient?.handle ?? "scribe";
   const clientReady = useAppState((s) => s.client !== null);
   const [open, setOpen] = useState(false);
   const [message, setMessage] = useState("");
   const [selection, setSelection] = useState<string | undefined>(undefined);
   const [busy, setBusy] = useState(false);
+  const [sendError, setSendError] = useState<string | null>(null);
 
   const beginCompose = () => {
     setSelection(currentSelection());
@@ -54,8 +59,9 @@ export function SendToScribe({
 
   const submit = async () => {
     const text = message.trim();
-    if (!text || !activePath) return;
+    if (!text || !activePath || !recipient?.participantId) return;
     setBusy(true);
+    setSendError(null);
     try {
       const vcsPath = app.vault.mapping().toVcsPath(activePath);
       await sendToScribe(
@@ -67,6 +73,7 @@ export function SendToScribe({
         {
           message: text,
           handle: scribeHandle,
+          participantId: recipient.participantId,
           context: { path: vcsPath, selection },
         }
       );
@@ -75,6 +82,7 @@ export function SendToScribe({
       app.session.openDock();
     } catch (err) {
       console.warn("[Spectrolite] send to scribe failed:", err);
+      setSendError(err instanceof Error ? err.message : String(err));
     } finally {
       setBusy(false);
     }
@@ -90,7 +98,7 @@ export function SendToScribe({
           variant="soft"
           color="iris"
           onClick={beginCompose}
-          disabled={!clientReady}
+          disabled={!clientReady || !recipient?.participantId}
           data-testid="spectrolite-send-to-scribe"
           aria-label={`Ask @${scribeHandle}`}
           title={`Ask @${scribeHandle}`}
@@ -138,12 +146,17 @@ export function SendToScribe({
             rows={3}
             data-testid="spectrolite-send-to-scribe-input"
           />
+          {sendError ? (
+            <Text size="1" color="red" role="alert">
+              Couldn't send: {sendError}
+            </Text>
+          ) : null}
           <Flex justify="end">
             <Button
               size="1"
               variant="solid"
               color="iris"
-              disabled={!message.trim() || busy}
+              disabled={!message.trim() || busy || !recipient?.participantId}
               onClick={() => void submit()}
               data-testid="spectrolite-send-to-scribe-submit"
             >

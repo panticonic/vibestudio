@@ -27,6 +27,26 @@ const WIKILINK_JSX_RE_WITH_TEXT =
   /<WikiLink\s+target=("([^"]+)"|'([^']+)')\s*>([\s\S]*?)<\/WikiLink>/g;
 const FRONTMATTER_RE = /^(---\s*\r?\n[\s\S]*?\r?\n---\s*\r?\n)/;
 
+interface WikilinkMdastNode {
+  name?: string | null;
+  attributes?: Array<{ type: string; name?: string; value?: unknown }>;
+  children?: Array<{ type: string; value?: string }>;
+}
+
+/** Read the authored target/label from the canonical WikiLink mdast shape. */
+export function wikilinkValue(node: WikilinkMdastNode): { target: string; label: string } | null {
+  if (node.name !== "WikiLink") return null;
+  const targetAttribute = node.attributes?.find(
+    (attribute) => attribute.type === "mdxJsxAttribute" && attribute.name === "target"
+  );
+  if (typeof targetAttribute?.value !== "string" || !targetAttribute.value) return null;
+  const label =
+    node.children
+      ?.flatMap((child) => (child.type === "text" && child.value ? [child.value] : []))
+      .join("") || targetAttribute.value;
+  return { target: targetAttribute.value, label };
+}
+
 /** Strip the YAML frontmatter (if any) off the front of the doc and
  *  return [frontmatter, body]. Wikilink transforms should NEVER touch
  *  the frontmatter — a `title: "My [[Foo]] note"` would be silently

@@ -56,6 +56,11 @@ export type { JsxComponentDescriptor, JsxEditorProps, JsxPropertyDescriptor, Mda
 
 // --- Code block descriptor types ---
 export type { CodeBlockEditorDescriptor, CodeBlockEditorProps } from './nodes/codeblock-types'
+export {
+  LexicalMdxEsmNode,
+  $createLexicalMdxEsmNode,
+  $isLexicalMdxEsmNode
+} from './nodes/LexicalMdxEsmNode'
 
 // --- Descriptor React context (replaces gurx cells for the decorator nodes) ---
 export { DescriptorProvider, useDescriptors } from './descriptor-context'

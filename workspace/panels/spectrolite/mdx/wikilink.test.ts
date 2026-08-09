@@ -2,11 +2,22 @@ import { describe, expect, it } from "vitest";
 import {
   extractWikilinks,
   resolveWikilinkTarget,
+  wikilinkValue,
   wikilinksFromJsx,
   wikilinksToJsx,
 } from "./wikilink";
 
 describe("wikilink transforms", () => {
+  it("extracts a native renderer target and text label from mdast", () => {
+    expect(
+      wikilinkValue({
+        name: "WikiLink",
+        attributes: [{ type: "mdxJsxAttribute", name: "target", value: "E2E" }],
+        children: [{ type: "text", value: "the note" }],
+      })
+    ).toEqual({ target: "E2E", label: "the note" });
+  });
+
   it("round-trips simple and aliased links", () => {
     const source = "See [[Daily Note]] and [[Projects/Roadmap|the roadmap]].";
     const jsx = wikilinksToJsx(source);

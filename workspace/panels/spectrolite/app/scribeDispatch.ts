@@ -2,8 +2,8 @@
  * Scribe dispatch — explicit, decoupled from autosave (plan section D + decision 7).
  *
  * The original failure: autosave was coupled to agent dispatch, so a half-typed
- * `@scribe` line invoked the agent mid-edit. Here, quiescence only commits
- * (DocController) and NEVER dispatches. Invoking the scribe is an explicit user
+ * `@scribe` line invoked the agent mid-edit. Here, autosave only records a
+ * working semantic edit and NEVER dispatches. Invoking the scribe is an explicit user
  * action — selecting text / a mention → **Send to @scribe**.
  *
  * Send must **flush first**: because autosave is decoupled, dirty blocks may be
@@ -22,6 +22,8 @@ export interface ScribeDispatchDeps {
 export interface ScribeRequest {
   /** The scribe's handle (default "scribe"). */
   handle?: string;
+  /** Exact live channel participant to address. */
+  participantId: string;
   /** The user's instruction to the scribe. */
   message: string;
   /** Optional context: a path + selected excerpt the user is asking about. */
@@ -34,7 +36,8 @@ export interface ScribeRequest {
  * the scribe edits against exactly what the user saw.
  */
 export function buildScribeMessage(input: ScribeRequest, eventId: string | null): string {
-  const lines = [input.message.trim()];
+  const handle = input.handle ?? "scribe";
+  const lines = [`@${handle} ${input.message.trim()}`];
   if (input.context?.selection) {
     lines.push("", `> Re: \`${input.context.path}\``, "", "```", input.context.selection, "```");
   } else if (input.context?.path) {
@@ -55,6 +58,6 @@ export async function sendToScribe(
   const committed = await deps.commitPending();
   const eventId = committed?.eventId || null;
   const handle = request.handle ?? "scribe";
-  await deps.send(buildScribeMessage(request, eventId), { mentions: [handle] });
+  await deps.send(buildScribeMessage(request, eventId), { mentions: [request.participantId] });
   return { eventId };
 }

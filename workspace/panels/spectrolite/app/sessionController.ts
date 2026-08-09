@@ -65,6 +65,9 @@ function buildAgentConfig(opts: {
       handle: opts.handle,
     }),
     systemPromptMode: "append",
+    // Only exact participant addressing wakes a resident editor. This keeps a
+    // multi-agent vault quiet and makes the Ask button deterministic.
+    wakePolicy: "explicit",
   };
   if (opts.className === "TestAgentWorker") {
     return {

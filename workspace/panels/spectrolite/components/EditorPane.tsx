@@ -8,7 +8,7 @@
  * through the shell.
  */
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useState } from "react";
 import { Box, Button, Callout, Flex, Heading, Spinner, Text } from "@radix-ui/themes";
 import {
   ExclamationTriangleIcon,
@@ -19,7 +19,6 @@ import {
 import { useApp, useAppState } from "../app/context";
 import { DocumentEditor } from "./DocumentEditor";
 import { SuggestionStack } from "./SuggestionCard";
-import type { MentionCandidate } from "./MentionAutocomplete";
 
 export const SAMPLE_DOC_NAME = "Welcome.mdx";
 
@@ -39,7 +38,8 @@ This is an **MDX** knowledge base backed by version-controlled storage. Try the 
    highlight and you can undo them.
 3. **Link between notes** with double brackets — for example,
    [[Another Note]] (click to create it).
-4. **Publish** when you're ready to share with the rest of the workspace.
+4. **Publish the workspace branch** when you're ready to share its saved changes.
+   The selected vault is your editing focus; publication includes the full branch.
 
 <Callout color="blue">
   <Callout.Icon><Icons.InfoCircledIcon /></Callout.Icon>
@@ -81,17 +81,7 @@ export function EditorPane({ theme, onOpenFiles, mobile = false }: EditorPanePro
   const vaultEmpty = useAppState((s) => s.pathsLoaded && !s.pathsLoading && s.paths.length === 0);
   const pathsError = useAppState((s) => s.pathsError);
   const activeDeps = useAppState((s) => s.activeDeps);
-  const roster = useAppState((s) => s.roster);
-  const removedHandles = useAppState((s) => s.removedHandles);
   const [createError, setCreateError] = useState<string | null>(null);
-
-  const mentionCandidates: MentionCandidate[] = useMemo(
-    () =>
-      roster
-        .filter((agent) => !removedHandles.includes(agent.handle))
-        .map((agent) => ({ handle: agent.handle })),
-    [roster, removedHandles]
-  );
 
   const handleCreateWelcomeDoc = useCallback(async () => {
     try {
@@ -114,7 +104,6 @@ export function EditorPane({ theme, onOpenFiles, mobile = false }: EditorPanePro
           key={activePath}
           relPath={activePath}
           theme={theme}
-          mentionCandidates={mentionCandidates}
           dependencies={activeDeps}
         />
         <SuggestionStack />

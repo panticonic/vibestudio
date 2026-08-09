@@ -14,6 +14,24 @@ describe("MdxEditorCore (headless Lexical + vendored pipeline)", () => {
     expect(out).toContain("Second paragraph.");
   });
 
+  it("preserves authored MDX modules and the JSX that references them", () => {
+    const core = createMdxEditorCore();
+    const doc = `---
+title: Counter
+---
+
+export const Counter = () => <Button>Count</Button>;
+
+<Counter />`;
+
+    core.setCanonical(doc);
+
+    const out = core.getCanonical();
+    expect(out).toContain("export const Counter = () => <Button>Count</Button>;");
+    expect(out).toContain("<Counter />");
+    expect(out).toContain("title: Counter");
+  });
+
   it("round-trips wikilinks through the internal live-JSX representation", () => {
     const core = createMdxEditorCore();
     core.setCanonical("# Linked\n\nThis note points at [[E2E]].");

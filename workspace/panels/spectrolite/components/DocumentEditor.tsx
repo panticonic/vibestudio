@@ -3,10 +3,10 @@
  *
  * Renders a single {@link MdxLexicalEditor} (raw Lexical + the vendored MDX
  * pipeline). On ready it builds the per-document {@link DocController}
- * (commit-on-quiescence + narrow remote reconcile) and the {@link UndoCoordinator}
+ * (working-state autosave + narrow remote reconcile) and the {@link UndoCoordinator}
  * (one ⌘Z stack over Lexical-native undo + GAD revert), then `load`s the doc
- * from the vault's exact semantic working state via `vcs` — there are NO disk reads,
- * NO polling, NO flush, and NO disk-conflict banners.
+ * from the vault's exact semantic working state via `vcs`. A bounded semantic
+ * watcher observes other authors, and navigation explicitly flushes local work.
  *
  * Per-JSX-node live render goes through {@link LiveJsxEditor}; component
  * view-state (`useDocState`) is private and lives in the panel-local
@@ -15,7 +15,8 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Box, Flex, Text } from "@radix-ui/themes";
+import { Box, Button, Callout, Flex, Text } from "@radix-ui/themes";
+import { ExclamationTriangleIcon, ReloadIcon } from "@radix-ui/react-icons";
 import { $getNodeByKey, $getRoot, type LexicalNode } from "lexical";
 import { fromMarkdown } from "mdast-util-from-markdown";
 import { importMdastTreeToLexical } from "@workspace/mdx-editor-core";
@@ -26,13 +27,11 @@ import { splitMdxBlocks } from "../editor/parseBlocks";
 import { DocController, type DocVcs } from "../coedit/docController";
 import { UndoCoordinator } from "../coedit/undoCoordinator";
 import { knownJsxDescriptors } from "../mdx/runtime";
-import { LiveJsxEditor } from "../mdx/LiveJsxEditor";
+import { DocModuleSourceContext, LiveJsxEditor } from "../mdx/LiveJsxEditor";
 import { DocStateContext, useDocState } from "../mdx/docState";
 import { DepsContext, runtimeNamespace } from "../mdx/runtimeNamespace";
 import { useApp } from "../app/context";
 import type { JsxComponentDescriptor, JsxEditorProps } from "@workspace/mdx-editor-core";
-import type { MentionCandidate } from "./MentionAutocomplete";
-import { MentionAutocomplete } from "./MentionAutocomplete";
 
 export interface DocumentEditorProps {
   /** Vault-relative path of the open document, e.g. `notes/E2E.mdx`. */
@@ -40,8 +39,6 @@ export interface DocumentEditorProps {
   theme: "light" | "dark";
   /** Frontmatter-declared dependencies; threaded into inline JSX + eval. */
   dependencies: Record<string, string>;
-  /** Mention candidates from the channel roster (for @-autocomplete). */
-  mentionCandidates: MentionCandidate[];
 }
 
 /** A canonical-derived recompute is debounced — full serialization isn't free. */
@@ -50,13 +47,18 @@ export function DocumentEditor({
   relPath,
   theme,
   dependencies,
-  mentionCandidates,
 }: DocumentEditorProps) {
   const app = useApp();
   const [ready, setReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
-  const [contentEditableEl, setContentEditableEl] = useState<HTMLElement | null>(null);
+  const [moduleSource, setModuleSource] = useState("");
+  const [documentIssue, setDocumentIssue] = useState<{
+    reason: "missing" | "unreadable";
+    message: string;
+  } | null>(null);
+  const [recovering, setRecovering] = useState(false);
+  const [saveIssue, setSaveIssue] = useState<string | null>(null);
 
   const vcsPath = useMemo(() => app.vault.mapping().toVcsPath(relPath), [app, relPath]);
 
@@ -64,10 +66,9 @@ export function DocumentEditor({
   const controllerRef = useRef<DocController | null>(null);
   const undoRef = useRef<UndoCoordinator | null>(null);
 
-  // Build the editor config once: known descriptors get a live JSX editor that
-  // resolves frontmatter deps. Each node compiles in isolation (local
-  // incremental render); there is no whole-doc compile. The wildcard `"*"`
-  // descriptor is included by knownJsxDescriptors and gets the same editor.
+  // Build the editor config once: known descriptors get an incremental live JSX
+  // editor with frontmatter dependencies and the document's preserved ESM scope.
+  // The wildcard `"*"` descriptor gets the same editor.
   const dependenciesRef = useRef(dependencies);
   dependenciesRef.current = dependencies;
 
@@ -94,6 +95,7 @@ export function DocumentEditor({
       coreRef.current = null;
       app.registerSuggestionApplier(null);
       app.registerCommitActiveDoc(null);
+      app.registerFlushActiveDoc(null);
       app.registerReloadActiveDoc(null);
       app.setDirty(relPath, false);
     };
@@ -107,8 +109,26 @@ export function DocumentEditor({
     () => (core: MdxEditorCore) => {
       const canonical = core.getCanonical();
       app.setActiveDocSource(relPath, canonical);
-      const controller = controllerRef.current;
-      app.setDirty(relPath, controller ? controller.isDirty() : core.getLiveBlockIds().size > 0);
+      try {
+        const tree = fromMarkdown(canonical, {
+          extensions: config.assembled.syntaxExtensions,
+          mdastExtensions: config.assembled.mdastExtensions,
+        });
+        setModuleSource(
+          tree.children
+            .filter((node) => node.type === "mdxjsEsm")
+            .map((node) => node.value)
+            .join("\n\n")
+        );
+        const controller = controllerRef.current;
+        app.setDirty(relPath, controller ? controller.isDirty() : core.getLiveBlockIds().size > 0);
+        setSaveIssue(null);
+      } catch (nextError) {
+        app.setDirty(relPath, true);
+        setSaveIssue(
+          `The MDX source is invalid and has not been saved: ${nextError instanceof Error ? nextError.message : String(nextError)}`
+        );
+      }
     },
     [app, relPath]
   );
@@ -127,6 +147,7 @@ export function DocumentEditor({
         lexical: lexicalUndo,
         revert: async (changeIds) => {
           const result = await semanticVcs.revert(changeIds);
+          controllerRef.current?.noteAuthoredChanges(result.changeIds);
           return { changeIds: result.changeIds };
         },
       });
@@ -142,6 +163,9 @@ export function DocumentEditor({
           // keep the path marked unsaved (the edit may not be durable).
           const rel = app.vault.mapping().toVaultRelPath(path);
           app.setDirty(rel ?? path, true);
+          setSaveIssue(
+            `This note is not saved: ${err instanceof Error ? err.message : String(err)}`
+          );
           console.warn("[spectrolite] working edit failed:", path, err);
         },
         // Working-copy dirtiness changed (working edit / commit / remote apply) —
@@ -150,17 +174,32 @@ export function DocumentEditor({
           const rel = app.vault.mapping().toVaultRelPath(path);
           if (rel) app.setDirty(rel, dirty);
         },
+        onWorkingStateChange: async (path, reason) => {
+          await app.workingStateChanged(path, reason);
+          if (reason !== "observed") setSaveIssue(null);
+        },
+        onUnavailable: (_path, reason, issue) => {
+          setDocumentIssue({
+            reason,
+            message:
+              reason === "missing"
+                ? "This note was deleted from the semantic working state. Your visible editor is still the only copy."
+                : `This note cannot currently be read${issue ? `: ${issue instanceof Error ? issue.message : String(issue)}` : "."}`,
+          });
+        },
+        onAvailabilityRestored: () => setDocumentIssue(null),
         undo,
       });
       controllerRef.current = controller;
       // The deliberate commit (Publish / Send-to-scribe) — carries a message.
       app.registerCommitActiveDoc((message) => controller.commitNow(message));
+      app.registerFlushActiveDoc(() => controller.flushNow());
       // Re-read after semantic Sync advances the context to a new exact state.
       app.registerReloadActiveDoc(() => controller.load(vcsPath));
 
       // A user-chosen collision resolution: replace the live blocks with the
       // resolved text as a NORMAL user edit (no historic tag) so the
-      // DocController commits it like any other keystroke.
+      // DocController records it like any other keystroke.
       app.registerSuggestionApplier((resolution) => {
         core.editor.update(() => {
           const targets = resolution.oldIds
@@ -230,24 +269,32 @@ export function DocumentEditor({
     return () => root?.removeEventListener("keydown", onKeyDown);
   }, [ready]);
 
-  // Locate the contenteditable for the mention autocomplete keylistener.
-  useEffect(() => {
-    if (!containerRef.current) return;
-    const find = () => {
-      const el = containerRef.current?.querySelector<HTMLElement>('[contenteditable="true"]');
-      if (el && el !== contentEditableEl) setContentEditableEl(el);
-    };
-    find();
-    const observer = new MutationObserver(find);
-    observer.observe(containerRef.current, { childList: true, subtree: true });
-    return () => observer.disconnect();
-  }, [contentEditableEl]);
-
   const docStateValue = useMemo(() => ({ store: app.viewState, path: vcsPath }), [app, vcsPath]);
 
-  // The mention adapter mutates the contenteditable directly; Lexical observes
-  // the input event and the controller's onUserEdit handles the rest.
-  const handleMentionAccept = useMemo(() => () => {}, []);
+  const recoverDocument = async () => {
+    const core = coreRef.current;
+    const controller = controllerRef.current;
+    const semanticVcs = app.semanticVcs;
+    if (!core || !controller || !semanticVcs) return;
+    setRecovering(true);
+    try {
+      if (documentIssue?.reason === "missing") {
+        const recreated = await semanticVcs.createFile(vcsPath, core.getCanonical());
+        controller.noteLocalChanges(recreated.changeIds);
+        await app.workingStateChanged(vcsPath, "local-edit");
+      }
+      await controller.load(vcsPath);
+      setDocumentIssue(null);
+      recompute(core);
+    } catch (nextError) {
+      setDocumentIssue({
+        reason: documentIssue?.reason ?? "unreadable",
+        message: nextError instanceof Error ? nextError.message : String(nextError),
+      });
+    } finally {
+      setRecovering(false);
+    }
+  };
 
   if (error) {
     return (
@@ -262,11 +309,12 @@ export function DocumentEditor({
   return (
     <DocStateContext.Provider value={docStateValue}>
       <DepsContext.Provider value={dependencies}>
-        <Flex
-          direction="column"
-          className={`spectrolite-mdx ${theme === "dark" ? "dark-theme" : ""}`}
-          style={{ height: "100%" }}
-        >
+        <DocModuleSourceContext.Provider value={moduleSource}>
+          <Flex
+            direction="column"
+            className={`spectrolite-mdx ${theme === "dark" ? "dark-theme" : ""}`}
+            style={{ height: "100%" }}
+          >
           <Box
             ref={containerRef}
             data-testid="spectrolite-editor"
@@ -278,11 +326,44 @@ export function DocumentEditor({
               ariaLabel={relPath}
               className={`spectrolite-content ${theme === "dark" ? "spectrolite-content--dark" : ""}`}
             />
-            <MentionAutocomplete
-              container={contentEditableEl}
-              candidates={mentionCandidates}
-              onAccept={handleMentionAccept}
-            />
+            {documentIssue ? (
+              <Callout.Root
+                color="amber"
+                data-testid={
+                  documentIssue.reason === "missing"
+                    ? "spectrolite-file-missing"
+                    : "spectrolite-document-unreadable"
+                }
+                style={{ position: "sticky", left: 12, right: 12, bottom: 12, zIndex: 30 }}
+              >
+                <Callout.Icon><ExclamationTriangleIcon /></Callout.Icon>
+                <Callout.Text>
+                  <Flex direction="column" gap="2">
+                    <Text size="2">{documentIssue.message}</Text>
+                    <Button
+                      size="1"
+                      color="amber"
+                      disabled={recovering}
+                      onClick={() => void recoverDocument()}
+                    >
+                      <ReloadIcon />
+                      {documentIssue.reason === "missing" ? "Recreate from editor" : "Retry read"}
+                    </Button>
+                  </Flex>
+                </Callout.Text>
+              </Callout.Root>
+            ) : null}
+            {saveIssue ? (
+              <Callout.Root
+                color="red"
+                role="alert"
+                data-testid="spectrolite-save-error"
+                style={{ position: "sticky", left: 12, right: 12, bottom: 12, zIndex: 31 }}
+              >
+                <Callout.Icon><ExclamationTriangleIcon /></Callout.Icon>
+                <Callout.Text>{saveIssue}</Callout.Text>
+              </Callout.Root>
+            ) : null}
             {!ready ? (
               <Flex
                 align="center"
@@ -295,7 +376,8 @@ export function DocumentEditor({
               </Flex>
             ) : null}
           </Box>
-        </Flex>
+          </Flex>
+        </DocModuleSourceContext.Provider>
       </DepsContext.Provider>
     </DocStateContext.Provider>
   );

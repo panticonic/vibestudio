@@ -113,7 +113,7 @@ export function LiveEval({ code, imports }: EvalProps) {
  * documents (and inline JSX inside them) reach the panel-aware hooks
  * via `runtime.*`:
  *
- *   - `runtime.useDocState(key, initial)`  — persisted into frontmatter
+ *   - `runtime.useDocState(key, initial)`  — private panel view state
  *   - `runtime.useIsMobile()`               — viewport < 768 px
  *   - `runtime.useTouchDevice()`            — coarse pointer
  *   - `runtime.useViewportHeight()`         — visual viewport height,
