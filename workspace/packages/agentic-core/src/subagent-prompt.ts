@@ -17,9 +17,14 @@ export interface SubagentIdentity {
   task: string;
   parentRef: string;
   parentChannelId: string;
+  taskChannelId: string;
   parentContextId: string;
   depth: number;
   mode?: "fresh" | "fork";
+  /** The supervisor's channel participant id. The supervisor observes the
+   * task channel with delivery interest "addressed", so a child utterance
+   * meant for the supervisor must carry this in its audience. */
+  parentParticipantId?: string;
 }
 
 export type SubagentCompletionMode = "tool" | "supervised-process";

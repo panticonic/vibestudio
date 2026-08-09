@@ -102,10 +102,10 @@ function registerEffects(scenario: Scenario, emitted: EffectDescriptor[]): void 
   const derived = derivePendingEffects(scenario.state);
   const derivable = new Set(derived.map((effect) => effect.effectId));
   for (const effect of emitted) {
-    // publish_envelope is best-effort and fire-and-forget (§1.4.6): the real
-    // driver inserts it directly and never re-derives it, so it is exempt from
-    // the reconstructibility subset check (mirrors the driver).
-    if (effect.kind === "publish_envelope") continue;
+    // Read projection updates are emitted at the exact model-visibility
+    // boundary and committed to the durable outbox with that step. They are
+    // intentionally not reconstructed from later folded model state.
+    if (effect.kind === "record_receipt") continue;
     if (!derivable.has(effect.effectId)) {
       throw new Error(
         `step emitted effect ${effect.effectId} that is not derivable from the folded state ` +

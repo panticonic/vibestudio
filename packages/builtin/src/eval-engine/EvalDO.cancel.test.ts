@@ -144,6 +144,89 @@ function redeliveryState(sql: {
 }
 
 describe("EvalDO cancellation + forced recovery", () => {
+  it("injects resident delivery registration from the exact EvalDO activation", async () => {
+    const { instance } = await createTestDO(EvalDO);
+    const activeExecution = priv<{
+      run<T>(store: unknown, callback: () => T): T;
+    }>(instance, "activeEvalExecution");
+    const runtimeRpc = priv<
+      () => {
+        registerResidentSession(
+          channelId: string,
+          receiver: (payload: unknown) => void | Promise<void>
+        ): {
+          transport: {
+            call<T = unknown>(targetId: string, method: string, args: unknown[]): Promise<T>;
+          };
+          close(): void | Promise<void>;
+        };
+      }
+    >(instance, "createActiveRuntimeRpc").call(instance);
+    const received: unknown[] = [];
+    const contextualCall = vi.fn(
+      (_target: string, _method: string, _args: unknown[], _options?: unknown) =>
+        Promise.resolve("context-restored")
+    );
+    const residentSessionCleanups = new Set<() => Promise<void>>();
+    const execution = {
+      rpc: { call: contextualCall },
+      residentSessionCleanups,
+    };
+    let registration!: ReturnType<typeof runtimeRpc.registerResidentSession>;
+    registration = activeExecution.run(execution, () =>
+      runtimeRpc.registerResidentSession("channel-eval", async (payload) => {
+        received.push(payload);
+        await registration.transport.call("target", "method", []);
+      })
+    );
+
+    await expect(
+      instance.acceptChannelDelivery({
+        deliveryId: "delivery-eval",
+        channelId: "channel-eval",
+        channelRef: {
+          source: "workers/pubsub-channel",
+          className: "PubSubChannel",
+          objectKey: "channel-eval",
+        },
+        participantId: "do:test:EvalDO:test-key",
+        subscriptionRevision: 1,
+        eventSequence: 1,
+        envelope: { kind: "message.completed" },
+        agenticContext: null,
+      })
+    ).resolves.toEqual({ processed: true });
+    expect(received).toEqual([
+      {
+        channelId: "channel-eval",
+        message: { kind: "message.completed" },
+      },
+    ]);
+    expect(contextualCall).toHaveBeenCalledWith("target", "method", []);
+
+    await priv<(execution: unknown) => Promise<void>>(instance, "settleResidentSessions").call(
+      instance,
+      execution
+    );
+    expect(residentSessionCleanups.size).toBe(0);
+    await expect(
+      instance.acceptChannelDelivery({
+        deliveryId: "delivery-eval-after-terminal",
+        channelId: "channel-eval",
+        channelRef: {
+          source: "workers/pubsub-channel",
+          className: "PubSubChannel",
+          objectKey: "channel-eval",
+        },
+        participantId: "do:test:EvalDO:test-key",
+        subscriptionRevision: 1,
+        eventSequence: 2,
+        envelope: { kind: "message.completed" },
+        agenticContext: null,
+      })
+    ).rejects.toMatchObject({ code: "ResidentSessionUnavailable" });
+  });
+
   it("records kernel incarnations and emits one exact recovery event after reconstruction", async () => {
     const first = await createTestDO(EvalDO);
     setPriv(first.instance, "scopeRecovery", {

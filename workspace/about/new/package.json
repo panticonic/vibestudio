@@ -78,8 +78,8 @@
             "kind": "prefix",
             "prefix": ""
           },
-          "tier": "open",
-          "evidence": "bounded-dynamic"
+          "tier": "gated",
+          "evidence": "intentional-broad"
         },
         {
           "capability": "workspace.runtime-state.manage",

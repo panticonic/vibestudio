@@ -89,6 +89,7 @@ async function makeHarness(opts: {
     opts.driverSql ?? (await createTestDO(GadWorkspaceDO, { __objectKey: "driver-host" }));
   const ephemerals: EphemeralEmit[] = [];
   const channelPublishes: Array<Parameters<ChannelCallPort["publish"]>[0]> = [];
+  const readReceipts: Array<Parameters<ChannelCallPort["recordReadReceipt"]>[0]> = [];
   const channelCalls: Array<Parameters<ChannelCallPort["callMethod"]>[0]> = [];
   const cancelledChannelCalls: Array<{ channelId: string; transportCallId: string }> = [];
   const alarms: number[] = [];
@@ -144,6 +145,11 @@ async function makeHarness(opts: {
           channelPublishes.push(input);
           await opts.channelPublish?.(input);
         },
+        recordReadReceipt: async (
+          input: Parameters<ChannelCallPort["recordReadReceipt"]>[0]
+        ) => {
+          readReceipts.push(input);
+        },
         sendSignalEvent: async () => {},
       },
       credentials: {
@@ -176,6 +182,7 @@ async function makeHarness(opts: {
     ephemerals,
     alarms,
     channelPublishes,
+    readReceipts,
     channelCalls,
     cancelledChannelCalls,
     setNow,
@@ -384,16 +391,9 @@ describe("AgentLoopDriver", () => {
     });
     const alarm = harness.driver.dispatchReadyEffectsForTest();
     await started.promise;
-    const reads = harness.channelPublishes.filter(
-      (p) => (p.payload as { kind?: string } | undefined)?.kind === "message.read"
+    expect(harness.readReceipts).toContainEqual(
+      expect.objectContaining({ channelId: CHANNEL, messageId: "u1" })
     );
-    expect(
-      reads.some(
-        (r) =>
-          (r.payload as { causality?: { messageId?: string } } | undefined)?.causality
-            ?.messageId === "u1"
-      )
-    ).toBe(true);
     hung.resolve(textReply("done"));
     await alarm;
   });

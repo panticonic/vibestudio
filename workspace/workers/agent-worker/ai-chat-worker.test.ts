@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createTestDO } from "@workspace/runtime/worker/test-utils";
+import { rpcExposedMethodNames, rpcMethodAuthority } from "@vibestudio/rpc";
 import { PROVIDER_CREDENTIAL_SETUPS, DEFAULT_MODEL } from "@workspace/agentic-do";
 import { AGENTIC_EVENT_PAYLOAD_KIND, AGENTIC_PROTOCOL_VERSION } from "@workspace/agentic-protocol";
 import type { ChannelReplayEnvelope } from "@workspace/pubsub";
@@ -108,22 +109,14 @@ class TestableAiChatWorker extends AiChatWorker {
         this.published.push({ participantId, event, opts });
         return { id: this.published.length };
       },
-      openSubscription: async (participantId: string) => {
-        let settleClosed = () => {};
-        const closed = new Promise<void>((resolve) => {
-          settleClosed = resolve;
-        });
-        return {
-          result: {
-            ok: true,
-            participantId,
-            channelConfig: undefined,
-            envelope: this.subscribeEnvelope,
-          },
-          closed,
-          close: settleClosed,
-        };
-      },
+      relationshipState: async () => ({ revision: 0, active: false }),
+      join: async (input: { participantId: string }) => ({
+        ok: true,
+        participantId: input.participantId,
+        channelConfig: undefined,
+        envelope: this.subscribeEnvelope,
+      }),
+      leave: async () => ({ ok: true }),
       getParticipants: async () => [],
     } as never;
   }
@@ -134,12 +127,15 @@ class TestableAiChatWorker extends AiChatWorker {
 
   seedSubscriptionConfig(channelId: string, config: Record<string, unknown>) {
     this.sql.exec(
-      `INSERT OR REPLACE INTO subscriptions (channel_id, context_id, subscribed_at, config, participant_id)
-       VALUES (?, ?, ?, ?, ?)`,
+      `INSERT OR REPLACE INTO subscriptions
+         (channel_id, context_id, revision, subscribed_at, config, relationship_json, participant_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
       channelId,
       "ctx-1",
+      1,
       Date.now(),
       JSON.stringify(config),
+      "{}",
       `participant:${channelId}`
     );
   }
@@ -165,6 +161,17 @@ async function makeWorker() {
 }
 
 describe("AiChatWorker", () => {
+  it("inherits the finite channel-delivery RPC authority declaration", async () => {
+    const worker = await makeWorker();
+    expect(rpcExposedMethodNames(worker).has("acceptChannelDelivery")).toBe(true);
+    expect(rpcMethodAuthority(worker, "acceptChannelDelivery")).toMatchObject({
+      principals: ["host"],
+      effect: { kind: "open" },
+      tier: "open",
+      sensitivity: "write",
+    });
+  });
+
   it("inherits the base agent schema epoch", () => {
     expect(TestableAiChatWorker.schemaVersion).toBe(AiChatWorker.schemaVersion);
   });
@@ -184,7 +191,7 @@ describe("AiChatWorker", () => {
     expect(worker.credentialSetup("nope")).toBeNull();
   });
 
-  it("ingests subscription replay and wakes the loop after subscribing", async () => {
+  it("ingests finite subscription replay and wakes the loop without a residency lease", async () => {
     const worker = await makeWorker();
     worker.subscribeEnvelope = {
       mode: "initial",
@@ -216,17 +223,7 @@ describe("AiChatWorker", () => {
 
     await worker.subscribeChannel({ channelId: "ch-1", contextId: "ctx-1", replay: true });
 
-    expect(worker.lifecycleLeaseCalls).toEqual([
-      {
-        method: "workspace-state.lifecycleLeaseUpsert",
-        input: {
-          source: "test",
-          className: "TestDO",
-          objectKey: "agent-1",
-          detail: { kind: "channel-subscriptions" },
-        },
-      },
-    ]);
+    expect(worker.lifecycleLeaseCalls).toEqual([]);
     expect(worker.driverHandleIncoming).toHaveBeenCalledWith(
       "ch-1",
       expect.objectContaining({

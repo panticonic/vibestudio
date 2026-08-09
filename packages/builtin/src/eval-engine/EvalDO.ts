@@ -39,6 +39,11 @@ import {
 } from "@vibestudio/service-schemas/progressSemantics";
 import { EVAL_AMBIENT_ONLY } from "@vibestudio/service-schemas/runtime/runtimeSurface.eval";
 import { canonicalJson } from "@vibestudio/shared/canonicalJson";
+import type {
+  ResidentSessionReceiver,
+  ResidentSessionRegistrar,
+  ResidentSessionRegistration,
+} from "@vibestudio/shared/residentSession";
 import {
   verifyExecutionArtifactRef,
   type ExecutionArtifactRefV1,
@@ -282,6 +287,10 @@ interface EvalExecutionContext {
   readonly signal?: AbortSignal;
   readonly contextId: string;
   readonly runId?: string;
+  /** Activation-local channel receivers owned by exactly this eval run. The
+   * set is internal mutable lifecycle state; it is never exposed to guest
+   * code, and terminalization drains it before releasing the eval scope. */
+  readonly residentSessionCleanups: Set<() => Promise<void>>;
   readonly build: BuildServiceClient;
   readonly fs: FsClient;
   readonly blobstore: BlobstoreClient;
@@ -776,6 +785,7 @@ export class EvalDO extends DurableObjectBase {
       signal,
       contextId: input.contextId ?? "",
       ...(input.runId ? { runId: input.runId } : {}),
+      residentSessionCleanups: new Set<() => Promise<void>>(),
       build: createBuildServiceClient(callMainService),
       fs: createTypedServiceClient("fs", fsMethods, callMainService),
       blobstore: createTypedServiceClient("blobstore", blobstoreMethods, callMainService),
@@ -2863,6 +2873,7 @@ export class EvalDO extends DurableObjectBase {
     } finally {
       flushLiveConsole();
       streamer?.close();
+      await this.settleResidentSessions(execution);
       if (!signal?.aborted) {
         const localKeys = new Set([
           runtimeModuleName,
@@ -3257,7 +3268,7 @@ export class EvalDO extends DurableObjectBase {
    * context at call time; no retained object can keep an earlier cell's abort
    * signal, execution-session nonce, causal parent, or authority attenuation.
    */
-  private createActiveRuntimeRpc(): RpcClient {
+  private createActiveRuntimeRpc(): RpcClient & ResidentSessionRegistrar {
     const call = <T = unknown>(
       targetId: string,
       method: string,
@@ -3287,6 +3298,58 @@ export class EvalDO extends DurableObjectBase {
     };
     return Object.freeze({
       selfId: this.rpc.selfId,
+      registerResidentSession: (
+        channelId: string,
+        receiver: ResidentSessionReceiver
+      ): ResidentSessionRegistration => {
+        const execution = this.requireActiveEvalExecution();
+        const inFlight = new Set<Promise<void>>();
+        let accepting = true;
+        const unregisterOwnerReceiver = this.registerResidentChannelSession(
+          channelId,
+          (payload) => {
+            if (!accepting) {
+              throw Object.assign(
+                new Error(`resident channel receiver ${channelId} is no longer active`),
+                { code: "ResidentSessionUnavailable" }
+              );
+            }
+            // Finite delivery arrives as a separate inbound DO invocation and
+            // therefore has no ambient eval AsyncLocalStorage. Re-enter the
+            // exact bounded execution that registered the receiver so retained
+            // runtime clients borrow its signal, causal parent, and execution
+            // authority rather than the delivery invocation's authority.
+            const delivery = Promise.resolve(
+              this.activeEvalExecution.run(execution, () => receiver(payload))
+            );
+            inFlight.add(delivery);
+            void delivery.finally(() => inFlight.delete(delivery)).catch(() => undefined);
+            return delivery;
+          }
+        );
+        let cleanupPromise: Promise<void> | null = null;
+        const cleanup = (): Promise<void> => {
+          if (cleanupPromise) return cleanupPromise;
+          accepting = false;
+          unregisterOwnerReceiver();
+          cleanupPromise = Promise.allSettled([...inFlight]).then(() => {
+            execution.residentSessionCleanups.delete(cleanup);
+          });
+          return cleanupPromise;
+        };
+        execution.residentSessionCleanups.add(cleanup);
+        // Guest callbacks can cross the sandbox isolate boundary, where host
+        // AsyncLocalStorage is not an authority carrier. Return the exact
+        // execution transport explicitly; its signal, causal parent, nonce,
+        // and ceiling remain those of this finite session's owning cell.
+        return Object.freeze({
+          transport: Object.freeze({
+            call: <T = unknown>(targetId: string, method: string, args: unknown[]) =>
+              execution.rpc.call<T>(targetId, method, args),
+          }),
+          close: () => cleanup(),
+        });
+      },
       expose: this.rpc.expose.bind(this.rpc),
       exposeAll: this.rpc.exposeAll.bind(this.rpc),
       exposeStreaming: this.rpc.exposeStreaming.bind(this.rpc),
@@ -3306,6 +3369,12 @@ export class EvalDO extends DurableObjectBase {
       ready: this.rpc.ready.bind(this.rpc),
       onStatusChange: this.rpc.onStatusChange.bind(this.rpc),
     });
+  }
+
+  private async settleResidentSessions(execution: EvalExecutionContext): Promise<void> {
+    while (execution.residentSessionCleanups.size > 0) {
+      await Promise.all([...execution.residentSessionCleanups].map((cleanup) => cleanup()));
+    }
   }
 
   /**

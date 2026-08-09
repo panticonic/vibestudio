@@ -28,7 +28,6 @@ import {
   type ChatParticipantMetadata,
   type ChatMessage,
   type DirtyRepoDetails,
-  type SubagentProgressEntry,
   unwrapChatMethodResult,
   type ChatMethodResult,
 } from "@workspace/agentic-core";
@@ -93,7 +92,6 @@ export interface SessionSnapshot {
     type: string;
     title: string;
     status: string;
-    progress?: SubagentProgressEntry[];
     result?: unknown;
   }>;
   debugEvents: readonly (AgentDebugPayload & { ts: number })[];
@@ -264,7 +262,6 @@ export class HeadlessSession {
   private _modelExecutionEvidenceError: string | undefined;
   private readonly _hotPathTrace: SessionHotPathTrace[] = [];
   private _disposed = false;
-  private _consumeAbort: AbortController | null = null;
   /** Local projection of the durable channel title, surfaced in reports. */
   private _title: string | null = null;
 
@@ -277,7 +274,7 @@ export class HeadlessSession {
     this._clientId = config.config.clientId;
 
     this._connection = new ConnectionManager({
-      config: config.config,
+      config: { ...config.config, deliveryMode: "resident" },
       metadata: config.metadata ?? DEFAULT_METADATA,
       callbacks: {
         onEvent: (event) => this.handleEvent(event),
@@ -290,6 +287,8 @@ export class HeadlessSession {
     senderId?: string;
     senderMetadata?: { name?: string; type?: string; handle?: string };
     ts?: number;
+    contentClass: "internal" | "external";
+    externalKeys: string[];
     payload: AgenticEvent;
   }): ChannelEnvelope<AgenticEvent> {
     const participantId = wire.senderId ?? wire.payload.actor.id;
@@ -307,8 +306,8 @@ export class HeadlessSession {
       },
       payload: wire.payload,
       payloadKind: AGENTIC_EVENT_PAYLOAD_KIND,
-      contentClass: "external",
-      externalKeys: [`msg:${this._channelId ?? "headless"}/${wire.pubsubId ?? "unattributed"}`],
+      contentClass: wire.contentClass,
+      externalKeys: [...wire.externalKeys],
       publishedAt: new Date(wire.ts ?? Date.now()).toISOString(),
     };
   }
@@ -599,6 +598,21 @@ export class HeadlessSession {
   // ===========================================================================
 
   private handleEvent(event: IncomingEvent): void {
+    if (event.type === AGENTIC_EVENT_PAYLOAD_KIND) {
+      this._channelView = reduceChannelView(
+        this._channelView,
+        this.pubsubAgenticEventToEnvelope(event)
+      );
+      this._chatMessages.clear();
+      this._chatMessageOrder = [];
+      for (const msg of chatMessagesFromChannelView(this._channelView)) {
+        this._chatMessages.set(msg.id, msg);
+        this._chatMessageOrder.push(msg.id);
+      }
+      this.recomputeHasIncomplete();
+      this.notifyListeners();
+    }
+
     if (event.type === "agent-debug") {
       const payload = (event as IncomingEvent & { payload: AgentDebugPayload }).payload;
       const ts = (event as IncomingEvent & { ts: number }).ts ?? Date.now();
@@ -654,58 +668,11 @@ export class HeadlessSession {
       this._participants = { ...update.participants };
     });
 
-    // Message stream → snapshot derivation
-    this._consumeAbort = new AbortController();
-    void this.consumeChannelMessages(this._consumeAbort.signal);
     this._hotPathTrace.push({
       phase: "channel.connected",
       startedAt,
       durationMs: Date.now() - startedAt,
     });
-  }
-
-  private async consumeChannelMessages(signal: AbortSignal): Promise<void> {
-    if (!this._client) return;
-    try {
-      for await (const event of this._client.events({
-        includeReplay: true,
-        includeSignals: false,
-      })) {
-        if (signal.aborted) break;
-
-        const wire = event as unknown as {
-          type?: string;
-          pubsubId?: number;
-          senderId?: string;
-          senderMetadata?: { name?: string; type?: string; handle?: string };
-          ts?: number;
-          payload?: AgenticEvent;
-        };
-
-        if (wire.type === AGENTIC_EVENT_PAYLOAD_KIND && wire.payload) {
-          this._channelView = reduceChannelView(
-            this._channelView,
-            this.pubsubAgenticEventToEnvelope({
-              pubsubId: wire.pubsubId,
-              senderId: wire.senderId,
-              senderMetadata: wire.senderMetadata,
-              ts: wire.ts,
-              payload: wire.payload,
-            })
-          );
-          this._chatMessages.clear();
-          this._chatMessageOrder = [];
-          for (const msg of chatMessagesFromChannelView(this._channelView)) {
-            this._chatMessages.set(msg.id, msg);
-            this._chatMessageOrder.push(msg.id);
-          }
-          this.recomputeHasIncomplete();
-          this.notifyListeners();
-        }
-      }
-    } catch (err) {
-      if (!signal.aborted) console.error("[HeadlessSession] message consumer error:", err);
-    }
   }
 
   /** Scan all messages to determine if any are still incomplete (streaming). */
@@ -826,10 +793,6 @@ export class HeadlessSession {
   }
 
   async disconnect(): Promise<void> {
-    if (this._consumeAbort) {
-      this._consumeAbort.abort();
-      this._consumeAbort = null;
-    }
     try {
       await this._connection.disconnect();
     } catch (err) {
@@ -1041,7 +1004,6 @@ export class HeadlessSession {
         type: message.task!.taskType,
         title: message.task!.title,
         status: message.task!.execution.status,
-        progress: message.task!.execution.progress,
         result: message.task!.execution.result,
       }));
     return {

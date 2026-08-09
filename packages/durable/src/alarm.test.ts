@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { rpcMethodAuthority } from "@vibestudio/rpc";
+import type { ResidentChannelDeliveryInput } from "@vibestudio/shared/residentSession";
 import { DurableObjectBase, rpc, type AlarmSchedule } from "./index.js";
 import { createTestDO, createTestDirectAuthority } from "./test-utils.js";
 
@@ -15,6 +16,10 @@ class AlarmProbeDO extends DurableObjectBase {
 
   runtimeId(): string {
     return this.rpcSelfId;
+  }
+
+  openResidentReceiver(channelId: string, receiver: (payload: unknown) => void): () => void {
+    return this.registerResidentChannelSession(channelId, receiver);
   }
 
   override async alarm(): Promise<AlarmSchedule | null> {
@@ -72,6 +77,50 @@ describe("DurableObjectBase alarm dispatch", () => {
       effect: { kind: "open" },
       tier: "open",
       sensitivity: "read",
+    });
+  });
+
+  it("exposes finite host delivery for explicitly resident operations", async () => {
+    const { instance } = await createTestDO(AlarmProbeDO);
+
+    expect(rpcMethodAuthority(instance, "acceptChannelDelivery")).toMatchObject({
+      principals: ["host"],
+      effect: { kind: "open" },
+      tier: "open",
+      sensitivity: "write",
+    });
+  });
+
+  it("delivers through the receiver registered by the exact object activation", async () => {
+    const { instance } = await createTestDO(AlarmProbeDO);
+    const received: unknown[] = [];
+    const close = instance.openResidentReceiver("channel-1", (payload) => received.push(payload));
+    const input = {
+      deliveryId: "delivery-1",
+      channelId: "channel-1",
+      channelRef: {
+        source: "workers/pubsub-channel",
+        className: "PubSubChannel",
+        objectKey: "channel-1",
+      },
+      participantId: instance.runtimeId(),
+      subscriptionRevision: 1,
+      eventSequence: 1,
+      envelope: { kind: "message.completed" },
+      agenticContext: null,
+    } satisfies ResidentChannelDeliveryInput;
+
+    await expect(instance.acceptChannelDelivery(input)).resolves.toEqual({ processed: true });
+    expect(received).toEqual([
+      {
+        channelId: "channel-1",
+        message: { kind: "message.completed" },
+      },
+    ]);
+
+    close();
+    await expect(instance.acceptChannelDelivery(input)).rejects.toMatchObject({
+      code: "ResidentSessionUnavailable",
     });
   });
 

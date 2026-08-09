@@ -124,6 +124,44 @@ function setRpcCaller(
     : null;
 }
 
+async function joinEntity(
+  instance: PubSubChannel,
+  participantId: string,
+  metadata: Record<string, unknown> = { name: "Agent", type: "agent" },
+  contextId = "ctx-1"
+): Promise<void> {
+  setRpcCaller(instance, participantId, "durable-object");
+  await instance.join({
+    participantId,
+    revision: 1,
+    contextId,
+    metadata,
+    delivery: "all",
+    endpoint: { kind: "entity", entityId: participantId },
+    applicationConfig: null,
+    replay: true,
+  });
+}
+
+async function joinResidentSession(
+  instance: PubSubChannel,
+  participantId: string,
+  metadata: Record<string, unknown> = { name: "Resident client", type: "client" },
+  contextId = "ctx-1"
+): Promise<void> {
+  setRpcCaller(instance, participantId, "durable-object");
+  await instance.join({
+    participantId,
+    revision: 1,
+    contextId,
+    metadata,
+    delivery: "all",
+    endpoint: { kind: "entity", entityId: participantId },
+    applicationConfig: null,
+    replay: true,
+  });
+}
+
 function agenticEvent(kind = "message.completed") {
   return {
     kind,
@@ -164,6 +202,7 @@ async function createGadBackedChannel(
     emittedTargets?: string[];
     channelKey?: string;
     gad?: TestDO<GadWorkspaceDO>;
+    db?: TestDO<PubSubChannel>["db"];
     blobstorePutText?: (value: string) => Promise<{ digest: string; size: number }>;
     rpcCall?: (
       target: string,
@@ -174,9 +213,13 @@ async function createGadBackedChannel(
   } = {}
 ) {
   const gad = options.gad ?? (await createTestDO(GadWorkspaceDO, { __objectKey: "workspace" }));
-  const channel = await createTestDO(PubSubChannel, {
-    __objectKey: options.channelKey ?? "channel-1",
-  });
+  const channel = await createTestDO(
+    PubSubChannel,
+    {
+      __objectKey: options.channelKey ?? "channel-1",
+    },
+    options.db ? { db: options.db } : undefined
+  );
   subscriptionSinks.set(channel.instance, {
     emitted: options.emitted,
     emittedTargets: options.emittedTargets,
@@ -212,6 +255,9 @@ async function createGadBackedChannel(
         if (target === "main" && method === "runtime.setTitle") {
           // Title registry isn't relevant in unit tests; treat as a no-op.
           return undefined;
+        }
+        if (target === "main" && method === "workspace-state.entity.resolveActive") {
+          return { id: args[0], kind: "do" };
         }
         if (
           target === "main" &&
@@ -322,16 +368,9 @@ describe("PubSubChannel", () => {
       })
     ).rejects.toThrow("Participant user:bob is not admitted by this locked channel");
 
-    setRpcCaller(instance, workerId, "durable-object");
     await expect(
-      instance.subscribe(workerId, {
-        contextId: "ctx-system-alice",
-        name: "System Agent",
-        type: "agent",
-        receivesChannelEnvelopes: true,
-        incarnation: "test-incarnation",
-      })
-    ).resolves.toMatchObject({ participantId: workerId });
+      joinEntity(instance, workerId, { name: "System Agent", type: "agent" }, "ctx-system-alice")
+    ).resolves.toBeUndefined();
   });
 
   it("does not let subscribe or generic config updates create or widen locked membership", async () => {
@@ -578,28 +617,6 @@ describe("PubSubChannel", () => {
         },
       ],
     });
-  });
-
-  it("reaps persisted subscription rows that have no response resource on activation", async () => {
-    const { instance, sql } = await createGadBackedChannel();
-    sql.exec(
-      `INSERT INTO participants
-         (id, metadata, transport, last_active_at, presence_status)
-       VALUES ('user:usr_orphan', '{}', 'rpc', 1, 'online')`
-    );
-    (
-      instance as unknown as { reapOrphanedSubscriptionProjection(): void }
-    ).reapOrphanedSubscriptionProjection();
-
-    expect(sql.exec(`SELECT id FROM participants`).toArray()).toEqual([]);
-    expect(
-      sql
-        .exec(
-          `SELECT participant_id, last_seen FROM presence_last_seen WHERE participant_id = ?`,
-          "user:usr_orphan"
-        )
-        .toArray()
-    ).toEqual([{ participant_id: "user:usr_orphan", last_seen: expect.any(Number) }]);
   });
 
   it("uses authenticated delivery identity without a client session namespace", async () => {
@@ -971,12 +988,17 @@ describe("PubSubChannel", () => {
     setRpcCaller(instance, evalDoId, "durable-object");
 
     await expect(
-      instance.subscribe(arbitraryLabel, {
+      instance.join({
+        participantId: arbitraryLabel,
+        revision: 1,
         contextId: "ctx-1",
-        name: "Eval client",
-        type: "client",
+        metadata: { name: "Eval client", type: "client" },
+        delivery: "all",
+        endpoint: { kind: "entity", entityId: evalDoId },
+        applicationConfig: null,
+        replay: true,
       })
-    ).rejects.toThrow(`Participant ${arbitraryLabel} cannot be subscribed by caller ${evalDoId}`);
+    ).rejects.toThrow(`join: participant ${arbitraryLabel} cannot be used by caller ${evalDoId}`);
     await expect(
       instance.publish(arbitraryLabel, AGENTIC_EVENT_PAYLOAD_KIND, agenticEvent())
     ).rejects.toThrow(
@@ -984,12 +1006,8 @@ describe("PubSubChannel", () => {
     );
 
     await expect(
-      instance.subscribe(evalDoId, {
-        contextId: "ctx-1",
-        name: "Eval client",
-        type: "client",
-      })
-    ).resolves.toMatchObject({ ok: true });
+      joinResidentSession(instance, evalDoId, { name: "Eval client", type: "client" })
+    ).resolves.toBeUndefined();
   });
 
   it("rejects a Durable Object participant that is not an active runtime entity", async () => {
@@ -1003,12 +1021,17 @@ describe("PubSubChannel", () => {
     setRpcCaller(instance, participantId, "do");
 
     await expect(
-      instance.subscribe(participantId, {
+      instance.join({
+        participantId,
+        revision: 1,
         contextId: "ctx-1",
-        name: "Retired eval",
-        type: "headless",
+        metadata: { name: "Retired eval", type: "headless" },
+        delivery: "all",
+        endpoint: { kind: "entity", entityId: participantId },
+        applicationConfig: null,
+        replay: true,
       })
-    ).rejects.toThrow(`subscribe: Durable Object participant ${participantId} is not active`);
+    ).rejects.toThrow(`join: Durable Object participant ${participantId} is not active`);
   });
 
   it("dedupes concurrent publishes with the same idempotency key before append settles", async () => {
@@ -1236,53 +1259,7 @@ describe("PubSubChannel", () => {
     ).toBe(true);
   });
 
-  it("does not infer DO liveness from a failed semantic delivery", async () => {
-    const missingDoId = "do:workers/agent-worker:AiChatWorker:headless-missing";
-    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
-    const { instance, sql } = await createGadBackedChannel({
-      rpcCall: async (target, method, args) => {
-        if (target === "main" && method === "workspace-state.entity.resolveActive") {
-          return { id: args[0], kind: "do" };
-        }
-        if (target === missingDoId && method === "onChannelEnvelope") {
-          const err = new Error("runtime entity not registered") as Error & { code?: string };
-          err.code = "DO_NOT_CREATED";
-          throw err;
-        }
-        return undefined;
-      },
-    });
-
-    try {
-      setRpcCaller(instance, "panel:user", "panel");
-      await instance.subscribe("panel:user", { contextId: "ctx-1", name: "User", type: "panel" });
-      await instance.publish("panel:user", AGENTIC_EVENT_PAYLOAD_KIND, agenticEvent());
-
-      setRpcCaller(instance, missingDoId, "durable-object");
-      await instance.subscribe(missingDoId, {
-        contextId: "ctx-1",
-        name: "Missing agent",
-        type: "agent",
-        // A real agent opts into structured onChannelEnvelope delivery; its
-        // missing-DO eviction is driven by that delivery's fatal code.
-        receivesChannelEnvelopes: true,
-        incarnation: "test-incarnation",
-      });
-      await instance.alarm();
-
-      expect(sql.exec(`SELECT id FROM participants WHERE id = ?`, missingDoId).toArray()).toEqual([
-        { id: missingDoId },
-      ]);
-      expect(consoleError).not.toHaveBeenCalledWith(
-        expect.stringContaining("[Channel] delivery failed"),
-        expect.anything()
-      );
-    } finally {
-      consoleError.mockRestore();
-    }
-  });
-
-  it("keeps later structured deliveries behind a lane head in retry backoff", async () => {
+  it("keeps later durable deliveries behind a lane head in retry backoff", async () => {
     const agentId = "do:workers/agent-worker:AiChatWorker:headless-denied";
     const { instance } = await createGadBackedChannel({
       rpcCall: async (target, method, args) => {
@@ -1294,12 +1271,15 @@ describe("PubSubChannel", () => {
     });
 
     setRpcCaller(instance, agentId, "durable-object");
-    await instance.subscribe(agentId, {
+    await instance.join({
+      participantId: agentId,
+      revision: 1,
       contextId: "ctx-1",
-      name: "Denied agent",
-      type: "agent",
-      receivesChannelEnvelopes: true,
-      incarnation: "test-incarnation",
+      metadata: { name: "Denied agent", type: "agent" },
+      delivery: "all",
+      endpoint: { kind: "entity", entityId: agentId },
+      applicationConfig: null,
+      replay: true,
     });
     setRpcCaller(instance, "panel:user", "panel");
     await instance.subscribe("panel:user", {
@@ -1315,12 +1295,9 @@ describe("PubSubChannel", () => {
       limit: 1,
     });
     expect(claim).toBeDefined();
-    expect(JSON.parse(claim!.itemId)[0]).toBe(agentId);
-    const initialRowCount = (
-      claim!.payload as {
-        batch: { rows: Array<{ channelSeq: number }> };
-      }
-    ).batch.rows.length;
+    expect((claim!.payload as { delivery: { participantId: string } }).delivery.participantId).toBe(
+      agentId
+    );
     const failed = instance.failReadyWork("channel-delivery", {
       workerId: "driver-1",
       itemId: claim!.itemId,
@@ -1347,18 +1324,10 @@ describe("PubSubChannel", () => {
       now: retryAt,
       limit: 1,
     });
-    const rows = (
-      retry!.payload as {
-        batch: { rows: Array<{ channelSeq: number }> };
-      }
-    ).batch.rows;
-    expect(rows).toHaveLength(initialRowCount + 1);
-    expect(rows.map((row) => row.channelSeq)).toEqual(
-      [...rows].map((row) => row.channelSeq).sort((a, b) => a - b)
-    );
+    expect(retry!.itemId).toBe(claim!.itemId);
   });
 
-  it("settles only an exact, gap-free acknowledgement of the leased delivery batch", async () => {
+  it("settles one finite delivery by its stable delivery id", async () => {
     const agentId = "do:workers/agent-worker:AiChatWorker:agent-settlement";
     const { instance } = await createGadBackedChannel({
       rpcCall: async (target, method, args) => {
@@ -1369,12 +1338,15 @@ describe("PubSubChannel", () => {
       },
     });
     setRpcCaller(instance, agentId, "durable-object");
-    await instance.subscribe(agentId, {
+    await instance.join({
+      participantId: agentId,
+      revision: 1,
       contextId: "ctx-1",
-      name: "Agent",
-      type: "agent",
-      receivesChannelEnvelopes: true,
-      incarnation: "incarnation-1",
+      metadata: { name: "Agent", type: "agent" },
+      delivery: "all",
+      endpoint: { kind: "entity", entityId: agentId },
+      applicationConfig: null,
+      replay: true,
     });
     setRpcCaller(instance, "panel:user", "panel");
     await instance.subscribe("panel:user", { contextId: "ctx-1", name: "User", type: "panel" });
@@ -1386,42 +1358,23 @@ describe("PubSubChannel", () => {
       now: Date.now(),
       limit: 1,
     });
-    const rows = (
-      claim!.payload as {
-        batch: { rows: Array<{ deliveryKey: string; channelSeq: number }> };
-      }
-    ).batch.rows;
-    expect(rows.length).toBeGreaterThan(1);
-
-    expect(() =>
-      instance.settleReadyWork("channel-delivery", {
-        workerId: "driver-1",
-        itemId: claim!.itemId,
-        generation: claim!.generation,
-        outcome: {
-          perRow: [{ deliveryKey: rows[0]!.deliveryKey, disposition: "accepted" }],
-          highestContiguousCommittedSeq: rows[0]!.channelSeq,
-        },
-      })
-    ).toThrow("does not cover the leased batch");
-
     expect(
       instance.settleReadyWork("channel-delivery", {
         workerId: "driver-1",
         itemId: claim!.itemId,
         generation: claim!.generation,
-        outcome: {
-          perRow: rows.map((row) => ({
-            deliveryKey: row.deliveryKey,
-            disposition: "accepted" as const,
-          })),
-          highestContiguousCommittedSeq: rows.at(-1)!.channelSeq,
-        },
+        outcome: { processed: true },
       })
     ).toBe("accepted");
+    const [next] = instance.claimReadyWork("channel-delivery", {
+      workerId: "driver-1",
+      now: Date.now(),
+      limit: 1,
+    });
+    expect(next?.itemId).not.toBe(claim!.itemId);
   });
 
-  it("claims structured work only for DO participants that opted in", async () => {
+  it("derives every executable recipient through the same entity endpoint", async () => {
     const agentDoId = "do:workers/agent-worker:AiChatWorker:agent-x";
     const clientDoId = "do:vibestudio/internal:EvalDO:client-x";
     const { instance } = await createGadBackedChannel({
@@ -1433,21 +1386,27 @@ describe("PubSubChannel", () => {
       },
     });
 
-    // An agent vessel opts into the structured delivery; an rpc-style DO client
-    // (the eval running system tests, via connectViaRpc) does NOT.
     setRpcCaller(instance, agentDoId, "durable-object");
-    await instance.subscribe(agentDoId, {
+    await instance.join({
+      participantId: agentDoId,
+      revision: 1,
       contextId: "ctx-1",
-      name: "Agent",
-      type: "agent",
-      receivesChannelEnvelopes: true,
-      incarnation: "test-incarnation",
+      metadata: { name: "Agent", type: "agent" },
+      delivery: "all",
+      endpoint: { kind: "entity", entityId: agentDoId },
+      applicationConfig: null,
+      replay: true,
     });
     setRpcCaller(instance, clientDoId, "durable-object");
-    await instance.subscribe(clientDoId, {
+    await instance.join({
+      participantId: clientDoId,
+      revision: 1,
       contextId: "ctx-1",
-      name: "Eval client",
-      type: "client",
+      metadata: { name: "Eval client", type: "client" },
+      delivery: "all",
+      endpoint: { kind: "entity", entityId: clientDoId },
+      applicationConfig: null,
+      replay: true,
     });
 
     setRpcCaller(instance, "panel:user", "panel");
@@ -1458,9 +1417,182 @@ describe("PubSubChannel", () => {
       now: Date.now(),
       limit: 10,
     });
-    const targets = claims.map((claim) => JSON.parse(claim.itemId)[0] as string);
-    expect(targets).toContain(agentDoId);
-    expect(targets).not.toContain(clientDoId);
+    expect(claims.map((claim) => claim.payload)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          delivery: expect.objectContaining({ participantId: agentDoId }),
+        }),
+        expect.objectContaining({
+          delivery: expect.objectContaining({ participantId: clientDoId }),
+        }),
+      ])
+    );
+  });
+
+  it("routes addressed task facts without copying ordinary child activity to the supervisor", async () => {
+    const supervisorId = "do:workers/agent-worker:AiChatWorker:supervisor";
+    const childId = "do:workers/agent-worker:AiChatWorker:child";
+    const { instance, sql } = await createGadBackedChannel();
+
+    setRpcCaller(instance, supervisorId, "durable-object");
+    await instance.join({
+      participantId: supervisorId,
+      revision: 1,
+      contextId: "ctx-task",
+      metadata: { name: "Supervisor", type: "agent" },
+      delivery: "addressed",
+      endpoint: { kind: "entity", entityId: supervisorId },
+      applicationConfig: null,
+      replay: true,
+    });
+    setRpcCaller(instance, childId, "durable-object");
+    await instance.join({
+      participantId: childId,
+      revision: 1,
+      contextId: "ctx-task",
+      metadata: { name: "Child", type: "agent" },
+      delivery: "all",
+      endpoint: { kind: "entity", entityId: childId },
+      applicationConfig: null,
+      replay: true,
+    });
+
+    await instance.publish(childId, AGENTIC_EVENT_PAYLOAD_KIND, {
+      ...agenticEvent("invocation.progress"),
+      actor: { kind: "agent", id: childId },
+      causality: { invocationId: "tool-1" },
+      payload: { protocol: AGENTIC_PROTOCOL_VERSION, delta: "working" },
+    });
+    expect(
+      sql
+        .exec(
+          `SELECT delivery_id FROM channel_delivery_mailbox WHERE participant_id = ?`,
+          supervisorId
+        )
+        .toArray()
+    ).toEqual([]);
+
+    await instance.publish(childId, AGENTIC_EVENT_PAYLOAD_KIND, {
+      ...agenticEvent("task.completed"),
+      actor: { kind: "agent", id: childId },
+      causality: { taskId: "run-1" },
+      payload: {
+        protocol: AGENTIC_PROTOCOL_VERSION,
+        terminalOutcome: "success",
+        to: [{ kind: "participant", participantId: supervisorId }],
+      },
+    });
+    expect(
+      sql
+        .exec(
+          `SELECT participant_id, state FROM channel_delivery_mailbox WHERE participant_id = ?`,
+          supervisorId
+        )
+        .toArray()
+    ).toEqual([{ participant_id: supervisorId, state: "ready" }]);
+  });
+
+  it("records read receipts as a projection without appending or creating mailbox work", async () => {
+    const agents = [
+      "do:workers/agent-worker:AiChatWorker:receipt-a",
+      "do:workers/agent-worker:AiChatWorker:receipt-b",
+      "do:workers/agent-worker:AiChatWorker:receipt-c",
+    ];
+    const { instance, gad, sql } = await createGadBackedChannel();
+    for (const agentId of agents) await joinEntity(instance, agentId);
+    setRpcCaller(instance, "panel:user", "panel");
+    await instance.subscribe("panel:user", {
+      contextId: "ctx-1",
+      name: "User",
+      type: "panel",
+    });
+    await instance.publish("panel:user", AGENTIC_EVENT_PAYLOAD_KIND, agenticEvent());
+
+    const logCountBefore = Number(
+      gad.sql.exec(`SELECT COUNT(*) AS count FROM log_events`).toArray()[0]!["count"]
+    );
+    const mailboxCountBefore = Number(
+      sql.exec(`SELECT COUNT(*) AS count FROM channel_delivery_mailbox`).toArray()[0]!["count"]
+    );
+    for (const agentId of agents) {
+      setRpcCaller(instance, agentId, "durable-object");
+      await instance.recordReceipt(agentId, "msg-1", "read", { turnId: `turn:${agentId}` });
+    }
+
+    expect(
+      Number(gad.sql.exec(`SELECT COUNT(*) AS count FROM log_events`).toArray()[0]!["count"])
+    ).toBe(logCountBefore);
+    expect(
+      Number(
+        sql.exec(`SELECT COUNT(*) AS count FROM channel_delivery_mailbox`).toArray()[0]!["count"]
+      )
+    ).toBe(mailboxCountBefore);
+    const replay = await instance.getReplayAfter({ after: 0 });
+    const receiptSnapshot = replay.snapshots.find(
+      (snapshot) => snapshot.kind === "receipt-snapshot"
+    );
+    expect(receiptSnapshot).toMatchObject({
+      kind: "receipt-snapshot",
+      events: expect.arrayContaining(
+        agents.map((agentId) =>
+          expect.objectContaining({
+            senderId: agentId,
+            payload: expect.objectContaining({ kind: "message.read" }),
+          })
+        )
+      ),
+    });
+  });
+
+  it("reconstructs durable membership and a missing mailbox projection after activation loss", async () => {
+    const agentId = "do:workers/agent-worker:AiChatWorker:restart-recipient";
+    const first = await createGadBackedChannel();
+    await joinEntity(first.instance, agentId);
+    setRpcCaller(first.instance, "panel:user", "panel");
+    await first.instance.subscribe("panel:user", {
+      contextId: "ctx-1",
+      name: "User",
+      type: "panel",
+    });
+    const published = await first.instance.publish(
+      "panel:user",
+      AGENTIC_EVENT_PAYLOAD_KIND,
+      agenticEvent()
+    );
+    expect(published.id).toBeDefined();
+    const publishedSequence = published.id!;
+
+    // Emulate loss after the canonical append but before projection commit.
+    first.sql.exec(
+      `DELETE FROM channel_delivery_mailbox WHERE event_sequence = ?`,
+      publishedSequence
+    );
+    first.sql.exec(`DELETE FROM channel_receipts WHERE message_id = 'msg-1'`);
+    first.sql.exec(
+      `UPDATE channel_delivery_projection_cursor SET log_sequence = ? WHERE singleton = 1`,
+      publishedSequence - 1
+    );
+
+    const restarted = await createGadBackedChannel({ gad: first.gad, db: first.db });
+    await restarted.instance.adoptDurableWorkWorker("driver-after-restart");
+    setRpcCaller(restarted.instance, agentId, "durable-object");
+    await expect(restarted.instance.relationshipState(agentId)).resolves.toEqual({
+      revision: 1,
+      active: true,
+    });
+    expect(
+      restarted.sql
+        .exec(
+          `SELECT participant_id, event_sequence, state
+             FROM channel_delivery_mailbox
+            WHERE participant_id = ?`,
+          agentId
+        )
+        .toArray()
+    ).toEqual([{ participant_id: agentId, event_sequence: published.id, state: "ready" }]);
+    const state = await restarted.instance.getState();
+    expect(state["liveTransport"]).toMatchObject({ count: 0, streams: [] });
+    expect(state["delivery"]).toMatchObject({ cursor: published.id, lag: 0 });
   });
 
   it("reports an envelope-only schema", async () => {
@@ -1493,16 +1625,7 @@ describe("PubSubChannel", () => {
 
     setRpcCaller(instance, "panel:user", "panel");
     await instance.subscribe("panel:user", { contextId: "ctx-1", name: "User", type: "panel" });
-    setRpcCaller(instance, targetPid, "durable-object");
-    await instance.subscribe(targetPid, {
-      contextId: "ctx-1",
-      name: "AI Chat",
-      type: "agent",
-      // Agent vessels implement onMethodCall and opt into structured delivery — the flag that now
-      // gates the synchronous deliverDoMethodCall dispatch (vs RPC-style DO clients).
-      receivesChannelEnvelopes: true,
-      incarnation: "test-incarnation",
-    });
+    await joinEntity(instance, targetPid, { name: "AI Chat", type: "agent" });
 
     setRpcCaller(instance, "panel:user", "panel");
     await instance.callMethod(
@@ -1551,12 +1674,7 @@ describe("PubSubChannel", () => {
     );
   });
 
-  it("routes method calls to an RPC-style DO client (eval HeadlessSession) via the broadcast, not onMethodCall", async () => {
-    // The eval's connectViaRpc / HeadlessSession must subscribe under the EvalDO's own DO id (a
-    // do-ref shape ⇒ transport classifies as "do"), but it has NO onMethodCall handler — it settles
-    // method calls the RPC way: the broadcast `started` (delivered on every subscription to every
-    // participant) + submitMethodResult. It must NOT be routed through deliverDoMethodCall, which
-    // would dispatch onMethodCall to a missing handler and never settle the call (the redelivery echo).
+  it("routes resident-session method calls through the durable event path", async () => {
     const evalPid = "do:vibestudio/internal:EvalDO:eval-1";
     const rpcCalls: Array<{ target: string; method: string }> = [];
     const { instance, gad } = await createGadBackedChannel({
@@ -1571,10 +1689,7 @@ describe("PubSubChannel", () => {
 
     setRpcCaller(instance, "panel:user", "panel");
     await instance.subscribe("panel:user", { contextId: "ctx-1", name: "User", type: "panel" });
-    // RPC-style DO client: subscribes as its own DO id, and (unlike an agent vessel) does NOT set
-    // receivesChannelEnvelopes — it has no onMethodCall / onChannelEnvelope handler.
-    setRpcCaller(instance, evalPid, "durable-object");
-    await instance.subscribe(evalPid, { contextId: "ctx-1", name: "Eval client", type: "client" });
+    await joinResidentSession(instance, evalPid, { name: "Eval client", type: "client" });
 
     setRpcCaller(instance, "panel:user", "panel");
     await instance.callMethod(
@@ -1586,11 +1701,8 @@ describe("PubSubChannel", () => {
       { invocationId: "title-inv", transportCallId: "title-call" }
     );
 
-    // The bug: callMethod must NOT dispatch onMethodCall to a client that can't handle it.
-    expect(rpcCalls.some((c) => c.target === evalPid && c.method === "onMethodCall")).toBe(false);
+    expect(rpcCalls.some((c) => c.target === evalPid && c.method === "onMethodCall")).toBe(true);
 
-    // The client receives the journaled+broadcast `started` and replies via submitMethodResult, which
-    // settles the call cleanly (terminal in the log ⇒ no echo).
     setRpcCaller(instance, evalPid, "durable-object");
     await instance.submitMethodResult(evalPid, "title-call", { ok: true }, false, {
       invocationId: "title-inv",
@@ -1980,7 +2092,8 @@ describe("PubSubChannel", () => {
 
     const replay = await fork.instance.getReplayAfter({ after: 0 });
     // No-copy fork: the child sees the parent prefix verbatim, including the
-    // presence envelope, with the original sequence numbers.
+    // relationship and message facts with their original sequence numbers;
+    // presence is intentionally an activation-local signal.
     expect(replay.logEvents.map((event) => event.id)).toEqual([1, 2, 3]);
     const messages = replay.logEvents.filter((event) => event.type === AGENTIC_EVENT_PAYLOAD_KIND);
     expect(
@@ -2211,12 +2324,7 @@ describe("PubSubChannel", () => {
     });
     const caller = "do:vibestudio/internal:EvalDO:system-tests";
 
-    setRpcCaller(instance, caller, "do");
-    await instance.subscribe(caller, {
-      contextId: "ctx-1",
-      name: "System tests",
-      type: "headless",
-    });
+    await joinResidentSession(instance, caller, { name: "System tests", type: "headless" });
     setRpcCaller(instance, "panel:provider", "panel");
     await instance.subscribe("panel:provider", {
       contextId: "ctx-1",
@@ -2434,14 +2542,7 @@ describe("PubSubChannel", () => {
       name: "Caller",
       type: "panel",
     });
-    setRpcCaller(instance, targetPid, "durable-object");
-    await instance.subscribe(targetPid, {
-      contextId: "ctx-1",
-      name: "Agent",
-      type: "agent",
-      receivesChannelEnvelopes: true,
-      incarnation: "test-incarnation",
-    });
+    await joinEntity(instance, targetPid);
     setRpcCaller(instance, "panel:caller", "panel");
     await instance.callMethod(
       "panel:caller",
@@ -3460,16 +3561,7 @@ describe("PubSubChannel", () => {
 
     setRpcCaller(instance, "panel:caller", "panel");
     await instance.subscribe("panel:caller", { contextId: "ctx-1", name: "Caller", type: "panel" });
-    setRpcCaller(instance, targetPid, "do");
-    await instance.subscribe(targetPid, {
-      contextId: "ctx-1",
-      name: "Agent",
-      type: "agent",
-      handle: "agent",
-      // Agent vessel: implements onMethodCall + opts into structured delivery (gates deliverDoMethodCall).
-      receivesChannelEnvelopes: true,
-      incarnation: "test-incarnation",
-    });
+    await joinEntity(instance, targetPid, { name: "Agent", type: "agent", handle: "agent" });
 
     setRpcCaller(instance, "panel:caller", "panel");
     await expect(

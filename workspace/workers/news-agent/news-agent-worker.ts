@@ -1719,10 +1719,11 @@ export class NewsAgentWorker extends AgentWorkerBase implements NewsHandlers {
       briefingId: (row["briefed_in"] as string | null) ?? undefined,
     };
     const actor = this.localActor(channelId);
-    await this.createChannelClient(channelId).sendSignalEvent(
+    await this.createChannelClient(channelId).publishSignalFact(
       actor.id,
       NEWS_DEEPDIVE_SIGNAL,
-      payload
+      payload,
+      `news-deepdive-requested:${payload.articleId}:${this.now()}`
     );
     return { requested: payload };
   }

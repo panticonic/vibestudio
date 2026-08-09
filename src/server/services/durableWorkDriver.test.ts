@@ -44,7 +44,7 @@ function handlers(overrides: Partial<DurableWorkHandler> = {}) {
     handler,
     record: {
       "channel-delivery": handler,
-      "agent-inbox": handler,
+      "agent-wake": handler,
       "agent-effect": handler,
       "workspace-publication": handler,
     } satisfies Record<DurableWorkQueue, DurableWorkHandler>,
@@ -108,6 +108,53 @@ describe("DurableWorkDriver", () => {
       outcome: { ok: true },
     });
     expect(driver.inspect().duplicateHints).toBeGreaterThan(0);
+    await driver.quiesce();
+  });
+
+  it("does not ask a retired or superseded owner for continuation after stale settlement", async () => {
+    const queue = [claim("effect-1", 7)];
+    const suite = handlers({
+      claim: vi.fn(async () => queue.splice(0)),
+      settle: vi.fn(async () => "stale" as const),
+    });
+    const driver = new DurableWorkDriver({
+      handlers: suite.record,
+      scanReadyOwners: async () => [],
+      workerId: "driver-1",
+    });
+
+    driver.start();
+    driver.notify({ owner: owner("retired"), queues: ["agent-effect"] });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(suite.handler.claim).toHaveBeenCalledOnce();
+    expect(driver.inspect()).toMatchObject({
+      staleSettlements: 1,
+      claimsByTrigger: { hint: 1, recovery: 0, continuation: 0 },
+    });
+    await driver.quiesce();
+  });
+
+  it("discards a hint whose durable owner was retired before claim", async () => {
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const suite = handlers({
+      claim: vi.fn(async () => {
+        throw Object.assign(new Error("entity is no longer active"), { code: "DO_NOT_CREATED" });
+      }),
+    });
+    const driver = new DurableWorkDriver({
+      handlers: suite.record,
+      scanReadyOwners: async () => [],
+      workerId: "driver-1",
+    });
+
+    driver.start();
+    driver.notify({ owner: owner("retired"), queues: ["agent-effect"] });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(suite.handler.claim).toHaveBeenCalledOnce();
+    expect(warning).not.toHaveBeenCalled();
+    expect(driver.inspect()).toMatchObject({ accepting: true, pendingHints: 0, active: 0 });
     await driver.quiesce();
   });
 
@@ -192,7 +239,7 @@ describe("DurableWorkDriver", () => {
     });
     const recoveryHint: DurableWorkReadyHint = {
       owner: owner("recovered-owner"),
-      queues: ["agent-inbox"],
+      queues: ["agent-wake"],
     };
     const driver = new DurableWorkDriver({
       handlers: suite.record,
@@ -216,7 +263,7 @@ describe("DurableWorkDriver", () => {
         expect.objectContaining({
           phase: "claim.completed",
           trigger: "recovery",
-          queue: "agent-inbox",
+          queue: "agent-wake",
         }),
       ]),
     });
@@ -254,7 +301,7 @@ describe("DurableWorkDriver", () => {
   it("scans owner recovery status through a single low-priority lane", async () => {
     const registrations = Array.from({ length: 12 }, (_, index) => ({
       owner: owner(`registered-${index}`),
-      queues: ["agent-inbox"] as const,
+      queues: ["agent-wake"] as const,
     }));
     let active = 0;
     let maxActive = 0;
@@ -264,7 +311,7 @@ describe("DurableWorkDriver", () => {
       maxActive = Math.max(maxActive, active);
       await new Promise((resolve) => setTimeout(resolve, 5));
       active--;
-      return { readyQueues: ["agent-inbox"] };
+      return { readyQueues: ["agent-wake"] };
     });
     const scan = createDurableWorkOwnerScanner(
       { dispatch } as never,
@@ -332,6 +379,33 @@ describe("DurableWorkDriver", () => {
     );
   });
 
+  it("terminalizes delivery to a retired durable target without retry churn", async () => {
+    const dispatchHeldWithSignal = vi.fn(async () => {
+      throw Object.assign(new Error("durable target is retired"), {
+        code: "DURABLE_OBJECT_RETIRED",
+      });
+    });
+    const record = createDurableWorkHandlers({
+      dispatch: vi.fn(),
+      dispatchHeldWithSignal,
+    } as never);
+    const work = claim("delivery-retired", 2);
+    const target = owner("retired-agent");
+    work.payload = {
+      target,
+      delivery: {
+        deliveryId: "delivery-retired",
+        channelId: "channel-1",
+        envelope: { kind: "log" },
+      },
+    };
+
+    await expect(
+      record["channel-delivery"].execute(owner("channel-1"), work, new AbortController().signal)
+    ).resolves.toEqual({ deliveryId: "delivery-retired", disposition: "retired" });
+    expect(dispatchHeldWithSignal).toHaveBeenCalledOnce();
+  });
+
   it("delivers committed workspace publications to their exact channel target", async () => {
     const dispatchHeldWithSignal = vi.fn(async () => ({ broadcasted: 2 }));
     const record = createDurableWorkHandlers({
@@ -359,6 +433,32 @@ describe("DurableWorkDriver", () => {
       "broadcastStoredEnvelopes",
       ["event-1", "event-2"]
     );
+  });
+
+  it("terminalizes publication to a retired channel without retry churn", async () => {
+    const dispatchHeldWithSignal = vi.fn(async () => {
+      throw Object.assign(new Error("channel is retired"), {
+        code: "DURABLE_OBJECT_RETIRED",
+      });
+    });
+    const record = createDurableWorkHandlers({
+      dispatch: vi.fn(),
+      dispatchHeldWithSignal,
+    } as never);
+    const work = claim("publication-retired", 7);
+    work.payload = {
+      target: {
+        source: "workers/pubsub-channel",
+        className: "PubSubChannel",
+        objectKey: "retired-channel",
+      },
+      envelopeIds: ["event-1", "event-2"],
+    };
+
+    await expect(
+      record["workspace-publication"].execute(owner("gad"), work, new AbortController().signal)
+    ).resolves.toEqual({ broadcasted: 2 });
+    expect(dispatchHeldWithSignal).toHaveBeenCalledOnce();
   });
 
   it("fails a publication claim unless the channel acknowledges the complete batch", async () => {

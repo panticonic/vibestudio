@@ -1097,17 +1097,6 @@ describe("@workspace/agentic-protocol reducers", () => {
         },
         createdAt: "2026-05-20T12:00:00.000Z",
       },
-      {
-        kind: "task.progress",
-        actor: agent,
-        causality: { taskId },
-        payload: {
-          protocol: AGENTIC_PROTOCOL_VERSION,
-          message: "reading",
-          progress: 0.5,
-        },
-        createdAt: "2026-05-20T12:00:01.000Z",
-      },
     ];
     const state = events
       .map((event, index) => envelope(event, index + 1))
@@ -1117,8 +1106,7 @@ describe("@workspace/agentic-protocol reducers", () => {
       taskId: "task-1",
       taskType: "subagent",
       title: "Repository audit",
-      status: "running",
-      progress: [{ message: "reading", progress: 0.5 }],
+      status: "started",
     });
     expect(state.invocations).toEqual({});
   });

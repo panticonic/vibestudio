@@ -871,119 +871,6 @@ describe("SubagentRunCard", () => {
     };
   }
 
-  it("is compact by default and expands into consolidated child tool calls", async () => {
-    const at = (secondsAgo: number) => new Date(Date.now() - secondsAgo * 1000).toISOString();
-    render(
-      React.createElement(SubagentRunCard, {
-        msg: subagentMessage({
-          id: "run-1",
-          execution: {
-            status: "running",
-            description:
-              "**Pilot-process one Google Drive PDF** into a normalized poetry archive repo.",
-            progress: [
-              { kind: "turn-started", messageSeq: 1, at: at(300) },
-              {
-                kind: "tool-started",
-                tool: "Read",
-                callId: "child-call-1",
-                args: { path: "index.ts" },
-                messageSeq: 2,
-                at: at(120),
-              },
-              // The terminal update names no tool — pairing by callId is what
-              // restores "Read" instead of the old anonymous "Finished tool".
-              {
-                kind: "tool-completed",
-                callId: "child-call-1",
-                result: { bytes: 4096 },
-                messageSeq: 3,
-                at: at(90),
-              },
-              {
-                kind: "said",
-                text: "**Writing normalized catalog**\n\n- normalized index\n- poem records",
-                messageSeq: 4,
-                say: true,
-                at: at(30),
-              },
-              {
-                kind: "title-changed",
-                text: "Normalized poetry archive",
-                messageSeq: 5,
-                at: at(20),
-              },
-            ],
-          },
-          subagent: {
-            runId: "run-1",
-            mode: "fresh",
-            taskChannelId: "task-run-1",
-            contextId: "ctx-run-1",
-            childEntityId: "do:workers/agent-worker:AiChatWorker:subagent-run-1",
-            label: "PDF poem extraction pilot",
-          },
-          complete: false,
-        }),
-      })
-    );
-
-    expect(screen.getByTestId("subagent-run-card")).toBeTruthy();
-    expect(screen.getByText("Normalized poetry archive")).toBeTruthy();
-    expect(screen.getByText("Running")).toBeTruthy();
-    // One consolidated call, not one row per lifecycle event.
-    expect(screen.getByText(/^1 call/)).toBeTruthy();
-    // Collapsed: only the latest update, as a preview line.
-    const preview = document.body.querySelector(".subagent-update-preview");
-    expect(preview).toBeTruthy();
-    expect(preview?.textContent).toContain("Writing normalized catalog");
-    expect(preview?.textContent).toContain("normalized index");
-    expect(preview?.querySelector(".markdown-preview-strong")).toBeTruthy();
-    expect(preview?.querySelector("a, button, input")).toBeNull();
-    expect(screen.queryByText("Started working")).toBeNull();
-    expect(
-      screen.queryByText(
-        "Pilot-process one Google Drive PDF into a normalized poetry archive repo."
-      )
-    ).toBeNull();
-
-    fireEvent.click(preview as HTMLElement);
-
-    // The child's call renders through the parent chat's own invocation pill,
-    // named and previewed exactly as a top-level call would be.
-    const pill = document.body.querySelector('[data-testid="invocation-pill"]');
-    expect(pill).toBeTruthy();
-    expect(pill?.getAttribute("data-invocation-name")).toBe("Read");
-    expect(pill?.getAttribute("data-invocation-status")).toBe("complete");
-    expect(pill?.textContent).toContain("index.ts");
-    // Lifecycle noise is gone: no "Started …"/"Finished tool" rows survive.
-    expect(screen.queryByText("Started working")).toBeNull();
-    expect(screen.queryByText(/^Finished/)).toBeNull();
-
-    // Expanding the child call exposes its arguments and result, same as the
-    // main chat's expanded tool view.
-    fireEvent.click(pill as HTMLElement);
-    expect(screen.getByText("Arguments")).toBeTruthy();
-    expect(screen.getAllByText("Result").length).toBeGreaterThan(0);
-    await waitFor(() => {
-      expect(document.body.querySelector(".ns-codeblock .hljs")).toBeTruthy();
-    });
-
-    // What the child said is prose, not a log row.
-    expect(screen.getAllByText("Writing normalized catalog").length).toBeGreaterThan(0);
-    expect(document.body.querySelector(".subagent-say-body .message-prose ul")).toBeTruthy();
-    expect(screen.getByText("Pilot-process one Google Drive PDF")).toBeTruthy();
-    expect(
-      document.body.querySelector(".subagent-description .message-prose .rt-r-weight-bold")
-    ).toBeTruthy();
-
-    // Identifiers stay behind their own disclosure until asked for.
-    expect(screen.queryByText("task-run-1")).toBeNull();
-    fireEvent.click(screen.getByLabelText("Run identifiers"));
-    expect(screen.getByText("task-run-1")).toBeTruthy();
-    expect(screen.getByText("ctx-run-1")).toBeTruthy();
-  });
-
   it("renders markdown in collapsed description previews", () => {
     render(
       React.createElement(SubagentRunCard, {
@@ -1015,63 +902,7 @@ describe("SubagentRunCard", () => {
     expect(preview?.querySelector("a, button, input")).toBeNull();
   });
 
-  it("labels bounded child results and offers their authoritative transcript", () => {
-    render(
-      React.createElement(
-        ChatMessageActionsContext.Provider,
-        {
-          value: {
-            childTranscript: { config: {}, metadata: {} },
-          } as never,
-        },
-        React.createElement(SubagentRunCard, {
-          msg: subagentMessage({
-            id: "run-truncated",
-            execution: {
-              status: "running",
-              description: "",
-              progress: [
-                {
-                  kind: "tool-started",
-                  tool: "eval",
-                  callId: "child-eval",
-                  sourceChannelId: "task-run-truncated",
-                  messageSeq: 40,
-                  at: new Date().toISOString(),
-                },
-                {
-                  kind: "tool-completed",
-                  callId: "child-eval",
-                  result: { details: { returnValue: { __truncated: "depth" } } },
-                  resultTruncated: true,
-                  sourceChannelId: "task-run-truncated",
-                  messageSeq: 41,
-                  at: new Date().toISOString(),
-                },
-              ],
-            },
-            subagent: {
-              runId: "run-truncated",
-              mode: "fork",
-              taskChannelId: "task-run-truncated",
-              contextId: "ctx-run-truncated",
-              childEntityId: "do:workers/agent-worker:AiChatWorker:run-truncated",
-              label: "Truncated result audit",
-            },
-            complete: false,
-          }),
-        })
-      )
-    );
-
-    fireEvent.click(screen.getByLabelText("Expand run details"));
-
-    expect(screen.getByText(/Compact preview only/)).toBeTruthy();
-    expect(screen.getByText(/task-run-truncated#41/)).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Open full transcript" })).toBeTruthy();
-  });
-
-  it("shows useful expanded details before the child has published progress", () => {
+  it("shows useful expanded details before the child has a summary", () => {
     render(
       React.createElement(SubagentRunCard, {
         msg: subagentMessage({
@@ -1090,11 +921,10 @@ describe("SubagentRunCard", () => {
       })
     );
 
-    expect(screen.getByText("Waiting for the child agent to start")).toBeTruthy();
+    expect(screen.getByText("Working — open the card to watch the transcript")).toBeTruthy();
     expect(screen.getByText("Pending")).toBeTruthy();
     fireEvent.click(screen.getByLabelText("Expand run details"));
 
-    expect(screen.getByText(/The child has not published progress yet/)).toBeTruthy();
     fireEvent.click(screen.getByLabelText("Run identifiers"));
     expect(screen.getByText("run-2")).toBeTruthy();
     expect(screen.getByText("task-run-2")).toBeTruthy();

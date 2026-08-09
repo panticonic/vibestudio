@@ -127,12 +127,6 @@ export function toolPresentation(payload: InvocationCardPayload): {
       preview: runId ? `Merge changes from ${runId}` : "Merge changes",
     };
   }
-  if (payload.name === "close_subagent") {
-    return {
-      displayName: "Close Subagent",
-      preview: `${args["discard"] ? "Discard" : "Close"}${runId ? ` ${runId}` : ""}`,
-    };
-  }
   const preview = formatInvocationPreview(payload.arguments, payload.execution.description, 120);
   return { displayName: formatDisplayName(payload.name), preview };
 }
@@ -173,11 +167,7 @@ function SupervisionActionSummary({ payload }: { payload: InvocationCardPayload 
     const task = compactText(args["task"], 260);
     if (task) rows.push(["Task", task]);
   }
-  const warning =
-    details?.["tokenWaste"] === "polling_without_new_subagent_messages" ||
-    details?.["empty"] === true
-      ? "This read found no new messages. Repeating it burns tokens; use suspend_turn to wait for pushed progress."
-      : "";
+  const warning = "";
   const textResult = compactText(protocolText(payload), 220);
   if (!rows.length && !warning && !textResult) return null;
   return (

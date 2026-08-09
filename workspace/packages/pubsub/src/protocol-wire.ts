@@ -56,7 +56,9 @@ export type RpcChannelMessage =
   | RpcErrorMessage
   | RpcSignalMessage;
 
-export function snapshotToRpcControl(snapshot: BootstrapSnapshot): RpcRosterSnapshotMessage {
+export function snapshotToRpcControl(
+  snapshot: Extract<BootstrapSnapshot, { kind: "roster-snapshot" }>
+): RpcRosterSnapshotMessage {
   return {
     kind: "control",
     type: "roster-snapshot",

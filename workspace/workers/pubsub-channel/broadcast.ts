@@ -1,51 +1,28 @@
 /**
  * Broadcast + delivery for the PubSub Channel DO.
  *
- * RPC participants receive events on the stream returned by `subscribe`.
+ * Connected external sessions receive events on their live transport.
  * ChannelEvent is the worker-internal durable row format. RPC clients receive
- * explicit log/control/signal envelopes; DO participants receive the same
- * envelope shape over ordered RPC calls.
+ * explicit log/control/signal envelopes. Durable entity delivery is derived
+ * from the canonical log by the channel mailbox and never passes through this
+ * activation-local fan-out.
  */
 
 import type { SqlStorage } from "@workspace/runtime/worker";
 import type { ChannelEvent } from "@workspace/harness";
-import { participantIsAgentVessel, type BroadcastEnvelope } from "./types.js";
+import type { BroadcastEnvelope } from "./types.js";
 import type { RpcChannelMessage, RpcSignalMessage } from "@workspace/pubsub";
 
 export type StructuredDeliveryEnvelope = Extract<RpcChannelMessage, { kind: "log" | "signal" }>;
 
 export interface BroadcastParticipant {
   id: string;
-  structured: boolean;
-  incarnation: string | null;
-}
-
-export interface StructuredDelivery {
-  participantId: string;
-  targetIncarnation: string;
-  envelope: StructuredDeliveryEnvelope;
 }
 
 export interface BroadcastDeps {
   objectKey: string;
   participants(): readonly BroadcastParticipant[];
   deliverParticipant(participantId: string, payload: unknown): Promise<void> | void;
-  enqueueDoEnvelopes(deliveries: readonly StructuredDelivery[]): void;
-}
-
-/**
- * True if a DO participant is an agent vessel (opted into host-driven structured batch delivery).
- * RPC-style DO clients omit the flag and receive only the subscription stream.
- * Parses the stored metadata JSON and delegates to the one canonical
- * discriminator (`participantIsAgentVessel`).
- */
-function participantReceivesChannelEnvelopes(metadataJson: unknown): boolean {
-  if (typeof metadataJson !== "string") return false;
-  try {
-    return participantIsAgentVessel(JSON.parse(metadataJson) as Record<string, unknown>);
-  } catch {
-    return false;
-  }
 }
 
 /**
@@ -56,17 +33,9 @@ function participantReceivesChannelEnvelopes(metadataJson: unknown): boolean {
  */
 export function loadBroadcastParticipants(sql: SqlStorage): BroadcastParticipant[] {
   return sql
-    .exec(`SELECT id, transport, metadata, participant_incarnation FROM participants`)
+    .exec(`SELECT id FROM participants`)
     .toArray()
-    .map((row) => ({
-      id: row["id"] as string,
-      structured: row["transport"] === "do" && participantReceivesChannelEnvelopes(row["metadata"]),
-      incarnation:
-        typeof row["participant_incarnation"] === "string" &&
-        row["participant_incarnation"].length > 0
-          ? row["participant_incarnation"]
-          : null,
-    }));
+    .map((row) => ({ id: row["id"] as string }));
 }
 
 // ── Broadcast ────────────────────────────────────────────────────────────────
@@ -86,8 +55,6 @@ export function broadcast(
     envelope.kind === "log"
       ? channelEventToRpcLog(event, envelope.phase ?? "live", envelope.ref)
       : channelEventToRpcSignal(event, envelope.ref);
-  const structuredDeliveries: StructuredDelivery[] = [];
-
   for (const participant of deps.participants()) {
     const pid = participant.id;
     const data =
@@ -95,32 +62,9 @@ export function broadcast(
         ? { channelId: deps.objectKey, message: { ...msg, ref: envelope.ref } }
         : { channelId: deps.objectKey, message: msg };
 
-    // Agent vessels receive one structured delivery RPC per participant. Every
-    // other session receives bytes on the stream that owns its lifetime.
-    if (participant.structured) {
-      // A structured publisher has already accepted and journaled this event
-      // in its own turn. Calling back into that same Durable Object before the
-      // publish RPC can return creates a causal cycle: the recipient cannot
-      // process its self-delivery until the publication that scheduled it has
-      // completed. Other participants still receive the durable broadcast;
-      // stream transports retain their sender echo for UI acknowledgement.
-      if (pid === structuredPublisherId) continue;
-      if (!participant.incarnation) {
-        throw new Error(`Structured participant ${pid} has no active incarnation`);
-      }
-      structuredDeliveries.push({
-        participantId: pid,
-        targetIncarnation: participant.incarnation,
-        envelope:
-          envelope.kind === "log"
-            ? { kind: "log", phase: envelope.phase ?? "live", event }
-            : channelEventToRpcSignal(event),
-      });
-    } else {
-      void deps.deliverParticipant(pid, data);
-    }
+    void structuredPublisherId;
+    void deps.deliverParticipant(pid, data);
   }
-  if (structuredDeliveries.length > 0) deps.enqueueDoEnvelopes(structuredDeliveries);
 }
 
 // ── ChannelEvent builders ────────────────────────────────────────────────────

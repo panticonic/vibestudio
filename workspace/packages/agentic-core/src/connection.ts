@@ -33,7 +33,7 @@ export type ClientParticipantMetadata = Partial<ChatParticipantMetadata> &
   Pick<ChatParticipantMetadata, "name" | "type">;
 
 export interface ConnectionCallbacks {
-  onEvent?: (event: IncomingEvent) => void;
+  onEvent?: (event: IncomingEvent) => void | Promise<void>;
   onRoster?: (roster: RosterUpdate<ChatParticipantMetadata>) => void;
   onError?: (error: Error) => void;
   onReconnect?: () => void;
@@ -131,6 +131,10 @@ export class ConnectionManager {
         methods,
         replayMode: "stream",
         replayMessageLimit,
+        deliveryMode: this.config.deliveryMode,
+        ...(this.config.deliveryMode === "resident" && this.callbacks.onEvent
+          ? { residentEventHandler: this.callbacks.onEvent }
+          : {}),
         recoveryCoordinator: this.config.recoveryCoordinator,
       });
 
@@ -164,36 +168,36 @@ export class ConnectionManager {
 
       const unsubs: Array<() => void> = [];
 
-      // Set up unified event handling
-      const eventIterator = newClient.events({ includeReplay: true, includeSignals: true });
-      let eventLoopRunning = true;
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      let eventIteratorRef: AsyncIterableIterator<any> | null = eventIterator;
+      // Stream transports own an event iterator. Resident transports invoke
+      // the application handler inside the finite delivery RPC above so the
+      // durable sender cannot acknowledge an unprojected event.
+      if (this.config.deliveryMode !== "resident") {
+        const eventIterator = newClient.events({ includeReplay: true, includeSignals: true });
+        let eventLoopRunning = true;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        let eventIteratorRef: AsyncIterableIterator<any> | null = eventIterator;
 
-      void (async () => {
-        try {
-          for await (const event of eventIterator) {
-            if (!eventLoopRunning) break;
-            try {
-              this.callbacks.onEvent?.(event as IncomingEvent);
-            } catch (callbackError) {
-              console.error("[ConnectionManager] Event callback error:", callbackError);
+        void (async () => {
+          try {
+            for await (const event of eventIterator) {
+              if (!eventLoopRunning) break;
+              await this.callbacks.onEvent?.(event as IncomingEvent);
             }
+          } catch (streamError) {
+            console.error("[ConnectionManager] Event stream error:", streamError);
+            this.callbacks.onError?.(
+              streamError instanceof Error ? streamError : new Error(String(streamError))
+            );
+          } finally {
+            eventIteratorRef = null;
           }
-        } catch (streamError) {
-          console.error("[ConnectionManager] Event stream error:", streamError);
-          this.callbacks.onError?.(
-            streamError instanceof Error ? streamError : new Error(String(streamError))
-          );
-        } finally {
+        })();
+        unsubs.push(() => {
+          eventLoopRunning = false;
+          eventIteratorRef?.return?.();
           eventIteratorRef = null;
-        }
-      })();
-      unsubs.push(() => {
-        eventLoopRunning = false;
-        eventIteratorRef?.return?.();
-        eventIteratorRef = null;
-      });
+        });
+      }
 
       // Set up roster handler
       unsubs.push(

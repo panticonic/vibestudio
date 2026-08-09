@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "censusDigest": "sha256:3b823bf398dd31e7635760724fc7c48472a6c884abef2fb7e71a3aab3973c334",
+  "censusDigest": "sha256:51f8619bdd5b55e21a1152c32a74ed984b5a2c85b75f1236d0b41dd6211ee2a9",
   "decisions": {
     "host:auth.mintAgentCredential": {
       "review": "reviewed-subagent-launch-agent-login",
@@ -362,13 +362,21 @@
       "review": "host-only-durable-worker-generation-adoption",
       "change": "Installs the exact host durable-work worker generation on one concrete agent vessel and releases only claims owned by the positively superseded generation. No user or code principal is admitted, and elapsed time cannot transfer ownership."
     },
+    "direct:workspace/packages/agentic-do/src/agent-vessel.ts:acceptChannelDelivery": {
+      "review": "host-only-idempotent-channel-recipient-transition",
+      "change": "Replaces the former host-only batch-to-inbox relay with one finite transition on the exact addressed vessel. The receiver validates immutable delivery coordinates, its durable channel relationship, and a versioned at-sequence decision context, then retains one outcome by deterministic delivery ID; no user or code principal is admitted."
+    },
+    "direct:workspace/packages/runtime/src/worker/durable-base.ts:acceptChannelDelivery": {
+      "review": "host-only-finite-resident-session-delivery",
+      "change": "Adds the common host-only finite delivery entrypoint used after the durable-work host has resolved the exact recipient entity. It forwards one addressed envelope only to that receiver's explicit resident execution session and creates no channel membership, stream, or authority."
+    },
+    "direct:workspace/packages/agentic-do/src/agent-vessel.ts:cancelSubagentExecution": {
+      "review": "parent-owned-exact-child-cancellation",
+      "change": "Allows code to request cancellation only on the exact child vessel whose durable subagent identity records the verified caller as parent and whose run and task-channel coordinates match. It commits a terminal intent and aborts that run; it cannot cancel a sibling, revive a terminal run, or delete retained state."
+    },
     "direct:workspace/workers/pubsub-channel/channel-do.ts:adoptDurableWorkWorker": {
       "review": "host-only-durable-worker-generation-adoption",
       "change": "Installs the exact host durable-work worker generation on one concrete channel and releases only claims owned by the positively superseded generation. No user or code principal is admitted, and elapsed time cannot transfer ownership."
-    },
-    "direct:workspace/packages/agentic-do/src/agent-vessel.ts:acceptChannelBatch": {
-      "review": "host-only-incarnation-fenced-inbox-admission",
-      "change": "Adds bounded all-or-nothing local admission of an exact channel batch addressed to the active vessel incarnation; it performs no remote execution."
     },
     "direct:workspace/packages/agentic-do/src/agent-vessel.ts:claimReadyWork": {
       "review": "host-only-agent-work-claim",
@@ -382,9 +390,9 @@
       "review": "host-only-held-agent-effect",
       "change": "Executes only an already generation-fenced effect claim on the exact vessel; live authority is re-evaluated by the narrow executor ports."
     },
-    "direct:workspace/packages/agentic-do/src/agent-vessel.ts:executeInboxClaim": {
-      "review": "host-only-held-agent-transition",
-      "change": "Executes only an already generation-fenced local inbox transition on the exact vessel, with GAD retaining semantic ordering authority."
+    "direct:workspace/packages/agentic-do/src/agent-vessel.ts:executeWakeClaim": {
+      "review": "host-only-held-agent-wake-transition",
+      "change": "Executes only an existing generation-fenced local wake claim on the exact vessel. Wake payloads are closed internal variants; terminal publication remains idempotent and subsequent remote effects retain their own receiver-side authority checks."
     },
     "direct:workspace/packages/agentic-do/src/agent-vessel.ts:failReadyWork": {
       "review": "host-only-agent-claim-failure",
@@ -401,6 +409,22 @@
     "direct:workspace/workers/pubsub-channel/channel-do.ts:durableWorkStatus": {
       "review": "host-only-channel-readiness-summary",
       "change": "Adds a bounded host read of channel work readiness and recovery time without exposing message payloads."
+    },
+    "direct:workspace/workers/pubsub-channel/channel-do.ts:join": {
+      "review": "self-authenticated-finite-entity-membership-open",
+      "change": "Replaces executable-entity streaming subscription with a finite durable relationship write. The receiver requires the caller to be the asserted participant, the endpoint to be that same Durable Object identity, the entity to be currently active, the locked-channel allowlist to admit it, and revisions to be monotone."
+    },
+    "direct:workspace/workers/pubsub-channel/channel-do.ts:leave": {
+      "review": "self-authenticated-finite-entity-membership-end",
+      "change": "Ends only the verified caller's own durable channel relationship at the exact next revision. It cannot remove another participant or bypass the receiver's pending-delivery derivation before departure."
+    },
+    "direct:workspace/workers/pubsub-channel/channel-do.ts:recordReceipt": {
+      "review": "self-authenticated-monotone-read-projection",
+      "change": "Lets a verified participant advance only its own read projection for one message. The operation appends no canonical event and creates no agent mailbox work; its optional live emission is a disposable presentation signal to connected external sessions."
+    },
+    "direct:workspace/workers/pubsub-channel/channel-do.ts:relationshipState": {
+      "review": "self-authenticated-exact-relationship-read",
+      "change": "Returns only the verified caller participant's own active flag and monotone relationship revision after bringing the disposable projection current. It exposes no roster, message content, or foreign membership."
     },
     "direct:workspace/workers/pubsub-channel/channel-do.ts:executeChannelMaintenanceClaim": {
       "review": "host-only-held-channel-recovery",

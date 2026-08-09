@@ -266,7 +266,7 @@ describe("DODispatch", () => {
             status: 200,
             headers: {
               "Content-Type": "application/json",
-              [DURABLE_WORK_READY_HEADER]: "agent-inbox,agent-effect,agent-inbox",
+              [DURABLE_WORK_READY_HEADER]: "agent-wake,agent-effect,agent-wake",
             },
           })
         )
@@ -280,7 +280,7 @@ describe("DODispatch", () => {
       await expect(dispatch.dispatch(ref, "enqueue")).resolves.toEqual({ committed: true });
       expect(observer).toHaveBeenCalledWith({
         owner: ref,
-        queues: ["agent-inbox", "agent-effect"],
+        queues: ["agent-wake", "agent-effect"],
       });
     });
 

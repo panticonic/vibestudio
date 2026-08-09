@@ -34,6 +34,13 @@ import {
   encodeDurableWorkReady,
   type DurableWorkQueue,
 } from "@vibestudio/shared/durableWork";
+import {
+  acceptResidentChannelDelivery,
+  inspectResidentSessions,
+  registerResidentSession,
+  type ResidentChannelDeliveryInput,
+  type ResidentSessionReceiver,
+} from "@vibestudio/shared/residentSession";
 import { bindMethodCapability, allOf, anyOf, capability } from "@vibestudio/shared/authorization";
 import type { MethodSchema, ServiceMethodSchemas } from "@vibestudio/shared/typedServiceClient";
 import {
@@ -1115,6 +1122,37 @@ export abstract class DurableObjectBase {
   })
   durableWorkCapabilities(): DurableWorkQueue[] {
     return [...this.durableWorkQueues()];
+  }
+
+  /** Finite delivery into an explicitly resident in-memory operation. The
+   * durable sender retains and retries its mailbox row while no receiver is
+   * active; channel membership itself owns no stream or residency. */
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "open" },
+    tier: "open",
+    sensitivity: "write",
+  })
+  async acceptChannelDelivery(input: ResidentChannelDeliveryInput): Promise<unknown> {
+    return acceptResidentChannelDelivery(this.rpcSelfId, input);
+  }
+
+  /** Register the finite receiver in this exact Durable Object activation.
+   * Guest/userland bundles must receive this capability from their owner; a
+   * separately imported module registry lives in a different module graph. */
+  protected registerResidentChannelSession(
+    channelId: string,
+    receiver: ResidentSessionReceiver
+  ): () => void {
+    return registerResidentSession(this.rpcSelfId, channelId, receiver);
+  }
+
+  protected residentSessionDiagnostics(): {
+    active: number;
+    receivers: Array<{ channelId: string; openedAt: number; ageMs: number }>;
+  } {
+    const receivers = inspectResidentSessions(this.rpcSelfId);
+    return { active: receivers.length, receivers };
   }
 
   /**

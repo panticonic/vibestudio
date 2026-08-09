@@ -16,7 +16,7 @@ import type {
   HttpCallEffect,
   LocalToolEffect,
   PromptArtifactsEffect,
-  PublishEnvelopeEffect,
+  RecordReceiptEffect,
 } from "@workspace/agent-loop";
 import { modelCallExecutor } from "./model-call.js";
 import type { EffectExecutor } from "./types.js";
@@ -218,18 +218,14 @@ export const credentialWaitExecutor: EffectExecutor<CredentialWaitEffect> = {
   },
 };
 
-/** publish_envelope (§2.4.6): fire-and-forget; exempt from the reconcile. */
-export const publishExecutor: EffectExecutor<PublishEnvelopeEffect> = {
-  kind: "publish_envelope",
+/** Receipt projection update: durable and idempotent, never a channel append. */
+export const receiptExecutor: EffectExecutor<RecordReceiptEffect> = {
+  kind: "record_receipt",
   async execute({ descriptor, deps }) {
-    await deps.channel.publish({
+    await deps.channel.recordReadReceipt({
       channelId: descriptor.channelId,
-      payloadKind: descriptor.payloadKind,
-      payload: descriptor.payload,
-      // Forward the idempotency key so duplicate publishes (read acks, etc.)
-      // dedupe at the channel — one of the three duplicate guards. The port
-      // accepts it; only this executor was dropping it.
-      idempotencyKey: descriptor.idempotencyKey,
+      messageId: descriptor.messageId,
+      turnId: descriptor.turnId,
     });
     return { kind: "tool", result: null, isError: false } satisfies EffectOutcome;
   },
@@ -249,7 +245,7 @@ export function executorFor(descriptor: EffectDescriptor): EffectExecutor {
       return httpCallExecutor as EffectExecutor;
     case "credential_wait":
       return credentialWaitExecutor as EffectExecutor;
-    case "publish_envelope":
-      return publishExecutor as EffectExecutor;
+    case "record_receipt":
+      return receiptExecutor as EffectExecutor;
   }
 }

@@ -5,7 +5,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { connectViaRpc } from "./rpc-client.js";
 import type { PubSubClient } from "./client.js";
-import type { MethodExecutionContext } from "./protocol-types.js";
+import type { IncomingEvent, MethodExecutionContext } from "./protocol-types.js";
 import {
   AGENTIC_EVENT_PAYLOAD_KIND,
   agentToolFailureFromUnknown,
@@ -232,6 +232,8 @@ function createMockRpc() {
             senderId: msg["senderId"],
             ts: msg["ts"],
             senderMetadata: msg["senderMetadata"],
+            contentClass: "internal",
+            externalKeys: [],
             attachments: msg["attachments"],
           },
         },
@@ -374,6 +376,165 @@ describe("connectViaRpc", () => {
       await emitReplayAndReady(emit, []);
       await client.ready();
       await client.close();
+    });
+
+    it("requires the resident receiver registrar from the owning Durable Object", async () => {
+      const client = connectViaRpc({
+        rpc: mockRpc as any,
+        channel: CHANNEL,
+        deliveryMode: "resident",
+      });
+
+      await expect(client.ready()).rejects.toThrow(
+        "Resident channel delivery requires the owning Durable Object registrar"
+      );
+      expect(mockRpc.stream).not.toHaveBeenCalledWith(
+        DO_TARGET,
+        "subscribe",
+        expect.anything(),
+        expect.anything()
+      );
+      await client.close();
+    });
+
+    it("routes finite resident delivery through the injected owner registrar", async () => {
+      let receiver: ((payload: unknown) => void | Promise<void>) | undefined;
+      let releaseHandler: (() => void) | undefined;
+      const handlerGate = new Promise<void>((resolve) => {
+        releaseHandler = resolve;
+      });
+      const residentEventHandler = vi.fn(async (event: IncomingEvent) => {
+        if (!("payload" in event)) throw new Error("expected a payload-bearing resident event");
+        if (residentEventHandler.mock.calls.length === 1) {
+          expect(event.payload).toMatchObject({
+            payload: { request: { value: "hydrated" } },
+          });
+          await handlerGate;
+        }
+      });
+      const unregister = vi.fn();
+      const rpc = {
+        selfId: SELF_ID,
+        stream: vi.fn(),
+        registerResidentSession: vi.fn(
+          (_channelId: string, next: (payload: unknown) => void | Promise<void>) => {
+            receiver = next;
+            return {
+              transport: {
+                call: <T = unknown>(target: string, method: string, args: unknown[]) =>
+                  rpc.call(target, method, args) as Promise<T>,
+              },
+              close: unregister,
+            };
+          }
+        ),
+        call: vi.fn(async (target: string, method: string, _args?: unknown[]) => {
+          if (target === "main" && method === "workers.resolveService") {
+            return { kind: "durable-object", targetId: DO_TARGET };
+          }
+          if (target === DO_TARGET && method === "relationshipState") {
+            return { revision: 0 };
+          }
+          if (target === DO_TARGET && method === "join") {
+            return {
+              ok: true,
+              participantId: SELF_ID,
+              envelope: {
+                mode: "initial",
+                logEvents: [],
+                snapshots: [],
+                ready: {
+                  contextId: "ctx-resident",
+                  totalCount: 0,
+                  envelopeCount: 0,
+                  hasMoreBefore: false,
+                },
+              },
+            };
+          }
+          if (target === DO_TARGET && method === "leave") return { ok: true };
+          if (target === "main" && method === "blobstore.getText") {
+            return JSON.stringify({ value: "hydrated" });
+          }
+          return undefined;
+        }),
+      };
+
+      const client = connectViaRpc({
+        rpc: rpc as any,
+        channel: CHANNEL,
+        deliveryMode: "resident",
+        residentEventHandler,
+      });
+      await client.ready();
+
+      expect(rpc.registerResidentSession).toHaveBeenCalledWith(CHANNEL, expect.any(Function));
+      expect(rpc.stream).not.toHaveBeenCalled();
+      expect(receiver).toBeTypeOf("function");
+      expect(client.contextId).toBe("ctx-resident");
+
+      let deliverySettled = false;
+      const delivery = Promise.resolve(
+        receiver!({
+          channelId: CHANNEL,
+          message: {
+            kind: "log",
+            phase: "live",
+            event: {
+              id: 1,
+              messageId: "invocation-1",
+              type: AGENTIC_EVENT_PAYLOAD_KIND,
+              payload: invocation("invocation.started", CALL_ID_1, {
+                name: "inspect",
+                request: {
+                  protocol: "vibestudio.blob-ref.v1",
+                  digest: "resident-request",
+                  size: 20,
+                  encoding: "json",
+                  originalBytes: 20,
+                },
+                transport: { kind: "local", awaiterId: "resident-call" },
+              }),
+              senderId: "agent-1",
+              contentClass: "internal",
+              externalKeys: [],
+              ts: Date.now(),
+            },
+          },
+        })
+      ).then(() => {
+        deliverySettled = true;
+      });
+      await vi.waitFor(() => expect(residentEventHandler).toHaveBeenCalledOnce());
+      expect(deliverySettled).toBe(false);
+      releaseHandler!();
+      await delivery;
+      expect(deliverySettled).toBe(true);
+
+      await receiver!({
+        channelId: CHANNEL,
+        message: {
+          kind: "log",
+          phase: "live",
+          event: {
+            id: 3,
+            messageId: "message-3",
+            type: AGENTIC_EVENT_PAYLOAD_KIND,
+            payload: messageEvent("message-3", "mailbox gaps are expected"),
+            senderId: "agent-1",
+            contentClass: "internal",
+            externalKeys: [],
+            ts: Date.now(),
+          },
+        },
+      });
+      expect(rpc.call.mock.calls.some(([, method]) => method === "getReplayAfter")).toBe(false);
+
+      await client.close();
+      expect(unregister).toHaveBeenCalledOnce();
+      expect(rpc.call).toHaveBeenCalledWith(DO_TARGET, "leave", [
+        { participantId: SELF_ID, revision: 2 },
+      ]);
     });
 
     it("preserves non-recoverable structured RPC errors through the subscription boundary", async () => {
@@ -701,6 +862,8 @@ describe("connectViaRpc", () => {
                   type: AGENTIC_EVENT_PAYLOAD_KIND,
                   payload: messageEvent("00000000-0000-4000-8000-000000000201", "from replay"),
                   senderId: "agent-1",
+                  contentClass: "internal",
+                  externalKeys: [],
                   ts: Date.now(),
                 },
               ],
@@ -1872,6 +2035,7 @@ describe("connectViaRpc", () => {
                 ? [
                     {
                       id: 501,
+                      messageId: "invocation-501",
                       type: AGENTIC_EVENT_PAYLOAD_KIND,
                       payload: invocation(
                         "invocation.completed",
@@ -1880,6 +2044,8 @@ describe("connectViaRpc", () => {
                         { transportCallId: pendingCallId }
                       ),
                       senderId: "provider-1",
+                      contentClass: "internal",
+                      externalKeys: [],
                       ts: Date.now(),
                     },
                   ]

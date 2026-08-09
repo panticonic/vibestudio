@@ -449,7 +449,7 @@ describe("AlarmDriver durable concurrent scheduling", () => {
     });
     const restoredDigests: string[] = [];
     const readiness = new DurableObjectExecutionReadiness({
-      resolveActiveEntity: async () => record,
+      resolveEntity: async () => record,
       restoreExactExecution: async (active) => {
         const retained = retainedByExecution.get(active.activeExecutionDigest!);
         if (!retained || retained.buildKey !== active.activeBuildKey) {

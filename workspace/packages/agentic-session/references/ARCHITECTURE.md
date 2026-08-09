@@ -18,6 +18,7 @@
 
 @workspace/agentic-session       ← thin headless convenience
   HeadlessSession = PubSub connection (via ConnectionManager) + the same typed reducer/selector path
+  - finite, owner-routed delivery into the resident operation; no channel response stream
   - full-auto channel config (approval level 2)
   - durable channel-title observation for reports
   - convenience: createWithAgent() connects the headless client, then subscribes the agent
@@ -61,9 +62,9 @@
 Producer
   ↓ send()/publish()
 PubSub channel log
-  ↓ WebSocket
+  ↓ durable recipient mailbox + finite delivery to the owning DO
 ConnectionManager
-  ↓ events(includeReplay)
+  ↓ owner-registered event callback (replay arrives in the finite join ACK)
 Typed Agentic Event Reducer
   ↓ ChannelViewState
 chatMessagesFromChannelView / actionBarPayloadFromChannelView
@@ -72,6 +73,22 @@ React adapter (useChatCore/useAgenticChat)
   ↓
 React components re-render
 ```
+
+For a headless session, the owning Durable Object supplies the resident receiver
+registrar. EvalDO injects that registrar into its active execution RPC object;
+importing a registry in guest/userland code is not equivalent because it belongs
+to a different module graph. The registration exists only for the active
+operation. Missing receivers leave mailbox work retryable, while a new
+relationship revision retires the obsolete lane and reconstructs state from the
+join replay.
+
+Resident mailbox sequence is ordered but intentionally not globally contiguous:
+self-authored and unaddressed channel events do not become recipient work. A
+resident client therefore never interprets a global log-sequence gap as loss or
+issues replay repair from inside the delivery callback. Completeness comes from
+the channel's durable per-participant lane. When the owner is EvalDO, each
+finite callback re-enters the exact active eval execution context and eval
+terminalization revokes the receiver and drains callbacks already in flight.
 
 The transcript source is the PubSub channel log. Initial prompts, user messages,
 agent responses, invocation updates, approvals, inline UI, and action bars all
@@ -97,7 +114,7 @@ transcript UX.
 
 HeadlessSession provides two teardown paths:
 
-- **`dispose(): void`** — synchronous best-effort: aborts the message consumer and disconnects. Use when the surrounding context is being torn down hard.
+- **`dispose(): void`** — synchronous best-effort: unregisters the resident receiver and disconnects. Use when the surrounding context is being torn down hard.
 - **`close(): Promise<void>`** — awaitable: disposes locally, then completes shared-context unsubscribe before entity retirement. An isolated session destroys its owned context tree as one lifecycle unit. Use for ordinary headless consumers.
 - **`close({ waitForRemoteCleanup: false })`** — detach mode for harnesses: disposes local state immediately and starts the same ordered remote cleanup without awaiting it. Use this instead of wrapping session cleanup in a timeout.
 - **`Symbol.asyncDispose`** — supports `await using session = ...` syntax (calls `close()`).

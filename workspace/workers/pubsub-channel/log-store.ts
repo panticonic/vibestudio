@@ -269,6 +269,12 @@ export class ChannelLog {
     });
   }
 
+  /** Hydrated ascending events for deterministic local projection folds. */
+  async readEvents(opts: { afterSeq: number; limit?: number }): Promise<ChannelEvent[]> {
+    const rows = await this.read({ afterSeq: opts.afterSeq, limit: opts.limit ?? 500 });
+    return Promise.all(rows.map(async (row) => this.eventFromLogEnvelope(await this.hydrate(row))));
+  }
+
   async replayAfter(
     request: ChannelReplayAfterRequest,
     context: ChannelReplayContext

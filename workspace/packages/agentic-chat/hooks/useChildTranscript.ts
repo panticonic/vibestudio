@@ -13,14 +13,10 @@ import { useChannelMessages } from "./useChannelMessages.js";
  * child's REAL transcript — the same messages, tool pills, and argument/result
  * inspection the child's own panel would show — instead of a bounded summary.
  *
- * Deliberately lazy: a chat can hold many subagent cards, and each live
- * connection costs a subscription. Nothing connects until `enabled` flips true
- * (the user expanded the run and asked for the transcript), and the connection
- * is torn down as soon as it flips back.
- *
- * The relayed progress feed remains the card's always-available source. This is
- * an enhancement layered on top: if there is no connection config, or the
- * connect fails, the card keeps rendering the consolidated feed.
+ * Deliberately bounded: a card observes while the user has its transcript open,
+ * or while a live run is waiting for its canonical terminal fact. The caller
+ * disables observation as soon as that terminal is folded, so retained history
+ * owns no long-lived transport and no copied progress feed is needed.
  */
 
 export interface ChildTranscriptConnection {
@@ -69,7 +65,10 @@ export function useChildTranscript(options: {
     // A distinct clientId keeps this observer subscription from colliding with
     // the parent panel's own connection in the transport's client registry.
     const manager = new ConnectionManager({
-      config: { ...connection.config, clientId: `${connection.config.clientId}:observe:${channelId}` },
+      config: {
+        ...connection.config,
+        clientId: `${connection.config.clientId}:observe:${channelId}`,
+      },
       metadata: { ...connection.metadata, type: "panel" },
       callbacks: {
         onRoster: (update) => {

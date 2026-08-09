@@ -7,7 +7,6 @@
 import type { RpcCaller } from "@vibestudio/rpc";
 import {
   iterateChannelReplayAfterPages,
-  readChannelSubscriptionRecords,
   type ChannelReplayAfterRequest,
   type ChannelReplayEnvelope,
 } from "@workspace/pubsub";
@@ -62,30 +61,26 @@ interface ResolvedService {
   targetId?: string;
 }
 
-export interface ChannelSubscription {
-  result: {
-    ok: boolean;
-    participantId: string;
-    channelConfig?: Record<string, unknown>;
-    envelope: ChannelReplayEnvelope;
-  };
-  /** Settles when the routed response body reaches its terminal state. */
-  closed: Promise<void>;
-  /**
-   * Relinquish only this activation's routed response resource.
-   *
-   * Lifecycle replacement must not perform a semantic channel leave: that can
-   * wait for the channel's ordered delivery lane to call back into the very
-   * activation being suspended. The replacement activation reconstructs the
-   * same durable membership with replay.
-   */
-  release(): Promise<void>;
-  /**
-   * Perform an acknowledged graceful leave, then close the response body.
-   * Resolving this promise proves that the channel has removed membership and
-   * drained every structured delivery it accepted for this participant.
-   */
-  close(): Promise<void>;
+export type ChannelDeliveryEndpoint =
+  | { kind: "entity"; entityId: string }
+  | { kind: "session" };
+
+export interface ChannelJoinInput {
+  participantId: string;
+  revision: number;
+  contextId: string;
+  metadata: Record<string, unknown>;
+  delivery: "all" | "addressed" | "none";
+  endpoint: ChannelDeliveryEndpoint;
+  applicationConfig: { version: number; value: unknown } | null;
+  replay: boolean;
+}
+
+export interface ChannelJoinResult {
+  ok: boolean;
+  participantId: string;
+  channelConfig?: Record<string, unknown>;
+  envelope?: ChannelReplayEnvelope;
 }
 
 export class ChannelClient {
@@ -187,6 +182,15 @@ export class ChannelClient {
   ): Promise<{ id?: number }> {
     return this.call("publish", participantId, payloadKind, payload, opts);
   }
+  async recordReadReceipt(
+    participantId: string,
+    messageId: string,
+    turnId?: string
+  ): Promise<void> {
+    await this.call("recordReceipt", participantId, messageId, "read", {
+      ...(turnId ? { turnId } : {}),
+    });
+  }
   async update(
     participantId: string,
     messageId: string,
@@ -221,6 +225,21 @@ export class ChannelClient {
   async sendSignalEvent<T>(participantId: string, contentType: string, payload: T): Promise<void> {
     await this.sendSignal(participantId, JSON.stringify(payload), contentType);
   }
+  /** Durable semantic signal. Unlike UI/model progress hints, this is appended
+   * to the canonical log and therefore survives restart and hint loss. */
+  async publishSignalFact<T>(
+    participantId: string,
+    contentType: string,
+    payload: T,
+    idempotencyKey: string
+  ): Promise<void> {
+    await this.publish(
+      participantId,
+      "signal",
+      { content: JSON.stringify(payload), contentType },
+      { idempotencyKey }
+    );
+  }
   async broadcastStoredEnvelopes(envelopeIds: string[]): Promise<{ broadcasted: number }> {
     return this.call("broadcastStoredEnvelopes", envelopeIds) as Promise<{ broadcasted: number }>;
   }
@@ -230,81 +249,16 @@ export class ChannelClient {
   async setTypingState(participantId: string, typing: boolean): Promise<void> {
     await this.call("setTypingState", participantId, typing);
   }
-  async openSubscription(
-    participantId: string,
-    metadata: Record<string, unknown>
-  ): Promise<ChannelSubscription> {
-    type Result = {
-      ok: boolean;
-      participantId: string;
-      channelConfig?: Record<string, unknown>;
-      envelope: ChannelReplayEnvelope;
-    };
-    const controller = new AbortController();
-    const response = await this.rpc.stream(
-      await this.target(),
-      "subscribe",
-      [participantId, metadata],
-      { signal: controller.signal }
-    );
-    const records = readChannelSubscriptionRecords<Result, unknown>(response);
-    const first = await records.next();
-    if (first.done || first.value.kind !== "subscribed") {
-      await records.return();
-      throw new Error("Channel subscription closed without a subscription ACK");
-    }
-    let explicitlyClosed = false;
-    const closed = (async () => {
-      try {
-        for await (const record of records) {
-          if (record.kind === "subscribed") {
-            throw new Error("Channel subscription sent more than one ACK");
-          }
-          // Agent vessels receive live data through host-claimed durable
-          // batches. Draining this response owns their exact session lifetime;
-          // it is not a second semantic delivery path.
-        }
-      } catch (error) {
-        // An acknowledged release/leave aborts the local response body after
-        // the channel has closed its authoritative endpoint. That local abort
-        // is the expected mirror terminal, not an unexpected disconnect.
-        if (!explicitlyClosed) throw error;
-      }
-      if (!explicitlyClosed) throw new Error("Channel subscription closed unexpectedly");
-    })();
-    closed.catch(() => {});
-    let closePromise: Promise<void> | null = null;
-    let releasePromise: Promise<void> | null = null;
-    return {
-      result: first.value.result,
-      closed,
-      release: () => {
-        explicitlyClosed = true;
-        if (!releasePromise) {
-          releasePromise = (async () => {
-            try {
-              await this.call<void>("releaseSubscription", participantId);
-            } finally {
-              // The channel's method acknowledgement is the proof that it
-              // closed this exact response resource and fenced structured
-              // delivery. Do not wait for the same terminal to traverse the
-              // response stream back to the activation being released.
-              controller.abort();
-            }
-          })();
-        }
-        return releasePromise;
-      },
-      close: () => {
-        explicitlyClosed = true;
-        if (!closePromise) {
-          closePromise = this.call<void>("unsubscribe", participantId).finally(() => {
-            controller.abort();
-          });
-        }
-        return closePromise;
-      },
-    };
+  async join(input: ChannelJoinInput): Promise<ChannelJoinResult> {
+    return this.call("join", input) as Promise<ChannelJoinResult>;
+  }
+
+  async leave(participantId: string, revision: number): Promise<void> {
+    await this.call("leave", { participantId, revision });
+  }
+
+  async relationshipState(participantId: string): Promise<{ revision: number; active: boolean }> {
+    return this.call("relationshipState", participantId);
   }
   async getParticipants(): Promise<
     Array<{

@@ -24,7 +24,7 @@ import {
 import type { ChannelEvent } from "@workspace/harness";
 import type { SqlStorage } from "@workspace/runtime/worker";
 import type { ChannelCallEventBuilders } from "@workspace/channel-policies";
-import { participantIsAgentVessel, type StoredAttachment } from "./types.js";
+import type { StoredAttachment } from "./types.js";
 import type { ChannelLog } from "./log-store.js";
 
 /** A promise plus its resolver, used as a start-journaling barrier. */
@@ -137,7 +137,7 @@ export interface CallTransportDeps {
   emitSignal(participantId: string, event: ChannelEvent): void;
   participantRef(participantId: string): ParticipantRef;
   getSenderMetadata(participantId: string): Record<string, unknown> | undefined;
-  participantTransport(participantId: string): "rpc" | "do" | null;
+  participantTransport(participantId: string): "external-session" | "entity" | "resident-session" | null;
   rpcCall(targetId: string, method: string, args: unknown[]): Promise<unknown>;
   waitUntil(promise: Promise<unknown>): void;
   getStateValue(key: string): string | null;
@@ -422,19 +422,7 @@ export class CallTransport {
       await this.settleCall(pendingRow.transportCallId, { error: message }, true);
       return;
     }
-    // A "do" target gets the synchronous `onMethodCall` dispatch ONLY if it's an agent vessel — it
-    // implements `onMethodCall` AND opted into structured delivery (`receivesChannelEnvelopes`, set by
-    // SubscriptionManager). An RPC-style connectionless DO client (the eval's `connectViaRpc` /
-    // HeadlessSession) has NO `onMethodCall` handler: its participant id is just the host DO's id, so
-    // `transport` is "do" purely by id-shape — but it settles method calls the RPC way, via the
-    // broadcast `started` (delivered on every participant subscription, broadcast.ts) +
-    // `submitMethodResult`. Routing it through `deliverDoMethodCall` dispatches to a missing handler and
-    // never settles the call. Same discriminator broadcast.ts uses for the
-    // structured envelope, so the two dispatch decisions stay aligned.
-    const isAgentVesselTarget = participantIsAgentVessel(
-      this.deps.getSenderMetadata(pendingRow.targetId)
-    );
-    if (transport === "do" && isAgentVesselTarget) {
+    if (transport === "entity") {
       this.deps.waitUntil(
         this.deliverDoMethodCall({
           targetPid: pendingRow.targetId,
@@ -878,10 +866,7 @@ export class CallTransport {
         createdAt: new Date().toISOString(),
       });
       const transport = this.deps.participantTransport(participantId);
-      const isAgentVesselTarget = participantIsAgentVessel(
-        this.deps.getSenderMetadata(participantId)
-      );
-      if (transport === "do" && isAgentVesselTarget) {
+      if (transport === "entity") {
         // Agent vessels execute method calls only through the structured
         // onMethodCall boundary. Their subscription response owns membership
         // but intentionally is not a second semantic delivery path.

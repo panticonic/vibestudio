@@ -687,10 +687,10 @@ async function main() {
   let entityStoreInstance: import("./workspaceEntityStore.js").WorkspaceEntityStore | null = null;
   const { DurableObjectExecutionReadiness } = await import("./durableObjectExecutionReadiness.js");
   const durableObjectExecutionReadiness = new DurableObjectExecutionReadiness({
-    resolveActiveEntity: (id) =>
+    resolveEntity: (id) =>
       ensureEntityStore(
         container.get<import("./doDispatch.js").DODispatch>("doDispatch")
-      ).resolveActiveRecord(id),
+      ).resolveRecord(id),
     restoreExactExecution: async (record) => {
       const manager = workerdManagerForGateway;
       if (!manager) {

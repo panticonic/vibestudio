@@ -36,7 +36,7 @@ export type EffectKind =
   | "channel_call"
   | "http_call"
   | "credential_wait"
-  | "publish_envelope";
+  | "record_receipt";
 
 export interface EffectDescriptorBase {
   /** deterministic (§1.5); == outbox PK. */
@@ -112,10 +112,10 @@ export interface CredentialWaitEffect extends EffectDescriptorBase {
   expiresAt: string;
 }
 
-export interface PublishEnvelopeEffect extends EffectDescriptorBase {
-  kind: "publish_envelope";
-  payloadKind: string;
-  payload: unknown;
+export interface RecordReceiptEffect extends EffectDescriptorBase {
+  kind: "record_receipt";
+  messageId: string;
+  turnId: string;
 }
 
 export type EffectDescriptor =
@@ -125,7 +125,7 @@ export type EffectDescriptor =
   | ChannelCallEffect
   | HttpCallEffect
   | CredentialWaitEffect
-  | PublishEnvelopeEffect;
+  | RecordReceiptEffect;
 
 // ---------------------------------------------------------------------------
 // derivePendingEffects (§1.7) — the dispatch-cache derivation
@@ -308,7 +308,7 @@ export function derivePendingEffects(state: AgentState): EffectDescriptor[] {
   for (const wait of Object.values(state.pendingCredentialWaits)) {
     out.push(credentialWaitEffect(state, wait));
   }
-  return out; // publish_envelope is best-effort and exempt (§1.4.6)
+  return out; // receipt effects are emitted at the consuming step boundary
 }
 
 // ---------------------------------------------------------------------------
@@ -611,7 +611,7 @@ export function outcomeEvents(
     ];
   }
 
-  return []; // publish_envelope: fire-and-forget, no outcome events
+  return []; // record_receipt: projection update, no trajectory outcome event
 }
 
 function shouldPublishModelOutcome(request: ModelRequestDescriptor, blocks: unknown[]): boolean {

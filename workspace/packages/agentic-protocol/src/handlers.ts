@@ -692,26 +692,6 @@ export function applyTaskEvent(
     };
   }
 
-  if (event.kind === "task.progress") {
-    return {
-      ...tasks,
-      [taskId]: {
-        ...existing,
-        status: "running",
-        updatedAt: event.createdAt,
-        progress: [
-          ...existing.progress,
-          {
-            at: event.createdAt,
-            message: "message" in payload ? payload.message : undefined,
-            progress: "progress" in payload ? payload.progress : undefined,
-            data: "data" in payload ? payload.data : undefined,
-          },
-        ],
-      },
-    };
-  }
-
   if (event.kind === "task.completed") {
     return {
       ...tasks,

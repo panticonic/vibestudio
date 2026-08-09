@@ -337,7 +337,6 @@ async function tail(inv: ParsedInvocation): Promise<number> {
               callerId,
               {
                 handle,
-                receivesChannelEnvelopes: false,
                 replay: true,
                 replayMessageLimit: 10,
                 ...(lastRenderedSeq > 0 ? { sinceId: lastRenderedSeq } : {}),

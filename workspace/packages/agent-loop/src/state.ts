@@ -118,8 +118,8 @@ export interface AgentLoopConfig {
   /** Max subagent nesting depth (enforced at spawn by the vessel). Absent ⇒
    *  the vessel's implementation default. */
   maxSubagentDepth?: number;
-  /** Maximum child contexts this supervisor may own at once. A terminal child
-   *  keeps its slot until `close_subagent` completes teardown successfully. */
+  /** Maximum concurrently executing child runs. Retained terminal results do
+   *  not consume execution capacity. */
   maxSubagents?: number;
 }
 

@@ -159,7 +159,8 @@ interface DriverClaimPayload {
   workKind?: unknown;
   laneKey?: unknown;
   target?: unknown;
-  batch?: unknown;
+  delivery?: unknown;
+  endpointKind?: unknown;
   envelopeIds?: unknown;
 }
 
@@ -174,6 +175,10 @@ function requireTarget(value: unknown): DORef {
     throw new Error("durable-work claim has no valid target");
   }
   return value as DORef;
+}
+
+function isRetiredOwnerHint(error: unknown): boolean {
+  return (error as { code?: unknown })?.code === "DO_NOT_CREATED";
 }
 
 /**
@@ -233,12 +238,23 @@ export function createDurableWorkHandlers(
           );
         }
         const target = requireTarget(payload.target);
-        return doDispatch.dispatchHeldWithSignal(
-          target,
-          signal,
-          "acceptChannelBatch",
-          payload.batch
-        );
+        const delivery = payload.delivery as { channelId?: unknown; envelope?: unknown };
+        try {
+          return await doDispatch.dispatchHeldWithSignal(
+            target,
+            signal,
+            "acceptChannelDelivery",
+            delivery
+          );
+        } catch (error) {
+          if ((error as { code?: unknown })?.code === "DURABLE_OBJECT_RETIRED") {
+            return {
+              deliveryId: String((delivery as { deliveryId?: unknown }).deliveryId ?? claim.itemId),
+              disposition: "retired",
+            };
+          }
+          throw error;
+        }
       },
     },
     "workspace-publication": {
@@ -252,12 +268,22 @@ export function createDurableWorkHandlers(
         if (envelopeIds.length === 0) {
           throw new Error("workspace-publication claim has no envelope ids");
         }
-        const outcome = (await doDispatch.dispatchHeldWithSignal(
-          target,
-          signal,
-          "broadcastStoredEnvelopes",
-          envelopeIds
-        )) as { broadcasted?: unknown };
+        let outcome: { broadcasted?: unknown };
+        try {
+          outcome = (await doDispatch.dispatchHeldWithSignal(
+            target,
+            signal,
+            "broadcastStoredEnvelopes",
+            envelopeIds
+          )) as { broadcasted?: unknown };
+        } catch (error) {
+          if ((error as { code?: unknown })?.code !== "DURABLE_OBJECT_RETIRED") throw error;
+          // The workspace log is canonical; this outbox owns only live
+          // broadcast. Once the exact channel is retired there is no receiver
+          // to recover, so retaining the row would manufacture permanent retry
+          // work for an effect that can never become observable.
+          outcome = { broadcasted: envelopeIds.length };
+        }
         if (outcome?.broadcasted !== envelopeIds.length) {
           throw new Error(
             `workspace-publication broadcast acknowledged ${String(outcome?.broadcasted)} of ${envelopeIds.length} envelopes`
@@ -266,10 +292,10 @@ export function createDurableWorkHandlers(
         return outcome;
       },
     },
-    "agent-inbox": {
-      ...common("agent-inbox"),
+    "agent-wake": {
+      ...common("agent-wake"),
       execute: (owner, claim, signal) =>
-        doDispatch.dispatchHeldWithSignal(owner, signal, "executeInboxClaim", {
+        doDispatch.dispatchHeldWithSignal(owner, signal, "executeWakeClaim", {
           itemId: claim.itemId,
           generation: claim.generation,
         }),
@@ -462,7 +488,14 @@ export class DurableWorkDriver {
           limit: this.concurrency - this.runners.size,
         });
       } catch (error) {
-        log.warn(`claim failed for ${key}`, error);
+        if (isRetiredOwnerHint(error)) {
+          // Hints are disposable. Lifecycle retirement can remove the owner
+          // after it emitted a hint but before the host claims it; there is no
+          // durable owner left to recover and no retry to perform.
+          log.verbose(`discarded hint for retired owner ${key}`);
+        } else {
+          log.warn(`claim failed for ${key}`, error);
+        }
         continue;
       } finally {
         this.claiming.delete(key);
@@ -511,6 +544,7 @@ export class DurableWorkDriver {
     const controller = new AbortController();
     this.activeLanes.add(lane);
     this.controllers.add(controller);
+    let ownsContinuation = true;
     const runner = (async () => {
       const executionStartedAt = Date.now();
       this.trace({
@@ -539,7 +573,15 @@ export class DurableWorkDriver {
           generation: claim.generation,
           outcome,
         });
-        if (disposition === "stale") this.staleSettlements++;
+        if (disposition === "stale") {
+          this.staleSettlements++;
+          // A stale claimant no longer owns the durable row or its scheduling
+          // frontier. The current owner/generation supplies its own hint (and
+          // recovery scanning remains the crash backstop); asking the former
+          // owner for a continuation creates useless calls after lifecycle
+          // retirement.
+          ownsContinuation = false;
+        }
         this.trace({
           phase: "settlement.completed",
           trigger,
@@ -586,7 +628,7 @@ export class DurableWorkDriver {
       this.runners.delete(runner);
       this.controllers.delete(controller);
       this.activeLanes.delete(lane);
-      if (this.accepting) {
+      if (this.accepting && ownsContinuation) {
         this.notify({ owner, queues: [queue] }, "continuation");
         this.kick();
       }

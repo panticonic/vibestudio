@@ -1,17 +1,6 @@
-/**
- * SubagentRunStore — durable bookkeeping for the subagent runs a supervising
- * vessel owns.
- *
- * The log is the source of truth for a run's transcript (the task channel) and
- * its trajectory record (parent invocation events); this table is the vessel's
- * live INDEX over those — enough to route `complete`, gate depth/fan-out, drive
- * supervision tools, and re-home teardown after hibernation. Every field is
- * derived from durable inputs at spawn, so a replay reconstructs it
- * deterministically.
- */
+/** Durable supervisor index for retained subagent execution results. */
 
 import type { SqlStorage } from "@workspace/runtime/worker";
-import type { AgenticEvent } from "@workspace/agentic-protocol";
 import { assertExactSqlTableSchema } from "@workspace/runtime/worker";
 
 export type SubagentRunStatus =
@@ -20,13 +9,8 @@ export type SubagentRunStatus =
   | "completed"
   | "failed"
   | "cancelled"
-  | "abandoned"
-  /** Child resources were released; the row remains as the supervisor's
-   * durable, handle-resolvable lifecycle receipt. */
-  | "closed";
+  | "abandoned";
 
-/** The reasoning engine behind a subagent: "pi" is the in-process vessel; any
- *  other string names an extension-owned external launcher. */
 export type SubagentAgentKind = string;
 
 export interface SubagentRunRow {
@@ -42,18 +26,12 @@ export interface SubagentRunRow {
   depth: number;
   status: SubagentRunStatus;
   sourceEventId: string | null;
-  discardedBeforeIntegration: boolean;
-  emptyReadAfterSeq: number | null;
   semanticIntegrationSnapshot: Record<string, unknown> | null;
   startedAt: number;
   lastActivityAt: number;
-  /** Reasoning engine kind (default "pi"). */
   agentKind: SubagentAgentKind;
-  /** Effective Pi settings, or launcher options selected for an external run. */
   launchConfig: Record<string, unknown> | null;
-  /** External session entity id for extension-launched kinds, or null. */
   externalSessionEntityId: string | null;
-  /** Exact provider launch generation. Required for inspect/release ownership. */
   externalGenerationId: string | null;
 }
 
@@ -70,8 +48,80 @@ const SUBAGENT_RUN_STATUSES = [
   "failed",
   "cancelled",
   "abandoned",
-  "closed",
 ] as const satisfies readonly SubagentRunStatus[];
+
+interface SubagentRunSqlRow {
+  run_id: string;
+  task_channel_id: string;
+  parent_context_id?: string | null;
+  child_context_id: string;
+  child_entity_id: string;
+  child_participant_id: string | null;
+  parent_channel_id: string;
+  mode: string;
+  label: string;
+  depth: number;
+  status: string;
+  source_event_id: string | null;
+  semantic_integration_json: string | null;
+  started_at: number;
+  last_activity_at: number;
+  agent_kind: string;
+  launch_config_json: string | null;
+  external_session_entity_id: string | null;
+  external_generation_id: string | null;
+}
+
+function exactEnum<const Value extends string>(
+  field: string,
+  value: unknown,
+  allowed: readonly Value[]
+): Value {
+  if (typeof value === "string" && allowed.includes(value as Value)) return value as Value;
+  throw new Error(`Invalid subagent_runs.${field}: ${JSON.stringify(value)}`);
+}
+
+function parseRecord(field: string, value: string | null): Record<string, unknown> | null {
+  if (value === null) return null;
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error();
+    return parsed as Record<string, unknown>;
+  } catch {
+    throw new Error(`Invalid subagent_runs.${field}: ${JSON.stringify(value)}`);
+  }
+}
+
+function toRow(row: SubagentRunSqlRow): SubagentRunRow {
+  if (typeof row.agent_kind !== "string" || row.agent_kind.trim().length === 0) {
+    throw new Error(`Invalid subagent_runs.agent_kind: ${JSON.stringify(row.agent_kind)}`);
+  }
+  return {
+    runId: row.run_id,
+    taskChannelId: row.task_channel_id,
+    parentContextId: row.parent_context_id ?? null,
+    childContextId: row.child_context_id,
+    childEntityId: row.child_entity_id,
+    childParticipantId: row.child_participant_id ?? null,
+    parentChannelId: row.parent_channel_id,
+    mode: exactEnum("mode", row.mode, ["fresh", "fork"] as const),
+    label: row.label,
+    depth: Number(row.depth),
+    status: exactEnum("status", row.status, SUBAGENT_RUN_STATUSES),
+    sourceEventId: row.source_event_id ?? null,
+    semanticIntegrationSnapshot: parseRecord(
+      "semantic_integration_json",
+      row.semantic_integration_json
+    ),
+    startedAt: Number(row.started_at),
+    lastActivityAt: Number(row.last_activity_at),
+    agentKind: row.agent_kind,
+    launchConfig: parseRecord("launch_config_json", row.launch_config_json),
+    externalSessionEntityId: row.external_session_entity_id ?? null,
+    externalGenerationId: row.external_generation_id ?? null,
+  };
+}
+
 function normalizeAbbreviatedReference(reference: string): string {
   const trimmed = reference.trim();
   if (trimmed.endsWith("...")) return trimmed.slice(0, -3).trimEnd();
@@ -79,7 +129,6 @@ function normalizeAbbreviatedReference(reference: string): string {
   return trimmed;
 }
 
-/** Return edit distance when it is within `limit`, otherwise stop early. */
 function boundedEditDistance(left: string, right: string, limit: number): number | null {
   if (Math.abs(left.length - right.length) > limit) return null;
   let previous = Array.from({ length: right.length + 1 }, (_, index) => index);
@@ -115,144 +164,8 @@ function abbreviatedReferenceScore(reference: string, runId: string): number | n
   return best;
 }
 
-interface SubagentRunSqlRow {
-  run_id: string;
-  task_channel_id: string;
-  parent_context_id?: string | null;
-  child_context_id: string;
-  child_entity_id: string;
-  child_participant_id: string | null;
-  parent_channel_id: string;
-  mode: string;
-  label: string;
-  depth: number;
-  status: string;
-  source_event_id: string | null;
-  discarded_before_integration: number;
-  empty_read_after_seq: number | null;
-  semantic_integration_json: string | null;
-  started_at: number;
-  last_activity_at: number;
-  agent_kind: string;
-  launch_config_json: string | null;
-  external_session_entity_id: string | null;
-  external_generation_id: string | null;
-}
-
-interface SubagentProgressOutboxSqlRow {
-  sequence: number;
-  idempotency_key: string;
-  run_id: string;
-  message_seq: number;
-  parent_channel_id: string;
-  participant_id: string;
-  event_json: string;
-  attempts: number;
-  next_attempt_at: number;
-  last_error: string | null;
-  created_at: number;
-}
-
-export interface SubagentProgressOutboxEntry {
-  sequence: number;
-  idempotencyKey: string;
-  runId: string;
-  messageSeq: number;
-  parentChannelId: string;
-  participantId: string;
-  event: AgenticEvent<"task.progress">;
-  attempts: number;
-  nextAttemptAt: number;
-  lastError: string | null;
-  createdAt: number;
-}
-
-export interface SubagentProgressOutboxDiagnostics {
-  pending: number;
-  oldestCreatedAt: number | null;
-  failures: Array<{
-    idempotencyKey: string;
-    runId: string;
-    messageSeq: number;
-    attempts: number;
-    nextAttemptAt: number;
-    lastError: string;
-  }>;
-}
-
-function toProgressOutboxEntry(row: SubagentProgressOutboxSqlRow): SubagentProgressOutboxEntry {
-  return {
-    sequence: Number(row.sequence),
-    idempotencyKey: row.idempotency_key,
-    runId: row.run_id,
-    messageSeq: Number(row.message_seq),
-    parentChannelId: row.parent_channel_id,
-    participantId: row.participant_id,
-    event: JSON.parse(row.event_json) as AgenticEvent<"task.progress">,
-    attempts: Number(row.attempts),
-    nextAttemptAt: Number(row.next_attempt_at),
-    lastError: row.last_error,
-    createdAt: Number(row.created_at),
-  };
-}
-
-function toRow(row: SubagentRunSqlRow): SubagentRunRow {
-  const mode = exactEnum("mode", row.mode, ["fresh", "fork"] as const);
-  const status = exactEnum("status", row.status, SUBAGENT_RUN_STATUSES);
-  if (typeof row.agent_kind !== "string" || row.agent_kind.trim().length === 0) {
-    throw new Error(`Invalid subagent_runs.agent_kind: ${JSON.stringify(row.agent_kind)}`);
-  }
-  let launchConfig: Record<string, unknown> | null = null;
-  if (row.launch_config_json !== null) {
-    try {
-      const parsed = JSON.parse(row.launch_config_json) as unknown;
-      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error();
-      launchConfig = parsed as Record<string, unknown>;
-    } catch {
-      throw new Error(
-        `Invalid subagent_runs.launch_config_json: ${JSON.stringify(row.launch_config_json)}`
-      );
-    }
-  }
-  return {
-    runId: row.run_id,
-    taskChannelId: row.task_channel_id,
-    parentContextId: row.parent_context_id ?? null,
-    childContextId: row.child_context_id,
-    childEntityId: row.child_entity_id,
-    childParticipantId: row.child_participant_id ?? null,
-    parentChannelId: row.parent_channel_id,
-    mode,
-    label: row.label,
-    depth: Number(row.depth),
-    status,
-    sourceEventId: row.source_event_id ?? null,
-    discardedBeforeIntegration: Number(row.discarded_before_integration) === 1,
-    emptyReadAfterSeq: row.empty_read_after_seq === null ? null : Number(row.empty_read_after_seq),
-    semanticIntegrationSnapshot:
-      row.semantic_integration_json === null
-        ? null
-        : (JSON.parse(row.semantic_integration_json) as Record<string, unknown>),
-    startedAt: Number(row.started_at),
-    lastActivityAt: Number(row.last_activity_at),
-    agentKind: row.agent_kind,
-    launchConfig,
-    externalSessionEntityId: row.external_session_entity_id ?? null,
-    externalGenerationId: row.external_generation_id ?? null,
-  };
-}
-
-function exactEnum<const Value extends string>(
-  field: string,
-  value: unknown,
-  allowed: readonly Value[]
-): Value {
-  if (typeof value === "string" && allowed.includes(value as Value)) return value as Value;
-  throw new Error(`Invalid subagent_runs.${field}: ${JSON.stringify(value)}`);
-}
-
 export class SubagentRunStore {
-  constructor(private sql: SqlStorage) {}
+  constructor(private readonly sql: SqlStorage) {}
 
   static createTables(sql: SqlStorage): void {
     sql.exec(`
@@ -267,7 +180,9 @@ export class SubagentRunStore {
         mode TEXT NOT NULL,
         label TEXT NOT NULL,
         depth INTEGER NOT NULL,
-        status TEXT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN (
+          'starting', 'running', 'completed', 'failed', 'cancelled', 'abandoned'
+        )),
         started_at INTEGER NOT NULL,
         last_activity_at INTEGER NOT NULL,
         agent_kind TEXT NOT NULL,
@@ -275,8 +190,6 @@ export class SubagentRunStore {
         external_session_entity_id TEXT,
         external_generation_id TEXT,
         source_event_id TEXT,
-        discarded_before_integration INTEGER NOT NULL DEFAULT 0,
-        empty_read_after_seq INTEGER,
         semantic_integration_json TEXT
       )
     `);
@@ -301,64 +214,25 @@ export class SubagentRunStore {
         ["external_session_entity_id", "TEXT", false],
         ["external_generation_id", "TEXT", false],
         ["source_event_id", "TEXT", false],
-        ["discarded_before_integration", "INTEGER", true, "0"],
-        ["empty_read_after_seq", "INTEGER", false],
         ["semantic_integration_json", "TEXT", false],
       ],
       primaryKey: ["run_id"],
     });
-    sql.exec(`
-      CREATE TABLE IF NOT EXISTS subagent_progress_outbox (
-        sequence INTEGER PRIMARY KEY AUTOINCREMENT,
-        idempotency_key TEXT NOT NULL UNIQUE,
-        run_id TEXT NOT NULL,
-        message_seq INTEGER NOT NULL,
-        parent_channel_id TEXT NOT NULL,
-        participant_id TEXT NOT NULL,
-        event_json TEXT NOT NULL,
-        attempts INTEGER NOT NULL DEFAULT 0,
-        next_attempt_at INTEGER NOT NULL,
-        last_error TEXT,
-        created_at INTEGER NOT NULL
-      )
-    `);
-    assertExactSqlTableSchema(sql, {
-      table: "subagent_progress_outbox",
-      columns: [
-        ["sequence", "INTEGER", false],
-        ["idempotency_key", "TEXT", true],
-        ["run_id", "TEXT", true],
-        ["message_seq", "INTEGER", true],
-        ["parent_channel_id", "TEXT", true],
-        ["participant_id", "TEXT", true],
-        ["event_json", "TEXT", true],
-        ["attempts", "INTEGER", true, "0"],
-        ["next_attempt_at", "INTEGER", true],
-        ["last_error", "TEXT", false],
-        ["created_at", "INTEGER", true],
-      ],
-      primaryKey: ["sequence"],
-    });
-    sql.exec(`
-      CREATE INDEX IF NOT EXISTS subagent_progress_outbox_run_sequence
-      ON subagent_progress_outbox (run_id, sequence)
-    `);
   }
 
   createTables(): void {
     SubagentRunStore.createTables(this.sql);
   }
 
-  /** Idempotent insert — a re-driven spawn (same runId) is a no-op. */
   insert(row: SubagentRunRow): void {
     this.sql.exec(
       `INSERT OR IGNORE INTO subagent_runs
-         (run_id, task_channel_id, parent_context_id, child_context_id, child_entity_id, child_participant_id, parent_channel_id,
-          mode, label, depth, status, source_event_id,
-          discarded_before_integration, empty_read_after_seq, semantic_integration_json,
-          started_at, last_activity_at, agent_kind,
-          launch_config_json, external_session_entity_id, external_generation_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         (run_id, task_channel_id, parent_context_id, child_context_id, child_entity_id,
+          child_participant_id, parent_channel_id, mode, label, depth, status,
+          source_event_id, semantic_integration_json, started_at,
+          last_activity_at, agent_kind, launch_config_json, external_session_entity_id,
+          external_generation_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       row.runId,
       row.taskChannelId,
       row.parentContextId,
@@ -371,8 +245,6 @@ export class SubagentRunStore {
       row.depth,
       row.status,
       row.sourceEventId,
-      row.discardedBeforeIntegration ? 1 : 0,
-      row.emptyReadAfterSeq,
       row.semanticIntegrationSnapshot ? JSON.stringify(row.semanticIntegrationSnapshot) : null,
       row.startedAt,
       row.lastActivityAt,
@@ -384,60 +256,31 @@ export class SubagentRunStore {
   }
 
   get(runId: string): SubagentRunRow | null {
-    const rows = this.sql
-      .exec(`SELECT * FROM subagent_runs WHERE run_id = ?`, runId)
-      .toArray() as unknown as SubagentRunSqlRow[];
-    return rows.length > 0 ? toRow(rows[0]!) : null;
+    const row = this.sql.exec(`SELECT * FROM subagent_runs WHERE run_id = ?`, runId).toArray()[0];
+    return row ? toRow(row as unknown as SubagentRunSqlRow) : null;
   }
 
   getBySourceEvent(sourceEventId: string): SubagentRunRow | null {
-    const rows = this.sql
+    const row = this.sql
       .exec(
         `SELECT * FROM subagent_runs WHERE source_event_id = ? ORDER BY started_at DESC LIMIT 1`,
         sourceEventId
       )
-      .toArray() as unknown as SubagentRunSqlRow[];
-    return rows.length > 0 ? toRow(rows[0]!) : null;
-  }
-
-  /**
-   * Resolve the durable id first, then a sufficiently long unique prefix.
-   * Display handles include an ellipsis, but callers may naturally retain or
-   * omit it when copying a prefix. A tiny edit allowance covers
-   * display/model truncation at the boundary without turning arbitrary strings
-   * into run handles.
-   */
-  resolveReference(reference: string, parentChannelId?: string): SubagentRunReferenceResolution {
-    const exact = this.get(reference);
-    if (exact) return { kind: "exact", run: exact };
-
-    const abbreviated = normalizeAbbreviatedReference(reference);
-    if (abbreviated.length < MIN_ABBREVIATED_RUN_ID_LENGTH) return null;
-
-    const candidates = this.listAll()
-      .filter((run) => !parentChannelId || run.parentChannelId === parentChannelId)
-      .map((run) => ({ run, score: abbreviatedReferenceScore(abbreviated, run.runId) }))
-      .filter(
-        (candidate): candidate is { run: SubagentRunRow; score: number } => candidate.score !== null
-      );
-    if (candidates.length === 0) return null;
-    const bestScore = Math.min(...candidates.map((candidate) => candidate.score));
-    const best = candidates.filter((candidate) => candidate.score === bestScore);
-    if (best.length !== 1) return { kind: "ambiguous" };
-    return { kind: "abbreviated", run: best[0]!.run };
-  }
-
-  listAll(): SubagentRunRow[] {
-    return (
-      this.sql.exec(`SELECT * FROM subagent_runs`).toArray() as unknown as SubagentRunSqlRow[]
-    ).map(toRow);
+      .toArray()[0];
+    return row ? toRow(row as unknown as SubagentRunSqlRow) : null;
   }
 
   getByTaskChannel(taskChannelId: string): SubagentRunRow | null {
-    const rows = this.sql
+    const row = this.sql
       .exec(`SELECT * FROM subagent_runs WHERE task_channel_id = ?`, taskChannelId)
-      .toArray() as unknown as SubagentRunSqlRow[];
-    return rows.length > 0 ? toRow(rows[0]!) : null;
+      .toArray()[0];
+    return row ? toRow(row as unknown as SubagentRunSqlRow) : null;
+  }
+
+  listAll(): SubagentRunRow[] {
+    return (this.sql.exec(`SELECT * FROM subagent_runs`).toArray() as unknown as SubagentRunSqlRow[]).map(
+      toRow
+    );
   }
 
   listByStatus(status: SubagentRunStatus): SubagentRunRow[] {
@@ -448,15 +291,6 @@ export class SubagentRunStore {
     ).map(toRow);
   }
 
-  /** Number of child contexts still owned by the supervisor. Closed receipt
-   * rows remain queryable but no longer consume a slot. */
-  countAllocated(): number {
-    const row = this.sql
-      .exec(`SELECT COUNT(*) AS cnt FROM subagent_runs WHERE status <> 'closed'`)
-      .toArray()[0];
-    return Number(row?.["cnt"] ?? 0);
-  }
-
   listLive(): SubagentRunRow[] {
     return (
       this.sql
@@ -465,40 +299,36 @@ export class SubagentRunStore {
     ).map(toRow);
   }
 
+  countLive(): number {
+    const row = this.sql
+      .exec(`SELECT COUNT(*) AS cnt FROM subagent_runs WHERE status IN ('starting', 'running')`)
+      .toArray()[0];
+    return Number(row?.["cnt"] ?? 0);
+  }
+
+  resolveReference(reference: string, parentChannelId?: string): SubagentRunReferenceResolution {
+    const exact = this.get(reference);
+    if (exact) return { kind: "exact", run: exact };
+    const abbreviated = normalizeAbbreviatedReference(reference);
+    if (abbreviated.length < MIN_ABBREVIATED_RUN_ID_LENGTH) return null;
+    const candidates = this.listAll()
+      .filter((run) => !parentChannelId || run.parentChannelId === parentChannelId)
+      .map((run) => ({ run, score: abbreviatedReferenceScore(abbreviated, run.runId) }))
+      .filter(
+        (candidate): candidate is { run: SubagentRunRow; score: number } => candidate.score !== null
+      );
+    if (candidates.length === 0) return null;
+    const bestScore = Math.min(...candidates.map(({ score }) => score));
+    const best = candidates.filter(({ score }) => score === bestScore);
+    return best.length === 1 ? { kind: "abbreviated", run: best[0]!.run } : { kind: "ambiguous" };
+  }
+
   setStatus(runId: string, status: SubagentRunStatus): void {
     this.sql.exec(`UPDATE subagent_runs SET status = ? WHERE run_id = ?`, status, runId);
   }
 
   setSourceEventId(runId: string, sourceEventId: string): void {
-    this.sql.exec(
-      `UPDATE subagent_runs SET source_event_id = ? WHERE run_id = ?`,
-      sourceEventId,
-      runId
-    );
-  }
-
-  setDiscardedBeforeIntegration(runId: string): void {
-    this.sql.exec(
-      `UPDATE subagent_runs SET discarded_before_integration = 1 WHERE run_id = ?`,
-      runId
-    );
-  }
-
-  setEmptyReadAfterSeq(runId: string, sequence: number | null): void {
-    this.sql.exec(
-      `UPDATE subagent_runs SET empty_read_after_seq = ? WHERE run_id = ?`,
-      sequence,
-      runId
-    );
-  }
-
-  clearEmptyReadAfterNewEvent(runId: string, sequence: number): void {
-    this.sql.exec(
-      `UPDATE subagent_runs SET empty_read_after_seq = NULL
-        WHERE run_id = ? AND empty_read_after_seq IS NOT NULL AND empty_read_after_seq < ?`,
-      runId,
-      sequence
-    );
+    this.sql.exec(`UPDATE subagent_runs SET source_event_id = ? WHERE run_id = ?`, sourceEventId, runId);
   }
 
   setSemanticIntegrationSnapshot(runId: string, value: Record<string, unknown>): void {
@@ -510,11 +340,7 @@ export class SubagentRunStore {
   }
 
   setChildParticipantId(runId: string, participantId: string | null): void {
-    this.sql.exec(
-      `UPDATE subagent_runs SET child_participant_id = ? WHERE run_id = ?`,
-      participantId,
-      runId
-    );
+    this.sql.exec(`UPDATE subagent_runs SET child_participant_id = ? WHERE run_id = ?`, participantId, runId);
   }
 
   setLaunchConfig(runId: string, launchConfig: Record<string, unknown> | null): void {
@@ -525,14 +351,9 @@ export class SubagentRunStore {
     );
   }
 
-  setExternalSession(
-    runId: string,
-    session: { entityId: string; generationId: string } | null
-  ): void {
+  setExternalSession(runId: string, session: { entityId: string; generationId: string } | null): void {
     this.sql.exec(
-      `UPDATE subagent_runs
-       SET external_session_entity_id = ?, external_generation_id = ?
-       WHERE run_id = ?`,
+      `UPDATE subagent_runs SET external_session_entity_id = ?, external_generation_id = ? WHERE run_id = ?`,
       session?.entityId ?? null,
       session?.generationId ?? null,
       runId
@@ -540,19 +361,11 @@ export class SubagentRunStore {
   }
 
   setChildEntityId(runId: string, childEntityId: string): void {
-    this.sql.exec(
-      `UPDATE subagent_runs SET child_entity_id = ? WHERE run_id = ?`,
-      childEntityId,
-      runId
-    );
+    this.sql.exec(`UPDATE subagent_runs SET child_entity_id = ? WHERE run_id = ?`, childEntityId, runId);
   }
 
   setParentContextId(runId: string, contextId: string): void {
-    this.sql.exec(
-      `UPDATE subagent_runs SET parent_context_id = ? WHERE run_id = ?`,
-      contextId,
-      runId
-    );
+    this.sql.exec(`UPDATE subagent_runs SET parent_context_id = ? WHERE run_id = ?`, contextId, runId);
   }
 
   touch(runId: string, at: number): void {
@@ -561,131 +374,5 @@ export class SubagentRunStore {
 
   delete(runId: string): void {
     this.sql.exec(`DELETE FROM subagent_runs WHERE run_id = ?`, runId);
-  }
-
-  /**
-   * Durably enqueue a parent-card progress event. The idempotency key is also
-   * the target channel publication key, so losing the acknowledgement after a
-   * successful publish is safe: the retry resolves to the same channel event.
-   */
-  enqueueProgress(input: {
-    idempotencyKey: string;
-    runId: string;
-    messageSeq: number;
-    parentChannelId: string;
-    participantId: string;
-    event: AgenticEvent<"task.progress">;
-    now: number;
-  }): void {
-    this.sql.exec(
-      `INSERT OR IGNORE INTO subagent_progress_outbox
-         (idempotency_key, run_id, message_seq, parent_channel_id, participant_id,
-          event_json, attempts, next_attempt_at, last_error, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, 0, ?, NULL, ?)`,
-      input.idempotencyKey,
-      input.runId,
-      input.messageSeq,
-      input.parentChannelId,
-      input.participantId,
-      JSON.stringify(input.event),
-      input.now,
-      input.now
-    );
-  }
-
-  /**
-   * Return due queue heads only. Later events for a run remain blocked behind
-   * its oldest outstanding event, while unrelated runs can continue.
-   */
-  dueProgress(now: number, limit: number): SubagentProgressOutboxEntry[] {
-    return (
-      this.sql
-        .exec(
-          `SELECT current.*
-           FROM subagent_progress_outbox AS current
-           WHERE current.next_attempt_at <= ?
-             AND NOT EXISTS (
-               SELECT 1 FROM subagent_progress_outbox AS earlier
-               WHERE earlier.run_id = current.run_id
-                 AND earlier.sequence < current.sequence
-             )
-           ORDER BY current.sequence ASC
-           LIMIT ?`,
-          now,
-          limit
-        )
-        .toArray() as unknown as SubagentProgressOutboxSqlRow[]
-    ).map(toProgressOutboxEntry);
-  }
-
-  getProgress(sequence: number): SubagentProgressOutboxEntry | null {
-    const row = this.sql
-      .exec(`SELECT * FROM subagent_progress_outbox WHERE sequence = ?`, sequence)
-      .toArray()[0] as unknown as SubagentProgressOutboxSqlRow | undefined;
-    return row ? toProgressOutboxEntry(row) : null;
-  }
-
-  nextProgressWakeAt(): number | null {
-    const row = this.sql
-      .exec(
-        `SELECT MIN(current.next_attempt_at) AS due
-         FROM subagent_progress_outbox AS current
-         WHERE NOT EXISTS (
-           SELECT 1 FROM subagent_progress_outbox AS earlier
-           WHERE earlier.run_id = current.run_id
-             AND earlier.sequence < current.sequence
-         )`
-      )
-      .toArray()[0];
-    const value = row?.["due"];
-    return typeof value === "number" && Number.isFinite(value) ? value : null;
-  }
-
-  completeProgress(sequence: number): void {
-    this.sql.exec(`DELETE FROM subagent_progress_outbox WHERE sequence = ?`, sequence);
-  }
-
-  failProgress(sequence: number, error: string, nextAttemptAt: number): void {
-    this.sql.exec(
-      `UPDATE subagent_progress_outbox
-       SET attempts = attempts + 1, last_error = ?, next_attempt_at = ?
-       WHERE sequence = ?`,
-      error,
-      nextAttemptAt,
-      sequence
-    );
-  }
-
-  progressDiagnostics(): SubagentProgressOutboxDiagnostics {
-    const summary = this.sql
-      .exec(
-        `SELECT COUNT(*) AS pending, MIN(created_at) AS oldest_created_at
-         FROM subagent_progress_outbox`
-      )
-      .toArray()[0];
-    const failures = this.sql
-      .exec(
-        `SELECT idempotency_key, run_id, message_seq, attempts, next_attempt_at, last_error
-         FROM subagent_progress_outbox
-         WHERE last_error IS NOT NULL
-         ORDER BY sequence ASC
-         LIMIT 25`
-      )
-      .toArray() as Array<Record<string, unknown>>;
-    return {
-      pending: Number(summary?.["pending"] ?? 0),
-      oldestCreatedAt:
-        typeof summary?.["oldest_created_at"] === "number"
-          ? Number(summary["oldest_created_at"])
-          : null,
-      failures: failures.map((row) => ({
-        idempotencyKey: String(row["idempotency_key"]),
-        runId: String(row["run_id"]),
-        messageSeq: Number(row["message_seq"]),
-        attempts: Number(row["attempts"]),
-        nextAttemptAt: Number(row["next_attempt_at"]),
-        lastError: String(row["last_error"]),
-      })),
-    };
   }
 }

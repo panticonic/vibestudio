@@ -137,11 +137,7 @@ export type {
   ToolExecutionState,
 } from "./invocation-card-payload.js";
 export { parseInvocationCardPayload } from "./invocation-card-payload.js";
-export type {
-  SubagentProgressEntry,
-  SubagentRunState,
-  TaskCardPayload,
-} from "./task-card-payload.js";
+export type { SubagentRunState, TaskCardPayload } from "./task-card-payload.js";
 
 // --- Shared wire-event → ChatMessage merge helpers ---
 export {

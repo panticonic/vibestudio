@@ -1,6 +1,4 @@
-import type { InvocationOutcome, SubagentProgressUpdate } from "@workspace/agentic-protocol";
-
-export type SubagentProgressEntry = SubagentProgressUpdate & { at: string };
+import type { InvocationOutcome } from "@workspace/agentic-protocol";
 
 export interface SubagentRunState {
   runId?: string;
@@ -22,7 +20,6 @@ export interface TaskCardPayload {
     status: "pending" | "running" | "complete" | "error" | "cancelled" | "abandoned";
     terminalOutcome?: InvocationOutcome;
     description: string;
-    progress?: SubagentProgressEntry[];
     result?: unknown;
     isError?: boolean;
   };

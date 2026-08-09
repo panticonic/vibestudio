@@ -274,7 +274,7 @@ describe.runIf(RUN)("full agent turn over pubsub with real local models", () => 
           const callable = channel.instance as unknown as {
             subscribe(pid: string, metadata: Record<string, unknown>): Promise<unknown>;
           };
-          return callable.subscribe(pid, { ...metadata, receivesChannelEnvelopes: true });
+          return callable.subscribe(pid, metadata);
         }
         if (method === "unsubscribe") return { ok: true };
         if (method === "broadcastStoredEnvelopes") {
@@ -306,7 +306,7 @@ describe.runIf(RUN)("full agent turn over pubsub with real local models", () => 
       ).subscribe(USER_PID, { contextId: "ctx-live", name: "User", type: "panel" });
 
       // Agent joins through its OWN real subscription flow (vessel →
-      // channel client → real channel roster with receivesChannelEnvelopes).
+      // channel client → real channel roster).
       vessel.instance.callerIdForTest = USER_PID;
       vessel.instance.callerKindForTest = "panel";
       await vessel.instance.registerSubscriptionForTest(CHANNEL, {
@@ -342,20 +342,11 @@ describe.runIf(RUN)("full agent turn over pubsub with real local models", () => 
             limit: 8,
           });
           for (const claim of channelClaims) {
-            const batch = (
-              claim.payload as {
-                batch: {
-                  rows: Array<{
-                    deliveryKey: string;
-                    channelSeq: number;
-                    envelope: Record<string, unknown>;
-                  }>;
-                };
-              }
-            ).batch;
-            envelopesDelivered += batch.rows.length;
-            deliveredEnvelopes.push(...batch.rows.map((row) => row.envelope));
-            const outcome = vessel.instance.acceptChannelBatch(batch as never);
+            const delivery = (claim.payload as { delivery: { envelope: Record<string, unknown> } })
+              .delivery;
+            envelopesDelivered += 1;
+            deliveredEnvelopes.push(delivery.envelope);
+            const outcome = await vessel.instance.acceptChannelDelivery(delivery as never);
             channel.instance.settleReadyWork("channel-delivery", {
               workerId: "live-host",
               itemId: claim.itemId,
@@ -364,7 +355,7 @@ describe.runIf(RUN)("full agent turn over pubsub with real local models", () => 
             });
           }
 
-          for (const queue of ["agent-inbox", "agent-effect"] as const) {
+          for (const queue of ["agent-wake", "agent-effect"] as const) {
             const claims = vessel.instance.claimReadyWork(queue, {
               workerId: "live-host",
               now: Date.now(),
@@ -372,8 +363,8 @@ describe.runIf(RUN)("full agent turn over pubsub with real local models", () => 
             });
             for (const claim of claims) {
               const outcome =
-                queue === "agent-inbox"
-                  ? await vessel.instance.executeInboxClaim({
+                queue === "agent-wake"
+                  ? await vessel.instance.executeWakeClaim({
                       itemId: claim.itemId,
                       generation: claim.generation,
                     })

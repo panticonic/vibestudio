@@ -19,7 +19,7 @@ import {
   type AppendItem,
   type EffectDescriptor,
   type ModelCallEffect,
-  type PublishEnvelopeEffect,
+  type RecordReceiptEffect,
 } from "./effects.js";
 import type { DeferredPrompt } from "./state.js";
 import { applyEvent } from "./fold.js";
@@ -270,28 +270,20 @@ function turnOpenedItem(
   };
 }
 
-/** A single `message.read` ack as a best-effort publish_envelope effect.
- *  Deterministic identity (effectId + idempotencyKey) is one of three duplicate
- *  guards (effect-outbox PK, channel-publish idempotency, monotone reducer). */
+/** A monotone read-projection update. It never appends a receipt message. */
 function readAckEffect(
   channelId: string,
   sourceMessageId: string,
   turnId: string,
   ctx: StepContext
-): PublishEnvelopeEffect {
+): RecordReceiptEffect {
   return {
     effectId: `read:${sourceMessageId}:${turnId}`,
-    kind: "publish_envelope",
+    kind: "record_receipt",
     channelId,
     idempotencyKey: `read:${sourceMessageId}:${turnId}`,
-    payloadKind: AGENTIC_EVENT_PAYLOAD_KIND,
-    payload: {
-      kind: "message.read",
-      actor: ctx.selfRef,
-      causality: { messageId: sourceMessageId },
-      payload: { protocol: AGENTIC_PROTOCOL_VERSION, turnId },
-      createdAt: ctx.now,
-    },
+    messageId: sourceMessageId,
+    turnId,
   };
 }
 
@@ -308,7 +300,7 @@ function readAckEffects(opts: {
   freshSourceMessageIds: string[];
   turnId: string;
   ctx: StepContext;
-}): PublishEnvelopeEffect[] {
+}): RecordReceiptEffect[] {
   const consumed = new Set<string>(opts.freshSourceMessageIds.filter(Boolean));
   for (const entry of opts.state.steeringQueue) {
     if (entry.seq <= opts.contextThroughSeq && entry.sourceMessageId) {
@@ -1848,15 +1840,11 @@ function effectFailedStep(
     return { append, effects: [] };
   }
 
-  if (incoming.kind === "publish_envelope") {
-    // Best-effort, fire-and-forget (§1.4.6): never tracked as pending state and
-    // never re-derived, so a failed publish is simply dropped. It must NOT close
-    // the turn or emit an error diagnostic (the prior fall-through to the
-    // unmapped-effect catch-all incorrectly failed the turn on a dropped publish).
+  if (incoming.kind === "record_receipt") {
     return EMPTY;
   }
 
-  // Exhaustiveness guard: after the model_call/credential_wait/publish_envelope
+  // Exhaustiveness guard: after the model_call/credential_wait/record_receipt
   // branches above, the only remaining effect kinds are the invocation-style
   // ones, dispatched by effect-id prefix below (form: approval / inv:
   // tool-or-channel-or-http). If a new EffectKind is ever added to effects.ts

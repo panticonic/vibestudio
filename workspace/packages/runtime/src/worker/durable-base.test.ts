@@ -138,8 +138,8 @@ class LifecycleProbeDO extends TestDurableObjectBase {
 class WorkReadyProbeDO extends TestDurableObjectBase {
   protected createTables(): void {}
 
-  protected override durableWorkQueues(): readonly ["agent-inbox", "agent-effect"] {
-    return ["agent-inbox", "agent-effect"];
+  protected override durableWorkQueues(): readonly ["agent-wake", "agent-effect"] {
+    return ["agent-wake", "agent-effect"];
   }
 
   @rpc({
@@ -149,7 +149,7 @@ class WorkReadyProbeDO extends TestDurableObjectBase {
     sensitivity: "write",
   })
   enqueue(): { committed: true } {
-    this.markWorkReady("agent-inbox", "agent-inbox", "agent-effect");
+    this.markWorkReady("agent-wake", "agent-wake", "agent-effect");
     return { committed: true };
   }
 
@@ -159,13 +159,13 @@ class WorkReadyProbeDO extends TestDurableObjectBase {
     tier: "open",
     sensitivity: "write",
   })
-  drain(queue: "agent-inbox" | "agent-effect"): { drained: true } {
+  drain(queue: "agent-wake" | "agent-effect"): { drained: true } {
     this.acknowledgeDurableWorkReady(queue);
     return { drained: true };
   }
 
   override async resumeAfterRestart(): Promise<void> {
-    this.markWorkReady("agent-inbox");
+    this.markWorkReady("agent-wake");
   }
 }
 
@@ -819,7 +819,7 @@ describe("DurableObjectBase work-ready receipts", () => {
     );
 
     expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual(["agent-inbox", "agent-effect"]);
+    await expect(response.json()).resolves.toEqual(["agent-wake", "agent-effect"]);
   });
 
   it("re-emits one unacknowledged generation without manufacturing new work", async () => {
@@ -841,12 +841,12 @@ describe("DurableObjectBase work-ready receipts", () => {
 
     const ordinary = await request("enqueue", []);
     await expect(ordinary.json()).resolves.toEqual({ committed: true });
-    expect(ordinary.headers.get(DURABLE_WORK_READY_HEADER)).toBe("agent-effect,agent-inbox");
+    expect(ordinary.headers.get(DURABLE_WORK_READY_HEADER)).toBe("agent-effect,agent-wake");
 
     const firstAlarm = await request("__alarm", []);
-    expect(firstAlarm.headers.get(DURABLE_WORK_READY_HEADER)).toBe("agent-effect,agent-inbox");
+    expect(firstAlarm.headers.get(DURABLE_WORK_READY_HEADER)).toBe("agent-effect,agent-wake");
     const secondAlarm = await request("__alarm", []);
-    expect(secondAlarm.headers.get(DURABLE_WORK_READY_HEADER)).toBe("agent-effect,agent-inbox");
+    expect(secondAlarm.headers.get(DURABLE_WORK_READY_HEADER)).toBe("agent-effect,agent-wake");
     expect(
       sql
         .exec(
@@ -857,10 +857,10 @@ describe("DurableObjectBase work-ready receipts", () => {
         .toArray()
     ).toEqual([
       { key: "durable-work-ready-generation:agent-effect", value: "1" },
-      { key: "durable-work-ready-generation:agent-inbox", value: "1" },
+      { key: "durable-work-ready-generation:agent-wake", value: "1" },
     ]);
 
-    await request("drain", ["agent-inbox"]);
+    await request("drain", ["agent-wake"]);
     await request("drain", ["agent-effect"]);
     const drainedAlarm = await request("__alarm", []);
     expect(drainedAlarm.headers.get(DURABLE_WORK_READY_HEADER)).toBeNull();
@@ -868,7 +868,7 @@ describe("DurableObjectBase work-ready receipts", () => {
     const resume = await request("__lifecycle/resume", [
       { epoch: "e1", previousGeneration: null, currentGeneration: 1, reason: "planned" },
     ]);
-    expect(resume.headers.get(DURABLE_WORK_READY_HEADER)).toBe("agent-inbox");
+    expect(resume.headers.get(DURABLE_WORK_READY_HEADER)).toBe("agent-wake");
   });
 
   it("releases claims when a facet is reconstructed under the same host driver", async () => {

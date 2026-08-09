@@ -149,6 +149,9 @@ export type IncomingEvent =
 export interface IncomingAgenticEvent extends IncomingBase {
   type: typeof AGENTIC_EVENT_PAYLOAD_KIND;
   payload: AgenticEvent;
+  /** Host-attested content provenance from the durable channel envelope. */
+  contentClass: "internal" | "external";
+  externalKeys: string[];
 }
 
 /** Model credential connect card published by an agent (opaque payload —

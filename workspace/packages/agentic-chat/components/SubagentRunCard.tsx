@@ -1,68 +1,29 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Badge, Box, Flex, IconButton, Popover, Text } from "@radix-ui/themes";
 import { ChevronDownIcon, ExternalLinkIcon, InfoCircledIcon } from "@radix-ui/react-icons";
 import type { ChatMessage } from "@workspace/agentic-core";
 import { useOptionalChatMessageActions } from "../context/ChatContext";
 import { MarkdownPreview } from "./MarkdownPreview";
 import { MessageContent } from "./MessageContent";
-import { SubagentActivity } from "./SubagentActivity";
-import { SubagentTranscript } from "./SubagentTranscript";
-import { toolPresentation } from "./ActionMessage";
+import { SubagentTranscriptContent } from "./SubagentTranscript";
+import { useChildTranscript } from "../hooks/useChildTranscript";
 import { CopyIconButton } from "./shared/CopyButton";
 import { executionStatusLabel, executionStatusTone, isLiveStatus } from "./shared/invocationStatus";
-import { formatDuration, formatRelativeTime, useNow } from "./shared/relativeTime";
-import {
-  consolidateSubagentActivity,
-  countToolCalls,
-  latestActivity,
-  type SubagentActivityItem,
-} from "./subagent-activity";
 
 /**
  * SubagentRunCard — how a spawned child run appears in its parent's transcript.
  * Routed here from `MessageList.renderItem` for a durable subagent task card.
  *
- * The card has two sources of truth, in order of availability:
- *
- *  1. The relayed progress feed (`execution.progress`), folded by
- *     `consolidateSubagentActivity` into whole tool calls and child messages.
- *     Always present — it lives in the parent's own log, so it survives replay
- *     and works with no connection.
- *  2. The child's real transcript, observed live on its task channel and drawn
- *     by the same `MessageList` as the parent chat. Opt-in and lazily
- *     connected, because each observer costs a subscription.
- *
- * Both render through the main chat's components rather than card-local
- * lookalikes: a child's `Read` call is the same pill, with the same name and
- * the same argument/result inspection, as a `Read` in the parent conversation.
+ * The card's summary line comes from the durable task card itself (terminal
+ * summary / status). Detailed activity is the child's canonical task
+ * transcript, observed on its task channel and drawn by the same
+ * `MessageList` as the parent chat — there is no relayed copy of child
+ * activity in the parent's log.
  */
-
-type BodyView = "activity" | "transcript";
 
 function compactId(value: string): string {
   if (value.length <= 36) return value;
   return `${value.slice(0, 18)}…${value.slice(-12)}`;
-}
-
-/** One-line description of the newest activity, for the collapsed card. */
-function previewOf(item: SubagentActivityItem | null): { prefix?: string; content: string } | null {
-  if (!item) return null;
-  if (item.kind === "say") return { content: item.text };
-  if (item.kind === "tool") {
-    const presentation = toolPresentation(item.payload);
-    return presentation.preview
-      ? { prefix: `${presentation.displayName}:`, content: presentation.preview }
-      : { content: presentation.displayName };
-  }
-  return null;
-}
-
-/** When the newest activity happened — the stamp the collapsed line shows. */
-function activityAt(item: SubagentActivityItem | null): string | null {
-  if (!item) return null;
-  if (item.kind === "say") return item.at;
-  if (item.kind === "tool") return item.endedAt ?? item.startedAt;
-  return null;
 }
 
 function IdentifiersPopover({ rows }: { rows: Array<[string, string]> }) {
@@ -112,61 +73,50 @@ export function SubagentRunCard({ msg }: { msg: ChatMessage }) {
   const forkState = actions?.forkState;
   const childTranscript = actions?.childTranscript;
   const [open, setOpen] = useState(false);
-  const [view, setView] = useState<BodyView>("activity");
+  const [observedTerminal, setObservedTerminal] = useState<ChatMessage["task"] | null>(null);
 
   const task = msg.task;
-  const progressFeed = useMemo(() => task?.execution.progress ?? [], [task?.execution.progress]);
-  const activity = useMemo(() => consolidateSubagentActivity(progressFeed), [progressFeed]);
-  const truncatedPreview = useMemo(() => {
-    for (let index = activity.length - 1; index >= 0; index -= 1) {
-      const item = activity[index]!;
-      if (item.kind === "tool") {
-        if (
-          item.preview.argsTruncated ||
-          item.preview.resultTruncated ||
-          item.preview.textTruncated
-        ) {
-          return {
-            channelId: item.preview.sourceChannelId,
-            messageSeq: item.preview.sourceMessageSeq,
-          };
-        }
-      } else if (item.kind === "say" && item.textTruncated) {
-        return { channelId: item.sourceChannelId, messageSeq: item.sourceMessageSeq };
-      }
-    }
-    return null;
-  }, [activity]);
-
   const subagent = task?.subagent;
-  const status = task?.execution.status ?? "pending";
-  const isLive = isLiveStatus(status);
-  const now = useNow(Boolean(task && subagent) && isLive);
+  const recordedStatus = task?.execution.status ?? "pending";
+  const recordedIsLive = isLiveStatus(recordedStatus);
+  const runId = subagent?.runId ?? "";
+  const canObserve = Boolean(childTranscript && subagent?.taskChannelId);
+  const observed = useChildTranscript({
+    connection: childTranscript ?? null,
+    channelId: subagent?.taskChannelId ?? null,
+    contextId: subagent?.contextId ?? null,
+    // Live cards observe until they see the canonical terminal fact. Historical
+    // terminal cards therefore own no stream; expanding a card observes only
+    // for as long as the user is reading its transcript.
+    enabled: canObserve && (open || (recordedIsLive && !observedTerminal)),
+  });
+  const terminalTask = useMemo(
+    () =>
+      observed.messages
+        .map((message) => message.task)
+        .find(
+          (candidate) => candidate?.id === runId && !isLiveStatus(candidate.execution.status)
+        ) ?? null,
+    [observed.messages, runId]
+  );
+  useEffect(() => {
+    setObservedTerminal(null);
+  }, [runId]);
+  useEffect(() => {
+    if (terminalTask) setObservedTerminal(terminalTask);
+  }, [terminalTask]);
+
   if (!task || !subagent) return null;
 
-  const channelTitle = [...progressFeed]
-    .reverse()
-    .find((entry) => entry.kind === "title-changed" && entry.text?.trim())?.text;
-  const label = channelTitle || subagent.label || task.title || "Subagent";
+  const effectiveTask = observedTerminal ?? task;
+  const status = effectiveTask.execution.status;
+  const isLive = isLiveStatus(status);
+  const description = effectiveTask.execution.description.trim();
+  const label = subagent.label || task.title || "Subagent";
   const canOpenPanel = Boolean(forkState && subagent.taskChannelId && subagent.contextId);
-  const canObserve = Boolean(childTranscript && subagent.taskChannelId);
-
-  const callCount = countToolCalls(activity);
-  const latest = latestActivity(activity);
-  const preview =
-    previewOf(latest) ??
-    (task.execution.description.trim()
-      ? { content: task.execution.description.trim() }
-      : {
-          content: isLive ? "Waiting for the child agent to start" : "No child updates yet",
-        });
-  const latestAt = activityAt(latest);
-  const latestTime = latestAt ? formatRelativeTime(latestAt, now) : null;
-
-  // Wall time across the whole run, from the first relayed update to the last.
-  const first = activity[0];
-  const firstAt = first ? (first.kind === "tool" ? first.startedAt : first.at) : null;
-  const elapsed = firstAt && latestAt ? formatDuration(firstAt, latestAt) : null;
+  const preview = description
+    ? { content: description }
+    : { content: isLive ? "Working — open the card to watch the transcript" : "No summary yet" };
 
   const detailRows = (
     [
@@ -230,14 +180,6 @@ export function SubagentRunCard({ msg }: { msg: ChatMessage }) {
               )}
             </button>
             <Flex align="center" gap="2" className="subagent-card-actions">
-              {/* Calls, not raw update count: the old "76 updates" counted each
-                  call at least twice and told the reader nothing. */}
-              {callCount > 0 && (
-                <Text size="1" className="subagent-stat">
-                  {callCount} {callCount === 1 ? "call" : "calls"}
-                  {elapsed ? ` · ${elapsed}` : ""}
-                </Text>
-              )}
               <Badge
                 className="subagent-status-badge"
                 size="1"
@@ -264,86 +206,29 @@ export function SubagentRunCard({ msg }: { msg: ChatMessage }) {
             <button
               type="button"
               className="subagent-update-preview"
-              aria-label="Expand run details from latest update"
+              aria-label="Expand run details from summary"
               onClick={() => setOpen(true)}
             >
               <span className="subagent-activity-text">
-                {preview.prefix && (
-                  <span className="subagent-activity-prefix">{preview.prefix}</span>
-                )}
                 <MarkdownPreview content={preview.content} />
               </span>
-              {latestTime && (
-                <Text size="1" className="subagent-time" title={latestAt ?? undefined}>
-                  {latestTime}
-                </Text>
-              )}
             </button>
           )}
         </div>
 
         {open && (
           <Box className="subagent-details">
-            {task.execution.description && (
+            {description && (
               <div className="subagent-description">
-                <MessageContent content={task.execution.description} isStreaming={false} />
+                <MessageContent content={description} isStreaming={false} />
               </div>
             )}
 
-            {view === "activity" && truncatedPreview && (
-              <Flex className="subagent-preview-notice" align="center" justify="between" gap="2">
-                <Text size="1" color="amber">
-                  Compact preview only. Full source: {truncatedPreview.channelId ?? "child task"}#
-                  {truncatedPreview.messageSeq}.
-                </Text>
-                {canObserve && (
-                  <button
-                    type="button"
-                    className="subagent-preview-transcript-button"
-                    onClick={() => setView("transcript")}
-                  >
-                    Open full transcript
-                  </button>
-                )}
-              </Flex>
-            )}
-
-            {canObserve && (
-              <Flex className="subagent-view-switch" gap="1" align="center" role="tablist">
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={view === "activity"}
-                  className={`subagent-view-tab${view === "activity" ? " subagent-view-tab-active" : ""}`}
-                  onClick={() => setView("activity")}
-                >
-                  Activity
-                </button>
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={view === "transcript"}
-                  className={`subagent-view-tab${view === "transcript" ? " subagent-view-tab-active" : ""}`}
-                  onClick={() => setView("transcript")}
-                >
-                  Full transcript
-                </button>
-              </Flex>
-            )}
-
-            {view === "transcript" && canObserve && childTranscript && subagent.taskChannelId ? (
-              <SubagentTranscript
-                connection={childTranscript}
-                channelId={subagent.taskChannelId}
-                contextId={subagent.contextId ?? null}
-              />
-            ) : activity.length > 0 ? (
-              <SubagentActivity items={activity} now={now} />
+            {canObserve && childTranscript && subagent.taskChannelId ? (
+              <SubagentTranscriptContent transcript={observed} />
             ) : (
               <Text size="1" color="gray" className="subagent-empty-feed">
-                {canObserve
-                  ? "No relayed activity yet — open the full transcript to watch the child live."
-                  : "The child has not published progress yet."}
+                The child's transcript is not observable from this view.
               </Text>
             )}
           </Box>

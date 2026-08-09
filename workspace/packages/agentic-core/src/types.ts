@@ -19,6 +19,7 @@ import type {
 } from "@workspace/pubsub";
 import type { MessageTier, ParticipantRef } from "@workspace/agentic-protocol";
 import type { RecoveryCoordinator } from "@vibestudio/shell-core/recoveryCoordinator";
+import type { ResidentSessionRegistrar } from "@vibestudio/shared/residentSession";
 import type { SandboxOptions, SandboxResult, ScopesApi } from "@workspace/eval";
 import type { ChatMethodResult } from "./invocation-result.js";
 import type { AgentSubscriptionConfig } from "./agent-subscription-config.js";
@@ -64,6 +65,7 @@ export interface ConnectionConfig {
     ): Promise<Response>;
     on(event: string, listener: (event: { payload: unknown }) => void): () => void;
     selfId: string;
+    registerResidentSession?: ResidentSessionRegistrar["registerResidentSession"];
   };
   protocol?: string;
   recoveryCoordinator?: Pick<
@@ -74,6 +76,9 @@ export interface ConnectionConfig {
    * the pubsub client's generic default quickly because tool lifecycle events
    * count as envelopes even when they collapse into one visible card. */
   replayMessageLimit?: number;
+  /** Resident Durable Object operations receive finite callbacks instead of
+   * owning a channel response stream. */
+  deliveryMode?: "stream" | "resident";
 }
 
 /** A selectable agent type, enriched from worker manifest `agent` metadata. */

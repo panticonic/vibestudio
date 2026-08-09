@@ -83,7 +83,7 @@ function assertDeferralMatchesEffect(kind: EffectKind, reason: EffectDeferral["r
       if (reason === "external-result") return;
       break;
     case "prompt_artifacts":
-    case "publish_envelope":
+    case "record_receipt":
       break;
   }
   throw new Error(`Effect ${kind} cannot defer for ${reason}`);
@@ -2172,6 +2172,13 @@ export class AgentLoopDriver {
     const reason = new Error("durable-object activation released");
     for (const entry of active) entry.controller.abort(reason);
     return active.length;
+  }
+
+  /** A lifecycle-released activation deliberately leaves claimed rows leased.
+   * The next host generation adopts them; the dying generation's settlement
+   * is stale rather than evidence that an executor forgot its transition. */
+  isActivationReleased(): boolean {
+    return this.activationReleased;
   }
 
   /** Alarm-side recovery is deliberately local and bounded. It announces

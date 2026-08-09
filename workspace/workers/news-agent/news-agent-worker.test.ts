@@ -144,12 +144,15 @@ class TestNewsAgentWorker extends NewsAgentWorker {
 
   seedSubscription(channelId = "ch-1", participantId = "agent-news") {
     this.sql.exec(
-      `INSERT OR REPLACE INTO subscriptions (channel_id, context_id, subscribed_at, config, participant_id)
-       VALUES (?, ?, ?, ?, ?)`,
+      `INSERT OR REPLACE INTO subscriptions
+         (channel_id, context_id, revision, subscribed_at, config, relationship_json, participant_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
       channelId,
       "ctx-1",
+      1,
       Date.now(),
       JSON.stringify({ handle: "news" }),
+      JSON.stringify({ test: true }),
       participantId
     );
   }
@@ -163,22 +166,14 @@ class TestNewsAgentWorker extends NewsAgentWorker {
 
   protected override createChannelClient() {
     return {
-      openSubscription: async (participantId: string) => {
-        let settleClosed = () => {};
-        const closed = new Promise<void>((resolve) => {
-          settleClosed = resolve;
-        });
-        return {
-          result: {
-            ok: true,
-            participantId,
-            channelConfig: undefined,
-            envelope: { mode: "initial", logEvents: [], snapshots: [], ready: {} },
-          },
-          closed,
-          close: settleClosed,
-        };
-      },
+      relationshipState: async () => null,
+      join: async (input: { participantId: string }) => ({
+        ok: true,
+        participantId: input.participantId,
+        channelConfig: undefined,
+        envelope: { mode: "initial", logEvents: [], snapshots: [], ready: {} },
+      }),
+      leave: async () => ({ ok: true }),
       getConfig: async () => null,
       getParticipants: async () => [],
       getReplayAfter: async () => ({
@@ -198,6 +193,13 @@ class TestNewsAgentWorker extends NewsAgentWorker {
         this.signals.push({ participantId, content, type });
       },
       sendSignalEvent: async (participantId: string, contentType: string, payload: unknown) => {
+        this.signals.push({ participantId, content: JSON.stringify(payload), type: contentType });
+      },
+      publishSignalFact: async (
+        participantId: string,
+        contentType: string,
+        payload: unknown
+      ) => {
         this.signals.push({ participantId, content: JSON.stringify(payload), type: contentType });
       },
       getMessageType: async (typeId: string) => {

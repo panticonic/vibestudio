@@ -2248,12 +2248,10 @@ describe("agent-loop message delivery (acks, edit/retract, after-turn, flush)", 
   function readAcks(s: Scenario): Array<{ messageId: string; turnId?: string }> {
     return s.outputs
       .flatMap((output) => output.effects)
-      .filter((effect) => effect.kind === "publish_envelope")
+      .filter((effect) => effect.kind === "record_receipt")
       .map((effect) => {
-        const payload = (effect as { payload: Record<string, unknown> }).payload;
-        const causality = (payload["causality"] ?? {}) as Record<string, unknown>;
-        const inner = (payload["payload"] ?? {}) as Record<string, unknown>;
-        return { messageId: String(causality["messageId"]), turnId: inner["turnId"] as string };
+        const receipt = effect as { messageId: string; turnId: string };
+        return { messageId: receipt.messageId, turnId: receipt.turnId };
       });
   }
 
@@ -2362,6 +2360,97 @@ describe("agent-loop message delivery (acks, edit/retract, after-turn, flush)", 
       )
     ).toBe(true);
     expect(pendingEffectIds(s)).toEqual([ids.modelEffect(ids.messageId(turn1, 1))]);
+  });
+
+  it("does not lose a sibling terminal when user steering races the first terminal wake", () => {
+    const s = scenario();
+    promptWith(s, { envelopeId: "env-1", sourceMessageId: "u1" });
+    resolveEffect(s, ids.modelEffect(msg0), {
+      kind: "model",
+      blocks: [
+        {
+          type: "toolCall",
+          id: "suspend-1",
+          name: "suspend_turn",
+          arguments: { reason: "waiting_for_background" },
+        },
+      ],
+      stopReason: "completed",
+    });
+    resolveEffect(s, ids.invocationEffect("suspend-1"), {
+      kind: "tool",
+      result: {
+        protocolContent: [{ type: "text", text: "Turn suspended." }],
+        details: { suspendTurn: true, reason: "waiting_for_background" },
+      },
+      turnControl: {
+        kind: "suspend",
+        reason: "waiting_for_background",
+        summary: "Suspended until background work or user input arrives",
+      },
+      isError: false,
+    });
+
+    promptWith(s, {
+      envelopeId: "env-terminal-1",
+      sourceMessageId: "subagent-terminal:run-1",
+      content: "Subagent run-1 completed.",
+      metadata: { deliverAfterTurn: true },
+    });
+    const firstTerminalModel = ids.modelEffect(ids.messageId(turn1, 1));
+    expect(pendingEffectIds(s)).toEqual([firstTerminalModel]);
+
+    dispatch(s, {
+      type: "command",
+      command: {
+        kind: "steer",
+        channelId: "chan-1",
+        source: { envelopeId: "env-user-wake" },
+        sourceMessageId: "u2",
+        content: "What has finished so far?",
+        senderRef: userRef,
+      },
+    });
+    promptWith(s, {
+      envelopeId: "env-terminal-2",
+      sourceMessageId: "subagent-terminal:run-2",
+      content: "Subagent run-2 completed.",
+      metadata: { deliverAfterTurn: true },
+    });
+
+    expect(s.state.steeringQueue.map((entry) => entry.sourceMessageId)).toEqual(["u2"]);
+    expect(s.state.deferredPostTurnQueue.map((entry) => entry.sourceMessageId)).toEqual([
+      "subagent-terminal:run-2",
+    ]);
+
+    resolveEffect(s, firstTerminalModel, {
+      kind: "model",
+      blocks: [{ type: "text", content: "The first child finished." }],
+      stopReason: "completed",
+    });
+    const steeredModel = ids.modelEffect(ids.messageId(turn1, 2));
+    expect(pendingEffectIds(s)).toEqual([steeredModel]);
+    expect(s.state.deferredPostTurnQueue.map((entry) => entry.sourceMessageId)).toEqual([
+      "subagent-terminal:run-2",
+    ]);
+
+    resolveEffect(s, steeredModel, {
+      kind: "model",
+      blocks: [{ type: "text", content: "Here is the current status." }],
+      stopReason: "completed",
+    });
+
+    expect(s.state.deferredPostTurnQueue).toHaveLength(0);
+    expect(
+      s.state.entries.some(
+        (entry) =>
+          entry.kind === "user" && entry.sourceMessageId === "subagent-terminal:run-2"
+      )
+    ).toBe(true);
+    expect(readAcks(s).map((ack) => ack.messageId)).toEqual(
+      expect.arrayContaining(["subagent-terminal:run-1", "u2", "subagent-terminal:run-2"])
+    );
+    expect(pendingEffectIds(s).some((id) => id.includes("model"))).toBe(true);
   });
 
   it("does not let future-turn artifact preparation deadlock the current tool continuation", () => {

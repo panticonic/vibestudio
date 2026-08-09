@@ -271,14 +271,6 @@ const taskStartedPayloadSchema = z
   })
   .strict();
 
-const taskProgressPayloadSchema = z
-  .object({
-    protocol: protocolSchema,
-    message: z.string().optional(),
-    progress: z.number().min(0).max(1).optional(),
-    data: z.unknown().optional(),
-  })
-  .strict();
 
 const taskCompletedPayloadSchema = z
   .object({
@@ -286,6 +278,7 @@ const taskCompletedPayloadSchema = z
     result: z.unknown().optional(),
     summary: z.string().optional(),
     terminalOutcome: z.literal("success"),
+    to: z.array(participantSelectorSchema).optional(),
   })
   .strict();
 
@@ -295,6 +288,7 @@ const taskFailedPayloadSchema = z
     reason: z.string(),
     details: z.unknown().optional(),
     terminalOutcome: z.enum(["tool_error", "infrastructure_error"]),
+    to: z.array(participantSelectorSchema).optional(),
   })
   .strict();
 
@@ -304,6 +298,7 @@ const taskCancelledPayloadSchema = z
     reason: z.string(),
     details: z.unknown().optional(),
     terminalOutcome: z.enum(["cancelled", "stale_dispatch"]),
+    to: z.array(participantSelectorSchema).optional(),
   })
   .strict();
 
@@ -313,6 +308,7 @@ const taskAbandonedPayloadSchema = z
     reason: z.string(),
     details: z.unknown().optional(),
     terminalOutcome: z.literal("abandoned"),
+    to: z.array(participantSelectorSchema).optional(),
   })
   .strict();
 
@@ -646,7 +642,6 @@ export const eventKindSchemas = {
     invocationTerminalFailurePayloadSchema
   ),
   "task.started": eventSchema("task.started", taskStartedPayloadSchema),
-  "task.progress": eventSchema("task.progress", taskProgressPayloadSchema),
   "task.completed": eventSchema("task.completed", taskCompletedPayloadSchema),
   "task.failed": eventSchema("task.failed", taskFailedPayloadSchema),
   "task.cancelled": eventSchema("task.cancelled", taskCancelledPayloadSchema),

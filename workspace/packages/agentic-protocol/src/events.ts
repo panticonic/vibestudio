@@ -94,7 +94,6 @@ export type EventKind =
   | "invocation.cancelled"
   | "invocation.abandoned"
   | "task.started"
-  | "task.progress"
   | "task.completed"
   | "task.failed"
   | "task.cancelled"
@@ -396,60 +395,6 @@ export type InvocationFailurePayload =
 
 export type InvocationTerminalPayload = InvocationCompletedPayload | InvocationFailurePayload;
 
-/** What a subagent progress update reports. `tool-*` kinds carry the child's
- *  own invocation lifecycle; `said` is a completed child message. */
-export type SubagentProgressKind =
-  | "turn-started"
-  | "turn-finished"
-  | "tool-started"
-  | "tool-progress"
-  | "tool-completed"
-  | "tool-failed"
-  | "tool-cancelled"
-  | "tool-abandoned"
-  | "title-changed"
-  | "said";
-
-/**
- * One structured progress update relayed from a subagent's task channel onto
- * the parent run, published as a `task.progress` payload facet. Every
- * field is inline (fold-readable); the emitter bounds `text`.
- */
-export interface SubagentProgressUpdate {
-  kind: SubagentProgressKind;
-  /** Stable address of the authoritative child event behind this inline
-   *  projection. Together with `messageSeq`, this identifies the unbounded
-   *  source in the child's transcript. */
-  sourceChannelId?: string;
-  /** Child tool name, for the `tool-*` kinds. */
-  tool?: string;
-  /**
-   * The child-side invocation this update belongs to (`causality.invocationId`
-   * on the folded event), present on every `tool-*` kind. Terminal updates
-   * carry no tool name of their own, so the parent pairs them back to their
-   * `tool-started` through this id and renders ONE consolidated call rather
-   * than two unrelated log lines.
-   */
-  callId?: string;
-  /** Bounded preview of the child call's arguments, on `tool-started`. */
-  args?: Record<string, unknown>;
-  /** True when `args` is only a partial projection of the source request. */
-  argsTruncated?: boolean;
-  /** Bounded preview of the child call's result, on `tool-completed`. */
-  result?: unknown;
-  /** True when `result` is only a partial projection of the source result. */
-  resultTruncated?: boolean;
-  /** Bounded human-readable body: say text, progress message, failure reason. */
-  text?: string;
-  /** True when `text` is only a partial projection of the source text. */
-  textTruncated?: boolean;
-  /** Child task-channel envelope seq this update was folded from. */
-  messageSeq: number;
-  /** True when the child explicitly surfaced this (`saliency: "say"`) rather
-   *  than it being derived from routine turn traffic. */
-  say?: boolean;
-}
-
 export type InvocationPayload =
   | {
       protocol: "agentic.trajectory.v1";
@@ -485,18 +430,12 @@ export interface TaskStartedPayload {
   details?: unknown;
 }
 
-export interface TaskProgressPayload {
-  protocol: "agentic.trajectory.v1";
-  message?: string;
-  progress?: number;
-  data?: unknown;
-}
-
 export interface TaskCompletedPayload {
   protocol: "agentic.trajectory.v1";
   result?: unknown;
   summary?: string;
   terminalOutcome: "success";
+  to?: ParticipantSelector[];
 }
 
 type TaskFailurePayloadBase<Outcome extends InvocationTerminalFailureOutcome> = {
@@ -504,6 +443,7 @@ type TaskFailurePayloadBase<Outcome extends InvocationTerminalFailureOutcome> = 
   reason: string;
   terminalOutcome: Outcome;
   details?: unknown;
+  to?: ParticipantSelector[];
 };
 
 export type TaskFailedPayload = TaskFailurePayloadBase<
@@ -516,7 +456,6 @@ export type TaskAbandonedPayload = TaskFailurePayloadBase<"abandoned">;
 
 export type TaskPayload =
   | TaskStartedPayload
-  | TaskProgressPayload
   | TaskCompletedPayload
   | TaskFailedPayload
   | TaskCancelledPayload

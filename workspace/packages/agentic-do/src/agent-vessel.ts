@@ -27,6 +27,7 @@ import {
   type DurableObjectServiceClient,
 } from "@workspace/runtime/workerd-client";
 import type {
+  ChannelAgenticContext,
   ChannelReplayEnvelope,
   RegisterMessageTypeInput,
   RpcChannelMessage,
@@ -53,17 +54,16 @@ import {
   hydrateStoredValueRefs,
   isRespondPolicy,
   participantRefFromActor,
+  participantRefFromMetadata,
   renderAgentToolFailure,
   resolveShouldRespond,
   type ActorRef,
   type AgenticEvent,
   type CustomMessageDisplayMode,
   type ParticipantRef,
-  type SubagentProgressUpdate,
 } from "@workspace/agentic-protocol";
 import { sha256HexSyncText, stableSha256Hex } from "@vibestudio/content-addressing";
 import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
-import { serializeByKey } from "@vibestudio/shared/keyedSerializer";
 import {
   createDeferredEvalExecutor,
   evalAuthorityInputSchema,
@@ -227,7 +227,7 @@ function subagentLaunchReceipt(run: Pick<SubagentRunRow, "runId" | "status">): s
   return (
     `subagent ${handle} is running in the background. Continue independent foreground work, ` +
     `or call suspend_turn({ reason: "waiting_for_background" }) if no foreground work remains. ` +
-    `Do not inspect, read, merge, or close merely to wait; terminal delivery will resume you.`
+    `Do not inspect, read, or merge merely to wait; terminal delivery will resume you.`
   );
 }
 
@@ -281,9 +281,6 @@ function semanticIntegrationForRun(
     : undefined;
   if (live) return semanticIntegrationFromProjection(live);
   const receipt = run.semanticIntegrationSnapshot;
-  if (receipt && run.status === "closed") {
-    return receipt;
-  }
   const receiptSource = receipt?.["source"];
   if (
     receipt &&
@@ -559,24 +556,20 @@ export interface AgentInitiatedTurnOptions extends AgentTurnMetadata {
   mode?: "auto" | "sequential";
 }
 
-interface ChannelDeliveryBatch {
+interface ChannelDeliveryInput {
+  deliveryId: string;
   channelId: string;
   channelRef: { source: string; className: string; objectKey: string };
-  sourceIncarnation: string;
-  targetIncarnation: string;
-  rows: Array<{
-    deliveryKey: string;
-    channelSeq: number;
-    envelope: RpcChannelMessage;
-  }>;
+  participantId: string;
+  subscriptionRevision: number;
+  eventSequence: number;
+  envelope: unknown;
+  agenticContext: ChannelAgenticContext;
 }
 
-interface ChannelDeliveryBatchOutcome {
-  perRow: Array<{
-    deliveryKey: string;
-    disposition: "accepted" | "duplicate-match";
-  }>;
-  highestContiguousCommittedSeq: number;
+interface ChannelDeliveryOutcome {
+  deliveryId: string;
+  disposition: "processed" | "duplicate" | "declined";
 }
 
 const HOT_PATH_TRACE_RETENTION_LIMIT = 500;
@@ -633,7 +626,6 @@ export abstract class AgentVesselBase extends DurableObjectBase {
   private blobTextCacheBytes = 0;
   private readonly alarmSources = new Map<string, AgentAlarmSource>();
   private readonly alarmDeadlines = new Map<string, number>();
-  private readonly subagentTerminalChains = new Map<string, Promise<unknown>>();
   /** Derived scheduling state only; the durable trace rows remain authoritative. */
   private readonly hotPathTraceInsertsSinceSweep = new Map<string, number>();
   /**
@@ -661,14 +653,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     this.subscriptions = new SubscriptionManager(
       this.sql,
       (channelId) => this.createChannelClient(channelId),
-      this.identity,
-      async ({ channelId, config, envelope }) => {
-        await this.ingestSubscriptionReplay(
-          channelId,
-          envelope,
-          configuredWakePolicy(config) === "every-envelope"
-        );
-      }
+      this.identity
     );
     this.subagentRuns = new SubagentRunStore(this.sql);
     this.feedback = new FeedbackIngest(this.sql);
@@ -711,13 +696,31 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     DOIdentity.createTables(this.sql);
     SubscriptionManager.createTables(this.sql);
     this.sql.exec(`
-      CREATE TABLE IF NOT EXISTS agent_inbox_queue (
-        delivery_key TEXT PRIMARY KEY,
+      CREATE TABLE IF NOT EXISTS channel_delivery_admissions (
+        delivery_id TEXT PRIMARY KEY,
         channel_id TEXT NOT NULL,
-        source_incarnation TEXT NOT NULL,
-        channel_seq INTEGER NOT NULL,
-        envelope_json TEXT NOT NULL,
-        continuation_cursor TEXT,
+        participant_id TEXT NOT NULL,
+        subscription_revision INTEGER NOT NULL,
+        event_sequence INTEGER NOT NULL,
+        envelope_json TEXT,
+        agentic_context_json TEXT,
+        state TEXT NOT NULL CHECK (state IN ('admitted', 'processed', 'declined')),
+        outcome_json TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      )
+    `);
+    this.sql.exec(`
+      CREATE TABLE IF NOT EXISTS agent_wake_queue (
+        wake_id TEXT PRIMARY KEY,
+        channel_id TEXT NOT NULL,
+        wake_kind TEXT NOT NULL CHECK (wake_kind IN (
+          'scheduled-model-resume',
+          'subagent-terminal-publish',
+          'subagent-cancel-settle'
+        )),
+        payload_json TEXT NOT NULL,
+        prerequisite_delivery_id TEXT,
         idempotency_key TEXT NOT NULL UNIQUE,
         attempts INTEGER NOT NULL DEFAULT 0,
         next_attempt_at INTEGER NOT NULL,
@@ -726,21 +729,17 @@ export abstract class AgentVesselBase extends DurableObjectBase {
         created_at INTEGER NOT NULL,
         last_attempt_at INTEGER,
         disposition TEXT NOT NULL DEFAULT 'ready'
-          CHECK (disposition IN (
-            'ready', 'leased', 'parked', 'retrying',
-            'terminal-completed', 'terminal-unsubscribed', 'terminal-integrity'
-          ))
+          CHECK (disposition IN ('ready', 'leased', 'retrying', 'terminal-completed'))
       )
     `);
     assertExactSqlTableSchema(this.sql, {
-      table: "agent_inbox_queue",
+      table: "agent_wake_queue",
       columns: [
-        ["delivery_key", "TEXT", false],
+        ["wake_id", "TEXT", false],
         ["channel_id", "TEXT", true],
-        ["source_incarnation", "TEXT", true],
-        ["channel_seq", "INTEGER", true],
-        ["envelope_json", "TEXT", true],
-        ["continuation_cursor", "TEXT", false],
+        ["wake_kind", "TEXT", true],
+        ["payload_json", "TEXT", true],
+        ["prerequisite_delivery_id", "TEXT", false],
         ["idempotency_key", "TEXT", true],
         ["attempts", "INTEGER", true, "0"],
         ["next_attempt_at", "INTEGER", true],
@@ -750,11 +749,11 @@ export abstract class AgentVesselBase extends DurableObjectBase {
         ["last_attempt_at", "INTEGER", false],
         ["disposition", "TEXT", true, "'ready'"],
       ],
-      primaryKey: ["delivery_key"],
+      primaryKey: ["wake_id"],
     });
     this.sql.exec(`
-      CREATE INDEX IF NOT EXISTS idx_agent_inbox_claim
-        ON agent_inbox_queue(disposition, next_attempt_at, channel_id, channel_seq)
+      CREATE INDEX IF NOT EXISTS idx_agent_wake_claim
+        ON agent_wake_queue(disposition, next_attempt_at, channel_id, created_at)
     `);
     this.sql.exec(`
       CREATE TABLE IF NOT EXISTS agent_hot_path_trace (
@@ -805,10 +804,10 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     return [
       "do_identity",
       "subscriptions",
-      "agent_inbox_queue",
+      "channel_delivery_admissions",
+      "agent_wake_queue",
       "agent_hot_path_trace",
       "subagent_runs",
-      "subagent_progress_outbox",
       "feedback_seen",
       "pending_feedback",
       "custom_cards",
@@ -822,7 +821,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
   }
 
   protected override durableWorkQueues(): readonly DurableWorkQueue[] {
-    return ["agent-inbox", "agent-effect"];
+    return ["agent-wake", "agent-effect"];
   }
 
   protected override releaseDurableWorkClaims(
@@ -832,7 +831,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     if (!previousWorkerId) return;
     const now = Date.now();
     this.sql.exec(
-      `UPDATE agent_inbox_queue
+      `UPDATE agent_wake_queue
           SET disposition = 'ready',
               lease_owner = NULL,
               next_attempt_at = ?
@@ -943,26 +942,14 @@ export abstract class AgentVesselBase extends DurableObjectBase {
         },
       };
     }
-    const releasedSubscriptions = await this.subscriptions.releaseActivation();
     return {
       status: "ready",
-      detail: { mode: input.mode, releasedEffects, releasedSubscriptions },
+      detail: { mode: input.mode, releasedEffects },
     };
   }
 
   override async resumeAfterRestart(input: LifecycleResumeInput): Promise<void> {
     await super.resumeAfterRestart(input);
-    // Durable rows remember which channels this vessel belongs to; live
-    // membership itself is the routed response resource and must be recreated
-    // after the old workerd activation has disappeared.
-    for (const subscription of this.subscriptions.listStored()) {
-      await this.subscribeChannel({
-        channelId: subscription.channelId,
-        contextId: subscription.contextId,
-        ...(subscription.config !== undefined ? { config: subscription.config } : {}),
-        replay: true,
-      });
-    }
     // Eval terminal delivery was activation-local. Re-observe every parked
     // eval through its deterministic run id now, instead of waiting for the
     // periodic lost-push reconciliation cadence.
@@ -1008,7 +995,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     return DEFAULT_MAX_SUBAGENT_DEPTH;
   }
 
-  /** Max child contexts owned at once; terminal runs retain their slot until close. */
+  /** Maximum concurrent child executions; terminal results are retained outside this count. */
   protected getMaxSubagents(): number {
     return DEFAULT_MAX_SUBAGENTS;
   }
@@ -1106,7 +1093,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
   /**
    * A model must not reconstruct delegation state from old transcript text.
    * Keep the supervisor's bounded lifecycle ledger at the model-call boundary,
-   * including closed receipts whose child resources have already been released.
+   * including retained terminal results.
    */
   private supervisedSubagentRuntimePrompt(
     channelId: string,
@@ -1134,7 +1121,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       );
       return (
         `- ${subagentRunHandle(run.runId)} (${run.label || "unlabeled"}): ` +
-        `status=${run.status}; discardedBeforeIntegration=${run.discardedBeforeIntegration}; ` +
+        `status=${run.status}; ` +
         `semanticIntegration=${JSON.stringify(semantic)}; ` +
         `agentKind=${run.agentKind}${config}`
       );
@@ -1144,10 +1131,10 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       "## Durable Supervised Subagent Ledger",
       "This is the authoritative lifecycle inventory for this supervisor channel. " +
         "Use these handles directly; do not reconstruct them from transcript text. " +
-        "A closed row means its delegation already existed and its child resources were released. " +
-        "Do not spawn a replacement merely because a row is terminal or closed.",
+        "Terminal rows are retained results and consume no live execution slot. " +
+        "Do not spawn a replacement merely because a row is terminal.",
       ...rows,
-      ...(omitted > 0 ? [`- ${omitted} older closed run(s) omitted from this bounded view`] : []),
+      ...(omitted > 0 ? [`- ${omitted} older retained run(s) omitted from this bounded view`] : []),
     ].join("\n");
   }
 
@@ -1165,9 +1152,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     // open runs have a live projection worth an RPC round-trip per model call.
     const openRuns = this.subagentRuns
       .listAll()
-      .filter(
-        (run) => run.parentChannelId === channelId && run.parentContextId && run.status !== "closed"
-      );
+      .filter((run) => run.parentChannelId === channelId && run.parentContextId);
     if (openRuns.length === 0) return this.immediatePrompt(channelId);
     return (async () => {
       const contextIds = [...new Set(openRuns.map((run) => run.parentContextId!))];
@@ -1486,6 +1471,13 @@ export abstract class AgentVesselBase extends DurableObjectBase {
             input.payloadKind,
             input.payload,
             input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : undefined
+          );
+        },
+        recordReadReceipt: async (input) => {
+          await this.createChannelClient(input.channelId).recordReadReceipt(
+            this.participantId(),
+            input.messageId,
+            input.turnId
           );
         },
         sendSignalEvent: async (channelId, event) => {
@@ -2337,6 +2329,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     contextId: string;
     config?: unknown;
     replay?: boolean;
+    delivery?: "all" | "addressed";
   }): Promise<{ ok: boolean; participantId: string }> {
     const subscriptionStartedAt = Date.now();
     this.traceHotPath(opts.channelId, "subscription.started");
@@ -2347,10 +2340,6 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     // static fallback descriptor.
     await this.refreshLocalModelEntry(opts.channelId);
     this.driver.activateChannel(opts.channelId);
-    const firstSubscription = this.subscriptions.count() === 0;
-    if (firstSubscription) {
-      await this.registerLifecycleRelease({ kind: "channel-subscriptions" });
-    }
     const descriptor = this.getEffectiveParticipantInfo(opts.channelId, opts.config);
     // Subscription is MEMBERSHIP + presentation only. Behavior config (model,
     // approvalLevel, respondPolicy, …) is per-agent and seeded at creation from
@@ -2358,20 +2347,14 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     // carries only channel-presentation (handle, systemPrompt) consumed via the
     // participant descriptor / getPromptOverride.
     let result: Awaited<ReturnType<SubscriptionManager["subscribe"]>>;
-    try {
-      result = await this.subscriptions.subscribe({
-        channelId: opts.channelId,
-        contextId: opts.contextId,
-        config: opts.config,
-        descriptor,
-        replay: opts.replay,
-      });
-    } catch (error) {
-      if (firstSubscription && this.subscriptions.count() === 0) {
-        await this.clearLifecycleRelease();
-      }
-      throw error;
-    }
+    result = await this.subscriptions.subscribe({
+      channelId: opts.channelId,
+      contextId: opts.contextId,
+      config: opts.config,
+      descriptor,
+      replay: opts.replay,
+      delivery: opts.delivery,
+    });
     await this.ingestSubscriptionReplay(
       opts.channelId,
       result.envelope,
@@ -2500,33 +2483,10 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     await this.cancelDeferredEvalRuns(channelId);
     try {
       await this.driver.abortChannel(channelId, "channel_unsubscribe");
-      // End durable membership before closing the response resource. Closing
-      // publishes participant-left; batch admission consults this row
-      // synchronously, so terminal delivery becomes a no-op.
-      this.subscriptions.deleteSubscription(channelId);
-      this.sql.exec(
-        `UPDATE agent_inbox_queue
-            SET disposition = 'terminal-unsubscribed',
-                lease_owner = NULL
-          WHERE channel_id = ? AND disposition NOT LIKE 'terminal-%'`,
-        channelId
-      );
       await this.subscriptions.unsubscribeFromChannel(channelId);
     } finally {
       this.subscriptions.deleteSubscription(channelId);
-      // Structured channel delivery is queued durably so a transient handler
-      // failure cannot lose an envelope. Once membership ends, however, those
-      // envelopes have no valid consumer: replaying them can rehydrate a
-      // dropped loop and start a new turn after teardown.
-      this.sql.exec(
-        `UPDATE agent_inbox_queue
-            SET disposition = 'terminal-unsubscribed',
-                lease_owner = NULL
-          WHERE channel_id = ? AND disposition NOT LIKE 'terminal-%'`,
-        channelId
-      );
       this.driver.dropLoop(channelId);
-      if (this.subscriptions.count() === 0) await this.clearLifecycleRelease();
     }
     return { ok: true };
   }
@@ -2539,80 +2499,123 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     tier: "open",
     sensitivity: "write",
   })
-  acceptChannelBatch(batch: ChannelDeliveryBatch): ChannelDeliveryBatchOutcome {
+  async acceptChannelDelivery(delivery: ChannelDeliveryInput): Promise<ChannelDeliveryOutcome> {
     this.ensureIdentity();
-    if (batch.channelRef.objectKey !== batch.channelId) {
-      throw new Error("acceptChannelBatch: channel identity mismatch");
+    if (delivery.channelRef.objectKey !== delivery.channelId) {
+      throw new Error("acceptChannelDelivery: channel identity mismatch");
     }
-    if (batch.targetIncarnation !== this.identity.sessionId) {
-      throw new Error("acceptChannelBatch: target incarnation retired");
-    }
-    if (!this.subscriptions.getParticipantId(batch.channelId)) {
-      throw new Error("acceptChannelBatch: channel is not subscribed");
-    }
-    if (batch.rows.length === 0 || batch.rows.length > 32) {
-      throw new Error("acceptChannelBatch: invalid batch size");
-    }
-    const ordered = [...batch.rows].sort((a, b) => a.channelSeq - b.channelSeq);
-    const now = Date.now();
-    const perRow = this.ctx.storage.transactionSync(() => {
-      const dispositions: ChannelDeliveryBatchOutcome["perRow"] = [];
-      for (const row of ordered) {
-        const envelopeJson = JSON.stringify(row.envelope);
-        const existing = this.sql
-          .exec(
-            `SELECT channel_id, envelope_json
-               FROM agent_inbox_queue
-              WHERE delivery_key = ?`,
-            row.deliveryKey
-          )
-          .toArray()[0];
-        if (existing) {
-          // deliveryKey identifies the durable channel envelope. channelSeq is
-          // only this channel runtime's queue order, and sourceIncarnation
-          // changes when that runtime restarts. A terminal may be re-enqueued
-          // after its first delivery raced effect derivation, so neither is
-          // part of duplicate identity; the durable envelope bytes are.
-          if (
-            existing["channel_id"] !== batch.channelId ||
-            existing["envelope_json"] !== envelopeJson
-          ) {
-            throw new Error(`acceptChannelBatch: mismatched duplicate ${row.deliveryKey}`);
-          }
-          dispositions.push({
-            deliveryKey: row.deliveryKey,
-            disposition: "duplicate-match",
-          });
-          continue;
-        }
-        this.sql.exec(
-          `INSERT INTO agent_inbox_queue (
-             delivery_key, channel_id, source_incarnation, channel_seq,
-             envelope_json, continuation_cursor, idempotency_key, attempts,
-             next_attempt_at, lease_generation, created_at, disposition
-           ) VALUES (?, ?, ?, ?, ?, NULL, ?, 0, ?, 0, ?, 'ready')`,
-          row.deliveryKey,
-          batch.channelId,
-          batch.sourceIncarnation,
-          row.channelSeq,
-          envelopeJson,
-          `agent-inbox:${batch.channelId}:${batch.sourceIncarnation}:${row.deliveryKey}`,
-          now,
-          now
-        );
-        dispositions.push({ deliveryKey: row.deliveryKey, disposition: "accepted" });
+    const storedParticipantId = this.subscriptions.getParticipantId(delivery.channelId);
+    const stored = this.subscriptions
+      .listStored()
+      .find(({ channelId }) => channelId === delivery.channelId);
+    const envelopeJson = JSON.stringify(delivery.envelope);
+    const agenticContextJson = JSON.stringify(delivery.agenticContext);
+    const existing = this.sql
+      .exec(
+        `SELECT channel_id, participant_id, subscription_revision, event_sequence,
+                envelope_json, agentic_context_json, state, outcome_json
+           FROM channel_delivery_admissions WHERE delivery_id = ?`,
+        delivery.deliveryId
+      )
+      .toArray()[0];
+    if (existing) {
+      if (
+        existing["channel_id"] !== delivery.channelId ||
+        existing["participant_id"] !== delivery.participantId ||
+        Number(existing["subscription_revision"]) !== delivery.subscriptionRevision ||
+        Number(existing["event_sequence"]) !== delivery.eventSequence ||
+        // Terminal rows shed their envelope bytes (storage bound); the
+        // deterministic delivery id plus the coordinate columns above remain
+        // the duplicate identity. Compare bytes only while retained.
+        (existing["envelope_json"] !== null && existing["envelope_json"] !== envelopeJson) ||
+        (existing["agentic_context_json"] !== null &&
+          existing["agentic_context_json"] !== agenticContextJson)
+      ) {
+        throw new Error(`acceptChannelDelivery: mismatched duplicate ${delivery.deliveryId}`);
       }
-      return dispositions;
-    });
-    this.traceHotPath(batch.channelId, "inbox.accepted", {
+      if (existing["state"] === "processed" || existing["state"] === "declined") {
+        const retained = JSON.parse(String(existing["outcome_json"])) as ChannelDeliveryOutcome;
+        return {
+          ...retained,
+          disposition: existing["state"] === "processed" ? "duplicate" : "declined",
+        };
+      }
+    }
+    // The delivery's subscriptionRevision is the channel's at-sequence stamp;
+    // the locally stored revision may legitimately be newer (or, across a
+    // crash between the join append and the local store, older). Membership
+    // at the event sequence is the channel's routing decision — decline only
+    // when this vessel is not the addressed participant at all.
+    if (storedParticipantId !== delivery.participantId || !stored) {
+      const outcome: ChannelDeliveryOutcome = {
+        deliveryId: delivery.deliveryId,
+        disposition: "declined",
+      };
+      this.sql.exec(
+        `INSERT OR REPLACE INTO channel_delivery_admissions (
+           delivery_id, channel_id, participant_id, subscription_revision,
+           event_sequence, envelope_json, agentic_context_json, state, outcome_json, created_at, updated_at
+         ) VALUES (?, ?, ?, ?, ?, NULL, NULL, 'declined', ?, ?, ?)`,
+        delivery.deliveryId,
+        delivery.channelId,
+        delivery.participantId,
+        delivery.subscriptionRevision,
+        delivery.eventSequence,
+        JSON.stringify(outcome),
+        Date.now(),
+        Date.now()
+      );
+      return outcome;
+    }
+    if (!existing) {
+      const now = Date.now();
+      this.sql.exec(
+        `INSERT INTO channel_delivery_admissions (
+           delivery_id, channel_id, participant_id, subscription_revision,
+           event_sequence, envelope_json, agentic_context_json, state, outcome_json, created_at, updated_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, 'admitted', NULL, ?, ?)`,
+        delivery.deliveryId,
+        delivery.channelId,
+        delivery.participantId,
+        delivery.subscriptionRevision,
+        delivery.eventSequence,
+        envelopeJson,
+        agenticContextJson,
+        now,
+        now
+      );
+    }
+    this.traceHotPath(delivery.channelId, "delivery.admitted", {
       source: "channel-delivery",
-      details: { rowCount: ordered.length },
+      itemId: delivery.deliveryId,
     });
-    this.markWorkReady("agent-inbox");
-    return {
-      perRow,
-      highestContiguousCommittedSeq: ordered.at(-1)!.channelSeq,
+    const envelope = delivery.envelope as RpcChannelMessage;
+    if (envelope.kind !== "log" || !envelope.event) {
+      throw new Error("acceptChannelDelivery: durable delivery must contain one log event");
+    }
+    const agenticContext = await this.applyDeliveredAgenticContext(
+      delivery.channelId,
+      delivery.agenticContext
+    );
+    await this.processChannelEvent(delivery.channelId, envelope.event, agenticContext);
+    const outcome: ChannelDeliveryOutcome = {
+      deliveryId: delivery.deliveryId,
+      disposition: "processed",
     };
+    this.sql.exec(
+      `UPDATE channel_delivery_admissions
+          SET state = 'processed', outcome_json = ?, envelope_json = NULL,
+              agentic_context_json = NULL, updated_at = ?
+        WHERE delivery_id = ?`,
+      JSON.stringify(outcome),
+      Date.now(),
+      delivery.deliveryId
+    );
+    this.traceHotPath(delivery.channelId, "delivery.processed", {
+      source: "channel-delivery",
+      itemId: delivery.deliveryId,
+    });
+    return outcome;
   }
 
   @rpc({
@@ -2645,7 +2648,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
               ? "redrive-backstop"
               : (input.trigger ?? "unknown"),
           laneKey:
-            row.kind === "publish_envelope" ||
+            row.kind === "record_receipt" ||
             row.kind === "channel_call" ||
             row.kind === "http_call" ||
             (row.descriptor.kind === "local_tool" && row.descriptor.executionMode === "parallel")
@@ -2674,7 +2677,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       }
       return claimed;
     }
-    if (queue !== "agent-inbox") return [];
+    if (queue !== "agent-wake") return [];
     const claimed = this.ctx.storage.transactionSync(() => {
       let scheduledResumes: Record<string, unknown>[] = [];
       try {
@@ -2693,53 +2696,34 @@ export abstract class AgentVesselBase extends DurableObjectBase {
         const channelId = String(resume["channel_id"]);
         const messageId = String(resume["message_id"]);
         const resetAtMs = Number(resume["reset_at_ms"]);
-        const deliveryKey = `scheduled-resume:${channelId}:${messageId}`;
+        const wakeId = `scheduled-resume:${channelId}:${messageId}`;
         this.sql.exec(
-          `INSERT OR IGNORE INTO agent_inbox_queue (
-             delivery_key, channel_id, source_incarnation, channel_seq,
-             envelope_json, continuation_cursor, idempotency_key, attempts,
-             next_attempt_at, lease_generation, created_at, disposition
-           ) VALUES (?, ?, 'self', ?, ?, NULL, ?, 0, ?, 0, ?, 'ready')`,
-          deliveryKey,
+          `INSERT OR IGNORE INTO agent_wake_queue (
+             wake_id, channel_id, wake_kind, payload_json, prerequisite_delivery_id,
+             idempotency_key, attempts, next_attempt_at, lease_generation, created_at,
+             disposition
+           ) VALUES (?, ?, 'scheduled-model-resume', ?, NULL, ?, 0, ?, 0, ?, 'ready')`,
+          wakeId,
           channelId,
-          resetAtMs,
-          JSON.stringify({
-            kind: "internal",
-            type: "scheduled-model-resume",
-            messageId,
-          }),
-          deliveryKey,
+          JSON.stringify({ messageId }),
+          wakeId,
           resetAtMs,
           Number(resume["created_at"])
-        );
-      }
-      for (const progress of this.subagentRuns.dueProgress(input.now, input.limit * 4)) {
-        const deliveryKey = `subagent-progress:${progress.sequence}`;
-        this.sql.exec(
-          `INSERT OR IGNORE INTO agent_inbox_queue (
-             delivery_key, channel_id, source_incarnation, channel_seq,
-             envelope_json, continuation_cursor, idempotency_key, attempts,
-             next_attempt_at, lease_generation, created_at, disposition
-           ) VALUES (?, ?, 'self', ?, ?, NULL, ?, 0, ?, 0, ?, 'ready')`,
-          deliveryKey,
-          progress.parentChannelId,
-          progress.sequence,
-          JSON.stringify({
-            kind: "internal",
-            type: "subagent-progress",
-            sequence: progress.sequence,
-          }),
-          progress.idempotencyKey,
-          progress.nextAttemptAt,
-          progress.createdAt
         );
       }
       const candidates = this.sql
         .exec(
           `SELECT *
-             FROM agent_inbox_queue
+             FROM agent_wake_queue
             WHERE disposition IN ('ready', 'retrying') AND next_attempt_at <= ?
-            ORDER BY channel_id, channel_seq
+              AND (
+                prerequisite_delivery_id IS NULL OR EXISTS (
+                  SELECT 1 FROM channel_delivery_admissions AS admission
+                   WHERE admission.delivery_id = agent_wake_queue.prerequisite_delivery_id
+                     AND admission.state IN ('processed', 'declined')
+                )
+              )
+            ORDER BY channel_id, created_at
             LIMIT ?`,
           input.now,
           Math.min(input.limit * 4, 1_000)
@@ -2755,22 +2739,22 @@ export abstract class AgentVesselBase extends DurableObjectBase {
         if (selected.length >= input.limit) break;
       }
       return selected.map((row) => {
-        const deliveryKey = String(row["delivery_key"]);
+        const wakeId = String(row["wake_id"]);
         const generation = Number(row["lease_generation"] ?? 0) + 1;
         this.sql.exec(
-          `UPDATE agent_inbox_queue
+          `UPDATE agent_wake_queue
               SET disposition = 'leased',
                   lease_owner = ?,
                   lease_generation = ?,
                   last_attempt_at = ?
-            WHERE delivery_key = ?`,
+            WHERE wake_id = ?`,
           input.workerId,
           generation,
           input.now,
-          deliveryKey
+          wakeId
         );
         return {
-          itemId: deliveryKey,
+          itemId: wakeId,
           generation,
           idempotencyKey: String(row["idempotency_key"]),
           createdAt: Number(row["created_at"]),
@@ -2778,7 +2762,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
           payload: {
             laneKey: String(row["channel_id"]),
             channelId: String(row["channel_id"]),
-            channelSeq: Number(row["channel_seq"]),
+            wakeKind: String(row["wake_kind"]),
           },
         };
       });
@@ -2786,15 +2770,15 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     for (const claim of claimed) {
       const channelId = String((claim.payload as { channelId?: unknown } | null)?.channelId ?? "");
       if (channelId) {
-        this.traceHotPath(channelId, "inbox.claimed", {
+        this.traceHotPath(channelId, "wake.claimed", {
           source: input.trigger ?? "unknown",
           itemId: claim.itemId,
           generation: claim.generation,
         });
       }
     }
-    if (!this.readyDurableWorkQueues(input.now).includes("agent-inbox")) {
-      this.acknowledgeDurableWorkReady("agent-inbox");
+    if (!this.readyDurableWorkQueues(input.now).includes("agent-wake")) {
+      this.acknowledgeDurableWorkReady("agent-wake");
     }
     return claimed;
   }
@@ -2805,29 +2789,68 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     tier: "open",
     sensitivity: "write",
   })
-  async executeInboxClaim(input: { itemId: string; generation: number }): Promise<{
+  async executeWakeClaim(input: { itemId: string; generation: number }): Promise<{
     processed: true;
   }> {
     const row = this.sql
       .exec(
-        `SELECT channel_id, envelope_json
-           FROM agent_inbox_queue
-          WHERE delivery_key = ?
+        `SELECT channel_id, wake_kind, payload_json
+           FROM agent_wake_queue
+          WHERE wake_id = ?
             AND lease_generation = ?
             AND disposition = 'leased'`,
         input.itemId,
         input.generation
       )
       .toArray()[0];
-    if (!row) throw new Error("executeInboxClaim: stale claim");
+    if (!row) throw new Error("executeWakeClaim: stale claim");
     const channelId = String(row["channel_id"]);
     const startedAt = Date.now();
-    this.traceHotPath(channelId, "inbox.execution.started", {
+    this.traceHotPath(channelId, "wake.execution.started", {
       itemId: input.itemId,
       generation: input.generation,
     });
-    await this.processQueuedChannelEnvelope(channelId, JSON.parse(String(row["envelope_json"])));
-    this.traceHotPath(channelId, "inbox.execution.completed", {
+    const wakeKind = String(row["wake_kind"]);
+    const payload = JSON.parse(String(row["payload_json"])) as Record<string, unknown>;
+    if (wakeKind === "subagent-terminal-publish") {
+      if (
+        typeof payload["runId"] !== "string" ||
+        typeof payload["taskChannelId"] !== "string" ||
+        typeof payload["parentRef"] !== "string" ||
+        typeof payload["report"] !== "string"
+      ) {
+        throw new Error("executeWakeClaim: invalid subagent-terminal-publish payload");
+      }
+      await this.publishOwnSubagentTerminal({
+        runId: String(payload["runId"]),
+        taskChannelId: String(payload["taskChannelId"]),
+        parentRef: String(payload["parentRef"]),
+        report: String(payload["report"]),
+        outcome:
+          payload["outcome"] === "failed"
+            ? "failed"
+            : payload["outcome"] === "cancelled"
+              ? "cancelled"
+              : "completed",
+        sourceEventId:
+          typeof payload["sourceEventId"] === "string" ? payload["sourceEventId"] : null,
+      });
+    } else if (wakeKind === "subagent-cancel-settle") {
+      // PARENT side: re-drive an interrupted cancellation to its terminal
+      // fact. Idempotent — a run already terminal no-ops.
+      if (typeof payload["runId"] !== "string") {
+        throw new Error("executeWakeClaim: invalid subagent-cancel-settle payload");
+      }
+      await this.driveCancelSubagent(
+        String(payload["runId"]),
+        typeof payload["reason"] === "string" ? payload["reason"] : "cancelled"
+      );
+    } else if (wakeKind === "scheduled-model-resume" && typeof payload["messageId"] === "string") {
+      await this.driver.executeScheduledResume(channelId, payload["messageId"]);
+    } else {
+      throw new Error(`executeWakeClaim: invalid ${wakeKind} payload`);
+    }
+    this.traceHotPath(channelId, "wake.execution.completed", {
       startedAt,
       itemId: input.itemId,
       generation: input.generation,
@@ -2885,6 +2908,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
         return "stale";
       }
       if (row.disposition === "leased") {
+        if (this.driver.isActivationReleased()) return "stale";
         throw new Error("settleReadyWork: effect execution left its claim leased");
       }
       this.traceHotPath(row.channelId, "effect.settled", {
@@ -2894,13 +2918,13 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       });
       return "accepted";
     }
-    if (queue !== "agent-inbox") return "stale";
+    if (queue !== "agent-wake") return "stale";
     const settlement = this.ctx.storage.transactionSync(() => {
       const row = this.sql
         .exec(
           `SELECT lease_owner, lease_generation, disposition
-             FROM agent_inbox_queue
-            WHERE delivery_key = ?`,
+             FROM agent_wake_queue
+            WHERE wake_id = ?`,
           request.itemId
         )
         .toArray()[0];
@@ -2913,14 +2937,14 @@ export abstract class AgentVesselBase extends DurableObjectBase {
         return { disposition: "stale" as const, channelId: null };
       }
       this.sql.exec(
-        `UPDATE agent_inbox_queue
+        `UPDATE agent_wake_queue
             SET disposition = 'terminal-completed',
                 lease_owner = NULL
-          WHERE delivery_key = ?`,
+          WHERE wake_id = ?`,
         request.itemId
       );
       const channel = this.sql
-        .exec(`SELECT channel_id FROM agent_inbox_queue WHERE delivery_key = ?`, request.itemId)
+        .exec(`SELECT channel_id FROM agent_wake_queue WHERE wake_id = ?`, request.itemId)
         .toArray()[0];
       return {
         disposition: "accepted" as const,
@@ -2928,7 +2952,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       };
     });
     if (settlement.channelId) {
-      this.traceHotPath(settlement.channelId, "inbox.settled", {
+      this.traceHotPath(settlement.channelId, "wake.settled", {
         source: request.workerId,
         itemId: request.itemId,
         generation: request.generation,
@@ -2968,13 +2992,13 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       if (retryAt === null || retryAt === undefined) return "stale";
       return { retryAt };
     }
-    if (queue !== "agent-inbox") return "stale";
+    if (queue !== "agent-wake") return "stale";
     return this.ctx.storage.transactionSync(() => {
       const row = this.sql
         .exec(
           `SELECT attempts
-             FROM agent_inbox_queue
-            WHERE delivery_key = ?
+             FROM agent_wake_queue
+            WHERE wake_id = ?
               AND lease_owner = ?
               AND lease_generation = ?
               AND disposition = 'leased'`,
@@ -2991,12 +3015,12 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       );
       const retryAt = Date.now() + delay;
       this.sql.exec(
-        `UPDATE agent_inbox_queue
+        `UPDATE agent_wake_queue
             SET attempts = ?,
                 disposition = 'retrying',
                 next_attempt_at = ?,
                 lease_owner = NULL
-          WHERE delivery_key = ?
+          WHERE wake_id = ?
             AND lease_owner = ?
             AND lease_generation = ?`,
         attempts,
@@ -3023,11 +3047,11 @@ export abstract class AgentVesselBase extends DurableObjectBase {
   }
 
   private readyDurableWorkQueues(now = Date.now()): DurableWorkQueue[] {
-    const inboxReady =
+    const wakeReady =
       this.sql
         .exec(
           `SELECT 1
-             FROM agent_inbox_queue
+             FROM agent_wake_queue
             WHERE disposition IN ('ready', 'retrying') AND next_attempt_at <= ?
             LIMIT 1`,
           now
@@ -3035,8 +3059,6 @@ export abstract class AgentVesselBase extends DurableObjectBase {
         .toArray().length > 0;
     let effectReady = false;
     let scheduledResumeReady = false;
-    const subagentProgressReady =
-      (this.subagentRuns.nextProgressWakeAt() ?? Number.POSITIVE_INFINITY) <= now;
     try {
       effectReady =
         this.sql
@@ -3063,22 +3085,20 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       // Scheduled-resume storage is lazy.
     }
     return [
-      ...(inboxReady || scheduledResumeReady || subagentProgressReady
-        ? (["agent-inbox"] as const)
-        : []),
+      ...(wakeReady || scheduledResumeReady ? (["agent-wake"] as const) : []),
       ...(effectReady ? (["agent-effect"] as const) : []),
     ];
   }
 
   private nextDurableWorkRecoveryAt(): number | null {
-    const inboxValue = this.sql
+    const wakeValue = this.sql
       .exec(
         `SELECT MIN(next_attempt_at) AS due
-           FROM agent_inbox_queue
+           FROM agent_wake_queue
           WHERE disposition = 'retrying'`
       )
       .toArray()[0]?.["due"];
-    const inboxAt = typeof inboxValue === "number" ? inboxValue : null;
+    const wakeAt = typeof wakeValue === "number" ? wakeValue : null;
     let effectAt: number | null = null;
     try {
       const effectValue = this.sql
@@ -3092,91 +3112,27 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     } catch {
       // Effect storage is lazy.
     }
-    const progressAt = this.subagentRuns.nextProgressWakeAt();
-    const candidates = [inboxAt, effectAt, progressAt].filter(
+    const candidates = [wakeAt, effectAt].filter(
       (value): value is number => typeof value === "number"
     );
     return candidates.length > 0 ? Math.min(...candidates) : null;
   }
 
-  private async processQueuedChannelEnvelope(
+  async processChannelEvent(
     channelId: string,
-    envelope:
-      | RpcChannelMessage
-      | {
-          kind: "internal";
-          type: "scheduled-model-resume";
-          messageId: string;
-        }
-      | {
-          kind: "internal";
-          type: "subagent-progress";
-          sequence: number;
-        }
+    event: ChannelEvent,
+    deliveredContext?: ChannelAgenticContext
   ): Promise<void> {
-    if (envelope.kind === "internal") {
-      if (envelope.type === "scheduled-model-resume") {
-        await this.driver.executeScheduledResume(channelId, envelope.messageId);
-      } else {
-        await this.executeSubagentProgress(envelope.sequence);
-      }
-      return;
-    }
-    if (envelope.kind === "control") {
-      if (envelope.type === "ready") {
-        const wakePolicy = this.subscriptions.getConfig(channelId)?.wakePolicy ?? "every-envelope";
-        if (wakePolicy === "every-envelope") await this.driver.wake(channelId);
-      }
-      return;
-    }
-    if (envelope.kind === "log" && envelope.event) {
-      await this.processChannelEvent(channelId, envelope.event);
-      return;
-    }
-    // signals are advisory — subclasses may hook them via onChannelEvent
-    if (envelope.kind === "signal" && envelope.type) {
-      await this.onChannelEvent(channelId, {
-        id: 0,
-        messageId: envelope.messageId,
-        type: envelope.type,
-        payload: envelope.payload,
-        senderId: envelope.senderId ?? "system",
-        ts: envelope.ts ?? Date.now(),
-      });
-    }
-  }
-
-  async processChannelEvent(channelId: string, event: ChannelEvent): Promise<void> {
     // Invalidate the cached participant roster on any presence change, in the one sink both the
     // live stream and subscription-replay paths funnel through — so neither path serves a stale
     // roster to shouldRespond / refreshRoster.
     if (event.type === "presence") {
       this.participantCache.delete(channelId);
       this.localTools.delete(channelId);
-      // A participant joined/left/updated mid-session: refresh the durable
-      // roster snapshot. Prompt/tool artifacts are materialized at the actual
-      // reasoning boundary, where their signature includes this snapshot.
-      // Idle membership must not start host RPC/build work that outlives the
-      // subscription or competes with lifecycle release.
-      try {
-        await this.refreshRoster(channelId);
-      } catch (error) {
-        console.warn(
-          `[Vessel] roster refresh after presence change failed for ${channelId}:`,
-          error instanceof Error ? error.message : error
-        );
-      }
     }
-    // A supervisor's task-channel progress mirror observes the raw agentic
-    // stream before specialized routing consumes invocation traffic. In
-    // particular, routeInvocationTerminal intentionally swallows
-    // invocation.started/output events so they never become prompts; observing
-    // only after that gate made child tools permanently invisible on the
-    // parent card.
-    const observedAgentic =
-      event.type === AGENTIC_EVENT_PAYLOAD_KIND ? (event.payload as AgenticEvent | null) : null;
-    this.publishSubagentProgress(channelId, event, observedAgentic);
-    if (await this.onChannelEvent(channelId, event)) return;
+    const handledBySubclass = await this.onChannelEvent(channelId, event);
+    if (await this.routeSupervisedTaskTerminal(channelId, event)) return;
+    if (handledBySubclass) return;
     if (event.type !== AGENTIC_EVENT_PAYLOAD_KIND) return;
     const maybeFeedback = event.payload as AgenticEvent | null;
     if (maybeFeedback && (maybeFeedback as { kind?: string }).kind === "ui.feedback") {
@@ -3216,7 +3172,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     if (!agentic || (agentic as { kind?: string }).kind !== "message.completed") return;
     if (event.senderId === this.participantId()) return;
 
-    const respond = await this.shouldRespond(channelId, event);
+    const respond = await this.shouldRespond(channelId, event, deliveredContext);
     if (!respond) return;
 
     // Sender's canonical message identity — the read-ack / edit / retract
@@ -3237,10 +3193,110 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     // bytes, while the GAD provenance row is product-sealed.
     await this.recordMessageIngestion(channelId, event, "channel-message");
 
-    // Only an actual recipient (shouldRespond === true) emits a received ack.
-    await this.publishReceivedAck(channelId, sourceMessageId);
-
     await this.dispatchApprovedInput(channelId, event, sourceMessageId);
+  }
+
+  /** A terminal task fact is both the retained card result and the supervisor
+   * wake. Delivery remains pending in the channel mailbox until this finite
+   * transition succeeds, so a foreground turn cannot consume or hide it. */
+  private async routeSupervisedTaskTerminal(
+    channelId: string,
+    event: ChannelEvent
+  ): Promise<boolean> {
+    if (event.type !== AGENTIC_EVENT_PAYLOAD_KIND) return false;
+    const agentic = event.payload as AgenticEvent;
+    const kind = (agentic as { kind?: string }).kind;
+    const statusByKind = {
+      "task.completed": "completed",
+      "task.failed": "failed",
+      "task.cancelled": "cancelled",
+      "task.abandoned": "abandoned",
+    } as const;
+    const terminalStatus = kind ? statusByKind[kind as keyof typeof statusByKind] : undefined;
+    if (!terminalStatus) return false;
+    const runId = agentic.causality?.taskId;
+    if (typeof runId !== "string") return false;
+    const run = this.subagentRuns.get(runId);
+    if (!run || run.taskChannelId !== channelId) return false;
+    const supervisorId = this.participantId();
+    const childParticipantId = run.childParticipantId ?? run.childEntityId;
+    const childAuthored =
+      event.senderId === childParticipantId && agentic.actor.id === childParticipantId;
+    // A supervisor may author cancellation/abandonment/infrastructure failure
+    // facts when the child is unreachable. Successful completion is child
+    // evidence and can never be asserted by the supervisor.
+    const supervisorAuthored =
+      terminalStatus !== "completed" &&
+      event.senderId === supervisorId &&
+      agentic.actor.id === supervisorId;
+    if (!childAuthored && !supervisorAuthored) {
+      console.warn(
+        `[agent-vessel] ignoring task terminal for ${runId}: publisher is neither the child nor an authorized supervisor terminal source`
+      );
+      return false;
+    }
+    const payload = agentic.payload as Record<string, unknown>;
+    // Competing terminals (child completion racing a supervisor cancellation)
+    // are fenced at PUBLICATION: both publishers share idempotency key
+    // `subagent-terminal:<runId>`, so at most one terminal event ever commits
+    // to the task log. Re-processing here is therefore always the SAME
+    // durable terminal (a delivery retry after a failed supervisor wake), and
+    // must re-run in full — status idempotently, prompt re-dispatched.
+    const details =
+      payload["details"] && typeof payload["details"] === "object"
+        ? (payload["details"] as Record<string, unknown>)
+        : payload["result"] && typeof payload["result"] === "object"
+          ? (((payload["result"] as Record<string, unknown>)["details"] as
+              | Record<string, unknown>
+              | undefined) ?? {})
+          : {};
+    if (typeof details["sourceEventId"] === "string") {
+      this.subagentRuns.setSourceEventId(runId, details["sourceEventId"]);
+    }
+    this.subagentRuns.setStatus(runId, terminalStatus);
+    this.subagentRuns.touch(runId, event.ts);
+
+    const report =
+      typeof payload["summary"] === "string"
+        ? payload["summary"]
+        : typeof payload["reason"] === "string"
+          ? payload["reason"]
+          : "";
+    const siblings = this.subagentRuns
+      .listAll()
+      .filter((candidate) => candidate.parentChannelId === run.parentChannelId)
+      .map(
+        (candidate) =>
+          `- ${subagentRunHandle(candidate.runId)} (${candidate.label || "unlabeled"}): ${candidate.status}`
+      )
+      .join("\n");
+    const liveCount = this.subagentRuns
+      .listLive()
+      .filter((candidate) => candidate.parentChannelId === run.parentChannelId).length;
+    const content = [
+      `Subagent \"${run.label || subagentRunHandle(runId)}\" ${terminalStatus}.`,
+      report ? `Report:\n${report}` : "",
+      "This is a durable terminal result for the existing user request, not a new request.",
+      siblings ? `Supervised runs:\n${siblings}` : "",
+      liveCount > 0
+        ? `${liveCount} other supervised subagent${liveCount === 1 ? " remains" : "s remain"} live. Review this result now, then continue useful foreground work or suspend again.`
+        : "No supervised subagents remain live. Review the retained result and continue the user goal. Integrate it only when incorporating the child's work is part of that goal; inspection-only and comparison tasks may deliberately leave it unintegrated.",
+    ]
+      .filter(Boolean)
+      .join("\n\n");
+    await this.driver.handleIncoming(run.parentChannelId, {
+      type: "command",
+      command: {
+        kind: "prompt",
+        channelId: run.parentChannelId,
+        source: { envelopeId: event.messageId },
+        sourceMessageId: event.messageId,
+        content,
+        senderRef: participantRefFromActor(agentic.actor),
+        metadata: { deliverAfterTurn: true },
+      },
+    });
+    return true;
   }
 
   /**
@@ -3256,12 +3312,16 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     event: ChannelEvent,
     sourceMessageId: string | undefined
   ): Promise<void> {
-    // The in-process model's tool surface is part of this turn's durable input.
-    // Do not silently materialize it from an absent or stale best-effort
-    // snapshot: inbox delivery can retry once the channel roster is readable
-    // again. Linked agents override this seam and own their external tool
-    // surface, so they do not need an internal prompt roster.
-    await this.refreshRoster(channelId);
+    // §7.2 execution fence: once this vessel (running as a subagent) has
+    // committed its terminal intent, no further model execution is admitted.
+    // The delivery itself still settles durably; only dispatch is refused.
+    const sub = this.subagentIdentity();
+    if (sub && this.subagentTerminalIntentRecorded(sub.runId)) {
+      console.warn(
+        `[agent-vessel] refusing post-terminal dispatch for subagent run ${sub.runId} on ${channelId}`
+      );
+      return;
+    }
     const agentic = event.payload as AgenticEvent | null;
     const metadata = this.turnMetadata(event);
     const command = {
@@ -3284,31 +3344,6 @@ export abstract class AgentVesselBase extends DurableObjectBase {
         ...command,
       },
     });
-  }
-
-  /** Publish a `message.received` ack for a message this agent will consume.
-   *  Deterministic idempotency key dedupes redeliveries. */
-  private async publishReceivedAck(
-    channelId: string,
-    sourceMessageId: string | undefined
-  ): Promise<void> {
-    if (!sourceMessageId) return;
-    const participantId = this.subscriptions.getParticipantId(channelId) ?? this.participantId();
-    const event: AgenticEvent<"message.received"> = {
-      kind: "message.received",
-      actor: this.selfRef(channelId),
-      causality: { messageId: sourceMessageId as never },
-      payload: { protocol: AGENTIC_PROTOCOL_VERSION },
-      createdAt: new Date().toISOString(),
-    };
-    await this.createChannelClient(channelId)
-      .publishAgenticEvent(participantId, event, {
-        idempotencyKey: `received:${channelId}:${sourceMessageId}:${participantId}`,
-        senderMetadata: { type: "agent", name: participantId },
-      })
-      .catch((err) => {
-        console.error(`[AgentVessel] received ack emit failed for ${channelId}:`, err);
-      });
   }
 
   /** Route a `message.edited` / `message.retracted` channel event to the loop
@@ -3500,14 +3535,18 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       : undefined;
   }
 
-  protected async shouldRespond(channelId: string, event: ChannelEvent): Promise<boolean> {
+  protected async shouldRespond(
+    channelId: string,
+    event: ChannelEvent,
+    deliveredContext?: ChannelAgenticContext
+  ): Promise<boolean> {
     const agentic = event.payload as AgenticEvent;
     const payload = (agentic.payload ?? {}) as {
       mentions?: string[];
       replyTo?: string;
       to?: never[];
     };
-    const channel = this.createChannelClient(channelId);
+    const channel = deliveredContext ? null : this.createChannelClient(channelId);
     let lastCompletedSender: string | null = null;
     let lastCompletedMessageId: string | null = null;
     let replyToSenderId: string | undefined;
@@ -3521,12 +3560,34 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     }> = [];
     let agentStreakHops: number | undefined;
     try {
-      const [policyState, config, participants] = await Promise.all([
-        channel.getPolicyState(),
-        this.getCachedChannelConfig(channelId),
-        this.getCachedParticipants(channelId),
-      ]);
-      const conversation = policyState.state as {
+      const resolved = deliveredContext
+        ? {
+            conversation: deliveredContext.conversation,
+            config: deliveredContext.channelConfig,
+            participants: deliveredContext.relationships.map((relationship) => ({
+              participantId: relationship.participantId,
+              metadata: relationship.metadata,
+              ref: participantRefFromMetadata(relationship.participantId, relationship.metadata),
+            })),
+            replyToSenderId: deliveredContext.replyToSenderId ?? undefined,
+          }
+        : await (async () => {
+            const [policyState, config, participants] = await Promise.all([
+              channel!.getPolicyState(),
+              this.getCachedChannelConfig(channelId),
+              this.getCachedParticipants(channelId),
+            ]);
+            return {
+              conversation: policyState.state,
+              config,
+              participants,
+              replyToSenderId: payload.replyTo
+                ? ((await channel!.getMessageSender(this.participantId(), payload.replyTo)) ??
+                  undefined)
+                : undefined,
+            };
+          })();
+      const conversation = resolved.conversation as {
         lastCompletedSender: string | null;
         lastCompletedMessageId?: string | null;
         lastCompletedSeq: number | null;
@@ -3551,20 +3612,20 @@ export abstract class AgentVesselBase extends DurableObjectBase {
           ? (conversation.previousCompletedMessageId ?? null)
           : (conversation.lastCompletedMessageId ?? null);
       if (
-        config?.["conversationPolicy"] === "open" ||
-        config?.["conversationPolicy"] === "directed" ||
-        config?.["conversationPolicy"] === "moderated"
+        resolved.config?.["conversationPolicy"] === "open" ||
+        resolved.config?.["conversationPolicy"] === "directed" ||
+        resolved.config?.["conversationPolicy"] === "moderated"
       ) {
-        conversationPolicy = config["conversationPolicy"];
+        conversationPolicy = resolved.config["conversationPolicy"];
       }
-      if (typeof config?.["agentHopLimit"] === "number") {
-        agentHopLimit = config["agentHopLimit"];
+      if (typeof resolved.config?.["agentHopLimit"] === "number") {
+        agentHopLimit = resolved.config["agentHopLimit"];
       }
-      participantIds = participants.map((participant) => participant.participantId);
-      respondParticipants = participants;
+      participantIds = resolved.participants.map((participant) => participant.participantId);
+      respondParticipants = resolved.participants;
       if (payload.replyTo) {
         replyToSenderId =
-          (await channel.getMessageSender(this.participantId(), payload.replyTo)) ??
+          resolved.replyToSenderId ??
           (payload.replyTo === lastCompletedMessageId
             ? (lastCompletedSender ?? undefined)
             : undefined);
@@ -3685,6 +3746,67 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     // Invalidate it only after the new snapshot has committed.
     this.localTools.delete(channelId);
     return true;
+  }
+
+  /** Commit the event-sequence roster projection carried by the mailbox row.
+   * Recipient admission therefore performs no serialized channel read and the
+   * prompt/tool surface is derived from the same relationship fold that chose
+   * this recipient. */
+  private async applyDeliveredAgenticContext(
+    channelId: string,
+    context: ChannelAgenticContext
+  ): Promise<ChannelAgenticContext> {
+    if (context?.version !== 1) {
+      throw new Error("acceptChannelDelivery: unsupported agentic context version");
+    }
+    const relationships =
+      context && typeof context === "object"
+        ? (context as { relationships?: unknown }).relationships
+        : undefined;
+    if (!Array.isArray(relationships) || !context.conversation || !context.channelConfig) {
+      throw new Error("acceptChannelDelivery: missing versioned agentic context");
+    }
+    const selfId = this.participantId();
+    const roster: RosterEntry[] = relationships
+      .filter(
+        (value): value is { participantId: string; metadata: Record<string, unknown> } =>
+          !!value &&
+          typeof value === "object" &&
+          typeof (value as { participantId?: unknown }).participantId === "string" &&
+          !!(value as { metadata?: unknown }).metadata &&
+          typeof (value as { metadata?: unknown }).metadata === "object"
+      )
+      .filter(({ participantId }) => participantId !== selfId)
+      .map(({ participantId, metadata }) => ({
+        participantId,
+        ref: participantRefFromMetadata(participantId, metadata),
+        handle: typeof metadata["handle"] === "string" ? String(metadata["handle"]) : undefined,
+        type: typeof metadata["type"] === "string" ? String(metadata["type"]) : undefined,
+        methods: Array.isArray(metadata["methods"])
+          ? (
+              metadata["methods"] as Array<{
+                name?: string;
+                description?: string;
+                parameters?: unknown;
+              }>
+            )
+              .filter(
+                (method): method is { name: string; description?: string; parameters?: unknown } =>
+                  typeof method?.name === "string"
+              )
+              .map((method) => this.boundedRosterMethod(method))
+          : [],
+      }));
+    const fingerprint = JSON.stringify(roster);
+    if (this.getStateValue(`agent:roster:${channelId}`) !== fingerprint) {
+      await this.driver.handleIncoming(channelId, {
+        type: "command",
+        command: { kind: "setRoster", roster: { participants: roster } },
+      });
+      this.setStateValue(`agent:roster:${channelId}`, fingerprint);
+      this.localTools.delete(channelId);
+    }
+    return context;
   }
 
   private async getCachedChannelConfig(channelId: string): Promise<Record<string, unknown> | null> {
@@ -5386,7 +5508,8 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       typeof s["task"] !== "string" ||
       s["task"].trim().length === 0 ||
       typeof s["parentRef"] !== "string" ||
-      typeof s["parentChannelId"] !== "string"
+      typeof s["parentChannelId"] !== "string" ||
+      typeof s["taskChannelId"] !== "string"
     ) {
       return null;
     }
@@ -5395,15 +5518,33 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       task: s["task"],
       parentRef: s["parentRef"],
       parentChannelId: s["parentChannelId"],
+      taskChannelId: s["taskChannelId"],
       parentContextId: typeof s["parentContextId"] === "string" ? s["parentContextId"] : "",
       depth: typeof s["depth"] === "number" ? s["depth"] : 0,
       mode: s["mode"] === "fork" || s["mode"] === "fresh" ? s["mode"] : undefined,
+      ...(typeof s["parentParticipantId"] === "string"
+        ? { parentParticipantId: s["parentParticipantId"] }
+        : {}),
     };
   }
 
   /** True when this agent was spawned as a subagent (advertises `complete`). */
   protected isSubagent(): boolean {
     return this.subagentIdentity() !== null;
+  }
+
+  /** True once this run's terminal intent + execution fence committed (§7.2
+   *  step 1). The wake row is the durable fact; it is retained after the
+   *  notification settles, so the fence survives restart and hibernation. */
+  private subagentTerminalIntentRecorded(runId: string): boolean {
+    return (
+      this.sql
+        .exec(
+          `SELECT 1 FROM agent_wake_queue WHERE wake_id = ?`,
+          `subagent-terminal-publish:${runId}`
+        )
+        .toArray().length > 0
+    );
   }
 
   private currentSubagentDepth(): number {
@@ -5507,7 +5648,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       if (existingRun) {
         if (existingRun.status === "starting") {
           console.warn(`[AgentVessel] resetting stale starting subagent run ${existingRun.runId}`);
-          await this.teardownRun(existingRun);
+          await this.rollbackFailedSubagentSpawn(existingRun);
         } else {
           if (existingRun.status === "running" && task.trim()) {
             console.info(
@@ -5537,11 +5678,9 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       if (childDepth > maxDepth) {
         return { result: `subagent depth limit reached (max ${maxDepth})`, isError: true };
       }
-      if (this.subagentRuns.countAllocated() >= maxSubagents) {
+      if (this.subagentRuns.countLive() >= maxSubagents) {
         return {
-          result:
-            `subagent limit reached (max ${maxSubagents}); inspect, integrate, and close an ` +
-            `existing run before spawning a replacement`,
+          result: `subagent execution limit reached (max ${maxSubagents}); wait for or cancel a live run before spawning another`,
           isError: true,
         };
       }
@@ -5671,8 +5810,10 @@ export abstract class AgentVesselBase extends DurableObjectBase {
             mode,
             parentRef: ownerEntityId,
             parentChannelId: channelId,
+            taskChannelId,
             parentContextId,
             depth: childDepth,
+            parentParticipantId: this.participantId(),
           },
         },
       });
@@ -5692,8 +5833,6 @@ export abstract class AgentVesselBase extends DurableObjectBase {
         depth: childDepth,
         status: "starting",
         sourceEventId: null,
-        discardedBeforeIntegration: false,
-        emptyReadAfterSeq: null,
         semanticIntegrationSnapshot: null,
         startedAt: now,
         lastActivityAt: now,
@@ -5759,14 +5898,19 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       this.subagentRuns.setLaunchConfig(runId, effectiveLaunchConfig);
       run.launchConfig = effectiveLaunchConfig;
 
-      // 6) Parent observes progress but wakes only for explicit child messages.
-      // The seed is published only after this, so the supervisor cannot miss
-      // child activity that follows the task prompt.
+      // 6) Supervisor stance on the task channel (§9): delivery interest
+      // "addressed" — child tool activity stays in the canonical task log
+      // with ZERO supervisor mailbox rows; only utterances addressed to the
+      // supervisor (child `say` carries the parent audience) create parent
+      // work. NOTE: any future parent-made channel_call against a task
+      // channel would need addressed invocation terminals before it could
+      // settle under this stance.
       await this.subscribeChannel({
         channelId: taskChannelId,
         contextId,
         config: { wakePolicy: "explicit" },
         replay: false,
+        delivery: "addressed",
       });
 
       // 6b) Stamp task provenance on the task channel so its getProvenance
@@ -5802,11 +5946,9 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       });
       const run = this.subagentRuns.get(invocationId);
       if (run && (run.status === "starting" || run.status === "running")) {
-        let canTeardown = run.status === "starting";
         if (run.status === "running") {
           try {
             await this.settleSubagentTerminal(run, "failed", message);
-            canTeardown = true;
           } catch (terminalErr) {
             console.error(
               `[AgentVessel] subagent setup failure terminal emit failed for ${run.runId}:`,
@@ -5814,11 +5956,11 @@ export abstract class AgentVesselBase extends DurableObjectBase {
             );
           }
         }
-        if (canTeardown) {
-          await this.teardownRun(run).catch((teardownErr) => {
+        if (run.status === "starting") {
+          await this.rollbackFailedSubagentSpawn(run).catch((rollbackError) => {
             console.error(
-              `[AgentVessel] subagent setup teardown failed for ${run.runId}:`,
-              teardownErr
+              `[AgentVessel] subagent spawn rollback failed for ${run.runId}:`,
+              rollbackError
             );
           });
         }
@@ -5829,9 +5971,9 @@ export abstract class AgentVesselBase extends DurableObjectBase {
 
   /**
    * External subagent bring-up. Mirrors the Pi path but delegates the child
-   * process to an extension launcher named by agentKind. Completion still flows
-   * through the linked vessel's terminal settlement → `onSubagentComplete`
-   * path. Interactive completion can arrive from the bridge; supervised
+   * process to an extension launcher named by agentKind. Completion is the
+   * linked vessel's durable terminal task event. Interactive completion can
+   * arrive from the bridge; supervised
    * print-mode completion arrives from the launcher's typed process result.
    * Cards, progress, merge-back, and cancellation stay shared either way.
    */
@@ -5863,9 +6005,8 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       targetKey,
     });
 
-    // 2) Record the run BEFORE any external side effect so a setup failure
-    //    (prepare/spawn) is reclaimable by the tool's catch → teardownRun (which
-    //    keys teardown off childContextId). childEntityId/participant are filled
+    // 2) Record the run BEFORE any external side effect so a setup failure is
+    //    compensatable by the spawn transaction rollback. childEntityId/participant are filled
     //    once `prepare` returns; the complete-gate can't fire during setup.
     const now = Date.now();
     const run: SubagentRunRow = {
@@ -5881,8 +6022,6 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       depth: childDepth,
       status: "starting",
       sourceEventId: null,
-      discardedBeforeIntegration: false,
-      emptyReadAfterSeq: null,
       semanticIntegrationSnapshot: null,
       startedAt: now,
       lastActivityAt: now,
@@ -5893,14 +6032,16 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     };
     this.subagentRuns.insert(run);
 
-    // 3) Parent observes progress and explicit child messages + stamps task provenance —
-    //    this also materializes the channel bound to the child context, which the
-    //    extension's `prepare` resolves the session context from.
+    // 3) Supervisor stance on the task channel (§9): "addressed" delivery —
+    //    zero mailbox rows for child tool activity. This also materializes the
+    //    channel bound to the child context, which the extension's `prepare`
+    //    resolves the session context from.
     await this.subscribeChannel({
       channelId: taskChannelId,
       contextId,
       config: { wakePolicy: "explicit" },
       replay: false,
+      delivery: "addressed",
     });
     await this.createChannelClient(taskChannelId).recordTaskProvenance({
       parentChannelId: channelId,
@@ -5928,17 +6069,20 @@ export abstract class AgentVesselBase extends DurableObjectBase {
               task,
               parentRef: ownerEntityId,
               parentChannelId: channelId,
+              taskChannelId,
               parentContextId,
               depth: childDepth,
               mode,
+              parentParticipantId: this.participantId(),
             },
           },
         ],
       ]
     );
 
-    // childEntityId = the linked vessel's canonical id — its RPC caller identity
-    // when it calls back `onSubagentComplete` (the ownership gate).
+    // The participant is the linked vessel's canonical publishing identity;
+    // the entity remains its executable delivery/ownership endpoint. Terminal
+    // admission validates the former and never conflates these two axes.
     this.subagentRuns.setChildEntityId(runId, launched.vesselEntityId);
     this.subagentRuns.setChildParticipantId(runId, launched.vesselParticipantId);
     this.subagentRuns.setExternalSession(runId, {
@@ -5988,7 +6132,6 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       childEntityId: run.childEntityId,
       status: run.status,
       sourceEventId: run.sourceEventId,
-      discardedBeforeIntegration: run.discardedBeforeIntegration,
       semanticIntegration: semanticIntegrationForRun(run),
       // W6b: the SubagentRunCard badges the reasoning engine from this field.
       agentKind: run.agentKind,
@@ -6108,8 +6251,6 @@ export abstract class AgentVesselBase extends DurableObjectBase {
             depth: this.currentSubagentDepth() + 1,
             status: "running",
             sourceEventId: null,
-            discardedBeforeIntegration: false,
-            emptyReadAfterSeq: null,
             semanticIntegrationSnapshot: null,
             startedAt,
             lastActivityAt: startedAt,
@@ -6197,10 +6338,27 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     if (!run) {
       throw this.subagentReferenceError(`unknown subagent run ${runId}`, { runId });
     }
-    if (run.status === "closed") {
-      throw this.subagentReferenceError(
-        `subagent ${subagentRunHandle(run.runId)} is closed and cannot receive messages`,
-        { runId: run.runId, status: run.status }
+    if (run.status !== "starting" && run.status !== "running") {
+      throw Object.assign(
+        new Error(
+          `subagent ${subagentRunHandle(run.runId)} is terminal (${run.status}) and cannot receive execution messages. ` +
+            `Its retained result stays inspectable and mergeable; to continue this line of work, spawn a new run.`
+        ),
+        {
+          code: "SubagentTerminal",
+          errorData: {
+            code: "SubagentTerminal",
+            runId: run.runId,
+            status: run.status,
+            sourceEventId: run.sourceEventId,
+            allowedOperations: [
+              "inspect_subagent",
+              "read_subagent",
+              "merge_subagent",
+              "spawn_subagent",
+            ],
+          },
+        }
       );
     }
     if (typeof message !== "string" || !message.trim()) {
@@ -6240,19 +6398,6 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       throw this.subagentReferenceError(`unknown subagent run ${runId}`, { runId });
     }
     const q = (query ?? "status").trim() || "status";
-    if (run.status === "closed") {
-      const details = {
-        ...this.subagentRunDetails(run),
-        query: q,
-        available: false,
-        reason: "closed",
-      };
-      return this.toolText(
-        `Subagent ${subagentRunHandle(run.runId)} is closed. Its child context and task ` +
-          "channel were released; the durable lifecycle receipt remains available here.",
-        details
-      );
-    }
     if (q === "runtime") {
       if (!run.externalSessionEntityId || !run.externalGenerationId) {
         return this.toolText(
@@ -6428,21 +6573,6 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     if (!run) {
       throw this.subagentReferenceError(`unknown subagent run ${runId}`, { runId });
     }
-    if (run.status === "closed") {
-      const recovery = run.sourceEventId
-        ? ` Recover with vcs merge {sourceEventId:"${run.sourceEventId}", resolutions:{allRemaining:{resolution:"ours"}}}.`
-        : "";
-      return this.toolText(
-        `Subagent ${subagentRunHandle(run.runId)} is already closed; its integration receipt ` +
-          `is retained in the supervisor ledger.${recovery}`,
-        {
-          ...this.subagentRunDetails(run),
-          protocol: SUBAGENT_MERGE_PROTOCOL,
-          available: false,
-          reason: "closed",
-        }
-      );
-    }
     if (!run.parentContextId) {
       throw new Error(`subagent ${run.runId} has no recoverable parent context`);
     }
@@ -6546,16 +6676,10 @@ export abstract class AgentVesselBase extends DurableObjectBase {
         },
       });
     }
-    const closingPermitted =
-      driven.review.resolution.complete && driven.review.resolution.concluded;
-    const closeGuidance = closingPermitted
-      ? `Close: permitted for ${subagentRunHandle(run.runId)} after verification; closing releases the child resources and retains this integration receipt.`
-      : `Close: not permitted yet; ${driven.review.resolution.remainingCoordinateCount} semantic coordinate(s) still require integration or an explicit resolution.`;
-    return this.toolText(`${renderMergeReview(driven.review)}\n${closeGuidance}`, {
+    return this.toolText(renderMergeReview(driven.review), {
       protocol: SUBAGENT_MERGE_PROTOCOL,
       runId: subagentRunHandle(run.runId),
       sourceEventId,
-      closingPermitted,
       ...driven,
     });
   }
@@ -6570,36 +6694,6 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     const run = await this.resolveSubagentRun(runId, parentChannelId);
     if (!run) {
       throw this.subagentReferenceError(`unknown subagent run ${runId}`, { runId });
-    }
-    if (run.status === "closed") {
-      return this.toolText(
-        `Subagent ${subagentRunHandle(run.runId)} is closed. Its task channel was released; ` +
-          "use the retained lifecycle receipt instead of polling.",
-        {
-          ...this.subagentRunDetails(run),
-          nextSeq: Number.isFinite(afterSeq) ? afterSeq : 0,
-          messages: [],
-          empty: true,
-          available: false,
-          reason: "closed",
-        }
-      );
-    }
-    if (run.emptyReadAfterSeq !== null) {
-      throw Object.assign(
-        new Error(
-          `No child event has arrived since the empty read at sequence ${run.emptyReadAfterSeq}. ` +
-            "The supervisor is subscribed to pushed progress; call suspend_turn when waiting."
-        ),
-        {
-          code: "SubagentPollingBlocked",
-          errorData: {
-            code: "SubagentPollingBlocked",
-            runId: subagentRunHandle(run.runId),
-            emptyReadAfterSeq: run.emptyReadAfterSeq,
-          },
-        }
-      );
     }
     const envelope = await this.createChannelClient(run.taskChannelId).getReplayAfter({
       after: Number.isFinite(afterSeq) ? afterSeq : 0,
@@ -6616,12 +6710,11 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       messages.push({ seq: event.id ?? 0, author: event.senderId ?? "unknown", text });
     }
     if (messages.length === 0) {
-      this.subagentRuns.setEmptyReadAfterSeq(run.runId, nextSeq);
       return {
         content: [
           {
             type: "text",
-            text: "No new subagent messages. Stop polling now: the parent is already subscribed to pushed subagent progress. Use suspend_turn when no foreground work remains.",
+            text: "No new subagent messages after this cursor.",
           },
         ],
         details: {
@@ -6629,13 +6722,10 @@ export abstract class AgentVesselBase extends DurableObjectBase {
           nextSeq,
           messages,
           empty: true,
-          waitForPush: true,
           hasMore: envelope.ready.hasMoreAfter === true,
-          tokenWaste: "polling_without_new_subagent_messages",
         },
       };
     }
-    this.subagentRuns.setEmptyReadAfterSeq(run.runId, null);
     const rendered = messages.map((m) => `[#${m.seq} ${m.author}]\n${m.text}`).join("\n\n");
     return this.toolText(rendered, {
       runId: subagentRunHandle(run.runId),
@@ -6646,135 +6736,101 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     });
   }
 
-  /** Close a subagent run: cancel it if still open, tear down its context
-   *  (recursive lifecycle subtree), and drop the parent's task subscription. */
-  protected async closeSubagent(
+  /** Cancel live execution while retaining the complete durable run result. */
+  protected async cancelSubagent(
     runId: string,
-    discard: boolean,
+    reason: string,
     parentChannelId?: string,
     toolRpc: RpcClient = this.rpc
   ): Promise<AgentToolResult<Record<string, unknown>>> {
     const run = await this.resolveSubagentRun(runId, parentChannelId);
-    if (!run) return this.toolText(`subagent ${runId} already closed`, { runId });
-    if (run.status === "closed") {
-      return this.toolText(`subagent ${subagentRunHandle(run.runId)} already closed`, {
-        ...this.subagentRunDetails(run),
-        discarded: run.discardedBeforeIntegration,
-      });
-    }
-    if (!run.parentContextId) {
-      throw this.subagentClosePrecondition(
-        "InvalidReference",
-        `subagent ${run.runId} has no recoverable parent context`,
-        { runId: run.runId }
+    if (!run) throw this.subagentReferenceError(`unknown subagent run ${runId}`, { runId });
+    if (run.status !== "starting" && run.status !== "running") {
+      return this.toolText(
+        `Subagent ${subagentRunHandle(run.runId)} is already ${run.status}; no cancellation was performed.`,
+        { ...this.subagentRunDetails(run), cancelled: false, terminal: true }
       );
     }
-    const vcs = createSubagentVcsClient(toolRpc);
-    const [targetStatus, sourceStatus] = await Promise.all([
-      vcs.status({ contextId: run.parentContextId }),
-      vcs.status({ contextId: run.childContextId }),
-    ]);
-    const cleanSourceEventId =
-      sourceStatus.clean && sourceStatus.committed.kind === "event"
-        ? sourceStatus.committed.eventId
-        : null;
-    if (cleanSourceEventId) this.subagentRuns.setSourceEventId(run.runId, cleanSourceEventId);
-    const retainedSourceEventId = cleanSourceEventId ?? run.sourceEventId;
-    const projection = retainedSourceEventId
-      ? targetStatus.integrating.find(
-          (entry) => entry.source.kind === "event" && entry.source.eventId === retainedSourceEventId
-        )
-      : undefined;
-    const observedRun = { ...run, sourceEventId: retainedSourceEventId };
-    const semanticIntegration = semanticIntegrationForRun(
-      observedRun,
-      targetStatus.integrating,
-      targetStatus.workingHead
-    );
-    const complete =
-      semanticIntegration["state"] === "complete" && semanticIntegration["stale"] !== true;
-    const shouldDiscard = discard || run.discardedBeforeIntegration;
-    if (shouldDiscard) {
-      if (semanticIntegration["state"] !== "unattempted" && !complete) {
-        const handle = subagentRunHandle(run.runId);
-        throw this.subagentClosePrecondition(
-          "IntegrationIncomplete",
-          `subagent ${handle} has already entered the parent working chain. ` +
-            `Call merge_subagent({runId:"${handle}", resolutions:{allRemaining:{resolution:"ours"}}}) ` +
-            `to explicitly decline every remainder, or merge_subagent({runId:"${handle}", ` +
-            `resolutions:{allRemaining:{resolution:"current", rationale:"…"}}}) when the parent's current state is the reviewed combined result; then close normally.`,
-          { runId: run.runId, sourceEventId: retainedSourceEventId, integration: projection }
-        );
+    // Durable cancel intent BEFORE any side effect: a crash anywhere between
+    // the child abort and the terminal settle re-drives through the wake
+    // queue instead of leaking a fenced-but-`running` run and its slot.
+    const wakeId = `subagent-cancel-settle:${run.runId}`;
+    const now = Date.now();
+    this.ctx.storage.transactionSync(() => {
+      this.sql.exec(
+        `INSERT OR IGNORE INTO agent_wake_queue (
+           wake_id, channel_id, wake_kind, payload_json, prerequisite_delivery_id,
+           idempotency_key, attempts, next_attempt_at, lease_generation, created_at,
+           disposition
+         ) VALUES (?, ?, 'subagent-cancel-settle', ?, NULL, ?, 0, ?, 0, ?, 'ready')`,
+        wakeId,
+        run.parentChannelId,
+        JSON.stringify({ runId: run.runId, reason }),
+        wakeId,
+        // Eligible only after a grace delay: the inline drive below is the
+        // normal path; the wake row is the crash-recovery driver.
+        now + CHANNEL_ENVELOPE_RETRY_MS,
+        now
+      );
+    });
+    await this.driveCancelSubagent(run.runId, reason, toolRpc);
+    const terminal = this.subagentRuns.get(run.runId) ?? { ...run, status: "cancelled" as const };
+    return this.toolText(`cancelled subagent ${subagentRunHandle(run.runId)}`, {
+      ...this.subagentRunDetails(terminal),
+      cancelled: true,
+      retained: true,
+    });
+  }
+
+  /** Idempotent core of cancellation: fence the child's live execution, then
+   *  settle the terminal fact. Safe to re-drive from the wake queue — a run
+   *  already terminal no-ops, the abort is fencing (repeatable), and the
+   *  terminal publish is idempotent by run identity. */
+  private async driveCancelSubagent(
+    runId: string,
+    reason: string,
+    toolRpc: RpcClient = this.rpc
+  ): Promise<void> {
+    const run = this.subagentRuns.get(runId);
+    if (!run || (run.status !== "starting" && run.status !== "running")) return;
+    if (run.externalSessionEntityId && run.externalGenerationId) {
+      const agentKind = normalizeSubagentAgentKind(run.agentKind);
+      if (!agentKind || agentKind === "pi") {
+        throw new Error(`cancel_subagent: invalid external agent kind ${run.agentKind}`);
       }
-      if (semanticIntegration["state"] === "unattempted") {
-        this.subagentRuns.setDiscardedBeforeIntegration(run.runId);
-      }
+      const providerSlot = externalSubagentProviderSlot(agentKind);
+      await toolRpc.call("main", providerSlot ? "extensions.invokeProvider" : "extensions.invoke", [
+        providerSlot ?? externalSubagentExtensionId(agentKind),
+        "release",
+        [{ entityId: run.externalSessionEntityId, generationId: run.externalGenerationId }],
+      ]);
     } else {
-      if (!cleanSourceEventId) {
-        throw this.subagentClosePrecondition(
-          "WorkingChangesPresent",
-          `subagent ${run.runId} has uncommitted work; commit and merge it, or close with discard:true only if integration has never begun`,
-          { runId: run.runId, childContextId: run.childContextId }
-        );
-      }
-      if (!complete) {
-        throw this.subagentClosePrecondition(
-          "IntegrationIncomplete",
-          `subagent ${run.runId} is not semantically complete; call merge_subagent({runId:"${subagentRunHandle(run.runId)}"}) first`,
-          {
-            runId: run.runId,
-            sourceEventId: cleanSourceEventId,
-            integration: semanticIntegration,
-          }
-        );
-      }
+      await toolRpc.call(run.childEntityId, "cancelSubagentExecution", [
+        { runId: run.runId, taskChannelId: run.taskChannelId, reason },
+      ]);
+      return;
     }
-    this.subagentRuns.setSemanticIntegrationSnapshot(run.runId, semanticIntegration);
-    const refreshed = this.subagentRuns.get(run.runId)!;
-    if (refreshed.status === "starting" || refreshed.status === "running") {
-      await this.settleSubagentTerminal(refreshed, "cancelled", "closed by parent");
-    }
-    await this.teardownRun(refreshed, { retainReceipt: true });
-    const handle = subagentRunHandle(run.runId);
-    const closed = this.subagentRuns.get(run.runId) ?? refreshed;
-    return this.toolText(`closed subagent ${handle}`, {
-      ...this.subagentRunDetails(closed),
-      discarded: closed.discardedBeforeIntegration,
-    });
+    await this.settleSubagentTerminal(run, "cancelled", reason);
   }
 
-  private subagentClosePrecondition(
-    code: "IntegrationIncomplete" | "InvalidReference" | "WorkingChangesPresent",
-    message: string,
-    detail: Record<string, unknown>
-  ): Error {
-    return Object.assign(new Error(message), {
-      code,
-      errorData: { code, operation: "subagent-close", ...detail },
-    });
-  }
-
-  private subagentCleanupIncomplete(
-    run: SubagentRunRow,
-    failures: Array<{ stage: "external-release" | "context-destroy"; message: string }>
-  ): Error {
-    const code = "SubagentCleanupIncomplete";
-    const summary = failures.map(({ stage, message }) => `${stage}: ${message}`).join("; ");
-    return Object.assign(
-      new Error(
-        `subagent ${subagentRunHandle(run.runId)} cleanup incomplete; retry close_subagent ` +
-          `with the same runId (${summary})`
-      ),
-      {
-        code,
-        errorData: {
-          code,
-          operation: "subagent-close-cleanup",
-          runId: run.runId,
-          failures,
-        },
-      }
-    );
+  @rpc({
+    principals: ["code"],
+    effect: { kind: "open" },
+    tier: "open",
+    sensitivity: "write",
+  })
+  async cancelSubagentExecution(input: {
+    runId: string;
+    taskChannelId: string;
+    reason: string;
+  }): Promise<{ cancelled: true }> {
+    const subagent = this.subagentIdentity();
+    if (!subagent || subagent.runId !== input.runId || subagent.parentRef !== this.rpcCallerId) {
+      throw new Error("cancelSubagentExecution: caller does not own this subagent run");
+    }
+    await this.recordOwnSubagentTerminalIntent(subagent, input.reason, "cancelled");
+    await this.driver.abortChannel(input.taskChannelId, input.reason);
+    return { cancelled: true };
   }
 
   private subagentReferenceError(message: string, detail: Record<string, unknown>): Error {
@@ -6784,74 +6840,69 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     });
   }
 
-  /** CHILD side of the terminal trigger: notify the owning parent that this run
-   *  is done. Routes to the parent's {@link onSubagentComplete}. */
+  /** CHILD side of the terminal trigger (§7.2 steps 1–2): commit the terminal
+   *  outcome and the post-terminal execution fence in ONE child-local
+   *  transaction, then let the durable wake queue drive the parent
+   *  notification at-least-once. A child crash after this commit can no
+   *  longer lose the terminal fact — the wake row survives and republishes;
+   *  the parent's settle is idempotent by run identity. */
   protected async completeAsSubagent(
     report: string,
     outcome: "success" | "failed"
   ): Promise<AgentToolResult<Record<string, unknown>>> {
     const sub = this.subagentIdentity();
     if (!sub) throw new Error("complete is only available to subagents");
-    await this.rpc.call(sub.parentRef, "onSubagentComplete", [
-      { runId: sub.runId, channelId: sub.parentChannelId, report, outcome },
-    ]);
-    return this.toolText("subagent run completed", { runId: sub.runId, outcome });
-  }
-
-  /**
-   * Parent-side terminal delivery, driven by the child's `complete` tool. Gated to
-   * the OWNING subagent (caller id must equal the recorded child entity) — an open
-   * relay otherwise lets any DO forge a completion and drive the parent loop.
-   * Idempotent: a duplicate / post-terminal call no-ops.
-   */
-  @rpc({
-    principals: ["code"],
-    effect: { kind: "open" },
-    tier: "open",
-    sensitivity: "write",
-  })
-  async onSubagentComplete(payload: {
-    runId: string;
-    channelId?: string;
-    report?: unknown;
-    outcome?: "success" | "failed";
-  }): Promise<void> {
-    const callerId = this.rpcCallerId;
-    const run = await this.resolveSubagentRun(payload.runId, payload.channelId);
-    if (!run) return; // unknown / already torn down — idempotent
-    await serializeByKey(this.subagentTerminalChains, run.parentChannelId, async () => {
-      const current = await this.resolveSubagentRun(payload.runId, payload.channelId);
-      if (!current) return;
-      await this.onSubagentCompleteSerial(current, payload, callerId);
+    await this.recordOwnSubagentTerminalIntent(
+      sub,
+      report,
+      outcome === "failed" ? "failed" : "completed"
+    );
+    return this.toolText("subagent run completed; terminal delivery is durable", {
+      runId: sub.runId,
+      outcome,
     });
   }
 
-  /** Serialize terminal delivery per supervisor channel so concurrent siblings
-   *  observe one another's settled status and produce a truthful live snapshot. */
-  private async onSubagentCompleteSerial(
-    run: SubagentRunRow,
-    payload: { report?: unknown; outcome?: "success" | "failed" },
-    callerId: string | null
+  private async recordOwnSubagentTerminalIntent(
+    sub: SubagentIdentity,
+    report: string,
+    outcome: "completed" | "failed" | "cancelled"
   ): Promise<void> {
-    if (callerId !== run.childEntityId) {
-      throw new Error(
-        `onSubagentComplete: refusing caller ${callerId ?? "unknown"} — not the owning subagent for ${run.runId}`
+    const contextId = this.subscriptions.getContextId(sub.taskChannelId);
+    const childStatus = await createSubagentVcsClient(this.rpc).status({ contextId });
+    const sourceEventId =
+      childStatus.clean && childStatus.committed.kind === "event"
+        ? childStatus.committed.eventId
+        : null;
+    const wakeId = `subagent-terminal-publish:${sub.runId}`;
+    const now = Date.now();
+    this.ctx.storage.transactionSync(() => {
+      // The wake row is simultaneously the durable terminal intent, the
+      // execution fence marker (see dispatchApprovedInput), and the
+      // notification driver. First intent wins; a duplicate `complete` from a
+      // retried model turn is a no-op against the same wakeId.
+      this.sql.exec(
+        `INSERT OR IGNORE INTO agent_wake_queue (
+           wake_id, channel_id, wake_kind, payload_json, prerequisite_delivery_id,
+           idempotency_key, attempts, next_attempt_at, lease_generation, created_at,
+           disposition
+         ) VALUES (?, ?, 'subagent-terminal-publish', ?, NULL, ?, 0, ?, 0, ?, 'ready')`,
+        wakeId,
+        sub.taskChannelId,
+        JSON.stringify({
+          runId: sub.runId,
+          parentRef: sub.parentRef,
+          taskChannelId: sub.taskChannelId,
+          report,
+          outcome,
+          sourceEventId,
+        }),
+        wakeId,
+        now,
+        now
       );
-    }
-    if (run.status !== "starting" && run.status !== "running") return; // already terminal
-    const outcome: "completed" | "failed" = payload.outcome === "failed" ? "failed" : "completed";
-    const reportText =
-      typeof payload.report === "string" ? payload.report : JSON.stringify(payload.report ?? null);
-    const childStatus = await createSubagentVcsClient(this.rpc).status({
-      contextId: run.childContextId,
     });
-    if (childStatus.clean && childStatus.committed.kind === "event") {
-      this.subagentRuns.setSourceEventId(run.runId, childStatus.committed.eventId);
-    }
-    this.subagentRuns.touch(run.runId, Date.now());
-    await this.settleSubagentTerminal(run, outcome, reportText, {
-      notifyParent: true,
-    });
+    this.markWorkReady("agent-wake");
   }
 
   /** Publish the terminal subagent card and notify the parent, then mark the run
@@ -6860,67 +6911,19 @@ export abstract class AgentVesselBase extends DurableObjectBase {
    *  returns when the child is launched; child completion is a later event, not
    *  the terminal for the original tool.
    */
-  private async settleSubagentTerminal(
-    run: SubagentRunRow,
-    outcome: "completed" | "failed" | "cancelled" | "abandoned",
-    text: string,
-    opts: { notifyParent?: boolean } = {}
-  ): Promise<void> {
-    await this.publishSubagentTerminal(run, outcome, text);
-    if (opts.notifyParent) {
-      await this.notifyParentOfSubagentTerminal(run, outcome, text);
-    }
-    this.subagentRuns.setStatus(run.runId, outcome === "completed" ? "completed" : outcome);
-  }
-
-  private async notifyParentOfSubagentTerminal(
+  protected async settleSubagentTerminal(
     run: SubagentRunRow,
     outcome: "completed" | "failed" | "cancelled" | "abandoned",
     text: string
   ): Promise<void> {
-    const outcomeLabel = outcome === "completed" ? "completed" : outcome;
-    const label = run.label ? `"${run.label}"` : run.runId;
-    const report = text.trim();
-    const liveSiblings = this.subagentRuns
-      .listLive()
-      .filter(
-        (candidate) =>
-          candidate.runId !== run.runId && candidate.parentChannelId === run.parentChannelId
-      );
-    const siblingSummary = this.subagentRuns
-      .listAll()
-      .filter(
-        (candidate) =>
-          candidate.status !== "closed" && candidate.parentChannelId === run.parentChannelId
-      )
-      .map((candidate) => {
-        const status =
-          candidate.runId === run.runId
-            ? outcome === "completed"
-              ? "completed"
-              : outcome
-            : candidate.status;
-        return `- ${subagentRunHandle(candidate.runId)} (${candidate.label || "unlabeled"}): ${status}`;
-      })
-      .join("\n");
-    const next =
-      liveSiblings.length > 0
-        ? `${liveSiblings.length} other supervised subagent${liveSiblings.length === 1 ? " remains" : "s remain"} live. ` +
-          `Handle this terminal result now: merge or otherwise resolve its work, then close the run. ` +
-          `Do not finalize the user's goal while the remaining subagents are live. Continue useful ` +
-          `foreground work, or call suspend_turn again if only background work remains.`
-        : `No other supervised subagents remain live. Handle this terminal result now, finish ` +
-          `integrating and closing the supervised runs, then continue the full user goal.`;
-    const content = [`Subagent ${label} ${outcomeLabel}.`, report ? `Report:\n${report}` : ""]
-      .filter(Boolean)
-      .concat(
-        `This is a lifecycle result for the existing user request, not a new request.`,
-        siblingSummary ? `Supervised runs:\n${siblingSummary}` : "",
-        `Next: ${next}`
-      )
-      .filter(Boolean)
-      .join("\n\n");
-    const senderRef: ParticipantRef = {
+    await this.publishSubagentTerminal(run, outcome, text);
+    this.subagentRuns.setStatus(run.runId, outcome === "completed" ? "completed" : outcome);
+  }
+
+  private async publishSubagentStarted(run: SubagentRunRow): Promise<void> {
+    const participantId =
+      this.subscriptions.getParticipantId(run.parentChannelId) ?? this.participantId();
+    const actor: ActorRef = {
       kind: "agent",
       id: run.childEntityId,
       displayName: run.label || "Subagent",
@@ -6930,28 +6933,6 @@ export abstract class AgentVesselBase extends DurableObjectBase {
         taskChannelId: run.taskChannelId,
       },
     };
-    await this.driver.handleIncoming(run.parentChannelId, {
-      type: "command",
-      command: {
-        kind: "prompt",
-        channelId: run.parentChannelId,
-        source: { envelopeId: `subagent-terminal:${run.runId}:${outcomeLabel}` },
-        sourceMessageId: `subagent-terminal:${run.runId}`,
-        content,
-        senderRef,
-        // A lifecycle terminal must get its own model turn when the supervisor
-        // is already handling user input. Folding it into that active turn can
-        // let an otherwise good answer semantically consume the notification
-        // without integrating the child result.
-        metadata: { deliverAfterTurn: true },
-      },
-    });
-  }
-
-  private async publishSubagentStarted(run: SubagentRunRow): Promise<void> {
-    const participantId =
-      this.subscriptions.getParticipantId(run.parentChannelId) ?? this.participantId();
-    const actor = this.cardActor(run.parentChannelId, participantId);
     const event = {
       kind: "task.started",
       actor,
@@ -7002,7 +6983,17 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     } as const;
     const participantId =
       this.subscriptions.getParticipantId(run.parentChannelId) ?? this.participantId();
-    const actor = this.cardActor(run.parentChannelId, participantId);
+    const actor: ActorRef = {
+      kind: "agent",
+      id: participantId,
+      displayName: "Supervisor",
+      metadata: {
+        type: "agent",
+        supervision: true,
+        subagentRunId: run.runId,
+        taskChannelId: run.taskChannelId,
+      },
+    };
     // The retained committed source event travels with the terminal event so a
     // replay-recovered receipt keeps its raw-VCS recovery recipe (the run row
     // may have been refreshed after `run` was captured).
@@ -7019,6 +7010,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
             protocol: AGENTIC_PROTOCOL_VERSION,
             terminalOutcome: "success",
             summary: text,
+            to: [{ kind: "participant", participantId }],
             result: {
               protocolContent: [{ type: "text", text }],
               details: {
@@ -7030,6 +7022,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
             protocol: AGENTIC_PROTOCOL_VERSION,
             reason: text,
             terminalOutcome: terminalOutcomeByOutcome[outcome],
+            to: [{ kind: "participant", participantId }],
             details: terminalDetails,
           };
     const event = {
@@ -7039,82 +7032,100 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       payload,
       createdAt: new Date().toISOString(),
     } as unknown as AgenticEvent;
-    await this.createChannelClient(run.parentChannelId).publishAgenticEvent(participantId, event, {
+    await this.createChannelClient(run.taskChannelId).publishAgenticEvent(participantId, event, {
       idempotencyKey: `subagent-terminal:${run.runId}`,
       senderMetadata: actor.metadata,
     });
   }
 
-  /** Tear down a run: drop the parent's task subscription and recursively
-   *  destroy the child's lifecycle context subtree. */
-  private async teardownRun(
-    run: SubagentRunRow,
-    opts: { retainReceipt?: boolean } = {}
-  ): Promise<void> {
-    const failures: Array<{
-      stage: "external-release" | "context-destroy";
-      message: string;
-    }> = [];
-    try {
-      await this.unsubscribeChannel(run.taskChannelId);
-    } catch {
-      // Subscription teardown is activation-local and idempotent. The durable
-      // subscription row is removed by unsubscribeChannel even if a local
-      // driver hook fails, and context destruction below is authoritative.
+  private async publishOwnSubagentTerminal(input: {
+    runId: string;
+    taskChannelId: string;
+    parentRef: string;
+    report: string;
+    outcome: "completed" | "failed" | "cancelled";
+    sourceEventId: string | null;
+  }): Promise<void> {
+    const kind =
+      input.outcome === "completed"
+        ? "task.completed"
+        : input.outcome === "failed"
+          ? "task.failed"
+          : "task.cancelled";
+    const terminalOutcome =
+      input.outcome === "completed"
+        ? "success"
+        : input.outcome === "failed"
+          ? "tool_error"
+          : "cancelled";
+    const participantId =
+      this.subscriptions.getParticipantId(input.taskChannelId) ?? this.participantId();
+    const actor: ActorRef = {
+      kind: "agent",
+      id: participantId,
+      displayName: "Subagent",
+      metadata: { type: "agent", subagentRunId: input.runId },
+    };
+    const details = {
+      runId: subagentRunHandle(input.runId),
+      outcome: terminalOutcome,
+      ...(input.sourceEventId ? { sourceEventId: input.sourceEventId } : {}),
+    };
+    const payload =
+      input.outcome === "completed"
+        ? {
+            protocol: AGENTIC_PROTOCOL_VERSION,
+            terminalOutcome,
+            summary: input.report,
+            to: [{ kind: "participant" as const, participantId: input.parentRef }],
+            result: { protocolContent: [{ type: "text", text: input.report }], details },
+          }
+        : {
+            protocol: AGENTIC_PROTOCOL_VERSION,
+            reason: input.report,
+            terminalOutcome,
+            to: [{ kind: "participant" as const, participantId: input.parentRef }],
+            details,
+          };
+    const event = {
+      kind,
+      actor,
+      causality: { taskId: input.runId as never, invocationId: input.runId as never },
+      payload,
+      createdAt: new Date().toISOString(),
+    } as unknown as AgenticEvent;
+    await this.createChannelClient(input.taskChannelId).publishAgenticEvent(participantId, event, {
+      idempotencyKey: `subagent-terminal:${input.runId}`,
+      senderMetadata: actor.metadata,
+    });
+  }
+  /** Compensation for a spawn transaction that never reached a published
+   * running result. This is intentionally unreachable from normal lifecycle. */
+  private async rollbackFailedSubagentSpawn(run: SubagentRunRow): Promise<void> {
+    if (run.status !== "starting") {
+      throw new Error(`refusing spawn rollback for ${run.runId} in ${run.status}`);
     }
-    // Release an extension-owned headless launch directly. Close/cancel/abandon
-    // all route here. Idempotent — releasing an already-exited launch is a no-op.
     if (run.externalSessionEntityId && run.externalGenerationId) {
       const agentKind = normalizeSubagentAgentKind(run.agentKind);
-      if (agentKind && agentKind !== "pi") {
-        const providerSlot = externalSubagentProviderSlot(agentKind);
-        try {
-          await this.rpc.call(
-            "main",
-            providerSlot ? "extensions.invokeProvider" : "extensions.invoke",
-            [
-              providerSlot ?? externalSubagentExtensionId(agentKind),
-              "release",
-              [
-                {
-                  entityId: run.externalSessionEntityId,
-                  generationId: run.externalGenerationId,
-                },
-              ],
-            ]
-          );
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          failures.push({ stage: "external-release", message });
-          console.error(
-            `[AgentVessel] ${run.agentKind} release for subagent ${run.runId} failed:`,
-            error
-          );
-        }
-      } else {
-        const message = `invalid agentKind ${run.agentKind}`;
-        failures.push({ stage: "external-release", message });
-        console.error(`[AgentVessel] cannot release external subagent ${run.runId}: ${message}`);
+      if (!agentKind || agentKind === "pi") {
+        throw new Error(`invalid external spawn kind ${run.agentKind}`);
       }
+      const providerSlot = externalSubagentProviderSlot(agentKind);
+      await this.rpc.call(
+        "main",
+        providerSlot ? "extensions.invokeProvider" : "extensions.invoke",
+        [
+          providerSlot ?? externalSubagentExtensionId(agentKind),
+          "release",
+          [{ entityId: run.externalSessionEntityId, generationId: run.externalGenerationId }],
+        ]
+      );
     }
-    try {
-      await this.rpc.call("main", "runtime.destroyContext", [
-        { contextId: run.childContextId, recursive: true },
-      ]);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      failures.push({ stage: "context-destroy", message });
-      console.error(`[AgentVessel] destroyContext for subagent ${run.runId} failed:`, error);
-    }
-    if (failures.length > 0) {
-      throw this.subagentCleanupIncomplete(run, failures);
-    }
-    if (opts.retainReceipt) {
-      this.subagentRuns.setStatus(run.runId, "closed");
-      this.subagentRuns.touch(run.runId, Date.now());
-    } else {
-      this.subagentRuns.delete(run.runId);
-    }
+    await this.unsubscribeChannel(run.taskChannelId);
+    await this.rpc.call("main", "runtime.destroyContext", [
+      { contextId: run.childContextId, recursive: true },
+    ]);
+    this.subagentRuns.delete(run.runId);
   }
 
   // ── Wake discipline (explicit supervisor messages / manual) ─────────────────
@@ -7131,248 +7142,6 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       )
       .filter(Boolean)
       .join("\n");
-  }
-
-  private trimSubagentProgress(text: string): { text: string; truncated: boolean } {
-    const compact = text.replace(/\s+/g, " ").trim();
-    return compact.length > 360
-      ? { text: `${compact.slice(0, 357)}...`, truncated: true }
-      : { text: compact, truncated: false };
-  }
-
-  /**
-   * Bound an arbitrary child-call value for inline relay onto the parent card.
-   * Progress updates are fold-readable and must stay small, so strings are
-   * clipped, containers are shallow-capped, and anything past the budget is
-   * replaced by a marker the renderer shows as "truncated" — the parent panel
-   * can always open the child's own transcript for the unbounded version.
-   */
-  private boundedProgressValue(value: unknown): { value: unknown; truncated: boolean } {
-    const MAX_STRING = 240;
-    const MAX_ENTRIES = 12;
-    const MAX_DEPTH = 3;
-    const visit = (entry: unknown, depth: number): { value: unknown; truncated: boolean } => {
-      if (entry === null || entry === undefined) return { value: entry, truncated: false };
-      if (typeof entry === "string") {
-        return entry.length > MAX_STRING
-          ? { value: `${entry.slice(0, MAX_STRING - 1)}…`, truncated: true }
-          : { value: entry, truncated: false };
-      }
-      if (typeof entry === "number" || typeof entry === "boolean") {
-        return { value: entry, truncated: false };
-      }
-      if (depth >= MAX_DEPTH) return { value: { __truncated: "depth" }, truncated: true };
-      if (Array.isArray(entry)) {
-        let truncated = entry.length > MAX_ENTRIES;
-        const kept = entry.slice(0, MAX_ENTRIES).map((item) => {
-          const bounded = visit(item, depth + 1);
-          truncated ||= bounded.truncated;
-          return bounded.value;
-        });
-        return {
-          value:
-            entry.length > MAX_ENTRIES
-              ? [...kept, { __truncated: entry.length - MAX_ENTRIES }]
-              : kept,
-          truncated,
-        };
-      }
-      if (typeof entry === "object") {
-        const entries = Object.entries(entry as Record<string, unknown>);
-        let truncated = entries.length > MAX_ENTRIES;
-        const out: Record<string, unknown> = {};
-        for (const [key, entryValue] of entries.slice(0, MAX_ENTRIES)) {
-          const bounded = visit(entryValue, depth + 1);
-          truncated ||= bounded.truncated;
-          out[key] = bounded.value;
-        }
-        if (entries.length > MAX_ENTRIES) out["__truncated"] = entries.length - MAX_ENTRIES;
-        return { value: out, truncated };
-      }
-      return { value: undefined, truncated: false };
-    };
-    return visit(value, 0);
-  }
-
-  /** Bounded argument record for a child `tool-started` update. */
-  private boundedProgressArgs(request: unknown): {
-    value?: Record<string, unknown>;
-    truncated: boolean;
-  } {
-    if (!request || typeof request !== "object" || Array.isArray(request)) {
-      return { truncated: false };
-    }
-    const bounded = this.boundedProgressValue(request);
-    if (!bounded.value || typeof bounded.value !== "object" || Array.isArray(bounded.value)) {
-      return { truncated: bounded.truncated };
-    }
-    const record = bounded.value as Record<string, unknown>;
-    return {
-      ...(Object.keys(record).length > 0 ? { value: record } : {}),
-      truncated: bounded.truncated,
-    };
-  }
-
-  /** Fold a child task-channel event into a structured, bounded progress
-   *  update for the parent card. Returns null for kinds we don't surface. */
-  private subagentProgressUpdate(
-    sourceChannelId: string,
-    event: ChannelEvent,
-    agentic: AgenticEvent | null,
-    messageSeq: number
-  ): SubagentProgressUpdate | null {
-    if (event.type === "config-update") {
-      const title = (event.payload as { title?: unknown } | null)?.title;
-      if (typeof title !== "string" || title.trim().length === 0) return null;
-      const bounded = this.trimSubagentProgress(title);
-      return {
-        kind: "title-changed",
-        sourceChannelId,
-        text: bounded.text,
-        ...(bounded.truncated ? { textTruncated: true } : {}),
-        messageSeq,
-      };
-    }
-    const kind = (agentic as { kind?: string } | null)?.kind ?? "";
-    const payload = ((agentic as { payload?: Record<string, unknown> } | null)?.payload ??
-      {}) as Record<string, unknown>;
-    const tool = typeof payload["name"] === "string" ? payload["name"] : undefined;
-    // Terminal invocation payloads carry no tool name; the parent re-attaches
-    // one by pairing on this id, so it must ride along on every `tool-*` kind.
-    const causalityInvocationId = (agentic as { causality?: { invocationId?: unknown } } | null)
-      ?.causality?.invocationId;
-    const callId = typeof causalityInvocationId === "string" ? causalityInvocationId : undefined;
-    if (kind === "turn.opened") return { kind: "turn-started", sourceChannelId, messageSeq };
-    if (kind === "turn.closed") return { kind: "turn-finished", sourceChannelId, messageSeq };
-    if (kind === "invocation.started") {
-      const args = this.boundedProgressArgs(payload["request"]);
-      return {
-        kind: "tool-started",
-        sourceChannelId,
-        tool,
-        ...(callId ? { callId } : {}),
-        ...(args.value ? { args: args.value } : {}),
-        ...(args.truncated ? { argsTruncated: true } : {}),
-        messageSeq,
-      };
-    }
-    if (kind === "invocation.progress") {
-      const message = typeof payload["message"] === "string" ? payload["message"] : undefined;
-      const bounded = message ? this.trimSubagentProgress(message) : undefined;
-      return {
-        kind: "tool-progress",
-        sourceChannelId,
-        tool,
-        ...(callId ? { callId } : {}),
-        ...(bounded?.text ? { text: bounded.text } : {}),
-        ...(bounded?.truncated ? { textTruncated: true } : {}),
-        messageSeq,
-      };
-    }
-    if (kind === "invocation.completed") {
-      const result = this.boundedProgressValue(payload["result"]);
-      const summary = typeof payload["summary"] === "string" ? payload["summary"] : undefined;
-      const boundedSummary = summary ? this.trimSubagentProgress(summary) : undefined;
-      return {
-        kind: "tool-completed",
-        sourceChannelId,
-        tool,
-        ...(callId ? { callId } : {}),
-        ...(result.value !== undefined ? { result: result.value } : {}),
-        ...(result.truncated ? { resultTruncated: true } : {}),
-        ...(boundedSummary?.text ? { text: boundedSummary.text } : {}),
-        ...(boundedSummary?.truncated ? { textTruncated: true } : {}),
-        messageSeq,
-      };
-    }
-    if (
-      kind === "invocation.failed" ||
-      kind === "invocation.cancelled" ||
-      kind === "invocation.abandoned"
-    ) {
-      const reason = typeof payload["reason"] === "string" ? payload["reason"] : undefined;
-      const error = this.boundedProgressValue(payload["failure"] ?? payload["error"]);
-      const boundedReason = reason ? this.trimSubagentProgress(reason) : undefined;
-      return {
-        kind: kind.replace("invocation.", "tool-") as SubagentProgressUpdate["kind"],
-        sourceChannelId,
-        tool,
-        ...(callId ? { callId } : {}),
-        ...(error.value !== undefined ? { result: error.value } : {}),
-        ...(error.truncated ? { resultTruncated: true } : {}),
-        ...(boundedReason?.text ? { text: boundedReason.text } : {}),
-        ...(boundedReason?.truncated ? { textTruncated: true } : {}),
-        messageSeq,
-      };
-    }
-    if (agentic && kind === "message.completed") {
-      const text = this.extractMessageText(agentic);
-      if (!text) return null;
-      const bounded = this.trimSubagentProgress(text);
-      return {
-        kind: "said",
-        sourceChannelId,
-        text: bounded.text,
-        ...(bounded.truncated ? { textTruncated: true } : {}),
-        messageSeq,
-        ...(payload["saliency"] === "say" ? { say: true } : {}),
-      };
-    }
-    return null;
-  }
-
-  private publishSubagentProgress(
-    channelId: string,
-    event: ChannelEvent,
-    agentic: AgenticEvent | null
-  ): void {
-    const run = this.subagentRuns.getByTaskChannel(channelId);
-    if (!run || event.senderId === this.participantId()) return;
-    const messageSeq = Number.isFinite(event.id) ? (event.id as number) : 0;
-    this.subagentRuns.clearEmptyReadAfterNewEvent(run.runId, messageSeq);
-    const update = this.subagentProgressUpdate(channelId, event, agentic, messageSeq);
-    if (!update) return;
-    const participantId =
-      this.subscriptions.getParticipantId(run.parentChannelId) ?? this.participantId();
-    const actor = this.cardActor(run.parentChannelId, participantId);
-    const progressEvent: AgenticEvent<"task.progress"> = {
-      kind: "task.progress",
-      actor,
-      causality: { taskId: run.runId as never, invocationId: run.runId as never },
-      payload: {
-        protocol: AGENTIC_PROTOCOL_VERSION,
-        data: { subagent: update },
-      },
-      createdAt: new Date().toISOString(),
-    };
-    const idempotencyKey = `subagent-progress:${run.runId}:${messageSeq}:${(agentic as { kind?: string } | null)?.kind ?? "event"}`;
-    this.subagentRuns.enqueueProgress({
-      idempotencyKey,
-      runId: run.runId,
-      messageSeq,
-      parentChannelId: run.parentChannelId,
-      participantId,
-      event: progressEvent,
-      now: Date.now(),
-    });
-    this.markWorkReady("agent-inbox");
-  }
-
-  private async executeSubagentProgress(sequence: number): Promise<void> {
-    const entry = this.subagentRuns.getProgress(sequence);
-    // Deleting the projection before the inbox settlement is safe: a crash
-    // after the idempotent publication may replay this claim, which becomes a
-    // no-op once the authoritative progress row is gone.
-    if (!entry) return;
-    await this.createChannelClient(entry.parentChannelId).publishAgenticEvent(
-      entry.participantId,
-      entry.event,
-      {
-        idempotencyKey: entry.idempotencyKey,
-        senderMetadata: entry.event.actor.metadata,
-      }
-    );
-    this.subagentRuns.completeProgress(entry.sequence);
   }
 
   private eventAddressesSelf(
@@ -7514,7 +7283,8 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       loops,
       outbox: inspectEffectOutbox(this.sql),
       activeDispatches: this._driver?.activeDispatchDiagnostics?.(channelId) ?? [],
-      subagentProgressOutbox: this.subagentRuns.progressDiagnostics(),
+      retainedSubagentRuns: this.subagentRuns.listAll().length,
+      liveSubagentRuns: this.subagentRuns.countLive(),
     };
   }
 

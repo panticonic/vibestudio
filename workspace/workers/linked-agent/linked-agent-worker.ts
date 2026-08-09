@@ -1092,8 +1092,8 @@ export class LinkedAgentWorker extends AgentWorkerBase {
    * failure path). If this vessel carries subagent duty and the session never
    * called `complete`, settle the parent's run as failed instead of leaving it
    * dangling as "running". Idempotent: a post-complete exit (the normal case —
-   * every headless process eventually exits) and a duplicate report both no-op;
-   * the parent's `onSubagentComplete` is additionally post-terminal-idempotent.
+   * every headless process eventually exits) and a duplicate report both no-op.
+   * The durable task event and recipient transition are independently idempotent.
    * The controller identity stamped into STATE_ARGS is the authorization; an
    * unrelated extension cannot forge a terminal exit.
    */

@@ -43,11 +43,7 @@ import {
   summarizeMessageBlocks,
 } from "@workspace/agentic-protocol";
 import type { InvocationCardPayload } from "./invocation-card-payload.js";
-import type {
-  SubagentProgressEntry,
-  SubagentRunState,
-  TaskCardPayload,
-} from "./task-card-payload.js";
+import type { SubagentRunState, TaskCardPayload } from "./task-card-payload.js";
 
 type StoredValueRefPreview = { preview?: string };
 
@@ -826,17 +822,6 @@ function subagentDetails(value: unknown): SubagentRunState | undefined {
   return record as SubagentRunState;
 }
 
-function subagentProgress(value: unknown, at: string): SubagentProgressEntry | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
-  const candidate = (value as Record<string, unknown>)["subagent"];
-  if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) return undefined;
-  const record = candidate as Record<string, unknown>;
-  if (typeof record["kind"] !== "string" || typeof record["messageSeq"] !== "number") {
-    return undefined;
-  }
-  return { ...(record as unknown as SubagentProgressEntry), at };
-}
-
 function projectedTaskToChatMessage(task: ProjectedTask): ChatMessage & { sortTime: number } {
   const subagent = task.taskType === "subagent" ? subagentDetails(task.details) : undefined;
   const status: TaskCardPayload["execution"]["status"] =
@@ -849,14 +834,6 @@ function projectedTaskToChatMessage(task: ProjectedTask): ChatMessage & { sortTi
           : task.status === "started" || task.status === "running"
             ? "running"
             : "pending";
-  const progress = task.progress.flatMap((entry) => {
-    const projected = subagentProgress(entry.data, entry.at);
-    return projected ? [projected] : [];
-  });
-  progress.sort(
-    (left, right) =>
-      left.messageSeq - right.messageSeq || Date.parse(left.at) - Date.parse(right.at)
-  );
   const payload: TaskCardPayload = {
     id: task.taskId,
     taskType: task.taskType ?? "task",
@@ -865,7 +842,6 @@ function projectedTaskToChatMessage(task: ProjectedTask): ChatMessage & { sortTi
       status,
       ...(task.terminalOutcome ? { terminalOutcome: task.terminalOutcome } : {}),
       description: task.terminalReason ?? task.summary ?? "",
-      ...(progress.length > 0 ? { progress } : {}),
       ...(task.result !== undefined ? { result: displayStoredValue(task.result) } : {}),
       isError: status === "error",
     },

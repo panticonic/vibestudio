@@ -111,8 +111,8 @@ export function maxAttempts(kind: EffectKind, mutating = false): number {
       return 5;
     case "credential_wait":
       return Number.POSITIVE_INFINITY; // deadline-only
-    case "publish_envelope":
-      return 1;
+    case "record_receipt":
+      return 3;
   }
 }
 
@@ -251,7 +251,7 @@ export class EffectOutbox {
     return (
       this.sql
         .exec(
-          `SELECT * FROM effect_outbox WHERE branch_id = ? AND kind != 'publish_envelope'`,
+          `SELECT * FROM effect_outbox WHERE branch_id = ? AND kind != 'record_receipt'`,
           branchId
         )
         .toArray() as Record<string, unknown>[]
@@ -332,7 +332,7 @@ export class EffectOutbox {
       selected.push(
         ...rows.filter(
           (row) =>
-            (row.kind === "publish_envelope" ||
+            (row.kind === "record_receipt" ||
               row.kind === "channel_call" ||
               row.kind === "http_call") &&
             dueKeys.has(`${row.branchId}\u0000${row.effectId}`)
@@ -340,7 +340,7 @@ export class EffectOutbox {
       );
       const semantic = rows.filter(
         (row) =>
-          row.kind !== "publish_envelope" && row.kind !== "channel_call" && row.kind !== "http_call"
+          row.kind !== "record_receipt" && row.kind !== "channel_call" && row.kind !== "http_call"
       );
       const first = semantic[0];
       if (!first) continue;

@@ -69,6 +69,11 @@ import {
   type AttestedCaller,
 } from "@vibestudio/rpc/internal";
 import type { RuntimeFs } from "../types.js";
+import {
+  acceptResidentChannelDelivery,
+  inspectResidentSessions,
+  type ResidentChannelDeliveryInput,
+} from "@vibestudio/shared/residentSession";
 import type { PanelHandle } from "../core/index.js";
 import {
   DURABLE_WORK_READY_HEADER,
@@ -1494,6 +1499,27 @@ export abstract class DurableObjectBase {
     return [...this.durableWorkQueues()];
   }
 
+  /** Finite delivery into an explicitly resident in-memory operation. The
+   * durable sender retries when no receiver is active; this method owns no
+   * stream, timer, or durable relationship state. */
+  @rpc({
+    principals: ["host"],
+    effect: { kind: "open" },
+    tier: "open",
+    sensitivity: "write",
+  })
+  async acceptChannelDelivery(input: ResidentChannelDeliveryInput): Promise<unknown> {
+    return acceptResidentChannelDelivery(this.directAuthorityAudience(), input);
+  }
+
+  protected residentSessionDiagnostics(): {
+    active: number;
+    receivers: Array<{ channelId: string; openedAt: number; ageMs: number }>;
+  } {
+    const receivers = inspectResidentSessions(this.directAuthorityAudience());
+    return { active: receivers.length, receivers };
+  }
+
   /**
    * Claim methods call this before selecting rows, so an immediate response
    * hint and a registry recovery scan have identical fencing semantics.
@@ -1593,6 +1619,6 @@ export abstract class DurableObjectBase {
 
   async getState(): Promise<Record<string, unknown>> {
     const state = this.sql.exec(`SELECT * FROM state`).toArray();
-    return { state };
+    return { state, residentExecution: this.residentSessionDiagnostics() };
   }
 }

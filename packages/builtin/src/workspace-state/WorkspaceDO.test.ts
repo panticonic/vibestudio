@@ -35,6 +35,9 @@ const ACTIVE_AUTHORITY: UnitAuthorityManifest = {
       evidence: "exact",
     },
   ],
+  // A validated envelope always carries its protocol declarations, so the
+  // round trip through activation returns exactly what went in.
+  serviceRequests: [],
 };
 
 async function createPreEngineDatabase() {
@@ -1402,17 +1405,17 @@ describe("WorkspaceDO lifecycle registry", () => {
 
   it("registers work capability only for an active owner and removes it on retirement", () => {
     const key = { source: SOURCE, className: "MyDO", objectKey: "k1" };
-    expect(() => instance.durableWorkOwnerRegister({ ...key, queues: ["agent-inbox"] })).toThrow(
+    expect(() => instance.durableWorkOwnerRegister({ ...key, queues: ["agent-wake"] })).toThrow(
       /is not active/u
     );
 
     const entity = instance.entityActivate(doInput());
     instance.durableWorkOwnerRegister({
       ...key,
-      queues: ["agent-effect", "agent-inbox", "agent-inbox"],
+      queues: ["agent-effect", "agent-wake", "agent-wake"],
     });
     expect(instance.durableWorkOwnerList()).toEqual([
-      { owner: key, queues: ["agent-effect", "agent-inbox"] },
+      { owner: key, queues: ["agent-effect", "agent-wake"] },
     ]);
 
     instance.entityRetire(entity.id);

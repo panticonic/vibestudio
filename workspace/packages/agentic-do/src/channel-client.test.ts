@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-import { encodeChannelSubscriptionRecord } from "@workspace/pubsub";
 import { ChannelClient } from "./channel-client.js";
 
 interface Captured {
@@ -109,112 +108,62 @@ describe("ChannelClient.send attachments", () => {
   });
 });
 
-describe("ChannelClient subscription lifetime", () => {
-  it("uses the channel acknowledgement as activation release without waiting for the mirrored stream terminal", async () => {
-    let streamController!: ReadableStreamDefaultController<Uint8Array>;
-    const calls: string[] = [];
+describe("ChannelClient finite relationships", () => {
+  it("joins without opening an RPC response stream", async () => {
+    const stream = vi.fn();
     const rpc = {
-      call: vi.fn(async (_target: string, method: string) => {
-        calls.push(method);
+      call: vi.fn(async (_target: string, method: string, args: unknown[]) => {
         if (method === "workers.resolveService") {
           return { kind: "durable-object", targetId: "chan-do" };
         }
-        if (method === "releaseSubscription") {
-          return undefined;
+        if (method === "join") {
+          return { ok: true, participantId: (args[0] as { participantId: string }).participantId };
         }
         return undefined;
       }),
-      stream: vi.fn(async (_target: string, _method: string, _args: unknown[], options: {
-        signal: AbortSignal;
-      }) => {
-        const body = new ReadableStream<Uint8Array>({
-          start(controller) {
-            streamController = controller;
-            controller.enqueue(
-              encodeChannelSubscriptionRecord({
-                kind: "subscribed",
-                result: {
-                  ok: true,
-                  participantId: "agent-1",
-                  envelope: { mode: "none" },
-                },
-              })
-            );
-            options.signal.addEventListener("abort", () => controller.error(options.signal.reason), {
-              once: true,
-            });
-          },
-        });
-        return new Response(body);
-      }),
+      stream,
     };
     const client = new ChannelClient(rpc as never, "chan-1");
-    const subscription = await client.openSubscription("agent-1", {
+    await expect(client.join({
+      participantId: "agent-1",
+      revision: 1,
       contextId: "ctx-1",
-    });
-
-    await subscription.release();
-    await subscription.closed;
-    expect(calls).toEqual(["workers.resolveService", "releaseSubscription"]);
-    expect(streamController).toBeDefined();
+      metadata: { type: "agent" },
+      delivery: "all",
+      endpoint: { kind: "entity", entityId: "agent-1" },
+      applicationConfig: null,
+      replay: true,
+    })).resolves.toMatchObject({ ok: true, participantId: "agent-1" });
+    expect(stream).not.toHaveBeenCalled();
   });
 
-  it("does not report a graceful close until the channel acknowledges self-leave", async () => {
-    let streamController!: ReadableStreamDefaultController<Uint8Array>;
+  it("does not resolve leave until the channel acknowledges it", async () => {
     let acknowledgeLeave!: () => void;
     const leaveAcknowledged = new Promise<void>((resolve) => {
       acknowledgeLeave = resolve;
     });
-    const calls: string[] = [];
     const rpc = {
       call: vi.fn(async (_target: string, method: string) => {
-        calls.push(method);
         if (method === "workers.resolveService") {
           return { kind: "durable-object", targetId: "chan-do" };
         }
-        if (method === "unsubscribe") {
+        if (method === "leave") {
           await leaveAcknowledged;
-          streamController.close();
-          return undefined;
         }
         return undefined;
       }),
-      stream: vi.fn(async () => {
-        const body = new ReadableStream<Uint8Array>({
-          start(controller) {
-            streamController = controller;
-            controller.enqueue(
-              encodeChannelSubscriptionRecord({
-                kind: "subscribed",
-                result: {
-                  ok: true,
-                  participantId: "agent-1",
-                  envelope: { mode: "none" },
-                },
-              })
-            );
-          },
-        });
-        return new Response(body);
-      }),
     };
     const client = new ChannelClient(rpc as never, "chan-1");
-    const subscription = await client.openSubscription("agent-1", {
-      contextId: "ctx-1",
-    });
 
     let settled = false;
-    const closing = subscription.close().then(() => {
+    const leaving = client.leave("agent-1", 2).then(() => {
       settled = true;
     });
-    await vi.waitFor(() => expect(calls).toContain("unsubscribe"));
-
-    expect(calls).toEqual(["workers.resolveService", "unsubscribe"]);
+    await vi.waitFor(() => expect(rpc.call).toHaveBeenCalledTimes(2));
     expect(settled).toBe(false);
 
     acknowledgeLeave();
-    await closing;
-    await subscription.closed;
+    await leaving;
     expect(settled).toBe(true);
   });
 });

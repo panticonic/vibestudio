@@ -141,6 +141,7 @@ function deps(): ExecutorDeps {
       cancelMethodCall: async () => {},
       callMethod: async () => {},
       publish: async () => {},
+      recordReadReceipt: async () => {},
       sendSignalEvent: async () => {},
     },
     localTools: {

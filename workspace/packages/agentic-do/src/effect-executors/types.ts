@@ -57,6 +57,11 @@ export interface ChannelCallPort {
     payload: unknown;
     idempotencyKey?: string;
   }): Promise<void>;
+  recordReadReceipt(input: {
+    channelId: string;
+    messageId: string;
+    turnId?: string;
+  }): Promise<void>;
   sendSignalEvent(channelId: string, event: AgenticEvent): Promise<void>;
 }
 

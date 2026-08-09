@@ -3,7 +3,7 @@ import type { DORef } from "./doDispatcher.js";
 export const DURABLE_WORK_QUEUES = [
   "channel-delivery",
   "workspace-publication",
-  "agent-inbox",
+  "agent-wake",
   "agent-effect",
 ] as const;
 

@@ -97,6 +97,15 @@ describe("composeSystemPrompt", () => {
     expect(VIBESTUDIO_BASE_SYSTEM_PROMPT).toContain("## Conversation Forks And Subagents");
     expect(VIBESTUDIO_BASE_SYSTEM_PROMPT).toContain("do not conflate them");
     expect(VIBESTUDIO_BASE_SYSTEM_PROMPT).toContain("context window cache is shared");
+    expect(VIBESTUDIO_BASE_SYSTEM_PROMPT).toContain(
+      "do not poll a live child with status, transcript, log, or diff reads"
+    );
+    expect(VIBESTUDIO_BASE_SYSTEM_PROMPT).toContain(
+      "only when that goal requires incorporating the child's work"
+    );
+    expect(VIBESTUDIO_BASE_SYSTEM_PROMPT).toContain(
+      "when the user explicitly asks to inspect, review, or compare child work"
+    );
     expect(VIBESTUDIO_BASE_SYSTEM_PROMPT).toContain("complete({ report, outcome })");
     expect(VIBESTUDIO_BASE_SYSTEM_PROMPT).toContain("packages/agentic-do/SKILL.md");
   });

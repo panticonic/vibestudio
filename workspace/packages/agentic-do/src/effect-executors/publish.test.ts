@@ -1,29 +1,22 @@
 import { describe, expect, it, vi } from "vitest";
-import { publishExecutor } from "./index.js";
+import { receiptExecutor } from "./index.js";
 import type { ExecutorDeps } from "./types.js";
-import type { PublishEnvelopeEffect } from "@workspace/agent-loop";
+import type { RecordReceiptEffect } from "@workspace/agent-loop";
 
-describe("publishExecutor", () => {
-  it("forwards the descriptor idempotencyKey to channel.publish", async () => {
-    const publish = vi.fn(
-      async (_input: {
-        channelId: string;
-        payloadKind: string;
-        payload: unknown;
-        idempotencyKey?: string;
-      }) => {}
-    );
-    const deps = { channel: { publish } } as unknown as ExecutorDeps;
-    const descriptor: PublishEnvelopeEffect = {
+describe("receiptExecutor", () => {
+  it("updates the read projection without publishing an envelope", async () => {
+    const recordReadReceipt = vi.fn(async () => {});
+    const deps = { channel: { recordReadReceipt } } as unknown as ExecutorDeps;
+    const descriptor: RecordReceiptEffect = {
       effectId: "read:src-1:turn-1",
-      kind: "publish_envelope",
+      kind: "record_receipt",
       channelId: "chan-1",
       idempotencyKey: "read:src-1:turn-1",
-      payloadKind: "agentic.trajectory.v1/event",
-      payload: { kind: "message.read" },
+      messageId: "src-1",
+      turnId: "turn-1",
     };
 
-    await publishExecutor.execute({
+    await receiptExecutor.execute({
       descriptor,
       state: {} as never,
       signal: new AbortController().signal,
@@ -31,11 +24,10 @@ describe("publishExecutor", () => {
       onEphemeral: () => {},
     });
 
-    expect(publish).toHaveBeenCalledTimes(1);
-    expect(publish.mock.calls[0]![0]).toMatchObject({
+    expect(recordReadReceipt).toHaveBeenCalledWith({
       channelId: "chan-1",
-      payloadKind: "agentic.trajectory.v1/event",
-      idempotencyKey: "read:src-1:turn-1",
+      messageId: "src-1",
+      turnId: "turn-1",
     });
   });
 });

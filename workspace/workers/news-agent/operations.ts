@@ -367,7 +367,7 @@ export const NEWS_OPERATIONS: NewsOperation[] = [
   {
     name: NEWS_METHODS.requestDeepDive,
     description:
-      "Request a deep-dive on a story: emits a news.deepdive.requested signal the panel turns into a forked analysis channel.",
+      "Request a deep-dive on a story: appends a durable news.deepdive.requested fact the panel turns into a forked analysis channel.",
     schema: {
       type: "object",
       properties: { articleId: { type: "string", minLength: 1 } },

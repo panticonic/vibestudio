@@ -24,6 +24,29 @@ export interface ChannelConfig {
   agentHopLimit?: number;
 }
 
+/** Event-sequence decision context carried by one durable channel delivery.
+ * It is derived beside recipient selection, so admission never consults newer
+ * channel state or performs a serialized channel read. */
+export interface ChannelAgenticContext {
+  version: 1;
+  relationships: Array<{
+    participantId: string;
+    metadata: Record<string, unknown>;
+    applicationConfig: { version: number; value: unknown } | null;
+  }>;
+  channelConfig: ChannelConfig;
+  conversation: {
+    lastCompletedSender: string | null;
+    lastCompletedMessageId: string | null;
+    lastCompletedSeq: number | null;
+    previousCompletedSender: string | null;
+    previousCompletedMessageId: string | null;
+    previousCompletedSeq: number | null;
+    agentStreak: number;
+  };
+  replyToSenderId: string | null;
+}
+
 /**
  * Input for sending a binary attachment (ID assigned by server).
  * Use this when publishing messages with attachments.
@@ -55,6 +78,10 @@ export interface ServerLogEvent<T = unknown> {
   payload: T;
   senderId: string;
   senderMetadata?: Record<string, unknown>;
+  /** Host-attested content provenance preserved across live delivery and replay. */
+  contentClass?: "internal" | "external";
+  /** Exact outside-content lineage at publication time. */
+  externalKeys?: string[];
   contentType?: string;
   ts: number;
   attachments?: Array<{
@@ -74,11 +101,19 @@ export interface ParticipantSnapshot {
   metadata: Record<string, unknown>;
 }
 
-export type BootstrapSnapshot = {
-  kind: "roster-snapshot";
-  participants: ParticipantSnapshot[];
-  ts: number;
-};
+export type BootstrapSnapshot =
+  | {
+      kind: "roster-snapshot";
+      participants: ParticipantSnapshot[];
+      ts: number;
+    }
+  | {
+      /** Durable receipt projection, emitted after replayed log events so it
+       * never creates receipt traffic or mailbox work of its own. */
+      kind: "receipt-snapshot";
+      events: ServerLogEvent[];
+      ts: number;
+    };
 
 export interface ReplayReady {
   contextId?: string;
@@ -228,6 +263,9 @@ export interface PubSubMessage<T = unknown> {
   attachments?: Attachment[];
   /** Sender metadata snapshot (if available) */
   senderMetadata?: Record<string, unknown>;
+  /** Present on durable log messages; absent on ephemeral signals. */
+  contentClass?: "internal" | "external";
+  externalKeys?: string[];
 }
 
 /**

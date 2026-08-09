@@ -30,7 +30,6 @@
         "onEvalComplete",
         "onEvalProgress",
         "onMethodCall",
-        "onSubagentComplete",
         "postClone",
         "subscribeChannel",
         "unsubscribeChannel"

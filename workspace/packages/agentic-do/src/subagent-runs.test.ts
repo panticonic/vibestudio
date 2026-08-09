@@ -4,7 +4,7 @@ import type { SqlStorage } from "@workspace/runtime/worker";
 import { SubagentRunStore } from "./subagent-runs.js";
 
 describe("SubagentRunStore schema", () => {
-  it("retains closed receipts without consuming an owned child slot", async () => {
+  it("retains terminal results without consuming a live execution slot", async () => {
     const sql = (await createInMemorySql()) as unknown as SqlStorage;
     const store = new SubagentRunStore(sql);
     store.createTables();
@@ -21,8 +21,6 @@ describe("SubagentRunStore schema", () => {
       depth: 1,
       status: "running",
       sourceEventId: null,
-      discardedBeforeIntegration: false,
-      emptyReadAfterSeq: null,
       semanticIntegrationSnapshot: { state: "complete" },
       startedAt: 1,
       lastActivityAt: 2,
@@ -32,13 +30,13 @@ describe("SubagentRunStore schema", () => {
       externalGenerationId: null,
     });
 
-    expect(store.countAllocated()).toBe(1);
-    store.setStatus("run-1", "closed");
+    expect(store.countLive()).toBe(1);
+    store.setStatus("run-1", "completed");
 
-    expect(store.countAllocated()).toBe(0);
+    expect(store.countLive()).toBe(0);
     expect(store.resolveReference("run-1")).toMatchObject({
       kind: "exact",
-      run: { status: "closed", semanticIntegrationSnapshot: { state: "complete" } },
+      run: { status: "completed", semanticIntegrationSnapshot: { state: "complete" } },
     });
   });
 
@@ -100,9 +98,43 @@ describe("SubagentRunStore schema", () => {
     );
   });
 
+  it("rejects an invalid status at write time via the schema CHECK", async () => {
+    const sql = (await createInMemorySql()) as unknown as SqlStorage;
+    const store = new SubagentRunStore(sql);
+    store.createTables();
+    store.insert({
+      runId: "run-1",
+      taskChannelId: "task-1",
+      parentContextId: "parent-1",
+      childContextId: "child-1",
+      childEntityId: "entity-1",
+      childParticipantId: null,
+      parentChannelId: "channel-1",
+      mode: "fresh",
+      label: "child",
+      depth: 1,
+      status: "running",
+      sourceEventId: null,
+      semanticIntegrationSnapshot: null,
+      startedAt: 1,
+      lastActivityAt: 2,
+      agentKind: "pi",
+      launchConfig: null,
+      externalSessionEntityId: null,
+      externalGenerationId: null,
+    });
+    // `closed` and any other non-live/non-terminal label are rejected by the
+    // schema itself — corruption cannot even be persisted.
+    expect(() =>
+      sql.exec(`UPDATE subagent_runs SET status = 'almost-done' WHERE run_id = 'run-1'`)
+    ).toThrow(/CHECK constraint failed/);
+    expect(() =>
+      sql.exec(`UPDATE subagent_runs SET status = 'closed' WHERE run_id = 'run-1'`)
+    ).toThrow(/CHECK constraint failed/);
+  });
+
   it.each([
     ["mode", "sideways"],
-    ["status", "almost-done"],
     ["agent_kind", ""],
   ])("rejects an invalid persisted %s", async (column, value) => {
     const sql = (await createInMemorySql()) as unknown as SqlStorage;
@@ -121,8 +153,6 @@ describe("SubagentRunStore schema", () => {
       depth: 1,
       status: "running",
       sourceEventId: null,
-      discardedBeforeIntegration: false,
-      emptyReadAfterSeq: null,
       semanticIntegrationSnapshot: null,
       startedAt: 1,
       lastActivityAt: 2,

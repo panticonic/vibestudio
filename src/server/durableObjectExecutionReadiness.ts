@@ -25,8 +25,8 @@ export interface DurableObjectExecutionReadinessMetrics {
 }
 
 export interface DurableObjectExecutionReadinessDeps {
-  /** Resolve the currently active durable identity; null means it must not execute. */
-  resolveActiveEntity(id: string): Promise<EntityRecord | null>;
+  /** Resolve the durable identity including retired records. */
+  resolveEntity(id: string): Promise<EntityRecord | null>;
   /** Rebuild only disposable runtime state from an exact durable identity. */
   restoreExactExecution(record: EntityRecord): Promise<void>;
   /** Generation of the disposable workerd process that will receive the call. */
@@ -34,6 +34,14 @@ export interface DurableObjectExecutionReadinessDeps {
   /** Surface an integrity incident without creating a second semantic owner. */
   onPermanentFailure?: (incident: DurableObjectExecutionIncident) => void;
   onRecovered?: (incident: Omit<DurableObjectExecutionIncident, "message">) => void;
+}
+
+export class DurableObjectRetiredError extends Error {
+  readonly code = "DURABLE_OBJECT_RETIRED";
+  constructor(entityId: string) {
+    super(`Durable Object ${entityId} is retired or absent`);
+    this.name = "DurableObjectRetiredError";
+  }
 }
 
 /**
@@ -97,10 +105,8 @@ export class DurableObjectExecutionReadiness {
       className: ref.className,
       key: ref.objectKey,
     });
-    const record = await this.deps.resolveActiveEntity(id);
-    if (!record) {
-      throw new Error(`Durable Object ${id} has no active durable execution`);
-    }
+    const record = await this.deps.resolveEntity(id);
+    if (!record || record.status === "retired") throw new DurableObjectRetiredError(id);
     if (record.id !== id) {
       throw new Error(`Durable Object readiness resolved ${record.id} for ${id}`);
     }

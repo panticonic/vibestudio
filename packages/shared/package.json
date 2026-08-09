@@ -87,6 +87,7 @@
     "./protectedPublicationEvents": "./src/protectedPublicationEvents.ts",
     "./providerConnect": "./src/providerConnect.ts",
     "./redact": "./src/redact.ts",
+    "./residentSession": "./src/residentSession.ts",
     "./runtimePaths": "./src/runtimePaths.ts",
     "./runtimeSurface": "./src/runtimeSurface.ts",
     "./schemaTypeGuard": "./src/schemaTypeGuard.ts",

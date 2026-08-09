@@ -34,7 +34,7 @@ describe("DurableObjectExecutionReadiness", () => {
       throw unavailable();
     });
     const readiness = new DurableObjectExecutionReadiness({
-      resolveActiveEntity: async () => RECORD,
+      resolveEntity: async () => RECORD,
       restoreExactExecution,
       onPermanentFailure,
     });
@@ -78,7 +78,7 @@ describe("DurableObjectExecutionReadiness", () => {
       .mockResolvedValueOnce()
       .mockRejectedValueOnce(unavailable("second loss"));
     const readiness = new DurableObjectExecutionReadiness({
-      resolveActiveEntity: async () => RECORD,
+      resolveEntity: async () => RECORD,
       restoreExactExecution,
       getBootGeneration: () => bootGeneration,
       onPermanentFailure,
@@ -108,17 +108,17 @@ describe("DurableObjectExecutionReadiness", () => {
   });
 
   it("re-validates the active row but restores once per sealed boot identity", async () => {
-    const resolveActiveEntity = vi.fn(async () => RECORD);
+    const resolveEntity = vi.fn(async () => RECORD);
     const restoreExactExecution = vi.fn(async () => undefined);
     const readiness = new DurableObjectExecutionReadiness({
-      resolveActiveEntity,
+      resolveEntity,
       restoreExactExecution,
     });
 
     await readiness.ensureReady(REF);
     await readiness.ensureReady(REF);
 
-    expect(resolveActiveEntity).toHaveBeenCalledTimes(2);
+    expect(resolveEntity).toHaveBeenCalledTimes(2);
     expect(restoreExactExecution).toHaveBeenNthCalledWith(1, RECORD);
     expect(restoreExactExecution).toHaveBeenCalledTimes(1);
     expect(readiness.inspect()).toMatchObject({ cacheHits: 1, cacheMisses: 1 });
@@ -128,7 +128,7 @@ describe("DurableObjectExecutionReadiness", () => {
     let bootGeneration = 4;
     const restoreExactExecution = vi.fn(async () => undefined);
     const readiness = new DurableObjectExecutionReadiness({
-      resolveActiveEntity: async () => RECORD,
+      resolveEntity: async () => RECORD,
       restoreExactExecution,
       getBootGeneration: () => bootGeneration,
     });
@@ -144,7 +144,7 @@ describe("DurableObjectExecutionReadiness", () => {
   it("forgets cached execution evidence when an entity retires", async () => {
     const restoreExactExecution = vi.fn(async () => undefined);
     const readiness = new DurableObjectExecutionReadiness({
-      resolveActiveEntity: async () => RECORD,
+      resolveEntity: async () => RECORD,
       restoreExactExecution,
     });
 
@@ -163,7 +163,7 @@ describe("DurableObjectExecutionReadiness", () => {
     });
     const restoreExactExecution = vi.fn(() => gate);
     const readiness = new DurableObjectExecutionReadiness({
-      resolveActiveEntity: async () => RECORD,
+      resolveEntity: async () => RECORD,
       restoreExactExecution,
     });
 
@@ -184,18 +184,20 @@ describe("DurableObjectExecutionReadiness", () => {
   it("fails closed before restoration when the durable identity is retired", async () => {
     const restoreExactExecution = vi.fn(async () => undefined);
     const readiness = new DurableObjectExecutionReadiness({
-      resolveActiveEntity: async () => null,
+      resolveEntity: async () => ({ ...RECORD, status: "retired" }),
       restoreExactExecution,
     });
 
-    await expect(readiness.ensureReady(REF)).rejects.toThrow(/no active durable execution/);
+    await expect(readiness.ensureReady(REF)).rejects.toMatchObject({
+      code: "DURABLE_OBJECT_RETIRED",
+    });
     expect(restoreExactExecution).not.toHaveBeenCalled();
   });
 
   it("rejects incomplete active rows instead of rebuilding from a mutable selector", async () => {
     const restoreExactExecution = vi.fn(async () => undefined);
     const readiness = new DurableObjectExecutionReadiness({
-      resolveActiveEntity: async () => ({ ...RECORD, activeExecutionDigest: undefined }),
+      resolveEntity: async () => ({ ...RECORD, activeExecutionDigest: undefined }),
       restoreExactExecution,
     });
 
@@ -206,7 +208,7 @@ describe("DurableObjectExecutionReadiness", () => {
   it("rejects a resolver result that does not match the requested durable identity", async () => {
     const restoreExactExecution = vi.fn(async () => undefined);
     const readiness = new DurableObjectExecutionReadiness({
-      resolveActiveEntity: async () => ({ ...RECORD, id: `${RECORD.id}-other` }),
+      resolveEntity: async () => ({ ...RECORD, id: `${RECORD.id}-other` }),
       restoreExactExecution,
     });
 
@@ -217,7 +219,7 @@ describe("DurableObjectExecutionReadiness", () => {
   it("materializes a committed row through the same exact restoration port", async () => {
     const restoreExactExecution = vi.fn(async () => undefined);
     const readiness = new DurableObjectExecutionReadiness({
-      resolveActiveEntity: async () => {
+      resolveEntity: async () => {
         throw new Error("publication must not re-resolve its committed record");
       },
       restoreExactExecution,

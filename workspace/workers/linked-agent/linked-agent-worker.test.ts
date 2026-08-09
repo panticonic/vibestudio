@@ -24,8 +24,6 @@ class TestableLinkedAgentWorker extends LinkedAgentWorker {
   readonly gadCalls: Array<{ method: string; args: Record<string, unknown> }> = [];
   readonly published: Array<{ event: unknown }> = [];
   readonly signals: Array<{ event: unknown }> = [];
-  /** onSubagentComplete relays to the parent vessel. */
-  readonly parentCompletions: Array<{ target: string; payload: Record<string, unknown> }> = [];
   failLogAppend = false;
   appendBarrier: Promise<void> | null = null;
 
@@ -39,9 +37,20 @@ class TestableLinkedAgentWorker extends LinkedAgentWorker {
   }
 
   readonly rpcCall = vi.fn(async (target: string, method: string, args: unknown[]) => {
-    if (method === "onSubagentComplete") {
-      this.parentCompletions.push({ target, payload: (args[0] ?? {}) as Record<string, unknown> });
-      return undefined;
+    if (target === "main" && method === "vcs.status") {
+      const contextId = String(
+        (args[0] as { contextId?: unknown } | undefined)?.contextId ?? "ctx-1"
+      );
+      return {
+        contextId,
+        clean: true,
+        committed: { kind: "event", eventId: "child-source-event" },
+        workingHead: { kind: "event", eventId: "child-source-event" },
+        mainEventId: "main-source-event",
+        mainRelation: "ahead",
+        workingCounts: { applications: 0, workUnits: 0, changes: 0 },
+        integrating: [],
+      };
     }
     if (target === "main" && method === "contextIntegrity.ingest") {
       return { class: "internal", latchEpoch: 0, externalKeys: [] };
@@ -75,11 +84,12 @@ class TestableLinkedAgentWorker extends LinkedAgentWorker {
 
   protected override createChannelClient() {
     return {
-      openSubscription: async () => ({
-        result: { ok: true },
-        closed: new Promise<void>(() => {}),
-        close: () => undefined,
+      relationshipState: async () => ({ revision: 0, active: false }),
+      join: async (input: { participantId: string }) => ({
+        ok: true,
+        participantId: input.participantId,
       }),
+      leave: async () => undefined,
       getParticipants: async () => [],
       getPolicyState: async () => ({
         state: {
@@ -116,14 +126,18 @@ class TestableLinkedAgentWorker extends LinkedAgentWorker {
   }
 
   seedSubscription(channelId: string) {
+    const participantId = this.selfParticipantId();
     this.sql.exec(
-      `INSERT OR REPLACE INTO subscriptions (channel_id, context_id, subscribed_at, config, participant_id)
-       VALUES (?, ?, ?, ?, ?)`,
+      `INSERT OR REPLACE INTO subscriptions
+         (channel_id, context_id, revision, subscribed_at, config, relationship_json, participant_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
       channelId,
       "ctx-1",
+      1,
       Date.now(),
       null,
-      this.selfParticipantId()
+      JSON.stringify({ test: true }),
+      participantId
     );
   }
 
@@ -153,6 +167,17 @@ class TestableLinkedAgentWorker extends LinkedAgentWorker {
 
   bridgeSessionRows(): Array<Record<string, unknown>> {
     return this.sql.exec(`SELECT * FROM linked_bridge_sessions ORDER BY created_at`).toArray();
+  }
+
+  terminalIntentRows(): Array<Record<string, unknown>> {
+    return this.sql
+      .exec(
+        `SELECT wake_id, channel_id, wake_kind, payload_json, disposition
+           FROM agent_wake_queue
+          WHERE wake_kind = 'subagent-terminal-publish'
+          ORDER BY created_at`
+      )
+      .toArray();
   }
 
   migrateLegacyForTest(): void {
@@ -249,22 +274,39 @@ class TestableLinkedAgentWorker extends LinkedAgentWorker {
   ): Promise<void> {
     this.ensureIdentity();
     try {
-      this.acceptChannelBatch({
+      await this.acceptChannelDelivery({
+        deliveryId: `test:${event.messageId}`,
         channelId,
         channelRef: {
           source: "workers/pubsub-channel",
           className: "PubSubChannel",
           objectKey: channelId,
         },
-        sourceIncarnation: "channel-test-session",
-        targetIncarnation: this.identity.sessionId!,
-        rows: [
-          {
-            deliveryKey: `test:${event.messageId}`,
-            channelSeq: event.id,
-            envelope: { kind: "log", phase: "live", event } as never,
+        participantId: this.participantId(),
+        subscriptionRevision: 1,
+        eventSequence: event.id,
+        envelope: { kind: "log", phase: "live", event } as never,
+        agenticContext: {
+          version: 1,
+          relationships: [
+            {
+              participantId: this.participantId(),
+              metadata: { name: "Linked", type: "agent" },
+              applicationConfig: null,
+            },
+          ],
+          channelConfig: {},
+          conversation: {
+            lastCompletedSender: null,
+            lastCompletedMessageId: null,
+            lastCompletedSeq: null,
+            previousCompletedSender: null,
+            previousCompletedMessageId: null,
+            previousCompletedSeq: null,
+            agentStreak: 0,
           },
-        ],
+          replyToSenderId: null,
+        },
       });
     } catch (error) {
       if (
@@ -274,20 +316,6 @@ class TestableLinkedAgentWorker extends LinkedAgentWorker {
         throw error;
       }
     }
-    const workerId = "linked-agent-admission-test";
-    const [claim] = this.claimReadyWork("agent-inbox", {
-      workerId,
-      now: Date.now(),
-      limit: 1,
-    });
-    if (!claim) throw new Error("durable channel event was not claimable");
-    await this.executeInboxClaim({ itemId: claim.itemId, generation: claim.generation });
-    this.settleReadyWork("agent-inbox", {
-      workerId,
-      itemId: claim.itemId,
-      generation: claim.generation,
-      outcome: { processed: true },
-    });
   }
 
   appendedEvents(): Array<Record<string, unknown>> {
@@ -373,6 +401,7 @@ const SUBAGENT_STATE_ARGS = {
       task: "Audit the linked-agent supervision path.",
       parentRef: "do:parent-vessel",
       parentChannelId: "ch-parent",
+      taskChannelId: "ch-1",
       parentContextId: "ctx-parent",
       depth: 1,
       mode: "fresh",
@@ -1182,17 +1211,20 @@ describe("LinkedAgentWorker", () => {
 
     const result = await worker.reportExternalExit({ runId: "run-9", code: 1, signal: null });
     expect(result).toEqual({ ok: true, settled: true });
-    expect(worker.parentCompletions).toHaveLength(1);
-    expect(worker.parentCompletions[0]).toMatchObject({
-      target: "do:parent-vessel",
-      payload: { runId: "run-9", channelId: "ch-parent", outcome: "failed" },
+    expect(worker.terminalIntentRows()).toHaveLength(1);
+    expect(JSON.parse(String(worker.terminalIntentRows()[0]!["payload_json"]))).toMatchObject({
+      runId: "run-9",
+      taskChannelId: "ch-1",
+      parentRef: "do:parent-vessel",
+      outcome: "failed",
+      sourceEventId: "child-source-event",
     });
-    expect(String(worker.parentCompletions[0]!.payload["report"])).toContain("exit code 1");
+    expect(String(worker.terminalIntentRows()[0]!["payload_json"])).toContain("exit code 1");
 
     // A duplicate report no-ops.
     const again = await worker.reportExternalExit({ runId: "run-9", code: 1, signal: null });
     expect(again).toEqual({ ok: true, settled: false });
-    expect(worker.parentCompletions).toHaveLength(1);
+    expect(worker.terminalIntentRows()).toHaveLength(1);
   });
 
   it("settles a typed supervised result and rejects a foreign controller", async () => {
@@ -1208,9 +1240,10 @@ describe("LinkedAgentWorker", () => {
         report: "audit complete",
       })
     ).toEqual({ ok: true, settled: true });
-    expect(worker.parentCompletions[0]).toMatchObject({
-      target: "do:parent-vessel",
-      payload: { runId: "run-9", outcome: "success", report: "audit complete" },
+    expect(JSON.parse(String(worker.terminalIntentRows()[0]!["payload_json"]))).toMatchObject({
+      runId: "run-9",
+      outcome: "completed",
+      report: "audit complete",
     });
     expect(
       await worker.reportExternalResult({
@@ -1227,20 +1260,20 @@ describe("LinkedAgentWorker", () => {
     await expect(
       foreign.reportExternalResult({ runId: "run-9", outcome: "success", report: "forged" })
     ).rejects.toThrow(/is not controller/);
-    expect(foreign.parentCompletions).toHaveLength(0);
+    expect(foreign.terminalIntentRows()).toHaveLength(0);
   });
 
   it("ignores an exit report after a real complete or for a foreign run", async () => {
     const worker = await makeWorker(SUBAGENT_STATE_ARGS);
     // Real completion via the bridge first (agent caller).
     await worker.completeFromBridge({ report: "done", outcome: "success" });
-    expect(worker.parentCompletions).toHaveLength(1);
+    expect(worker.terminalIntentRows()).toHaveLength(1);
 
     worker.testCallerKind = "extension";
     worker.testCallerId = "@workspace-extensions/claude-code";
     const afterComplete = await worker.reportExternalExit({ runId: "run-9", code: 0 });
     expect(afterComplete).toEqual({ ok: true, settled: false });
-    expect(worker.parentCompletions).toHaveLength(1);
+    expect(worker.terminalIntentRows()).toHaveLength(1);
 
     // Foreign runId on a fresh duty-bearing vessel: refused.
     const other = await makeWorker(SUBAGENT_STATE_ARGS);
@@ -1250,6 +1283,6 @@ describe("LinkedAgentWorker", () => {
       ok: true,
       settled: false,
     });
-    expect(other.parentCompletions).toHaveLength(0);
+    expect(other.terminalIntentRows()).toHaveLength(0);
   });
 });

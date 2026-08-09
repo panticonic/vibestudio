@@ -350,7 +350,7 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
           if (reason !== "waiting_for_background") return { suspend: true };
           const supervised = this.subagentRuns
             .listAll()
-            .filter((run) => run.parentChannelId === channelId && run.status !== "closed");
+            .filter((run) => run.parentChannelId === channelId);
           const live = supervised.filter(
             (run) => run.status === "starting" || run.status === "running"
           );
@@ -358,7 +358,7 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
           const completedRunsAwaitingIntegration = supervised
             .filter((run) => {
               const integration = run.semanticIntegrationSnapshot;
-              return !run.discardedBeforeIntegration && integration?.["state"] !== "complete";
+              return integration?.["state"] !== "complete";
             })
             .map((run) => subagentRunHandle(run.runId));
           return {
@@ -366,7 +366,7 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
             reason: "no_live_supervised_runs",
             message:
               completedRunsAwaitingIntegration.length > 0
-                ? `Turn not suspended: no supervised subagent is live. Integrate or explicitly discard and close ${completedRunsAwaitingIntegration.join(", ")}.`
+                ? `Turn not suspended: no supervised subagent is live. Review the retained result(s) ${completedRunsAwaitingIntegration.join(", ")} and continue the user goal; integrate only when the goal calls for incorporating the child work.`
                 : "Turn not suspended: no supervised subagent is live. Continue or finish the foreground request.",
             details: { completedRunsAwaitingIntegration },
           };
@@ -493,6 +493,12 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
           this.subscriptions.getConfig(channelId)
         );
         const messageId = `say:${toolCallId}`;
+        // A subagent's deliberate `say` is, per §9, an utterance intended for
+        // its supervisor. The supervisor observes the task channel with
+        // delivery interest "addressed", so carry the parent in the audience
+        // explicitly — otherwise the say stays in the task log without ever
+        // creating supervisor work.
+        const parentParticipantId = this.subagentIdentity()?.parentParticipantId;
         await this.createChannelClient(channelId).send(participantId, messageId, input.content, {
           saliency: "say",
           senderMetadata: {
@@ -505,6 +511,9 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
           mentions: Array.isArray(input.mentions)
             ? input.mentions.filter((mention): mention is string => typeof mention === "string")
             : undefined,
+          ...(parentParticipantId
+            ? { to: [{ kind: "participant", participantId: parentParticipantId }] }
+            : {}),
           attachments: attachments.length > 0 ? attachments : undefined,
         });
         const attachmentNote =
@@ -520,7 +529,7 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
   }
 
   /** The subagent tool surface: parent-side supervision (spawn/send/inspect/
-   *  integrate/read/close) plus the child-side `complete` terminal trigger
+   *  integrate/read/cancel) plus the child-side `complete` terminal trigger
    *  (advertised only to subagents). The vessel implements the spawn mechanics
    *  in the local-tool executor (it never reaches the `execute` below — see
    *  AgentVesselBase.runDeferredSpawn). */
@@ -530,7 +539,7 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
         name: "spawn_subagent",
         label: "spawn_subagent",
         description:
-          "Delegate separable work to a child agent in its own task channel and child context. Returns a runId once launch succeeds; the child then continues on a separate durable task card, so the spawn invocation does not stay open for the child's lifetime. Use for independent investigation, parallel work, or isolated edits; do small linear work yourself. mode:'fresh' seeds a child from `task`; mode:'fork' starts the child from your current trajectory and can save substantial tokens because the context window cache is shared. Track the returned runId exactly, keep doing useful foreground work, steer with send_to_subagent only when you have new instructions, inspect files with inspect_subagent, then integrate or close. A supervisor owns at most three child contexts by default; terminal runs keep their slot until closed, so do not spawn replacement groups. Progress is pushed onto the task card without replacing your current goal. An explicit child say can resume you, and every terminal child result resumes you so you can integrate and close that run immediately. Do not poll read_subagent. If sibling runs remain live after you handle a terminal result, keep doing useful foreground work or call suspend_turn({ reason:'waiting_for_background' }) again; do not finalize the user's goal while supervised runs remain live. The child finishes only by calling complete.",
+          "Delegate separable work to a child agent in its own durable task channel and retained child context. Returns a runId once launch succeeds; the spawn invocation does not stay open for the child's lifetime. Use for independent investigation, parallel work, or isolated edits; do small linear work yourself. mode:'fresh' seeds a child from task; mode:'fork' starts from your current trajectory and can share context-window cache. Track the runId exactly, continue useful foreground work, and steer only with new instructions. After terminal delivery, review the retained result and decide from the user's goal whether to integrate it; inspection-only and comparison tasks may deliberately leave it unintegrated. Detailed activity remains on the canonical child transcript. Terminal results immediately free execution capacity and remain inspectable, readable, and mergeable; no cleanup tool is required. Use cancel_subagent only to stop a live run. If siblings remain live, continue foreground work or suspend_turn({ reason:'waiting_for_background' }) again. The child finishes only by calling complete.",
         parameters: {
           type: "object",
           properties: {
@@ -624,7 +633,7 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
         name: "inspect_subagent",
         label: "inspect_subagent",
         description:
-          "Inspects a supervised child's runtime or semantic workspace state; it never exposes the model's private context window. No inspection preflight is required before merge_subagent. Use 'status', bounded parent-relative 'diff'/'log', or an exact repo-prefixed file path. 'runtime' is only for external-agent diagnostics; read_subagent returns what the child said.",
+          "Inspects a supervised child's runtime or semantic workspace state; it never exposes the model's private context window. Use the bounded parent-relative 'diff' when the user's goal is to inspect, review, or compare child work without integrating it. No inspection preflight is required before merge_subagent when the goal instead calls for integration. Use 'status', 'diff'/'log', or an exact repo-prefixed file path. 'runtime' is only for external-agent diagnostics; read_subagent returns what the child said. Do not poll a live child with this tool; suspend_turn wakes on terminal delivery.",
         parameters: {
           type: "object",
           properties: {
@@ -676,7 +685,7 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
         name: "merge_subagent",
         label: "merge_subagent",
         description:
-          "Merge a subagent's committed net effect into your local working state. Call this directly after terminal delivery; it derives exact child/parent status and comparison without an inspect preflight. Returns model-visible resolution, intents, a composed-review checklist, and coordinate conflicts. Pass resolutions after editing a truthful combined result or choosing ours/theirs. This does not commit or publish your work.",
+          "Merge a subagent's committed net effect into your local working state when the user's goal calls for incorporating that child work. It derives exact child/parent status and comparison without an inspect preflight. Do not call it for inspection-only, comparison, or deliberately unintegrated tasks. Returns model-visible resolution, intents, a composed-review checklist, and coordinate conflicts. Pass resolutions after editing a truthful combined result or choosing ours/theirs. This does not commit or publish your work.",
         parameters: {
           type: "object",
           properties: {
@@ -752,7 +761,7 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
         name: "read_subagent",
         label: "read_subagent",
         description:
-          "Catch up on what a subagent said on its task channel since a cursor. Returns messages plus nextSeq; pass nextSeq as afterSeq only for deliberate transcript catch-up or debugging. Do not poll this tool waiting for progress; progress is pushed onto the durable task card without replacing the current goal, and suspend_turn({ reason:'waiting_for_background' }) parks the parent when no foreground work remains. Use inspect_subagent instead for child files/status/diff/log.",
+          "Read the canonical subagent task transcript after a cursor. Returns messages plus nextSeq. Use it for deliberate catch-up or debugging; suspend_turn({ reason:'waiting_for_background' }) parks the parent when only live background execution remains. Use inspect_subagent for child files, status, semantic diff, and runtime diagnostics.",
         parameters: {
           type: "object",
           properties: {
@@ -778,10 +787,10 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
         },
       } as AgentTool,
       {
-        name: "close_subagent",
-        label: "close_subagent",
+        name: "cancel_subagent",
+        label: "cancel_subagent",
         description:
-          "Close a completed read-only subagent, or an editing subagent after merge_subagent reports working or unchanged and every conflict has been resolved. The server freshly verifies complete and concluded merge state before teardown. Set discard:true only when intentionally dropping unmerged work.",
+          "Cancel a subagent that is still starting or running. Cancellation fences execution and records a retained terminal result; it does not delete the agent, context, transcript, or workspace.",
         parameters: {
           type: "object",
           properties: {
@@ -790,17 +799,21 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
               description:
                 "The exact subagent runId or any sufficiently long unique prefix; the display ellipsis is optional.",
             },
-            discard: {
-              type: "boolean",
-              description:
-                "Explicitly discard any unintegrated or unresolved child work. Omit after complete integration.",
+            reason: {
+              type: "string",
+              description: "Why execution is being cancelled.",
             },
           },
           required: ["runId"],
         } as never,
         execute: async (_toolCallId, params) => {
-          const p = params as { runId?: unknown; discard?: unknown };
-          return this.closeSubagent(String(p.runId ?? ""), p.discard === true, channelId, toolRpc);
+          const p = params as { runId?: unknown; reason?: unknown };
+          return this.cancelSubagent(
+            String(p.runId ?? ""),
+            typeof p.reason === "string" ? p.reason : "cancelled by supervisor",
+            channelId,
+            toolRpc
+          );
         },
       } as AgentTool,
     ];
