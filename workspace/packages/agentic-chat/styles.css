@@ -450,8 +450,6 @@
 
 @media (min-width: 720px) {
   .agentic-chat-root {
-    --chat-root-gap: var(--space-1);
-    --chat-root-padding: var(--space-2);
     --chat-panel-padding: var(--space-2);
     --message-list-padding: var(--space-1);
     background: var(--gray-2);
@@ -471,15 +469,10 @@
   .chat-surface-card::after {
     box-shadow: var(--base-card-surface-box-shadow);
   }
-
-  .chat-header-card {
-    --card-padding: var(--space-1) var(--chat-panel-padding);
-  }
 }
 
 @media (min-width: 1040px) {
   .agentic-chat-root {
-    --chat-root-padding: var(--space-3);
     --chat-panel-padding: var(--space-2);
     --message-list-padding: var(--space-2);
   }
