@@ -31,6 +31,10 @@ import { UpstreamEngine } from "./upstream.js";
 import { TemplatePushEngine } from "./templatePush.js";
 import { TemplatePublishEngine } from "./templatePublish.js";
 import type { TemplatePushInput } from "./templatePush.js";
+import {
+  RegistryContributionEngine,
+  type RegistryContributionInput,
+} from "./registryContribution.js";
 import type { ExtensionContextLike } from "./context.js";
 
 function createBridgeHost(ctx: ExtensionContextLike): BridgeHost {
@@ -65,6 +69,9 @@ type GitBridgeApi = {
   openGitTab(repoPath?: string): ReturnType<UpstreamEngine["openGitTab"]>;
   /** Userland template composer entry; deliberately outside the host provider namespace. */
   suggestTemplateContribution(input: TemplatePushInput): ReturnType<TemplatePushEngine["push"]>;
+  suggestRegistryEntry(
+    input: RegistryContributionInput
+  ): ReturnType<RegistryContributionEngine["suggest"]>;
   publishTemplate(input: GitTemplatePublishInput): ReturnType<TemplatePublishEngine["publish"]>;
 };
 
@@ -79,10 +86,14 @@ export async function activate(ctx: ExtensionContextLike) {
   const upstream = new UpstreamEngine(ctx, bridge);
   const templatePush = new TemplatePushEngine(ctx, bridge);
   const templatePublish = new TemplatePublishEngine(ctx, bridge);
+  const registryContribution = new RegistryContributionEngine(ctx);
   await upstream.activate();
   const unsubscribe = ctx.rpc.on?.("workspace:protected-refs-changed", (event) => {
     const payload = event.payload as { repoPaths?: unknown };
-    if (!Array.isArray(payload.repoPaths) || !payload.repoPaths.every((item) => typeof item === "string")) {
+    if (
+      !Array.isArray(payload.repoPaths) ||
+      !payload.repoPaths.every((item) => typeof item === "string")
+    ) {
       ctx.log.warn?.("ignored malformed protected-ref event");
       return;
     }
@@ -102,10 +113,7 @@ export async function activate(ctx: ExtensionContextLike) {
     removeUpstream(repoPath: string) {
       return upstream.removeUpstream(repoPath);
     },
-    detachUpstream(
-      repoPath: string,
-      options?: Parameters<UpstreamEngine["detachUpstream"]>[1]
-    ) {
+    detachUpstream(repoPath: string, options?: Parameters<UpstreamEngine["detachUpstream"]>[1]) {
       return upstream.detachUpstream(repoPath, options);
     },
     setAutoPush(repoPath: string, enabled: boolean) {
@@ -155,6 +163,9 @@ export async function activate(ctx: ExtensionContextLike) {
     },
     suggestTemplateContribution(input: TemplatePushInput) {
       return templatePush.push(input);
+    },
+    suggestRegistryEntry(input: RegistryContributionInput) {
+      return registryContribution.suggest(input);
     },
     publishTemplate(input: GitTemplatePublishInput) {
       return templatePublish.publish(input);

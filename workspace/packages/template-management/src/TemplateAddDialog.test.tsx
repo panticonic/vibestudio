@@ -20,10 +20,7 @@ function preparation(name: string, marker: string): TemplateAddPreparation {
       fingerprint: `v1-sha256:${marker.repeat(64)}`,
       roots: [],
       templates: [],
-      addedParts: [`extensions/${name.toLowerCase()}`],
-      retainedParts: [],
-      orphanedParts: [],
-      conflicts: [],
+      affectedParts: [`extensions/${name.toLowerCase()}`],
       excludedSuggestions: [],
     },
   };
@@ -53,10 +50,7 @@ describe("TemplateAddDialog", () => {
           fingerprint: `v1-sha256:${"b".repeat(64)}`,
           roots: [],
           templates: [],
-          addedParts: ["extensions/github", "skills/github"],
-          retainedParts: [],
-          orphanedParts: [],
-          conflicts: [],
+          affectedParts: ["extensions/github", "skills/github"],
           excludedSuggestions: [],
         },
       })
@@ -64,8 +58,7 @@ describe("TemplateAddDialog", () => {
     const add = vi.fn(async () => ({
       operationId: "add-github",
       state: "applied" as const,
-      addedParts: ["extensions/github", "skills/github"],
-      orphanedParts: [],
+      affectedParts: ["extensions/github", "skills/github"],
     }));
     const client = { prepareAdd, add } satisfies TemplateAddClient;
     const view = render(
@@ -99,8 +92,7 @@ describe("TemplateAddDialog", () => {
     const add = vi.fn(async () => ({
       operationId: "add-second",
       state: "applied" as const,
-      addedParts: ["extensions/second"],
-      orphanedParts: [],
+      affectedParts: ["extensions/second"],
     }));
     const client = { prepareAdd, add } satisfies TemplateAddClient;
     const view = render(
@@ -145,8 +137,7 @@ describe("TemplateAddDialog", () => {
       add: vi.fn(async () => ({
         operationId: "add-github",
         state: "applied" as const,
-        addedParts: ["extensions/github"],
-        orphanedParts: [],
+        affectedParts: ["extensions/github"],
       })),
     } satisfies TemplateAddClient;
     const view = render(

@@ -28,26 +28,31 @@
     },
     "inspectAuthoring": {
       "tier": "read",
-      "arguments": [
-        "{ name, description, parts, parents?: [{ url, credential?, ref, commit, snapshot }] }"
-      ],
+      "arguments": ["{ name, description, parts, dependencies?: [{ url, credential? }] }"],
       "returns": "TemplateAuthoringInspection"
     },
     "authoringParts": {
       "tier": "read",
       "arguments": [],
-      "returns": "{ repoPath, packageName?, templateAlias?, templatePin? }[]"
+      "returns": "{ repoPath, packageName?, templateAliases?, templateUrls? }[]"
     },
     "publishAuthoring": {
       "tier": "write",
       "arguments": [
-        "{ commandId, plan, version, destination: { provider, owner, name }, credentialId?, creation?: { private?, description? } }"
+        "{ commandId, intent: { name, description, parts, dependencies?: [{ url, credential? }] }, expectedFingerprint, version, destination: { provider, owner, name }, credentialId?, creation?: { private?, description? } }"
       ],
       "returns": "TemplatePublication"
     },
+    "suggestRegistryEntry": {
+      "tier": "write",
+      "arguments": [
+        "{ commandId, catalog: TemplateCatalogSnapshot, publication: TemplatePublication, credential?, entry: { id, name, description, tags, recommended }, revision }"
+      ],
+      "returns": "TemplateRegistryContribution"
+    },
     "add": {
       "tier": "approval",
-      "arguments": ["{ commandId, pin, choices?: Record<string, keep|take|skip> }"],
+      "arguments": ["{ commandId, pin, onBuildFailure?: discard-context|retain-context }"],
       "returns": "PendingTemplateOperation"
     },
     "pull": {
@@ -87,30 +92,34 @@
     }
   },
   "types": {
-    "PendingTemplateOperation": "{ operationId, state: pending|applied|local-changes|waiting-for-credential|conflict|error, review?: { operationId, contextId, approvalGranted, items: [{ repoPath, deltaId }] }, contribution?: { branch, url? }, blocker?, addedParts, orphanedParts }",
-    "TemplateStatusRow": "{ nodeId, alias, url, ref, commit, direct, state: current|update-available|local-changes|reviewing|waiting-for-credential|conflict|error, verification: verified|deferred, review?, suggestions: [{ section: trust|providers, value }], blocker?, ownedParts, pendingReviews, error? }",
-    "TemplateAuthoringInspection": "{ request, mainEventId, selectableParts, requestedParts, includedParts, requiredParts, inheritedParts, parents: [{ alias, direct, url, credential?, ref, commit, snapshot }], parentClosureFingerprint, manifest, manifestDigest, fingerprint }",
+    "PendingTemplateOperation": "{ operationId, state: pending|applied|local-changes|waiting-for-credential|conflict|error, review?: { operationId, contextId, approvalGranted, items: [{ repoPath, deltaId }] }, repair?: { contextId, mainEventId?, failures: [{ unit, message }] }, contribution?: { branch, url? }, blocker?, affectedParts }",
+    "TemplateStatusRow": "{ nodeId, alias, url, ref, commit, direct, state: current|update-available|local-changes|reviewing|waiting-for-credential|conflict|error, verification: verified|deferred, review?, suggestions: [{ section: trust|providers, value }], blocker?, contributedParts, pendingReviews, error? }",
+    "TemplateAuthoringInspection": "{ request, mainEventId, selectableParts, requestedParts, includedParts, requiredParts, inheritedParts, manifest, manifestDigest, fingerprint }",
     "TemplatePublication": "{ operationId, destination: { provider, owner, name }, created, remoteUrl, webUrl, templateUrl, ref, commit, snapshot, parts }",
-    "TemplateInspection": "{ pin: { url, credential?, ref, commit, snapshot }, fingerprint, roots, templates, addedParts, retainedParts, orphanedParts, conflicts, excludedSuggestions: [{ alias, section, value }] }",
+    "TemplateRegistryContribution": "{ operationId, outcome: pushed|already-at-remote|nothing-to-suggest, registryUrl, baseCommit, branch, headCommit, revision, entry }",
+    "TemplateInspection": "{ pin: { url, credential?, ref, commit, snapshot }, fingerprint, roots, templates, affectedParts, excludedSuggestions: [{ alias, section, value }] }",
     "TemplateAddPreparation": "{ name, description?, inspection: TemplateInspection }",
     "TemplateSuggestionDecision": "{ operationId, state: accepted|declined, section, publicationEventId? }",
-    "ResumableTemplateOperation": "{ operationId, kind: add|pull|remove|recompose|adopt-bootstrap, contextId, state: pending|reviewing, fingerprint, review? }",
+    "ResumableTemplateOperation": "{ operationId, kind: add|pull|remove|recompose|adopt-bootstrap|publish-authoring, contextId, state: pending|reviewing|repairing, fingerprint, review?, repair? }",
     "TemplateCatalogSnapshot": "{ version: 1, revision, systemEpoch, entries: [{ id, name, description, tags, recommended, url, promoted: { ref, commit, snapshot } }], source: verified|cache, stale, verifiedAt, refreshError? }"
   },
   "invariants": [
     "prepareAdd before every new add; UI and agents use the same preparation method",
     "pass inspect.pin unchanged to add; add never resolves a URL, alias, catalog entry, or moving ref",
-    "repository conflicts require explicit keep|take|skip choices before a mutation is proposed",
+    "templates have ordered repository contributions, never exclusive repository ownership; overlap is merged through ordinary VCS external deltas",
     "the current lock wins for every already-resolved URL; catalog selections and unseen dependencies resolve from the reviewed registry revision, while direct URLs use inspect's independently discovered exact pin",
     "pending review items are opened through normal VCS compare/merge using their context and delta ids; approval record identifiers are host-internal",
+    "build failures retain the staged context by default and return its context id plus structured failures; after ordinary agent edits, resume rebuilds that context without replaying composition",
+    "when protected main advances during review, the operation returns the new main event and retained context so an agent can merge main semantically and resume instead of discarding the plan",
     "catalog rendering is cache-only; network refresh occurs only through catalog({ refresh: true })",
     "a catalog selection is rejected unless registryCommit and registrySnapshot exactly match the cached verified registry",
     "excluded trust/provider values come from acquired exact template pins and are accepted or declined through a separate individually approved action",
     "status is a local projection of the committed lock and content-addressed suggestion evidence; it never acquires or fetches template sources",
     "a direct URL may name a logical credential; that name is preserved in inspect.pin and durable operation intent",
     "the userland composer resolves every URL or revision-bound catalog id to an exact version before inspection or approval; there is no host fallback",
-    "authoring parent requests contain exact pins; the composer verifies their ordinary URL-declared closure and full repository contribution without consulting current workspace ownership, while the generated portable manifest emits URL-only direct declarations",
-    "authoring receipts bind the selected and automatically required repositories, exact verified parent closure, generated manifest, and exact protected-main event; publication re-derives and rejects stale receipts",
-    "template publication creates one external repository with main and the immutable version tag at the same commit; it does not mutate workspace ownership or imply registry promotion"
+    "authoring dependencies are URL-only semantic relationships; they need not be installed or controlled by the author and exact release coordinates are not authoring inputs",
+    "authoring inspections bind selected and automatically required repositories, generated manifest, and protected-main event; installed contribution relationships are explanatory hints only and publication rejects stale fingerprints",
+    "template publication creates one external repository with main and the immutable version tag at the same commit; it does not assign workspace ownership or imply registry promotion",
+    "registry suggestion requires the complete unchanged publication and non-stale verified catalog receipts, writes one validated registry document on a collision-safe branch based on the reviewed registry commit, and never merges or promotes it"
   ]
 }

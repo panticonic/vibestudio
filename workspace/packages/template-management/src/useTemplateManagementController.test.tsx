@@ -18,7 +18,7 @@ const deferredRow = {
   commit: "1".repeat(40),
   direct: true,
   state: "reviewing",
-  ownedParts: 1,
+  contributedParts: 1,
   pendingReviews: 1,
   verification: "deferred",
   review: {

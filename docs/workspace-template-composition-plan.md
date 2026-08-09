@@ -1,7 +1,11 @@
 # Workspace template composition: monorepo template upstreams, blended via a DAG
 
-Status: implemented foundation; ownership model superseded by
-`docs/official-template-repositories-plan.md`
+Status: historical design record. Repository ownership, conflict-winner
+choices, and `templates.conflicts` described below are superseded. The
+implemented model records an ordered contribution ledger per repository;
+templates may overlap, and added, updated, or removed contributions are merged
+through ordinary semantic VCS deltas. Build/type failures retain the operation
+context for agent repair and `resume` rebuilds that context.
 
 > **Canonical architecture:** the official-repositories plan supersedes every
 > host-owned lifecycle, service, journal, catalog, and filesystem-template
@@ -12,8 +16,8 @@ Status: implemented foundation; ownership model superseded by
 > extension broker. There is no host `templates` service, host resolver,
 > template lifecycle journal, or checked-in presentation catalog. The
 > composition rules, Git interchange invariants, semantic review model, and UX
-> outcomes below remain the intent where the official plan does not replace
-> them.
+> outcomes below remain historical context only where they agree with the
+> contribution-ledger model above.
 
 ## Outcome
 

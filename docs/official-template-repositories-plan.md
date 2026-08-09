@@ -1,11 +1,11 @@
 # Official template repositories: slim base, build-proven dependencies, Git registry
 
-Status: corrected 2026-08-04. No optional template repositories or verified
-template catalog entries are currently deployed. All seven planned extraction
+Status: corrected 2026-08-09. No optional template repositories or verified
+template catalog entries are currently deployed. All three planned extraction
 outcomes still ship in `workspace/` as part of the base product. Extraction is
-blocked on the pre-extraction functional verification checklist, followed by
-creation of the external repositories and promotion CI. Publishing a
-standalone npm SDK is explicitly not an extraction prerequisite.
+ready for private candidate repositories; promotion and product cutover remain
+blocked on the functional verification checklist and promotion CI. Publishing
+a standalone npm SDK is explicitly not an extraction prerequisite.
 
 ## Outcome
 
@@ -16,17 +16,16 @@ Git repositories, composed by a userland package that ships in base:
   useful on its own; the root every workspace is created from; independently
   bootable with its flattened runtime manifest present.
 - **Feature template repositories** — one per user-visible outcome (news,
-  Google Workspace, GitHub, local models, mobile, Spectrolite, and examples),
-  each vendoring only the units that outcome
-  owns. Templates correspond to outcomes a user would ask for, never to
+  Spectrolite, and examples), each publishing the repositories it needs to
+  contribute. Templates correspond to outcomes a user would ask for, never to
   packages: a user adds "News" and gets a working news workspace; they never
   reason about `packages/feeds`.
 - **`vibestudio-template-registry`** — catalog metadata and promotion
   pointers, updated by reviewed PR with validating CI.
 
 This plan builds on the composition model of
-`docs/workspace-template-composition-plan.md` (DAG, fragments, lock,
-ownership) and supersedes it on ownership: there is no host `templates`
+`docs/workspace-template-composition-plan.md` (DAG, fragments, lock) but
+supersedes its ownership model with ordered, overlapping contributions: there is no host `templates`
 service, resolver, journal, or checked-in catalog. It also supersedes
 `docs/host-residency-redesign.md` H10 for templates: not a builtin service —
 userland, which is where the code already is.
@@ -221,16 +220,12 @@ building unless offline creation becomes a requirement (§Deferred).
 
 ## Repository inventory
 
-| Repository                             | Contents                                                                                                                                                                                                                                                               |
-| -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `vibestudio-workspace-base`            | Every repository not assigned to one of the seven optional outcomes below, including shell, browser, terminal, onboarding + templates skills, model settings, pubsub, shared integrations and channel-fork packages, agent/runtime/UI foundations, and developer tools |
-| `vibestudio-template-news`             | `panels/news`, `workers/news-agent`, and `packages/feeds`; shared `packages/channel-fork` remains in base because base-owned agent chat also consumes it                                                                                                               |
-| `vibestudio-template-google-workspace` | Gmail agent and package plus Google Workspace/Drive skills; shared `packages/integrations` remains in base because the Git bridge and GitHub skill also consume it                                                                                                     |
-| `vibestudio-template-github`           | The GitHub user skill; generic Git transport/composition and the shared integrations package remain in base                                                                                                                                                            |
-| `vibestudio-template-mobile`           | Mobile app, React Native and mobile-debug extensions, and the phone-setup/mobile-system-testing skills                                                                                                                                                                 |
-| `vibestudio-template-local-models`     | local-models panel and extension                                                                                                                                                                                                                                       |
-| `vibestudio-template-spectrolite`      | Spectrolite panel, MDX editor package                                                                                                                                                                                                                                  |
-| `vibestudio-template-examples`         | `panels/hello-svelte` (the current workspace has no `hello-vanilla` repository)                                                                                                                                                                                        |
+| Repository                        | Contents                                                                                                                                                                                                                                                                                                               |
+| --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `vibestudio-workspace-base`       | Every repository not assigned to one of the three optional outcomes below, including Google Workspace, GitHub, local models, mobile, shell, browser, terminal, onboarding + templates skills, model settings, pubsub, shared integrations and channel-fork packages, agent/runtime/UI foundations, and developer tools |
+| `vibestudio-template-news`        | `panels/news`, `workers/news-agent`, and `packages/feeds`; shared `packages/channel-fork` remains in base because base-owned agent chat also consumes it                                                                                                                                                               |
+| `vibestudio-template-spectrolite` | Spectrolite panel, MDX editor package                                                                                                                                                                                                                                                                                  |
+| `vibestudio-template-examples`    | `panels/hello-vanilla`, `panels/hello-svelte`, `workers/hello`, and `workers/sample-do`; these modern examples were restored after an earlier cleanup deleted them instead of extracting them                                                                                                                          |
 
 **Developer tools belong to base.** Vibestudio is a place where people build
 things; the development surface (`panels/development`, `panels/testbench`,
@@ -374,11 +369,11 @@ Current migration state:
 5. **Done:** establish the composed host + base + optional validation contract
    (§Extracted-repository validation contract); no npm SDK publication gate.
 6. Extract the final repository set from the current workspace:
-   `vibestudio-workspace-base` plus exactly seven optional templates:
-   `examples`, `google-workspace`, `github`, `local-models`, `mobile`, `news`,
-   and `spectrolite`. Everything not selected by one of those seven templates
-   remains in base for this cut. In particular, browser and terminal
-   functionality remain in base.
+   `vibestudio-workspace-base` plus exactly three optional templates:
+   `examples`, `news`, and `spectrolite`. Everything not selected by one of
+   those three templates remains in base for this cut. In particular, Google
+   Workspace, GitHub, local models, mobile, browser, and terminal functionality
+   remain in base.
 7. Introduce release tagging and cross-repository composition tests; create
    the registry repository with build-gated promotion.
 8. **Code side done:** the verified Git registry client binds selection to
@@ -401,16 +396,12 @@ Current migration state:
 
 The split is closed-world for this release:
 
-| Repository                             | Content rule                                                                                                                                                                                                                                                                                              |
-| -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `vibestudio-workspace-base`            | Every current workspace repository not owned by one of the seven rows below, plus the root workspace metadata, lockfile, default manifest, onboarding core, template composer/registry client, shell, browser, terminal, and system-test infrastructure required to install and verify optional templates |
-| `vibestudio-template-examples`         | Example/demo repositories and their declarations only                                                                                                                                                                                                                                                     |
-| `vibestudio-template-google-workspace` | Google Workspace integration, provider, skills, and directly owned UI/workers                                                                                                                                                                                                                             |
-| `vibestudio-template-github`           | GitHub user integration, provider, skills, and directly owned UI/workers; generic Git transport/composition remains in base                                                                                                                                                                               |
-| `vibestudio-template-local-models`     | Local-model extension, panels, workers, skills, and direct dependencies                                                                                                                                                                                                                                   |
-| `vibestudio-template-mobile`           | Mobile app and mobile-only extensions, skills, workers, and direct dependencies; generic remote/server support remains in base                                                                                                                                                                            |
-| `vibestudio-template-news`             | News panel/agent and direct dependencies                                                                                                                                                                                                                                                                  |
-| `vibestudio-template-spectrolite`      | Spectrolite panel and direct dependencies                                                                                                                                                                                                                                                                 |
+| Repository                        | Content rule                                                                                                                                                                                                                                                                                                                                              |
+| --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `vibestudio-workspace-base`       | Every current workspace repository not owned by one of the three rows below, plus the root workspace metadata, lockfile, default manifest, onboarding core, Google Workspace, GitHub, local models, mobile, template composer/registry client, shell, browser, terminal, and system-test infrastructure required to install and verify optional templates |
+| `vibestudio-template-examples`    | Example/demo repositories and their declarations only                                                                                                                                                                                                                                                                                                     |
+| `vibestudio-template-news`        | News panel/agent and direct dependencies                                                                                                                                                                                                                                                                                                                  |
+| `vibestudio-template-spectrolite` | Spectrolite panel and direct dependencies                                                                                                                                                                                                                                                                                                                 |
 
 Selections are produced and validated by the authoring inventory/closure API.
 The table names outcomes; it is not a hand-maintained file list. A repository
@@ -429,8 +420,9 @@ Run before step 9 changes how workspaces are created:
 
 - Creation from a pinned base root; creation with registry or base remote
   unreachable fails actionably with no half-initialized workspace.
-- Adding one feature; adding two with a genuine repository overlap (explicit
-  conflict decision).
+- Adding each official feature independently; use synthetic templates for the
+  generic two-template repository-overlap and explicit-conflict-decision case,
+  because the official three-way partition is intentionally disjoint.
 - Lock-first resolution: an add never moves an already-locked base and
   performs no network lookup for it.
 - The build gate blocks publication: a non-building feature leaves protected

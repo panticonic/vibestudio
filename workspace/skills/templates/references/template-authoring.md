@@ -23,37 +23,28 @@ const available = await extensions.invoke(
 const candidates = available.filter(({ repoPath }) =>
   ["panels/news", "workers/news"].includes(repoPath)
 );
-const officialBase = {
-  url: "git+https://github.com/panticonic/vibestudio-workspace-base.git",
-  ref: "refs/heads/main",
-  commit: "38ee17d33b9f16d275b122bd4f7b71ed5ed40abb",
-  snapshot: "v1-sha256:a1d5c274041470a18c491d50bdc291b11128df2c4eed1e939365b1498ed6aec2",
+const intent = {
+  name: "News",
+  description: "A focused news-reading and digest workspace",
+  parts: ["panels/news", "workers/news"],
+  dependencies: [{ url: "git+https://github.com/panticonic/vibestudio-workspace-base.git" }],
 };
-const plan = await extensions.invoke(
+const inspection = await extensions.invoke(
   "@workspace-extensions/template-composer",
   "inspectAuthoring",
-  [
-    {
-      name: "News",
-      description: "A focused news-reading and digest workspace",
-      parts: ["panels/news", "workers/news"],
-      parents: [officialBase],
-    },
-  ]
+  [intent]
 );
-return { candidates, plan };
+return { candidates, intent, inspection };
 ```
 
-The plan names optional parts available at protected main, selected parts,
+The inspection names optional parts available at protected main, selected parts,
 automatically required parts, the full repository contribution supplied by the
-verified parent closure, every closure node's exact coordinates, the generated
-URL-only manifest, source event, parent closure fingerprint, and receipt
-fingerprint. Review that boundary with the user. In eval, return the selected
-candidate rows and complete plan as structured evidence; returning the entire
-inventory can exceed the eval result limit, and printing only to the console is
-not a durable inspection receipt.
+selected source, any contribution hints available for installed dependencies, the
+generated URL-only manifest, and a compact fingerprint. Review the selected and
+automatically included parts with the user. Dependency contribution hints are not
+compatibility proof and do not forbid an explicit overlapping selection.
 
-Publish the unchanged receipt:
+Publish the same intent against the reviewed fingerprint:
 
 ```js
 const published = await extensions.invoke(
@@ -62,7 +53,8 @@ const published = await extensions.invoke(
   [
     {
       commandId: crypto.randomUUID(),
-      plan,
+      intent,
+      expectedFingerprint: inspection.fingerprint,
       version: "1.0.0",
       destination: {
         provider: "github",
@@ -78,8 +70,11 @@ const published = await extensions.invoke(
 );
 ```
 
-The composer re-derives the plan before requesting publication. If protected
-main, the dependency closure, or manifest changed, inspect again. On success,
+The composer builds the selected source in the current composed workspace. If
+protected main, the selection, or manifest changed before the operation begins, the
+fingerprint check asks the agent to inspect again. Once begun, the durable
+operation retains that exact inspection so an idempotent retry cannot drift to
+a newer dependency. On success,
 `published.templateUrl`, `published.ref`, `published.commit`, and
 `published.snapshot` are the exact install coordinates.
 
@@ -90,22 +85,18 @@ tag replacement, operation-id reuse with different inputs, and non-fast-forward
 updates to `main`. Retrying the same command is safe, including after `main`
 was pushed but the tag push was interrupted.
 
-`parts` are outcome-owned unit repositories, not arbitrary directories.
+`parts` are unit repositories contributing to the template's outcome, not arbitrary directories.
 Workspace package dependencies and runtime companion units are included
-automatically. Use `parents` when a dependency should come from another
-template instead of being copied into the new repository. Each parent is an
-exact pin: `{ url, ref, commit, snapshot, credential? }`. A fresh publication
-receipt supplies `url` as `templateUrl`; an installed owner returned by
-`authoringParts` supplies `templatePin`. Both enter the same acquisition and
-resolver path. Alias-only and moving parent declarations are rejected.
+automatically. Use `dependencies` to state a relationship to another template.
+Dependencies are `{ url, credential? }`; they do not need to be installed or
+controlled by the author. `authoringParts` supplies every installed template
+URL that currently contributes to a repository as an explanatory hint.
 
-The composer reacquires every direct parent, verifies its exact commit and
-snapshot, resolves its URL-declared dependency closure through the normal
-registry/lock rules, and derives all inherited repositories from that verified
-source. The live workspace's current ownership lock is not evidence for the
-parent's contents. `meta/template.yml` remains portable: it emits only direct
-parent URLs and logical credential labels, while exact pins belong to the
-authoring receipt and the consuming workspace's generated lock.
+The composer may use the live contribution graph to explain which repositories an
+installed dependency currently supplies. That explanation is not an admission
+gate. `meta/template.yml` remains portable and emits only direct dependency URLs
+and logical credential labels. Exact coordinates are created by publication
+and installation, not chosen during authoring.
 
 ## Put the right things in the repository
 
@@ -130,10 +121,10 @@ authoring receipt and the consuming workspace's generated lock.
 
 ## Make releases usable
 
-Tag each published version. Promote its exact tag, commit, and verified
-snapshot in the Git registry only after the template composes and builds from
-a clean checkout. A template repository's moving branch never changes a
-workspace by itself.
+Tag each published version. Promote its release coordinates in the Git registry
+only after the template has been pulled into a representative workspace and
+the resulting composition builds. A template repository's moving branch never
+changes a workspace by itself.
 
 ## Validate a release before promoting it
 
@@ -145,8 +136,8 @@ operation build-gates its selected closure before publication, and version tags
 are immutable — later validation failures require a new tag, never replacement.
 
 An optional repository is a Vibestudio source fragment, not necessarily a
-standalone npm application. Its meaningful release test is the exact
-Vibestudio host plus the exact promoted base plus this optional template:
+standalone npm application. Its meaningful release test is a representative
+Vibestudio workspace plus this optional template:
 
 - `@workspace/*` resolves from the composed base/template source graph.
 - `@vibestudio/*` resolves from platform packages supplied by that exact host
@@ -156,24 +147,30 @@ Vibestudio host plus the exact promoted base plus this optional template:
 Do not require a bare clone of the optional repository to pass `pnpm install`
 or publish a separate npm SDK before extraction.
 
-1. Publish privately, then start with a scratch workspace created from the
-   exact promoted base and add the template
-   through `templates.inspect` then `templates.add` using the exact URL, tag,
-   commit, and snapshot returned by publication.
-2. Check that every supplied part is assigned exactly once, and that a local
-   part or an unrelated template produces a clear choice rather than a silent
-   overwrite.
-3. Test a template that brings in its parents, a locked older parent, and a
-   conflicting pair of unrelated parents.
+1. Publish privately, then add the returned template version to a scratch
+   workspace through `templates.inspect` and `templates.add`.
+2. Check that every supplied repository records the template's contribution.
+   Add a second template that contributes to the same repository and verify
+   that ordinary VCS deltas expose and merge both changes without assigning a
+   winner.
+3. Test an unavailable semantic dependency, an installed dependency with local
+   edits, and an explicit overlapping repository selection.
 4. Confirm that the final workspace has one local `meta` repository and that
    settings from the template can be overridden from its top-level workspace
    configuration.
-5. Test a later tagged update with a locally changed part, then verify that
-   the review flow preserves the local version until the user decides.
+5. Test a later tagged update with local and overlapping changes. Verify that
+   merge or build failures retain one repairable context with structured
+   feedback, and that resume rebuilds and publishes the repaired result.
 
 The publication operation creates a `main` branch and an immutable version tag
 at the same attributed commit. It does not modify the source workspace or add
 the new repository as a workspace upstream.
+
+The author does not need to control or republish a dependency. Local changes in
+the composed workspace can help the current build, but are exported only when
+their repositories are explicitly selected. Later composition may expose
+incompatibilities or overlaps; build, type, and conflict diagnostics are fed
+back to the agent for repair.
 
 Registry promotion is a later, separate review. Add the returned URL, tag,
 commit, and snapshot to the registry only after clean-checkout installation and

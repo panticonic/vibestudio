@@ -14,7 +14,10 @@ describe("templates skill public contract", () => {
     expect(contract.methods["resume"]?.arguments.join(" ")).not.toContain("commandId");
     expect(contract.methods["cancel"]?.arguments.join(" ")).toContain("operationId");
     expect(contract.methods["inspectAuthoring"]?.arguments.join(" ")).toContain("parts");
-    expect(contract.methods["publishAuthoring"]?.arguments.join(" ")).toContain("plan");
+    expect(contract.methods["publishAuthoring"]?.arguments.join(" ")).toContain(
+      "expectedFingerprint"
+    );
+    expect(contract.methods["publishAuthoring"]?.arguments.join(" ")).not.toContain("plan");
     expect(contract.types["TemplateInspection"]).toContain("section, value");
     expect(contract.types["TemplateStatusRow"]).not.toContain("contribution");
     expect(skill).toContain("Never fold");

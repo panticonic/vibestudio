@@ -34,6 +34,7 @@ describe("git-bridge activation surface", () => {
     expect(api).not.toHaveProperty("pushUpstream");
     expect(api).not.toHaveProperty("publishRepo");
     expect(api).toHaveProperty("suggestTemplateContribution");
+    expect(api).toHaveProperty("suggestRegistryEntry");
   });
 
   it("routes notification actions directly through the owning Git engine", async () => {

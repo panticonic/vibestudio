@@ -104,14 +104,16 @@ async function manifest(
 }
 
 export function createAffectedBuildGate(
-  ctx: ExtensionContextLike
+  ctx: ExtensionContextLike,
+  repositoriesBeforeOperation: ReadonlySet<string> = new Set()
 ): TemplateOperationPorts["buildAffected"] {
   return async (contextId, affectedRepoPaths) => {
     const status = await ctx.rpc.call<VcsStatusResult>("main", "vcs.status", { contextId });
     const state = status.workingHead;
+    const repositoryPaths = await allRepositoryPaths(ctx, state);
     const manifests = (
       await Promise.all(
-        (await allRepositoryPaths(ctx, state)).map((repoPath) => manifest(ctx, state, repoPath))
+        repositoryPaths.map((repoPath) => manifest(ctx, state, repoPath))
       )
     ).filter((candidate): candidate is UnitManifest => candidate !== null);
     const byName = new Map(manifests.map((candidate) => [candidate.name, candidate]));
@@ -124,9 +126,20 @@ export function createAffectedBuildGate(
         dependants.set(dependency, set);
       }
     }
+    const manifestPaths = new Set(manifests.map((candidate) => candidate.repoPath));
+    const removedRepository = affectedRepoPaths.some(
+      (repoPath) =>
+        repositoriesBeforeOperation.has(repoPath) && !manifestPaths.has(repoPath)
+    );
+    // Once a prior unit disappears its old package name is no longer available
+    // to seed the dependant graph. Build every surviving buildable unit: this
+    // is conservative, actionable validation rather than a mechanical refusal
+    // to remove the contribution.
     const affectedNames = new Set(
       manifests
-        .filter((candidate) => affectedRepoPaths.includes(candidate.repoPath))
+        .filter(
+          (candidate) => removedRepository || affectedRepoPaths.includes(candidate.repoPath)
+        )
         .map((candidate) => candidate.name)
     );
     const pending = [...affectedNames];
@@ -142,11 +155,12 @@ export function createAffectedBuildGate(
       .filter((candidate) => candidate.buildable && affectedNames.has(candidate.name))
       .map((candidate) => candidate.repoPath)
       .sort();
-    const manifestPaths = new Set(manifests.map((candidate) => candidate.repoPath));
     const failures: Array<{ unit: string; message: string }> = affectedRepoPaths
       .filter(
         (repoPath) =>
-          BUILDABLE_SECTIONS.has(repoPath.split("/")[0] ?? "") && !manifestPaths.has(repoPath)
+          BUILDABLE_SECTIONS.has(repoPath.split("/")[0] ?? "") &&
+          !repositoriesBeforeOperation.has(repoPath) &&
+          !manifestPaths.has(repoPath)
       )
       .sort()
       .map((unit) => ({

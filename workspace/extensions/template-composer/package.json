@@ -79,6 +79,15 @@
             }
           }
         },
+        "suggestRegistryEntry": {
+          "effect": {
+            "kind": "userland-capability",
+            "capability": "workspace.templates.change",
+            "resource": {
+              "kind": "receiver"
+            }
+          }
+        },
         "add": {
           "effect": {
             "kind": "userland-capability",
@@ -223,6 +232,15 @@
         },
         {
           "capability": "credential.use",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          },
+          "tier": "gated",
+          "evidence": "intentional-broad"
+        },
+        {
+          "capability": "network.response.read",
           "resource": {
             "kind": "prefix",
             "prefix": ""

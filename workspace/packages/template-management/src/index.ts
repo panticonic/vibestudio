@@ -15,9 +15,10 @@ export interface TemplatePendingOperation {
   operationId: string;
   kind: "add" | "pull" | "remove" | "recompose" | "adopt-bootstrap" | "publish-authoring";
   contextId: string;
-  state: "pending" | "reviewing";
+  state: "pending" | "reviewing" | "repairing";
   fingerprint: string;
   review?: NonNullable<TemplateOperation["review"]>;
+  repair?: NonNullable<TemplateOperation["repair"]>;
 }
 
 export interface TemplateManagementClient {
@@ -29,7 +30,7 @@ export interface TemplateManagementClient {
   add(input: {
     commandId: string;
     pin: TemplateExactPin;
-    choices?: Record<string, "keep" | "take" | "skip">;
+    onBuildFailure?: "discard-context" | "retain-context";
   }): Promise<TemplateOperation>;
   pull(input: {
     commandId: string;

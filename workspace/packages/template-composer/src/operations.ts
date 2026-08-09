@@ -9,21 +9,9 @@ import { normalizeTemplateGitUrl } from "@vibestudio/workspace/templateCoordinat
 import {
   emptyTemplateComposition,
   resolveTemplateComposition,
-  TemplateRepoConflictError,
   type TemplateCompositionPlan,
   type TemplateSourcePorts,
 } from "./resolver.js";
-
-export interface TemplateRepositoryConflict {
-  kind: "repository";
-  repoPath: string;
-  claimants: string[];
-}
-
-export interface TemplateOperationConflictPreview {
-  inspection: TemplateOperationInspection;
-  conflicts: TemplateRepositoryConflict[];
-}
 
 export interface TemplateCatalogSelection {
   catalogId: string;
@@ -35,8 +23,6 @@ export interface TemplateWorkspaceObservation {
   roots: readonly WorkspaceTemplateDeclaration[];
   lock?: WorkspaceTemplateLock;
   localRepoPaths: ReadonlySet<string>;
-  externallyOwnedRepoPaths: ReadonlySet<string>;
-  conflicts?: Readonly<Record<string, string>>;
   overrides?: Readonly<Record<string, WorkspaceTemplatePin>>;
   expectedSystemEpoch: number;
 }
@@ -132,8 +118,6 @@ export async function inspectTemplateOperation(
     const plan = await resolveTemplateComposition({
       roots: [{ url: rootUrl, ...(root.credential ? { credential: root.credential } : {}) }],
       localRepoPaths: new Set(),
-      externallyOwnedRepoPaths: input.workspace.externallyOwnedRepoPaths,
-      conflicts: input.workspace.conflicts,
       expectedSystemEpoch: input.workspace.expectedSystemEpoch,
       ports: {
         acquire: input.sources.acquire,
@@ -149,7 +133,6 @@ export async function inspectTemplateOperation(
       nextTemplates: {
         use: plan.lock!.roots,
         overrides: plan.lock!.overrides,
-        conflicts: plan.lock!.conflicts,
       },
     };
   }
@@ -182,9 +165,7 @@ export async function inspectTemplateOperation(
       : await resolveTemplateComposition({
           roots,
           pinOverrides,
-          conflicts: input.workspace.conflicts,
           localRepoPaths: input.workspace.localRepoPaths,
-          externallyOwnedRepoPaths: input.workspace.externallyOwnedRepoPaths,
           previousLock: input.workspace.lock,
           expectedSystemEpoch: input.workspace.expectedSystemEpoch,
           ports: input.sources,
@@ -198,46 +179,9 @@ export async function inspectTemplateOperation(
         : {
             use: plan.lock.roots,
             overrides: plan.lock.overrides,
-            conflicts: plan.lock.conflicts,
           },
     ...(input.kind === "add" && input.selection ? { selection: input.selection } : {}),
   };
-}
-
-/**
- * Produce a complete preview even when unrelated templates claim one path.
- * Each discovered conflict is provisionally ignored only for purposes of
- * finishing the dry run; the returned inspection is never directly applied
- * while `conflicts` is non-empty.
- */
-export async function inspectTemplateOperationWithConflicts(
-  input: InspectTemplateOperationInput
-): Promise<TemplateOperationConflictPreview> {
-  if (input.kind === "adopt-bootstrap") {
-    return { inspection: await inspectTemplateOperation(input), conflicts: [] };
-  }
-  const conflicts: TemplateRepositoryConflict[] = [];
-  const provisional = { ...(input.workspace.conflicts ?? {}) };
-  for (;;) {
-    try {
-      return {
-        inspection: await inspectTemplateOperation({
-          ...input,
-          workspace: { ...input.workspace, conflicts: provisional },
-        }),
-        conflicts,
-      };
-    } catch (error) {
-      if (!(error instanceof TemplateRepoConflictError)) throw error;
-      if (provisional[error.repoPath] !== undefined) throw error;
-      conflicts.push({
-        kind: "repository",
-        repoPath: error.repoPath,
-        claimants: [...error.claimants],
-      });
-      provisional[error.repoPath] = "ignore";
-    }
-  }
 }
 
 export interface TemplateBuildFailure {

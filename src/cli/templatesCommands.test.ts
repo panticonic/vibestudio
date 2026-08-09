@@ -8,6 +8,7 @@ describe("templates CLI commands", () => {
       "author-parts",
       "author-inspect",
       "author-publish",
+      "registry-suggest",
       "status",
       "catalog",
       "check",
@@ -33,11 +34,11 @@ describe("templates CLI commands", () => {
       "--part",
       "panels/news",
       "--part=workers/news-agent",
-      "--parent",
-      "base",
+      "--dependency",
+      "git+https://example.test/base.git",
     ]);
     expect(inspection.flagsMulti("part")).toEqual(["panels/news", "workers/news-agent"]);
-    expect(inspection.flagsMulti("parent")).toEqual(["base"]);
+    expect(inspection.flagsMulti("dependency")).toEqual(["git+https://example.test/base.git"]);
 
     const publish = templatesCommands.find((command) => command.name === "author-publish")!;
     const publication = parseInvocation(publish, [
@@ -48,22 +49,40 @@ describe("templates CLI commands", () => {
       "vibestudio-template-news",
       "--owner",
       "panticonic",
+      "--receipt",
+      "publication.json",
     ]);
     expect(publication.positionals).toEqual(["news-receipt.json"]);
     expect(publication.flags["owner"]).toBe("panticonic");
     expect(publication.flags["private"]).toBeUndefined();
+    expect(publication.flags["receipt"]).toBe("publication.json");
+
+    const registry = templatesCommands.find((command) => command.name === "registry-suggest")!;
+    const suggestion = parseInvocation(registry, [
+      "publication.json",
+      "--id",
+      "news",
+      "--name",
+      "News",
+      "--description",
+      "Focused news workspace",
+      "--tag",
+      "news",
+      "--revision",
+      "2026-08-09.1",
+    ]);
+    expect(suggestion.positionals).toEqual(["publication.json"]);
+    expect(suggestion.flagsMulti("tag")).toEqual(["news"]);
+    expect(suggestion.flags["revision"]).toBe("2026-08-09.1");
   });
 
-  it("keeps conflict choices and part selections explicit", () => {
+  it("routes overlapping additions directly into semantic review", () => {
     const add = templatesCommands.find((command) => command.name === "add")!;
-    const parsed = parseInvocation(add, [
-      "https://example.test/news.git",
-      "--choice",
-      "panels/news=keep",
-      "--choice=workers/news=take",
-    ]);
+    const parsed = parseInvocation(add, ["https://example.test/news.git"]);
     expect(parsed.positionals).toEqual(["https://example.test/news.git"]);
-    expect(parsed.flagsMulti("choice")).toEqual(["panels/news=keep", "workers/news=take"]);
+    expect(() =>
+      parseInvocation(add, ["https://example.test/news.git", "--choice", "panels/news=keep"])
+    ).toThrow("Unknown flag");
   });
 
   it("makes registry network refresh explicit", () => {

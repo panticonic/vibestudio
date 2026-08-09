@@ -457,7 +457,14 @@ export function initWorkspace(name: string, opts?: WorkspaceCreationOptions): vo
   log.info(`[Workspace] Created managed workspace "${name}" at ${wsDir}`);
 }
 
-/** Recursively copy a directory, skipping .git, node_modules, and .cache. */
+/**
+ * Recursively copy semantic workspace source.
+ *
+ * Managed source is initialized from a live development checkout as well as
+ * from packaged templates. TypeScript incremental metadata may therefore sit
+ * beside source even though it is a generated cache; it must never become a
+ * semantic file merely because workspace creation copied the checkout.
+ */
 function copyDirRecursive(src: string, dest: string): void {
   fs.mkdirSync(dest, { recursive: true });
   for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
@@ -468,6 +475,7 @@ function copyDirRecursive(src: string, dest: string): void {
         continue;
       copyDirRecursive(srcPath, destPath);
     } else if (entry.isFile()) {
+      if (entry.name.endsWith(".tsbuildinfo")) continue;
       fs.copyFileSync(srcPath, destPath);
     }
   }

@@ -956,6 +956,8 @@ function PartDetail({
                   says whose code this is must be the one that stands out. */}
               <OriginText text={part.origin.url} origin={part.origin} />
             </>
+          ) : part.origin.originStatus === "multiple-template-contributors" ? (
+            <> · Multiple template contributions; inspect file history for exact sources</>
           ) : (
             ""
           )}

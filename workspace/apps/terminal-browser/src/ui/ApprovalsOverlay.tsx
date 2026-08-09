@@ -222,7 +222,7 @@ function PartDetail({
     part.notableRows.length === 0 &&
     part.everydayRows.length === 0 &&
     !originUrl &&
-    part.origin.originStatus !== "unresolved"
+    !part.origin.originStatus
   ) {
     return null;
   }
@@ -247,6 +247,10 @@ function PartDetail({
               in the words the launch gate's plain-text form uses. */}
           {domainFact ? <Text dimColor>{domainFact}</Text> : null}
         </>
+      ) : part.origin.originStatus === "multiple-template-contributors" ? (
+        <Text dimColor>
+          Multiple template contributions; inspect file history for exact sources
+        </Text>
       ) : null}
       {part.notableRows.length > 0 ? (
         <>

@@ -1,6 +1,5 @@
 import { canonicalSnapshotDigest } from "@vibestudio/content-addressing";
 import type { VcsListFilesResult, VcsStateNodeRef } from "@vibestudio/service-schemas/vcs";
-import type { TemplateCompositionPlan } from "@workspace/template-composer";
 import type { ExtensionContextLike } from "./context.js";
 
 export type SemanticRepositoryFile = NonNullable<VcsListFilesResult>["files"][number];
@@ -36,23 +35,5 @@ export function semanticRepositoryDigest(
       size: file.byteLength,
       mode: file.mode === 0o755 ? 0o100755 : 0o100644,
     }))
-  );
-}
-
-export function semanticRepositoryMatches(
-  actual: readonly SemanticRepositoryFile[],
-  desired: TemplateCompositionPlan["repositories"][string]["files"]
-): boolean {
-  return (
-    actual.length === desired.length &&
-    actual.every((file, index) => {
-      const expected = desired[index];
-      return (
-        expected !== undefined &&
-        file.path === expected.path &&
-        file.contentHash === expected.contentHash &&
-        file.mode === expected.mode
-      );
-    })
   );
 }

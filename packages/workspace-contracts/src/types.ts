@@ -144,8 +144,6 @@ export interface WorkspaceTemplatesConfig {
   use: WorkspaceTemplateDeclaration[];
   /** Exact root-level resolution overrides keyed by normalized template URL. */
   overrides?: Record<string, WorkspaceTemplatePin>;
-  /** Durable per-repository ownership choices. */
-  conflicts?: Record<string, string>;
   /** Presentation/promotion registry source; never part of an installed template lock. */
   registry?: WorkspaceTemplateRegistryDeclaration;
   /** Exact bootstrap root already adopted into the ordinary template graph. */
@@ -191,9 +189,14 @@ export interface WorkspaceTemplateLockNode {
   };
 }
 
-export interface WorkspaceTemplateLockRepository {
+export interface WorkspaceTemplateLockContribution {
   nodeId: string;
   subtreeDigest: `v1-sha256:${string}`;
+}
+
+export interface WorkspaceTemplateLockRepository {
+  /** Every template layer contributing changes to this repository. */
+  contributions: WorkspaceTemplateLockContribution[];
 }
 
 /** Checked projection committed in `meta/templates.lock.yml`. */
@@ -204,8 +207,6 @@ export interface WorkspaceTemplateLock {
   roots: WorkspaceTemplateDeclaration[];
   /** Normalized top-layer pin overrides that generated this closure. */
   overrides: Record<string, WorkspaceTemplatePin>;
-  /** Normalized top-layer repository ownership decisions for this closure. */
-  conflicts: Record<string, string>;
   nodes: WorkspaceTemplateLockNode[];
   repositories: Record<string, WorkspaceTemplateLockRepository>;
   verification: "verified" | "deferred";
@@ -582,7 +583,7 @@ export interface WorkspaceConfig {
  * by the host.
  */
 export type WorkspaceConfigTopLayer = Omit<WorkspaceConfig, "id"> & {
-  /** Direct template relationships and repository conflict choices. */
+  /** Direct semantic template relationships. */
   templates?: WorkspaceTemplatesConfig;
   /** Canonical inherited declaration keys disabled by the workspace layer. */
   disable?: string[];

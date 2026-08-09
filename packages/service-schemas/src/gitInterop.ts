@@ -75,18 +75,6 @@ export const gitTemplatePublishInputSchema = z
     version: z.string().regex(/^v?[0-9]+(?:\.[0-9]+){0,2}(?:[-.][A-Za-z0-9]+)*$/u),
     manifest: z.string().min(1),
     manifestDigest: z.string().regex(/^v1-sha256:[0-9a-f]{64}$/u),
-    validatedParents: z
-      .array(
-        z
-          .object({
-            url: z.string(),
-            ref: z.string(),
-            commit: z.string().regex(/^[0-9a-f]{40}$/u),
-            snapshot: z.string().regex(/^v1-sha256:[0-9a-f]{64}$/u),
-          })
-          .strict()
-      )
-      .default([]),
     parts: z.array(z.object({ repoPath: z.string(), subdir: z.string() }).strict()).min(1),
     credentialId: z.string().trim().min(1).optional(),
     destination: z

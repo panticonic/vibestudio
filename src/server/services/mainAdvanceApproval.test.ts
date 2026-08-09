@@ -554,19 +554,25 @@ describe("createMainAdvanceApprovalGate", () => {
       nodes: TemplateLockNode[];
       repositories: Record<string, string>;
     }): string {
-      const body = {
+      const body: Omit<WorkspaceTemplateLock, "fingerprint"> = {
         version: 1 as const,
         roots: input.nodes
           .filter((candidate) => candidate.parents.length === 0)
           .map((candidate) => ({ url: candidate.pin.url }))
           .sort((left, right) => left.url.localeCompare(right.url)),
         overrides: {},
-        conflicts: {},
         nodes: input.nodes,
         repositories: Object.fromEntries(
           Object.entries(input.repositories).map(
             ([repoPath, nodeId]) =>
-              [repoPath, { nodeId, subtreeDigest: `v1-sha256:${"c".repeat(64)}` as const }] as const
+              [
+                repoPath,
+                {
+                  contributions: [
+                    { nodeId, subtreeDigest: `v1-sha256:${"c".repeat(64)}` as const },
+                  ],
+                },
+              ]
           )
         ),
         verification: "verified" as const,

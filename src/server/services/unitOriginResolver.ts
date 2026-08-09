@@ -1,6 +1,7 @@
 import YAML from "yaml";
 import {
   hostBuildOrigin,
+  multipleTemplateContributorsOrigin,
   templateOrigin,
   unresolvedOrigin,
 } from "@vibestudio/shared/authority/reviewedUnitParts";
@@ -17,14 +18,13 @@ import type { UnitSourceOrigin } from "./unitAdmissionStore.js";
  * system nobody asserts about themselves — so it may only ever be derived from
  * workspace state the server reads itself. Two records answer it, in this order:
  *
- *   `meta/templates.lock.yml` maps every repository the composer imported to the
- *     template node that owns it, and every node to its exact pin. A unit that
- *     arrived with an installed template belongs to that template's URL and its
- *     human ref. The lock's fingerprint is checked before it is believed.
+ *   `meta/templates.lock.yml` records every template contribution. When exactly
+ *     one template contributes to a repository, its URL and human ref are a
+ *     useful coarse origin. Multiple contributors deliberately produce no
+ *     single-template origin; file-level VCS provenance is the honest source.
  *   the source recorded when the unit was admitted, for a repository the lock no
- *     longer claims. Removing a template severs a relationship and deletes
- *     nothing (§U2): the parts stay, and their history of where they came from
- *     stays with them. Without this step the lock's disappearance would silently
+ *     longer claims but whose merged content remains. Without this step the
+ *     lock's disappearance would silently
  *     re-attribute every one of them to whatever answers next — for most
  *     workspaces, to the host's own build — so a part would go from
  *     `Originally installed from News 1.2.0` to `Part of Vibestudio` purely
@@ -80,19 +80,20 @@ export interface RecordedUnitSource {
   isWorkspaceRoot?: boolean;
 }
 
-interface OwnedRepository {
+interface SoleTemplateContribution {
   url: string;
   /** Human ref (`v2.1`, `main`) — the version a person reads. */
   ref: string | null;
-  /** The owning template's self-given name. A title, never identity. */
+  /** The contributing template's self-given name. A title, never identity. */
   selfName: string | null;
   isWorkspaceRoot: boolean;
 }
 
 export class UnitOriginResolver {
-  private ownership = new Map<string, OwnedRepository>();
+  private soleContributions = new Map<string, SoleTemplateContribution>();
+  private overlappingContributions = new Set<string>();
   private bootstrapRepositories = new Set<string>();
-  private ownershipLoaded = false;
+  private contributionsLoaded = false;
 
   constructor(private readonly deps: UnitOriginResolverDeps) {}
 
@@ -124,34 +125,41 @@ export class UnitOriginResolver {
     return origins;
   }
 
-  /** Re-read ownership. Cheap enough to do per review, and always current. */
+  /** Re-read contribution attribution. Cheap enough to do per review. */
   async refresh(): Promise<void> {
     let content: string | null = null;
     try {
       content = await this.deps.readWorkspaceFile(TEMPLATE_LOCK_PATH);
     } catch (error) {
-      this.ownership = new Map();
-      this.ownershipLoaded = false;
+      this.soleContributions = new Map();
+      this.overlappingContributions = new Set();
+      this.contributionsLoaded = false;
       this.warn(`Could not read ${TEMPLATE_LOCK_PATH}: ${message(error)}`);
       return;
     }
     if (content === null) {
       // No composition. Bootstrap membership still decides which repositories
       // came with the root; absence from a lock proves nothing by itself.
-      this.ownership = new Map();
-      this.ownershipLoaded = true;
+      this.soleContributions = new Map();
+      this.overlappingContributions = new Set();
+      this.contributionsLoaded = true;
       return;
     }
     try {
       const lock = assertTemplateLockIntegrityForRead(YAML.parse(content) as unknown);
       const nodesById = new Map(lock.nodes.map((node) => [node.nodeId, node] as const));
       const rootUrls = new Set(lock.roots.map((root) => root.url));
-      const ownership = new Map<string, OwnedRepository>();
+      const soleContributions = new Map<string, SoleTemplateContribution>();
+      const overlappingContributions = new Set<string>();
       for (const [repoPath, repository] of Object.entries(lock.repositories)) {
-        const node = nodesById.get(repository.nodeId);
+        if (repository.contributions.length !== 1) {
+          overlappingContributions.add(repoPath);
+          continue;
+        }
+        const node = nodesById.get(repository.contributions[0]!.nodeId);
         const pin = node?.pin;
         if (!pin) continue;
-        ownership.set(repoPath, {
+        soleContributions.set(repoPath, {
           url: pin.url,
           ref: pin.ref ?? null,
           // Re-sanitized here for the same reason the gate re-sanitizes it: the
@@ -161,15 +169,17 @@ export class UnitOriginResolver {
           isWorkspaceRoot: rootUrls.has(pin.url),
         });
       }
-      this.ownership = ownership;
-      this.ownershipLoaded = true;
+      this.soleContributions = soleContributions;
+      this.overlappingContributions = overlappingContributions;
+      this.contributionsLoaded = true;
     } catch (error) {
       // A lock we cannot verify is not evidence of anything. Clear the last
-      // snapshot instead of retaining stale ownership, and make the review say
+      // snapshot instead of retaining stale attribution, and make the review say
       // the source is unavailable — never let an old template claim survive a
       // failed read as if it described the current workspace.
-      this.ownership = new Map();
-      this.ownershipLoaded = false;
+      this.soleContributions = new Map();
+      this.overlappingContributions = new Set();
+      this.contributionsLoaded = false;
       this.warn(`${TEMPLATE_LOCK_PATH} failed integrity checks: ${message(error)}`);
     }
   }
@@ -178,12 +188,13 @@ export class UnitOriginResolver {
    * The source recorded alongside an admission, without re-reading anything.
    *
    * Admission is written synchronously inside an accepted decision, so this
-   * answers from the ownership the review that produced that decision already
-   * loaded. Nothing is guessed: before any review has run there is no ownership
+   * answers from the contribution attribution the review that produced that
+   * decision already loaded. Nothing is guessed: before any review has run
+   * there is no contribution attribution
    * to consult and the record simply carries no source.
    */
   recordedOriginFor(repoPath: string): UnitSourceOrigin | null {
-    if (!this.ownershipLoaded) return null;
+    if (!this.contributionsLoaded) return null;
     const origin = this.originFor(repoPath, EMPTY);
     return {
       originKey: origin.originKey,
@@ -200,13 +211,13 @@ export class UnitOriginResolver {
   /**
    * `News 1.2.0` — where a part came from, for a part nothing owns any more.
    *
-   * Null whenever the live lock still claims the repository, because then the
+   * Null whenever one live template solely contributes the repository, because then the
    * question has a present-tense answer and the review already shows it: current
-   * ownership and historical origin are different facts, and printing both for
+   * current contribution and historical origin are different facts, and printing both for
    * the same relationship would say a live template is also a past one.
    *
    * Answered from the same `originFor` every other surface uses — this adds a
-   * rendering, never a second resolution order — and reads the ownership map the
+   * rendering, never a second resolution order — and reads the contribution map the
    * last `refresh()` established, which every review request site loads
    * immediately beforehand when it resolves origins.
    *
@@ -214,8 +225,8 @@ export class UnitOriginResolver {
    * renders as the name alone. Never a commit, never a digest.
    */
   originallyInstalledFrom(repoPath: string): string | null {
-    if (!this.ownershipLoaded) return null;
-    if (this.ownership.has(repoPath)) return null;
+    if (!this.contributionsLoaded) return null;
+    if (this.soleContributions.has(repoPath)) return null;
     const recorded = this.deps.recordedSourceFor?.(repoPath);
     if (!recorded?.url) return null;
     const origin = this.originFor(repoPath, EMPTY);
@@ -225,18 +236,21 @@ export class UnitOriginResolver {
   }
 
   private originFor(repoPath: string, admitted: ReadonlySet<string>): InstallReviewOrigin {
-    if (!this.ownershipLoaded) return unresolvedOrigin();
-    const owner = this.ownership.get(repoPath);
-    if (owner) {
+    if (!this.contributionsLoaded) return unresolvedOrigin();
+    if (this.overlappingContributions.has(repoPath)) {
+      return multipleTemplateContributorsOrigin();
+    }
+    const contributor = this.soleContributions.get(repoPath);
+    if (contributor) {
       return templateOrigin({
-        url: owner.url,
-        version: owner.ref,
-        ...(owner.selfName ? { selfName: owner.selfName } : {}),
+        url: contributor.url,
+        version: contributor.ref,
+        ...(contributor.selfName ? { selfName: contributor.selfName } : {}),
         admittedOriginKeys: admitted,
-        isWorkspaceRoot: owner.isWorkspaceRoot,
+        isWorkspaceRoot: contributor.isWorkspaceRoot,
       });
     }
-    // No live template owns this repository. Before concluding it is ours, ask
+    // No single live template accounts for this repository. Before concluding it is ours, ask
     // what was true when it was admitted: a removed template's parts are still
     // that template's code, and saying otherwise would erase the only audit
     // trail explaining the grants they hold (§7.7).

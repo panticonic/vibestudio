@@ -22,7 +22,9 @@ Treat the structured error code and fields as authoritative. Messages are explan
 
 - `DestinationOccupied`: inspect the current stable identity at the destination. Choose a genuinely free path or deliberately edit/move the existing identity.
 - Merge re-entry reports structured `status: "unchanged"`; it is not a `NoEffect` error. `NoEffect` remains meaningful for other authoring operations.
-- `SubagentPollingBlocked`: no new child event exists. Stop calling `read_subagent`; pushed progress reopens the gate.
+- `SubagentTerminal`: execution is already terminal. Use the returned status,
+  source event, and allowed operations; inspect, read, or merge the retained
+  result rather than sending more execution instructions.
 - `WorkingChangesPresent`: finish, commit, or discard the exact local chain before the requested clean-state operation.
 - `ConflictPresent` from revert: newer live state makes the counteraction untruthful. Inspect the coordinate and author a deliberate current result rather than forcing old bytes.
 

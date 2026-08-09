@@ -24,7 +24,6 @@ the user:
 | pin (`ref`, commit, snapshot)       | “this exact version”                                  |
 | repo path, subtree                  | a part, or its concrete name such as “the News panel” |
 | incoming candidate / external delta | incoming changes                                      |
-| orphan                              | becomes part of your workspace                        |
 | contribution branch                 | a suggestion for the template maintainers             |
 | lock or fragment                    | never mention these; say “settings from {template}”   |
 
@@ -41,8 +40,9 @@ commit, and content digest only in a labeled Details view.
   operation means approved composition changes are waiting for ordinary VCS
   review, not that host approval is still pending. Never show or repeat an
   internal approval reference to the user.
-- Never silently choose a conflict. Suggested choices are explanatory only;
-  they do not authorize an agent to decide for the user.
+- Templates contribute changes; they do not own repositories. Two templates
+  may contribute to the same repository, and their changes go through the
+  ordinary semantic VCS merge flow.
 - Never edit `meta/templates/*.yml`. Those are managed settings; direct edits
   prevent safe composition. Put a desired override in workspace settings
   through the normal reviewed configuration flow.
@@ -54,8 +54,9 @@ commit, and content digest only in a labeled Details view.
 
 1. Invoke composer `status`.
 2. Invoke composer `operations`. For every returned operation, continue its
-   ordinary VCS review when `state` is `reviewing`, invoke `resume` after the
-   reviews are complete, or invoke `cancel` when the user abandons it. These
+   ordinary VCS review when `state` is `reviewing`; when `state` is `repairing`,
+   edit `repair.contextId` using its structured failures and invoke `resume` to
+   rebuild; otherwise invoke `resume`, or invoke `cancel` when the user abandons it. These
    operations have already crossed the host approval boundary; never describe
    them as awaiting an approval card.
 3. Invoke composer `check` when the user asks to check, or while rendering a
@@ -72,17 +73,15 @@ refreshCatalog? }`. Use `refreshCatalog: true` only when the user explicitly
    installation. The composer binds a catalog id to the verified
    registry coordinates and returns `{ name, description?, inspection }`.
    `credential`, when present, is the workspace's logical credential name,
-   never a concrete credential id. Explain the returned parts, choices, and
-   optional setup suggestions in plain language.
-2. Discuss every repository conflict choice. Record each choice explicitly as
-   `keep`, `take`, or `skip`; never rely on a hidden default. Template
-   dependencies name URLs only, so inherited version disagreements do not
-   exist: the current lock wins. Catalog selections and previously unseen
-   dependencies resolve from the reviewed registry revision; a direct URL is
-   independently discovered and verified to the exact pin returned by the
-   preparation.
-3. Invoke `add` with `{ pin: preparation.inspection.pin, commandId, choices? }`, a fresh
-   `commandId`, and any choices already discussed. Pass the preparation pin
+   never a concrete credential id. Explain the affected repositories and
+   optional setup suggestions in plain language. Overlap is expected and is
+   not a separate choice at this stage.
+2. Template dependencies name URLs only. Catalog selections and previously
+   unseen dependencies resolve from the reviewed registry revision; a direct
+   URL is independently discovered and verified to the exact pin returned by
+   the preparation.
+3. Invoke `add` with `{ pin: preparation.inspection.pin, commandId }` and a fresh
+   `commandId`. Pass the preparation pin
    unchanged: it is the one exact version already fetched and verified by
    `inspect`; never reconstruct it or send the locator again. The invocation
    itself crosses the host approval boundary.
@@ -93,6 +92,14 @@ refreshCatalog? }`. Use `refreshCatalog: true` only when the user explicitly
    updated.
    If the user abandons the operation, invoke `cancel` with its `operationId`;
    this discards the complete isolated operation context.
+   If it returns `error` with `repair`, edit that exact `repair.contextId`
+   using ordinary workspace/VCS tools. Use every structured failure as repair
+   feedback, then invoke `resume`. Resume rebuilds the retained result without
+   reacquiring or replaying template contributions.
+   If `repair.mainEventId` is present, merge that exact protected-main event
+   into `repair.contextId` with ordinary VCS tools, resolve its semantic
+   coordinates, and then resume. Do not abandon the contribution plan merely
+   because unrelated main work landed while it was under review.
 5. Treat every returned `excludedSuggestions` item as a separate decision.
    Show its exact value, then invoke `decideSuggestion` with `{ commandId,
 alias, section, decision: "accept" | "decline" }`. Acceptance writes only
@@ -104,9 +111,10 @@ alias, section, decision: "accept" | "decline" }`. Acceptance writes only
 
 1. Invoke `check` with `{ alias }`, then invoke `pull` with `{ alias,
 commandId })` only after the user asks to update.
-2. The inspection and approval prompt describe parts that changed. Clean
-   parts apply after approval; parts changed locally must be reviewed one by
-   one.
+2. The inspection and approval prompt describe repositories whose contribution
+   sets changed. Incoming contribution deltas are merged one by one, including
+   changes to repositories also contributed by other templates or edited in
+   the workspace.
 3. Use the normal VCS compare/merge workflow from
    [vibestudio-vcs compare and merge](../vibestudio-vcs/references/compare-and-merge.md)
    for each review. A pending operation's `review.items` names the exact part
@@ -118,10 +126,10 @@ commandId })` only after the user asks to update.
 - Only a template named directly in workspace settings can be removed.
   A template that merely comes with another one stays connected until its
   direct parent is removed; say which direct template brings it along instead
-  of offering removal. `templates.remove({ alias, commandId })` removes the
-  direct relationship, not the content. Say that affected parts stay and
-  become part of the workspace, while parts still shared through another
-  direct template remain connected.
+  of offering removal. `templates.remove({ alias, commandId })` removes that
+  template's contributions through ordinary VCS deltas. Other templates'
+  contributions and workspace edits remain; the merge result decides the
+  content.
 - Invoking `suggest` with `{ alias, parts, commandId }` proposes local changes to
   the template maintainers. It does not change the workspace. On an
   idempotent retry after approval, `contribution` carries the exact branch
@@ -134,47 +142,54 @@ workspace files with shell commands or create a temporary repository inside the
 workspace.
 
 1. Invoke `authoringParts` to discover protected-main repositories and their
-   package/template ownership hints. An installed owner includes its exact
-   `templatePin`; a fresh `publishAuthoring` receipt becomes a parent pin as
-   `{ url: templateUrl, ref, commit, snapshot }`. Help the user choose parts
-   around one outcome, then invoke `inspectAuthoring` with
-   `{ name, description, parts, parents?: exactPins[] }`. Never pass aliases or
-   moving URLs as parents. Return the selected inventory rows and complete plan
-   from eval; returning the entire inventory can exceed the result limit, and
-   console output alone is not a durable inspection receipt.
-2. Review `requestedParts`, `requiredParts`, `inheritedParts`, and `parents`.
-   The composer reacquires and verifies each exact parent and its ordinary
-   URL-declared closure; `inheritedParts` is the full repository contribution,
-   including parts not owned by a template in this live workspace. Required
+   package/template contribution hints. Help the user choose parts around one
+   outcome, then form one semantic intent:
+   `{ name, description, parts, dependencies?: [{ url, credential? }] }`.
+   Pass that intent to `inspectAuthoring`. Do not make the agent choose refs,
+   commits, snapshots, or aliases for dependencies.
+2. Review `requestedParts` and `requiredParts`. `inheritedParts` is only an
+   explanatory contribution hint when a dependency happens to be installed; it
+   is not validation and does not prevent explicitly selecting an overlapping
+   repository. Required
    parts are deterministic `workspace:*` or runtime dependencies; do not remove
    them.
-3. Show the generated manifest, `parentClosureFingerprint`, and `fingerprint`
-   in a technical details view. The manifest deliberately declares only the
-   direct parent URLs (plus logical credential names); exact coordinates remain
-   in the receipt and later workspace lock. The receipt is bound to
-   `mainEventId`; any intervening workspace publication requires a fresh
-   inspection.
+3. Show the generated manifest and `fingerprint` in a technical details view.
+   The source event binds the current workspace state. The manifest deliberately
+   declares only direct URLs (plus logical credential names).
 4. Ask where and how the user wants it published. Then invoke
-   `publishAuthoring` with a fresh `commandId`, the complete unchanged `plan`,
-   a version such as `1.0.0`, and
+   `publishAuthoring` with a fresh `commandId`, the same `intent`, the inspected
+   `expectedFingerprint`, a version such as `1.0.0`, and
    `{ destination: { provider: "github", owner, name }, credentialId?,
-creation?: { private?, description? } }`. The owner is always explicit;
+`creation?: { private?, description? } }`. The owner is always explicit;
    credentials and create-time policy are not repository identity. Do not
-   reconstruct or trim the plan.
+   add resolved coordinates to the intent.
 5. The invocation itself crosses the exact Git publication authority boundary.
    Confirm success only from its returned `webUrl`, `ref`, `commit`, and
    `snapshot`. The returned `templateUrl` can immediately be passed to ordinary
    `inspect` and `add` in a scratch workspace.
 
-Publishing makes an exact installable template; it does not recommend it.
+Publishing makes an exact installable template; it does not recommend it. A
+dependency URL is a semantic compatibility expectation, not proof that the
+dependency is installed, controlled by the user, or validated at a particular
+release. Composition-time build and type failures are actionable feedback for
+the agent to repair, not reasons to make authoring imitate a package manager.
 Publishing a later version to the same destination fetches its complete
 history, advances `main` normally with one new commit, and creates a new
 immutable version tag. A retry never overwrites a tag: it either returns the
 same exact publication, completes a missing tag after `main` was pushed, or
 rejects a divergent command.
 Submitting the returned coordinates to a registry is a separate reviewed Git
-change. The default workspace intentionally does not imply registry governance
-or silently edit a catalog.
+change. To submit one, explicitly refresh with `catalog({ refresh: true })`,
+review the current catalog receipt and the publication receipt, choose the
+stable id, display metadata, recommendation state, and a new
+`YYYY-MM-DD.N` promotion revision, then invoke `suggestRegistryEntry` with
+both receipts unchanged and, for a private release, its logical `credential`
+name. The method reacquires the release and rejects stale catalog receipts, id/URL
+collisions, and a changed entry without a new revision. Confirm only the
+returned contribution branch; it is ready for ordinary registry review and
+has not been merged or promoted. A later release uses the same method and id
+with the new publication receipt. The default workspace intentionally does not
+imply registry governance or silently merge a catalog change.
 
 ## Catalog ownership
 

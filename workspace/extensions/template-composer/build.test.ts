@@ -76,4 +76,13 @@ describe("template composer affected build gate", () => {
       expect.anything()
     );
   });
+
+  it("accepts an intentionally removed prior unit instead of treating it as a malformed add", async () => {
+    const ctx = context(null);
+    await expect(
+      createAffectedBuildGate(ctx as never, new Set(["about/help"]))("operation-1", [
+        "about/help",
+      ])
+    ).resolves.toEqual({ failures: [] });
+  });
 });

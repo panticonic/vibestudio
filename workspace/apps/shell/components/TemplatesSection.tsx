@@ -227,7 +227,7 @@ export function TemplatesSection() {
                       disabled={controller.isBusy(`operation:${operation.operationId}`)}
                       onClick={() => void resume(operation.operationId)}
                     >
-                      Resume
+                      {operation.repair ? "Rebuild" : "Resume"}
                     </Button>
                   ) : null}
                   <Button
@@ -249,6 +249,18 @@ export function TemplatesSection() {
                   }}
                 />
               ) : null}
+              {operation.repair ? (
+                <Box>
+                  <Text as="div" size="2" color="orange">
+                    The merged result is retained for repair.
+                  </Text>
+                  {operation.repair.failures.map((failure) => (
+                    <Text key={`${failure.unit}:${failure.message}`} as="div" size="1" color="gray">
+                      {failure.unit}: {failure.message}
+                    </Text>
+                  ))}
+                </Box>
+              ) : null}
             </Flex>
           </Card>
         ))}
@@ -263,7 +275,8 @@ export function TemplatesSection() {
                     {direct ? row.alias : `Comes with: ${row.alias}`} template
                   </Text>
                   <Text as="div" size="1" color="gray">
-                    {version(row.ref)} · {row.ownedParts} {row.ownedParts === 1 ? "part" : "parts"}
+                    {version(row.ref)} · {row.contributedParts}{" "}
+                    {row.contributedParts === 1 ? "contribution" : "contributions"}
                   </Text>
                   {row.error ? (
                     <Text as="div" size="1" color="red">

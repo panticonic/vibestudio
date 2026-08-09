@@ -1,11 +1,9 @@
 # Workspace template authoring from a live workspace
 
-Status: mechanism and publication-safety corrections implemented. The official
-release path is gated by repository extraction and composed-result validation
-against an exact Vibestudio host and base-template release, as specified in
-`docs/official-template-repositories-plan.md`. Publishing a standalone npm SDK
-is not a prerequisite. Until those repository releases and validation gates
-exist, permanent tags minted here are candidates, not official releases.
+Status: implemented. Publication captures selected protected-main repositories;
+consumer-side composition supplies ordinary VCS merge, build, and type feedback.
+Publishing a standalone npm SDK or proving compatibility with a particular base
+release is not a prerequisite.
 
 ## Outcome
 
@@ -15,9 +13,9 @@ using a host shell or hand-writing managed composition files.
 
 The happy path is:
 
-1. inspect the current protected-main workspace and choose outcome-owned parts;
+1. inspect the current protected-main workspace and choose contributing parts;
 2. let the composer add required workspace-package and runtime dependencies;
-3. review the exact generated `meta/template.yml`, parent-template
+3. review the generated `meta/template.yml`, template
    relationships, source event, and file digest;
 4. publish that immutable plan as a new Git repository and version tag;
 5. verify the returned URL, tag, commit, and canonical snapshot;
@@ -28,7 +26,12 @@ Authoring and registry promotion are deliberately separate. Publishing code
 does not make it recommended, and registry review never rebuilds a different
 template tree.
 
-## Ownership
+Dependencies are deliberately semantic rather than package-manager constraints.
+The author need not install, control, republish, or prove compatibility with a
+particular dependency release. Later composition supplies concrete build, type,
+and conflict feedback to the self-healing agent.
+
+## Responsibilities
 
 - `@workspace-extensions/template-composer` owns selection, dependency closure,
   portable manifest generation, preview, and the public agent workflow.
@@ -48,7 +51,7 @@ visible to the agent, and no host-owned template factory.
 ### `inspectAuthoring`
 
 `authoringParts()` first exposes the exact protected-main repository inventory
-with package-name and installed-template ownership hints, so an agent never has
+with package-name and installed-template contribution hints, so an agent never has
 to guess paths or source-scan the host.
 
 Input:
@@ -58,13 +61,13 @@ Input:
   name: string;
   description: string;
   parts: string[];
-  parents?: WorkspaceTemplatePin[]; // exact parent release receipts
+  dependencies?: Array<{ url: string; credential?: string }>;
 }
 ```
 
 It returns every selectable repository, the requested parts, automatically
-included dependencies, dependencies satisfied by the selected parents, the
-portable parent declarations, canonical manifest text, the exact protected
+included dependencies, optional contribution hints for installed template layers,
+portable dependency declarations, canonical manifest text, the protected
 main event, and a content-addressed plan fingerprint.
 
 Dependency closure has two sources:
@@ -77,20 +80,22 @@ Dependency closure has two sources:
 `@vibestudio/*` dependencies are platform packages supplied by the host and
 are not copied into authored templates.
 
-An exact parent may satisfy either dependency. Authoring resolves every parent
-through the ordinary template resolver and binds its complete transitive
-closure into the inspection receipt. A repository is never both vendored and
-inherited. Missing workspace dependencies and references outside the selected
-or inherited closure are errors, not warnings.
+A dependency URL is recorded whether or not that template is installed. When it
+is installed, authoring reports its current contribution closure as explanatory
+`inheritedParts`. Explicitly selecting an overlapping repository is allowed;
+the downstream VCS composition workflow provides repairable feedback.
+Missing `workspace:*` package dependencies and runtime references in the live
+workspace remain concrete source errors.
 
 ### `publishAuthoring`
 
-Input carries the unchanged inspection receipt plus:
+Input carries semantic intent and the reviewed fingerprint:
 
 ```ts
 {
   commandId: string;
-  plan: TemplateAuthoringInspection;
+  intent: TemplateAuthoringIntent;
+  expectedFingerprint: string;
   version: string;
   destination: {
     provider: "github";
@@ -105,7 +110,7 @@ Input carries the unchanged inspection receipt plus:
 }
 ```
 
-The composer re-inspects protected main and rejects any receipt whose event,
+The composer re-inspects protected main and rejects an operation whose
 selection, manifest, or fingerprint changed. The Git boundary then asks for
 one exact `git.publish` authority covering destination, visibility, version,
 source event, parts, and manifest digest. The provider resolves the explicit
@@ -124,16 +129,15 @@ fails closed; neither a tag nor history is overwritten.
 ## Portable manifest projection
 
 The authoring projection starts from the resolved runtime manifest and keeps
-only declarations owned by the selected closure:
+only declarations relevant to the selected closure:
 
 - source-addressed arrays are retained only when their source is selected;
 - `defaultRepo`, Git remotes/upstreams, providers, trust, and host targets are
   retained only for selected repositories;
 - concrete author identity is removed from upstreams;
-- workspace identity, exact template pins, locks, conflict choices, disables,
+- workspace identity, exact template pins, locks, disables,
   and registry configuration are never exported;
-- direct exact parents become URL-only `templates.use` declarations; their
-  exact closure remains bound in the authoring receipt.
+- template dependencies remain URL-only `templates.use` declarations.
 
 `providers` and `trust` may be present in the source manifest so the existing
 consumer-side sanitizer can expose them as individually reviewed suggestions;
@@ -157,13 +161,12 @@ repository merely to prove discovery.
 
 The implementation enforces all four review findings:
 
-1. **Pre-publication build gate.** `publishAuthoring` materializes the
-   candidate in an operation context, composes it with its resolved exact
-   parents, and runs the same build gate the
-   consumer-side add uses (official plan D1); only a clean build may
-   create/push/tag the external repository. Registry promotion remains the
-   gate protecting users, but immutable tags should not be mintable for
-   compositions that demonstrably do not assemble.
+1. **Pre-publication build gate.** `publishAuthoring` runs the affected build
+   gate over the selected protected-main repositories before external Git
+   publication. This proves the selected source builds in the authoring
+   workspace. It does not claim to prove a clean install composed from the
+   published child and an independently materialized parent; that remains a
+   downstream candidate-release check.
 2. **The idempotency binding exists before repository creation.** The composer
    records `commandId → destination + request fingerprint`
    **durably before creation**, in the operation's own record within the
@@ -176,21 +179,23 @@ The implementation enforces all four review findings:
 3. **The request fingerprint covers `creation`.** `creation.private` and
    `creation.description` are normalized into the durable intent and Git
    publication fingerprint, so a visibility-changing retry is divergent.
-4. **Resolved-parent provenance is published.** Direct parents are correctly
-   URL-only in the portable manifest (official plan D1), and installers
-   resolve lock-first against promoted releases — that stands. But the exact
-   parent closure the author validated against is written to
-   `meta/template-authoring-provenance.json` as non-authoritative provenance:
-   never an input to resolution, purely so a later composition failure can
-   name the delta from what the author validated.
+4. **Dependency relationships are semantic.** Agents supply URL-only
+   dependency intent. Installed contributions may enrich the inspection but never
+   gates it. The composer binds publication to the reviewed fingerprint and
+   stores that inspection in the durable operation record for drift-free retry.
+   Published templates contain only the portable URL
+   declarations in `meta/template.yml`; no
+   decorative authoring-provenance file is emitted.
 
-## Registry follow-up
+## Registry contribution
 
-The first implementation ends at an exact, installable tagged repository.
-Registry submission follows as a separate `suggestRegistryEntry` operation
-once the official registry repository and its review CI are extracted. That
-operation will clone the configured registry at the exact verified revision,
-add the returned publication coordinates, and push a collision-safe review
-branch. It must not be bundled into `publishAuthoring`: a template can be
-private, unlisted, experimental, or published to a registry with different
-governance.
+Registry submission is a separate `suggestRegistryEntry` operation. It binds
+the complete publication receipt and a non-stale verified catalog receipt,
+reacquires the published exact tag (using an optional logical credential),
+validates stable id/URL ownership and the proposed registry contract, records
+the exact command intent before network mutation, clones the configured
+registry at the reviewed commit and snapshot, and pushes a collision-safe
+review branch. A changed entry requires a new human-facing promotion revision.
+The operation never merges or promotes the branch and is deliberately not
+bundled into `publishAuthoring`: a template can be private, unlisted,
+experimental, or published to a registry with different governance.

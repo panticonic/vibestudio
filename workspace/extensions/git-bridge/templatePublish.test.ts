@@ -95,7 +95,6 @@ function publicationInput(
     version: "1.0.0",
     manifest,
     manifestDigest: `v1-sha256:${sha256Hex(new TextEncoder().encode(manifest))}`,
-    validatedParents: [],
     parts: [{ repoPath: "panels/news", subdir: "panels/news" }],
     destination: {
       provider: "template-publish-test",
@@ -237,9 +236,14 @@ afterEach(() => {
 function engine(snapshot = protectedSnapshot()) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "template-publish-"));
   roots.push(root);
-  const bridge = { readProtectedRepository: vi.fn(async () => snapshot) };
+  const bridge = {
+    readProtectedRepositories: vi.fn(async (repoPaths: string[]) =>
+      repoPaths.map((repoPath) => ({ ...snapshot, repoPath }))
+    ),
+  };
   return {
     engine: new TemplatePublishEngine(testContext(root) as never, bridge as never),
+    bridge,
     root,
   };
 }
@@ -256,8 +260,14 @@ describe("TemplatePublishEngine", () => {
       webUrl: "https://example.test/acme/news-template",
       created: false,
     });
-    const result = await engine().engine.publish(publicationInput());
+    const fixture = engine();
+    const result = await fixture.engine.publish(publicationInput());
 
+    expect(fixture.bridge.readProtectedRepositories).toHaveBeenCalledExactlyOnceWith(
+      ["panels/news"],
+      "event:main",
+      "publish-news-v1"
+    );
     expect(GitClient.prototype.init).toHaveBeenCalledOnce();
     expect(GitClient.prototype.clone).not.toHaveBeenCalled();
     expect(state.main).toBe(result.commit);
@@ -382,7 +392,6 @@ describe("TemplatePublishEngine", () => {
 
     expect(result.snapshot).toBe(consumer.snapshot);
     expect(consumer.files.map((file) => file.path)).toEqual([
-      "meta/template-authoring-provenance.json",
       "meta/template.yml",
       "panels/news/.npmrc",
       "panels/news/index.ts",

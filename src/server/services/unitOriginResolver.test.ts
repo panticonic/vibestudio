@@ -24,7 +24,6 @@ function lockYaml(
     version: 1 as const,
     roots: [{ url }],
     overrides: {},
-    conflicts: {},
     nodes: [
       {
         nodeId,
@@ -44,9 +43,52 @@ function lockYaml(
     repositories: Object.fromEntries(
       Object.keys(repositories).map((repoPath) => [
         repoPath,
-        { nodeId, subtreeDigest: `v1-sha256:${"d".repeat(64)}` as const },
+        {
+          contributions: [
+            { nodeId, subtreeDigest: `v1-sha256:${"d".repeat(64)}` as const },
+          ],
+        },
       ])
     ),
+    verification: "verified" as const,
+  };
+  return YAML.stringify({ ...lock, fingerprint: templateLockFingerprint(lock) });
+}
+
+function overlappingLockYaml(repoPath: string): string {
+  const firstUrl = normalizeTemplateGitUrl(ACME_URL);
+  const secondUrl = normalizeTemplateGitUrl("https://github.com/news/studio");
+  const firstId = canonicalTemplateNodeId(firstUrl, ACME_COMMIT);
+  const secondId = canonicalTemplateNodeId(secondUrl, "e".repeat(40));
+  const node = (nodeId: string, url: string, commit: string, digest: string) => ({
+    nodeId,
+    alias: templateAliasFromUrl(url),
+    pin: {
+      url,
+      ref: "v1",
+      commit,
+      snapshot: `v1-sha256:${digest.repeat(64)}` as const,
+    },
+    parents: [],
+    fragmentDigest: `v1-sha256:${digest.repeat(64)}` as const,
+    suggestions: {},
+  });
+  const lock = {
+    version: 1 as const,
+    roots: [{ url: firstUrl }, { url: secondUrl }],
+    overrides: {},
+    nodes: [
+      node(firstId, firstUrl, ACME_COMMIT, "b"),
+      node(secondId, secondUrl, "e".repeat(40), "f"),
+    ],
+    repositories: {
+      [repoPath]: {
+        contributions: [
+          { nodeId: firstId, subtreeDigest: `v1-sha256:${"c".repeat(64)}` as const },
+          { nodeId: secondId, subtreeDigest: `v1-sha256:${"d".repeat(64)}` as const },
+        ],
+      },
+    },
     verification: "verified" as const,
   };
   return YAML.stringify({ ...lock, fingerprint: templateLockFingerprint(lock) });
@@ -74,7 +116,7 @@ function resolver(opts: {
 }
 
 describe("where a unit's bytes came from", () => {
-  it("reads ownership from the template lock, and names the pin's human ref", async () => {
+  it("reads a sole contribution from the template lock and names its human ref", async () => {
     const origins = await resolver({
       lock: lockYaml({ "extensions/acme-tools": "" }),
     }).originsFor(["extensions/acme-tools"]);
@@ -86,6 +128,18 @@ describe("where a unit's bytes came from", () => {
     expect(origin.version).toBe("v2.1");
     // Never a commit id or a content digest, at any level.
     expect(JSON.stringify(origin)).not.toMatch(/[0-9a-f]{40}/u);
+  });
+
+  it("does not invent one coarse origin for an overlapping repository", async () => {
+    const origins = await resolver({
+      lock: overlappingLockYaml("extensions/acme-tools"),
+    }).originsFor(["extensions/acme-tools"]);
+
+    expect(origins.get("extensions/acme-tools")).toMatchObject({
+      originStatus: "multiple-template-contributors",
+      originKey: "multiple template contributions",
+      isHostBuild: false,
+    });
   });
 
   it("attributes anything the lock does not claim to the root this workspace was built from", async () => {

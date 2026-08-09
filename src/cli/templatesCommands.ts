@@ -12,8 +12,6 @@ import {
   type TemplateStatusRow,
   type TemplatesClient,
 } from "@vibestudio/service-schemas/templates";
-import { WorkspaceTemplatePinSchema } from "@vibestudio/workspace-contracts/workspaceConfigSchema";
-import type { WorkspaceTemplatePin } from "@vibestudio/workspace-contracts/types";
 import {
   JSON_FLAG,
   type CliCommand,
@@ -43,23 +41,17 @@ const REFRESH: FlagSpec = {
 };
 const ALIAS: FlagSpec = { name: "alias", takesValue: true, description: "Installed template name" };
 const TO_REF: FlagSpec = { name: "to-ref", takesValue: true, description: "Version to propose" };
-const CHOICE: FlagSpec = {
-  name: "choice",
-  takesValue: true,
-  multiple: true,
-  description: "Conflict choice: PART=keep|take|skip (repeatable)",
-};
 const PART: FlagSpec = {
   name: "part",
   takesValue: true,
   multiple: true,
   description: "Workspace part to include (repeatable)",
 };
-const PARENT: FlagSpec = {
-  name: "parent",
+const DEPENDENCY: FlagSpec = {
+  name: "dependency",
   takesValue: true,
   multiple: true,
-  description: "Exact parent pin or publication receipt JSON file (repeatable)",
+  description: "Installed template URL this template relies on (repeatable)",
 };
 const NAME: FlagSpec = {
   name: "name",
@@ -115,6 +107,23 @@ const DECISION: FlagSpec = {
   name: "decision",
   takesValue: true,
   description: "Suggestion decision: accept or decline",
+};
+const ID: FlagSpec = { name: "id", takesValue: true, description: "Stable catalog id" };
+const TAG: FlagSpec = {
+  name: "tag",
+  takesValue: true,
+  multiple: true,
+  description: "Catalog search tag (repeatable)",
+};
+const REVISION: FlagSpec = {
+  name: "revision",
+  takesValue: true,
+  description: "New registry promotion revision (YYYY-MM-DD.N)",
+};
+const RECOMMENDED: FlagSpec = {
+  name: "recommended",
+  takesValue: false,
+  description: "Mark the catalog entry as recommended",
 };
 const BUILD_FAILURE: FlagSpec = {
   name: "on-build-failure",
@@ -222,20 +231,6 @@ function buildFailureMode(inv: ParsedInvocation): "retain-context" | "discard-co
   throw new UsageError("--on-build-failure must be retain or discard");
 }
 
-function choices(inv: ParsedInvocation): Record<string, "keep" | "take" | "skip"> | undefined {
-  const result: Record<string, "keep" | "take" | "skip"> = {};
-  for (const raw of inv.flagsMulti("choice")) {
-    const equal = raw.indexOf("=");
-    const part = equal === -1 ? "" : raw.slice(0, equal).trim();
-    const value = equal === -1 ? "" : raw.slice(equal + 1);
-    if (!part || (value !== "keep" && value !== "take" && value !== "skip")) {
-      throw new UsageError("--choice must be PART=keep, PART=take, or PART=skip");
-    }
-    result[part] = value;
-  }
-  return Object.keys(result).length ? result : undefined;
-}
-
 function requiredFlag(inv: ParsedInvocation, name: string): string {
   const value = inv.flags[name];
   if (typeof value !== "string" || !value.trim()) throw new UsageError(`--${name} is required`);
@@ -262,29 +257,24 @@ function authoringPlan(inv: ParsedInvocation): TemplateAuthoringInspection {
   return parsed.data;
 }
 
-function parentPin(path: string): WorkspaceTemplatePin {
+function publicationReceipt(inv: ParsedInvocation): TemplatePublication {
+  const path = inv.positionals[0]?.trim();
+  if (!path || inv.positionals.length !== 1) {
+    throw new UsageError("pass exactly one publication receipt JSON file");
+  }
   let value: unknown;
   try {
     value = JSON.parse(readFileSync(path, "utf8"));
   } catch (error) {
     throw new UsageError(
-      `Could not read parent receipt ${path}: ${error instanceof Error ? error.message : String(error)}`
+      `Could not read publication receipt ${path}: ${error instanceof Error ? error.message : String(error)}`
     );
   }
-  const pin = WorkspaceTemplatePinSchema.safeParse(value);
-  if (pin.success) return pin.data;
-  const publication = templatePublicationSchema.safeParse(value);
-  if (publication.success) {
-    return WorkspaceTemplatePinSchema.parse({
-      url: publication.data.templateUrl,
-      ref: publication.data.ref,
-      commit: publication.data.commit,
-      snapshot: publication.data.snapshot,
-    });
+  const parsed = templatePublicationSchema.safeParse(value);
+  if (!parsed.success) {
+    throw new UsageError(`Invalid publication receipt ${path}: ${parsed.error.message}`);
   }
-  throw new UsageError(
-    `Invalid parent receipt ${path}: expected an exact template pin or publication result`
-  );
+  return parsed.data;
 }
 
 function version(ref: string): string {
@@ -309,22 +299,22 @@ function renderPublication(publication: TemplatePublication): void {
   console.log(`  parts: ${publication.parts.join(", ")}`);
 }
 
-function saveAuthoringPlan(inv: ParsedInvocation, plan: TemplateAuthoringInspection): void {
+function saveReceipt(inv: ParsedInvocation, kind: string, value: unknown): void {
   const path = inv.flags["receipt"];
   if (typeof path !== "string") return;
   if (!path.trim()) throw new UsageError("--receipt requires a file path");
   try {
-    writeFileSync(path, `${JSON.stringify(plan, null, 2)}\n`, {
+    writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`, {
       encoding: "utf8",
       flag: "wx",
       mode: 0o600,
     });
   } catch (error) {
     throw new UsageError(
-      `Could not save authoring receipt ${path}: ${error instanceof Error ? error.message : String(error)}`
+      `Could not save ${kind} receipt ${path}: ${error instanceof Error ? error.message : String(error)}`
     );
   }
-  console.error(`[vibestudio] authoring receipt: ${path}`);
+  console.error(`[vibestudio] ${kind} receipt: ${path}`);
 }
 
 function renderStatus(rows: TemplateStatusRow[]): void {
@@ -379,18 +369,8 @@ function renderStatus(rows: TemplateStatusRow[]): void {
 
 function renderInspection(result: TemplateInspection): void {
   console.log(
-    `Adds ${result.addedParts.length} new ${result.addedParts.length === 1 ? "part" : "parts"}.`
+    `Affects ${result.affectedParts.length} ${result.affectedParts.length === 1 ? "repository" : "repositories"}.`
   );
-  if (result.conflicts.length) {
-    console.log(
-      `${result.conflicts.length} ${result.conflicts.length === 1 ? "choice" : "choices"} need your review:`
-    );
-    for (const conflict of result.conflicts) {
-      console.log(
-        `  ${conflict.repoPath} — both ${conflict.claimants.join(" and ")} include this part; rerun add with --choice ${conflict.repoPath}=keep|take|skip`
-      );
-    }
-  }
   for (const suggestion of result.excludedSuggestions) {
     console.log(
       `Suggested ${suggestion.section} from ${suggestion.alias}: ${JSON.stringify(suggestion.value)}`
@@ -407,6 +387,15 @@ function renderPending(operation: TemplateOperation): void {
     if (operation.blocker?.nextAction === "connect-credential") {
       console.log(
         `Next: open Templates in Vibestudio, choose Connect account, then run vibestudio templates resume ${operation.operationId}.`
+      );
+    }
+    if (operation.repair) {
+      console.log(`Repair context: ${operation.repair.contextId}`);
+      for (const failure of operation.repair.failures) {
+        console.log(`  ${failure.unit}: ${failure.message}`);
+      }
+      console.log(
+        `Next: repair that context with ordinary workspace/VCS tools, then run vibestudio templates resume ${operation.operationId}.`
       );
     }
     return;
@@ -477,7 +466,10 @@ export const templatesCommands: CliCommand[] = [
         (templates) => templates.authoringParts(),
         (parts) => {
           for (const part of parts) {
-            const metadata = [part.packageName, part.templateAlias && `from ${part.templateAlias}`]
+            const metadata = [
+              part.packageName,
+              part.templateAliases?.length && `from ${part.templateAliases.join(", ")}`,
+            ]
               .filter(Boolean)
               .join(" · ");
             console.log(`  ${part.repoPath}${metadata ? ` — ${metadata}` : ""}`);
@@ -490,8 +482,8 @@ export const templatesCommands: CliCommand[] = [
     name: "author-inspect",
     summary: "Create an exact template authoring receipt without publishing",
     usage:
-      "vibestudio templates author-inspect --name NAME --description TEXT --part PATH [--part PATH] [--parent RECEIPT.json] [--receipt FILE] [--json]",
-    flags: [NAME, DESCRIPTION, PART, PARENT, RECEIPT, JSON_FLAG],
+      "vibestudio templates author-inspect --name NAME --description TEXT --part PATH [--part PATH] [--dependency URL] [--receipt FILE] [--json]",
+    flags: [NAME, DESCRIPTION, PART, DEPENDENCY, RECEIPT, JSON_FLAG],
     run: (inv) =>
       run(
         inv,
@@ -506,18 +498,18 @@ export const templatesCommands: CliCommand[] = [
             .map((part) => part.trim())
             .filter(Boolean);
           if (!parts.length) throw new UsageError("pass at least one --part");
-          const parents = inv
-            .flagsMulti("parent")
-            .map((parent) => parent.trim())
+          const dependencies = inv
+            .flagsMulti("dependency")
+            .map((url) => url.trim())
             .filter(Boolean)
-            .map(parentPin);
+            .map((url) => ({ url }));
           const plan = await templates.inspectAuthoring({
             name: requiredFlag(inv, "name"),
             description: requiredFlag(inv, "description"),
             parts,
-            ...(parents.length ? { parents } : {}),
+            ...(dependencies.length ? { dependencies } : {}),
           });
-          saveAuthoringPlan(inv, plan);
+          saveReceipt(inv, "authoring", plan);
           return plan;
         },
         renderAuthoringPlan
@@ -528,7 +520,7 @@ export const templatesCommands: CliCommand[] = [
     name: "author-publish",
     summary: "Publish an unchanged authoring receipt as an immutable Git template",
     usage:
-      "vibestudio templates author-publish RECEIPT.json --version VERSION --owner OWNER --repository NAME [--private] [--credential-id ID]",
+      "vibestudio templates author-publish RECEIPT.json --version VERSION --owner OWNER --repository NAME [--private] [--credential-id ID] [--receipt FILE]",
     flags: [
       VERSION,
       OWNER,
@@ -538,15 +530,25 @@ export const templatesCommands: CliCommand[] = [
       DESCRIPTION,
       CREDENTIAL_ID,
       COMMAND_ID,
+      RECEIPT,
       JSON_FLAG,
     ],
     run: (inv) =>
       run(
         inv,
-        (templates) =>
-          templates.publishAuthoring({
+        async (templates) => {
+          const plan = authoringPlan(inv);
+          const publication = await templates.publishAuthoring({
             commandId: commandId(inv),
-            plan: authoringPlan(inv),
+            intent: {
+              name: plan.request.name,
+              description: plan.request.description,
+              parts: plan.request.parts,
+              ...(plan.request.dependencies?.length
+                ? { dependencies: plan.request.dependencies }
+                : {}),
+            },
+            expectedFingerprint: plan.fingerprint,
             version: requiredFlag(inv, "version"),
             destination: {
               provider:
@@ -563,8 +565,56 @@ export const templatesCommands: CliCommand[] = [
             ...(typeof inv.flags["credential-id"] === "string"
               ? { credentialId: inv.flags["credential-id"].trim() }
               : {}),
-          }),
+          });
+          saveReceipt(inv, "publication", publication);
+          return publication;
+        },
         renderPublication
+      ),
+  },
+  {
+    group: "templates",
+    name: "registry-suggest",
+    summary: "Suggest an exact published release to the verified template registry",
+    usage:
+      "vibestudio templates registry-suggest PUBLICATION.json --id ID --name NAME --description TEXT --tag TAG [--recommended] --revision YYYY-MM-DD.N",
+    flags: [ID, NAME, DESCRIPTION, TAG, RECOMMENDED, REVISION, CREDENTIAL, COMMAND_ID, JSON_FLAG],
+    run: (inv) =>
+      run(
+        inv,
+        async (templates) => {
+          const tags = inv
+            .flagsMulti("tag")
+            .map((tag) => tag.trim())
+            .filter(Boolean);
+          if (!tags.length) throw new UsageError("pass at least one --tag");
+          const catalog = await templates.catalog({ refresh: true });
+          if (!catalog) throw new UsageError("the workspace has no configured template registry");
+          return templates.suggestRegistryEntry({
+            commandId: commandId(inv),
+            catalog,
+            publication: publicationReceipt(inv),
+            ...(typeof inv.flags["credential"] === "string"
+              ? { credential: inv.flags["credential"].trim() }
+              : {}),
+            entry: {
+              id: requiredFlag(inv, "id"),
+              name: requiredFlag(inv, "name"),
+              description: requiredFlag(inv, "description"),
+              tags,
+              recommended: inv.flags["recommended"] === true,
+            },
+            revision: requiredFlag(inv, "revision"),
+          });
+        },
+        (result) => {
+          if (!result.branch) {
+            console.log(`Registry entry ${result.entry.id} already matches this release.`);
+            return;
+          }
+          console.log(`Registry suggestion ready on ${result.branch}.`);
+          console.log(`  release: ${result.entry.promoted.ref} at ${result.entry.promoted.commit}`);
+        }
       ),
   },
   {
@@ -638,20 +688,17 @@ export const templatesCommands: CliCommand[] = [
     group: "templates",
     name: "add",
     summary: "Ask to add a template after inspecting it",
-    usage:
-      "vibestudio templates add URL_OR_ALIAS [--catalog ID] [--credential NAME] [--choice PART=keep|take|skip]",
-    flags: [CATALOG, CREDENTIAL, CHOICE, COMMAND_ID, JSON_FLAG],
+    usage: "vibestudio templates add URL_OR_ALIAS [--catalog ID] [--credential NAME]",
+    flags: [CATALOG, CREDENTIAL, COMMAND_ID, JSON_FLAG],
     run: (inv) =>
       run(
         inv,
         async (templates) => {
-          const selected = choices(inv);
           const locator = await resolvedTarget(templates, inv);
           const inspection = await templates.inspect(locator);
           return templates.add({
             commandId: commandId(inv),
             pin: inspection.pin,
-            ...(selected ? { choices: selected } : {}),
           });
         },
         renderPending

@@ -1,0 +1,18 @@
+{
+  "name": "@workspace-panels/hello-vanilla",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "vibestudio": {
+    "title": "Hello Vanilla",
+    "entry": "index.ts",
+    "template": "vanilla",
+    "authority": {
+      "provides": [],
+      "requests": []
+    }
+  },
+  "dependencies": {
+    "@workspace/runtime": "workspace:*"
+  }
+}

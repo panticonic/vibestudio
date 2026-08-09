@@ -61,7 +61,7 @@ function jsonFromOutput<T>(stdout: string): T {
   throw new Error(`Expected JSON CLI output, got:\n${stdout}`);
 }
 
-async function cli<T>(args: string[], timeout = 90_000): Promise<CommandResult<T>> {
+async function cli<T>(args: string[], timeout = 180_000): Promise<CommandResult<T>> {
   const result = await execFileAsync("pnpm", ["cli", "--instance", instance, ...args], {
     cwd: root,
     timeout,
@@ -73,7 +73,7 @@ async function cli<T>(args: string[], timeout = 90_000): Promise<CommandResult<T
 async function cliWithInput<T>(
   args: string[],
   input: string,
-  timeout = 90_000
+  timeout = 180_000
 ): Promise<CommandResult<T>> {
   return await new Promise((resolve, reject) => {
     const child = spawn("pnpm", ["cli", "--instance", instance, ...args], {
@@ -116,7 +116,7 @@ async function cliWithInput<T>(
   });
 }
 
-async function cliError(args: string[], timeout = 90_000): Promise<string> {
+async function cliError(args: string[], timeout = 180_000): Promise<string> {
   try {
     await cli<unknown>(args, timeout);
   } catch (error) {
@@ -178,20 +178,64 @@ async function stopServer(): Promise<void> {
 }
 
 async function approveExactly(cardRef: string): Promise<void> {
-  const pending = await cli<Array<{ approvalId: string; kind?: string }>>([
-    "agent",
-    "call",
-    "shellApproval.listPending",
-    "[]",
-    "--json",
-  ]);
-  const card = pending.value.find((entry) => entry.approvalId === cardRef);
+  type Approval = {
+    approvalId: string;
+    kind?: string;
+    mode?: "adopt-root" | "install" | "update" | "remove" | "part-changed";
+    lifecycle?: { state: "preparing" | "ready" | "failed" | "cancelled"; diagnostics?: string[] };
+    allowedDecisions?: string[];
+  };
+  let card: Approval | undefined;
+  for (let attempt = 0; attempt < 1_200; attempt += 1) {
+    const pending = await cli<
+      Array<{
+        approvalId: string;
+        kind?: string;
+        mode?: "adopt-root" | "install" | "update" | "remove" | "part-changed";
+        lifecycle?: {
+          state: "preparing" | "ready" | "failed" | "cancelled";
+          diagnostics?: string[];
+        };
+        allowedDecisions?: string[];
+      }>
+    >(["agent", "call", "shellApproval.listPending", "[]", "--json"]);
+    card = pending.value.find((entry) => entry.approvalId === cardRef);
+    if (!card) break;
+    if (card.lifecycle?.state === "failed" || card.lifecycle?.state === "cancelled") {
+      throw new Error(
+        `Approval ${cardRef} ${card.lifecycle.state}: ${card.lifecycle.diagnostics?.join("; ") ?? "no diagnostics"}`
+      );
+    }
+    if (card.lifecycle?.state !== "preparing") break;
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
   expect(card).toBeDefined();
+  if (card?.kind === "unit-install-review") {
+    const decision =
+      card.mode === "adopt-root" ? "adopt-root" : card.mode === "update" ? "update" : "install";
+    await cli<void>([
+      "agent",
+      "call",
+      "shellApproval.resolveInstallReview",
+      JSON.stringify([cardRef, { decision, allowNow: [] }]),
+      "--json",
+    ]);
+    return;
+  }
+  const decision =
+    card?.kind === "userland"
+      ? "once"
+      : card?.allowedDecisions?.includes("once")
+        ? "once"
+        : card?.allowedDecisions?.find(
+            (candidate) => candidate !== "deny" && candidate !== "dismiss"
+          );
+  expect(decision, `Approval ${cardRef} did not offer a granting decision`).toBeDefined();
   await cli<void>([
     "agent",
     "call",
     card?.kind === "userland" ? "shellApproval.resolveUserland" : "shellApproval.resolve",
-    JSON.stringify([cardRef, "once"]),
+    JSON.stringify([cardRef, decision]),
     "--json",
   ]);
 }
@@ -255,10 +299,7 @@ async function runWithTemplateApprovals<T>(
   throw new Error(`Template approval workflow did not settle for ${args.join(" ")}`);
 }
 
-async function runWithAnyApprovals<T>(
-  operation: () => Promise<T>,
-  timeout = 90_000
-): Promise<T> {
+async function runWithAnyApprovals<T>(operation: () => Promise<T>, timeout = 90_000): Promise<T> {
   const before = await cli<Array<{ approvalId: string }>>([
     "agent",
     "call",
@@ -268,10 +309,7 @@ async function runWithAnyApprovals<T>(
   ]);
   const existing = new Set(before.value.map(({ approvalId }) => approvalId));
   const pending = operation();
-  let outcome:
-    | { state: "resolved"; value: T }
-    | { state: "rejected"; error: unknown }
-    | undefined;
+  let outcome: { state: "resolved"; value: T } | { state: "rejected"; error: unknown } | undefined;
   void pending.then(
     (value) => {
       outcome = { state: "resolved", value };
@@ -585,6 +623,8 @@ describe("full-stack template Git UX", () => {
           await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: worktree })
         ).stdout.trim();
         const templateV1Snapshot = await canonicalGitSnapshot(worktree, templateV1Commit);
+        await nativeGit(worktree, ["tag", "v1.0.0", templateV1Commit]);
+        await nativeGit(worktree, ["push", "origin", "refs/tags/v1.0.0"]);
 
         const registryRemote = await fixtureGit.create("template-registry", "main");
         const registryWorktree = path.join(temp, "template-registry");
@@ -683,6 +723,79 @@ describe("full-stack template Git UX", () => {
         await runWithAnyApprovals(
           () => cli<unknown>(["templates", "catalog", "--refresh", "--json"], 180_000),
           180_000
+        );
+
+        const publicationReceiptPath = path.join(temp, "template-publication.json");
+        await fs.writeFile(
+          publicationReceiptPath,
+          `${JSON.stringify(
+            {
+              operationId: "fixture-publication-v1",
+              destination: {
+                provider: "fixture",
+                owner: "fixture",
+                name: templateAlias,
+              },
+              created: false,
+              remoteUrl: templateRemote.url,
+              webUrl: templateRemote.url,
+              templateUrl: normalizeTemplateGitUrl(templateRemote.url),
+              ref: "refs/tags/v1.0.0",
+              commit: templateV1Commit,
+              snapshot: templateV1Snapshot,
+              parts: [templateRepoPath],
+            },
+            null,
+            2
+          )}\n`
+        );
+        const registrySuggestion = await runWithAnyApprovals(
+          () =>
+            cli<{
+              branch: string;
+              entry: { promoted: { ref: string; commit: string } };
+            }>(
+              [
+                "templates",
+                "registry-suggest",
+                publicationReceiptPath,
+                "--id",
+                templateAlias,
+                "--name",
+                "Full-stack template",
+                "--description",
+                "Deterministic smart-HTTP template fixture.",
+                "--tag",
+                "test",
+                "--revision",
+                "2026-07-29.2",
+                "--command-id",
+                "registry-suggestion-v1",
+                "--json",
+              ],
+              300_000
+            ),
+          300_000
+        );
+        expect(registrySuggestion.value.entry.promoted).toEqual({
+          ref: "refs/tags/v1.0.0",
+          commit: templateV1Commit,
+          snapshot: templateV1Snapshot,
+        });
+        await nativeGit(registryWorktree, ["fetch", "origin", registrySuggestion.value.branch]);
+        const suggestedRegistry = YAML.parse(
+          (
+            await execFileAsync("git", ["show", `FETCH_HEAD:registry.yml`], {
+              cwd: registryWorktree,
+            })
+          ).stdout
+        ) as { revision: string; entries: Array<{ id: string; promoted: { ref: string } }> };
+        expect(suggestedRegistry.revision).toBe("2026-07-29.2");
+        expect(suggestedRegistry.entries).toContainEqual(
+          expect.objectContaining({
+            id: templateAlias,
+            promoted: expect.objectContaining({ ref: "refs/tags/v1.0.0" }),
+          })
         );
 
         const inspected = await cli<{ templates: Array<{ commit: string }> }>([
@@ -800,11 +913,7 @@ describe("full-stack template Git UX", () => {
           "--json",
         ]);
         await runWithAnyApprovals(
-          () =>
-            cli<unknown>(
-              ["vcs", "git", "push", "--repo", templateRepoPath, "--json"],
-              180_000
-            ),
+          () => cli<unknown>(["vcs", "git", "push", "--repo", templateRepoPath, "--json"], 180_000),
           180_000
         );
         expect(await fixtureGit.inspect("workspace-push")).toMatchObject({
@@ -892,7 +1001,7 @@ describe("full-stack template Git UX", () => {
           expect.objectContaining({ alias: installedTemplateAlias, commit: templateV2Commit })
         );
 
-        const removed = await runWithTemplateApprovals<{ orphanedParts: string[] }>([
+        const removed = await runWithTemplateApprovals<{ affectedParts: string[] }>([
           "templates",
           "remove",
           installedTemplateAlias,
@@ -900,7 +1009,7 @@ describe("full-stack template Git UX", () => {
           `template-remove:${randomUUID()}`,
           "--json",
         ]);
-        expect(removed.value.orphanedParts).toContain(templateRepoPath);
+        expect(removed.value.affectedParts).toContain(templateRepoPath);
         const afterRemoval = await waitForTemplateState(installedTemplateAlias, null);
         expect(afterRemoval).not.toContainEqual(
           expect.objectContaining({ alias: installedTemplateAlias })
@@ -989,6 +1098,6 @@ describe("full-stack template Git UX", () => {
         await fs.rm(temp, { recursive: true, force: true });
       }
     },
-    600_000
+    900_000
   );
 });

@@ -1429,6 +1429,9 @@ const SEARCH_THRESHOLD = 12;
  * identity ships in the build rather than being asserted by a third party.
  */
 function installOriginLabel(origin: InstallReviewOrigin): string {
+  if (origin.originStatus === "multiple-template-contributors") {
+    return "Multiple template contributions";
+  }
   if (origin.originStatus === "unresolved") return "";
   if (origin.url) return origin.url;
   if (origin.isHostBuild) return origin.version ? `Vibestudio ${origin.version}` : "Vibestudio";
@@ -1630,8 +1633,15 @@ function InstallReviewDetails({
                   <Text style={[styles.installReviewGroupTitle, { color: colors.text }]}>
                     {group.title}
                   </Text>
-                  <View style={[styles.installReviewGroupBadge, { backgroundColor: colors.surfaceSunken }]}>
-                    <Text style={[styles.installReviewGroupBadgeText, { color: colors.textSecondary }]}>
+                  <View
+                    style={[
+                      styles.installReviewGroupBadge,
+                      { backgroundColor: colors.surfaceSunken },
+                    ]}
+                  >
+                    <Text
+                      style={[styles.installReviewGroupBadgeText, { color: colors.textSecondary }]}
+                    >
                       {installPartGroupCount(group)}
                     </Text>
                   </View>

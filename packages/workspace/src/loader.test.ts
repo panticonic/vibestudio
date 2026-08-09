@@ -399,6 +399,10 @@ describe("initWorkspace", () => {
         path.join(templateRoot, "extensions", "react-native", "index.ts"),
         "export const templateProvider = true;\n"
       );
+      fs.writeFileSync(
+        path.join(templateRoot, "extensions", "react-native", "tsconfig.tsbuildinfo"),
+        "generated compiler cache\n"
+      );
 
       initWorkspace("fresh-app-ws", { templateDir: templateRoot });
 
@@ -426,6 +430,9 @@ describe("initWorkspace", () => {
       expect(fs.existsSync(path.join(sourceRoot, "extensions", "react-native", ".git"))).toBe(
         false
       );
+      expect(
+        fs.existsSync(path.join(sourceRoot, "extensions", "react-native", "tsconfig.tsbuildinfo"))
+      ).toBe(false);
       expect(
         JSON.parse(fs.readFileSync(path.join(sourceRoot, "apps", "shell", "package.json"), "utf-8"))
       ).toMatchObject({

@@ -60,7 +60,6 @@ describe("template operations", () => {
       workspace: {
         roots: [],
         localRepoPaths: new Set(["panels/chat"]),
-        externallyOwnedRepoPaths: new Set(),
         expectedSystemEpoch: 57,
       },
       sources: {
@@ -94,7 +93,6 @@ describe("template operations", () => {
       descriptor: { version: 1, workspaceId: "example", rootTemplate: exactRoot },
       workspace: {
         localRepoPaths: new Set(["packages/runtime"]),
-        externallyOwnedRepoPaths: new Set(),
         expectedSystemEpoch: 57,
       },
       sources: {

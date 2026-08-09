@@ -31,7 +31,7 @@ const row = {
   commit: "1".repeat(40),
   direct: true,
   state: "current" as const,
-  ownedParts: 2,
+  contributedParts: 2,
   pendingReviews: 0,
   verification: "verified" as const,
   suggestions: [],
@@ -72,8 +72,7 @@ describe("TemplatesSection mutation refresh", () => {
     clients.templates.pull.mockResolvedValue({
       operationId: "pull-github",
       state: "pending",
-      addedParts: [],
-      orphanedParts: [],
+      affectedParts: [],
     });
     const view = draw();
     fireEvent.click(await view.findByRole("button", { name: "Check for updates" }));
@@ -91,8 +90,7 @@ describe("TemplatesSection mutation refresh", () => {
       return {
         operationId: "remove-github",
         state: "applied",
-        addedParts: [],
-        orphanedParts: ["extensions/github"],
+        affectedParts: ["extensions/github"],
       };
     });
     const view = draw();

@@ -6,8 +6,10 @@ import type {
 import type {
   TemplateAddRequest,
   TemplateAuthoringInspection,
-  TemplateAuthoringRequest,
+  TemplateAuthoringIntent,
+  TemplateCatalogSnapshot as ServiceTemplateCatalogSnapshot,
   TemplateLocator,
+  TemplatePublication,
 } from "@vibestudio/service-schemas/templates";
 import { templateLocatorSchema } from "@vibestudio/service-schemas/templates";
 import {
@@ -15,26 +17,29 @@ import {
   WorkspaceTemplatePinSchema,
 } from "@vibestudio/workspace-contracts/workspaceConfigSchema";
 import { canonicalJson } from "@vibestudio/content-addressing";
-import { normalizeTemplateGitUrl } from "@vibestudio/workspace/templateCoordinates";
+import {
+  canonicalTemplateNodeId,
+  normalizeTemplateGitUrl,
+} from "@vibestudio/workspace/templateCoordinates";
 import {
   inspectTemplateOperation,
-  inspectTemplateOperationWithConflicts,
   prepareTemplateOperation,
   publishPreparedTemplateOperation,
+  rebuildPreparedTemplateOperation,
   TemplateBuildGateError,
   templateStatus,
   templateSuggestionDigest,
   type TemplateOperationInspection,
-  type TemplateOperationConflictPreview,
-  type TemplateRepositoryConflict,
   type TemplateSourcePorts,
   type TemplateWorkspaceObservation,
 } from "@workspace/template-composer";
 import {
+  parseTemplateRegistry,
   TemplateRegistryUnavailableError,
   type TemplateCatalogSnapshot,
   type TemplateRegistryClient,
 } from "@workspace/template-registry";
+import YAML from "yaml";
 import { createAffectedBuildGate } from "./build.js";
 import type { ExtensionContextLike } from "./context.js";
 import {
@@ -50,6 +55,7 @@ import {
 import { ensureTemplateOperationIntent } from "./operationRecord.js";
 import {
   createTemplateOperationPorts,
+  clearTemplateOperationRecordFile,
   ensureTemplateOperationContext,
   isTemplateOperationCancelled,
   OPERATION_CONTEXT_PREFIX,
@@ -58,6 +64,7 @@ import {
   publishTemplateSuggestionTopLayer,
   publishTemplateOperationCancellation,
   TemplateReviewRequired,
+  TemplateOperationMainAdvanced,
   updateTemplateOperationRecord,
   writeTemplateOperationRecord,
   type TemplateOperationRecord,
@@ -105,8 +112,7 @@ async function completedOperationResult(
     operationId: record.operationId,
     state: "applied" as const,
     publicationEventId: status.mainEventId,
-    addedParts: record.addedParts,
-    orphanedParts: record.orphanedParts,
+    affectedParts: record.affectedParts,
   };
 }
 
@@ -188,8 +194,6 @@ async function ensureBootstrapAdoption(
     descriptor,
     workspace: {
       localRepoPaths: new Set(),
-      externallyOwnedRepoPaths: observation.externallyOwnedRepoPaths,
-      conflicts: observation.conflicts,
       overrides: observation.overrides,
       expectedSystemEpoch: observation.expectedSystemEpoch,
     },
@@ -215,7 +219,7 @@ async function ensureBootstrapAdoption(
     ctx,
     statePath,
     observation,
-    createAffectedBuildGate(ctx)
+    createAffectedBuildGate(ctx, observation.localRepoPaths)
   );
   const operationId = `bootstrap-${descriptor.rootTemplate.commit}`;
   const preparation = await prepareTemplateOperation({
@@ -301,7 +305,6 @@ async function inspectLocator(
     env,
     pin,
     [],
-    {},
     "catalogId" in locator
       ? {
           catalogId: locator.catalogId,
@@ -313,7 +316,6 @@ async function inspectLocator(
   return inspectionResult(
     preview.inspection,
     env.observation.lock,
-    preview.conflicts,
     env.observation.top.templates?.suggestionDecisions,
     pin
   );
@@ -352,8 +354,6 @@ async function adoptionAwareInput(
     descriptor,
     workspace: {
       localRepoPaths: new Set(),
-      externallyOwnedRepoPaths: env.observation.externallyOwnedRepoPaths,
-      conflicts: env.observation.conflicts,
       overrides: env.observation.overrides,
       expectedSystemEpoch: env.observation.expectedSystemEpoch,
     },
@@ -384,14 +384,11 @@ async function adoptionAwareInput(
 function inspectionResult(
   inspection: TemplateOperationInspection,
   previous?: SemanticWorkspaceObservation["lock"],
-  conflicts: readonly TemplateRepositoryConflict[] = [],
   suggestionDecisions:
     | Record<string, { digest: `v1-sha256:${string}`; decision: "accepted" | "declined" }>
     | undefined = undefined,
   pin?: WorkspaceTemplatePin
 ) {
-  const previousPaths = new Set(Object.keys(previous?.repositories ?? {}));
-  const paths = Object.keys(inspection.plan.repositories).sort();
   return {
     ...(pin ? { pin } : {}),
     fingerprint: inspection.plan.fingerprint,
@@ -402,12 +399,7 @@ function inspectionResult(
       url: node.pin.url,
       commit: node.pin.commit,
     })),
-    addedParts: paths.filter((repoPath) => !previousPaths.has(repoPath)),
-    retainedParts: paths.filter((repoPath) => previousPaths.has(repoPath)),
-    orphanedParts: inspection.plan.ownershipChanges
-      .filter((change) => change.reason === "orphaned")
-      .map((change) => change.repoPath),
-    conflicts,
+    affectedParts: affectedTemplateParts(inspection, previous),
     excludedSuggestions: inspection.plan.nodes.flatMap((node) =>
       (["trust", "providers"] as const).flatMap((section) => {
         const value = node.excludedSuggestions[section];
@@ -422,41 +414,31 @@ function inspectionResult(
   };
 }
 
-export function resolveRepositoryConflictChoices(
-  conflicts: readonly TemplateRepositoryConflict[],
-  choices: Readonly<Record<string, "keep" | "take" | "skip">>,
-  observation: Pick<SemanticWorkspaceObservation, "lock">
-): Record<string, string> {
-  const decisions: Record<string, string> = {};
-  const previousAliases = new Set(observation.lock?.nodes.map((node) => node.alias) ?? []);
-  for (const conflict of conflicts) {
-    const choice = choices[conflict.repoPath];
-    if (!choice) {
-      throw new Error(`Template conflict ${conflict.repoPath} requires keep, take, or skip`);
-    }
-    if (choice === "skip") {
-      decisions[conflict.repoPath] = "ignore";
-      continue;
-    }
-    if (choice === "keep") {
-      const ownerId = observation.lock?.repositories[conflict.repoPath]?.nodeId;
-      const owner = observation.lock?.nodes.find((node) => node.nodeId === ownerId)?.alias;
-      if (!owner || !conflict.claimants.includes(owner)) {
-        throw new Error(`Template conflict ${conflict.repoPath} has no existing owner to keep`);
-      }
-      decisions[conflict.repoPath] = owner;
-      continue;
-    }
-    const candidates = conflict.claimants.filter((alias) => !previousAliases.has(alias));
-    if (candidates.length !== 1) {
-      throw new Error(
-        `Template conflict ${conflict.repoPath} has ${candidates.length} new claimants; ` +
-          `take requires exactly one newly added claimant`
+function affectedTemplateParts(
+  inspection: TemplateOperationInspection,
+  previous?: SemanticWorkspaceObservation["lock"]
+): string[] {
+  const previousUrls = new Map(
+    (previous?.nodes ?? []).map((node) => [node.nodeId, normalizeTemplateGitUrl(node.pin.url)])
+  );
+  const nextUrls = new Map(
+    inspection.plan.nodes.map((node) => [node.nodeId, normalizeTemplateGitUrl(node.pin.url)])
+  );
+  const paths = new Set([
+    ...Object.keys(previous?.repositories ?? {}),
+    ...Object.keys(inspection.plan.repositories),
+  ]);
+  return [...paths]
+    .filter((repoPath) => {
+      const before = (previous?.repositories[repoPath]?.contributions ?? []).map(
+        ({ nodeId, subtreeDigest }) => ({ url: previousUrls.get(nodeId), subtreeDigest })
       );
-    }
-    decisions[conflict.repoPath] = candidates[0]!;
-  }
-  return decisions;
+      const after = (inspection.plan.repositories[repoPath]?.contributions ?? []).map(
+        ({ nodeId, subtreeDigest }) => ({ url: nextUrls.get(nodeId), subtreeDigest })
+      );
+      return canonicalJson(before) !== canonicalJson(after);
+    })
+    .sort();
 }
 
 export function mergeAcceptedTemplateSuggestion(
@@ -503,9 +485,8 @@ async function inspectAdd(
   env: Environment,
   selected: WorkspaceTemplatePin,
   pins: readonly WorkspaceTemplatePin[] = [],
-  conflictDecisions: Readonly<Record<string, string>> = {},
   selection?: { catalogId: string; registryCommit: string; registrySnapshot: string }
-): Promise<TemplateOperationConflictPreview> {
+): Promise<{ inspection: TemplateOperationInspection }> {
   const prepared = await adoptionAwareInput(ctx, env);
   const selectedSources = {
     ...prepared.sources,
@@ -515,38 +496,33 @@ async function inspectAdd(
         : prepared.sources.resolvePromoted(declaration),
   };
   const sources = createPinnedTemplateSourcePorts(selectedSources, pins);
-  const preview = await inspectTemplateOperationWithConflicts({
+  const inspection = await inspectTemplateOperation({
     kind: "add",
     ...(selection ? { selection } : {}),
     template: {
       url: selected.url,
       ...(selected.credential ? { credential: selected.credential } : {}),
     },
-    workspace: {
-      ...prepared.workspace,
-      conflicts: {
-        ...(prepared.workspace.conflicts ?? {}),
-        ...conflictDecisions,
-      },
-    },
+    workspace: prepared.workspace,
     sources,
   });
-  if (prepared.descriptor && preview.inspection.nextTemplates) {
-    preview.inspection.nextTemplates = {
-      ...preview.inspection.nextTemplates,
+  if (prepared.descriptor && inspection.nextTemplates) {
+    inspection.nextTemplates = {
+      ...inspection.nextTemplates,
       bootstrapAdopted: prepared.descriptor.rootTemplate,
     };
   }
-  return preview;
+  return { inspection };
 }
 
-function operationParts(operationId: string, inspection: TemplateOperationInspection) {
+function operationParts(
+  operationId: string,
+  inspection: TemplateOperationInspection,
+  previous?: SemanticWorkspaceObservation["lock"]
+) {
   return {
     operationId,
-    addedParts: Object.keys(inspection.plan.repositories).sort(),
-    orphanedParts: inspection.plan.ownershipChanges
-      .filter((change) => change.reason === "orphaned")
-      .map((change) => change.repoPath),
+    affectedParts: affectedTemplateParts(inspection, previous),
   };
 }
 
@@ -556,22 +532,23 @@ async function applyInspection(
   operationId: string,
   inspection: TemplateOperationInspection,
   intent: unknown,
-  onBuildFailure: "discard-context" | "retain-context" = "discard-context"
+  onBuildFailure: "discard-context" | "retain-context" = "retain-context"
 ) {
-  const parts = operationParts(operationId, inspection);
+  const parts = operationParts(operationId, inspection, env.observation.lock);
   const existing = await readTemplateOperationRecord(ctx, operationId);
   const operation = await ensureTemplateOperationIntent({
     operationId,
     inspection,
     intent,
     existing,
+    affectedParts: parts.affectedParts,
     persist: (record) => writeTemplateOperationRecord(ctx, record),
   });
   const ports = createTemplateOperationPorts(
     ctx,
     env.info.statePath,
     env.observation,
-    createAffectedBuildGate(ctx),
+    createAffectedBuildGate(ctx, env.observation.localRepoPaths),
     operation.record
   );
   try {
@@ -583,6 +560,15 @@ async function applyInspection(
     if (preparation.status === "build-failed") {
       if (onBuildFailure === "discard-context") {
         await ports.discard(preparation.prepared.contextId);
+      } else {
+        await updateTemplateOperationRecord(ctx, {
+          ...operation.record,
+          reviews: undefined,
+          deltaBasis: undefined,
+          mainAdvanceEventId: undefined,
+          preparedAffectedRepoPaths: preparation.prepared.affectedRepoPaths,
+          buildFailures: preparation.failures,
+        });
       }
       return {
         ...parts,
@@ -596,8 +582,17 @@ async function applyInspection(
           nextAction:
             onBuildFailure === "discard-context" ? ("retry" as const) : ("details" as const),
         },
+        ...(onBuildFailure === "retain-context"
+          ? {
+              repair: {
+                contextId: preparation.prepared.contextId,
+                failures: preparation.failures,
+              },
+            }
+          : {}),
       };
     }
+    await clearTemplateOperationRecordFile(ctx, operationId);
     const published = await publishPreparedTemplateOperation(
       preparation.prepared,
       env.observation.mainEventId,
@@ -626,6 +621,7 @@ async function applyInspection(
       if (!operation.record.reviews) {
         await updateTemplateOperationRecord(ctx, {
           ...operation.record,
+          mainAdvanceEventId: undefined,
           reviews: [...error.items],
           deltaBasis: error.deltaBasis,
         });
@@ -641,8 +637,128 @@ async function applyInspection(
         },
       };
     }
+    if (error instanceof TemplateOperationMainAdvanced) {
+      await updateTemplateOperationRecord(ctx, {
+        ...operation.record,
+        mainAdvanceEventId: error.mainEventId,
+      });
+      return {
+        ...parts,
+        state: "error" as const,
+        blocker: {
+          state: "error" as const,
+          code: "TemplateMainAdvanced",
+          message: error.message,
+          nextAction: "details" as const,
+        },
+        repair: {
+          contextId: error.contextId,
+          mainEventId: error.mainEventId,
+          failures: [
+            {
+              unit: "workspace-main",
+              message: `Merge protected-main event ${error.mainEventId} into this context, resolve any semantic conflicts, then resume`,
+            },
+          ],
+        },
+      };
+    }
     throw error;
   }
+}
+
+async function resumePreparedOperation(
+  ctx: ExtensionContextLike,
+  env: Environment,
+  record: TemplateOperationRecord,
+  onBuildFailure: "discard-context" | "retain-context" = "retain-context"
+) {
+  const affectedRepoPaths = record.preparedAffectedRepoPaths;
+  if (!affectedRepoPaths) {
+    throw new Error(`Template operation ${record.operationId} has not finished staging`);
+  }
+  const contextId = await ensureTemplateOperationContext(ctx, record.operationId);
+  const ports = createTemplateOperationPorts(
+    ctx,
+    env.info.statePath,
+    env.observation,
+    createAffectedBuildGate(ctx, env.observation.localRepoPaths),
+    record
+  );
+  const preparation = await rebuildPreparedTemplateOperation(
+    { contextId, affectedRepoPaths },
+    ports
+  );
+  if (preparation.status === "build-failed") {
+    if (onBuildFailure === "discard-context") {
+      await ports.discard(contextId);
+    } else {
+      await updateTemplateOperationRecord(ctx, {
+        ...record,
+        mainAdvanceEventId: undefined,
+        buildFailures: preparation.failures,
+      });
+    }
+    return {
+      operationId: record.operationId,
+      state: "error" as const,
+      affectedParts: record.affectedParts,
+      blocker: {
+        state: "error" as const,
+        code: "TemplateBuildFailed",
+        message: preparation.failures
+          .map((failure) => `${failure.unit}: ${failure.message}`)
+          .join("\n"),
+        nextAction:
+          onBuildFailure === "discard-context" ? ("retry" as const) : ("details" as const),
+      },
+      ...(onBuildFailure === "retain-context"
+        ? { repair: { contextId, failures: preparation.failures } }
+        : {}),
+    };
+  }
+  await clearTemplateOperationRecordFile(ctx, record.operationId);
+  let published: { mainEventId: string };
+  try {
+    published = await publishPreparedTemplateOperation(
+      preparation.prepared,
+      env.observation.mainEventId,
+      ports
+    );
+  } catch (error) {
+    if (!(error instanceof TemplateOperationMainAdvanced)) throw error;
+    await updateTemplateOperationRecord(ctx, {
+      ...record,
+      mainAdvanceEventId: error.mainEventId,
+    });
+    return {
+      operationId: record.operationId,
+      state: "error" as const,
+      affectedParts: record.affectedParts,
+      blocker: {
+        state: "error" as const,
+        code: "TemplateMainAdvanced",
+        message: error.message,
+        nextAction: "details" as const,
+      },
+      repair: {
+        contextId,
+        mainEventId: error.mainEventId,
+        failures: [
+          {
+            unit: "workspace-main",
+            message: `Merge protected-main event ${error.mainEventId} into this context, resolve any semantic conflicts, then resume`,
+          },
+        ],
+      },
+    };
+  }
+  return {
+    operationId: record.operationId,
+    state: "applied" as const,
+    affectedParts: record.affectedParts,
+    publicationEventId: published.mainEventId,
+  };
 }
 
 export async function cancelTemplateOperation(input: {
@@ -685,6 +801,7 @@ async function activeTemplateOperations(
     const record = await readTemplateOperationRecordInContext(ctx, contextId);
     if (!record) continue;
     if (await isTemplateOperationCancelled(ctx, mainEventId, record.operationId)) continue;
+    if (record.authoringPublication) continue;
     if (await completedOperationResult(ctx, record)) continue;
     result.push({ contextId, record });
   }
@@ -724,11 +841,6 @@ export async function activate(ctx: ExtensionContextLike) {
             url: node.pin.url,
             credential: node.pin.credential,
           });
-          const locallyModified = Object.entries(observation.lock?.repositories ?? {}).some(
-            ([repoPath, repository]) =>
-              repository.nodeId === node.nodeId &&
-              observation.modifiedTemplateRepoPaths.has(repoPath)
-          );
           return {
             nodeId: node.nodeId,
             alias: node.alias,
@@ -742,11 +854,10 @@ export async function activate(ctx: ExtensionContextLike) {
               ? ("waiting-for-credential" as const)
               : reviews.length
                 ? ("reviewing" as const)
-                : locallyModified
-                  ? ("local-changes" as const)
-                  : ("current" as const),
-            ownedParts: Object.values(observation.lock?.repositories ?? {}).filter(
-              (repository) => repository.nodeId === node.nodeId
+                : ("current" as const),
+            contributedParts: Object.values(observation.lock?.repositories ?? {}).filter(
+              (repository) =>
+                repository.contributions.some((contribution) => contribution.nodeId === node.nodeId)
             ).length,
             pendingReviews: reviews.length,
             verification: observation.lock?.verification ?? "deferred",
@@ -801,7 +912,11 @@ export async function activate(ctx: ExtensionContextLike) {
           operationId,
           kind: record.kind,
           contextId,
-          state: record.reviews?.length ? ("reviewing" as const) : ("pending" as const),
+          state: record.reviews?.length
+            ? ("reviewing" as const)
+            : record.preparedAffectedRepoPaths || record.mainAdvanceEventId
+              ? ("repairing" as const)
+              : ("pending" as const),
           fingerprint: record.fingerprint,
           ...(record.reviews?.length
             ? {
@@ -810,6 +925,24 @@ export async function activate(ctx: ExtensionContextLike) {
                   contextId,
                   approvalGranted: true,
                   items: record.reviews,
+                },
+              }
+            : {}),
+          ...(record.preparedAffectedRepoPaths || record.mainAdvanceEventId
+            ? {
+                repair: {
+                  contextId,
+                  ...(record.mainAdvanceEventId ? { mainEventId: record.mainAdvanceEventId } : {}),
+                  failures:
+                    record.buildFailures ??
+                    (record.mainAdvanceEventId
+                      ? [
+                          {
+                            unit: "workspace-main",
+                            message: `Merge protected-main event ${record.mainAdvanceEventId} into this context, resolve any semantic conflicts, then resume`,
+                          },
+                        ]
+                      : []),
                 },
               }
             : {}),
@@ -832,7 +965,9 @@ export async function activate(ctx: ExtensionContextLike) {
             if (record?.operationId !== input.operationId) continue;
             return {
               contextId,
-              applied: Boolean(await completedOperationResult(ctx, record)),
+              applied: Boolean(
+                record.authoringPublication ?? (await completedOperationResult(ctx, record))
+              ),
               mainEventId: (
                 await ctx.rpc.call<{ mainEventId: string }>("main", "vcs.status", { contextId })
               ).mainEventId,
@@ -856,14 +991,19 @@ export async function activate(ctx: ExtensionContextLike) {
       operationId: string;
       onBuildFailure?: "discard-context" | "retain-context";
     }) {
-      const observation = await observeWorkspace(ctx);
-      if (await isTemplateOperationCancelled(ctx, observation.mainEventId, input.operationId)) {
+      const env = await environment(ctx);
+      if (await isTemplateOperationCancelled(ctx, env.observation.mainEventId, input.operationId)) {
         throw new Error(
           `Template operation ${input.operationId} was cancelled and cannot be resumed`
         );
       }
       const record = await readTemplateOperationRecord(ctx, input.operationId);
       if (!record) throw new Error(`Unknown template operation ${input.operationId}`);
+      const completed = await completedOperationResult(ctx, record);
+      if (completed) return completed;
+      if (record.preparedAffectedRepoPaths) {
+        return resumePreparedOperation(ctx, env, record, input.onBuildFailure);
+      }
       const intent = record.intent as {
         kind?: string;
         target?: unknown;
@@ -952,14 +1092,9 @@ export async function activate(ctx: ExtensionContextLike) {
       };
     },
 
-    async inspectAuthoring(input: TemplateAuthoringRequest) {
+    async inspectAuthoring(input: TemplateAuthoringIntent) {
       const env = await environment(ctx);
-      return inspectTemplateAuthoring(
-        ctx,
-        env.observation,
-        input,
-        sourcePortsForEnvironment(ctx, env)
-      );
+      return inspectTemplateAuthoring(ctx, env.observation, input);
     },
 
     async authoringParts() {
@@ -968,7 +1103,8 @@ export async function activate(ctx: ExtensionContextLike) {
 
     async publishAuthoring(input: {
       commandId: string;
-      plan: TemplateAuthoringInspection;
+      intent: TemplateAuthoringIntent;
+      expectedFingerprint: string;
       version: string;
       destination: {
         provider: string;
@@ -981,21 +1117,11 @@ export async function activate(ctx: ExtensionContextLike) {
         description?: string;
       };
     }) {
+      const existing = await readTemplateOperationRecord(ctx, input.commandId);
       const env = await environment(ctx);
-      const current = await inspectTemplateAuthoring(
-        ctx,
-        env.observation,
-        input.plan.request,
-        sourcePortsForEnvironment(ctx, env)
-      );
-      if (canonicalJson(current) !== canonicalJson(input.plan)) {
-        throw new Error(
-          "The workspace or authoring selection changed after inspection; inspect authoring again"
-        );
-      }
       const creation = {
         private: input.creation?.private ?? true,
-        description: input.creation?.description ?? current.request.description,
+        description: input.creation?.description ?? input.intent.description,
       };
       const publicationIntent = {
         protocol: "vibestudio-template-authoring-publication/v1",
@@ -1003,10 +1129,10 @@ export async function activate(ctx: ExtensionContextLike) {
         version: input.version,
         credentialId: input.credentialId ?? null,
         creation,
-        planFingerprint: current.fingerprint,
-        mainEventId: current.mainEventId,
+        intent: input.intent,
+        expectedFingerprint: input.expectedFingerprint,
       };
-      const existing = await readTemplateOperationRecord(ctx, input.commandId);
+      let current: TemplateAuthoringInspection;
       if (existing) {
         if (
           existing.kind !== "publish-authoring" ||
@@ -1016,55 +1142,199 @@ export async function activate(ctx: ExtensionContextLike) {
             `Template publication command ${input.commandId} was already bound to a different request`
           );
         }
+        if (!existing.authoringInspection) {
+          throw new Error(`Template publication command ${input.commandId} has no authoring state`);
+        }
+        if (existing.authoringPublication) return existing.authoringPublication;
+        current = existing.authoringInspection;
       } else {
+        current = await inspectTemplateAuthoring(ctx, env.observation, input.intent);
+        if (current.fingerprint !== input.expectedFingerprint) {
+          throw new Error(
+            "The workspace, dependency resolution, or authoring selection changed after inspection; inspect authoring again"
+          );
+        }
         await writeTemplateOperationRecord(ctx, {
           version: 1,
           operationId: input.commandId,
           kind: "publish-authoring",
           fingerprint: current.fingerprint,
           intent: publicationIntent,
-          pins: current.parents.map((parent) => ({
-            url: parent.url,
-            ...(parent.credential ? { credential: parent.credential } : {}),
-            ref: parent.ref,
-            commit: parent.commit,
-            snapshot: parent.snapshot,
-          })),
-          addedParts: [...current.includedParts],
-          orphanedParts: [],
+          pins: [],
+          affectedParts: [...current.includedParts],
+          authoringInspection: current,
         });
       }
       const contextId = await ensureTemplateOperationContext(ctx, input.commandId);
-      const build = await createAffectedBuildGate(ctx)(contextId, current.includedParts);
+      const build = await createAffectedBuildGate(ctx, env.observation.localRepoPaths)(
+        contextId,
+        current.includedParts
+      );
       if (build.failures.length > 0) {
         throw new TemplateBuildGateError(build.failures);
       }
-      return ctx.extensions.invoke("@workspace-extensions/git-bridge", "publishTemplate", [
+      const publication = await ctx.extensions.invoke<TemplatePublication>(
+        "@workspace-extensions/git-bridge",
+        "publishTemplate",
+        [
+          {
+            operationId: input.commandId,
+            expectedMainEventId: current.mainEventId,
+            templateName: current.request.name,
+            version: input.version,
+            manifest: current.manifest,
+            manifestDigest: current.manifestDigest,
+            parts: current.includedParts.map((repoPath) => ({ repoPath, subdir: repoPath })),
+            destination: input.destination,
+            ...(input.credentialId ? { credentialId: input.credentialId } : {}),
+            creation,
+          },
+        ]
+      );
+      const record = await readTemplateOperationRecord(ctx, input.commandId);
+      if (!record) {
+        throw new Error(`Template publication ${input.commandId} lost its durable operation state`);
+      }
+      await updateTemplateOperationRecord(ctx, {
+        ...record,
+        authoringPublication: publication,
+      });
+      return publication;
+    },
+
+    async suggestRegistryEntry(input: {
+      commandId: string;
+      catalog: ServiceTemplateCatalogSnapshot;
+      publication: TemplatePublication;
+      credential?: string;
+      entry: {
+        id: string;
+        name: string;
+        description: string;
+        tags: string[];
+        recommended: boolean;
+      };
+      revision: string;
+    }) {
+      const env = await environment(ctx, { requireCatalog: true });
+      const current = env.catalog!;
+      if (input.catalog.stale || input.catalog.source !== "verified") {
+        throw new Error("Refresh the template registry before preparing a contribution");
+      }
+      const reviewedCatalog = {
+        version: input.catalog.version,
+        revision: input.catalog.revision,
+        systemEpoch: input.catalog.systemEpoch,
+        entries: input.catalog.entries,
+        coordinates: input.catalog.coordinates,
+      };
+      const currentCatalog = {
+        version: current.version,
+        revision: current.revision,
+        systemEpoch: current.systemEpoch,
+        entries: current.entries,
+        coordinates: current.coordinates,
+      };
+      if (canonicalJson(reviewedCatalog) !== canonicalJson(currentCatalog)) {
+        throw new Error(
+          "The template registry changed after it was reviewed; refresh and review it again"
+        );
+      }
+      const registrySource = env.observation.top.templates?.registry;
+      if (!registrySource) throw new Error("Workspace does not declare templates.registry");
+      if (normalizeTemplateGitUrl(registrySource.url) !== current.coordinates.url) {
+        throw new Error("The configured template registry does not match the reviewed catalog");
+      }
+      const publicationUrl = normalizeTemplateGitUrl(input.publication.templateUrl);
+      await acquireTemplateSnapshot(
+        ctx,
+        env.info.statePath,
+        WorkspaceTemplatePinSchema.parse({
+          url: publicationUrl,
+          ref: input.publication.ref,
+          commit: input.publication.commit,
+          snapshot: input.publication.snapshot,
+          ...(input.credential ? { credential: input.credential } : {}),
+        }),
+        canonicalTemplateNodeId(publicationUrl, input.publication.commit)
+      );
+      const idCollision = current.entries.find(
+        (candidate) => candidate.id === input.entry.id && candidate.url !== publicationUrl
+      );
+      if (idCollision) {
+        throw new Error(`Registry id ${input.entry.id} already belongs to ${idCollision.url}`);
+      }
+      const urlCollision = current.entries.find(
+        (candidate) => candidate.url === publicationUrl && candidate.id !== input.entry.id
+      );
+      if (urlCollision) {
+        throw new Error(`Published template URL already belongs to registry id ${urlCollision.id}`);
+      }
+      const entry = {
+        ...input.entry,
+        tags: [...new Set(input.entry.tags)].sort(),
+        url: publicationUrl,
+        promoted: {
+          ref: input.publication.ref,
+          commit: input.publication.commit,
+          snapshot: input.publication.snapshot,
+        },
+      };
+      const entries = current.entries
+        .filter((candidate) => candidate.id !== entry.id)
+        .concat(entry)
+        .sort((left, right) => left.id.localeCompare(right.id, "en"));
+      const semanticallyChanged = canonicalJson(entries) !== canonicalJson(current.entries);
+      if (semanticallyChanged && input.revision === current.revision) {
+        throw new Error("A changed registry entry requires a new promotion revision");
+      }
+      if (!semanticallyChanged && input.revision === current.revision) {
+        return {
+          operationId: input.commandId,
+          outcome: "nothing-to-suggest" as const,
+          registryUrl: current.coordinates.url,
+          baseCommit: current.coordinates.commit,
+          branch: null,
+          headCommit: null,
+          revision: input.revision,
+          entry,
+        };
+      }
+      const registry = parseTemplateRegistry({
+        version: 1,
+        revision: input.revision,
+        systemEpoch: current.systemEpoch,
+        entries,
+      });
+      const registryDocument = YAML.stringify(registry, { lineWidth: 0 });
+      const result = await ctx.extensions.invoke<{
+        outcome: "pushed" | "already-at-remote" | "nothing-to-suggest";
+        registryUrl: string;
+        baseCommit: string;
+        branch: string | null;
+        headCommit: string | null;
+      }>("@workspace-extensions/git-bridge", "suggestRegistryEntry", [
         {
           operationId: input.commandId,
-          expectedMainEventId: current.mainEventId,
-          templateName: current.request.name,
-          version: input.version,
-          manifest: current.manifest,
-          manifestDigest: current.manifestDigest,
-          validatedParents: current.parents.map(({ url, ref, commit, snapshot }) => ({
-            url,
-            ref,
-            commit,
-            snapshot,
-          })),
-          parts: current.includedParts.map((repoPath) => ({ repoPath, subdir: repoPath })),
-          destination: input.destination,
-          ...(input.credentialId ? { credentialId: input.credentialId } : {}),
-          creation,
+          registryUrl: current.coordinates.url,
+          baseCommit: current.coordinates.commit,
+          baseSnapshot: current.coordinates.snapshot,
+          registryDocument,
+          entryId: entry.id,
+          ...(registrySource.credential ? { credential: registrySource.credential } : {}),
         },
       ]);
+      return {
+        operationId: input.commandId,
+        ...result,
+        revision: registry.revision,
+        entry: registry.entries.find((candidate) => candidate.id === entry.id)!,
+      };
     },
 
     async add(input: {
       commandId: string;
       pin: WorkspaceTemplatePin;
-      choices?: Record<string, "keep" | "take" | "skip">;
       onBuildFailure?: "discard-context" | "retain-context";
     }) {
       const env = await environment(ctx);
@@ -1081,38 +1351,7 @@ export async function activate(ctx: ExtensionContextLike) {
         );
       }
       const selectedPin = recordedPin ?? requestedPin;
-      const recordedDecisions =
-        (record?.intent as { conflictDecisions?: Record<string, string> } | undefined)
-          ?.conflictDecisions ?? {};
-      let preview = await inspectAdd(ctx, env, selectedPin, record?.pins ?? [], recordedDecisions);
-      let decisions = recordedDecisions;
-      if (!record && preview.conflicts.length > 0) {
-        if (!input.choices) {
-          return {
-            operationId: input.commandId,
-            state: "conflict" as const,
-            blocker: {
-              state: "conflict" as const,
-              code: "TemplateRepositoryConflict",
-              message: preview.conflicts
-                .map((conflict) => `${conflict.repoPath}: ${conflict.claimants.join(", ")}`)
-                .join("\n"),
-              nextAction: "resolve-conflict" as const,
-            },
-            addedParts: [],
-            orphanedParts: [],
-          };
-        }
-        decisions = resolveRepositoryConflictChoices(
-          preview.conflicts,
-          input.choices,
-          env.observation
-        );
-        preview = await inspectAdd(ctx, env, selectedPin, [], decisions);
-        if (preview.conflicts.length > 0) {
-          throw new Error("Template conflict decisions did not resolve the complete plan");
-        }
-      }
+      const preview = await inspectAdd(ctx, env, selectedPin, record?.pins ?? []);
       return applyInspection(
         ctx,
         env,
@@ -1121,7 +1360,6 @@ export async function activate(ctx: ExtensionContextLike) {
         record?.intent ?? {
           kind: "add",
           target: selectedPin,
-          conflictDecisions: decisions,
         },
         input.onBuildFailure
       );
@@ -1286,13 +1524,15 @@ export async function activate(ctx: ExtensionContextLike) {
       const observation = await observeWorkspace(ctx);
       const node = observation.lock?.nodes.find((candidate) => candidate.alias === input.alias);
       if (!node) throw new Error(`Unknown installed template alias: ${input.alias}`);
-      const owned = Object.entries(observation.lock?.repositories ?? {})
-        .filter(([, repository]) => repository.nodeId === node.nodeId)
+      const contributed = Object.entries(observation.lock?.repositories ?? {})
+        .filter(([, repository]) =>
+          repository.contributions.some((contribution) => contribution.nodeId === node.nodeId)
+        )
         .map(([repoPath]) => repoPath);
-      const selected = input.parts ?? owned;
+      const selected = input.parts ?? contributed;
       for (const repoPath of selected) {
-        if (!owned.includes(repoPath)) {
-          throw new Error(`${repoPath} is not owned by template ${input.alias}`);
+        if (!observation.localRepoPaths.has(repoPath)) {
+          throw new Error(`Unknown workspace repository ${repoPath}`);
         }
       }
       const result = await ctx.extensions.invoke<{
@@ -1316,8 +1556,7 @@ export async function activate(ctx: ExtensionContextLike) {
         contribution: result.branch
           ? { branch: result.branch, ...(result.url ? { url: result.url } : {}) }
           : undefined,
-        addedParts: [],
-        orphanedParts: [],
+        affectedParts: [...selected].sort(),
       };
     },
   };

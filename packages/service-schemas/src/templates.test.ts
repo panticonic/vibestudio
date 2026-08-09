@@ -67,7 +67,7 @@ describe("template recovery contracts", () => {
         commit: "1".repeat(40),
         direct: true,
         state: "waiting-for-credential",
-        ownedParts: 1,
+        contributedParts: 1,
         pendingReviews: 1,
         verification: "deferred",
         suggestions: [],
@@ -83,10 +83,67 @@ describe("template recovery contracts", () => {
         operationId: "add:private",
         state: "waiting-for-credential",
         blocker,
-        addedParts: [],
-        orphanedParts: [],
+        affectedParts: [],
       })
     ).toMatchObject({ state: "waiting-for-credential", blocker });
+  });
+
+  it("returns a retained context and structured failures for agentic repair", () => {
+    expect(
+      templateOperationSchema.parse({
+        operationId: "add:news",
+        state: "error",
+        affectedParts: ["panels/news"],
+        blocker: {
+          state: "error",
+          code: "TemplateBuildFailed",
+          message: "panels/news: type error",
+          nextAction: "details",
+        },
+        repair: {
+          contextId: "template-operation-news",
+          failures: [{ unit: "panels/news", message: "type error" }],
+        },
+      }).repair
+    ).toEqual({
+      contextId: "template-operation-news",
+      failures: [{ unit: "panels/news", message: "type error" }],
+    });
+  });
+
+  it("returns the exact protected-main event needed to repair a stale operation", () => {
+    expect(
+      templateOperationSchema.parse({
+        operationId: "pull:news",
+        state: "error",
+        affectedParts: ["panels/news"],
+        blocker: {
+          state: "error",
+          code: "TemplateMainAdvanced",
+          message: "Protected main advanced",
+          nextAction: "details",
+        },
+        repair: {
+          contextId: "template-operation-news",
+          mainEventId: "event:new-main",
+          failures: [
+            {
+              unit: "workspace-main",
+              message: "Merge protected main and resume",
+            },
+          ],
+        },
+      }).repair
+    ).toEqual({
+      contextId: "template-operation-news",
+      mainEventId: "event:new-main",
+      failures: [
+        {
+          unit: "workspace-main",
+          message: "Merge protected main and resume",
+        },
+      ],
+    });
   });
 
   it("does not expose host-internal approval references", () => {
@@ -95,8 +152,7 @@ describe("template recovery contracts", () => {
         operationId: "add:private",
         state: "pending",
         cardRef: "internal-approval-record",
-        addedParts: [],
-        orphanedParts: [],
+        affectedParts: [],
       })
     ).toThrow();
   });
@@ -115,20 +171,19 @@ describe("template authoring contracts", () => {
     includedParts: ["extensions/demo", "packages/shared"],
     requiredParts: ["packages/shared"],
     inheritedParts: [],
-    parents: [],
-    parentClosureFingerprint: null,
     manifest: "systemEpoch: 57\n",
     manifestDigest: `v1-sha256:${"a".repeat(64)}`,
     fingerprint: `v1-sha256:${"b".repeat(64)}`,
   };
 
-  it("binds publication to the complete inspected authoring receipt", () => {
+  it("binds publication to semantic intent and the reviewed fingerprint", () => {
     expect(templateAuthoringInspectionSchema.parse(plan)).toEqual(plan);
     expect(
       templatesMethods.publishAuthoring.args.safeParse([
         {
           commandId: "publish-demo",
-          plan,
+          intent: plan.request,
+          expectedFingerprint: plan.fingerprint,
           version: "1.0.0",
           destination: { provider: "github", owner: "acme", name: "template-demo" },
           creation: { private: true },
@@ -139,7 +194,8 @@ describe("template authoring contracts", () => {
       templatesMethods.publishAuthoring.args.safeParse([
         {
           commandId: "publish-demo",
-          fingerprint: plan.fingerprint,
+          intent: plan.request,
+          expectedFingerprint: plan.fingerprint,
           version: "1.0.0",
           destination: { name: "template-demo" },
         },
@@ -147,20 +203,14 @@ describe("template authoring contracts", () => {
     ).toBe(false);
   });
 
-  it("binds authoring parents to exact coordinates and rejects alias shortcuts", () => {
-    const parent = {
-      url: "git+https://example.test/base.git",
-      ref: "refs/tags/v1",
-      commit: "c".repeat(40),
-      snapshot: `v1-sha256:${"d".repeat(64)}`,
-    };
+  it("accepts URL dependencies and rejects agent-supplied exact coordinates", () => {
     expect(
       templatesMethods.inspectAuthoring.args.safeParse([
         {
           name: "Child",
           description: "A child template",
           parts: ["extensions/child"],
-          parents: [parent],
+          dependencies: [{ url: "git+https://example.test/base.git" }],
         },
       ]).success
     ).toBe(true);
@@ -170,8 +220,69 @@ describe("template authoring contracts", () => {
           name: "Child",
           description: "A child template",
           parts: ["extensions/child"],
-          parents: ["base"],
+          dependencies: [
+            {
+              url: "git+https://example.test/base.git",
+              ref: "refs/tags/v1",
+              commit: "c".repeat(40),
+              snapshot: `v1-sha256:${"d".repeat(64)}`,
+            },
+          ],
         },
+      ]).success
+    ).toBe(false);
+  });
+
+  it("binds registry suggestions to complete publication and catalog receipts", () => {
+    const publication = {
+      operationId: "publish-demo",
+      destination: { provider: "github", owner: "acme", name: "template-demo" },
+      created: true,
+      remoteUrl: "https://example.test/acme/template-demo.git",
+      webUrl: "https://example.test/acme/template-demo",
+      templateUrl: "git+https://example.test/acme/template-demo.git",
+      ref: "refs/tags/v1.0.0",
+      commit: "c".repeat(40),
+      snapshot: `v1-sha256:${"d".repeat(64)}`,
+      parts: ["extensions/demo"],
+    };
+    const catalog = {
+      version: 1 as const,
+      revision: "2026-08-09.1",
+      systemEpoch: 57,
+      entries: [],
+      coordinates: {
+        url: "git+https://example.test/template-registry.git",
+        ref: "refs/heads/main",
+        commit: "e".repeat(40),
+        snapshot: `v1-sha256:${"f".repeat(64)}`,
+      },
+      source: "verified" as const,
+      stale: false,
+      verifiedAt: "2026-08-09T12:00:00.000Z",
+    };
+    const request = {
+      commandId: "suggest-demo-v1",
+      catalog,
+      publication,
+      entry: {
+        id: "demo",
+        name: "Demo",
+        description: "A focused demo",
+        tags: ["demo"],
+        recommended: false,
+      },
+      revision: "2026-08-09.2",
+    };
+    expect(templatesMethods.suggestRegistryEntry.args.safeParse([request]).success).toBe(true);
+    expect(
+      templatesMethods.suggestRegistryEntry.args.safeParse([
+        { ...request, publication: { commit: publication.commit } },
+      ]).success
+    ).toBe(false);
+    expect(
+      templatesMethods.suggestRegistryEntry.args.safeParse([
+        { ...request, catalog: { ...catalog, coordinates: undefined } },
       ]).success
     ).toBe(false);
   });
@@ -202,10 +313,7 @@ describe("exact template selection contracts", () => {
         fingerprint: `v1-sha256:${"b".repeat(64)}`,
         roots: [],
         templates: [],
-        addedParts: [],
-        retainedParts: [],
-        orphanedParts: [],
-        conflicts: [],
+        affectedParts: [],
         excludedSuggestions: [],
       }).pin
     ).toEqual(pin);
@@ -249,10 +357,7 @@ describe("exact template selection contracts", () => {
           fingerprint: `v1-sha256:${"b".repeat(64)}`,
           roots: [],
           templates: [],
-          addedParts: ["extensions/github"],
-          retainedParts: [],
-          orphanedParts: [],
-          conflicts: [],
+          affectedParts: ["extensions/github"],
           excludedSuggestions: [],
         },
       }).inspection.pin

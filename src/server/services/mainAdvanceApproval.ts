@@ -14,7 +14,10 @@ import type {
   UnitInstallSourceOrigin,
 } from "@vibestudio/shared/authority/unitInstallReview";
 import type { UnitAuthorityRequest } from "@vibestudio/shared/authorityManifest";
-import { templateOrigin } from "@vibestudio/shared/authority/reviewedUnitParts";
+import {
+  multipleTemplateContributorsOrigin,
+  templateOrigin,
+} from "@vibestudio/shared/authority/reviewedUnitParts";
 import { HOST_APPROVAL_COPY } from "@vibestudio/shared/hostApprovalCopy";
 import { assertTemplateLockIntegrityForRead } from "@vibestudio/workspace/templateLock";
 import {
@@ -571,8 +574,8 @@ export interface TemplateOperationRecognition {
   template: InstallReviewTemplate;
   /** Where each repository the lock claims came from, at the state being published. */
   origins: ReadonlyMap<string, InstallReviewOrigin>;
-  /** Repositories delivered by the closure of the template this operation moves. */
-  ownedRepoPaths: ReadonlySet<string>;
+  /** Repositories touched by contributions from the closure this operation moves. */
+  contributedRepoPaths: ReadonlySet<string>;
 }
 
 /**
@@ -588,7 +591,7 @@ export interface TemplateOperationRecognition {
  *
  * `meta/templates.lock.yml` is different. It is the workspace's committed
  * projection of its template closure, its fingerprint covers every node, pin,
- * and repository ownership entry, and `assertTemplateLockIntegrityForRead`
+ * and repository contribution entry, and `assertTemplateLockIntegrityForRead`
  * additionally re-derives each node id from its own pin and each alias from its
  * own URL. Diffing the lock the workspace has against the lock the publication
  * would install is therefore not a claim about the operation — it IS the
@@ -638,10 +641,9 @@ export function recognizeTemplateOperation(input: {
   const fromVersion = current.get(operation.url)?.pin.ref ?? null;
   const toVersion = candidate.get(operation.url)?.pin.ref ?? null;
 
-  // A root's closure is the root plus everything it depends on: the lock orders
-  // dependencies before dependents and records them as `parents`. Repositories
-  // owned by that closure are what this template delivers; everything else the
-  // same publication touches is a repair (§5.3).
+  // A root's closure is the root plus everything it depends on. A repository
+  // belongs to the operation when any node in that closure contributes to it;
+  // no template exclusively owns the resulting workspace repository.
   const nodesById = new Map((lock?.nodes ?? []).map((node) => [node.nodeId, node]));
   const closure = new Set<string>();
   const pending = [rootNode.nodeId];
@@ -653,25 +655,32 @@ export function recognizeTemplateOperation(input: {
   }
 
   const origins = new Map<string, InstallReviewOrigin>();
-  const ownedRepoPaths = new Set<string>();
+  const contributedRepoPaths = new Set<string>();
   for (const [repoPath, repository] of Object.entries(lock?.repositories ?? {})) {
-    const owner = nodesById.get(repository.nodeId);
-    if (!owner) continue;
-    // Origin follows the node that actually owns the bytes, never the root of
-    // the operation: a nested template's parts came from the nested template's
-    // URL, and attributing them to the template the user named would be exactly
-    // the identity claim §7.6.3 forbids.
-    const ownerName = sanitizeTemplateDisplayText(owner.presentation?.name, TEMPLATE_NAME_MAX);
-    origins.set(
-      repoPath,
-      templateOrigin({
-        url: owner.pin.url,
-        version: owner.pin.ref,
-        ...(ownerName ? { selfName: ownerName } : {}),
-        admittedOriginKeys: input.admittedOriginKeys,
-      })
-    );
-    if (closure.has(repository.nodeId)) ownedRepoPaths.add(repoPath);
+    const contributors = repository.contributions
+      .map(({ nodeId }) => nodesById.get(nodeId))
+      .filter((node): node is NonNullable<typeof node> => node !== undefined);
+    if (contributors.length === 1) {
+      const contributor = contributors[0]!;
+      const contributorName = sanitizeTemplateDisplayText(
+        contributor.presentation?.name,
+        TEMPLATE_NAME_MAX
+      );
+      origins.set(
+        repoPath,
+        templateOrigin({
+          url: contributor.pin.url,
+          version: contributor.pin.ref,
+          ...(contributorName ? { selfName: contributorName } : {}),
+          admittedOriginKeys: input.admittedOriginKeys,
+        })
+      );
+    } else if (contributors.length > 1) {
+      origins.set(repoPath, multipleTemplateContributorsOrigin());
+    }
+    if (repository.contributions.some(({ nodeId }) => closure.has(nodeId))) {
+      contributedRepoPaths.add(repoPath);
+    }
   }
 
   // What the template says it is called and what it says it does, re-sanitized
@@ -709,7 +718,7 @@ export function recognizeTemplateOperation(input: {
       toVersion,
     },
     origins,
-    ownedRepoPaths,
+    contributedRepoPaths,
   };
 }
 
@@ -1039,14 +1048,17 @@ export function createMainAdvanceApprovalGate(deps: {
       // it wins wherever it claims a repository.
       for (const [repoPath, origin] of template?.origins ?? []) origins.set(repoPath, origin);
       // Inside a template publication every changed unit is one of two things:
-      // a part the template delivers, or a fix the same publication makes to a
-      // part already in the workspace, which the user did not ask for and which
-      // is therefore shown in its own always-expanded section, unchecked (§5.3).
+      // a repository this template closure contributes to, or an unrelated fix
+      // in the same publication, which is shown separately (§5.3). A shared
+      // repository remains a template contribution; no exclusive owner exists.
       const sections = template
         ? new Map(
             repoPaths.map(
               (repoPath) =>
-                [repoPath, template.ownedRepoPaths.has(repoPath) ? "template" : "repair"] as const
+                [
+                  repoPath,
+                  template.contributedRepoPaths.has(repoPath) ? "template" : "repair",
+                ] as const
             )
           )
         : null;

@@ -45,7 +45,7 @@ Owner workflows remain authoritative:
 
 Onboarding does not advertise planned template extractions or offer template
 installation. The separate Templates workflow owns verified catalog refresh,
-exact selection, inspection, conflict choices, approval, and operation
+exact selection, contribution review, approval, and operation
 recovery. Until a template is deployed in that catalog, it does not exist as an
 installable product capability.
 

@@ -159,7 +159,8 @@ function TemplateRow({
               {presentation.label}
             </Badge>
             <Text size="1" color="gray">
-              {row.ownedParts} {row.ownedParts === 1 ? "part" : "parts"}
+              {row.contributedParts}{" "}
+              {row.contributedParts === 1 ? "contribution" : "contributions"}
             </Text>
           </Flex>
           {/* §7.7 lists a template by version, origin, and parts. The origin

@@ -8,6 +8,7 @@ export async function ensureTemplateOperationIntent(input: {
   inspection: TemplateOperationInspection;
   intent: unknown;
   existing: TemplateOperationRecord | null;
+  affectedParts: string[];
   persist(record: TemplateOperationRecord): Promise<void>;
 }): Promise<{ record: TemplateOperationRecord; resumed: boolean }> {
   if (input.existing) {
@@ -32,10 +33,7 @@ export async function ensureTemplateOperationIntent(input: {
     fingerprint: input.inspection.plan.fingerprint,
     intent: input.intent,
     pins: input.inspection.plan.nodes.map((node) => node.pin as WorkspaceTemplatePin),
-    addedParts: Object.keys(input.inspection.plan.repositories).sort(),
-    orphanedParts: input.inspection.plan.ownershipChanges
-      .filter((change) => change.reason === "orphaned")
-      .map((change) => change.repoPath),
+    affectedParts: input.affectedParts,
   };
   await input.persist(record);
   return { record, resumed: false };

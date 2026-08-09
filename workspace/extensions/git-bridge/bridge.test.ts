@@ -860,6 +860,47 @@ describe("GitBridge semantic snapshot boundary", () => {
     expect(host.vcs.resolveRepository).not.toHaveBeenCalled();
   });
 
+  it("reads a multi-repository template publication through one reviewed context", async () => {
+    const { host } = baseHost(root);
+    let activeRepositoryReads = 0;
+    let maximumActiveRepositoryReads = 0;
+    host.vcs.status = vi.fn(async ({ contextId }) => status(contextId, "event:main"));
+    host.vcs.resolveRepository = vi.fn(async ({ state, repoPath }) => {
+      activeRepositoryReads += 1;
+      maximumActiveRepositoryReads = Math.max(maximumActiveRepositoryReads, activeRepositoryReads);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      activeRepositoryReads -= 1;
+      return {
+        state,
+        repositoryId: `repository:${repoPath}`,
+        repoPath,
+      };
+    });
+    host.vcs.listFiles = vi.fn(async ({ state, repositoryId }) => ({
+      state,
+      repositoryId,
+      files: [],
+      nextCursor: null,
+    }));
+    const bridge = new GitBridge(host);
+
+    await expect(
+      bridge.readProtectedRepositories(
+        ["panels/news", "workers/news-agent"],
+        "event:main",
+        "publish-news-v1"
+      )
+    ).resolves.toEqual([
+      expect.objectContaining({ repoPath: "panels/news", eventId: "event:main" }),
+      expect.objectContaining({ repoPath: "workers/news-agent", eventId: "event:main" }),
+    ]);
+    expect(host.ensureContext).toHaveBeenCalledExactlyOnceWith(
+      expect.stringMatching(/^git-bridge-template-publication-/u)
+    );
+    expect(host.vcs.status).toHaveBeenCalledTimes(1);
+    expect(maximumActiveRepositoryReads).toBe(1);
+  });
+
   it("refuses to export over an unresolved external candidate", async () => {
     const repoPath = "projects/demo";
     const { host } = baseHost(root);

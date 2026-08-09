@@ -158,6 +158,19 @@ export function unresolvedOrigin(): InstallReviewOrigin {
   };
 }
 
+/** A merged repository whose file-level provenance names multiple templates. */
+export function multipleTemplateContributorsOrigin(): InstallReviewOrigin {
+  return {
+    url: null,
+    originKey: "multiple template contributions",
+    registrableDomain: null,
+    version: null,
+    isHostBuild: false,
+    originStatus: "multiple-template-contributors",
+    firstEncounter: false,
+  };
+}
+
 /**
  * Where bytes came from, from a template pin.
  *

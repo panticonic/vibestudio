@@ -7,8 +7,6 @@ import type {
 } from "@vibestudio/service-schemas/templates";
 import type { TemplateManagementClient } from "./index";
 
-type ConflictChoice = "keep" | "take" | "skip";
-
 export type TemplateAddClient = Pick<TemplateManagementClient, "prepareAdd" | "add">;
 
 export interface TemplateAddDialogProps {
@@ -36,7 +34,6 @@ export function TemplateAddDialog({
   const [preparing, setPreparing] = useState(false);
   const [adding, setAdding] = useState(false);
   const [preparation, setPreparation] = useState<TemplateAddPreparation | null>(null);
-  const [choices, setChoices] = useState<Record<string, ConflictChoice>>({});
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<TemplateOperation | null>(null);
   const preparationGeneration = useRef(0);
@@ -45,7 +42,6 @@ export function TemplateAddDialog({
     const generation = ++preparationGeneration.current;
     setPreparing(true);
     setPreparation(null);
-    setChoices({});
     setResult(null);
     setError(null);
     try {
@@ -69,7 +65,6 @@ export function TemplateAddDialog({
       operation = await client.add({
         commandId: crypto.randomUUID(),
         pin: preparation.inspection.pin,
-        ...(Object.keys(choices).length > 0 ? { choices } : {}),
       });
     } catch (failure) {
       setError(`Couldn't add this template. Nothing was changed. ${failureMessage(failure)}`);
@@ -87,9 +82,6 @@ export function TemplateAddDialog({
       setAdding(false);
     }
   };
-
-  const unresolved =
-    preparation?.inspection.conflicts.some((conflict) => !choices[conflict.repoPath]) ?? false;
 
   return (
     <Dialog.Root
@@ -114,8 +106,8 @@ export function TemplateAddDialog({
       <Dialog.Content maxWidth="560px">
         <Dialog.Title>Add a template</Dialog.Title>
         <Dialog.Description size="2" color="gray">
-          First review the exact parts this template would add. Your workspace changes only after
-          you choose Add template and approve that operation.
+          Review the repositories this template would affect. Overlapping contributions are merged
+          through the ordinary workspace review flow after you approve the operation.
         </Dialog.Description>
 
         <Flex direction="column" gap="3" mt="4">
@@ -141,52 +133,14 @@ export function TemplateAddDialog({
 
               <Box>
                 <Text as="div" size="2" weight="medium">
-                  Parts to add ({preparation.inspection.addedParts.length})
+                  Repositories affected ({preparation.inspection.affectedParts.length})
                 </Text>
                 <Text as="div" size="2" color="gray">
-                  {preparation.inspection.addedParts.length > 0
-                    ? preparation.inspection.addedParts.join(", ")
-                    : "No new parts; this exact version is already present."}
+                  {preparation.inspection.affectedParts.length > 0
+                    ? preparation.inspection.affectedParts.join(", ")
+                    : "This exact contribution set is already present."}
                 </Text>
               </Box>
-
-              {preparation.inspection.retainedParts.length > 0 ? (
-                <Text size="2" color="gray">
-                  Keeps {preparation.inspection.retainedParts.length} existing workspace
-                  {preparation.inspection.retainedParts.length === 1 ? " part" : " parts"}.
-                </Text>
-              ) : null}
-
-              {preparation.inspection.conflicts.map((conflict) => (
-                <Callout.Root key={conflict.repoPath} color="orange" size="1">
-                  <Callout.Text>
-                    <Text as="div" size="2" weight="medium">
-                      Choose what happens to {conflict.repoPath}
-                    </Text>
-                    <Text as="div" size="1">
-                      It is included by {conflict.claimants.join(" and ")}.
-                    </Text>
-                    <Flex gap="2" mt="2" wrap="wrap">
-                      {(["keep", "take", "skip"] as const).map((choice) => (
-                        <Button
-                          key={choice}
-                          size="1"
-                          variant={choices[conflict.repoPath] === choice ? "solid" : "soft"}
-                          onClick={() =>
-                            setChoices((current) => ({ ...current, [conflict.repoPath]: choice }))
-                          }
-                        >
-                          {choice === "keep"
-                            ? "Keep yours"
-                            : choice === "take"
-                              ? "Use template"
-                              : "Skip this part"}
-                        </Button>
-                      ))}
-                    </Flex>
-                  </Callout.Text>
-                </Callout.Root>
-              ))}
             </Flex>
           ) : null}
 
@@ -214,7 +168,7 @@ export function TemplateAddDialog({
               </Button>
             </Dialog.Close>
             {preparation && !result ? (
-              <Button disabled={adding || unresolved} onClick={() => void add()}>
+              <Button disabled={adding} onClick={() => void add()}>
                 {adding ? "Adding…" : "Add template"}
               </Button>
             ) : null}

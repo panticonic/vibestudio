@@ -8,6 +8,7 @@ import {
   WorkspaceGitCommitSchema,
   WorkspaceGitSnapshotSchema,
   WorkspaceLogicalCredentialNameSchema,
+  WorkspaceTemplateDeclarationSchema,
   WorkspaceTemplatePinSchema,
 } from "@vibestudio/workspace-contracts/workspaceConfigSchema";
 
@@ -84,7 +85,7 @@ export const templateStatusRowSchema = z
     commit: z.string().regex(/^[0-9a-f]{40}$/u),
     direct: z.boolean(),
     state: templateLifecycleStateSchema,
-    ownedParts: z.number().int().nonnegative(),
+    contributedParts: z.number().int().nonnegative(),
     pendingReviews: z.number().int().nonnegative(),
     /** The copied lock/fragments are usable locally; a deferred check only
      * means no remote reacquisition has happened in this host session. */
@@ -103,16 +104,6 @@ export const templateStatusRowSchema = z
   })
   .strict();
 
-export const templateConflictSchema = z.discriminatedUnion("kind", [
-  z
-    .object({
-      kind: z.literal("repository"),
-      repoPath: z.string(),
-      claimants: z.array(z.string()).min(2),
-    })
-    .strict(),
-]);
-
 export const templateInspectionSchema = z
   .object({
     /** The exact immutable target resolved by inspect. Pass this value
@@ -130,10 +121,8 @@ export const templateInspectionSchema = z
         })
         .strict()
     ),
-    addedParts: z.array(z.string()),
-    retainedParts: z.array(z.string()),
-    orphanedParts: z.array(z.string()),
-    conflicts: z.array(templateConflictSchema),
+    /** Repositories whose ordered template contribution set would change. */
+    affectedParts: z.array(z.string()),
     excludedSuggestions: z.array(
       z
         .object({
@@ -161,44 +150,46 @@ export const templateOperationSchema = z
     review: templateReviewSchema.optional(),
     contribution: templateContributionSchema.optional(),
     blocker: templateRecoveryBlockerSchema.optional(),
+    /** A retained semantic context which an agent may edit with the ordinary
+     * workspace/VCS tools before calling resume. */
+    repair: z
+      .object({
+        contextId: z.string().trim().min(1),
+        mainEventId: z.string().trim().min(1).optional(),
+        failures: z.array(
+          z
+            .object({
+              unit: z.string().trim().min(1),
+              message: z.string().trim().min(1),
+            })
+            .strict()
+        ),
+      })
+      .strict()
+      .optional(),
     publicationEventId: z.string().optional(),
-    addedParts: z.array(z.string()),
-    orphanedParts: z.array(z.string()),
+    affectedParts: z.array(z.string()),
   })
   .strict();
 
-const choicesSchema = z.record(z.enum(["keep", "take", "skip"]));
 const buildFailureModeSchema = z.enum(["discard-context", "retain-context"]);
-const templateAuthoringParentSchema = z
-  .object({
-    alias: z.string(),
-    direct: z.boolean(),
-    url: z.string().trim().min(1),
-    credential: WorkspaceLogicalCredentialNameSchema.optional(),
-    ref: z.string().trim().min(1),
-    commit: WorkspaceGitCommitSchema,
-    snapshot: WorkspaceGitSnapshotSchema,
-  })
-  .strict();
-const templateAuthoringRequestSchema = z
+const templateAuthoringIntentSchema = z
   .object({
     name: z.string().trim().min(1),
     description: z.string().trim().min(1),
     parts: z.array(z.string()).min(1),
-    parents: z.array(WorkspaceTemplatePinSchema).optional(),
+    dependencies: z.array(WorkspaceTemplateDeclarationSchema).optional(),
   })
   .strict();
 export const templateAuthoringInspectionSchema = z
   .object({
-    request: templateAuthoringRequestSchema,
+    request: templateAuthoringIntentSchema,
     mainEventId: z.string().trim().min(1),
     selectableParts: z.array(z.string()),
     requestedParts: z.array(z.string()).min(1),
     includedParts: z.array(z.string()).min(1),
     requiredParts: z.array(z.string()),
     inheritedParts: z.array(z.string()),
-    parents: z.array(templateAuthoringParentSchema),
-    parentClosureFingerprint: digest.nullable(),
     manifest: z.string().min(1),
     manifestDigest: digest,
     fingerprint: digest,
@@ -229,6 +220,15 @@ export const templatePublicationSchema = z
     commit: z.string().regex(/^[0-9a-f]{40}$/u),
     snapshot: digest,
     parts: z.array(z.string()).min(1),
+  })
+  .strict();
+const templateRegistryEntryRequestSchema = z
+  .object({
+    id: z.string().regex(/^[a-z0-9][a-z0-9-]*$/u),
+    name: z.string().trim().min(1),
+    description: z.string().trim().min(1),
+    tags: z.array(z.string().trim().min(1)).min(1),
+    recommended: z.boolean(),
   })
   .strict();
 export const templateLocatorSchema = z.union([
@@ -313,6 +313,19 @@ export const templateCatalogSnapshotSchema = z
   .strict();
 export type TemplateCatalogSnapshot = z.infer<typeof templateCatalogSnapshotSchema>;
 
+export const templateRegistryContributionSchema = z
+  .object({
+    operationId: z.string(),
+    outcome: z.enum(["pushed", "already-at-remote", "nothing-to-suggest"]),
+    registryUrl: z.string(),
+    baseCommit: WorkspaceGitCommitSchema,
+    branch: z.string().nullable(),
+    headCommit: WorkspaceGitCommitSchema.nullable(),
+    revision: z.string().regex(/^\d{4}-\d{2}-\d{2}\.\d+$/u),
+    entry: catalogEntrySchema,
+  })
+  .strict();
+
 const updateCandidateSchema = z
   .object({
     nodeId: z.string(),
@@ -328,7 +341,7 @@ const updateCandidateSchema = z
 export const templatesMethods = defineServiceMethods({
   status: {
     description:
-      "Return exact committed template relationships joined with local ownership state, pending VCS review handles, and unresolved content-addressed suggestions without acquisition or network work.",
+      "Return exact committed template relationships joined with contribution counts, pending VCS review handles, and unresolved content-addressed suggestions without acquisition or network work.",
     args: z.tuple([]),
     returns: z.array(templateStatusRowSchema),
     access: READ_ACCESS,
@@ -366,22 +379,22 @@ export const templatesMethods = defineServiceMethods({
   },
   inspectAuthoring: {
     description:
-      "Prepare a content-addressed template authoring receipt from selected protected-main repositories and exact parent pins, verifying the ordinary parent closure, adding required workspace dependencies, and projecting one portable URL-only manifest.",
-    args: z.tuple([templateAuthoringRequestSchema]),
+      "Inspect selected protected-main content in the current composed workspace and record URL-only semantic dependencies. Dependencies are descriptive authoring intent, not compatibility proofs or exact release inputs.",
+    args: z.tuple([templateAuthoringIntentSchema]),
     returns: templateAuthoringInspectionSchema,
     access: READ_ACCESS,
   },
   authoringParts: {
     description:
-      "List protected-main repositories available for template authoring with package hints and exact pins for installed template owners.",
+      "List protected-main repositories available for template authoring with package and installed template contribution hints.",
     args: z.tuple([]),
     returns: z.array(
       z
         .object({
           repoPath: z.string(),
           packageName: z.string().optional(),
-          templateAlias: z.string().optional(),
-          templatePin: WorkspaceTemplatePinSchema.optional(),
+          templateAliases: z.array(z.string()).optional(),
+          templateUrls: z.array(z.string().trim().min(1)).optional(),
         })
         .strict()
     ),
@@ -389,12 +402,13 @@ export const templatesMethods = defineServiceMethods({
   },
   publishAuthoring: {
     description:
-      "Revalidate an unchanged authoring receipt and publish its exact protected-main repositories and portable manifest as a new versioned Git template repository.",
+      "Recompute and publish reviewed template intent when its compact inspection fingerprint still matches protected main and resolved dependencies.",
     args: z.tuple([
       z
         .object({
           commandId,
-          plan: templateAuthoringInspectionSchema,
+          intent: templateAuthoringIntentSchema,
+          expectedFingerprint: digest,
           version: z.string().regex(/^v?[0-9]+(?:\.[0-9]+){0,2}(?:[-.][A-Za-z0-9]+)*$/u),
           destination: templateAuthoringDestinationSchema,
           credentialId: z.string().trim().min(1).optional(),
@@ -405,15 +419,32 @@ export const templatesMethods = defineServiceMethods({
     returns: templatePublicationSchema,
     access: WRITE_ACCESS,
   },
+  suggestRegistryEntry: {
+    description:
+      "Revalidate an exact publication and verified registry receipt, then push a collision-safe review branch containing its catalog entry. This does not promote or merge the entry.",
+    args: z.tuple([
+      z
+        .object({
+          commandId,
+          catalog: templateCatalogSnapshotSchema,
+          publication: templatePublicationSchema,
+          credential: WorkspaceLogicalCredentialNameSchema.optional(),
+          entry: templateRegistryEntryRequestSchema,
+          revision: z.string().regex(/^\d{4}-\d{2}-\d{2}\.\d+$/u),
+        })
+        .strict(),
+    ]),
+    returns: templateRegistryContributionSchema,
+    access: WRITE_ACCESS,
+  },
   add: {
     description:
-      "Stage, build, and atomically publish an exact template relationship from a semantic operation context.",
+      "Merge an exact template's contributions through ordinary VCS, build them in a retained semantic context, and publish atomically when clean.",
     args: z.tuple([
       z
         .object({
           commandId,
           pin: WorkspaceTemplatePinSchema,
-          choices: choicesSchema.optional(),
           onBuildFailure: buildFailureModeSchema.optional(),
         })
         .strict(),
@@ -439,7 +470,7 @@ export const templatesMethods = defineServiceMethods({
   },
   remove: {
     description:
-      "Remove one direct template relationship in userland and atomically recompose; owned repositories are orphaned locally by default.",
+      "Remove one direct template relationship, merge the removal of its contributions through ordinary VCS review, rebuild, and publish the repaired composition.",
     args: z.tuple([
       z
         .object({
@@ -454,7 +485,7 @@ export const templatesMethods = defineServiceMethods({
   },
   suggest: {
     description:
-      "Delegate selected locally changed owned repositories to the ordinary Git contribution workflow.",
+      "Delegate selected workspace repositories to the ordinary Git contribution workflow for an installed template; repositories may be shared with other templates.",
     args: z.tuple([
       z
         .object({
@@ -507,9 +538,17 @@ export const templatesMethods = defineServiceMethods({
             "publish-authoring",
           ]),
           contextId: z.string(),
-          state: z.enum(["pending", "reviewing"]),
+          state: z.enum(["pending", "reviewing", "repairing"]),
           fingerprint: digest,
           review: templateReviewSchema.optional(),
+          repair: z
+            .object({
+              contextId: z.string().trim().min(1),
+              mainEventId: z.string().trim().min(1).optional(),
+              failures: z.array(z.object({ unit: z.string(), message: z.string() }).strict()),
+            })
+            .strict()
+            .optional(),
         })
         .strict()
     ),
@@ -517,7 +556,7 @@ export const templatesMethods = defineServiceMethods({
   },
   resume: {
     description:
-      "Resume one discovered exact semantic template operation by operation id. The host approval boundary is evaluated again.",
+      "Resume one semantic template operation by operation id. A fully staged repair context is rebuilt as-is; an unfinished VCS review continues composition. The host approval boundary is evaluated again.",
     args: z.tuple([
       z
         .object({
@@ -558,6 +597,7 @@ export type TemplateLocator = z.infer<typeof templateLocatorSchema>;
 export type TemplateAddRequest = z.infer<typeof templateAddRequestSchema>;
 export type TemplateAddPreparation = z.infer<typeof templateAddPreparationSchema>;
 export type TemplateExactPin = z.infer<typeof WorkspaceTemplatePinSchema>;
-export type TemplateAuthoringRequest = z.infer<typeof templateAuthoringRequestSchema>;
+export type TemplateAuthoringIntent = z.infer<typeof templateAuthoringIntentSchema>;
 export type TemplateAuthoringInspection = z.infer<typeof templateAuthoringInspectionSchema>;
 export type TemplatePublication = z.infer<typeof templatePublicationSchema>;
+export type TemplateRegistryContribution = z.infer<typeof templateRegistryContributionSchema>;

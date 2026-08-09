@@ -8,20 +8,19 @@ import type {
   VcsStatusResult,
 } from "@vibestudio/service-schemas/vcs";
 import type { WorkspaceTemplatePin } from "@vibestudio/workspace-contracts/types";
+import type { TemplateAuthoringInspection } from "@vibestudio/service-schemas/templates";
 import { assertTemplateLockIntegrityForRead } from "@vibestudio/workspace/templateLock";
 import { composeWorkspaceConfig } from "@vibestudio/workspace/configComposition";
+import { normalizeTemplateGitUrl } from "@vibestudio/workspace/templateCoordinates";
 import type {
   TemplateCompositionPlan,
   TemplateOperationInspection,
   TemplateOperationPorts,
+  TemplateRepositoryContribution,
 } from "@workspace/template-composer";
 import type { ExtensionContextLike } from "./context.js";
 import { acquireTemplateSnapshot } from "./source.js";
-import {
-  listSemanticRepositoryFiles,
-  semanticRepositoryDigest,
-  semanticRepositoryMatches,
-} from "./semanticRepository.js";
+import { semanticRepositoryDigest } from "./semanticRepository.js";
 import {
   LOCK_PATH,
   COMPOSITION_SOURCE_PATH,
@@ -46,6 +45,19 @@ export class TemplateReviewRequired extends Error {
   }
 }
 
+export class TemplateOperationMainAdvanced extends Error {
+  constructor(
+    readonly contextId: string,
+    readonly mainEventId: string,
+    readonly relation: "behind" | "diverged"
+  ) {
+    super(
+      `Protected main advanced while template operation ${contextId} was in progress; merge event ${mainEventId} into that context and resume`
+    );
+    this.name = "TemplateOperationMainAdvanced";
+  }
+}
+
 export const OPERATION_CONTEXT_PREFIX = "template-composer-operation-";
 const OPERATION_CONTEXT_DIGEST_LENGTH = 32;
 const OPERATION_RECORD_DIR = "template-operations";
@@ -59,20 +71,21 @@ export interface TemplateOperationRecord {
   fingerprint: string;
   intent: unknown;
   pins: WorkspaceTemplatePin[];
-  addedParts: string[];
-  orphanedParts: string[];
+  affectedParts: string[];
+  authoringInspection?: TemplateAuthoringInspection;
+  authoringPublication?: import("@vibestudio/service-schemas/templates").TemplatePublication;
   reviews?: TemplateReviewItem[];
   deltaBasis?: VcsStateNodeRef;
+  preparedAffectedRepoPaths?: string[];
+  buildFailures?: Array<{ unit: string; message: string }>;
+  mainAdvanceEventId?: string;
 }
 
 export function affectedRepositoryPaths(
-  imported: readonly string[],
-  reviewed: readonly string[],
-  ownershipChanges: readonly { repoPath: string }[]
+  merged: readonly string[],
+  metadataAffected: readonly string[] = []
 ): string[] {
-  return [
-    ...new Set([...imported, ...reviewed, ...ownershipChanges.map((change) => change.repoPath)]),
-  ].sort();
+  return [...new Set([...merged, ...metadataAffected])].sort();
 }
 
 function operationContextId(operationId: string): string {
@@ -256,31 +269,77 @@ export async function updateTemplateOperationRecord(
   const meta = await resolveRepository(ctx, current.workingHead, META_REPOSITORY);
   if (!meta) throw new Error("Template operation context has no meta repository");
   const file = await readFile(ctx, current.workingHead, meta.repositoryId, operationRecordPath());
-  if (!file) throw new Error(`Template operation ${record.operationId} has no context record`);
   const content = `${JSON.stringify(record, null, 2)}\n`;
+  if (file && text(file) === content) return;
+  const recordDigest = sha256HexSyncText(JSON.stringify(record)).slice(0, 16);
   await ctx.rpc.call("main", "vcs.edit", {
-    commandId: `${contextId}:update-review-record`,
+    commandId: `${contextId}:update-record:${recordDigest}`,
     contextId,
     expectedWorkingHead: current.workingHead,
-    intentSummary: "Record resumable template VCS review handles",
-    changes: [
-      {
-        kind: "text-edit",
-        repositoryId: meta.repositoryId,
-        fileId: file.fileId,
-        edits: [{ start: 0, end: text(file).length, text: content }],
-      },
-    ],
+    intentSummary: "Record resumable template operation state",
+    changes: file
+      ? [
+          {
+            kind: "text-edit",
+            repositoryId: meta.repositoryId,
+            fileId: file.fileId,
+            edits: [{ start: 0, end: text(file).length, text: content }],
+          },
+        ]
+      : [
+          {
+            kind: "file-create",
+            repositoryId: meta.repositoryId,
+            path: operationRecordPath(),
+            content: { kind: "text", text: content },
+            mode: 0o644,
+          },
+        ],
   });
   current = await status(ctx, contextId);
   await ctx.rpc.call("main", "vcs.commit", {
-    commandId: `${contextId}:commit-review-record`,
+    commandId: `${contextId}:commit-record:${recordDigest}`,
     contextId,
     expectedWorkingHead: current.workingHead,
     intentSummary: "Commit resumable template VCS review handles",
     message: `${OPERATION_MESSAGE_PREFIX}${Buffer.from(JSON.stringify(record), "utf8").toString(
       "base64url"
     )}`,
+  });
+}
+
+/** Remove context-local recovery state before publishing the composed result.
+ * The record remains recoverable from attributed context history until push. */
+export async function clearTemplateOperationRecordFile(
+  ctx: ExtensionContextLike,
+  operationId: string
+): Promise<void> {
+  const contextId = await ensureTemplateOperationContext(ctx, operationId);
+  let current = await status(ctx, contextId);
+  if (!current.clean) {
+    throw new Error(`Cannot finalize template operation ${operationId} with pending work`);
+  }
+  const meta = await resolveRepository(ctx, current.workingHead, META_REPOSITORY);
+  if (!meta) throw new Error("Template operation context has no meta repository");
+  const file = await readFile(ctx, current.workingHead, meta.repositoryId, operationRecordPath());
+  if (!file) return;
+  const clearDigest = sha256HexSyncText(
+    JSON.stringify({ workingHead: current.workingHead, fileId: file.fileId })
+  ).slice(0, 16);
+  await ctx.rpc.call("main", "vcs.edit", {
+    commandId: `${contextId}:clear-operation-record:${clearDigest}`,
+    contextId,
+    expectedWorkingHead: current.workingHead,
+    intentSummary: "Remove context-local template recovery state before publication",
+    changes: [{ kind: "file-delete", repositoryId: meta.repositoryId, fileId: file.fileId }],
+  });
+  current = await status(ctx, contextId);
+  await ctx.rpc.call("main", "vcs.commit", {
+    commandId: `${contextId}:commit-clear-operation-record:${clearDigest}`,
+    contextId,
+    expectedWorkingHead: current.workingHead,
+    intentSummary: "Finalize repaired template operation",
+    message: `Finalize repaired template operation ${operationId}`,
   });
 }
 
@@ -323,59 +382,6 @@ async function alreadyStaged(
   }
 }
 
-async function importRepositories(
-  ctx: ExtensionContextLike,
-  contextId: string,
-  plan: TemplateCompositionPlan,
-  previous: SemanticWorkspaceObservation["lock"]
-): Promise<string[]> {
-  const affected: string[] = [];
-  for (const [repoPath, contribution] of Object.entries(plan.repositories)) {
-    const current = await status(ctx, contextId);
-    const existing = await resolveRepository(ctx, current.workingHead, repoPath);
-    if (existing) {
-      const files = await listSemanticRepositoryFiles(
-        ctx,
-        current.workingHead,
-        existing.repositoryId
-      );
-      if (semanticRepositoryMatches(files, contribution.files)) continue;
-      const previousOwner = previous?.repositories[repoPath]?.nodeId;
-      if (previousOwner) continue;
-      throw new Error(
-        `Template plan selected occupied repository ${repoPath} with different local content`
-      );
-    }
-    const pin = pinForContribution(plan, contribution.nodeId);
-    await ctx.rpc.call("main", "vcs.importSnapshot", {
-      commandId: `${contextId}:import:${repoPath}`,
-      contextId,
-      expectedWorkingHead: current.workingHead,
-      intentSummary: `Import ${repoPath} from template ${contribution.alias}`,
-      source: {
-        kind: "git",
-        url: pin.url,
-        commit: pin.commit,
-        subdir: contribution.subdir,
-        snapshot: contribution.subtreeDigest,
-      },
-      repositories: [
-        {
-          repoPath,
-          files: contribution.files.map(({ path, contentHash, mode }) => ({
-            path,
-            contentHash,
-            mode,
-          })),
-        },
-      ],
-      message: `Import ${repoPath} from template ${contribution.alias}`,
-    });
-    affected.push(repoPath);
-  }
-  return affected;
-}
-
 function subtreeFiles(
   files: readonly {
     path: string;
@@ -392,12 +398,100 @@ function subtreeFiles(
     .sort((left, right) => left.path.localeCompare(right.path));
 }
 
-export async function reviewTemplateUpdates(
+interface ContributionSide {
+  nodeId: string;
+  alias: string;
+  pin: WorkspaceTemplatePin;
+  subtreeDigest: `v1-sha256:${string}`;
+  subdir: string;
+  files: Array<{ path: string; contentHash: string; mode: 0o644 | 0o755 }>;
+}
+
+function emptyContributionSource(nodeId: string, repoPath: string) {
+  return {
+    kind: "generated" as const,
+    uri: `vibestudio-template://empty/${nodeId}/${encodeURIComponent(repoPath)}`,
+    snapshotRevision: "empty",
+    snapshot: semanticRepositoryDigest([]),
+  };
+}
+
+function gitContributionSource(side: ContributionSide) {
+  return {
+    kind: "git" as const,
+    url: side.pin.url,
+    commit: side.pin.commit,
+    subdir: side.subdir,
+    snapshot: side.subtreeDigest,
+  };
+}
+
+function nextContributionSides(
+  plan: TemplateCompositionPlan,
+  repoPath: string
+): Map<string, ContributionSide> {
+  return new Map(
+    (plan.repositories[repoPath]?.contributions ?? []).map((contribution) => {
+      const pin = pinForContribution(plan, contribution.nodeId);
+      return [
+        normalizeTemplateGitUrl(pin.url),
+        {
+          nodeId: contribution.nodeId,
+          alias: contribution.alias,
+          pin,
+          subtreeDigest: contribution.subtreeDigest,
+          subdir: contribution.subdir,
+          files: contribution.files.map(({ path, contentHash, mode }) => ({
+            path,
+            contentHash,
+            mode,
+          })),
+        },
+      ];
+    })
+  );
+}
+
+async function previousContributionSides(
+  ctx: ExtensionContextLike,
+  statePath: string,
+  previous: NonNullable<SemanticWorkspaceObservation["lock"]>,
+  repoPath: string
+): Promise<Map<string, ContributionSide>> {
+  const result = new Map<string, ContributionSide>();
+  for (const contribution of previous.repositories[repoPath]?.contributions ?? []) {
+    const node = previous.nodes.find((candidate) => candidate.nodeId === contribution.nodeId);
+    if (!node) {
+      throw new Error(`Previous template lock is missing node ${contribution.nodeId}`);
+    }
+    const snapshot = await acquireTemplateSnapshot(ctx, statePath, node.pin, node.nodeId);
+    const files = subtreeFiles(snapshot.files, repoPath);
+    if (
+      semanticRepositoryDigest(files.map((file) => ({ ...file, byteLength: file.size }))) !==
+      contribution.subtreeDigest
+    ) {
+      throw new Error(
+        `Previous template contribution ${node.alias} for ${repoPath} is inconsistent`
+      );
+    }
+    result.set(normalizeTemplateGitUrl(node.pin.url), {
+      nodeId: node.nodeId,
+      alias: node.alias,
+      pin: node.pin,
+      subtreeDigest: contribution.subtreeDigest,
+      subdir: repoPath,
+      files: files.map(({ path, contentHash, mode }) => ({ path, contentHash, mode })),
+    });
+  }
+  return result;
+}
+
+export async function mergeTemplateContributions(
   ctx: ExtensionContextLike,
   statePath: string,
   contextId: string,
   plan: TemplateCompositionPlan,
-  previous: NonNullable<SemanticWorkspaceObservation["lock"]>,
+  previous: SemanticWorkspaceObservation["lock"],
   record?: TemplateOperationRecord
 ): Promise<string[]> {
   const items: TemplateReviewItem[] = [];
@@ -405,75 +499,71 @@ export async function reviewTemplateUpdates(
   const completedDeltas: Array<{ repoPath: string; deltaId: string }> = [];
   const registeredDeltas: Array<{ repoPath: string; deltaId: string }> = [];
   let deltaBasis = record?.deltaBasis;
-  for (const [repoPath, contribution] of Object.entries(plan.repositories)) {
-    const previousRepository = previous.repositories[repoPath];
-    if (!previousRepository) continue;
-    const previousNode = previous.nodes.find(
-      (candidate) => candidate.nodeId === previousRepository.nodeId
-    );
-    if (!previousNode) {
-      throw new Error(`Previous template lock is missing node ${previousRepository.nodeId}`);
-    }
-    const nextPin = pinForContribution(plan, contribution.nodeId);
-    if (
-      previousNode.pin.url === nextPin.url &&
-      previousNode.pin.commit === nextPin.commit &&
-      previousRepository.subtreeDigest === contribution.subtreeDigest
-    ) {
-      continue;
-    }
+  const repoPaths = [
+    ...new Set([...Object.keys(previous?.repositories ?? {}), ...Object.keys(plan.repositories)]),
+  ].sort();
+  for (const repoPath of repoPaths) {
     const current = await status(ctx, contextId);
-    deltaBasis ??= current.committed;
-    const repository = await resolveRepository(ctx, current.workingHead, repoPath);
-    if (!repository) {
-      throw new Error(`Tracked template repository ${repoPath} is missing`);
+    let repository = await resolveRepository(ctx, current.workingHead, repoPath);
+    const next = nextContributionSides(plan, repoPath);
+    const prior = previous
+      ? await previousContributionSides(ctx, statePath, previous, repoPath)
+      : new Map<string, ContributionSide>();
+
+    if (!repository && next.size > 0) {
+      const [url, first] = next.entries().next().value!;
+      await ctx.rpc.call("main", "vcs.importSnapshot", {
+        commandId: `${contextId}:import:${repoPath}`,
+        contextId,
+        expectedWorkingHead: current.workingHead,
+        intentSummary: `Import ${repoPath} contribution from ${first.alias}`,
+        source: gitContributionSource(first),
+        repositories: [{ repoPath, files: first.files }],
+        message: `Import ${repoPath} contribution from ${first.alias}`,
+      });
+      next.delete(url);
+      // The imported snapshot is already the complete next side for this
+      // contribution. Do not subsequently apply its old→new delta to itself.
+      prior.delete(url);
+      changed.push(repoPath);
+      const imported = await status(ctx, contextId);
+      repository = await resolveRepository(ctx, imported.workingHead, repoPath);
     }
-    const oldSnapshot = await acquireTemplateSnapshot(
-      ctx,
-      statePath,
-      previousNode.pin,
-      previousNode.nodeId
-    );
-    const oldFiles = subtreeFiles(oldSnapshot.files, repoPath);
-    if (
-      semanticRepositoryDigest(oldFiles.map((file) => ({ ...file, byteLength: file.size }))) !==
-      previousRepository.subtreeDigest
-    ) {
-      throw new Error(`Previous template subtree evidence for ${repoPath} is inconsistent`);
+    if (!repository) continue;
+    const urls = [...new Set([...prior.keys(), ...next.keys()])].sort();
+    for (const url of urls) {
+      const oldSide = prior.get(url);
+      const newSide = next.get(url);
+      if (
+        oldSide &&
+        newSide &&
+        oldSide.pin.commit === newSide.pin.commit &&
+        oldSide.subtreeDigest === newSide.subtreeDigest
+      ) {
+        continue;
+      }
+      const identity = oldSide?.nodeId ?? newSide!.nodeId;
+      const action = oldSide && newSide ? "Update" : newSide ? "Add" : "Remove";
+      const basis = await status(ctx, contextId);
+      deltaBasis ??= basis.committed;
+      const delta = await ctx.rpc.call<{ deltaId: string }>("main", "vcs.registerExternalDelta", {
+        commandId: `${contextId}:delta:${repoPath}:${identity}`,
+        contextId,
+        expectedWorkingHead: deltaBasis,
+        intentSummary: `${action} ${repoPath} contribution from ${newSide?.alias ?? oldSide!.alias}`,
+        repositoryId: repository.repositoryId,
+        repoPath,
+        oldSource: oldSide
+          ? gitContributionSource(oldSide)
+          : emptyContributionSource(identity, repoPath),
+        newSource: newSide
+          ? gitContributionSource(newSide)
+          : emptyContributionSource(identity, repoPath),
+        oldFiles: oldSide?.files ?? [],
+        newFiles: newSide?.files ?? [],
+      });
+      registeredDeltas.push({ repoPath, deltaId: delta.deltaId });
     }
-    const delta = await ctx.rpc.call<{ deltaId: string }>("main", "vcs.registerExternalDelta", {
-      commandId: `${contextId}:delta:${repoPath}`,
-      contextId,
-      expectedWorkingHead: deltaBasis,
-      intentSummary: `Review ${repoPath} from template ${contribution.alias}`,
-      repositoryId: repository.repositoryId,
-      repoPath,
-      oldSource: {
-        kind: "git",
-        url: previousNode.pin.url,
-        commit: previousNode.pin.commit,
-        subdir: repoPath,
-        snapshot: previousRepository.subtreeDigest,
-      },
-      newSource: {
-        kind: "git",
-        url: nextPin.url,
-        commit: nextPin.commit,
-        subdir: contribution.subdir,
-        snapshot: contribution.subtreeDigest,
-      },
-      oldFiles: oldFiles.map(({ path, contentHash, mode }) => ({
-        path,
-        contentHash,
-        mode,
-      })),
-      newFiles: contribution.files.map(({ path, contentHash, mode }) => ({
-        path,
-        contentHash,
-        mode,
-      })),
-    });
-    registeredDeltas.push({ repoPath, deltaId: delta.deltaId });
   }
   for (const { repoPath, deltaId } of registeredDeltas) {
     const latest = await status(ctx, contextId);
@@ -486,7 +576,7 @@ export async function reviewTemplateUpdates(
     });
     if (compared.resolution.complete && !compared.resolution.concluded) {
       await ctx.rpc.call("main", "vcs.merge", {
-        commandId: `${contextId}:conclude-convergent:${repoPath}`,
+        commandId: `${contextId}:conclude-convergent:${deltaId}`,
         contextId,
         expectedWorkingHead: latest.workingHead,
         source: { kind: "external-delta", deltaId },
@@ -513,7 +603,7 @@ export async function reviewTemplateUpdates(
   for (const completed of completedDeltas) {
     current = await status(ctx, contextId);
     await ctx.rpc.call("main", "vcs.finalizeExternalDelta", {
-      commandId: `${contextId}:finalize:${completed.repoPath}`,
+      commandId: `${contextId}:finalize:${completed.deltaId}`,
       contextId,
       expectedWorkingHead: current.workingHead,
       intentSummary: `Finalize reviewed template update for ${completed.repoPath}`,
@@ -523,7 +613,7 @@ export async function reviewTemplateUpdates(
   if (items.length > 0) {
     throw new TemplateReviewRequired(contextId, items, deltaBasis!);
   }
-  return changed;
+  return [...new Set(changed)].sort();
 }
 
 function nextWorkspaceSource(
@@ -536,9 +626,6 @@ function nextWorkspaceSource(
     use: relationships?.use ?? [],
     ...(relationships?.overrides && Object.keys(relationships.overrides).length > 0
       ? { overrides: relationships.overrides }
-      : {}),
-    ...(relationships?.conflicts && Object.keys(relationships.conflicts).length > 0
-      ? { conflicts: relationships.conflicts }
       : {}),
     ...(registry ? { registry } : {}),
     ...((relationships?.bootstrapAdopted ?? observation.top.templates?.bootstrapAdopted)
@@ -684,8 +771,10 @@ export function createTemplateOperationPorts(
       await ctx.rpc.call("main", "runtime.createContext", { contextId });
       const current = await status(ctx, contextId);
       if (current.mainRelation === "behind" || current.mainRelation === "diverged") {
-        throw new Error(
-          `Template operation ${operationId} was based on an older protected main; retry with a new command id`
+        throw new TemplateOperationMainAdvanced(
+          contextId,
+          current.mainEventId,
+          current.mainRelation
         );
       }
       return { contextId };
@@ -693,32 +782,37 @@ export function createTemplateOperationPorts(
     async stageComposition(contextId, inspection) {
       if (await alreadyStaged(ctx, contextId, inspection.plan.fingerprint)) {
         return {
-          affectedRepoPaths: Object.keys(inspection.plan.repositories).sort(),
+          affectedRepoPaths: [
+            ...new Set([
+              ...Object.keys(observation.lock?.repositories ?? {}),
+              ...Object.keys(inspection.plan.repositories),
+            ]),
+          ].sort(),
         };
       }
-      const reviewed = observation.lock
-        ? await reviewTemplateUpdates(
-            ctx,
-            statePath,
-            contextId,
-            inspection.plan,
-            observation.lock,
-            record
-          )
-        : [];
-      const imported = await importRepositories(ctx, contextId, inspection.plan, observation.lock);
+      const merged = await mergeTemplateContributions(
+        ctx,
+        statePath,
+        contextId,
+        inspection.plan,
+        observation.lock,
+        record
+      );
       await stageMeta(ctx, contextId, observation, inspection);
       return {
-        affectedRepoPaths: affectedRepositoryPaths(
-          imported,
-          reviewed,
-          inspection.plan.ownershipChanges
-        ),
+        affectedRepoPaths: affectedRepositoryPaths(merged),
       };
     },
     buildAffected,
     async publish(contextId, expectedMainEventId) {
       const current = await status(ctx, contextId);
+      if (current.mainRelation === "behind" || current.mainRelation === "diverged") {
+        throw new TemplateOperationMainAdvanced(
+          contextId,
+          current.mainEventId,
+          current.mainRelation
+        );
+      }
       if (!current.clean || current.committed.kind !== "event") {
         throw new Error(`Template operation context ${contextId} is not committed`);
       }

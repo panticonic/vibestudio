@@ -90,46 +90,6 @@ export class TemplateCredentialConflictError extends TemplateResolutionError {
   }
 }
 
-export class TemplateRepoConflictError extends TemplateResolutionError {
-  constructor(
-    readonly repoPath: string,
-    readonly claimants: readonly string[]
-  ) {
-    super(
-      "template-repo-conflict",
-      `Unrelated templates ${claimants.join(" and ")} both provide ${repoPath}; ` +
-        `set templates.conflicts.${repoPath} to a claimant alias or ignore`
-    );
-  }
-}
-
-export class TemplateConflictResolutionError extends TemplateResolutionError {
-  constructor(
-    readonly repoPath: string,
-    readonly resolution: string,
-    readonly claimants: readonly string[]
-  ) {
-    super(
-      "template-conflict-resolution-invalid",
-      `Template conflict resolution ${JSON.stringify(resolution)} for ${repoPath} ` +
-        `does not name one of its current claimants (${claimants.join(", ") || "none"})`
-    );
-  }
-}
-
-export class TemplateExternalRepoCollisionError extends TemplateResolutionError {
-  constructor(
-    readonly repoPath: string,
-    readonly claimantAliases: readonly string[]
-  ) {
-    super(
-      "template-external-repo-collision",
-      `${repoPath} is declared as a unit-level Git upstream and is also vendored by ` +
-        `${claimantAliases.join(", ")}; exactly one source may own a repository`
-    );
-  }
-}
-
 export interface TemplateSourcePorts {
   /**
    * Resolve the registry's exact promoted coordinate. Called at most once for
@@ -166,11 +126,9 @@ export interface TemplateRepositoryContribution {
   files: ExactSnapshotFile[];
 }
 
-export interface TemplateOwnershipChange {
+export interface TemplateRepositoryComposition {
   repoPath: string;
-  fromNodeId: string | null;
-  toNodeId: string | null;
-  reason: "orphaned" | "transferred" | "explicit-resolution";
+  contributions: TemplateRepositoryContribution[];
 }
 
 export interface TemplateGeneratedArtifact {
@@ -186,9 +144,8 @@ export interface TemplateCompositionPlan {
   fingerprint: CanonicalSnapshotDigest;
   rootNodeIds: string[];
   nodes: ResolvedTemplateNode[];
-  repositories: Record<string, TemplateRepositoryContribution>;
+  repositories: Record<string, TemplateRepositoryComposition>;
   localRepoPaths: string[];
-  ownershipChanges: TemplateOwnershipChange[];
   lock: WorkspaceTemplateLock | null;
   artifacts: TemplateGeneratedArtifact[];
   /** Previously generated files that must be removed in this composition. */
@@ -199,9 +156,7 @@ export interface ResolveTemplateCompositionInput {
   roots: readonly WorkspaceTemplateDeclaration[];
   /** Exact, deliberate source replacements keyed by normalized URL. */
   pinOverrides?: Readonly<Record<string, WorkspaceTemplatePin>>;
-  conflicts?: Readonly<Record<string, string>>;
   localRepoPaths?: ReadonlySet<string>;
-  externallyOwnedRepoPaths?: ReadonlySet<string>;
   previousLock?: WorkspaceTemplateLock;
   expectedSystemEpoch: number;
   ports: TemplateSourcePorts;
@@ -307,9 +262,6 @@ function parseTemplateManifest(
     if (top.templates?.overrides && Object.keys(top.templates.overrides).length > 0) {
       throw new Error("template manifests cannot impose exact template overrides");
     }
-    if (top.templates?.conflicts && Object.keys(top.templates.conflicts).length > 0) {
-      throw new Error("template manifests cannot impose repository conflict decisions");
-    }
     if (top.templates?.registry) {
       throw new Error("template manifests cannot replace the workspace template registry");
     }
@@ -371,16 +323,6 @@ function subtreeDigest(files: readonly ExactSnapshotFile[]): CanonicalSnapshotDi
   );
 }
 
-function fragmentUpstreamPaths(fragment: TemplateManifestFragment): string[] {
-  const paths: string[] = [];
-  for (const [section, repositories] of Object.entries(fragment.git?.upstreams ?? {})) {
-    for (const repo of Object.keys(repositories)) {
-      paths.push(normalizeWorkspaceRepoPath(`${section}/${repo}`));
-    }
-  }
-  return paths;
-}
-
 function requireNode(nodes: ReadonlyMap<string, MutableNode>, nodeId: string): MutableNode {
   const node = nodes.get(nodeId);
   if (!node) {
@@ -429,55 +371,8 @@ function topologicalNodes(nodes: ReadonlyMap<string, MutableNode>): MutableNode[
   return ordered;
 }
 
-function ancestorSets(nodes: readonly MutableNode[]): Map<string, Set<string>> {
-  const result = new Map<string, Set<string>>();
-  for (const node of nodes) {
-    const ancestors = new Set<string>();
-    for (const parent of node.parents) {
-      ancestors.add(parent);
-      for (const ancestor of result.get(parent) ?? []) ancestors.add(ancestor);
-    }
-    result.set(node.nodeId, ancestors);
-  }
-  return result;
-}
-
-function maximalClaimants(
-  claimants: readonly string[],
-  ancestors: ReadonlyMap<string, ReadonlySet<string>>
-): string[] {
-  return claimants.filter(
-    (candidate) =>
-      !claimants.some((other) => other !== candidate && ancestors.get(other)?.has(candidate))
-  );
-}
-
 function normalizedPaths(paths: ReadonlySet<string> | undefined): Set<string> {
   return new Set([...(paths ?? [])].map(normalizeWorkspaceRepoPath));
-}
-
-function previousOwnerSuccessor(
-  repoPath: string,
-  previousLock: WorkspaceTemplateLock | undefined,
-  currentNodeByUrl: ReadonlyMap<string, string>,
-  claims: ReadonlyMap<string, ReadonlyMap<string, TemplateRepositoryContribution>>
-): string | null {
-  const previousNodeId = previousLock?.repositories[repoPath]?.nodeId;
-  if (!previousNodeId) return null;
-  if (claims.get(repoPath)?.has(previousNodeId)) return previousNodeId;
-  const previousNode = previousLock?.nodes.find((node) => node.nodeId === previousNodeId);
-  if (!previousNode) return null;
-  const successor = currentNodeByUrl.get(normalizeTemplateGitUrl(previousNode.pin.url));
-  return successor && claims.get(repoPath)?.has(successor) ? successor : null;
-}
-
-function lockNodeUrl(
-  lock: WorkspaceTemplateLock | undefined,
-  nodeId: string | null
-): string | null {
-  if (!lock || !nodeId) return null;
-  const node = lock.nodes.find((candidate) => candidate.nodeId === nodeId);
-  return node ? normalizeTemplateGitUrl(node.pin.url) : null;
 }
 
 function artifact(path: string, text: string): TemplateGeneratedArtifact {
@@ -524,9 +419,8 @@ export async function resolveTemplateComposition(
   }
 
   const declaration = normalizeTemplateLockDeclaration({
-    use: input.roots,
+    use: [...input.roots],
     overrides: input.pinOverrides,
-    conflicts: input.conflicts,
   });
   const rootsByUrl = new Map(declaration.roots.map((root) => [root.url, root]));
   const overrides = normalizedOverrides(declaration.overrides);
@@ -657,11 +551,8 @@ export async function resolveTemplateComposition(
   }
 
   const ordered = topologicalNodes(nodes);
-  const ancestors = ancestorSets(ordered);
   const claims = new Map<string, Map<string, TemplateRepositoryContribution>>();
-  const externalPaths = normalizedPaths(input.externallyOwnedRepoPaths);
   for (const node of ordered) {
-    for (const repoPath of fragmentUpstreamPaths(node.fragment)) externalPaths.add(repoPath);
     for (const [repoPath, files] of enumerateRepoFiles(node)) {
       const repoClaims = claims.get(repoPath) ?? new Map();
       repoClaims.set(node.nodeId, {
@@ -675,99 +566,16 @@ export async function resolveTemplateComposition(
       claims.set(repoPath, repoClaims);
     }
   }
-  for (const repoPath of externalPaths) {
-    const repoClaims = claims.get(repoPath);
-    if (repoClaims) {
-      throw new TemplateExternalRepoCollisionError(
-        repoPath,
-        [...repoClaims.values()].map((claim) => claim.alias).sort(compareUtf16CodeUnits)
-      );
-    }
-  }
 
   const localPaths = normalizedPaths(input.localRepoPaths);
-  const currentNodeByUrl = new Map(ordered.map((node) => [node.pin.url, node.nodeId]));
-  const conflicts = Object.fromEntries(
-    Object.entries(declaration.conflicts).map(([repoPath, resolution]) => [
-      normalizeWorkspaceRepoPath(repoPath),
-      resolution,
-    ])
+  const repositories: Record<string, TemplateRepositoryComposition> = Object.fromEntries(
+    [...claims.entries()]
+      .sort(([left], [right]) => compareUtf16CodeUnits(left, right))
+      .map(([repoPath, contributions]) => [
+        repoPath,
+        { repoPath, contributions: [...contributions.values()] },
+      ])
   );
-  const repositories: Record<string, TemplateRepositoryContribution> = {};
-  const ownershipChanges: TemplateOwnershipChange[] = [];
-  const allPaths = [
-    ...new Set([
-      ...claims.keys(),
-      ...Object.keys(previousLock?.repositories ?? {}),
-      ...Object.keys(conflicts),
-    ]),
-  ].sort(compareUtf16CodeUnits);
-
-  for (const repoPath of allPaths) {
-    const pathClaims = claims.get(repoPath) ?? new Map();
-    const claimantIds = [...pathClaims.keys()].sort(compareUtf16CodeUnits);
-    const claimantAliases = claimantIds
-      .map((nodeId) => requireNode(nodes, nodeId).alias)
-      .sort(compareUtf16CodeUnits);
-    const previousNodeId = previousLock?.repositories[repoPath]?.nodeId ?? null;
-    const successor = previousOwnerSuccessor(repoPath, previousLock, currentNodeByUrl, claims);
-    const resolution = conflicts[repoPath];
-    let selected: string | null = null;
-
-    if (resolution !== undefined) {
-      if (resolution !== "ignore") {
-        selected = claimantIds.find((nodeId) => nodes.get(nodeId)?.alias === resolution) ?? null;
-        if (!selected) {
-          throw new TemplateConflictResolutionError(repoPath, resolution, claimantAliases);
-        }
-      }
-    } else if (successor) {
-      selected = successor;
-    } else if (localPaths.has(repoPath) || previousNodeId) {
-      selected = null;
-    } else if (claimantIds.length === 1) {
-      selected = claimantIds[0] ?? null;
-    } else if (claimantIds.length > 1) {
-      const maximal = maximalClaimants(claimantIds, ancestors);
-      if (maximal.length !== 1) {
-        throw new TemplateRepoConflictError(
-          repoPath,
-          maximal.map((nodeId) => requireNode(nodes, nodeId).alias).sort(compareUtf16CodeUnits)
-        );
-      }
-      selected = maximal[0] ?? null;
-    }
-
-    if (selected) {
-      const contribution = pathClaims.get(selected);
-      if (!contribution) {
-        throw new TemplateResolutionError(
-          "template-assignment-integrity",
-          `Selected template ${selected} does not contribute ${repoPath}`
-        );
-      }
-      repositories[repoPath] = contribution;
-    }
-    const previousUrl = lockNodeUrl(previousLock, previousNodeId);
-    const selectedUrl = selected ? requireNode(nodes, selected).pin.url : null;
-    const sameOwner = previousUrl !== null && selectedUrl !== null && previousUrl === selectedUrl;
-    if (previousNodeId && previousNodeId !== selected && !sameOwner) {
-      ownershipChanges.push({
-        repoPath,
-        fromNodeId: previousNodeId,
-        toNodeId: selected,
-        reason:
-          resolution !== undefined ? "explicit-resolution" : selected ? "transferred" : "orphaned",
-      });
-    } else if (!previousNodeId && resolution !== undefined && selected) {
-      ownershipChanges.push({
-        repoPath,
-        fromNodeId: null,
-        toNodeId: selected,
-        reason: "explicit-resolution",
-      });
-    }
-  }
 
   const lockNodes: WorkspaceTemplateLockNode[] = ordered.map((node) => ({
     nodeId: node.nodeId,
@@ -788,16 +596,20 @@ export async function resolveTemplateComposition(
   const lockRepositories = Object.fromEntries(
     Object.entries(repositories)
       .sort(([left], [right]) => compareUtf16CodeUnits(left, right))
-      .map(([repoPath, contribution]) => [
+      .map(([repoPath, composition]) => [
         repoPath,
-        { nodeId: contribution.nodeId, subtreeDigest: contribution.subtreeDigest },
+        {
+          contributions: composition.contributions.map(({ nodeId, subtreeDigest }) => ({
+            nodeId,
+            subtreeDigest,
+          })),
+        },
       ])
   );
   const lockWithoutFingerprint: Omit<WorkspaceTemplateLock, "fingerprint"> = {
     version: 1,
     roots: declaration.roots,
     overrides: declaration.overrides,
-    conflicts: declaration.conflicts,
     nodes: lockNodes,
     repositories: lockRepositories,
     verification: "verified",
@@ -813,7 +625,6 @@ export async function resolveTemplateComposition(
       lock: {
         roots: lock.roots,
         overrides: lock.overrides,
-        conflicts: lock.conflicts,
         nodes: lock.nodes,
         repositories: lock.repositories,
       },
@@ -841,7 +652,6 @@ export async function resolveTemplateComposition(
     nodes: resolvedNodes,
     repositories,
     localRepoPaths: [...localPaths].sort(compareUtf16CodeUnits),
-    ownershipChanges,
     lock,
     artifacts,
     removedArtifactPaths,
@@ -863,14 +673,6 @@ export function emptyTemplateComposition(
     nodes: [],
     repositories: {},
     localRepoPaths: [...normalizedPaths(localRepoPaths)].sort(compareUtf16CodeUnits),
-    ownershipChanges: Object.entries(checked?.repositories ?? {})
-      .sort(([left], [right]) => compareUtf16CodeUnits(left, right))
-      .map(([repoPath, repository]) => ({
-        repoPath,
-        fromNodeId: repository.nodeId,
-        toNodeId: null,
-        reason: "orphaned" as const,
-      })),
     lock: null,
     artifacts: [],
     removedArtifactPaths: [

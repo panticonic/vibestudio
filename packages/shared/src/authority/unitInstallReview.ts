@@ -459,8 +459,8 @@ export interface InstallReviewOrigin {
    * the trusted host bootstrap. Never inferred from how many units it owns.
    */
   isWorkspaceRoot?: boolean;
-  /** Present when the server could not prove where the bytes came from. */
-  originStatus?: "unresolved";
+  /** Present when no single source URL can honestly describe the repository. */
+  originStatus?: "unresolved" | "multiple-template-contributors";
   /** The user has not run code from this origin before. A fact, not a judgment. */
   firstEncounter: boolean;
 }

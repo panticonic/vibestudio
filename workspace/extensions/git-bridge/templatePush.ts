@@ -1,6 +1,5 @@
 import * as fsp from "node:fs/promises";
 import * as path from "node:path";
-import { Buffer } from "node:buffer";
 import {
   canonicalJson,
   compareUtf16CodeUnits,
@@ -14,11 +13,6 @@ import {
   withTemporaryGitCheckout,
   type GitCommitTreeEntry,
 } from "@vibestudio/git";
-import type {
-  VcsReadFileResult,
-  VcsResolveRepositoryResult,
-  VcsStatusResult,
-} from "@vibestudio/service-schemas/vcs";
 import { normalizeWorkspaceRepoPath } from "@vibestudio/workspace/remotes";
 import {
   normalizeTemplateGitUrl,
@@ -26,10 +20,10 @@ import {
 } from "@vibestudio/workspace/templateCoordinates";
 import { GitBridge, type ProtectedRepositorySnapshot } from "./bridge.js";
 import type { ExtensionContextLike } from "./context.js";
+import { ensureExternalSemanticIntent } from "./semanticIntent.js";
 
 const FULL_OID = /^[0-9a-f]{40}$/u;
 const NODE_ID = /^t-[0-9a-f]+$/u;
-const META_REPOSITORY = "meta";
 const INTENT_FILE = "template-suggestion-intent.json";
 const INTENT_CONTEXT_PREFIX = "context-template-suggestion-";
 const TRANSPORT_REMOTE = "vibestudio-template-contribution";
@@ -200,72 +194,17 @@ function contributionBranch(intent: SuggestionIntent): string {
   )}`;
 }
 
-function readText(file: NonNullable<VcsReadFileResult>): string {
-  return file.content.kind === "text"
-    ? file.content.text
-    : Buffer.from(file.content.base64, "base64").toString("utf8");
-}
-
 async function ensureSemanticIntent(
   ctx: ExtensionContextLike,
   intent: SuggestionIntent
 ): Promise<void> {
   const id = contextId(intent);
-  await ctx.rpc.call("main", "runtime.createContext", { contextId: id });
-  let status = await ctx.rpc.call<VcsStatusResult>("main", "vcs.status", {
+  await ensureExternalSemanticIntent({
+    ctx,
     contextId: id,
-  });
-  if (!status.clean) {
-    throw new Error(`Template suggestion intent context ${id} has uncommitted work`);
-  }
-  const meta = await ctx.rpc.call<VcsResolveRepositoryResult>("main", "vcs.resolveRepository", {
-    state: status.workingHead,
-    repoPath: META_REPOSITORY,
-  });
-  if (!meta) throw new Error("Template suggestion context has no meta repository");
-  const existing = await ctx.rpc.call<VcsReadFileResult>("main", "vcs.readFile", {
-    state: status.workingHead,
-    repositoryId: meta.repositoryId,
-    file: { kind: "path", path: INTENT_FILE },
-  });
-  if (existing) {
-    let observed: unknown;
-    try {
-      observed = JSON.parse(readText(existing));
-    } catch {
-      throw new Error(`Template suggestion intent context ${id} contains invalid JSON`);
-    }
-    if (canonicalJson(observed) !== canonicalJson(intent)) {
-      throw new Error(
-        `Template push command ${intent.operationId} was reused with different exact intent`
-      );
-    }
-    return;
-  }
-  await ctx.rpc.call("main", "vcs.edit", {
-    commandId: `${id}:record`,
-    contextId: id,
-    expectedWorkingHead: status.workingHead,
-    intentSummary: "Record exact template contribution intent",
-    changes: [
-      {
-        kind: "file-create",
-        repositoryId: meta.repositoryId,
-        path: INTENT_FILE,
-        content: { kind: "text", text: `${JSON.stringify(intent, null, 2)}\n` },
-        mode: 0o644,
-      },
-    ],
-  });
-  status = await ctx.rpc.call<VcsStatusResult>("main", "vcs.status", {
-    contextId: id,
-  });
-  await ctx.rpc.call("main", "vcs.commit", {
-    commandId: `${id}:commit`,
-    contextId: id,
-    expectedWorkingHead: status.workingHead,
-    intentSummary: "Commit exact template contribution intent",
-    message: `Record template suggestion ${intent.requestFingerprint}`,
+    fileName: INTENT_FILE,
+    intent,
+    operationLabel: `template push ${intent.operationId}`,
   });
 }
 

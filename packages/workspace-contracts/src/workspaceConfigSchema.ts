@@ -127,7 +127,6 @@ export const WorkspaceTemplatesConfigSchema = z
   .object({
     use: z.array(WorkspaceTemplateDeclarationSchema),
     overrides: z.record(WorkspaceTemplatePinSchema).optional(),
-    conflicts: z.record(z.string().trim().min(1)).optional(),
     registry: WorkspaceTemplateRegistryDeclarationSchema.optional(),
     bootstrapAdopted: WorkspaceTemplatePinSchema.optional(),
     suggestionDecisions: z
@@ -545,13 +544,18 @@ export const WorkspaceTemplateLockSchema = z
     /** The normalized top-layer declaration this generated lock realizes. */
     roots: z.array(WorkspaceTemplateDeclarationSchema),
     overrides: z.record(WorkspaceTemplatePinSchema),
-    conflicts: z.record(z.string().trim().min(1)),
     nodes: z.array(WorkspaceTemplateLockNodeSchema),
     repositories: z.record(
       z
         .object({
-          nodeId: z.string().regex(/^t-[0-9a-f]+$/),
-          subtreeDigest: z.string().regex(/^v1-sha256:[0-9a-f]{64}$/i),
+          contributions: z.array(
+            z
+              .object({
+                nodeId: z.string().regex(/^t-[0-9a-f]+$/),
+                subtreeDigest: z.string().regex(/^v1-sha256:[0-9a-f]{64}$/i),
+              })
+              .strict()
+          ),
         })
         .strict()
     ),

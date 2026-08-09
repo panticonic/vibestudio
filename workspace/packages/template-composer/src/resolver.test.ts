@@ -157,17 +157,13 @@ describe("resolveTemplateComposition", () => {
         roots: [{ url: newsUrl }],
         lock: initial.lock!,
         localRepoPaths: new Set(["packages/runtime", "panels/news"]),
-        externallyOwnedRepoPaths: new Set(),
         expectedSystemEpoch: epoch,
       },
       sources: ports([], snapshots),
     });
     expect(removed.plan.lock).toBeNull();
     expect(removed.plan.removedArtifactPaths).toContain("meta/templates.lock.yml");
-    expect(removed.plan.ownershipChanges.map((change) => change.repoPath)).toEqual([
-      "packages/runtime",
-      "panels/news",
-    ]);
+    expect(removed.plan.repositories).toEqual({});
 
     const addPorts = ports([browser], snapshots);
     const added = await resolveTemplateComposition({
@@ -217,6 +213,29 @@ describe("resolveTemplateComposition", () => {
       description: "Read and discuss personalized news briefings.",
     });
     expect(plan.nodes[0]!.fragment).not.toHaveProperty("template");
+  });
+
+  it("retains every overlapping repository contribution", async () => {
+    const base = pin(baseUrl, "a");
+    const news = pin(newsUrl, "b");
+    const plan = await resolveTemplateComposition({
+      roots: [{ url: baseUrl }, { url: newsUrl }],
+      expectedSystemEpoch: epoch,
+      ports: ports(
+        [base, news],
+        new Map([
+          [normalizeTemplateGitUrl(baseUrl), snapshot(base, [], "packages/runtime")],
+          [normalizeTemplateGitUrl(newsUrl), snapshot(news, [], "packages/runtime")],
+        ])
+      ),
+    });
+
+    expect(plan.repositories["packages/runtime"]!.contributions).toHaveLength(2);
+    expect(plan.lock!.repositories["packages/runtime"]!.contributions).toEqual(
+      plan.repositories["packages/runtime"]!.contributions.map(
+        ({ nodeId, subtreeDigest }) => ({ nodeId, subtreeDigest })
+      )
+    );
   });
 
   it("keeps a hostile self-given name out of workspace state entirely", async () => {

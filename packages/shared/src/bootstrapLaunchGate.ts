@@ -173,6 +173,9 @@ export function sourceLabel(origin: InstallReviewOrigin): string {
   if (origin.isHostBuild) {
     return origin.version ? `Vibestudio ${origin.version}` : "Vibestudio";
   }
+  if (origin.originStatus === "multiple-template-contributors") {
+    return "Multiple template contributions — inspect file history for exact sources";
+  }
   if (origin.originStatus === "unresolved" || !origin.url) return "";
   return origin.version ? `${origin.url}  at ${origin.version}` : origin.url;
 }

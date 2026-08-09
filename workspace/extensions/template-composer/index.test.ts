@@ -15,7 +15,6 @@ import {
   loadTemplateCatalog,
   mergeAcceptedTemplateSuggestion,
   operationReviewForTemplate,
-  resolveRepositoryConflictChoices,
 } from "./index.js";
 import { bootstrapWorkspaceSource, projectBootstrapRuntimeToSource } from "./workspace.js";
 
@@ -55,7 +54,6 @@ function inspection(): TemplateOperationInspection {
       ],
       repositories: {},
       localRepoPaths: [],
-      ownershipChanges: [],
       lock: null,
       artifacts: [],
       removedArtifactPaths: [],
@@ -71,8 +69,7 @@ function approvedRecord(): TemplateOperationRecord {
     fingerprint: inspection().plan.fingerprint,
     intent: { kind: "pull", target: oldPin },
     pins: [oldPin],
-    addedParts: [],
-    orphanedParts: [],
+    affectedParts: [],
   };
 }
 
@@ -172,6 +169,7 @@ describe("template composer operation resumption", () => {
         inspection: inspection(),
         intent: { kind: "pull", target: oldPin },
         existing: approvedRecord(),
+        affectedParts: [],
         persist,
       })
     ).resolves.toMatchObject({ resumed: true });
@@ -189,31 +187,11 @@ describe("template composer operation resumption", () => {
     expect(fallback).not.toHaveBeenCalled();
   });
 
-  it("includes reviewed same-owner updates in the affected build set", () => {
-    expect(affectedRepositoryPaths([], ["panels/news"], [])).toEqual(["panels/news"]);
-  });
-
-  it("turns keep/take/skip into explicit durable claimant decisions", () => {
-    const conflict = {
-      kind: "repository" as const,
-      repoPath: "panels/shared",
-      claimants: ["base", "news"],
-    };
-    const observation = {
-      lock: {
-        nodes: [{ nodeId: "t-base", alias: "base" }],
-        repositories: { "panels/shared": { nodeId: "t-base" } },
-      },
-    } as never;
-    expect(
-      resolveRepositoryConflictChoices([conflict], { "panels/shared": "keep" }, observation)
-    ).toEqual({ "panels/shared": "base" });
-    expect(
-      resolveRepositoryConflictChoices([conflict], { "panels/shared": "take" }, observation)
-    ).toEqual({ "panels/shared": "news" });
-    expect(
-      resolveRepositoryConflictChoices([conflict], { "panels/shared": "skip" }, observation)
-    ).toEqual({ "panels/shared": "ignore" });
+  it("includes every merged contribution in the affected build set", () => {
+    expect(affectedRepositoryPaths(["panels/news", "packages/shared"])).toEqual([
+      "packages/shared",
+      "panels/news",
+    ]);
   });
 
   it("merges accepted exact trust suggestions without replacing existing grants", () => {

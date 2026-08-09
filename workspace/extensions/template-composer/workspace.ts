@@ -28,7 +28,6 @@ import {
 } from "@vibestudio/workspace/configComposition";
 import type { TemplateWorkspaceObservation } from "@workspace/template-composer";
 import type { ExtensionContextLike } from "./context.js";
-import { listSemanticRepositoryFiles, semanticRepositoryDigest } from "./semanticRepository.js";
 
 export const OBSERVATION_CONTEXT = "template-composer-observation";
 export const META_REPOSITORY = "meta";
@@ -43,7 +42,6 @@ export interface SemanticWorkspaceObservation extends TemplateWorkspaceObservati
   runtimeTop: WorkspaceRuntimeManifest;
   top: ReturnType<typeof WorkspaceConfigTopLayerSchema.parse>;
   metaRepository: NonNullable<VcsResolveRepositoryResult>;
-  modifiedTemplateRepoPaths: ReadonlySet<string>;
 }
 
 type WorkspaceTopLayer = ReturnType<typeof WorkspaceConfigTopLayerSchema.parse>;
@@ -257,40 +255,18 @@ export async function observeWorkspace(
       : WorkspaceConfigTopLayerSchema.parse({ ...runtimeTop, templates });
   }
   const localRepoPaths = await repositoryPaths(ctx, mainState);
-  const modifiedTemplateRepoPaths = new Set<string>();
-  for (const repoPath of Object.keys(lock?.repositories ?? {})) {
-    localRepoPaths.delete(repoPath);
-    const repository = await ctx.rpc.call<VcsResolveRepositoryResult>(
-      "main",
-      "vcs.resolveRepository",
-      { state: mainState, repoPath }
-    );
-    const expected = lock?.repositories[repoPath];
-    if (
-      !repository ||
-      !expected ||
-      semanticRepositoryDigest(
-        await listSemanticRepositoryFiles(ctx, mainState, repository.repositoryId)
-      ) !== expected.subtreeDigest
-    ) {
-      modifiedTemplateRepoPaths.add(repoPath);
-    }
-  }
   return {
     workspaceId: info.id,
     runtimeTop,
     roots: top.templates?.use ?? [],
     ...(lock ? { lock } : {}),
     localRepoPaths,
-    externallyOwnedRepoPaths: new Set(),
-    conflicts: top.templates?.conflicts,
     overrides: top.templates?.overrides,
     expectedSystemEpoch: top.systemEpoch,
     mainEventId: status.mainEventId,
     mainState,
     top,
     metaRepository,
-    modifiedTemplateRepoPaths,
   };
 }
 

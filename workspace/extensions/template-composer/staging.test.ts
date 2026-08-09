@@ -21,9 +21,14 @@ vi.mock("./source.js", () => ({
 }));
 
 import {
+  clearTemplateOperationRecordFile,
+  createTemplateOperationPorts,
   isTemplateOperationCancelled,
+  mergeTemplateContributions,
   readTemplateOperationRecord,
-  reviewTemplateUpdates,
+  TemplateOperationMainAdvanced,
+  TemplateReviewRequired,
+  updateTemplateOperationRecord,
 } from "./staging.js";
 
 const BASE = { kind: "event", eventId: "event-base" } as const;
@@ -67,6 +72,246 @@ describe("template composer staging", () => {
     ).resolves.toBe(true);
   });
 
+  it("recreates repair state after metadata staging removed the temporary record", async () => {
+    const call = vi.fn(async (_target: string, method: string) => {
+      if (method === "runtime.createContext") return {};
+      if (method === "vcs.status") {
+        return { committed: BASE, workingHead: BASE, clean: true };
+      }
+      if (method === "vcs.resolveRepository") {
+        return { repositoryId: "repository:meta", repoPath: "meta" };
+      }
+      if (method === "vcs.readFile") return null;
+      if (method === "vcs.edit" || method === "vcs.commit") return {};
+      throw new Error(`unexpected RPC ${method}`);
+    });
+    const record = {
+      version: 1 as const,
+      operationId: "repair-news",
+      kind: "pull" as const,
+      fingerprint: `v1-sha256:${"a".repeat(64)}`,
+      intent: { kind: "pull" },
+      pins: [],
+      affectedParts: ["panels/news"],
+      preparedAffectedRepoPaths: ["panels/news"],
+      buildFailures: [{ unit: "panels/news", message: "type error" }],
+    };
+
+    await updateTemplateOperationRecord({ rpc: { call } } as never, record);
+
+    expect(call).toHaveBeenCalledWith(
+      "main",
+      "vcs.edit",
+      expect.objectContaining({
+        changes: [
+          expect.objectContaining({ kind: "file-create", path: "template-operations/record.json" }),
+        ],
+      })
+    );
+  });
+
+  it("treats an already-persisted repair record as an idempotent retry", async () => {
+    const record = {
+      version: 1 as const,
+      operationId: "repair-news",
+      kind: "pull" as const,
+      fingerprint: `v1-sha256:${"a".repeat(64)}`,
+      intent: { kind: "pull" },
+      pins: [],
+      affectedParts: ["panels/news"],
+      buildFailures: [{ unit: "panels/news", message: "type error" }],
+    };
+    const call = vi.fn(async (_target: string, method: string) => {
+      if (method === "runtime.createContext") return {};
+      if (method === "vcs.status") return { committed: BASE, workingHead: BASE, clean: true };
+      if (method === "vcs.resolveRepository") {
+        return { repositoryId: "repository:meta", repoPath: "meta" };
+      }
+      if (method === "vcs.readFile") {
+        return {
+          fileId: "file:record",
+          content: { kind: "text", text: `${JSON.stringify(record, null, 2)}\n` },
+        };
+      }
+      throw new Error(`unexpected RPC ${method}`);
+    });
+
+    await updateTemplateOperationRecord({ rpc: { call } } as never, record);
+
+    expect(call).not.toHaveBeenCalledWith("main", "vcs.edit", expect.anything());
+    expect(call).not.toHaveBeenCalledWith("main", "vcs.commit", expect.anything());
+  });
+
+  it("removes temporary repair state before publishing the repaired context", async () => {
+    const call = vi.fn(async (_target: string, method: string) => {
+      if (method === "runtime.createContext") return {};
+      if (method === "vcs.status") {
+        return { committed: BASE, workingHead: BASE, clean: true };
+      }
+      if (method === "vcs.resolveRepository") {
+        return { repositoryId: "repository:meta", repoPath: "meta" };
+      }
+      if (method === "vcs.readFile")
+        return { fileId: "file:record", content: { kind: "text", text: "{}" } };
+      if (method === "vcs.edit" || method === "vcs.commit") return {};
+      throw new Error(`unexpected RPC ${method}`);
+    });
+
+    await clearTemplateOperationRecordFile({ rpc: { call } } as never, "repair-news");
+
+    expect(call).toHaveBeenCalledWith(
+      "main",
+      "vcs.edit",
+      expect.objectContaining({
+        changes: [expect.objectContaining({ kind: "file-delete", fileId: "file:record" })],
+      })
+    );
+  });
+
+  it("returns an actionable stale-main error when reopening an operation context", async () => {
+    const call = vi.fn(async (_target: string, method: string) => {
+      if (method === "runtime.createContext") return {};
+      if (method === "vcs.status") {
+        return {
+          committed: BASE,
+          workingHead: BASE,
+          clean: true,
+          mainRelation: "behind",
+          mainEventId: "event:new-main",
+        };
+      }
+      throw new Error(`unexpected RPC ${method}`);
+    });
+    const ports = createTemplateOperationPorts(
+      { rpc: { call } } as never,
+      "/state",
+      { localRepoPaths: [] } as never,
+      vi.fn()
+    );
+
+    await expect(ports.openContext("pull-news")).rejects.toMatchObject({
+      name: "TemplateOperationMainAdvanced",
+      contextId: expect.stringMatching(/^template-composer-operation-/u),
+      mainEventId: "event:new-main",
+      relation: "behind",
+    } satisfies Partial<TemplateOperationMainAdvanced>);
+  });
+
+  it("returns an actionable stale-main error when main advances before publication", async () => {
+    const call = vi.fn(async (_target: string, method: string) => {
+      if (method === "vcs.status") {
+        return {
+          committed: BASE,
+          workingHead: BASE,
+          clean: true,
+          mainRelation: "diverged",
+          mainEventId: "event:new-main",
+        };
+      }
+      throw new Error(`unexpected RPC ${method}`);
+    });
+    const ports = createTemplateOperationPorts(
+      { rpc: { call } } as never,
+      "/state",
+      { localRepoPaths: [] } as never,
+      vi.fn()
+    );
+
+    await expect(ports.publish("operation-context", "event:old-main")).rejects.toMatchObject({
+      name: "TemplateOperationMainAdvanced",
+      contextId: "operation-context",
+      mainEventId: "event:new-main",
+      relation: "diverged",
+    } satisfies Partial<TemplateOperationMainAdvanced>);
+    expect(call).not.toHaveBeenCalledWith("main", "vcs.push", expect.anything());
+  });
+
+  it("surfaces an overlapping contribution as an ordinary VCS review delta", async () => {
+    let imported = false;
+    const call = vi.fn(async (_target: string, method: string, input: Record<string, unknown>) => {
+      if (method === "vcs.status") {
+        return { committed: BASE, workingHead: BASE, clean: true };
+      }
+      if (method === "vcs.resolveRepository") {
+        return imported
+          ? { repositoryId: "repository:runtime", repoPath: "packages/runtime" }
+          : null;
+      }
+      if (method === "vcs.importSnapshot") {
+        imported = true;
+        return {};
+      }
+      if (method === "vcs.registerExternalDelta") return { deltaId: "delta:overlay" };
+      if (method === "vcs.compare") {
+        return { resolution: { complete: false, concluded: false } };
+      }
+      throw new Error(`unexpected RPC ${method}: ${JSON.stringify(input)}`);
+    });
+    const contribution = (nodeId: string, alias: string, digit: string) => ({
+      nodeId,
+      alias,
+      subdir: "packages/runtime",
+      subtreeDigest: `v1-sha256:${digit.repeat(64)}`,
+      files: [{ path: "index.ts", contentHash: digit.repeat(64), size: 1, mode: 0o644 }],
+    });
+    const plan = {
+      nodes: [
+        {
+          nodeId: "t-base",
+          pin: {
+            url: "git+https://example.test/base.git",
+            ref: "refs/tags/v1",
+            commit: "1".repeat(40),
+            snapshot: `v1-sha256:${"1".repeat(64)}`,
+          },
+        },
+        {
+          nodeId: "t-feature",
+          pin: {
+            url: "git+https://example.test/feature.git",
+            ref: "refs/tags/v1",
+            commit: "2".repeat(40),
+            snapshot: `v1-sha256:${"2".repeat(64)}`,
+          },
+        },
+      ],
+      repositories: {
+        "packages/runtime": {
+          repoPath: "packages/runtime",
+          contributions: [
+            contribution("t-base", "base", "1"),
+            contribution("t-feature", "feature", "2"),
+          ],
+        },
+      },
+    };
+
+    await expect(
+      mergeTemplateContributions(
+        { rpc: { call } } as never,
+        "/state",
+        "operation-overlay",
+        plan as never,
+        undefined
+      )
+    ).rejects.toMatchObject({
+      name: "TemplateReviewRequired",
+      contextId: "operation-overlay",
+      items: [{ repoPath: "packages/runtime", deltaId: "delta:overlay" }],
+      deltaBasis: BASE,
+    } satisfies Partial<TemplateReviewRequired>);
+    expect(call).toHaveBeenCalledWith(
+      "main",
+      "vcs.registerExternalDelta",
+      expect.objectContaining({
+        repoPath: "packages/runtime",
+        oldFiles: [],
+        newFiles: [expect.objectContaining({ path: "index.ts" })],
+      })
+    );
+    expect(call).not.toHaveBeenCalledWith("main", "vcs.finalizeExternalDelta", expect.anything());
+  });
+
   it("registers every repository delta before reconciliation mutates the context", async () => {
     const registrations: string[] = [];
     let integrationStarted = false;
@@ -91,10 +336,16 @@ describe("template composer staging", () => {
         }
         const repoPath = String(input["repoPath"]);
         registrations.push(repoPath);
-        return { deltaId: `delta-${repoPath}` };
+        return { deltaId: `delta-${repoPath}-${registrations.length}` };
       }
       if (method === "vcs.compare") {
-        return { resolution: { complete: true, remainingCoordinateCount: 0, concluded: integrationStarted } };
+        return {
+          resolution: {
+            complete: true,
+            remainingCoordinateCount: 0,
+            concluded: integrationStarted,
+          },
+        };
       }
       if (method === "vcs.merge") {
         integrationStarted = true;
@@ -125,34 +376,66 @@ describe("template composer staging", () => {
       { path: "index.ts", contentHash, size: 1, mode: 0o644 as const },
     ];
     const plan = {
-      nodes: [{ nodeId: "t-next", pin: nextPin }],
+      nodes: [
+        { nodeId: "t-next", pin: nextPin },
+        {
+          nodeId: "t-news",
+          pin: {
+            url: "git+https://example.test/news.git",
+            ref: "refs/tags/v1",
+            commit: "3".repeat(40),
+            snapshot: `v1-sha256:${"e".repeat(64)}`,
+          },
+        },
+      ],
       repositories: {
         "panels/one": {
-          nodeId: "t-next",
-          alias: "template",
-          subdir: "panels/one",
-          subtreeDigest: `v1-sha256:${"c".repeat(64)}`,
-          files: files(NEW_ONE),
+          repoPath: "panels/one",
+          contributions: [
+            {
+              nodeId: "t-next",
+              alias: "template",
+              subdir: "panels/one",
+              subtreeDigest: `v1-sha256:${"c".repeat(64)}`,
+              files: files(NEW_ONE),
+            },
+            {
+              nodeId: "t-news",
+              alias: "news",
+              subdir: "panels/one",
+              subtreeDigest: `v1-sha256:${"e".repeat(64)}`,
+              files: files("5".repeat(64)),
+            },
+          ],
         },
         "panels/two": {
-          nodeId: "t-next",
-          alias: "template",
-          subdir: "panels/two",
-          subtreeDigest: `v1-sha256:${"d".repeat(64)}`,
-          files: files(NEW_TWO),
+          repoPath: "panels/two",
+          contributions: [
+            {
+              nodeId: "t-next",
+              alias: "template",
+              subdir: "panels/two",
+              subtreeDigest: `v1-sha256:${"d".repeat(64)}`,
+              files: files(NEW_TWO),
+            },
+          ],
         },
       },
     };
     const previous = {
       nodes: [{ nodeId: "t-old", pin: previousPin }],
       repositories: {
-        "panels/one": { nodeId: "t-old", subtreeDigest: oldOneDigest },
-        "panels/two": { nodeId: "t-old", subtreeDigest: oldTwoDigest },
+        "panels/one": {
+          contributions: [{ nodeId: "t-old", subtreeDigest: oldOneDigest }],
+        },
+        "panels/two": {
+          contributions: [{ nodeId: "t-old", subtreeDigest: oldTwoDigest }],
+        },
       },
     };
 
     await expect(
-      reviewTemplateUpdates(
+      mergeTemplateContributions(
         { rpc: { call } } as never,
         "/state",
         "operation-1",
@@ -160,7 +443,7 @@ describe("template composer staging", () => {
         previous as never
       )
     ).resolves.toEqual(["panels/one", "panels/two"]);
-    expect(registrations).toEqual(["panels/one", "panels/two"]);
+    expect(registrations).toEqual(["panels/one", "panels/one", "panels/two"]);
     expect(integrationStarted).toBe(true);
   });
 });

@@ -237,6 +237,48 @@ export class GitBridge {
         `Protected main changed from ${mainEventId} to ${status.mainEventId} before template export`
       );
     }
+    return this.readRepositoryAtEvent(repo, mainEventId);
+  }
+
+  /**
+   * Read a complete multi-repository publication from one exact protected-main
+   * event. Publication is one reviewed workspace operation, so it owns one
+   * stable observation context rather than acquiring one context boundary per
+   * source repository. Unpublished import candidates do not alter the exact
+   * protected-main event and are intentionally outside this projection.
+   */
+  async readProtectedRepositories(
+    repoPaths: readonly string[],
+    mainEventId: string,
+    operationId: string
+  ): Promise<ProtectedRepositorySnapshot[]> {
+    if (!operationId.trim()) throw new Error("Template publication operationId is required");
+    const repos = repoPaths.map(normalizeWorkspaceRepoPath);
+    if (new Set(repos).size !== repos.length) {
+      throw new Error("Template publication contains duplicate repositories");
+    }
+    const contextId = `git-bridge-template-publication-${sha256HexSyncText(operationId).slice(0, 24)}`;
+    await this.host.ensureContext(contextId);
+    const status = await this.host.vcs.status({ contextId });
+    if (status.mainEventId !== mainEventId) {
+      throw new Error(
+        `Protected main changed from ${mainEventId} to ${status.mainEventId} before template export`
+      );
+    }
+    const snapshots: ProtectedRepositorySnapshot[] = [];
+    for (const repo of repos) {
+      // A base template can contain the whole workspace. Keep the semantic
+      // snapshot stream bounded instead of opening one concurrent Durable
+      // Object request graph per repository.
+      snapshots.push(await this.readRepositoryAtEvent(repo, mainEventId));
+    }
+    return snapshots;
+  }
+
+  private async readRepositoryAtEvent(
+    repo: string,
+    mainEventId: string
+  ): Promise<ProtectedRepositorySnapshot> {
     const state = { kind: "event" as const, eventId: mainEventId };
     const repository = await this.findRepository(state, repo);
     if (!repository) throw new Error(`Cannot export absent repository '${repo}'`);

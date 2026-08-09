@@ -34,9 +34,7 @@ ordinary commit records the child source in ancestry.
 
 ## Decline a supervised child
 
-Before any integration decision, `close_subagent({discard:true})` records only
-the lifecycle disposition. After integration begins it refuses because close
-never mutates the workspace. Call `merge_subagent` with `allRemaining: ours`
-to decline every remainder explicitly, then close normally. If the child is
-already closed, use the receipt's retained `sourceEventId` with the raw VCS
-recipe returned by the refusal.
+Call `merge_subagent` with `allRemaining: ours` to decline every remainder
+explicitly. This records a semantic decision in the parent working chain.
+Execution lifecycle never substitutes for that decision: terminal child
+results are retained automatically and need no cleanup operation.

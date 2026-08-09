@@ -26,13 +26,11 @@ import {
 export interface TemplateLockDeclaration {
   roots: WorkspaceTemplateDeclaration[];
   overrides: Record<string, WorkspaceTemplatePin>;
-  conflicts: Record<string, string>;
 }
 
 export interface TemplateLockDeclarationInput {
   use?: readonly WorkspaceTemplateDeclaration[];
   overrides?: Readonly<Record<string, WorkspaceTemplatePin>>;
-  conflicts?: Readonly<Record<string, string>>;
 }
 
 export class TemplateLockIntegrityError extends Error {
@@ -65,7 +63,7 @@ export function templateSuggestionDigest(
 /**
  * Normalize the sole set of workspace-authored inputs to template resolution.
  * The lock persists this exact normalized value, rather than trying to infer
- * roots, overrides, or ignored conflicts from the resolved closure.
+ * roots or overrides from the resolved closure.
  */
 export function normalizeTemplateLockDeclaration(
   templates: TemplateLockDeclarationInput | WorkspaceTemplatesConfig | undefined
@@ -98,19 +96,7 @@ export function normalizeTemplateLockDeclaration(
   }
   overrideEntries.sort(([left], [right]) => compareUtf16CodeUnits(left, right));
 
-  const conflictEntries = Object.entries(templates?.conflicts ?? {})
-    .map(([repoPath, resolution]) => [normalizeWorkspaceRepoPath(repoPath), resolution] as const)
-    .sort(([left], [right]) => compareUtf16CodeUnits(left, right));
-  const conflicts: Record<string, string> = {};
-  for (const [repoPath, resolution] of conflictEntries) {
-    if (conflicts[repoPath] !== undefined && conflicts[repoPath] !== resolution) {
-      throw new TemplateLockIntegrityError(
-        `Template conflicts declare incompatible resolutions for ${repoPath}`
-      );
-    }
-    conflicts[repoPath] = resolution;
-  }
-  return { roots, overrides: Object.fromEntries(overrideEntries), conflicts };
+  return { roots, overrides: Object.fromEntries(overrideEntries) };
 }
 
 /**
@@ -131,7 +117,6 @@ export function templateLockFingerprint(
       version: lock.version,
       roots: lock.roots,
       overrides: lock.overrides,
-      conflicts: lock.conflicts,
       nodes: lock.nodes,
       repositories: lock.repositories,
     })
@@ -142,12 +127,10 @@ function assertCanonicalDeclaration(lock: WorkspaceTemplateLock): TemplateLockDe
   const declaration = normalizeTemplateLockDeclaration({
     use: lock.roots,
     overrides: lock.overrides,
-    conflicts: lock.conflicts,
   });
   if (
     canonicalJson(declaration.roots) !== canonicalJson(lock.roots) ||
-    canonicalJson(declaration.overrides) !== canonicalJson(lock.overrides) ||
-    canonicalJson(declaration.conflicts) !== canonicalJson(lock.conflicts)
+    canonicalJson(declaration.overrides) !== canonicalJson(lock.overrides)
   ) {
     throw new TemplateLockIntegrityError(
       "Template lock declaration is not normalized; regenerate the template lock"
@@ -163,7 +146,6 @@ export function assertTemplateLockIntegrityForRead(input: unknown): WorkspaceTem
     version: lock.version,
     roots: lock.roots,
     overrides: lock.overrides,
-    conflicts: lock.conflicts,
     nodes: lock.nodes,
     repositories: lock.repositories,
     verification: lock.verification,
@@ -266,28 +248,36 @@ export function assertTemplateLockIntegrityForRead(input: unknown): WorkspaceTem
       );
     }
   }
-  for (const [repoPath, resolution] of Object.entries(declaration.conflicts)) {
-    const repository = lock.repositories[repoPath];
-    if (resolution === "ignore") {
-      if (repository)
-        throw new TemplateLockIntegrityError(
-          `Template lock conflict ${repoPath} is ignored but still has an owner`
-        );
-      continue;
-    }
-    const owner = repository && nodeById.get(repository.nodeId);
-    if (!owner || owner.alias !== resolution) {
-      throw new TemplateLockIntegrityError(
-        `Template lock conflict ${repoPath} does not select ${JSON.stringify(resolution)}`
-      );
-    }
-  }
   for (const [repoPath, repository] of Object.entries(lock.repositories)) {
     normalizeWorkspaceRepoPath(repoPath);
-    if (!ids.has(repository.nodeId))
+    if (repository.contributions.length === 0) {
       throw new TemplateLockIntegrityError(
-        `Template lock repository ${repoPath} names missing node ${repository.nodeId}`
+        `Template lock repository ${repoPath} has no contributions`
       );
+    }
+    const contributionIds = repository.contributions.map(({ nodeId }) => nodeId);
+    if (new Set(contributionIds).size !== contributionIds.length) {
+      throw new TemplateLockIntegrityError(
+        `Template lock repository ${repoPath} repeats a contribution`
+      );
+    }
+    for (const nodeId of contributionIds) {
+      if (!ids.has(nodeId)) {
+        throw new TemplateLockIntegrityError(
+          `Template lock repository ${repoPath} names missing node ${nodeId}`
+        );
+      }
+    }
+    for (let index = 1; index < contributionIds.length; index += 1) {
+      if (
+        (positions.get(contributionIds[index - 1]!) ?? Infinity) >=
+        (positions.get(contributionIds[index]!) ?? -1)
+      ) {
+        throw new TemplateLockIntegrityError(
+          `Template lock repository ${repoPath} contributions are not in closure order`
+        );
+      }
+    }
   }
   return lock;
 }
@@ -308,11 +298,10 @@ export function assertTemplateLockMatchesTopLayer(
     canonicalJson({
       roots: checked.roots,
       overrides: checked.overrides,
-      conflicts: checked.conflicts,
     }) !== canonicalJson(declared)
   ) {
     throw new TemplateLockIntegrityError(
-      "Template lock does not match the top-layer roots, overrides, and conflicts; regenerate the template lock"
+      "Template lock does not match the top-layer roots and overrides; regenerate the template lock"
     );
   }
   return checked;

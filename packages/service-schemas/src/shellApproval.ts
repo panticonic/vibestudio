@@ -248,7 +248,7 @@ const installReviewOriginSchema = z
     selfName: z.string().optional(),
     isHostBuild: z.boolean(),
     isWorkspaceRoot: z.boolean().optional(),
-    originStatus: z.literal("unresolved").optional(),
+    originStatus: z.enum(["unresolved", "multiple-template-contributors"]).optional(),
     firstEncounter: z.boolean(),
   })
   .strict() satisfies z.ZodType<InstallReviewOrigin>;
