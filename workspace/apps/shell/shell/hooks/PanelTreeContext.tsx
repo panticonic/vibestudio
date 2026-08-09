@@ -522,13 +522,22 @@ export function useFullPanel(panelId: string | null): {
   const [loading, setLoading] = useState(Boolean(panelId));
   const nextRequestRef = useRef(0);
   const appliedRequestRef = useRef(0);
+  const appliedHostViewRevisionRef = useRef(0);
   const applyPresentation = useCallback(
     (presentation: Awaited<ReturnType<typeof panel.getPresentation>>, request: number) => {
       if (!presentation || presentation.id !== panelId) return;
-      // Event-driven and initial reads can overlap. Never let an older RPC
-      // response replace a newer materialization identity and strand the pane
-      // on its preparing surface after the native view is already ready.
-      if (request < appliedRequestRef.current) return;
+      // Event-driven and initial reads can overlap. Request start order is not
+      // presentation order: an earlier request can finish its durable refresh
+      // after a later one and therefore carry the newer native view. Order
+      // primarily by the host's monotonic view revision, using request order
+      // only to break ties between projections of the same native view.
+      if (presentation.hostViewRevision < appliedHostViewRevisionRef.current) return;
+      if (
+        presentation.hostViewRevision === appliedHostViewRevisionRef.current &&
+        request < appliedRequestRef.current
+      )
+        return;
+      appliedHostViewRevisionRef.current = presentation.hostViewRevision;
       appliedRequestRef.current = request;
       const source = presentation.snapshot.source;
       setValue({

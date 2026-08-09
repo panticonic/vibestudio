@@ -435,6 +435,62 @@ describe("useFullPanel local presentation", () => {
       "panel:nav-current"
     );
   });
+
+  it("accepts a newer host view observed by an earlier overlapping request", async () => {
+    const preparing = {
+      id: "panel:tree/a",
+      title: "Panel",
+      runtimeEntityId: "panel:nav-a",
+      buildKey: "b".repeat(64),
+      parentId: null,
+      position: 0,
+      selectedChildId: null,
+      children: [],
+      snapshot: { source: "panels/ready", contextId: "context-a", options: {} },
+      artifacts: { buildState: "pending", buildProgress: "Preparing panel runtime..." },
+      hostViewRevision: 1,
+    };
+    const ready = {
+      ...preparing,
+      artifacts: {
+        buildState: "ready",
+        htmlPath: "/ready",
+        hostedRuntimeEntityId: "panel:nav-a",
+      },
+      hostViewRevision: 2,
+    };
+    let resolveInitial!: (value: typeof ready) => void;
+    let resolveRefresh!: (value: typeof preparing) => void;
+    getPresentation
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveInitial = resolve;
+          })
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveRefresh = resolve;
+          })
+      );
+
+    render(<FullPanelProbe panelId="panel:tree/a" />);
+    await waitFor(() => expect(getPresentation).toHaveBeenCalledOnce());
+    act(() => {
+      presentationChangeHandler?.({ revision: 2, panelIds: ["panel:tree/a"] });
+    });
+    await waitFor(() => expect(getPresentation).toHaveBeenCalledTimes(2));
+
+    await act(async () => resolveRefresh(preparing));
+    expect(screen.getByTestId("full-panel").textContent).toBe("panel:tree/a:pending");
+
+    await act(async () => resolveInitial(ready));
+    expect(screen.getByTestId("full-panel").textContent).toBe("panel:tree/a:ready");
+    expect(screen.getByTestId("full-panel").dataset["hostedRuntimeEntityId"]).toBe(
+      "panel:nav-a"
+    );
+  });
 });
 
 describe("PanelTreeProvider pin reconciliation", () => {
