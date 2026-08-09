@@ -1,8 +1,0 @@
-{
-  "mcpServers": {
-    "vibestudio": {
-      "command": "vibestudio",
-      "args": ["claude", "channel-host"]
-    }
-  }
-}

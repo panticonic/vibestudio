@@ -7,14 +7,8 @@ import { SessionManager } from "./sessionManager.js";
 import { prepareVscodeShellIntegrationLaunch } from "./shellIntegrationEnv.js";
 import { SnugServer } from "./snugServer.js";
 import { nodeSetInterval } from "./nodeTimers.js";
-import { LaunchAdapterRegistry } from "./launchAdapters.js";
-import {
-  createContextRequestSchema,
-  execRequestSchema,
-  launchAdapterSchema,
-  openRequestSchema,
-  unregisterLaunchAdapterSchema,
-} from "./types.js";
+import { detectAgent } from "./detectAgent.js";
+import { createContextRequestSchema, execRequestSchema, openRequestSchema } from "./types.js";
 
 const BLOCKED_ENV = /^(LD_PRELOAD|NODE_OPTIONS|PYTHONSTARTUP|SHELL)$|^DYLD_/;
 const SCRATCH_LIMIT_BYTES = 25 * 1024 * 1024;
@@ -111,14 +105,6 @@ function currentInvocationContextId(ctx: ExtensionContext): string | undefined {
   return invocation?.chainCaller?.contextId ?? invocation?.caller.contextId;
 }
 
-function currentExtensionCaller(ctx: ExtensionContext, method: string): string {
-  const caller = ctx.invocation.current()?.caller;
-  if (!caller || caller.callerKind !== "extension") {
-    throw error("EACCES", `shell.${method} is only available to extension callers`);
-  }
-  return caller.callerId;
-}
-
 /** Public API surface of this extension — the awaited return of {@link activate}. */
 export type Api = Awaited<ReturnType<typeof activate>>;
 declare module "@vibestudio/extension" {
@@ -153,27 +139,6 @@ async function contextRevisionDisplay(
 
 export async function activate(ctx: ExtensionContext) {
   const workspace = await ctx.workspace.getInfo();
-  // Launch-adapter registry (§4.3) — the single mechanism for recognizing and
-  // optionally enriching agent launches. Seeded with the built-in detect-only
-  // adapters; extensions add/replace entries via registerLaunchAdapter.
-  const launchAdapters = new LaunchAdapterRegistry();
-  const launchAdapterOwners = new Map<string, string>();
-  const launchCleanups = new Map<string, { extension: string; method: string; args: unknown[] }>();
-  const runLaunchCleanup = (sessionId: string): void => {
-    const cleanup = launchCleanups.get(sessionId);
-    if (!cleanup) return;
-    launchCleanups.delete(sessionId);
-    void ctx.extensions
-      .invoke(cleanup.extension, cleanup.method, cleanup.args)
-      .catch((err: unknown) => {
-        ctx.log.warn?.("launch adapter cleanup failed", {
-          sessionId,
-          extension: cleanup.extension,
-          method: cleanup.method,
-          error: err instanceof Error ? err.message : String(err),
-        });
-      });
-  };
   const freshContextTokens = new Map<
     string,
     { contextId: string; callerId: string; expiresAt: number }
@@ -183,15 +148,13 @@ export async function activate(ctx: ExtensionContext) {
     {
       onExit: (sessionId) => {
         snug.unregister(sessionId);
-        runLaunchCleanup(sessionId);
       },
       onDispose: (sessionId) => {
         snug.unregister(sessionId);
-        runLaunchCleanup(sessionId);
       },
     },
     {
-      detectAgent: (argv) => launchAdapters.detect(argv),
+      detectAgent,
       resolveContextRevision: (contextId) => contextRevisionDisplay(ctx, contextId),
     }
   );
@@ -399,69 +362,19 @@ export async function activate(ctx: ExtensionContext) {
       );
       const root = await confinementRoot(parsed.contextId);
       const cwd = resolveWithin(root, parsed.cwd);
-      let command = parsed.command ?? process.env["SHELL"] ?? "/bin/bash";
-      let args = parsed.args;
+      const command = parsed.command ?? process.env["SHELL"] ?? "/bin/bash";
+      const args = parsed.args;
       const {
         env: _env,
         cwd: _cwd,
         command: _command,
         contextId: _ctxId,
         contextAttachToken: _contextAttachToken,
-        launchIntent: _launchIntent,
         ...openReq
       } = parsed;
-      // Launch-adapter enrichment (§4.3): for a context-scoped session whose
-      // resolved argv matches an adapter with a handler, invoke the handler
-      // BEFORE approval/spawn so its env/argv rewrites are what the user
-      // approves and what runs. No context, no match, or a null handler launches
-      // untouched; a matched handler failure aborts loudly.
-      let handlerEnv: Record<string, string> = {};
-      let pendingCleanup: { extension: string; method: string; args: unknown[] } | undefined;
       let snugToken: string | undefined;
-      if (parsed.contextId) {
-        const argv = [command, ...args];
-        const handler = launchAdapters.matchHandler(argv);
-        if (handler) {
-          try {
-            const rewrite = (await ctx.extensions.invoke(handler.extension, handler.method, [
-              {
-                contextId: parsed.contextId,
-                argv,
-                cwd,
-                env: parsed.env,
-                ...(parsed.launchIntent ? { intent: parsed.launchIntent } : {}),
-              },
-            ])) as
-              | {
-                  env?: Record<string, string>;
-                  argv?: string[];
-                  cleanup?: { method: string; args: unknown[] };
-                }
-              | null
-              | undefined;
-            if (rewrite?.argv && rewrite.argv.length > 0) {
-              const [nextCommand, ...nextArgs] = rewrite.argv;
-              command = nextCommand ?? command;
-              args = nextArgs;
-            }
-            if (rewrite?.env) handlerEnv = rewrite.env;
-            if (rewrite?.cleanup) {
-              pendingCleanup = { extension: handler.extension, ...rewrite.cleanup };
-            }
-          } catch (err) {
-            ctx.log.warn?.("launch adapter handler failed", {
-              extension: handler.extension,
-              method: handler.method,
-              error: err instanceof Error ? err.message : String(err),
-            });
-            throw err;
-          }
-        }
-      }
       try {
-        const { env, token } = snug.envForSession(
-          cleanEnv({ ...parsed.env, ...handlerEnv }).effective
-        );
+        const { env, token } = snug.envForSession(cleanEnv(parsed.env).effective);
         snugToken = token;
         const launch = await prepareVscodeShellIntegrationLaunch({
           command,
@@ -483,58 +396,11 @@ export async function activate(ctx: ExtensionContext) {
           owner
         );
         snug.register(token, result.sessionId);
-        if (pendingCleanup) launchCleanups.set(result.sessionId, pendingCleanup);
         return result;
       } catch (err) {
         if (snugToken) snug.discardPending(snugToken);
-        if (pendingCleanup) {
-          await ctx.extensions
-            .invoke(pendingCleanup.extension, pendingCleanup.method, pendingCleanup.args)
-            .catch((cleanupError: unknown) => {
-              ctx.log.warn?.("launch adapter cleanup failed", {
-                extension: pendingCleanup?.extension,
-                method: pendingCleanup?.method,
-                error: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
-              });
-            });
-        }
         throw err;
       }
-    },
-
-    /**
-     * Register (or replace, by id) a launch adapter (§4.3). Extensions call
-     * this on activation to teach the shell how to recognize and — for
-     * context-scoped sessions — enrich their agent launches. Idempotent by id.
-     */
-    async registerLaunchAdapter(raw: unknown) {
-      const adapter = launchAdapterSchema.parse(raw);
-      const owner = currentExtensionCaller(ctx, "registerLaunchAdapter");
-      if (adapter.id.startsWith("builtin:")) {
-        throw error("EACCES", "Built-in launch adapters cannot be replaced");
-      }
-      const existingOwner = launchAdapterOwners.get(adapter.id);
-      if (existingOwner && existingOwner !== owner) {
-        throw error("EACCES", `Launch adapter ${adapter.id} is owned by another extension`);
-      }
-      if (adapter.handler && adapter.handler.extension !== owner) {
-        throw error("EACCES", "Launch adapter handlers must be owned by the registering extension");
-      }
-      launchAdapters.register(adapter);
-      launchAdapterOwners.set(adapter.id, owner);
-    },
-
-    /** Remove a previously-registered launch adapter by id. */
-    async unregisterLaunchAdapter(raw: unknown) {
-      const { id } = unregisterLaunchAdapterSchema.parse(raw);
-      const owner = currentExtensionCaller(ctx, "unregisterLaunchAdapter");
-      const existingOwner = launchAdapterOwners.get(id);
-      if (!existingOwner) return;
-      if (existingOwner !== owner) {
-        throw error("EACCES", `Launch adapter ${id} is owned by another extension`);
-      }
-      launchAdapters.unregister(id);
-      launchAdapterOwners.delete(id);
     },
 
     async dispose(sessionId: string) {

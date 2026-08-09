@@ -96,9 +96,6 @@ export const openRequestSchema = z
     // context projection; cwd confinement is relative to that projection.
     contextId: z.string().min(1).optional(),
     contextAttachToken: z.string().min(16).optional(),
-    /** Semantic input for a matched launch adapter. The shell only forwards it;
-     * adapter-specific meaning remains with the owning extension. */
-    launchIntent: z.record(z.unknown()).optional(),
   })
   .strict();
 
@@ -107,39 +104,6 @@ export const createContextRequestSchema = z
     title: z.string().min(1).max(80).optional(),
   })
   .optional();
-
-/** A launch adapter registered by an extension (see registerLaunchAdapter). */
-export const launchAdapterSchema = z
-  .object({
-    id: z.string().min(1),
-    match: z.object({
-      /** Regex source applied to `argv.join(" ")`. */
-      pattern: z.string().min(1),
-    }),
-    /** Detection metadata surfaced as SessionInfo.detectedAgent when matched. */
-    detect: z
-      .object({
-        kind: z.string().min(1),
-        title: z.string().optional(),
-      })
-      .optional(),
-    /** Context-scoped launch enrichment: an extension method invoked before spawn. */
-    handler: z
-      .object({
-        extension: z.string().min(1),
-        method: z.string().min(1),
-      })
-      .optional(),
-  })
-  .strict();
-
-export type LaunchAdapter = z.infer<typeof launchAdapterSchema>;
-
-export const unregisterLaunchAdapterSchema = z
-  .object({
-    id: z.string().min(1),
-  })
-  .strict();
 
 export type ExecRequest = z.infer<typeof execRequestSchema>;
 export type ExecIntent = z.infer<typeof execIntentSchema>;
@@ -188,9 +152,7 @@ export interface SessionInfo {
   detectedUrls: string[];
   bytesOut: number;
   meta: Record<string, unknown>;
-  // `kind` is an open string: built-in adapters seed the historical set
-  // (claude-code/codex/aider/opencode/test-runner/dev-server) but extensions
-  // register arbitrary kinds via registerLaunchAdapter.
+  // Display-only classification derived from the launched executable.
   detectedAgent?: { kind: string; title?: string };
 }
 

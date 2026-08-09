@@ -66,10 +66,6 @@ class JigShell implements ShellApi {
     return { contextId: "jig-context", contextAttachToken: "jig-context-token" };
   }
 
-  async registerLaunchAdapter(): Promise<void> {}
-
-  async unregisterLaunchAdapter(): Promise<void> {}
-
   async dispose(): Promise<void> {}
 
   async restart(): Promise<{ sessionId: string }> {
@@ -166,8 +162,10 @@ function activeElementLabel(): string {
 }
 
 function isXtermTextareaFocused(): boolean {
-  return document.activeElement instanceof HTMLTextAreaElement
-    && document.activeElement.classList.contains("xterm-helper-textarea");
+  return (
+    document.activeElement instanceof HTMLTextAreaElement &&
+    document.activeElement.classList.contains("xterm-helper-textarea")
+  );
 }
 
 /**

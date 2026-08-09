@@ -1,4 +1,4 @@
-import { readFile, stat, mkdtemp, mkdir } from "node:fs/promises";
+import { readFile, stat, mkdtemp, mkdir, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -403,16 +403,29 @@ describe("@workspace-extensions/shell", () => {
     });
   });
 
-  it("tags detected agents via the built-in launch-adapter registry", async () => {
-    const { api } = await makeApi("allow");
-    // Detection matches the resolved argv (command + args), not the label.
+  it("tags an agent only when it is the launched executable", async () => {
+    const { api, root } = await makeApi("allow");
+    const claude = join(root, "claude");
+    await symlink(process.execPath, claude);
     const { sessionId } = await api.open({
-      command: "node",
-      args: ["-e", "process.exit(0)", "claude"],
+      command: claude,
+      args: ["--version"],
     });
     await api.awaitExit(sessionId);
     const info = await api.get(sessionId);
     expect(info.detectedAgent).toEqual({ kind: "claude-code", title: "Claude Code" });
+  });
+
+  it("does not infer an agent from labels or arbitrary arguments", async () => {
+    const { api } = await makeApi("allow");
+    const { sessionId } = await api.open({
+      command: "node",
+      args: ["-e", "process.exit(0)", "claude"],
+      label: "Claude Code",
+    });
+    await api.awaitExit(sessionId);
+    const info = await api.get(sessionId);
+    expect(info.detectedAgent).toBeUndefined();
   });
 
   it("places context sessions in the materialized context folder and carries contextId", async () => {
@@ -475,118 +488,6 @@ describe("@workspace-extensions/shell", () => {
     await api.awaitExit(first.sessionId);
     await api.awaitExit(second.sessionId);
   });
-
-  it("invokes a registered launch-adapter handler for context sessions and applies rewrites", async () => {
-    const { api, invoke, invocationCurrent } = await makeApi("allow");
-    invoke.mockResolvedValueOnce({
-      env: { INJECTED: "1" },
-      argv: ["node", "-e", "process.stdout.write(process.env.INJECTED||'')"],
-    });
-    invocationCurrent.mockReturnValueOnce({
-      caller: { callerId: "@workspace-extensions/claude-code", callerKind: "extension" },
-    });
-    await api.registerLaunchAdapter({
-      id: "test:claude",
-      match: { pattern: "\\bclaude\\b" },
-      detect: { kind: "claude-code", title: "Claude Code" },
-      handler: { extension: "@workspace-extensions/claude-code", method: "prepareLaunch" },
-    });
-    // argv carries "claude" so the adapter matches; the handler rewrites it to a
-    // runnable node invocation before spawn.
-    const { sessionId } = await api.open({
-      command: "node",
-      args: ["claude"],
-      contextId: "ctx-2",
-      launchIntent: { channelId: "channel-2" },
-    });
-    await api.awaitExit(sessionId);
-    expect(invoke).toHaveBeenCalledWith("@workspace-extensions/claude-code", "prepareLaunch", [
-      expect.objectContaining({
-        contextId: "ctx-2",
-        argv: ["node", "claude"],
-        intent: { channelId: "channel-2" },
-      }),
-    ]);
-    const info = await api.get(sessionId);
-    // The handler's argv rewrite is what actually spawned.
-    expect(info.command.argv).toEqual([
-      "node",
-      "-e",
-      "process.stdout.write(process.env.INJECTED||'')",
-    ]);
-    const scrollback = await api.getScrollback(sessionId);
-    expect(scrollback.text).toContain("1");
-  });
-
-  it("runs a launch adapter's cleanup exactly once when its terminal exits", async () => {
-    const { api, invoke, invocationCurrent } = await makeApi("allow");
-    invoke.mockResolvedValueOnce({
-      env: { INJECTED: "1" },
-      argv: ["node", "-e", "process.exit(0)"],
-      cleanup: { method: "release", args: [{ entityId: "entity-1" }] },
-    });
-    invocationCurrent.mockReturnValueOnce({
-      caller: { callerId: "@workspace-extensions/claude-code", callerKind: "extension" },
-    });
-    await api.registerLaunchAdapter({
-      id: "test:claude-lifecycle",
-      match: { pattern: "\\bclaude\\b" },
-      handler: { extension: "@workspace-extensions/claude-code", method: "adaptLaunch" },
-    });
-
-    const { sessionId } = await api.open({ command: "node", args: ["claude"], contextId: "ctx-2" });
-    await api.awaitExit(sessionId);
-    await vi.waitFor(() => {
-      expect(invoke).toHaveBeenCalledWith("@workspace-extensions/claude-code", "release", [
-        { entityId: "entity-1" },
-      ]);
-    });
-    expect(invoke.mock.calls.filter((call) => call[1] === "release")).toHaveLength(1);
-  });
-
-  it("does not run launch-adapter handlers for non-context sessions", async () => {
-    const { api, invoke, invocationCurrent } = await makeApi("allow");
-    invocationCurrent.mockReturnValueOnce({
-      caller: { callerId: "@workspace-extensions/claude-code", callerKind: "extension" },
-    });
-    await api.registerLaunchAdapter({
-      id: "test:claude",
-      match: { pattern: "\\bclaude\\b" },
-      handler: { extension: "@workspace-extensions/claude-code", method: "prepareLaunch" },
-    });
-    const { sessionId } = await api.open({
-      command: "node",
-      args: ["-e", "process.exit(0)"],
-      label: "claude",
-    });
-    await api.awaitExit(sessionId);
-    expect(invoke).not.toHaveBeenCalled();
-  });
-
-  it("fails loudly when a matched launch-adapter handler throws", async () => {
-    const { api, invoke, log, invocationCurrent } = await makeApi("allow");
-    invoke.mockRejectedValueOnce(new Error("boom"));
-    invocationCurrent.mockReturnValueOnce({
-      caller: { callerId: "@workspace-extensions/claude-code", callerKind: "extension" },
-    });
-    await api.registerLaunchAdapter({
-      id: "test:claude",
-      match: { pattern: "\\bclaude\\b" },
-      handler: { extension: "@workspace-extensions/claude-code", method: "prepareLaunch" },
-    });
-    await expect(
-      api.open({
-        command: "node",
-        args: ["-e", "process.exit(0)", "claude"],
-        contextId: "ctx-3",
-      })
-    ).rejects.toThrow("boom");
-    expect(log.warn).toHaveBeenCalledWith(
-      "launch adapter handler failed",
-      expect.objectContaining({ method: "prepareLaunch", error: "boom" })
-    );
-  });
-
 });
 
 const readerBuffers = new WeakMap<ReadableStreamDefaultReader<Uint8Array>, string>();

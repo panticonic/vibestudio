@@ -56,9 +56,8 @@ export interface SessionManagerOptions {
   exitedSessionTtlMs?: number;
   watchAllHeartbeatMs?: number;
   /**
-   * Resolve a session's `detectedAgent` from its argv. Injected by the shell
-   * extension so detection flows through the launch-adapter registry (§4.3)
-   * rather than a hardcoded table. Omitted ⇒ no agent tagging.
+   * Resolve display-only `detectedAgent` metadata from structured argv.
+   * Omitted ⇒ no agent tagging.
    */
   detectAgent?: (argv: string[]) => { kind: string; title?: string } | undefined;
   /** Resolve a context's exact semantic-state label. Non-context sessions

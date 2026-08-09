@@ -40,16 +40,6 @@
             }
           }
         },
-        "registerLaunchAdapter": {
-          "effect": {
-            "kind": "open"
-          }
-        },
-        "unregisterLaunchAdapter": {
-          "effect": {
-            "kind": "open"
-          }
-        },
         "dispose": {
           "effect": {
             "kind": "open"

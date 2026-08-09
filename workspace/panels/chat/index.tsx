@@ -589,8 +589,9 @@ export default function ChatPanel() {
     void openLocalModelsCapability();
   }, [openLocalModelsCapability]);
 
-  // The panel declares intent; the shell's registered Claude adapter owns
-  // semantic preparation, host-local materialization, and process cleanup.
+  // Use the explicit managed launcher. It prepares the channel identity,
+  // materializes the isolated profile, applies confinement, and releases the
+  // launch when Claude exits. A generic shell launch never acquires identity.
   const handleOpenClaudeCode = useCallback(
     async (channelId: string) => {
       try {
@@ -598,9 +599,8 @@ export default function ChatPanel() {
         await extensions.invoke("@workspace-extensions/shell", "open", [
           {
             contextId: resolvedContextId,
-            command: "claude",
-            args: [],
-            launchIntent: { channelId },
+            command: "vibestudio",
+            args: ["claude", "--channel", channelId],
             label: "Claude Code",
           },
         ]);

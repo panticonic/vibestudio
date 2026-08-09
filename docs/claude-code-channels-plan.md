@@ -47,7 +47,8 @@ From the Claude Code docs (research preview, v2.1.80+):
 - The server **pushes events** into the running session via
   `notification({ method: 'notifications/claude/channel', params: { content, meta } })`.
   Claude receives them as `<channel source="..." ...meta>content</channel>` tags; events
-  queue and are delivered on the next turn.
+  queue and are delivered on the next turn. Every metadata key is an identifier and
+  every metadata value is a string.
 - Two-way channels expose a normal MCP **tool** (e.g. `reply`) that Claude calls to send
   outbound messages.
 - **Permission relay** (v2.1.81+, `capabilities.experimental['claude/channel/permission']`):
@@ -55,9 +56,15 @@ From the Claude Code docs (research preview, v2.1.80+):
   (`{request_id, tool_name, description, input_preview}`) to the channel server and
   accepts a verdict via `notifications/claude/channel/permission`
   (`{request_id, behavior: "allow"|"deny"}`).
-- Activation: `claude --channels server:<name>` where `<name>` is an entry in the
-  session's MCP config. Custom (non-marketplace) channels currently additionally require
-  `--dangerously-load-development-channels`.
+- The bridge gates inbound events on authenticated sender identity before notification.
+  A permission-capable bridge applies the same sender gate, returns only exact open
+  request IDs, and lets Claude Code's local/remote first-verdict behavior retire the
+  losing surface.
+- Activation: approved entries use `claude --channels server:<name>` where `<name>` is
+  in the session's MCP config. During the research preview a custom server entry must
+  instead be the argument to
+  `--dangerously-load-development-channels server:<name>`; combining that flag with a
+  separate `--channels` entry does not extend the development bypass to it.
 - The session can be simultaneously interactive (terminal UI) and channel-connected.
 - Hooks (SessionStart/UserPromptSubmit/PreToolUse/PostToolUse/Stop/SessionEnd) run
   independently and are our source of structured lifecycle events.
@@ -234,10 +241,10 @@ persist for reattach unless the entity is retired.
 ### 4.3 Launch paths (all call the extension's `prepare`)
 
 - **Terminal panel**: an "Open Claude Code" action on a conversation calls the
-  extension over RPC (exactly how the terminal panel drives the shell extension today),
-  materializes the declaration on that host, then opens a PTY in the context projection.
-  The generic launch-adapter result carries one cleanup action that the shell invokes
-  exactly once on exit/disposal and also on approval or spawn failure.
+  explicit `vibestudio claude --channel <id>` launcher through the shell extension,
+  in the conversation's context projection. The launcher alone prepares the identity,
+  materializes the local profile, applies containment, and releases its exact generation
+  on launch failure or process exit.
 - **CLI**: `vibestudio claude [--channel <id>]` — calls the extension's `prepare`
   (generic service/extension RPC; the CLI stays Claude-agnostic apart from the command
   name), verifies the returned context identity against the nearest local binding,
@@ -246,18 +253,11 @@ persist for reattach unless the entity is retired.
   silently pointed at a different tree. With no flag, the channel is resolved from the
   binding's existing primary conversation channel. Starting a _new_ conversation is the existing
   conversation-creation flow, after which the agent is invited/launched into it.
-- **Launch adapters (generic shell-extension hook)**: instead of hardcoding
-  agent-specific upgrades into the shell extension, it gains one generic extension
-  point: `shell.registerLaunchAdapter({ match, prepare })`. The claude-code extension
-  registers an adapter matching the `claude` command line; when a bare `claude` is
-  launched in a _context-scoped_ terminal session, the shell extension invokes the
-  adapter, which resolves the context's primary conversation channel, runs `prepare`,
-  and returns env/argv rewrites — "just typing `claude`" in a context terminal yields
-  a fully connected agent. No matching adapter, or no conversation channel in the
-  context → the session launches untouched (today's detection/tagging only); channels
-  are never created as a side effect. `detectAgent`'s regex table folds into the same
-  adapter registry (one mechanism for "recognize and optionally enrich agent
-  launches"), with codex/aider adapters as future sibling extensions.
+
+A bare `claude` command is an ordinary shell process. The shell may tag a direct,
+known executable for display, but it never rewrites argv, adds credentials, or activates
+a provider based on command text. This keeps the authority-bearing launch explicit and
+preserves every user-supplied flag on unmanaged commands.
 
 The snug server stays as-is: it is the PTY/UI affordance surface (badges, notify,
 split), orthogonal to agent messaging. Claude Code sessions get both.
@@ -665,9 +665,9 @@ There are now two explicit states only:
 8. **`vibestudio.yml` / extension registry**: new `linked-agent` worker declaration;
    new `@workspace-extensions/claude-code` extension; extended `auth`/`approvals` host
    service schemas (no new host service — the orchestrator is the extension).
-9. **Shell extension launch adapters**: `detectAgent`'s hardcoded regex table is
-   replaced by the `registerLaunchAdapter` registry; the shell extension's public API
-   gains the registration method, and session tagging flows through adapters.
+9. **Shell agent detection**: regex matching over joined argv and authority-bearing
+   launch adapters are removed. Display metadata is derived only from the executable
+   and structured subcommands; managed launches use explicit product entry points.
 10. **`spawn_subagent` tool schema**: gains `agentKind`; the subagent pipeline's
     child-bring-up branches on it. The claude-code extension owns the headless
     process launch privately; no generic runtime process surface is added.
@@ -698,8 +698,8 @@ shipping order):
 - **W2 Linked-agent vessel** — `workspace/workers/linked-agent/`: one response-owned
   bridge resource, addressing gate, causal trajectory projection, method provision,
   task duty, presence/cursor semantics.
-- **W3 Context terminals & orchestration** — shell/panel `contextId`, launch-adapter
-  registry (replacing `detectAgent`'s table), `@workspace-extensions/claude-code`
+- **W3 Context terminals & orchestration** — shell/panel `contextId`, executable-aware
+  display classification, `@workspace-extensions/claude-code`
   (prepare/release, launch profiles), context bindings, CLI scope precedence,
   `vibestudio claude`.
 - **W4 Contained bridge** — `vibestudio claude channel-host` (MCP channel server,
