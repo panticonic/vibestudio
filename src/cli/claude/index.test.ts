@@ -199,22 +199,23 @@ describe("writeToHookSocket", () => {
     const received: string[] = [];
     const server = net.createServer((sock) => {
       sock.setEncoding("utf8");
-      sock.on("data", (chunk: Buffer | string) => received.push(chunk.toString()));
+      sock.on("data", (chunk: Buffer | string) => {
+        received.push(chunk.toString());
+        if (received.join("").includes("\n")) sock.write('{"ok":true}\n');
+      });
     });
     await new Promise<void>((resolve) => server.listen(socketPath, resolve));
 
     const line = JSON.stringify({ event: "SessionStart", payload: { a: 1 }, ts: 123 });
     await writeToHookSocket(socketPath, line);
 
-    // Give the server a tick to flush the received data.
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    server.close();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
 
     expect(received.join("")).toBe(`${line}\n`);
   });
 
-  it("resolves without throwing when the socket does not exist", async () => {
+  it("fails when the socket does not exist", async () => {
     const missing = path.join(tmpRoot, "does-not-exist.sock");
-    await expect(writeToHookSocket(missing, "x")).resolves.toBeUndefined();
+    await expect(writeToHookSocket(missing, "x")).rejects.toMatchObject({ code: "ENOENT" });
   });
 });
