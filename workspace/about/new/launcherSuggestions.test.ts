@@ -19,6 +19,7 @@ const history = [
     visitCount: 12,
     typedCount: 3,
     lastVisit: 100,
+    source: "history" as const,
   },
 ];
 

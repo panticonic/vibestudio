@@ -67,7 +67,10 @@ function usageScore(count: number, lastUsed: number): number {
 }
 
 function browserUsage(browser: BrowserAddressSuggestion): number {
-  return usageScore(browser.visitCount + browser.typedCount * 2, browser.lastVisit);
+  return usageScore(
+    (browser.visitCount ?? 0) + (browser.typedCount ?? 0) * 2,
+    browser.lastVisit ?? 0
+  );
 }
 
 export function buildLauncherSuggestions(input: {

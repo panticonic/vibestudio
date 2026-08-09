@@ -141,7 +141,7 @@ describe("new panel launcher", () => {
     render(<AboutPanelRoot />);
 
     expect(await screen.findByText("Terminal")).toBeTruthy();
-    expect(mocks.roots).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(mocks.roots).toHaveBeenCalledTimes(1));
   });
 
   it("uses the tree revision to avoid repeating a deep traversal on focus", async () => {
