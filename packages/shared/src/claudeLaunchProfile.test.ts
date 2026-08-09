@@ -96,6 +96,12 @@ describe("ClaudeLaunchProfile", () => {
     expect(settings.hooks.SessionStart[0].hooks[0].command).toBe(
       "vibestudio claude emit SessionStart"
     );
+    expect(settings.hooks.PostToolUseFailure[0].hooks[0].command).toBe(
+      "vibestudio claude emit PostToolUseFailure"
+    );
+    expect(settings.hooks.StopFailure[0].hooks[0].command).toBe(
+      "vibestudio claude emit StopFailure"
+    );
     const mcp = JSON.parse(await readFile(path.join(launch.profileDir, "mcp.json"), "utf8"));
     expect(mcp.mcpServers.vibestudio).toEqual({
       command: "vibestudio",

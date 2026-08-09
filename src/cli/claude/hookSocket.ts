@@ -16,18 +16,50 @@ import * as path from "node:path";
 
 /** Structural mirror of the vessel's LinkedHookEvent (no workspace import). */
 export type BridgeHookEvent =
-  | { hook: "SessionStart"; model?: string; cwd?: string }
-  | { hook: "UserPromptSubmit"; promptText: string; turnKey: string }
-  | { hook: "PreToolUse"; toolName: string; toolUseId: string; request?: unknown }
+  | { hook: "SessionStart"; claudeSessionId?: string; model?: string; cwd?: string }
+  | { hook: "UserPromptSubmit"; promptText: string; turnKey: string; promptId?: string }
+  | {
+      hook: "PreToolUse";
+      toolName: string;
+      toolUseId: string;
+      request?: unknown;
+      promptId?: string;
+      turnSource: "local" | "channel";
+    }
   | {
       hook: "PostToolUse";
       toolUseId: string;
       toolName?: string;
-      ok: boolean;
       outputSummary?: string;
+      promptId?: string;
+      turnSource: "local" | "channel";
     }
-  | { hook: "Stop"; finalText?: string; turnKey: string }
-  | { hook: "SessionEnd" };
+  | {
+      hook: "PostToolUseFailure";
+      toolUseId: string;
+      toolName?: string;
+      error: string;
+      interrupted?: boolean;
+      promptId?: string;
+      turnSource: "local" | "channel";
+    }
+  | {
+      hook: "Stop";
+      finalText?: string;
+      turnKey: string;
+      promptId?: string;
+      turnSource: "local" | "channel";
+    }
+  | {
+      hook: "StopFailure";
+      error: string;
+      errorDetails?: string;
+      finalText?: string;
+      turnKey: string;
+      promptId?: string;
+      turnSource: "local" | "channel";
+    }
+  | { hook: "SessionEnd"; claudeSessionId?: string; reason?: string };
 
 export interface EmittedHookLine {
   event: string;
@@ -54,27 +86,31 @@ export function agentSocketPath(contextId: string): string {
  */
 export class TurnTracker {
   private n = 0;
-  private open = false;
+  private open: "local" | "channel" | null = null;
 
   onUserPrompt(): string {
     this.n += 1;
-    this.open = true;
+    this.open = "local";
     return this.key();
   }
 
   /** Tool use (or any mid-turn activity): join the open turn or open one. */
-  onActivity(): string {
+  onActivity(): { turnKey: string; source: "local" | "channel" } {
     if (!this.open) {
       this.n += 1;
-      this.open = true;
+      this.open = "channel";
     }
-    return this.key();
+    return { turnKey: this.key(), source: this.open };
   }
 
-  onStop(): string {
-    if (!this.open) this.n += 1;
-    this.open = false;
-    return this.key();
+  onStop(): { turnKey: string; source: "local" | "channel" } {
+    if (!this.open) {
+      this.n += 1;
+      this.open = "channel";
+    }
+    const result = { turnKey: this.key(), source: this.open };
+    this.open = null;
+    return result;
   }
 
   key(): string {
@@ -99,6 +135,10 @@ function summarize(value: unknown): string | undefined {
 
 function rec(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+}
+
+function optionalString(payload: Record<string, unknown>, key: string): string | undefined {
+  return typeof payload[key] === "string" ? (payload[key] as string) : undefined;
 }
 
 let syntheticToolUse = 0;
@@ -127,6 +167,7 @@ export function mapHookEvent(
       const model = payload["model"];
       return {
         hook: "SessionStart",
+        claudeSessionId: optionalString(payload, "session_id"),
         model:
           typeof model === "string"
             ? model
@@ -142,10 +183,13 @@ export function mapHookEvent(
         hook: "UserPromptSubmit",
         promptText: typeof prompt === "string" ? prompt : "",
         turnKey: turns.onUserPrompt(),
+        ...(optionalString(payload, "prompt_id")
+          ? { promptId: optionalString(payload, "prompt_id") }
+          : {}),
       };
     }
     case "PreToolUse": {
-      turns.onActivity();
+      const turn = turns.onActivity();
       const toolName = typeof payload["tool_name"] === "string" ? payload["tool_name"] : "unknown";
       let toolUseId =
         typeof payload["tool_use_id"] === "string" ? payload["tool_use_id"] : undefined;
@@ -157,10 +201,15 @@ export function mapHookEvent(
         hook: "PreToolUse",
         toolName,
         toolUseId,
+        turnSource: turn.source,
+        ...(optionalString(payload, "prompt_id")
+          ? { promptId: optionalString(payload, "prompt_id") }
+          : {}),
         ...(payload["tool_input"] !== undefined ? { request: payload["tool_input"] } : {}),
       };
     }
     case "PostToolUse": {
+      const turn = turns.onActivity();
       const toolName = typeof payload["tool_name"] === "string" ? payload["tool_name"] : undefined;
       let toolUseId =
         typeof payload["tool_use_id"] === "string" ? payload["tool_use_id"] : undefined;
@@ -170,18 +219,36 @@ export function mapHookEvent(
       }
       if (!toolUseId) toolUseId = `synthetic:${++syntheticToolUse}`;
       const response = payload["tool_response"];
-      const responseRec = rec(response);
-      const ok = !(
-        responseRec["is_error"] === true ||
-        responseRec["isError"] === true ||
-        responseRec["success"] === false
-      );
       return {
         hook: "PostToolUse",
         toolUseId,
         toolName,
-        ok,
+        turnSource: turn.source,
         outputSummary: summarize(response),
+        ...(optionalString(payload, "prompt_id")
+          ? { promptId: optionalString(payload, "prompt_id") }
+          : {}),
+      };
+    }
+    case "PostToolUseFailure": {
+      const turn = turns.onActivity();
+      const toolName = optionalString(payload, "tool_name");
+      let toolUseId = optionalString(payload, "tool_use_id");
+      if (!toolUseId && toolName) {
+        toolUseId = pendingToolIds.get(toolName);
+        pendingToolIds.delete(toolName);
+      }
+      if (!toolUseId) toolUseId = `synthetic:${++syntheticToolUse}`;
+      return {
+        hook: "PostToolUseFailure",
+        toolUseId,
+        toolName,
+        error: optionalString(payload, "error") ?? "tool failed",
+        ...(payload["is_interrupt"] === true ? { interrupted: true } : {}),
+        ...(optionalString(payload, "prompt_id")
+          ? { promptId: optionalString(payload, "prompt_id") }
+          : {}),
+        turnSource: turn.source,
       };
     }
     case "Stop": {
@@ -193,10 +260,37 @@ export function mapHookEvent(
           : typeof payload["final_message"] === "string"
             ? payload["final_message"]
             : undefined;
-      return { hook: "Stop", finalText, turnKey: turns.onStop() };
+      const turn = turns.onStop();
+      return {
+        hook: "Stop",
+        finalText,
+        turnKey: turn.turnKey,
+        turnSource: turn.source,
+        ...(optionalString(payload, "prompt_id")
+          ? { promptId: optionalString(payload, "prompt_id") }
+          : {}),
+      };
+    }
+    case "StopFailure": {
+      const turn = turns.onStop();
+      return {
+        hook: "StopFailure",
+        error: optionalString(payload, "error") ?? "unknown",
+        errorDetails: summarize(payload["error_details"]),
+        finalText: optionalString(payload, "last_assistant_message"),
+        turnKey: turn.turnKey,
+        turnSource: turn.source,
+        ...(optionalString(payload, "prompt_id")
+          ? { promptId: optionalString(payload, "prompt_id") }
+          : {}),
+      };
     }
     case "SessionEnd":
-      return { hook: "SessionEnd" };
+      return {
+        hook: "SessionEnd",
+        claudeSessionId: optionalString(payload, "session_id"),
+        reason: optionalString(payload, "reason"),
+      };
     default:
       return null;
   }
@@ -204,6 +298,7 @@ export function mapHookEvent(
 
 export interface HookSocketServer {
   paths: string[];
+  ready: Promise<void>;
   close(): Promise<void>;
 }
 
@@ -214,57 +309,82 @@ export interface HookSocketServer {
  */
 export function startHookSocketServer(
   socketPaths: string[],
-  onLine: (line: EmittedHookLine) => void,
+  onLine: (line: EmittedHookLine) => Promise<void>,
   log: (message: string) => void
 ): HookSocketServer {
   const servers: net.Server[] = [];
-  const bound: string[] = [];
+  const bound = [...socketPaths];
+  const pending = new Set<Promise<void>>();
+  let closing = false;
+  const readiness: Promise<void>[] = [];
   for (const socketPath of socketPaths) {
-    try {
-      fs.mkdirSync(path.dirname(socketPath), { recursive: true, mode: 0o700 });
-      fs.rmSync(socketPath, { force: true });
-      const server = net.createServer((socket) => {
-        let buffer = "";
-        socket.setEncoding("utf8");
-        socket.on("data", (chunk: string) => {
-          buffer += chunk;
-          for (;;) {
-            const idx = buffer.indexOf("\n");
-            if (idx === -1) return;
-            const raw = buffer.slice(0, idx).trim();
-            buffer = buffer.slice(idx + 1);
-            if (!raw) continue;
-            try {
-              const parsed = JSON.parse(raw) as EmittedHookLine;
-              if (parsed && typeof parsed.event === "string") onLine(parsed);
-            } catch {
-              log(`hook socket: dropping unparseable line (${raw.length} bytes)`);
+    fs.mkdirSync(path.dirname(socketPath), { recursive: true, mode: 0o700 });
+    fs.rmSync(socketPath, { force: true });
+    const server = net.createServer((socket) => {
+      if (closing) {
+        socket.destroy();
+        return;
+      }
+      let buffer = "";
+      let received = false;
+      socket.setEncoding("utf8");
+      socket.on("data", (chunk: string) => {
+        if (received) return;
+        buffer += chunk;
+        const idx = buffer.indexOf("\n");
+        if (idx === -1) return;
+        received = true;
+        const raw = buffer.slice(0, idx).trim();
+        const task = (async () => {
+          try {
+            const parsed = JSON.parse(raw) as EmittedHookLine;
+            if (!parsed || typeof parsed.event !== "string") {
+              throw new Error("invalid hook envelope");
             }
+            await onLine(parsed);
+            socket.end('{"ok":true}\n');
+          } catch (error) {
+            log(
+              `hook socket: ingestion failed (${error instanceof Error ? error.message : error})`
+            );
+            socket.end('{"ok":false,"error":"hook-ingest-failed"}\n');
           }
-        });
-        socket.on("error", () => socket.destroy());
+        })();
+        pending.add(task);
+        void task.finally(() => pending.delete(task));
       });
-      server.on("error", (err) => log(`hook socket ${socketPath}: ${err.message}`));
-      server.listen(socketPath);
-      servers.push(server);
-      bound.push(socketPath);
-    } catch (err) {
-      log(
-        `hook socket ${socketPath}: failed to bind (${err instanceof Error ? err.message : err})`
-      );
-    }
+      socket.on("error", () => socket.destroy());
+    });
+    const ready = new Promise<void>((resolve, reject) => {
+      const onError = (error: Error): void => reject(error);
+      server.once("error", onError);
+      server.listen(socketPath, () => {
+        server.off("error", onError);
+        server.on("error", (error) => log(`hook socket ${socketPath}: ${error.message}`));
+        resolve();
+      });
+    });
+    readiness.push(ready);
+    servers.push(server);
   }
   return {
     paths: bound,
+    ready: Promise.all(readiness).then(() => undefined),
     close: async () => {
+      closing = true;
       await Promise.all(
         servers.map(
           (server) =>
             new Promise<void>((resolve) => {
+              if (!server.listening) {
+                resolve();
+                return;
+              }
               server.close(() => resolve());
             })
         )
       );
+      await Promise.allSettled([...pending]);
       for (const socketPath of bound) fs.rmSync(socketPath, { force: true });
     },
   };

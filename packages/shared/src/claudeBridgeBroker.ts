@@ -61,13 +61,30 @@ const hookEvent = z.discriminatedUnion("hook", [
       outputSummary: text.optional(),
     })
     .strict(),
+  z
+    .object({
+      hook: z.literal("PostToolUseFailure"),
+      toolUseId: shortString,
+      toolName: shortString.optional(),
+      error: text,
+    })
+    .strict(),
   z.object({ hook: z.literal("Stop"), finalText: text.optional(), turnKey: shortString }).strict(),
+  z
+    .object({
+      hook: z.literal("StopFailure"),
+      error: shortString,
+      errorDetails: text.optional(),
+      turnKey: shortString,
+    })
+    .strict(),
   z.object({ hook: z.literal("SessionEnd") }).strict(),
 ]);
 
 const operations = {
   openBridge: z
     .object({
+      bridgeSessionId: shortString,
       sessionInfo: z
         .object({
           bridge: shortString,
@@ -101,9 +118,22 @@ const operations = {
       inputPreview: z.string().max(64 * 1024),
     })
     .strict(),
-  ackDelivery: z.object({ seq: z.number().int().nonnegative() }).strict(),
+  acceptDelivery: z
+    .object({
+      bridgeSessionId: shortString,
+      attachmentGeneration: shortString,
+      deliveryId: shortString,
+      batchId: shortString,
+    })
+    .strict(),
   ingestHookEvent: z
-    .object({ sessionId: shortString, seq: z.number().int().positive(), event: hookEvent })
+    .object({
+      bridgeSessionId: shortString,
+      seq: z.number().int().positive(),
+      batchId: shortString.optional(),
+      interruptedBatchId: shortString.optional(),
+      event: hookEvent,
+    })
     .strict(),
   listSkills: z.object({}).strict(),
   readSkill: z.object({ name: shortString }).strict(),
@@ -120,6 +150,9 @@ const bridgePayload = z.discriminatedUnion("kind", [
     .object({
       kind: z.enum(["message", "prompt"]),
       seq: z.number().int().nonnegative(),
+      deliveryId: shortString,
+      bridgeSessionId: shortString,
+      attachmentGeneration: shortString,
       channelId: shortString.optional(),
       content: text,
       triggerMessageId: shortString.optional(),
@@ -139,14 +172,35 @@ const bridgePayload = z.discriminatedUnion("kind", [
 
 export type ClaudeBridgePayload = z.infer<typeof bridgePayload>;
 export type ClaudeBridgeStreamRecord =
-  | { kind: "subscribed"; result: { pendingCount: number } }
+  | {
+      kind: "subscribed";
+      result: {
+        ok: true;
+        bridgeSessionId: string;
+        attachmentGeneration: string;
+        pendingCount: number;
+        primaryChannelId: string | null;
+        contextId: string | null;
+        channelIds: string[];
+      };
+    }
   | { kind: "event"; payload: ClaudeBridgePayload };
 
 const streamRecord = z.discriminatedUnion("kind", [
   z
     .object({
       kind: z.literal("subscribed"),
-      result: z.object({ pendingCount: z.number().int().nonnegative() }).strict(),
+      result: z
+        .object({
+          ok: z.literal(true),
+          bridgeSessionId: shortString,
+          attachmentGeneration: shortString,
+          pendingCount: z.number().int().nonnegative(),
+          primaryChannelId: shortString.nullable(),
+          contextId: shortString.nullable(),
+          channelIds: z.array(shortString),
+        })
+        .strict(),
     })
     .strict(),
   z.object({ kind: z.literal("event"), payload: bridgePayload }).strict(),
@@ -214,7 +268,7 @@ export interface ClaudeBridgeAuthority {
   requestPermission(
     input: ClaudeBridgeOperationInput<"requestPermission">
   ): Promise<ClaudeBridgeJson>;
-  ackDelivery(input: ClaudeBridgeOperationInput<"ackDelivery">): Promise<ClaudeBridgeJson>;
+  acceptDelivery(input: ClaudeBridgeOperationInput<"acceptDelivery">): Promise<ClaudeBridgeJson>;
   ingestHookEvent(input: ClaudeBridgeOperationInput<"ingestHookEvent">): Promise<ClaudeBridgeJson>;
   listSkills(): Promise<ClaudeBridgeJson>;
   readSkill(input: ClaudeBridgeOperationInput<"readSkill">): Promise<ClaudeBridgeJson>;
@@ -374,8 +428,8 @@ export async function startClaudeBridgeBroker(input: {
           case "requestPermission":
             result = await input.authority.requestPermission(payload);
             break;
-          case "ackDelivery":
-            result = await input.authority.ackDelivery(payload);
+          case "acceptDelivery":
+            result = await input.authority.acceptDelivery(payload);
             break;
           case "ingestHookEvent":
             result = await input.authority.ingestHookEvent(payload);

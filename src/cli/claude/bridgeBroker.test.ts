@@ -25,7 +25,12 @@ describe("CLI Claude bridge authority", () => {
       messageId: "m1",
       channelId: "chan-1",
     });
-    await authority.ackDelivery({ seq: 4 });
+    await authority.acceptDelivery({
+      bridgeSessionId: "bridge-session-1",
+      attachmentGeneration: "attachment-1",
+      deliveryId: "delivery-4",
+      batchId: "batch-1",
+    });
     await expect(
       authority.requestPermission({
         requestId: "abcde",
@@ -40,7 +45,14 @@ describe("CLI Claude bridge authority", () => {
     expect(callTargetPush).toHaveBeenNthCalledWith(1, "do:linked:one", "say", [
       { text: "hello", idempotencyKey: "mcp:1" },
     ]);
-    expect(callTargetPush).toHaveBeenNthCalledWith(2, "do:linked:one", "ackDelivery", [{ seq: 4 }]);
+    expect(callTargetPush).toHaveBeenNthCalledWith(2, "do:linked:one", "acceptDelivery", [
+      {
+        bridgeSessionId: "bridge-session-1",
+        attachmentGeneration: "attachment-1",
+        deliveryId: "delivery-4",
+        batchId: "batch-1",
+      },
+    ]);
     expect(call).toHaveBeenCalledWith("workspace.listSkills", []);
     expect(call).toHaveBeenCalledWith("workspace.readSkill", ["review"]);
     expect(makeClient).toHaveBeenCalledWith({

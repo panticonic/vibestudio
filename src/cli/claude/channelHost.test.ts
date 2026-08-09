@@ -4,10 +4,12 @@ import * as os from "node:os";
 import * as path from "node:path";
 import {
   bridgeInstructions,
+  BridgeTurnBatcher,
   channelNotificationMeta,
   CLAUDE_CHANNEL_READINESS,
   createSkillResources,
   deliverBridgePayload,
+  OrderedHookIngestor,
   resolveBridgeConfig,
   skillNameFromUri,
   skillResourceUri,
@@ -77,11 +79,17 @@ describe("Claude channel boundary", () => {
       {
         kind: "message",
         seq: 9,
+        deliveryId: "delivery-9",
+        bridgeSessionId: "bridge-session-1",
+        attachmentGeneration: "generation-1",
         content: "hello",
         meta: { channel_id: "chan-1", seq: 100, mentions: ["alice"] },
       },
       {
         channelId: "chan-1",
+        bridgeSessionId: "bridge-session-1",
+        attachmentGeneration: "generation-1",
+        batcher: new BridgeTurnBatcher("bridge-session-1"),
         mcp: {
           notifyChannel: async (_content, meta) => {
             order.push(`notify:${meta["seq"]}`);
@@ -99,16 +107,31 @@ describe("Claude channel boundary", () => {
     expect(order).toEqual(["notify:100"]);
     accept();
     await delivery;
-    expect(order).toEqual(["notify:100", "accepted", 'ackDelivery:[{"seq":9}]']);
+    expect(order).toEqual([
+      "notify:100",
+      "accepted",
+      'acceptDelivery:[{"bridgeSessionId":"bridge-session-1","attachmentGeneration":"generation-1","deliveryId":"delivery-9","batchId":"bridge-session-1:batch:1"}]',
+    ]);
   });
 
   it("does not acknowledge when MCP transport acceptance fails", async () => {
     const calls: string[] = [];
     await expect(
       deliverBridgePayload(
-        { kind: "prompt", seq: 4, content: "hello", meta: {} },
+        {
+          kind: "prompt",
+          seq: 4,
+          deliveryId: "delivery-4",
+          bridgeSessionId: "bridge-session-1",
+          attachmentGeneration: "generation-1",
+          content: "hello",
+          meta: {},
+        },
         {
           channelId: "chan-1",
+          bridgeSessionId: "bridge-session-1",
+          attachmentGeneration: "generation-1",
+          batcher: new BridgeTurnBatcher("bridge-session-1"),
           mcp: {
             notifyChannel: async () => {
               throw new Error("stdout closed");
@@ -122,6 +145,94 @@ describe("Claude channel boundary", () => {
       )
     ).rejects.toThrow(/stdout closed/);
     expect(calls).toEqual([]);
+  });
+
+  it("groups transport-accepted messages at official busy-turn boundaries", () => {
+    const batcher = new BridgeTurnBatcher("bridge-session-1");
+    const first = batcher.assignDelivery();
+    expect(batcher.assignDelivery()).toBe(first);
+
+    const active = batcher.coordinatesForHook({
+      hook: "PreToolUse",
+      toolName: "Read",
+      toolUseId: "tool-1",
+      turnSource: "channel",
+    });
+    expect(active.batchId).toBe(first);
+    active.commit();
+
+    const next = batcher.assignDelivery();
+    expect(next).not.toBe(first);
+    const stop = batcher.coordinatesForHook({
+      hook: "Stop",
+      turnKey: "t1",
+      turnSource: "channel",
+    });
+    expect(stop.batchId).toBe(first);
+    stop.commit();
+
+    const nextTurn = batcher.coordinatesForHook({
+      hook: "Stop",
+      turnKey: "t2",
+      turnSource: "channel",
+    });
+    expect(nextTurn.batchId).toBe(next);
+  });
+
+  it("keeps local turns separate and reports an interrupted active channel batch", () => {
+    const batcher = new BridgeTurnBatcher("bridge-session-1");
+    const channelBatch = batcher.assignDelivery();
+    batcher
+      .coordinatesForHook({
+        hook: "PreToolUse",
+        toolName: "Read",
+        toolUseId: "tool-1",
+        turnSource: "channel",
+      })
+      .commit();
+    const local = batcher.coordinatesForHook({
+      hook: "UserPromptSubmit",
+      promptText: "new prompt",
+      turnKey: "t2",
+    });
+    expect(local).toMatchObject({ interruptedBatchId: channelBatch });
+    local.commit();
+    expect(
+      batcher.coordinatesForHook({
+        hook: "Stop",
+        turnKey: "t2",
+        turnSource: "local",
+      }).batchId
+    ).toBeUndefined();
+  });
+
+  it("serializes hook durability and poisons later hooks after an uncertain failure", async () => {
+    const ingestor = new OrderedHookIngestor();
+    const order: string[] = [];
+    let release!: () => void;
+    const barrier = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const first = ingestor.enqueue(async () => {
+      order.push("first:start");
+      await barrier;
+      order.push("first:done");
+    });
+    const second = ingestor.enqueue(async () => {
+      order.push("second");
+      throw new Error("durable receipt uncertain");
+    });
+    const third = ingestor.enqueue(async () => {
+      order.push("third");
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(order).toEqual(["first:start"]);
+    release();
+    await expect(first).resolves.toBeUndefined();
+    await expect(second).rejects.toThrow(/durable receipt uncertain/);
+    await expect(third).rejects.toThrow(/durable receipt uncertain/);
+    expect(order).toEqual(["first:start", "first:done", "second"]);
+    await ingestor.drain();
   });
 });
 

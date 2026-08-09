@@ -40,7 +40,15 @@ export function createCliClaudeBridgeAuthority(input: {
     openBridge: async function* (request, signal): AsyncIterable<ClaudeBridgeStreamRecord> {
       const response = await client.stream(input.vesselRef, "openBridge", [request], { signal });
       for await (const record of readChannelSubscriptionRecords<
-        { pendingCount: number },
+        {
+          ok: true;
+          bridgeSessionId: string;
+          attachmentGeneration: string;
+          pendingCount: number;
+          primaryChannelId: string | null;
+          contextId: string | null;
+          channelIds: string[];
+        },
         Record<string, unknown>
       >(response)) {
         if (record.kind === "subscribed") {
@@ -58,7 +66,8 @@ export function createCliClaudeBridgeAuthority(input: {
         "Claude permission relay is disabled until workspace approvals provide a trusted verdict"
       );
     },
-    ackDelivery: (request) => vesselCall("ackDelivery", [request]) as Promise<ClaudeBridgeJson>,
+    acceptDelivery: (request) =>
+      vesselCall("acceptDelivery", [request]) as Promise<ClaudeBridgeJson>,
     ingestHookEvent: (request) =>
       vesselCall("ingestHookEvent", [request]) as Promise<ClaudeBridgeJson>,
     listSkills: () => client.call("workspace.listSkills", []) as Promise<ClaudeBridgeJson>,

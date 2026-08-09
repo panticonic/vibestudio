@@ -19,7 +19,6 @@ import { rpc } from "@workspace/runtime/worker";
 import { AgentWorkerBase } from "@workspace/agentic-do";
 import type { ChannelEvent, ParticipantDescriptor } from "@workspace/harness";
 import {
-  AGENTIC_EVENT_PAYLOAD_KIND,
   AGENTIC_PROTOCOL_VERSION,
   agentToolFailureFromUnknown,
   invocationCompletedPayload,
@@ -38,14 +37,21 @@ import {
 
 const COMPLETED_KEY = "linked:completed";
 const PRIMARY_CHANNEL_KEY = "linked:primaryChannelId";
-const ACK_SEQ_KEY = "linked:ackSeq";
-const PROCESSED_SEQ_KEY = "linked:processedSeq";
+const LEGACY_ACK_SEQ_KEY = "linked:ackSeq";
+const LEGACY_PROCESSED_SEQ_KEY = "linked:processedSeq";
 const OPEN_TURN_KEY = "linked:openTurn";
 const SESSION_KEY = "linked:session";
+const DELIVERY_SCHEMA_KEY = "linked:deliverySchema";
 const BRIDGE_REPLAY_PAGE_SIZE = 64;
+const TERMINAL_RECEIPT_LIMIT = 256;
+const SUPERSEDED_ATTEMPT_LIMIT = 4;
+const HOOK_RECEIPT_LIMIT = 256;
+const ENDED_HOOK_SESSION_LIMIT = 8;
 
 export interface LinkedAttachment {
   callerId: string;
+  bridgeSessionId: string;
+  attachmentGeneration: string;
   sessionInfo: Record<string, unknown>;
   attachedAt: number;
 }
@@ -61,24 +67,71 @@ interface LinkedBridgeStream extends LinkedAttachment {
 /** Hook events reported by the bridge (plan §7.4). `seq` is a per-session
  *  monotonic counter minted by the bridge; redelivery is a no-op. */
 export type LinkedHookEvent =
-  | { hook: "SessionStart"; model?: string; cwd?: string }
-  | { hook: "UserPromptSubmit"; promptText: string; turnKey: string }
-  | { hook: "PreToolUse"; toolName: string; toolUseId: string; request?: unknown }
+  | { hook: "SessionStart"; claudeSessionId?: string; model?: string; cwd?: string }
+  | { hook: "UserPromptSubmit"; promptText: string; turnKey: string; promptId?: string }
+  | {
+      hook: "PreToolUse";
+      toolName: string;
+      toolUseId: string;
+      request?: unknown;
+      promptId?: string;
+    }
   | {
       hook: "PostToolUse";
       toolUseId: string;
       toolName?: string;
-      ok: boolean;
       outputSummary?: string;
+      promptId?: string;
     }
-  | { hook: "Stop"; finalText?: string; turnKey: string }
-  | { hook: "SessionEnd" };
+  | {
+      hook: "PostToolUseFailure";
+      toolUseId: string;
+      toolName?: string;
+      error: string;
+      interrupted?: boolean;
+      promptId?: string;
+    }
+  | { hook: "Stop"; finalText?: string; turnKey: string; promptId?: string }
+  | {
+      hook: "StopFailure";
+      error: string;
+      errorDetails?: string;
+      finalText?: string;
+      turnKey: string;
+      promptId?: string;
+    }
+  | { hook: "SessionEnd"; claudeSessionId?: string; reason?: string };
 
 interface QueueRow {
   seq: number;
   kind: string;
   channelId: string;
   payload: Record<string, unknown>;
+}
+
+interface DeliveryAttempt {
+  deliveryId: string;
+  seq: number;
+  bridgeSessionId: string;
+  attachmentGeneration: string;
+}
+
+type DeliveryOutcome = "completed" | "failed" | "interrupted";
+
+interface OpenLinkedTurn {
+  turnId: string;
+  turnKey: string;
+  source: "local" | "channel";
+  bridgeSessionId?: string;
+  batchId?: string;
+}
+
+interface HookIngestOptions {
+  bridgeSessionId: string;
+  seq: number;
+  batchId?: string;
+  interruptedBatchId?: string;
+  event: LinkedHookEvent;
 }
 
 const TEXT_BOUND = 8_000;
@@ -128,6 +181,10 @@ function isExternallyFedInput(event: ChannelEvent): boolean {
 export class LinkedAgentWorker extends AgentWorkerBase {
   static override schemaVersion = AgentWorkerBase.schemaVersion;
   private bridgeStream: LinkedBridgeStream | null = null;
+  private readonly hookApplications = new Map<
+    string,
+    { eventJson: string; promise: Promise<{ ok: boolean; duplicate?: boolean }> }
+  >();
 
   constructor(ctx: DurableObjectContext, env: unknown) {
     super(ctx, env);
@@ -138,6 +195,49 @@ export class LinkedAgentWorker extends AgentWorkerBase {
         kind TEXT NOT NULL,
         channel_id TEXT NOT NULL,
         payload TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        terminal_outcome TEXT,
+        terminal_at INTEGER,
+        terminal_turn_id TEXT
+      )
+    `);
+    this.ensureQueueColumn("terminal_outcome", "TEXT");
+    this.ensureQueueColumn("terminal_at", "INTEGER");
+    this.ensureQueueColumn("terminal_turn_id", "TEXT");
+    this.sql.exec(`
+      CREATE TABLE IF NOT EXISTS linked_delivery_attempts (
+        delivery_id TEXT PRIMARY KEY,
+        seq INTEGER NOT NULL,
+        bridge_session_id TEXT NOT NULL,
+        attachment_generation TEXT NOT NULL,
+        offered_at INTEGER NOT NULL,
+        accepted_at INTEGER,
+        batch_id TEXT,
+        superseded_at INTEGER,
+        UNIQUE (seq, bridge_session_id, attachment_generation)
+      )
+    `);
+    this.sql.exec(`
+      CREATE TABLE IF NOT EXISTS linked_delivery_batches (
+        batch_id TEXT PRIMARY KEY,
+        bridge_session_id TEXT NOT NULL,
+        turn_id TEXT,
+        opened_at INTEGER,
+        opened_published_at INTEGER,
+        outcome TEXT,
+        terminal_at INTEGER,
+        terminal_published_at INTEGER,
+        created_at INTEGER NOT NULL
+      )
+    `);
+    this.ensureBatchColumn("opened_at", "INTEGER");
+    this.ensureBatchColumn("opened_published_at", "INTEGER");
+    this.ensureBatchColumn("terminal_published_at", "INTEGER");
+    this.sql.exec(`
+      CREATE TABLE IF NOT EXISTS linked_bridge_sessions (
+        session_id TEXT PRIMARY KEY,
+        last_hook_seq INTEGER NOT NULL DEFAULT 0,
+        ended_at INTEGER,
         created_at INTEGER NOT NULL
       )
     `);
@@ -145,9 +245,61 @@ export class LinkedAgentWorker extends AgentWorkerBase {
       CREATE TABLE IF NOT EXISTS linked_hook_seqs (
         session_id TEXT NOT NULL,
         seq INTEGER NOT NULL,
+        event_json TEXT,
+        created_at INTEGER NOT NULL DEFAULT 0,
+        applied_at INTEGER,
         PRIMARY KEY (session_id, seq)
       )
     `);
+    this.ensureHookColumn("event_json", "TEXT");
+    this.ensureHookColumn("created_at", "INTEGER NOT NULL DEFAULT 0");
+    this.ensureHookColumn("applied_at", "INTEGER");
+    this.migrateLegacyDeliveryState();
+  }
+
+  private ensureQueueColumn(name: string, declaration: string): void {
+    const present = this.sql
+      .exec(`PRAGMA table_info(linked_bridge_queue)`)
+      .toArray()
+      .some((row) => String(row["name"]) === name);
+    if (!present)
+      this.sql.exec(`ALTER TABLE linked_bridge_queue ADD COLUMN ${name} ${declaration}`);
+  }
+
+  private ensureHookColumn(name: string, declaration: string): void {
+    const present = this.sql
+      .exec(`PRAGMA table_info(linked_hook_seqs)`)
+      .toArray()
+      .some((row) => String(row["name"]) === name);
+    if (!present) this.sql.exec(`ALTER TABLE linked_hook_seqs ADD COLUMN ${name} ${declaration}`);
+  }
+
+  private ensureBatchColumn(name: string, declaration: string): void {
+    const present = this.sql
+      .exec(`PRAGMA table_info(linked_delivery_batches)`)
+      .toArray()
+      .some((row) => String(row["name"]) === name);
+    if (!present) {
+      this.sql.exec(`ALTER TABLE linked_delivery_batches ADD COLUMN ${name} ${declaration}`);
+    }
+  }
+
+  /**
+   * Legacy cursors cannot prove which individual rows reached Claude or a turn
+   * boundary. Deleted rows are irrecoverable; every row that still exists is
+   * therefore intentionally replayable after this one-way migration.
+   */
+  private migrateLegacyDeliveryState(): void {
+    if (this.getStateValue(DELIVERY_SCHEMA_KEY) === "2") return;
+    this.setStateValue(LEGACY_ACK_SEQ_KEY, "");
+    this.setStateValue(LEGACY_PROCESSED_SEQ_KEY, "");
+    this.setStateValue(OPEN_TURN_KEY, "");
+    this.sql.exec(
+      `UPDATE linked_bridge_queue
+       SET terminal_outcome = NULL, terminal_at = NULL, terminal_turn_id = NULL`
+    );
+    this.sql.exec(`DELETE FROM linked_hook_seqs`);
+    this.setStateValue(DELIVERY_SCHEMA_KEY, "2");
   }
 
   // ── Identity & participant surface ─────────────────────────────────────────
@@ -203,6 +355,8 @@ export class LinkedAgentWorker extends AgentWorkerBase {
     return stream
       ? {
           callerId: stream.callerId,
+          bridgeSessionId: stream.bridgeSessionId,
+          attachmentGeneration: stream.attachmentGeneration,
           sessionInfo: stream.sessionInfo,
           attachedAt: stream.attachedAt,
         }
@@ -266,8 +420,39 @@ export class LinkedAgentWorker extends AgentWorkerBase {
     tier: "open",
     sensitivity: "write",
   })
-  async openBridge(opts?: { sessionInfo?: Record<string, unknown> }): Promise<Response> {
+  async openBridge(opts: {
+    bridgeSessionId: string;
+    sessionInfo?: Record<string, unknown>;
+  }): Promise<Response> {
     const callerId = this.requireBridgeCaller("openBridge");
+    const bridgeSessionId = String(opts?.bridgeSessionId ?? "");
+    if (!bridgeSessionId || bridgeSessionId.length > 128) {
+      throw new Error("openBridge requires a bounded bridgeSessionId");
+    }
+    await this.recoverPendingHookApplications();
+    const existingSession = this.sql
+      .exec(`SELECT ended_at FROM linked_bridge_sessions WHERE session_id = ?`, bridgeSessionId)
+      .toArray()[0];
+    if (existingSession?.["ended_at"] != null) {
+      throw new Error("openBridge cannot resume an ended bridge session");
+    }
+    const now = Date.now();
+    this.sql.exec(
+      `INSERT OR IGNORE INTO linked_bridge_sessions
+         (session_id, last_hook_seq, ended_at, created_at)
+       VALUES (?, 0, NULL, ?)`,
+      bridgeSessionId,
+      now
+    );
+    await this.supersedeForeignSession(bridgeSessionId, now);
+    this.sql.exec(
+      `UPDATE linked_delivery_attempts
+       SET superseded_at = ?
+       WHERE bridge_session_id = ? AND accepted_at IS NULL AND superseded_at IS NULL`,
+      now,
+      bridgeSessionId
+    );
+    const attachmentGeneration = crypto.randomUUID();
     const primaryChannelId = this.primaryChannelId();
     let contextId: string | null = null;
     if (primaryChannelId) {
@@ -277,12 +462,11 @@ export class LinkedAgentWorker extends AgentWorkerBase {
         contextId = null;
       }
     }
-    const replayFromSeq = this.processedSeq();
     const result = {
       ok: true,
-      cursor: this.ackSeq(),
-      replayFromSeq,
-      pendingCount: this.queuePendingCountAfter(replayFromSeq),
+      bridgeSessionId,
+      attachmentGeneration,
+      pendingCount: this.queuePendingCountForSession(bridgeSessionId),
       primaryChannelId,
       contextId,
       channelIds: this.subscriptions.listChannelIds(),
@@ -309,9 +493,11 @@ export class LinkedAgentWorker extends AgentWorkerBase {
             token,
             controller,
             callerId,
+            bridgeSessionId,
+            attachmentGeneration,
             sessionInfo: opts?.sessionInfo ?? {},
             attachedAt: Date.now(),
-            replayCursor: replayFromSeq,
+            replayCursor: 0,
             replayPending: true,
             replayPump: null,
           };
@@ -354,13 +540,90 @@ export class LinkedAgentWorker extends AgentWorkerBase {
     tier: "open",
     sensitivity: "write",
   })
-  async ackDelivery(opts: { seq: number }): Promise<{ ok: boolean; ackSeq: number }> {
-    this.requireBridgeCaller("ackDelivery");
-    const seq = Number(opts?.seq);
-    if (!Number.isFinite(seq)) throw new Error("ackDelivery requires a numeric seq");
-    const next = Math.max(this.ackSeq(), Math.round(seq));
-    this.setStateValue(ACK_SEQ_KEY, String(next));
-    return { ok: true, ackSeq: next };
+  async acceptDelivery(opts: {
+    bridgeSessionId: string;
+    attachmentGeneration: string;
+    deliveryId: string;
+    batchId: string;
+  }): Promise<{
+    ok: true;
+    deliveryId: string;
+    batchId: string;
+    state: "transport-accepted";
+  }> {
+    this.requireBridgeCaller("acceptDelivery");
+    const stream = this.bridgeStream;
+    const bridgeSessionId = String(opts?.bridgeSessionId ?? "");
+    const attachmentGeneration = String(opts?.attachmentGeneration ?? "");
+    const deliveryId = String(opts?.deliveryId ?? "");
+    const batchId = String(opts?.batchId ?? "");
+    if (
+      !stream ||
+      stream.bridgeSessionId !== bridgeSessionId ||
+      stream.attachmentGeneration !== attachmentGeneration
+    ) {
+      throw new Error("acceptDelivery rejected a stale bridge attachment");
+    }
+    if (!deliveryId || !batchId || deliveryId.length > 128 || batchId.length > 128) {
+      throw new Error("acceptDelivery requires bounded deliveryId and batchId");
+    }
+    const now = Date.now();
+    const attempt = this.sql
+      .exec(
+        `SELECT a.seq, a.bridge_session_id, a.attachment_generation,
+                a.accepted_at, a.batch_id, a.superseded_at, q.terminal_at
+         FROM linked_delivery_attempts a
+         JOIN linked_bridge_queue q ON q.seq = a.seq
+         WHERE a.delivery_id = ?`,
+        deliveryId
+      )
+      .toArray()[0];
+    if (
+      !attempt ||
+      String(attempt["bridge_session_id"]) !== bridgeSessionId ||
+      String(attempt["attachment_generation"]) !== attachmentGeneration ||
+      attempt["superseded_at"] != null ||
+      attempt["terminal_at"] != null
+    ) {
+      throw new Error("acceptDelivery rejected an unknown or terminal delivery attempt");
+    }
+    if (attempt["accepted_at"] != null) {
+      if (String(attempt["batch_id"]) !== batchId) {
+        throw new Error("acceptDelivery cannot move an accepted delivery to another batch");
+      }
+      return { ok: true, deliveryId, batchId, state: "transport-accepted" };
+    }
+    this.sql.exec(
+      `INSERT OR IGNORE INTO linked_delivery_batches
+         (batch_id, bridge_session_id, turn_id, opened_at, opened_published_at,
+          outcome, terminal_at, terminal_published_at, created_at)
+       VALUES (?, ?, NULL, NULL, NULL, NULL, NULL, NULL, ?)`,
+      batchId,
+      bridgeSessionId,
+      now
+    );
+    const batch = this.sql
+      .exec(
+        `SELECT bridge_session_id, terminal_at FROM linked_delivery_batches WHERE batch_id = ?`,
+        batchId
+      )
+      .toArray()[0];
+    if (
+      !batch ||
+      String(batch["bridge_session_id"]) !== bridgeSessionId ||
+      batch["terminal_at"] != null
+    ) {
+      throw new Error("acceptDelivery rejected a foreign or terminal batch");
+    }
+    this.sql.exec(
+      `UPDATE linked_delivery_attempts
+       SET accepted_at = ?, batch_id = ?
+       WHERE delivery_id = ? AND accepted_at IS NULL AND superseded_at IS NULL`,
+      now,
+      batchId,
+      deliveryId
+    );
+    return { ok: true, deliveryId, batchId, state: "transport-accepted" };
   }
 
   private async closeBridgeStream(token: symbol, reason: string, failure?: unknown): Promise<void> {
@@ -373,7 +636,6 @@ export class LinkedAgentWorker extends AgentWorkerBase {
     } catch {
       // Already terminal.
     }
-    await this.closeOpenTurn(`bridge detached (${reason})`);
     await this.refreshPresence();
   }
 
@@ -413,23 +675,25 @@ export class LinkedAgentWorker extends AgentWorkerBase {
     return first;
   }
 
-  private ackSeq(): number {
-    return Number(this.getStateValue(ACK_SEQ_KEY) ?? 0) || 0;
-  }
-
-  private processedSeq(): number {
-    return Number(this.getStateValue(PROCESSED_SEQ_KEY) ?? 0) || 0;
-  }
-
-  private queueRowsAfter(seq: number): QueueRow[] {
+  private queueRowsForSessionAfter(bridgeSessionId: string, seq: number): QueueRow[] {
     return this.sql
       .exec(
-        `SELECT seq, kind, channel_id, payload
-         FROM linked_bridge_queue
-         WHERE seq > ?
-         ORDER BY seq
+        `SELECT q.seq, q.kind, q.channel_id, q.payload
+         FROM linked_bridge_queue q
+         WHERE q.seq > ?
+           AND q.terminal_at IS NULL
+           AND NOT EXISTS (
+             SELECT 1
+             FROM linked_delivery_attempts a
+             WHERE a.seq = q.seq
+               AND a.bridge_session_id = ?
+               AND a.accepted_at IS NOT NULL
+               AND a.superseded_at IS NULL
+           )
+         ORDER BY q.seq
          LIMIT ?`,
         seq,
+        bridgeSessionId,
         BRIDGE_REPLAY_PAGE_SIZE
       )
       .toArray()
@@ -441,11 +705,164 @@ export class LinkedAgentWorker extends AgentWorkerBase {
       }));
   }
 
-  private queuePendingCountAfter(seq: number): number {
+  private queuePendingCount(): number {
     const row = this.sql
-      .exec(`SELECT COUNT(*) AS count FROM linked_bridge_queue WHERE seq > ?`, seq)
+      .exec(`SELECT COUNT(*) AS count FROM linked_bridge_queue WHERE terminal_at IS NULL`)
       .toArray()[0];
     return Number(row?.["count"] ?? 0);
+  }
+
+  private queuePendingCountForSession(bridgeSessionId: string): number {
+    const row = this.sql
+      .exec(
+        `SELECT COUNT(*) AS count
+         FROM linked_bridge_queue q
+         WHERE q.terminal_at IS NULL
+           AND NOT EXISTS (
+             SELECT 1
+             FROM linked_delivery_attempts a
+             WHERE a.seq = q.seq
+               AND a.bridge_session_id = ?
+               AND a.accepted_at IS NOT NULL
+               AND a.superseded_at IS NULL
+           )`,
+        bridgeSessionId
+      )
+      .toArray()[0];
+    return Number(row?.["count"] ?? 0);
+  }
+
+  private queueRow(seq: number): QueueRow | null {
+    const row = this.sql
+      .exec(
+        `SELECT seq, kind, channel_id, payload
+         FROM linked_bridge_queue
+         WHERE seq = ? AND terminal_at IS NULL`,
+        seq
+      )
+      .toArray()[0];
+    return row
+      ? {
+          seq: Number(row["seq"]),
+          kind: String(row["kind"]),
+          channelId: String(row["channel_id"]),
+          payload: JSON.parse(String(row["payload"])) as Record<string, unknown>,
+        }
+      : null;
+  }
+
+  private ensureDeliveryAttempt(row: QueueRow, stream: LinkedBridgeStream): DeliveryAttempt {
+    const existing = this.sql
+      .exec(
+        `SELECT delivery_id, seq, bridge_session_id, attachment_generation
+         FROM linked_delivery_attempts
+         WHERE seq = ? AND bridge_session_id = ? AND attachment_generation = ?`,
+        row.seq,
+        stream.bridgeSessionId,
+        stream.attachmentGeneration
+      )
+      .toArray()[0];
+    if (existing) {
+      return {
+        deliveryId: String(existing["delivery_id"]),
+        seq: Number(existing["seq"]),
+        bridgeSessionId: String(existing["bridge_session_id"]),
+        attachmentGeneration: String(existing["attachment_generation"]),
+      };
+    }
+    const delivery: DeliveryAttempt = {
+      deliveryId: crypto.randomUUID(),
+      seq: row.seq,
+      bridgeSessionId: stream.bridgeSessionId,
+      attachmentGeneration: stream.attachmentGeneration,
+    };
+    this.sql.exec(
+      `INSERT INTO linked_delivery_attempts
+         (delivery_id, seq, bridge_session_id, attachment_generation,
+          offered_at, accepted_at, batch_id, superseded_at)
+       VALUES (?, ?, ?, ?, ?, NULL, NULL, NULL)`,
+      delivery.deliveryId,
+      delivery.seq,
+      delivery.bridgeSessionId,
+      delivery.attachmentGeneration,
+      Date.now()
+    );
+    this.compactSupersededAttempts(row.seq);
+    return delivery;
+  }
+
+  private compactSupersededAttempts(seq: number): void {
+    this.sql.exec(
+      `DELETE FROM linked_delivery_attempts
+       WHERE delivery_id IN (
+         SELECT delivery_id
+         FROM linked_delivery_attempts
+         WHERE seq = ? AND superseded_at IS NOT NULL
+         ORDER BY superseded_at DESC, offered_at DESC
+         LIMIT -1 OFFSET ?
+       )`,
+      seq,
+      SUPERSEDED_ATTEMPT_LIMIT
+    );
+    this.sql.exec(
+      `DELETE FROM linked_delivery_batches
+       WHERE outcome = 'abandoned'
+         AND batch_id NOT IN (
+           SELECT batch_id FROM linked_delivery_attempts WHERE batch_id IS NOT NULL
+         )`
+    );
+  }
+
+  private async supersedeForeignSession(bridgeSessionId: string, now: number): Promise<void> {
+    this.sql.exec(
+      `UPDATE linked_bridge_sessions
+       SET ended_at = COALESCE(ended_at, ?)
+       WHERE session_id <> ?`,
+      now,
+      bridgeSessionId
+    );
+    const foreignBatches = this.sql
+      .exec(
+        `SELECT DISTINCT batch_id
+         FROM linked_delivery_attempts
+         WHERE bridge_session_id <> ?
+           AND batch_id IS NOT NULL
+           AND superseded_at IS NULL`,
+        bridgeSessionId
+      )
+      .toArray()
+      .map((row) => String(row["batch_id"]));
+    this.sql.exec(
+      `UPDATE linked_delivery_attempts
+       SET superseded_at = ?
+       WHERE bridge_session_id <> ? AND superseded_at IS NULL`,
+      now,
+      bridgeSessionId
+    );
+    for (const batchId of foreignBatches) {
+      this.sql.exec(
+        `UPDATE linked_delivery_batches
+         SET outcome = COALESCE(outcome, 'abandoned'),
+             terminal_at = COALESCE(terminal_at, ?)
+         WHERE batch_id = ?`,
+        now,
+        batchId
+      );
+    }
+    for (const row of this.sql
+      .exec(`SELECT DISTINCT seq FROM linked_delivery_attempts WHERE superseded_at IS NOT NULL`)
+      .toArray()) {
+      this.compactSupersededAttempts(Number(row["seq"]));
+    }
+    this.compactHookReceipts(bridgeSessionId);
+    const open = this.openTurn();
+    if (
+      open?.source === "channel" &&
+      open.bridgeSessionId &&
+      open.bridgeSessionId !== bridgeSessionId
+    ) {
+      await this.closeOpenTurn("linked session replaced before a terminal hook");
+    }
   }
 
   private async pumpBridgeReplay(token: symbol): Promise<void> {
@@ -472,16 +889,17 @@ export class LinkedAgentWorker extends AgentWorkerBase {
   /** Fill only currently available response capacity, reading durable rows one page at a time. */
   private async runBridgeReplay(stream: LinkedBridgeStream): Promise<void> {
     while (this.bridgeStream === stream && stream.replayPending) {
-      const rows = this.queueRowsAfter(stream.replayCursor);
+      const rows = this.queueRowsForSessionAfter(stream.bridgeSessionId, stream.replayCursor);
       if (rows.length === 0) {
         stream.replayPending = false;
         return;
       }
       for (const row of rows) {
         if (this.bridgeStream !== stream) return;
+        const delivery = this.ensureDeliveryAttempt(row, stream);
         const bytes = encodeChannelSubscriptionRecord({
           kind: "message",
-          payload: this.queueEventPayload(row),
+          payload: this.queueEventPayload(row, delivery),
         });
         if (bytes.byteLength > CHANNEL_SUBSCRIPTION_BUFFER_BYTES) {
           throw new Error("Linked bridge replay record exceeds the response buffer limit");
@@ -490,10 +908,6 @@ export class LinkedAgentWorker extends AgentWorkerBase {
         if (capacity === null) return;
         if (bytes.byteLength > capacity) return;
 
-        // Replay starts at the last completed turn boundary (§7.5):
-        // acked-but-unprocessed input is context for the fresh session.
-        await this.openBridgeQueueTurn(row);
-        if (this.bridgeStream !== stream) return;
         const outcome = enqueueChannelSubscriptionBytes(stream.controller, bytes);
         if (outcome === "backpressured") return;
         if (outcome !== "enqueued") {
@@ -525,8 +939,16 @@ export class LinkedAgentWorker extends AgentWorkerBase {
     return row ? Number(row["seq"]) : null;
   }
 
-  private queueEventPayload(row: QueueRow): Record<string, unknown> {
-    return { kind: row.kind, seq: row.seq, channelId: row.channelId, ...row.payload };
+  private queueEventPayload(row: QueueRow, delivery: DeliveryAttempt): Record<string, unknown> {
+    return {
+      kind: row.kind,
+      seq: row.seq,
+      channelId: row.channelId,
+      deliveryId: delivery.deliveryId,
+      bridgeSessionId: delivery.bridgeSessionId,
+      attachmentGeneration: delivery.attachmentGeneration,
+      ...row.payload,
+    };
   }
 
   /** Enqueue onto the response-owned bridge tail. The durable queue remains
@@ -537,7 +959,13 @@ export class LinkedAgentWorker extends AgentWorkerBase {
     const seq = payload["seq"];
     if (stream.replayPending && typeof seq === "number" && seq > stream.replayCursor) return;
     try {
-      const bytes = encodeChannelSubscriptionRecord({ kind: "message", payload });
+      let exactPayload = payload;
+      if (typeof seq === "number") {
+        const row = this.queueRow(seq);
+        if (!row) return;
+        exactPayload = this.queueEventPayload(row, this.ensureDeliveryAttempt(row, stream));
+      }
+      const bytes = encodeChannelSubscriptionRecord({ kind: "message", payload: exactPayload });
       if (enqueueChannelSubscriptionBytes(stream.controller, bytes) !== "enqueued") {
         void this.closeBridgeStream(stream.token, "response-buffer-full");
       }
@@ -583,9 +1011,6 @@ export class LinkedAgentWorker extends AgentWorkerBase {
       meta,
     });
     if (seq !== null) {
-      if (this.attachment()) {
-        await this.openReceivedMessageTurn(channelId, sourceMessageId);
-      }
       this.emitToBridge({ kind: "message", seq, channelId, content, meta });
     }
   }
@@ -738,8 +1163,11 @@ export class LinkedAgentWorker extends AgentWorkerBase {
     attached: boolean;
     sessionInfo: Record<string, unknown> | null;
     pendingCount: number;
-    ackSeq: number;
-    processedSeq: number;
+    queuedCount: number;
+    acceptedCount: number;
+    terminalPendingPublicationCount: number;
+    terminalReceiptCount: number;
+    activeBatchId: string | null;
     primaryChannelId: string | null;
     channelIds: string[];
   }> {
@@ -749,14 +1177,113 @@ export class LinkedAgentWorker extends AgentWorkerBase {
 
   private linkedStatusResult() {
     const attachment = this.attachment();
+    const counts = this.sql
+      .exec(
+        `SELECT
+           SUM(CASE WHEN q.terminal_at IS NULL AND NOT EXISTS (
+             SELECT 1 FROM linked_delivery_attempts a
+             WHERE a.seq = q.seq AND a.accepted_at IS NOT NULL AND a.superseded_at IS NULL
+           ) THEN 1 ELSE 0 END) AS queued_count,
+           SUM(CASE WHEN q.terminal_at IS NULL AND EXISTS (
+             SELECT 1 FROM linked_delivery_attempts a
+             WHERE a.seq = q.seq AND a.accepted_at IS NOT NULL AND a.superseded_at IS NULL
+           ) THEN 1 ELSE 0 END) AS accepted_count,
+           SUM(CASE WHEN q.terminal_at IS NOT NULL AND EXISTS (
+             SELECT 1 FROM linked_delivery_attempts a
+             JOIN linked_delivery_batches b ON b.batch_id = a.batch_id
+             WHERE a.seq = q.seq AND b.terminal_published_at IS NULL
+           ) THEN 1 ELSE 0 END) AS terminal_pending_count,
+           SUM(CASE WHEN q.terminal_at IS NOT NULL AND EXISTS (
+             SELECT 1 FROM linked_delivery_attempts a
+             JOIN linked_delivery_batches b ON b.batch_id = a.batch_id
+             WHERE a.seq = q.seq AND b.terminal_published_at IS NOT NULL
+           ) THEN 1 ELSE 0 END) AS terminal_count
+         FROM linked_bridge_queue q`
+      )
+      .toArray()[0];
+    const open = this.openTurn();
     return {
       attached: attachment !== null,
       sessionInfo: attachment?.sessionInfo ?? null,
-      pendingCount: this.queuePendingCountAfter(this.processedSeq()),
-      ackSeq: this.ackSeq(),
-      processedSeq: this.processedSeq(),
+      pendingCount: this.queuePendingCount(),
+      queuedCount: Number(counts?.["queued_count"] ?? 0),
+      acceptedCount: Number(counts?.["accepted_count"] ?? 0),
+      terminalPendingPublicationCount: Number(counts?.["terminal_pending_count"] ?? 0),
+      terminalReceiptCount: Number(counts?.["terminal_count"] ?? 0),
+      activeBatchId: open?.source === "channel" ? (open.batchId ?? null) : null,
       primaryChannelId: this.primaryChannelId(),
       channelIds: this.subscriptions.listChannelIds(),
+    };
+  }
+
+  @rpc({
+    principals: ["host", "code"],
+    effect: { kind: "open" },
+    tier: "open",
+    sensitivity: "read",
+  })
+  async deliveryReceipt(opts: { dedupeKey: string }): Promise<{
+    found: boolean;
+    state?:
+      | "queued"
+      | "offered"
+      | "transport-accepted"
+      | "terminal-pending-publication"
+      | "terminal";
+    batchId?: string | null;
+    turnId?: string | null;
+    outcome?: DeliveryOutcome | null;
+    terminalAt?: number | null;
+  }> {
+    this.requireExternalControllerCaller("deliveryReceipt");
+    const dedupeKey = String(opts?.dedupeKey ?? "");
+    if (!dedupeKey || dedupeKey.length > 512) {
+      throw new Error("deliveryReceipt requires a bounded dedupeKey");
+    }
+    const row = this.sql
+      .exec(
+        `SELECT seq, terminal_outcome, terminal_at, terminal_turn_id
+         FROM linked_bridge_queue WHERE dedupe_key = ?`,
+        dedupeKey
+      )
+      .toArray()[0];
+    if (!row) return { found: false };
+    if (row["terminal_at"] != null) {
+      const publication = this.sql
+        .exec(
+          `SELECT b.terminal_published_at
+           FROM linked_delivery_attempts a
+           JOIN linked_delivery_batches b ON b.batch_id = a.batch_id
+           WHERE a.seq = ? AND b.terminal_at IS NOT NULL
+           ORDER BY b.terminal_at DESC LIMIT 1`,
+          Number(row["seq"])
+        )
+        .toArray()[0];
+      return {
+        found: true,
+        state:
+          publication?.["terminal_published_at"] == null
+            ? "terminal-pending-publication"
+            : "terminal",
+        turnId: row["terminal_turn_id"] == null ? null : String(row["terminal_turn_id"]),
+        outcome: String(row["terminal_outcome"]) as DeliveryOutcome,
+        terminalAt: Number(row["terminal_at"]),
+      };
+    }
+    const attempt = this.sql
+      .exec(
+        `SELECT accepted_at, batch_id
+         FROM linked_delivery_attempts
+         WHERE seq = ? AND superseded_at IS NULL
+         ORDER BY offered_at DESC LIMIT 1`,
+        Number(row["seq"])
+      )
+      .toArray()[0];
+    if (!attempt) return { found: true, state: "queued", batchId: null };
+    return {
+      found: true,
+      state: attempt["accepted_at"] == null ? "offered" : "transport-accepted",
+      batchId: attempt["batch_id"] == null ? null : String(attempt["batch_id"]),
     };
   }
 
@@ -783,7 +1310,6 @@ export class LinkedAgentWorker extends AgentWorkerBase {
           { content: text, meta: { from: this.rpcCallerId ?? "channel" } }
         );
         if (seq !== null) {
-          await this.openCommandTurn(channelId, String(seq), text);
           this.emitToBridge({
             kind: "prompt",
             seq,
@@ -818,30 +1344,217 @@ export class LinkedAgentWorker extends AgentWorkerBase {
     tier: "open",
     sensitivity: "write",
   })
-  async ingestHookEvent(opts: {
-    sessionId: string;
-    seq: number;
-    event: LinkedHookEvent;
-  }): Promise<{ ok: boolean; duplicate?: boolean }> {
+  async ingestHookEvent(opts: HookIngestOptions): Promise<{ ok: boolean; duplicate?: boolean }> {
     this.requireBridgeCaller("ingestHookEvent");
-    const sessionId = String(opts?.sessionId ?? "");
+    const sessionId = String(opts?.bridgeSessionId ?? "");
     const seq = Number(opts?.seq);
-    if (!sessionId || !Number.isFinite(seq)) {
-      throw new Error("ingestHookEvent requires sessionId and a numeric seq");
+    if (!sessionId || sessionId.length > 128 || !Number.isInteger(seq) || seq < 1) {
+      throw new Error(
+        "ingestHookEvent requires a bounded bridgeSessionId and positive integer seq"
+      );
     }
-    const inserted = this.sql
+    const batchId = opts?.batchId == null ? null : String(opts.batchId);
+    const interruptedBatchId =
+      opts?.interruptedBatchId == null ? null : String(opts.interruptedBatchId);
+    if ((batchId?.length ?? 0) > 128 || (interruptedBatchId?.length ?? 0) > 128) {
+      throw new Error("ingestHookEvent batch identities must be bounded");
+    }
+    const eventJson = JSON.stringify({ batchId, interruptedBatchId, event: opts.event });
+    await this.recoverPendingHookApplications(sessionId, seq);
+    const applicationKey = `${sessionId}:${seq}`;
+    const active = this.hookApplications.get(applicationKey);
+    if (active) {
+      if (active.eventJson !== eventJson) {
+        throw new Error("ingestHookEvent rejected concurrent same-sequence payload drift");
+      }
+      await active.promise;
+      return { ok: true, duplicate: true };
+    }
+    const promise = this.ingestHookEventOwned(opts, eventJson);
+    this.hookApplications.set(applicationKey, { eventJson, promise });
+    try {
+      return await promise;
+    } finally {
+      if (this.hookApplications.get(applicationKey)?.promise === promise) {
+        this.hookApplications.delete(applicationKey);
+      }
+    }
+  }
+
+  private async ingestHookEventOwned(
+    opts: HookIngestOptions,
+    eventJson: string
+  ): Promise<{ ok: boolean; duplicate?: boolean }> {
+    const sessionId = String(opts.bridgeSessionId);
+    const seq = Number(opts.seq);
+    const batchId = opts.batchId == null ? null : String(opts.batchId);
+    const interruptedBatchId =
+      opts.interruptedBatchId == null ? null : String(opts.interruptedBatchId);
+    const existing = this.sql
       .exec(
-        `INSERT OR IGNORE INTO linked_hook_seqs (session_id, seq) VALUES (?, ?) RETURNING seq`,
+        `SELECT event_json, applied_at FROM linked_hook_seqs WHERE session_id = ? AND seq = ?`,
         sessionId,
-        Math.round(seq)
+        seq
       )
-      .toArray();
-    if (inserted.length === 0) return { ok: true, duplicate: true };
+      .toArray()[0];
+    if (existing) {
+      if (String(existing["event_json"] ?? "") !== eventJson) {
+        throw new Error("ingestHookEvent rejected same-sequence payload drift");
+      }
+      if (existing["applied_at"] != null) return { ok: true, duplicate: true };
+    }
+    const now = Date.now();
+    this.sql.exec(
+      `INSERT OR IGNORE INTO linked_bridge_sessions
+         (session_id, last_hook_seq, ended_at, created_at)
+       VALUES (?, 0, NULL, ?)`,
+      sessionId,
+      now
+    );
+    const session = this.sql
+      .exec(
+        `SELECT last_hook_seq, ended_at FROM linked_bridge_sessions WHERE session_id = ?`,
+        sessionId
+      )
+      .toArray()[0];
+    if (!session || session["ended_at"] != null) {
+      throw new Error("ingestHookEvent rejected an ended bridge session");
+    }
+    const lastSeq = Number(session["last_hook_seq"] ?? 0);
+    if (!existing && seq !== lastSeq + 1) {
+      throw new Error(`ingestHookEvent expected sequence ${lastSeq + 1}, received ${seq}`);
+    }
+    if (!existing) {
+      this.sql.exec(
+        `INSERT INTO linked_hook_seqs (session_id, seq, event_json, created_at, applied_at)
+         VALUES (?, ?, ?, ?, NULL)`,
+        sessionId,
+        seq,
+        eventJson,
+        now
+      );
+    }
 
     const channelId = this.primaryChannelId();
-    if (!channelId) return { ok: true }; // nothing to author against yet
+    if (channelId) {
+      await this.applyHookEvent({
+        channelId,
+        bridgeSessionId: sessionId,
+        seq,
+        batchId,
+        interruptedBatchId,
+        event: opts.event,
+      });
+    }
+    const appliedAt = Date.now();
+    this.sql.exec(
+      `UPDATE linked_hook_seqs SET applied_at = ? WHERE session_id = ? AND seq = ?`,
+      appliedAt,
+      sessionId,
+      seq
+    );
+    this.sql.exec(
+      `UPDATE linked_bridge_sessions SET last_hook_seq = ? WHERE session_id = ?`,
+      seq,
+      sessionId
+    );
+    if (opts.event.hook === "SessionEnd") {
+      this.sql.exec(
+        `UPDATE linked_bridge_sessions SET ended_at = ? WHERE session_id = ?`,
+        appliedAt,
+        sessionId
+      );
+    }
+    this.compactHookReceipts(sessionId);
+    return { ok: true };
+  }
 
-    const event = opts.event;
+  /**
+   * An unapplied hook row is a durable continuation, not a failed watermark.
+   * A live concurrent application is joined through `hookApplications`; after
+   * eviction there can be no surviving external call, so the next semantic
+   * ingress replays the deterministic trajectory envelopes and advances the
+   * same durable row.
+   */
+  private async recoverPendingHookApplications(
+    onlySessionId?: string,
+    beforeSeq?: number
+  ): Promise<void> {
+    for (;;) {
+      const conditions = ["applied_at IS NULL"];
+      const bindings: unknown[] = [];
+      if (onlySessionId) {
+        conditions.push("session_id = ?");
+        bindings.push(onlySessionId);
+      }
+      if (beforeSeq !== undefined) {
+        conditions.push("seq < ?");
+        bindings.push(beforeSeq);
+      }
+      const row = this.sql
+        .exec(
+          `SELECT session_id, seq, event_json
+           FROM linked_hook_seqs
+           WHERE ${conditions.join(" AND ")}
+           ORDER BY created_at, session_id, seq
+           LIMIT 1`,
+          ...bindings
+        )
+        .toArray()[0];
+      if (!row) return;
+      const bridgeSessionId = String(row["session_id"]);
+      const seq = Number(row["seq"]);
+      const eventJson = String(row["event_json"] ?? "");
+      const applicationKey = `${bridgeSessionId}:${seq}`;
+      const active = this.hookApplications.get(applicationKey);
+      if (active) {
+        if (active.eventJson !== eventJson) {
+          throw new Error("durable hook continuation drifted from its live application");
+        }
+        await active.promise;
+        continue;
+      }
+      const parsed = JSON.parse(eventJson) as {
+        batchId: string | null;
+        interruptedBatchId: string | null;
+        event: LinkedHookEvent;
+      };
+      const opts: HookIngestOptions = {
+        bridgeSessionId,
+        seq,
+        ...(parsed.batchId ? { batchId: parsed.batchId } : {}),
+        ...(parsed.interruptedBatchId ? { interruptedBatchId: parsed.interruptedBatchId } : {}),
+        event: parsed.event,
+      };
+      const promise = this.ingestHookEventOwned(opts, eventJson);
+      this.hookApplications.set(applicationKey, { eventJson, promise });
+      try {
+        await promise;
+      } finally {
+        if (this.hookApplications.get(applicationKey)?.promise === promise) {
+          this.hookApplications.delete(applicationKey);
+        }
+      }
+    }
+  }
+
+  private async applyHookEvent(input: {
+    channelId: string;
+    bridgeSessionId: string;
+    seq: number;
+    batchId: string | null;
+    interruptedBatchId: string | null;
+    event: LinkedHookEvent;
+  }): Promise<void> {
+    const {
+      channelId,
+      bridgeSessionId: sessionId,
+      seq,
+      batchId,
+      interruptedBatchId,
+      event,
+    } = input;
+
     switch (event.hook) {
       case "SessionStart": {
         this.setStateValue(
@@ -864,13 +1577,23 @@ export class LinkedAgentWorker extends AgentWorkerBase {
         break;
       }
       case "UserPromptSubmit": {
+        if (interruptedBatchId) {
+          await this.terminalizeBatch(channelId, sessionId, interruptedBatchId, "interrupted");
+        }
         const turnId = this.turnIdFor(channelId, sessionId, event.turnKey);
         const existing = this.openTurn();
         if (existing?.turnKey === event.turnKey) break;
         if (existing && existing.turnKey !== event.turnKey) {
           await this.closeOpenTurn("new terminal prompt submitted");
         }
-        this.setStateValue(OPEN_TURN_KEY, JSON.stringify({ turnId, turnKey: event.turnKey }));
+        this.setStateValue(
+          OPEN_TURN_KEY,
+          JSON.stringify({
+            turnId,
+            turnKey: event.turnKey,
+            source: "local",
+          } satisfies OpenLinkedTurn)
+        );
         const messageId = `lm:${turnId}:user`;
         await this.appendTrajectory(channelId, [
           {
@@ -898,6 +1621,7 @@ export class LinkedAgentWorker extends AgentWorkerBase {
         break;
       }
       case "PreToolUse": {
+        if (batchId) await this.activateBatch(channelId, sessionId, batchId, batchId);
         const invocationId = `linv:${sessionId}:${event.toolUseId}`;
         await this.appendTrajectory(channelId, [
           {
@@ -917,29 +1641,38 @@ export class LinkedAgentWorker extends AgentWorkerBase {
         break;
       }
       case "PostToolUse": {
+        if (batchId) await this.activateBatch(channelId, sessionId, batchId, batchId);
         const invocationId = `linv:${sessionId}:${event.toolUseId}`;
         await this.appendTrajectory(channelId, [
           {
             envelopeId: ids.invocationTerminal(invocationId),
-            payloadKind: event.ok ? "invocation.completed" : "invocation.failed",
-            payload: event.ok
-              ? invocationCompletedPayload({
-                  ...(event.outputSummary ? { summary: bounded(event.outputSummary, 2_000) } : {}),
-                })
-              : invocationFailedPayload(
-                  "tool_error",
-                  bounded(event.outputSummary ?? "tool failed", 2_000),
-                  {
-                    failure: agentToolFailureFromUnknown(
-                      { message: event.outputSummary ?? "tool failed" },
-                      {
-                        operation: event.toolName ?? "external-tool",
-                        stage: "external-tool",
-                        causal: { invocationId },
-                      }
-                    ),
-                  }
-                ),
+            payloadKind: "invocation.completed",
+            payload: invocationCompletedPayload({
+              ...(event.outputSummary ? { summary: bounded(event.outputSummary, 2_000) } : {}),
+            }),
+            causality: { invocationId, ...this.openTurnCausality() },
+            publish: true,
+          },
+        ]);
+        break;
+      }
+      case "PostToolUseFailure": {
+        if (batchId) await this.activateBatch(channelId, sessionId, batchId, batchId);
+        const invocationId = `linv:${sessionId}:${event.toolUseId}`;
+        await this.appendTrajectory(channelId, [
+          {
+            envelopeId: ids.invocationTerminal(invocationId),
+            payloadKind: "invocation.failed",
+            payload: invocationFailedPayload("tool_error", bounded(event.error, 2_000), {
+              failure: agentToolFailureFromUnknown(
+                { message: event.error },
+                {
+                  operation: event.toolName ?? "external-tool",
+                  stage: "external-tool",
+                  causal: { invocationId },
+                }
+              ),
+            }),
             causality: { invocationId, ...this.openTurnCausality() },
             publish: true,
           },
@@ -947,7 +1680,10 @@ export class LinkedAgentWorker extends AgentWorkerBase {
         break;
       }
       case "Stop": {
-        const open = this.openTurn();
+        const open = batchId
+          ? (this.terminalTurnForBatch(batchId, sessionId) ??
+            (await this.activateBatch(channelId, sessionId, batchId, event.turnKey)))
+          : this.openTurn();
         if (!open) {
           throw new Error(
             `linked Stop ${event.turnKey} has no captured prompt or received message; refusing to invent turn causality`
@@ -988,16 +1724,40 @@ export class LinkedAgentWorker extends AgentWorkerBase {
           causality: { turnId },
           publish: true,
         });
-        await this.appendTrajectory(channelId, items);
+        if (batchId) this.prepareBatchTerminal(batchId, sessionId, turnId, "completed");
         this.setStateValue(OPEN_TURN_KEY, "");
-        // §7.5 cursor semantics: turn.closed is the processed marker — input
-        // acked before this boundary is never replayed to a fresh session.
-        const processed = this.ackSeq();
-        this.setStateValue(PROCESSED_SEQ_KEY, String(processed));
-        this.sql.exec(`DELETE FROM linked_bridge_queue WHERE seq <= ?`, processed);
+        await this.appendTrajectory(channelId, items);
+        if (batchId) this.finishBatchTerminalPublication(batchId, sessionId);
+        break;
+      }
+      case "StopFailure": {
+        const open = batchId
+          ? (this.terminalTurnForBatch(batchId, sessionId) ??
+            (await this.activateBatch(channelId, sessionId, batchId, event.turnKey)))
+          : this.openTurn();
+        if (!open) throw new Error("linked StopFailure has no active turn");
+        if (batchId) this.prepareBatchTerminal(batchId, sessionId, open.turnId, "failed");
+        this.setStateValue(OPEN_TURN_KEY, "");
+        await this.appendTrajectory(channelId, [
+          {
+            envelopeId: ids.turnClosed(open.turnId),
+            payloadKind: "turn.closed",
+            payload: {
+              protocol: AGENTIC_PROTOCOL_VERSION,
+              reason: bounded(`Claude API failure: ${event.errorDetails ?? event.error}`, 512),
+            },
+            causality: { turnId: open.turnId },
+            publish: true,
+          },
+        ]);
+        if (batchId) this.finishBatchTerminalPublication(batchId, sessionId);
         break;
       }
       case "SessionEnd": {
+        const open = this.openTurn();
+        if (open?.bridgeSessionId === sessionId && open.batchId) {
+          this.abandonBatch(open.batchId, sessionId, Date.now());
+        }
         await this.appendTrajectory(channelId, [
           {
             envelopeId: ids.systemEvent(`linked:${sessionId}`, "session-end", Math.round(seq)),
@@ -1010,24 +1770,348 @@ export class LinkedAgentWorker extends AgentWorkerBase {
             },
           },
         ]);
-        // The bridge response is client-owned. MCP stdin closure cancels it;
-        // this hook records the semantic event but does not create a second,
-        // server-side lifetime decision.
+        if (open?.bridgeSessionId === sessionId) {
+          await this.closeOpenTurn("linked session ended before a terminal hook");
+        }
         break;
       }
     }
-    return { ok: true };
   }
 
   private turnIdFor(channelId: string, sessionId: string, turnKey: string): string {
     return ids.turnId(channelId, `hook:${sessionId}:${turnKey}`, this.participantId());
   }
 
-  private openTurn(): { turnId: string; turnKey: string } | null {
+  private async activateBatch(
+    channelId: string,
+    bridgeSessionId: string,
+    batchId: string,
+    turnKey: string
+  ): Promise<OpenLinkedTurn> {
+    const open = this.openTurn();
+    if (open) {
+      if (
+        !(
+          open.source === "channel" &&
+          open.bridgeSessionId === bridgeSessionId &&
+          open.batchId === batchId
+        )
+      )
+        throw new Error("linked channel batch cannot replace another active turn");
+    }
+    const batch = this.sql
+      .exec(
+        `SELECT bridge_session_id, turn_id, opened_published_at, terminal_at
+         FROM linked_delivery_batches WHERE batch_id = ?`,
+        batchId
+      )
+      .toArray()[0];
+    if (
+      !batch ||
+      String(batch["bridge_session_id"]) !== bridgeSessionId ||
+      batch["terminal_at"] != null
+    ) {
+      throw new Error("linked hook references a foreign or terminal delivery batch");
+    }
+    const first = this.sql
+      .exec(
+        `SELECT q.seq, q.kind, q.channel_id, q.payload
+         FROM linked_delivery_attempts a
+         JOIN linked_bridge_queue q ON q.seq = a.seq
+         WHERE a.batch_id = ?
+           AND a.bridge_session_id = ?
+           AND a.accepted_at IS NOT NULL
+           AND a.superseded_at IS NULL
+           AND q.terminal_at IS NULL
+         ORDER BY q.seq
+         LIMIT 1`,
+        batchId,
+        bridgeSessionId
+      )
+      .toArray()[0];
+    if (!first) throw new Error("linked hook batch has no accepted delivery members");
+    const row: QueueRow = {
+      seq: Number(first["seq"]),
+      kind: String(first["kind"]),
+      channelId: String(first["channel_id"]),
+      payload: JSON.parse(String(first["payload"])) as Record<string, unknown>,
+    };
+    if (row.channelId !== channelId) {
+      throw new Error("linked hook batch channel drifted from the vessel primary channel");
+    }
+    const turnId =
+      open?.turnId ??
+      (batch["turn_id"] == null
+        ? ids.turnId(
+            channelId,
+            `bridge:${bridgeSessionId}:${batchId}:${turnKey}`,
+            this.participantId()
+          )
+        : String(batch["turn_id"]));
+    const items: TrajectoryItem[] = [];
+    if (row.kind === "message") {
+      const triggerMessageId = row.payload["triggerMessageId"];
+      if (typeof triggerMessageId !== "string" || !triggerMessageId) {
+        throw new Error(`linked queue row ${row.seq} has no canonical trigger message identity`);
+      }
+      items.push(this.triggeredTurnOpenedItem(turnId, triggerMessageId));
+    } else {
+      const content = bounded(row.payload["content"]);
+      const messageId = `lm:${turnId}:channel-command`;
+      items.push(
+        {
+          envelopeId: ids.messageTerminal(messageId),
+          payloadKind: "message.completed",
+          payload: {
+            protocol: AGENTIC_PROTOCOL_VERSION,
+            role: "user",
+            blocks: [{ blockId: `${messageId}:block:0`, type: "text", content }],
+            outcome: "completed",
+            tier: "primary",
+            metadata: { source: "channel-command" },
+          },
+          causality: { turnId, messageId },
+          publish: true,
+        },
+        this.triggeredTurnOpenedItem(turnId, messageId)
+      );
+    }
+    this.sql.exec(
+      `UPDATE linked_delivery_batches
+       SET turn_id = ?, opened_at = COALESCE(opened_at, ?)
+       WHERE batch_id = ? AND bridge_session_id = ? AND terminal_at IS NULL`,
+      turnId,
+      Date.now(),
+      batchId,
+      bridgeSessionId
+    );
+    const active: OpenLinkedTurn = {
+      turnId,
+      turnKey,
+      source: "channel",
+      bridgeSessionId,
+      batchId,
+    };
+    this.setStateValue(OPEN_TURN_KEY, JSON.stringify(active));
+    if (batch["opened_published_at"] != null) return active;
+    await this.appendTrajectory(channelId, items);
+    this.sql.exec(
+      `UPDATE linked_delivery_batches
+       SET opened_published_at = COALESCE(opened_published_at, ?)
+       WHERE batch_id = ? AND bridge_session_id = ?`,
+      Date.now(),
+      batchId,
+      bridgeSessionId
+    );
+    return active;
+  }
+
+  private async terminalizeBatch(
+    channelId: string,
+    bridgeSessionId: string,
+    batchId: string,
+    outcome: DeliveryOutcome
+  ): Promise<void> {
+    const open = this.terminalTurnForBatch(batchId, bridgeSessionId) ?? this.openTurn();
+    if (
+      !open ||
+      open.source !== "channel" ||
+      open.bridgeSessionId !== bridgeSessionId ||
+      open.batchId !== batchId
+    ) {
+      throw new Error("linked terminal receipt does not own the active delivery batch");
+    }
+    this.prepareBatchTerminal(batchId, bridgeSessionId, open.turnId, outcome);
+    this.setStateValue(OPEN_TURN_KEY, "");
+    await this.appendTrajectory(channelId, [
+      {
+        envelopeId: ids.turnClosed(open.turnId),
+        payloadKind: "turn.closed",
+        payload: { protocol: AGENTIC_PROTOCOL_VERSION, reason: outcome },
+        causality: { turnId: open.turnId },
+        publish: true,
+      },
+    ]);
+    this.finishBatchTerminalPublication(batchId, bridgeSessionId);
+  }
+
+  private prepareBatchTerminal(
+    batchId: string,
+    bridgeSessionId: string,
+    turnId: string,
+    outcome: DeliveryOutcome
+  ): void {
+    const now = Date.now();
+    const batch = this.sql
+      .exec(
+        `SELECT bridge_session_id, turn_id, outcome, terminal_at
+         FROM linked_delivery_batches WHERE batch_id = ?`,
+        batchId
+      )
+      .toArray()[0];
+    if (!batch || String(batch["bridge_session_id"]) !== bridgeSessionId) {
+      throw new Error("linked terminal receipt references a foreign delivery batch");
+    }
+    if (batch["terminal_at"] != null) {
+      if (String(batch["outcome"]) !== outcome || String(batch["turn_id"]) !== turnId) {
+        throw new Error("linked terminal receipt drifted after persistence");
+      }
+      return;
+    }
+    this.sql.exec(
+      `UPDATE linked_delivery_batches
+       SET turn_id = ?, outcome = ?, terminal_at = ?
+       WHERE batch_id = ? AND terminal_at IS NULL`,
+      turnId,
+      outcome,
+      now,
+      batchId
+    );
+    this.sql.exec(
+      `UPDATE linked_bridge_queue
+       SET terminal_outcome = ?, terminal_at = ?, terminal_turn_id = ?
+       WHERE terminal_at IS NULL AND seq IN (
+         SELECT seq FROM linked_delivery_attempts
+         WHERE batch_id = ?
+           AND bridge_session_id = ?
+           AND accepted_at IS NOT NULL
+           AND superseded_at IS NULL
+       )`,
+      outcome,
+      now,
+      turnId,
+      batchId,
+      bridgeSessionId
+    );
+  }
+
+  private finishBatchTerminalPublication(batchId: string, bridgeSessionId: string): void {
+    const publishedAt = Date.now();
+    this.sql.exec(
+      `UPDATE linked_delivery_batches
+       SET terminal_published_at = COALESCE(terminal_published_at, ?)
+       WHERE batch_id = ? AND bridge_session_id = ? AND terminal_at IS NOT NULL`,
+      publishedAt,
+      batchId,
+      bridgeSessionId
+    );
+    this.sql.exec(
+      `UPDATE linked_bridge_queue SET payload = '{}'
+       WHERE terminal_at IS NOT NULL AND seq IN (
+         SELECT seq FROM linked_delivery_attempts
+         WHERE batch_id = ? AND bridge_session_id = ?
+       )`,
+      batchId,
+      bridgeSessionId
+    );
+    this.compactTerminalReceipts();
+  }
+
+  private terminalTurnForBatch(batchId: string, bridgeSessionId: string): OpenLinkedTurn | null {
+    const batch = this.sql
+      .exec(
+        `SELECT turn_id, terminal_at FROM linked_delivery_batches
+         WHERE batch_id = ? AND bridge_session_id = ?`,
+        batchId,
+        bridgeSessionId
+      )
+      .toArray()[0];
+    if (!batch || batch["terminal_at"] == null || batch["turn_id"] == null) return null;
+    return {
+      turnId: String(batch["turn_id"]),
+      turnKey: batchId,
+      source: "channel",
+      bridgeSessionId,
+      batchId,
+    };
+  }
+
+  private abandonBatch(batchId: string, bridgeSessionId: string, at: number): void {
+    this.sql.exec(
+      `UPDATE linked_delivery_attempts
+       SET superseded_at = COALESCE(superseded_at, ?)
+       WHERE batch_id = ? AND bridge_session_id = ?`,
+      at,
+      batchId,
+      bridgeSessionId
+    );
+    this.sql.exec(
+      `UPDATE linked_delivery_batches
+       SET outcome = COALESCE(outcome, 'abandoned'), terminal_at = COALESCE(terminal_at, ?)
+       WHERE batch_id = ? AND bridge_session_id = ?`,
+      at,
+      batchId,
+      bridgeSessionId
+    );
+  }
+
+  /** The trajectory is canonical long-term history. SQL receipts retain only a
+   * finite recent diagnostic window and a small replay-attempt tail. */
+  private compactTerminalReceipts(): void {
+    const expired = this.sql
+      .exec(
+        `SELECT seq FROM linked_bridge_queue
+         WHERE terminal_at IS NOT NULL
+           AND EXISTS (
+             SELECT 1
+             FROM linked_delivery_attempts a
+             JOIN linked_delivery_batches b ON b.batch_id = a.batch_id
+             WHERE a.seq = linked_bridge_queue.seq
+               AND b.terminal_published_at IS NOT NULL
+           )
+         ORDER BY terminal_at DESC, seq DESC
+         LIMIT -1 OFFSET ?`,
+        TERMINAL_RECEIPT_LIMIT
+      )
+      .toArray()
+      .map((row) => Number(row["seq"]));
+    for (const seq of expired) {
+      this.sql.exec(`DELETE FROM linked_delivery_attempts WHERE seq = ?`, seq);
+      this.sql.exec(`DELETE FROM linked_bridge_queue WHERE seq = ?`, seq);
+    }
+    this.sql.exec(
+      `DELETE FROM linked_delivery_batches
+       WHERE terminal_published_at IS NOT NULL
+         AND batch_id NOT IN (
+           SELECT batch_id FROM linked_delivery_attempts WHERE batch_id IS NOT NULL
+         )`
+    );
+  }
+
+  private compactHookReceipts(sessionId: string): void {
+    this.sql.exec(
+      `DELETE FROM linked_hook_seqs
+       WHERE session_id = ? AND seq IN (
+         SELECT seq FROM linked_hook_seqs
+         WHERE session_id = ? AND applied_at IS NOT NULL
+         ORDER BY seq DESC
+         LIMIT -1 OFFSET ?
+       )`,
+      sessionId,
+      sessionId,
+      HOOK_RECEIPT_LIMIT
+    );
+    const expiredSessions = this.sql
+      .exec(
+        `SELECT session_id FROM linked_bridge_sessions
+         WHERE ended_at IS NOT NULL
+         ORDER BY ended_at DESC
+         LIMIT -1 OFFSET ?`,
+        ENDED_HOOK_SESSION_LIMIT
+      )
+      .toArray()
+      .map((row) => String(row["session_id"]));
+    for (const expired of expiredSessions) {
+      this.sql.exec(`DELETE FROM linked_hook_seqs WHERE session_id = ?`, expired);
+      this.sql.exec(`DELETE FROM linked_bridge_sessions WHERE session_id = ?`, expired);
+    }
+  }
+
+  private openTurn(): OpenLinkedTurn | null {
     const raw = this.getStateValue(OPEN_TURN_KEY);
     if (!raw) return null;
     try {
-      return JSON.parse(raw) as { turnId: string; turnKey: string };
+      return JSON.parse(raw) as OpenLinkedTurn;
     } catch {
       return null;
     }
@@ -1036,70 +2120,6 @@ export class LinkedAgentWorker extends AgentWorkerBase {
   private openTurnCausality(): { turnId?: string } {
     const open = this.openTurn();
     return open ? { turnId: open.turnId } : {};
-  }
-
-  /**
-   * Open a linked turn from a message that already exists in the canonical
-   * trajectory. No mirrored copy is authored: the turn points straight at the
-   * received message identity, so turn -> message -> sender/content stays one
-   * public, walkable chain on live delivery and durable replay alike.
-   */
-  private async openReceivedMessageTurn(
-    channelId: string,
-    triggerMessageId: string
-  ): Promise<void> {
-    if (this.openTurn()) return;
-    const turnKey = `channel:${triggerMessageId}`;
-    const turnId = ids.turnId(channelId, turnKey, this.participantId());
-    this.setStateValue(OPEN_TURN_KEY, JSON.stringify({ turnId, turnKey }));
-    await this.appendTrajectory(channelId, [
-      this.triggeredTurnOpenedItem(turnId, triggerMessageId),
-    ]);
-  }
-
-  private async openCommandTurn(channelId: string, seq: string, content: string): Promise<void> {
-    if (this.openTurn()) return;
-    const turnKey = `prompt:${seq}`;
-    const turnId = ids.turnId(channelId, turnKey, this.participantId());
-    this.setStateValue(OPEN_TURN_KEY, JSON.stringify({ turnId, turnKey }));
-    const messageId = `lm:${turnId}:channel-command`;
-    await this.appendTrajectory(channelId, [
-      {
-        envelopeId: ids.messageTerminal(messageId),
-        payloadKind: "message.completed",
-        payload: {
-          protocol: AGENTIC_PROTOCOL_VERSION,
-          role: "user",
-          blocks: [{ blockId: `${messageId}:block:0`, type: "text", content }],
-          outcome: "completed",
-          tier: "primary",
-          metadata: { source: "channel-command" },
-        },
-        causality: { turnId, messageId },
-        publish: true,
-      },
-      this.triggeredTurnOpenedItem(turnId, messageId),
-    ]);
-  }
-
-  private async openBridgeQueueTurn(row: QueueRow): Promise<void> {
-    if (this.openTurn()) return;
-    if (row.kind === "message") {
-      const triggerMessageId = row.payload["triggerMessageId"];
-      if (typeof triggerMessageId !== "string" || triggerMessageId.length === 0) {
-        throw new Error(`linked queue row ${row.seq} has no canonical trigger message identity`);
-      }
-      await this.openReceivedMessageTurn(row.channelId, triggerMessageId);
-      return;
-    }
-    if (row.kind === "prompt") {
-      const content = row.payload["content"];
-      await this.openCommandTurn(
-        row.channelId,
-        String(row.seq),
-        typeof content === "string" ? content : String(content ?? "")
-      );
-    }
   }
 
   private triggeredTurnOpenedItem(turnId: string, triggerMessageId: string): TrajectoryItem {
@@ -1185,9 +2205,7 @@ export class LinkedAgentWorker extends AgentWorkerBase {
 
   // ── Fork hygiene ───────────────────────────────────────────────────────────
 
-  /** A cloned linked vessel starts detached: bridge connections, delivery
-   *  cursors, permission relays, and hook idempotency are per-live-session
-   *  state that must not ghost into the fork. */
+  /** A cloned linked vessel starts detached and with no delivery receipts. */
   protected override async onChannelForked(ctx: {
     oldChannelId: string;
     newChannelId: string;
@@ -1195,11 +2213,12 @@ export class LinkedAgentWorker extends AgentWorkerBase {
   }): Promise<void> {
     await this.closeCurrentBridge("channel-forked");
     this.setStateValue(COMPLETED_KEY, "");
-    this.setStateValue(ACK_SEQ_KEY, "");
-    this.setStateValue(PROCESSED_SEQ_KEY, "");
     this.setStateValue(OPEN_TURN_KEY, "");
     this.setStateValue(SESSION_KEY, "");
     this.setStateValue(PRIMARY_CHANNEL_KEY, ctx.newChannelId);
+    this.sql.exec(`DELETE FROM linked_delivery_attempts`);
+    this.sql.exec(`DELETE FROM linked_delivery_batches`);
+    this.sql.exec(`DELETE FROM linked_bridge_sessions`);
     this.sql.exec(`DELETE FROM linked_bridge_queue`);
     this.sql.exec(`DELETE FROM linked_hook_seqs`);
   }

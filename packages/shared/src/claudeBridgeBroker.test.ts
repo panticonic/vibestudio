@@ -22,11 +22,30 @@ afterEach(() => {
 
 function authority(): ClaudeBridgeAuthority & { close: ReturnType<typeof vi.fn> } {
   return {
-    async *openBridge(_input, signal) {
-      yield { kind: "subscribed", result: { pendingCount: 1 } };
+    async *openBridge(input, signal) {
+      yield {
+        kind: "subscribed",
+        result: {
+          ok: true,
+          bridgeSessionId: input.bridgeSessionId,
+          attachmentGeneration: "attachment-1",
+          pendingCount: 1,
+          primaryChannelId: "chan",
+          contextId: "ctx",
+          channelIds: ["chan"],
+        },
+      };
       yield {
         kind: "event",
-        payload: { kind: "message", seq: 1, content: "hello", meta: { channel_id: "chan" } },
+        payload: {
+          kind: "message",
+          seq: 1,
+          deliveryId: "delivery-1",
+          bridgeSessionId: input.bridgeSessionId,
+          attachmentGeneration: "attachment-1",
+          content: "hello",
+          meta: { channel_id: "chan" },
+        },
       };
       await new Promise<void>((resolve) =>
         signal.addEventListener("abort", () => resolve(), { once: true })
@@ -35,7 +54,7 @@ function authority(): ClaudeBridgeAuthority & { close: ReturnType<typeof vi.fn> 
     say: vi.fn(async ({ text }) => ({ messageId: "m1", channelId: text })),
     complete: vi.fn(async () => ({ ok: true })),
     requestPermission: vi.fn(async () => ({ ok: true })),
-    ackDelivery: vi.fn(async () => ({ ok: true })),
+    acceptDelivery: vi.fn(async () => ({ ok: true })),
     ingestHookEvent: vi.fn(async () => ({ ok: true })),
     listSkills: vi.fn(async () => [] as ClaudeBridgeJson),
     readSkill: vi.fn(async ({ name }) => `# ${name}`),
@@ -81,6 +100,7 @@ describe("Claude bridge broker", () => {
     const records: unknown[] = [];
     for await (const record of client.openBridge(
       {
+        bridgeSessionId: "bridge-session-1",
         sessionInfo: {
           bridge: "bridge:1",
           mode: "launched",
@@ -117,6 +137,7 @@ describe("Claude bridge broker", () => {
     const iterator = channelClient
       .openBridge(
         {
+          bridgeSessionId: "bridge-session-1",
           sessionInfo: {
             bridge: "bridge:1",
             mode: "launched",
@@ -146,8 +167,19 @@ describe("Claude bridge broker", () => {
     const socketPath = path.join(root, "bridge.sock");
     let streamAborted = false;
     const auth = authority();
-    auth.openBridge = async function* (_input, signal) {
-      yield { kind: "subscribed", result: { pendingCount: 0 } };
+    auth.openBridge = async function* (input, signal) {
+      yield {
+        kind: "subscribed",
+        result: {
+          ok: true,
+          bridgeSessionId: input.bridgeSessionId,
+          attachmentGeneration: "attachment-1",
+          pendingCount: 0,
+          primaryChannelId: "chan",
+          contextId: "ctx",
+          channelIds: ["chan"],
+        },
+      };
       await new Promise<void>((resolve) => {
         if (signal.aborted) resolve();
         else signal.addEventListener("abort", () => resolve(), { once: true });
@@ -163,6 +195,7 @@ describe("Claude bridge broker", () => {
     const iterator = client
       .openBridge(
         {
+          bridgeSessionId: "bridge-session-1",
           sessionInfo: {
             bridge: "bridge:1",
             mode: "launched",

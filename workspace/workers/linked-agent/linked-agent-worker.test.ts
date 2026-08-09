@@ -27,6 +27,7 @@ class TestableLinkedAgentWorker extends LinkedAgentWorker {
   /** onSubagentComplete relays to the parent vessel. */
   readonly parentCompletions: Array<{ target: string; payload: Record<string, unknown> }> = [];
   failLogAppend = false;
+  appendBarrier: Promise<void> | null = null;
 
   channelConfig: Record<string, unknown> | null = null;
 
@@ -58,6 +59,7 @@ class TestableLinkedAgentWorker extends LinkedAgentWorker {
   protected override async callGad<T>(method: string, ...args: unknown[]): Promise<T> {
     this.gadCalls.push({ method, args: (args[0] ?? {}) as Record<string, unknown> });
     if (method === "appendLogEvent") {
+      await this.appendBarrier;
       if (this.failLogAppend) throw new Error("simulated replay append failure");
       const input = (args[0] ?? {}) as { events?: Array<{ envelopeId: string }> };
       return {
@@ -137,6 +139,78 @@ class TestableLinkedAgentWorker extends LinkedAgentWorker {
     return this.sql.exec(`SELECT * FROM linked_bridge_queue ORDER BY seq`).toArray();
   }
 
+  attemptRows(): Array<Record<string, unknown>> {
+    return this.sql.exec(`SELECT * FROM linked_delivery_attempts ORDER BY offered_at`).toArray();
+  }
+
+  batchRows(): Array<Record<string, unknown>> {
+    return this.sql.exec(`SELECT * FROM linked_delivery_batches ORDER BY created_at`).toArray();
+  }
+
+  hookRows(): Array<Record<string, unknown>> {
+    return this.sql.exec(`SELECT * FROM linked_hook_seqs ORDER BY session_id, seq`).toArray();
+  }
+
+  bridgeSessionRows(): Array<Record<string, unknown>> {
+    return this.sql.exec(`SELECT * FROM linked_bridge_sessions ORDER BY created_at`).toArray();
+  }
+
+  migrateLegacyForTest(): void {
+    this.setStateValue("linked:deliverySchema", "");
+    this.setStateValue("linked:ackSeq", "8");
+    this.setStateValue("linked:processedSeq", "7");
+    (this as unknown as { migrateLegacyDeliveryState(): void }).migrateLegacyDeliveryState();
+  }
+
+  legacyCursorForTest(key: string): string | null {
+    return this.getStateValue(key);
+  }
+
+  seedTerminalReceiptsForTest(count: number): void {
+    for (let index = 0; index < count; index += 1) {
+      const seq = Number(
+        this.sql
+          .exec(
+            `INSERT INTO linked_bridge_queue
+           (dedupe_key, kind, channel_id, payload, created_at,
+            terminal_outcome, terminal_at, terminal_turn_id)
+         VALUES (?, 'message', 'ch-1', '{}', ?, 'completed', ?, ?)
+         RETURNING seq`,
+            `terminal:${index}`,
+            index,
+            index,
+            `turn-${index}`
+          )
+          .toArray()[0]?.["seq"]
+      );
+      this.sql.exec(
+        `INSERT INTO linked_delivery_batches
+           (batch_id, bridge_session_id, turn_id, opened_at, opened_published_at,
+            outcome, terminal_at, terminal_published_at, created_at)
+         VALUES (?, 'receipt-session', ?, ?, ?, 'completed', ?, ?, ?)`,
+        `receipt-batch-${index}`,
+        `turn-${index}`,
+        index,
+        index,
+        index,
+        index,
+        index
+      );
+      this.sql.exec(
+        `INSERT INTO linked_delivery_attempts
+           (delivery_id, seq, bridge_session_id, attachment_generation,
+            offered_at, accepted_at, batch_id, superseded_at)
+         VALUES (?, ?, 'receipt-session', 'receipt-generation', ?, ?, ?, NULL)`,
+        `receipt-delivery-${index}`,
+        seq,
+        index,
+        index,
+        `receipt-batch-${index}`
+      );
+    }
+    (this as unknown as { compactTerminalReceipts(): void }).compactTerminalReceipts();
+  }
+
   seedBridgeQueue(count: number, contentBytes: number): void {
     const content = "x".repeat(contentBytes);
     for (let index = 0; index < count; index += 1) {
@@ -163,13 +237,12 @@ class TestableLinkedAgentWorker extends LinkedAgentWorker {
       .filter((call) => call.method === "appendLogEvent")
       .flatMap((call) => call.args["events"] as Array<Record<string, unknown>>);
   }
-
 }
 
 type BridgeAck = {
   ok: boolean;
-  cursor: number;
-  replayFromSeq: number;
+  bridgeSessionId: string;
+  attachmentGeneration: string;
   pendingCount: number;
   primaryChannelId: string | null;
 };
@@ -186,15 +259,30 @@ type TestBridge = {
 
 async function openTestBridge(
   worker: TestableLinkedAgentWorker,
-  sessionInfo: Record<string, unknown> = {}
+  sessionInfo: Record<string, unknown> = {},
+  bridgeSessionId = "bridge-session-1"
 ): Promise<TestBridge> {
-  const response = await worker.openBridge({ sessionInfo });
+  const response = await worker.openBridge({ bridgeSessionId, sessionInfo });
   const records = readChannelSubscriptionRecords<BridgeAck, Record<string, unknown>>(response);
   const first = await records.next();
   if (first.done || first.value.kind !== "subscribed") {
     throw new Error("linked bridge did not start with its subscription ACK");
   }
   return { ack: first.value.result, records };
+}
+
+async function acceptBridgePayload(
+  worker: TestableLinkedAgentWorker,
+  bridge: TestBridge,
+  payload: Record<string, unknown>,
+  batchId: string
+): Promise<void> {
+  await worker.acceptDelivery({
+    bridgeSessionId: bridge.ack.bridgeSessionId,
+    attachmentGeneration: bridge.ack.attachmentGeneration,
+    deliveryId: String(payload["deliveryId"]),
+    batchId,
+  });
 }
 
 async function nextBridgePayload(bridge: TestBridge): Promise<Record<string, unknown>> {
@@ -284,16 +372,20 @@ describe("LinkedAgentWorker", () => {
   it("rejects bridge opening from a foreign agent credential", async () => {
     const worker = await makeWorker();
     worker.testCallerId = "agent:someone-else";
-    await expect(worker.openBridge({})).rejects.toThrow(/does not own this vessel/);
+    await expect(worker.openBridge({ bridgeSessionId: "foreign-1" })).rejects.toThrow(
+      /does not own this vessel/
+    );
     worker.testCallerKind = "panel";
     worker.testCallerId = "panel:x";
-    await expect(worker.openBridge({})).rejects.toThrow(/not a linked bridge/);
+    await expect(worker.openBridge({ bridgeSessionId: "foreign-2" })).rejects.toThrow(
+      /not a linked bridge/
+    );
   });
 
   it("replaces the complete bridge generation without letting old cancellation detach the new one", async () => {
     const worker = await makeWorker();
-    const first = await openTestBridge(worker, { bridge: "bridge-1" });
-    const second = await openTestBridge(worker, { bridge: "bridge-2" });
+    const first = await openTestBridge(worker, { bridge: "bridge-1" }, "same-process");
+    const second = await openTestBridge(worker, { bridge: "bridge-2" }, "same-process");
 
     await first.records.return();
     expect(await worker.linkedStatus()).toMatchObject({
@@ -304,7 +396,7 @@ describe("LinkedAgentWorker", () => {
     expect((await worker.linkedStatus()).attached).toBe(false);
   });
 
-  it("buffers addressed input while detached and replays from the turn boundary on attach", async () => {
+  it("replays surviving input and terminalizes only its exact accepted batch", async () => {
     const worker = await makeWorker();
     // Detached: addressed message (explicit `to` us) buffers.
     await worker.processChannelEvent(
@@ -326,40 +418,167 @@ describe("LinkedAgentWorker", () => {
     const meta = replayed["meta"] as Record<string, unknown>;
     expect(meta["from_handle"]).toBe("alice");
     expect(meta["channel_id"]).toBe("ch-1");
-    const replayTurn = worker
-      .appendedEvents()
-      .find((event) => event["payloadKind"] === "turn.opened")!;
-    expect((replayTurn["causality"] as Record<string, unknown>)["messageId"]).toBe("m-1");
     expect(
-      worker.appendedEvents().filter((event) => event["payloadKind"] === "message.completed")
+      worker.appendedEvents().filter((event) => event["payloadKind"] === "turn.opened")
     ).toHaveLength(0);
 
-    // Ack + turn boundary (Stop) prunes the queue.
-    const seq = Number(replayed["seq"]);
-    await worker.ackDelivery({ seq });
+    await acceptBridgePayload(worker, bridge, replayed, "batch-1");
     await worker.ingestHookEvent({
-      sessionId: "s-1",
+      bridgeSessionId: bridge.ack.bridgeSessionId,
       seq: 1,
+      batchId: "batch-1",
       event: { hook: "Stop", finalText: "done", turnKey: "turn-1" },
     });
-    expect(worker.queueRows()).toHaveLength(0);
+    expect(worker.queueRows()).toHaveLength(1);
+    expect(worker.queueRows()[0]).toMatchObject({
+      payload: "{}",
+      terminal_outcome: "completed",
+    });
+    expect((await worker.linkedStatus()).pendingCount).toBe(0);
   });
 
-  it("clears the installed bridge generation when replay setup fails", async () => {
+  it("migrates legacy watermarks by replaying every surviving row", async () => {
+    const worker = await makeWorker();
+    worker.seedBridgeQueue(2, 8);
+    worker.migrateLegacyForTest();
+    expect(worker.legacyCursorForTest("linked:ackSeq")).toBe("");
+    expect(worker.legacyCursorForTest("linked:processedSeq")).toBe("");
+
+    const bridge = await openTestBridge(worker, {}, "post-migration-session");
+    expect(bridge.ack.pendingCount).toBe(2);
+    expect((await nextBridgePayload(bridge))["content"]).toBe("xxxxxxxx");
+    expect((await nextBridgePayload(bridge))["content"]).toBe("xxxxxxxx");
+  });
+
+  it("binds transport acceptance to one attachment and replays only into a new process session", async () => {
     const worker = await makeWorker();
     await worker.processChannelEvent(
       "ch-1",
       completedMessageEvent({
-        id: 10,
-        messageId: "m-replay-failure",
+        id: 11,
+        messageId: "m-recovery",
         senderId: "panel:alice",
-        text: "replay me",
+        text: "recover me",
         to: [{ kind: "participant", participantId: worker.selfParticipantId() }],
       }) as never
     );
-    worker.failLogAppend = true;
+    const first = await openTestBridge(worker, {}, "live-process-session");
+    const payload = await nextBridgePayload(first);
+    await acceptBridgePayload(worker, first, payload, "batch-recovery");
+    await expect(
+      worker.acceptDelivery({
+        bridgeSessionId: first.ack.bridgeSessionId,
+        attachmentGeneration: "stale-generation",
+        deliveryId: String(payload["deliveryId"]),
+        batchId: "batch-recovery",
+      })
+    ).rejects.toThrow(/stale bridge attachment/);
 
-    const response = await worker.openBridge({ sessionInfo: { bridge: "failed" } });
+    const recovered = await openTestBridge(worker, {}, "live-process-session");
+    expect(recovered.ack.pendingCount).toBe(0);
+    const replacement = await openTestBridge(worker, {}, "new-process-session");
+    expect(replacement.ack.pendingCount).toBe(1);
+    const replayed = await nextBridgePayload(replacement);
+    expect(replayed["deliveryId"]).not.toBe(payload["deliveryId"]);
+  });
+
+  it("caps superseded delivery attempts and ended hook-session receipts", async () => {
+    const worker = await makeWorker();
+    worker.seedBridgeQueue(1, 8);
+    for (let index = 0; index < 7; index += 1) {
+      const bridge = await openTestBridge(worker, {}, `attempt-session-${index}`);
+      await nextBridgePayload(bridge);
+    }
+    expect(worker.attemptRows().length).toBeLessThanOrEqual(5);
+
+    for (let index = 0; index < 10; index += 1) {
+      const bridgeSessionId = `ended-hook-session-${index}`;
+      await worker.ingestHookEvent({
+        bridgeSessionId,
+        seq: 1,
+        event: { hook: "SessionStart" },
+      });
+      await worker.ingestHookEvent({
+        bridgeSessionId,
+        seq: 2,
+        event: { hook: "SessionEnd" },
+      });
+    }
+    expect(worker.bridgeSessionRows().filter((row) => row["ended_at"] != null)).toHaveLength(8);
+    expect(
+      new Set(worker.hookRows().map((row) => String(row["session_id"]))).size
+    ).toBeLessThanOrEqual(8);
+  });
+
+  it("groups several accepted messages into one terminal turn without advancing a newer busy batch", async () => {
+    const worker = await makeWorker();
+    const bridge = await openTestBridge(worker, {}, "busy-session");
+    for (const [id, messageId] of [
+      [20, "m-busy-1"],
+      [21, "m-busy-2"],
+    ] as const) {
+      await worker.processChannelEvent(
+        "ch-1",
+        completedMessageEvent({
+          id,
+          messageId,
+          senderId: "panel:alice",
+          text: messageId,
+          to: [{ kind: "participant", participantId: worker.selfParticipantId() }],
+        }) as never
+      );
+    }
+    const first = await nextBridgePayload(bridge);
+    const second = await nextBridgePayload(bridge);
+    await acceptBridgePayload(worker, bridge, first, "batch-busy-1");
+    await acceptBridgePayload(worker, bridge, second, "batch-busy-1");
+    await worker.ingestHookEvent({
+      bridgeSessionId: bridge.ack.bridgeSessionId,
+      seq: 1,
+      batchId: "batch-busy-1",
+      event: { hook: "PreToolUse", toolName: "Read", toolUseId: "busy-tool" },
+    });
+
+    await worker.processChannelEvent(
+      "ch-1",
+      completedMessageEvent({
+        id: 22,
+        messageId: "m-busy-next",
+        senderId: "panel:alice",
+        text: "next",
+        to: [{ kind: "participant", participantId: worker.selfParticipantId() }],
+      }) as never
+    );
+    const third = await nextBridgePayload(bridge);
+    await acceptBridgePayload(worker, bridge, third, "batch-busy-2");
+    await worker.ingestHookEvent({
+      bridgeSessionId: bridge.ack.bridgeSessionId,
+      seq: 2,
+      batchId: "batch-busy-1",
+      event: { hook: "Stop", turnKey: "busy-turn" },
+    });
+
+    const rows = worker.queueRows();
+    expect(rows.filter((row) => row["terminal_outcome"] === "completed")).toHaveLength(2);
+    expect(rows.filter((row) => row["terminal_at"] == null)).toHaveLength(1);
+    expect((await worker.linkedStatus()).pendingCount).toBe(1);
+  });
+
+  it("retains a finite terminal receipt window after publishing canonical trajectory", async () => {
+    const worker = await makeWorker();
+    worker.seedTerminalReceiptsForTest(300);
+    expect(worker.queueRows()).toHaveLength(256);
+    expect(worker.queueRows()[0]?.["dedupe_key"]).toBe("terminal:44");
+  });
+
+  it("clears the installed bridge generation when replay setup fails", async () => {
+    const worker = await makeWorker();
+    worker.seedBridgeQueue(1, 1_100_000);
+
+    const response = await worker.openBridge({
+      bridgeSessionId: "failed-session",
+      sessionInfo: { bridge: "failed" },
+    });
     let failure: unknown;
     try {
       for await (const _record of readChannelSubscriptionRecords(response)) {
@@ -369,7 +588,7 @@ describe("LinkedAgentWorker", () => {
       failure = error;
     }
     expect(failure).toEqual(
-      expect.objectContaining({ message: "simulated replay append failure" })
+      expect.objectContaining({ message: expect.stringMatching(/exceeds the response buffer/) })
     );
     expect(await worker.linkedStatus()).toMatchObject({ attached: false });
     expect(worker.queueRows()).toHaveLength(1);
@@ -379,7 +598,7 @@ describe("LinkedAgentWorker", () => {
     const worker = await makeWorker();
     worker.seedBridgeQueue(96, 16_000);
 
-    const response = await worker.openBridge();
+    const response = await worker.openBridge({ bridgeSessionId: "backlog-session" });
     await vi.waitFor(() => expect(worker.bridgeDesiredSize()).toBeLessThanOrEqual(1_024 * 1_024));
     expect(worker.bridgeDesiredSize()).toBeGreaterThanOrEqual(0);
 
@@ -462,7 +681,7 @@ describe("LinkedAgentWorker", () => {
     expect(worker.queueRows()).toHaveLength(0);
   });
 
-  it("opens a live turn for channel-driven input and groups tool events under it", async () => {
+  it("opens a channel turn only after accepted input reaches hook activity", async () => {
     const worker = await makeWorker();
     const bridge = await openTestBridge(worker, { bridge: "bridge-1" });
     worker.gadCalls.length = 0;
@@ -478,25 +697,25 @@ describe("LinkedAgentWorker", () => {
       }) as never
     );
 
+    const pushed = await nextBridgePayload(bridge);
+    expect(pushed["kind"]).toBe("message");
+    expect(worker.appendedEvents()).toHaveLength(0);
+    await acceptBridgePayload(worker, bridge, pushed, "batch-channel");
+
+    await worker.ingestHookEvent({
+      bridgeSessionId: bridge.ack.bridgeSessionId,
+      seq: 1,
+      batchId: "batch-channel",
+      event: { hook: "PreToolUse", toolName: "Read", toolUseId: "tu-channel" },
+    });
+
     const opened = worker
       .appendedEvents()
       .filter((event) => event["payloadKind"] === "turn.opened");
     expect(opened).toHaveLength(1);
     const openedCausality = opened[0]!["causality"] as Record<string, unknown>;
-    const turnId = (openedCausality["turnId"] ?? "").toString();
-    expect(turnId).toContain("channel:m-channel-turn");
+    const turnId = String(openedCausality["turnId"]);
     expect(openedCausality["messageId"]).toBe("m-channel-turn");
-    expect(
-      worker.appendedEvents().filter((event) => event["payloadKind"] === "message.completed")
-    ).toHaveLength(0);
-    const pushed = await nextBridgePayload(bridge);
-    expect(pushed["kind"]).toBe("message");
-
-    await worker.ingestHookEvent({
-      sessionId: "s-chan",
-      seq: 1,
-      event: { hook: "PreToolUse", toolName: "Read", toolUseId: "tu-channel" },
-    });
 
     const invocation = worker
       .appendedEvents()
@@ -504,8 +723,9 @@ describe("LinkedAgentWorker", () => {
     expect((invocation["causality"] as Record<string, unknown>)["turnId"]).toBe(turnId);
 
     await worker.ingestHookEvent({
-      sessionId: "s-chan",
+      bridgeSessionId: bridge.ack.bridgeSessionId,
       seq: 2,
+      batchId: "batch-channel",
       event: { hook: "Stop", finalText: "done", turnKey: "claude-generated-key" },
     });
 
@@ -515,7 +735,7 @@ describe("LinkedAgentWorker", () => {
     expect((closed["causality"] as Record<string, unknown>)["turnId"]).toBe(turnId);
   });
 
-  it("closes an open turn when its response is cancelled", async () => {
+  it("does not fabricate a terminal turn when its response is cancelled", async () => {
     const worker = await makeWorker();
     const bridge = await openTestBridge(worker, { bridge: "bridge-1" });
     await worker.processChannelEvent(
@@ -528,13 +748,21 @@ describe("LinkedAgentWorker", () => {
         to: [{ kind: "participant", participantId: worker.selfParticipantId() }],
       }) as never
     );
+    const pushed = await nextBridgePayload(bridge);
+    await acceptBridgePayload(worker, bridge, pushed, "batch-detach");
+    await worker.ingestHookEvent({
+      bridgeSessionId: bridge.ack.bridgeSessionId,
+      seq: 1,
+      batchId: "batch-detach",
+      event: { hook: "PreToolUse", toolName: "Read", toolUseId: "tool-detach" },
+    });
     worker.gadCalls.length = 0;
 
     await bridge.records.return();
 
-    const closed = worker.appendedEvents().find((event) => event["payloadKind"] === "turn.closed");
-    expect(closed).toBeTruthy();
+    expect(worker.appendedEvents()).toHaveLength(0);
     expect((await worker.linkedStatus()).attached).toBe(false);
+    expect((await worker.linkedStatus()).pendingCount).toBe(1);
   });
 
   it("authors idempotent trajectory events from hook reports", async () => {
@@ -542,8 +770,8 @@ describe("LinkedAgentWorker", () => {
     await openTestBridge(worker);
 
     const prompt = {
-      sessionId: "s-1",
-      seq: 2,
+      bridgeSessionId: "bridge-session-1",
+      seq: 1,
       event: { hook: "UserPromptSubmit", promptText: "fix the bug", turnKey: "turn-9" } as const,
     };
     await worker.ingestHookEvent(prompt);
@@ -560,7 +788,7 @@ describe("LinkedAgentWorker", () => {
     const turnCausality = events[1]!["causality"] as Record<string, unknown>;
     expect(turnCausality["messageId"]).toBe(promptMessageId);
     const turnOpenId = String(events[1]!["envelopeId"]);
-    expect(turnOpenId).toMatch(/^turn:t:ch-1:hook:s-1:turn-9:/);
+    expect(turnOpenId).toMatch(/^turn:t:ch-1:hook:bridge-session-1:turn-9:/);
 
     // Redelivery of the same hook seq is a no-op.
     const duplicate = await worker.ingestHookEvent(prompt);
@@ -569,8 +797,8 @@ describe("LinkedAgentWorker", () => {
 
     // Tool lifecycle + Stop close the turn with the mirrored final message.
     await worker.ingestHookEvent({
-      sessionId: "s-1",
-      seq: 3,
+      bridgeSessionId: "bridge-session-1",
+      seq: 2,
       event: {
         hook: "PreToolUse",
         toolName: "Bash",
@@ -579,13 +807,13 @@ describe("LinkedAgentWorker", () => {
       },
     });
     await worker.ingestHookEvent({
-      sessionId: "s-1",
-      seq: 4,
-      event: { hook: "PostToolUse", toolUseId: "tu-1", ok: true, outputSummary: "ok" },
+      bridgeSessionId: "bridge-session-1",
+      seq: 3,
+      event: { hook: "PostToolUse", toolUseId: "tu-1", outputSummary: "ok" },
     });
     await worker.ingestHookEvent({
-      sessionId: "s-1",
-      seq: 5,
+      bridgeSessionId: "bridge-session-1",
+      seq: 4,
       event: { hook: "Stop", finalText: "all fixed", turnKey: "turn-9" },
     });
     const kinds = worker.gadCalls
@@ -620,16 +848,161 @@ describe("LinkedAgentWorker", () => {
     expect(payload["saliency"]).toBeUndefined();
   });
 
+  it("fails closed on hook gaps and same-sequence drift", async () => {
+    const worker = await makeWorker();
+    await worker.ingestHookEvent({
+      bridgeSessionId: "hook-order-session",
+      seq: 1,
+      event: { hook: "SessionStart", model: "Opus" },
+    });
+    await expect(
+      worker.ingestHookEvent({
+        bridgeSessionId: "hook-order-session",
+        seq: 3,
+        event: { hook: "SessionEnd" },
+      })
+    ).rejects.toThrow(/expected sequence 2/);
+    await expect(
+      worker.ingestHookEvent({
+        bridgeSessionId: "hook-order-session",
+        seq: 1,
+        event: { hook: "SessionStart", model: "Sonnet" },
+      })
+    ).rejects.toThrow(/payload drift/);
+  });
+
+  it("joins a concurrent exact hook replay while its durable application is pending", async () => {
+    const worker = await makeWorker();
+    let release!: () => void;
+    worker.appendBarrier = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const hook = {
+      bridgeSessionId: "concurrent-hook-session",
+      seq: 1,
+      event: { hook: "SessionStart", model: "Opus" } as const,
+    };
+    const first = worker.ingestHookEvent(hook);
+    await vi.waitFor(() => expect(worker.gadCalls).toHaveLength(1));
+    const replay = worker.ingestHookEvent(hook);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(worker.gadCalls).toHaveLength(1);
+    release();
+    await expect(first).resolves.toEqual({ ok: true });
+    await expect(replay).resolves.toEqual({ ok: true, duplicate: true });
+  });
+
+  it("authors exact tool and turn failure receipts without terminalizing unrelated input", async () => {
+    const worker = await makeWorker();
+    const bridge = await openTestBridge(worker, {}, "failure-session");
+    await worker.processChannelEvent(
+      "ch-1",
+      completedMessageEvent({
+        id: 41,
+        messageId: "m-failure",
+        senderId: "panel:alice",
+        text: "fail exactly",
+        to: [{ kind: "participant", participantId: worker.selfParticipantId() }],
+      }) as never
+    );
+    const payload = await nextBridgePayload(bridge);
+    await acceptBridgePayload(worker, bridge, payload, "batch-failure");
+    await worker.ingestHookEvent({
+      bridgeSessionId: bridge.ack.bridgeSessionId,
+      seq: 1,
+      batchId: "batch-failure",
+      event: { hook: "PreToolUse", toolName: "Bash", toolUseId: "tool-failure" },
+    });
+    await worker.ingestHookEvent({
+      bridgeSessionId: bridge.ack.bridgeSessionId,
+      seq: 2,
+      batchId: "batch-failure",
+      event: {
+        hook: "PostToolUseFailure",
+        toolName: "Bash",
+        toolUseId: "tool-failure",
+        error: "permission denied",
+      },
+    });
+    await worker.ingestHookEvent({
+      bridgeSessionId: bridge.ack.bridgeSessionId,
+      seq: 3,
+      batchId: "batch-failure",
+      event: {
+        hook: "StopFailure",
+        error: "authentication_failed",
+        errorDetails: "credential rejected",
+        turnKey: "failure-turn",
+      },
+    });
+    expect(worker.appendedEvents().map((event) => event["payloadKind"])).toContain(
+      "invocation.failed"
+    );
+    expect(worker.queueRows()[0]).toMatchObject({ terminal_outcome: "failed", payload: "{}" });
+  });
+
+  it("redrives a persisted terminal transition before the next hook after publication fails", async () => {
+    const worker = await makeWorker();
+    const bridge = await openTestBridge(worker, {}, "terminal-replay-session");
+    await worker.processChannelEvent(
+      "ch-1",
+      completedMessageEvent({
+        id: 42,
+        messageId: "m-terminal-replay",
+        senderId: "panel:alice",
+        text: "finish durably",
+        to: [{ kind: "participant", participantId: worker.selfParticipantId() }],
+      }) as never
+    );
+    const payload = await nextBridgePayload(bridge);
+    await acceptBridgePayload(worker, bridge, payload, "batch-terminal-replay");
+    await worker.ingestHookEvent({
+      bridgeSessionId: bridge.ack.bridgeSessionId,
+      seq: 1,
+      batchId: "batch-terminal-replay",
+      event: { hook: "PreToolUse", toolName: "Read", toolUseId: "tool-replay" },
+    });
+    worker.failLogAppend = true;
+    const terminal = {
+      bridgeSessionId: bridge.ack.bridgeSessionId,
+      seq: 2,
+      batchId: "batch-terminal-replay",
+      event: { hook: "Stop", finalText: "done", turnKey: "terminal-replay" } as const,
+    };
+    await expect(worker.ingestHookEvent(terminal)).rejects.toThrow(/simulated replay/);
+    expect(worker.queueRows()[0]).toMatchObject({ terminal_outcome: "completed" });
+    expect(worker.queueRows()[0]?.["payload"]).not.toBe("{}");
+
+    worker.failLogAppend = false;
+    await expect(
+      worker.ingestHookEvent({
+        bridgeSessionId: bridge.ack.bridgeSessionId,
+        seq: 3,
+        event: { hook: "SessionEnd" },
+      })
+    ).resolves.toEqual({ ok: true });
+    expect(worker.queueRows()[0]?.["payload"]).toBe("{}");
+    const terminalIds = worker.gadCalls
+      .filter((call) => call.method === "appendLogEvent")
+      .flatMap((call) => call.args["events"] as Array<Record<string, unknown>>)
+      .filter((event) => event["payloadKind"] === "turn.closed")
+      .map((event) => event["envelopeId"]);
+    expect(terminalIds).toHaveLength(2);
+    expect(new Set(terminalIds).size).toBe(1);
+  });
+
   it("relays an admitted exact permission invocation without a provider-side approval path", async () => {
     const worker = await makeWorker();
     const bridge = await openTestBridge(worker);
 
-    await expect(worker.requestPermission({
-      requestId: "req-1",
-      toolName: "Bash",
-      description: "run npm install",
-      inputPreview: "npm install",
-    })).resolves.toEqual({ ok: true, pending: false });
+    await expect(
+      worker.requestPermission({
+        requestId: "req-1",
+        toolName: "Bash",
+        description: "run npm install",
+        inputPreview: "npm install",
+      })
+    ).resolves.toEqual({ ok: true, pending: false });
     const verdict = await nextBridgePayload(bridge);
     expect(verdict).toMatchObject({
       kind: "permission",

@@ -246,19 +246,39 @@ async function invokeExtension<T>(client: RpcClient, method: string, args: unkno
 // ---------------------------------------------------------------------------
 
 async function runEmit(argv: string[]): Promise<number> {
-  // Hooks must NEVER break the session: swallow every error and exit 0.
+  const event = argv[0];
+  if (!event) return 0;
   try {
-    const event = argv[0];
-    if (!event) return 0;
     const socketPath = emitSocketPath(process.env, process.cwd());
-    if (!socketPath) return 0;
+    if (!socketPath) throw new Error("hook socket is unavailable");
     const payload = await readStdinSafe();
     const line = JSON.stringify({ event, payload, ts: Date.now() });
     await writeToHookSocket(socketPath, line);
   } catch {
-    // Intentionally ignored.
+    // Keep stderr bounded and payload-free. Exit 2 is the official blocking
+    // hook failure, but Stop must not use it: blocking Stop asks Claude to
+    // continue and can recursively invoke Stop. Lifecycle-only hooks likewise
+    // fail visibly without trying to reverse cleanup.
+    console.error(`vibestudio hook ${event} was not durably accepted`);
+    return hookFailureExitCode(event);
   }
   return 0;
+}
+
+export function hookFailureExitCode(event: string): 1 | 2 {
+  switch (event) {
+    case "UserPromptSubmit":
+    case "PreToolUse":
+    case "PostToolUse":
+    case "PostToolUseFailure":
+      return 2;
+    case "SessionStart":
+    case "Stop":
+    case "StopFailure":
+    case "SessionEnd":
+    default:
+      return 1;
+  }
 }
 
 /**
@@ -297,23 +317,43 @@ function readStdinSafe(): Promise<unknown> {
     });
     process.stdin.on("end", done);
     process.stdin.on("error", () => resolve(null));
-    // Never block a hook indefinitely.
-    setTimeout(done, 2000).unref();
   });
 }
 
 export function writeToHookSocket(socketPath: string, line: string): Promise<void> {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     const socket = net.connect(socketPath);
-    const finish = (): void => {
+    let buffer = "";
+    let settled = false;
+    const finish = (error?: Error): void => {
+      if (settled) return;
+      settled = true;
       socket.destroy();
-      resolve();
+      if (error) reject(error);
+      else resolve();
     };
     socket.on("connect", () => {
-      socket.write(`${line}\n`, () => finish());
+      socket.write(`${line}\n`, (error) => {
+        if (error) finish(error);
+      });
     });
-    socket.on("error", () => resolve());
-    socket.setTimeout(2000, finish);
+    socket.setEncoding("utf8");
+    socket.on("data", (chunk: string) => {
+      buffer += chunk;
+      const newline = buffer.indexOf("\n");
+      if (newline === -1) return;
+      try {
+        const ack = JSON.parse(buffer.slice(0, newline)) as { ok?: unknown; error?: unknown };
+        if (ack.ok !== true) throw new Error("hook ingestion was rejected");
+        finish();
+      } catch (error) {
+        finish(error instanceof Error ? error : new Error("invalid hook acknowledgement"));
+      }
+    });
+    socket.on("error", (error) => finish(error));
+    socket.on("close", () => {
+      if (!settled) finish(new Error("hook socket closed before durable acknowledgement"));
+    });
   });
 }
 

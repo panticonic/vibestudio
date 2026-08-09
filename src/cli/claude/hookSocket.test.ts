@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -9,7 +9,7 @@ import {
   type BridgeHookEvent,
   type EmittedHookLine,
 } from "./hookSocket.js";
-import { writeToHookSocket } from "./index.js";
+import { hookFailureExitCode, writeToHookSocket } from "./index.js";
 
 let tmpRoot: string;
 
@@ -69,7 +69,7 @@ describe("mapHookEvent + TurnTracker", () => {
     expect(stop2.turnKey).toBe("t2");
   });
 
-  it("maps tool payload fields, error detection, and summary truncation", () => {
+  it("maps successful and failed tool hooks as distinct official events", () => {
     const turns = new TurnTracker();
     const long = "x".repeat(600);
     const pre = map(
@@ -86,12 +86,30 @@ describe("mapHookEvent + TurnTracker", () => {
       {
         tool_name: "Write",
         tool_use_id: "tu2",
-        tool_response: { is_error: true, message: "denied" },
+        tool_response: { message: "done" },
       },
       turns
     ) as Extract<BridgeHookEvent, { hook: "PostToolUse" }>;
-    expect(post.ok).toBe(false);
     expect(post.toolUseId).toBe("tu2");
+    const failure = map(
+      "PostToolUseFailure",
+      { tool_name: "Write", tool_use_id: "tu2", error: "denied", is_interrupt: true },
+      turns
+    ) as Extract<BridgeHookEvent, { hook: "PostToolUseFailure" }>;
+    expect(failure).toMatchObject({
+      toolUseId: "tu2",
+      error: "denied",
+      interrupted: true,
+    });
+    const stopFailure = map(
+      "StopFailure",
+      { error: "authentication_failed", error_details: "expired" },
+      turns
+    ) as Extract<BridgeHookEvent, { hook: "StopFailure" }>;
+    expect(stopFailure).toMatchObject({
+      error: "authentication_failed",
+      errorDetails: "expired",
+    });
   });
 
   it("pairs Pre/Post via synthetic ids when tool_use_id is absent", () => {
@@ -132,15 +150,19 @@ describe("startHookSocketServer", () => {
     const received: EmittedHookLine[] = [];
     const server = startHookSocketServer(
       [socketPath],
-      (line) => received.push(line),
+      async (line) => {
+        received.push(line);
+      },
       () => {}
     );
+    await server.ready;
     expect(server.paths).toEqual([socketPath]);
 
     await writeToHookSocket(socketPath, JSON.stringify({ event: "Stop", payload: { a: 1 } }));
-    await writeToHookSocket(socketPath, "not json at all");
+    await expect(writeToHookSocket(socketPath, "not json at all")).rejects.toThrow(
+      /hook ingestion was rejected/
+    );
     await writeToHookSocket(socketPath, JSON.stringify({ event: "SessionEnd", payload: null }));
-    await new Promise((resolve) => setTimeout(resolve, 50));
 
     expect(received.map((l) => l.event)).toEqual(["Stop", "SessionEnd"]);
     await server.close();
@@ -152,10 +174,67 @@ describe("startHookSocketServer", () => {
     fs.writeFileSync(socketPath, "");
     const server = startHookSocketServer(
       [socketPath],
-      () => {},
+      async () => {},
       () => {}
     );
+    await server.ready;
     expect(server.paths).toEqual([socketPath]);
     await server.close();
+  });
+
+  it("acknowledges only after ordered durable ingestion and drains on close", async () => {
+    const socketPath = path.join(tmpRoot, "ordered.sock");
+    const order: string[] = [];
+    let release!: () => void;
+    const blocked = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const server = startHookSocketServer(
+      [socketPath],
+      async (line) => {
+        order.push(`start:${line.event}`);
+        await blocked;
+        order.push(`done:${line.event}`);
+      },
+      () => {}
+    );
+    await server.ready;
+    const write = writeToHookSocket(
+      socketPath,
+      JSON.stringify({ event: "PostToolUse", payload: {} })
+    ).then(() => order.push("ack"));
+    await vi.waitFor(() => expect(order).toEqual(["start:PostToolUse"]));
+    const close = server.close().then(() => order.push("closed"));
+    release();
+    await Promise.all([write, close]);
+    expect(order).toEqual(["start:PostToolUse", "done:PostToolUse", "ack", "closed"]);
+  });
+
+  it("rejects the emitter when durable ingestion fails", async () => {
+    const socketPath = path.join(tmpRoot, "reject.sock");
+    const server = startHookSocketServer(
+      [socketPath],
+      async () => {
+        throw new Error("durable write failed");
+      },
+      () => {}
+    );
+    await server.ready;
+    await expect(
+      writeToHookSocket(socketPath, JSON.stringify({ event: "Stop", payload: {} }))
+    ).rejects.toThrow(/hook ingestion was rejected/);
+    await server.close();
+  });
+});
+
+describe("hook failure exit semantics", () => {
+  it("fails blocking semantic hooks loudly but never recursively blocks terminal cleanup hooks", () => {
+    expect(hookFailureExitCode("UserPromptSubmit")).toBe(2);
+    expect(hookFailureExitCode("PreToolUse")).toBe(2);
+    expect(hookFailureExitCode("PostToolUseFailure")).toBe(2);
+    expect(hookFailureExitCode("SessionStart")).toBe(1);
+    expect(hookFailureExitCode("Stop")).toBe(1);
+    expect(hookFailureExitCode("StopFailure")).toBe(1);
+    expect(hookFailureExitCode("SessionEnd")).toBe(1);
   });
 });

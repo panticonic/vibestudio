@@ -14,6 +14,7 @@
  */
 
 import * as path from "node:path";
+import { randomUUID } from "node:crypto";
 import {
   ClaudeBridgeBrokerClient,
   type ClaudeBridgeJson,
@@ -327,11 +328,91 @@ interface ChannelMcpDelivery {
   notifyPermission(requestId: string, behavior: "allow" | "deny"): Promise<void>;
 }
 
+export class BridgeTurnBatcher {
+  private nextBatch = 0;
+  private pendingBatchId: string | null = null;
+  private activeBatchId: string | null = null;
+
+  constructor(private readonly bridgeSessionId: string) {}
+
+  assignDelivery(): string {
+    this.pendingBatchId ??= `${this.bridgeSessionId}:batch:${++this.nextBatch}`;
+    return this.pendingBatchId;
+  }
+
+  coordinatesForHook(event: ReturnType<typeof mapHookEvent>): {
+    batchId?: string;
+    interruptedBatchId?: string;
+    commit(): void;
+  } {
+    if (!event) return { commit: () => undefined };
+    if (event.hook === "UserPromptSubmit") {
+      const interruptedBatchId = this.activeBatchId ?? undefined;
+      return {
+        ...(interruptedBatchId ? { interruptedBatchId } : {}),
+        commit: () => {
+          if (interruptedBatchId && this.activeBatchId === interruptedBatchId) {
+            this.activeBatchId = null;
+          }
+        },
+      };
+    }
+    if (event.hook === "SessionEnd") {
+      return {
+        commit: () => {
+          this.activeBatchId = null;
+        },
+      };
+    }
+    if (!("turnSource" in event) || event.turnSource === "local") {
+      return { commit: () => undefined };
+    }
+    if (!this.activeBatchId) {
+      if (!this.pendingBatchId) {
+        throw new Error(`channel-driven ${event.hook} has no accepted delivery batch`);
+      }
+      this.activeBatchId = this.pendingBatchId;
+      this.pendingBatchId = null;
+    }
+    const batchId = this.activeBatchId;
+    const terminal = event.hook === "Stop" || event.hook === "StopFailure";
+    return {
+      batchId,
+      commit: () => {
+        if (terminal && this.activeBatchId === batchId) this.activeBatchId = null;
+      },
+    };
+  }
+}
+
+export class OrderedHookIngestor {
+  private tail: Promise<void> = Promise.resolve();
+  private failure: Error | null = null;
+
+  enqueue(operation: () => Promise<void>): Promise<void> {
+    const task = this.tail.then(async () => {
+      if (this.failure) throw this.failure;
+      await operation();
+    });
+    this.tail = task.catch((error) => {
+      this.failure = error instanceof Error ? error : new Error(String(error));
+    });
+    return task;
+  }
+
+  async drain(): Promise<void> {
+    await this.tail;
+  }
+}
+
 /** Deliver one bridge record without advancing its durable cursor prematurely. */
 export async function deliverBridgePayload(
   payload: unknown,
   deps: {
     channelId: string;
+    bridgeSessionId: string;
+    attachmentGeneration: string;
+    batcher: BridgeTurnBatcher;
     mcp: ChannelMcpDelivery;
     callVessel(method: string, args: unknown[]): Promise<unknown>;
   }
@@ -341,13 +422,34 @@ export async function deliverBridgePayload(
     case "message":
     case "prompt": {
       const seq = Number(event["seq"]);
+      const deliveryId = typeof event["deliveryId"] === "string" ? event["deliveryId"] : "";
+      const eventSessionId =
+        typeof event["bridgeSessionId"] === "string" ? event["bridgeSessionId"] : "";
+      const eventGeneration =
+        typeof event["attachmentGeneration"] === "string" ? event["attachmentGeneration"] : "";
+      if (
+        !Number.isFinite(seq) ||
+        !deliveryId ||
+        eventSessionId !== deps.bridgeSessionId ||
+        eventGeneration !== deps.attachmentGeneration
+      ) {
+        throw new Error("linked delivery record has a stale or incomplete attachment identity");
+      }
       const content = typeof event["content"] === "string" ? event["content"] : "";
       const meta = (event["meta"] ?? {}) as Record<string, unknown>;
       await deps.mcp.notifyChannel(
         content,
         channelNotificationMeta(meta, event["kind"] as "message" | "prompt")
       );
-      if (Number.isFinite(seq)) await deps.callVessel("ackDelivery", [{ seq }]);
+      const batchId = deps.batcher.assignDelivery();
+      await deps.callVessel("acceptDelivery", [
+        {
+          bridgeSessionId: deps.bridgeSessionId,
+          attachmentGeneration: deps.attachmentGeneration,
+          deliveryId,
+          batchId,
+        },
+      ]);
       return;
     }
     case "permission": {
@@ -390,8 +492,8 @@ export async function runChannelHostLoop(
         case "requestPermission":
           result = await client.call("requestPermission", payload);
           break;
-        case "ackDelivery":
-          result = await client.call("ackDelivery", payload);
+        case "acceptDelivery":
+          result = await client.call("acceptDelivery", payload);
           break;
         case "ingestHookEvent":
           result = await client.call("ingestHookEvent", payload);
@@ -403,7 +505,10 @@ export async function runChannelHostLoop(
     },
   };
 
-  const sessionId = `bridge:${process.pid}:${Date.now().toString(36)}`;
+  // A random process-lifetime identity survives response recovery without
+  // inheriting authority from a reused PID or wall-clock coordinate.
+  const bridgeSessionId = randomUUID();
+  const batcher = new BridgeTurnBatcher(bridgeSessionId);
   let hookSeq = 0;
   const turns = new TurnTracker();
   const pendingToolIds = new Map<string, string>();
@@ -433,7 +538,7 @@ export async function runChannelHostLoop(
           {
             text,
             ...(Array.isArray(args["mentions"]) ? { mentions: args["mentions"] } : {}),
-            idempotencyKey: `mcp:${sessionId}:${requestId}`,
+            idempotencyKey: `mcp:${bridgeSessionId}:${requestId}`,
           },
         ]);
         return toolText(`sent to ${result.channelId}`);
@@ -452,30 +557,49 @@ export async function runChannelHostLoop(
       else pendingMcpFailure = error;
     },
   });
+  // ── Ordered hook lifetime ─────────────────────────────────────────────────
+  // Bind before MCP initialization can complete so SessionStart cannot race a
+  // lazily-created socket. Each socket waits for this one durable ingestion tail.
+  const hookIngestor = new OrderedHookIngestor();
+  const hookServer = startHookSocketServer(
+    config.hookSocketPaths,
+    (line: EmittedHookLine) =>
+      hookIngestor.enqueue(async () => {
+        const mapped = mapHookEvent(line, turns, pendingToolIds);
+        if (!mapped) return;
+        const coordinates = batcher.coordinatesForHook(mapped);
+        const seq = hookSeq + 1;
+        await vessel.call("ingestHookEvent", [
+          {
+            bridgeSessionId,
+            seq,
+            ...(coordinates.batchId ? { batchId: coordinates.batchId } : {}),
+            ...(coordinates.interruptedBatchId
+              ? { interruptedBatchId: coordinates.interruptedBatchId }
+              : {}),
+            event: mapped,
+          },
+        ]);
+        hookSeq = seq;
+        coordinates.commit();
+      }),
+    log
+  );
+  try {
+    await hookServer.ready;
+  } catch (error) {
+    await hookServer.close().catch(() => undefined);
+    await client.close().catch(() => undefined);
+    throw error;
+  }
+  log(`listening for hooks on ${hookServer.paths.join(", ") || "(no sockets bound)"}`);
   mcp.start();
 
   // ── Response-owned bridge lifetime ────────────────────────────────────────
-  let hookServer: ReturnType<typeof startHookSocketServer> | null = null;
-
-  const ensureHookServer = (): void => {
-    if (hookServer) return;
-    hookServer = startHookSocketServer(
-      config.hookSocketPaths,
-      (line: EmittedHookLine) => {
-        const mapped = mapHookEvent(line, turns, pendingToolIds);
-        if (!mapped) return;
-        const seq = ++hookSeq;
-        void vessel.call("ingestHookEvent", [{ sessionId, seq, event: mapped }]).catch((err) => {
-          log(`hook ${mapped.hook} ingest failed: ${err instanceof Error ? err.message : err}`);
-        });
-      },
-      log
-    );
-    log(`listening for hooks on ${hookServer.paths.join(", ") || "(no sockets bound)"}`);
-  };
 
   interface ActiveBridge {
     generation: number;
+    attachmentGeneration: string | null;
     controller: AbortController;
     terminal: Promise<void>;
   }
@@ -496,11 +620,14 @@ export async function runChannelHostLoop(
     if (shuttingDown) return;
     shuttingDown = true;
     stopRecovery();
+    // Stop hook admission and drain the exact in-flight durable hook before
+    // closing its RPC authority or response-owned bridge.
+    await hookServer.close().catch(() => undefined);
+    await hookIngestor.drain();
     const bridge = activeBridge;
     activeBridge = null;
     bridge?.controller.abort();
     await bridge?.terminal.catch(() => {});
-    await hookServer?.close().catch(() => undefined);
     await client.close().catch(() => undefined);
     resolveDone(code);
   };
@@ -515,10 +642,18 @@ export async function runChannelHostLoop(
     if (shuttingDown) return;
 
     const controller = new AbortController();
-    let resolveAck!: (result: { pendingCount: number }) => void;
+    let resolveAck!: (result: {
+      pendingCount: number;
+      bridgeSessionId: string;
+      attachmentGeneration: string;
+    }) => void;
     let rejectAck!: (error: Error) => void;
     let acknowledged = false;
-    const ack = new Promise<{ pendingCount: number }>((resolve, reject) => {
+    const ack = new Promise<{
+      pendingCount: number;
+      bridgeSessionId: string;
+      attachmentGeneration: string;
+    }>((resolve, reject) => {
       resolveAck = resolve;
       rejectAck = reject;
     });
@@ -526,8 +661,9 @@ export async function runChannelHostLoop(
       try {
         const response = client.openBridge(
           {
+            bridgeSessionId,
             sessionInfo: {
-              bridge: sessionId,
+              bridge: bridgeSessionId,
               mode: config.mode,
               pid: process.pid,
               agentKind: "claude-code",
@@ -540,13 +676,28 @@ export async function runChannelHostLoop(
           if (activeBridge?.generation !== generation) break;
           if (record.kind === "subscribed") {
             if (acknowledged) throw new Error("Linked bridge sent more than one ACK");
+            if (
+              record.result.bridgeSessionId !== bridgeSessionId ||
+              !record.result.attachmentGeneration
+            ) {
+              throw new Error("Linked bridge ACK has a stale or incomplete attachment identity");
+            }
             acknowledged = true;
+            if (activeBridge?.generation === generation) {
+              activeBridge.attachmentGeneration = record.result.attachmentGeneration;
+            }
             resolveAck(record.result);
             continue;
           }
           if (!acknowledged) throw new Error("Linked bridge delivered data before its ACK");
           await deliverBridgePayload(record.payload, {
             channelId: config.channelId,
+            bridgeSessionId,
+            attachmentGeneration:
+              activeBridge?.generation === generation
+                ? (activeBridge.attachmentGeneration ?? "")
+                : "",
+            batcher,
             mcp,
             callVessel: (method, args) => vessel.call(method, args),
           });
@@ -567,10 +718,9 @@ export async function runChannelHostLoop(
         void shutdown(1);
       }
     });
-    activeBridge = { generation, controller, terminal };
+    activeBridge = { generation, attachmentGeneration: null, controller, terminal };
     const result = await ack;
     log(`attached (${result.pendingCount} pending event(s) will replay)`);
-    ensureHookServer();
   };
 
   const queueBridgeOpen = (): Promise<void> => {
@@ -578,9 +728,6 @@ export async function runChannelHostLoop(
     bridgeRefresh = refresh.catch(() => {});
     return refresh;
   };
-
-  // ── Hook socket ───────────────────────────────────────────────────────────
-  // Bound lazily only after the bridge ACK proves the response resource exists.
 
   // ── Shutdown ──────────────────────────────────────────────────────────────
   process.once("SIGTERM", () => void shutdown(0));

@@ -90,7 +90,9 @@ const HOOK_EVENTS = [
   "UserPromptSubmit",
   "PreToolUse",
   "PostToolUse",
+  "PostToolUseFailure",
   "Stop",
+  "StopFailure",
   "SessionEnd",
 ] as const;
 
