@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { closeSync, mkdirSync, openSync, readSync, statSync } from "node:fs";
+import { closeSync, openSync, readSync, statSync } from "node:fs";
 import * as path from "node:path";
 import type { ExtensionContext } from "@vibestudio/extension";
 import {
@@ -13,6 +13,11 @@ import {
   type MaterializedClaudeLaunch,
 } from "@vibestudio/shared/claudeLaunchProfile";
 import { confineClaudeReadOnly } from "@vibestudio/shared/claudeReadOnlyLaunch";
+import { serializeByKey } from "@vibestudio/shared/keyedSerializer";
+import {
+  OwnedProcessGroup,
+  type OwnedProcessGroupHandle,
+} from "@vibestudio/shared/ownedProcessGroup";
 import {
   launchAgentIntoChannel,
   subagentFirstTaskPrompt,
@@ -20,6 +25,15 @@ import {
   type AgentLaunchRpc,
 } from "@workspace/agentic-core";
 import { toServerBaseUrl } from "./gateway.js";
+import {
+  materializationReceipt,
+  ownBoundedLaunchLog,
+  parseClaudeLaunchRecord,
+  recoverMaterializedLaunch,
+  type BoundedLaunchLog,
+  type ClaudeLaunchOwnerKind,
+  type ClaudeLaunchRecord,
+} from "./launchOwnership.js";
 
 const CHANNEL_SERVICE_PROTOCOL = "vibestudio.channel.v1";
 const LINKED_AGENT_SOURCE = "workers/linked-agent";
@@ -27,17 +41,6 @@ const LINKED_AGENT_CLASS = "LinkedAgentWorker";
 
 function error(code: string, message: string): Error {
   return Object.assign(new Error(message), { code });
-}
-
-/** Durable per-launch bookkeeping, stored in extension storage. */
-interface LaunchRecord {
-  launchId: string;
-  entityId: string;
-  contextId: string;
-  channelId: string;
-  vesselRef: string;
-  agentId: string | null;
-  preparedAt: string;
 }
 
 /** Subagent task-duty binding threaded into the linked vessel's state
@@ -237,19 +240,31 @@ export async function activate(ctx: ExtensionContext) {
     runId: string;
     vesselRef: string;
     child: ChildProcess;
+    owner: OwnedProcessGroupHandle;
+    log: BoundedLaunchLog;
     logPath: string;
+    deliberate: boolean;
   }
 
   const headlessLaunches = new Map<string, HeadlessLaunch>();
   const terminalLaunches = new Map<string, InspectLaunchResult>();
-  const materializedLaunches = new Map<string, MaterializedClaudeLaunch>();
+  const channelTransactions = new Map<string, Promise<unknown>>();
+  const finalizations = new Map<string, Promise<boolean>>();
   const terminateHeadlessLaunches = () => {
     for (const launch of headlessLaunches.values()) {
-      try {
-        launch.child.kill("SIGTERM");
-      } catch {
-        /* process is already gone */
-      }
+      launch.deliberate = true;
+      // retire() signals synchronously before its first finite wait. Durable
+      // recovery completes absence proof if the extension host exits first.
+      void launch.owner
+        .retire()
+        .then(() => finalizeHeadlessLaunch(launch, null, null))
+        .catch((failure: unknown) => {
+          ctx.log.warn?.("Claude Code shutdown retirement failed", {
+            entityId: launch.entityId,
+            generationId: launch.generationId,
+            error: failure instanceof Error ? failure.message : String(failure),
+          });
+        });
     }
   };
   process.once("exit", terminateHeadlessLaunches);
@@ -278,17 +293,38 @@ export async function activate(ctx: ExtensionContext) {
     `${entityId}\u0000${generationId}`;
 
   async function readJson<T>(key: string): Promise<T | null> {
+    let raw: string | Buffer;
     try {
-      const raw = await ctx.storage.readFile(key, "utf8");
+      raw = await ctx.storage.readFile(key, "utf8");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+      throw error;
+    }
+    try {
       return JSON.parse(typeof raw === "string" ? raw : raw.toString("utf8")) as T;
-    } catch {
-      return null;
+    } catch (error) {
+      throw Object.assign(
+        new Error(
+          `Corrupt Claude extension record ${key}: ${error instanceof Error ? error.message : String(error)}`
+        ),
+        { code: "ECORRUPT" }
+      );
     }
   }
   async function writeJson(key: string, value: unknown): Promise<void> {
     const dir = path.posix.dirname(key);
     await ctx.storage.mkdir(dir, { recursive: true });
     await ctx.storage.writeFile(key, JSON.stringify(value, null, 2));
+  }
+
+  async function readLaunchRecord(key: string): Promise<ClaudeLaunchRecord | null> {
+    const value = await readJson<unknown>(key);
+    return value === null ? null : parseClaudeLaunchRecord(value, key);
+  }
+
+  async function writeLaunchRecord(record: ClaudeLaunchRecord): Promise<void> {
+    const parsed = parseClaudeLaunchRecord(record, launchKey(record.launchId));
+    await writeJson(launchKey(parsed.launchId), parsed);
   }
 
   async function resolveChannelTarget(channelId: string): Promise<string> {
@@ -336,22 +372,96 @@ export async function activate(ctx: ExtensionContext) {
     }
   }
 
-  function killHeadlessLaunch(entityId: string, generationId?: string): boolean {
-    const launch = headlessLaunches.get(entityId);
-    if (!launch || (generationId !== undefined && launch.generationId !== generationId)) {
-      return false;
-    }
-    headlessLaunches.delete(entityId);
+  async function profilesRoot(): Promise<string> {
+    const workspace = await ctx.workspace.getInfo();
+    return path.join(workspace.statePath, "agent-launch");
+  }
+
+  function finalizeRecord(fallback: ClaudeLaunchRecord, live?: HeadlessLaunch): Promise<boolean> {
+    const existing = finalizations.get(fallback.launchId);
+    if (existing) return existing;
+    const finalization = (async () => {
+      let record = (await readLaunchRecord(launchKey(fallback.launchId))) ?? fallback;
+      if (record.entityId !== fallback.entityId) {
+        throw error("ECORRUPT", `Launch ${record.launchId} changed entity ownership`);
+      }
+      if (record.phase === "released") return false;
+      record = { ...record, phase: "retiring" };
+      await writeLaunchRecord(record);
+
+      const owner =
+        live?.owner ?? (record.process ? OwnedProcessGroup.adopt(record.process) : null);
+      if (owner) await owner.retire();
+      live?.log.close();
+      if (record.process) {
+        record = { ...record, process: null };
+        await writeLaunchRecord(record);
+      }
+
+      const materialized = recoverMaterializedLaunch(record, await profilesRoot());
+      if (materialized) {
+        const credential = await reconcileClaudeLaunchCredential(materialized);
+        if (credential.status === "conflict") {
+          ctx.log.warn?.(
+            "Claude refreshed its isolated credential, but the host login changed concurrently; preserving the newer host state",
+            { entityId: record.entityId, generationId: record.launchId }
+          );
+        }
+      }
+      if (record.agentId) {
+        await ctx.rpc.call("main", "auth.revokeAgentCredential", record.agentId);
+        record = { ...record, agentId: null };
+        await writeLaunchRecord(record);
+      }
+      if (materialized) {
+        await removeMaterializedClaudeLaunch(materialized);
+        record = { ...record, materialization: null };
+        await writeLaunchRecord(record);
+      }
+      record = {
+        ...record,
+        phase: "released",
+        releasedAt: new Date().toISOString(),
+      };
+      await writeLaunchRecord(record);
+      headlessLaunches.delete(record.launchId);
+      return true;
+    })();
+    finalizations.set(fallback.launchId, finalization);
+    finalization
+      .finally(() => {
+        if (finalizations.get(fallback.launchId) === finalization) {
+          finalizations.delete(fallback.launchId);
+        }
+      })
+      .catch(() => undefined);
+    return finalization;
+  }
+
+  async function recoverInterruptedLaunches(): Promise<void> {
+    let entries: string[];
     try {
-      launch.child.kill("SIGTERM");
-    } catch (err) {
-      ctx.log.warn?.("Claude Code headless process kill failed", {
-        entityId,
-        launchId: launch.launchId,
-        error: err instanceof Error ? err.message : String(err),
-      });
+      entries = await ctx.storage.readdir("launches");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+      throw error;
     }
-    return true;
+    for (const entry of entries.sort()) {
+      if (!entry.endsWith(".json")) continue;
+      const record = await readLaunchRecord(`launches/${entry}`);
+      if (!record || record.phase === "released") {
+        continue;
+      }
+      if (record.ownerKind === "external-cli" && record.phase === "active") {
+        continue;
+      }
+      await finalizeRecord(record);
+      const current = await readLaunchRecord(channelKey(record.channelId));
+      if (current?.launchId === record.launchId) {
+        const released = await readLaunchRecord(launchKey(record.launchId));
+        if (released) await writeJson(channelKey(record.channelId), released);
+      }
+    }
   }
 
   function readLaunchLog(logPath: string, maxLogBytes: number): InspectLaunchResult["log"] {
@@ -393,8 +503,8 @@ export async function activate(ctx: ExtensionContext) {
         ? input.maxLogBytes
         : 16_384;
     const maxLogBytes = Math.max(1_024, Math.min(65_536, requested));
-    const launch = headlessLaunches.get(entityId);
-    if (!launch || launch.generationId !== generationId) {
+    const launch = headlessLaunches.get(generationId);
+    if (!launch || launch.entityId !== entityId) {
       const terminal = terminalLaunches.get(terminalLaunchKey(entityId, generationId));
       if (!terminal) {
         throw error("ENOENT", `No Claude launch ${generationId} for entity ${entityId}`);
@@ -428,58 +538,57 @@ export async function activate(ctx: ExtensionContext) {
     };
   }
 
-  function spawnHeadlessClaude(
+  async function spawnHeadlessClaude(
     prepared: PrepareResult,
     input: LaunchSubagentInput,
     materialized: MaterializedClaudeLaunch,
     contextFolder: string
-  ): LaunchSubagentResult {
-    killHeadlessLaunch(prepared.entityId);
+  ): Promise<LaunchSubagentResult> {
     const launchId = `claude-code:${input.subagent.runId}`;
     const logPath = path.join(materialized.profileDir, "headless.log");
-    mkdirSync(path.dirname(logPath), { recursive: true });
-    const logFd = openSync(logPath, "a");
-    let child: ChildProcess | null = null;
-    try {
-      const argv = [
-        ...materialized.argv,
-        ...subagentCliArgs(input.options),
-        // Give headless supervision a machine-readable execution trace and
-        // explicitly pre-authorize the two lifecycle tools. This keeps normal
-        // repository tools under Claude's configured auto policy while making
-        // `say`/`complete` unambiguously callable in print mode.
-        "--output-format",
-        "stream-json",
-        "--verbose",
-        "--allowedTools",
-        "mcp__vibestudio__say,mcp__vibestudio__complete",
-        // A managed subagent must not inherit arbitrary user/project MCP
-        // servers. They add unreviewed tools, startup latency, and processes
-        // outside the launch contract. The one explicit config is the linked
-        // Vibestudio bridge.
-        "--strict-mcp-config",
-        "-p",
-        subagentFirstTaskPrompt(input.subagent),
-      ];
-      const confined = confineClaudeReadOnly({
-        argv,
-        profileDir: materialized.profileDir,
-        contextDirectory: contextFolder,
-      });
-      child = spawn(confined.command, confined.args, {
-        cwd: contextFolder,
-        env: { ...process.env, ...materialized.env, ...confined.env },
-        stdio: ["ignore", logFd, logFd],
-        detached: false,
-      });
-    } finally {
-      try {
-        closeSync(logFd);
-      } catch {
-        /* noop */
-      }
+    const argv = [
+      ...materialized.argv,
+      ...subagentCliArgs(input.options),
+      // Give headless supervision a machine-readable execution trace and
+      // explicitly pre-authorize the two lifecycle tools. This keeps normal
+      // repository tools under Claude's configured auto policy while making
+      // `say`/`complete` unambiguously callable in print mode.
+      "--output-format",
+      "stream-json",
+      "--verbose",
+      "--allowedTools",
+      "mcp__vibestudio__say,mcp__vibestudio__complete",
+      // A managed subagent must not inherit arbitrary user/project MCP
+      // servers. They add unreviewed tools, startup latency, and processes
+      // outside the launch contract. The one explicit config is the linked
+      // Vibestudio bridge.
+      "--strict-mcp-config",
+      "-p",
+      subagentFirstTaskPrompt(input.subagent),
+    ];
+    const confined = confineClaudeReadOnly({
+      argv,
+      profileDir: materialized.profileDir,
+      contextDirectory: contextFolder,
+    });
+    const child = spawn(confined.command, confined.args, {
+      cwd: contextFolder,
+      env: { ...process.env, ...materialized.env, ...confined.env },
+      stdio: ["ignore", "pipe", "pipe"],
+      detached: true,
+    });
+    const owner = OwnedProcessGroup.create(child);
+    if (!owner.identity) {
+      await owner.retire();
+      throw error("EEXECUTOR_UNAVAILABLE", "Durable Claude process ownership is unavailable");
     }
-    if (!child) throw error("ESPAWN", "Claude Code headless process did not start");
+    let log: BoundedLaunchLog;
+    try {
+      log = ownBoundedLaunchLog(child, logPath);
+    } catch (failure) {
+      await owner.retire();
+      throw failure;
+    }
 
     const launch: HeadlessLaunch = {
       entityId: prepared.entityId,
@@ -488,88 +597,22 @@ export async function activate(ctx: ExtensionContext) {
       runId: input.subagent.runId,
       vesselRef: prepared.vesselRef,
       child,
+      owner,
+      log,
       logPath,
+      deliberate: false,
     };
-    headlessLaunches.set(prepared.entityId, launch);
-    child.on("exit", (code, signal) => {
-      const current = headlessLaunches.get(prepared.entityId);
-      const tracked = current?.generationId === prepared.profile.launchId;
-      const inspectedLog = readLaunchLog(launch.logPath, 262_144);
-      const completion =
-        code === 0 && signal === null ? parseClaudeStreamCompletion(inspectedLog.tail) : null;
-      if (tracked) {
-        headlessLaunches.delete(prepared.entityId);
-        const terminal: InspectLaunchResult = {
-          entityId: launch.entityId,
-          generationId: launch.generationId,
-          launchId: launch.launchId,
-          runId: launch.runId,
-          state: "exited",
-          pid: launch.child.pid ?? null,
-          exit: { code: code ?? null, signal: signal ?? null, at: new Date().toISOString() },
-          ...(completion ? { completion } : {}),
-          log: {
-            ...inspectedLog,
-            tail: boundedUtf8Tail(inspectedLog.tail, 65_536),
-            truncated: inspectedLog.bytes > 65_536,
-          },
-        };
-        terminalLaunches.set(terminalLaunchKey(terminal.entityId, terminal.generationId), terminal);
-        while (terminalLaunches.size > 64) {
-          const oldest = terminalLaunches.keys().next().value as string | undefined;
-          if (!oldest) break;
-          terminalLaunches.delete(oldest);
-        }
-      }
-      ctx.log.info?.("Claude Code headless process exited", {
-        entityId: prepared.entityId,
-        launchId,
-        code,
-        signal,
+    headlessLaunches.set(launch.generationId, launch);
+    child.once("exit", (code, signal) => {
+      void serializeByKey(channelTransactions, prepared.channelId, () =>
+        finalizeHeadlessLaunch(launch, code, signal)
+      ).catch((err: unknown) => {
+        ctx.log.warn?.("Claude Code launch cleanup failed", {
+          entityId: prepared.entityId,
+          launchId,
+          error: err instanceof Error ? err.message : String(err),
+        });
       });
-      // Still tracked = the session ended on its own (a deliberate release/
-      // cancel kill removes the entry first). A successful print-mode session
-      // owns an authoritative typed result; settle from that result rather than
-      // depending on the model to voluntarily call an MCP lifecycle tool.
-      // Missing/malformed results and non-zero exits remain explicit failures.
-      // Both vessel methods are idempotent past an early bridge completion.
-      if (tracked) {
-        void (async () => {
-          try {
-            if (completion) {
-              await ctx.rpc.call(prepared.vesselRef, "reportExternalResult", {
-                runId: input.subagent.runId,
-                outcome: completion.outcome,
-                report: completion.report,
-                code: code ?? null,
-              });
-            } else {
-              await ctx.rpc.call(prepared.vesselRef, "reportExternalExit", {
-                runId: input.subagent.runId,
-                code: code ?? null,
-                signal: signal ?? null,
-              });
-            }
-          } catch (err) {
-            ctx.log.warn?.("Claude Code exit report failed", {
-              entityId: prepared.entityId,
-              launchId,
-              error: err instanceof Error ? err.message : String(err),
-            });
-          } finally {
-            await release({
-              entityId: prepared.entityId,
-              generationId: prepared.profile.launchId,
-            }).catch((err: unknown) => {
-              ctx.log.warn?.("Claude Code launch cleanup failed", {
-                entityId: prepared.entityId,
-                launchId,
-                error: err instanceof Error ? err.message : String(err),
-              });
-            });
-          }
-        })();
-      }
     });
     child.on("error", (err) => {
       ctx.log.warn?.("Claude Code headless process error", {
@@ -578,6 +621,25 @@ export async function activate(ctx: ExtensionContext) {
         error: err.message,
       });
     });
+
+    let record = await readLaunchRecord(launchKey(prepared.profile.launchId));
+    if (!record) throw error("ECORRUPT", `Missing preparing launch ${prepared.profile.launchId}`);
+    record = { ...record, process: owner.identity };
+    try {
+      await writeLaunchRecord(record);
+      await activatePreparedGeneration(record);
+    } catch (failure) {
+      launch.deliberate = true;
+      try {
+        await finalizeRecord(record, launch);
+      } catch (cleanupFailure) {
+        throw new AggregateError(
+          [failure, cleanupFailure],
+          "Claude headless activation failed and its preparing generation could not be retired"
+        );
+      }
+      throw failure;
+    }
 
     return {
       entityId: prepared.entityId,
@@ -593,14 +655,77 @@ export async function activate(ctx: ExtensionContext) {
     };
   }
 
-  async function prepare(input: {
-    channelId: string;
-    title?: string;
-    subagent?: PrepareSubagentBinding;
-  }): Promise<PrepareResult> {
+  async function finalizeHeadlessLaunch(
+    launch: HeadlessLaunch,
+    code: number | null,
+    signal: NodeJS.Signals | null
+  ): Promise<void> {
+    const record = await readLaunchRecord(launchKey(launch.generationId));
+    if (!record) throw error("ECORRUPT", `Missing owned launch ${launch.generationId}`);
+    await launch.owner.retire();
+    launch.log.close();
+    const inspectedLog = readLaunchLog(launch.logPath, 262_144);
+    const completion =
+      code === 0 && signal === null ? parseClaudeStreamCompletion(inspectedLog.tail) : null;
+    const terminal: InspectLaunchResult = {
+      entityId: launch.entityId,
+      generationId: launch.generationId,
+      launchId: launch.launchId,
+      runId: launch.runId,
+      state: "exited",
+      pid: launch.child.pid ?? null,
+      exit: { code, signal, at: new Date().toISOString() },
+      ...(completion ? { completion } : {}),
+      log: {
+        ...inspectedLog,
+        tail: boundedUtf8Tail(inspectedLog.tail, 65_536),
+        truncated: inspectedLog.bytes > 65_536,
+      },
+    };
+    await finalizeRecord(record, launch);
+    terminalLaunches.set(terminalLaunchKey(terminal.entityId, terminal.generationId), terminal);
+    while (terminalLaunches.size > 64) {
+      const oldest = terminalLaunches.keys().next().value as string | undefined;
+      if (!oldest) break;
+      terminalLaunches.delete(oldest);
+    }
+    if (launch.deliberate) return;
+    try {
+      if (completion) {
+        await ctx.rpc.call(launch.vesselRef, "reportExternalResult", {
+          runId: launch.runId,
+          outcome: completion.outcome,
+          report: completion.report,
+          code,
+        });
+      } else {
+        await ctx.rpc.call(launch.vesselRef, "reportExternalExit", {
+          runId: launch.runId,
+          code,
+          signal,
+        });
+      }
+    } catch (err) {
+      ctx.log.warn?.("Claude Code exit report failed", {
+        entityId: launch.entityId,
+        launchId: launch.launchId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  async function prepareGeneration(
+    input: {
+      channelId: string;
+      title?: string;
+      subagent?: PrepareSubagentBinding;
+    },
+    ownerKind: ClaudeLaunchOwnerKind
+  ): Promise<PrepareResult> {
     const { channelId } = input;
     if (!channelId) throw error("EINVAL", "prepare requires a channelId");
-    const priorForChannel = await readJson<LaunchRecord>(channelKey(channelId));
+    // Validate the active pointer before minting any replacement authority.
+    await readLaunchRecord(channelKey(channelId));
     // 1. Context is the channel's context — never create a channel.
     const contextId = await resolveContextFromChannel(channelId);
 
@@ -644,11 +769,8 @@ export async function activate(ctx: ExtensionContext) {
     const vesselEntityId = launch.handle.id ?? vesselRef;
     const vesselParticipantId = launch.subscription.participantId ?? null;
 
-    // 5. Mint the agent credential (rotate on re-prepare so a stale token is
-    //    revoked). Bound to entity + host-derived context + channel.
-    if (priorForChannel?.agentId) {
-      await ctx.rpc.call("main", "auth.revokeAgentCredential", priorForChannel.agentId);
-    }
+    // Mint and durably stage the replacement before changing or revoking the
+    // active generation. The channel pointer moves only in activatePreparedGeneration.
     const credential = await ctx.rpc.call<{ agentId: string; agentToken: string }>(
       "main",
       "auth.mintAgentCredential",
@@ -681,17 +803,21 @@ export async function activate(ctx: ExtensionContext) {
         },
       });
 
-      const record: LaunchRecord = {
+      const record: ClaudeLaunchRecord = {
+        version: 2,
         launchId: profile.launchId,
         entityId,
         contextId,
         channelId,
         vesselRef,
+        ownerKind,
+        phase: "preparing",
         agentId: credential.agentId,
         preparedAt: new Date().toISOString(),
+        materialization: null,
+        process: null,
       };
-      await writeJson(launchKey(record.launchId), record);
-      await writeJson(channelKey(channelId), record);
+      await writeLaunchRecord(record);
       await writeJson(entityKey(entityId), { channelId });
       await writeJson(contextKey(contextId), { channelId });
 
@@ -717,6 +843,66 @@ export async function activate(ctx: ExtensionContext) {
     }
   }
 
+  async function activatePreparedGeneration(
+    preparing: ClaudeLaunchRecord
+  ): Promise<ClaudeLaunchRecord> {
+    if (preparing.phase !== "preparing") {
+      throw error("ECORRUPT", `Launch ${preparing.launchId} is not preparing`);
+    }
+    const prior = await readLaunchRecord(channelKey(preparing.channelId));
+    if (prior && prior.launchId !== preparing.launchId && prior.phase !== "released") {
+      const priorLive = headlessLaunches.get(prior.launchId);
+      if (priorLive) priorLive.deliberate = true;
+      const retiring = { ...prior, phase: "retiring" as const };
+      await writeLaunchRecord(retiring);
+      await writeJson(channelKey(retiring.channelId), retiring);
+      try {
+        await finalizeRecord(retiring, priorLive);
+      } catch (failure) {
+        const failed = await readLaunchRecord(launchKey(prior.launchId));
+        const ownershipUnchanged =
+          failed?.agentId === prior.agentId &&
+          JSON.stringify(failed?.process) === JSON.stringify(prior.process) &&
+          JSON.stringify(failed?.materialization) === JSON.stringify(prior.materialization);
+        if (prior.phase === "active" && ownershipUnchanged) {
+          await writeLaunchRecord(prior);
+          await writeJson(channelKey(prior.channelId), prior);
+        }
+        throw failure;
+      }
+    }
+    const active = { ...preparing, phase: "active" as const };
+    await writeLaunchRecord(active);
+    await writeJson(channelKey(active.channelId), active);
+    return active;
+  }
+
+  async function prepare(input: {
+    channelId: string;
+    title?: string;
+    subagent?: PrepareSubagentBinding;
+  }): Promise<PrepareResult> {
+    return serializeByKey(channelTransactions, input.channelId, async () => {
+      const prepared = await prepareGeneration(input, "external-cli");
+      const record = await readLaunchRecord(launchKey(prepared.profile.launchId));
+      if (!record) throw error("ECORRUPT", `Missing preparing launch ${prepared.profile.launchId}`);
+      try {
+        await activatePreparedGeneration(record);
+        return prepared;
+      } catch (failure) {
+        try {
+          await finalizeRecord(record);
+        } catch (cleanupFailure) {
+          throw new AggregateError(
+            [failure, cleanupFailure],
+            "Claude CLI preparation failed and its staged credential could not be revoked"
+          );
+        }
+        throw failure;
+      }
+    });
+  }
+
   async function materializeLocalLaunch(prepared: PrepareResult): Promise<{
     launch: MaterializedClaudeLaunch;
     contextFolder: string;
@@ -729,7 +915,17 @@ export async function activate(ctx: ExtensionContext) {
       profilesRoot: path.join(workspace.statePath, "agent-launch"),
       serverUrl: currentServerUrl(),
     });
-    materializedLaunches.set(prepared.profile.launchId, launch);
+    const record = await readLaunchRecord(launchKey(prepared.profile.launchId));
+    if (!record || record.ownerKind !== "extension-headless" || record.phase !== "preparing") {
+      await removeMaterializedClaudeLaunch(launch);
+      throw error("ECORRUPT", `Launch ${prepared.profile.launchId} cannot own a local profile`);
+    }
+    try {
+      await writeLaunchRecord({ ...record, materialization: materializationReceipt(launch) });
+    } catch (failure) {
+      await removeMaterializedClaudeLaunch(launch);
+      throw failure;
+    }
     return { launch, contextFolder };
   }
 
@@ -741,61 +937,49 @@ export async function activate(ctx: ExtensionContext) {
     if (!entityId || !generationId) {
       throw error("EINVAL", "release requires entityId and generationId");
     }
-    const killed = killHeadlessLaunch(entityId, generationId);
-    const record = await readJson<LaunchRecord>(launchKey(generationId));
+    const record = await readLaunchRecord(launchKey(generationId));
     if (record && record.entityId !== entityId) {
       throw error("EINVAL", `Launch ${generationId} does not belong to entity ${entityId}`);
     }
-    const materialized = materializedLaunches.get(generationId);
-    let cleanupError: unknown;
-    if (record?.agentId) {
-      try {
-        await ctx.rpc.call("main", "auth.revokeAgentCredential", record.agentId);
-        await writeJson(launchKey(generationId), { ...record, agentId: null });
-      } catch (error) {
-        cleanupError = error;
+    if (!record) return { released: false };
+    return serializeByKey(channelTransactions, record.channelId, async () => {
+      const live = headlessLaunches.get(generationId);
+      if (live) live.deliberate = true;
+      await finalizeRecord(record, live);
+      const current = await readLaunchRecord(channelKey(record.channelId));
+      if (current?.launchId === generationId) {
+        const released = await readLaunchRecord(launchKey(generationId));
+        if (released) await writeJson(channelKey(record.channelId), released);
       }
-    }
-    if (materialized) {
-      try {
-        if (!killed) {
-          const credential = await reconcileClaudeLaunchCredential(materialized);
-          if (credential.status === "conflict") {
-            ctx.log.warn?.(
-              "Claude refreshed its isolated credential, but the host login changed concurrently; preserving the newer host state",
-              { entityId, generationId }
-            );
-          }
-        }
-        await removeMaterializedClaudeLaunch(materialized);
-        materializedLaunches.delete(generationId);
-      } catch (error) {
-        cleanupError ??= error;
-      }
-    }
-    if (cleanupError) throw cleanupError;
-    // Vessel + channel membership persist for reattach; ending the owned bridge
-    // response takes presence offline. Storage records remain the reattach anchor.
-    return { released: record !== null || killed || materialized !== undefined };
+      return { released: true };
+    });
   }
 
   async function launchSubagent(input: LaunchSubagentInput): Promise<LaunchSubagentResult> {
     assertHeadlessSubagentCaller(input);
-    const prepared = await prepare({
-      channelId: input.channelId,
-      title: input.title,
-      subagent: input.subagent,
+    return serializeByKey(channelTransactions, input.channelId, async () => {
+      const prepared = await prepareGeneration(
+        { channelId: input.channelId, title: input.title, subagent: input.subagent },
+        "extension-headless"
+      );
+      try {
+        const { launch, contextFolder } = await materializeLocalLaunch(prepared);
+        return await spawnHeadlessClaude(prepared, input, launch, contextFolder);
+      } catch (err) {
+        const record = await readLaunchRecord(launchKey(prepared.profile.launchId));
+        if (record && record.phase !== "released") {
+          try {
+            await finalizeRecord(record, headlessLaunches.get(record.launchId));
+          } catch (cleanupFailure) {
+            throw new AggregateError(
+              [err, cleanupFailure],
+              "Claude headless launch failed and its preparing generation could not be retired"
+            );
+          }
+        }
+        throw err;
+      }
     });
-    try {
-      const { launch, contextFolder } = await materializeLocalLaunch(prepared);
-      return spawnHeadlessClaude(prepared, input, launch, contextFolder);
-    } catch (err) {
-      await release({
-        entityId: prepared.entityId,
-        generationId: prepared.profile.launchId,
-      }).catch(() => undefined);
-      throw err;
-    }
   }
 
   async function resolvePrimaryChannel(input: {
@@ -806,6 +990,7 @@ export async function activate(ctx: ExtensionContext) {
     return rec?.channelId ? { channelId: rec.channelId } : null;
   }
 
+  await recoverInterruptedLaunches();
   ctx.health.healthy({ summary: "Claude Code launch orchestrator activated" });
 
   return {

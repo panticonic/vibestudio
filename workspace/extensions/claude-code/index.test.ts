@@ -4,21 +4,49 @@ import * as os from "node:os";
 import * as path from "node:path";
 
 const childProcessMock = vi.hoisted(() => {
+  const stdout = { on: vi.fn(), off: vi.fn() };
+  const stderr = { on: vi.fn(), off: vi.fn() };
   const child = {
     pid: 4242,
     on: vi.fn(),
+    once: vi.fn(),
     kill: vi.fn(() => true),
+    stdout,
+    stderr,
   };
   child.on.mockReturnValue(child);
+  child.once.mockReturnValue(child);
   return {
     child,
     spawn: vi.fn(() => child),
   };
 });
 
+const processOwnerMock = vi.hoisted(() => ({
+  retire: vi.fn(async () => {}),
+  identity: {
+    version: 1 as const,
+    platform: "linux" as const,
+    pid: 4242,
+    processGroupId: 4242,
+    startCoordinate: "test-start",
+  },
+}));
+const processOwnerApiMock = vi.hoisted(() => ({
+  create: vi.fn(),
+  adopt: vi.fn(),
+}));
+
 vi.mock("node:child_process", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:child_process")>()),
   spawn: childProcessMock.spawn,
+}));
+
+vi.mock("@vibestudio/shared/ownedProcessGroup", () => ({
+  OwnedProcessGroup: {
+    create: processOwnerApiMock.create,
+    adopt: processOwnerApiMock.adopt,
+  },
 }));
 
 // The executing-host version probe is deterministic in orchestration tests;
@@ -34,14 +62,18 @@ const CHANNEL = "chan-1";
 const CONTEXT = "ctx-1";
 const activationSubscriptions: Array<Array<{ dispose(): void }>> = [];
 
-function makeCtx(tmpRoot: string) {
+function makeCtx(
+  tmpRoot: string,
+  storage = new Map<string, string>(),
+  options: { failRevocationOnce?: string } = {}
+) {
   const contextProjectionsPath = path.join(tmpRoot, ".context-projections", "v5");
   const contextFolder = path.join(contextProjectionsPath, CONTEXT);
   mkdirSync(contextFolder, { recursive: true });
 
-  const storage = new Map<string, string>();
   let mintSeq = 0;
   const revoked: string[] = [];
+  const lifecycleEvents: string[] = [];
 
   const rpcCall = vi.fn(async (target: string, method: string, ...args: unknown[]) => {
     if (method === "getContextId") return CONTEXT;
@@ -59,9 +91,15 @@ function makeCtx(tmpRoot: string) {
     if (method === "subscribeChannel") return { ok: true, participantId: "p1" };
     if (method === "auth.mintAgentCredential") {
       mintSeq += 1;
+      lifecycleEvents.push(`mint:agt_${mintSeq}`);
       return { agentId: `agt_${mintSeq}`, agentToken: `agent:agt_${mintSeq}:tok` };
     }
     if (method === "auth.revokeAgentCredential") {
+      lifecycleEvents.push(`revoke:${String(args[0])}`);
+      if (options.failRevocationOnce === args[0]) {
+        options.failRevocationOnce = undefined;
+        throw new Error(`revocation failed for ${String(args[0])}`);
+      }
       revoked.push(args[0] as string);
       return { revoked: true };
     }
@@ -95,12 +133,23 @@ function makeCtx(tmpRoot: string) {
     },
     storage: {
       mkdir: vi.fn(async () => {}),
+      readdir: vi.fn(async (directory: string) => {
+        const prefix = `${directory.replace(/\/$/u, "")}/`;
+        return [...storage.keys()]
+          .filter((key) => key.startsWith(prefix) && !key.slice(prefix.length).includes("/"))
+          .map((key) => key.slice(prefix.length));
+      }),
+      rm: vi.fn(async (p: string) => {
+        storage.delete(p);
+      }),
       readFile: vi.fn(async (p: string) => {
         if (!storage.has(p)) throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
         return storage.get(p)!;
       }),
       writeFile: vi.fn(async (p: string, data: string) => {
         storage.set(p, data);
+        const parsed = JSON.parse(data) as { phase?: string; launchId?: string };
+        lifecycleEvents.push(`write:${p}:${parsed.phase ?? "mapping"}:${parsed.launchId ?? ""}`);
       }),
     },
     approvals: { request: approvalsRequest },
@@ -111,7 +160,7 @@ function makeCtx(tmpRoot: string) {
     log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
   };
 
-  return { ctx, approvalsRequest, rpcCall, revoked, contextFolder };
+  return { ctx, approvalsRequest, rpcCall, revoked, contextFolder, storage, lifecycleEvents };
 }
 
 let tmpRoot: string;
@@ -127,7 +176,13 @@ afterEach(() => {
   rmSync(tmpRoot, { recursive: true, force: true });
   childProcessMock.spawn.mockClear();
   childProcessMock.child.on.mockClear();
+  childProcessMock.child.once.mockClear();
   childProcessMock.child.kill.mockClear();
+  processOwnerMock.retire.mockClear();
+  processOwnerApiMock.create.mockReset();
+  processOwnerApiMock.create.mockReturnValue(processOwnerMock);
+  processOwnerApiMock.adopt.mockReset();
+  processOwnerApiMock.adopt.mockReturnValue(processOwnerMock);
   vi.unstubAllEnvs();
   vi.clearAllMocks();
 });
@@ -186,7 +241,7 @@ describe("@workspace-extensions/claude-code prepare", () => {
   });
 
   it("prepares without reading a host context binding or gateway path", async () => {
-    const { ctx, approvalsRequest, rpcCall } = makeCtx(tmpRoot);
+    const { ctx, approvalsRequest, rpcCall, storage } = makeCtx(tmpRoot);
     const api = (await activate(ctx as never)).providerContracts.claudeCode;
 
     const result = await api.prepare({ channelId: CHANNEL });
@@ -220,6 +275,12 @@ describe("@workspace-extensions/claude-code prepare", () => {
       entityId: "session:chan-1",
       channelId: CHANNEL,
     });
+    expect(JSON.parse(storage.get(`launches/${result.profile.launchId}.json`)!)).toMatchObject({
+      ownerKind: "external-cli",
+      phase: "active",
+      process: null,
+      materialization: null,
+    });
   });
 
   it("prepares portably when the extension gateway is absent", async () => {
@@ -236,7 +297,7 @@ describe("@workspace-extensions/claude-code prepare", () => {
   });
 
   it("is idempotent on re-prepare: no second approval, rotates the credential", async () => {
-    const { ctx, approvalsRequest, revoked } = makeCtx(tmpRoot);
+    const { ctx, approvalsRequest, revoked, lifecycleEvents } = makeCtx(tmpRoot);
     const api = (await activate(ctx as never)).providerContracts.claudeCode;
 
     const first = await api.prepare({ channelId: CHANNEL });
@@ -249,6 +310,47 @@ describe("@workspace-extensions/claude-code prepare", () => {
     // The prior credential was revoked and a fresh one minted.
     expect(revoked).toEqual(["agt_1"]);
     expect(second.profile.environment.VIBESTUDIO_AGENT_TOKEN).toBe("agent:agt_2:tok");
+    const replacement = lifecycleEvents.slice(lifecycleEvents.indexOf("mint:agt_2"));
+    expect(replacement.findIndex((event) => event === "mint:agt_2")).toBeLessThan(
+      replacement.findIndex((event) => event.includes("launches/") && event.includes("preparing"))
+    );
+    expect(
+      replacement.findIndex((event) => event.includes("launches/") && event.includes("preparing"))
+    ).toBeLessThan(replacement.findIndex((event) => event === "revoke:agt_1"));
+    expect(replacement.findIndex((event) => event === "revoke:agt_1")).toBeLessThan(
+      replacement.findIndex((event) => event.includes("channels/") && event.includes("active"))
+    );
+  });
+
+  it("fails loudly on a corrupt active pointer before minting replacement authority", async () => {
+    const storage = new Map<string, string>([["channels/chan-1.json", "{broken"]]);
+    const { ctx, rpcCall } = makeCtx(tmpRoot, storage);
+    const api = (await activate(ctx as never)).providerContracts.claudeCode;
+
+    await expect(api.prepare({ channelId: CHANNEL })).rejects.toMatchObject({ code: "ECORRUPT" });
+    expect(rpcCall.mock.calls.some((call) => call[1] === "auth.mintAgentCredential")).toBe(false);
+    expect(storage.get("channels/chan-1.json")).toBe("{broken");
+  });
+
+  it("keeps the old active pointer when replacement credential retirement fails", async () => {
+    const storage = new Map<string, string>();
+    const failures: { failRevocationOnce?: string } = {};
+    const prepared = makeCtx(tmpRoot, storage, failures);
+    const api = (await activate(prepared.ctx as never)).providerContracts.claudeCode;
+    const first = await api.prepare({ channelId: CHANNEL });
+    failures.failRevocationOnce = "agt_1";
+
+    await expect(api.prepare({ channelId: CHANNEL })).rejects.toThrow(
+      /revocation failed for agt_1/
+    );
+
+    const pointer = JSON.parse(storage.get("channels/chan-1.json")!) as {
+      launchId: string;
+      phase: string;
+    };
+    expect(pointer).toMatchObject({ launchId: first.profile.launchId, phase: "active" });
+    expect(prepared.revoked).toContain("agt_2");
+    expect(prepared.revoked).not.toContain("agt_1");
   });
 
   it("records the context→channel binding for resolvePrimaryChannel", async () => {
@@ -300,7 +402,7 @@ describe("@workspace-extensions/claude-code prepare", () => {
   });
 
   it("launchSubagent prepares, spawns headless Claude privately, and release kills it", async () => {
-    const { ctx, approvalsRequest } = makeCtx(tmpRoot);
+    const { ctx, approvalsRequest, storage } = makeCtx(tmpRoot);
     ctx.invocation.current.mockReturnValue({
       requestId: "req-1",
       extensionName: "@workspace-extensions/claude-code",
@@ -375,7 +477,7 @@ describe("@workspace-extensions/claude-code prepare", () => {
     expect(claudeArgs).toContain("--settings");
     expect(options).toMatchObject({
       cwd: path.join(tmpRoot, ".context-projections", "v5", CONTEXT),
-      detached: false,
+      detached: true,
     });
     expect(options.env).toMatchObject({
       VIBESTUDIO_ENTITY_ID: "session:chan-1",
@@ -393,6 +495,12 @@ describe("@workspace-extensions/claude-code prepare", () => {
     expect(options.env["VIBESTUDIO_SUBAGENT_CONTRACT"]).toContain(
       "Do not print or imitate tool-call syntax"
     );
+    expect(JSON.parse(storage.get(`launches/${result.generationId}.json`)!)).toMatchObject({
+      ownerKind: "extension-headless",
+      phase: "active",
+      process: { pid: 4242, startCoordinate: "test-start" },
+      materialization: { profileDir: path.dirname(result.logPath), logPath: result.logPath },
+    });
 
     expect(
       api.inspectLaunch({
@@ -420,7 +528,77 @@ describe("@workspace-extensions/claude-code prepare", () => {
       generationId: result.generationId,
     });
     expect(released).toEqual({ released: true });
-    expect(childProcessMock.child.kill).toHaveBeenCalledWith("SIGTERM");
+    expect(processOwnerMock.retire).toHaveBeenCalledTimes(1);
+    expect(existsSync(path.dirname(result.logPath))).toBe(false);
+  });
+
+  it("does not revoke or delete a headless generation until its process group is absent", async () => {
+    const { ctx, revoked } = makeCtx(tmpRoot);
+    ctx.invocation.current.mockReturnValue({
+      requestId: "req-1",
+      extensionName: "@workspace-extensions/claude-code",
+      method: "providers.claudeCode.launchSubagent",
+      caller: { callerId: "do:parent", callerKind: "do" },
+    });
+    let finishRetirement!: () => void;
+    processOwnerMock.retire.mockImplementationOnce(
+      () => new Promise<void>((resolve) => (finishRetirement = resolve))
+    );
+    const api = (await activate(ctx as never)).providerContracts.claudeCode;
+    const result = await api.launchSubagent({
+      channelId: CHANNEL,
+      subagent: {
+        runId: "run-order",
+        task: "audit",
+        parentRef: "do:parent",
+        parentChannelId: "home-chan",
+        parentContextId: "ctx-parent",
+        depth: 1,
+      },
+    });
+
+    const releasing = api.release({ entityId: result.entityId, generationId: result.generationId });
+    await vi.waitFor(() => expect(processOwnerMock.retire).toHaveBeenCalledTimes(1));
+    expect(revoked).not.toContain("agt_1");
+    expect(existsSync(path.dirname(result.logPath))).toBe(true);
+
+    finishRetirement();
+    await releasing;
+    expect(revoked).toContain("agt_1");
+    expect(existsSync(path.dirname(result.logPath))).toBe(false);
+  });
+
+  it("recovers a persisted process/profile receipt and releases it after extension restart", async () => {
+    const storage = new Map<string, string>();
+    const firstCtx = makeCtx(tmpRoot, storage);
+    firstCtx.ctx.invocation.current.mockReturnValue({
+      requestId: "req-1",
+      extensionName: "@workspace-extensions/claude-code",
+      method: "providers.claudeCode.launchSubagent",
+      caller: { callerId: "do:parent", callerKind: "do" },
+    });
+    const firstApi = (await activate(firstCtx.ctx as never)).providerContracts.claudeCode;
+    const result = await firstApi.launchSubagent({
+      channelId: CHANNEL,
+      subagent: {
+        runId: "run-restart",
+        task: "audit",
+        parentRef: "do:parent",
+        parentChannelId: "home-chan",
+        parentContextId: "ctx-parent",
+        depth: 1,
+      },
+    });
+    expect(existsSync(path.dirname(result.logPath))).toBe(true);
+
+    const restarted = makeCtx(tmpRoot, storage);
+    const restartedApi = (await activate(restarted.ctx as never)).providerContracts.claudeCode;
+    await restartedApi.release({ entityId: result.entityId, generationId: result.generationId });
+
+    expect(processOwnerApiMock.adopt).toHaveBeenCalledWith(
+      expect.objectContaining({ pid: 4242, startCoordinate: "test-start" })
+    );
+    expect(restarted.revoked).toContain("agt_1");
     expect(existsSync(path.dirname(result.logPath))).toBe(false);
   });
 
@@ -497,23 +675,25 @@ describe("@workspace-extensions/claude-code prepare", () => {
     };
     const result = await api.launchSubagent({ channelId: CHANNEL, subagent });
 
-    const exitHandler = childProcessMock.child.on.mock.calls.find((c) => c[0] === "exit")![1] as (
+    const exitHandler = childProcessMock.child.once.mock.calls.find((c) => c[0] === "exit")![1] as (
       code: number | null,
       signal: string | null
     ) => void;
 
     // The session died on its own → the vessel is told so the run settles.
     exitHandler(1, null);
-    expect(
-      api.inspectLaunch({
-        entityId: result.entityId,
-        generationId: result.generationId,
+    await vi.waitFor(() =>
+      expect(
+        api.inspectLaunch({
+          entityId: result.entityId,
+          generationId: result.generationId,
+        })
+      ).toMatchObject({
+        state: "exited",
+        exit: { code: 1, signal: null },
+        log: { bytes: 0, tail: "", truncated: false },
       })
-    ).toMatchObject({
-      state: "exited",
-      exit: { code: 1, signal: null },
-      log: { bytes: 0, tail: "", truncated: false },
-    });
+    );
     const report = rpcCall.mock.calls.find((c) => c[1] === "reportExternalExit");
     expect(report).toBeDefined();
     expect(report![0]).toBe(result.vesselRef);
@@ -532,10 +712,9 @@ describe("@workspace-extensions/claude-code prepare", () => {
       entityId: relaunched.entityId,
       generationId: relaunched.generationId,
     });
-    const exitHandler2 = childProcessMock.child.on.mock.calls.find((c) => c[0] === "exit")![1] as (
-      code: number | null,
-      signal: string | null
-    ) => void;
+    const exitHandler2 = childProcessMock.child.once.mock.calls.find(
+      (c) => c[0] === "exit"
+    )![1] as (code: number | null, signal: string | null) => void;
     exitHandler2(null, "SIGTERM");
     expect(rpcCall.mock.calls.find((c) => c[1] === "reportExternalExit")).toBeUndefined();
   });
@@ -569,12 +748,15 @@ describe("@workspace-extensions/claude-code prepare", () => {
         result: "one concrete finding",
       })}\n`
     );
-    const exitHandler = childProcessMock.child.on.mock.calls.find((c) => c[0] === "exit")![1] as (
+    const exitHandler = childProcessMock.child.once.mock.calls.find((c) => c[0] === "exit")![1] as (
       code: number | null,
       signal: string | null
     ) => void;
     exitHandler(0, null);
 
+    await vi.waitFor(() =>
+      expect(rpcCall.mock.calls.find((c) => c[1] === "reportExternalResult")).toBeDefined()
+    );
     const report = rpcCall.mock.calls.find((c) => c[1] === "reportExternalResult");
     expect(report?.[0]).toBe(result.vesselRef);
     expect(report?.[2]).toEqual({
