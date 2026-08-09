@@ -6,7 +6,6 @@ import type {
   PanelNavigationState,
   PanelPlacementHint,
   PanelSnapshot,
-  PanelTreeSnapshot,
   ThemeAppearance,
 } from "@vibestudio/shared/types";
 import type { PanelSearchIndex } from "@vibestudio/shared/panelSearchTypes";
@@ -34,18 +33,13 @@ import {
   getPanelStateArgs,
   updatePanelNavigationState,
 } from "@vibestudio/shared/panel/accessors";
-import {
-  canonicalEntityId,
-  type RuntimeCodePanelEntityCreateSpec,
-  type RuntimeEntityHandle,
-} from "@vibestudio/shared/runtime/entitySpec";
+import type { RuntimeCodePanelEntityCreateSpec } from "@vibestudio/shared/runtime/entitySpec";
 import { asPanelEntityId, asPanelSlotId } from "@vibestudio/shared/panel/ids";
 import { normalizePanelTitle } from "@vibestudio/shared/panel/title";
 import type { PanelEntityId, PanelSlotId } from "@vibestudio/shared/panel/ids";
 import type {
   RuntimeClient,
   SlotHistoryRow,
-  SlotRow,
   WorkspaceStateClient,
 } from "./workspaceStateClient.js";
 import {
@@ -139,11 +133,6 @@ export interface CreatePanelResult {
   options: Record<string, unknown>;
   autoArchiveWhenEmpty?: boolean;
   privileged?: boolean;
-  /**
-   * Resolves when the reserved panel's immutable runtime image is active.
-   * This is intentionally not part of the panel-tree wire result.
-   */
-  preparation?: Promise<RuntimeEntityHandle>;
 }
 
 export interface NavigatePanelOptions {
@@ -248,7 +237,6 @@ export class PanelManager {
     PanelSlotId,
     { repoPath: string; effectiveVersion: string }
   >();
-  private readonly panelPreparationBySlot = new Map<PanelSlotId, Promise<RuntimeEntityHandle>>();
   private readonly runtimePanelLru = new Map<PanelSlotId, number>();
   private runtimePanelClock = 0;
   private readonly incarnationChurn = {
@@ -498,8 +486,6 @@ export class PanelManager {
 
     this.indexPanel(slotId, displayTitle, relativePath);
 
-    const preparation = this.activateReservedPanel(slotId, entityId, entitySpec, runtime);
-
     return {
       panelId: slotId,
       contextId,
@@ -509,72 +495,7 @@ export class PanelManager {
       options: { env: opts?.env ?? {}, ...(opts?.ref ? { ref: opts.ref } : {}) },
       autoArchiveWhenEmpty: snapshot.autoArchiveWhenEmpty,
       privileged: snapshot.privileged,
-      preparation,
     };
-  }
-
-  /** Resume a durable preparing reservation after a server restart or mirror reload. */
-  async resumePanelPreparation(slotId: PanelSlotId): Promise<RuntimeEntityHandle> {
-    const existing = this.panelPreparationBySlot.get(slotId);
-    if (existing) return existing;
-    const panel = this.registry.getPanel(slotId);
-    if (!panel?.runtimeEntityId) {
-      throw new Error(`Cannot resume panel preparation without an entity: ${slotId}`);
-    }
-    const slot = await this.workspaceState.getSlot(slotId);
-    if (!slot?.current_entry_key) {
-      throw new Error(`Cannot resume panel preparation without a history entry: ${slotId}`);
-    }
-    const snapshot = getCurrentSnapshot(panel);
-    return this.activateReservedPanel(slotId, asPanelEntityId(panel.runtimeEntityId), {
-      kind: "panel",
-      execution: {
-        surface: "code",
-        source: snapshot.source,
-        ...(snapshot.options.ref ? { ref: snapshot.options.ref } : {}),
-      },
-      key: slot.current_entry_key,
-      contextId: snapshot.contextId,
-      stateArgs: getPanelStateArgs(panel) ?? {},
-    });
-  }
-
-  private activateReservedPanel(
-    slotId: PanelSlotId,
-    entityId: PanelEntityId,
-    spec: RuntimeCodePanelEntityCreateSpec,
-    runtime: RuntimeClient = this.runtime
-  ): Promise<RuntimeEntityHandle> {
-    const existing = this.panelPreparationBySlot.get(slotId);
-    if (existing) return existing;
-    let preparation!: Promise<RuntimeEntityHandle>;
-    preparation = runtime
-      .activateReservedEntity(spec)
-      .then((activeHandle) => {
-        this.currentEntitySourceBySlot.set(slotId, activeHandle.source);
-        const livePanel = this.registry.getPanel(slotId);
-        if (livePanel?.runtimeEntityId === entityId) {
-          livePanel.effectiveVersion = activeHandle.source.effectiveVersion;
-          livePanel.buildKey = activeHandle.buildKey ?? null;
-          livePanel.executionDigest = activeHandle.executionDigest ?? null;
-          livePanel.authorityRequests = activeHandle.authorityRequests;
-          this.registry.updateArtifacts(slotId, {
-            ...livePanel.artifacts,
-            buildState: "building",
-            buildProgress: "Runtime image ready; loading panel...",
-            error: undefined,
-          });
-          this.registry.notifyPanelTreeUpdate(slotId);
-        }
-        return activeHandle;
-      })
-      .finally(() => {
-        if (this.panelPreparationBySlot.get(slotId) === preparation) {
-          this.panelPreparationBySlot.delete(slotId);
-        }
-      });
-    this.panelPreparationBySlot.set(slotId, preparation);
-    return preparation;
   }
 
   async createBrowser(
@@ -1696,9 +1617,7 @@ export class PanelManager {
   private touchRuntimePanel(slotId: PanelSlotId): void {
     this.runtimePanelLru.set(slotId, ++this.runtimePanelClock);
     while (this.runtimePanelLru.size > PanelManager.MAX_RUNTIME_PANEL_CACHE) {
-      const oldest = [...this.runtimePanelLru.entries()]
-        .filter(([candidate]) => !this.panelPreparationBySlot.has(candidate))
-        .sort((a, b) => a[1] - b[1])[0];
+      const oldest = [...this.runtimePanelLru.entries()].sort((a, b) => a[1] - b[1])[0];
       if (!oldest) return;
       const [candidate] = oldest;
       this.runtimePanelLru.delete(candidate);

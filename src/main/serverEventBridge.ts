@@ -47,6 +47,7 @@ const HOST_DIRECT_EVENT_NAMES = [
   "panel-created",
   "navigate-to-panel",
   "panel:executionActivated",
+  "panel:executionFailed",
   "panel:stateArgsChanged",
 ] as const;
 
@@ -290,6 +291,13 @@ export function createServerEventBridge(
         );
         deps.notifyError?.("Panel runtime could not be activated", message);
       });
+      return;
+    }
+
+    if (bareEvent === "panel:executionFailed") {
+      const failure =
+        payload as import("@vibestudio/shared/events").EventPayloads["panel:executionFailed"];
+      panelOrchestrator?.applyPanelExecutionFailed(failure);
       return;
     }
 

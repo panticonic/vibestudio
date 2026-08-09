@@ -4189,10 +4189,14 @@ async function main() {
       return runtimeServiceInternal.activateReservedEntity(spec);
     },
     onError: (error, slotId, entityId) => {
+      const message = error instanceof Error ? error.message : String(error);
+      eventService.emit("panel:executionFailed", {
+        panelId: slotId,
+        runtimeEntityId: entityId,
+        message,
+      });
       console.warn(
-        `[PanelExecutionReconciler] Failed to activate ${entityId} for ${slotId}: ${
-          error instanceof Error ? error.message : String(error)
-        }`
+        `[PanelExecutionReconciler] Failed to activate ${entityId} for ${slotId}: ${message}`
       );
     },
   });

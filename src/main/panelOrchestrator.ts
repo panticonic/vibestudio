@@ -237,81 +237,21 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
       );
     }
 
-    // The supervisor takes ownership synchronously so a fast rejection can
-    // never become unhandled. It yields one turn before doing readiness/view
-    // work, allowing this RPC response to reach the renderer first.
-    void this.superviseCreatedPanel(
-      result,
-      {
-        focus: createOpts.focus,
-        materialize: shouldMaterializePanelOnCreate(createOpts.initialLoad),
-      },
-      interactionStartedAt
-    );
-    return { id: result.panelId, title: result.title };
-  }
-
-  private async superviseCreatedPanel(
-    result: {
-      panelId: string;
-      title: string;
-      contextId: string;
-      source: string;
-      preparation?: Promise<unknown>;
-    },
-    opts: { focus?: boolean; materialize: boolean },
-    interactionStartedAt: number
-  ): Promise<void> {
-    const preparationOutcome = result.preparation
-      ? result.preparation.then(
-          () => ({ ok: true as const }),
-          (error: unknown) => ({ ok: false as const, error })
-        )
-      : Promise.resolve({ ok: true as const });
-    await new Promise<void>((resolve) => setImmediate(resolve));
-    const outcome = await preparationOutcome;
-    if (!outcome.ok) {
-      const error = outcome.error;
-      const message = error instanceof Error ? error.message : String(error);
-      const panel = this.registry.getPanel(result.panelId);
-      if (panel) {
-        this.registry.updateArtifacts(result.panelId, {
-          ...panel.artifacts,
-          buildState: "error",
-          buildProgress: message,
-          error: message,
-        });
-        this.registry.notifyPanelTreeUpdate(result.panelId);
-      }
-      log.warn(
-        `[responsiveness] panel preparation failed panel=${result.panelId} ` +
-          `elapsedMs=${(performance.now() - interactionStartedAt).toFixed(1)}: ${message}`
-      );
-      return;
-    }
-
-    const preparedMs = performance.now() - interactionStartedAt;
-    if (opts.materialize) {
-      try {
-        await this.attachCreatedPanel(result, { focus: opts.focus });
-      } catch (error) {
-        // attachCreatedPanel records the distinct viewFailure state and releases
-        // any partial local runtime. The durable slot remains authoritative.
+    // Code-backed activation is owned exclusively by the server's durable
+    // panel-execution reconciler. The host may acquire its presentation lease
+    // immediately, but it never starts a competing activation. For a preparing
+    // code panel this returns after lease acquisition; executionActivated then
+    // creates the view. External documents can create their view immediately.
+    if (shouldMaterializePanelOnCreate(createOpts.initialLoad)) {
+      void this.attachCreatedPanel(result, { focus: createOpts.focus }).catch((error) => {
         const message = error instanceof Error ? error.message : String(error);
         log.warn(
           `[responsiveness] panel view attachment failed panel=${result.panelId} ` +
             `elapsedMs=${(performance.now() - interactionStartedAt).toFixed(1)}: ${message}`
         );
-        return;
-      }
+      });
     }
-    if (log.isTrace()) {
-      log.trace(
-        `[responsiveness] panel-ready panel=${result.panelId} ` +
-          `preparedMs=${preparedMs.toFixed(1)} ` +
-          `totalMs=${(performance.now() - interactionStartedAt).toFixed(1)}`
-      );
-    }
+    return { id: result.panelId, title: result.title };
   }
 
   async createPanel(
@@ -1248,9 +1188,32 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
     event: import("@vibestudio/shared/events").EventPayloads["panel:executionActivated"]
   ): Promise<void> {
     if (!this.registry.applyExecutionIdentity(event.panelId, event)) return;
-    await this.runtime.convergePreparedPanelView(event.panelId, {
-      refreshPresentedIdentity: true,
+    try {
+      await this.runtime.convergePreparedPanelView(event.panelId, {
+        refreshPresentedIdentity: true,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.runtime.recordPanelViewFailure(event.panelId, message);
+      this.runtime.releaseLocalPanelRuntime(event.panelId, "unload");
+      throw error;
+    }
+  }
+
+  applyPanelExecutionFailed(
+    event: import("@vibestudio/shared/events").EventPayloads["panel:executionFailed"]
+  ): void {
+    const panel = this.registry.getPanel(event.panelId);
+    if (!panel || panel.runtimeEntityId !== event.runtimeEntityId) return;
+    this.registry.updateArtifacts(event.panelId, {
+      ...panel.artifacts,
+      buildState: "error",
+      buildProgress: event.message,
+      error: event.message,
+      htmlPath: undefined,
+      hostedRuntimeEntityId: undefined,
     });
+    this.registry.notifyPanelTreeUpdate(event.panelId);
   }
 
   /**
@@ -1355,6 +1318,11 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
       await this.runtime.loadPanelIntoView(result.panelId);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      const panel = this.registry.getPanel(result.panelId);
+      // A server-owned execution failure is already the canonical panel error.
+      // Keep the acquired lease so a successful reconciler retry can present
+      // immediately; do not misclassify preparation as a native-view failure.
+      if (panel?.artifacts.buildState === "error" && panel.artifacts.error === message) return;
       if (!/running on|leased by/i.test(message))
         this.runtime.recordPanelViewFailure(result.panelId, message);
       this.runtime.releaseLocalPanelRuntime(result.panelId, "unload");

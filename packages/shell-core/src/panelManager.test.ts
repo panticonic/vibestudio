@@ -7,11 +7,7 @@ import { getCurrentSnapshot } from "@vibestudio/shared/panel/accessors";
 import { PanelLifecycleAggregateError, PanelManager } from "./panelManager.js";
 import { PanelNavigationCommitError } from "./panelNavigationTransaction.js";
 import { canonicalEntityId, runtimeEntitySource } from "@vibestudio/shared/runtime/entitySpec";
-import {
-  asPanelEntityId,
-  type PanelEntityId,
-  type PanelSlotId,
-} from "@vibestudio/shared/panel/ids";
+import type { PanelEntityId, PanelSlotId } from "@vibestudio/shared/panel/ids";
 import type {
   EntityRecord,
   RuntimeEntityCreateSpec,
@@ -789,6 +785,23 @@ describe("PanelManager", () => {
     expect(mem.state.slots.has(created.panelId)).toBe(true);
     expect(mem.state.entities.size).toBe(1);
 
+    const createdEntry = mem.state.history.get(created.panelId)?.[0];
+    if (!createdEntry) throw new Error("missing created history fixture");
+    const active = await deps.runtime.activateReservedEntity({
+      kind: "panel",
+      execution: { surface: "code", source: createdEntry.source },
+      key: createdEntry.entry_key,
+      contextId: created.contextId,
+      stateArgs: { greeting: "hello" },
+    });
+    registry.applyExecutionIdentity(created.panelId, {
+      runtimeEntityId: active.id,
+      effectiveVersion: active.source.effectiveVersion,
+      buildKey: active.buildKey!,
+      executionDigest: active.executionDigest!,
+      authorityRequests: active.authorityRequests ?? [],
+    });
+
     const init = (await manager.getPanelInit(created.panelId)) as {
       entityId: string;
       panelId?: string;
@@ -888,7 +901,6 @@ describe("PanelManager", () => {
       ref: "ctx:panel-dev",
     });
 
-    await created.preparation;
     expect(reserveEntity).toHaveBeenCalledWith(
       expect.objectContaining({
         kind: "panel",
@@ -901,16 +913,7 @@ describe("PanelManager", () => {
     );
     expect(reserveEntity.mock.calls[0]?.[0]).not.toHaveProperty("contextId");
     expect(created.contextId).toBe("ctx-default");
-    expect(activateReservedEntity).toHaveBeenCalledWith(
-      expect.objectContaining({
-        kind: "panel",
-        execution: {
-          surface: "code",
-          source: "panels/example",
-          ref: "ctx:panel-dev",
-        },
-      })
-    );
+    expect(activateReservedEntity).not.toHaveBeenCalled();
     expect(getCurrentSnapshot(registry.getPanel(created.panelId)!).options.ref).toBe(
       "ctx:panel-dev"
     );
@@ -1309,6 +1312,15 @@ describe("PanelManager", () => {
     const manager = new PanelManager({ registry, ...deps });
     const created = await manager.create("panels/first", { isRoot: true, addAsRoot: true });
     const originalEntityId = mem.state.slots.get(created.panelId)?.current_entity_id;
+    const createdEntry = mem.state.history.get(created.panelId)?.[0];
+    if (!createdEntry) throw new Error("missing created history fixture");
+    await deps.runtime.activateReservedEntity({
+      kind: "panel",
+      execution: { surface: "code", source: createdEntry.source },
+      key: createdEntry.entry_key,
+      contextId: created.contextId,
+      stateArgs: {},
+    });
     const createEntity = vi.spyOn(deps.runtime, "createEntity");
     const retireEntity = vi.spyOn(deps.runtime, "retireEntity");
 

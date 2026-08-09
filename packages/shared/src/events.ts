@@ -30,6 +30,7 @@ export type EventName =
   | "presence:panel-active"
   | "panel:runtimeLeaseChanged"
   | "panel:executionActivated"
+  | "panel:executionFailed"
   | "panel:stateArgsChanged"
   | "panel-title-updated"
   | "panel-presentation-changed"
@@ -227,6 +228,16 @@ export interface EventPayloads {
     buildKey: string;
     executionDigest: string;
     authorityRequests: NonNullable<Panel["authorityRequests"]>;
+  };
+  /**
+   * The server-owned activation attempt failed. The durable reservation stays
+   * current and may be retried by the reconciler, while every presenter shows
+   * a terminal, actionable state instead of an unbounded preparation spinner.
+   */
+  "panel:executionFailed": {
+    panelId: string;
+    runtimeEntityId: string;
+    message: string;
   };
   /**
    * The server committed a panel's durable state arguments. Addressed to the
@@ -443,6 +454,7 @@ export const VALID_EVENT_NAMES: EventName[] = [
   "workspace-presence-changed",
   "panel:runtimeLeaseChanged",
   "panel:executionActivated",
+  "panel:executionFailed",
   "panel:stateArgsChanged",
   "panel-title-updated",
   "panel-presentation-changed",
@@ -496,6 +508,7 @@ export function isValidEventName(name: string): name is EventName {
   if (name === "presence:panel-active") return true;
   if (name === "panel:runtimeLeaseChanged") return true;
   if (name === "panel:executionActivated") return true;
+  if (name === "panel:executionFailed") return true;
   if (name === "panel:stateArgsChanged") return true;
   if (name === "panel-title-updated") return true;
   if (name === "panel:snapshot") return true;

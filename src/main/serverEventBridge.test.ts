@@ -20,6 +20,7 @@ function createHarness(
     applyBuildComplete: vi.fn(),
     handleRuntimeLeaseChanged: vi.fn(async () => {}),
     applyPanelExecutionActivated: vi.fn(async () => {}),
+    applyPanelExecutionFailed: vi.fn(),
     applyServerPanelStateArgsUpdate: vi.fn(),
     applyServerPanelTitleUpdate: vi.fn(),
     recoverShellSnapshot: vi.fn(async () => undefined),
@@ -59,7 +60,7 @@ function createHarness(
 describe("createServerEventBridge", () => {
   it("binds host-owned OAuth handoffs on the direct server event channel", () => {
     const listeners = new Map<string, (payload: unknown) => void>();
-    const releases = [vi.fn(), vi.fn(), vi.fn(), vi.fn(), vi.fn(), vi.fn()];
+    const releases = [vi.fn(), vi.fn(), vi.fn(), vi.fn(), vi.fn(), vi.fn(), vi.fn()];
     const client = {
       onDirectEvent: vi.fn((event: string, listener: (payload: unknown) => void) => {
         listeners.set(event, listener);
@@ -83,6 +84,11 @@ describe("createServerEventBridge", () => {
     listeners.get("panel:executionActivated")?.({
       panelId: "panel:tree/slot-a",
       runtimeEntityId: "panel:entity/slot-a",
+    });
+    listeners.get("panel:executionFailed")?.({
+      panelId: "panel:tree/slot-a",
+      runtimeEntityId: "panel:entity/slot-a",
+      message: "activation denied",
     });
     listeners.get("panel:stateArgsChanged")?.({
       panelId: "panel:tree/slot-a",
@@ -108,7 +114,12 @@ describe("createServerEventBridge", () => {
       panelId: "panel:tree/slot-a",
       runtimeEntityId: "panel:entity/slot-a",
     });
-    expect(handle).toHaveBeenNthCalledWith(6, "panel:stateArgsChanged", {
+    expect(handle).toHaveBeenNthCalledWith(6, "panel:executionFailed", {
+      panelId: "panel:tree/slot-a",
+      runtimeEntityId: "panel:entity/slot-a",
+      message: "activation denied",
+    });
+    expect(handle).toHaveBeenNthCalledWith(7, "panel:stateArgsChanged", {
       panelId: "panel:tree/slot-a",
       stateArgs: { channelName: "chat-1234" },
     });
@@ -120,6 +131,7 @@ describe("createServerEventBridge", () => {
     expect(releases[3]).toHaveBeenCalledOnce();
     expect(releases[4]).toHaveBeenCalledOnce();
     expect(releases[5]).toHaveBeenCalledOnce();
+    expect(releases[6]).toHaveBeenCalledOnce();
   });
 
   it("converges an activated panel execution through its native host owner", async () => {
@@ -138,6 +150,20 @@ describe("createServerEventBridge", () => {
     await vi.waitFor(() =>
       expect(panelOrchestrator.applyPanelExecutionActivated).toHaveBeenCalledWith(activation)
     );
+    expect(eventService.emit).not.toHaveBeenCalled();
+  });
+
+  it("projects server-owned panel activation failures through the native host owner", () => {
+    const { handle, eventService, panelOrchestrator } = createHarness();
+    const failure = {
+      panelId: "panel:tree/slot-a",
+      runtimeEntityId: "panel:entity/slot-a",
+      message: "activation denied",
+    };
+
+    handle("panel:executionFailed", failure);
+
+    expect(panelOrchestrator.applyPanelExecutionFailed).toHaveBeenCalledWith(failure);
     expect(eventService.emit).not.toHaveBeenCalled();
   });
 

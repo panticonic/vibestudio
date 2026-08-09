@@ -112,7 +112,15 @@ function createOrchestrator(
             snapshot: { source, contextId, options: {} },
             ...(execution.surface === "external"
               ? { artifacts: { buildState: "ready" as const } }
-              : {}),
+              : {
+                  runtimeEntityId: asPanelEntityId(`panel:nav-${id}`),
+                  buildKey: null,
+                  executionDigest: null,
+                  artifacts: {
+                    buildState: "pending" as const,
+                    buildProgress: "Preparing panel runtime...",
+                  },
+                }),
           }),
           options?.parentId ?? null,
           { addAsRoot: options?.parentId == null }
@@ -123,7 +131,6 @@ function createOrchestrator(
           contextId,
           source,
           options: {},
-          preparation: Promise.resolve({}),
         };
       }
     ),
@@ -832,23 +839,11 @@ describe("PanelOrchestrator.createPanel", () => {
     expect(serverClient.callAs).not.toHaveBeenCalled();
   });
 
-  it("publishes and returns the durable panel before runtime preparation resolves", async () => {
+  it("publishes and returns a code panel without starting host-owned activation", async () => {
     const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
     const caller = makePanel("panel:tree/caller");
     registry.addPanel(caller, null, { addAsRoot: true });
-    const { orchestrator, panelView, emit, shellCore } = createOrchestrator(registry);
-    let resolvePreparation!: (value: object) => void;
-    const preparation = new Promise<object>((resolve) => {
-      resolvePreparation = resolve;
-    });
-    const originalCreateExecution = shellCore.createExecution.getMockImplementation();
-    if (!originalCreateExecution) throw new Error("missing createExecution fixture");
-    shellCore.createExecution.mockImplementationOnce(async (...args: unknown[]) => {
-      const result = await originalCreateExecution(
-        ...(args as Parameters<typeof originalCreateExecution>)
-      );
-      return { ...result, preparation };
-    });
+    const { orchestrator, panelView, emit } = createOrchestrator(registry);
 
     const result = await orchestrator.createPanel(caller.id, "panels/created-panel", {
       focus: true,
@@ -860,39 +855,38 @@ describe("PanelOrchestrator.createPanel", () => {
       focus: true,
     });
     expect(panelView.createViewForPanel).not.toHaveBeenCalled();
-
-    resolvePreparation({});
-    await vi.waitFor(() => expect(panelView.createViewForPanel).toHaveBeenCalled());
   });
 
-  it("captures an immediate preparation failure without rejecting panel creation", async () => {
+  it("projects a server-owned activation failure for only the current entity", async () => {
     const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
     const caller = makePanel("panel:tree/caller");
     registry.addPanel(caller, null, { addAsRoot: true });
-    const { orchestrator, panelView, emit, shellCore } = createOrchestrator(registry);
-    const originalCreateExecution = shellCore.createExecution.getMockImplementation();
-    if (!originalCreateExecution) throw new Error("missing createExecution fixture");
-    shellCore.createExecution.mockImplementationOnce(async (...args: unknown[]) => {
-      const result = await originalCreateExecution(
-        ...(args as Parameters<typeof originalCreateExecution>)
-      );
-      return { ...result, preparation: Promise.reject(new Error("activation denied")) };
-    });
+    const { orchestrator, panelView, emit } = createOrchestrator(registry);
 
-    await expect(
-      orchestrator.createPanel(caller.id, "panels/created-panel", { focus: true })
-    ).resolves.toMatchObject({ id: "panel:tree/created-1" });
+    await orchestrator.createPanel(caller.id, "panels/created-panel", { focus: true });
     expect(emit).toHaveBeenCalledWith("panel-created", {
       panelId: "panel:tree/created-1",
       parentId: caller.id,
       focus: true,
     });
-    await vi.waitFor(() =>
-      expect(registry.getPanel("panel:tree/created-1")?.artifacts).toMatchObject({
-        buildState: "error",
-        error: "activation denied",
-      })
-    );
+    const entityId = registry.getPanel("panel:tree/created-1")?.runtimeEntityId;
+    if (!entityId) throw new Error("missing runtime entity fixture");
+    orchestrator.applyPanelExecutionFailed({
+      panelId: "panel:tree/created-1",
+      runtimeEntityId: entityId,
+      message: "activation denied",
+    });
+    expect(registry.getPanel("panel:tree/created-1")?.artifacts).toMatchObject({
+      buildState: "error",
+      error: "activation denied",
+    });
+
+    orchestrator.applyPanelExecutionFailed({
+      panelId: "panel:tree/created-1",
+      runtimeEntityId: "panel:entity/stale",
+      message: "stale failure",
+    });
+    expect(registry.getPanel("panel:tree/created-1")?.artifacts.error).toBe("activation denied");
     expect(panelView.createViewForPanel).not.toHaveBeenCalled();
   });
 
@@ -934,6 +928,14 @@ describe("PanelOrchestrator.createPanel", () => {
       parentId: caller.id,
       focus: true,
     });
+    await orchestrator.applyPanelExecutionActivated({
+      panelId: id,
+      runtimeEntityId: registry.getPanel(id)!.runtimeEntityId!,
+      effectiveVersion: "effective-ready",
+      buildKey: "b".repeat(64),
+      executionDigest: "e".repeat(64),
+      authorityRequests: [],
+    });
     await vi.waitFor(() =>
       expect(panelView.createViewForPanel).toHaveBeenCalledWith(
         id,
@@ -954,7 +956,7 @@ describe("PanelOrchestrator.createPanel", () => {
     registry.addPanel(caller, null, { addAsRoot: true });
 
     const { orchestrator, panelView, serverClient, emit } = createOrchestrator(registry);
-    panelView.createViewForPanel.mockRejectedValueOnce(new Error("native view failed"));
+    panelView.createViewForPanel.mockRejectedValue(new Error("native view failed"));
     const scopedCaller = { callerId: "@workspace-apps/shell", callerKind: "app" as const };
 
     await expect(
@@ -968,6 +970,18 @@ describe("PanelOrchestrator.createPanel", () => {
         scopedCaller
       )
     ).resolves.toMatchObject({ id: "panel:tree/created-1" });
+
+    const created = registry.getPanel("panel:tree/created-1")!;
+    await expect(
+      orchestrator.applyPanelExecutionActivated({
+        panelId: created.id,
+        runtimeEntityId: created.runtimeEntityId!,
+        effectiveVersion: "effective-ready",
+        buildKey: "b".repeat(64),
+        executionDigest: "e".repeat(64),
+        authorityRequests: [],
+      })
+    ).rejects.toThrow("native view failed");
 
     await vi.waitFor(() =>
       expect(registry.getPanel("panel:tree/created-1")?.artifacts.viewFailure).toMatchObject({
@@ -1496,7 +1510,21 @@ describe("PanelOrchestrator.initializePanelTree", () => {
       }),
       undefined
     );
-    await vi.waitFor(() => expect(panelView.createViewForPanel).toHaveBeenCalledTimes(2));
+    for (const panel of registry.getRootPanels()) {
+      await orchestrator.applyPanelExecutionActivated({
+        panelId: panel.id,
+        runtimeEntityId: panel.runtimeEntityId!,
+        effectiveVersion: "effective-ready",
+        buildKey: "b".repeat(64),
+        executionDigest: "e".repeat(64),
+        authorityRequests: [],
+      });
+    }
+    await vi.waitFor(() => {
+      expect(new Set(panelView.createViewForPanel.mock.calls.map(([panelId]) => panelId))).toEqual(
+        new Set(registry.getRootPanels().map((panel) => panel.id))
+      );
+    });
     expect(shellCore.hasRootPanelSource).toHaveBeenCalledTimes(2);
   });
 
