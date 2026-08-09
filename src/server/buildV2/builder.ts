@@ -3528,10 +3528,24 @@ function createAsyncNullProxy() {
 }
 function createExtensionSmokeContext() {
   const asyncNull = createAsyncNullProxy();
+  const storage = new Proxy(Object.create(null), {
+    get(_target, prop) {
+      if (prop === "readdir") return async () => [];
+      if (prop === "readFile") {
+        return async () => {
+          const error = new Error("Smoke storage entry does not exist");
+          error.code = "ENOENT";
+          throw error;
+        };
+      }
+      if (typeof prop !== "string" || prop === "then") return undefined;
+      return async () => undefined;
+    },
+  });
   return {
     name: "smoke-test",
     version: "0.0.0",
-    storage: asyncNull,
+    storage,
     fs: asyncNull,
     git: asyncNull,
     panel: asyncNull,

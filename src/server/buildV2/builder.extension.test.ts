@@ -69,7 +69,9 @@ describe("buildUnit extension builds", () => {
     fs.writeFileSync(
       path.join(extensionDir, "index.ts"),
       [
-        "export async function activate() {",
+        "export async function activate(ctx: { storage: { readdir(path: string): Promise<string[]> } }) {",
+        "  const entries = await ctx.storage.readdir('launches');",
+        "  if (!Array.isArray(entries)) throw new Error('smoke storage readdir contract violated');",
         "  return {",
         "    ping() { return 'pong'; },",
         "  };",
