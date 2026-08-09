@@ -3,8 +3,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-const getCentralDataPath = vi.hoisted(() => vi.fn<() => string>());
-vi.mock("@vibestudio/env-paths", () => ({ getCentralDataPath }));
+const getSharedDerivedDataPath = vi.hoisted(() => vi.fn<() => string>());
+vi.mock("@vibestudio/env-paths", () => ({ getSharedDerivedDataPath }));
 
 import { runNpmInstall } from "./npmInstaller.js";
 
@@ -20,8 +20,8 @@ afterEach(() => {
 describe("runNpmInstall", () => {
   it("uses a Vibestudio-owned cache instead of the user's npm cache", async () => {
     const fixture = createFakeNpmFixture();
-    const centralDataPath = path.join(fixture.root, "vibestudio-data");
-    getCentralDataPath.mockReturnValue(centralDataPath);
+    const sharedDerivedDataPath = path.join(fixture.root, "shared-derived-data");
+    getSharedDerivedDataPath.mockReturnValue(sharedDerivedDataPath);
     const restoreEnv = replaceEnv({
       VIBESTUDIO_APP_ROOT: fixture.appRoot,
       npm_config_cache: path.join(fixture.root, "poisoned-user-cache"),
@@ -35,7 +35,7 @@ describe("runNpmInstall", () => {
     }
 
     const [args] = readAttempts(fixture.installDir);
-    expect(cacheArg(args!)).toBe(path.join(centralDataPath, "npm-cache"));
+    expect(cacheArg(args!)).toBe(path.join(sharedDerivedDataPath, "npm-cache"));
     expect(args).toContain("--ignore-scripts");
   });
 
@@ -140,7 +140,7 @@ describe("runNpmInstall", () => {
 
   it("retries transient network failures", async () => {
     const fixture = createFakeNpmFixture();
-    getCentralDataPath.mockReturnValue(path.join(fixture.root, "vibestudio-data"));
+    getSharedDerivedDataPath.mockReturnValue(path.join(fixture.root, "shared-derived-data"));
     const restoreEnv = replaceEnv({
       VIBESTUDIO_APP_ROOT: fixture.appRoot,
       VIBESTUDIO_NPM_INSTALLER_TEST_FAIL_ONCE: "1",
@@ -158,7 +158,7 @@ describe("runNpmInstall", () => {
 
   it("hard-stops and retries an npm process that ignores SIGTERM", async () => {
     const fixture = createFakeNpmFixture();
-    getCentralDataPath.mockReturnValue(path.join(fixture.root, "vibestudio-data"));
+    getSharedDerivedDataPath.mockReturnValue(path.join(fixture.root, "shared-derived-data"));
     const restoreEnv = replaceEnv({
       VIBESTUDIO_APP_ROOT: fixture.appRoot,
       VIBESTUDIO_NPM_INSTALLER_TEST_HANG_ONCE: "1",
@@ -203,9 +203,19 @@ const args = process.argv.slice(2);
 attempts.push(args);
 fs.writeFileSync(attemptsPath, JSON.stringify(attempts));
 if (process.env.VIBESTUDIO_NPM_INSTALLER_TEST_HANG_ONCE && attempts.length === 1) {
+  fs.mkdirSync(path.join(process.cwd(), "node_modules", "half-extracted"), { recursive: true });
+  fs.writeFileSync(path.join(process.cwd(), "package-lock.json"), "partial lock");
   process.on("SIGTERM", () => {});
   setInterval(() => {}, 1000);
   return;
+}
+if (
+  process.env.VIBESTUDIO_NPM_INSTALLER_TEST_HANG_ONCE &&
+  (fs.existsSync(path.join(process.cwd(), "node_modules")) ||
+    fs.existsSync(path.join(process.cwd(), "package-lock.json")))
+) {
+  process.stderr.write("retry inherited a partial npm install\\n");
+  process.exit(1);
 }
 if (process.env.VIBESTUDIO_NPM_INSTALLER_TEST_FAIL_ONCE && attempts.length === 1) {
   process.stderr.write("npm error network ETIMEDOUT while fetching package\\n");

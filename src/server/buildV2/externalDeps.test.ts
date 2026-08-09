@@ -18,7 +18,28 @@ vi.mock("@vibestudio/env-paths", () => ({
 vi.mock("@vibestudio/shared/npmInstaller", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@vibestudio/shared/npmInstaller")>()),
   runNpmInstall: vi.fn(async (cwd: string) => {
-    fs.mkdirSync(path.join(cwd, "node_modules"), { recursive: true });
+    const manifest = JSON.parse(fs.readFileSync(path.join(cwd, "package.json"), "utf8")) as {
+      dependencies: Record<string, string>;
+    };
+    const packages: Record<string, Record<string, unknown>> = {};
+    for (const name of Object.keys(manifest.dependencies)) {
+      const location = path.join("node_modules", ...name.split("/"));
+      const packageDir = path.join(cwd, location);
+      fs.mkdirSync(packageDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(packageDir, "package.json"),
+        JSON.stringify({ name, version: "1.0.0", exports: { ".": "./index.js" } })
+      );
+      fs.writeFileSync(path.join(packageDir, "index.js"), "export default true;\n");
+      packages[location] = {
+        version: "1.0.0",
+        resolved: `https://registry.npmjs.org/${name}/-/${name.split("/").at(-1)}-1.0.0.tgz`,
+        integrity: "sha512-test",
+      };
+    }
+    const lock = { name: "external-deps-install", lockfileVersion: 3, packages };
+    fs.writeFileSync(path.join(cwd, "package-lock.json"), JSON.stringify(lock));
+    fs.writeFileSync(path.join(cwd, "node_modules", ".package-lock.json"), JSON.stringify(lock));
   }),
 }));
 
@@ -385,5 +406,28 @@ describe("ensureExternalDeps", () => {
     const repaired = await ensureExternalDeps({ leftpad: "1.0.0" });
     expect(repaired).toBe(first);
     expect(fs.existsSync(repaired)).toBe(true);
+  });
+
+  it("rejects and reinstalls a ready cache with incomplete npm integrity metadata", async () => {
+    vi.mocked(runNpmInstall).mockClear();
+    fs.rmSync(testExtDepsRoot, { recursive: true, force: true });
+    const first = await ensureExternalDeps({ leftpad: "1.0.0" });
+    const cacheDir = path.dirname(first);
+    const hiddenLockPath = path.join(first, ".package-lock.json");
+    const hiddenLock = JSON.parse(fs.readFileSync(hiddenLockPath, "utf8")) as {
+      packages: Record<string, { integrity?: string }>;
+    };
+    delete hiddenLock.packages["node_modules/leftpad"]?.integrity;
+    fs.writeFileSync(hiddenLockPath, JSON.stringify(hiddenLock));
+    fs.writeFileSync(path.join(cacheDir, ".ready"), new Date().toISOString());
+    expect(fs.existsSync(path.join(cacheDir, ".ready"))).toBe(true);
+
+    const repaired = await ensureExternalDeps({ leftpad: "1.0.0" });
+    expect(repaired).toBe(first);
+    const repairedLock = JSON.parse(fs.readFileSync(hiddenLockPath, "utf8")) as {
+      packages: Record<string, { integrity?: string }>;
+    };
+    expect(repairedLock.packages["node_modules/leftpad"]?.integrity).toBe("sha512-test");
+    expect(runNpmInstall).toHaveBeenCalledTimes(2);
   });
 });

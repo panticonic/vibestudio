@@ -4,7 +4,7 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import { pathToFileURL } from "url";
-import { getCentralDataPath } from "@vibestudio/env-paths";
+import { getSharedDerivedDataPath } from "@vibestudio/env-paths";
 
 const DEFAULT_NPM_INSTALL_TIMEOUT_MS = 10 * 60_000;
 
@@ -71,9 +71,20 @@ export async function runNpmInstall(
   const ignoreScripts = typeof options === "number" ? true : (options.ignoreScripts ?? true);
   const cacheDir =
     typeof options === "number" || !options.cacheDir
-      ? path.join(getCentralDataPath(), "npm-cache")
+      ? path.join(getSharedDerivedDataPath(), "npm-cache")
       : options.cacheDir;
   const npmCli = resolveBundledNpmCliPath();
+
+  const discardPartialInstall = (): void => {
+    // npm may leave a structurally plausible but only partly extracted tree
+    // when an install is killed at the deadline. A retry in that same tree can
+    // then report "up to date" from the lockfile and publish missing package
+    // files as a successful install. These callers install into Vibestudio-
+    // owned staging directories, so every retry must start from the manifest,
+    // never from interrupted output.
+    fs.rmSync(path.join(cwd, "node_modules"), { recursive: true, force: true });
+    fs.rmSync(path.join(cwd, "package-lock.json"), { force: true });
+  };
 
   const installWithCache = async (installCacheDir: string): Promise<void> => {
     fs.mkdirSync(installCacheDir, { recursive: true });
@@ -140,6 +151,7 @@ export async function runNpmInstall(
           path.join(os.tmpdir(), "vibestudio-npm-cache-recovery-")
         );
         try {
+          discardPartialInstall();
           console.warn(
             "[npmInstaller] npm cache corruption detected; retrying once with a clean cache"
           );
@@ -166,6 +178,7 @@ export async function runNpmInstall(
       console.warn(
         `[npmInstaller] transient npm install failure; retrying (${attempt}/3): ${npmErrorOutput(error).split("\n")[0]}`
       );
+      discardPartialInstall();
       await new Promise((resolve) => setTimeout(resolve, 250 * attempt));
     }
   }

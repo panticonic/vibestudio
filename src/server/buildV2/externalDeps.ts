@@ -413,6 +413,131 @@ function warnCleanupFailure(pathName: string, error: unknown): void {
   );
 }
 
+const EXTERNAL_DEPS_RECEIPT_VERSION = 1;
+
+interface ExternalDepsReceipt {
+  version: typeof EXTERNAL_DEPS_RECEIPT_VERSION;
+  lockDigest: string;
+  packageCount: number;
+}
+
+const validatedCacheReceipts = new Map<string, { mtimeMs: number; size: number }>();
+
+function sha256(value: string | Buffer): string {
+  return crypto.createHash("sha256").update(value).digest("hex");
+}
+
+/**
+ * Prove that npm produced a coherent immutable tree before publishing it.
+ * The hidden lock describes the packages npm actually installed (unlike the
+ * root lock, which may include platform-skipped optionals). Every registry
+ * package must retain its integrity identity and matching package metadata.
+ */
+function createExternalDepsReceipt(cacheDir: string): ExternalDepsReceipt {
+  const nodeModulesDir = path.join(cacheDir, "node_modules");
+  const lockPath = path.join(nodeModulesDir, ".package-lock.json");
+  const lockBytes = fs.readFileSync(lockPath);
+  const lock = JSON.parse(lockBytes.toString("utf8")) as {
+    packages?: Record<
+      string,
+      { version?: unknown; integrity?: unknown; link?: unknown; inBundle?: unknown }
+    >;
+  };
+  if (!lock.packages || typeof lock.packages !== "object") {
+    throw new Error("installed dependency lock has no package inventory");
+  }
+
+  let packageCount = 0;
+  for (const [location, record] of Object.entries(lock.packages)) {
+    if (!location.startsWith("node_modules/") || record.link === true) continue;
+    packageCount += 1;
+    if (typeof record.version !== "string" || record.version.length === 0) {
+      throw new Error(`installed dependency ${location} has no version identity`);
+    }
+    if (typeof record.integrity !== "string" && record.inBundle !== true) {
+      throw new Error(`installed dependency ${location} has no registry integrity`);
+    }
+
+    const packageDir = path.resolve(cacheDir, location);
+    if (!packageDir.startsWith(`${path.resolve(cacheDir)}${path.sep}`)) {
+      throw new Error(`installed dependency ${location} escapes its cache`);
+    }
+    const packageJsonPath = path.join(packageDir, "package.json");
+    const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8")) as {
+      version?: unknown;
+    };
+    if (packageJson.version !== record.version) {
+      throw new Error(`installed dependency ${location} does not match its lock identity`);
+    }
+  }
+  if (packageCount === 0) throw new Error("installed dependency lock is empty");
+  return {
+    version: EXTERNAL_DEPS_RECEIPT_VERSION,
+    lockDigest: sha256(lockBytes),
+    packageCount,
+  };
+}
+
+function writeExternalDepsReceipt(cacheDir: string, receipt: ExternalDepsReceipt): void {
+  const sentinelPath = path.join(cacheDir, ".ready");
+  const temporaryPath = `${sentinelPath}.tmp.${process.pid}.${crypto.randomBytes(8).toString("hex")}`;
+  try {
+    fs.writeFileSync(temporaryPath, JSON.stringify(receipt));
+    fs.renameSync(temporaryPath, sentinelPath);
+  } finally {
+    fs.rmSync(temporaryPath, { force: true });
+  }
+}
+
+function isReusableExternalDepsCache(cacheDir: string): boolean {
+  const sentinelPath = path.join(cacheDir, ".ready");
+  let sentinelStat: fs.Stats;
+  try {
+    sentinelStat = fs.statSync(sentinelPath);
+  } catch {
+    return false;
+  }
+  const memoized = validatedCacheReceipts.get(cacheDir);
+  if (memoized?.mtimeMs === sentinelStat.mtimeMs && memoized.size === sentinelStat.size)
+    return true;
+
+  try {
+    const raw = fs.readFileSync(sentinelPath, "utf8");
+    let receipt: ExternalDepsReceipt;
+    try {
+      const parsed = JSON.parse(raw) as Partial<ExternalDepsReceipt>;
+      if (
+        parsed.version !== EXTERNAL_DEPS_RECEIPT_VERSION ||
+        typeof parsed.lockDigest !== "string" ||
+        typeof parsed.packageCount !== "number" ||
+        parsed.packageCount <= 0
+      ) {
+        throw new Error("legacy receipt");
+      }
+      receipt = parsed as ExternalDepsReceipt;
+    } catch {
+      // Upgrade healthy timestamp-only sentinels in place. Invalid legacy
+      // entries are rejected and reinstalled by the caller.
+      receipt = createExternalDepsReceipt(cacheDir);
+      writeExternalDepsReceipt(cacheDir, receipt);
+      sentinelStat = fs.statSync(sentinelPath);
+    }
+
+    const lockBytes = fs.readFileSync(path.join(cacheDir, "node_modules", ".package-lock.json"));
+    if (sha256(lockBytes) !== receipt.lockDigest) return false;
+    validatedCacheReceipts.set(cacheDir, {
+      mtimeMs: sentinelStat.mtimeMs,
+      size: sentinelStat.size,
+    });
+    return true;
+  } catch (error) {
+    console.warn(
+      `[externalDeps] Rejecting incomplete cache ${cacheDir}: ${error instanceof Error ? error.message : String(error)}`
+    );
+    return false;
+  }
+}
+
 /**
  * Get or install external dependencies. Returns the path to the
  * node_modules directory.
@@ -497,13 +622,14 @@ async function ensureDepsInstalledOnce(
   const sentinelPath = path.join(cacheDir, ".ready");
   const nodeModulesDir = path.join(cacheDir, "node_modules");
 
-  // Check sentinel
+  // A marker is evidence only when its validated receipt still matches the
+  // immutable installed tree. Timestamp-only legacy markers are upgraded on
+  // first use; partial trees are discarded and rebuilt.
   if (fs.existsSync(sentinelPath)) {
-    if (fs.existsSync(nodeModulesDir)) {
-      return nodeModulesDir;
-    }
+    if (isReusableExternalDepsCache(cacheDir)) return nodeModulesDir;
     try {
       fs.rmSync(cacheDir, { recursive: true, force: true });
+      validatedCacheReceipts.delete(cacheDir);
     } catch (cleanupError) {
       warnCleanupFailure(cacheDir, cleanupError);
     }
@@ -529,16 +655,17 @@ async function ensureDepsInstalledOnce(
   try {
     await runNpmInstall(tmpDir, { ignoreScripts: options.ignoreScripts });
 
-    // Write sentinel inside tmpDir BEFORE rename so winner is always complete
-    fs.writeFileSync(path.join(tmpDir, ".ready"), new Date().toISOString());
+    // Validate npm's installed package identities before making the cache
+    // visible, then publish the receipt atomically with the directory rename.
+    writeExternalDepsReceipt(tmpDir, createExternalDepsReceipt(tmpDir));
 
     // Race-safe promotion: try rename, handle concurrent winner
     try {
       fs.renameSync(tmpDir, cacheDir);
     } catch (err: unknown) {
       if (isFileSystemErrorCode(err, ["ENOTEMPTY", "EEXIST", "ENOTDIR"])) {
-        // Another process won — verify their sentinel, use their cache
-        if (fs.existsSync(sentinelPath)) {
+        // Another process won — verify its receipt before use.
+        if (isReusableExternalDepsCache(cacheDir)) {
           try {
             fs.rmSync(tmpDir, { recursive: true, force: true });
           } catch (cleanupError) {
