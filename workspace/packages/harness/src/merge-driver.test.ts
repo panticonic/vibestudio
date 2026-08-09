@@ -367,7 +367,7 @@ describe("driveMerge", () => {
 });
 
 describe("renderMergeReview", () => {
-  it("deduplicates repeated intent evidence and distinguishes integration from commit state", () => {
+  it("deduplicates exact intent evidence without hiding side or state", () => {
     const text = renderMergeReview({
       headline: "Merge child",
       resolution: { complete: true, remainingCoordinateCount: 0, concluded: true },
@@ -387,6 +387,13 @@ describe("renderMergeReview", () => {
           intent: { tier: "trigger", text: "Build the task app" },
           coordinates: [],
         },
+        {
+          workUnitId: "work:three",
+          side: "ours",
+          state: "settled",
+          intent: { tier: "trigger", text: "Build the task app" },
+          coordinates: [],
+        },
       ],
       intentsTruncated: false,
       composed: [],
@@ -394,8 +401,9 @@ describe("renderMergeReview", () => {
       nextConflictCursor: null,
     });
 
-    expect(text.match(/Build the task app/g)).toHaveLength(1);
+    expect(text.match(/Build the task app/g)).toHaveLength(2);
     expect(text).toContain("Intent: ours/settled · trigger · Build the task app");
+    expect(text).toContain("Intent: theirs/merged · trigger · Build the task app");
     expect(text).toContain("Integration: semantically complete");
     expect(text).toContain("remain local until the parent commits them");
   });

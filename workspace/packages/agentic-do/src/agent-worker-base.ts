@@ -727,15 +727,23 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
                 },
               ],
             },
+            intent: {
+              type: "string",
+              minLength: 1,
+              maxLength: 2000,
+              description:
+                "Why this integration is being performed, when that purpose adds information beyond the child request.",
+            },
           },
           required: ["runId"],
         } as never,
         execute: async (_toolCallId, params) => {
-          const p = params as { runId?: unknown; resolutions?: unknown };
+          const p = params as { runId?: unknown; resolutions?: unknown; intent?: unknown };
           return this.mergeSubagent(
             String(p.runId ?? ""),
             channelId,
             p.resolutions && typeof p.resolutions === "object" ? (p.resolutions as never) : [],
+            typeof p.intent === "string" ? p.intent : undefined,
             toolRpc
           );
         },

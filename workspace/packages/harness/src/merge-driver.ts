@@ -229,8 +229,13 @@ export function renderMergeReview(review: MergeReview): string {
   if (review.sourceHeadline) lines.push(`Source: ${review.sourceHeadline}`);
   const renderedIntents = new Set<string>();
   for (const intent of review.intents) {
-    if (intent.intent.tier === "trigger" && intent.intent.text === review.sourceHeadline) continue;
-    const key = `${intent.intent.tier}\u0000${intent.intent.text}`;
+    if (
+      intent.side === "theirs" &&
+      intent.intent.tier === "trigger" &&
+      intent.intent.text === review.sourceHeadline
+    )
+      continue;
+    const key = `${intent.side}\u0000${intent.state ?? ""}\u0000${intent.intent.tier}\u0000${intent.intent.text}`;
     if (renderedIntents.has(key)) continue;
     renderedIntents.add(key);
     lines.push(
@@ -238,9 +243,7 @@ export function renderMergeReview(review: MergeReview): string {
     );
   }
   if (review.intentsTruncated)
-    lines.push(
-      "Intent projection is truncated; structured details contain the bounded projection."
-    );
+    lines.push("Intent projection is truncated; structured details contain the bounded projection.");
   for (const entry of review.composed) {
     lines.push(
       `Composed: ${entry.coordinate.kind}:${entry.coordinate.id} · ours: ${entry.ours.text} · theirs: ${entry.theirs.text}`
@@ -283,7 +286,9 @@ export function renderCompareReview(result: VcsCompareResult): string {
     );
   }
   if (result.intentsTruncated) {
-    lines.push("Intent projection is truncated; structured details contain the bounded projection.");
+    lines.push(
+      "Intent projection is truncated; structured details contain the bounded projection."
+    );
   }
   for (const coordinate of result.coordinates) {
     lines.push(

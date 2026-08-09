@@ -1763,8 +1763,8 @@ class SubagentSpawnProbe extends TestVessel {
   async inspectSubagentForTest(runId: string, query: string, parentChannelId = CHANNEL) {
     return this.inspectSubagent(runId, query, parentChannelId);
   }
-  async mergeSubagentForTest(runId: string, parentChannelId = CHANNEL) {
-    return this.mergeSubagent(runId, parentChannelId);
+  async mergeSubagentForTest(runId: string, parentChannelId = CHANNEL, intent?: string) {
+    return this.mergeSubagent(runId, parentChannelId, [], intent);
   }
   respondToVcs(method: string, ...responses: unknown[]) {
     this.vcsResponses.set(`vcs.${method}`, [...responses]);
@@ -2864,7 +2864,11 @@ describe("AgentVesselBase.runDeferredSpawn", () => {
       ],
     });
 
-    const result = await probe.mergeSubagentForTest(runId);
+    const result = await probe.mergeSubagentForTest(
+      runId,
+      CHANNEL,
+      "Integrate the reviewed fixture corpus"
+    );
 
     expect(result.details).toMatchObject({
       protocol: "vibestudio.subagent-merge.v1",
@@ -2897,9 +2901,9 @@ describe("AgentVesselBase.runDeferredSpawn", () => {
       contextId: "ctx-1",
       expectedWorkingHead: target,
       source: { kind: "event", eventId: sourceEventId },
+      intentSummary: "Integrate the reviewed fixture corpus",
     });
     expect(integrateInput["commandId"]).toMatch(/^subagent-merge:[a-f0-9]{64}$/);
-    expect(integrateInput).not.toHaveProperty("intentSummary");
     expect(vcsCalls.some(({ method }) => method === "vcs.commit")).toBe(false);
   });
 

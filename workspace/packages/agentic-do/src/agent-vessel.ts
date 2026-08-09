@@ -6391,8 +6391,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       this.traceHotPath(run.parentChannelId, "subagent-inspect.completed", {
         startedAt: wrapperWallStartedAt,
         details: {
-          queryKind:
-            q === "status" || q === "diff" || q === "log" ? q : "managed-file",
+          queryKind: q === "status" || q === "diff" || q === "log" ? q : "managed-file",
           runResolutionMs: Math.round(runResolvedAt - wrapperStartedAt),
           statusFetchMs: Math.round(statusFetchMs),
           semanticQueryMs: Math.round(semanticQueryMs),
@@ -6419,6 +6418,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     runId: string,
     parentChannelId?: string,
     resolutions: VcsMergeInput["resolutions"] = [],
+    intentSummary?: string,
     toolRpc: RpcClient = this.rpc
   ): Promise<AgentToolResult<Record<string, unknown>>> {
     const wrapperStartedAt = performance.now();
@@ -6491,6 +6491,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       expectedWorkingHead: targetStatus.workingHead,
       source,
       ...(resolutions ? { resolutions } : {}),
+      ...(intentSummary ? { intentSummary } : {}),
       headline: `Merge subagent ${subagentRunHandle(run.runId)}`,
       commandIdForPage: ({ expectedWorkingHead }) =>
         subagentVcsCommandId("merge", run, {
@@ -6498,6 +6499,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
           expectedWorkingHead,
           source,
           resolutions,
+          intentSummary,
         }),
     });
     this.subagentRuns.setSemanticIntegrationSnapshot(run.runId, {

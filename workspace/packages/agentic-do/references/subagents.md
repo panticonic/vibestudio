@@ -7,7 +7,7 @@ Subagents are supervised child agents with their own task channel and semantic w
 1. `spawn_subagent` with one bounded task and a useful label. Use `fresh` for independent work and `fork` when the child needs the current trajectory context.
 2. Keep doing useful foreground work. Child progress is pushed to the parent; do not poll an empty transcript. Every terminal child result resumes the supervisor so that run can be integrated and closed immediately. If sibling runs remain live afterward, continue useful foreground work or suspend again; do not finalize the user's goal while supervised runs remain live.
 3. Use `send_to_subagent` only for new instructions. The spawn invocation completes after launch and the child continues on a durable task card. The child must commit its semantic work and call `complete` with a concise result; that report arrives through the terminal task notification. Uncommitted child work cannot merge.
-4. After terminal delivery, call `merge_subagent({ runId })` directly. No status, diff, log, or transcript preflight is required. The helper derives both exact states and invokes the same shared merge driver as ordinary VCS and protected-main integration, without a wrapper compare loop.
+4. After terminal delivery, call `merge_subagent({ runId })` directly. No status, diff, log, or transcript preflight is required. The helper derives both exact states and invokes the same shared merge driver as ordinary VCS and protected-main integration, without a wrapper compare loop. Add optional `intent` when the parent's reason for integrating adds information beyond the child request; absence remains honest.
 5. Review the model-visible resolution, `intents`, and every `composed` entry. A mechanically composed coordinate still needs semantic review.
 6. If the helper returns `source-uncommitted` or `needs-decision`, use the returned evidence first. Inspect only the child state needed to resolve a concrete ambiguity, author any truthful combined state with ordinary parent edit tools, then call `merge_subagent` again with coordinate resolutions.
 7. Close only after the helper reports completion. `close_subagent` reads the engine-owned integration projection and requires semantic completion. Lifecycle disposition and semantic integration are separate axes.
@@ -51,6 +51,7 @@ The helper always performs the decision-establishing merge when a source is not 
 ```js
 merge_subagent({
   runId,
+  intent: "Integrate the reviewed retry behavior while preserving the parent API",
   resolutions: [{
     coordinate: { kind: "file", id: "file:..." },
     resolution: "current",
