@@ -4,8 +4,6 @@ import { PassThrough, Writable } from "node:stream";
 import {
   CHANNEL_NOTIFICATION,
   McpStdioServer,
-  PERMISSION_REQUEST_NOTIFICATION,
-  PERMISSION_VERDICT_NOTIFICATION,
   toolText,
   type McpServerOptions,
 } from "./mcpServer.js";
@@ -77,7 +75,7 @@ class ControlledWritable extends Writable {
 const turn = () => new Promise<void>((resolve) => setImmediate(resolve));
 
 describe("McpStdioServer", () => {
-  it("answers initialize without claiming an unconfigured permission relay", async () => {
+  it("answers initialize with exactly the channel capability", async () => {
     const { sent, send, flush } = harness();
     send({
       jsonrpc: "2.0",
@@ -90,8 +88,7 @@ describe("McpStdioServer", () => {
     const result = sent[0]!.result!;
     expect(result["protocolVersion"]).toBe("2025-06-18");
     const caps = result["capabilities"] as Record<string, Record<string, unknown>>;
-    expect(caps["experimental"]).toHaveProperty(["claude/channel"]);
-    expect(caps["experimental"]).not.toHaveProperty(["claude/channel/permission"]);
+    expect(caps["experimental"]).toEqual({ "claude/channel": {} });
     expect(result["instructions"]).toBe("test instructions");
   });
 
@@ -129,33 +126,6 @@ describe("McpStdioServer", () => {
     expect((sent[0]!.result!["tools"] as unknown[]).length).toBe(1);
     expect(calls).toEqual([{ name: "say", requestId: "3" }]);
     expect((sent[1]!.result!["content"] as Array<{ text: string }>)[0]!.text).toBe("ran say");
-  });
-
-  it("relays permission requests in and verdicts out", async () => {
-    const requests: string[] = [];
-    const { server, sent, send, flush } = harness({
-      onPermissionRequest: (params) => {
-        requests.push(params.request_id);
-      },
-    });
-    send({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} });
-    await flush();
-    const capabilities = sent[0]!.result!["capabilities"] as Record<
-      string,
-      Record<string, unknown>
-    >;
-    expect(capabilities["experimental"]).toHaveProperty(["claude/channel/permission"]);
-    send({
-      jsonrpc: "2.0",
-      method: PERMISSION_REQUEST_NOTIFICATION,
-      params: { request_id: "pr-1", tool_name: "Bash", input_preview: "npm install" },
-    });
-    await flush();
-    expect(requests).toEqual(["pr-1"]);
-
-    await server.notifyPermission("pr-1", "allow");
-    const verdict = sent.find((m) => m.method === PERMISSION_VERDICT_NOTIFICATION);
-    expect(verdict?.params).toEqual({ request_id: "pr-1", behavior: "allow" });
   });
 
   it("pushes channel notifications with content + meta", async () => {

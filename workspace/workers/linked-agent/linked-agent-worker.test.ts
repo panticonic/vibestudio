@@ -991,30 +991,6 @@ describe("LinkedAgentWorker", () => {
     expect(new Set(terminalIds).size).toBe(1);
   });
 
-  it("relays an admitted exact permission invocation without a provider-side approval path", async () => {
-    const worker = await makeWorker();
-    const bridge = await openTestBridge(worker);
-
-    await expect(
-      worker.requestPermission({
-        requestId: "req-1",
-        toolName: "Bash",
-        description: "run npm install",
-        inputPreview: "npm install",
-      })
-    ).resolves.toEqual({ ok: true, pending: false });
-    const verdict = await nextBridgePayload(bridge);
-    expect(verdict).toMatchObject({
-      kind: "permission",
-      requestId: "req-1",
-      behavior: "allow",
-      reason: "workspace-authority",
-    });
-    expect(worker.rpcCall.mock.calls.some((call) => call[1].startsWith("userlandApproval."))).toBe(
-      false
-    );
-  });
-
   it("relays prompt/interrupt/status methods and fails closed when detached", async () => {
     const worker = await makeWorker();
     // onMethodCall arrives via the channel DO / server delivery boundary.

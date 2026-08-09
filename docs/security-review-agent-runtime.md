@@ -150,10 +150,10 @@ Claude's `auto`/`manual` modes can remain useful UX policies, but they must not 
 Each managed launcher now owns a per-generation Unix broker and the raw Vibestudio
 credential/transport. Claude and its MCP channel host receive only an opaque
 socket path plus generation and can invoke a fixed, schema-validated set of channel,
-hook, skill-resource, and status operations. A permission-request schema is reserved,
-but the authority rejects it and the MCP server omits the optional relay capability until
-a real approvals owner exists. The endpoint directory/socket
-are `0700`/`0600`; startup is bind-ready before spawn; owner close aborts and joins
+hook, skill-resource, and status operations. The broker has no permission-request
+operation, and the MCP server advertises only the channel capability; Claude Code tool
+permissions remain local or follow the launcher's explicit headless mode. The endpoint
+directory/socket are `0700`/`0600`; startup is bind-ready before spawn; owner close aborts and joins
 streams and queued work, closes the authority, and unlinks the endpoint. There is no
 generic RPC or caller-selected target escape.
 

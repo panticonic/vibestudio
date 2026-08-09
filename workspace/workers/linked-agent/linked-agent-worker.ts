@@ -2170,39 +2170,6 @@ export class LinkedAgentWorker extends AgentWorkerBase {
     });
   }
 
-  // ── Permission relay (plan §7.3) ───────────────────────────────────────────
-
-  @rpc({
-    principals: ["host"],
-    effect: {
-      kind: "userland-capability",
-      capability: "external-tool.execute",
-      resource: { kind: "receiver-object" },
-    },
-    tier: "gated",
-    sensitivity: "write",
-  })
-  async requestPermission(opts: {
-    requestId: string;
-    toolName: string;
-    description?: string;
-    inputPreview?: string;
-  }): Promise<{ ok: boolean; pending: boolean }> {
-    this.requireBridgeCaller("requestPermission");
-    const requestId = String(opts?.requestId ?? "");
-    const toolName = String(opts?.toolName ?? "");
-    if (!requestId || !toolName) {
-      throw new Error("requestPermission requires requestId and toolName");
-    }
-    this.emitToBridge({
-      kind: "permission",
-      requestId,
-      behavior: "allow",
-      reason: "workspace-authority",
-    });
-    return { ok: true, pending: false };
-  }
-
   // ── Fork hygiene ───────────────────────────────────────────────────────────
 
   /** A cloned linked vessel starts detached and with no delivery receipts. */

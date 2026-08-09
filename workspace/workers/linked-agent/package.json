@@ -23,28 +23,7 @@
       "zod"
     ],
     "authority": {
-      "provides": [
-        {
-          "name": "external-tool.execute",
-          "title": "Run a linked-agent tool",
-          "action": "allow this linked agent to run the requested tool",
-          "description": "The exact tool request came from the attached external agent and is enforced before the linked-agent worker receives it.",
-          "tier": "gated",
-          "sensitivity": "write",
-          "resourceType": "linked-agent",
-          "presentation": {
-            "domain": "automation",
-            "verb": "act"
-          },
-          "notability": "headline",
-          "grantScopes": [
-            "once",
-            "task",
-            "agent",
-            "session"
-          ]
-        }
-      ],
+      "provides": [],
       "requests": [
         {
           "capability": "accounts.connect",

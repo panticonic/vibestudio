@@ -4,8 +4,7 @@
  * Speaks JSON-RPC 2.0, newline-delimited (one message per line — the MCP stdio
  * transport framing; no Content-Length headers). Implements exactly the subset
  * the channel contract needs: `initialize` (declaring the experimental
- * `claude/channel` and, only with a configured relay, `claude/channel/permission`
- * capabilities), `tools/list`,
+ * `claude/channel` capability), `tools/list`,
  * `tools/call`, `ping`, and the channel notification methods in both
  * directions. Transport-agnostic over Readable/Writable for tests.
  */
@@ -15,8 +14,6 @@ import type { Readable, Writable } from "node:stream";
 export const MCP_PROTOCOL_VERSION = "2025-06-18";
 
 export const CHANNEL_NOTIFICATION = "notifications/claude/channel";
-export const PERMISSION_REQUEST_NOTIFICATION = "notifications/claude/channel/permission_request";
-export const PERMISSION_VERDICT_NOTIFICATION = "notifications/claude/channel/permission";
 
 export interface McpToolDef {
   name: string;
@@ -73,13 +70,6 @@ export interface McpServerOptions {
     args: Record<string, unknown>,
     requestId: string
   ) => Promise<McpToolResult>;
-  /** Claude Code → bridge permission request (claude/channel/permission). */
-  onPermissionRequest?: (params: {
-    request_id: string;
-    tool_name: string;
-    description?: string;
-    input_preview?: string;
-  }) => void | Promise<void>;
   onInitialized?: () => void | Promise<void>;
   onTransportFailure?: (error: Error) => void;
   log?: (message: string) => void;
@@ -156,7 +146,7 @@ export class McpStdioServer {
     if (!method) return; // responses to server-initiated requests: none issued
     const params = message.params ?? {};
 
-    // Notifications (no id): initialized + permission requests.
+    // Notifications (no id): initialized.
     if (id === undefined || id === null) {
       if (method === "notifications/initialized") {
         if (!this.initializedSettled) {
@@ -164,19 +154,6 @@ export class McpStdioServer {
           this.resolveInitialized();
         }
         await this.options.onInitialized?.();
-        return;
-      }
-      if (method === PERMISSION_REQUEST_NOTIFICATION) {
-        const requestId = str(params["request_id"]);
-        const toolName = str(params["tool_name"]);
-        if (requestId && toolName) {
-          await this.options.onPermissionRequest?.({
-            request_id: requestId,
-            tool_name: toolName,
-            description: optStr(params["description"]),
-            input_preview: optStr(params["input_preview"]),
-          });
-        }
         return;
       }
       return; // other notifications ignored
@@ -189,10 +166,7 @@ export class McpStdioServer {
           capabilities: {
             tools: {},
             ...(this.options.resources ? { resources: {} } : {}),
-            experimental: {
-              "claude/channel": {},
-              ...(this.options.onPermissionRequest ? { "claude/channel/permission": {} } : {}),
-            },
+            experimental: { "claude/channel": {} },
           },
           serverInfo: { name: this.options.serverName, version: this.options.serverVersion },
           instructions: this.options.instructions,
@@ -258,11 +232,6 @@ export class McpStdioServer {
   notifyChannel(content: string, meta: ChannelNotificationMeta = {}): Promise<void> {
     assertChannelNotification(content, meta);
     return this.notify(CHANNEL_NOTIFICATION, { content, meta });
-  }
-
-  /** Deliver a permission verdict for a relayed request. */
-  notifyPermission(requestId: string, behavior: "allow" | "deny"): Promise<void> {
-    return this.notify(PERMISSION_VERDICT_NOTIFICATION, { request_id: requestId, behavior });
   }
 
   notify(method: string, params: Record<string, unknown>): Promise<void> {
@@ -381,8 +350,4 @@ function asError(error: unknown, fallback: string): Error {
 
 function str(value: unknown): string {
   return typeof value === "string" ? value : "";
-}
-
-function optStr(value: unknown): string | undefined {
-  return typeof value === "string" ? value : undefined;
 }
