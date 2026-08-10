@@ -121,6 +121,25 @@ function createHarness(
 }
 
 describe("PanelView plain panel links", () => {
+  it("materializes a workspace panel at DOM readiness without waiting for all subresources", async () => {
+    const { panelId, panelView, viewManager, webContents } = createHarness();
+    let finishNavigation!: () => void;
+    viewManager.navigateView.mockImplementationOnce(
+      () => new Promise<void>((resolve) => (finishNavigation = resolve))
+    );
+
+    const creating = panelView.createViewForPanel(
+      panelId,
+      "http://127.0.0.1:1234/about/new/",
+      "ctx-current"
+    );
+    await Promise.resolve();
+    webContents.emit("dom-ready");
+
+    await expect(creating).resolves.toBeUndefined();
+    finishNavigation();
+  });
+
   it("starts a new document when the runtime incarnation changes at the same build URL", async () => {
     const { panelId, panel, panelView, viewManager } = createHarness();
     const url = "http://127.0.0.1:1234/about/new/";

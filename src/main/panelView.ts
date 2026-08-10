@@ -296,7 +296,9 @@ export class PanelView implements PanelViewLike {
     const documentId = panel?.runtimeEntityId ?? undefined;
     if (this.viewManager.hasView(panelId)) {
       this.viewManager.updateCodeIdentity(panelId, identity);
-      await this.viewManager.navigateView(panelId, url, documentId);
+      const contents = this.viewManager.getWebContents(panelId);
+      if (!contents) throw new Error(`Panel view disappeared before navigation: ${panelId}`);
+      await this.navigateWorkspacePanelUntilDomReady(panelId, contents, url, documentId);
       return;
     }
 
@@ -324,7 +326,46 @@ export class PanelView implements PanelViewLike {
     this.contentLoadHandlers.set(panelId, { domReady: domReadyHandler });
 
     this.setupLinkInterception(panelId, view.webContents);
-    await this.viewManager.navigateView(panelId, url, documentId);
+    await this.navigateWorkspacePanelUntilDomReady(panelId, view.webContents, url, documentId);
+  }
+
+  /**
+   * A native panel is materialized once its top-level DOM is ready. Waiting for
+   * Electron's loadURL promise also waits for every subresource and can keep the
+   * shell's loading overlay mounted over an already-live panel indefinitely.
+   * Renderer boot readiness remains owned by the panel runtime observation.
+   */
+  private async navigateWorkspacePanelUntilDomReady(
+    panelId: string,
+    contents: Electron.WebContents,
+    url: string,
+    documentId?: string
+  ): Promise<void> {
+    let removeDomReady = () => {};
+    const domReady = new Promise<"dom-ready">((resolve) => {
+      const onDomReady = () => {
+        if (contents.isDestroyed() || contents.getURL() !== url) return;
+        resolve("dom-ready");
+      };
+      contents.on("dom-ready", onDomReady);
+      removeDomReady = () => contents.off("dom-ready", onDomReady);
+    });
+    const navigation = this.viewManager.navigateView(panelId, url, documentId);
+    try {
+      const completed = navigation.then(() => "load-complete" as const);
+      const outcome = await Promise.race([completed, domReady]);
+      if (outcome === "dom-ready") {
+        void navigation.catch((error: unknown) => {
+          log.warn(
+            `[createViewForPanel] Navigation failed after DOM readiness for ${panelId}: ${
+              error instanceof Error ? error.message : String(error)
+            }`
+          );
+        });
+      }
+    } finally {
+      removeDomReady();
+    }
   }
 
   async createViewForApp(
