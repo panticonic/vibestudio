@@ -138,7 +138,7 @@ export function requireCodeOperations(
   alternatives: readonly (readonly string[])[]
 ): { passed: true; reason: undefined } | { passed: false; reason: string } {
   const matched = alternatives.some((tokens) =>
-    tokens.every((token) => code.includes(token) || importedFsOperation(code, token))
+    tokens.every((token) => codeOperationPresent(code, token))
   );
   return matched
     ? { passed: true, reason: undefined }
@@ -148,6 +148,14 @@ export function requireCodeOperations(
           .map((tokens) => tokens.join(" + "))
           .join(" or ")}`,
       };
+}
+
+function codeOperationPresent(code: string, token: string): boolean {
+  if (code.includes(token) || importedFsOperation(code, token)) return true;
+  const quoted = /^(["'])(.*)\1$/u.exec(token);
+  if (!quoted?.[2]) return false;
+  const value = quoted[2];
+  return [`"${value}"`, `'${value}'`, `\`${value}\``].some((spelling) => code.includes(spelling));
 }
 
 function escapeRegExp(value: string): string {

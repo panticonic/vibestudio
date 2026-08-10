@@ -127,7 +127,6 @@ describe("TestRunner", () => {
       category: "test",
       description: "timeout",
       prompt: "hang",
-      validation: "harness" as const,
       validate: () => ({ passed: true }),
     });
 
@@ -159,6 +158,16 @@ describe("TestRunner", () => {
       agentEntityId: "agent-entity-timeout",
       agentTargetId: "agent-target-timeout",
       contextId: "ctx-timeout",
+    });
+    expect(execution.trajectoryReview).toEqual({
+      required: true,
+      agentReportedOutcome: "unspecified",
+      invocationCount: 1,
+      modelCallCount: 1,
+      unexpectedToolFailureCount: 0,
+      repeatedFailureOperations: [],
+      potentialConfusionSignals: ["missing-completion-report"],
+      frequentOperations: [],
     });
   });
 
@@ -222,6 +231,7 @@ describe("TestRunner", () => {
       {
         id: "invocation-validator",
         senderId: "agent",
+        senderMetadata: { type: "agent" },
         kind: "message",
         contentType: "invocation",
         complete: true,
@@ -246,6 +256,7 @@ describe("TestRunner", () => {
       {
         id: "answer-validator",
         senderId: "agent",
+        senderMetadata: { type: "agent" },
         kind: "message",
         complete: true,
         content: "Created and opened the panel.",
@@ -428,6 +439,7 @@ describe("TestRunner", () => {
       {
         id: "invocation:call-1",
         senderId: "agent",
+        senderMetadata: { type: "agent" },
         kind: "message",
         contentType: "invocation",
         complete: true,
@@ -445,6 +457,7 @@ describe("TestRunner", () => {
       {
         id: "invocation:call-2",
         senderId: "agent",
+        senderMetadata: { type: "agent" },
         kind: "message",
         contentType: "invocation",
         complete: true,
@@ -463,6 +476,7 @@ describe("TestRunner", () => {
       {
         id: "invocation:call-3",
         senderId: "agent",
+        senderMetadata: { type: "agent" },
         kind: "message",
         contentType: "invocation",
         complete: true,
@@ -488,6 +502,7 @@ describe("TestRunner", () => {
       {
         id: "answer-1",
         senderId: "agent",
+        senderMetadata: { type: "agent" },
         kind: "message",
         complete: true,
         content: "Recovered and finished with TOOL_RECOVERY_OK.",
@@ -678,6 +693,7 @@ describe("TestRunner", () => {
     listener?.({
       id: "invocation:authority-failure",
       senderId: "agent",
+      senderMetadata: { type: "agent" },
       kind: "message",
       contentType: "invocation",
       complete: true,
@@ -719,6 +735,7 @@ describe("TestRunner", () => {
       {
         id: "answer-1",
         senderId: "agent",
+        senderMetadata: { type: "agent" },
         kind: "message",
         complete: true,
         content: "ORCHESTRATED_OK",
@@ -1093,6 +1110,7 @@ describe("TestRunner", () => {
       {
         id: "answer-fixture",
         senderId: "agent",
+        senderMetadata: { type: "agent" },
         kind: "message",
         complete: true,
         content: "FIXTURE_OK",
@@ -1196,6 +1214,7 @@ describe("TestRunner", () => {
       {
         id: "answer-fallback",
         senderId: "agent",
+        senderMetadata: { type: "agent" },
         kind: "message",
         complete: true,
         content: "FALLBACK_OK",
@@ -1297,6 +1316,7 @@ describe("validateAgentCompletionReport", () => {
         {
           id: "user",
           senderId: "user",
+          senderMetadata: { type: "headless" },
           kind: "message",
           contentType: "text",
           content: "Exercise file handles.",
@@ -1305,6 +1325,7 @@ describe("validateAgentCompletionReport", () => {
         {
           id: "agent",
           senderId: "agent",
+          senderMetadata: { type: "agent" },
           kind: "message",
           contentType: "text",
           content: final,
@@ -1320,7 +1341,12 @@ describe("validateAgentCompletionReport", () => {
           "Task completed.\n\nAll requested lifecycle behavior was verified.\n\nWhat I could not verify: automatic cleanup after a process crash."
         )
       )
-    ).toEqual({ passed: true });
+    ).toMatchObject({
+      passed: true,
+      details: {
+        trajectoryReview: { required: true, agentReportedOutcome: "completed" },
+      },
+    });
   });
 
   it("accepts a summary immediately after the completed status marker", () => {
@@ -1328,7 +1354,12 @@ describe("validateAgentCompletionReport", () => {
       validateAgentCompletionReport(
         execution("Task completed. I verified a full write/read round-trip.")
       )
-    ).toEqual({ passed: true });
+    ).toMatchObject({
+      passed: true,
+      details: {
+        trajectoryReview: { required: true, agentReportedOutcome: "completed" },
+      },
+    });
   });
 
   it("accepts one terminal declaration after transport-combined progress text", () => {
@@ -1338,7 +1369,12 @@ describe("validateAgentCompletionReport", () => {
           "Comparing the read output against the write payload.\n\nTask completed.\nThe contents matched exactly."
         )
       )
-    ).toEqual({ passed: true });
+    ).toMatchObject({
+      passed: true,
+      details: {
+        trajectoryReview: { required: true, agentReportedOutcome: "completed" },
+      },
+    });
   });
 
   it("trusts an explicit incomplete status", () => {
@@ -1354,13 +1390,88 @@ describe("validateAgentCompletionReport", () => {
     });
   });
 
-  it("rejects an ambiguous report instead of guessing from prose", () => {
+  it("accepts a natural completion report without requiring marker syntax", () => {
     expect(
       validateAgentCompletionReport(execution("All requested lifecycle behavior was verified."))
-    ).toMatchObject({
-      passed: false,
-      reason: expect.stringContaining("required"),
+    ).toEqual({
+      passed: true,
+      details: {
+        trajectoryReview: expect.objectContaining({
+          required: true,
+          agentReportedOutcome: "unspecified",
+        }),
+      },
     });
+  });
+
+  it("flags a wasteful trajectory for review without converting success into failure", () => {
+    const result = execution("The requested command completed successfully.");
+    result.snapshot = {
+      invocations: Array.from({ length: 24 }, (_, index) => ({
+        id: `read-${index}`,
+        name: "read",
+        status: "complete",
+      })),
+    } as TestExecutionResult["snapshot"];
+    result.modelExecutionEvidence = { totalCalls: 18, calls: [] };
+
+    expect(validateAgentCompletionReport(result)).toMatchObject({
+      passed: true,
+      details: {
+        trajectoryReview: {
+          potentialConfusionSignals: [
+            "high-model-call-count",
+            "high-tool-invocation-count",
+            "frequent-operation:read",
+          ],
+          frequentOperations: [{ name: "read", count: 24 }],
+        },
+      },
+    });
+  });
+
+  it("flags duplicate substantial completion reports without failing the scenario", () => {
+    const result = execution(`First complete synthesis. ${"detail ".repeat(90)}`);
+    result.messages.push({
+      ...result.messages[1]!,
+      id: "agent-second-completion",
+      content: `Second complete synthesis. ${"detail ".repeat(90)}`,
+    });
+
+    expect(validateAgentCompletionReport(result)).toMatchObject({
+      passed: true,
+      details: {
+        trajectoryReview: {
+          potentialConfusionSignals: ["multiple-substantial-completion-reports"],
+        },
+      },
+    });
+  });
+
+  it("flags repeated subagent transcript access without failing the scenario", () => {
+    const result = execution("The two design reviews were synthesized.");
+    result.snapshot = {
+      invocations: [
+        { id: "inspect-1", name: "inspect_subagent", status: "complete" },
+        { id: "read-1", name: "read_subagent", status: "complete" },
+      ],
+    } as TestExecutionResult["snapshot"];
+
+    expect(validateAgentCompletionReport(result)).toMatchObject({
+      passed: true,
+      details: {
+        trajectoryReview: {
+          potentialConfusionSignals: ["subagent-transcript-chasing"],
+        },
+      },
+    });
+  });
+
+  it("recognizes the agent when recipient delivery omits every self-authored message", () => {
+    const result = execution("The retained child result was reviewed without integration.");
+    result.messages = result.messages.slice(1);
+
+    expect(validateAgentCompletionReport(result)).toMatchObject({ passed: true });
   });
 
   it("rejects conflicting terminal declarations", () => {
@@ -1370,7 +1481,7 @@ describe("validateAgentCompletionReport", () => {
       )
     ).toMatchObject({
       passed: false,
-      reason: expect.stringContaining("more than one"),
+      reason: expect.stringContaining("conflicting"),
     });
   });
 });

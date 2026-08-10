@@ -40,6 +40,28 @@ function passingEntryWithToolFailure(messages: ChatMessage[]): TestSuiteResultEn
 }
 
 describe("system-testing diagnostics", () => {
+  it("uses participant authorship when the finite mailbox omits the local prompt", () => {
+    const messages: ChatMessage[] = [
+      {
+        id: "answer-1",
+        senderId: "agent",
+        senderMetadata: { name: "Agent", type: "agent", handle: "agent" },
+        kind: "message",
+        contentType: "text",
+        complete: true,
+        content: "Reviewed the retained result without integrating it.",
+      },
+    ];
+
+    const diagnostic = summarizeEntry(entryWithMessages(messages));
+
+    expect(diagnostic.finalAgentMessage).toBe(
+      "Reviewed the retained result without integrating it."
+    );
+    expect(diagnostic.conversation[0]).toMatchObject({ who: "agent" });
+    expect(diagnostic.likelyIssue).toBe("validation-mismatch");
+  });
+
   it("preserves structured invocation payloads for stage report drill-down", () => {
     const invocation = {
       id: "call-1",
@@ -115,6 +137,7 @@ describe("system-testing diagnostics", () => {
       {
         id: "diag-1",
         senderId: "agent",
+        senderMetadata: { type: "agent" },
         kind: "system",
         complete: true,
         content: "",
@@ -154,6 +177,7 @@ describe("system-testing diagnostics", () => {
       {
         id: "answer-1",
         senderId: "agent",
+        senderMetadata: { type: "agent" },
         kind: "message",
         complete: true,
         content: "Recovered.",

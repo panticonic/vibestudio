@@ -16,6 +16,7 @@ function execution(
         id: "eval",
         kind: "message",
         senderId: "agent",
+        senderMetadata: { type: "agent" },
         complete: true,
         contentType: "invocation",
         content: "",
@@ -29,7 +30,14 @@ function execution(
           result: { details: { success: true, returnValue } },
         },
       } as unknown as TestExecutionResult["messages"][number],
-      { id: "final", kind: "message", senderId: "agent", complete: true, content: finalMessage },
+      {
+        id: "final",
+        kind: "message",
+        senderId: "agent",
+        senderMetadata: { type: "agent" },
+        complete: true,
+        content: finalMessage,
+      },
     ],
   } as TestExecutionResult;
 }

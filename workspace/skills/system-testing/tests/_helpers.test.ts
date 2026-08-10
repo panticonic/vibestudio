@@ -7,6 +7,7 @@ import {
   finalMessageHasField,
   finalMessageHasMarkerCount,
   finalMessageHasNumericField,
+  findLastAgentMessage,
   incompleteToolCalls,
   noFailedInvocations,
   requireEvalResultEvidence,
@@ -27,6 +28,7 @@ function executionWithProjectedInvocation(
       {
         kind: "message",
         senderId: "agent",
+        senderMetadata: { type: "agent" },
         complete: true,
         contentType: "invocation",
         invocation: {
@@ -55,6 +57,7 @@ function executionWithInvocation(status: string, terminalOutcome?: string): Test
       {
         kind: "message",
         senderId: "agent",
+        senderMetadata: { type: "agent" },
         complete: true,
         contentType: "invocation",
         content: JSON.stringify({
@@ -87,6 +90,7 @@ function executionWithInvocationResult(
       {
         kind: "message",
         senderId: "agent",
+        senderMetadata: { type: "agent" },
         complete: true,
         contentType: "invocation",
         content: JSON.stringify({
@@ -116,6 +120,7 @@ function executionWithFinalAgentMessage(content: string): TestExecutionResult {
       {
         kind: "message",
         senderId: "agent",
+        senderMetadata: { type: "agent" },
         complete: true,
         content,
       },
@@ -124,6 +129,24 @@ function executionWithFinalAgentMessage(content: string): TestExecutionResult {
 }
 
 describe("system-testing validation helpers", () => {
+  it("uses explicit agent authorship when a recipient transcript starts with the agent", () => {
+    const result = {
+      duration: 0,
+      messages: [
+        {
+          id: "final",
+          kind: "message",
+          senderId: "agent-only",
+          senderMetadata: { type: "agent" },
+          complete: true,
+          content: "Completed from a recipient-specific transcript.",
+        },
+      ],
+    } as TestExecutionResult;
+
+    expect(findLastAgentMessage(result)).toBe("Completed from a recipient-specific transcript.");
+  });
+
   it("does not classify terminal tool errors as incomplete invocations", () => {
     expect(incompleteToolCalls(executionWithInvocation("error", "tool_error"))).toEqual([]);
   });
@@ -263,6 +286,7 @@ describe("system-testing validation helpers", () => {
         {
           kind: "message",
           senderId: "agent",
+          senderMetadata: { type: "agent" },
           complete: true,
           contentType: "invocation",
           invocation: {
@@ -278,6 +302,7 @@ describe("system-testing validation helpers", () => {
         {
           kind: "message",
           senderId: "agent",
+          senderMetadata: { type: "agent" },
           complete: true,
           contentType: "invocation",
           invocation: {

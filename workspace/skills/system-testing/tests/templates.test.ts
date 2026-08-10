@@ -14,6 +14,7 @@ function execution(
       {
         kind: "message",
         senderId: "agent",
+        senderMetadata: { type: "agent" },
         complete: true,
         contentType: "invocation",
         invocation: {
@@ -36,7 +37,13 @@ function execution(
           },
         },
       },
-      { kind: "message", senderId: "agent", complete: true, content: final },
+      {
+        kind: "message",
+        senderId: "agent",
+        senderMetadata: { type: "agent" },
+        complete: true,
+        content: final,
+      },
     ],
   } as TestExecutionResult;
 }

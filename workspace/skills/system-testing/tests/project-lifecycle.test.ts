@@ -13,6 +13,7 @@ function invocation(
   return {
     kind: "message" as const,
     senderId: "agent",
+    senderMetadata: { type: "agent" },
     complete: true,
     contentType: "invocation" as const,
     invocation: {
@@ -37,6 +38,7 @@ function todoExecution(calls: ReturnType<typeof invocation>[]): TestExecutionRes
       {
         kind: "message",
         senderId: "agent",
+        senderMetadata: { type: "agent" },
         complete: true,
         content:
           "I observed and repaired the compiler defect, then fixed the UX and verified add, complete, filter, and delete behavior.",
@@ -128,7 +130,13 @@ describe("project lifecycle prompts", () => {
             },
           }
         ),
-        { kind: "message", senderId: "agent", complete: true, content: "Created." },
+        {
+          kind: "message",
+          senderId: "agent",
+          senderMetadata: { type: "agent" },
+          complete: true,
+          content: "Created.",
+        },
       ],
     } as TestExecutionResult;
 
@@ -320,6 +328,7 @@ describe("project lifecycle prompts", () => {
     const typedGuestFailure = {
       kind: "message" as const,
       senderId: "agent",
+      senderMetadata: { type: "agent" },
       complete: true,
       contentType: "invocation" as const,
       invocation: {

@@ -295,11 +295,7 @@ function validatePregrantedOnly(result: TestExecutionResult) {
     (candidate) => authorityFrom(candidate)?.["approvals"] === "pregranted-only"
   );
   const authority = call && authorityFrom(call);
-  if (
-    !call ||
-    !Array.isArray(authority?.["requests"]) ||
-    authority["requests"].length !== 0
-  ) {
+  if (!call || !Array.isArray(authority?.["requests"]) || authority["requests"].length !== 0) {
     return {
       passed: false,
       reason: "The denied operation was not run under an empty pregranted-only request allowlist",
@@ -616,7 +612,7 @@ export const evalLifecycleTests: TestCase[] = [
       ],
     },
     prompt:
-      "Using exactly one eval call, invoke services.permissions.list() and return its structured result. Set authority to read-only and pregranted-only with exactly one request: capability permissions.read and exact resource permissions.read. A supplied requests list is the exact allowlist. Do not make any other tool call.",
+      "Use a sandbox evaluation to list the current workspace permissions while explicitly confining that evaluation to the one read permission it needs. Summarize the result and whether the authority stayed limited to that operation.",
     validate: validateExactAuthority,
   },
   {
@@ -636,7 +632,7 @@ export const evalLifecycleTests: TestCase[] = [
       ],
     },
     prompt:
-      "Using exactly one eval call, attempt services.permissions.list() under authority { requests: [], approvals: 'pregranted-only' }. The empty requests list denies every protected operation. Catch the operation error inside eval and return exactly { denied: true, message: String(error) }; do not ask for approval and do not make any other tool call.",
+      "Demonstrate that a sandbox evaluation with no granted authority cannot list workspace permissions. Keep the expected refusal contained, do not request broader access, and explain what the system refused.",
     validate: validatePregrantedOnly,
   },
   {
@@ -655,7 +651,7 @@ export const evalLifecycleTests: TestCase[] = [
       ],
     },
     prompt:
-      "Using exactly one eval call, set authority approvals:'prompt' with preauthorize exactly [{ service:'permissions', method:'list', args:[] }], then invoke services.permissions.list() and return its structured result. Do not make any other tool call.",
+      "Use a sandbox evaluation to list workspace permissions through the normal approval-before-execution flow. Report what was approved and the resulting permission summary.",
     validate: validatePreauthorization,
   },
   {
@@ -683,6 +679,7 @@ export const evalLifecycleTests: TestCase[] = [
     category: "eval-lifecycle",
     prompt: "Harness-orchestrated live notebook continuity check.",
     orchestrate: orchestrateLiveKernelContinuity,
+    validation: "harness",
     validate: validateLiveKernelContinuity,
   },
   {
@@ -691,6 +688,7 @@ export const evalLifecycleTests: TestCase[] = [
     category: "eval-lifecycle",
     prompt: "Harness-orchestrated eval database continuity check.",
     orchestrate: orchestrateDbPersistence,
+    validation: "harness",
     validate: validateDbPersistence,
   },
   {

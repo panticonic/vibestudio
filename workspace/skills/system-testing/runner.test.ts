@@ -291,8 +291,10 @@ describe("HeadlessRunner", () => {
     expect(SYSTEM_TEST_AGENT_PROMPT).toContain("pregranted-only");
     expect(SYSTEM_TEST_AGENT_PROMPT).toContain("If that documented approach fails, stop");
     expect(SYSTEM_TEST_AGENT_PROMPT).toContain("When reporting a failure");
-    expect(SYSTEM_TEST_AGENT_PROMPT).toContain("Task completed.");
-    expect(SYSTEM_TEST_AGENT_PROMPT).toContain("Task not completed.");
+    expect(SYSTEM_TEST_AGENT_PROMPT).toContain(
+      "state plainly whether the user's task was completed"
+    );
+    expect(SYSTEM_TEST_AGENT_PROMPT).not.toContain("Task completed.");
     expect(SYSTEM_TEST_AGENT_PROMPT).toContain("exact error or unexpected result");
     expect(SYSTEM_TEST_AGENT_PROMPT).toContain("there is no initial visible panel ancestor");
     expect(SYSTEM_TEST_AGENT_PROMPT).toContain("create an owned root panel explicitly");
@@ -455,6 +457,16 @@ describe("HeadlessRunner", () => {
               resource: {
                 kind: "prefix",
                 prefix: "do:workers/pubsub-channel:PubSubChannel:headless-",
+              },
+              tier: "gated",
+              decision: "once",
+            },
+            {
+              ruleId: "subagent-task-channels",
+              capability: { kind: "exact", key: "workspace-service:channel" },
+              resource: {
+                kind: "prefix",
+                prefix: "do:workers/pubsub-channel:PubSubChannel:task-",
               },
               tier: "gated",
               decision: "once",

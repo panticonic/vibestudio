@@ -38,11 +38,18 @@ function execution(
       ...invocations.map((invocation) => ({
         kind: "message" as const,
         senderId: "agent",
+        senderMetadata: { type: "agent" },
         complete: true,
         contentType: "invocation" as const,
         content: JSON.stringify(invocation),
       })),
-      { kind: "message", senderId: "agent", complete: true, content: final },
+      {
+        kind: "message",
+        senderId: "agent",
+        senderMetadata: { type: "agent" },
+        complete: true,
+        content: final,
+      },
     ],
   } as TestExecutionResult;
 }
@@ -619,6 +626,7 @@ describe("semantic system-test validators", () => {
       id: "delivered-action",
       kind: "message",
       senderId: "agent",
+      senderMetadata: { type: "agent" },
       complete: true,
       content:
         '<ActionButton message="Follow-up acknowledged">Open follow-up</ActionButton> MDX_ACTION_OK',

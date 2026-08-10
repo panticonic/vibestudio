@@ -9,9 +9,7 @@ function execution(
   writtenContent = "agentic-file-tools-smoke"
 ): TestExecutionResult {
   const reportedPath =
-    searchRoot === "notes" || searchRoot === "notes/marker.txt"
-      ? "marker.txt"
-      : "notes/marker.txt";
+    searchRoot === "notes" || searchRoot === "notes/marker.txt" ? "marker.txt" : "notes/marker.txt";
   const invocations = [
     {
       id: "write",
@@ -52,6 +50,7 @@ function execution(
       ...invocations.map((invocation) => ({
         kind: "message" as const,
         senderId: "agent",
+        senderMetadata: { type: "agent" },
         complete: true,
         contentType: "invocation" as const,
         invocation,
@@ -59,6 +58,7 @@ function execution(
       {
         kind: "message",
         senderId: "agent",
+        senderMetadata: { type: "agent" },
         complete: true,
         content: "I found the note again and its contents matched.",
       },
@@ -87,9 +87,9 @@ describe("smoke validators", () => {
   });
 
   it("accepts a descriptive note when canonical grep evidence contains the marker", () => {
-    expect(test.validate(execution(null, ".", "prefix agentic-file-tools-smoke suffix")).passed).toBe(
-      true
-    );
+    expect(
+      test.validate(execution(null, ".", "prefix agentic-file-tools-smoke suffix")).passed
+    ).toBe(true);
   });
 
   it("rejects content search evidence that does not identify the written path", () => {
@@ -112,6 +112,7 @@ describe("smoke validators", () => {
         {
           kind: "message",
           senderId: "agent",
+          senderMetadata: { type: "agent" },
           complete: true,
           contentType: "invocation",
           invocation: {
@@ -123,7 +124,13 @@ describe("smoke validators", () => {
             result: { details: { returnValue: 120 } },
           },
         },
-        { kind: "message", senderId: "agent", complete: true, content: "The result is 120." },
+        {
+          kind: "message",
+          senderId: "agent",
+          senderMetadata: { type: "agent" },
+          complete: true,
+          content: "The result is 120.",
+        },
       ],
     } as TestExecutionResult;
 
@@ -142,6 +149,7 @@ describe("smoke validators", () => {
         {
           kind: "message",
           senderId: "agent",
+          senderMetadata: { type: "agent" },
           complete: true,
           contentType: "invocation",
           invocation: {
@@ -158,6 +166,7 @@ describe("smoke validators", () => {
         {
           kind: "message",
           senderId: "agent",
+          senderMetadata: { type: "agent" },
           complete: true,
           content: "The module exports workers and rpc at runtime.",
         },

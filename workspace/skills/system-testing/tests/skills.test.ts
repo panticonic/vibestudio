@@ -29,6 +29,7 @@ function execution(
         id: "eval",
         kind: "message",
         senderId: "agent",
+        senderMetadata: { type: "agent" },
         complete: true,
         contentType: "invocation",
         content: "",
@@ -42,17 +43,21 @@ function execution(
           result: { details: { success: true, returnValue } },
         },
       } as unknown as TestExecutionResult["messages"][number],
-      { id: "final", kind: "message", senderId: "agent", complete: true, content: finalMessage },
+      {
+        id: "final",
+        kind: "message",
+        senderId: "agent",
+        senderMetadata: { type: "agent" },
+        complete: true,
+        content: finalMessage,
+      },
     ],
   } as TestExecutionResult;
 }
 
 const apiTest = skillTests.find((test) => test.name === "load-api-integrations")!;
 
-function choiceExecution(
-  finalMessage: string,
-  path?: string
-): TestExecutionResult {
+function choiceExecution(finalMessage: string, path?: string): TestExecutionResult {
   return {
     duration: 0,
     messages: [
@@ -63,6 +68,7 @@ function choiceExecution(
               id: "read",
               kind: "message" as const,
               senderId: "agent",
+              senderMetadata: { type: "agent" },
               complete: true,
               contentType: "invocation" as const,
               content: "",
@@ -78,7 +84,14 @@ function choiceExecution(
             } as unknown as TestExecutionResult["messages"][number],
           ]
         : []),
-      { id: "final", kind: "message", senderId: "agent", complete: true, content: finalMessage },
+      {
+        id: "final",
+        kind: "message",
+        senderId: "agent",
+        senderMetadata: { type: "agent" },
+        complete: true,
+        content: finalMessage,
+      },
     ],
   } as TestExecutionResult;
 }

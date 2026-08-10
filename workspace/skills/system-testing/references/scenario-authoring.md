@@ -13,17 +13,20 @@ prompts hide them.
 
 ## Judge the agent; diagnose the trajectory
 
-An agentic case passes when the agent completes the user task and reports that
-outcome. Do not duplicate the implementation in a mechanical validator or
-require markers, ceremonial fields, redundant observations, exact object
-layouts, or one preferred tool choreography.
+An agentic case's automated row is only a transport/lifecycle outcome: the turn
+finished and produced a final response, or explicitly reported that it could
+not complete the task. It is not a quality score. Do not duplicate the
+implementation in a mechanical validator or require status-marker syntax,
+ceremonial fields, redundant observations, exact object layouts, or one
+preferred tool choreography.
 
-The harness records tool failures independently from task completion. Review
-failed calls (including caught eval failures), retries, unusually long
-trajectories, cleanup errors, and runtime diagnostics even when the agent
-ultimately succeeds. These are ergonomics findings: inspect the full trajectory
-and repair the platform, documentation, or tool surface that made the sensible
-path difficult.
+The harness records tool failures independently from task completion and marks
+every ordinary agent trajectory for review. Review failed calls (including
+caught eval failures), retries, unusually long trajectories, cleanup errors,
+and runtime diagnostics even when the agent ultimately succeeds. Also look for
+needless searching, repeated rediscovery, and work abandoned after consuming
+time. These are ergonomics findings: inspect the full trajectory and repair the
+platform, documentation, or tool surface that made the sensible path difficult.
 
 Keep exact schema/effect assertions in `@workspace/testkit`. A system-test case
 may opt into exact validation only when it is explicitly a deterministic or

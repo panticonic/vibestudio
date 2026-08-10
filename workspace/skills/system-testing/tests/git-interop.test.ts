@@ -7,6 +7,7 @@ function invocation(id: string, name: string, args: Record<string, unknown>, res
   return {
     kind: "message" as const,
     senderId: "agent",
+    senderMetadata: { type: "agent" },
     complete: true,
     contentType: "invocation" as const,
     invocation: {
@@ -27,7 +28,13 @@ function execution(
     messages: [
       { kind: "message", senderId: "user", complete: true, content: "prompt" },
       ...calls,
-      { kind: "message", senderId: "agent", complete: true, content: final },
+      {
+        kind: "message",
+        senderId: "agent",
+        senderMetadata: { type: "agent" },
+        complete: true,
+        content: final,
+      },
     ],
   } as TestExecutionResult;
 }

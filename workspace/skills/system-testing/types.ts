@@ -82,6 +82,25 @@ export interface ExpectedToolFailure {
   errorIncludes?: string;
 }
 
+/**
+ * Bounded index for the human review of an agentic trajectory. This is not a
+ * mechanical quality score: the transcript remains the source of truth for
+ * whether the agent was confused, wasteful, or chose an awkward product path.
+ */
+export interface AgentTrajectoryReview {
+  required: true;
+  agentReportedOutcome: "completed" | "incomplete" | "unspecified" | "conflicting";
+  invocationCount: number;
+  modelCallCount: number;
+  unexpectedToolFailureCount: number;
+  repeatedFailureOperations: string[];
+  /** Non-failing review cues. They point a human at likely wandering or
+   * friction without pretending that a mechanical threshold can judge task
+   * quality. */
+  potentialConfusionSignals: string[];
+  frequentOperations: Array<{ name: string; count: number }>;
+}
+
 export interface TestAuthorityPolicyContext {
   testName: string;
   workspaceRepoFixture: (WorkspaceRepoFixtureSpec & { repoName: string | null }) | null;
@@ -190,6 +209,8 @@ export interface TestExecutionResult {
   diagnostics?: Record<string, unknown>;
   /** Non-fatal tool-call failures observed during the turn. */
   toolFailures?: ToolFailureSummary[];
+  /** Human-review index for ordinary agent-goal trajectories. */
+  trajectoryReview?: AgentTrajectoryReview;
 }
 
 export interface ValidationFailureProvenance {

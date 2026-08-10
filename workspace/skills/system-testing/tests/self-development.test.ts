@@ -359,6 +359,7 @@ describe("self-development semantic validators", () => {
             id: "final",
             kind: "message",
             senderId: "agent",
+            senderMetadata: { type: "agent" },
             complete: true,
             content: JSON.stringify({ state: "ready", client: { state: "ready" } }),
           },

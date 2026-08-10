@@ -113,7 +113,7 @@ export const agenticRuntimeTests: TestCase[] = [
       ],
     },
     prompt:
-      "Use the top-level openPanel API (not runtime.openPanel) to open a disposable about/new root with focus:false, then open panels/spectrolite as its child with stateArgs { tiny: 'start' } and focus:false. On that returned handle, call stateArgs.get, stateArgs.set({ tiny: 'updated', seq: 1 }), and stateArgs.get again. Close the child and root, then report the observed before/set/after values.",
+      "Open a disposable parent panel and a Help child panel without stealing focus. Give the child a small initial launch state, observe it, update it, and observe it again immediately. Close both panels and summarize what changed.",
     validate: (result) =>
       semanticEval(
         result,

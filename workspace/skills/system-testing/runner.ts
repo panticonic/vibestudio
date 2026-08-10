@@ -46,10 +46,7 @@ Use file-loaded eval for substantive multi-line or multi-file eval work. Do not 
 
 Keep evidence bounded. Report summaries, counts, ids, byte lengths, exact error messages, the final agent message, the validation reason, and the relevant tool call statuses/errors. Do not paste large raw payloads, full database rows, full channel envelopes, image data, or secrets.
 
-Every final response should be concise and contain exactly one terminal status declaration at the start of a line:
-\`Task completed.\`
-\`Task not completed.\`
-The summary may continue on that line or the next. Summarize what you verified and mention any problems or retries encountered along the way. For an incomplete task, include the concrete mismatch or error. Never just refer to files or artifacts; describe what the evidence shows.`;
+Every final response should be concise and state plainly whether the user's task was completed. Summarize what you verified and mention any problems, retries, or abandoned approaches encountered along the way. For an incomplete task, include the concrete mismatch or error. Never just refer to files or artifacts; describe what the evidence shows. The harness records the full trajectory for human review, so do not hide confusion or failed attempts behind a polished success summary.`;
 
 export type { WorkspaceRepoFixtureCleanup, WorkspaceRepoFixtureState };
 
@@ -312,6 +309,16 @@ export class HeadlessRunner {
             resource: {
               kind: "prefix",
               prefix: "do:workers/pubsub-channel:PubSubChannel:headless-",
+            },
+            tier: "gated",
+            decision: "once",
+          },
+          {
+            ruleId: "subagent-task-channels",
+            capability: { kind: "exact", key: "workspace-service:channel" },
+            resource: {
+              kind: "prefix",
+              prefix: "do:workers/pubsub-channel:PubSubChannel:task-",
             },
             tier: "gated",
             decision: "once",

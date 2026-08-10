@@ -1,4 +1,5 @@
 import type { TestExecutionResult } from "../types.js";
+import { findFinalAgentCompletionMessage, isAgentCompletionMessage } from "../agent-message.js";
 
 export interface InvocationCardPayloadLike {
   id: string;
@@ -30,44 +31,14 @@ export interface InvocationCardPayloadLike {
   };
 }
 
-/**
- * Find the last complete agent message (not from self, not thinking).
- * The self-sent message has kind "message" + pending:true initially,
- * then becomes pending:false. Agent messages never have pending.
- * We use a heuristic: skip the first message (likely the prompt).
- */
+/** Find the last delivered completion authored by an explicit agent participant. */
 export function findLastAgentMessage(result: TestExecutionResult): string {
-  const msgs = result.messages;
-  // Skip messages from the first sender (the test client)
-  const selfSenderId = msgs[0]?.senderId;
-  for (let i = msgs.length - 1; i >= 0; i--) {
-    const m = msgs[i]!;
-    if (
-      m.senderId !== selfSenderId &&
-      m.kind === "message" &&
-      m.complete &&
-      m.contentType !== "thinking" &&
-      m.contentType !== "invocation" &&
-      !m.pending
-    ) {
-      return m.content ?? "";
-    }
-  }
-  return "";
+  return findFinalAgentCompletionMessage(result.messages)?.content ?? "";
 }
 
 /** Check if the agent produced any response at all */
 export function hasAgentResponse(result: TestExecutionResult): boolean {
-  const selfSenderId = result.messages[0]?.senderId;
-  return result.messages.some(
-    (m) =>
-      m.senderId !== selfSenderId &&
-      m.kind === "message" &&
-      m.complete &&
-      m.contentType !== "thinking" &&
-      m.contentType !== "typing" &&
-      m.contentType !== "invocation"
-  );
+  return result.messages.some(isAgentCompletionMessage);
 }
 
 /** Check that the response contains a specific string (case-insensitive) */
@@ -117,17 +88,7 @@ export function agentMessageHasAll(
   result: TestExecutionResult,
   tokens: readonly string[]
 ): { passed: boolean; reason?: string } {
-  const selfSenderId = result.messages[0]?.senderId;
-  const messages = result.messages.filter(
-    (message) =>
-      message.senderId !== selfSenderId &&
-      message.kind === "message" &&
-      message.complete &&
-      message.contentType !== "thinking" &&
-      message.contentType !== "typing" &&
-      message.contentType !== "invocation" &&
-      !message.pending
-  );
+  const messages = result.messages.filter(isAgentCompletionMessage);
   const found = messages.some((message) => {
     const normalized = normalizeMarkerText(message.content ?? "");
     return tokens.every((token) => normalized.includes(normalizeMarkerText(token)));
@@ -675,8 +636,8 @@ export function requireIncrementalIntegrationEvidence(result: TestExecutionResul
       .filter((entry): entry is { index: number; value: Record<string, unknown> } =>
         Boolean(
           entry.value &&
-            stringField(entry.value, "decisionId") &&
-            stringField(entry.value, "applicationId")
+          stringField(entry.value, "decisionId") &&
+          stringField(entry.value, "applicationId")
         )
       );
     if (merges.length === 0) continue;
@@ -707,8 +668,13 @@ export function requireIncrementalIntegrationEvidence(result: TestExecutionResul
     });
     if (localWasPublished) continue;
     const committedApplications = commit["committedApplicationIds"];
-    if (!isStringArray(committedApplications) || merges.some((entry) =>
-      !committedApplications.includes(entry.value["applicationId"] as string))) continue;
+    if (
+      !isStringArray(committedApplications) ||
+      merges.some(
+        (entry) => !committedApplications.includes(entry.value["applicationId"] as string)
+      )
+    )
+      continue;
 
     const lastMerge = merges.at(-1)!;
     const resolvedCompare = calls
@@ -725,8 +691,8 @@ export function requireIncrementalIntegrationEvidence(result: TestExecutionResul
         const resolution = recordField(compare, "resolution");
         return Boolean(
           resolution?.["complete"] === true &&
-            resolution["concluded"] === true &&
-            resolution["remainingCoordinateCount"] === 0
+          resolution["concluded"] === true &&
+          resolution["remainingCoordinateCount"] === 0
         );
       });
     if (!resolvedCompare) continue;

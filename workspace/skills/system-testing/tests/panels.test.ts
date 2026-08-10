@@ -149,6 +149,7 @@ function execution(
       id: "eval-card",
       kind: "message",
       senderId: "agent",
+      senderMetadata: { type: "agent" },
       complete: true,
       content: "",
       contentType: "invocation",
@@ -167,6 +168,7 @@ function execution(
       id: "read-card",
       kind: "message",
       senderId: "agent",
+      senderMetadata: { type: "agent" },
       complete: true,
       content: "",
       contentType: "invocation",
@@ -186,6 +188,7 @@ function execution(
     id: "final",
     kind: "message",
     senderId: "agent",
+    senderMetadata: { type: "agent" },
     complete: true,
     content: finalContent,
   });

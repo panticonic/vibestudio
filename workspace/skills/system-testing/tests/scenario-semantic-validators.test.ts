@@ -7,7 +7,7 @@ import { filesystemTests } from "./filesystem.js";
 import { multiUserTests } from "./multi-user.js";
 import { workerTests } from "./workers.js";
 import { workspaceTests } from "./workspace.js";
-import { completedScenarioEvidence } from "./_scenario-evidence.js";
+import { completedScenarioEvidence, requireCodeOperations } from "./_scenario-evidence.js";
 
 interface EvalStep {
   code: string;
@@ -42,6 +42,7 @@ function execution(finalMessage: string, steps: EvalStep[]): TestExecutionResult
       id: `eval-message-${index}`,
       kind: "message",
       senderId: "agent",
+      senderMetadata: { type: "agent" },
       complete: true,
       contentType: "invocation",
       content: "",
@@ -77,6 +78,7 @@ function execution(finalMessage: string, steps: EvalStep[]): TestExecutionResult
     id: "final",
     kind: "message",
     senderId: "agent",
+    senderMetadata: { type: "agent" },
     complete: true,
     content: finalMessage,
   } as TestExecutionResult["messages"][number]);
@@ -94,6 +96,7 @@ function directExecution(finalMessage: string, steps: ToolStep[]): TestExecution
           id: `tool-${index}`,
           kind: "message",
           senderId: "agent",
+          senderMetadata: { type: "agent" },
           complete: true,
           contentType: "invocation",
           content: "",
@@ -119,12 +122,21 @@ function scenario(tests: { name: string }[], name: string) {
 }
 
 describe("scenario tool protocol semantics", () => {
+  it("recognizes quoted operation names independent of JavaScript quote style", () => {
+    expect(
+      requireCodeOperations("await rpc.call(target, 'providers', [])", [
+        ["rpc.call", '"providers"'],
+      ])
+    ).toEqual({ passed: true, reason: undefined });
+  });
+
   it("keeps pre-execution argument rejections diagnostic without calling them failed effects", () => {
     const result = execution("I corrected the call and completed the task.", []);
     result.messages.splice(1, 0, {
       id: "rejected",
       kind: "message",
       senderId: "agent",
+      senderMetadata: { type: "agent" },
       complete: true,
       contentType: "invocation",
       content: "tool failed",

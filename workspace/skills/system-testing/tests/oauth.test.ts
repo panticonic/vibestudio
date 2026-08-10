@@ -23,6 +23,7 @@ function credentialMissExecution(
         id: "eval",
         kind: "message",
         senderId: "agent",
+        senderMetadata: { type: "agent" },
         complete: true,
         contentType: "invocation",
         content: "",
@@ -40,6 +41,7 @@ function credentialMissExecution(
         id: "final",
         kind: "message",
         senderId: "agent",
+        senderMetadata: { type: "agent" },
         complete: true,
         content:
           "No stored credential is bound to that API audience. I checked quietly without opening an authorization prompt or exposing any secret.",

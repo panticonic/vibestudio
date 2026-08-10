@@ -115,7 +115,7 @@ function formatError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-async function waitForStalledChildTool(
+async function waitForRunningChild(
   session: HeadlessSession,
   timeoutMs: number
 ): Promise<{ invocationId: string; tool: string | null }> {
@@ -124,11 +124,8 @@ async function waitForStalledChildTool(
     const spawn = [...session.snapshot().tasks]
       .reverse()
       .find((task) => task.type === "subagent");
-    const progress = spawn?.progress?.find(
-      (entry) => entry.kind === "tool-started" || entry.kind === "tool-progress"
-    );
-    if (spawn && progress) {
-      return { invocationId: spawn.id, tool: progress.tool ?? null };
+    if (spawn && (spawn.status === "started" || spawn.status === "running")) {
+      return { invocationId: spawn.id, tool: null };
     }
     if (Date.now() >= deadline) {
       throw new Error(
@@ -154,7 +151,7 @@ async function orchestrateHeadlessDiagnosis(
       "create a real stalled child fixture"
     );
     const remainingTimeMs = context.remainingTimeMs();
-    fixture = await waitForStalledChildTool(
+    fixture = await waitForRunningChild(
       session,
       remainingTimeMs === undefined
         ? 60_000

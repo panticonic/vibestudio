@@ -107,18 +107,12 @@ export function isEvalGuestCodeFailure(
   );
 }
 
-const SAFE_SUBAGENT_CLOSE_REJECTIONS = new Set([
-  "IntegrationIncomplete",
-  "InvalidReference",
-  "WorkingChangesPresent",
-]);
-
 /**
  * Subagent tools expose typed no-effect domain refusals. inspect_subagent
- * reports ambiguous references before reading anything. close_subagent checks
- * lifecycle preconditions before cancellation, context teardown, or
- * subscription removal. Keep both visible without treating the guard itself as
- * a platform execution failure.
+ * reports ambiguous references before reading anything; send_to_subagent
+ * refuses terminal runs with a structured SubagentTerminal outcome naming the
+ * retained result and the real options. Keep these visible without treating
+ * the guard itself as a platform execution failure.
  */
 export function isSafeSubagentDomainRejection(
   toolName: string,
@@ -127,11 +121,7 @@ export function isSafeSubagentDomainRejection(
   if (toolName === "inspect_subagent" && terminalReasonCode === "InvalidReference") {
     return true;
   }
-  return (
-    toolName === "close_subagent" &&
-    terminalReasonCode !== undefined &&
-    SAFE_SUBAGENT_CLOSE_REJECTIONS.has(terminalReasonCode)
-  );
+  return toolName === "send_to_subagent" && terminalReasonCode === "SubagentTerminal";
 }
 
 export type BuiltInToolFailureClassification =

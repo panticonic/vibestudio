@@ -74,6 +74,7 @@ function evalInvocation(
     id: `eval-${status}-${isError}-${String(returnValue)}`,
     kind: "message",
     senderId: "agent",
+    senderMetadata: { type: "agent" },
     complete: true,
     contentType: "invocation",
     content: JSON.stringify({
@@ -98,6 +99,7 @@ function finalAgentMessage(content: string): ChatMessage {
     id: "final-agent-message",
     kind: "message",
     senderId: "agent",
+    senderMetadata: { type: "agent" },
     complete: true,
     content,
   };

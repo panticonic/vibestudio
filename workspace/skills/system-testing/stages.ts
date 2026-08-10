@@ -1,4 +1,5 @@
 import type { TestCase } from "./types.js";
+import { assertSystemTestDeclaration } from "./prompt-contract.js";
 
 export { smokeTests } from "./tests/smoke.js";
 export { filesystemTests } from "./tests/filesystem.js";
@@ -98,7 +99,7 @@ export type NextTestStage = {
 };
 
 export function allTests(): TestCase[] {
-  return [
+  const tests = [
     ..._smoke,
     ..._fs,
     ..._vcs,
@@ -136,6 +137,8 @@ export function allTests(): TestCase[] {
     ..._docs,
     ..._deterministic(),
   ];
+  for (const test of tests) assertSystemTestDeclaration(test);
+  return tests;
 }
 
 export function testCategories(tests: TestCase[] = allTests()): string[] {

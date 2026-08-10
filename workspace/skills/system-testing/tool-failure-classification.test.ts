@@ -79,15 +79,6 @@ describe("tool failure classification", () => {
     expect(isEvalGuestCodeFailure("read", "guest_execution_failed", "user-code")).toBe(false);
   });
 
-  it("keeps typed no-effect subagent close guards diagnostic-only", () => {
-    expect(isSafeSubagentDomainRejection("close_subagent", "IntegrationIncomplete")).toBe(true);
-    expect(isSafeSubagentDomainRejection("close_subagent", "WorkingChangesPresent")).toBe(true);
-    expect(isSafeSubagentDomainRejection("close_subagent", "Unauthorized")).toBe(false);
-    expect(isSafeSubagentDomainRejection("merge_subagent", "IntegrationIncomplete")).toBe(
-      false
-    );
-  });
-
   it("keeps typed ambiguous subagent inspection diagnostic-only", () => {
     expect(isSafeSubagentDomainRejection("inspect_subagent", "InvalidReference")).toBe(true);
     expect(isSafeSubagentDomainRejection("inspect_subagent", "unknown_tool_failure")).toBe(false);

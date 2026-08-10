@@ -12,6 +12,7 @@ function invocation(
   return {
     kind: "message" as const,
     senderId: "agent",
+    senderMetadata: { type: "agent" },
     complete: true,
     contentType: "invocation" as const,
     invocation: {
@@ -29,14 +30,20 @@ function execution(final: string, calls: ReturnType<typeof invocation>[]): TestE
     messages: [
       { kind: "message", senderId: "user", complete: true, content: "prompt" },
       ...calls,
-      { kind: "message", senderId: "agent", complete: true, content: final },
+      {
+        kind: "message",
+        senderId: "agent",
+        senderMetadata: { type: "agent" },
+        complete: true,
+        content: final,
+      },
     ],
   } as TestExecutionResult;
 }
 
 describe("reduced VCS agentic catalog", () => {
   it("keeps every agent prompt user-like and free of method choreography", () => {
-    expect([...vcsTests, ...vcsAdvancedTests]).toHaveLength(12);
+    expect([...vcsTests, ...vcsAdvancedTests]).toHaveLength(13);
     for (const test of [...vcsTests, ...vcsAdvancedTests]) {
       expect(test.prompt).not.toContain("vcs.");
       expect(test.prompt).not.toContain("expectedWorkingHead");

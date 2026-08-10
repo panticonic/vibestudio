@@ -18,6 +18,7 @@ function execution(code: string, result: unknown = { count: 2, states: ["active"
         id: "eval",
         kind: "message",
         senderId: "agent",
+        senderMetadata: { type: "agent" },
         complete: true,
         contentType: "invocation",
         content: "",
@@ -35,6 +36,7 @@ function execution(code: string, result: unknown = { count: 2, states: ["active"
         id: "final",
         kind: "message",
         senderId: "agent",
+        senderMetadata: { type: "agent" },
         complete: true,
         content:
           "I found two managed credentials. The represented lifecycle state is active; I inspected only the summary without exposing secrets or changing credential state.",
@@ -163,14 +165,11 @@ describe("credential store system test validator", () => {
   it("accepts the dedicated summary through the documented raw RPC spelling", () => {
     expect(
       test().validate(
-        execution(
-          `return rpc.call("main", "credentials.summarizeStoredCredentials", []);`,
-          {
-            credentialCount: 2,
-            lifecycleStates: ["active"],
-            stateCounts: { active: 2 },
-          }
-        )
+        execution(`return rpc.call("main", "credentials.summarizeStoredCredentials", []);`, {
+          credentialCount: 2,
+          lifecycleStates: ["active"],
+          stateCounts: { active: 2 },
+        })
       )
     ).toEqual({ passed: true });
   });

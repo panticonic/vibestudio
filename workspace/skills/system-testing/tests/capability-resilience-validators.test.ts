@@ -22,6 +22,7 @@ function invocationMessage(invocation: Invocation, index: number): ChatMessage {
     id: `invocation-message-${index}`,
     kind: "message",
     senderId: "agent",
+    senderMetadata: { type: "agent" },
     complete: true,
     contentType: "invocation",
     content: JSON.stringify({
@@ -54,6 +55,7 @@ function execution(invocations: Invocation[], final = "The requested behavior wa
         id: "final",
         kind: "message",
         senderId: "agent",
+        senderMetadata: { type: "agent" },
         complete: true,
         content: final,
       },
@@ -265,10 +267,7 @@ describe("permission semantic validators", () => {
     expect(
       validator.validate(
         execution([
-          evalCall(
-            'return rpc.call("main", "permissions.list", []);',
-            { grants: [grant] }
-          ),
+          evalCall('return rpc.call("main", "permissions.list", []);', { grants: [grant] }),
         ])
       ).passed
     ).toBe(false);

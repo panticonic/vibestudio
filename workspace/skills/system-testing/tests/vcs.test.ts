@@ -11,6 +11,7 @@ function invocation(
   return {
     kind: "message" as const,
     senderId: "agent",
+    senderMetadata: { type: "agent" },
     complete: true,
     contentType: "invocation" as const,
     invocation: {
@@ -32,7 +33,13 @@ function execution(final: string, calls: ReturnType<typeof invocation>[]): TestE
     messages: [
       { kind: "message", senderId: "user", complete: true, content: "prompt" },
       ...calls,
-      { kind: "message", senderId: "agent", complete: true, content: final },
+      {
+        kind: "message",
+        senderId: "agent",
+        senderMetadata: { type: "agent" },
+        complete: true,
+        content: final,
+      },
     ],
   } as TestExecutionResult;
 }
@@ -118,8 +125,9 @@ describe("joined VCS scenario validators", () => {
       }
     );
 
-    expect(test.validate(execution("The local comparison found the intended file update.", [compared])))
-      .toEqual({ passed: true });
+    expect(
+      test.validate(execution("The local comparison found the intended file update.", [compared]))
+    ).toEqual({ passed: true });
     const committed = invocation(
       "commit",
       "vcs",
@@ -127,8 +135,9 @@ describe("joined VCS scenario validators", () => {
       commit("event:committed", ["application:working"])
     );
     expect(
-      test.validate(execution("The local comparison found the intended file update.", [committed, compared]))
-        .passed
+      test.validate(
+        execution("The local comparison found the intended file update.", [committed, compared])
+      ).passed
     ).toBe(false);
   });
 

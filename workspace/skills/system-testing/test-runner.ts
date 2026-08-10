@@ -19,6 +19,8 @@ import { materializeValidationEvidence } from "./validation-evidence.js";
 import { DEFAULT_SYSTEM_TEST_TIMEOUT_MS } from "./config.js";
 import { projectValidationInput, validationFailureProvenance } from "./validation-failure.js";
 import type { SystemTestJsonValue } from "./structured-error.js";
+import { assertSystemTestDeclaration } from "./prompt-contract.js";
+import { findFinalAgentCompletionMessage, isAgentCompletionMessage } from "./agent-message.js";
 
 const NON_INTERACTIVE_TERMINAL_WAIT_REASONS = [
   "model_credential_required",
@@ -217,13 +219,14 @@ export class TestRunner {
     let workspaceRepoFixtureState:
       | Awaited<ReturnType<HeadlessRunner["prepareWorkspaceRepoFixture"]>>
       | undefined;
-    let failurePhase = test.workspaceRepoFixture ? "workspace-fixture-setup" : "session-setup";
+    let failurePhase = "test-declaration";
     let validationInputProjection: SystemTestJsonValue | undefined;
     const enterPhase = (phase: string): void => {
       failurePhase = phase;
       this.opts?.onTestPhase?.(test, phase);
     };
     try {
+      assertSystemTestDeclaration(test);
       if (test.workspaceRepoFixture) {
         enterPhase("workspace-fixture-setup");
         workspaceRepoFixtureState = await testRunner.prepareWorkspaceRepoFixture();
@@ -336,6 +339,11 @@ export class TestRunner {
       // Persist only the bounded summaries. The canonical request/result bodies
       // remain content-addressed in the durable execution record.
       execution.toolFailures = validationExecution.toolFailures;
+      if (test.validation !== "harness") {
+        const trajectoryReview = buildAgentTrajectoryReview(validationExecution);
+        validationExecution.trajectoryReview = trajectoryReview;
+        execution.trajectoryReview = trajectoryReview;
+      }
       validationInputProjection = projectValidationInput(validationExecution);
       enterPhase("validation");
       const result =
@@ -385,6 +393,9 @@ export class TestRunner {
         collectToolFailures(execution),
         test.expectedToolFailures
       );
+      if (test.validation !== "harness") {
+        execution.trajectoryReview = buildAgentTrajectoryReview(execution);
+      }
       outcome = {
         result: { passed: false, reason: `Error: ${execution.error}` },
         execution,
@@ -992,43 +1003,107 @@ function asString(value: unknown): string | undefined {
 }
 
 export function validateAgentCompletionReport(result: TestExecutionResult): TestResult {
-  const firstSender = result.messages[0]?.senderId;
-  const final = [...result.messages]
-    .reverse()
-    .find(
-      (message) =>
-        message.senderId !== firstSender &&
-        message.kind === "message" &&
-        message.complete &&
-        message.contentType !== "thinking" &&
-        message.contentType !== "typing" &&
-        message.contentType !== "invocation" &&
-        !message.pending
-    )
-    ?.content?.trim();
+  const final = findFinalAgentCompletionMessage(result.messages)?.content?.trim();
   if (!final) return { passed: false, reason: "No agent completion report received" };
 
-  const declarations = [
-    ...final.matchAll(/(?:^|\n)(Task completed\.|Task not completed\.)(?=\s|$)/gu),
+  const review = result.trajectoryReview ?? buildAgentTrajectoryReview(result);
+  if (review.agentReportedOutcome === "conflicting") {
+    return {
+      passed: false,
+      reason: "Agent completion report contained conflicting completed and incomplete outcomes",
+      details: { trajectoryReview: review },
+    };
+  }
+  if (review.agentReportedOutcome === "incomplete") {
+    return {
+      passed: false,
+      reason: `Agent reported that it did not complete the task: ${final.slice(0, 400)}`,
+      details: { trajectoryReview: review },
+    };
+  }
+  return {
+    passed: true,
+    details: { trajectoryReview: review },
+  };
+}
+
+function buildAgentTrajectoryReview(result: TestExecutionResult) {
+  const final = finalAgentCompletionMessage(result);
+  const completed = /(?:^|\n)\s*Task completed\.(?=\s|$)/u.test(final ?? "");
+  const incomplete = /(?:^|\n)\s*Task not completed\.(?=\s|$)/u.test(final ?? "");
+  const failures = unexpectedToolFailures(result.toolFailures);
+  const failureCounts = new Map<string, number>();
+  for (const failure of failures) {
+    failureCounts.set(failure.name, (failureCounts.get(failure.name) ?? 0) + 1);
+  }
+  const invocationNames = trajectoryInvocationNames(result);
+  const operationCounts = new Map<string, number>();
+  for (const name of invocationNames) {
+    operationCounts.set(name, (operationCounts.get(name) ?? 0) + 1);
+  }
+  const frequentOperations = [...operationCounts]
+    .filter(([, count]) => count >= 4)
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .slice(0, 8)
+    .map(([name, count]) => ({ name, count }));
+  const evidence = asRecord(result.modelExecutionEvidence);
+  const evidenceCalls = Array.isArray(evidence?.["calls"]) ? evidence["calls"].length : 0;
+  const modelCallCount =
+    typeof evidence?.["totalCalls"] === "number" ? evidence["totalCalls"] : evidenceCalls;
+  const invocationCount = invocationNames.length;
+  const substantialCompletionCount = result.messages.filter(
+    (message) => isAgentCompletionMessage(message) && message.content.trim().length >= 500
+  ).length;
+  const subagentTranscriptAccessCount = invocationNames.filter(
+    (name) => name === "read_subagent" || name === "inspect_subagent"
+  ).length;
+  const potentialConfusionSignals = [
+    ...(!final ? ["missing-completion-report"] : []),
+    ...(substantialCompletionCount > 1 ? ["multiple-substantial-completion-reports"] : []),
+    ...(modelCallCount >= 16 ? ["high-model-call-count"] : []),
+    ...(invocationCount >= 24 ? ["high-tool-invocation-count"] : []),
+    ...(subagentTranscriptAccessCount >= 2 ? ["subagent-transcript-chasing"] : []),
+    ...frequentOperations.map(({ name }) => `frequent-operation:${name}`),
+    ...[...failureCounts]
+      .filter(([, count]) => count > 1)
+      .map(([name]) => `repeated-failure:${name}`),
   ];
-  if (declarations.length !== 1) {
-    return {
-      passed: false,
-      reason:
-        declarations.length === 0
-          ? "Agent completion report did not contain the required standalone “Task completed.” or “Task not completed.” status declaration"
-          : "Agent completion report contained more than one terminal status declaration",
-    };
+  return {
+    required: true as const,
+    agentReportedOutcome:
+      completed && incomplete
+        ? ("conflicting" as const)
+        : incomplete
+          ? ("incomplete" as const)
+          : completed
+            ? ("completed" as const)
+            : ("unspecified" as const),
+    invocationCount,
+    modelCallCount,
+    unexpectedToolFailureCount: failures.length,
+    repeatedFailureOperations: [...failureCounts]
+      .filter(([, count]) => count > 1)
+      .map(([name]) => name)
+      .sort(),
+    potentialConfusionSignals,
+    frequentOperations,
+  };
+}
+
+function trajectoryInvocationNames(result: TestExecutionResult): string[] {
+  if (result.snapshot?.invocations.length) {
+    return result.snapshot.invocations.map((invocation) => invocation.name || "(unknown)");
   }
-  const [declaration] = declarations;
-  if (declaration![1] === "Task completed.") return { passed: true };
-  if (declaration![1] === "Task not completed.") {
-    return {
-      passed: false,
-      reason: `Agent reported that it did not complete the task: ${final.slice(declaration!.index, declaration!.index + 400)}`,
-    };
-  }
-  throw new Error("unreachable completion declaration");
+  return result.messages.flatMap((message) => {
+    if (message.contentType !== "invocation") return [];
+    const invocation = ((message as { invocation?: unknown }).invocation ??
+      parseJson(message.content)) as InvocationLike | undefined;
+    return [asString(invocation?.name) ?? asString(invocation?.method) ?? "(unknown)"];
+  });
+}
+
+function finalAgentCompletionMessage(result: TestExecutionResult): string | null {
+  return findFinalAgentCompletionMessage(result.messages)?.content?.trim() ?? null;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
