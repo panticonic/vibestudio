@@ -65,6 +65,7 @@ import {
 } from "../utils/localStorageScopePersistence";
 import { scheduleBackgroundWork } from "../utils/scheduleBackgroundWork";
 import { sendSandboxText, type SandboxSendOptions } from "./sandboxSend";
+import { connectionRetryDelayMs, isTransientConnectionFailure } from "./connectionRetry";
 /** Installed agent info passed from the host panel. */
 interface InstalledAgentInfo {
   agentId: string;
@@ -832,8 +833,12 @@ export function useAgenticChat({
     if (!channelName || !config.rpc) return;
     if (core.hasConnectedRef.current) return;
     core.hasConnectedRef.current = true;
+    let cancelled = false;
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
     async function doConnect() {
-      try {
+      let transientAttempt = 0;
+      for (;;) {
+        try {
         const feedbackMethods = feedbackRef.current.buildFeedbackMethods();
         const toolMethods = chatToolsRef.current.buildToolMethods();
         const methods: Record<string, MethodDefinition> = {
@@ -1288,18 +1293,37 @@ Use package imports available to inline_ui plus relative imports for local helpe
             },
           },
         };
-        await core.connectToChannel({ channelId: channelName, methods, channelConfig, contextId });
-      } catch (err) {
-        console.error("[Chat] Connection error:", err);
-        core.hasConnectedRef.current = false;
+          await core.connectToChannel({ channelId: channelName, methods, channelConfig, contextId });
+          return;
+        } catch (err) {
+          core.hasConnectedRef.current = false;
+          if (cancelled) return;
+          if (!isTransientConnectionFailure(err)) {
+            console.error("[Chat] Connection error:", err);
+            return;
+          }
+          core.dismissConnectionError();
+          const delayMs = connectionRetryDelayMs(transientAttempt++);
+          console.warn(`[Chat] Transient connection failure; retrying in ${delayMs}ms`, err);
+          await new Promise<void>((resolve) => {
+            retryTimer = setTimeout(resolve, delayMs);
+          });
+          retryTimer = undefined;
+          if (cancelled) return;
+        }
       }
     }
     void doConnect();
+    return () => {
+      cancelled = true;
+      if (retryTimer !== undefined) clearTimeout(retryTimer);
+    };
   }, [
     channelName,
     channelConfig,
     contextId,
     core.connectToChannel,
+    core.dismissConnectionError,
     config.rpc,
     core.hasConnectedRef,
     core.selfIdRef,
