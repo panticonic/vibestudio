@@ -22,6 +22,7 @@
     "paths": {
       "@vibestudio/browser-data": ["./packages/browser-data/src/index.ts"],
       "@vibestudio/browser-data/client": ["./packages/browser-data/src/client.ts"],
+      "@vibestudio/browser-data/form-fill-types": ["./packages/browser-data/src/formFillTypes.ts"],
       "@vibestudio/browser-data/source-reader-internals": [
         "./packages/browser-data/src/sourceReaderInternals.ts"
       ],
@@ -64,6 +65,7 @@
       "@vibestudio/workspace/*": ["./packages/workspace/src/*"],
       "@vibestudio/workspace-contracts/*": ["./packages/workspace-contracts/src/*"],
       "@workspace/agentic-protocol": ["./workspace/packages/agentic-protocol/src/index.ts"],
+      "@workspace/agentic-protocol/*": ["./workspace/packages/agentic-protocol/src/*"],
       "@workspace/vcs-engine": ["./workspace/packages/vcs-engine/src/index.ts"],
       "@workspace/runtime": ["./workspace/packages/runtime/src/panel/index.ts"],
       "@workspace/runtime/panel-runtime": [

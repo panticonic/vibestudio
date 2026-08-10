@@ -1,15 +1,16 @@
 /** Canonical runtime client for the deliberately small semantic VCS API. */
 
 import {
-  vcsMethods,
-  vcsOperationRegistry,
+  type vcsMethods,
   type VcsStatusInput,
   type VcsStatusResult,
 } from "@vibestudio/service-schemas/vcs";
+import { type TypedServiceClient } from "@vibestudio/shared/typedServiceClient";
+import { createLazyTypedServiceClient } from "@vibestudio/shared/lazyTypedServiceClient";
 import {
-  createTypedServiceClient,
-  type TypedServiceClient,
-} from "@vibestudio/shared/typedServiceClient";
+  VCS_CONTEXT_BOUND_METHOD_NAMES,
+  VCS_METHOD_NAMES,
+} from "@vibestudio/service-schemas/clients/generated/runtimeClientMethods";
 
 export type * from "@vibestudio/service-schemas/vcs";
 
@@ -49,18 +50,17 @@ export function createVcsClient(
   callMain: <T>(method: string, ...args: unknown[]) => Promise<T>,
   boundContextId: string
 ): VcsClient {
-  const schemaClient = createTypedServiceClient("vcs", vcsMethods, (_service, method, args) =>
-    callMain(`vcs.${method}`, ...args)
+  const schemaClient = createLazyTypedServiceClient(
+    "vcs",
+    VCS_METHOD_NAMES,
+    async () => (await import("@vibestudio/service-schemas/vcs")).vcsMethods,
+    (_service, method, args) => callMain(`vcs.${method}`, ...args)
   );
+  const contextBoundMethods = new Set<string>(VCS_CONTEXT_BOUND_METHOD_NAMES);
   return Object.fromEntries(
     Object.entries(schemaClient).map(([method, invoke]) => [
       method,
-      vcsOperationRegistry[method as keyof typeof vcsOperationRegistry].references.some(
-        (reference) =>
-          reference.kind === "context" &&
-          reference.path.length === 1 &&
-          reference.path[0] === "contextId"
-      )
+      contextBoundMethods.has(method)
         ? (input?: unknown) => {
             const boundInput =
               input === undefined

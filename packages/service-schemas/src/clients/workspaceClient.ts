@@ -6,12 +6,10 @@
  */
 
 import type { RpcCaller } from "@vibestudio/rpc";
-import {
-  createTypedServiceClient,
-  type TypedServiceClient,
-} from "@vibestudio/shared/typedServiceClient";
-import { workspaceMethods } from "../workspace.js";
-import type { WorkspaceTreeNode } from "../workspace.js";
+import { type TypedServiceClient } from "@vibestudio/shared/typedServiceClient";
+import { createLazyTypedServiceClient } from "@vibestudio/shared/lazyTypedServiceClient";
+import type { workspaceMethods, WorkspaceTreeNode } from "../workspace.js";
+import { WORKSPACE_METHOD_NAMES } from "./generated/runtimeClientMethods.js";
 
 export type { InitPanelEntry, WorkspaceConfig } from "@vibestudio/workspace-contracts/types";
 export type { WorkspaceEntry, WorkspaceRecurringJobStatus } from "../workspace.js";
@@ -33,8 +31,11 @@ export type WorkspaceClient = WorkspaceTypedClient & {
 type WorkspaceRpc = RpcCaller;
 
 export function createWorkspaceClient(rpc: WorkspaceRpc): WorkspaceClient {
-  const typed = createTypedServiceClient("workspace", workspaceMethods, (svc, method, args) =>
-    rpc.call("main", `${svc}.${method}`, args)
+  const typed = createLazyTypedServiceClient(
+    "workspace",
+    WORKSPACE_METHOD_NAMES,
+    async () => (await import("../workspace.js")).workspaceMethods,
+    (svc, method, args) => rpc.call("main", `${svc}.${method}`, args)
   );
   const listProjects = async (): Promise<string[]> => {
     const tree = await typed.sourceTree();

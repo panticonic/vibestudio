@@ -1,9 +1,5 @@
-import { extensionsMethods } from "@vibestudio/service-schemas/extensions";
-import { browserDataMethods } from "@vibestudio/service-schemas/browserData";
-import {
-  callTypedServiceMethod,
-  createTypedServiceClient,
-} from "@vibestudio/shared/typedServiceClient";
+import type { extensionsMethods } from "@vibestudio/service-schemas/extensions";
+import type { browserDataMethods } from "@vibestudio/service-schemas/browserData";
 import type {
   ApplyCookieMutationsRequest,
   BrowserEnvironmentIdentity,
@@ -179,13 +175,21 @@ export interface BrowserDataClient {
 
 /** Canonical client for the manifest-declared browser environment provider. */
 export function createBrowserDataClient(rpc: BrowserDataRpc): BrowserDataClient {
-  const extensions = createTypedServiceClient(
-    "extensions",
-    extensionsMethods,
-    (service, method, args) => rpc.callService(service, method, args)
-  );
+  const callExtension = async <T>(
+    method: keyof typeof extensionsMethods & string,
+    ...args: unknown[]
+  ): Promise<T> => {
+    const { callTypedServiceMethod } = await import("@vibestudio/shared/typedServiceClient");
+    return callTypedServiceMethod(
+      "extensions",
+      (await import("@vibestudio/service-schemas/extensions")).extensionsMethods,
+      (service, wireMethod, wireArgs) => rpc.callService(service, wireMethod, wireArgs),
+      method,
+      args
+    ) as Promise<T>;
+  };
   const callNative = <T>(method: string, ...args: unknown[]): Promise<T> =>
-    extensions.invokeProvider("browserData", method, args) as Promise<T>;
+    callExtension("invokeProvider", "browserData", method, args);
   const callBrowserEnvironment = <T>(method: BrowserEnvironmentMethod, ...args: unknown[]) =>
     rpc.callService("browserEnvironment", method, args) as Promise<T>;
   let resolvedTarget: Promise<string> | null = null;
@@ -212,15 +216,17 @@ export function createBrowserDataClient(rpc: BrowserDataRpc): BrowserDataClient 
   const callData = async <T>(
     method: keyof typeof browserDataMethods & string,
     ...args: unknown[]
-  ) =>
-    callTypedServiceMethod(
+  ) => {
+    const { callTypedServiceMethod } = await import("@vibestudio/shared/typedServiceClient");
+    return callTypedServiceMethod(
       "browser.data",
-      browserDataMethods,
+      (await import("@vibestudio/service-schemas/browserData")).browserDataMethods,
       async (_service, wireMethod, wireArgs) =>
         rpc.callTarget(await target(), wireMethod, wireArgs),
       method,
       args
     ) as Promise<T>;
+  };
 
   return {
     getBrowserEnvironment: () => callNative("getBrowserEnvironment"),

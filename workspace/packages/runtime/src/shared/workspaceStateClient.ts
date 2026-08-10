@@ -1,7 +1,7 @@
 import {
   createWorkspaceStateClient,
   type ShellServiceCall,
-} from "@vibestudio/shell-core/createShellCore";
+} from "@vibestudio/shell-core/workspaceStateClient";
 
 export interface RuntimeWorkspaceStateRpc {
   call(target: string, method: string, args: unknown[]): Promise<unknown>;

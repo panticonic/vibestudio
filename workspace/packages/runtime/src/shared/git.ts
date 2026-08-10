@@ -10,8 +10,9 @@
  */
 
 import type { RpcCaller } from "@vibestudio/rpc";
-import { gitInteropMethods, type GitInteropClient } from "@vibestudio/service-schemas/gitInterop";
-import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
+import type { gitInteropMethods, GitInteropClient } from "@vibestudio/service-schemas/gitInterop";
+import { GIT_INTEROP_METHOD_NAMES } from "@vibestudio/service-schemas/clients/generated/runtimeClientMethods";
+import { createLazyTypedServiceClient } from "@vibestudio/shared/lazyTypedServiceClient";
 
 export type GitClient = GitInteropClient;
 export type {
@@ -36,7 +37,11 @@ export type {
 } from "@vibestudio/service-schemas/gitInterop";
 
 export function createGitClient(rpc: RpcCaller): GitClient {
-  return createTypedServiceClient("gitInterop", gitInteropMethods, (_service, method, args) =>
-    rpc.call("main", "extensions.invokeProvider", ["gitInterop", method, args])
+  return createLazyTypedServiceClient(
+    "gitInterop",
+    GIT_INTEROP_METHOD_NAMES,
+    async () => (await import("@vibestudio/service-schemas/gitInterop")).gitInteropMethods,
+    (_service, method, args) =>
+      rpc.call("main", "extensions.invokeProvider", ["gitInterop", method, args])
   );
 }

@@ -4,7 +4,7 @@
  * Both environments receive the same global names.
  */
 
-import type { PanelEntityId, PanelSlotId } from "@vibestudio/shared/panel/ids";
+import type { PanelEntityId, PanelSlotId } from "@vibestudio/shared/panel/idValues";
 
 export interface GatewayConfig {
   serverUrl: string;

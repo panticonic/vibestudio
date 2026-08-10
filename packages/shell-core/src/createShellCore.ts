@@ -1,72 +1,19 @@
 import type { PanelRegistry } from "@vibestudio/shared/panelRegistry";
 import type { PanelSearchIndex, PanelSearchResult } from "@vibestudio/shared/panelSearchTypes";
-import type { EntityRecord, RuntimeEntityHandle } from "@vibestudio/shared/runtime/entitySpec";
 import type { WorkspaceConfig } from "@vibestudio/workspace-contracts/types";
 import {
   PanelManager,
   type LocalPanelViewStateStore,
   type PanelManagerServerInfo,
 } from "./panelManager.js";
-import type {
-  RuntimeClient,
-  SlotHistoryRow,
-  SlotRow,
-  WorkspaceStateClient,
+import type { ShellServiceCall } from "./workspaceStateClient.js";
+import { createRuntimeClient, createWorkspaceStateClient } from "./workspaceStateClient.js";
+
+export {
+  createRuntimeClient,
+  createWorkspaceStateClient,
+  type ShellServiceCall,
 } from "./workspaceStateClient.js";
-
-export type ShellServiceCall = (
-  service: string,
-  method: string,
-  args: unknown[]
-) => Promise<unknown>;
-
-/**
- * Complete shell adapters for the workspace-state/runtime service contracts.
- * Every host uses these factories so adding a required PanelManager operation
- * cannot silently leave one platform with a partial structural lookalike.
- */
-export function createWorkspaceStateClient(callService: ShellServiceCall): WorkspaceStateClient {
-  const call = <T>(service: string, method: string, args: unknown[]) =>
-    callService(service, method, args) as Promise<T>;
-  return {
-    getPanelTreeRootGroups: (input) => call("workspace-state", "panelTree.rootGroups", [input]),
-    getPanelTreePage: (input) => call("workspace-state", "panelTree.page", [input]),
-    getPanelTreePath: (slotId) => call("workspace-state", "panelTree.path", [slotId]),
-    getPanelDetail: (slotId) => call("workspace-state", "panelTree.detail", [slotId]),
-    searchPanelTree: (input) => call("workspace-state", "panelTree.search", [input]),
-    getSlot: (slotId) => call<SlotRow | null>("workspace-state", "slot.get", [slotId]),
-    getRelativeSlotHistory: (slotId, delta) =>
-      call<SlotHistoryRow | null>("workspace-state", "slot.historyRelative", [slotId, delta]),
-    resolveActiveEntity: (id) =>
-      call<EntityRecord | null>("workspace-state", "entity.resolveActive", [id]),
-    resolveEntity: (id) => call<EntityRecord | null>("workspace-state", "entity.resolve", [id]),
-    resolveSlotByEntity: (entityId) =>
-      call<string | null>("workspace-state", "slot.resolveByEntity", [entityId]),
-    createSlot: (input) => call<void>("workspace-state", "slot.create", [input]),
-    commitPreparedNavigation: (input) =>
-      call("workspace-state", "slot.commitPreparedNavigation", [input]),
-    updateCurrentStateArgs: (slotId, stateArgs) =>
-      call<void>("workspace-state", "slot.updateCurrentStateArgs", [slotId, stateArgs]),
-    moveSlot: (slotId, parentSlotId, placement) =>
-      call<void>("workspace-state", "slot.move", [slotId, parentSlotId, placement]),
-    closeSlot: (slotId) => call("workspace-state", "slot.close", [slotId]),
-    getCloseCleanupPage: (input) => call("workspace-state", "slot.closeCleanupPage", [input]),
-    acknowledgeCloseCleanup: (slotIds) =>
-      call<void>("workspace-state", "slot.closeCleanupAck", [slotIds]),
-  };
-}
-
-export function createRuntimeClient(callService: ShellServiceCall): RuntimeClient {
-  const call = <T>(service: string, method: string, args: unknown[]) =>
-    callService(service, method, args) as Promise<T>;
-  return {
-    createEntity: (spec) => call<RuntimeEntityHandle>("runtime", "createEntity", [spec]),
-    reserveEntity: (spec) => call<RuntimeEntityHandle>("runtime", "reserveEntity", [spec]),
-    activateReservedEntity: (spec) =>
-      call<RuntimeEntityHandle>("runtime", "activateReservedEntity", [spec]),
-    retireEntity: (id) => call<void>("runtime", "retireEntity", [{ id }]),
-  };
-}
 
 /**
  * Platform-neutral shell core. Electron and mobile supply only their transport,

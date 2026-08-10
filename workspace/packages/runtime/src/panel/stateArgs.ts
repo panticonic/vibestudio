@@ -1,5 +1,5 @@
 import { applyStateArgsSnapshot } from "@vibestudio/shared/panel/applyStateArgsSnapshot";
-import type { PanelSlotId } from "@vibestudio/shared/panel/ids";
+import type { PanelSlotId } from "@vibestudio/shared/panel/idValues";
 import { readPanelStateArgs, updatePanelStateArgs } from "../shared/panelStateArgsPersistence.js";
 
 // Global injected by preload via --vibestudio-state-args command line arg

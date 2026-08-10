@@ -19,7 +19,7 @@ import {
   panelIdSegmentFromName,
 } from "@vibestudio/shared/panelIdUtils";
 import { browserSourceFromHostname, generateContextId } from "@vibestudio/shared/panelFactory";
-import { validateStateArgs } from "@vibestudio/shared/stateArgsValidator";
+import { validateStateArgsAsync } from "@vibestudio/shared/asyncStateArgsValidator";
 import {
   panelFailure,
   panelFailureFromError,
@@ -48,7 +48,7 @@ import {
   type PanelHandleMetadata,
 } from "./handles.js";
 import { readPanelStateArgs, updatePanelStateArgs } from "./panelStateArgsPersistence.js";
-import { asPanelEntityId, asPanelSlotId } from "@vibestudio/shared/panel/ids";
+import { asPanelEntityId, asPanelSlotId } from "@vibestudio/shared/panel/idValues";
 import { callWorkspaceState, createRuntimeWorkspaceStateClient } from "./workspaceStateClient.js";
 import {
   commitPreparedPanelNavigation,
@@ -720,7 +720,10 @@ export function createPanelRuntime(options: CreatePanelRuntimeOptions): PanelRun
     if (!external && !panelMetadata) throw new Error(`Unknown panel source: ${source}`);
     const stateArgsValidation = external
       ? { success: true as const, data: navigateOptions?.stateArgs ?? {} }
-      : validateStateArgs(navigateOptions?.stateArgs ?? {}, panelMetadata?.stateArgs as never);
+      : await validateStateArgsAsync(
+          navigateOptions?.stateArgs ?? {},
+          panelMetadata?.stateArgs as never
+        );
     if (!stateArgsValidation.success) {
       throw new Error(`Invalid stateArgs for ${source}: ${stateArgsValidation.error}`);
     }
@@ -1384,7 +1387,10 @@ export function createPanelRuntime(options: CreatePanelRuntimeOptions): PanelRun
     }
     const stateArgsValidation = external
       ? { success: true as const, data: openOptions?.stateArgs ?? {} }
-      : validateStateArgs(openOptions?.stateArgs ?? {}, panelMetadata?.stateArgs as never);
+      : await validateStateArgsAsync(
+          openOptions?.stateArgs ?? {},
+          panelMetadata?.stateArgs as never
+        );
     if (!stateArgsValidation.success) {
       throw new Error(`Invalid stateArgs for ${source}: ${stateArgsValidation.error}`);
     }

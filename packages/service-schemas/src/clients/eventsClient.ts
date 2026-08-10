@@ -8,7 +8,6 @@
  */
 import type { RpcCaller, RpcClient } from "@vibestudio/rpc";
 import type { EventName, EventPayloads } from "@vibestudio/shared/events";
-import { readEventWatchRecords } from "@vibestudio/service-schemas/events";
 import type { RecoveryCoordinator } from "@vibestudio/shell-core/recoveryCoordinator";
 import { serializeByKey } from "@vibestudio/shared/keyedSerializer";
 
@@ -160,6 +159,7 @@ export class EventsClient {
           typeof this.rpc.streamReadable === "function"
             ? await this.rpc.streamReadable("main", `${this.serviceName}.watch`, args, options)
             : await this.rpc.stream("main", `${this.serviceName}.watch`, args, options);
+        const { readEventWatchRecords } = await import("@vibestudio/service-schemas/events");
         for await (const record of readEventWatchRecords(response)) {
           if (record.kind === "watching") {
             if (acknowledged) throw new Error("Event watch sent more than one ACK");

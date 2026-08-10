@@ -34,9 +34,9 @@ import {
   updatePanelNavigationState,
 } from "@vibestudio/shared/panel/accessors";
 import type { RuntimeCodePanelEntityCreateSpec } from "@vibestudio/shared/runtime/entitySpec";
-import { asPanelEntityId, asPanelSlotId } from "@vibestudio/shared/panel/ids";
+import { asPanelEntityId, asPanelSlotId } from "@vibestudio/shared/panel/idValues";
 import { normalizePanelTitle } from "@vibestudio/shared/panel/title";
-import type { PanelEntityId, PanelSlotId } from "@vibestudio/shared/panel/ids";
+import type { PanelEntityId, PanelSlotId } from "@vibestudio/shared/panel/idValues";
 import type {
   RuntimeClient,
   SlotHistoryRow,

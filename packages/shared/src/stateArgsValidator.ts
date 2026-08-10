@@ -1,5 +1,6 @@
 import Ajv from "ajv";
 import type { StateArgsSchema, StateArgsValue, StateArgsValidation } from "./stateArgs.js";
+import { normalizeStateArgs } from "./stateArgsSerialization.js";
 
 // Ajv instance with defaults enabled - mutates input to apply defaults
 const ajv = new Ajv({ useDefaults: true, coerceTypes: true });
@@ -31,12 +32,9 @@ export function validateStateArgs(
   schema: StateArgsSchema | undefined
 ): StateArgsValidation {
   // First, ensure input is JSON-serializable (catches functions, circular refs, etc.)
-  let data: StateArgsValue;
-  try {
-    data = JSON.parse(JSON.stringify(args ?? {}));
-  } catch {
-    return { success: false, error: "stateArgs must be JSON-serializable" };
-  }
+  const normalized = normalizeStateArgs(args);
+  if (!normalized.success) return normalized;
+  const data = normalized.data as StateArgsValue;
 
   // No schema = accept any JSON-serializable value
   if (!schema) {

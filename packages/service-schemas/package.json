@@ -13,6 +13,7 @@
     "./*": "./src/*.ts"
   },
   "scripts": {
+    "generate:runtime-client-methods": "node --import tsx ../../scripts/generate-runtime-client-methods.mjs",
     "test": "cd ../.. && vitest run packages/service-schemas/src"
   },
   "dependencies": {

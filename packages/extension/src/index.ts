@@ -1,10 +1,11 @@
 import type { UnitRegistryEntryBase } from "@vibestudio/unit-host";
 import type { CallerKind } from "@vibestudio/shared/serviceDispatcher";
 import type { CodeIdentityCallerKind } from "@vibestudio/shared/principalKinds";
-import { extensionsMethods } from "@vibestudio/service-schemas/extensions";
+import type { extensionsMethods } from "@vibestudio/service-schemas/extensions";
+import { EXTENSIONS_METHOD_NAMES } from "@vibestudio/service-schemas/clients/generated/runtimeClientMethods";
 import type { GitInteropClient } from "@vibestudio/service-schemas/gitInterop";
 import { EventsClient } from "@vibestudio/service-schemas/clients/eventsClient";
-import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
+import { createLazyTypedServiceClient } from "@vibestudio/shared/lazyTypedServiceClient";
 
 export interface Disposable {
   dispose(): void;
@@ -116,8 +117,11 @@ const PROMISE_MISUSE_PROPS = new Set<PropertyKey>(["catch", "finally"]);
 
 /** Typed `extensions.*` client over a `call(target, method, args)` transport. */
 function createExtensionsServiceClient(rpc: Pick<ExtensionsClientRpc, "call">) {
-  return createTypedServiceClient("extensions", extensionsMethods, (service, method, args) =>
-    rpc.call("main", `${service}.${method}`, args)
+  return createLazyTypedServiceClient(
+    "extensions",
+    EXTENSIONS_METHOD_NAMES,
+    async () => (await import("@vibestudio/service-schemas/extensions")).extensionsMethods,
+    (service, method, args) => rpc.call("main", `${service}.${method}`, args)
   );
 }
 

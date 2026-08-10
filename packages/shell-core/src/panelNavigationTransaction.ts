@@ -1,4 +1,4 @@
-import type { PanelSlotId } from "@vibestudio/shared/panel/ids";
+import type { PanelSlotId } from "@vibestudio/shared/panel/idValues";
 import type {
   SlotCommitPreparedNavigationInput,
   SlotCommitPreparedNavigationResult,

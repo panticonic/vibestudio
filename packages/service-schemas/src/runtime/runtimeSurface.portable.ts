@@ -23,11 +23,13 @@ import {
   type RuntimeSurfaceEntry,
 } from "@vibestudio/shared/runtimeSurface";
 import gadRuntimeCatalog from "./generated/gadRuntimeCatalog.json";
-import { blobstoreMethods } from "../blobstore.js";
 import { GAD_RUNTIME_METHOD_NAMES } from "@vibestudio/shared/gadRuntimeMethods";
-import { gitInteropMethods } from "../gitInterop.js";
-import { vcsMethods } from "../vcs.js";
-import { workspaceMethods } from "../workspace.js";
+import {
+  BLOBSTORE_METHOD_NAMES,
+  GIT_INTEROP_METHOD_NAMES,
+  VCS_METHOD_NAMES,
+  WORKSPACE_METHOD_NAMES,
+} from "../clients/generated/runtimeClientMethods.js";
 
 export const OPEN_PANEL_SIGNATURE =
   "openPanel(source: string, options?: OpenPanelOptions): Promise<PanelHandle>";
@@ -230,7 +232,7 @@ const WORKERS_RUNTIME_METHOD_CATALOG = {
  * project-discovery namespace. Deriving this prevents the portable help surface
  * from retaining deleted hub-catalog methods or missing new nested groups. */
 export const WORKSPACE_MEMBERS = [
-  ...new Set(Object.keys(workspaceMethods).map((method) => method.split(".")[0]!)),
+  ...new Set(WORKSPACE_METHOD_NAMES.map((method) => method.split(".")[0]!)),
   "projects",
 ];
 
@@ -321,21 +323,16 @@ export const BROWSER_DATA_MEMBERS = [
   "exportCookies",
 ];
 
-export const GIT_MEMBERS = Object.keys(gitInteropMethods);
+export const GIT_MEMBERS = [...GIT_INTEROP_METHOD_NAMES];
 
-export const VCS_MEMBERS = Object.keys(vcsMethods);
+export const VCS_MEMBERS = [...VCS_METHOD_NAMES];
 
 export const VCS_DESCRIPTION =
   "Simple semantic version control: exact event/application state, expressive edit/move/copy records, incremental local integration, whole-chain commit/discard, directly walkable provenance, and atomic external-snapshot acknowledgements containing the committed event/application/work-unit/repository/snapshot tuple.";
 
 export const GAD_MEMBERS = [...GAD_RUNTIME_METHOD_NAMES];
 
-export const BLOBSTORE_MEMBERS = [
-  ...Object.keys(blobstoreMethods),
-  "putBytes",
-  "getBytes",
-  "readText",
-];
+export const BLOBSTORE_MEMBERS = [...BLOBSTORE_METHOD_NAMES, "putBytes", "getBytes", "readText"];
 
 export const WEBHOOKS_MEMBERS = [
   "createSubscription",

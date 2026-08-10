@@ -3,8 +3,9 @@
  * `runtime` services.
  *
  * These describe what the shell (Electron main / mobile main) sends over RPC.
- * They are pure type contracts — the concrete RPC client is wired separately
- * by each shell. `panelManager` consumes these via dependency injection.
+ * This module also owns their tiny transport adapters. Keeping those adapters
+ * here lets panel runtimes use the client without importing the full shell
+ * assembly and PanelManager implementation.
  */
 
 import type {
@@ -13,7 +14,7 @@ import type {
   RuntimeEntityCreateSpec,
   RuntimeEntityHandle,
 } from "@vibestudio/shared/runtime/entitySpec";
-import type { PanelEntityId, PanelSlotId } from "@vibestudio/shared/panel/ids";
+import type { PanelEntityId, PanelSlotId } from "@vibestudio/shared/panel/idValues";
 import type {
   WorkspacePanelDetail,
   WorkspacePanelCloseCleanupPage,
@@ -119,4 +120,47 @@ export interface RuntimeClient {
   reserveEntity(spec: RuntimeCodeEntityCreateSpec): Promise<RuntimeEntityHandle>;
   activateReservedEntity(spec: RuntimeCodeEntityCreateSpec): Promise<RuntimeEntityHandle>;
   retireEntity(id: string): Promise<void>;
+}
+
+export type ShellServiceCall = (
+  service: string,
+  method: string,
+  args: unknown[]
+) => Promise<unknown>;
+
+export function createWorkspaceStateClient(callService: ShellServiceCall): WorkspaceStateClient {
+  const call = <T>(method: string, args: unknown[]) =>
+    callService("workspace-state", method, args) as Promise<T>;
+  return {
+    getPanelTreeRootGroups: (input) => call("panelTree.rootGroups", [input]),
+    getPanelTreePage: (input) => call("panelTree.page", [input]),
+    getPanelTreePath: (slotId) => call("panelTree.path", [slotId]),
+    getPanelDetail: (slotId) => call("panelTree.detail", [slotId]),
+    searchPanelTree: (input) => call("panelTree.search", [input]),
+    getSlot: (slotId) => call("slot.get", [slotId]),
+    getRelativeSlotHistory: (slotId, delta) => call("slot.historyRelative", [slotId, delta]),
+    resolveActiveEntity: (id) => call("entity.resolveActive", [id]),
+    resolveEntity: (id) => call("entity.resolve", [id]),
+    resolveSlotByEntity: (entityId) => call("slot.resolveByEntity", [entityId]),
+    createSlot: (input) => call("slot.create", [input]),
+    commitPreparedNavigation: (input) => call("slot.commitPreparedNavigation", [input]),
+    updateCurrentStateArgs: (slotId, stateArgs) =>
+      call("slot.updateCurrentStateArgs", [slotId, stateArgs]),
+    moveSlot: (slotId, parentSlotId, placement) =>
+      call("slot.move", [slotId, parentSlotId, placement]),
+    closeSlot: (slotId) => call("slot.close", [slotId]),
+    getCloseCleanupPage: (input) => call("slot.closeCleanupPage", [input]),
+    acknowledgeCloseCleanup: (slotIds) => call("slot.closeCleanupAck", [slotIds]),
+  };
+}
+
+export function createRuntimeClient(callService: ShellServiceCall): RuntimeClient {
+  const call = <T>(method: string, args: unknown[]) =>
+    callService("runtime", method, args) as Promise<T>;
+  return {
+    createEntity: (spec) => call("createEntity", [spec]),
+    reserveEntity: (spec) => call("reserveEntity", [spec]),
+    activateReservedEntity: (spec) => call("activateReservedEntity", [spec]),
+    retireEntity: (id) => call("retireEntity", [{ id }]),
+  };
 }

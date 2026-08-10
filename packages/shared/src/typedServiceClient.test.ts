@@ -7,6 +7,7 @@ import {
   preparedAuthoritySelectorKey,
   selectedPreparedAuthorityRequirement,
 } from "./typedServiceClient.js";
+import { createLazyTypedServiceClient } from "./lazyTypedServiceClient.js";
 import {
   fixedPreparedAuthoritySelection,
   selectedPreparedAuthoritySelection,
@@ -96,6 +97,37 @@ describe("createTypedServiceClient", () => {
       units: { args: z.tuple([]) },
     });
     expect(() => createTypedServiceClient("demo", colliding, async () => null)).toThrow(/collides/);
+  });
+});
+
+describe("createLazyTypedServiceClient", () => {
+  it("is enumerable before loading and validates through one shared schema load", async () => {
+    const loadMethods = vi.fn(async () => methods);
+    const call = vi.fn(async (_service: string, method: string) =>
+      method === "ping" ? "pong" : null
+    );
+    const client = createLazyTypedServiceClient(
+      "demo",
+      Object.keys(methods) as (keyof typeof methods & string)[],
+      loadMethods,
+      call
+    );
+
+    expect(Object.keys(client)).toEqual([
+      "ping",
+      "echo",
+      "units",
+      "hostTargets",
+      "voidResult",
+      "nullableResult",
+    ]);
+    expect(loadMethods).not.toHaveBeenCalled();
+
+    await expect(client.echo(42 as never)).rejects.toThrow(/arguments failed schema validation/);
+    expect(call).not.toHaveBeenCalled();
+    await expect(client.ping()).resolves.toBe("pong");
+    expect(loadMethods).toHaveBeenCalledTimes(1);
+    expect(call).toHaveBeenCalledWith("demo", "ping", []);
   });
 });
 

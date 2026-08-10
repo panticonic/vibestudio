@@ -1,9 +1,3 @@
-// Buffer polyfill for browser environments - must be first to ensure availability
-// for bundled dependencies that expect a Node-compatible Buffer global.
-import { Buffer } from "buffer";
-if (typeof globalThis.Buffer === "undefined") {
-  globalThis.Buffer = Buffer;
-}
 import { createPanelTransport } from "./transport.js";
 import { fs } from "./fs.js"; // RPC-backed fs (server-side per-context folders)
 import { initRuntime } from "../setup/initRuntime.js";
@@ -14,8 +8,8 @@ import { createHostedRuntime, type RuntimeHost } from "../shared/hostedRuntime.j
 // --- Portable authoring helpers (z, defineContract, Rpc, path/context helpers,
 // buildPanelLink, createGatewayFetch) — identical on panel · worker · eval. ---
 export * from "../shared/portable.js";
-export { FORM_FILL_TYPES } from "@vibestudio/browser-data";
-export type { FormFillType } from "@vibestudio/browser-data";
+export { FORM_FILL_TYPES } from "@vibestudio/browser-data/form-fill-types";
+export type { FormFillType } from "@vibestudio/browser-data/form-fill-types";
 
 // --- Type re-exports ---
 export type {

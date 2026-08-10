@@ -18,15 +18,19 @@
  * service policy gate — same as any other namespaced service method.
  */
 
-import { Buffer } from "buffer";
-import type { RpcCaller } from "@vibestudio/rpc";
-import {
-  createTypedServiceClient,
-  type TypedServiceClient,
-} from "@vibestudio/shared/typedServiceClient";
-import { blobstoreMethods } from "@vibestudio/service-schemas/blobstore";
-export { BLOBSTORE_MEMBERS } from "@vibestudio/service-schemas/runtime/runtimeSurface.portable";
+import { base64ToBytes, bytesToBase64, type RpcCaller } from "@vibestudio/rpc";
+import { type TypedServiceClient } from "@vibestudio/shared/typedServiceClient";
+import { createLazyTypedServiceClient } from "@vibestudio/shared/lazyTypedServiceClient";
+import type { blobstoreMethods } from "@vibestudio/service-schemas/blobstore";
+import { BLOBSTORE_METHOD_NAMES } from "@vibestudio/service-schemas/clients/generated/runtimeClientMethods";
 import type { RuntimeFs } from "../types.js";
+
+export const BLOBSTORE_MEMBERS = [
+  ...BLOBSTORE_METHOD_NAMES,
+  "putBytes",
+  "getBytes",
+  "readText",
+] as const;
 
 type BlobstoreServiceClient = TypedServiceClient<typeof blobstoreMethods>;
 type PutBlobResult = Awaited<ReturnType<BlobstoreServiceClient["putBase64"]>>;
@@ -54,9 +58,10 @@ export type BlobstoreClient = Omit<BlobstoreServiceClient, "materializeTree"> & 
 };
 
 export function createBlobstoreClient(rpc: RpcCaller, fs?: RuntimeFs): BlobstoreClient {
-  const serviceClient = createTypedServiceClient(
+  const serviceClient = createLazyTypedServiceClient(
     "blobstore",
-    blobstoreMethods,
+    BLOBSTORE_METHOD_NAMES,
+    async () => (await import("@vibestudio/service-schemas/blobstore")).blobstoreMethods,
     (svc, method, args) => rpc.call("main", `${svc}.${method}`, args)
   );
 
@@ -74,13 +79,13 @@ export function createBlobstoreClient(rpc: RpcCaller, fs?: RuntimeFs): Blobstore
     }
 
     const bytes = input instanceof ArrayBuffer ? new Uint8Array(input) : input;
-    return serviceClient.putBase64(Buffer.from(bytes).toString("base64"));
+    return serviceClient.putBase64(bytesToBase64(bytes));
   };
 
   const readText: ReadText = (digest) => serviceClient.getText(digest);
   const getBytes: GetBytes = async (digest) => {
     const base64 = await serviceClient.getBase64(digest);
-    return base64 === null ? null : new Uint8Array(Buffer.from(base64, "base64"));
+    return base64 === null ? null : base64ToBytes(base64);
   };
 
   const materializeTree: MaterializeTree = async (treeRef, outDir, opts) => {
@@ -117,7 +122,9 @@ export function createBlobstoreClient(rpc: RpcCaller, fs?: RuntimeFs): Blobstore
       if (!expectedBasis) {
         expectedBasis = page.basis;
         if (page.basis.ref !== treeRef || page.basis.prefix !== "") {
-          throw new Error("blobstore.listTree returned a basis different from materializeTree's request");
+          throw new Error(
+            "blobstore.listTree returned a basis different from materializeTree's request"
+          );
         }
       } else if (
         page.basis.ref !== expectedBasis.ref ||
@@ -139,12 +146,12 @@ export function createBlobstoreClient(rpc: RpcCaller, fs?: RuntimeFs): Blobstore
         if (bytesBase64 === null) {
           throw new Error(`Tree blob missing: ${entry.contentHash} (${entry.path})`);
         }
-        const bytes = Buffer.from(bytesBase64, "base64");
+        const bytes = base64ToBytes(bytesBase64);
         await fs.mkdir(parentPath(path), { recursive: true });
 
         if (await fs.exists(path)) {
           const current = await fs.readFile(path);
-          if (Buffer.from(current as Uint8Array).equals(bytes)) {
+          if (bytesEqual(current as Uint8Array, bytes)) {
             // Content equality does not imply metadata equality. Re-apply the
             // tree's Git mode so repeated materialization repairs executable bits.
             await fs.chmod(path, entry.mode);
@@ -175,6 +182,14 @@ export function createBlobstoreClient(rpc: RpcCaller, fs?: RuntimeFs): Blobstore
     readText,
     materializeTree,
   }) as BlobstoreClient;
+}
+
+function bytesEqual(left: Uint8Array, right: Uint8Array): boolean {
+  if (left.byteLength !== right.byteLength) return false;
+  for (let index = 0; index < left.byteLength; index += 1) {
+    if (left[index] !== right[index]) return false;
+  }
+  return true;
 }
 
 function safeMaterializedPath(root: string, relativePath: string): string {

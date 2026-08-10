@@ -14,7 +14,7 @@ import type { RuntimeFs, ThemeAppearance } from "../types.js";
 import { _applyStateArgsFromHost, _initStateArgsRuntime } from "../panel/stateArgs.js";
 import { exposeAgentApi } from "../panel/agentApi.js";
 import { createPanelBootReporter } from "../panel/bootReporter.js";
-import type { PanelEntityId, PanelSlotId } from "@vibestudio/shared/panel/ids";
+import type { PanelEntityId, PanelSlotId } from "@vibestudio/shared/panel/idValues";
 import type { PanelBootObservation } from "@vibestudio/shared/panel/observation";
 
 export interface RuntimeDeps {

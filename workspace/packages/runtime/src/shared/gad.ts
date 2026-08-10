@@ -5,26 +5,23 @@ import type {
   UserNotificationListResult,
 } from "@vibestudio/shared/userNotifications";
 import { createGadServiceClient } from "@vibestudio/shared/workspaceServiceRpc";
+import { type ServiceCallFn, type TypedServiceClient } from "@vibestudio/shared/typedServiceClient";
+import { createLazyTypedServiceClient } from "@vibestudio/shared/lazyTypedServiceClient";
+import type { blobstoreMethods } from "@vibestudio/service-schemas/blobstore";
 import {
-  callTypedServiceMethod,
-  createTypedServiceClient,
-  type ServiceCallFn,
-  type TypedServiceClient,
-} from "@vibestudio/shared/typedServiceClient";
-import { blobstoreMethods } from "@vibestudio/service-schemas/blobstore";
-import {
-  gadMethods,
-  gadWireMethods,
+  type gadMethods,
+  type gadWireMethods,
   type EnvelopeLineage,
   type PrivateLineageForPublishedEnvelope,
   type PublishedArtifact,
 } from "@vibestudio/service-schemas/workspaceSource";
-import type { ChannelEnvelopePage } from "@vibestudio/shared/channelEnvelopePaging";
 import {
-  hydrateStoredValueRefs,
-  type ChannelEnvelope,
-  type TrajectoryEvent,
-} from "@workspace/agentic-protocol";
+  BLOBSTORE_METHOD_NAMES,
+  GAD_METHOD_NAMES,
+} from "@vibestudio/service-schemas/clients/generated/runtimeClientMethods";
+import type { ChannelEnvelopePage } from "@vibestudio/shared/channelEnvelopePaging";
+import { hydrateStoredValueRefs } from "@workspace/agentic-protocol/stored-values";
+import type { ChannelEnvelope, TrajectoryEvent } from "@workspace/agentic-protocol";
 
 export { GAD_WORKSPACE_SERVICE_PROTOCOL } from "@vibestudio/shared/workspaceServiceRpc";
 export type * from "@vibestudio/service-schemas/workspaceSource";
@@ -35,10 +32,21 @@ export type GadClient = TypedServiceClient<typeof gadMethods>;
 export function createGadClient(rpc: RpcCaller): GadClient {
   const service = createGadServiceClient(rpc);
   const wireTransport: ServiceCallFn = (_service, method, args) => service.call(method, ...args);
-  const call = <T>(method: keyof typeof gadWireMethods & string, ...args: unknown[]) =>
-    callTypedServiceMethod("gad-wire", gadWireMethods, wireTransport, method, args) as Promise<T>;
-  const blobstore = createTypedServiceClient("blobstore", blobstoreMethods, (svc, method, args) =>
-    rpc.call("main", `${svc}.${method}`, args)
+  const call = async <T>(method: keyof typeof gadWireMethods & string, ...args: unknown[]) => {
+    const { callTypedServiceMethod } = await import("@vibestudio/shared/typedServiceClient");
+    return callTypedServiceMethod(
+      "gad-wire",
+      (await import("@vibestudio/service-schemas/workspaceSource")).gadWireMethods,
+      wireTransport,
+      method,
+      args
+    ) as Promise<T>;
+  };
+  const blobstore = createLazyTypedServiceClient(
+    "blobstore",
+    BLOBSTORE_METHOD_NAMES,
+    async () => (await import("@vibestudio/service-schemas/blobstore")).blobstoreMethods,
+    (svc, method, args) => rpc.call("main", `${svc}.${method}`, args)
   );
   const hydrate = async <T>(value: T): Promise<T> =>
     hydrateStoredValueRefs(value, {
@@ -152,11 +160,16 @@ export function createGadClient(rpc: RpcCaller): GadClient {
     rebuildTrajectoryProjections: (input) => call("rebuildTrajectoryProjections", input),
   };
 
-  return createTypedServiceClient("gad", gadMethods, (_service, method, args) => {
-    const member = (adapter as unknown as Record<string, unknown>)[method];
-    if (typeof member !== "function") {
-      throw new Error(`GAD public adapter has no method ${JSON.stringify(method)}`);
+  return createLazyTypedServiceClient(
+    "gad",
+    GAD_METHOD_NAMES,
+    async () => (await import("@vibestudio/service-schemas/workspaceSource")).gadMethods,
+    (_service, method, args) => {
+      const member = (adapter as unknown as Record<string, unknown>)[method];
+      if (typeof member !== "function") {
+        throw new Error(`GAD public adapter has no method ${JSON.stringify(method)}`);
+      }
+      return (member as (...values: unknown[]) => Promise<unknown>)(...args);
     }
-    return (member as (...values: unknown[]) => Promise<unknown>)(...args);
-  });
+  );
 }

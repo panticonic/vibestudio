@@ -1,8 +1,8 @@
 import type { RpcClient } from "@vibestudio/rpc";
 import { decodePanelStateArgs } from "@vibestudio/shared/panelStateArgs";
-import { validateStateArgs } from "@vibestudio/shared/stateArgsValidator";
+import { validateStateArgsAsync } from "@vibestudio/shared/asyncStateArgsValidator";
 import type { StateArgsSchema } from "@vibestudio/shared/stateArgs";
-import { asPanelSlotId } from "@vibestudio/shared/panel/ids";
+import { asPanelSlotId } from "@vibestudio/shared/panel/idValues";
 import { callWorkspaceState, createRuntimeWorkspaceStateClient } from "./workspaceStateClient.js";
 
 type PanelStateArgsRpc = Pick<RpcClient, "call">;
@@ -47,7 +47,7 @@ export async function updatePanelStateArgs(
         detail.entity.activeBuildKey,
       ])
     : null;
-  const validation = validateStateArgs(merged, metadata?.stateArgsSchema);
+  const validation = await validateStateArgsAsync(merged, metadata?.stateArgsSchema);
   if (!validation.success) {
     throw new Error(`Invalid stateArgs: ${validation.error}`);
   }
