@@ -1078,6 +1078,8 @@ function buildBrowserAddressRows(
   return { rows, empty: query ? "No matching history" : "No browser history yet" };
 }
 
+const BREADCRUMB_ICON_SIZE = 15;
+
 // Shared styles for breadcrumb items
 const itemStyle: CSSProperties = {
   appRegion: "no-drag",
@@ -1231,7 +1233,7 @@ function HoverableBreadcrumbItem({
           icon={icon}
           source={source}
           favicon={favicon}
-          size={17}
+          size={BREADCRUMB_ICON_SIZE}
           fallback={source?.startsWith("browser:") ? "browser" : "panel"}
         />
         <Text

@@ -74,6 +74,8 @@ const OWNER_BAND_HEIGHT = 18;
 const ROW_PADDING_LEFT = 6;
 /** Fixed-width gutter that holds the expand caret so titles align by depth. */
 const CARET_SLOT = 14;
+/** Optical artwork size; leaves breathing room inside the dense 22px row. */
+const PANEL_ICON_SIZE = 14;
 const ACTION_BUTTON_SIZE = 18;
 const PANEL_TREE_PAGE_SIZE = 50;
 
@@ -547,7 +549,7 @@ const SortableTreeItem = memo(
             icon={panel.icon}
             source={panel.source}
             favicon={panel.favicon}
-            size={16}
+            size={PANEL_ICON_SIZE}
             fallback={panel.source?.startsWith("browser:") ? "browser" : "panel"}
           />
 
