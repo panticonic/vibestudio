@@ -12,10 +12,16 @@ import {
   type SetupAction,
 } from "./catalog";
 import type { SetupCapabilitySnapshot } from "./snapshot";
+import {
+  optionalTemplateCatalog,
+  type OptionalTemplateDefinition,
+  type OptionalTemplateSnapshot,
+} from "./templates";
 
 interface SetupHubProps {
   props: {
     snapshot?: SetupCapabilitySnapshot[];
+    templates?: OptionalTemplateSnapshot[];
   };
   chat: {
     send: (content: string, options?: { metadata?: Record<string, unknown> }) => Promise<unknown>;
@@ -171,6 +177,7 @@ function SetupRow({
 
 export default function SetupHub({ props, chat }: SetupHubProps) {
   const snapshots = props.snapshot ?? [];
+  const templateSnapshots = props.templates ?? [];
   const [pending, setPending] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const byId = new Map(snapshots.map((snapshot) => [snapshot.id, snapshot]));
@@ -216,6 +223,28 @@ export default function SetupHub({ props, chat }: SetupHubProps) {
       });
     } catch {
       setError("Couldn't request a fresh overview. Try again.");
+    } finally {
+      setPending(null);
+    }
+  }
+
+  async function sendTemplateInteraction(definition: OptionalTemplateDefinition) {
+    const key = `${definition.id}:add`;
+    setPending(key);
+    setError(null);
+    try {
+      await chat.send(`Review and add ${definition.title}`, {
+        metadata: {
+          interaction: {
+            source: "onboarding-setup-hub",
+            kind: "onboarding-template",
+            action: "add",
+            targetId: definition.id,
+          },
+        },
+      });
+    } catch {
+      setError(`Couldn't request ${definition.title}. Try again.`);
     } finally {
       setPending(null);
     }
@@ -340,6 +369,64 @@ export default function SetupHub({ props, chat }: SetupHubProps) {
           </Flex>
         );
       })}
+
+      {templateSnapshots.length > 0 ? (
+        <Flex direction="column" gap="1">
+          <Text size="2" weight="bold">
+            Optional templates
+          </Text>
+          <Text size="1" color="gray">
+            Review reusable workspace additions before installing them.
+          </Text>
+          {optionalTemplateCatalog.map((definition) => {
+            const snapshot = templateSnapshots.find((entry) => entry.id === definition.id);
+            if (!snapshot) return null;
+            return (
+              <Card key={definition.id} size="1">
+                <Flex align="center" justify="between" gap="2" wrap="wrap">
+                  <Box style={{ minWidth: 0, flex: "1 1 220px" }}>
+                    <Text as="div" size="2" weight="medium">
+                      {definition.title}
+                    </Text>
+                    <Text as="div" size="1" color="gray">
+                      {definition.summary}
+                    </Text>
+                  </Box>
+                  <Flex align="center" gap="2">
+                    <Badge
+                      size="1"
+                      color={
+                        snapshot.state === "installed"
+                          ? "green"
+                          : snapshot.state === "unknown"
+                            ? "orange"
+                            : "gray"
+                      }
+                      variant="soft"
+                    >
+                      {snapshot.state === "installed"
+                        ? "Installed"
+                        : snapshot.state === "unknown"
+                          ? "Unknown"
+                          : "Available"}
+                    </Badge>
+                    {snapshot.state === "available" ? (
+                      <Button
+                        size="1"
+                        variant="soft"
+                        disabled={pending !== null}
+                        onClick={() => void sendTemplateInteraction(definition)}
+                      >
+                        {pending === `${definition.id}:add` ? "Sending…" : "Review & add"}
+                      </Button>
+                    ) : null}
+                  </Flex>
+                </Flex>
+              </Card>
+            );
+          })}
+        </Flex>
+      ) : null}
 
       <Separator size="4" />
       <Box>

@@ -8,6 +8,7 @@ import { resolve } from "node:path";
 import { lintRendererSource } from "@workspace/agentic-core";
 import SetupHub from "./SetupHub.js";
 import type { SetupCapabilitySnapshot } from "./snapshot.js";
+import type { OptionalTemplateSnapshot } from "./templates.js";
 
 const observedAt = new Date().toISOString();
 const snapshots: SetupCapabilitySnapshot[] = [
@@ -30,6 +31,26 @@ const snapshots: SetupCapabilitySnapshot[] = [
     tier: "host-topology",
     attention: "none",
     nextAction: "setup",
+    observedAt,
+  },
+];
+const templates: OptionalTemplateSnapshot[] = [
+  {
+    id: "template.examples",
+    state: "available",
+    summary: "Available to review and add.",
+    observedAt,
+  },
+  {
+    id: "template.news",
+    state: "installed",
+    summary: "Installed in this workspace.",
+    observedAt,
+  },
+  {
+    id: "template.spectrolite",
+    state: "unknown",
+    summary: "Installation status could not be read right now.",
     observedAt,
   },
 ];
@@ -97,5 +118,33 @@ describe("SetupHub", () => {
       })
     );
     expect(view.getByText("Connected · not checked")).toBeTruthy();
+  });
+
+  it("shows optional templates and sends available choices through structured review", async () => {
+    const send = vi.fn(async () => undefined);
+    const view = render(
+      <Theme>
+        <SetupHub props={{ snapshot: snapshots, templates }} chat={{ send }} />
+      </Theme>
+    );
+
+    expect(view.getByText("Optional templates")).toBeTruthy();
+    expect(view.getByText("Installed")).toBeTruthy();
+    expect(view.getByText("Unknown")).toBeTruthy();
+    expect(view.getAllByRole("button", { name: "Review & add" })).toHaveLength(1);
+
+    fireEvent.click(view.getByRole("button", { name: "Review & add" }));
+    await waitFor(() =>
+      expect(send).toHaveBeenCalledWith("Review and add Examples", {
+        metadata: {
+          interaction: {
+            source: "onboarding-setup-hub",
+            kind: "onboarding-template",
+            action: "add",
+            targetId: "template.examples",
+          },
+        },
+      })
+    );
   });
 });

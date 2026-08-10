@@ -20,7 +20,8 @@
     "./execution": "./execution.ts",
     "./routing": "./routing.ts",
     "./snapshot": "./snapshot.ts",
-    "./status": "./status.ts"
+    "./status": "./status.ts",
+    "./templates": "./templates.ts"
   },
   "dependencies": {
     "@vibestudio/service-schemas": "workspace:*",

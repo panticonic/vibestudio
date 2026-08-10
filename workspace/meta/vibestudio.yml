@@ -17,13 +17,13 @@ initPanels:
 
 
         Read `skills/onboarding/SKILL.md`, then use the inviting panel's
-        `client_eval` tool to statically import `composeOnboardingSnapshot` from
+        `client_eval` tool to statically import `composeOnboardingOverview` from
         `@workspace-skills/onboarding` and return `await
-        composeOnboardingSnapshot()` with no verification argument. This
+        composeOnboardingOverview()` with no verification argument. This
         executes the single composer in the customer's current panel/client
         context. Give a welcome of at most two short paragraphs and render
         `skills/onboarding/SetupHub.tsx` with `inline_ui`, passing the returned
-        array as the `snapshot` prop. The inline overview owns the onboarding
+        `{ snapshot, templates }` object. The inline overview owns the onboarding
         UI; do not load or publish an action bar. If client eval or rendering is
         unavailable, give a concise plain-text fallback and do not invent
         status.
@@ -51,11 +51,18 @@ initPanels:
           invent setup status.
 
 
+        For `kind: "onboarding-template"`, use `client_eval` to statically
+        import `resolveOnboardingTemplateSelection`, call it with the complete
+        interaction, then read its returned Templates skill and use its URL
+        with the canonical `prepareAdd` and reviewed `add` workflow. The card
+        does not install directly or bypass Composer review and approval.
+
+
         Unknown or retired IDs are visible errors. There is no string-matching
         fallback.
 
         For a Google or GitHub `check` action, use `client_eval` to call
-        `composeOnboardingSnapshot({ verifyCapabilityId: interaction.targetId
+        `composeOnboardingOverview({ verifyCapabilityId: interaction.targetId
         })` and render a new `SetupHub.tsx` observation. Never mutate or claim
         to refresh the old inline card. For `kind: "onboarding-overview"` and
         action `refresh`, call the composer through `client_eval` again and
@@ -70,7 +77,7 @@ initPanels:
         ## Presentation rules
 
 
-        The verified template catalog and owner status reads are the source of
+        Composer template status and owner status reads are the source of
         the onboarding presentation. Do not enumerate an independent feature
         menu, inspect private owner storage, count credentials as proof of a
         live connection, create completion flags, or report a universal setup

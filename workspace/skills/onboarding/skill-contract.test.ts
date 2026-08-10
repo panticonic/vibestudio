@@ -13,7 +13,8 @@ describe("onboarding skill template handoff", () => {
       "git+https://github.com/panticonic/vibestudio-template-spectrolite.git"
     );
     expect(skill).toContain("`prepareAdd` and reviewed `add`");
-    expect(skill).toMatch(/ask\s+the user whether to add/);
+    expect(skill).toContain("`Review & add`");
+    expect(skill).toContain("resolveOnboardingTemplateSelection");
     expect(skill).toContain("Never\nguess a tag or commit");
   });
 });

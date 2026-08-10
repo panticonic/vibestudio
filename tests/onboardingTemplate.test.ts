@@ -27,9 +27,12 @@ describe("shipped first-run workspace", () => {
     const stateArgs = manifest.initPanels?.[0]?.stateArgs ?? {};
     expect(Object.keys(stateArgs).sort()).toEqual(["initialPrompt", "systemPrompt"]);
     expect(stateArgs["systemPrompt"]).toEqual(expect.stringContaining("client_eval"));
-    expect(stateArgs["systemPrompt"]).toEqual(expect.stringContaining("composeOnboardingSnapshot"));
+    expect(stateArgs["systemPrompt"]).toEqual(expect.stringContaining("composeOnboardingOverview"));
     expect(stateArgs["systemPrompt"]).toEqual(
       expect.stringContaining("executeOnboardingSelection")
+    );
+    expect(stateArgs["systemPrompt"]).toEqual(
+      expect.stringContaining("resolveOnboardingTemplateSelection")
     );
     expect(stateArgs["systemPrompt"]).toEqual(expect.stringContaining("SetupHub.tsx"));
     expect(stateArgs["systemPrompt"]).toEqual(

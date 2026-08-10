@@ -9,7 +9,11 @@ vi.mock("./status.js", () => ({
   createStatusAdapters: vi.fn(() => ({})),
 }));
 
-import { composeOnboardingSnapshot, type OnboardingSnapshotDependencies } from "./snapshot.js";
+import {
+  composeOnboardingOverview,
+  composeOnboardingSnapshot,
+  type OnboardingSnapshotDependencies,
+} from "./snapshot.js";
 import type { CapabilityOnboardingStatusAdapter } from "./status.js";
 
 const healthy: CapabilityOnboardingStatusAdapter = vi.fn(
@@ -45,6 +49,35 @@ function dependencies(
 }
 
 describe("composeOnboardingSnapshot", () => {
+  it("composes capability and template observations at one observation time", async () => {
+    const deps = dependencies({
+      "ai-provider": healthy,
+      "google-workspace": healthy,
+      github: healthy,
+      "browser-environment": healthy,
+      "local-models": healthy,
+      "agent-defaults": healthy,
+      "web-search": healthy,
+    });
+    const overview = await composeOnboardingOverview(
+      {},
+      {
+        ...deps,
+        templateStatus: vi.fn(async () => []),
+      }
+    );
+
+    expect(overview.snapshot.length).toBeGreaterThan(0);
+    expect(overview.templates.map((entry) => entry.state)).toEqual([
+      "available",
+      "available",
+      "available",
+    ]);
+    expect(
+      new Set([...overview.snapshot, ...overview.templates].map((entry) => entry.observedAt))
+    ).toEqual(new Set(["2026-07-24T12:00:00.000Z"]));
+  });
+
   it("preflights optional host reads instead of logging denied IPC calls", async () => {
     const callMainMock = vi.mocked(callMain);
     callMainMock.mockImplementation(async (method: string) => {

@@ -7,12 +7,12 @@ install an action bar.
 
 ## Run the setup projection
 
-Use `client_eval` to statically import `composeOnboardingSnapshot` from
+Use `client_eval` to statically import `composeOnboardingOverview` from
 `@workspace-skills/onboarding` and return its result. This runs the one
 composer inside the inviting chat panel, where direct owner APIs and the
 redacted Electron host topology read are both reachable.
 
-Render `{ snapshot }` with the base-owned setup hub. In a non-panel client,
+Render `{ snapshot, templates }` with the base-owned setup hub. In a non-panel client,
 summarize blocking and attention states concisely and mention that all other
 configuration is optional. A missing owner for a capability shipped in base is
 unavailable, not installable.
@@ -43,11 +43,12 @@ Owner workflows remain authoritative:
 - Credential inspection/revocation and agent grants open their distinct About
   pages.
 
-Onboarding does not advertise planned template extractions or offer template
-installation. The separate Templates workflow owns verified catalog refresh,
-exact selection, contribution review, approval, and operation
-recovery. Until a template is deployed in that catalog, it does not exist as an
-installable product capability.
+For an `onboarding-template` interaction, call
+`resolveOnboardingTemplateSelection` through `client_eval`, read its returned
+Templates skill, and use its stable URL with the canonical `prepareAdd` and
+reviewed `add` workflow. The onboarding card never installs directly. The
+Templates workflow owns exact selection, contribution review, approval, and
+operation recovery.
 
 After any check or workflow outcome, call the composer through `client_eval`
 again and render a new observation. A Google/GitHub check passes the selected

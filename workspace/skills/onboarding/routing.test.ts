@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { onboardingInteraction, resolveOnboardingSelection } from "./routing.js";
+import {
+  onboardingInteraction,
+  onboardingTemplateInteraction,
+  resolveOnboardingSelection,
+  resolveOnboardingTemplateSelection,
+} from "./routing.js";
 
 describe("onboarding selection routing", () => {
   it("resolves a stable capability id to its owner workflow", () => {
@@ -51,5 +56,19 @@ describe("onboarding selection routing", () => {
         action: "install" as never,
       })
     ).toThrow("connection.device does not offer the install action");
+  });
+
+  it("resolves optional template choices to the canonical Templates owner and URL", () => {
+    expect(
+      resolveOnboardingTemplateSelection(onboardingTemplateInteraction("template.news"))
+    ).toEqual(
+      expect.objectContaining({
+        ownerSkillPath: "skills/templates/SKILL.md",
+        url: "git+https://github.com/panticonic/vibestudio-template-news.git",
+      })
+    );
+    expect(() =>
+      resolveOnboardingTemplateSelection(onboardingTemplateInteraction("template.retired"))
+    ).toThrow("Unknown or retired onboarding template");
   });
 });

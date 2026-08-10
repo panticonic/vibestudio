@@ -12,15 +12,15 @@ checklist item.
 ## Opening overview
 
 Use the chat panel's `client_eval` tool to statically import
-`composeOnboardingSnapshot` from `@workspace-skills/onboarding`, then return
-`await composeOnboardingSnapshot()` with no arguments. Client eval runs the
+`composeOnboardingOverview` from `@workspace-skills/onboarding`, then return
+`await composeOnboardingOverview()` with no arguments. Client eval runs the
 base-owned composer inside the inviting panel, the shared boundary that can
 reach workspace owners and the redacted Electron host read.
 
-Render the returned array with `inline_ui` from
-`skills/onboarding/SetupHub.tsx`, passing `{ snapshot }`. The composer reads
+Render the returned object with `inline_ui` from
+`skills/onboarding/SetupHub.tsx`, passing its `{ snapshot, templates }`. The composer reads
 Google, GitHub, model settings, agent defaults, local models, browser imports,
-and web search directly from their owners. It composes device/workspace topology
+web search, and installed-template status directly from their owners. It composes device/workspace topology
 from `hubControl.listDevices` and `hubControl.listWorkspaces`, plus the
 client-local route mode. A failed read becomes an honest `unknown` row and does
 not suppress the rest. These owners currently ship in the base workspace. If
@@ -73,11 +73,18 @@ loaded modules, panel-local scope, or Electron-local host transport. Portable
 runtime helpers such as `openExternal()` work from either eval path and retain
 their normal approval flow.
 
+For `kind: "onboarding-template"`, statically import and call
+`resolveOnboardingTemplateSelection` with the complete interaction. Read its
+returned `ownerSkillPath`, then use its returned `url` with the Templates
+skill's `prepareAdd` and reviewed `add` workflow. The click expresses the
+user's request to review that template; it is not permission to bypass the
+Composer inspection or host approval boundary.
+
 ## Verification and refresh
 
 Stored Google/GitHub credentials are `connected-unverified`. For a `check`
 action, use `client_eval` to call
-`composeOnboardingSnapshot({ verifyCapabilityId: interaction.targetId })`.
+`composeOnboardingOverview({ verifyCapabilityId: interaction.targetId })`.
 
 Render a new `SetupHub.tsx` observation. Never rewrite the historical card.
 Refresh, workflow success, failure, and cancellation likewise produce a new
@@ -86,29 +93,29 @@ device IDs, pairing links, profile paths, or private topology.
 
 ## Templates
 
-Onboarding reflects the capabilities actually composed into the current
-workspace. When the user's stated goal requires one of these optional official
-outcomes and its units are absent, offer to add it through the Templates skill:
+Onboarding shows these optional official outcomes together with their actual
+Composer installation status:
 
-| User outcome | Official template URL |
-| --- | --- |
-| Learn from or start with Vibestudio examples | `git+https://github.com/panticonic/vibestudio-template-examples.git` |
-| Read, collect, or work with news | `git+https://github.com/panticonic/vibestudio-template-news.git` |
-| Write or edit MDX with Spectrolite | `git+https://github.com/panticonic/vibestudio-template-spectrolite.git` |
+| User outcome                                 | Official template URL                                                   |
+| -------------------------------------------- | ----------------------------------------------------------------------- |
+| Learn from or start with Vibestudio examples | `git+https://github.com/panticonic/vibestudio-template-examples.git`    |
+| Read, collect, or work with news             | `git+https://github.com/panticonic/vibestudio-template-news.git`        |
+| Write or edit MDX with Spectrolite           | `git+https://github.com/panticonic/vibestudio-template-spectrolite.git` |
 
-First inspect current template status. If the outcome is already present,
-continue with its discovered owner instead of adding it again. Otherwise ask
-the user whether to add the named outcome, then follow the Templates skill's
-canonical direct-URL `prepareAdd` and reviewed `add` workflow unchanged. Never
+The overview offers `Review & add` only when Composer reports that the outcome
+is available. Installed outcomes are labeled and are not offered again; an
+unknown status is honest and not actionable until refresh. A structured
+selection hands the stable URL to the Templates skill's canonical direct-URL
+`prepareAdd` and reviewed `add` workflow unchanged. Never
 guess a tag or commit, silently install from an inferred interest, or reproduce
 template preparation inside onboarding. The Templates surface and composer
 remain the sole installation path; onboarding only recognizes the need and
-hands off the user's approved intent.
+hands off the user's selected intent.
 
-Do not advertise all optional templates as a generic first-run checklist. They
-appear contextually when the user's goal calls for them. Once installed,
-ordinary runtime owner discovery exposes any setup workflow the new units
-provide.
+Keep optional templates visually separate from required setup. Their presence
+is discoverability, not an unfinished-setup checklist or recommendation. Once
+installed, ordinary runtime owner discovery exposes any setup workflow the new
+units provide.
 
 ## Product rules
 

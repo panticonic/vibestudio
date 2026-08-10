@@ -8,6 +8,11 @@ import {
   type SetupPresentationState,
 } from "./catalog";
 import { createStatusAdapters, type CapabilityOnboardingStatusAdapter } from "./status";
+import {
+  composeOptionalTemplateSnapshot,
+  type OptionalTemplateSnapshot,
+  type OptionalTemplateSnapshotDependencies,
+} from "./templates";
 
 interface OnboardingHostTopologySnapshot {
   devices: {
@@ -45,6 +50,15 @@ export interface SetupCapabilitySnapshot {
 
 export interface ComposeOnboardingSnapshotOptions {
   verifyCapabilityId?: "connection.google-workspace" | "connection.github";
+}
+
+export interface OnboardingOverview {
+  snapshot: SetupCapabilitySnapshot[];
+  templates: OptionalTemplateSnapshot[];
+}
+
+export interface OnboardingOverviewDependencies extends OnboardingSnapshotDependencies {
+  templateStatus?: OptionalTemplateSnapshotDependencies["status"];
 }
 
 export interface OnboardingSnapshotDependencies {
@@ -270,4 +284,17 @@ export async function composeOnboardingSnapshot(
     const snapshot = byId.get(entry.id);
     return snapshot ? [snapshot] : [];
   });
+}
+
+export async function composeOnboardingOverview(
+  options: ComposeOnboardingSnapshotOptions = {},
+  dependencies: OnboardingOverviewDependencies = {}
+): Promise<OnboardingOverview> {
+  const now = dependencies.now?.() ?? new Date();
+  const sharedNow = () => now;
+  const [snapshot, templates] = await Promise.all([
+    composeOnboardingSnapshot(options, { ...dependencies, now: sharedNow }),
+    composeOptionalTemplateSnapshot({ status: dependencies.templateStatus, now: sharedNow }),
+  ]);
+  return { snapshot, templates };
 }

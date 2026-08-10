@@ -4,6 +4,7 @@ import {
   type SetupAction,
   type SetupActionTarget,
 } from "./catalog";
+import { optionalTemplateById, type OptionalTemplateDefinition } from "./templates";
 
 export const ONBOARDING_INTERACTION_KIND = "onboarding-capability";
 export const ONBOARDING_INTERACTION_SOURCE = "onboarding-setup-hub";
@@ -22,6 +23,19 @@ export interface ResolvedOnboardingSelection {
   ownerSkillPath?: string;
 }
 
+export interface OnboardingTemplateInteraction {
+  source: typeof ONBOARDING_INTERACTION_SOURCE;
+  kind: "onboarding-template";
+  action: "add";
+  targetId: string;
+}
+
+export interface ResolvedOnboardingTemplateSelection {
+  template: OptionalTemplateDefinition;
+  ownerSkillPath: "skills/templates/SKILL.md";
+  url: string;
+}
+
 export function onboardingInteraction(
   targetId: string,
   action: SetupAction
@@ -31,6 +45,41 @@ export function onboardingInteraction(
     kind: ONBOARDING_INTERACTION_KIND,
     action,
     targetId,
+  };
+}
+
+export function onboardingTemplateInteraction(targetId: string): OnboardingTemplateInteraction {
+  return {
+    source: ONBOARDING_INTERACTION_SOURCE,
+    kind: "onboarding-template",
+    action: "add",
+    targetId,
+  };
+}
+
+export function resolveOnboardingTemplateSelection(
+  interaction: unknown
+): ResolvedOnboardingTemplateSelection {
+  if (!interaction || typeof interaction !== "object" || Array.isArray(interaction)) {
+    throw new Error("Onboarding template selection metadata is missing.");
+  }
+  const value = interaction as Record<string, unknown>;
+  if (
+    value["source"] !== ONBOARDING_INTERACTION_SOURCE ||
+    value["kind"] !== "onboarding-template" ||
+    value["action"] !== "add" ||
+    typeof value["targetId"] !== "string"
+  ) {
+    throw new Error("Onboarding template selection metadata is invalid.");
+  }
+  const template = optionalTemplateById(value["targetId"]);
+  if (!template) {
+    throw new Error(`Unknown or retired onboarding template: ${value["targetId"]}`);
+  }
+  return {
+    template,
+    ownerSkillPath: "skills/templates/SKILL.md",
+    url: template.url,
   };
 }
 
