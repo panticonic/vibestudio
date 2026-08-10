@@ -1,5 +1,5 @@
 import React from "react";
-import { fireEvent, render } from "@testing-library/react-native";
+import { fireEvent, render, waitFor } from "@testing-library/react-native";
 import { Provider, createStore } from "jotai";
 import { SvgUri } from "react-native-svg";
 import { AppBar } from "./AppBar";
@@ -41,6 +41,34 @@ const suggestion: AddressAutocompleteItem = {
 };
 
 describe("AppBar address UX", () => {
+  it("opens the New Panel launcher directly from the create button", async () => {
+    const store = createStore();
+    const createAboutPanel = jest.fn(async () => ({ id: "panel-new", title: "New Panel" }));
+    const onPanelCreated = jest.fn();
+    store.set(shellClientAtom, {
+      panels: {
+        createAboutPanel,
+      },
+    } as never);
+
+    const { getByLabelText } = render(
+      <Provider store={store}>
+        <AppBar
+          title="Agentic Chat"
+          onMenuPress={jest.fn()}
+          onPanelCreated={onPanelCreated}
+        />
+      </Provider>
+    );
+
+    fireEvent.press(getByLabelText("Create new panel"));
+
+    await waitFor(() => {
+      expect(createAboutPanel).toHaveBeenCalledWith("new");
+      expect(onPanelCreated).toHaveBeenCalledWith("panel-new");
+    });
+  });
+
   it("shows the active panel's canonical image identity in the header", () => {
     const store = createStore();
     store.set(activePanelIdAtom, "panel-1");

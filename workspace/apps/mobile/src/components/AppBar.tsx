@@ -18,7 +18,6 @@ import { useAtomValue, useSetAtom } from "jotai";
 import { themeColorsAtom } from "../state/themeAtoms";
 import { panelTreeRevisionAtom, shellClientAtom } from "../state/shellClientAtom";
 import { activePanelIdAtom } from "../state/navigationAtoms";
-import { showActionSheetAtom } from "../state/actionSheetAtoms";
 import { pushToastAtom } from "../state/toastAtoms";
 import {
   isBrowserPanelSource,
@@ -34,7 +33,6 @@ import {
   Bookmark,
   Clock3,
   Globe2,
-  LayoutGrid,
   Menu,
   MoreHorizontal,
   PanelTop,
@@ -98,7 +96,6 @@ export function AppBar({
   const shellClient = useAtomValue(shellClientAtom);
   const activePanelId = useAtomValue(activePanelIdAtom);
   const panelTreeRevision = useAtomValue(panelTreeRevisionAtom);
-  const showActionSheet = useSetAtom(showActionSheetAtom);
   const pushToast = useSetAtom(pushToastAtom);
   const [addressValue, setAddressValue] = useState(address);
   const [addressFocused, setAddressFocused] = useState(false);
@@ -141,39 +138,19 @@ export function AppBar({
     return undefined;
   }, [addressBarVisible]);
 
-  const handleCreatePanel = useCallback(() => {
+  const handleCreatePanel = useCallback(async () => {
     if (!shellClient) return;
-    const createPanel = async (kind: "new" | "browser") => {
-      try {
-        const result = await shellClient.panels.createAboutPanel(kind);
-        onPanelCreated?.(result.id);
-      } catch (error) {
-        pushToast({
-          title: "Panel creation failed",
-          message: error instanceof Error ? error.message : "Could not create panel.",
-          tone: "danger",
-        });
-      }
-    };
-    showActionSheet({
-      title: "New panel",
-      items: [
-        {
-          id: "new",
-          label: "New panel",
-          description: "Pick an app or workspace unit to open",
-          icon: LayoutGrid,
-        },
-        {
-          id: "browser",
-          label: "Browser",
-          description: "Open a web page in a browser panel",
-          icon: Globe2,
-        },
-      ],
-      onSelect: (id) => void createPanel(id as "new" | "browser"),
-    });
-  }, [onPanelCreated, pushToast, shellClient, showActionSheet]);
+    try {
+      const result = await shellClient.panels.createAboutPanel("new");
+      onPanelCreated?.(result.id);
+    } catch (error) {
+      pushToast({
+        title: "Panel creation failed",
+        message: error instanceof Error ? error.message : "Could not create panel.",
+        tone: "danger",
+      });
+    }
+  }, [onPanelCreated, pushToast, shellClient]);
 
   const caption = address && address !== title ? address : "";
 

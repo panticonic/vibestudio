@@ -31,6 +31,17 @@ afterEach(() => {
 });
 
 describe("mobile script platform and relay guarantees", () => {
+  it("opens the New Panel launcher without the retired panel-kind chooser", () => {
+    const source = fs.readFileSync(
+      path.join(process.cwd(), "scripts/cli/mobile-smoke.mjs"),
+      "utf8"
+    );
+    expect(source).toContain(
+      'tapButtonByText(options.device, "Create new panel", managedLaunchDeadlineMs)'
+    );
+    expect(source).not.toContain("tapButtonAndChoose");
+  });
+
   it("fails iOS smoke explicitly instead of reporting install/launch as a pass", () => {
     const result = spawnSync(
       process.execPath,

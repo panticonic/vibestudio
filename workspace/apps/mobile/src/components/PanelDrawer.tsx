@@ -630,7 +630,7 @@ export function PanelDrawer({ onSelectPanel }: PanelDrawerProps) {
           <Text style={[type.caption, styles.emptyText, { color: colors.textSecondary }]}>
             {trimmedQuery
               ? "Try a different search, or clear it to see the full tree."
-              : "Tap + to choose a panel, or tap the address pill and enter a website or panel source."}
+              : "Tap + to open New Panel, or tap the address pill and enter a website or panel source."}
           </Text>
         </View>
       ) : (

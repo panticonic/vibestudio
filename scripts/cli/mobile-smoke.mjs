@@ -634,28 +634,6 @@ async function tapButtonByText(device, text, deadlineMs) {
   );
 }
 
-async function tapButtonAndChoose(device, buttonText, choiceText, deadlineMs) {
-  let lastXml = "";
-  while (Date.now() < deadlineMs) {
-    const xml = await dumpWindowXml(device);
-    lastXml = xml;
-    const choice = findNodeBounds(xml, choiceText);
-    if (choice) {
-      await adb(device, "shell", "input", "tap", String(choice.x), String(choice.y));
-      return;
-    }
-    const button = findNodeBounds(xml, buttonText);
-    if (button) {
-      await adb(device, "shell", "input", "tap", String(button.x), String(button.y));
-    }
-    await sleep(500);
-  }
-  throw new Error(
-    `Timed out opening "${buttonText}" and choosing "${choiceText}". ` +
-      `Last visible labels: ${summarizeLabels(collectWindowLabels(lastXml))}`
-  );
-}
-
 async function tapOptionalButtonByText(device, text, timeoutMs = 6_000) {
   const deadlineMs = Date.now() + timeoutMs;
   while (Date.now() < deadlineMs) {
@@ -1659,15 +1637,9 @@ async function main() {
     );
     // The product no longer creates an onboarding panel during workspace
     // startup. Exercise the default user path instead of relying on hidden
-    // fixture state: open the panel action sheet and create the standard new
-    // panel launcher.
+    // fixture state: open the standard new-panel launcher directly.
     if (!options.noTap) {
-      await tapButtonAndChoose(
-        options.device,
-        "Create new panel",
-        "New Panel",
-        managedLaunchDeadlineMs
-      );
+      await tapButtonByText(options.device, "Create new panel", managedLaunchDeadlineMs);
       console.log("[mobile-smoke] Created a panel through the mobile app chrome");
     }
     for (const phase of [
