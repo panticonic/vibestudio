@@ -62,7 +62,7 @@ interface ResolvedService {
 }
 
 export type ChannelDeliveryEndpoint =
-  | { kind: "entity"; entityId: string }
+  | { kind: "entity"; entityId: string; invocation: "direct" | "mailbox" }
   | { kind: "session" };
 
 export interface ChannelJoinInput {
@@ -79,6 +79,7 @@ export interface ChannelJoinInput {
 export interface ChannelJoinResult {
   ok: boolean;
   participantId: string;
+  revision: number;
   channelConfig?: Record<string, unknown>;
   envelope?: ChannelReplayEnvelope;
 }

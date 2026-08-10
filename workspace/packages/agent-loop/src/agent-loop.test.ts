@@ -2418,7 +2418,11 @@ describe("agent-loop message delivery (acks, edit/retract, after-turn, flush)", 
         (entry) => entry.kind === "user" && entry.sourceMessageId === "subagent-terminal:run-1"
       )
     ).toBe(true);
-    expect(pendingEffectIds(s)).toEqual([ids.modelEffect(ids.messageId(turn1, 1))]);
+    expect(pendingEffectIds(s)).toEqual([
+      ids.modelEffect(ids.messageId(turn1, 1)),
+      `read:subagent-terminal:run-1:${turn1}`,
+      `read:u1:${turn1}`,
+    ]);
   });
 
   it("releases an after-turn message that arrives before suspension settles", () => {
@@ -2469,7 +2473,11 @@ describe("agent-loop message delivery (acks, edit/retract, after-turn, flush)", 
         (entry) => entry.kind === "user" && entry.sourceMessageId === "subagent-terminal:run-1"
       )
     ).toBe(true);
-    expect(pendingEffectIds(s)).toEqual([ids.modelEffect(ids.messageId(turn1, 1))]);
+    expect(pendingEffectIds(s)).toEqual([
+      ids.modelEffect(ids.messageId(turn1, 1)),
+      `read:subagent-terminal:run-1:${turn1}`,
+      `read:u1:${turn1}`,
+    ]);
     expect(
       s.outputs
         .flatMap((output) => output.append)
@@ -2513,7 +2521,11 @@ describe("agent-loop message delivery (acks, edit/retract, after-turn, flush)", 
       metadata: { deliverAfterTurn: true },
     });
     const firstTerminalModel = ids.modelEffect(ids.messageId(turn1, 1));
-    expect(pendingEffectIds(s)).toEqual([firstTerminalModel]);
+    expect(pendingEffectIds(s)).toEqual([
+      firstTerminalModel,
+      `read:subagent-terminal:run-1:${turn1}`,
+      `read:u1:${turn1}`,
+    ]);
 
     dispatch(s, {
       type: "command",
@@ -2544,7 +2556,12 @@ describe("agent-loop message delivery (acks, edit/retract, after-turn, flush)", 
       stopReason: "completed",
     });
     const steeredModel = ids.modelEffect(ids.messageId(turn1, 2));
-    expect(pendingEffectIds(s)).toEqual([steeredModel]);
+    expect(pendingEffectIds(s)).toEqual([
+      steeredModel,
+      `read:subagent-terminal:run-1:${turn1}`,
+      `read:u1:${turn1}`,
+      `read:u2:${turn1}`,
+    ]);
     expect(s.state.deferredPostTurnQueue.map((entry) => entry.sourceMessageId)).toEqual([
       "subagent-terminal:run-2",
     ]);

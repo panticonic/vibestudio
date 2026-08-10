@@ -49,6 +49,15 @@ function isAgentAuthoredCompleted(draft: PolicyAppendDraft): AgenticEvent | null
   return payload;
 }
 
+function callerAudience(descriptor: Pick<ChannelCallDescriptor, "caller">) {
+  return [
+    {
+      kind: "participant" as const,
+      participantId: descriptor.caller.participantId ?? descriptor.caller.id,
+    },
+  ];
+}
+
 const callEventPayload: ChannelCallEventBuilders = {
   started(input: ChannelCallDescriptor): AgenticEvent {
     return {
@@ -71,6 +80,12 @@ const callEventPayload: ChannelCallEventBuilders = {
           transportCallId: input.transportCallId,
           ...(input.deadlineAt != null ? { deadlineAt: input.deadlineAt } : {}),
         },
+        to: [
+          {
+            kind: "participant",
+            participantId: input.target.participantId ?? input.target.id,
+          },
+        ],
         userVisible: false,
       },
       createdAt: input.createdAt,
@@ -80,6 +95,7 @@ const callEventPayload: ChannelCallEventBuilders = {
   terminal(input: ChannelCallTerminalInput): AgenticEvent {
     const { descriptor, result, isError, terminalOutcome, terminalReasonCode } = input;
     const reason = typeof result === "string" && result ? result : "method failed";
+    const to = callerAudience(descriptor);
     const base = {
       actor: descriptor.caller,
       ...(descriptor.turnId ? { turnId: descriptor.turnId as TurnId } : {}),
@@ -94,6 +110,7 @@ const callEventPayload: ChannelCallEventBuilders = {
         kind: "invocation.cancelled",
         ...base,
         payload: invocationCancelledPayload(terminalOutcome, reason, {
+          to,
           ...(typeof result === "string" ? {} : { error: result }),
           ...(terminalReasonCode ? { terminalReasonCode } : {}),
         }),
@@ -104,6 +121,7 @@ const callEventPayload: ChannelCallEventBuilders = {
         kind: "invocation.abandoned",
         ...base,
         payload: invocationAbandonedPayload(reason, {
+          to,
           ...(typeof result === "string" ? {} : { error: result }),
           ...(terminalReasonCode ? { terminalReasonCode } : {}),
         }),
@@ -116,6 +134,7 @@ const callEventPayload: ChannelCallEventBuilders = {
       ...base,
       payload: isError
         ? invocationFailedPayload(failedOutcome, "method failed", {
+            to,
             error: result,
             terminalReasonCode: terminalReasonCode ?? "method_failed",
             failure: agentToolFailureFromUnknown(result, {
@@ -125,7 +144,7 @@ const callEventPayload: ChannelCallEventBuilders = {
               kind: failedOutcome === "infrastructure_error" ? "infrastructure" : undefined,
             }),
           })
-        : invocationCompletedPayload({ result }),
+        : invocationCompletedPayload({ result, to }),
     } as AgenticEvent;
   },
 
@@ -142,6 +161,7 @@ const callEventPayload: ChannelCallEventBuilders = {
       payload: {
         protocol: AGENTIC_PROTOCOL_VERSION,
         output: input.output,
+        to: callerAudience(descriptor),
       },
       createdAt: input.createdAt,
     } as AgenticEvent;
@@ -159,6 +179,7 @@ const callEventPayload: ChannelCallEventBuilders = {
       },
       payload: invocationCancelledPayload("cancelled", input.reason, {
         terminalReasonCode: "cancelled",
+        to: callerAudience(descriptor),
       }),
       createdAt: input.createdAt,
     } as AgenticEvent;

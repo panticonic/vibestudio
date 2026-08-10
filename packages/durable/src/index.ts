@@ -36,9 +36,13 @@ import {
 } from "@vibestudio/shared/durableWork";
 import {
   acceptResidentChannelDelivery,
+  acceptResidentChannelInvocation,
+  cancelResidentChannelInvocation,
   inspectResidentSessions,
   registerResidentSession,
   type ResidentChannelDeliveryInput,
+  type ResidentChannelInvocationInput,
+  type ResidentChannelCancellationInput,
   type ResidentSessionReceiver,
 } from "@vibestudio/shared/residentSession";
 import { bindMethodCapability, allOf, anyOf, capability } from "@vibestudio/shared/authorization";
@@ -1135,6 +1139,16 @@ export abstract class DurableObjectBase {
   })
   async acceptChannelDelivery(input: ResidentChannelDeliveryInput): Promise<unknown> {
     return acceptResidentChannelDelivery(this.rpcSelfId, input);
+  }
+
+  @rpc({ principals: ["code"], effect: { kind: "open" }, tier: "open", sensitivity: "write" })
+  async acceptChannelInvocation(input: ResidentChannelInvocationInput): Promise<unknown> {
+    return acceptResidentChannelInvocation(this.rpcSelfId, input);
+  }
+
+  @rpc({ principals: ["code"], effect: { kind: "open" }, tier: "open", sensitivity: "write" })
+  async cancelChannelInvocation(input: ResidentChannelCancellationInput): Promise<unknown> {
+    return cancelResidentChannelInvocation(this.rpcSelfId, input);
   }
 
   /** Register the finite receiver in this exact Durable Object activation.

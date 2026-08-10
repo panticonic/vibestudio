@@ -108,6 +108,12 @@ function createMockRpc() {
       if (target === "main" && method === "workers.resolveService") {
         return { kind: "durable-object", targetId: DO_TARGET };
       }
+      if (target === DO_TARGET && method === "claimMethodCall") {
+        return { claimed: true, generation: 1 };
+      }
+      if (target === DO_TARGET && method === "markMethodCallExecutionStarted") {
+        return { accepted: true };
+      }
       return undefined;
     }),
     stream: vi.fn(
@@ -398,6 +404,7 @@ describe("connectViaRpc", () => {
     });
 
     it("routes finite resident delivery through the injected owner registrar", async () => {
+      let joined = false;
       let receiver: ((payload: unknown) => void | Promise<void>) | undefined;
       let releaseHandler: (() => void) | undefined;
       const handlerGate = new Promise<void>((resolve) => {
@@ -433,12 +440,14 @@ describe("connectViaRpc", () => {
             return { kind: "durable-object", targetId: DO_TARGET };
           }
           if (target === DO_TARGET && method === "relationshipState") {
-            return { revision: 0 };
+            return { revision: joined ? 1 : 0, active: joined };
           }
           if (target === DO_TARGET && method === "join") {
+            joined = true;
             return {
               ok: true,
               participantId: SELF_ID,
+              revision: 1,
               envelope: {
                 mode: "initial",
                 logEvents: [],
@@ -1246,7 +1255,13 @@ describe("connectViaRpc", () => {
       await client.ready();
       mockRpc.call.mockClear();
       mockRpc.call.mockImplementation(async (_target: string, method: string) =>
-        method === "submitMethodResult" ? { id: 301 } : undefined
+        method === "claimMethodCall"
+          ? { claimed: true, generation: 1 }
+          : method === "markMethodCallExecutionStarted"
+            ? { accepted: true }
+            : method === "submitMethodResult"
+              ? { id: 301 }
+              : undefined
       );
 
       // Simulate an invocation start arriving from another participant.
@@ -1331,6 +1346,8 @@ describe("connectViaRpc", () => {
       await client.ready();
       mockRpc.call.mockClear();
       mockRpc.call.mockImplementation(async (_target: string, method: string) => {
+        if (method === "claimMethodCall") return { claimed: true, generation: 1 };
+        if (method === "markMethodCallExecutionStarted") return { accepted: true };
         if (method === "submitMethodProgress") {
           await progressSubmitted;
         }
@@ -1410,7 +1427,13 @@ describe("connectViaRpc", () => {
       await client.ready();
       mockRpc.call.mockClear();
       mockRpc.call.mockImplementation(async (_target: string, method: string) =>
-        method === "submitMethodResult" ? { id: 302 } : undefined
+        method === "claimMethodCall"
+          ? { claimed: true, generation: 1 }
+          : method === "markMethodCallExecutionStarted"
+            ? { accepted: true }
+            : method === "submitMethodResult"
+              ? { id: 302 }
+              : undefined
       );
 
       const emitInvocationStarted = (id: number) => {
@@ -1448,6 +1471,9 @@ describe("connectViaRpc", () => {
       await Promise.resolve();
       await Promise.resolve();
       expect(executeFn).toHaveBeenCalledTimes(1);
+      expect(
+        mockRpc.call.mock.calls.filter((c: unknown[]) => c[1] === "claimMethodCall")
+      ).toHaveLength(1);
 
       resolveWork({ answer: 42 });
       await vi.waitFor(() => {
@@ -1556,7 +1582,13 @@ describe("connectViaRpc", () => {
       await emitReplayAndReady(emit, []);
       await client.ready();
       mockRpc.call.mockClear();
-      mockRpc.call.mockResolvedValue(undefined);
+      mockRpc.call.mockImplementation(async (_target: string, method: string) =>
+        method === "claimMethodCall"
+          ? { claimed: true, generation: 1 }
+          : method === "markMethodCallExecutionStarted"
+            ? { accepted: true }
+            : undefined
+      );
 
       const emitInvocationStarted = (id: number) => {
         emit({
@@ -1623,6 +1655,8 @@ describe("connectViaRpc", () => {
       await client.ready();
       mockRpc.call.mockClear();
       mockRpc.call.mockImplementation(async (target: string, method: string) => {
+        if (method === "claimMethodCall") return { claimed: true, generation: 1 };
+        if (method === "markMethodCallExecutionStarted") return { accepted: true };
         if (target === "main" && method === "blobstore.getText") return encodedRequest;
         return undefined;
       });
@@ -1693,6 +1727,8 @@ describe("connectViaRpc", () => {
       await client.ready();
       mockRpc.call.mockClear();
       mockRpc.call.mockImplementation(async (target: string, method: string) => {
+        if (method === "claimMethodCall") return { claimed: true, generation: 1 };
+        if (method === "markMethodCallExecutionStarted") return { accepted: true };
         if (target === "main" && method === "blobstore.getText") {
           return await new Promise<string>((resolve) => {
             releaseRead = resolve;
@@ -2124,6 +2160,45 @@ describe("connectViaRpc", () => {
       await client.close();
     });
 
+    it("never regresses the durable replay cursor when an overlapping reader replays an older event", async () => {
+      const coordinator = createRecoveryCoordinator();
+      const mock = createMockRpc();
+      const client = connectViaRpc({
+        rpc: mock.rpc as any,
+        channel: CHANNEL,
+        recoveryCoordinator: coordinator,
+      });
+
+      await emitReplayAndReady(mock.emit, []);
+      await client.ready();
+      const events = client.events({ includeReplay: true });
+      mock.emit({
+        stream: "log",
+        phase: "live",
+        id: 200,
+        type: AGENTIC_EVENT_PAYLOAD_KIND,
+        payload: messageEvent("newer", "newer"),
+        senderId: "agent-1",
+        ts: Date.now(),
+      });
+      mock.emit({
+        stream: "log",
+        phase: "replay",
+        id: 150,
+        type: AGENTIC_EVENT_PAYLOAD_KIND,
+        payload: messageEvent("older", "older"),
+        senderId: "agent-1",
+        ts: Date.now(),
+      });
+      await events.next();
+      await events.next();
+
+      await coordinator.run("resubscribe");
+      const metadata = mock.rpc.stream.mock.calls[1]?.[2]?.[1] as { sinceId?: number };
+      expect(metadata.sinceId).toBe(200);
+      await client.close();
+    });
+
     it("recovers a terminated channel resource while the host transport remains connected", async () => {
       const coordinator = createRecoveryCoordinator();
       const mock = createMockRpc();
@@ -2139,6 +2214,65 @@ describe("connectViaRpc", () => {
 
       await vi.waitFor(() => expect(mock.rpc.stream).toHaveBeenCalledTimes(2));
       expect(mock.priorSignalStatesAtOpen[1]).toEqual([false]);
+      await client.close();
+    });
+
+    it("keeps ready pending across a transient first-subscription failure and resolves on recovery", async () => {
+      const coordinator = createRecoveryCoordinator();
+      const mock = createMockRpc();
+      mock.rpc.stream.mockRejectedValueOnce(new Error("first subscription transport failed"));
+      const client = connectViaRpc({
+        rpc: mock.rpc as any,
+        channel: CHANNEL,
+        recoveryCoordinator: coordinator,
+      });
+      const ready = client.ready();
+
+      await vi.waitFor(() => expect(mock.rpc.stream).toHaveBeenCalledTimes(2));
+      mock.emit({
+        kind: "ready",
+        contextId: "ctx-recovered-first-connect",
+        totalCount: 0,
+        envelopeCount: 0,
+      });
+
+      await expect(ready).resolves.toBeUndefined();
+      await client.close();
+    });
+
+    it("redrives a replacement that terminates during its ACK instead of losing the request behind recovering", async () => {
+      const coordinator = createRecoveryCoordinator();
+      const mock = createMockRpc();
+      const defaultStream = mock.rpc.stream.getMockImplementation()!;
+      let streamAttempt = 0;
+      mock.rpc.stream.mockImplementation(async (...args: Parameters<typeof defaultStream>) => {
+        streamAttempt += 1;
+        if (streamAttempt !== 2) return defaultStream(...args);
+        const result = await mock.rpc.call(args[0], args[1], args[2]);
+        const encoder = new TextEncoder();
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(
+                encoder.encode(`${JSON.stringify({ kind: "subscribed", result })}\n`)
+              );
+              controller.enqueue(encoder.encode("not-json\n"));
+              controller.close();
+            },
+          })
+        );
+      });
+      const client = connectViaRpc({
+        rpc: mock.rpc as any,
+        channel: CHANNEL,
+        recoveryCoordinator: coordinator,
+      });
+      await emitReplayAndReady(mock.emit, []);
+      await client.ready();
+
+      await coordinator.run("resubscribe");
+      await vi.waitFor(() => expect(mock.rpc.stream).toHaveBeenCalledTimes(3));
+
       await client.close();
     });
   });
@@ -2211,7 +2345,13 @@ describe("connectViaRpc", () => {
       await emitReplayAndReady(emit, []);
       await client.ready();
       mockRpc.call.mockClear();
-      mockRpc.call.mockResolvedValue(undefined);
+      mockRpc.call.mockImplementation(async (_target: string, method: string) =>
+        method === "claimMethodCall"
+          ? { claimed: true, generation: 1 }
+          : method === "markMethodCallExecutionStarted"
+            ? { accepted: true }
+            : undefined
+      );
 
       const disconnectFn = vi.fn();
       client.onDisconnect(disconnectFn);
@@ -2256,7 +2396,13 @@ describe("connectViaRpc", () => {
       await emitReplayAndReady(emit, []);
       await client.ready();
       mockRpc.call.mockClear();
-      mockRpc.call.mockResolvedValue(undefined);
+      mockRpc.call.mockImplementation(async (_target: string, method: string) =>
+        method === "claimMethodCall"
+          ? { claimed: true, generation: 1 }
+          : method === "markMethodCallExecutionStarted"
+            ? { accepted: true }
+            : undefined
+      );
 
       const controller = new AbortController();
       const handle = client.callMethod("provider-1", "slowWork", {}, { signal: controller.signal });
@@ -2330,7 +2476,13 @@ describe("connectViaRpc", () => {
       await emitReplayAndReady(emit, []);
       await client.ready();
       mockRpc.call.mockClear();
-      mockRpc.call.mockResolvedValue(undefined);
+      mockRpc.call.mockImplementation(async (_target: string, method: string) =>
+        method === "claimMethodCall"
+          ? { claimed: true, generation: 1 }
+          : method === "markMethodCallExecutionStarted"
+            ? { accepted: true }
+            : undefined
+      );
 
       const handle = client.callMethod("agent-1", "pause", {
         reason: "User interrupted execution",
@@ -2523,7 +2675,13 @@ describe("connectViaRpc", () => {
       await emitReplayAndReady(emit, []);
       await client.ready();
       mockRpc.call.mockClear();
-      mockRpc.call.mockResolvedValue(undefined);
+      mockRpc.call.mockImplementation(async (_target: string, method: string) =>
+        method === "claimMethodCall"
+          ? { claimed: true, generation: 1 }
+          : method === "markMethodCallExecutionStarted"
+            ? { accepted: true }
+            : undefined
+      );
 
       // Trigger the method call
       emit({
@@ -2567,6 +2725,291 @@ describe("connectViaRpc", () => {
       await client.close();
     });
 
+    it("never starts a provider method when cancellation wins during claim admission", async () => {
+      let resolveClaim!: (value: { claimed: boolean; generation: number }) => void;
+      const claim = new Promise<{ claimed: boolean; generation: number }>((resolve) => {
+        resolveClaim = resolve;
+      });
+      const execute = vi.fn(async () => ({ shouldNotRun: true }));
+      const client = connectViaRpc({
+        rpc: mockRpc as any,
+        channel: CHANNEL,
+        methods: {
+          sideEffect: {
+            description: "side-effectful operation",
+            parameters: z.object({}),
+            execute,
+          },
+        },
+      });
+
+      await emitReplayAndReady(emit, []);
+      await client.ready();
+      mockRpc.call.mockClear();
+      mockRpc.call.mockImplementation(async (_target: string, method: string) => {
+        if (method === "claimMethodCall") return claim;
+        return undefined;
+      });
+
+      emit({
+        stream: "log",
+        phase: "live",
+        id: 350,
+        type: AGENTIC_EVENT_PAYLOAD_KIND,
+        payload: invocation(
+          "invocation.started",
+          CALL_ID_SLOW,
+          {
+            name: "sideEffect",
+            request: {},
+            transport: {
+              kind: "channel",
+              channelId: CHANNEL,
+              target: { kind: "panel", id: SELF_ID, participantId: SELF_ID },
+              transportCallId: TRANSPORT_ID_1,
+            },
+          },
+          { transportCallId: TRANSPORT_ID_1 }
+        ),
+        senderId: "caller-1",
+        ts: Date.now(),
+      });
+      await vi.waitFor(() =>
+        expect(mockRpc.call.mock.calls.some((call) => call[1] === "claimMethodCall")).toBe(true)
+      );
+
+      emit({
+        stream: "log",
+        phase: "live",
+        id: 351,
+        type: AGENTIC_EVENT_PAYLOAD_KIND,
+        payload: invocation(
+          "invocation.cancelled",
+          CALL_ID_SLOW,
+          { reason: "cancelled" },
+          { transportCallId: TRANSPORT_ID_1 }
+        ),
+        senderId: "caller-1",
+        ts: Date.now(),
+      });
+      resolveClaim({ claimed: true, generation: 1 });
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(execute).not.toHaveBeenCalled();
+      await client.close();
+    });
+
+    it("never starts a provider method when cancellation wins during execution-start admission", async () => {
+      let resolveExecutionStart!: (value: { accepted: boolean }) => void;
+      const executionStart = new Promise<{ accepted: boolean }>((resolve) => {
+        resolveExecutionStart = resolve;
+      });
+      const execute = vi.fn(async () => ({ shouldNotRun: true }));
+      const client = connectViaRpc({
+        rpc: mockRpc as any,
+        channel: CHANNEL,
+        methods: {
+          sideEffect: {
+            description: "side-effectful operation",
+            parameters: z.object({}),
+            execute,
+          },
+        },
+      });
+
+      await emitReplayAndReady(emit, []);
+      await client.ready();
+      mockRpc.call.mockClear();
+      mockRpc.call.mockImplementation(async (_target: string, method: string) => {
+        if (method === "claimMethodCall") return { claimed: true, generation: 1 };
+        if (method === "markMethodCallExecutionStarted") return executionStart;
+        return undefined;
+      });
+
+      emit({
+        stream: "log",
+        phase: "live",
+        id: 360,
+        type: AGENTIC_EVENT_PAYLOAD_KIND,
+        payload: invocation(
+          "invocation.started",
+          CALL_ID_SLOW,
+          {
+            name: "sideEffect",
+            request: {},
+            transport: {
+              kind: "channel",
+              channelId: CHANNEL,
+              target: { kind: "panel", id: SELF_ID, participantId: SELF_ID },
+              transportCallId: TRANSPORT_ID_1,
+            },
+          },
+          { transportCallId: TRANSPORT_ID_1 }
+        ),
+        senderId: "caller-1",
+        ts: Date.now(),
+      });
+      await vi.waitFor(() =>
+        expect(
+          mockRpc.call.mock.calls.some((call) => call[1] === "markMethodCallExecutionStarted")
+        ).toBe(true)
+      );
+
+      emit({
+        stream: "log",
+        phase: "live",
+        id: 361,
+        type: AGENTIC_EVENT_PAYLOAD_KIND,
+        payload: invocation(
+          "invocation.cancelled",
+          CALL_ID_SLOW,
+          { reason: "cancelled" },
+          { transportCallId: TRANSPORT_ID_1 }
+        ),
+        senderId: "caller-1",
+        ts: Date.now(),
+      });
+      resolveExecutionStart({ accepted: true });
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(execute).not.toHaveBeenCalled();
+      await client.close();
+    });
+
+    it("can redeliver after execution-start admission loses its response", async () => {
+      const execute = vi.fn(async () => ({ ok: true }));
+      const client = connectViaRpc({
+        rpc: mockRpc as any,
+        channel: CHANNEL,
+        methods: {
+          sideEffect: {
+            description: "side-effectful operation",
+            parameters: z.object({}),
+            execute,
+          },
+        },
+      });
+
+      await emitReplayAndReady(emit, []);
+      await client.ready();
+      mockRpc.call.mockClear();
+      let markAttempts = 0;
+      mockRpc.call.mockImplementation(async (_target: string, method: string) => {
+        if (method === "claimMethodCall") return { claimed: true, generation: 1 };
+        if (method === "markMethodCallExecutionStarted") {
+          markAttempts += 1;
+          if (markAttempts === 1) throw new Error("execution-start response lost");
+          return { accepted: true };
+        }
+        if (method === "submitMethodResult") return { accepted: true };
+        return undefined;
+      });
+
+      const started = (id: number) => ({
+        stream: "log" as const,
+        phase: "live" as const,
+        id,
+        type: AGENTIC_EVENT_PAYLOAD_KIND,
+        payload: invocation(
+          "invocation.started",
+          CALL_ID_SLOW,
+          {
+            name: "sideEffect",
+            request: {},
+            transport: {
+              kind: "channel",
+              channelId: CHANNEL,
+              target: { kind: "panel", id: SELF_ID, participantId: SELF_ID },
+              transportCallId: TRANSPORT_ID_1,
+            },
+          },
+          { transportCallId: TRANSPORT_ID_1 }
+        ),
+        senderId: "caller-1",
+        ts: Date.now(),
+      });
+
+      emit(started(362));
+      await vi.waitFor(() => expect(markAttempts).toBe(1));
+      emit(started(363));
+
+      await vi.waitFor(() => expect(execute).toHaveBeenCalledOnce());
+      expect(markAttempts).toBe(2);
+      await client.close();
+    });
+
+    it("redrives a transient provider-claim failure without terminating or blocking the subscription", async () => {
+      const execute = vi.fn(async () => ({ ok: true }));
+      const client = connectViaRpc({
+        rpc: mockRpc as any,
+        channel: CHANNEL,
+        methods: {
+          sideEffect: {
+            description: "side-effectful operation",
+            parameters: z.object({}),
+            execute,
+          },
+        },
+      });
+      await emitReplayAndReady(emit, []);
+      await client.ready();
+      const received = client.events();
+      mockRpc.call.mockClear();
+      let claimAttempts = 0;
+      mockRpc.call.mockImplementation(async (_target: string, method: string) => {
+        if (method === "claimMethodCall") {
+          claimAttempts += 1;
+          if (claimAttempts === 1) throw new Error("claim response unavailable");
+          return { claimed: true, generation: 1 };
+        }
+        if (method === "markMethodCallExecutionStarted") return { accepted: true };
+        if (method === "submitMethodResult") return { id: 1 };
+        return undefined;
+      });
+
+      emit({
+        stream: "log",
+        phase: "live",
+        id: 370,
+        type: AGENTIC_EVENT_PAYLOAD_KIND,
+        payload: invocation(
+          "invocation.started",
+          CALL_ID_SLOW,
+          {
+            name: "sideEffect",
+            request: {},
+            transport: {
+              kind: "channel",
+              channelId: CHANNEL,
+              target: { kind: "panel", id: SELF_ID, participantId: SELF_ID },
+              transportCallId: TRANSPORT_ID_1,
+            },
+          },
+          { transportCallId: TRANSPORT_ID_1 }
+        ),
+        senderId: "caller-1",
+        ts: Date.now(),
+      });
+      emit({
+        stream: "log",
+        phase: "live",
+        id: 371,
+        type: AGENTIC_EVENT_PAYLOAD_KIND,
+        payload: messageEvent("still-live", "subscription stayed live"),
+        senderId: "agent-1",
+        ts: Date.now(),
+      });
+
+      expect((await received.next()).value).toMatchObject({ pubsubId: 370 });
+      expect((await received.next()).value).toMatchObject({ pubsubId: 371 });
+      await vi.waitFor(() => expect(execute).toHaveBeenCalledOnce());
+      expect(claimAttempts).toBe(2);
+      expect(mockRpc.stream).toHaveBeenCalledTimes(1);
+      await client.close();
+    });
+
     it("abortExecutingMethod fires the local signal synchronously without a channel round-trip", async () => {
       let capturedSignal: AbortSignal | null = null;
 
@@ -2592,7 +3035,13 @@ describe("connectViaRpc", () => {
       await emitReplayAndReady(emit, []);
       await client.ready();
       mockRpc.call.mockClear();
-      mockRpc.call.mockResolvedValue(undefined);
+      mockRpc.call.mockImplementation(async (_target: string, method: string) =>
+        method === "claimMethodCall"
+          ? { claimed: true, generation: 1 }
+          : method === "markMethodCallExecutionStarted"
+            ? { accepted: true }
+            : undefined
+      );
 
       emit({
         stream: "log",

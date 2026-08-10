@@ -138,6 +138,42 @@ describe("@workspace/agentic-protocol schemas", () => {
     ).toBe(false);
   });
 
+  it("accepts explicit participant audiences on invocation responses", () => {
+    const base = {
+      actor: agent,
+      causality: { invocationId: "inv-audience" },
+      createdAt: "2026-07-14T00:00:00.000Z",
+    };
+    const to = [{ kind: "participant", participantId: "agent-1" }];
+
+    expect(
+      agenticEventSchema.safeParse({
+        ...base,
+        kind: "invocation.output",
+        payload: { protocol: AGENTIC_PROTOCOL_VERSION, output: "line", to },
+      }).success
+    ).toBe(true);
+    expect(
+      agenticEventSchema.safeParse({
+        ...base,
+        kind: "invocation.completed",
+        payload: { protocol: AGENTIC_PROTOCOL_VERSION, terminalOutcome: "success", to },
+      }).success
+    ).toBe(true);
+    expect(
+      agenticEventSchema.safeParse({
+        ...base,
+        kind: "invocation.cancelled",
+        payload: {
+          protocol: AGENTIC_PROTOCOL_VERSION,
+          terminalOutcome: "cancelled",
+          reason: "cancelled",
+          to,
+        },
+      }).success
+    ).toBe(true);
+  });
+
   it("separates participant refs from runtime principal actor refs", () => {
     expect(actorRefSchema.parse({ kind: "do", id: "do:agent" }).kind).toBe("do");
     expect(principalRefSchema.parse({ kind: "do", id: "do:agent" }).kind).toBe("do");

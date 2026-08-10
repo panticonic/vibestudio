@@ -98,7 +98,10 @@ import { ChannelLog, type ChannelReplayContext } from "./log-store.js";
 import type { MessageTypeDefinition } from "@workspace/pubsub";
 import { PolicyHost, policyViewFromLogEnvelope } from "./policy-host.js";
 import { CallTransport, type PendingCallRow } from "./calls.js";
-import type { PolicyEnvelopeView } from "@workspace/channel-policies";
+import {
+  assertDeclaredAgenticEventAudience,
+  type PolicyEnvelopeView,
+} from "@workspace/channel-policies";
 import {
   AGENT_INSPECTION_METHODS,
   AGENT_INSPECTION_RPC_METHOD,
@@ -303,12 +306,13 @@ interface ChannelDeliveryInput {
   subscriptionRevision: number;
   eventSequence: number;
   envelope: RpcChannelMessage;
-  agenticContext: ChannelAgenticContext;
+  agenticContext: ChannelAgenticContext | null;
 }
 
 interface ChannelDeliveryOutcome {
   deliveryId: string;
   disposition: "processed" | "duplicate" | "declined" | "retired";
+  recipientExecutionStartedAt?: number;
 }
 
 /** A durable channel membership record (WP7 §3) — separate from the ephemeral
@@ -348,6 +352,7 @@ export class PubSubChannel extends DurableObjectBase {
   private _calls: CallTransport | null = null;
   private _deliveryProjection: ChannelDeliveryProjection | null = null;
   private readonly publishDedupInFlight = new Map<string, Promise<ChannelEvent>>();
+  private readonly relationshipMutations = new Map<string, Promise<void>>();
   private broadcastParticipantCache: BroadcastParticipant[] | null = null;
   private readonly subscriptionStreams = new Map<
     string,
@@ -422,6 +427,34 @@ export class PubSubChannel extends DurableObjectBase {
       `CREATE INDEX IF NOT EXISTS idx_pending_calls_deadline
          ON pending_calls(deadline_at) WHERE deadline_at IS NOT NULL`
     );
+    this.sql.exec(`
+      CREATE TABLE IF NOT EXISTS provider_call_claims (
+        transport_call_id TEXT PRIMARY KEY,
+        provider_id TEXT NOT NULL,
+        provider_generation_id TEXT NOT NULL,
+        claim_generation INTEGER NOT NULL CHECK (claim_generation > 0),
+        claimed_at INTEGER NOT NULL,
+        execution_started_at INTEGER
+      )
+    `);
+    const providerClaimColumns = this.sql.exec(`PRAGMA table_info(provider_call_claims)`).toArray();
+    if (!providerClaimColumns.some((column) => column["name"] === "execution_started_at")) {
+      this.sql.exec(`ALTER TABLE provider_call_claims ADD COLUMN execution_started_at INTEGER`);
+    }
+    this.sql.exec(`
+      CREATE TABLE IF NOT EXISTS channel_delivery_latency_histogram (
+        metric TEXT NOT NULL CHECK (metric IN (
+          'publish-to-recipient-execution',
+          'call-to-provider-execution',
+          'result-to-caller-settlement'
+        )),
+        upper_bound_ms INTEGER NOT NULL,
+        samples INTEGER NOT NULL DEFAULT 0,
+        total_ms INTEGER NOT NULL DEFAULT 0,
+        maximum_ms INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (metric, upper_bound_ms)
+      )
+    `);
     this.sql.exec(`
       CREATE TABLE IF NOT EXISTS dedup_keys (
         key TEXT PRIMARY KEY,
@@ -550,9 +583,12 @@ export class PubSubChannel extends DurableObjectBase {
     return [
       "participants",
       "pending_calls",
+      "provider_call_claims",
+      "channel_delivery_latency_histogram",
       "dedup_keys",
       "channel_relationships",
       "channel_delivery_mailbox",
+      "channel_delivery_event_context",
       "channel_delivery_projection_cursor",
       "channel_maintenance_queue",
       "fork_ops",
@@ -883,10 +919,18 @@ export class PubSubChannel extends DurableObjectBase {
       if (remaining < 1) return claims;
       const candidates = this.sql
         .exec(
-          `SELECT current.*
+          `SELECT current.*, relationship.revision AS active_relationship_revision,
+                  relationship.invocation_route AS active_invocation_route,
+                  event_context.agentic_context_json AS event_agentic_context_json
              FROM channel_delivery_mailbox AS current
+             JOIN channel_relationships AS relationship
+               ON relationship.participant_id = current.participant_id
+             LEFT JOIN channel_delivery_event_context AS event_context
+               ON event_context.event_id = current.event_id
             WHERE current.state IN ('ready', 'retrying')
               AND current.next_attempt_at <= ?
+              AND relationship.active = 1
+              AND relationship.attached = 1
               AND NOT EXISTS (
                 -- Strict head-of-line: any earlier non-terminal row blocks,
                 -- eligible or not. This guarantees at most one claim per
@@ -911,7 +955,10 @@ export class PubSubChannel extends DurableObjectBase {
         const deliveryId = String(row["delivery_id"]);
         const participantId = String(row["participant_id"]);
         const target = parseDOParticipantId(String(row["endpoint_entity_id"]));
-        if (!target) {
+        const directContextMissing =
+          row["active_invocation_route"] === "direct" &&
+          typeof row["event_agentic_context_json"] !== "string";
+        if (!target || directContextMissing) {
           this.sql.exec(
             `UPDATE channel_delivery_mailbox
                 SET state = 'terminal-integrity', claimed_by = NULL
@@ -921,13 +968,16 @@ export class PubSubChannel extends DurableObjectBase {
           continue;
         }
         const generation = Number(row["claim_generation"] ?? 0) + 1;
+        const relationshipRevision = Number(row["active_relationship_revision"]);
         this.sql.exec(
           `UPDATE channel_delivery_mailbox
-              SET state = 'leased', claimed_by = ?, claim_generation = ?, last_attempt_at = ?
+              SET state = 'leased', claimed_by = ?, claim_generation = ?, last_attempt_at = ?,
+                  claimed_relationship_revision = ?
             WHERE delivery_id = ?`,
           input.workerId,
           generation,
           input.now,
+          relationshipRevision,
           deliveryId
         );
         const delivery: ChannelDeliveryInput = {
@@ -942,7 +992,10 @@ export class PubSubChannel extends DurableObjectBase {
           subscriptionRevision: Number(row["subscription_revision"]),
           eventSequence: Number(row["event_sequence"]),
           envelope: JSON.parse(String(row["envelope_json"])) as RpcChannelMessage,
-          agenticContext: JSON.parse(String(row["agentic_context_json"])) as ChannelAgenticContext,
+          agenticContext:
+            row["active_invocation_route"] === "direct"
+              ? (JSON.parse(String(row["event_agentic_context_json"])) as ChannelAgenticContext)
+              : null,
         };
         claims.push({
           itemId: deliveryId,
@@ -973,7 +1026,9 @@ export class PubSubChannel extends DurableObjectBase {
   })
   settleReadyWork(
     queue: DurableWorkQueue,
-    request: SettleRequest<ChannelDeliveryOutcome | { processed: true }>
+    request: SettleRequest<
+      ChannelDeliveryOutcome | { processed: true; recipientExecutionStartedAt?: number }
+    >
   ): ClaimSettlement {
     if (queue !== "channel-delivery") return "stale";
     if (request.itemId.startsWith("maintenance:")) {
@@ -998,13 +1053,22 @@ export class PubSubChannel extends DurableObjectBase {
         return "accepted";
       });
     }
-    const acknowledged = request.outcome as ChannelDeliveryOutcome | { processed: true } | null;
+    const acknowledged = request.outcome as
+      | ChannelDeliveryOutcome
+      | { processed: true; recipientExecutionStartedAt?: number }
+      | null;
     const outcome: ChannelDeliveryOutcome =
       acknowledged !== null &&
       typeof acknowledged === "object" &&
       "processed" in acknowledged &&
       acknowledged.processed === true
-        ? { deliveryId: request.itemId, disposition: "processed" }
+        ? {
+            deliveryId: request.itemId,
+            disposition: "processed",
+            ...(typeof acknowledged.recipientExecutionStartedAt === "number"
+              ? { recipientExecutionStartedAt: acknowledged.recipientExecutionStartedAt }
+              : {}),
+          }
         : (acknowledged as ChannelDeliveryOutcome);
     if (
       !outcome ||
@@ -1016,7 +1080,7 @@ export class PubSubChannel extends DurableObjectBase {
     return this.ctx.storage.transactionSync(() => {
       const row = this.sql
         .exec(
-          `SELECT claimed_by, claim_generation, state
+          `SELECT claimed_by, claim_generation, state, created_at, envelope_json
              FROM channel_delivery_mailbox
             WHERE delivery_id = ?`,
           request.itemId
@@ -1032,6 +1096,34 @@ export class PubSubChannel extends DurableObjectBase {
       }
       if (outcome.disposition === "declined") {
         this.deliveryProjection.recordDeclined(request.itemId);
+      }
+      if (typeof outcome.recipientExecutionStartedAt === "number") {
+        this.recordDeliveryLatency(
+          "publish-to-recipient-execution",
+          Math.max(0, outcome.recipientExecutionStartedAt - Number(row["created_at"]))
+        );
+      }
+      if (typeof row["envelope_json"] === "string") {
+        try {
+          const envelope = JSON.parse(String(row["envelope_json"])) as {
+            event?: { payload?: { kind?: unknown } };
+          };
+          const kind = envelope.event?.payload?.kind;
+          if (
+            kind === "invocation.completed" ||
+            kind === "invocation.failed" ||
+            kind === "invocation.cancelled" ||
+            kind === "invocation.abandoned"
+          ) {
+            this.recordDeliveryLatency(
+              "result-to-caller-settlement",
+              Math.max(0, Date.now() - Number(row["created_at"]))
+            );
+          }
+        } catch {
+          // Malformed envelopes are classified by the delivery consumer. The
+          // latency observer never becomes an alternate validation path.
+        }
       }
       this.sql.exec(
         `UPDATE channel_delivery_mailbox
@@ -1057,10 +1149,10 @@ export class PubSubChannel extends DurableObjectBase {
     tier: "open",
     sensitivity: "write",
   })
-  failReadyWork(
+  async failReadyWork(
     queue: DurableWorkQueue,
-    request: { workerId: string; itemId: string; generation: number }
-  ): { retryAt: number } | "stale" {
+    request: { workerId: string; itemId: string; generation: number; error?: unknown }
+  ): Promise<{ retryAt: number } | "stale"> {
     if (queue !== "channel-delivery") return "stale";
     if (request.itemId.startsWith("maintenance:")) {
       return this.ctx.storage.transactionSync(() => {
@@ -1103,6 +1195,80 @@ export class PubSubChannel extends DurableObjectBase {
         return { retryAt };
       });
     }
+    const errorCode =
+      request.error && typeof request.error === "object"
+        ? (request.error as { code?: unknown }).code
+        : undefined;
+    if (errorCode === "PermanentChannelDelivery") {
+      return this.ctx.storage.transactionSync(() => {
+        const updated = this.sql.exec(
+          `UPDATE channel_delivery_mailbox
+              SET state = 'terminal-integrity', claimed_by = NULL,
+                  terminal_outcome_json = ?
+            WHERE delivery_id = ? AND claimed_by = ? AND claim_generation = ? AND state = 'leased'
+            RETURNING delivery_id`,
+          JSON.stringify({ disposition: "integrity-error", error: request.error }),
+          request.itemId,
+          request.workerId,
+          request.generation
+        );
+        return updated.toArray().length > 0 ? { retryAt: Date.now() } : "stale";
+      });
+    }
+    if (errorCode === "ResidentSessionUnavailable") {
+      const claimed = this.sql
+        .exec(
+          `SELECT participant_id
+             FROM channel_delivery_mailbox
+            WHERE delivery_id = ? AND claimed_by = ? AND claim_generation = ? AND state = 'leased'`,
+          request.itemId,
+          request.workerId,
+          request.generation
+        )
+        .toArray()[0];
+      if (!claimed) return "stale";
+      const participantId = String(claimed["participant_id"]);
+      return this.withRelationshipMutation(participantId, async () => {
+        const current = this.sql
+          .exec(
+            `SELECT mailbox.event_sequence, mailbox.claimed_relationship_revision,
+                    relationship.revision AS active_relationship_revision
+               FROM channel_delivery_mailbox AS mailbox
+               LEFT JOIN channel_relationships AS relationship
+                 ON relationship.participant_id = mailbox.participant_id
+              WHERE mailbox.delivery_id = ? AND mailbox.claimed_by = ?
+                AND mailbox.claim_generation = ? AND mailbox.state = 'leased'`,
+            request.itemId,
+            request.workerId,
+            request.generation
+          )
+          .toArray()[0];
+        if (!current) return "stale" as const;
+        if (
+          Number(current["claimed_relationship_revision"]) !==
+          Number(current["active_relationship_revision"])
+        ) {
+          const now = Date.now();
+          this.sql.exec(
+            `UPDATE channel_delivery_mailbox
+                SET state = 'ready', claimed_by = NULL, next_attempt_at = ?,
+                    claimed_relationship_revision = NULL
+              WHERE delivery_id = ? AND claimed_by = ? AND claim_generation = ? AND state = 'leased'`,
+            now,
+            request.itemId,
+            request.workerId,
+            request.generation
+          );
+          this.markWorkReady("channel-delivery");
+          return { retryAt: now };
+        }
+        await this.detachParticipantUnlocked(
+          participantId,
+          Math.max(0, Number(current["event_sequence"]) - 1)
+        );
+        return { retryAt: Date.now() };
+      });
+    }
     return this.ctx.storage.transactionSync(() => {
       const row = this.sql
         .exec(
@@ -1141,6 +1307,65 @@ export class PubSubChannel extends DurableObjectBase {
       );
       return { retryAt };
     });
+  }
+
+  private async detachParticipant(
+    participantId: string,
+    detachAfterSequence?: number
+  ): Promise<void> {
+    return this.withRelationshipMutation(participantId, () =>
+      this.detachParticipantUnlocked(participantId, detachAfterSequence)
+    );
+  }
+
+  private async detachParticipantUnlocked(
+    participantId: string,
+    detachAfterSequence?: number
+  ): Promise<void> {
+    await this.deriveDeliveries();
+    const relationship = this.deliveryProjection.relationship(participantId);
+    if (!relationship?.active || !relationship.attached) return;
+    const metadata = this.getSenderMetadata(participantId) ?? {};
+    const recoveryBoundary = this.deliveryProjection.detachRecoveryBoundary(
+      participantId,
+      detachAfterSequence ?? this.deliveryProjection.cursor()
+    );
+    await this.appendDurable({
+      type: "channel.subscription.detached",
+      payload: {
+        participantId,
+        revision: relationship.revision + 1,
+        detachAfterSequence: recoveryBoundary,
+      },
+      senderId: participantId,
+      senderMetadata: metadata,
+      messageId: `channel-subscription:${participantId}:${relationship.revision + 1}`,
+      idempotency: "idempotent-by-id",
+    });
+    this.invalidateBroadcastParticipants();
+    this.broadcastPresenceSignal(participantId, "leave", metadata, "disconnect");
+  }
+
+  private async withRelationshipMutation<T>(
+    participantId: string,
+    operation: () => Promise<T>
+  ): Promise<T> {
+    const previous = this.relationshipMutations.get(participantId) ?? Promise.resolve();
+    let release!: () => void;
+    const current = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const tail = previous.catch(() => undefined).then(() => current);
+    this.relationshipMutations.set(participantId, tail);
+    await previous.catch(() => undefined);
+    try {
+      return await operation();
+    } finally {
+      release();
+      if (this.relationshipMutations.get(participantId) === tail) {
+        this.relationshipMutations.delete(participantId);
+      }
+    }
   }
 
   @rpc({
@@ -1188,7 +1413,13 @@ export class PubSubChannel extends DurableObjectBase {
     this._deliveryProjection ??= new ChannelDeliveryProjection(
       this.sql,
       (callback) => this.ctx.storage.transactionSync(callback),
-      this.objectKey
+      this.objectKey,
+      () => {
+        const value = this.getStateValue("forkPointId");
+        if (value === null) return null;
+        const boundary = Number(value);
+        return Number.isSafeInteger(boundary) && boundary >= 0 ? boundary : null;
+      }
     );
     return this._deliveryProjection;
   }
@@ -1199,29 +1430,74 @@ export class PubSubChannel extends DurableObjectBase {
    *  round trip is spent re-reading an event this activation already holds.
    *  Any gap (a prior crash left the cursor behind) falls back to bounded
    *  replay from the committed cursor. */
-  private async deriveDeliveries(appended?: ChannelEvent): Promise<number> {
+  private async deriveDeliveries(
+    appended?: ChannelEvent,
+    deliveryStartedAt?: number
+  ): Promise<number> {
+    // A later relationship fold can legitimately replace the relationship
+    // row that owns recovery. Drain that durable debt before the projection
+    // cursor is allowed to advance to any newer canonical event.
+    let inserted = await this.resumeReattachBackfills();
     if (appended) {
       const cursor = this.deliveryProjection.cursor();
-      if (appended.id <= cursor) return 0;
+      if (appended.id <= cursor) {
+        if (inserted > 0) this.markWorkReady("channel-delivery");
+        return inserted;
+      }
       if (appended.id === cursor + 1) {
-        const inserted = this.deliveryProjection.fold(appended).inserted;
+        inserted += this.deliveryProjection.fold(appended, deliveryStartedAt).inserted;
+        inserted += await this.resumeReattachBackfills();
         if (inserted > 0) this.markWorkReady("channel-delivery");
         return inserted;
       }
       // Cursor is behind by more than this event: recover through replay,
       // which folds the appended event in sequence with everything missing.
     }
-    let inserted = 0;
     for (;;) {
       const events = await this.channelLog.readEvents({
         afterSeq: this.deliveryProjection.cursor(),
         limit: 500,
       });
       if (events.length === 0) break;
-      for (const event of events) inserted += this.deliveryProjection.fold(event).inserted;
+      for (const event of events) {
+        inserted += this.deliveryProjection.fold(event).inserted;
+        inserted += await this.resumeReattachBackfills();
+      }
       if (events.length < 500) break;
     }
     if (inserted > 0) this.markWorkReady("channel-delivery");
+    return inserted;
+  }
+
+  /** Resume every durable detached-range recovery. Progress is stored in the
+   * relationship row atomically with each derived mailbox item, so activation
+   * loss at any await boundary simply resumes from the last committed event. */
+  private async resumeReattachBackfills(): Promise<number> {
+    let inserted = 0;
+    for (const recovery of this.deliveryProjection.pendingReattachBackfills()) {
+      if (recovery.afterSequence >= recovery.throughSequence) {
+        this.deliveryProjection.completeEmptyReattachBackfill(recovery.participantId);
+        continue;
+      }
+      let afterSeq = recovery.afterSequence;
+      while (afterSeq < recovery.throughSequence) {
+        const events = await this.channelLog.readEvents({ afterSeq, limit: 500 });
+        const gap = events.filter((event) => event.id <= recovery.throughSequence);
+        if (gap.length === 0) {
+          throw new Error(
+            `Reattach backfill for ${recovery.participantId} cannot reach ` +
+              `${recovery.throughSequence} after ${afterSeq}`
+          );
+        }
+        for (const event of gap) {
+          inserted += this.deliveryProjection.advanceReattachBackfill(
+            event,
+            recovery.participantId
+          );
+          afterSeq = event.id;
+        }
+      }
+    }
     return inserted;
   }
 
@@ -1268,6 +1544,13 @@ export class PubSubChannel extends DurableObjectBase {
           message: channelEventToRpcSignal(event),
         });
       },
+      redeliverDurableEvent: async (participantId, eventId) => {
+        const event = await this.channelLog.getEventByEnvelopeId(eventId);
+        if (!event) return false;
+        const changed = this.deliveryProjection.redeliverEventTo(event, participantId);
+        if (changed) this.markWorkReady("channel-delivery");
+        return changed;
+      },
       participantRef: (participantId) => this.participantRef(participantId),
       getSenderMetadata: (participantId) => this.getSenderMetadata(participantId),
       participantTransport: (participantId) => {
@@ -1277,7 +1560,8 @@ export class PubSubChannel extends DurableObjectBase {
         if (session) return "external-session";
         const relationship = this.deliveryProjection.relationship(participantId);
         if (!relationship?.active) return null;
-        return relationship.endpointKind === "entity" ? "entity" : "resident-session";
+        if (relationship.endpointKind !== "entity") return "resident-session";
+        return relationship.invocationRoute === "direct" ? "entity" : "resident-session";
       },
       rpcCall: (targetId, method, args) => this.rpc.call(targetId, method, args),
       waitUntil: (promise) => {
@@ -1286,8 +1570,35 @@ export class PubSubChannel extends DurableObjectBase {
       },
       getStateValue: (key) => this.getStateValue(key),
       setStateValue: (key, value) => this.setStateValue(key, value),
+      recordLatency: (metric, durationMs) => this.recordDeliveryLatency(metric, durationMs),
     });
     return this._calls;
+  }
+
+  private recordDeliveryLatency(
+    metric:
+      | "publish-to-recipient-execution"
+      | "call-to-provider-execution"
+      | "result-to-caller-settlement",
+    durationMs: number
+  ): void {
+    const bounded = Math.max(0, Math.round(durationMs));
+    const upperBound =
+      [10, 50, 100, 250, 500, 1_000, 5_000, 30_000].find((value) => bounded <= value) ??
+      2_147_483_647;
+    this.sql.exec(
+      `INSERT INTO channel_delivery_latency_histogram (
+         metric, upper_bound_ms, samples, total_ms, maximum_ms
+       ) VALUES (?, ?, 1, ?, ?)
+       ON CONFLICT(metric, upper_bound_ms) DO UPDATE SET
+         samples = samples + 1,
+         total_ms = total_ms + excluded.total_ms,
+         maximum_ms = MAX(maximum_ms, excluded.maximum_ms)`,
+      metric,
+      upperBound,
+      bounded,
+      bounded
+    );
   }
 
   /** Look up metadata from either live session presence or durable membership. */
@@ -1334,7 +1645,29 @@ export class PubSubChannel extends DurableObjectBase {
     /** "idempotent-by-id" is reserved for the client publish path. */
     idempotency?: AppendIdempotency;
     attachments?: StoredAttachment[];
+    /** Measurement origin only; never consulted as delivery authority. */
+    deliveryStartedAt?: number;
   }): Promise<ChannelEvent> {
+    const deliveryStartedAt = input.deliveryStartedAt ?? Date.now();
+    if (
+      input.type === AGENTIC_EVENT_PAYLOAD_KIND &&
+      input.payload &&
+      typeof input.payload === "object"
+    ) {
+      assertDeclaredAgenticEventAudience(input.payload as AgenticEvent);
+      const audience = (input.payload as { payload?: { to?: unknown } }).payload?.to;
+      if (
+        Array.isArray(audience) &&
+        audience.some(
+          (selector) =>
+            selector !== null &&
+            typeof selector === "object" &&
+            (selector as { kind?: unknown }).kind === "role"
+        )
+      ) {
+        throw new Error("Participant role selectors are not resolvable on channel append");
+      }
+    }
     const contentIntegrity = this.senderContentIntegrity();
     const payloadRecord =
       input.payload && typeof input.payload === "object" && !Array.isArray(input.payload)
@@ -1361,7 +1694,7 @@ export class PubSubChannel extends DurableObjectBase {
       ...contentIntegrity,
     });
     this.policyHost.foldAppended(this.policyViewFromChannelEvent(event));
-    await this.deriveDeliveries(event);
+    await this.deriveDeliveries(event, deliveryStartedAt);
     // Report the head advance up the fork lineage (debounced) so live badges on
     // the root fan out. Cheap: records a pending seq + arms the alarm.
     this.noteLineageHeadAdvance(event.id);
@@ -1838,6 +2171,10 @@ export class PubSubChannel extends DurableObjectBase {
     sensitivity: "write",
   })
   async join(input: ChannelJoinInput): Promise<SubscribeResult> {
+    return this.withRelationshipMutation(input.participantId, () => this.joinUnlocked(input));
+  }
+
+  private async joinUnlocked(input: ChannelJoinInput): Promise<SubscribeResult> {
     const { participantId } = input;
     this.assertParticipantCaller(participantId, "join");
     this.assertLockedMembership(participantId);
@@ -1870,7 +2207,8 @@ export class PubSubChannel extends DurableObjectBase {
 
     const existing = this.sql
       .exec(
-        `SELECT revision, delivery, endpoint_kind, endpoint_entity_id, active,
+        `SELECT revision, delivery, endpoint_kind, endpoint_entity_id, invocation_route, active,
+                attached, detached_at_sequence,
                 metadata_json, application_config_json
            FROM channel_relationships WHERE participant_id = ?`,
         participantId
@@ -1887,6 +2225,7 @@ export class PubSubChannel extends DurableObjectBase {
     if (
       existing &&
       Number(existing["active"]) === 1 &&
+      Number(existing["attached"]) === 1 &&
       Number(existing["revision"]) === input.revision
     ) {
       const retained = canonicalJson({
@@ -1896,6 +2235,7 @@ export class PubSubChannel extends DurableObjectBase {
         endpoint: {
           kind: String(existing["endpoint_kind"]),
           entityId: String(existing["endpoint_entity_id"]),
+          invocation: String(existing["invocation_route"]),
         },
         metadata: JSON.parse(String(existing["metadata_json"])),
         applicationConfig:
@@ -1937,9 +2277,13 @@ export class PubSubChannel extends DurableObjectBase {
     const envelope = input.replay
       ? await this.channelLog.replayInitial(REPLAY_LIMIT, this.currentReplayContext())
       : undefined;
+    const rearmed = this.deliveryProjection.rearmRetryingFor(participantId);
+    await this.calls.redeliverPendingCallsTo(participantId);
+    if (rearmed > 0) this.markWorkReady("channel-delivery");
     return {
       ok: true,
       participantId,
+      revision: input.revision,
       channelConfig: this.getChannelConfig() ?? undefined,
       ...(envelope ? { envelope } : {}),
     };
@@ -1970,6 +2314,17 @@ export class PubSubChannel extends DurableObjectBase {
     });
     await this.calls.failPendingCallsTargeting(input.participantId, "graceful");
     this.broadcastPresenceSignal(input.participantId, "leave", metadata, "graceful");
+  }
+
+  @rpc({
+    principals: ["code"],
+    effect: { kind: "open" },
+    tier: "open",
+    sensitivity: "write",
+  })
+  async detach(input: { participantId: string }): Promise<void> {
+    this.assertParticipantCaller(input.participantId, "detach");
+    await this.detachParticipant(input.participantId);
   }
 
   @rpc({
@@ -2812,7 +3167,9 @@ export class PubSubChannel extends DurableObjectBase {
         .toArray(),
       ...this.sql
         .exec(
-          `SELECT participant_id, metadata_json, 'do' AS transport, endpoint_entity_id
+          `SELECT participant_id, metadata_json,
+                  CASE endpoint_kind WHEN 'entity' THEN 'do' ELSE 'session' END AS transport,
+                  endpoint_entity_id
              FROM channel_relationships WHERE active = 1`
         )
         .toArray(),
@@ -3611,14 +3968,26 @@ export class PubSubChannel extends DurableObjectBase {
     isError: boolean,
     opts?: {
       invocationId?: string;
+      callerId?: string;
       turnId?: string;
       terminalOutcome?: InvocationOutcome;
       terminalReasonCode?: string;
       attachments?: StoredAttachment[];
+      providerClaimGeneration?: number;
     }
   ): Promise<{ id?: number; dropped?: boolean; reason?: string; recovered?: boolean }> {
     this.assertParticipantCaller(participantId, "submitMethodResult");
     this.markParticipantActive(participantId);
+    if (
+      this.deliveryProjection.relationship(participantId)?.invocationRoute === "mailbox" &&
+      !this.calls.isCurrentProviderClaim(
+        transportCallId,
+        participantId,
+        opts?.providerClaimGeneration
+      )
+    ) {
+      return { dropped: true, reason: "superseded-provider-claim" };
+    }
     const resolution = await this.calls.resolveSubmitterForCall(
       participantId,
       transportCallId,
@@ -3642,6 +4011,7 @@ export class PubSubChannel extends DurableObjectBase {
         isError,
         {
           ...(opts?.invocationId ? { invocationId: opts.invocationId } : {}),
+          ...(opts?.callerId ? { callerId: opts.callerId } : {}),
           ...(opts?.turnId ? { turnId: opts.turnId } : {}),
           ...(opts?.terminalOutcome ? { terminalOutcome: opts.terminalOutcome } : {}),
           ...(opts?.terminalReasonCode ? { terminalReasonCode: opts.terminalReasonCode } : {}),
@@ -3680,6 +4050,7 @@ export class PubSubChannel extends DurableObjectBase {
       invocationId?: string;
       turnId?: string;
       attachments?: StoredAttachment[];
+      providerClaimGeneration?: number;
     }
   ): Promise<void> {
     this.assertParticipantCaller(participantId, "submitMethodProgress");
@@ -3690,6 +4061,16 @@ export class PubSubChannel extends DurableObjectBase {
       "submitMethodProgress"
     );
     if (resolution.kind !== "pending") {
+      return;
+    }
+    if (
+      this.deliveryProjection.relationship(participantId)?.invocationRoute === "mailbox" &&
+      !this.calls.isCurrentProviderClaim(
+        transportCallId,
+        participantId,
+        opts?.providerClaimGeneration
+      )
+    ) {
       return;
     }
     await this.calls.submitMethodProgress(transportCallId, content, {
@@ -3734,7 +4115,39 @@ export class PubSubChannel extends DurableObjectBase {
   })
   async cancelMethodCall(participantId: string, callId: string): Promise<void> {
     this.assertParticipantCaller(participantId, "cancelMethodCall");
-    await this.calls.cancelMethodCall(callId, "cancelled", participantId);
+    const pending = await this.calls.cancelMethodCall(callId, "cancelled", participantId);
+    if (pending) await this.calls.abortProviderCall(pending);
+  }
+
+  @rpc({
+    principals: ["code"],
+    effect: { kind: "open" },
+    tier: "open",
+    sensitivity: "write",
+  })
+  async claimMethodCall(
+    participantId: string,
+    transportCallId: string,
+    providerGenerationId: string
+  ): Promise<{ claimed: boolean; generation?: number }> {
+    this.assertParticipantCaller(participantId, "claimMethodCall");
+    return this.calls.claimProviderCall(participantId, transportCallId, providerGenerationId);
+  }
+
+  @rpc({ principals: ["code"], effect: { kind: "open" }, tier: "open", sensitivity: "write" })
+  async markMethodCallExecutionStarted(
+    participantId: string,
+    transportCallId: string,
+    providerClaimGeneration: number
+  ): Promise<{ accepted: boolean }> {
+    this.assertParticipantCaller(participantId, "markMethodCallExecutionStarted");
+    return {
+      accepted: this.calls.markProviderCallExecutionStarted(
+        participantId,
+        transportCallId,
+        providerClaimGeneration
+      ),
+    };
   }
 
   @rpc({
@@ -3746,6 +4159,7 @@ export class PubSubChannel extends DurableObjectBase {
   async timeoutMethodCall(callId: string, reason?: string): Promise<void> {
     const pending = await this.calls.cancelMethodCall(callId, reason ?? "timed out");
     if (!pending) return;
+    await this.calls.abortProviderCall(pending);
     // Tell the target agent its call rotted — the caller already got a
     // terminal, but the agent otherwise never learns it failed to respond.
     await this.publishMethodCallFeedback(
@@ -3770,6 +4184,7 @@ export class PubSubChannel extends DurableObjectBase {
         payload: {
           protocol: AGENTIC_PROTOCOL_VERSION,
           target: this.participantRef(targetId),
+          to: [{ kind: "participant", participantId: targetId }],
           category: "method_call_failed",
           refs: { callId: transportCallId },
           error: { message: `${method}: ${message}` },
@@ -3867,6 +4282,15 @@ export class PubSubChannel extends DurableObjectBase {
 
   override async alarm(): Promise<DoAlarmSchedule | null> {
     await super.alarm();
+
+    if (this.durableWorkReadinessDiagnostics().some((entry) => entry.pending)) {
+      const spins = Number(this.getStateValue("deliveryReadyEdgeAlarmSpins") ?? 0);
+      this.setStateValue("deliveryReadyEdgeAlarmSpins", String(spins + 1));
+    }
+
+    // Heal an interrupted append-to-projection window even when no later
+    // channel traffic arrives.
+    await this.deriveDeliveries();
 
     this.advancePresenceStatuses();
     this.sql.exec(
@@ -4567,6 +4991,7 @@ export class PubSubChannel extends DurableObjectBase {
       }
     }
     await this.channelLog.forkFrom(parentChannelId, forkPointId);
+    this.deliveryProjection.resetForFork(forkPointId);
     // The child must NOT inherit the parent's fork journal or lineage roster.
     this.sql.exec(`DELETE FROM fork_ops`);
     this.sql.exec(`DELETE FROM lineage_subscribers`);
@@ -4578,6 +5003,9 @@ export class PubSubChannel extends DurableObjectBase {
     this.sql.exec(`DELETE FROM participants`);
     this.invalidateBroadcastParticipants();
     this.sql.exec(`DELETE FROM pending_calls`);
+    this.sql.exec(`DELETE FROM provider_call_claims`);
+    this.sql.exec(`DELETE FROM channel_delivery_latency_histogram`);
+    this.deleteStateValue("deliveryReadyEdgeAlarmSpins");
     this.sql.exec(`DELETE FROM dedup_keys`);
     await this.policyHost.rebuildAfterFork();
     // Rebuild pending_calls for any started-without-terminal in the inherited
@@ -4723,6 +5151,34 @@ export class PubSubChannel extends DurableObjectBase {
       pendingCalls,
       state,
       delivery: this.deliveryProjection.diagnostics(headSequence),
+      deliveryLifecycle: {
+        readiness: this.durableWorkReadinessDiagnostics(),
+        readyEdgeAlarmSpins: Number(this.getStateValue("deliveryReadyEdgeAlarmSpins") ?? 0),
+        pendingCalls: pendingCalls.length,
+        providerClaims: Number(
+          this.sql.exec(`SELECT COUNT(*) AS count FROM provider_call_claims`).toArray()[0]?.[
+            "count"
+          ] ?? 0
+        ),
+        pendingCallsWithDurableTerminal: (
+          await Promise.all(
+            pendingCalls.map(async (row) =>
+              Boolean(
+                await this.channelLog.getEventByEnvelopeId(
+                  `terminal:${String(row["transport_call_id"])}`
+                )
+              )
+            )
+          )
+        ).filter(Boolean).length,
+        latencyHistogram: this.sql
+          .exec(
+            `SELECT metric, upper_bound_ms, samples, total_ms, maximum_ms
+               FROM channel_delivery_latency_histogram
+              ORDER BY metric, upper_bound_ms`
+          )
+          .toArray(),
+      },
       liveTransport: {
         count: this.subscriptionStreams.size,
         streams: [...this.subscriptionStreams.values()].map((stream) => ({

@@ -74,6 +74,43 @@ The runtime-foundation ledger must omit ownership-transfer, tombstone, and
 general immutable-structure claims until those behaviors exist and have direct
 evidence.
 
+## Durable delivery guarantee
+
+Entity mailbox delivery is at-least-once. A mailbox item is acknowledged only
+after the recipient accepts and processes it, but an activation can still fail
+after guest code performs a side effect and before the channel observes the
+settlement. Resident event handlers must therefore be idempotent. Method
+providers receive a generation-fenced single-claimant lane: direct fast-path
+and mailbox delivery collapse to one active execution, stale generations
+cannot publish results, and cancellation is delivered out of band through the
+handler's `AbortSignal`. Recovery after provider death may still re-execute an
+arbitrary external side effect; providers that need a stronger guarantee must
+commit their own idempotency evidence with that side effect.
+
+Resident relationships have three lifecycle states. Attached relationships
+materialize mailbox rows; detached relationships retain membership and a log
+sequence boundary without growing per-event mailbox debt; ended relationships
+carry no future obligation. Re-registration reattaches and backfills the
+durable log range. A typed unavailable-receiver refusal and graceful EvalDO
+drain both detach, while explicit close or owner retirement ends membership.
+
+Delivery failures are classified at the consumer boundary. Transport,
+availability, and infrastructure failures remain retryable without an attempt
+deadline. Inputs that cannot become valid on redelivery are terminal poison:
+missing provenance, missing referenced blobs, malformed resident envelopes,
+and malformed durable wake payloads. The channel records those mailbox debts
+as `terminal-integrity`; vessels record malformed wakes as `terminal-poison`.
+The classification is a durable lifecycle fact, not a retry-budget timeout.
+
+Local workspace mutation tools use the semantic VCS command journal as their
+commit-time replay evidence. The command id is derived from the exact
+trajectory invocation, and the journal entry commits atomically with the
+mutation. On effect adoption, a completed command synthesizes a successful
+replay outcome instead of executing the mutation again. An absent command is
+not evidence; an unavailable command journal is an infrastructure failure and
+must not authorize execution. Non-workspace external tools remain subject to
+their provider's documented at-least-once/idempotency contract.
+
 ## Executable evidence
 
 The canonical implementation is

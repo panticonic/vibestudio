@@ -88,23 +88,44 @@ export class SubscriptionManager {
       contextId: opts.contextId,
       metadata,
       delivery: opts.delivery ?? ("all" as const),
-      endpoint: { kind: "entity" as const, entityId: participantId },
+      endpoint: {
+        kind: "entity" as const,
+        entityId: participantId,
+        invocation: "direct" as const,
+      },
       applicationConfig: config === null ? null : { version: 1 as const, value: config },
     };
     const relationshipJson = canonicalJson(relationship);
     const channel = this.channelFactory(opts.channelId);
     const remote = current ? null : await channel.relationshipState(participantId);
-    const revision = current
+    let revision = current
       ? current.relationshipJson === relationshipJson
         ? current.revision
         : current.revision + 1
       : (remote?.revision ?? 0) + 1;
-    const result = await channel.join({
-      participantId,
-      revision,
-      ...relationship,
-      replay: opts.replay !== false,
-    });
+    let result;
+    try {
+      result = await channel.join({
+        participantId,
+        revision,
+        ...relationship,
+        replay: opts.replay !== false,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (!/relationship revision|already names different relationship data/.test(message)) {
+        throw error;
+      }
+      const authoritative = await channel.relationshipState(participantId);
+      revision = authoritative.revision + 1;
+      result = await channel.join({
+        participantId,
+        revision,
+        ...relationship,
+        replay: opts.replay !== false,
+      });
+    }
+    revision = result.revision;
 
     this.sql.exec(
       `INSERT OR REPLACE INTO subscriptions
@@ -124,7 +145,17 @@ export class SubscriptionManager {
   async unsubscribeFromChannel(channelId: string): Promise<void> {
     const stored = this.getStored(channelId);
     if (!stored) return;
-    await this.channelFactory(channelId).leave(stored.participantId, stored.revision + 1);
+    const channel = this.channelFactory(channelId);
+    try {
+      await channel.leave(stored.participantId, stored.revision + 1);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (!/relationship revision/.test(message)) throw error;
+      const authoritative = await channel.relationshipState(stored.participantId);
+      if (authoritative.active) {
+        await channel.leave(stored.participantId, authoritative.revision + 1);
+      }
+    }
     this.deleteSubscription(channelId);
   }
 

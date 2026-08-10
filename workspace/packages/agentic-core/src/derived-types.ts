@@ -99,7 +99,7 @@ export interface CustomMessageCardPayload {
   updates: CustomMessageUpdatePayload[];
   lastSeq: number;
   /** Card owner — the target for ui.feedback published by the renderer. */
-  by?: { kind: string; id: string; displayName?: string };
+  by?: { kind: string; id: string; participantId?: string; displayName?: string };
   /** Owner-published terminal failure; the UI renders a failed-card frame. */
   failed?: boolean;
   error?: { message: string; details?: unknown };

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { localToolExecutor } from "./index.js";
 
 describe("localToolExecutor", () => {
@@ -16,7 +16,7 @@ describe("localToolExecutor", () => {
       signal: new AbortController().signal,
       deps: {
         localTools: {
-          alreadyApplied: () => false,
+          alreadyApplied: async () => false,
           run: async () => ({
             result: { protocolContent: [], details: { outcome: "success" } },
             isError: false,
@@ -31,6 +31,36 @@ describe("localToolExecutor", () => {
       kind: "tool",
       isError: false,
       turnControl: { kind: "terminate" },
+    });
+  });
+
+  it("does not execute a mutation whose semantic command is already complete", async () => {
+    const run = vi.fn();
+    const outcome = await localToolExecutor.execute({
+      descriptor: {
+        kind: "local_tool",
+        effectId: "effect-replayed",
+        channelId: "channel-1",
+        invocationId: "invocation-replayed",
+        tool: "write",
+        args: { path: "file.txt", content: "value" },
+      } as never,
+      state: {} as never,
+      signal: new AbortController().signal,
+      deps: {
+        localTools: {
+          alreadyApplied: async () => true,
+          run,
+        },
+      } as never,
+      onEphemeral: () => undefined,
+    });
+
+    expect(run).not.toHaveBeenCalled();
+    expect(outcome).toMatchObject({
+      kind: "tool",
+      isError: false,
+      result: { replayed: true },
     });
   });
 });

@@ -130,7 +130,7 @@ describe("ChannelClient finite relationships", () => {
       contextId: "ctx-1",
       metadata: { type: "agent" },
       delivery: "all",
-      endpoint: { kind: "entity", entityId: "agent-1" },
+      endpoint: { kind: "entity", entityId: "agent-1", invocation: "direct" },
       applicationConfig: null,
       replay: true,
     })).resolves.toMatchObject({ ok: true, participantId: "agent-1" });

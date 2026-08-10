@@ -1,7 +1,11 @@
 {
   "version": 1,
-  "censusDigest": "sha256:e519ae9a456def4e3bdabf54fc985c2e25e1141c89b074e541566afeb9633c6f",
+  "censusDigest": "sha256:764cce9195e711fdc3904d603a64e7ff7a72429fc27d8c0db0f2397c3f17e61a",
   "decisions": {
+    "direct:workspace/workers/pubsub-channel/channel-do.ts:markMethodCallExecutionStarted": {
+      "review": "participant-bound-current-provider-claim-observation",
+      "change": "Adds an open code-principal write that records the execution boundary for one exact method call. The receiver derives caller identity from the runtime, requires it to equal the claimed provider participant, and updates only that participant's current claim generation once; it grants no call, result, or cross-participant authority."
+    },
     "host:auth.mintAgentCredential": {
       "review": "reviewed-subagent-launch-agent-login",
       "change": "Reuses the existing subagents.create decision for the credential-bearing portion of an external subagent launch. The receiver still requires a live exact agent session and restricts code callers to a session they own. The authenticated agent retains that relationship for ownership and audit and deliberately acts on behalf of the owning user for open and gated workspace operations; critical effects remain on the fresh-confirmation path."

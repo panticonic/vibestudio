@@ -89,6 +89,14 @@ export function ensureOutboxSchema(sql: SqlStorage): void {
     `CREATE INDEX IF NOT EXISTS idx_effect_outbox_channel_effect
       ON effect_outbox(channel_id, effect_id)`
   );
+  sql.exec(`
+    CREATE TABLE IF NOT EXISTS effect_completion_evidence (
+      branch_id TEXT NOT NULL,
+      effect_id TEXT NOT NULL,
+      completed_at INTEGER NOT NULL,
+      PRIMARY KEY (branch_id, effect_id)
+    )
+  `);
 }
 
 export function maxAttempts(kind: EffectKind, mutating = false): number {
@@ -175,6 +183,44 @@ export function inspectEffectOutbox(sql: SqlStorage): OutboxRow[] {
 export class EffectOutbox {
   constructor(private readonly sql: SqlStorage) {
     ensureOutboxSchema(sql);
+  }
+
+  hasCompletionEvidence(branchId: string, effectId: string): boolean {
+    return (
+      this.sql
+        .exec(
+          `SELECT 1 FROM effect_completion_evidence WHERE branch_id = ? AND effect_id = ?`,
+          branchId,
+          effectId
+        )
+        .toArray().length > 0
+    );
+  }
+
+  recordCompletionEvidence(branchId: string, effectId: string, completedAt: number): void {
+    this.sql.exec(
+      `INSERT OR IGNORE INTO effect_completion_evidence (branch_id, effect_id, completed_at)
+       VALUES (?, ?, ?)`,
+      branchId,
+      effectId,
+      completedAt
+    );
+  }
+
+  pruneCompletionEvidence(branchId: string, expectedEffectIds: Set<string>): void {
+    const rows = this.sql
+      .exec(`SELECT effect_id FROM effect_completion_evidence WHERE branch_id = ?`, branchId)
+      .toArray();
+    for (const row of rows) {
+      const effectId = String(row["effect_id"]);
+      if (!expectedEffectIds.has(effectId)) {
+        this.sql.exec(
+          `DELETE FROM effect_completion_evidence WHERE branch_id = ? AND effect_id = ?`,
+          branchId,
+          effectId
+        );
+      }
+    }
   }
 
   insert(branchId: string, descriptor: EffectDescriptor, nextAttemptAt: number | null): void {

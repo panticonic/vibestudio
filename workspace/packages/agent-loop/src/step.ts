@@ -1127,6 +1127,7 @@ function alreadyIngested(state: AgentState, recvEnvelopeId: string): boolean {
   return (
     state.pendingPrompt?.envelopeId === recvEnvelopeId ||
     state.steeringQueue.some((entry) => entry.envelopeId === recvEnvelopeId) ||
+    state.deferredPostTurnQueue.some((entry) => entry.envelopeId === recvEnvelopeId) ||
     state.entries.some((entry) => entry.kind === "user" && entry.envelopeId === recvEnvelopeId)
   );
 }
@@ -1690,6 +1691,20 @@ function eventStep(state: AgentState, envelope: LogEnvelope, ctx: StepContext): 
         if (state.pendingPrompt?.artifactsReady) return promotePendingPrompt(state, ctx, []);
         if (state.steeringQueue.length > 0) return promoteSteersAsTurn(state, ctx);
         return promoteDeferredHead(state, ctx);
+      }
+      const deferred = state.deferredPostTurnQueue[0];
+      if (
+        state.openTurn.waitingAtSeq !== undefined &&
+        !state.openTurn.interrupted &&
+        deferred?.artifactsReady &&
+        Object.keys(state.pendingPromptPreparations).length === 0 &&
+        Object.keys(state.pendingInvocations).length === 0 &&
+        wakeGuardSatisfied(state)
+      ) {
+        const recv = promotedRecvItem(deferred, state.lastSeq);
+        const afterRecv = projectAppend(state, [recv], ctx.now);
+        const next = nextModelCall(afterRecv, 1, ctx, [deferred.sourceMessageId]);
+        return { append: [recv, ...next.append], effects: next.effects };
       }
       if (
         !state.openTurn.interrupted &&

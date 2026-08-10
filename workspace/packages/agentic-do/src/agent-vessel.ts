@@ -20,7 +20,7 @@ import {
   type LifecycleResumeInput,
 } from "@workspace/runtime/worker/durable-base";
 import { assertExactSqlTableSchema } from "@workspace/runtime/worker/sql-table-schema";
-import { rpc, withCausalParent, type RpcClient } from "@vibestudio/rpc";
+import { RemoteRpcError, rpc, withCausalParent, type RpcClient } from "@vibestudio/rpc";
 import {
   createGadServiceClient,
   type DurableObjectServiceClient,
@@ -574,6 +574,7 @@ interface ChannelDeliveryInput {
 interface ChannelDeliveryOutcome {
   deliveryId: string;
   disposition: "processed" | "duplicate" | "declined";
+  recipientExecutionStartedAt?: number;
 }
 
 const HOT_PATH_TRACE_RETENTION_LIMIT = 500;
@@ -603,6 +604,12 @@ export abstract class AgentVesselBase extends DurableObjectBase {
   protected readonly feedback: FeedbackIngest;
   protected readonly cards: CardManager;
   protected readonly subagentRuns: SubagentRunStore;
+  /** Activation-local admission intents make concurrent sibling snapshots
+   * accurate without advancing durable status before prompt admission. */
+  private readonly admittingSubagentTerminals = new Map<
+    string,
+    "completed" | "failed" | "cancelled" | "abandoned"
+  >();
   private _driver: AgentLoopDriver | null = null;
   private readonly localTools = new Map<string, Map<string, AgentTool>>();
   /** Deferred evals are child resources of the channel that started them. */
@@ -632,6 +639,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
   private readonly alarmDeadlines = new Map<string, number>();
   /** Derived scheduling state only; the durable trace rows remain authoritative. */
   private readonly hotPathTraceInsertsSinceSweep = new Map<string, number>();
+  private readonly directMethodCalls = new Map<string, AbortController>();
   /**
    * In-flight `chat.callMethod` relays initiated on behalf of an EvalDO sandbox
    * (keyed by transportCallId). The agent issues the call via ChannelClient,
@@ -733,7 +741,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
         created_at INTEGER NOT NULL,
         last_attempt_at INTEGER,
         disposition TEXT NOT NULL DEFAULT 'ready'
-          CHECK (disposition IN ('ready', 'leased', 'retrying', 'terminal-completed'))
+          CHECK (disposition IN ('ready', 'leased', 'retrying', 'terminal-completed', 'terminal-poison'))
       )
     `);
     assertExactSqlTableSchema(this.sql, {
@@ -935,6 +943,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
   ): Promise<LifecyclePrepareResult> {
     const releasedEffects = this._driver ? await this._driver.releaseActivation() : 0;
     if (input.mode === "retire") {
+      const abandonedSubagents = await this.abandonLiveSubagentsForRetirement();
       const channelIds = this.subscriptions.listChannelIds();
       for (const channelId of channelIds) await this.unsubscribeChannel(channelId);
       return {
@@ -943,6 +952,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
           mode: input.mode,
           releasedEffects,
           retiredSubscriptions: channelIds.length,
+          abandonedSubagents,
         },
       };
     }
@@ -950,6 +960,40 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       status: "ready",
       detail: { mode: input.mode, releasedEffects },
     };
+  }
+
+  /** Retirement is the final owner of every live child obligation. Fence each
+   * child first, then publish the supervisor-authored durable terminal while
+   * the parent is still subscribed to both channels. A partial failure keeps
+   * retirement uncommitted; retrying is idempotent at both boundaries. */
+  private async abandonLiveSubagentsForRetirement(): Promise<number> {
+    let abandoned = 0;
+    for (const run of this.subagentRuns.listLive()) {
+      const reason = "supervisor retired";
+      if (run.externalSessionEntityId && run.externalGenerationId) {
+        const agentKind = normalizeSubagentAgentKind(run.agentKind);
+        if (!agentKind || agentKind === "pi") {
+          throw new Error(`retire: invalid external agent kind ${run.agentKind}`);
+        }
+        const providerSlot = externalSubagentProviderSlot(agentKind);
+        await this.rpc.call(
+          "main",
+          providerSlot ? "extensions.invokeProvider" : "extensions.invoke",
+          [
+            providerSlot ?? externalSubagentExtensionId(agentKind),
+            "release",
+            [{ entityId: run.externalSessionEntityId, generationId: run.externalGenerationId }],
+          ]
+        );
+      } else {
+        await this.rpc.call(run.childEntityId, "retireSubagentExecution", [
+          { runId: run.runId, taskChannelId: run.taskChannelId, reason },
+        ]);
+      }
+      await this.settleSubagentTerminal(run, "abandoned", reason);
+      abandoned += 1;
+    }
+    return abandoned;
   }
 
   override async resumeAfterRestart(input: LifecycleResumeInput): Promise<void> {
@@ -1659,7 +1703,32 @@ export abstract class AgentVesselBase extends DurableObjectBase {
             };
           }
         },
-        alreadyApplied: () => false,
+        alreadyApplied: async (state, invocationId) => {
+          const commandId = commandIdForTrajectoryInvocation({
+            logId: state.logId,
+            head: state.head,
+            invocationId,
+          });
+          try {
+            const inspected = await createSubagentVcsClient(this.rpc).inspect({
+              node: { kind: "command", commandId },
+              edgeLimit: 1,
+            });
+            return inspected.node.kind === "command" && inspected.node.value.status === "complete";
+          } catch (error) {
+            const code =
+              typeof error === "object" && error !== null
+                ? ((error as { code?: unknown }).code ??
+                  (error as { errorData?: { code?: unknown } }).errorData?.code)
+                : undefined;
+            // Read-only tools never create a semantic command. An absent command
+            // is therefore the ordinary "not applied" case; every other failure
+            // must preserve the claim so infrastructure trouble cannot authorize
+            // a duplicate mutation.
+            if (code === "InvalidReference") return false;
+            throw error;
+          }
+        },
       },
       http: {
         post: async (input) => {
@@ -2509,6 +2578,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     sensitivity: "write",
   })
   async acceptChannelDelivery(delivery: ChannelDeliveryInput): Promise<ChannelDeliveryOutcome> {
+    const recipientExecutionStartedAt = Date.now();
     this.ensureIdentity();
     if (delivery.channelRef.objectKey !== delivery.channelId) {
       throw new Error("acceptChannelDelivery: channel identity mismatch");
@@ -2547,6 +2617,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
         return {
           ...retained,
           disposition: existing["state"] === "processed" ? "duplicate" : "declined",
+          recipientExecutionStartedAt,
         };
       }
     }
@@ -2556,9 +2627,16 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     // at the event sequence is the channel's routing decision — decline only
     // when this vessel is not the addressed participant at all.
     if (storedParticipantId !== delivery.participantId || !stored) {
+      if (delivery.participantId === this.participantId() && !stored) {
+        throw Object.assign(
+          new Error("acceptChannelDelivery: local subscription commit is still pending"),
+          { code: "SubscriptionCommitPending" }
+        );
+      }
       const outcome: ChannelDeliveryOutcome = {
         deliveryId: delivery.deliveryId,
         disposition: "declined",
+        recipientExecutionStartedAt,
       };
       this.sql.exec(
         `INSERT OR REPLACE INTO channel_delivery_admissions (
@@ -2600,7 +2678,10 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     });
     const envelope = delivery.envelope as RpcChannelMessage;
     if (envelope.kind !== "log" || !envelope.event) {
-      throw new Error("acceptChannelDelivery: durable delivery must contain one log event");
+      throw Object.assign(
+        new Error("acceptChannelDelivery: durable delivery must contain one log event"),
+        { code: "PermanentChannelDelivery" }
+      );
     }
     const agenticContext = await this.applyDeliveredAgenticContext(
       delivery.channelId,
@@ -2610,6 +2691,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     const outcome: ChannelDeliveryOutcome = {
       deliveryId: delivery.deliveryId,
       disposition: "processed",
+      recipientExecutionStartedAt,
     };
     this.sql.exec(
       `UPDATE channel_delivery_admissions
@@ -2653,7 +2735,8 @@ export abstract class AgentVesselBase extends DurableObjectBase {
           claimSource:
             row.descriptor.kind === "local_tool" &&
             row.descriptor.tool === "eval" &&
-            (row.descriptor as { deferredEvalStarted?: boolean }).deferredEvalStarted === true
+            (row.descriptor as { deferredEvalStartAttempted?: boolean })
+              .deferredEvalStartAttempted === true
               ? "redrive-backstop"
               : (input.trigger ?? "unknown"),
           laneKey:
@@ -2828,7 +2911,10 @@ export abstract class AgentVesselBase extends DurableObjectBase {
         typeof payload["parentRef"] !== "string" ||
         typeof payload["report"] !== "string"
       ) {
-        throw new Error("executeWakeClaim: invalid subagent-terminal-publish payload");
+        throw Object.assign(
+          new Error("executeWakeClaim: invalid subagent-terminal-publish payload"),
+          { code: "PermanentDurableWork" }
+        );
       }
       await this.publishOwnSubagentTerminal({
         runId: String(payload["runId"]),
@@ -2848,7 +2934,9 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       // PARENT side: re-drive an interrupted cancellation to its terminal
       // fact. Idempotent — a run already terminal no-ops.
       if (typeof payload["runId"] !== "string") {
-        throw new Error("executeWakeClaim: invalid subagent-cancel-settle payload");
+        throw Object.assign(new Error("executeWakeClaim: invalid subagent-cancel-settle payload"), {
+          code: "PermanentDurableWork",
+        });
       }
       await this.driveCancelSubagent(
         String(payload["runId"]),
@@ -2857,7 +2945,9 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     } else if (wakeKind === "scheduled-model-resume" && typeof payload["messageId"] === "string") {
       await this.driver.executeScheduledResume(channelId, payload["messageId"]);
     } else {
-      throw new Error(`executeWakeClaim: invalid ${wakeKind} payload`);
+      throw Object.assign(new Error(`executeWakeClaim: invalid ${wakeKind} payload`), {
+        code: "PermanentDurableWork",
+      });
     }
     this.traceHotPath(channelId, "wake.execution.completed", {
       startedAt,
@@ -2945,16 +3035,26 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       ) {
         return { disposition: "stale" as const, channelId: null };
       }
-      this.sql.exec(
-        `UPDATE agent_wake_queue
-            SET disposition = 'terminal-completed',
-                lease_owner = NULL
-          WHERE wake_id = ?`,
-        request.itemId
-      );
       const channel = this.sql
-        .exec(`SELECT channel_id FROM agent_wake_queue WHERE wake_id = ?`, request.itemId)
+        .exec(
+          `SELECT channel_id, wake_kind FROM agent_wake_queue WHERE wake_id = ?`,
+          request.itemId
+        )
         .toArray()[0];
+      if (channel?.["wake_kind"] === "scheduled-model-resume") {
+        // This wake id is reusable when the same message is legitimately
+        // scheduled again. Keeping a terminal row would make INSERT OR IGNORE
+        // swallow that later schedule forever.
+        this.sql.exec(`DELETE FROM agent_wake_queue WHERE wake_id = ?`, request.itemId);
+      } else {
+        this.sql.exec(
+          `UPDATE agent_wake_queue
+              SET disposition = 'terminal-completed',
+                  lease_owner = NULL
+            WHERE wake_id = ?`,
+          request.itemId
+        );
+      }
       return {
         disposition: "accepted" as const,
         channelId: channel ? String(channel["channel_id"]) : null,
@@ -2978,7 +3078,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
   })
   failReadyWork(
     queue: DurableWorkQueue,
-    request: { workerId: string; itemId: string; generation: number }
+    request: { workerId: string; itemId: string; generation: number; error?: unknown }
   ): { retryAt: number } | "stale" {
     if (queue === "agent-effect") {
       const parsed = parseOutboxExternalId(request.itemId);
@@ -3017,6 +3117,21 @@ export abstract class AgentVesselBase extends DurableObjectBase {
         )
         .toArray()[0];
       if (!row) return "stale";
+      const errorCode =
+        request.error && typeof request.error === "object"
+          ? (request.error as { code?: unknown }).code
+          : undefined;
+      if (errorCode === "PermanentDurableWork") {
+        this.sql.exec(
+          `UPDATE agent_wake_queue
+              SET disposition = 'terminal-poison', lease_owner = NULL
+            WHERE wake_id = ? AND lease_owner = ? AND lease_generation = ?`,
+          request.itemId,
+          request.workerId,
+          request.generation
+        );
+        return { retryAt: Date.now() };
+      }
       const attempts = Number(row["attempts"] ?? 0) + 1;
       const delay = Math.min(
         CHANNEL_ENVELOPE_RETRY_MS * 2 ** Math.min(attempts - 1, 7),
@@ -3214,36 +3329,22 @@ export abstract class AgentVesselBase extends DurableObjectBase {
   ): Promise<boolean> {
     if (event.type !== AGENTIC_EVENT_PAYLOAD_KIND) return false;
     const agentic = event.payload as AgenticEvent;
-    const kind = (agentic as { kind?: string }).kind;
-    const statusByKind = {
-      "task.completed": "completed",
-      "task.failed": "failed",
-      "task.cancelled": "cancelled",
-      "task.abandoned": "abandoned",
-    } as const;
-    const terminalStatus = kind ? statusByKind[kind as keyof typeof statusByKind] : undefined;
-    if (!terminalStatus) return false;
     const runId = agentic.causality?.taskId;
     if (typeof runId !== "string") return false;
     const run = this.subagentRuns.get(runId);
     if (!run || run.taskChannelId !== channelId) return false;
-    const supervisorId = this.participantId();
-    const childParticipantId = run.childParticipantId ?? run.childEntityId;
-    const childAuthored =
-      event.senderId === childParticipantId && agentic.actor.id === childParticipantId;
-    // A supervisor may author cancellation/abandonment/infrastructure failure
-    // facts when the child is unreachable. Successful completion is child
-    // evidence and can never be asserted by the supervisor.
-    const supervisorAuthored =
-      terminalStatus !== "completed" &&
-      event.senderId === supervisorId &&
-      agentic.actor.id === supervisorId;
-    if (!childAuthored && !supervisorAuthored) {
+    const terminalStatus = this.authorizedSubagentTerminalStatus(run, event);
+    if (!terminalStatus) {
       console.warn(
         `[agent-vessel] ignoring task terminal for ${runId}: publisher is neither the child nor an authorized supervisor terminal source`
       );
       return false;
     }
+    // The task channel is the sole first-write-wins authority for competing
+    // child/supervisor terminals. Mirror these exact winning bytes before
+    // advancing any local projection; a failed mirror keeps this mailbox
+    // delivery retryable and can never leave the parent card permanently live.
+    await this.mirrorSubagentTerminalToParent(run, agentic);
     const payload = agentic.payload as Record<string, unknown>;
     // Competing terminals (child completion racing a supervisor cancellation)
     // are fenced at PUBLICATION: both publishers share idempotency key
@@ -3269,19 +3370,21 @@ export abstract class AgentVesselBase extends DurableObjectBase {
         : typeof payload["reason"] === "string"
           ? payload["reason"]
           : "";
+    this.admittingSubagentTerminals.set(runId, terminalStatus);
     const siblings = this.subagentRuns
       .listAll()
       .filter((candidate) => candidate.parentChannelId === run.parentChannelId)
       .map(
         (candidate) =>
-          `- ${subagentRunHandle(candidate.runId)} (${candidate.label || "unlabeled"}): ${candidate.runId === runId ? terminalStatus : candidate.status}`
+          `- ${subagentRunHandle(candidate.runId)} (${candidate.label || "unlabeled"}): ${this.admittingSubagentTerminals.get(candidate.runId) ?? candidate.status}`
       )
       .join("\n");
     const liveCount = this.subagentRuns
       .listLive()
       .filter(
         (candidate) =>
-          candidate.parentChannelId === run.parentChannelId && candidate.runId !== runId
+          candidate.parentChannelId === run.parentChannelId &&
+          !this.admittingSubagentTerminals.has(candidate.runId)
       ).length;
     const content = [
       `Subagent \"${run.label || subagentRunHandle(runId)}\" ${terminalStatus}.`,
@@ -3294,26 +3397,30 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     ]
       .filter(Boolean)
       .join("\n\n");
-    await this.driver.handleIncoming(run.parentChannelId, {
-      type: "command",
-      command: {
-        kind: "prompt",
-        channelId: run.parentChannelId,
-        source: { envelopeId: event.messageId },
-        sourceMessageId: event.messageId,
-        content,
-        senderRef: participantRefFromActor(agentic.actor),
-        metadata: { deliverAfterTurn: true, supervisedTerminalRunId: runId },
-      },
-    });
+    try {
+      await this.driver.handleIncoming(run.parentChannelId, {
+        type: "command",
+        command: {
+          kind: "prompt",
+          channelId: run.parentChannelId,
+          source: { envelopeId: event.messageId },
+          sourceMessageId: event.messageId,
+          content,
+          senderRef: participantRefFromActor(agentic.actor),
+          metadata: { deliverAfterTurn: true, supervisedTerminalRunId: runId },
+        },
+      });
+      this.subagentRuns.setStatus(runId, terminalStatus);
+      this.subagentRuns.touch(runId, event.ts);
+    } finally {
+      this.admittingSubagentTerminals.delete(runId);
+    }
     // The supervisor must remain observably live until its exact terminal
     // report is durably admitted to the reasoning loop. Otherwise a
     // concurrent suspend_turn can see no live children before the report is
     // available, reject the suspension, and send the model chasing an empty
     // retained transcript. A delivery retry re-enters this same transition;
     // only successful admission advances the retained run to terminal.
-    this.subagentRuns.setStatus(runId, terminalStatus);
-    this.subagentRuns.touch(runId, event.ts);
     return true;
   }
 
@@ -3775,14 +3882,18 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     context: ChannelAgenticContext
   ): Promise<ChannelAgenticContext> {
     if (context?.version !== 1) {
-      throw new Error("acceptChannelDelivery: unsupported agentic context version");
+      throw Object.assign(new Error("acceptChannelDelivery: unsupported agentic context version"), {
+        code: "PermanentChannelDelivery",
+      });
     }
     const relationships =
       context && typeof context === "object"
         ? (context as { relationships?: unknown }).relationships
         : undefined;
     if (!Array.isArray(relationships) || !context.conversation || !context.channelConfig) {
-      throw new Error("acceptChannelDelivery: missing versioned agentic context");
+      throw Object.assign(new Error("acceptChannelDelivery: missing versioned agentic context"), {
+        code: "PermanentChannelDelivery",
+      });
     }
     const selfId = this.participantId();
     const roster: RosterEntry[] = relationships
@@ -3864,17 +3975,41 @@ export abstract class AgentVesselBase extends DurableObjectBase {
   })
   async onMethodCall(
     channelId: string,
-    _transportCallId: string,
+    transportCallId: string,
     methodName: string,
     args: unknown
   ): Promise<{ result: unknown; isError?: boolean }> {
-    this.assertChannelDeliveryCaller("onMethodCall");
-    return (
-      (await this.handleStandardAgentMethodCall(channelId, methodName, args)) ?? {
-        result: { error: `unknown method: ${methodName}` },
-        isError: true,
+    this.assertChannelDeliveryCaller("onMethodCall", channelId);
+    const directCallKey = this.directMethodCallKey(channelId, transportCallId);
+    this.directMethodCalls.get(directCallKey)?.abort("superseded provider generation");
+    const controller = new AbortController();
+    this.directMethodCalls.set(directCallKey, controller);
+    try {
+      return (
+        (await this.handleStandardAgentMethodCall(
+          channelId,
+          methodName,
+          args,
+          controller.signal
+        )) ?? {
+          result: { error: `unknown method: ${methodName}` },
+          isError: true,
+        }
+      );
+    } finally {
+      if (this.directMethodCalls.get(directCallKey) === controller) {
+        this.directMethodCalls.delete(directCallKey);
       }
+    }
+  }
+
+  @rpc({ principals: ["code"], effect: { kind: "open" }, tier: "open", sensitivity: "write" })
+  async cancelDirectMethodCall(channelId: string, transportCallId: string): Promise<void> {
+    this.assertChannelDeliveryCaller("cancelDirectMethodCall", channelId);
+    const controller = this.directMethodCalls.get(
+      this.directMethodCallKey(channelId, transportCallId)
     );
+    if (controller) controller.abort(`method call cancelled on ${channelId}`);
   }
 
   /**
@@ -3895,7 +4030,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     channelId: string,
     methodName: string
   ): Promise<{ result: unknown; isError?: boolean }> {
-    this.assertChannelDeliveryCaller("readAgentInspection");
+    this.assertChannelDeliveryCaller("readAgentInspection", channelId);
     if (!isAgentInspectionMethod(methodName)) {
       throw new Error(
         `readAgentInspection: unsupported method ${methodName}; expected one of ` +
@@ -3973,7 +4108,8 @@ export abstract class AgentVesselBase extends DurableObjectBase {
   protected async handleStandardAgentMethodCall(
     channelId: string,
     methodName: string,
-    args: unknown
+    args: unknown,
+    signal?: AbortSignal
   ): Promise<{ result: unknown; isError?: boolean } | null> {
     if (!this.isParticipantMethodEnabled(methodName)) return null;
     if (isAgentInspectionMethod(methodName)) {
@@ -3998,9 +4134,12 @@ export abstract class AgentVesselBase extends DurableObjectBase {
         }
         const runId = ids.invocationEffect(invocationId);
         try {
-          const result = await this.rpc.call<{ ok: boolean }>("main", "eval.cancel", [
-            { scopeKey: channelId, runId },
-          ]);
+          const result = await this.rpc.call<{ ok: boolean }>(
+            "main",
+            "eval.cancel",
+            [{ scopeKey: channelId, runId }],
+            { signal }
+          );
           return { result };
         } catch (err) {
           return {
@@ -4054,7 +4193,8 @@ export abstract class AgentVesselBase extends DurableObjectBase {
         const credential = await this.rpc.call<Record<string, unknown>>(
           "main",
           "credentials.connect",
-          [connectParams]
+          [connectParams],
+          { signal }
         );
         return { result: credential };
       }
@@ -4355,11 +4495,22 @@ export abstract class AgentVesselBase extends DurableObjectBase {
    *  relay otherwise lets a panel, a worker, or ANOTHER agent forge channel traffic /
    *  tool outcomes into the loop. callerId is server-authenticated, so the className
    *  segment cannot be spoofed. */
-  private assertChannelDeliveryCaller(method: string): void {
+  private directMethodCallKey(channelId: string, transportCallId: string): string {
+    return `${channelId}\u0000${transportCallId}`;
+  }
+
+  private assertChannelDeliveryCaller(method: string, channelId?: string): void {
     const kind = this.rpcCallerKind;
     if (kind === "server") return;
     const callerId = this.rpcCallerId ?? "";
-    if (kind === "do" && callerId.includes(":PubSubChannel:")) return;
+    if (
+      kind === "do" &&
+      typeof channelId === "string" &&
+      channelId.length > 0 &&
+      callerId === `do:workers/pubsub-channel:PubSubChannel:${channelId}`
+    ) {
+      return;
+    }
     throw new Error(
       `${method}: refusing caller ${callerId || "unknown"} (kind ${kind ?? "unknown"})`
     );
@@ -4611,7 +4762,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     outcome: EffectOutcome,
     address?: { branchId?: string; channelId?: string }
   ): Promise<void> {
-    this.assertChannelDeliveryCaller("deliverEffectOutcome");
+    this.assertChannelDeliveryCaller("deliverEffectOutcome", address?.channelId);
     await this.driver.deliverEffectOutcome(effectId, outcome, address);
   }
 
@@ -4647,13 +4798,13 @@ export abstract class AgentVesselBase extends DurableObjectBase {
   ): Promise<DeferredEvalGateResult> {
     const runId = ids.invocationEffect(invocationId);
     // Durable state FIRST (single source of truth: the outbox row). Once a
-    // previous dispatch durably recorded a successful eval.start, the run
+    // previous dispatch durably recorded an eval.start attempt, the run
     // identity is settled server-side: never re-validate the arguments (a
     // later deploy may have tightened the schema after EvalDO already holds a
     // durable terminal) and never call eval.start again (EvalDO.dispose()
     // deletes runs; a fresh start would re-INSERT and RE-EXECUTE a
     // side-effectful eval). eval.get is the only permitted operation.
-    if (this.driver.hasDeferredEvalStarted(channelId, runId)) {
+    if (this.driver.hasDeferredEvalStartAttempted(channelId, runId)) {
       return await this.recoverStartedDeferredEval(channelId, invocationId, runId, scopedRpc);
     }
     const p = prepareAgentToolArguments(
@@ -4695,6 +4846,11 @@ export abstract class AgentVesselBase extends DurableObjectBase {
         },
       }
     );
+    // Commit the single-dispatch fence before crossing into EvalDO. The RPC
+    // outcome is inherently ambiguous: any rejection may follow
+    // server-side acceptance. Recovery is therefore read-only (`eval.get`) and
+    // can never recreate a disposed side-effectful run.
+    this.driver.markDeferredEvalStartAttempted(channelId, runId);
     let settlement;
     try {
       settlement = await executeDeferred({
@@ -4708,14 +4864,35 @@ export abstract class AgentVesselBase extends DurableObjectBase {
         runId,
       });
     } catch (error) {
-      this.forgetDeferredEval(channelId, runId);
-      throw error;
+      // A structured service/application/access rejection is a completed RPC:
+      // eval.start definitively rejected the request before admitting an
+      // EvalDO run. In particular, exact preauthorization validates its
+      // prospective invocation during prepareRun, before dispatch. Treating
+      // that response as an ambiguous lost acknowledgement strands a bogus
+      // started fence and replaces the actionable error with
+      // runtime_generation_lost. Only transport/unstructured failures retain
+      // the conservative read-only recovery path below.
+      if (
+        error instanceof RemoteRpcError &&
+        (error.errorKind === "service" ||
+          error.errorKind === "application" ||
+          error.errorKind === "access")
+      ) {
+        this.forgetDeferredEval(channelId, runId);
+        return this.deferredEvalSettlement(invocationId, {
+          success: false,
+          console: "",
+          error: error.message,
+          ...(error.code ? { failureCode: error.code } : {}),
+          ...(error.errorData ? { errorData: error.errorData } : {}),
+        });
+      }
+      console.warn(
+        `[AgentVessel] eval.start outcome for ${runId} is ambiguous; reconciling read-only:`,
+        error instanceof Error ? error.message : error
+      );
+      return await this.recoverStartedDeferredEval(channelId, invocationId, runId, scopedRpc);
     }
-    // `executeDeferred` only resolves after `eval.start` was acknowledged
-    // (its own throw path propagated above). Record that ack durably on the
-    // outbox row so a redrive after any generation change can never start —
-    // and thus never re-execute — this run again.
-    this.driver.markDeferredEvalStarted(channelId, runId);
     if (!settlement.deferred) {
       this.forgetDeferredEval(channelId, runId);
       // eval.start returned the result inline — no push channel was exercised,
@@ -4765,7 +4942,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
         console: "",
         error:
           "eval runtime generation lost: the durable run record no longer exists after a " +
-          "previously acknowledged start; the eval is not re-executed automatically",
+          "previously attempted start; the eval is not re-executed automatically",
         failureKind: "infrastructure",
         failureCode: "runtime_generation_lost",
       });
@@ -5527,7 +5704,8 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       s["task"].trim().length === 0 ||
       typeof s["parentRef"] !== "string" ||
       typeof s["parentChannelId"] !== "string" ||
-      typeof s["taskChannelId"] !== "string"
+      typeof s["taskChannelId"] !== "string" ||
+      typeof s["parentParticipantId"] !== "string"
     ) {
       return null;
     }
@@ -5540,9 +5718,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       parentContextId: typeof s["parentContextId"] === "string" ? s["parentContextId"] : "",
       depth: typeof s["depth"] === "number" ? s["depth"] : 0,
       mode: s["mode"] === "fork" || s["mode"] === "fresh" ? s["mode"] : undefined,
-      ...(typeof s["parentParticipantId"] === "string"
-        ? { parentParticipantId: s["parentParticipantId"] }
-        : {}),
+      parentParticipantId: s["parentParticipantId"],
     };
   }
 
@@ -6277,6 +6453,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
           const contextId = subagent["contextId"];
           const parentContextId = subagent["parentContextId"];
           const childEntityId = subagent["childEntityId"];
+          const childParticipantId = subagent["childParticipantId"];
           if (
             typeof taskChannelId !== "string" ||
             typeof contextId !== "string" ||
@@ -6298,7 +6475,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
                 : this.subscriptionContextOrNull(parentChannelId),
             childContextId: contextId,
             childEntityId,
-            childParticipantId: null,
+            childParticipantId: typeof childParticipantId === "string" ? childParticipantId : null,
             parentChannelId,
             mode,
             label: typeof subagent["label"] === "string" ? subagent["label"] : "subagent",
@@ -6887,6 +7064,42 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     return { cancelled: true };
   }
 
+  @rpc({
+    principals: ["code"],
+    effect: { kind: "open" },
+    tier: "open",
+    sensitivity: "write",
+  })
+  async retireSubagentExecution(input: {
+    runId: string;
+    taskChannelId: string;
+    reason: string;
+  }): Promise<{ retired: true }> {
+    const subagent = this.subagentIdentity();
+    if (!subagent || subagent.runId !== input.runId || subagent.parentRef !== this.rpcCallerId) {
+      throw new Error("retireSubagentExecution: caller does not own this subagent run");
+    }
+    const wakeId = `subagent-terminal-publish:${subagent.runId}`;
+    const now = Date.now();
+    this.ctx.storage.transactionSync(() => {
+      this.sql.exec(
+        `INSERT OR IGNORE INTO agent_wake_queue (
+           wake_id, channel_id, wake_kind, payload_json, prerequisite_delivery_id,
+           idempotency_key, attempts, next_attempt_at, lease_generation, created_at,
+           disposition
+         ) VALUES (?, ?, 'subagent-terminal-publish', ?, NULL, ?, 0, ?, 0, ?, 'terminal-completed')`,
+        wakeId,
+        subagent.taskChannelId,
+        JSON.stringify({ runId: subagent.runId, reason: input.reason, outcome: "abandoned" }),
+        wakeId,
+        now,
+        now
+      );
+    });
+    await this.driver.abortChannel(input.taskChannelId, input.reason);
+    return { retired: true };
+  }
+
   private subagentReferenceError(message: string, detail: Record<string, unknown>): Error {
     return Object.assign(new Error(message), {
       code: "InvalidReference",
@@ -6978,8 +7191,8 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     outcome: "completed" | "failed" | "cancelled" | "abandoned",
     text: string
   ): Promise<void> {
-    await this.publishSubagentTerminal(run, outcome, text);
-    this.subagentRuns.setStatus(run.runId, outcome === "completed" ? "completed" : outcome);
+    const canonicalStatus = await this.publishSubagentTerminal(run, outcome, text);
+    this.subagentRuns.setStatus(run.runId, canonicalStatus);
   }
 
   private async publishSubagentStarted(run: SubagentRunRow): Promise<void> {
@@ -7012,6 +7225,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
             contextId: run.childContextId,
             parentContextId: run.parentContextId,
             childEntityId: run.childEntityId,
+            childParticipantId: run.childParticipantId,
             label: run.label,
             agentKind: run.agentKind,
             launchConfig: run.launchConfig,
@@ -7030,7 +7244,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     run: SubagentRunRow,
     outcome: "completed" | "failed" | "cancelled" | "abandoned",
     text: string
-  ): Promise<void> {
+  ): Promise<"completed" | "failed" | "cancelled" | "abandoned"> {
     const kindByOutcome = {
       completed: "task.completed",
       failed: "task.failed",
@@ -7044,7 +7258,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       abandoned: "abandoned",
     } as const;
     const participantId =
-      this.subscriptions.getParticipantId(run.parentChannelId) ?? this.participantId();
+      this.subscriptions.getParticipantId(run.taskChannelId) ?? this.participantId();
     const actor: ActorRef = {
       kind: "agent",
       id: participantId,
@@ -7094,10 +7308,85 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       payload,
       createdAt: new Date().toISOString(),
     } as unknown as AgenticEvent;
-    await this.createChannelClient(run.taskChannelId).publishAgenticEvent(participantId, event, {
+    const taskChannel = this.createChannelClient(run.taskChannelId);
+    await taskChannel.publishAgenticEvent(participantId, event, {
       idempotencyKey: `subagent-terminal:${run.runId}`,
       senderMetadata: actor.metadata,
     });
+    const canonicalEnvelope = (await taskChannel.getEnvelope(
+      `ik:subagent-terminal:${run.runId}`
+    )) as ChannelEvent | null;
+    const canonicalStatus = canonicalEnvelope
+      ? this.authorizedSubagentTerminalStatus(run, canonicalEnvelope)
+      : null;
+    if (!canonicalEnvelope || !canonicalStatus) {
+      throw new Error(
+        `subagent terminal ${run.runId} has no authorized canonical task-channel event`
+      );
+    }
+    const canonicalEvent = canonicalEnvelope.payload as AgenticEvent;
+    await this.mirrorSubagentTerminalToParent(run, canonicalEvent);
+    return canonicalStatus;
+  }
+
+  private authorizedSubagentTerminalStatus(
+    run: SubagentRunRow,
+    envelope: ChannelEvent
+  ): "completed" | "failed" | "cancelled" | "abandoned" | null {
+    if (envelope.type !== AGENTIC_EVENT_PAYLOAD_KIND) return null;
+    const event = envelope.payload as AgenticEvent;
+    const status = this.subagentTerminalStatus(event, run.runId);
+    if (!status) return null;
+    const childParticipantId = run.childParticipantId ?? run.childEntityId;
+    const actorParticipantId = event.actor.participantId ?? event.actor.id;
+    if (envelope.senderId === childParticipantId && actorParticipantId === childParticipantId) {
+      return status;
+    }
+    // A supervisor may author cancellation/abandonment/infrastructure failure
+    // facts when the child is unreachable. Successful completion is child
+    // evidence and can never be asserted by the supervisor.
+    const supervisorParticipantId =
+      this.subscriptions.getParticipantId(run.taskChannelId) ?? this.participantId();
+    return status !== "completed" &&
+      envelope.senderId === supervisorParticipantId &&
+      actorParticipantId === supervisorParticipantId
+      ? status
+      : null;
+  }
+
+  private subagentTerminalStatus(
+    event: AgenticEvent,
+    runId: string
+  ): "completed" | "failed" | "cancelled" | "abandoned" | null {
+    if (event.causality?.taskId !== runId) return null;
+    switch (event.kind) {
+      case "task.completed":
+        return "completed";
+      case "task.failed":
+        return "failed";
+      case "task.cancelled":
+        return "cancelled";
+      case "task.abandoned":
+        return "abandoned";
+      default:
+        return null;
+    }
+  }
+
+  private async mirrorSubagentTerminalToParent(
+    run: SubagentRunRow,
+    canonicalEvent: AgenticEvent
+  ): Promise<void> {
+    if (!this.subagentTerminalStatus(canonicalEvent, run.runId)) {
+      throw new Error(`refusing to mirror a non-canonical terminal for subagent ${run.runId}`);
+    }
+    const participantId =
+      this.subscriptions.getParticipantId(run.parentChannelId) ?? this.participantId();
+    await this.createChannelClient(run.parentChannelId).publishAgenticEvent(
+      participantId,
+      canonicalEvent,
+      { idempotencyKey: `subagent-terminal:${run.runId}` }
+    );
   }
 
   private async publishOwnSubagentTerminal(input: {

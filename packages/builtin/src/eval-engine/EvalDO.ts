@@ -2,6 +2,7 @@ import {
   DurableObjectBase,
   schemaRpc,
   type DurableObjectContext,
+  type DurableObjectSchemaMigration,
   type LifecyclePrepareInput,
   type LifecycleResumeInput,
 } from "@vibestudio/durable";
@@ -92,8 +93,6 @@ import { createPrivateGuestGlobal } from "@vibestudio/shared/evalConfinement";
  * `import { fs } from "@workspace/runtime"` does not initialize in a DO isolate.)
  */
 
-/** Reserved tables the user `db` may not DROP/DELETE/ALTER — base state, scope, sqlite internals. */
-const RESERVED_TABLE = /\b(state|repl_scopes|sqlite_[A-Za-z0-9_]*)\b/i;
 const DESTRUCTIVE_STMT = /^\s*(DROP|DELETE|ALTER|UPDATE|INSERT|REPLACE|TRUNCATE|CREATE)\b/i;
 
 const RESULT_CONSOLE_MAX_CHARS = 80_000;
@@ -112,7 +111,19 @@ const EVAL_SCHEMA_TABLES = [
   "run_events",
   "eval_execution_roots",
   "eval_result_redeliveries",
+  "resident_channel_memberships",
 ] as const;
+
+const EVAL_RESERVED_TABLES = new Set<string>(["state", ...EVAL_SCHEMA_TABLES, "repl_scopes"]);
+
+/** True when a user-db statement names an engine-owned or SQLite-owned table. */
+function referencesReservedTable(query: string): boolean {
+  const normalized = query.replace(/["'`]/g, "");
+  if (/\bsqlite_[A-Za-z0-9_]*\b/i.test(normalized)) return true;
+  return [...EVAL_RESERVED_TABLES].some((table) =>
+    new RegExp(`\\b${table}\\b`, "i").test(normalized)
+  );
+}
 
 interface RunCleanupPhase {
   active: boolean;
@@ -444,10 +455,33 @@ interface KernelLeaseState {
 
 export class EvalDO extends DurableObjectBase {
   static override rpcMethods = evalEngineMethods;
-  static override schemaVersion = 2;
+  static override schemaVersion = 3;
 
   protected override schemaProductionBaseline() {
     return { version: 2, name: "eval-engine-v2" } as const;
+  }
+
+  protected override schemaMigrations(): readonly DurableObjectSchemaMigration[] {
+    return [
+      {
+        version: 3,
+        name: "resident-channel-membership-catalog",
+        validateSource: (sql) => {
+          const runs = sql
+            .exec(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'runs'`)
+            .toArray();
+          if (runs.length === 0) throw new Error("EvalDO v2 source is missing runs");
+        },
+        migrate: (sql) => {
+          sql.exec(`
+            CREATE TABLE resident_channel_memberships (
+              channel_id TEXT PRIMARY KEY,
+              registered_at INTEGER NOT NULL
+            )
+          `);
+        },
+      },
+    ];
   }
 
   private engine: EvalEngine | null = null;
@@ -634,6 +668,12 @@ export class EvalDO extends DurableObjectBase {
         run_id TEXT PRIMARY KEY,
         attempt INTEGER NOT NULL CHECK (attempt >= 1),
         FOREIGN KEY (run_id) REFERENCES runs(run_id) ON DELETE CASCADE
+      )
+    `);
+    this.sql.exec(`
+      CREATE TABLE IF NOT EXISTS resident_channel_memberships (
+        channel_id TEXT PRIMARY KEY,
+        registered_at INTEGER NOT NULL
       )
     `);
   }
@@ -960,7 +1000,7 @@ export class EvalDO extends DurableObjectBase {
     return this.executeRun(runId);
   }
 
-  override async releaseForLifecycle(_input: LifecyclePrepareInput): Promise<{ status: "ready" }> {
+  override async releaseForLifecycle(input: LifecyclePrepareInput): Promise<{ status: "ready" }> {
     const failures: unknown[] = [];
     try {
       await this.cancelRunsForLifecycle();
@@ -972,9 +1012,19 @@ export class EvalDO extends DurableObjectBase {
     } catch (error) {
       failures.push(error);
     }
+    if (input.mode === "retire") {
+      try {
+        await this.endResidentChannelMemberships();
+      } catch (error) {
+        failures.push(error);
+      }
+    }
     if (this.kernelLease) this.settleKernelLease(this.kernelLease, "released");
     if (failures.length > 0) {
-      throw new AggregateError(failures, "eval lifecycle release failed");
+      const details = failures
+        .map((error) => (error instanceof Error ? error.message : String(error)))
+        .join("; ");
+      throw new AggregateError(failures, `eval lifecycle release failed: ${details}`);
     }
     return { status: "ready" };
   }
@@ -2483,19 +2533,12 @@ export class EvalDO extends DurableObjectBase {
         `SELECT name FROM sqlite_master
          WHERE type='table'
            AND name NOT LIKE 'sqlite_%'
-           AND name NOT GLOB '_vibestudio_*'
-           AND name NOT IN (
-             'state',
-             'repl_scopes',
-             'runs',
-             'run_progress',
-             'run_checkpoints',
-             'run_events',
-             'eval_execution_roots'
-           )`
+           AND name NOT GLOB '_vibestudio_*'`
       )
-      .toArray() as Array<{ name: string }>;
-    for (const { name } of tables) {
+      .toArray()
+      .map((row) => String(row["name"]))
+      .filter((name) => !EVAL_RESERVED_TABLES.has(name));
+    for (const name of tables) {
       this.sql.exec(`DROP TABLE IF EXISTS "${name.replace(/"/g, '""')}"`);
     }
     // Drop the scope table (lazily created by SqlScopePersistence) — IF EXISTS so reset
@@ -3303,6 +3346,12 @@ export class EvalDO extends DurableObjectBase {
         receiver: ResidentSessionReceiver
       ): ResidentSessionRegistration => {
         const execution = this.requireActiveEvalExecution();
+        this.sql.exec(
+          `INSERT OR IGNORE INTO resident_channel_memberships (channel_id, registered_at)
+           VALUES (?, ?)`,
+          channelId,
+          Date.now()
+        );
         const inFlight = new Set<Promise<void>>();
         let accepting = true;
         const unregisterOwnerReceiver = this.registerResidentChannelSession(
@@ -3331,8 +3380,10 @@ export class EvalDO extends DurableObjectBase {
         const cleanup = (): Promise<void> => {
           if (cleanupPromise) return cleanupPromise;
           accepting = false;
+          receiver.abortAll?.();
           unregisterOwnerReceiver();
-          cleanupPromise = Promise.allSettled([...inFlight]).then(() => {
+          cleanupPromise = Promise.allSettled([...inFlight]).then(async () => {
+            await this.detachResidentChannelMembership(channelId, execution.rpc);
             execution.residentSessionCleanups.delete(cleanup);
           });
           return cleanupPromise;
@@ -3348,6 +3399,12 @@ export class EvalDO extends DurableObjectBase {
               execution.rpc.call<T>(targetId, method, args),
           }),
           close: () => cleanup(),
+          relationshipEnded: () => {
+            this.sql.exec(
+              `DELETE FROM resident_channel_memberships WHERE channel_id = ?`,
+              channelId
+            );
+          },
         });
       },
       expose: this.rpc.expose.bind(this.rpc),
@@ -3374,6 +3431,50 @@ export class EvalDO extends DurableObjectBase {
   private async settleResidentSessions(execution: EvalExecutionContext): Promise<void> {
     while (execution.residentSessionCleanups.size > 0) {
       await Promise.all([...execution.residentSessionCleanups].map((cleanup) => cleanup()));
+    }
+  }
+
+  private async residentChannelTarget(
+    channelId: string,
+    rpc: Pick<RpcClient, "call">
+  ): Promise<string> {
+    const service = await rpc.call<{ kind?: string; targetId?: string }>(
+      "main",
+      "workers.resolveService",
+      ["vibestudio.channel.v1", channelId]
+    );
+    if (service.kind !== "durable-object" || !service.targetId) {
+      throw new Error(`channel ${channelId} did not resolve to a Durable Object`);
+    }
+    return service.targetId;
+  }
+
+  private async detachResidentChannelMembership(
+    channelId: string,
+    rpc: Pick<RpcClient, "call">
+  ): Promise<void> {
+    const targetId = await this.residentChannelTarget(channelId, rpc);
+    await rpc.call(targetId, "detach", [{ participantId: this.rpc.selfId }]);
+  }
+
+  private async endResidentChannelMemberships(): Promise<void> {
+    const channels = this.sql
+      .exec(`SELECT channel_id FROM resident_channel_memberships ORDER BY channel_id`)
+      .toArray()
+      .map((row) => String(row["channel_id"]));
+    for (const channelId of channels) {
+      const targetId = await this.residentChannelTarget(channelId, this.rpc);
+      const state = await this.rpc.call<{ revision: number; active: boolean }>(
+        targetId,
+        "relationshipState",
+        [this.rpc.selfId]
+      );
+      if (state.active) {
+        await this.rpc.call(targetId, "leave", [
+          { participantId: this.rpc.selfId, revision: state.revision + 1 },
+        ]);
+      }
+      this.sql.exec(`DELETE FROM resident_channel_memberships WHERE channel_id = ?`, channelId);
     }
   }
 
@@ -3471,7 +3572,7 @@ export class EvalDO extends DurableObjectBase {
       if (generation !== this.scopeGeneration) {
         throw new Error("db: eval execution was invalidated by a scope reset");
       }
-      if (DESTRUCTIVE_STMT.test(query) && RESERVED_TABLE.test(query.replace(/["'`]/g, ""))) {
+      if (DESTRUCTIVE_STMT.test(query) && referencesReservedTable(query)) {
         throw new Error(
           "db: refusing to modify a reserved table (state / repl_scopes / sqlite_*). Use your own table names."
         );

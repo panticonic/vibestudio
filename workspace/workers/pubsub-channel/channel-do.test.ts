@@ -137,7 +137,7 @@ async function joinEntity(
     contextId,
     metadata,
     delivery: "all",
-    endpoint: { kind: "entity", entityId: participantId },
+    endpoint: { kind: "entity", entityId: participantId, invocation: "direct" },
     applicationConfig: null,
     replay: true,
   });
@@ -156,7 +156,7 @@ async function joinResidentSession(
     contextId,
     metadata,
     delivery: "all",
-    endpoint: { kind: "entity", entityId: participantId },
+    endpoint: { kind: "entity", entityId: participantId, invocation: "mailbox" },
     applicationConfig: null,
     replay: true,
   });
@@ -324,7 +324,7 @@ describe("PubSubChannel", () => {
 
   ledgerTest("channel.locked.exact-admission", async () => {
     const workerId = "do:workers/system-agent:SystemAgentWorker:user-alice";
-    const { instance } = await createGadBackedChannel({
+    const { instance, sql } = await createGadBackedChannel({
       rpcCall: (target, method, args) => {
         if (target === "main" && method === "workspace-state.entity.resolveActive") {
           return { id: args[0], kind: "do" };
@@ -994,7 +994,7 @@ describe("PubSubChannel", () => {
         contextId: "ctx-1",
         metadata: { name: "Eval client", type: "client" },
         delivery: "all",
-        endpoint: { kind: "entity", entityId: evalDoId },
+        endpoint: { kind: "entity", entityId: evalDoId, invocation: "mailbox" },
         applicationConfig: null,
         replay: true,
       })
@@ -1027,7 +1027,7 @@ describe("PubSubChannel", () => {
         contextId: "ctx-1",
         metadata: { name: "Retired eval", type: "headless" },
         delivery: "all",
-        endpoint: { kind: "entity", entityId: participantId },
+        endpoint: { kind: "entity", entityId: participantId, invocation: "direct" },
         applicationConfig: null,
         replay: true,
       })
@@ -1277,7 +1277,7 @@ describe("PubSubChannel", () => {
       contextId: "ctx-1",
       metadata: { name: "Denied agent", type: "agent" },
       delivery: "all",
-      endpoint: { kind: "entity", entityId: agentId },
+      endpoint: { kind: "entity", entityId: agentId, invocation: "direct" },
       applicationConfig: null,
       replay: true,
     });
@@ -1298,7 +1298,7 @@ describe("PubSubChannel", () => {
     expect((claim!.payload as { delivery: { participantId: string } }).delivery.participantId).toBe(
       agentId
     );
-    const failed = instance.failReadyWork("channel-delivery", {
+    const failed = await instance.failReadyWork("channel-delivery", {
       workerId: "driver-1",
       itemId: claim!.itemId,
       generation: claim!.generation,
@@ -1327,9 +1327,115 @@ describe("PubSubChannel", () => {
     expect(retry!.itemId).toBe(claim!.itemId);
   });
 
+  it("does not let an unavailable failure from an old claim detach a replacement receiver", async () => {
+    const residentId = "do:vibestudio/internal:EvalDO:resident-generation";
+    const { instance, sql } = await createGadBackedChannel({
+      rpcCall: async (target, method, args) => {
+        if (target === "main" && method === "workspace-state.entity.resolveActive") {
+          return { id: args[0], kind: "do" };
+        }
+        return undefined;
+      },
+    });
+    await joinResidentSession(instance, residentId);
+    setRpcCaller(instance, "panel:user", "panel");
+    await instance.subscribe("panel:user", { contextId: "ctx-1", name: "User", type: "panel" });
+    await instance.publish("panel:user", AGENTIC_EVENT_PAYLOAD_KIND, agenticEvent());
+
+    const [oldClaim] = instance.claimReadyWork("channel-delivery", {
+      workerId: "old-driver",
+      now: Date.now(),
+      limit: 1,
+    });
+    expect(oldClaim).toBeDefined();
+
+    setRpcCaller(instance, residentId, "durable-object");
+    await instance.join({
+      participantId: residentId,
+      revision: 2,
+      contextId: "ctx-1",
+      metadata: { name: "Replacement resident", type: "client" },
+      delivery: "all",
+      endpoint: { kind: "entity", entityId: residentId, invocation: "mailbox" },
+      applicationConfig: null,
+      replay: true,
+    });
+
+    await expect(
+      instance.failReadyWork("channel-delivery", {
+        workerId: "old-driver",
+        itemId: oldClaim!.itemId,
+        generation: oldClaim!.generation,
+        error: Object.assign(new Error("old receiver disappeared"), {
+          code: "ResidentSessionUnavailable",
+        }),
+      })
+    ).resolves.toEqual({ retryAt: expect.any(Number) });
+    expect(
+      sql
+        .exec(
+          `SELECT revision, attached FROM channel_relationships WHERE participant_id = ?`,
+          residentId
+        )
+        .toArray()
+    ).toEqual([expect.objectContaining({ revision: 2, attached: 1 })]);
+    expect(
+      instance.claimReadyWork("channel-delivery", {
+        workerId: "replacement-driver",
+        now: Date.now(),
+        limit: 1,
+      })[0]?.itemId
+    ).toBe(oldClaim!.itemId);
+  });
+
+  it("terminalizes permanent delivery poison and unblocks the ordered lane", async () => {
+    const residentId = "do:vibestudio/internal:EvalDO:permanent-poison";
+    const { instance, sql } = await createGadBackedChannel({
+      rpcCall: async (target, method, args) => {
+        if (target === "main" && method === "workspace-state.entity.resolveActive") {
+          return { id: args[0], kind: "do" };
+        }
+        return undefined;
+      },
+    });
+    await joinResidentSession(instance, residentId);
+    setRpcCaller(instance, "panel:user", "panel");
+    await instance.subscribe("panel:user", { contextId: "ctx-1", name: "User", type: "panel" });
+    await instance.publish("panel:user", AGENTIC_EVENT_PAYLOAD_KIND, agenticEvent());
+    await instance.publish("panel:user", AGENTIC_EVENT_PAYLOAD_KIND, agenticEvent());
+
+    const [poison] = instance.claimReadyWork("channel-delivery", {
+      workerId: "driver-poison",
+      now: Date.now(),
+      limit: 1,
+    });
+    await expect(
+      instance.failReadyWork("channel-delivery", {
+        workerId: "driver-poison",
+        itemId: poison!.itemId,
+        generation: poison!.generation,
+        error: Object.assign(new Error("malformed durable envelope"), {
+          code: "PermanentChannelDelivery",
+        }),
+      })
+    ).resolves.toEqual({ retryAt: expect.any(Number) });
+    expect(
+      sql
+        .exec(`SELECT state FROM channel_delivery_mailbox WHERE delivery_id = ?`, poison!.itemId)
+        .toArray()
+    ).toEqual([{ state: "terminal-integrity" }]);
+    const [next] = instance.claimReadyWork("channel-delivery", {
+      workerId: "driver-poison",
+      now: Date.now(),
+      limit: 1,
+    });
+    expect(next?.itemId).toBeDefined();
+    expect(next?.itemId).not.toBe(poison!.itemId);
+  });
+
   it("settles one finite delivery by its stable delivery id", async () => {
     const agentId = "do:workers/agent-worker:AiChatWorker:agent-settlement";
-    const { instance } = await createGadBackedChannel({
+    const { instance, sql } = await createGadBackedChannel({
       rpcCall: async (target, method, args) => {
         if (target === "main" && method === "workspace-state.entity.resolveActive") {
           return { id: args[0], kind: "do" };
@@ -1344,7 +1450,7 @@ describe("PubSubChannel", () => {
       contextId: "ctx-1",
       metadata: { name: "Agent", type: "agent" },
       delivery: "all",
-      endpoint: { kind: "entity", entityId: agentId },
+      endpoint: { kind: "entity", entityId: agentId, invocation: "direct" },
       applicationConfig: null,
       replay: true,
     });
@@ -1363,9 +1469,17 @@ describe("PubSubChannel", () => {
         workerId: "driver-1",
         itemId: claim!.itemId,
         generation: claim!.generation,
-        outcome: { processed: true },
+        outcome: { processed: true, recipientExecutionStartedAt: Date.now() },
       })
     ).toBe("accepted");
+    expect(
+      sql
+        .exec(
+          `SELECT samples FROM channel_delivery_latency_histogram
+            WHERE metric = 'publish-to-recipient-execution'`
+        )
+        .toArray()
+    ).toEqual([expect.objectContaining({ samples: 1 })]);
     const [next] = instance.claimReadyWork("channel-delivery", {
       workerId: "driver-1",
       now: Date.now(),
@@ -1377,7 +1491,7 @@ describe("PubSubChannel", () => {
   it("derives every executable recipient through the same entity endpoint", async () => {
     const agentDoId = "do:workers/agent-worker:AiChatWorker:agent-x";
     const clientDoId = "do:vibestudio/internal:EvalDO:client-x";
-    const { instance } = await createGadBackedChannel({
+    const { instance, sql } = await createGadBackedChannel({
       rpcCall: async (target, method, args) => {
         if (target === "main" && method === "workspace-state.entity.resolveActive") {
           return { id: args[0], kind: "do" };
@@ -1393,7 +1507,7 @@ describe("PubSubChannel", () => {
       contextId: "ctx-1",
       metadata: { name: "Agent", type: "agent" },
       delivery: "all",
-      endpoint: { kind: "entity", entityId: agentDoId },
+      endpoint: { kind: "entity", entityId: agentDoId, invocation: "direct" },
       applicationConfig: null,
       replay: true,
     });
@@ -1404,7 +1518,7 @@ describe("PubSubChannel", () => {
       contextId: "ctx-1",
       metadata: { name: "Eval client", type: "client" },
       delivery: "all",
-      endpoint: { kind: "entity", entityId: clientDoId },
+      endpoint: { kind: "entity", entityId: clientDoId, invocation: "mailbox" },
       applicationConfig: null,
       replay: true,
     });
@@ -1420,13 +1534,28 @@ describe("PubSubChannel", () => {
     expect(claims.map((claim) => claim.payload)).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          delivery: expect.objectContaining({ participantId: agentDoId }),
+          delivery: expect.objectContaining({
+            participantId: agentDoId,
+            agenticContext: expect.objectContaining({ version: 1 }),
+          }),
         }),
         expect.objectContaining({
-          delivery: expect.objectContaining({ participantId: clientDoId }),
+          delivery: expect.objectContaining({ participantId: clientDoId, agenticContext: null }),
         }),
       ])
     );
+    expect(
+      sql.exec(`SELECT COUNT(*) AS contexts FROM channel_delivery_event_context`).toArray()[0]
+    ).toEqual({ contexts: 1 });
+    expect(
+      sql
+        .exec(
+          `SELECT COUNT(*) AS copied
+             FROM channel_delivery_mailbox
+            WHERE agentic_context_json IS NOT NULL`
+        )
+        .toArray()[0]
+    ).toEqual({ copied: 0 });
   });
 
   it("routes addressed task facts without copying ordinary child activity to the supervisor", async () => {
@@ -1441,7 +1570,7 @@ describe("PubSubChannel", () => {
       contextId: "ctx-task",
       metadata: { name: "Supervisor", type: "agent" },
       delivery: "addressed",
-      endpoint: { kind: "entity", entityId: supervisorId },
+      endpoint: { kind: "entity", entityId: supervisorId, invocation: "direct" },
       applicationConfig: null,
       replay: true,
     });
@@ -1452,7 +1581,7 @@ describe("PubSubChannel", () => {
       contextId: "ctx-task",
       metadata: { name: "Child", type: "agent" },
       delivery: "all",
-      endpoint: { kind: "entity", entityId: childId },
+      endpoint: { kind: "entity", entityId: childId, invocation: "direct" },
       applicationConfig: null,
       replay: true,
     });
@@ -1677,7 +1806,7 @@ describe("PubSubChannel", () => {
   it("routes resident-session method calls through the durable event path", async () => {
     const evalPid = "do:vibestudio/internal:EvalDO:eval-1";
     const rpcCalls: Array<{ target: string; method: string }> = [];
-    const { instance, gad } = await createGadBackedChannel({
+    const { instance, gad, sql } = await createGadBackedChannel({
       rpcCall: (target, method, args) => {
         if (target === "main" && method === "workspace-state.entity.resolveActive") {
           return { id: args[0], kind: "do" };
@@ -1701,11 +1830,62 @@ describe("PubSubChannel", () => {
       { invocationId: "title-inv", transportCallId: "title-call" }
     );
 
-    expect(rpcCalls.some((c) => c.target === evalPid && c.method === "onMethodCall")).toBe(true);
+    expect(rpcCalls.some((c) => c.target === evalPid && c.method === "onMethodCall")).toBe(false);
+    await vi.waitFor(() =>
+      expect(
+        rpcCalls.some((c) => c.target === evalPid && c.method === "acceptChannelInvocation")
+      ).toBe(true)
+    );
 
     setRpcCaller(instance, evalPid, "durable-object");
+    const providerClaim = await instance.claimMethodCall(
+      evalPid,
+      "title-call",
+      "eval-generation-1"
+    );
+    expect(
+      sql
+        .exec(
+          `SELECT samples FROM channel_delivery_latency_histogram
+            WHERE metric = 'call-to-provider-execution'`
+        )
+        .toArray()
+    ).toEqual([]);
+    await expect(
+      instance.markMethodCallExecutionStarted(evalPid, "title-call", providerClaim.generation!)
+    ).resolves.toEqual({ accepted: true });
+    await expect(
+      instance.markMethodCallExecutionStarted(evalPid, "title-call", providerClaim.generation!)
+    ).resolves.toEqual({ accepted: true });
+    expect(
+      sql
+        .exec(
+          `SELECT samples FROM channel_delivery_latency_histogram
+            WHERE metric = 'call-to-provider-execution'`
+        )
+        .toArray()
+    ).toEqual([expect.objectContaining({ samples: 1 })]);
+    const adoptedClaim = await instance.claimMethodCall(evalPid, "title-call", "eval-generation-2");
+    await expect(
+      instance.markMethodCallExecutionStarted(evalPid, "title-call", providerClaim.generation!)
+    ).resolves.toEqual({ accepted: false });
+    await instance.submitMethodProgress(evalPid, "title-call", "stale progress", {
+      invocationId: "title-inv",
+      providerClaimGeneration: providerClaim.generation,
+    });
+    await instance.submitMethodProgress(evalPid, "title-call", "current progress", {
+      invocationId: "title-inv",
+      providerClaimGeneration: adoptedClaim.generation,
+    });
+    await expect(
+      instance.submitMethodResult(evalPid, "title-call", { stale: true }, false, {
+        invocationId: "title-inv",
+        providerClaimGeneration: providerClaim.generation,
+      })
+    ).resolves.toMatchObject({ dropped: true, reason: "superseded-provider-claim" });
     await instance.submitMethodResult(evalPid, "title-call", { ok: true }, false, {
       invocationId: "title-inv",
+      providerClaimGeneration: adoptedClaim.generation,
     });
 
     const events = gad.sql
@@ -1728,6 +1908,153 @@ describe("PubSubChannel", () => {
         }),
       ])
     );
+    // Only the current provider generation may append progress. The payload is
+    // blob-spilled by this fixture, so row cardinality is the authoritative
+    // stale-generation assertion here.
+    expect(events.filter((event) => event.kind === "invocation.output")).toHaveLength(1);
+  });
+
+  it.each([
+    { name: "vessel", target: "do:workers/agent-worker:AiChatWorker:matrix", route: "direct" },
+    { name: "resident", target: "do:vibestudio/internal:EvalDO:matrix-live", route: "mailbox" },
+    {
+      name: "disconnected resident",
+      target: "do:vibestudio/internal:EvalDO:matrix-disconnected",
+      route: "mailbox-refused",
+    },
+    { name: "live session", target: "panel:matrix-provider", route: "session" },
+  ])("route matrix: $name call, redrive, and cancel converge on one terminal", async (row) => {
+    const rpcCalls: Array<{ target: string; method: string }> = [];
+    let settleDirectCall: ((value: { result: unknown }) => void) | undefined;
+    const { instance, gad, sql } = await createGadBackedChannel({
+      rpcCall: async (target, method, args) => {
+        if (target === "main" && method === "workspace-state.entity.resolveActive") {
+          return { id: args[0], kind: "do" };
+        }
+        rpcCalls.push({ target, method });
+        if (row.route === "mailbox-refused" && method === "acceptChannelInvocation") {
+          throw Object.assign(new Error("no active receiver"), {
+            code: "ResidentSessionUnavailable",
+          });
+        }
+        if (method === "onMethodCall") {
+          return new Promise((resolve) => {
+            settleDirectCall = resolve;
+          });
+        }
+        if (
+          method === "acceptChannelInvocation" ||
+          method === "cancelDirectMethodCall" ||
+          method === "cancelChannelInvocation"
+        ) {
+          return null;
+        }
+        return undefined;
+      },
+    });
+    setRpcCaller(instance, "panel:matrix-caller", "panel");
+    await instance.subscribe("panel:matrix-caller", {
+      contextId: "ctx-1",
+      name: "Caller",
+      type: "panel",
+    });
+    if (row.route === "session") {
+      setRpcCaller(instance, row.target, "panel");
+      await instance.subscribe(row.target, {
+        contextId: "ctx-1",
+        name: "Provider",
+        type: "panel",
+      });
+    } else {
+      setRpcCaller(instance, row.target, "durable-object");
+      await instance.join({
+        participantId: row.target,
+        revision: 1,
+        contextId: "ctx-1",
+        metadata: { name: row.name, type: "client" },
+        delivery: "all",
+        endpoint: {
+          kind: "entity",
+          entityId: row.target,
+          invocation: row.route === "direct" ? "direct" : "mailbox",
+        },
+        applicationConfig: null,
+        replay: true,
+      });
+    }
+
+    const options = {
+      invocationId: `matrix-invocation-${row.name}`,
+      transportCallId: `matrix-transport-${row.name}`,
+      turnId: `matrix-turn-${row.name}`,
+    };
+    setRpcCaller(instance, "panel:matrix-caller", "panel");
+    await instance.callMethod(
+      "panel:matrix-caller",
+      row.target,
+      options.transportCallId,
+      "eval",
+      { code: "1 + 1" },
+      options
+    );
+    await instance.callMethod(
+      "panel:matrix-caller",
+      row.target,
+      options.transportCallId,
+      "eval",
+      { code: "1 + 1" },
+      options
+    );
+    await instance.cancelMethodCall("panel:matrix-caller", options.transportCallId);
+    settleDirectCall?.({ result: { ignoredAfterCancellation: true } });
+    await Promise.resolve();
+
+    expect(
+      gad.sql.exec(`SELECT 1 FROM log_events WHERE envelope_id = ?`, options.invocationId).toArray()
+    ).toHaveLength(1);
+    expect(
+      gad.sql
+        .exec(
+          `SELECT 1 FROM log_events WHERE envelope_id = ?`,
+          `terminal:${options.transportCallId}`
+        )
+        .toArray()
+    ).toHaveLength(1);
+    expect(
+      gad.sql
+        .exec(
+          `SELECT payload_ref_json FROM log_events WHERE envelope_id = ?`,
+          `terminal:${options.transportCallId}`
+        )
+        .toArray()
+        .map((terminal) => JSON.parse(String(terminal["payload_ref_json"])))
+    ).toEqual([
+      expect.objectContaining({
+        kind: "invocation.cancelled",
+        payload: expect.objectContaining({
+          to: [{ kind: "participant", participantId: "panel:matrix-caller" }],
+        }),
+      }),
+    ]);
+    if (row.route === "direct") {
+      expect(rpcCalls.some((call) => call.method === "onMethodCall")).toBe(true);
+      expect(rpcCalls.some((call) => call.method === "cancelDirectMethodCall")).toBe(true);
+    } else if (row.route === "session") {
+      expect(rpcCalls.some((call) => call.target === row.target)).toBe(false);
+    } else {
+      expect(rpcCalls.some((call) => call.method === "acceptChannelInvocation")).toBe(true);
+      expect(rpcCalls.some((call) => call.method === "cancelChannelInvocation")).toBe(true);
+      expect(
+        sql
+          .exec(
+            `SELECT COUNT(*) AS count FROM channel_delivery_mailbox
+              WHERE participant_id = ? AND event_id = ?`,
+            row.target,
+            options.invocationId
+          )
+          .toArray()[0]?.["count"]
+      ).toBe(1);
+    }
   });
 
   it("reports channel-scoped target absence for method calls to participants outside the live roster", async () => {
@@ -3541,6 +3868,7 @@ describe("PubSubChannel", () => {
       resolveMethod = resolve;
     });
     let methodStartedRecorded = false;
+    let cancellationDelivered = false;
     const targetPid = "do:workers/agent-worker:AiChatWorker:agent-1";
     const { instance, gad } = await createGadBackedChannel({
       rpcCall: (target, method, args) => {
@@ -3554,6 +3882,10 @@ describe("PubSubChannel", () => {
             resolveMethodStarted();
           }
           return methodResult;
+        }
+        if (target === targetPid && method === "cancelDirectMethodCall") {
+          cancellationDelivered = true;
+          return null;
         }
         return undefined;
       },
@@ -3587,6 +3919,7 @@ describe("PubSubChannel", () => {
 
     setRpcCaller(instance, "panel:caller", "panel");
     await instance.cancelMethodCall("panel:caller", "transport-do");
+    expect(cancellationDelivered).toBe(true);
     resolveMethod({ result: { ok: true } });
     await new Promise((resolve) => setTimeout(resolve, 0));
 

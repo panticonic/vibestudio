@@ -110,7 +110,10 @@ describe("DurableObjectBase alarm dispatch", () => {
       agenticContext: null,
     } satisfies ResidentChannelDeliveryInput;
 
-    await expect(instance.acceptChannelDelivery(input)).resolves.toEqual({ processed: true });
+    await expect(instance.acceptChannelDelivery(input)).resolves.toEqual({
+      processed: true,
+      recipientExecutionStartedAt: expect.any(Number),
+    });
     expect(received).toEqual([
       {
         channelId: "channel-1",

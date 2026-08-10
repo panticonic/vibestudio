@@ -208,6 +208,7 @@ const invocationTerminalFailurePayloadSchema = failurePayloadSchema
     terminalOutcome: invocationOutcomeSchema.exclude(["success"]),
     terminalReasonCode: z.string().optional(),
     failure: agentToolFailureSchema.optional(),
+    to: z.array(participantSelectorSchema).optional(),
   })
   .strict();
 
@@ -246,6 +247,7 @@ const invocationStartedPayloadSchema = z
     request: z.unknown().optional(),
     transport: invocationTransportSchema.optional(),
     executionMode: z.enum(["sequential", "parallel"]).optional(),
+    to: z.array(participantSelectorSchema).optional(),
     requiresApproval: z.boolean().optional(),
     userVisible: z.boolean().optional(),
     summary: z.string().optional(),
@@ -316,6 +318,7 @@ const invocationOutputPayloadSchema = z
     protocol: protocolSchema,
     output: z.unknown(),
     channel: z.enum(["stdout", "stderr", "data"]).optional(),
+    to: z.array(participantSelectorSchema).optional(),
   })
   .strict();
 
@@ -327,6 +330,7 @@ const invocationCompletedPayloadSchema = z
     summary: z.string().optional(),
     terminalOutcome: z.literal("success"),
     terminalReasonCode: z.string().optional(),
+    to: z.array(participantSelectorSchema).optional(),
     turnControl: z
       .union([
         z
@@ -451,6 +455,7 @@ const uiFeedbackPayloadSchema = z
   .object({
     protocol: protocolSchema,
     target: participantRefSchema,
+    to: z.array(participantSelectorSchema).optional(),
     category: z.enum([
       "render_failed",
       "state_invalid",

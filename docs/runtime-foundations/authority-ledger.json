@@ -8463,6 +8463,47 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
+      "id": "direct:workspace/packages/agentic-do/src/agent-vessel.ts:cancelDirectMethodCall",
+      "rpcPlane": "workspace-do",
+      "owner": "workspace/packages/agentic-do/src/agent-vessel.ts",
+      "source": "packages/agentic-do",
+      "method": "cancelDirectMethodCall",
+      "resourceDerivation": {
+        "kind": "direct-target",
+        "owner": "workspace/packages/agentic-do/src/agent-vessel.ts"
+      },
+      "authorityPrincipals": [
+        "code"
+      ],
+      "sensitivity": "write",
+      "tier": "open",
+      "capability": "rpc:cancelDirectMethodCall",
+      "authenticatedFacts": [
+        "session",
+        "acting-user-relay",
+        "runtime-entity",
+        "exact-code-artifact",
+        "owner-chain",
+        "agent-binding",
+        "audience-bound-delegation"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared direct-RPC scenarios retain their current behavior",
+        "denied": "missing attested facts or requirement failure is EACCES"
+      },
+      "predicates": [
+        "live-owner-service-relationship",
+        "exact-resource-scope",
+        "next-dispatch-revocation"
+      ],
+      "r3aRequirement": "allOf(capability(code,rpc:cancelDirectMethodCall),workspace-member)",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "parityAssertion": "generated-census:direct-authority"
+    },
+    {
       "id": "direct:workspace/packages/agentic-do/src/agent-vessel.ts:cancelSubagentExecution",
       "rpcPlane": "workspace-do",
       "owner": "workspace/packages/agentic-do/src/agent-vessel.ts",
@@ -9336,6 +9377,47 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
+      "id": "direct:workspace/packages/agentic-do/src/agent-vessel.ts:retireSubagentExecution",
+      "rpcPlane": "workspace-do",
+      "owner": "workspace/packages/agentic-do/src/agent-vessel.ts",
+      "source": "packages/agentic-do",
+      "method": "retireSubagentExecution",
+      "resourceDerivation": {
+        "kind": "direct-target",
+        "owner": "workspace/packages/agentic-do/src/agent-vessel.ts"
+      },
+      "authorityPrincipals": [
+        "code"
+      ],
+      "sensitivity": "write",
+      "tier": "open",
+      "capability": "rpc:retireSubagentExecution",
+      "authenticatedFacts": [
+        "session",
+        "acting-user-relay",
+        "runtime-entity",
+        "exact-code-artifact",
+        "owner-chain",
+        "agent-binding",
+        "audience-bound-delegation"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared direct-RPC scenarios retain their current behavior",
+        "denied": "missing attested facts or requirement failure is EACCES"
+      },
+      "predicates": [
+        "live-owner-service-relationship",
+        "exact-resource-scope",
+        "next-dispatch-revocation"
+      ],
+      "r3aRequirement": "allOf(capability(code,rpc:retireSubagentExecution),workspace-member)",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "parityAssertion": "generated-census:direct-authority"
+    },
+    {
       "id": "direct:workspace/packages/agentic-do/src/agent-vessel.ts:settleReadyWork",
       "rpcPlane": "workspace-do",
       "owner": "workspace/packages/agentic-do/src/agent-vessel.ts",
@@ -9497,6 +9579,88 @@
       "r3b": {
         "review": "host-only-finite-resident-session-delivery",
         "change": "Adds the common host-only finite delivery entrypoint used after the durable-work host has resolved the exact recipient entity. It forwards one addressed envelope only to that receiver's explicit resident execution session and creates no channel membership, stream, or authority."
+      },
+      "parityAssertion": "generated-census:direct-authority"
+    },
+    {
+      "id": "direct:workspace/packages/runtime/src/worker/durable-base.ts:acceptChannelInvocation",
+      "rpcPlane": "workspace-do",
+      "owner": "workspace/packages/runtime/src/worker/durable-base.ts",
+      "source": "packages/runtime",
+      "method": "acceptChannelInvocation",
+      "resourceDerivation": {
+        "kind": "direct-target",
+        "owner": "workspace/packages/runtime/src/worker/durable-base.ts"
+      },
+      "authorityPrincipals": [
+        "code"
+      ],
+      "sensitivity": "write",
+      "tier": "open",
+      "capability": "rpc:acceptChannelInvocation",
+      "authenticatedFacts": [
+        "session",
+        "acting-user-relay",
+        "runtime-entity",
+        "exact-code-artifact",
+        "owner-chain",
+        "agent-binding",
+        "audience-bound-delegation"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared direct-RPC scenarios retain their current behavior",
+        "denied": "missing attested facts or requirement failure is EACCES"
+      },
+      "predicates": [
+        "live-owner-service-relationship",
+        "exact-resource-scope",
+        "next-dispatch-revocation"
+      ],
+      "r3aRequirement": "allOf(capability(code,rpc:acceptChannelInvocation),workspace-member)",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "parityAssertion": "generated-census:direct-authority"
+    },
+    {
+      "id": "direct:workspace/packages/runtime/src/worker/durable-base.ts:cancelChannelInvocation",
+      "rpcPlane": "workspace-do",
+      "owner": "workspace/packages/runtime/src/worker/durable-base.ts",
+      "source": "packages/runtime",
+      "method": "cancelChannelInvocation",
+      "resourceDerivation": {
+        "kind": "direct-target",
+        "owner": "workspace/packages/runtime/src/worker/durable-base.ts"
+      },
+      "authorityPrincipals": [
+        "code"
+      ],
+      "sensitivity": "write",
+      "tier": "open",
+      "capability": "rpc:cancelChannelInvocation",
+      "authenticatedFacts": [
+        "session",
+        "acting-user-relay",
+        "runtime-entity",
+        "exact-code-artifact",
+        "owner-chain",
+        "agent-binding",
+        "audience-bound-delegation"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared direct-RPC scenarios retain their current behavior",
+        "denied": "missing attested facts or requirement failure is EACCES"
+      },
+      "predicates": [
+        "live-owner-service-relationship",
+        "exact-resource-scope",
+        "next-dispatch-revocation"
+      ],
+      "r3aRequirement": "allOf(capability(code,rpc:cancelChannelInvocation),workspace-member)",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
       },
       "parityAssertion": "generated-census:direct-authority"
     },
@@ -11142,6 +11306,47 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
+      "id": "direct:workspace/workers/pubsub-channel/channel-do.ts:claimMethodCall",
+      "rpcPlane": "workspace-do",
+      "owner": "workspace/workers/pubsub-channel/channel-do.ts",
+      "source": "workers/pubsub-channel",
+      "method": "claimMethodCall",
+      "resourceDerivation": {
+        "kind": "direct-target",
+        "owner": "workspace/workers/pubsub-channel/channel-do.ts"
+      },
+      "authorityPrincipals": [
+        "code"
+      ],
+      "sensitivity": "write",
+      "tier": "open",
+      "capability": "rpc:claimMethodCall",
+      "authenticatedFacts": [
+        "session",
+        "acting-user-relay",
+        "runtime-entity",
+        "exact-code-artifact",
+        "owner-chain",
+        "agent-binding",
+        "audience-bound-delegation"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared direct-RPC scenarios retain their current behavior",
+        "denied": "missing attested facts or requirement failure is EACCES"
+      },
+      "predicates": [
+        "live-owner-service-relationship",
+        "exact-resource-scope",
+        "next-dispatch-revocation"
+      ],
+      "r3aRequirement": "allOf(capability(code,rpc:claimMethodCall),workspace-member)",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "parityAssertion": "generated-census:direct-authority"
+    },
+    {
       "id": "direct:workspace/workers/pubsub-channel/channel-do.ts:claimReadyWork",
       "rpcPlane": "workspace-do",
       "owner": "workspace/workers/pubsub-channel/channel-do.ts",
@@ -11179,6 +11384,47 @@
       "r3b": {
         "review": "host-only-channel-work-claim",
         "change": "Adds bounded generation-fenced claims over exact recipient-incarnation batches and channel recovery items."
+      },
+      "parityAssertion": "generated-census:direct-authority"
+    },
+    {
+      "id": "direct:workspace/workers/pubsub-channel/channel-do.ts:detach",
+      "rpcPlane": "workspace-do",
+      "owner": "workspace/workers/pubsub-channel/channel-do.ts",
+      "source": "workers/pubsub-channel",
+      "method": "detach",
+      "resourceDerivation": {
+        "kind": "direct-target",
+        "owner": "workspace/workers/pubsub-channel/channel-do.ts"
+      },
+      "authorityPrincipals": [
+        "code"
+      ],
+      "sensitivity": "write",
+      "tier": "open",
+      "capability": "rpc:detach",
+      "authenticatedFacts": [
+        "session",
+        "acting-user-relay",
+        "runtime-entity",
+        "exact-code-artifact",
+        "owner-chain",
+        "agent-binding",
+        "audience-bound-delegation"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared direct-RPC scenarios retain their current behavior",
+        "denied": "missing attested facts or requirement failure is EACCES"
+      },
+      "predicates": [
+        "live-owner-service-relationship",
+        "exact-resource-scope",
+        "next-dispatch-revocation"
+      ],
+      "r3aRequirement": "allOf(capability(code,rpc:detach),workspace-member)",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
       },
       "parityAssertion": "generated-census:direct-authority"
     },
@@ -12189,6 +12435,47 @@
       "r3b": {
         "review": "unchanged-parity",
         "change": null
+      },
+      "parityAssertion": "generated-census:direct-authority"
+    },
+    {
+      "id": "direct:workspace/workers/pubsub-channel/channel-do.ts:markMethodCallExecutionStarted",
+      "rpcPlane": "workspace-do",
+      "owner": "workspace/workers/pubsub-channel/channel-do.ts",
+      "source": "workers/pubsub-channel",
+      "method": "markMethodCallExecutionStarted",
+      "resourceDerivation": {
+        "kind": "direct-target",
+        "owner": "workspace/workers/pubsub-channel/channel-do.ts"
+      },
+      "authorityPrincipals": [
+        "code"
+      ],
+      "sensitivity": "write",
+      "tier": "open",
+      "capability": "rpc:markMethodCallExecutionStarted",
+      "authenticatedFacts": [
+        "session",
+        "acting-user-relay",
+        "runtime-entity",
+        "exact-code-artifact",
+        "owner-chain",
+        "agent-binding",
+        "audience-bound-delegation"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared direct-RPC scenarios retain their current behavior",
+        "denied": "missing attested facts or requirement failure is EACCES"
+      },
+      "predicates": [
+        "live-owner-service-relationship",
+        "exact-resource-scope",
+        "next-dispatch-revocation"
+      ],
+      "r3aRequirement": "allOf(capability(code,rpc:markMethodCallExecutionStarted),workspace-member)",
+      "r3b": {
+        "review": "participant-bound-current-provider-claim-observation",
+        "change": "Adds an open code-principal write that records the execution boundary for one exact method call. The receiver derives caller identity from the runtime, requires it to equal the claimed provider participant, and updates only that participant's current claim generation once; it grants no call, result, or cross-participant authority."
       },
       "parityAssertion": "generated-census:direct-authority"
     },

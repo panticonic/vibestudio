@@ -78,6 +78,7 @@ describe("subagent participant handles", () => {
           parentRef: "do:workers/agent-worker:AiChatWorker:ai-chat",
           parentChannelId: "ch-parent",
           taskChannelId: "ch-task",
+          parentParticipantId: "do:workers/agent-worker:AiChatWorker:ai-chat",
         },
       },
     });
@@ -95,6 +96,7 @@ describe("subagent participant handles", () => {
           parentRef: "do:workers/agent-worker:AiChatWorker:ai-chat",
           parentChannelId: "ch-parent",
           taskChannelId: "ch-task",
+          parentParticipantId: "do:workers/agent-worker:AiChatWorker:ai-chat",
         },
       },
     });
@@ -123,6 +125,7 @@ describe("subagent prompt contract", () => {
           parentChannelId: "ch-parent",
           taskChannelId: "ch-task",
           parentContextId: "ctx-parent",
+          parentParticipantId: "agent:parent",
           depth: 1,
         },
       },
@@ -161,6 +164,7 @@ describe("subagent prompt contract", () => {
           parentRef: "do:workers/agent-worker:AiChatWorker:ai-chat",
           parentChannelId: "ch-parent",
           taskChannelId: "ch-task",
+          parentParticipantId: "do:workers/agent-worker:AiChatWorker:ai-chat",
           depth: 1,
         },
       },
@@ -182,6 +186,7 @@ describe("subagent prompt contract", () => {
       parentChannelId: "ch-parent",
       taskChannelId: "ch-task",
       parentContextId: "ctx-parent",
+      parentParticipantId: "agent:parent",
       depth: 2,
     });
 
@@ -204,6 +209,7 @@ describe("subagent prompt contract", () => {
       parentChannelId: "ch-parent",
       taskChannelId: "ch-task",
       parentContextId: "ctx-parent",
+      parentParticipantId: "agent:parent",
       depth: 2,
       mode: "fork",
     });
@@ -250,6 +256,7 @@ describe("subagent prompt contract", () => {
         parentChannelId: "ch-parent",
         taskChannelId: "ch-task",
         parentContextId: "ctx-parent",
+        parentParticipantId: "agent:parent",
         depth: 2,
       },
       { completionMode: "supervised-process" }

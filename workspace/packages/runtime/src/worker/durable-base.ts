@@ -63,8 +63,14 @@ import {
 import type { RuntimeFs } from "../types.js";
 import {
   acceptResidentChannelDelivery,
+  acceptResidentChannelInvocation,
+  cancelResidentChannelInvocation,
   inspectResidentSessions,
+  registerResidentSession,
   type ResidentChannelDeliveryInput,
+  type ResidentChannelInvocationInput,
+  type ResidentChannelCancellationInput,
+  type ResidentSessionReceiver,
 } from "@vibestudio/shared/residentSession";
 import {
   DURABLE_WORK_READY_HEADER,
@@ -1437,6 +1443,26 @@ export abstract class DurableObjectBase {
   })
   async acceptChannelDelivery(input: ResidentChannelDeliveryInput): Promise<unknown> {
     return acceptResidentChannelDelivery(this.directAuthorityAudience(), input);
+  }
+
+  @rpc({ principals: ["code"], effect: { kind: "open" }, tier: "open", sensitivity: "write" })
+  async acceptChannelInvocation(input: ResidentChannelInvocationInput): Promise<unknown> {
+    return acceptResidentChannelInvocation(this.directAuthorityAudience(), input);
+  }
+
+  @rpc({ principals: ["code"], effect: { kind: "open" }, tier: "open", sensitivity: "write" })
+  async cancelChannelInvocation(input: ResidentChannelCancellationInput): Promise<unknown> {
+    return cancelResidentChannelInvocation(this.directAuthorityAudience(), input);
+  }
+
+  /** Explicit owner-local registration capability for workspace Durable
+   * Objects that declare mailbox invocation routing. Without this hook an
+   * entity endpoint could join successfully but could never accept delivery. */
+  protected registerResidentChannelSession(
+    channelId: string,
+    receiver: ResidentSessionReceiver
+  ): () => void {
+    return registerResidentSession(this.directAuthorityAudience(), channelId, receiver);
   }
 
   protected residentSessionDiagnostics(): {

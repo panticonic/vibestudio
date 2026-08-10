@@ -181,7 +181,14 @@ export class ConnectionManager {
           try {
             for await (const event of eventIterator) {
               if (!eventLoopRunning) break;
+              try {
               await this.callbacks.onEvent?.(event as IncomingEvent);
+              } catch (eventError) {
+                console.error("[ConnectionManager] Event callback error:", eventError);
+                this.callbacks.onError?.(
+                  eventError instanceof Error ? eventError : new Error(String(eventError))
+                );
+              }
             }
           } catch (streamError) {
             console.error("[ConnectionManager] Event stream error:", streamError);

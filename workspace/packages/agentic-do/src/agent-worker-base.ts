@@ -303,14 +303,14 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
       onIntegrationSourcesCommitted: (result: VcsCommitResult) => {
         if (result.event.kind !== "event") return;
         for (const sourceEventId of result.integrationSourceEventIds) {
-          const run = this.subagentRuns.getBySourceEvent(sourceEventId);
-          if (!run) continue;
-          this.subagentRuns.setSemanticIntegrationSnapshot(run.runId, {
-            state: "complete",
-            sourceEventId,
-            committedEventId: result.event.eventId,
-            stale: false,
-          });
+          for (const run of this.subagentRuns.listBySourceEvent(sourceEventId)) {
+            this.subagentRuns.setSemanticIntegrationSnapshot(run.runId, {
+              state: "complete",
+              sourceEventId,
+              committedEventId: result.event.eventId,
+              stale: false,
+            });
+          }
         }
       },
     };

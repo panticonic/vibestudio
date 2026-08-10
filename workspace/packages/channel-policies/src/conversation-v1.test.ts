@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { AGENTIC_EVENT_PAYLOAD_KIND, AGENTIC_PROTOCOL_VERSION } from "@workspace/agentic-protocol";
 import {
+  AGENTIC_EVENT_PAYLOAD_KIND,
+  AGENTIC_PROTOCOL_VERSION,
+  eventKindSchemas,
+} from "@workspace/agentic-protocol";
+import {
+  AGENTIC_EVENT_AUDIENCE_POLICY,
+  assertDeclaredAgenticEventAudience,
   conversationV1Policy,
   resolveChannelPolicies,
   getChannelPolicy,
@@ -45,6 +51,44 @@ function opaqueEnvelope(seq: number): PolicyEnvelopeView {
 }
 
 describe("agentic.conversation.v1", () => {
+  it("declares an audience policy for every protocol event kind", () => {
+    expect(Object.keys(AGENTIC_EVENT_AUDIENCE_POLICY).sort()).toEqual(
+      Object.keys(eventKindSchemas).sort()
+    );
+    expect(() =>
+      assertDeclaredAgenticEventAudience({
+        kind: "invocation.started",
+        actor: { kind: "agent", id: "agent:a" },
+        payload: {
+          protocol: AGENTIC_PROTOCOL_VERSION,
+          name: "eval",
+          invocationType: "tool",
+          request: {},
+          transport: {
+            kind: "channel",
+            channelId: "channel-1",
+            target: { kind: "agent", id: "agent:a" },
+            transportCallId: "transport-1",
+          },
+          userVisible: false,
+        },
+        createdAt: "2026-05-20T12:00:00.000Z",
+      } as never)
+    ).toThrow(/requires an explicit participant audience/u);
+    expect(() =>
+      assertDeclaredAgenticEventAudience({
+        kind: "ui.feedback",
+        actor: { kind: "system", id: "channel" },
+        payload: {
+          protocol: AGENTIC_PROTOCOL_VERSION,
+          target: { kind: "agent", id: "agent:a", participantId: "agent:a" },
+          category: "method_call_failed",
+          error: { message: "failed" },
+        },
+        createdAt: "2026-05-20T12:00:00.000Z",
+      } as never)
+    ).toThrow(/requires an explicit participant audience/u);
+  });
   it("folds completed messages into conversation state with previous-slot shifting", () => {
     const policy = conversationV1Policy;
     let state = policy.init();
@@ -165,6 +209,7 @@ describe("agentic.conversation.v1", () => {
 
   it("builds call-transport events purely from injected timestamps", () => {
     const builders = conversationV1Policy.callEventPayload!;
+    expect(Object.keys(builders).sort()).toEqual(["cancelled", "output", "started", "terminal"]);
     const caller = { kind: "panel" as const, id: "panel:caller", participantId: "panel:caller" };
     const target = {
       kind: "panel" as const,
@@ -202,6 +247,7 @@ describe("agentic.conversation.v1", () => {
           transportCallId: "transport-1",
           deadlineAt: 1750000000000,
         },
+        to: [{ kind: "participant", participantId: target.participantId }],
         userVisible: false,
       },
       createdAt,
@@ -217,7 +263,11 @@ describe("agentic.conversation.v1", () => {
     };
     expect(builders.terminal({ descriptor, result: 2, isError: false, createdAt })).toMatchObject({
       kind: "invocation.completed",
-      payload: { result: 2, terminalOutcome: "success" },
+      payload: {
+        result: 2,
+        terminalOutcome: "success",
+        to: [{ kind: "participant", participantId: caller.participantId }],
+      },
       createdAt,
     });
     expect(
@@ -233,6 +283,7 @@ describe("agentic.conversation.v1", () => {
       payload: {
         terminalOutcome: "infrastructure_error",
         terminalReasonCode: "method_failed",
+        to: [{ kind: "participant", participantId: caller.participantId }],
       },
     });
     expect(
@@ -245,7 +296,11 @@ describe("agentic.conversation.v1", () => {
       })
     ).toMatchObject({
       kind: "invocation.cancelled",
-      payload: { terminalOutcome: "stale_dispatch", reason: "superseded" },
+      payload: {
+        terminalOutcome: "stale_dispatch",
+        reason: "superseded",
+        to: [{ kind: "participant", participantId: caller.participantId }],
+      },
     });
     expect(
       builders.terminal({
@@ -257,11 +312,18 @@ describe("agentic.conversation.v1", () => {
       })
     ).toMatchObject({
       kind: "invocation.abandoned",
-      payload: { terminalOutcome: "abandoned", reason: "target left" },
+      payload: {
+        terminalOutcome: "abandoned",
+        reason: "target left",
+        to: [{ kind: "participant", participantId: caller.participantId }],
+      },
     });
     expect(builders.output({ descriptor, output: { pct: 50 }, createdAt })).toMatchObject({
       kind: "invocation.output",
-      payload: { output: { pct: 50 } },
+      payload: {
+        output: { pct: 50 },
+        to: [{ kind: "participant", participantId: caller.participantId }],
+      },
     });
     expect(
       builders.cancelled({
@@ -273,7 +335,11 @@ describe("agentic.conversation.v1", () => {
     ).toMatchObject({
       kind: "invocation.cancelled",
       actor: { kind: "system", id: "system" },
-      payload: { terminalOutcome: "cancelled", reason: "timed out" },
+      payload: {
+        terminalOutcome: "cancelled",
+        reason: "timed out",
+        to: [{ kind: "participant", participantId: caller.participantId }],
+      },
     });
   });
 

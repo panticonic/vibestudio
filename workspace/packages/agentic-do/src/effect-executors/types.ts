@@ -144,7 +144,7 @@ export interface LocalToolPort {
   >;
   /** Mutation-replay guard (§1.4.2): true when the fold already recorded an
    *  applied worktree mutation for this invocation. */
-  alreadyApplied(state: AgentState, invocationId: string): boolean;
+  alreadyApplied(state: AgentState, invocationId: string): Promise<boolean>;
 }
 
 export interface HttpCallPort {

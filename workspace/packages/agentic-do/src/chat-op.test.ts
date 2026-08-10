@@ -15,7 +15,7 @@ import { createTestDO } from "@workspace/runtime/worker/test-utils";
 import type { LifecyclePrepareInput, LifecycleResumeInput } from "@workspace/runtime/worker";
 import { ids } from "@workspace/agent-loop";
 import { logIdForChannel } from "@vibestudio/trajectory-identity";
-import { rpc, type RpcClient } from "@vibestudio/rpc";
+import { RemoteRpcError, rpc, type RpcClient } from "@vibestudio/rpc";
 import {
   AGENTIC_EVENT_PAYLOAD_KIND,
   AGENTIC_PROTOCOL_VERSION,
@@ -108,6 +108,7 @@ class TestVessel extends AgentVesselBase {
   readonly channelPublishFailures = new Set<string>();
   readonly channelStub = {
     published: [] as Array<{
+      channelId: string;
       event: AgenticEvent;
       idempotencyKey?: string;
     }>,
@@ -128,6 +129,7 @@ class TestVessel extends AgentVesselBase {
     }>,
     replay: new Map<string, ChannelEvent[]>(),
     envelopes: new Map<string, ChannelEvent>(),
+    channelEnvelopes: new Map<string, ChannelEvent>(),
   };
   readonly operationLog: string[] = [];
   channelClientCreations = 0;
@@ -212,7 +214,7 @@ class TestVessel extends AgentVesselBase {
       } as never,
       null
     );
-    if (started) this.driver.markDeferredEvalStarted(CHANNEL, runId);
+    if (started) this.driver.markDeferredEvalStartAttempted(CHANNEL, runId);
   }
 
   nextAlarmScheduleForTest(): { wakeAt: number } | null {
@@ -343,15 +345,33 @@ class TestVessel extends AgentVesselBase {
     );
     return {
       publishAgenticEvent: vi.fn(
-        async (_pid: string, event: AgenticEvent, opts?: { idempotencyKey?: string }) => {
+        async (pid: string, event: AgenticEvent, opts?: { idempotencyKey?: string }) => {
           if (opts?.idempotencyKey && failures.has(opts.idempotencyKey)) {
             throw new Error(`publish failed: ${opts.idempotencyKey}`);
           }
+          const envelopeId = opts?.idempotencyKey ? `ik:${opts.idempotencyKey}` : undefined;
+          const channelEnvelopeId = envelopeId ? `${channelId}\u0000${envelopeId}` : undefined;
+          const existing = channelEnvelopeId
+            ? stub.channelEnvelopes.get(channelEnvelopeId)
+            : undefined;
           stub.published.push({
+            channelId,
             event,
             idempotencyKey: opts?.idempotencyKey,
           });
-          return { id: stub.published.length };
+          if (existing) return { id: existing.id };
+          const id = stub.published.length;
+          if (channelEnvelopeId && envelopeId) {
+            stub.channelEnvelopes.set(channelEnvelopeId, {
+              id,
+              messageId: envelopeId,
+              type: AGENTIC_EVENT_PAYLOAD_KIND,
+              payload: event,
+              senderId: pid,
+              ts: Date.now(),
+            } as ChannelEvent);
+          }
+          return { id };
         }
       ),
       getMessageType: vi.fn(async (typeId: string) => stub.messageTypes.get(typeId) ?? null),
@@ -384,7 +404,12 @@ class TestVessel extends AgentVesselBase {
           throughSeq ??= page.ready.snapshotLastSeq;
         }
       },
-      getEnvelope: vi.fn(async (envelopeId: string) => stub.envelopes.get(envelopeId) ?? null),
+      getEnvelope: vi.fn(
+        async (envelopeId: string) =>
+          stub.channelEnvelopes.get(`${channelId}\u0000${envelopeId}`) ??
+          stub.envelopes.get(envelopeId) ??
+          null
+      ),
       send: vi.fn(
         async (
           participantId: string,
@@ -397,7 +422,7 @@ class TestVessel extends AgentVesselBase {
       ),
       recordTaskProvenance: vi.fn(async () => undefined),
       relationshipState: vi.fn(async () => ({ revision: 0, active: false })),
-      join: vi.fn(async (input: { participantId: string }) => {
+      join: vi.fn(async (input: { participantId: string; revision: number }) => {
         operationLog.push(`channel:${channelId}:join`);
         stub.subscriptions.push({ channelId, participantId: input.participantId });
         return {
@@ -405,6 +430,7 @@ class TestVessel extends AgentVesselBase {
           channelConfig: {},
           envelope: { logEvents: [], ready: { totalCount: 0, envelopeCount: 0 } },
           participantId: input.participantId,
+          revision: input.revision,
         };
       }),
       leave: vi.fn(async () => {
@@ -1265,8 +1291,18 @@ describe("AgentVesselBase.onEvalComplete (deferred-eval resume)", () => {
     await vessel.deliverEffectOutcome("eff-1", outcome);
     vessel.callerKindForTest = "do";
     vessel.callerIdForTest = "do:workers/pubsub-channel:PubSubChannel:chan-1";
-    await vessel.deliverEffectOutcome("eff-2", outcome);
+    await vessel.deliverEffectOutcome("eff-2", outcome, { channelId: CHANNEL });
     expect(deliverSpy).toHaveBeenCalledTimes(2);
+
+    vessel.callerIdForTest = "do:workers/pubsub-channel:PubSubChannel:another-channel";
+    await expect(
+      vessel.deliverEffectOutcome("eff-wrong-channel", outcome, { channelId: CHANNEL })
+    ).rejects.toThrow(/refusing caller/);
+
+    vessel.callerIdForTest = "do:workers/forged-channel:PubSubChannel:chan-1";
+    await expect(
+      vessel.deliverEffectOutcome("eff-forged-source", outcome, { channelId: CHANNEL })
+    ).rejects.toThrow(/refusing caller/);
 
     vessel.callerIdForTest = "do:agents/evil:EvilAgent:x"; // a foreign agent forging
     await expect(vessel.deliverEffectOutcome("eff-3", outcome)).rejects.toThrow(/refusing caller/);
@@ -1305,6 +1341,54 @@ describe("AgentVesselBase.onEvalComplete (deferred-eval resume)", () => {
       })
     ).resolves.toEqual({ result: { resumed: false } });
     expect(wakeSpy).not.toHaveBeenCalled();
+  });
+
+  it("scopes direct provider calls and cancellation to the authenticated channel", async () => {
+    const vessel = await makeVessel();
+    let release!: (value: boolean) => void;
+    const gate = new Promise<boolean>((resolve) => {
+      release = resolve;
+    });
+    (vessel as unknown as { _driver: unknown })._driver = {
+      deliverEffectOutcome: vi.fn(() => gate),
+      wake: vi.fn(async () => {}),
+      connectSpecProvider: undefined,
+    };
+    vessel.callerKindForTest = "do";
+    vessel.callerIdForTest = "do:workers/pubsub-channel:PubSubChannel:chan-1";
+    const first = vessel.onMethodCall("chan-1", "shared-transport", "credentialConnected", {
+      providerId: "provider-a",
+    });
+    await vi.waitFor(() =>
+      expect(
+        (vessel as unknown as { directMethodCalls: Map<string, AbortController> }).directMethodCalls
+          .size
+      ).toBe(1)
+    );
+
+    vessel.callerIdForTest = "do:workers/pubsub-channel:PubSubChannel:chan-2";
+    const second = vessel.onMethodCall("chan-2", "shared-transport", "credentialConnected", {
+      providerId: "provider-b",
+    });
+    await vi.waitFor(() =>
+      expect(
+        (vessel as unknown as { directMethodCalls: Map<string, AbortController> }).directMethodCalls
+          .size
+      ).toBe(2)
+    );
+
+    await vessel.cancelDirectMethodCall("chan-2", "shared-transport");
+    const calls = (vessel as unknown as { directMethodCalls: Map<string, AbortController> })
+      .directMethodCalls;
+    expect(calls.get("chan-1\u0000shared-transport")?.signal.aborted).toBe(false);
+    expect(calls.get("chan-2\u0000shared-transport")?.signal.aborted).toBe(true);
+
+    vessel.callerIdForTest = "do:workers/pubsub-channel:PubSubChannel:chan-1";
+    await expect(vessel.cancelDirectMethodCall("chan-2", "shared-transport")).rejects.toThrow(
+      /refusing caller/
+    );
+    release(true);
+    await Promise.all([first, second]);
   });
 
   it("onAuthorityChanged refuses a non-server caller", async () => {
@@ -1612,6 +1696,15 @@ class SubagentSpawnProbe extends TestVessel {
   async cancelSubagentForTest(runId: string, reason = "cancelled by test") {
     return this.cancelSubagent(runId, reason, CHANNEL);
   }
+  async settleSubagentForTest(
+    runId: string,
+    outcome: "completed" | "failed" | "cancelled" | "abandoned",
+    text: string
+  ) {
+    const run = this.subagentRuns.get(runId);
+    if (!run) throw new Error(`missing run ${runId}`);
+    return this.settleSubagentTerminal(run, outcome, text);
+  }
   async completeSubagentForTest(runId: string, report: string, outcome: "success" | "failed") {
     const run = this.subagentRuns.get(runId);
     if (!run) throw new Error(`missing run ${runId}`);
@@ -1682,6 +1775,7 @@ async function makeChildCompletionProbe(): Promise<SubagentSpawnProbe> {
         parentChannelId: CHANNEL,
         taskChannelId: "task-child-run-1",
         parentContextId: "ctx-parent",
+        parentParticipantId: "participant-parent",
         depth: 1,
         mode: "fresh",
       },
@@ -2043,17 +2137,50 @@ describe("AgentVesselBase.runDeferredEval (the agent's eval-tool deferral gate)"
     expect(probe.rpcCalls.some((c) => c.method === "eval.get")).toBe(true);
   });
 
-  it("F4: a startRun failure still propagates (the run was never kicked off — fail fast)", async () => {
-    // startRun throwing means the eval never started; there's nothing parked to settle later, so the
-    // error must propagate to the tool executor (which renders it as the tool outcome). We only park
-    // for a getRun hiccup AFTER a successful startRun.
+  it("surfaces a definitive eval.start rejection without misclassifying it as generation loss", async () => {
     const probe = await makeGateProbe();
-    probe.startRunError = new Error("startRun dispatch failed");
-    await expect(probe.callGate(CHANNEL, "inv-fail", { code: "1+1" })).rejects.toThrow(
-      /startRun dispatch failed/
+    probe.startRunError = new RemoteRpcError(
+      "[workerdInspector.getEndpoint] Invalid args: expected string",
+      "service"
     );
-    // The getRun poll was never reached.
-    expect(probe.rpcCalls.some((c) => c.method === "eval.get")).toBe(false);
+    probe.getRunStatus = { status: "unknown" };
+
+    await expect(probe.callGate(CHANNEL, "inv-rejected", { code: "1+1" })).resolves.toMatchObject({
+      isError: true,
+      result: {
+        details: {
+          success: false,
+          error: expect.stringContaining("Invalid args"),
+        },
+      },
+    });
+    expect(probe.rpcCalls.filter((call) => call.method === "eval.start")).toHaveLength(1);
+    expect(probe.rpcCalls.some((call) => call.method === "eval.get")).toBe(false);
+  });
+
+  it("F4: treats a rejected startRun response as ambiguous and never dispatches twice", async () => {
+    const probe = await makeGateProbe();
+    probe.seedDeferredEvalForTest(ids.invocationEffect("inv-ambiguous"), false);
+    probe.startRunError = new Error("response lost after EvalDO accepted the run");
+    probe.getRunStatus = { status: "running" };
+
+    await expect(probe.callGate(CHANNEL, "inv-ambiguous", { code: "1+1" })).resolves.toEqual({
+      deferred: true,
+      reason: "external-result",
+    });
+    expect(
+      probe
+        .driverForTest()
+        .hasDeferredEvalStartAttempted(CHANNEL, ids.invocationEffect("inv-ambiguous"))
+    ).toBe(true);
+    probe.startRunError = null;
+    await expect(probe.callGate(CHANNEL, "inv-ambiguous", { code: "1+1" })).resolves.toEqual({
+      deferred: true,
+      reason: "external-result",
+    });
+
+    expect(probe.rpcCalls.filter((call) => call.method === "eval.start")).toHaveLength(1);
+    expect(probe.rpcCalls.filter((call) => call.method === "eval.get")).toHaveLength(2);
   });
 });
 
@@ -3067,6 +3194,11 @@ describe("AgentVesselBase.runDeferredSpawn", () => {
     await probe.completeSubagentForTest("inv-1", "All checks passed.", "success");
 
     expect(probe.subagentRunForTest("inv-1")).toMatchObject({ status: "completed" });
+    expect(
+      probe.channelStub.published.find(
+        (entry) => entry.channelId === CHANNEL && entry.idempotencyKey === "subagent-terminal:inv-1"
+      )?.event
+    ).toMatchObject({ kind: "task.completed", causality: { taskId: "inv-1" } });
     expect(probe.handleIncomingSpy).toHaveBeenCalledWith(
       CHANNEL,
       expect.objectContaining({
@@ -3090,6 +3222,82 @@ describe("AgentVesselBase.runDeferredSpawn", () => {
     ).command?.content;
     expect(terminalPrompt).toContain("Integrate it only when incorporating the child's work");
     expect(terminalPrompt).not.toContain("Review and integrate retained results");
+  });
+
+  it("projects the task-channel terminal winner across a competing supervisor terminal", async () => {
+    const probe = await makeSubagentSpawnProbe();
+    await probe.spawnForTest(CHANNEL, "inv-1", {
+      mode: "fresh",
+      label: "background audit",
+      task: "audit this in the child",
+    });
+    const canonicalEvent = {
+      kind: "task.completed",
+      actor: { kind: "agent", id: "participant-child" },
+      causality: { taskId: "inv-1", invocationId: "inv-1" },
+      payload: {
+        protocol: AGENTIC_PROTOCOL_VERSION,
+        terminalOutcome: "success",
+        summary: "Child completed first.",
+        result: { protocolContent: [{ type: "text", text: "Child completed first." }] },
+      },
+      createdAt: new Date().toISOString(),
+    } as unknown as AgenticEvent;
+    probe.channelStub.channelEnvelopes.set(`task-inv-1\u0000ik:subagent-terminal:inv-1`, {
+      id: 99,
+      messageId: "ik:subagent-terminal:inv-1",
+      type: AGENTIC_EVENT_PAYLOAD_KIND,
+      payload: canonicalEvent,
+      senderId: "participant-child",
+      ts: Date.now(),
+    } as ChannelEvent);
+
+    await probe.settleSubagentForTest("inv-1", "abandoned", "supervisor retired");
+
+    expect(probe.subagentRunForTest("inv-1")).toMatchObject({ status: "completed" });
+    expect(
+      probe.channelStub.published.find(
+        (entry) => entry.channelId === CHANNEL && entry.idempotencyKey === "subagent-terminal:inv-1"
+      )?.event
+    ).toMatchObject({ kind: "task.completed", payload: { summary: "Child completed first." } });
+  });
+
+  it("rejects a canonical task terminal whose actor does not match its publisher", async () => {
+    const probe = await makeSubagentSpawnProbe();
+    await probe.spawnForTest(CHANNEL, "inv-1", {
+      mode: "fresh",
+      label: "background audit",
+      task: "audit this in the child",
+    });
+    const forgedEvent = {
+      kind: "task.failed",
+      actor: { kind: "agent", id: AGENT_ID },
+      causality: { taskId: "inv-1", invocationId: "inv-1" },
+      payload: {
+        protocol: AGENTIC_PROTOCOL_VERSION,
+        terminalOutcome: "tool_error",
+        reason: "forged supervisor result",
+      },
+      createdAt: new Date().toISOString(),
+    } as unknown as AgenticEvent;
+    probe.channelStub.channelEnvelopes.set(`task-inv-1\u0000ik:subagent-terminal:inv-1`, {
+      id: 100,
+      messageId: "ik:subagent-terminal:inv-1",
+      type: AGENTIC_EVENT_PAYLOAD_KIND,
+      payload: forgedEvent,
+      senderId: "participant-child",
+      ts: Date.now(),
+    } as ChannelEvent);
+
+    await expect(
+      probe.settleSubagentForTest("inv-1", "abandoned", "supervisor retired")
+    ).rejects.toThrow(/no authorized canonical task-channel event/);
+    expect(probe.subagentRunForTest("inv-1")).toMatchObject({ status: "running" });
+    expect(
+      probe.channelStub.published.some(
+        (entry) => entry.channelId === CHANNEL && entry.idempotencyKey === "subagent-terminal:inv-1"
+      )
+    ).toBe(false);
   });
 
   it("resumes the supervisor after every sibling terminal", async () => {
@@ -3199,8 +3407,13 @@ describe("AgentVesselBase.runDeferredSpawn", () => {
     );
     expect(wakeContents).toHaveLength(2);
     expect(
-      wakeContents.every((content) => content?.includes("1 other supervised subagent remains live"))
-    ).toBe(true);
+      wakeContents.filter((content) =>
+        content?.includes("1 other supervised subagent remains live")
+      )
+    ).toHaveLength(1);
+    expect(
+      wakeContents.filter((content) => content?.includes("No supervised subagents remain live"))
+    ).toHaveLength(1);
     expect(wakeContents).toEqual(
       expect.arrayContaining([
         expect.stringContaining("First result."),

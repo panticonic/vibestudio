@@ -49,12 +49,13 @@ export interface SubscribeResult {
   /** Authoritative channel actor id. Human callers are canonicalized to
    * `user:<verifiedUserId>` regardless of their delivery endpoint. */
   participantId: string;
+  revision?: number;
   channelConfig?: Record<string, unknown>;
   envelope?: ChannelReplayEnvelope;
 }
 
 export type DeliveryEndpoint =
-  | { kind: "entity"; entityId: string }
+  | { kind: "entity"; entityId: string; invocation: "direct" | "mailbox" }
   | { kind: "session" };
 
 export interface VersionedApplicationConfig {
@@ -80,6 +81,7 @@ export interface ChannelRelationshipPayload {
   endpoint?: DeliveryEndpoint;
   metadata?: Record<string, unknown>;
   applicationConfig?: VersionedApplicationConfig | null;
+  detachAfterSequence?: number;
 }
 
 /** Participant info stored in the participants table. */

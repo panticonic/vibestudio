@@ -261,13 +261,17 @@ export class SubagentRunStore {
   }
 
   getBySourceEvent(sourceEventId: string): SubagentRunRow | null {
-    const row = this.sql
+    return this.listBySourceEvent(sourceEventId)[0] ?? null;
+  }
+
+  listBySourceEvent(sourceEventId: string): SubagentRunRow[] {
+    return this.sql
       .exec(
-        `SELECT * FROM subagent_runs WHERE source_event_id = ? ORDER BY started_at DESC LIMIT 1`,
+        `SELECT * FROM subagent_runs WHERE source_event_id = ? ORDER BY started_at, run_id`,
         sourceEventId
       )
-      .toArray()[0];
-    return row ? toRow(row as unknown as SubagentRunSqlRow) : null;
+      .toArray()
+      .map((row) => toRow(row as unknown as SubagentRunSqlRow));
   }
 
   getByTaskChannel(taskChannelId: string): SubagentRunRow | null {

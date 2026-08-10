@@ -10,10 +10,11 @@ import {
 } from "@workspace/channel-policies";
 import type { ChannelRelationshipPayload } from "./types.js";
 
-export const CHANNEL_DELIVERY_PROJECTION_VERSION = 2;
+export const CHANNEL_DELIVERY_PROJECTION_VERSION = 11;
 export const CHANNEL_RELATIONSHIP_EVENT_TYPES = new Set([
   "channel.subscription.opened",
   "channel.subscription.revised",
+  "channel.subscription.detached",
   "channel.subscription.ended",
 ]);
 
@@ -25,14 +26,20 @@ interface RelationshipRow {
   delivery: DeliveryInterest;
   endpointEntityId: string | null;
   endpointKind: "entity" | "session";
+  invocationRoute: "direct" | "mailbox" | null;
   active: boolean;
+  attached: boolean;
+  detachedAtSequence: number | null;
+  reattachAfterSequence: number | null;
+  reattachThroughSequence: number | null;
 }
 
 export class ChannelDeliveryProjection {
   constructor(
     private readonly sql: SqlStorage,
     private readonly transaction: <T>(callback: () => T) => T,
-    private readonly channelId: string
+    private readonly channelId: string,
+    private readonly durableForkBoundary: () => number | null = () => null
   ) {}
 
   static createTables(sql: SqlStorage): void {
@@ -43,13 +50,18 @@ export class ChannelDeliveryProjection {
         delivery TEXT NOT NULL CHECK (delivery IN ('all', 'addressed', 'none')),
         endpoint_kind TEXT NOT NULL CHECK (endpoint_kind IN ('entity', 'session')),
         endpoint_entity_id TEXT,
+        invocation_route TEXT CHECK (invocation_route IN ('direct', 'mailbox')),
         metadata_json TEXT NOT NULL,
         application_config_json TEXT,
         opened_sequence INTEGER NOT NULL,
         active INTEGER NOT NULL CHECK (active IN (0, 1)),
+        attached INTEGER NOT NULL DEFAULT 1 CHECK (attached IN (0, 1)),
+        detached_at_sequence INTEGER,
+        reattach_after_sequence INTEGER,
+        reattach_through_sequence INTEGER,
         CHECK (
-          (endpoint_kind = 'entity' AND endpoint_entity_id IS NOT NULL) OR
-          (endpoint_kind = 'session' AND endpoint_entity_id IS NULL)
+          (endpoint_kind = 'entity' AND endpoint_entity_id IS NOT NULL AND invocation_route IS NOT NULL) OR
+          (endpoint_kind = 'session' AND endpoint_entity_id IS NULL AND invocation_route IS NULL)
         )
       );
       CREATE TABLE IF NOT EXISTS channel_delivery_mailbox (
@@ -71,6 +83,7 @@ export class ChannelDeliveryProjection {
           )),
         claim_generation INTEGER NOT NULL DEFAULT 0,
         claimed_by TEXT,
+        claimed_relationship_revision INTEGER,
         attempts INTEGER NOT NULL DEFAULT 0,
         next_attempt_at INTEGER NOT NULL,
         created_at INTEGER NOT NULL,
@@ -83,13 +96,20 @@ export class ChannelDeliveryProjection {
         ON channel_delivery_mailbox(state, next_attempt_at, participant_id, event_sequence);
       CREATE INDEX IF NOT EXISTS idx_channel_delivery_lane
         ON channel_delivery_mailbox(participant_id, event_sequence, state, next_attempt_at);
+      CREATE TABLE IF NOT EXISTS channel_delivery_event_context (
+        event_id TEXT PRIMARY KEY,
+        agentic_context_json TEXT NOT NULL,
+        projection_version INTEGER NOT NULL
+      );
       CREATE TABLE IF NOT EXISTS channel_delivery_projection_cursor (
         singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
         projection_version INTEGER NOT NULL,
-        log_sequence INTEGER NOT NULL
+        log_sequence INTEGER NOT NULL,
+        fork_boundary_sequence INTEGER
       );
       INSERT OR IGNORE INTO channel_delivery_projection_cursor
-        (singleton, projection_version, log_sequence) VALUES (1, ${CHANNEL_DELIVERY_PROJECTION_VERSION}, 0);
+        (singleton, projection_version, log_sequence, fork_boundary_sequence)
+        VALUES (1, ${CHANNEL_DELIVERY_PROJECTION_VERSION}, 0, NULL);
       CREATE TABLE IF NOT EXISTS channel_delivery_context (
         singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
         projection_version INTEGER NOT NULL,
@@ -121,6 +141,12 @@ export class ChannelDeliveryProjection {
         PRIMARY KEY (message_id, participant_id)
       );
     `);
+    const mailboxColumns = sql.exec(`PRAGMA table_info(channel_delivery_mailbox)`).toArray();
+    if (!mailboxColumns.some((column) => column["name"] === "claimed_relationship_revision")) {
+      sql.exec(
+        `ALTER TABLE channel_delivery_mailbox ADD COLUMN claimed_relationship_revision INTEGER`
+      );
+    }
   }
 
   cursor(): number {
@@ -170,6 +196,7 @@ export class ChannelDeliveryProjection {
     this.transaction(() => {
       this.sql.exec(`DELETE FROM channel_relationships`);
       this.sql.exec(`DELETE FROM channel_delivery_mailbox`);
+      this.sql.exec(`DELETE FROM channel_delivery_event_context`);
       this.sql.exec(`DELETE FROM channel_receipts`);
       this.sql.exec(`DELETE FROM channel_delivery_message_senders`);
       this.sql.exec(
@@ -183,9 +210,10 @@ export class ChannelDeliveryProjection {
       );
       this.sql.exec(
         `INSERT OR REPLACE INTO channel_delivery_projection_cursor
-           (singleton, projection_version, log_sequence)
-         VALUES (1, ?, 0)`,
-        CHANNEL_DELIVERY_PROJECTION_VERSION
+           (singleton, projection_version, log_sequence, fork_boundary_sequence)
+         VALUES (1, ?, 0, ?)`,
+        CHANNEL_DELIVERY_PROJECTION_VERSION,
+        this.durableForkBoundary()
       );
     });
   }
@@ -193,7 +221,9 @@ export class ChannelDeliveryProjection {
   relationship(participantId: string): RelationshipRow | null {
     const row = this.sql
       .exec(
-        `SELECT participant_id, revision, delivery, endpoint_kind, endpoint_entity_id, active
+        `SELECT participant_id, revision, delivery, endpoint_kind, endpoint_entity_id,
+                invocation_route, active, attached, detached_at_sequence,
+                reattach_after_sequence, reattach_through_sequence
            FROM channel_relationships WHERE participant_id = ?`,
         participantId
       )
@@ -206,13 +236,35 @@ export class ChannelDeliveryProjection {
       endpointEntityId:
         typeof row["endpoint_entity_id"] === "string" ? row["endpoint_entity_id"] : null,
       endpointKind: String(row["endpoint_kind"]) as "entity" | "session",
+      invocationRoute:
+        row["invocation_route"] === "direct" || row["invocation_route"] === "mailbox"
+          ? row["invocation_route"]
+          : null,
       active: Number(row["active"]) === 1,
+      attached: Number(row["attached"]) === 1,
+      detachedAtSequence:
+        row["detached_at_sequence"] == null ? null : Number(row["detached_at_sequence"]),
+      reattachAfterSequence:
+        row["reattach_after_sequence"] == null ? null : Number(row["reattach_after_sequence"]),
+      reattachThroughSequence:
+        row["reattach_through_sequence"] == null ? null : Number(row["reattach_through_sequence"]),
     };
   }
 
-  fold(event: ChannelEvent): { inserted: number; relationshipChanged: boolean } {
+  fold(
+    event: ChannelEvent,
+    deliveryStartedAt?: number
+  ): { inserted: number; relationshipChanged: boolean } {
     const current = this.cursor();
     if (event.id <= current) return { inserted: 0, relationshipChanged: false };
+    const pendingRecovery = this.pendingReattachBackfills()[0];
+    if (pendingRecovery) {
+      throw new Error(
+        `Channel delivery projection cannot fold event ${event.id} while reattach recovery for ` +
+          `${pendingRecovery.participantId} remains at ${pendingRecovery.afterSequence}/` +
+          `${pendingRecovery.throughSequence}`
+      );
+    }
     if (event.id !== current + 1) {
       throw new Error(
         `Channel delivery projection gap: expected ${current + 1}, received ${event.id}`
@@ -222,7 +274,21 @@ export class ChannelDeliveryProjection {
       let inserted = 0;
       let relationshipChanged = false;
       this.foldDecisionContext(event);
-      if (CHANNEL_RELATIONSHIP_EVENT_TYPES.has(event.type)) {
+      const boundaryRow = this.sql
+        .exec(
+          `SELECT fork_boundary_sequence FROM channel_delivery_projection_cursor WHERE singleton = 1`
+        )
+        .toArray()[0];
+      const forkBoundary =
+        typeof boundaryRow?.["fork_boundary_sequence"] === "number"
+          ? Number(boundaryRow["fork_boundary_sequence"])
+          : null;
+      const contextOnly = forkBoundary !== null && event.id <= forkBoundary;
+      if (contextOnly) {
+        // An inherited fork prefix supplies conversational context and message
+        // sender identity, but its relationships belong to the parent lineage
+        // and its delivery debts must never cross into the child.
+      } else if (CHANNEL_RELATIONSHIP_EVENT_TYPES.has(event.type)) {
         // A malformed or revision-inconsistent relationship event fails the
         // EVENT, never the channel: it is skipped and the cursor advances.
         // The skip decision is a pure function of the event bytes and the
@@ -240,7 +306,7 @@ export class ChannelDeliveryProjection {
           );
         }
       } else {
-        inserted = this.deriveEvent(event);
+        inserted = this.deriveEvent(event, undefined, false, deliveryStartedAt);
       }
       this.sql.exec(
         `UPDATE channel_delivery_projection_cursor SET log_sequence = ? WHERE singleton = 1`,
@@ -250,15 +316,77 @@ export class ChannelDeliveryProjection {
     });
   }
 
+  /** Reset every disposable projection after a channel clone. The inherited
+   * prefix is replayed context-only through `forkPointSequence`; child-local
+   * facts after the boundary use the ordinary full fold. */
+  resetForFork(forkPointSequence: number): void {
+    this.transaction(() => {
+      this.sql.exec(`DELETE FROM channel_relationships`);
+      this.sql.exec(`DELETE FROM channel_delivery_mailbox`);
+      this.sql.exec(`DELETE FROM channel_delivery_event_context`);
+      this.sql.exec(`DELETE FROM channel_receipts`);
+      this.sql.exec(`DELETE FROM channel_delivery_message_senders`);
+      this.sql.exec(
+        `UPDATE channel_delivery_context
+            SET projection_version = ?,
+                current_config_json = initial_config_json,
+                conversation_state_json = ?
+          WHERE singleton = 1`,
+        CHANNEL_DELIVERY_PROJECTION_VERSION,
+        JSON.stringify(conversationV1Policy.init())
+      );
+      this.sql.exec(
+        `INSERT OR REPLACE INTO channel_delivery_projection_cursor
+           (singleton, projection_version, log_sequence, fork_boundary_sequence)
+         VALUES (1, ?, 0, ?)`,
+        CHANNEL_DELIVERY_PROJECTION_VERSION,
+        forkPointSequence
+      );
+    });
+  }
+
   private foldRelationship(event: ChannelEvent): void {
     const payload = this.requireRelationshipPayload(event.payload);
     const current = this.relationship(payload.participantId);
+    if (event.type === "channel.subscription.detached") {
+      if (
+        !current ||
+        !current.active ||
+        !current.attached ||
+        payload.revision !== current.revision + 1
+      ) {
+        throw new Error(`Invalid detached relationship revision for ${payload.participantId}`);
+      }
+      const detachAfterSequence =
+        typeof payload.detachAfterSequence === "number" && payload.detachAfterSequence >= 0
+          ? payload.detachAfterSequence
+          : event.id - 1;
+      this.sql.exec(
+        `UPDATE channel_relationships
+            SET revision = ?, attached = 0, detached_at_sequence = ?,
+                reattach_after_sequence = NULL, reattach_through_sequence = NULL
+          WHERE participant_id = ?`,
+        payload.revision,
+        detachAfterSequence,
+        payload.participantId
+      );
+      this.sql.exec(
+        `UPDATE channel_delivery_mailbox
+            SET state = 'terminal-retired', claimed_by = NULL
+          WHERE participant_id = ? AND state IN ('ready', 'leased', 'retrying')`,
+        payload.participantId
+      );
+      return;
+    }
     if (event.type === "channel.subscription.ended") {
       if (!current || !current.active || payload.revision !== current.revision + 1) {
         throw new Error(`Invalid ended relationship revision for ${payload.participantId}`);
       }
       this.sql.exec(
-        `UPDATE channel_relationships SET revision = ?, active = 0 WHERE participant_id = ?`,
+        `UPDATE channel_relationships
+            SET revision = ?, active = 0, attached = 0,
+                reattach_after_sequence = NULL, reattach_through_sequence = NULL
+          WHERE participant_id = ?`,
         payload.revision,
         payload.participantId
       );
@@ -273,6 +401,13 @@ export class ChannelDeliveryProjection {
     if (!payload.delivery || !payload.endpoint || !payload.metadata) {
       throw new Error(`${event.type} is missing relationship fields`);
     }
+    if (
+      payload.endpoint.kind === "entity" &&
+      payload.endpoint.invocation !== "direct" &&
+      payload.endpoint.invocation !== "mailbox"
+    ) {
+      throw new Error(`${event.type} entity endpoint is missing its invocation route`);
+    }
     const expected = current ? current.revision + 1 : 1;
     if (payload.revision !== expected) {
       throw new Error(
@@ -280,13 +415,19 @@ export class ChannelDeliveryProjection {
       );
     }
     const endpointEntityId = payload.endpoint.kind === "entity" ? payload.endpoint.entityId : null;
-    // A fresh relationship revision is the recovery boundary for an
-    // activation-local receiver. Replay in the join ACK reconstructs everything
-    // through the current head; pending work addressed to the superseded
-    // receiver incarnation must therefore stop blocking the participant lane.
-    // This is also safe when an old claim is still in flight: its later
-    // settlement observes a terminal row and cannot mutate the new revision.
-    if (current) {
+    const invocationRoute = payload.endpoint.kind === "entity" ? payload.endpoint.invocation : null;
+    const reattaching = current !== null && current.active && !current.attached;
+    const reattachAfterSequence = reattaching ? current.detachedAtSequence : null;
+    const reattachThroughSequence = reattaching ? event.id - 1 : null;
+    // A pending row's revision is its at-sequence coordinate, not an
+    // incarnation lease. Preserve debt across metadata/config revisions when
+    // the endpoint is unchanged; retire only when the actual address changes.
+    const endpointChanged =
+      current !== null &&
+      (current.endpointKind !== payload.endpoint.kind ||
+        current.endpointEntityId !== endpointEntityId ||
+        current.invocationRoute !== invocationRoute);
+    if (current && endpointChanged) {
       this.sql.exec(
         `UPDATE channel_delivery_mailbox
             SET state = 'terminal-retired', claimed_by = NULL
@@ -300,32 +441,250 @@ export class ChannelDeliveryProjection {
     this.sql.exec(
       `INSERT OR REPLACE INTO channel_relationships (
          participant_id, revision, delivery, endpoint_kind, endpoint_entity_id,
-         metadata_json, application_config_json, opened_sequence, active
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+         invocation_route,
+         metadata_json, application_config_json, opened_sequence, active,
+         attached, detached_at_sequence, reattach_after_sequence,
+         reattach_through_sequence
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1, NULL, ?, ?)`,
       payload.participantId,
       payload.revision,
       payload.delivery,
       payload.endpoint.kind,
       endpointEntityId,
+      invocationRoute,
       JSON.stringify(payload.metadata),
       payload.applicationConfig === undefined ? null : JSON.stringify(payload.applicationConfig),
-      event.id
+      event.id,
+      reattachAfterSequence,
+      reattachThroughSequence
     );
   }
 
-  private deriveEvent(event: ChannelEvent): number {
+  pendingReattachBackfills(): Array<{
+    participantId: string;
+    afterSequence: number;
+    throughSequence: number;
+  }> {
+    return this.sql
+      .exec(
+        `SELECT participant_id, reattach_after_sequence, reattach_through_sequence
+           FROM channel_relationships
+          WHERE active = 1 AND attached = 1
+            AND reattach_after_sequence IS NOT NULL
+            AND reattach_through_sequence IS NOT NULL
+          ORDER BY participant_id`
+      )
+      .toArray()
+      .map((row) => ({
+        participantId: String(row["participant_id"]),
+        afterSequence: Number(row["reattach_after_sequence"]),
+        throughSequence: Number(row["reattach_through_sequence"]),
+      }));
+  }
+
+  /** Advance one durable reattach step atomically with any mailbox row it
+   * derives. A crash can therefore repeat a step or resume after it, but can
+   * never record progress beyond an unmaterialized delivery debt. */
+  advanceReattachBackfill(event: ChannelEvent, participantId: string): number {
+    return this.transaction(() => {
+      const relationship = this.relationship(participantId);
+      const after = relationship?.reattachAfterSequence;
+      const through = relationship?.reattachThroughSequence;
+      if (after === null || after === undefined || through === null || through === undefined) {
+        return 0;
+      }
+      if (event.id <= after) return 0;
+      if (event.id > through) {
+        throw new Error(
+          `Reattach backfill for ${participantId} advanced beyond ${through}: ${event.id}`
+        );
+      }
+      const inserted = CHANNEL_RELATIONSHIP_EVENT_TYPES.has(event.type)
+        ? 0
+        : this.deriveEvent(event, participantId);
+      if (event.id === through) {
+        this.sql.exec(
+          `UPDATE channel_relationships
+              SET reattach_after_sequence = NULL, reattach_through_sequence = NULL
+            WHERE participant_id = ?`,
+          participantId
+        );
+      } else {
+        this.sql.exec(
+          `UPDATE channel_relationships SET reattach_after_sequence = ?
+            WHERE participant_id = ?`,
+          event.id,
+          participantId
+        );
+      }
+      return inserted;
+    });
+  }
+
+  completeEmptyReattachBackfill(participantId: string): boolean {
+    return this.transaction(() => {
+      const relationship = this.relationship(participantId);
+      const after = relationship?.reattachAfterSequence;
+      const through = relationship?.reattachThroughSequence;
+      if (after === null || after === undefined || through === null || through === undefined) {
+        return false;
+      }
+      if (after < through) return false;
+      this.sql.exec(
+        `UPDATE channel_relationships
+            SET reattach_after_sequence = NULL, reattach_through_sequence = NULL
+          WHERE participant_id = ?`,
+        participantId
+      );
+      return true;
+    });
+  }
+
+  /** The last sequence that can be retired safely during detach. Reattach
+   * rebuilds strictly after this boundary, so every outstanding mailbox debt
+   * must lie on the replay side of it. */
+  detachRecoveryBoundary(participantId: string, requestedUpperBound = this.cursor()): number {
+    const row = this.sql
+      .exec(
+        `SELECT MIN(event_sequence) AS first_outstanding
+           FROM channel_delivery_mailbox
+          WHERE participant_id = ? AND state IN ('ready', 'leased', 'retrying')`,
+        participantId
+      )
+      .toArray()[0];
+    const firstOutstanding = row?.["first_outstanding"];
+    return typeof firstOutstanding === "number"
+      ? Math.min(requestedUpperBound, Math.max(0, Number(firstOutstanding) - 1))
+      : requestedUpperBound;
+  }
+
+  /** Re-derive a delivery from its canonical log event. Terminal mailbox rows
+   * deliberately discard their payload bytes, so redelivery must never use a
+   * prior mailbox row as an event store. */
+  redeliverEventTo(event: ChannelEvent, participantId: string): boolean {
+    return this.transaction(() => this.deriveEvent(event, participantId, true) > 0);
+  }
+
+  private deriveEvent(
+    event: ChannelEvent,
+    onlyParticipantId?: string,
+    rearmTerminal = false,
+    deliveryStartedAt?: number
+  ): number {
     const envelope: RpcChannelMessage = { kind: "log", phase: "live", event };
     const envelopeJson = JSON.stringify(envelope);
     const now = Date.now();
+    const createdAt =
+      typeof deliveryStartedAt === "number" && Number.isFinite(deliveryStartedAt)
+        ? deliveryStartedAt
+        : typeof event.ts === "number" && Number.isFinite(event.ts)
+          ? event.ts
+          : now;
     let inserted = 0;
     const relationships = this.sql
       .exec(
-        `SELECT participant_id, revision, delivery, endpoint_kind, endpoint_entity_id
+        `SELECT participant_id, revision, delivery, endpoint_kind, endpoint_entity_id,
+                invocation_route
            FROM channel_relationships
-          WHERE active = 1 AND delivery != 'none' AND endpoint_kind = 'entity'
+          WHERE active = 1 AND attached = 1
+            AND delivery != 'none' AND endpoint_kind = 'entity'
           ORDER BY participant_id`
       )
       .toArray();
+    let agenticContextJson: string | null = null;
+    for (const row of relationships) {
+      const participantId = String(row["participant_id"]);
+      if (onlyParticipantId && participantId !== onlyParticipantId) continue;
+      const delivery = String(row["delivery"]) as DeliveryInterest;
+      const audience = this.audienceFor(event, participantId);
+      // Ordinary self-publication is already locally known. Explicitly
+      // addressed facts still create recipient work, including when the
+      // publisher and recipient are the same durable participant.
+      if (participantId === event.senderId && !audience.explicitParticipant) continue;
+      if (delivery === "addressed" && !audience.addressed) continue;
+      const revision = Number(row["revision"]);
+      const endpointEntityId = String(row["endpoint_entity_id"]);
+      const invocationRoute = String(row["invocation_route"]);
+      if (invocationRoute === "direct" && agenticContextJson === null) {
+        const retained = this.sql
+          .exec(
+            `SELECT agentic_context_json
+               FROM channel_delivery_event_context
+              WHERE event_id = ?`,
+            event.messageId
+          )
+          .toArray()[0];
+        agenticContextJson = retained
+          ? String(retained["agentic_context_json"])
+          : this.agenticContextJson(event);
+        this.sql.exec(
+          `INSERT OR IGNORE INTO channel_delivery_event_context
+             (event_id, agentic_context_json, projection_version)
+           VALUES (?, ?, ?)`,
+          event.messageId,
+          agenticContextJson,
+          CHANNEL_DELIVERY_PROJECTION_VERSION
+        );
+      }
+      const deliveryId = sha256HexSyncText(
+        canonicalJson([this.channelId, event.messageId, participantId, revision])
+      );
+      const result = this.sql.exec(
+        `INSERT INTO channel_delivery_mailbox (
+           delivery_id, channel_id, event_id, event_sequence, participant_id,
+           endpoint_entity_id,
+           subscription_revision, envelope_json, agentic_context_json,
+           projection_version, state, claim_generation, attempts,
+           next_attempt_at, created_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ready', 0, 0, ?, ?)
+         ON CONFLICT(delivery_id) DO ${
+           rearmTerminal
+             ? `UPDATE SET
+           event_sequence = excluded.event_sequence,
+           endpoint_entity_id = excluded.endpoint_entity_id,
+           subscription_revision = excluded.subscription_revision,
+           envelope_json = excluded.envelope_json,
+           agentic_context_json = excluded.agentic_context_json,
+           projection_version = excluded.projection_version,
+           state = 'ready', claim_generation = 0, claimed_by = NULL,
+           attempts = 0, next_attempt_at = excluded.next_attempt_at,
+           terminal_outcome_json = NULL
+         WHERE channel_delivery_mailbox.state LIKE 'terminal-%'`
+             : "NOTHING"
+         }
+         RETURNING delivery_id`,
+        deliveryId,
+        this.channelId,
+        event.messageId,
+        event.id,
+        participantId,
+        endpointEntityId,
+        revision,
+        envelopeJson,
+        null,
+        CHANNEL_DELIVERY_PROJECTION_VERSION,
+        now,
+        createdAt
+      );
+      const insertedRows = result.toArray().length;
+      inserted += insertedRows;
+      const sourceMessageId = this.sourceMessageId(event);
+      if (insertedRows > 0 && sourceMessageId) {
+        this.sql.exec(
+          `INSERT INTO channel_receipts
+             (message_id, participant_id, state, turn_id, updated_at)
+           VALUES (?, ?, 'delivered', NULL, ?)
+           ON CONFLICT(message_id, participant_id) DO NOTHING`,
+          sourceMessageId,
+          participantId,
+          now
+        );
+      }
+    }
+    return inserted;
+  }
+
+  private agenticContextJson(event: ChannelEvent): string {
     const contextRow = this.sql
       .exec(
         `SELECT current_config_json, conversation_state_json
@@ -369,59 +728,20 @@ export class ChannelDeliveryProjection {
       replyToSenderId:
         typeof replyToRow?.["sender_id"] === "string" ? String(replyToRow["sender_id"]) : null,
     };
-    const agenticContextJson = JSON.stringify(agenticContext);
-    for (const row of relationships) {
-      const participantId = String(row["participant_id"]);
-      const delivery = String(row["delivery"]) as DeliveryInterest;
-      const addressed = this.addresses(event, participantId);
-      // Ordinary self-publication is already locally known. Explicitly
-      // addressed facts still create recipient work, including when the
-      // publisher and recipient are the same durable participant.
-      if (participantId === event.senderId && !addressed) continue;
-      if (delivery === "addressed" && !addressed) continue;
-      const revision = Number(row["revision"]);
-      const endpointEntityId = String(row["endpoint_entity_id"]);
-      const deliveryId = sha256HexSyncText(
-        canonicalJson([this.channelId, event.messageId, participantId, revision])
-      );
-      const result = this.sql.exec(
-        `INSERT OR IGNORE INTO channel_delivery_mailbox (
-           delivery_id, channel_id, event_id, event_sequence, participant_id,
-           endpoint_entity_id,
-           subscription_revision, envelope_json, agentic_context_json,
-           projection_version, state, claim_generation, attempts,
-           next_attempt_at, created_at
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ready', 0, 0, ?, ?)
-         RETURNING delivery_id`,
-        deliveryId,
-        this.channelId,
-        event.messageId,
-        event.id,
-        participantId,
-        endpointEntityId,
-        revision,
-        envelopeJson,
-        agenticContextJson,
-        CHANNEL_DELIVERY_PROJECTION_VERSION,
-        now,
-        now
-      );
-      const insertedRows = result.toArray().length;
-      inserted += insertedRows;
-      const sourceMessageId = this.sourceMessageId(event);
-      if (insertedRows > 0 && sourceMessageId) {
-        this.sql.exec(
-          `INSERT INTO channel_receipts
-             (message_id, participant_id, state, turn_id, updated_at)
-           VALUES (?, ?, 'delivered', NULL, ?)
-           ON CONFLICT(message_id, participant_id) DO NOTHING`,
-          sourceMessageId,
-          participantId,
-          now
-        );
-      }
-    }
-    return inserted;
+    return JSON.stringify(agenticContext);
+  }
+
+  rearmRetryingFor(participantId: string): number {
+    return this.sql
+      .exec(
+        `UPDATE channel_delivery_mailbox
+            SET state = 'ready', next_attempt_at = ?, claimed_by = NULL
+          WHERE participant_id = ? AND state = 'retrying'
+          RETURNING delivery_id`,
+        Date.now(),
+        participantId
+      )
+      .toArray().length;
   }
 
   private foldDecisionContext(event: ChannelEvent): void {
@@ -552,7 +872,19 @@ export class ChannelDeliveryProjection {
       count: number;
     }>;
     mailbox: Array<{ state: string; count: number; oldestCreatedAt: number }>;
+    debts: {
+      retryingAboveThreshold: number;
+      maximumAttempts: number;
+      detachedRelationships: number;
+      terminalRetired: number;
+      terminalIntegrity: number;
+    };
     receiptCount: number;
+    contextStorage: {
+      eventRows: number;
+      mailboxRows: number;
+      mailboxContextCopies: number;
+    };
   } {
     const cursor = this.cursor();
     return {
@@ -586,6 +918,65 @@ export class ChannelDeliveryProjection {
           count: Number(row["count"]),
           oldestCreatedAt: Number(row["oldest_created_at"]),
         })),
+      debts: {
+        retryingAboveThreshold: Number(
+          this.sql
+            .exec(
+              `SELECT COUNT(*) AS count FROM channel_delivery_mailbox
+                WHERE state = 'retrying' AND attempts >= 3`
+            )
+            .toArray()[0]?.["count"] ?? 0
+        ),
+        maximumAttempts: Number(
+          this.sql
+            .exec(`SELECT MAX(attempts) AS attempts FROM channel_delivery_mailbox`)
+            .toArray()[0]?.["attempts"] ?? 0
+        ),
+        detachedRelationships: Number(
+          this.sql
+            .exec(
+              `SELECT COUNT(*) AS count FROM channel_relationships
+                WHERE active = 1 AND attached = 0`
+            )
+            .toArray()[0]?.["count"] ?? 0
+        ),
+        terminalRetired: Number(
+          this.sql
+            .exec(
+              `SELECT COUNT(*) AS count FROM channel_delivery_mailbox
+                WHERE state = 'terminal-retired'`
+            )
+            .toArray()[0]?.["count"] ?? 0
+        ),
+        terminalIntegrity: Number(
+          this.sql
+            .exec(
+              `SELECT COUNT(*) AS count FROM channel_delivery_mailbox
+                WHERE state = 'terminal-integrity'`
+            )
+            .toArray()[0]?.["count"] ?? 0
+        ),
+      },
+      contextStorage: {
+        eventRows: Number(
+          this.sql
+            .exec(`SELECT COUNT(*) AS count FROM channel_delivery_event_context`)
+            .toArray()[0]?.["count"] ?? 0
+        ),
+        mailboxRows: Number(
+          this.sql.exec(`SELECT COUNT(*) AS count FROM channel_delivery_mailbox`).toArray()[0]?.[
+            "count"
+          ] ?? 0
+        ),
+        mailboxContextCopies: Number(
+          this.sql
+            .exec(
+              `SELECT COUNT(*) AS count FROM channel_delivery_mailbox
+                WHERE agentic_context_json IS NOT NULL`
+            )
+            .toArray()[0]?.["count"] ?? 0
+        ),
+      },
       receiptCount: Number(
         this.sql.exec(`SELECT COUNT(*) AS count FROM channel_receipts`).toArray()[0]?.["count"] ?? 0
       ),
@@ -609,23 +1000,35 @@ export class ChannelDeliveryProjection {
     }
   }
 
-  private addresses(event: ChannelEvent, participantId: string): boolean {
+  private audienceFor(
+    event: ChannelEvent,
+    participantId: string
+  ): { addressed: boolean; explicitParticipant: boolean } {
     if (
       event.type !== "agentic.trajectory.v1/event" ||
       !event.payload ||
       typeof event.payload !== "object"
     ) {
-      return false;
+      return { addressed: false, explicitParticipant: false };
     }
     const agentic = event.payload as AgenticEvent;
     const payload = (agentic as { payload?: { mentions?: unknown; to?: unknown } }).payload;
-    if (Array.isArray(payload?.mentions) && payload.mentions.includes(participantId)) return true;
-    if (!Array.isArray(payload?.to)) return false;
-    return payload.to.some((target) => {
-      if (!target || typeof target !== "object") return false;
+    if (Array.isArray(payload?.mentions) && payload.mentions.includes(participantId)) {
+      return { addressed: true, explicitParticipant: true };
+    }
+    if (!Array.isArray(payload?.to)) return { addressed: false, explicitParticipant: false };
+    let addressed = false;
+    let explicitParticipant = false;
+    for (const target of payload.to) {
+      if (!target || typeof target !== "object") continue;
       const value = target as { kind?: unknown; participantId?: unknown };
-      return value.kind === "all" || value.participantId === participantId;
-    });
+      if (value.kind === "all") addressed = true;
+      if (value.kind === "participant" && value.participantId === participantId) {
+        addressed = true;
+        explicitParticipant = true;
+      }
+    }
+    return { addressed, explicitParticipant };
   }
 
   private requireRelationshipPayload(value: unknown): ChannelRelationshipPayload {

@@ -2,7 +2,11 @@
  * Durable state must never depend on this registry: a missing receiver means
  * the sender retains and retries its durable mailbox item. */
 
-export type ResidentSessionReceiver = (payload: unknown) => void | Promise<void>;
+export type ResidentSessionReceiver = ((payload: unknown) => void | Promise<void>) & {
+  /** Owner drain invokes this before awaiting deliveries so guest handlers
+   * receive cancellation instead of pinning the terminal path indefinitely. */
+  abortAll?: () => void;
+};
 
 /** Exact outbound authority retained by one resident operation. The owner
  * captures its already-attenuated execution transport at registration time;
@@ -15,6 +19,9 @@ export interface ResidentSessionTransport {
 export interface ResidentSessionRegistration {
   transport: ResidentSessionTransport;
   close(): void | Promise<void>;
+  /** Called only after the durable channel relationship has ended. Owner-side
+   * membership catalogs must survive ordinary receiver drain/detach. */
+  relationshipEnded?(): void | Promise<void>;
 }
 
 /** Owner-local registration capability. The implementation must be supplied
@@ -45,6 +52,16 @@ export interface ResidentChannelDeliveryInput {
   eventSequence: number;
   envelope: unknown;
   agenticContext: unknown;
+}
+
+export interface ResidentChannelInvocationInput {
+  channelId: string;
+  message: unknown;
+}
+
+export interface ResidentChannelCancellationInput {
+  channelId: string;
+  transportCallId: string;
 }
 
 const receivers = new Map<string, ResidentReceiver>();
@@ -85,12 +102,35 @@ export async function deliverResidentSession(
 export async function acceptResidentChannelDelivery(
   ownerEntityId: string,
   input: ResidentChannelDeliveryInput
-): Promise<{ processed: true }> {
+): Promise<{ processed: true; recipientExecutionStartedAt: number }> {
+  const recipientExecutionStartedAt = Date.now();
   await deliverResidentSession(ownerEntityId, input.channelId, {
     channelId: input.channelId,
     message: input.envelope,
   });
-  return { processed: true };
+  return { processed: true, recipientExecutionStartedAt };
+}
+
+export async function acceptResidentChannelInvocation(
+  ownerEntityId: string,
+  input: ResidentChannelInvocationInput
+): Promise<{ accepted: true }> {
+  await deliverResidentSession(ownerEntityId, input.channelId, {
+    channelId: input.channelId,
+    message: input.message,
+  });
+  return { accepted: true };
+}
+
+export async function cancelResidentChannelInvocation(
+  ownerEntityId: string,
+  input: ResidentChannelCancellationInput
+): Promise<{ accepted: true }> {
+  await deliverResidentSession(ownerEntityId, input.channelId, {
+    channelId: input.channelId,
+    cancellation: { transportCallId: input.transportCallId },
+  });
+  return { accepted: true };
 }
 
 export function inspectResidentSessions(ownerEntityId: string): Array<{

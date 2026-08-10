@@ -164,8 +164,13 @@ describe("EvalDO cancellation + forced recovery", () => {
     >(instance, "createActiveRuntimeRpc").call(instance);
     const received: unknown[] = [];
     const contextualCall = vi.fn(
-      (_target: string, _method: string, _args: unknown[], _options?: unknown) =>
-        Promise.resolve("context-restored")
+      (target: string, method: string, _args: unknown[], _options?: unknown) => {
+        if (target === "main" && method === "workers.resolveService") {
+          return Promise.resolve({ kind: "durable-object", targetId: "channel-target" });
+        }
+        if (target === "channel-target" && method === "detach") return Promise.resolve(undefined);
+        return Promise.resolve("context-restored");
+      }
     );
     const residentSessionCleanups = new Set<() => Promise<void>>();
     const execution = {
@@ -195,7 +200,10 @@ describe("EvalDO cancellation + forced recovery", () => {
         envelope: { kind: "message.completed" },
         agenticContext: null,
       })
-    ).resolves.toEqual({ processed: true });
+    ).resolves.toEqual({
+      processed: true,
+      recipientExecutionStartedAt: expect.any(Number),
+    });
     expect(received).toEqual([
       {
         channelId: "channel-eval",
@@ -209,6 +217,9 @@ describe("EvalDO cancellation + forced recovery", () => {
       execution
     );
     expect(residentSessionCleanups.size).toBe(0);
+    expect(contextualCall).toHaveBeenCalledWith("channel-target", "detach", [
+      { participantId: "do:test:TestDO:test-key" },
+    ]);
     await expect(
       instance.acceptChannelDelivery({
         deliveryId: "delivery-eval-after-terminal",
@@ -1832,6 +1843,9 @@ describe("EvalDO cancellation + forced recovery", () => {
       .map((r) => (r as { name: string }).name);
     expect(tables).not.toContain("user_data");
     expect(tables).not.toContain("repl_scopes");
+    expect(tables).toContain("state");
+    expect(tables).toContain("eval_result_redeliveries");
+    expect(tables).toContain("resident_channel_memberships");
     expect(priv(instance, "scopeManager")).toBeNull();
 
     // 3) A NEW run enqueued AFTER forceReset proceeds at once — the chain was not wedged.

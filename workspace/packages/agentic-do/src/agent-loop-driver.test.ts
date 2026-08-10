@@ -1169,7 +1169,7 @@ describe("AgentLoopDriver", () => {
     );
   });
 
-  it("keeps an early channel terminal retryable until its effect materializes", async () => {
+  it("keeps only the matching channel terminal retryable until its effect materializes", async () => {
     const invocationId = "tc-fast-channel";
     const effectId = ids.invocationEffect(invocationId);
     const started = deferred<void>();
@@ -1209,7 +1209,9 @@ describe("AgentLoopDriver", () => {
     await harness.driver.handleIncoming(CHANNEL, promptIncoming());
     const modelDispatch = harness.driver.dispatchReadyEffectsForTest();
     await started.promise;
-    expect(await harness.driver.channelCallMayMaterialize(CHANNEL, effectId)).toBe(true);
+    // An unrelated in-flight model call is not evidence that this particular
+    // invocation can materialize.
+    expect(await harness.driver.channelCallMayMaterialize(CHANNEL, effectId)).toBe(false);
 
     firstModel.resolve({
       kind: "model",
@@ -1307,9 +1309,9 @@ describe("AgentLoopDriver", () => {
           ? ({
               kind: "local_tool",
               async execute() {
-                if (!driver.hasDeferredEvalStarted(CHANNEL, effectId)) {
+                if (!driver.hasDeferredEvalStartAttempted(CHANNEL, effectId)) {
                   evalStarts += 1;
-                  driver.markDeferredEvalStarted(CHANNEL, effectId);
+                  driver.markDeferredEvalStartAttempted(CHANNEL, effectId);
                   return { deferred: true, reason: "external-result" };
                 }
                 canonicalReads += 1;

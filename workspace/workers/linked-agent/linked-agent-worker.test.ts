@@ -403,6 +403,7 @@ const SUBAGENT_STATE_ARGS = {
       parentChannelId: "ch-parent",
       taskChannelId: "ch-1",
       parentContextId: "ctx-parent",
+      parentParticipantId: "agent:parent",
       depth: 1,
       mode: "fresh",
     },

@@ -296,7 +296,30 @@ export function derivePendingEffects(state: AgentState): EffectDescriptor[] {
       a.requestedAtSeq - b.requestedAtSeq || a.triggerEnvelopeId.localeCompare(b.triggerEnvelopeId)
   )[0];
   if (nextPromptPreparation) out.push(promptArtifactsEffect(state, nextPromptPreparation));
-  if (state.inFlightModelCall) out.push(modelCallEffect(state, state.inFlightModelCall));
+  if (state.inFlightModelCall) {
+    out.push(modelCallEffect(state, state.inFlightModelCall));
+    const turnId = state.openTurn?.turnId ?? "";
+    const consumed = new Set<string>();
+    for (const entry of state.entries) {
+      if (
+        entry.seq <= state.inFlightModelCall.request.contextThroughSeq &&
+        "sourceMessageId" in entry &&
+        entry.sourceMessageId
+      ) {
+        consumed.add(entry.sourceMessageId);
+      }
+    }
+    for (const messageId of consumed) {
+      out.push({
+        effectId: `read:${messageId}:${turnId}`,
+        kind: "record_receipt",
+        channelId: state.channelId,
+        idempotencyKey: `read:${messageId}:${turnId}`,
+        messageId,
+        turnId,
+      });
+    }
+  }
   for (const invocation of Object.values(state.pendingInvocations)) {
     if (invocation.requiresApproval && invocation.approvalState !== "granted") continue; // gated
     out.push(...invocationEffects(state, invocation));
@@ -308,7 +331,7 @@ export function derivePendingEffects(state: AgentState): EffectDescriptor[] {
   for (const wait of Object.values(state.pendingCredentialWaits)) {
     out.push(credentialWaitEffect(state, wait));
   }
-  return out; // receipt effects are emitted at the consuming step boundary
+  return out;
 }
 
 // ---------------------------------------------------------------------------

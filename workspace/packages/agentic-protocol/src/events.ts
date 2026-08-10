@@ -352,6 +352,8 @@ export type InvocationCompletedPayload = {
   summary?: string;
   terminalOutcome: "success";
   terminalReasonCode?: string;
+  /** Explicit recipients of this correlated outcome. */
+  to?: ParticipantSelector[];
   /**
    * Bounded loop-control disposition copied out of an opaque tool result.
    * `result` is always blob-backed and therefore must never carry fields that
@@ -377,6 +379,8 @@ type InvocationFailurePayloadBase<Outcome extends InvocationTerminalFailureOutco
   recoverable?: boolean;
   terminalOutcome: Outcome;
   terminalReasonCode?: string;
+  /** Explicit recipients of this correlated outcome. */
+  to?: ParticipantSelector[];
   /** Canonical machine-readable failure. Human prose is rendered from this
    * object; agents and validators branch only on its typed fields. */
   failure?: AgentToolFailure;
@@ -408,6 +412,8 @@ export type InvocationPayload =
       transport?: InvocationTransport;
       /** Durable execution ordering selected from the invoked tool's metadata. */
       executionMode?: "sequential" | "parallel";
+      /** Explicit durable recipients of the invocation start. */
+      to?: ParticipantSelector[];
       requiresApproval?: boolean;
       userVisible?: boolean;
       summary?: string;
@@ -422,6 +428,8 @@ export type InvocationPayload =
       protocol: "agentic.trajectory.v1";
       output: unknown;
       channel?: "stdout" | "stderr" | "data";
+      /** Explicit recipients of this correlated output. */
+      to?: ParticipantSelector[];
     }
   | InvocationCompletedPayload
   | InvocationFailurePayload;
@@ -602,6 +610,8 @@ export type UiFeedbackCategory =
 export interface UiFeedbackPayload {
   protocol: "agentic.trajectory.v1";
   target: ParticipantRef;
+  /** Explicit durable recipient; `target` remains the semantic subject. */
+  to?: ParticipantSelector[];
   category: UiFeedbackCategory;
   refs?: {
     messageId?: MessageId;

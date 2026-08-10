@@ -35,7 +35,11 @@ describe("SubscriptionManager finite relationships", () => {
   });
 
   it("keeps an identical retry at the same relationship revision", async () => {
-    const join = vi.fn().mockResolvedValue({ ok: true, participantId: "agent-1" });
+    const join = vi.fn().mockImplementation(async (input) => ({
+      ok: true,
+      participantId: "agent-1",
+      revision: input.revision,
+    }));
     const manager = await makeManager({
       join,
       relationshipState: vi.fn().mockResolvedValue(null),
@@ -50,7 +54,11 @@ describe("SubscriptionManager finite relationships", () => {
   });
 
   it("increments the revision when relationship semantics change", async () => {
-    const join = vi.fn().mockResolvedValue({ ok: true, participantId: "agent-1" });
+    const join = vi.fn().mockImplementation(async (input) => ({
+      ok: true,
+      participantId: "agent-1",
+      revision: input.revision,
+    }));
     const manager = await makeManager({
       join,
       relationshipState: vi.fn().mockResolvedValue(null),
@@ -69,7 +77,11 @@ describe("SubscriptionManager finite relationships", () => {
   });
 
   it("continues the channel's monotonic revision after a prior leave", async () => {
-    const join = vi.fn().mockResolvedValue({ ok: true, participantId: "agent-1" });
+    const join = vi.fn().mockImplementation(async (input) => ({
+      ok: true,
+      participantId: "agent-1",
+      revision: input.revision,
+    }));
     const relationshipState = vi.fn().mockResolvedValue({ revision: 8, active: false });
     const manager = await makeManager({ join, relationshipState });
 
@@ -81,7 +93,11 @@ describe("SubscriptionManager finite relationships", () => {
   it("deletes local membership only after finite leave is acknowledged", async () => {
     const leave = vi.fn().mockResolvedValue(undefined);
     const manager = await makeManager({
-      join: vi.fn().mockResolvedValue({ ok: true, participantId: "agent-1" }),
+      join: vi.fn().mockImplementation(async (input) => ({
+        ok: true,
+        participantId: "agent-1",
+        revision: input.revision,
+      })),
       leave,
       relationshipState: vi.fn().mockResolvedValue(null),
     });

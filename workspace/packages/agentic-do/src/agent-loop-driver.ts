@@ -90,14 +90,14 @@ function assertDeferralMatchesEffect(kind: EffectKind, reason: EffectDeferral["r
 }
 
 /** Typed failure code for a deferred eval whose durable run is irrecoverably
- * gone (EvalDO run row lost after an acknowledged start, or a persistent
+ * gone (EvalDO run row absent after an attempted start, or a persistent
  * infrastructure failure exhausted the retry budget). Mirrors the eval
  * schema's `runtime_generation_lost` failure code (failureKind
  * "infrastructure"). */
 export const RUNTIME_GENERATION_LOST_CODE = "runtime_generation_lost";
 
-/** Durable started-ack marker persisted inside the outbox row's descriptor. */
-type DeferredEvalDescriptorMarker = { deferredEvalStarted?: boolean };
+/** Durable start-attempt marker persisted inside the outbox row's descriptor. */
+type DeferredEvalDescriptorMarker = { deferredEvalStartAttempted?: boolean };
 
 function isDeferredEvalRow(row: OutboxRow): boolean {
   return row.descriptor.kind === "local_tool" && row.descriptor.tool === "eval";
@@ -1220,7 +1220,12 @@ export class AgentLoopDriver {
 
   /** §2.2 — replaces the recovery zoo. */
   async reconcile(loop: LoopInstance): Promise<void> {
-    const expected = derivePendingEffects(loop.state);
+    const derived = derivePendingEffects(loop.state);
+    const expectedIds = new Set(derived.map((effect) => effect.effectId));
+    this.outbox.pruneCompletionEvidence(loop.logId, expectedIds);
+    const expected = derived.filter(
+      (effect) => !this.outbox.hasCompletionEvidence(loop.logId, effect.effectId)
+    );
     const expectedById = new Map(expected.map((effect) => [effect.effectId, effect]));
     const rows = this.outbox.forBranch(loop.logId);
     for (const row of rows) {
@@ -1242,7 +1247,6 @@ export class AgentLoopDriver {
    * an ordinary already-consumed duplicate. */
   async channelCallMayMaterialize(channelId: string, effectId: string): Promise<boolean> {
     const loop = await this.loop(channelId);
-    if (loop.state.inFlightModelCall) return true;
     return derivePendingEffects(loop.state).some(
       (effect) => effect.effectId === effectId && effect.kind === "channel_call"
     );
@@ -1667,6 +1671,9 @@ export class AgentLoopDriver {
     }
     this.kill("after-outcome-append");
     await this.cancelAskUserSiblings(row);
+    if (row.kind === "record_receipt") {
+      this.outbox.recordCompletionEvidence(row.branchId, row.effectId, this.deps.now());
+    }
     this.outbox.delete(row.branchId, row.effectId);
     this.kill("after-outbox-delete");
     for (const envelope of envelopes) {
@@ -1937,14 +1944,15 @@ export class AgentLoopDriver {
   //
   // The outbox row IS the deferred-eval run record — one durable source of
   // truth. `effectId` is the EvalDO runId, `disposition` is the scheduling
-  // state, and the descriptor carries the monotonic `deferredEvalStarted`
-  // fact once `eval.start` was acknowledged. Transitions:
+  // state, and the descriptor carries the monotonic
+  // `deferredEvalStartAttempted` fact before crossing into EvalDO. Transitions:
   //
-  //   inserted → (dispatch, eval.start acked) started+parked
+  //   inserted → (durable dispatch fence, eval.start attempted) started+parked
   //           → settled (terminal push / eval.get backstop / redrive)
   //           |  cancel-intent (vessel table) → cancelled by EvalDO.
   //
-  // "Never re-execute a started run" is structural: once `deferredEvalStarted`
+  // "Never re-execute an attempted run" is structural: once
+  // `deferredEvalStartAttempted`
   // is durably recorded, every later dispatch of the row takes the read-only
   // eval.get recovery path (agent-vessel runDeferredEval) and a missing run
   // row settles as the typed `runtime_generation_lost` infrastructure failure
@@ -1962,26 +1970,24 @@ export class AgentLoopDriver {
       );
   }
 
-  /** Durably record that EvalDO acknowledged eval.start for this run. A
-   * missing row (row already settled, or a direct gate probe without an
-   * outbox row) is a no-op. Monotonic: never cleared while the row lives. */
-  markDeferredEvalStarted(channelId: string, effectId: string): void {
+  /** Durably fence the first eval.start attempt before crossing into EvalDO.
+   * The RPC outcome is inherently ambiguous, so this fact is monotonic and is
+   * never cleared while the outbox row lives. */
+  markDeferredEvalStartAttempted(channelId: string, effectId: string): void {
     const row = this.outbox.getForChannel(channelId, effectId);
     if (!row || !isDeferredEvalRow(row)) return;
-    if ((row.descriptor as DeferredEvalDescriptorMarker).deferredEvalStarted === true) return;
+    if ((row.descriptor as DeferredEvalDescriptorMarker).deferredEvalStartAttempted === true) return;
     this.outbox.updateDescriptor(row.branchId, row.effectId, {
       ...row.descriptor,
-      deferredEvalStarted: true,
+      deferredEvalStartAttempted: true,
     } as unknown as EffectDescriptor);
   }
 
-  /** True when a previous activation durably recorded a successful
-   * eval.start for this run — the run identity is settled and it must never
-   * be started again. */
-  hasDeferredEvalStarted(channelId: string, effectId: string): boolean {
+  /** True once any eval.start attempt may have reached EvalDO. */
+  hasDeferredEvalStartAttempted(channelId: string, effectId: string): boolean {
     const row = this.outbox.getForChannel(channelId, effectId);
     if (!row || !isDeferredEvalRow(row)) return false;
-    return (row.descriptor as DeferredEvalDescriptorMarker).deferredEvalStarted === true;
+    return (row.descriptor as DeferredEvalDescriptorMarker).deferredEvalStartAttempted === true;
   }
 
   /** A workerd generation change invalidates every in-memory eval completion
@@ -2200,7 +2206,20 @@ export class AgentLoopDriver {
     const row = this.scheduledModelResumeRowsDue(this.deps.now()).find(
       (candidate) => candidate.channelId === channelId && candidate.messageId === messageId
     );
-    if (!row) throw new Error("executeScheduledResume: transition is not due");
+    if (!row) {
+      const exists = this.deps.sql
+        .exec(
+          `SELECT 1 AS present FROM scheduled_model_resumes
+           WHERE channel_id = ? AND message_id = ?`,
+          channelId,
+          messageId
+        )
+        .toArray()[0];
+      // Absence means a prior claimant completed the transition and crashed
+      // before settling its wake claim. That redrive has already succeeded.
+      if (!exists) return;
+      throw new Error("executeScheduledResume: transition is not due");
+    }
     await this.handleIncoming(row.channelId, {
       type: "command",
       command: {

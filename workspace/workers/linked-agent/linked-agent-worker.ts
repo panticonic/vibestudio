@@ -1017,6 +1017,30 @@ export class LinkedAgentWorker extends AgentWorkerBase {
       channelId,
       this.subscriptions.getConfig(channelId)
     );
+    const subagent = this.subagentIdentity();
+    const parentParticipantId = subagent?.parentParticipantId;
+    if (!opts.to && subagent && !parentParticipantId) {
+      throw new Error("say: subagent supervisor participant is unavailable");
+    }
+    let mentions = opts.mentions;
+    if (mentions?.length) {
+      const participants = await this.createChannelClient(channelId).getParticipants();
+      const byHandle = new Map(
+        participants.flatMap((participant) => {
+          const handle = participant.metadata["handle"];
+          return typeof handle === "string" && handle
+            ? [[handle, participant.participantId] as const]
+            : [];
+        })
+      );
+      mentions = mentions.map((handle) => {
+        const participantIdForHandle = byHandle.get(handle);
+        if (!participantIdForHandle) {
+          throw new Error(`say: unknown participant handle ${handle}`);
+        }
+        return participantIdForHandle;
+      });
+    }
     const messageId = `say:${opts.idempotencyKey ?? `linked:${Date.now()}`}`;
     await this.createChannelClient(channelId).send(participantId, messageId, opts.text, {
       saliency: "say",
@@ -1027,8 +1051,12 @@ export class LinkedAgentWorker extends AgentWorkerBase {
         handle: descriptor.handle,
       },
       ...(opts.replyTo ? { replyTo: opts.replyTo } : {}),
-      ...(opts.mentions ? { mentions: opts.mentions } : {}),
-      ...(opts.to ? { to: opts.to } : {}),
+      ...(mentions ? { mentions } : {}),
+      ...(opts.to
+        ? { to: opts.to }
+        : parentParticipantId
+          ? { to: [{ kind: "participant" as const, participantId: parentParticipantId }] }
+          : {}),
       ...(opts.idempotencyKey ? { idempotencyKey: `say:${opts.idempotencyKey}` } : {}),
     });
     return { ok: true, messageId, channelId };

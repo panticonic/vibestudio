@@ -406,6 +406,35 @@ describe("DurableWorkDriver", () => {
     expect(dispatchHeldWithSignal).toHaveBeenCalledOnce();
   });
 
+  it("delivers the exact normalized channel payload and preserves the recipient start marker", async () => {
+    const outcome = { processed: true, recipientExecutionStartedAt: 1_234 };
+    const dispatchHeldWithSignal = vi.fn(async () => outcome);
+    const record = createDurableWorkHandlers({
+      dispatch: vi.fn(),
+      dispatchHeldWithSignal,
+    } as never);
+    const work = claim("delivery-direct", 5);
+    const target = owner("direct-agent");
+    const delivery = {
+      deliveryId: "delivery-direct",
+      channelId: "channel-1",
+      participantId: "agent-1",
+      envelope: { kind: "log", event: { id: 7 } },
+      agenticContext: { version: 1 },
+    };
+    work.payload = { target, delivery };
+
+    await expect(
+      record["channel-delivery"].execute(owner("channel-1"), work, new AbortController().signal)
+    ).resolves.toEqual(outcome);
+    expect(dispatchHeldWithSignal).toHaveBeenCalledWith(
+      target,
+      expect.any(AbortSignal),
+      "acceptChannelDelivery",
+      delivery
+    );
+  });
+
   it("delivers committed workspace publications to their exact channel target", async () => {
     const dispatchHeldWithSignal = vi.fn(async () => ({ broadcasted: 2 }));
     const record = createDurableWorkHandlers({

@@ -484,8 +484,9 @@ function projectedMessageToChatMessages(
   message: ProjectedMessage,
   intendedRecipients: string[] = []
 ): ChatMessage[] {
-  const sortTime =
-    Date.parse(message.updatedAt ?? message.completedAt ?? message.startedAt ?? "") || 0;
+  // Receipt-only updates may advance updatedAt long after replies exist. Keep
+  // transcript order anchored to the message lifecycle, not acknowledgments.
+  const sortTime = Date.parse(message.completedAt ?? message.startedAt ?? "") || 0;
   const lifecycle = lifecycleNoticeFromMessage(message);
   const senderMetadata = {
     name: message.actor.displayName ?? message.actor.id,
@@ -1033,6 +1034,7 @@ function projectedCustomMessageToChatMessage(
     payload.by = {
       kind: custom.by.kind,
       id: custom.by.id,
+      ...(custom.by.participantId ? { participantId: custom.by.participantId } : {}),
       ...(custom.by.displayName ? { displayName: custom.by.displayName } : {}),
     };
   }

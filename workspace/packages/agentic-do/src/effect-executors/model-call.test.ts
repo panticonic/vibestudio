@@ -146,7 +146,7 @@ function deps(): ExecutorDeps {
     },
     localTools: {
       run: async () => ({ result: null, isError: false }),
-      alreadyApplied: () => false,
+      alreadyApplied: async () => false,
     },
     http: {
       post: async () => ({ deferred: false, result: null, isError: false }),
