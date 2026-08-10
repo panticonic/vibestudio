@@ -128,6 +128,15 @@ belongs to an item. Ordinals are acceptable only after`inspect()` proves
     approval prompts. Browser panels are the exception: their authentic site
     favicon is captured and resolved from browser data, so never invent an icon
     for a website.
+12. **Design initial loading as a budgeted path** — read the
+    [performance skill](../performance/SKILL.md) before adding a large runtime
+    dependency or making panel readiness await data. Panels must render a real
+    empty shell without secondary data; workers and Durable Objects must keep
+    entry evaluation and constructors small. Put feature-only parsers, provider
+    SDKs, renderers, migration tools, and diagnostics behind the operation that
+    needs them, then prove the initial/lazy split in build metadata. A source
+    `import()` is not proof—the build artifacts and real runtime loader must
+    preserve that boundary.
 
 ## Persistence
 

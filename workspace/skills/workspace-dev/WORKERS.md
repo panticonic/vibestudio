@@ -96,6 +96,36 @@ to pin protected main, or another explicit immutable selector deliberately.
 
 ## Worker Lifecycle and Environment Bindings
 
+### Startup and dependency budgets
+
+Worker and Durable Object builds preserve ESM dynamic imports as modules in the
+sealed workerd module map. Use that boundary deliberately:
+
+- Keep the entry module, exported DO classes, constructors, migrations, and
+  subscription/bootstrap path limited to code required for every activation.
+- Dynamically import feature payloads at their semantic operation: model
+  provider adapters at model selection/call, HTML/PDF extraction at fetch,
+  syntax parsers at code evaluation, exporters at telemetry export, and
+  administrative/debugging code at inspection.
+- Prefer narrow package subpath exports over a broad barrel. A barrel that
+  imports tools or providers for re-export can pull their complete static
+  closure into every worker even when only one type or helper is needed. Use
+  `import type` for type-only relationships.
+- Do not make a second reduced implementation. Split the canonical package
+  into a side-effect-free kernel and feature modules. Every feature must retain
+  its normal validation, authority, error handling, and tests when loaded.
+- Verify architecture at both ends: assert that the heavy marker is absent from
+  `bundle.js` and present in a chunk, then execute the dynamic import in a real
+  workerd test. A chunk emitted by esbuild but omitted by the immutable artifact
+  store or loader is a runtime defect.
+
+Build reports and source maps answer different questions. Entry/static-closure
+bytes approximate cold parse/evaluation pressure; lazy bytes show deferred
+feature cost; total sealed bytes show storage and module-map transport cost.
+Never claim that code splitting reduced all three. Pair those measurements with
+one cold and one verified-cache activation trace as described by the
+[performance skill](../performance/SKILL.md).
+
 Discover launchable sources with `await workers.listSources()`. The result
 includes every regular and Durable Object worker, its workspace `source`, the
 manifest's actual `entry`, and `classes` (empty for a regular worker). Use the

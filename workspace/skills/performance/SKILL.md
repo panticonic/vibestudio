@@ -103,6 +103,57 @@ Do not infer that an import is unused from bundle size alone; confirm it with a
 coverage run or source ownership. Measure cache-cold and verified-cache build
 paths separately.
 
+## Performance by construction
+
+Treat initial code as a startup budget, not merely a packaging detail. This is
+especially important for shared packages: one eager import in a panel adapter,
+worker runtime, agent base class, or package barrel is multiplied across every
+consumer.
+
+For panels and apps:
+
+- Render the usable shell and publish readiness without waiting for optional
+  history, suggestions, remote data, indexing, or other secondary sections.
+  Empty data is a valid initial state, not an error or a reason to block boot.
+- Put expensive editors, syntax highlighters, renderers, import/migration
+  flows, and diagnostics behind interaction-level dynamic imports. Keep their
+  loading and error states local to the feature that requested them.
+- Import narrow browser/runtime entry points. A convenient barrel is not free
+  when it re-exports modules with runtime initialization or large dependency
+  graphs. Confirm the initial closure in `metadata.bundleReport`.
+- Do not eagerly create every validator, service client, or namespace member
+  merely to expose a uniform API. A lazy namespace must still validate before
+  the first real operation; defer assembly, never validation or authority.
+- Keep React module evaluation and the first render pure. Start I/O from an
+  owned lifecycle/effect, deduplicate it with single-flight state where
+  appropriate, and do not make unrelated data sources share one blocking
+  readiness promise.
+
+For workers and Durable Objects:
+
+- Keep entry-module evaluation and constructors small. Feature-only provider
+  SDKs, document/PDF parsers, HTML extraction, syntax parsers, telemetry
+  exporters, and administrative tooling belong behind dynamic imports at the
+  operation that needs them.
+- A dynamic import is a real boundary only if the builder, immutable artifact
+  store, and workerd loader preserve the module graph. Verify both the emitted
+  chunk and a real-workerd import; inspecting source syntax alone proves
+  nothing.
+- Distinguish eager bytes from total sealed bytes. Workerd may receive an
+  immutable map containing all modules while V8 parses and evaluates only the
+  entry/static closure. Report initial, lazy, and total payloads separately.
+- Avoid importing broad package barrels from shared runtime code. Prefer
+  side-effect-free, capability-sized entry points so a small DO does not inherit
+  panel APIs, model providers, schema catalogs, or debugging machinery it never
+  uses.
+- Preserve one canonical implementation. Do not create a lightweight second
+  runtime or skip validation for speed; split the real runtime into a small
+  kernel plus lazily loaded, independently testable features.
+
+When adding a heavy dependency, record which user operation owns its cost and
+how the initial bundle report proves it is absent from startup. If no operation
+boundary exists, reconsider the dependency or the package boundary.
+
 ## Host, worker, and startup profiling
 
 - Query `services.serverLog` for the exact time window around startup, builds,
