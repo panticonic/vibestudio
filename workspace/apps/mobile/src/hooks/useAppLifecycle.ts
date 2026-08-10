@@ -3,7 +3,7 @@
  *
  * Handles:
  * - AppState transitions (foreground/background): reconnect transport on resume,
- *   pause periodic sync + trim the asset cache when backgrounded.
+ *   pause periodic sync without discarding immutable panel assets.
  * - NetInfo changes: reconnect when the network link returns, reflect a genuine
  *   loss of link (not merely "no internet") in the connection atoms.
  * - Memory-warning: trim the panel-asset LRU.
@@ -51,12 +51,6 @@ export function useAppLifecycle(shellClient: ShellClient | null): void {
         if (transport.status !== "connected") {
           transport.reconnect();
         }
-        // Resume periodic sync
-        void shellClient.panels
-          .refresh()
-          .catch((error) =>
-            console.warn("[mobile] Failed to refresh panels on foreground:", error)
-          );
       }
 
       // Transition to background or inactive.
@@ -64,12 +58,10 @@ export function useAppLifecycle(shellClient: ShellClient | null): void {
       // We deliberately do NOT run a timed disconnect here: a JS setTimeout is
       // suspended in the background on iOS (so it never fires), and on resume it
       // raced the "active" handler and could tear down a perfectly healthy pipe
-      // just as the user returned. Instead we stop polling and free reclaimable
-      // memory, and let the OS suspend the socket; the transport's own idle /
-      // keepalive handling reports the drop and the "active" branch reconnects.
-      if (nextAppState !== "active" && prevState === "active") {
-        shellClient.trimMemory();
-      }
+      // just as the user returned. Let the OS suspend the socket; the
+      // transport's own idle / keepalive handling reports the drop and the
+      // "active" branch reconnects. Immutable panel assets survive ordinary
+      // backgrounding and are reclaimed only under an actual memory warning.
     };
 
     const appStateSub = AppState.addEventListener("change", handleAppStateChange);

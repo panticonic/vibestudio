@@ -103,6 +103,38 @@ describe("bridgeAdapter CDP routing", () => {
 });
 
 describe("bridgeAdapter panel session relay", () => {
+  it("holds a pipe-racing envelope until the shared transport reconnects", async () => {
+    const pipeClosed = Object.assign(new Error("Not connected to server"), {
+      code: "PIPE_CLOSED",
+    });
+    const session = makePanelSession({
+      send: jest.fn().mockRejectedValueOnce(pipeClosed).mockResolvedValueOnce(undefined),
+    });
+    const waitUntilConnected = jest.fn(async () => undefined);
+    const adapter = createAdapter({
+      panelManager: {} as never,
+      transport: {
+        openPanelSession: jest.fn(async () => session),
+        waitUntilConnected,
+      } as never,
+      callbacks: { navigateToPanel: jest.fn() },
+      deliverToPanel: jest.fn(),
+      getPanelLease: jest.fn(() => ({
+        runtimeEntityId: "panel:runtime-a" as PanelEntityId,
+        connectionId: "conn-a",
+      })),
+    });
+
+    await expect(
+      adapter.handle("panel:tree/panel-a", "postEnvelope", [panelRequestEnvelope("msg-1")])
+    ).resolves.toBeUndefined();
+
+    expect(waitUntilConnected).toHaveBeenCalledWith(45_000);
+    expect(session.send).toHaveBeenCalledTimes(2);
+    expect(session.send).toHaveBeenNthCalledWith(1, stampedPanelEnvelope("msg-1"));
+    expect(session.send).toHaveBeenNthCalledWith(2, stampedPanelEnvelope("msg-1"));
+  });
+
   it("reuses a session whose transport is reconnecting but not closed", async () => {
     const warnSpy = jest.spyOn(console, "warn").mockImplementation(() => undefined);
     const session = makePanelSession({
@@ -222,7 +254,6 @@ describe("bridgeAdapter panel session relay", () => {
   });
 
   it("closes a cached session when the panel no longer has a runtime lease", async () => {
-    const warnSpy = jest.spyOn(console, "warn").mockImplementation(() => undefined);
     let hasLease = true;
     const session = makePanelSession();
     const adapter = createAdapter({
@@ -244,15 +275,10 @@ describe("bridgeAdapter panel session relay", () => {
     await waitFor(() => expect(session.send).toHaveBeenCalledWith(stampedPanelEnvelope("msg-1")));
 
     hasLease = false;
-    await adapter.handle("panel:tree/panel-a", "postEnvelope", [panelRequestEnvelope("msg-2")]);
-    await waitFor(() => expect(session.close).toHaveBeenCalledTimes(1));
-    await waitFor(() =>
-      expect(warnSpy).toHaveBeenCalledWith(
-        "[bridgeAdapter] postEnvelope relay failed (panel panel:tree/panel-a):",
-        expect.any(Error)
-      )
-    );
-    warnSpy.mockRestore();
+    await expect(
+      adapter.handle("panel:tree/panel-a", "postEnvelope", [panelRequestEnvelope("msg-2")])
+    ).rejects.toThrow("has no runtime lease yet");
+    expect(session.close).toHaveBeenCalledTimes(1);
   });
 });
 

@@ -7,7 +7,11 @@ import { WorkspaceClient } from "@vibestudio/service-schemas/clients/shellWorksp
 import { EventsClient } from "@vibestudio/service-schemas/clients/eventsClient";
 import type { EventName, EventPayloads } from "@vibestudio/shared/events";
 import { createRecoveryCoordinator } from "@vibestudio/shell-core/recoveryCoordinator";
-import { PanelTreeCache, type PanelTreeQuerySource } from "@vibestudio/shell-core/panelTreeCache";
+import {
+  PanelTreeCache,
+  type PanelTreeCacheSnapshot,
+  type PanelTreeQuerySource,
+} from "@vibestudio/shell-core/panelTreeCache";
 import type { RecoveryCoordinator, RecoveryKind } from "@vibestudio/shell-core/recoveryCoordinator";
 import type { PanelManager } from "@vibestudio/shell-core/panelManager";
 import type {
@@ -69,6 +73,13 @@ import {
   type MobileAccountProfile,
   type MobileAccountProfileUpdate,
 } from "./accountProfileClient";
+import {
+  clearMobileShellStartupSnapshot,
+  loadMobileShellStartupSnapshot,
+  saveMobileShellStartupSnapshot,
+  type MobileShellStartupSnapshot,
+} from "./shellStartupSnapshot";
+import type { Panel } from "@vibestudio/shared/types";
 
 export type { MobileAccountProfile, MobileAccountProfileUpdate } from "./accountProfileClient";
 
@@ -79,8 +90,11 @@ function smokePhase(phase: string, details?: Record<string, unknown>): void {
 
 export interface ShellClientConfig {
   credentials: Credentials;
+  serverIdentity: string;
   onTreeInvalidated?: (event: PanelTreeInvalidation) => void;
+  onPanelsChanged?: () => void;
   onStatusChange?: (status: ConnectionStatus) => void;
+  onReadinessChange?: (readiness: "shell-ready" | "reconciled" | "failed") => void;
 }
 
 export interface Credentials {
@@ -185,7 +199,7 @@ class MobilePanels implements PanelHost {
   // Set by the UI (MainScreen) so the panel-RPC relay can push server replies +
   // events into the right panel's webview. A mutable field (not a constructor
   // dep) because the webview refs live in the UI, which mounts after init().
-  private deliverToPanelFn: ((panelId: string, envelope: unknown) => void) | null = null;
+  private deliverToPanelFn: ((panelId: string, envelope: unknown) => boolean) | null = null;
   // Host→panel envelopes that arrived before the UI registered its delivery sink
   // (init() completes before MainScreen mounts). Bounded per panel; flushed in
   // order by setDeliverToPanel so relay replies/events never silently vanish.
@@ -199,12 +213,14 @@ class MobilePanels implements PanelHost {
     string,
     { runtimeEntityId: PanelEntityId; connectionId: string }
   >();
+  private registered = false;
   readonly registration: PanelHostRegistration;
   constructor(
     private readonly deps: {
       serverUrl: string;
       transport: MobileRpcClient;
       onTreeInvalidated?: (event: PanelTreeInvalidation) => void;
+      onPanelsChanged?: () => void;
       getSelfUserId: () => string | null;
       navigateToPanel: (panelId: string) => void;
       clientSessionId: string;
@@ -241,12 +257,16 @@ class MobilePanels implements PanelHost {
     if (!this.registryInstance) throw new Error("Panels not initialized");
     return this.registryInstance;
   }
-  async init(workspaceId: string, workspaceConfig?: WorkspaceConfig): Promise<void> {
+  prepare(
+    workspaceId: string,
+    restored?: { tree: PanelTreeCacheSnapshot; rootPanels: Panel[] }
+  ): void {
     if (!this.panelManager) {
       const core = createMobileShellCore({
         workspaceId,
         serverUrl: this.deps.serverUrl,
         transport: this.deps.transport,
+        onPresentationUpdated: () => this.deps.onPanelsChanged?.(),
       });
       this.panelManager = core.panelManager;
       this.registryInstance = core.registry;
@@ -263,7 +283,16 @@ class MobilePanels implements PanelHost {
     }
     const initialTheme = Appearance.getColorScheme() === "light" ? "light" : "dark";
     this.panelManager.setCurrentTheme(initialTheme);
-    await this.panelRuntime.registerClient(this.registration);
+    if (restored) {
+      this.treeCache.restore(restored.tree);
+      this.registry.populateFromServer(restored.rootPanels);
+      this.panelManager.syncEntityCachesFromRegistry();
+    }
+  }
+
+  async loadTreeForPaint(workspaceConfig?: WorkspaceConfig): Promise<void> {
+    const panelManager = this.requireManager();
+    await this.ensureRegistered();
     const groups = await this.treeCache.loadRootGroups(true);
     await Promise.all(
       groups.groups.map((group) =>
@@ -283,14 +312,24 @@ class MobilePanels implements PanelHost {
     );
     for (const initial of workspaceConfig?.initPanels ?? []) {
       if (existingSources.has(initial.source)) continue;
-      await this.panelManager.create(initial.source, {
+      await panelManager.create(initial.source, {
         isRoot: true,
         addAsRoot: true,
         stateArgs: initial.stateArgs,
       });
       existingSources.add(initial.source);
     }
-    await this.syncRuntimeLeases();
+    const roots = (
+      await Promise.all(
+        groups.groups.flatMap(
+          (group) =>
+            this.treeCache
+              .getGroup({ kind: "roots", ownerUserId: group.ownerUserId })
+              ?.nodes.map((node) => panelManager.refreshPanel(asPanelSlotId(node.slotId))) ?? []
+        )
+      )
+    ).filter((panel): panel is Panel => panel !== null);
+    this.registry.repopulate(roots);
     const ownGroup =
       groups.groups.find((group) => group.ownerUserId === this.deps.getSelfUserId()) ??
       groups.groups[0];
@@ -301,9 +340,43 @@ class MobilePanels implements PanelHost {
         })?.nodes[0]
       : undefined;
     if (firstRoot) {
-      await this.panelManager.notifyFocused(asPanelSlotId(firstRoot.slotId));
-      this.deps.navigateToPanel(firstRoot.slotId);
+      const slotId = asPanelSlotId(firstRoot.slotId);
+      const panel = await panelManager.getPanel(slotId);
+      if (panel) {
+        await panelManager.notifyFocused(slotId);
+        this.deps.navigateToPanel(firstRoot.slotId);
+      }
     }
+  }
+
+  async reconcile(workspaceConfig?: WorkspaceConfig): Promise<void> {
+    await this.loadTreeForPaint(workspaceConfig);
+    await this.syncRuntimeLeases();
+  }
+
+  async completeColdStart(): Promise<void> {
+    await this.ensureRegistered();
+    await this.syncRuntimeLeases();
+  }
+
+  showRestoredPanel(preferredPanelId: string | null): void {
+    const panelId =
+      (preferredPanelId && this.registry.getPanel(preferredPanelId)
+        ? preferredPanelId
+        : this.registry.getRootPanels()[0]?.id) ?? null;
+    if (panelId) this.deps.navigateToPanel(panelId);
+  }
+
+  startupSnapshot(): { tree: PanelTreeCacheSnapshot; rootPanels: Panel[] } | null {
+    const tree = this.treeCache.snapshot();
+    if (!tree) return null;
+    return { tree, rootPanels: this.registry.getSerializablePanelTree() };
+  }
+
+  private async ensureRegistered(): Promise<void> {
+    if (this.registered) return;
+    await this.panelRuntime.registerClient(this.registration);
+    this.registered = true;
   }
   async refresh(): Promise<void> {
     this.treeCache.clear();
@@ -318,6 +391,36 @@ class MobilePanels implements PanelHost {
   invalidateTree(event: PanelTreeInvalidation): void {
     this.treeCache.invalidate(event);
     this.deps.onTreeInvalidated?.(event);
+    const panelManager = this.panelManager;
+    if (!panelManager) return;
+
+    for (const panelId of event.removedSlotIds) {
+      if (this.registry.getPanel(panelId)) this.registry.removePanel(panelId);
+    }
+    const residentChanged = event.changedSlotIds.filter((panelId) =>
+      Boolean(this.registry.getPanel(panelId))
+    );
+    if (residentChanged.length === 0) return;
+    void Promise.all(
+      residentChanged.map((panelId) => panelManager.refreshPanel(asPanelSlotId(panelId)))
+    )
+      .then(() => this.deps.onPanelsChanged?.())
+      .catch((error: unknown) => {
+        console.warn("[MobilePanels] Failed to refresh changed panel presentations", {
+          revision: event.revision,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+  }
+
+  handleExecutionActivated(activation: EventPayloads["panel:executionActivated"]): void {
+    const panel = this.registry.getPanel(activation.panelId);
+    if (!panel || panel.runtimeEntityId !== activation.runtimeEntityId) return;
+    panel.effectiveVersion = activation.effectiveVersion;
+    panel.buildKey = activation.buildKey;
+    panel.executionDigest = activation.executionDigest;
+    panel.authorityRequests = activation.authorityRequests;
+    this.deps.onPanelsChanged?.();
   }
   async observe(
     panelId: string
@@ -464,7 +567,11 @@ class MobilePanels implements PanelHost {
     return { id: result.panelId, title: result.title };
   }
   async focus(panelId: string): Promise<void> {
-    await this.requireManager().notifyFocused(asPanelSlotId(panelId));
+    const manager = this.requireManager();
+    const slotId = asPanelSlotId(panelId);
+    const panel = await manager.getPanel(slotId);
+    if (!panel) throw new Error(`Panel not found: ${panelId}`);
+    await manager.notifyFocused(slotId);
     this.deps.navigateToPanel(panelId);
   }
   async createChildPanel(
@@ -707,13 +814,26 @@ class MobilePanels implements PanelHost {
     return this.bridgeAdapterInstance.handle(panelId, method, args);
   }
   /** Register the host→panel envelope delivery sink (called by the UI layer). */
-  setDeliverToPanel(fn: (panelId: string, envelope: unknown) => void): void {
+  setDeliverToPanel(fn: (panelId: string, envelope: unknown) => boolean): void {
     this.deliverToPanelFn = fn;
-    if (this.pendingDeliveries.size === 0) return;
-    for (const [panelId, envelopes] of this.pendingDeliveries) {
-      for (const envelope of envelopes) fn(panelId, envelope);
+    this.flushPanelDeliveries();
+  }
+  /** Retry replies/events that arrived while their native WebView ref was absent. */
+  flushPanelDeliveries(panelId?: string): void {
+    const targets = panelId ? [panelId] : [...this.pendingDeliveries.keys()];
+    for (const target of targets) {
+      const queue = this.pendingDeliveries.get(target);
+      if (!queue?.length || !this.deliverToPanelFn) continue;
+      let delivered = 0;
+      while (delivered < queue.length && this.deliverToPanelFn(target, queue[delivered])) {
+        delivered += 1;
+      }
+      if (delivered === queue.length) {
+        this.pendingDeliveries.delete(target);
+      } else if (delivered > 0) {
+        queue.splice(0, delivered);
+      }
     }
-    this.pendingDeliveries.clear();
   }
   /**
    * Route one host→panel envelope to the UI sink, or buffer it (bounded) until
@@ -721,8 +841,7 @@ class MobilePanels implements PanelHost {
    * oldest with a warning rather than growing without limit.
    */
   private deliverToPanel(panelId: string, envelope: unknown): void {
-    if (this.deliverToPanelFn) {
-      this.deliverToPanelFn(panelId, envelope);
+    if (this.deliverToPanelFn?.(panelId, envelope)) {
       return;
     }
     let queue = this.pendingDeliveries.get(panelId);
@@ -810,6 +929,7 @@ export class ShellClient {
     openChannel(channelId: string): Promise<{ id: string; title: string }>;
   };
   readonly credentials: Credentials;
+  private readonly serverIdentity: string;
   // Mutable: starts as the loopback placeholder, then becomes
   // `http://127.0.0.1:<facadePort>` once the panel-asset façade binds (init).
   // `MainScreen` reads this for `buildPanelUrl`, so panel URLs hit the façade.
@@ -829,9 +949,13 @@ export class ShellClient {
   private recoveryCompleteListeners = new Set<(kind: RecoveryKind) => void>();
   private workspaceInfo: WorkspaceInfo | null = null;
   private readonly accountProfileClient: MobileAccountProfileClient;
-  private panelsInitialized = false;
+  private reconciliation: Promise<void> | null = null;
+  private disposed = false;
+  private readonly onReadinessChange?: ShellClientConfig["onReadinessChange"];
   constructor(config: ShellClientConfig) {
     this.credentials = config.credentials;
+    this.serverIdentity = config.serverIdentity.toLowerCase();
+    this.onReadinessChange = config.onReadinessChange;
     this.serverUrl = MOBILE_SERVER_LOOPBACK_ORIGIN;
     // Remote is WebRTC: the client re-pairs to the stored shell credential's
     // signaling room (no server URL, no native WS grant) — see mobileTransport.ts.
@@ -855,6 +979,7 @@ export class ShellClient {
       serverUrl: MOBILE_SERVER_LOOPBACK_ORIGIN,
       transport: this.transport,
       onTreeInvalidated: config.onTreeInvalidated,
+      onPanelsChanged: config.onPanelsChanged,
       getSelfUserId: () => this.currentUserId,
       clientSessionId: config.credentials.deviceId,
       navigateToPanel: (panelId) => {
@@ -924,12 +1049,59 @@ export class ShellClient {
     this.events.on("panel-tree-invalidated", (event) => {
       this.panels.invalidateTree(event as PanelTreeInvalidation);
     });
+    this.events.on("panel:executionActivated", (event) => {
+      this.panels.handleExecutionActivated(event as EventPayloads["panel:executionActivated"]);
+    });
   }
   async init(): Promise<void> {
-    const info = await this.connectWorkspace();
-    await this.startPanelAssetFacade();
-    await this.ensureReactNativeHostTargetReady();
-    await this.initPanels(info);
+    const deadline = Date.now() + 120_000;
+    let recoveryAttempt = 0;
+    for (;;) {
+      try {
+        const info = await this.connectWorkspace();
+        await this.startPanelAssetFacade(info.config.id);
+        let restored = await loadMobileShellStartupSnapshot(this.serverIdentity, info.config.id);
+        try {
+          this.panels.prepare(
+            info.config.id,
+            restored ? { tree: restored.tree, rootPanels: restored.rootPanels } : undefined
+          );
+        } catch (error) {
+          if (!restored) throw error;
+          await clearMobileShellStartupSnapshot(this.serverIdentity, info.config.id);
+          restored = null;
+          this.panels.prepare(info.config.id);
+          smokePhase("workspace-shell-snapshot-rejected");
+        }
+        if (restored) {
+          this.panels.showRestoredPanel(restored.preferredPanelId);
+          smokePhase("workspace-shell-ready", {
+            source: "durable-snapshot",
+            revision: restored.tree.revision,
+          });
+        } else {
+          await this.panels.loadTreeForPaint(info.config);
+          await this.persistStartupSnapshot(info.config.id);
+          smokePhase("workspace-shell-ready", { source: "live-tree" });
+        }
+        this.onReadinessChange?.("shell-ready");
+        this.reconciliation = this.reconcileAfterPaint(info, Boolean(restored));
+        return;
+      } catch (error) {
+        if (
+          (error as { code?: unknown } | null)?.code !== "CONNECTION_LOST" ||
+          Date.now() >= deadline
+        ) {
+          throw error;
+        }
+        recoveryAttempt += 1;
+        smokePhase("workspace-init-retry", {
+          attempt: recoveryAttempt,
+          message: error instanceof Error ? error.message : String(error),
+        });
+        await this.transport.waitUntilConnected(deadline - Date.now());
+      }
+    }
   }
 
   /**
@@ -939,9 +1111,12 @@ export class ShellClient {
    * `MainScreen` reads `shellClient.serverUrl` for `buildPanelUrl`, so this must
    * land before the client is published to the UI (`finishConnectedClient`).
    */
-  private async startPanelAssetFacade(): Promise<void> {
+  private async startPanelAssetFacade(workspaceIdentity: string): Promise<void> {
     if (this.facade) return;
-    this.facade = await startPanelAssetFacade(this.transport);
+    this.facade = await startPanelAssetFacade(this.transport, {
+      serverIdentity: this.serverIdentity,
+      workspaceIdentity,
+    });
     this.serverUrl = `http://127.0.0.1:${this.facade.port}`;
     smokePhase("workspace-panel-facade-ready", { port: this.facade.port });
   }
@@ -1020,9 +1195,52 @@ export class ShellClient {
     smokePhase("workspace-ws-authenticated");
     const info = await this.workspaces.getInfo();
     smokePhase("workspace-info-loaded", { workspaceId: info.config.id });
-    await this.refreshAccountProfile();
     this.workspaceInfo = info;
     return info;
+  }
+
+  private async reconcileAfterPaint(info: WorkspaceInfo, refreshTree: boolean): Promise<void> {
+    try {
+      const deferredResults = Promise.allSettled([
+        this.refreshAccountProfile(),
+        this.ensureReactNativeHostTargetReady(),
+      ]);
+      await (refreshTree ? this.panels.reconcile(info.config) : this.panels.completeColdStart());
+      if (this.disposed) return;
+      await this.events.subscribe("panel:runtimeLeaseChanged");
+      await this.events.subscribe("panel-tree-invalidated");
+      await this.events.subscribe("panel:executionActivated");
+      await drainWorkspaceMutationQueue(this);
+      this.registerPanelRecoveryHandlers();
+      const [profile, host] = await deferredResults;
+      if (profile.status === "rejected") {
+        console.warn("[ShellClient] Deferred account profile load failed", profile.reason);
+      }
+      if (host.status === "rejected") throw host.reason;
+      await this.persistStartupSnapshot(info.config.id);
+      smokePhase("workspace-reconciled");
+      this.onReadinessChange?.("reconciled");
+    } catch (error) {
+      smokePhase("workspace-reconcile-failed", {
+        message: error instanceof Error ? error.message : String(error),
+      });
+      console.warn("[ShellClient] Deferred workspace reconciliation failed", error);
+      this.onReadinessChange?.("failed");
+    }
+  }
+
+  private async persistStartupSnapshot(workspaceIdentity: string): Promise<void> {
+    const snapshot = this.panels.startupSnapshot();
+    if (!snapshot) return;
+    const record: MobileShellStartupSnapshot = {
+      schemaVersion: 1,
+      serverIdentity: this.serverIdentity,
+      workspaceIdentity,
+      capturedAt: Date.now(),
+      preferredPanelId: this.panels.getPreferredRootId(),
+      ...snapshot,
+    };
+    await saveMobileShellStartupSnapshot(record);
   }
 
   private async ensureReactNativeHostTargetReady(): Promise<void> {
@@ -1054,25 +1272,19 @@ export class ShellClient {
     }
   }
 
-  private async initPanels(info: WorkspaceInfo): Promise<void> {
-    if (this.panelsInitialized) return;
-    await this.panels.init(info.config.id, info.config);
-    smokePhase("workspace-panels-initialized");
-    await this.events.subscribe("panel:runtimeLeaseChanged");
-    await this.events.subscribe("panel-tree-invalidated");
-    await this.panels.syncRuntimeLeases();
-    await drainWorkspaceMutationQueue(this);
-    this.registerPanelRecoveryHandlers();
-    this.panelsInitialized = true;
-  }
   reconnect(): void {
     this.transport.reconnect();
   }
-  /**
-   * Release reclaimable memory (the panel-asset LRU, up to 256 MiB). Called when
-   * the app backgrounds or the OS raises a memory warning; cached assets are
-   * content-addressed and re-fetch over the pipe on next use.
-   */
+  retryWorkspaceSetup(): void {
+    if (!this.workspaceInfo) return;
+    this.onReadinessChange?.("shell-ready");
+    this.reconciliation = this.reconcileAfterPaint(this.workspaceInfo, true);
+  }
+  /** Test/diagnostic boundary for work intentionally deferred past first paint. */
+  async whenReconciled(): Promise<void> {
+    await this.reconciliation;
+  }
+  /** Enforce the durable panel-asset byte cap after native memory pressure. */
   trimMemory(): void {
     this.facade?.trimCache();
   }
@@ -1108,6 +1320,7 @@ export class ShellClient {
     for (const listener of this.recoveryCompleteListeners) listener(kind);
   }
   dispose(): void {
+    this.disposed = true;
     for (const unsubscribe of this.panelRecoveryUnsubs ?? []) unsubscribe();
     this.panelRecoveryUnsubs = null;
     this.recoveryCompleteListeners.clear();

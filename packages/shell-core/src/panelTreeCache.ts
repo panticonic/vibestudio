@@ -26,6 +26,17 @@ export interface PanelTreeCachedGroup {
   error: string | null;
 }
 
+export interface PanelTreeCacheSnapshot {
+  revision: number;
+  rootGroups: PanelTreeRootGroupPage;
+  groups: Array<{
+    group: PanelTreeGroup;
+    revision: number;
+    nodes: PanelTreeNode[];
+    nextCursor: string | null;
+  }>;
+}
+
 interface MutableGroup {
   group: PanelTreeGroup;
   revision: number;
@@ -85,6 +96,70 @@ export class PanelTreeCache {
 
   getRootGroups(): PanelTreeRootGroupPage {
     return this.rootGroups;
+  }
+
+  /**
+   * Capture only one coherent, bounded tree projection. A revision mismatch is
+   * deliberately not serialised: local startup state is a snapshot, never a
+   * merge log, so a changing tree is fetched normally on the next launch.
+   */
+  snapshot(): PanelTreeCacheSnapshot | null {
+    if (this.rootGroups.revision !== this.revision) return null;
+    const groups = [...this.groups.values()];
+    if (groups.some((group) => group.loading || group.revision !== this.revision)) return null;
+    return {
+      revision: this.revision,
+      rootGroups: {
+        ...this.rootGroups,
+        groups: this.rootGroups.groups.map((group) => ({ ...group })),
+      },
+      groups: groups.map((group) => ({
+        group: { ...group.group },
+        revision: group.revision,
+        nodes: group.nodes.map((node) => ({ ...node })),
+        nextCursor: group.nextCursor,
+      })),
+    };
+  }
+
+  /** Restore a previously validated coherent projection before reconciliation. */
+  restore(snapshot: PanelTreeCacheSnapshot): void {
+    if (
+      !Number.isSafeInteger(snapshot.revision) ||
+      snapshot.revision < 0 ||
+      snapshot.rootGroups.revision !== snapshot.revision ||
+      snapshot.groups.some((group) => group.revision !== snapshot.revision)
+    ) {
+      throw new Error("Panel-tree snapshot is not revision-coherent");
+    }
+    this.generation += 1;
+    this.groups.clear();
+    this.paths.clear();
+    this.revision = snapshot.revision;
+    this.rootGroups = {
+      ...snapshot.rootGroups,
+      groups: snapshot.rootGroups.groups
+        .slice(0, this.options.maxRootGroups ?? 256)
+        .map((group) => ({ ...group })),
+    };
+    for (const entry of snapshot.groups.slice(0, this.options.maxGroups ?? 64)) {
+      const key = panelTreeGroupKey(entry.group);
+      if (this.groups.has(key)) throw new Error(`Duplicate panel-tree snapshot group: ${key}`);
+      const nodes = entry.nodes.slice(0, this.maxNodesPerGroup()).map((node) => ({ ...node }));
+      this.groups.set(key, {
+        group: { ...entry.group },
+        revision: entry.revision,
+        nodes,
+        loadedCount: nodes.length,
+        nextCursor: entry.nextCursor,
+        loading: false,
+        loadingGeneration: null,
+        error: null,
+        touched: ++this.clock,
+      });
+    }
+    this.evict();
+    this.emit();
   }
 
   retainGroups(groups: readonly PanelTreeGroup[]): void {

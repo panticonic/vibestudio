@@ -8,10 +8,11 @@
 
 import React, { useCallback } from "react";
 import { createDrawerNavigator } from "@react-navigation/drawer";
-import { useSetAtom } from "jotai";
+import { useAtomValue, useSetAtom } from "jotai";
 import { MainScreen } from "../components/MainScreen";
 import { PanelDrawer } from "../components/PanelDrawer";
 import { activePanelIdAtom } from "../state/navigationAtoms";
+import { shellClientAtom } from "../state/shellClientAtom";
 
 export type DrawerParamList = {
   PanelContent: undefined;
@@ -40,17 +41,27 @@ export function MainNavigator() {
 
 /**
  * Wrapper that provides PanelDrawer with the onSelectPanel callback.
- * Sets the active panel atom and closes the drawer.
+ * Hydrates and focuses the selected durable panel, then closes the drawer.
  */
 function DrawerContentWrapper({ navigation }: { navigation: { closeDrawer: () => void } }) {
+  const shellClient = useAtomValue(shellClientAtom);
   const setActivePanelId = useSetAtom(activePanelIdAtom);
 
   const handleSelectPanel = useCallback(
     (panelId: string) => {
-      setActivePanelId(panelId);
       navigation.closeDrawer();
+      if (!shellClient) {
+        setActivePanelId(panelId);
+        return;
+      }
+      void shellClient.panels.focus(panelId).catch((error: unknown) => {
+        console.warn("[MainNavigator] Failed to focus panel", {
+          panelId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
     },
-    [setActivePanelId, navigation]
+    [navigation, setActivePanelId, shellClient]
   );
 
   return <PanelDrawer onSelectPanel={handleSelectPanel} />;

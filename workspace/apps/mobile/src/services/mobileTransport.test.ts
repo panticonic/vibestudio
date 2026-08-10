@@ -5,7 +5,7 @@ import {
   loadShellCredential,
   MobileConnectionAggregateError,
   reconnectMobileSession,
-  type StoredShellCredential,
+  type StoredRoutedMobileConnection,
   type WebRtcConnection,
 } from "@vibestudio/mobile-webrtc";
 import { MobileRpcClient } from "./mobileTransport";
@@ -31,10 +31,10 @@ const mockReconnectMobileSession = reconnectMobileSession as jest.MockedFunction
 const DEVICE_ID = `dev_${"d".repeat(24)}`;
 const REFRESH_TOKEN = "r".repeat(43);
 
-const storedCredential: StoredShellCredential = {
-  schemaVersion: 3,
-  deviceId: DEVICE_ID,
-  refreshToken: REFRESH_TOKEN,
+const storedCredential: StoredRoutedMobileConnection = {
+  schemaVersion: 4,
+  phase: "routed",
+  credential: { deviceId: DEVICE_ID, refreshToken: REFRESH_TOKEN },
   controlPairing: {
     room: "room-control",
     fp: "AA".repeat(32),
@@ -49,6 +49,7 @@ const storedCredential: StoredShellCredential = {
     v: 2,
     ice: "all",
   },
+  selectedWorkspaceId: "ws-a",
   pairedAt: 123,
 };
 
@@ -189,6 +190,27 @@ describe("MobileRpcClient WebRTC transport", () => {
       reason: "network unavailable",
       layer: null,
     });
+  });
+
+  it("waits for an interrupted session to recover before startup resumes", async () => {
+    let status: RpcConnectionStatus = "disconnected";
+    let publishStatus: ((next: RpcConnectionStatus) => void) | undefined;
+    const session = makeSession({
+      status: jest.fn(() => status),
+      onStatusChange: jest.fn((listener) => {
+        publishStatus = listener;
+        return jest.fn();
+      }),
+    });
+    mockReconnectMobileSession.mockResolvedValue(makeConnection({ session }));
+    const client = new MobileRpcClient({});
+    await client.connectAndWait();
+
+    const recovered = client.waitUntilConnected(1_000);
+    status = "connected";
+    publishStatus?.("connected");
+
+    await expect(recovered).resolves.toBeUndefined();
   });
 
   it("dispatches server events to subscribed local listeners and unsubscribes cleanly", async () => {

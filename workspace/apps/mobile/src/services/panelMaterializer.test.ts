@@ -2,6 +2,7 @@ import type { Panel } from "@vibestudio/shared/types";
 import {
   materializeLatestMobilePanel,
   materializeMobilePanel,
+  mobilePanelMaterializationState,
   needsMobilePanelMaterialization,
   PanelMaterializationRetryQueue,
 } from "./panelMaterializer";
@@ -46,6 +47,12 @@ describe("needsMobilePanelMaterialization", () => {
     panel.buildKey = null;
 
     expect(
+      mobilePanelMaterializationState(panel, {
+        url: "about:blank",
+        runtimeEntityId: "panel:nav-1",
+      })
+    ).toBe("pending");
+    expect(
       needsMobilePanelMaterialization(panel, {
         url: "about:blank",
         runtimeEntityId: "panel:nav-1",
@@ -53,7 +60,25 @@ describe("needsMobilePanelMaterialization", () => {
     ).toBe(false);
   });
 
+  it("waits for a runtime identity instead of treating the placeholder as current", () => {
+    const panel = makePanel("panels/editor");
+    panel.runtimeEntityId = null;
+
+    expect(
+      mobilePanelMaterializationState(panel, {
+        url: "about:blank",
+        runtimeEntityId: null,
+      })
+    ).toBe("pending");
+  });
+
   it("materializes reserved WebViews regardless of visibility", () => {
+    expect(
+      mobilePanelMaterializationState(makePanel("panels/editor"), {
+        url: "about:blank",
+        runtimeEntityId: "panel:nav-1",
+      })
+    ).toBe("needed");
     expect(
       needsMobilePanelMaterialization(makePanel("panels/editor"), {
         url: "about:blank",
@@ -78,6 +103,12 @@ describe("needsMobilePanelMaterialization", () => {
         runtimeEntityId: "panel:nav-2",
       })
     ).toBe(false);
+    expect(
+      mobilePanelMaterializationState(panel, {
+        url: "http://127.0.0.1/panels/chat/",
+        runtimeEntityId: "panel:nav-2",
+      })
+    ).toBe("current");
   });
 
   it("rematerializes browser WebViews without requiring a workspace build", () => {

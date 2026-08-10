@@ -19,3 +19,8 @@ export const isConnectingAtom = atom((get) => get(connectionStatusAtom) === "con
 
 /** Whether the device has network connectivity (updated by useAppLifecycle via NetInfo) */
 export const networkReachableAtom = atom<boolean>(true);
+
+export type WorkspaceReadiness = "connecting" | "shell-ready" | "reconciled" | "failed";
+
+/** Workspace startup continues after the durable shell can first paint. */
+export const workspaceReadinessAtom = atom<WorkspaceReadiness>("connecting");

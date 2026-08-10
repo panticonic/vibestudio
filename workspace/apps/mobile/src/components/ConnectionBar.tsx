@@ -12,7 +12,11 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { View, Text, StyleSheet, Animated, Pressable, Alert } from "react-native";
 import { useAtomValue } from "jotai";
-import { connectionStatusAtom, networkReachableAtom } from "../state/connectionAtoms";
+import {
+  connectionStatusAtom,
+  networkReachableAtom,
+  workspaceReadinessAtom,
+} from "../state/connectionAtoms";
 import { shellClientAtom } from "../state/shellClientAtom";
 import { themeColorsAtom } from "../state/themeAtoms";
 import type { ConnectionStatus } from "../services/mobileTransport";
@@ -71,6 +75,7 @@ const BAR_HEIGHT = 24;
 export function ConnectionBar({ onRepair }: ConnectionBarProps = {}) {
   const status = useAtomValue(connectionStatusAtom);
   const networkReachable = useAtomValue(networkReachableAtom);
+  const workspaceReadiness = useAtomValue(workspaceReadinessAtom);
   const colors = useAtomValue(themeColorsAtom);
   const shellClient = useAtomValue(shellClientAtom);
   const [reconnectAttempt, setReconnectAttempt] = useState(0);
@@ -141,38 +146,60 @@ export function ConnectionBar({ onRepair }: ConnectionBarProps = {}) {
         clearTimeout(hideTimer.current);
       }
     };
-  }, [status, networkReachable, opacity, animatedHeight]);
+  }, [status, networkReachable, workspaceReadiness, opacity, animatedHeight]);
 
   // The bar is actionable whenever the connection is in a problem state
   // (disconnected, or offline) so the user is never stuck without a way to
   // retry or re-pair. A live pipe is never a problem, even if NetInfo reports
   // "no internet" (LAN-only), so a connected status is excluded.
-  const isProblem = status !== "connected";
+  const isProblem = status !== "connected" || workspaceReadiness === "failed";
 
   const handlePress = useCallback(() => {
     const reconnect = () => shellClient?.transport.reconnect();
-    const buttons: Parameters<typeof Alert.alert>[2] = [{ text: "Reconnect", onPress: reconnect }];
+    const buttons: Parameters<typeof Alert.alert>[2] =
+      workspaceReadiness === "failed"
+        ? [{ text: "Retry setup", onPress: () => shellClient?.retryWorkspaceSetup() }]
+        : [{ text: "Reconnect", onPress: reconnect }];
     if (onRepair) {
       buttons.push({ text: "Re-pair device", onPress: onRepair });
     }
     buttons.push({ text: "Cancel", style: "cancel" });
     Alert.alert(
-      networkReachable ? "Connection lost" : "No network",
-      networkReachable
-        ? "Vibestudio isn't connected to your server."
-        : "Your device appears to be offline. Reconnect once your network is back.",
+      workspaceReadiness === "failed"
+        ? "Workspace setup failed"
+        : networkReachable
+          ? "Connection lost"
+          : "No network",
+      workspaceReadiness === "failed"
+        ? "The server connection is live, but workspace reconciliation did not finish."
+        : networkReachable
+          ? "Vibestudio isn't connected to your server."
+          : "Your device appears to be offline. Reconnect once your network is back.",
       buttons,
       { cancelable: true }
     );
-  }, [networkReachable, onRepair, shellClient]);
+  }, [networkReachable, onRepair, shellClient, workspaceReadiness]);
 
   const config = getDisplayConfig(status, networkReachable, wasConnectedRef.current);
-  const backgroundColor = colors[config.colorKey];
+  const readinessColorKey =
+    status === "connected" && workspaceReadiness === "failed"
+      ? "statusDisconnected"
+      : status === "connected" && workspaceReadiness !== "reconciled"
+        ? "statusConnecting"
+        : config.colorKey;
+  const backgroundColor = colors[readinessColorKey];
   const reconnectLabel =
     wasConnectedRef.current && reconnectAttempt > 0
       ? `Reconnecting (attempt ${reconnectAttempt})…`
       : config.label;
-  const label = isProblem ? `${reconnectLabel} — tap for options` : config.label;
+  const label =
+    workspaceReadiness === "failed"
+      ? "Workspace setup needs attention — tap to retry"
+      : isProblem
+        ? `${reconnectLabel} — tap for options`
+        : workspaceReadiness !== "reconciled"
+          ? "Preparing workspace…"
+          : config.label;
   const accessibilityHint = onRepair
     ? "Opens actions to reconnect or re-pair the device."
     : "Opens actions to reconnect.";

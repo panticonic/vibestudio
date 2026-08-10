@@ -44,14 +44,25 @@ function panelInitEntityId(panelInit: unknown): string | null {
  * the shared tree. The host converges every retained WebView to that identity;
  * visibility is only presentation state and must not control materialization.
  */
+export type MobilePanelMaterializationState = "pending" | "needed" | "current";
+
+export function mobilePanelMaterializationState(
+  panel: Panel,
+  current: { url: string; runtimeEntityId: string | null }
+): MobilePanelMaterializationState {
+  if (!panel.runtimeEntityId) return "pending";
+  const managed = !getCurrentSnapshot(panel).source.startsWith("browser:");
+  if (managed && !/^[0-9a-f]{64}$/.test(panel.buildKey ?? "")) return "pending";
+  return current.url === "about:blank" || current.runtimeEntityId !== panel.runtimeEntityId
+    ? "needed"
+    : "current";
+}
+
 export function needsMobilePanelMaterialization(
   panel: Panel,
   current: { url: string; runtimeEntityId: string | null }
 ): boolean {
-  if (!panel.runtimeEntityId) return false;
-  const managed = !getCurrentSnapshot(panel).source.startsWith("browser:");
-  if (managed && !/^[0-9a-f]{64}$/.test(panel.buildKey ?? "")) return false;
-  return current.url === "about:blank" || current.runtimeEntityId !== panel.runtimeEntityId;
+  return mobilePanelMaterializationState(panel, current) === "needed";
 }
 
 /**

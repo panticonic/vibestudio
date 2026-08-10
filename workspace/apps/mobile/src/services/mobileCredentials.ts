@@ -2,7 +2,7 @@
 export {
   clearShellCredential,
   loadShellCredential,
-  persistStoredShellCredential,
+  persistStoredMobileConnection,
 } from "@vibestudio/mobile-webrtc";
 
-export type { MobileHubWorkspace, StoredShellCredential } from "@vibestudio/mobile-webrtc";
+export type { MobileHubWorkspace, StoredMobileConnection } from "@vibestudio/mobile-webrtc";

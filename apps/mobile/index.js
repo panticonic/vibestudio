@@ -11,7 +11,7 @@
 import "@vibestudio/mobile-webrtc/polyfills";
 import "react-native-get-random-values";
 import "react-native-url-polyfill/auto";
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   AppRegistry,
@@ -36,27 +36,24 @@ import {
 import {
   establishWebRtcConnection,
   reconnectMobileSession,
-  persistShellCredential,
+  retryAfterConnectionLoss,
+  persistStoredMobileConnection,
+  replaceMobileConnectionCredential,
   completeFreshMobilePairing,
   loadShellCredential,
   clearShellCredential,
   makeShellTokenProvider,
   activateApprovedWorkspaceApp as activateApprovedWorkspaceAppShared,
 } from "@vibestudio/mobile-webrtc";
-import {
-  formatCapabilities,
-  launchCopy,
-  plural,
-  unitKindLabel,
-  unitReviewRows,
-  unitSourceLabel,
-  unitSummaryChips,
-} from "@vibestudio/shared/bootstrapLaunchGate";
+import { launchGateView } from "@vibestudio/shared/bootstrapLaunchGate";
 import { HostLaunchClient } from "@vibestudio/service-schemas/clients/hostLaunchClient";
 import { name as appName } from "./app.json";
+import { createSuccessfulConnectCoalescer, routeIncomingConnectLink } from "./connectLinkRouter";
 import { VibestudioLogo } from "./VibestudioLogo";
 
 const nativeHost = NativeModules.VibestudioMobileHost;
+const MOBILE_LAUNCH_RECOVERY_TIMEOUT_MS = 3 * 60_000;
+const MOBILE_LAUNCH_RECONNECT_WAIT_MS = 30_000;
 
 let lastSmokePhase = null;
 let lastSmokePhaseAt = 0;
@@ -128,13 +125,19 @@ async function pairViaWebRtc(pairing) {
     credential: pairedCredential,
     pairingContext,
     controlPairing: pairing,
-    persistCredential: persistShellCredential,
+    persistConnection: persistStoredMobileConnection,
     connectWorkspace: async (workspacePairing, credential) => {
       const workspaceTokenProvider = makeShellTokenProvider(workspacePairing, credential);
       return establishWebRtcConnection(workspacePairing, workspaceTokenProvider, {
         onPaired: async (nextCredential) => {
           workspaceTokenProvider.setCredential(nextCredential);
-          await persistShellCredential(nextCredential, pairing, workspacePairing);
+          const current = await loadShellCredential();
+          if (!current || current.schemaVersion !== 4 || current.phase !== "routed") {
+            throw new Error("Routed mobile connection disappeared during workspace authentication");
+          }
+          await persistStoredMobileConnection(
+            replaceMobileConnectionCredential(current, nextCredential)
+          );
         },
       });
     },
@@ -275,6 +278,7 @@ function VibestudioMobileHostBootstrap() {
   const [openApprovalIds, setOpenApprovalIds] = useState(() => new Set());
   const launchGateGeneration = useRef(0);
   const scannerLastValueRef = useRef(null);
+  const acceptedConnectLinksRef = useRef(new Set());
   const cameraDevice = useCameraDevice("back");
 
   const runLaunchGate = useCallback(async (grant) => {
@@ -294,6 +298,7 @@ function VibestudioMobileHostBootstrap() {
         setLaunchSession(launch);
         setStatus(formatLaunchSessionStatus(launch));
         if (launch.status === "ready") {
+          setBusy(true);
           setApprovals([]);
           setStatus("Workspace app approved. Activating bundle...");
           await activateApprovedWorkspaceApp(grant, { source: launch.entity.source });
@@ -304,9 +309,19 @@ function VibestudioMobileHostBootstrap() {
         if (launch.status === "approval-required") {
           smokePhase("embedded-host-target-approval-required");
           setApprovals(launch.approvals);
-          return;
+          // Approval may be resolved on the already-running desktop/server rather
+          // than on this phone. Keep observing the canonical launch state so an
+          // externally approved request advances without requiring another tap.
+          // Leave the local buttons enabled while waiting; a local decision starts
+          // a new launch-gate generation and naturally retires this poller.
+          setBusy(false);
+          await new Promise((resolve) => setTimeout(resolve, 1000));
+          if (!isCurrent()) return;
+          continue;
         }
         if (launch.status === "preparing") {
+          setBusy(true);
+          setApprovals([]);
           smokePhase("embedded-host-target-preparing");
           await new Promise((resolve) => setTimeout(resolve, 1000));
           continue;
@@ -336,19 +351,26 @@ function VibestudioMobileHostBootstrap() {
         );
         await launchClient.resolveApprovals(approvals, decision);
         if (decision === "once") {
-          await runLaunchGate(launchGrant);
+          // The existing launch-gate observer owns this connection and will
+          // see the canonical state advance. Starting a second observer here
+          // briefly lets the first one's cleanup expose Retry while the second
+          // is still preparing; an automated tap can then open a second mobile
+          // session and make both offerers supersede each other.
+          setApprovals([]);
+          setStatus("Workspace app approved. Preparing bundle...");
+          return;
         } else {
           setLaunchSession(null);
           setApprovals([]);
           setStatus("Workspace app approval denied.");
+          setBusy(false);
         }
       } catch (error) {
         setStatus(error instanceof Error ? error.message : String(error));
-      } finally {
         setBusy(false);
       }
     },
-    [approvals, launchGrant, runLaunchGate]
+    [approvals, launchGrant]
   );
 
   const presentConnectLink = useCallback((rawUrl) => {
@@ -379,7 +401,7 @@ function VibestudioMobileHostBootstrap() {
     }
   }, []);
 
-  const connectFromInvite = useCallback(
+  const connectFromInviteAttempt = useCallback(
     async (connect) => {
       setBusy(true);
       setStatus("Pairing over a secure WebRTC pipe...");
@@ -391,18 +413,57 @@ function VibestudioMobileHostBootstrap() {
           await markConnectLinkConsumed(connect.rawUrl).catch(() => {});
         }
         setPendingConnect(null);
-        await runLaunchGate(connection);
+        await retryAfterConnectionLoss(() => runLaunchGate(connection), {
+          timeoutMs: MOBILE_LAUNCH_RECOVERY_TIMEOUT_MS,
+          reconnectWaitMs: MOBILE_LAUNCH_RECONNECT_WAIT_MS,
+          waitUntilConnected: (timeoutMs) => connection.waitUntilConnected(timeoutMs),
+          onRetry: (error) => {
+            smokePhase("embedded-launch-reconnect");
+            console.warn(
+              `[MobileLaunchGate] connection interrupted; waiting to resume: ${
+                error instanceof Error ? error.message : String(error)
+              }`
+            );
+            setStatus("Secure connection interrupted. Reconnecting automatically...");
+          },
+        });
+        return true;
       } catch (error) {
         const failure = await closeBootstrapConnectionAfterFailure(connection, error);
         setLaunchGrant(null);
         setLaunchSession(null);
         setApprovals([]);
         setStatus(failure instanceof Error ? failure.message : String(failure));
+        return false;
       } finally {
         setBusy(false);
       }
     },
     [runLaunchGate]
+  );
+  const connectFromInvite = useMemo(
+    () => createSuccessfulConnectCoalescer(connectFromInviteAttempt),
+    [connectFromInviteAttempt]
+  );
+
+  const handleIncomingConnectLink = useCallback(
+    async (rawUrl) =>
+      routeIncomingConnectLink(rawUrl, {
+        consumeReplay: consumeConnectLinkReplay,
+        parse: parseConnectDeepLink,
+        claim: (url) => {
+          if (acceptedConnectLinksRef.current.has(url)) return false;
+          acceptedConnectLinksRef.current.add(url);
+          return true;
+        },
+        release: (url) => acceptedConnectLinksRef.current.delete(url),
+        markConsumed: markConnectLinkConsumed,
+        consumeUsbApproval: async (url) => await nativeHost?.consumeUsbProvisioningApproval?.(url),
+        connect: connectFromInvite,
+        present: presentConnectLink,
+        onUsbApproved: () => smokePhase("embedded-usb-provisioning-approved"),
+      }),
+    [connectFromInvite, presentConnectLink]
   );
 
   const codeScanner = useCodeScanner({
@@ -428,25 +489,8 @@ function VibestudioMobileHostBootstrap() {
     try {
       const initialUrl = await Linking.getInitialURL();
       if (isConnectLink(initialUrl)) {
-        const replay = await consumeConnectLinkReplay(initialUrl);
-        if (!replay) {
-          const pairing = parseConnectDeepLink(initialUrl);
-          let usbApproved = false;
-          if (pairing) {
-            try {
-              usbApproved = Boolean(await nativeHost?.consumeUsbProvisioningApproval?.(initialUrl));
-            } catch {
-              // Fail closed into the ordinary in-app confirmation.
-            }
-          }
-          if (usbApproved) {
-            smokePhase("embedded-usb-provisioning-approved");
-            await connectFromInvite({ pairing, rawUrl: initialUrl });
-            return;
-          }
-          presentConnectLink(initialUrl);
-          return;
-        }
+        const outcome = await handleIncomingConnectLink(initialUrl);
+        if (outcome !== "replay") return;
       }
       // A returning device reconnects over the SAME signaling room with its
       // stored refresh secret — no HTTP, no native credential read.
@@ -457,7 +501,7 @@ function VibestudioMobileHostBootstrap() {
         );
         return;
       }
-      setStatus(`Reconnecting to ${pairingLabel(stored.workspacePairing)}...`);
+      setStatus(`Reconnecting to ${pairingLabel()}...`);
       connection = await reconnectMobileSession(stored);
       await runLaunchGate(connection);
     } catch (error) {
@@ -484,7 +528,7 @@ function VibestudioMobileHostBootstrap() {
     } finally {
       setBusy(false);
     }
-  }, [connectFromInvite, presentConnectLink, runLaunchGate]);
+  }, [handleIncomingConnectLink, runLaunchGate]);
 
   const confirmPendingConnect = useCallback(async () => {
     if (!pendingConnect) return;
@@ -548,15 +592,16 @@ function VibestudioMobileHostBootstrap() {
 
   useEffect(() => {
     const subscription = Linking.addEventListener("url", (event) => {
-      void (async () => {
-        if (await consumeConnectLinkReplay(event.url)) return;
-        presentConnectLink(event.url);
-      })();
+      void handleIncomingConnectLink(event.url);
     });
     return () => subscription.remove();
-  }, [presentConnectLink]);
+  }, [handleIncomingConnectLink]);
 
   const activeStep = approvals.length > 0 ? "approve" : pendingConnect ? "pair" : "load";
+  const launchGate = approvals.length > 0 ? launchGateView({ approvals }) : null;
+  const launchGateDetailsKey = launchGate?.approvalIds[0] ?? "launch-gate";
+  const launchGateDetailsOpen =
+    launchGate?.sourcesExpandedByDefault || openApprovalIds.has(launchGateDetailsKey);
 
   return (
     <SafeAreaView style={styles.root}>
@@ -580,73 +625,72 @@ function VibestudioMobileHostBootstrap() {
               </View>
             ) : null}
           </View>
-          {busy ? null : approvals.length > 0 ? (
+          {busy ? null : launchGate ? (
             <View style={styles.actions}>
               <View style={styles.sectionHeader}>
                 <Text style={styles.eyebrow}>Workspace trust</Text>
-                <Text style={styles.sectionTitle}>Review before running workspace code</Text>
+                <Text style={styles.sectionTitle}>{launchGate.title}</Text>
               </View>
               <View style={styles.approvalBox}>
-                {approvals.map((approval, approvalIndex) => {
-                  const units = Array.isArray(approval?.units) ? approval.units : [];
-                  const id = approval.approvalId ?? `approval-${approvalIndex}`;
-                  const copy = launchCopy(approval);
-                  const detailsOpen = openApprovalIds.has(id);
-                  return (
-                    <View key={id} style={styles.approvalGroup}>
-                      <Text style={styles.approvalGroupTitle}>{copy.title}</Text>
-                      <Text style={styles.approval}>{copy.summary}</Text>
-                      <View style={styles.unitSummary}>
-                        <Text style={styles.unitChip}>
-                          {plural(units.length, "privileged unit")}
-                        </Text>
-                        {unitSummaryChips(approval).map((chip) => (
-                          <Text key={chip} style={styles.unitChip}>
-                            {chip}
+                <Text style={styles.approval}>{launchGate.summary}</Text>
+                {launchGate.domainLine ? (
+                  <Text style={styles.unitMeta}>{launchGate.domainLine}</Text>
+                ) : null}
+                {launchGate.firstEncounterLine ? (
+                  <Text style={styles.approvalEmphasis}>{launchGate.firstEncounterLine}</Text>
+                ) : null}
+                {launchGate.programsLine ? (
+                  <Text style={styles.unitMeta}>{launchGate.programsLine}</Text>
+                ) : null}
+                {launchGate.nativeCodeWarning ? (
+                  <Text style={styles.approvalEmphasis}>{launchGate.nativeCodeWarning}</Text>
+                ) : null}
+                <ActionButton
+                  title={launchGate.acceptLabel}
+                  onPress={() => resolveLaunchApprovals("once")}
+                />
+                <ActionButton
+                  title={launchGate.declineLabel}
+                  onPress={() => resolveLaunchApprovals("deny")}
+                  variant="danger"
+                />
+                <ActionButton
+                  title={launchGateDetailsOpen ? "Hide details" : launchGate.disclosureLabel}
+                  onPress={() => toggleApprovalDetails(launchGateDetailsKey)}
+                  variant="secondary"
+                />
+                {launchGateDetailsOpen
+                  ? launchGate.sources.map((source) => (
+                      <View key={source.origin.originKey} style={styles.unitCard}>
+                        <View style={styles.unitHeader}>
+                          <Text style={styles.unitName}>{source.label}</Text>
+                          <Text style={styles.unitBadge}>{source.counts}</Text>
+                        </View>
+                        {source.domainLine ? (
+                          <Text style={styles.unitMeta}>{source.domainLine}</Text>
+                        ) : null}
+                        {source.origin.selfName && !source.origin.isHostBuild ? (
+                          <Text style={styles.unitMeta}>
+                            &quot;{source.origin.selfName}&quot; — name given by this template
                           </Text>
+                        ) : null}
+                        {source.firstEncounterLine ? (
+                          <Text style={styles.unitMeta}>{source.firstEncounterLine}</Text>
+                        ) : null}
+                        {source.units.map((unit) => (
+                          <View
+                            key={`${source.origin.originKey}:${unit.name}`}
+                            style={styles.unitRow}
+                          >
+                            <Text style={styles.unitRowName}>{unit.name}</Text>
+                            <Text style={styles.unitMeta}>{unit.notable || unit.purpose}</Text>
+                          </View>
                         ))}
                       </View>
-                      <ActionButton
-                        title={detailsOpen ? "Hide details" : "Review details"}
-                        onPress={() => toggleApprovalDetails(id)}
-                        variant="secondary"
-                      />
-                      {detailsOpen && units.length > 0
-                        ? units.map((unit, unitIndex) => {
-                            const row = unitReviewRows(approval)[unitIndex];
-                            return (
-                              <View
-                                key={`${id}:${unit.unitName ?? unit.displayName ?? unitIndex}`}
-                                style={styles.unitCard}
-                              >
-                                <View style={styles.unitHeader}>
-                                  <Text style={styles.unitName}>
-                                    {row?.name ||
-                                      unit.displayName ||
-                                      unit.unitName ||
-                                      "Workspace unit"}
-                                  </Text>
-                                  <Text style={styles.unitBadge}>{unitKindLabel(unit)}</Text>
-                                </View>
-                                <Text style={styles.unitMeta}>{unitSourceLabel(unit)}</Text>
-                                <Text style={styles.unitMeta}>{formatCapabilities(unit)}</Text>
-                              </View>
-                            );
-                          })
-                        : null}
-                    </View>
-                  );
-                })}
+                    ))
+                  : null}
+                <Text style={styles.unitMeta}>{launchGate.declineConsequence}</Text>
               </View>
-              <ActionButton
-                title="Trust and start"
-                onPress={() => resolveLaunchApprovals("once")}
-              />
-              <ActionButton
-                title="Deny"
-                onPress={() => resolveLaunchApprovals("deny")}
-                variant="danger"
-              />
             </View>
           ) : pendingConnect ? (
             <View style={styles.actions}>
@@ -872,6 +916,12 @@ const styles = StyleSheet.create({
     fontSize: 14,
     lineHeight: 20,
   },
+  approvalEmphasis: {
+    color: "#f8fafc",
+    fontSize: 14,
+    fontWeight: "700",
+    lineHeight: 20,
+  },
   approvalBox: {
     backgroundColor: "#181d27",
     borderColor: "#343d51",
@@ -879,30 +929,6 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     gap: 12,
     padding: 14,
-  },
-  approvalGroup: {
-    gap: 10,
-  },
-  approvalGroupTitle: {
-    color: "#f8fafc",
-    fontSize: 16,
-    fontWeight: "800",
-  },
-  unitSummary: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 8,
-  },
-  unitChip: {
-    backgroundColor: "#253143",
-    borderColor: "#40536f",
-    borderRadius: 999,
-    borderWidth: 1,
-    color: "#e8eef7",
-    fontSize: 12,
-    fontWeight: "700",
-    paddingHorizontal: 8,
-    paddingVertical: 3,
   },
   unitCard: {
     backgroundColor: "#111722",
@@ -939,6 +965,18 @@ const styles = StyleSheet.create({
   unitMeta: {
     color: "#aab6c8",
     fontSize: 13,
+    lineHeight: 18,
+  },
+  unitRow: {
+    borderTopColor: "#343d51",
+    borderTopWidth: 1,
+    gap: 3,
+    paddingTop: 8,
+  },
+  unitRowName: {
+    color: "#e8eef7",
+    fontSize: 13,
+    fontWeight: "700",
     lineHeight: 18,
   },
   connectCard: {

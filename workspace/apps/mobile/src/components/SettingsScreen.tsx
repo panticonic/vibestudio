@@ -5,9 +5,8 @@ import { useAtomValue, useSetAtom } from "jotai";
 import {
   clearShellCredential,
   loadShellCredential,
-  persistStoredShellCredential,
+  persistStoredMobileConnection,
   type MobileHubWorkspace,
-  type StoredShellCredential,
 } from "../services/mobileCredentials";
 import type { RootStackParamList } from "../navigation/RootNavigator";
 import { resetToNativeBootstrap } from "../services/auth";
@@ -122,9 +121,12 @@ export function SettingsScreen({ navigation }: SettingsScreenProps) {
   );
 
   const performDisconnect = async () => {
-    let previousCredential: StoredShellCredential | null;
+    let previousCredential: Awaited<ReturnType<typeof loadShellCredential>>;
     try {
       previousCredential = await loadShellCredential();
+      if (previousCredential?.schemaVersion === 3) {
+        throw new Error("The saved mobile connection has not completed its required migration.");
+      }
       await clearShellCredential();
     } catch (error) {
       Alert.alert(
@@ -139,7 +141,7 @@ export function SettingsScreen({ navigation }: SettingsScreenProps) {
       if (!reset.reloading) throw new Error("The native host did not start the pairing reload.");
     } catch (error) {
       try {
-        if (previousCredential) await persistStoredShellCredential(previousCredential);
+        if (previousCredential) await persistStoredMobileConnection(previousCredential);
       } catch (rollbackError) {
         Alert.alert(
           "Disconnect needs attention",

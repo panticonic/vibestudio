@@ -96,6 +96,7 @@ export function isPanelReachableGatewayPathname(pathname: string): boolean {
 const PARSE_BASE = "http://panel-gateway.invalid";
 
 const PANEL_BUILD_KEY = /^[0-9a-f]{64}$/u;
+const PINNED_ENTRY_REPRESENTATION = /^\/.*\/\?buildKey=[0-9a-f]{64}$/u;
 
 /**
  * Return the representation key used by every panel-asset facade.
@@ -139,7 +140,18 @@ export function panelAssetCacheKey(
   forwardHeaders: Readonly<Record<string, string>>
 ): string {
   const representationPath = panelAssetRepresentationPath(rawPath);
+  // A pinned entry document is defined above as a pure function of source and
+  // build key. Request metadata cannot select different bytes for that
+  // content-addressed identity, so credential rotation, WebView revalidation,
+  // or UA changes must not fragment it across app/server restarts.
+  if (PINNED_ENTRY_REPRESENTATION.test(representationPath)) return representationPath;
   const vary = Object.entries(forwardHeaders)
+    // Authorization admits the request but does not select the immutable
+    // representation. Workspace credentials are rotated when the server
+    // restarts; including their opaque value turns every valid warm restart
+    // into a cold cache. The loopback facade is already scoped to one server
+    // and authoritative workspace and is not an authorization boundary.
+    .filter(([name]) => name.toLowerCase() !== "authorization")
     .map(([name, value]) => [name.toLowerCase(), value] as const)
     .sort(([a], [b]) => a.localeCompare(b));
   if (vary.length === 0) return representationPath;

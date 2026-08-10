@@ -226,10 +226,12 @@ export async function startPanelAssetFacade(
   log.info(`Panel asset façade listening on http://127.0.0.1:${port}`);
   return {
     port,
-    close: () =>
-      new Promise<void>((resolveClose, rejectClose) => {
+    close: async () => {
+      await new Promise<void>((resolveClose, rejectClose) => {
         server.close((err) => (err ? rejectClose(err) : resolveClose()));
-      }),
+      });
+      await cache?.close();
+    },
   };
 }
 

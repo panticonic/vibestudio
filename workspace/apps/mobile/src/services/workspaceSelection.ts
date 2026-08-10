@@ -1,10 +1,11 @@
 import {
-  createStoredShellCredential,
+  createPairedMobileConnection,
+  createRoutedMobileConnection,
   loadShellCredential,
-  persistStoredShellCredential,
+  persistStoredMobileConnection,
   type MobileHubWorkspace,
   type MobileHubWorkspaceRoute,
-  type StoredShellCredential,
+  type StoredMobileConnection,
 } from "@vibestudio/mobile-webrtc";
 import { resetToNativeBootstrap } from "./auth";
 
@@ -13,8 +14,8 @@ export interface MobileWorkspaceSelectionDependencies {
     listWorkspaces(): Promise<MobileHubWorkspace[]>;
     routeWorkspace(input: { workspaceId: string }): Promise<MobileHubWorkspaceRoute>;
   };
-  loadCredential(): Promise<StoredShellCredential | null>;
-  persistCredential(stored: StoredShellCredential): Promise<void>;
+  loadCredential(): ReturnType<typeof loadShellCredential>;
+  persistCredential(stored: StoredMobileConnection): Promise<void>;
   reloadBootstrap(): Promise<{ reloading: boolean }>;
 }
 
@@ -24,7 +25,7 @@ export function mobileWorkspaceSelectionDependencies(
   return {
     control,
     loadCredential: loadShellCredential,
-    persistCredential: persistStoredShellCredential,
+    persistCredential: persistStoredMobileConnection,
     reloadBootstrap: resetToNativeBootstrap,
   };
 }
@@ -55,18 +56,29 @@ export async function selectMobileWorkspace(
   }
   const initialStored = await dependencies.loadCredential();
   if (!initialStored) throw missingCredentialError();
+  if (initialStored.schemaVersion === 3) {
+    throw new Error("Finish upgrading this mobile connection before switching workspaces.");
+  }
+  if (initialStored.phase !== "routed") {
+    throw new Error("Finish preparing the selected workspace before switching workspaces.");
+  }
 
   const baseline = initialStored;
   let selectionWriteAttempted = false;
   try {
-    const route = await dependencies.control.routeWorkspace({ workspaceId });
-    const selected = createStoredShellCredential(
-      { deviceId: baseline.deviceId, refreshToken: baseline.refreshToken },
+    const paired = createPairedMobileConnection(
+      baseline.credential,
       baseline.controlPairing,
-      route.workspaceReach,
+      workspaceId,
       baseline.pairedAt
     );
     selectionWriteAttempted = true;
+    await dependencies.persistCredential(paired);
+    const route = await dependencies.control.routeWorkspace({ workspaceId });
+    if (route.workspaceId !== workspaceId) {
+      throw new Error("The server routed a different workspace than the one selected.");
+    }
+    const selected = createRoutedMobileConnection(paired, route.workspaceReach);
     await dependencies.persistCredential(selected);
 
     const reset = await dependencies.reloadBootstrap();

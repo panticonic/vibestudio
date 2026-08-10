@@ -17,8 +17,15 @@ class MainActivity : ReactActivity() {
     override fun onNewIntent(intent: Intent) {
         setIntent(intent)
         if (isVibestudioPairingIntent(intent)) {
-            clearActiveBundleForConnectIntent(intent)
-            restartWithIntent(intent)
+            if (clearActiveBundleForConnectIntent(intent)) {
+                restartWithIntent(intent)
+            } else {
+                // The native bootstrap is already active. Preserve this React
+                // root and let Linking deliver the new URL to its single-flight
+                // router; restarting here erases that coordination and races
+                // multiple pairing/bundle-transfer operations.
+                super.onNewIntent(intent)
+            }
             return
         }
         super.onNewIntent(intent)

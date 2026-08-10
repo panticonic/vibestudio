@@ -144,4 +144,5 @@ NativeModules.VibestudioMobileHost = {
   appendBundleChunk: jest.fn(async () => undefined),
   finalizeBundleWrite: jest.fn(async () => ({ localPath: "/bundle.js" })),
   activatePreparedAppBundle: jest.fn(async () => ({ activated: false })),
+  reloadActiveAppBundle: jest.fn(async () => ({ reloading: true })),
 };

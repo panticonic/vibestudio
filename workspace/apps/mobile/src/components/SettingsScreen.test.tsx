@@ -6,7 +6,7 @@ import Clipboard from "@react-native-clipboard/clipboard";
 import {
   clearShellCredential,
   loadShellCredential,
-  persistStoredShellCredential,
+  persistStoredMobileConnection,
 } from "@vibestudio/mobile-webrtc";
 import { SettingsScreen } from "./SettingsScreen";
 import { connectionStatusAtom } from "../state/connectionAtoms";
@@ -27,7 +27,7 @@ jest.mock("../services/workspaceSelection", () => ({
 jest.mock("@vibestudio/mobile-webrtc", () => ({
   clearShellCredential: jest.fn(async () => undefined),
   loadShellCredential: jest.fn(),
-  persistStoredShellCredential: jest.fn(async () => undefined),
+  persistStoredMobileConnection: jest.fn(async () => undefined),
 }));
 
 jest.mock("./ConnectionBar", () => ({
@@ -43,8 +43,8 @@ const clearCredentialMock = clearShellCredential as jest.MockedFunction<
   typeof clearShellCredential
 >;
 const loadCredentialMock = loadShellCredential as jest.MockedFunction<typeof loadShellCredential>;
-const persistCredentialMock = persistStoredShellCredential as jest.MockedFunction<
-  typeof persistStoredShellCredential
+const persistCredentialMock = persistStoredMobileConnection as jest.MockedFunction<
+  typeof persistStoredMobileConnection
 >;
 const nativeHost = NativeModules.VibestudioMobileHost as {
   resetToNativeBootstrap: jest.Mock;
@@ -104,9 +104,12 @@ describe("SettingsScreen workspace selector", () => {
     dependenciesMock.mockClear();
     clearCredentialMock.mockReset().mockResolvedValue(undefined);
     loadCredentialMock.mockReset().mockResolvedValue({
-      schemaVersion: 3,
-      deviceId: `dev_${"d".repeat(24)}`,
-      refreshToken: "r".repeat(43),
+      schemaVersion: 4,
+      phase: "routed",
+      credential: {
+        deviceId: `dev_${"d".repeat(24)}`,
+        refreshToken: "r".repeat(43),
+      },
       controlPairing: {
         room: "control-1111",
         fp: "AA".repeat(32),
@@ -121,6 +124,7 @@ describe("SettingsScreen workspace selector", () => {
         v: 2,
         ice: "all",
       },
+      selectedWorkspaceId: "ws-a",
       pairedAt: 123,
     });
     persistCredentialMock.mockReset().mockResolvedValue(undefined);

@@ -36,7 +36,7 @@ that is streamed to the native host after pairing.
   current `MobileRpcClient` transport, then activate the prepared bundle.
 - Choosing Roll back changes the trusted server build first, then activates the
   selected bundle.
-- Keep `rnHostAbi` aligned with the native host. Current ABI: `rn-host-2`.
+- Keep `rnHostAbi` aligned with the native host. Current ABI: `rn-host-3`.
 
 ## Desktop Parity
 

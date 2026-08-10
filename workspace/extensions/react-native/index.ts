@@ -20,6 +20,7 @@ interface ArtifactFile {
 }
 
 const require = createRequire(import.meta.url);
+const ownedTempDirs = new Set<string>();
 
 export async function activate() {
   const artifactFiles = new Map<string, ArtifactFile>();
@@ -38,34 +39,44 @@ export async function activate() {
       const rnHostAbi =
         typeof appManifest["rnHostAbi"] === "string" ? appManifest["rnHostAbi"] : null;
       const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-rn-provider-"));
+      ownedTempDirs.add(tempDir);
       const artifacts: BuildProviderOutput["artifacts"] = [];
-      for (const platform of ["android", "ios"] as const) {
-        const bundlePath = path.join(tempDir, `index.${platform}.bundle`);
-        const assetsDir = path.join(tempDir, `${platform}-assets`);
-        fs.mkdirSync(assetsDir, { recursive: true });
-        await runReactNativeBundle(input, platform, entryPath, bundlePath, assetsDir);
-        const bundleArtifactId = randomUUID();
-        artifactFiles.set(bundleArtifactId, { filePath: bundlePath, tempDir });
-        artifacts.push({
-          path: `index.${platform}.bundle`,
-          role: "primary",
-          contentType: "application/javascript; charset=utf-8",
-          encoding: "utf8",
-          platform,
-          stream: { method: "buildArtifact", args: [bundleArtifactId] },
-        });
-        for (const assetPath of walkFiles(assetsDir)) {
-          const assetArtifactId = randomUUID();
-          artifactFiles.set(assetArtifactId, { filePath: assetPath, tempDir });
+      try {
+        for (const platform of ["android", "ios"] as const) {
+          const bundlePath = path.join(tempDir, `index.${platform}.bundle`);
+          const assetsDir = path.join(tempDir, `${platform}-assets`);
+          fs.mkdirSync(assetsDir, { recursive: true });
+          await runReactNativeBundle(input, platform, entryPath, bundlePath, assetsDir);
+          const bundleArtifactId = randomUUID();
+          artifactFiles.set(bundleArtifactId, { filePath: bundlePath, tempDir });
           artifacts.push({
-            path: `assets/${platform}/${path.relative(assetsDir, assetPath).replace(/\\/g, "/")}`,
-            role: "asset",
-            contentType: contentTypeForPath(assetPath),
-            encoding: "base64",
+            path: `index.${platform}.bundle`,
+            role: "primary",
+            contentType: "application/javascript; charset=utf-8",
+            encoding: "utf8",
             platform,
-            stream: { method: "buildArtifact", args: [assetArtifactId] },
+            stream: { method: "buildArtifact", args: [bundleArtifactId] },
           });
+          for (const assetPath of walkFiles(assetsDir)) {
+            const assetArtifactId = randomUUID();
+            artifactFiles.set(assetArtifactId, { filePath: assetPath, tempDir });
+            artifacts.push({
+              path: `assets/${platform}/${path.relative(assetsDir, assetPath).replace(/\\/g, "/")}`,
+              role: "asset",
+              contentType: contentTypeForPath(assetPath),
+              encoding: "base64",
+              platform,
+              stream: { method: "buildArtifact", args: [assetArtifactId] },
+            });
+          }
         }
+      } catch (error) {
+        for (const [artifactId, artifact] of artifactFiles) {
+          if (artifact.tempDir === tempDir) artifactFiles.delete(artifactId);
+        }
+        ownedTempDirs.delete(tempDir);
+        fs.rmSync(tempDir, { recursive: true, force: true });
+        throw error;
       }
       tempDirRefs.set(tempDir, artifacts.length);
       return {
@@ -131,7 +142,8 @@ async function runReactNativeBundle(
     assetsDir,
     "--config",
     metroConfig,
-    "--reset-cache",
+    "--max-workers",
+    process.env["VIBESTUDIO_RN_BUNDLE_WORKERS"] ?? "2",
     "--config-cmd",
     `${process.execPath} ${cliPath} config`,
   ];
@@ -211,5 +223,13 @@ function releaseTempDir(tempDir: string, refs: Map<string, number>): void {
     return;
   }
   refs.delete(tempDir);
+  ownedTempDirs.delete(tempDir);
   fs.rmSync(tempDir, { recursive: true, force: true });
+}
+
+export async function deactivate(): Promise<void> {
+  for (const tempDir of ownedTempDirs) {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }
+  ownedTempDirs.clear();
 }

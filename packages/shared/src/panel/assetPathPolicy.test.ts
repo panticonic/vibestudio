@@ -103,7 +103,11 @@ describe("panel asset representation keys", () => {
     expect(keyed).toBe(
       panelAssetCacheKey(path, { accept: "text/html", authorization: "Bearer a" })
     );
+    expect(keyed).toBe(`/panels/chat/?buildKey=${buildKey}`);
     expect(keyed).not.toContain("Bearer a");
+    expect(keyed).toBe(
+      panelAssetCacheKey(path, { accept: "text/html", authorization: "Bearer rotated" })
+    );
     expect(panelAssetCacheKey(path, {})).toBe(`/panels/chat/?buildKey=${buildKey}`);
   });
 });

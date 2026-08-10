@@ -41,6 +41,7 @@ interface VibestudioMobileHostNative {
     buildKey: string,
     integrity: string
   ): Promise<ActivatePreparedAppBundleResult>;
+  reloadActiveAppBundle(): Promise<ResetToNativeBootstrapResult>;
 }
 
 function nativeHost(): VibestudioMobileHostNative {

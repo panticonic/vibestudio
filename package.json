@@ -135,7 +135,8 @@
     },
     "patchedDependencies": {
       "re2@1.24.0": "patches/re2@1.24.0.patch",
-      "@earendil-works/pi-ai@0.82.0": "workspace/packages/harness/patches/@earendil-works__pi-ai@0.82.0.patch"
+      "@earendil-works/pi-ai@0.82.0": "workspace/packages/harness/patches/@earendil-works__pi-ai@0.82.0.patch",
+      "react-native-tcp-socket@6.4.1": "patches/react-native-tcp-socket.patch"
     }
   },
   "devDependencies": {

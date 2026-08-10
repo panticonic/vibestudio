@@ -124,6 +124,23 @@ export class MobileRpcClient implements Pick<
     return () => this.reconnectProgressListeners.delete(listener);
   }
 
+  async waitUntilConnected(timeoutMs: number): Promise<void> {
+    if (this.status === "connected") return;
+    await new Promise<void>((resolve, reject) => {
+      let timeout: ReturnType<typeof setTimeout> | null = null;
+      const remove = this.onStatusChange((status) => {
+        if (status !== "connected") return;
+        if (timeout) clearTimeout(timeout);
+        remove();
+        resolve();
+      });
+      timeout = setTimeout(() => {
+        remove();
+        reject(new Error("The secure workspace connection did not recover in time"));
+      }, Math.max(1, timeoutMs));
+    });
+  }
+
   private emitReconnectProgress(progress: ReconnectProgress): void {
     for (const listener of this.reconnectProgressListeners) listener(progress);
   }
@@ -133,9 +150,15 @@ export class MobileRpcClient implements Pick<
       this.setStatus("disconnected");
       return;
     }
-    void this.teardown().catch((error) =>
+    void this.close().catch((error) =>
       this.reportTransportFailure("Disconnect teardown failed", error)
     );
+  }
+
+  /** Deterministic ownership handoff used before the native RN runtime reloads. */
+  async close(): Promise<void> {
+    await this.teardown();
+    this.setStatus("disconnected");
   }
 
   onStatusChange(callback: (status: ConnectionStatus) => void): () => void {
@@ -283,8 +306,15 @@ export class MobileRpcClient implements Pick<
       throw new Error("No stored WebRTC shell credential — re-pair this device");
     }
     smokePhase("workspace-webrtc-connect-start", {
-      room: stored.workspacePairing.room,
-      ice: stored.workspacePairing.ice,
+      phase: stored.schemaVersion === 3 ? "legacy-migration" : stored.phase,
+      room:
+        stored.schemaVersion === 3 || stored.phase === "routed"
+          ? stored.workspacePairing.room
+          : stored.controlPairing.room,
+      ice:
+        stored.schemaVersion === 3 || stored.phase === "routed"
+          ? stored.workspacePairing.ice
+          : stored.controlPairing.ice,
     });
     const connection = await reconnectMobileSession(stored, (kind) => this.emitRecovery(kind));
     if (this.activeConnectToken !== token) {

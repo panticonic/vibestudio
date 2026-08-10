@@ -1,6 +1,6 @@
 import {
-  MobileAssetMemoryCache,
   panelAssetCacheKey,
+  streamAndPopulateImmutableAsset,
   streamPassthrough,
   type MobileFetchedResponse,
 } from "./panelAssetFacade";
@@ -16,13 +16,14 @@ jest.mock(
   }),
   { virtual: true }
 );
+jest.mock("react-native", () => ({ NativeModules: {} }), { virtual: true });
 
 describe("panelAssetCacheKey", () => {
   it("varies immutable asset cache entries by forwarded request headers", () => {
     const path = "/apps/shell/assets/app-abc123.js";
 
     expect(panelAssetCacheKey(path, {})).toBe(path);
-    expect(panelAssetCacheKey(path, { authorization: "Bearer a" })).not.toBe(
+    expect(panelAssetCacheKey(path, { authorization: "Bearer a" })).toBe(
       panelAssetCacheKey(path, { authorization: "Bearer b" })
     );
     expect(
@@ -40,124 +41,19 @@ describe("panelAssetCacheKey", () => {
 
   it("collapses build-pinned entry documents across runtime contexts", () => {
     const buildKey = "a".repeat(64);
-    expect(panelAssetCacheKey(`/panels/chat/?contextId=one&buildKey=${buildKey}`, {})).toBe(
-      panelAssetCacheKey(`/panels/chat/?contextId=two&ref=state%3Anew&buildKey=${buildKey}`, {})
-    );
-  });
-});
-
-// -------------------------------------------------------------------------
-// Fix 2: an asset larger than the whole cache budget is never cached (caching
-// it would evict every useful entry and still sit resident over budget).
-// -------------------------------------------------------------------------
-
-function bytesStream(byteLength: number): ReadableStream<Uint8Array> {
-  return new ReadableStream<Uint8Array>({
-    start(controller) {
-      controller.enqueue(new Uint8Array(byteLength));
-      controller.close();
-    },
-  });
-}
-
-function cacheableResponse(byteLength: number): MobileFetchedResponse {
-  return {
-    status: 200,
-    statusText: "OK",
-    gzip: false,
-    contentType: "application/octet-stream",
-    replayHeaders: {},
-    cacheable: true,
-    body: bytesStream(byteLength),
-  };
-}
-
-async function readBodyLength(stream: ReadableStream<Uint8Array>): Promise<number> {
-  const reader = stream.getReader();
-  let total = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    total += value?.byteLength ?? 0;
-  }
-  return total;
-}
-
-describe("MobileAssetMemoryCache oversized-asset handling", () => {
-  it("streams a first immutable miss while populating the cache", async () => {
-    const cache = new MobileAssetMemoryCache(1000);
-    let sourceController: ReadableStreamDefaultController<Uint8Array> | undefined;
-    let fetches = 0;
-    const fetcher = () => {
-      fetches += 1;
-      return Promise.resolve({
-        ...cacheableResponse(0),
-        body: new ReadableStream<Uint8Array>({
-          start(controller) {
-            sourceController = controller;
-          },
-        }),
-      });
-    };
-
-    const first = await cache.serve("/cold-abc.js", fetcher);
-    expect(first.kind).toBe("passthrough");
-    if (first.kind !== "passthrough") throw new Error("expected a streaming cache miss");
-
-    const reader = first.response.body!.getReader();
-    sourceController!.enqueue(new Uint8Array([1, 2, 3]));
-    await expect(reader.read()).resolves.toMatchObject({
-      done: false,
-      value: new Uint8Array([1, 2, 3]),
-    });
-    sourceController!.close();
-    await expect(reader.read()).resolves.toMatchObject({ done: true });
-    reader.releaseLock();
-
-    const hit = await cache.serve("/cold-abc.js", fetcher);
-    expect(hit.kind).toBe("asset");
-    expect(fetches).toBe(1);
-  });
-
-  it("does not cache an asset larger than the byte budget (re-fetches next time)", async () => {
-    const cache = new MobileAssetMemoryCache(100);
-    let fetches = 0;
-    const fetcher = () => {
-      fetches += 1;
-      return Promise.resolve(cacheableResponse(500)); // > 100-byte budget
-    };
-
-    const first = await cache.serve("/big-abc.js", fetcher);
-    expect(first.kind).toBe("passthrough"); // still served this time, but not buffered
-    if (first.kind === "passthrough") expect(await readBodyLength(first.response.body!)).toBe(500);
-    expect(fetches).toBe(1);
-
-    // A second request must re-fetch — the oversized asset was never cached.
-    const second = await cache.serve("/big-abc.js", fetcher);
-    expect(second.kind).toBe("passthrough");
-    expect(fetches).toBe(2);
-  });
-
-  it("retains existing entries when an oversized asset passes through", async () => {
-    const cache = new MobileAssetMemoryCache(1000);
-    let smallFetches = 0;
-    const smallFetcher = () => {
-      smallFetches += 1;
-      return Promise.resolve(cacheableResponse(100));
-    };
-    const bigFetcher = () => Promise.resolve(cacheableResponse(5000));
-
-    await cache.serve("/small-abc.js", smallFetcher); // cached
-    expect(smallFetches).toBe(1);
-
-    const big = await cache.serve("/big-abc.js", bigFetcher); // must NOT evict /small
-    expect(big.kind).toBe("passthrough");
-    if (big.kind === "passthrough") expect(await readBodyLength(big.response.body!)).toBe(5000);
-
-    // /small is still resident: served from cache, no second fetch.
-    const hit = await cache.serve("/small-abc.js", smallFetcher);
-    expect(hit.kind).toBe("asset");
-    expect(smallFetches).toBe(1);
+    const expected = `/panels/chat/?buildKey=${buildKey}`;
+    expect(
+      panelAssetCacheKey(`/panels/chat/?contextId=one&buildKey=${buildKey}`, {
+        accept: "text/html",
+        authorization: "Bearer first-boot",
+      })
+    ).toBe(expected);
+    expect(
+      panelAssetCacheKey(`/panels/chat/?contextId=two&ref=state%3Anew&buildKey=${buildKey}`, {
+        "cache-control": "max-age=0",
+        authorization: "Bearer rotated-after-restart",
+      })
+    ).toBe(expected);
   });
 });
 
@@ -224,5 +120,163 @@ describe("streamPassthrough head-sent signalling", () => {
     // Exactly one status line was written (no corrupting second head).
     const statusLines = socket.__writes.filter((w) => String(w).startsWith("HTTP/1.1"));
     expect(statusLines).toHaveLength(1);
+    expect(socket.__writes).toHaveLength(2);
+    expect(Buffer.from(socket.__writes[1] as Uint8Array)).toEqual(
+      Buffer.concat([Buffer.from("3\r\n", "ascii"), Buffer.from([1, 2, 3]), Buffer.from("\r\n")])
+    );
+  });
+});
+
+describe("streamAndPopulateImmutableAsset", () => {
+  it("streams cold bytes before durable population completes", async () => {
+    const calls: string[] = [];
+    let resolveCommit!: () => void;
+    const commitGate = new Promise<void>((resolve) => (resolveCommit = resolve));
+    const chunks = [new Uint8Array([1, 2]), new Uint8Array([3, 4, 5])];
+    const store = {
+      openWrite: jest.fn(async () => {
+        calls.push("open");
+        return "write-1";
+      }),
+      append: jest.fn(async (_writeId: string, bytes: Uint8Array) => {
+        calls.push(`append:${Array.from(bytes).join(",")}`);
+      }),
+      commit: jest.fn(async () => {
+        await commitGate;
+        calls.push("commit");
+        return {
+          handle: `vibestudio-asset-v1:${"a".repeat(64)}`,
+          size: 5,
+          metadata: {
+            status: 200 as const,
+            statusText: "OK",
+            gzip: true,
+            contentType: "text/javascript",
+            replayHeaders: { "cache-control": "public, max-age=31536000, immutable" },
+          },
+        };
+      }),
+      abort: jest.fn(async () => {
+        calls.push("abort");
+      }),
+    };
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (const chunk of chunks) controller.enqueue(chunk);
+        controller.close();
+      },
+    });
+    let transferred = 0;
+    const socket = fakeSocket();
+
+    const population = streamAndPopulateImmutableAsset(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      socket as any,
+      store,
+      "/immutable.js",
+      {
+        status: 200,
+        statusText: "OK",
+        gzip: true,
+        contentType: "text/javascript",
+        replayHeaders: { "cache-control": "public, max-age=31536000, immutable" },
+        cacheable: true,
+        body,
+      },
+      () => calls.push("head"),
+      (bytes) => {
+        transferred += bytes;
+      }
+    );
+
+    // Both chunks and their staging appends happen while commit is still
+    // blocked: cold TTFB no longer waits for the complete artifact.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(calls).toEqual(["open", "head", "append:1,2", "append:3,4,5"]);
+    expect(String(socket.__writes[0])).toMatch(/^HTTP\/1\.1 200 OK/u);
+    expect(socket.__writes).toHaveLength(3);
+    resolveCommit();
+    const stored = await population;
+
+    expect(stored.size).toBe(5);
+    expect(transferred).toBe(5);
+    expect(calls).toEqual(["open", "head", "append:1,2", "append:3,4,5", "commit"]);
+    expect(socket.__writes.at(-1)).toBe("0\r\n\r\n");
+    expect(store.abort).not.toHaveBeenCalled();
+  });
+
+  it("aborts an incomplete native write", async () => {
+    const store = {
+      openWrite: jest.fn(async () => "write-2"),
+      append: jest.fn(async () => {
+        throw new Error("native append failed");
+      }),
+      commit: jest.fn(),
+      abort: jest.fn(async () => undefined),
+    };
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array([1]));
+        controller.close();
+      },
+    });
+
+    await expect(
+      streamAndPopulateImmutableAsset(
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        fakeSocket() as any,
+        store,
+        "/immutable.js",
+        {
+          status: 200,
+          statusText: "OK",
+          gzip: true,
+          contentType: "text/javascript",
+          replayHeaders: { "cache-control": "public, max-age=31536000, immutable" },
+          cacheable: true,
+          body,
+        },
+        () => undefined,
+        () => undefined
+      )
+    ).rejects.toThrow("native append failed");
+    expect(store.abort).toHaveBeenCalledWith("write-2");
+    expect(store.commit).not.toHaveBeenCalled();
+  });
+  it("aborts a truncated transfer without multiplying network work", async () => {
+    const store = {
+      openWrite: jest.fn(async () => "write-truncated"),
+      append: jest.fn(async () => undefined),
+      commit: jest.fn(),
+      abort: jest.fn(async () => undefined),
+    };
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array([1, 2, 3]));
+        controller.error(new Error("body length mismatch"));
+      },
+    });
+
+    await expect(
+      streamAndPopulateImmutableAsset(
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        fakeSocket() as any,
+        store,
+        "/immutable.js",
+        {
+          status: 200,
+          statusText: "OK",
+          gzip: true,
+          contentType: "text/javascript",
+          replayHeaders: { "cache-control": "public, max-age=31536000, immutable" },
+          cacheable: true,
+          body,
+        },
+        () => undefined,
+        () => undefined
+      )
+    ).rejects.toThrow("body length mismatch");
+    expect(store.abort).toHaveBeenCalledWith("write-truncated");
+    expect(store.commit).not.toHaveBeenCalled();
   });
 });

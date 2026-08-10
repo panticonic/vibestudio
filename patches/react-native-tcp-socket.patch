@@ -1,0 +1,339 @@
+diff --git a/android/src/main/java/com/asterinet/react/tcpsocket/TcpSocketClient.java b/android/src/main/java/com/asterinet/react/tcpsocket/TcpSocketClient.java
+index e0f719f6b808df95ab79003a08d1a88ed85d6174..6ad77c66b2fa1ce8328a6bdcdac9ccc88628ca56 100644
+--- a/android/src/main/java/com/asterinet/react/tcpsocket/TcpSocketClient.java
++++ b/android/src/main/java/com/asterinet/react/tcpsocket/TcpSocketClient.java
+@@ -7,6 +7,8 @@ import com.facebook.react.bridge.ReadableMap;
+ import com.facebook.react.bridge.ReadableArray;
+
+ import java.io.BufferedInputStream;
++import java.io.File;
++import java.io.FileInputStream;
+ import java.io.IOException;
+ import java.net.InetAddress;
+ import java.net.InetSocketAddress;
+@@ -170,6 +172,35 @@ class TcpSocketClient extends TcpSocket {
+         });
+     }
+
++    /**
++     * Streams an app-owned file without materializing its body in React Native
++     * JavaScript. The single-threaded write executor preserves socket ordering
++     * and lets OutputStream.write provide native backpressure.
++     */
++    public void writeFile(final int msgId, final File file) {
++        writeExecutor.execute(new Runnable() {
++            @Override
++            public void run() {
++                if (socket == null) {
++                    receiverListener.onWritten(getId(), msgId, new IOException("Attempted to write to closed socket"));
++                    return;
++                }
++                try (BufferedInputStream input = new BufferedInputStream(new FileInputStream(file))) {
++                    final byte[] buffer = new byte[64 * 1024];
++                    int count;
++                    while ((count = input.read(buffer)) != -1) {
++                        socket.getOutputStream().write(buffer, 0, count);
++                    }
++                    socket.getOutputStream().flush();
++                    receiverListener.onWritten(getId(), msgId, null);
++                } catch (IOException e) {
++                    receiverListener.onWritten(getId(), msgId, e);
++                    receiverListener.onError(getId(), e);
++                }
++            }
++        });
++    }
++
+     public ReadableMap getPeerCertificate() {
+         return SSLCertificateHelper.getCertificateInfo(socket, true);
+     }
+@@ -184,14 +213,20 @@ class TcpSocketClient extends TcpSocket {
+      * Shuts down the receiver task, closing the socket.
+      */
+     public void destroy() {
++        final Socket socketToClose;
++        synchronized (this) {
++            socketToClose = socket;
++            if (socketToClose == null) {
++                return;
++            }
++            socket = null;
++            closed = true;
++        }
+         try {
+-            // close the socket
+-            if (socket != null && !socket.isClosed()) {
+-                closed = true;
+-                socket.close();
+-                receiverListener.onClose(getId(), null);
+-                socket = null;
++            if (!socketToClose.isClosed()) {
++                socketToClose.close();
+             }
++            receiverListener.onClose(getId(), null);
+         } catch (IOException e) {
+             receiverListener.onClose(getId(), e);
+         }
+diff --git a/android/src/main/java/com/asterinet/react/tcpsocket/TcpSocketModule.java b/android/src/main/java/com/asterinet/react/tcpsocket/TcpSocketModule.java
+index 121edb47dbecb4ca2a044722b2ad5a71d50c1fa7..d481948c861b2a4f9db095bec3f7309a04b33e5c 100644
+--- a/android/src/main/java/com/asterinet/react/tcpsocket/TcpSocketModule.java
++++ b/android/src/main/java/com/asterinet/react/tcpsocket/TcpSocketModule.java
+@@ -23,6 +23,7 @@ import com.facebook.react.bridge.WritableMap;
+ import com.facebook.react.bridge.Promise;
+
+ import java.io.IOException;
++import java.io.File;
+ import java.net.Inet4Address;
+ import java.net.Inet6Address;
+ import java.net.InetAddress;
+@@ -51,6 +52,7 @@ public class TcpSocketModule extends ReactContextBaseJavaModule {
+     private final CurrentNetwork currentNetwork = new CurrentNetwork();
+     private final ExecutorService executorService = Executors.newFixedThreadPool(N_THREADS);
+     private TcpEventListener tcpEvtListener;
++    private static final String ASSET_HANDLE_PREFIX = "vibestudio-asset-v1:";
+
+     public TcpSocketModule(ReactApplicationContext reactContext) {
+         super(reactContext);
+@@ -133,6 +135,36 @@ public class TcpSocketModule extends ReactContextBaseJavaModule {
+         socketClient.write(msgId, data);
+     }
+
++    /** Streams a validated Vibestudio artifact-store handle to an accepted socket. */
++    @SuppressLint("StaticFieldLeak")
++    @SuppressWarnings("unused")
++    @ReactMethod
++    public void writeStoredAsset(final int cId, @NonNull final String handle, final int msgId) {
++        final TcpSocketClient socketClient = getTcpClient(cId);
++        try {
++            socketClient.writeFile(msgId, resolveStoredAsset(handle));
++        } catch (IOException error) {
++            tcpEvtListener.onWritten(cId, msgId, error);
++            tcpEvtListener.onError(cId, error);
++        }
++    }
++
++    private File resolveStoredAsset(@NonNull final String handle) throws IOException {
++        if (!handle.startsWith(ASSET_HANDLE_PREFIX)) {
++            throw new IOException("Invalid stored asset handle");
++        }
++        final String digest = handle.substring(ASSET_HANDLE_PREFIX.length());
++        if (!digest.matches("^[a-f0-9]{64}$")) {
++            throw new IOException("Invalid stored asset handle");
++        }
++        final File root = new File(mReactContext.getNoBackupFilesDir(), "vibestudio-panel-assets/blobs").getCanonicalFile();
++        final File file = new File(root, digest).getCanonicalFile();
++        if (!file.getParentFile().equals(root) || !file.isFile()) {
++            throw new IOException("Stored asset handle is unavailable");
++        }
++        return file;
++    }
++
+     @SuppressLint("StaticFieldLeak")
+     @SuppressWarnings("unused")
+     @ReactMethod
+diff --git a/ios/TcpSocketClient.h b/ios/TcpSocketClient.h
+index ab17fc96b9876788b21bd844af845925d0815564..00ff39070452ef25ef697305e1cbd96c99315c2b 100644
+--- a/ios/TcpSocketClient.h
++++ b/ios/TcpSocketClient.h
+@@ -108,6 +108,9 @@ typedef enum RCTTCPError RCTTCPError;
+  */
+ - (void)writeData:(NSData *)data msgId:(NSNumber *)msgId;
+
++/** Stream a file one native chunk at a time, ordered with ordinary writes. */
++- (BOOL)writeFileAtPath:(NSString *)path msgId:(NSNumber *)msgId error:(NSError **)error;
++
+ - (void)startTLS:(NSDictionary *)tlsOptions;
+
+ /**
+diff --git a/ios/TcpSocketClient.m b/ios/TcpSocketClient.m
+index a3df69c2828ffcda1bec5106dc296e4064f69f0e..3ebe9c09caf5ff841f62e4e1682bb0034e794eb2 100644
+--- a/ios/TcpSocketClient.m
++++ b/ios/TcpSocketClient.m
+@@ -66,6 +66,9 @@ NSString *const RCTTCPErrorDomain = @"RCTTCPErrorDomain";
+     long _sendTag;
+     SecTrustRef _peerTrust;
+     SecIdentityRef _clientIdentity;
++    NSFileHandle *_pendingFileHandle;
++    NSNumber *_pendingFileMsgId;
++    long _pendingFileTag;
+ }
+
+ - (id)initWithClientId:(NSNumber *)clientID
+@@ -416,6 +419,10 @@ NSString *const RCTTCPErrorDomain = @"RCTTCPErrorDomain";
+ }
+
+ - (void)socket:(GCDAsyncSocket *)sock didWriteDataWithTag:(long)msgTag {
++    if (_pendingFileHandle && msgTag == _pendingFileTag) {
++        [self writeNextFileChunk];
++        return;
++    }
+     NSNumber *tagNum = [NSNumber numberWithLong:msgTag];
+     NSNumber *msgId = [self getPendingSend:tagNum];
+     if (msgId) {
+@@ -424,6 +431,46 @@ NSString *const RCTTCPErrorDomain = @"RCTTCPErrorDomain";
+     }
+ }
+
++- (BOOL)writeFileAtPath:(NSString *)path msgId:(NSNumber *)msgId error:(NSError **)error {
++    if (_pendingFileHandle) {
++        if (error) *error = [self badInvocationError:@"a stored-asset write is already active"];
++        return NO;
++    }
++    NSFileHandle *handle = [NSFileHandle fileHandleForReadingAtPath:path];
++    if (!handle) {
++        if (error) *error = [self badInvocationError:@"stored asset is unavailable"];
++        return NO;
++    }
++    _pendingFileHandle = handle;
++    _pendingFileMsgId = msgId;
++    [self writeNextFileChunk];
++    return YES;
++}
++
++- (void)writeNextFileChunk {
++    @try {
++        NSData *chunk = [_pendingFileHandle readDataOfLength:64 * 1024];
++        if (chunk.length == 0) {
++            [_pendingFileHandle closeFile];
++            NSNumber *msgId = _pendingFileMsgId;
++            _pendingFileHandle = nil;
++            _pendingFileMsgId = nil;
++            [_clientDelegate onWrittenData:self msgId:msgId];
++            return;
++        }
++        _pendingFileTag = _sendTag++;
++        [_tcpSocket writeData:chunk withTimeout:-1 tag:_pendingFileTag];
++    } @catch (NSException *exception) {
++        [_pendingFileHandle closeFile];
++        _pendingFileHandle = nil;
++        _pendingFileMsgId = nil;
++        NSError *error = [NSError errorWithDomain:RCTTCPErrorDomain
++                                             code:RCTTCPSendFailedError
++                                         userInfo:@{NSLocalizedDescriptionKey: exception.reason ?: @"stored asset read failed"}];
++        [_clientDelegate onError:self withError:error];
++    }
++}
++
+ - (void)writeData:(NSData *)data msgId:(NSNumber *)msgId {
+     [self setPendingSend:msgId forKey:@(_sendTag)];
+     [_tcpSocket writeData:data withTimeout:-1 tag:_sendTag];
+diff --git a/ios/TcpSockets.m b/ios/TcpSockets.m
+index 0fe15d2b9dde11293351aac0401ecab1012918da..aa5d2a86c8162f0c0365c4a5aaa64c3765cde8d9 100644
+--- a/ios/TcpSockets.m
++++ b/ios/TcpSockets.m
+@@ -101,6 +101,49 @@ RCT_EXPORT_METHOD(write
+     [client writeData:data msgId:msgId];
+ }
+
++RCT_EXPORT_METHOD(writeStoredAsset
++                  : (nonnull NSNumber *)cId handle
++                  : (nonnull NSString *)handle callback
++                  : (nonnull NSNumber *)msgId) {
++    TcpSocketClient *client = [self findClient:cId];
++    if (!client)
++        return;
++
++    NSError *error = nil;
++    NSString *path = [self pathForStoredAssetHandle:handle error:&error];
++    if (!path || ![client writeFileAtPath:path msgId:msgId error:&error]) {
++        [self sendEventWithName:@"written"
++                           body:@{
++                               @"id" : cId,
++                               @"msgId" : msgId,
++                               @"err" : error.localizedDescription ?: @"stored asset write failed",
++                           }];
++        if (error) [self onError:client withError:error];
++    }
++}
++
++- (NSString *)pathForStoredAssetHandle:(NSString *)handle error:(NSError **)error {
++    static NSString *const prefix = @"vibestudio-asset-v1:";
++    NSString *digest = [handle hasPrefix:prefix] ? [handle substringFromIndex:prefix.length] : nil;
++    NSRegularExpression *regex = [NSRegularExpression regularExpressionWithPattern:@"^[a-f0-9]{64}$" options:0 error:nil];
++    if (!digest || [regex numberOfMatchesInString:digest options:0 range:NSMakeRange(0, digest.length)] != 1) {
++        if (error) *error = [NSError errorWithDomain:RCTTCPErrorDomain code:RCTTCPBadParamError userInfo:@{NSLocalizedDescriptionKey: @"Invalid stored asset handle"}];
++        return nil;
++    }
++    NSURL *support = [[NSFileManager.defaultManager URLsForDirectory:NSApplicationSupportDirectory inDomains:NSUserDomainMask] firstObject];
++    NSString *root = [[[[support URLByAppendingPathComponent:@"vibestudio-panel-assets" isDirectory:YES]
++                        URLByAppendingPathComponent:@"blobs" isDirectory:YES] path] stringByResolvingSymlinksInPath];
++    NSString *path = [[[NSURL fileURLWithPath:root isDirectory:YES] URLByAppendingPathComponent:digest isDirectory:NO].path stringByResolvingSymlinksInPath];
++    BOOL isDirectory = NO;
++    BOOL valid = [path hasPrefix:[root stringByAppendingString:@"/"]] &&
++                 [NSFileManager.defaultManager fileExistsAtPath:path isDirectory:&isDirectory] && !isDirectory;
++    if (!valid) {
++        if (error) *error = [NSError errorWithDomain:RCTTCPErrorDomain code:RCTTCPBadParamError userInfo:@{NSLocalizedDescriptionKey: @"Stored asset handle is unavailable"}];
++        return nil;
++    }
++    return path;
++}
++
+ RCT_EXPORT_METHOD(end : (nonnull NSNumber *)cId) { [self endClient:cId]; }
+
+ RCT_EXPORT_METHOD(destroy : (nonnull NSNumber *)cId) {
+diff --git a/lib/types/Socket.d.ts b/lib/types/Socket.d.ts
+index abf5383f5f60e453c125f772e9bfb3934e9a7d02..f2b30c806a1e26d45bff92a9114aab958c33eb63 100644
+--- a/lib/types/Socket.d.ts
++++ b/lib/types/Socket.d.ts
+@@ -190,6 +190,8 @@ export default class Socket extends EventEmitter<SocketEvents & ReadableEvents,
+      * @return {boolean}
+      */
+     write(buffer: string | Buffer | Uint8Array, encoding?: "ascii" | "utf8" | "utf-8" | "utf16le" | "ucs2" | "ucs-2" | "base64" | "latin1" | "binary" | "hex" | undefined, cb?: ((err?: Error | undefined) => void) | undefined): boolean;
++    /** Stream an opaque app-owned artifact handle without passing body bytes through JavaScript. */
++    writeStoredAsset(handle: string, cb?: ((err?: Error | undefined) => void) | undefined): boolean;
+     /**
+      * Pauses the reading of data. That is, `'data'` events will not be emitted. Useful to throttle back an upload.
+      */
+diff --git a/src/Socket.js b/src/Socket.js
+index 9913e5aad9047866b6083ca1217a53df29b5312e..8e7a1612d9803d66d4c46d819152f0ba98764e21 100644
+--- a/src/Socket.js
++++ b/src/Socket.js
+@@ -368,6 +368,48 @@ export default class Socket extends EventEmitter {
+         return ok;
+     }
+
++    /**
++     * Streams an opaque app-owned artifact handle natively. No path or body
++     * bytes cross JavaScript; native validates the handle against its fixed
++     * application-support artifact root before opening it.
++     *
++     * @param {string} handle
++     * @param {(err?: Error) => void} [cb]
++     * @return {boolean}
++     */
++    writeStoredAsset(handle, cb) {
++        if (this._pending || this._destroyed) throw new Error('Socket is closed.');
++        if (typeof handle !== 'string' || handle.length === 0) throw new Error('Stored asset handle is required.');
++        const currentMsgId = this._msgId;
++        this._msgId = (this._msgId + 1) % Number.MAX_SAFE_INTEGER;
++        let finished = false;
++        const cleanup = () => {
++            this._msgEvtEmitter.removeListener('written', msgEvtHandler);
++            this.removeListener('error', errorHandler);
++            this.removeListener('close', closeHandler);
++        };
++        const finish = (err) => {
++            if (finished) return;
++            finished = true;
++            cleanup();
++            if (cb) cb(err);
++        };
++        const msgEvtHandler = (/** @type {{id: number, msgId: number, err?: string}} */ evt) => {
++            if (evt.msgId !== currentMsgId) return;
++            this._lastRcvMsgId = evt.msgId;
++            this._resetTimeout();
++            finish(evt.err ? new Error(evt.err) : undefined);
++        };
++        const errorHandler = (err) => finish(err instanceof Error ? err : new Error(String(err)));
++        const closeHandler = () => finish(new Error('Socket closed during stored asset write.'));
++        this._msgEvtEmitter.on('written', msgEvtHandler, this);
++        this.once('error', errorHandler);
++        this.once('close', closeHandler);
++        this._lastSentMsgId = currentMsgId;
++        NativeModules.TcpSockets.writeStoredAsset(this._id, handle, currentMsgId);
++        return true;
++    }
++
+     /**
+      * Pauses the reading of data. That is, `'data'` events will not be emitted. Useful to throttle back an upload.
+      */

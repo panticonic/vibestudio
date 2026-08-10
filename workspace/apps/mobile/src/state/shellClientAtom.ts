@@ -11,5 +11,5 @@ import type { ShellClient } from "../services/shellClient";
 /** The active ShellClient instance, or null if not connected */
 export const shellClientAtom = atom<ShellClient | null>(null);
 
-/** Latest durable tree revision; tree pages themselves live in the bounded shared cache. */
+/** UI revision for durable tree invalidations and local presentation changes. */
 export const panelTreeRevisionAtom = atom(0);

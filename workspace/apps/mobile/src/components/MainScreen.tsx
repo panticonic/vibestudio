@@ -43,7 +43,7 @@ import { PANEL_UI_IDLE_SWEEP_MS } from "@vibestudio/shared/constants";
 import { parseHostConfig } from "../services/panelUrls";
 import {
   materializeLatestMobilePanel,
-  needsMobilePanelMaterialization,
+  mobilePanelMaterializationState,
   PanelMaterializationRetryQueue,
 } from "../services/panelMaterializer";
 import { handleExternalOpen, type ExternalOpenPayload } from "../services/oauthLoopback";
@@ -317,19 +317,26 @@ export function MainScreen() {
   useEffect(() => {
     if (!shellClient) return;
     shellClient.panels.setDeliverToPanel((panelId, envelope) => {
-      webViewRefsMap.current.get(panelId)?.deliverEnvelope(envelope);
+      const webView = webViewRefsMap.current.get(panelId);
+      if (!webView) return false;
+      webView.deliverEnvelope(envelope);
+      return true;
     });
   }, [shellClient]);
   useEffect(() => {
     if (!shellClient) return;
     return shellClient.onRecoveryComplete((kind) => {
       if (kind !== "cold-recover") return;
-      // A restarted server has discarded every panel-side RPC session. Keep
-      // external browser tabs untouched, but reload managed panels after the
-      // authoritative snapshot is recovered so they recreate their bridge
-      // sessions and fetch assets through the restored WebRTC facade.
+      // A cold recovery replaced the server process and therefore every
+      // panel-side bridge session. Reload only retained WebViews whose runtime
+      // identity is still authoritative; changed identities are rematerialized
+      // by the convergence effect below instead of loading stale URLs.
       for (const entry of webViewStackRef.current) {
-        if (entry.managed) webViewRefsMap.current.get(entry.panelId)?.reload();
+        if (!entry.managed) continue;
+        const panel = shellClient.panels.registry.getPanel(entry.panelId);
+        if (panel && mobilePanelMaterializationState(panel, entry) === "current") {
+          webViewRefsMap.current.get(entry.panelId)?.reload();
+        }
       }
     });
   }, [shellClient]);
@@ -349,23 +356,27 @@ export function MainScreen() {
     },
     [pushToast, shellClient]
   );
-  const handleWebViewRef = useCallback((panelId: string, handle: PanelWebViewHandle | null) => {
-    if (!handle) {
-      webViewRefsMap.current.delete(panelId);
-      webViewThemeSignaturesRef.current.delete(panelId);
-      return;
-    }
-    webViewRefsMap.current.set(panelId, handle);
-    const existingEntry = webViewStackRef.current.find((entry) => entry.panelId === panelId);
-    if (existingEntry) {
-      syncManagedWebViewThemes(
-        [existingEntry],
-        webViewRefsMap.current,
-        webViewThemeSignaturesRef.current,
-        currentThemeModeRef.current
-      );
-    }
-  }, []);
+  const handleWebViewRef = useCallback(
+    (panelId: string, handle: PanelWebViewHandle | null) => {
+      if (!handle) {
+        webViewRefsMap.current.delete(panelId);
+        webViewThemeSignaturesRef.current.delete(panelId);
+        return;
+      }
+      webViewRefsMap.current.set(panelId, handle);
+      shellClient?.panels.flushPanelDeliveries(panelId);
+      const existingEntry = webViewStackRef.current.find((entry) => entry.panelId === panelId);
+      if (existingEntry) {
+        syncManagedWebViewThemes(
+          [existingEntry],
+          webViewRefsMap.current,
+          webViewThemeSignaturesRef.current,
+          currentThemeModeRef.current
+        );
+      }
+    },
+    [shellClient]
+  );
   const hostConfig: HostConfig | null = useMemo(() => {
     if (!shellClient) return null;
     try {
@@ -746,9 +757,22 @@ export function MainScreen() {
     panelMaterializationRetryQueue.retainOnly(retainedPanelIds);
     for (const entry of webViewStack) {
       const panel = shellClient.panels.registry.getPanel(entry.panelId);
-      if (!panel || !needsMobilePanelMaterialization(panel, entry)) {
+      if (!panel) {
         panelMaterializationRetryQueue.cancel(entry.panelId, { resetAttempts: true });
         setLoadingPanelId((current) => (current === entry.panelId ? null : current));
+        continue;
+      }
+      const materializationState = mobilePanelMaterializationState(panel, entry);
+      if (materializationState === "current") {
+        panelMaterializationRetryQueue.cancel(entry.panelId, { resetAttempts: true });
+        setLoadingPanelId((current) => (current === entry.panelId ? null : current));
+        continue;
+      }
+      if (materializationState === "pending") {
+        // Runtime identity/build completion is published asynchronously through
+        // the shared tree. Keep polling as a bounded fallback in case that
+        // publication does not produce a local registry revision.
+        panelMaterializationRetryQueue.schedule(entry.panelId);
         continue;
       }
       if (pendingPanelLoads.current.has(entry.panelId)) {
@@ -939,12 +963,6 @@ export function MainScreen() {
       void subscribeAll()
         .then(() => approvalStateController.refresh("manual"))
         .catch(() => approvalStateController.refresh("manual"));
-      void shellClient.panels
-        .refresh()
-        .then(() => {
-          refreshTree();
-        })
-        .catch(() => refreshTree());
     });
     const unsubNavigate = shellClient.onNavigateToPanel((panelId) => {
       refreshTree();
@@ -1689,15 +1707,23 @@ export function MainScreen() {
       observation: PanelPageObservation
     ) => {
       if (!shellClient) return;
+      const phase =
+        observation.boot.kind === "observed"
+          ? observation.boot.observation.phase
+          : "probe-unavailable";
+      // Local boot observation is the smoke's presentation evidence. Do not
+      // couple it to reportView's state mutation: after an app restart the
+      // same authoritative runtime attempt may already be terminal-ready, so
+      // replaying loading/booting/ready is correctly rejected as non-monotonic.
+      if (phase === "ready") {
+        console.log("[VibestudioMobileSmoke] phase=workspace-panel-ready");
+      }
       void shellClient.panels
         .reportView(runtimeEntityId, connectionId, observation)
         .then((result) => {
           if (result === "reported" && hostConfig?.protocol === "http") {
             console.log(`[MainScreen] Reported panel boot for ${panelId}`, {
-              phase:
-                observation.boot.kind === "observed"
-                  ? observation.boot.observation.phase
-                  : "probe-unavailable",
+              phase,
               runtimeEntityId,
               connectionId,
             });

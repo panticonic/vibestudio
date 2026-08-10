@@ -8,8 +8,11 @@ export function createMobileShellCore(deps: {
   workspaceId: string;
   serverUrl: string;
   transport: MobileRpcClient;
+  onPresentationUpdated?: (update: { revision: number; panelIds: string[] }) => void;
 }) {
-  const registry = new PanelRegistry({});
+  const registry = new PanelRegistry({
+    onPresentationUpdated: deps.onPresentationUpdated,
+  });
   const host = parseHostConfig(deps.serverUrl);
   const hostWithPort = `${host.host}${host.port ? `:${host.port}` : ""}`;
   const serverUrl = `${host.protocol}://${hostWithPort}${host.basePath}`;

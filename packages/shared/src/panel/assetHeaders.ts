@@ -53,3 +53,12 @@ export const STRIP_RESPONSE_HEADERS: ReadonlySet<string> = new Set([
  * upstream encoding header.
  */
 export const GZIP_MARKER_HEADER = "x-vibestudio-content-gzip";
+
+/**
+ * Internal app-artifact transfer contract. A request carrying this header asks
+ * the app gateway for the deterministic gzip representation, with any Range
+ * interpreted over those encoded bytes. The response repeats the header so a
+ * resumable client never appends an ordinary identity/range response to a gzip
+ * transfer.
+ */
+export const RESUMABLE_GZIP_HEADER = "x-vibestudio-resumable-gzip";

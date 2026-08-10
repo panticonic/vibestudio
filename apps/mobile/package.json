@@ -75,6 +75,7 @@
       "^react/(.*)$": "<rootDir>/../../node_modules/react/$1",
       "^react-native$": "<rootDir>/../../node_modules/react-native",
       "^react-test-renderer$": "<rootDir>/../../node_modules/react-test-renderer",
+      "^@vibestudio/mobile-webrtc$": "<rootDir>/../../packages/mobile-webrtc/src/index.ts",
       "^@vibestudio/rpc$": "<rootDir>/../../packages/rpc/src/index.ts",
       "^@vibestudio/rpc/(.*)$": "<rootDir>/../../packages/rpc/src/$1",
       "^(\\.{1,2}/.*)\\.js$": "$1"

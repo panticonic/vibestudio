@@ -205,6 +205,16 @@ export class AssetDiskCache {
     return this.index.size;
   }
 
+  /**
+   * Drain every cache population owned by this instance before its state root
+   * may be released. The HTTP server is closed first, so no new flights can be
+   * admitted while this barrier is waiting.
+   */
+  async close(): Promise<void> {
+    await Promise.allSettled([...this.inflight.values()]);
+    await this.writeChain;
+  }
+
   /** Digest currently mapped for a path, if any (test helper). */
   digestFor(cacheKey: string): string | undefined {
     return this.index.get(cacheKey)?.digest;

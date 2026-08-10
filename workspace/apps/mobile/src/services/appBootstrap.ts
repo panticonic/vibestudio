@@ -15,6 +15,8 @@ export async function ensureNativeWorkspaceAppBundle(
   let activated = false;
   const bundleTransport: BundleDeliveryTransport = {
     streamReadable: transport.streamReadable.bind(transport),
+    waitUntilConnected: transport.waitUntilConnected.bind(transport),
+    close: transport.close.bind(transport),
   };
   const reactNativeCapabilities = new Set<string>(APP_CAPABILITIES_BY_TARGET["react-native"]);
   await activateApprovedWorkspaceApp(bundleTransport, {

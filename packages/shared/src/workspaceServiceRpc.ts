@@ -1,5 +1,15 @@
 export interface RpcCallerLike {
-  call<T = unknown>(targetId: string, method: string, args: unknown[]): Promise<T>;
+  call<T = unknown>(
+    targetId: string,
+    method: string,
+    args: unknown[],
+    options?: RpcCallOptionsLike
+  ): Promise<T>;
+}
+
+export interface RpcCallOptionsLike {
+  signal?: AbortSignal;
+  timeoutMs?: number;
 }
 
 export interface DORefParam {
@@ -29,8 +39,13 @@ export interface ResolvedDurableObjectTarget {
 }
 
 export interface DurableObjectServiceClient {
-  resolve(): Promise<ResolvedDurableObjectTarget>;
+  resolve(options?: RpcCallOptionsLike): Promise<ResolvedDurableObjectTarget>;
   call<T = unknown>(method: string, ...args: unknown[]): Promise<T>;
+  callWithOptions<T = unknown>(
+    method: string,
+    args: unknown[],
+    options: RpcCallOptionsLike
+  ): Promise<T>;
 }
 
 export const GAD_WORKSPACE_SERVICE_PROTOCOL = "vibestudio.gad.workspace.v1";
@@ -62,12 +77,15 @@ export function parseDoTargetId(targetId: string): DORefParam | null {
 export async function resolveDurableObjectService(
   rpc: RpcCallerLike,
   query: string,
-  objectKey?: string | null
+  objectKey?: string | null,
+  options?: RpcCallOptionsLike
 ): Promise<ResolvedDurableObjectTarget> {
-  const service = await rpc.call<ResolvedWorkspaceService>("main", "workers.resolveService", [
-    query,
-    objectKey ?? null,
-  ]);
+  const service = await rpc.call<ResolvedWorkspaceService>(
+    "main",
+    "workers.resolveService",
+    [query, objectKey ?? null],
+    options
+  );
   if (service.kind !== "durable-object") {
     throw new Error(`Service '${query}' does not expose a Durable Object RPC target`);
   }
@@ -79,14 +97,27 @@ export function createDurableObjectServiceClient(
   query: string,
   objectKey?: string | null
 ): DurableObjectServiceClient {
+  let resolvedTarget: ResolvedDurableObjectTarget | null = null;
   let resolvedPromise: Promise<ResolvedDurableObjectTarget> | null = null;
-  const resolve = () => {
-    resolvedPromise ??= resolveDurableObjectService(rpc, query, objectKey).catch(
-      (error: unknown) => {
+  const resolve = (options?: RpcCallOptionsLike) => {
+    if (resolvedTarget) return Promise.resolve(resolvedTarget);
+    if (options) {
+      // A caller-owned signal must never own the shared resolution flight: its
+      // cancellation would otherwise reject unrelated concurrent callers.
+      return resolveDurableObjectService(rpc, query, objectKey, options).then((target) => {
+        resolvedTarget = target;
+        return target;
+      });
+    }
+    resolvedPromise ??= resolveDurableObjectService(rpc, query, objectKey)
+      .then((target) => {
+        resolvedTarget = target;
+        return target;
+      })
+      .catch((error: unknown) => {
         resolvedPromise = null;
         throw error;
-      }
-    );
+      });
     return resolvedPromise;
   };
   return {
@@ -94,6 +125,14 @@ export function createDurableObjectServiceClient(
     async call<T = unknown>(method: string, ...args: unknown[]): Promise<T> {
       const service = await resolve();
       return rpc.call<T>(service.targetId, method, args);
+    },
+    async callWithOptions<T = unknown>(
+      method: string,
+      args: unknown[],
+      options: RpcCallOptionsLike
+    ): Promise<T> {
+      const service = await resolve(options);
+      return rpc.call<T>(service.targetId, method, args, options);
     },
   };
 }

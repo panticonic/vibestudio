@@ -40,9 +40,41 @@ react {
     codegenDir = rootProject.file("../../../node_modules/@react-native/codegen")
     cliFile = rootProject.file("../../../node_modules/react-native/cli.js")
     hermesCommand = configuredHermesCommand ?: defaultHermesCommand
+    // Source installs are often launched beside Electron, the workspace
+    // server, and workerd. Bound Metro's worker pool just like the runtime RN
+    // provider so a cold APK build cannot fan out across every CPU and exhaust
+    // the desktop. The override is shared with that provider.
+    extraPackagerArgs = [
+        "--max-workers",
+        System.getenv("VIBESTUDIO_RN_BUNDLE_WORKERS") ?: "2",
+    ]
 
     // Autolinking configuration
     autolinkLibrariesWithApp()
+}
+
+// React Native's bundle task tracks `react.root` (apps/mobile) by default, but
+// Metro deliberately resolves @vibestudio/* to this monorepo's package source
+// and loads the workspace-owned mobile app from outside that root. Without
+// declaring those same source roots to Gradle, `assembleInternal` can reinstall
+// a stale JS bundle after a shared transport or mobile-workspace edit. Extend
+// the canonical RN task's inputs; do not force unrelated native tasks to rerun.
+def vibestudioMetroSourceTrees = [
+    rootProject.file("../../../packages"),
+    rootProject.file("../../../workspace/apps/mobile"),
+].collect { sourceRoot ->
+    fileTree(sourceRoot) {
+        include "**/*.js", "**/*.jsx", "**/*.ts", "**/*.tsx", "**/*.json"
+        exclude "**/build/**", "**/dist/**", "**/node_modules/**"
+    }
+}
+
+tasks.configureEach { task ->
+    if (task.name.startsWith("createBundle") && task.name.endsWith("JsAndAssets")) {
+        task.inputs.files(vibestudioMetroSourceTrees)
+            .withPropertyName("vibestudioMetroSources")
+            .withPathSensitivity(PathSensitivity.RELATIVE)
+    }
 }
 
 android {

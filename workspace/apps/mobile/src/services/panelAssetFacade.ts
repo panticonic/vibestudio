@@ -17,11 +17,10 @@
  * façade never touches the bytes.
  *
  * Two cache layers ride on top (plan §6):
- *  - A content-addressed cache for immutable artifacts so a repeat request costs
- *    zero pipe bytes. The current façade uses an IN-MEMORY LRU (256 MiB) while
- *    the native durable artifact store is implemented; see
- *    {@link MobileAssetMemoryCache}. Build-pinned entries are immutable;
- *    unpinned developer entries remain `no-store`.
+ *  - A native durable content-addressed store for immutable artifacts. A warm
+ *    hit costs zero pipe bytes and `writeStoredAsset` sends the body without
+ *    materializing it in Hermes. Build-pinned entries are immutable; unpinned
+ *    developer entries remain `no-store` and never enter the store.
  *  - A stable loopback port persisted in AsyncStorage and re-bound across launches,
  *    so the webview's own HTTP cache (keyed by origin) survives app restarts.
  *
@@ -32,6 +31,7 @@
  */
 
 import TcpSocket from "react-native-tcp-socket";
+import { Buffer } from "buffer";
 import {
   FORWARD_REQUEST_HEADERS,
   STRIP_RESPONSE_HEADERS,
@@ -44,26 +44,26 @@ import {
 export { panelAssetCacheKey } from "@vibestudio/shared/panel/assetPathPolicy";
 import type { MobileRpcClient } from "./mobileTransport";
 import { getNativeAppStorage } from "./nativeAppStorage";
+import {
+  MobileAssetStore,
+  type MobileAssetStoreNamespace,
+  type MobileStoredAsset,
+  type MobileStoredAssetMetadata,
+} from "./mobileAssetStore";
 
 // The connected-socket type — `Socket` is a member of the default export's
 // namespace, not a top-level named export, so derive the instance type from it.
-type TcpSocketConn = InstanceType<typeof TcpSocket.Socket>;
+type TcpSocketConn = InstanceType<typeof TcpSocket.Socket> & {
+  writeStoredAsset(handle: string, callback?: (error?: Error) => void): boolean;
+};
 
 const MAX_REQUEST_HEAD_BYTES = 64 * 1024;
 const CONTENT_DIGEST_HEADER = "x-vibestudio-content-digest";
 const PERSISTED_PORT_KEY = "vibestudio:panel-asset-facade:port";
-const MAX_CACHE_BYTES = 256 * 1024 * 1024; // 256 MiB in-memory LRU
-
-class MobileCachePopulationTooLargeError extends Error {
-  constructor(readonly maxBytes: number) {
-    super(`cacheable asset exceeded mobile cache byte budget (${maxBytes} bytes)`);
-    this.name = "MobileCachePopulationTooLargeError";
-  }
-}
 
 export interface PanelAssetFacade {
   port: number;
-  /** Drop the in-memory asset LRU (background / memory-warning). */
+  /** Enforce the durable store byte cap after a native memory warning. */
   trimCache(): void;
   close(): Promise<void>;
 }
@@ -93,10 +93,6 @@ async function writePersistedPort(port: number): Promise<void> {
   }
 }
 
-// --------------------------------------------------------------------------
-// In-memory content cache
-// --------------------------------------------------------------------------
-
 export interface MobileFetchedResponse {
   status: number;
   statusText: string;
@@ -107,144 +103,36 @@ export interface MobileFetchedResponse {
   body: ReadableStream<Uint8Array> | null;
 }
 
-export interface MobileCachedAsset {
-  status: number;
-  statusText: string;
-  gzip: boolean;
-  contentType: string;
-  replayHeaders: Record<string, string>;
-  body: Uint8Array;
-}
-
-type MobileServeOutcome =
-  | { kind: "asset"; asset: MobileCachedAsset }
-  | { kind: "passthrough"; response: MobileFetchedResponse };
-
-/**
- * Path-keyed in-memory LRU. Immutable artifacts have content-hashed URL paths, so
- * path → asset is a safe content address (a changed build changes the path). LRU
- * by last access; evicts oldest when over the byte cap. Concurrent misses for the
- * same path are single-flighted so two webview requests trigger one pipe fetch.
- */
-export class MobileAssetMemoryCache {
-  private readonly entries = new Map<string, MobileCachedAsset>(); // insertion order = LRU
-  private bytes = 0;
-  private readonly inflight = new Map<string, Promise<MobileCachedAsset | null>>();
-
-  constructor(private readonly maxBytes = MAX_CACHE_BYTES) {}
-
-  async serve(
-    urlPath: string,
-    fetcher: () => Promise<MobileFetchedResponse>
-  ): Promise<MobileServeOutcome> {
-    const hit = this.entries.get(urlPath);
-    if (hit) {
-      // LRU bump: re-insert at the end (most-recent).
-      this.entries.delete(urlPath);
-      this.entries.set(urlPath, hit);
-      return { kind: "asset", asset: hit };
-    }
-
-    const existing = this.inflight.get(urlPath);
-    if (existing) {
-      const asset = await existing;
-      if (asset) return { kind: "asset", asset };
-      return { kind: "passthrough", response: await fetcher() };
-    }
-
-    let settle!: (asset: MobileCachedAsset | null) => void;
-    const populated = new Promise<MobileCachedAsset | null>((resolve) => {
-      settle = resolve;
-    });
-    this.inflight.set(urlPath, populated);
-    try {
-      const response = await fetcher();
-      if (!response.cacheable || !response.body) {
-        settle(null);
-        this.inflight.delete(urlPath);
-        return { kind: "passthrough", response };
-      }
-      const [cacheBody, passthroughBody] = response.body.tee();
-      // First-use latency matters more than waiting for the cache write: stream
-      // one tee branch to the WebView immediately while the other fills the LRU.
-      // The old path awaited the complete remote download and only then wrote
-      // the buffered body to the loopback socket, serializing two multi-MB hops
-      // before an ES-module chunk could execute.
-      void (async () => {
-        try {
-          const body = await streamToUint8Array(cacheBody, this.maxBytes);
-          const asset: MobileCachedAsset = {
-            status: response.status,
-            statusText: response.statusText,
-            gzip: response.gzip,
-            contentType: response.contentType,
-            replayHeaders: response.replayHeaders,
-            body,
-          };
-          this.store(urlPath, asset);
-          settle(asset);
-        } catch (err) {
-          // Cache population is an optimization. An oversized or failed cache
-          // branch must not fail the independent passthrough response.
-          settle(null);
-          if (!(err instanceof MobileCachePopulationTooLargeError)) {
-            console.warn(
-              `[panel-facade] failed to cache immutable asset ${urlPath}: ${err instanceof Error ? err.message : String(err)}`
-            );
-          }
-        } finally {
-          this.inflight.delete(urlPath);
-        }
-      })();
-      return {
-        kind: "passthrough",
-        response: { ...response, body: passthroughBody },
-      };
-    } catch (err) {
-      settle(null);
-      this.inflight.delete(urlPath);
-      throw err;
-    }
-  }
-
-  /**
-   * Drop all cached bytes (keeps in-flight single-flights). Called on
-   * background / memory-warning so a 256 MiB LRU doesn't sit resident on a phone
-   * that the OS is trying to reclaim. Immutable content-addressed assets simply
-   * re-fetch over the pipe on next use, so this only costs pipe bytes, never
-   * correctness.
-   */
-  clear(): void {
-    this.entries.clear();
-    this.bytes = 0;
-  }
-
-  private store(urlPath: string, asset: MobileCachedAsset): void {
-    const prev = this.entries.get(urlPath);
-    if (prev) this.bytes -= prev.body.byteLength;
-    this.entries.set(urlPath, asset);
-    this.bytes += asset.body.byteLength;
-    // Evict oldest until under the cap.
-    while (this.bytes > this.maxBytes && this.entries.size > 1) {
-      const oldest = this.entries.keys().next().value as string | undefined;
-      if (oldest === undefined) break;
-      const evicted = this.entries.get(oldest);
-      this.entries.delete(oldest);
-      if (evicted) this.bytes -= evicted.body.byteLength;
-    }
-  }
-}
-
 /**
  * Start the loopback panel-asset façade. Resolves once the port is bound; point
  * `buildPanelUrl` (via `hostConfig.port`) at the returned `port`.
  */
-export async function startPanelAssetFacade(transport: MobileRpcClient): Promise<PanelAssetFacade> {
-  const cache = new MobileAssetMemoryCache();
+export async function startPanelAssetFacade(
+  transport: MobileRpcClient,
+  namespace: MobileAssetStoreNamespace
+): Promise<PanelAssetFacade> {
+  const store = new MobileAssetStore(namespace);
   const preferredPort = await readPersistedPort();
+  const activeSockets = new Set<TcpSocketConn>();
+  const activeRequests = new Set<Promise<void>>();
+  let closing = false;
+  let closeFlight: Promise<void> | null = null;
 
   const server = TcpSocket.createServer((socket) => {
-    handleConnection(transport, cache, socket);
+    const connection = socket as TcpSocketConn;
+    if (closing) {
+      connection.destroy();
+      return;
+    }
+    activeSockets.add(connection);
+    connection.once("close", () => activeSockets.delete(connection));
+    handleConnection(transport, store, connection, (request) => {
+      activeRequests.add(request);
+      void request.then(
+        () => activeRequests.delete(request),
+        () => activeRequests.delete(request)
+      );
+    });
   });
 
   const bind = (requested: number): Promise<number> =>
@@ -272,24 +160,41 @@ export async function startPanelAssetFacade(transport: MobileRpcClient): Promise
   return {
     port,
     trimCache: () => {
-      cache.clear();
-      console.log("[VibestudioMobileSmoke] phase=workspace-panel-facade-cache-trimmed");
+      void store
+        .trim()
+        .then(() =>
+          console.log("[VibestudioMobileSmoke] phase=workspace-panel-facade-cache-trimmed")
+        )
+        .catch((error: unknown) =>
+          console.error("[panel-facade] durable asset-store trim failed", error)
+        );
     },
-    close: () =>
-      new Promise<void>((resolveClose) => {
-        try {
-          server.close(() => resolveClose());
-        } catch {
-          resolveClose();
-        }
-      }),
+    close: () => {
+      if (closeFlight) return closeFlight;
+      closing = true;
+      closeFlight = (async () => {
+        const serverClosed = new Promise<void>((resolveClose) => {
+          try {
+            server.close(() => resolveClose());
+          } catch {
+            resolveClose();
+          }
+        });
+        for (const socket of activeSockets) socket.destroy();
+        await Promise.allSettled([...activeRequests]);
+        await store.close();
+        await serverClosed;
+      })();
+      return closeFlight;
+    },
   };
 }
 
 function handleConnection(
   transport: MobileRpcClient,
-  cache: MobileAssetMemoryCache,
-  socket: TcpSocketConn
+  store: MobileAssetStore,
+  socket: TcpSocketConn,
+  trackRequest: (request: Promise<void>) => void
 ): void {
   let head = "";
   let dispatched = false;
@@ -316,9 +221,9 @@ function handleConnection(
     }
   };
 
-  socket.on("data", (data: string | Buffer) => {
+  socket.on("data", (data: string | Uint8Array) => {
     if (dispatched) return;
-    const text = typeof data === "string" ? data : data.toString("latin1");
+    const text = typeof data === "string" ? data : Buffer.from(data).toString("latin1");
     head += text;
     const end = head.indexOf("\r\n\r\n");
     if (end === -1) {
@@ -348,7 +253,7 @@ function handleConnection(
       return;
     }
     dispatched = true;
-    void handleRequest(transport, cache, socket, head);
+    trackRequest(handleRequest(transport, store, socket, head));
   });
   socket.on("error", () => {
     try {
@@ -361,10 +266,11 @@ function handleConnection(
 
 async function handleRequest(
   transport: MobileRpcClient,
-  cache: MobileAssetMemoryCache,
+  store: MobileAssetStore,
   socket: TcpSocketConn,
   rawHead: string
 ): Promise<void> {
+  const startedAt = Date.now();
   const lines = rawHead.split("\r\n");
   const [, target = "/"] = (lines[0] ?? "").split(" ");
   const forwardHeaders = collectForwardHeaders(lines.slice(1));
@@ -395,12 +301,26 @@ async function handleRequest(
     return;
   }
   const gatewayPath = decision.target;
+  const cacheKey = panelAssetCacheKey(gatewayPath, forwardHeaders);
+  let tier: "store-hit" | "miss" | "no-store" = "miss";
+  let cacheableResponse = false;
+  let transferredBytes = 0;
+  let bridgeCrossings = 0;
+  let ttfbMs: number | null = null;
+  const markHeadSent = (): void => {
+    headSent = true;
+    ttfbMs ??= Date.now() - startedAt;
+  };
+  const countTransferred = (bytes: number): void => {
+    transferredBytes += bytes;
+  };
 
   const fetcher = async (): Promise<MobileFetchedResponse> => {
     // Target the server "main" with the fully-qualified method (the bootstrap's
     // proven bundle-stream call). NOT ("gateway","fetch") — that routes to the
     // streaming endpoint's proxyFetch-only fast path and is rejected. GET-only:
     // no request body ever crosses this façade (uploads ride the bridge).
+    bridgeCrossings += 1;
     const result = await transport.streamReadable("main", "gateway.fetch", [
       { path: gatewayPath, method: "GET", headers: forwardHeaders, gzip: true },
     ]);
@@ -408,18 +328,34 @@ async function handleRequest(
   };
 
   try {
-    // GET assets: content-addressed cache; non-cacheable GETs (e.g. the no-store
-    // HTML entry doc) stream straight through.
-    const outcome = await cache.serve(panelAssetCacheKey(gatewayPath, forwardHeaders), fetcher);
-    if (outcome.kind === "asset") {
-      await writeBufferedAsset(socket, outcome.asset, () => {
-        headSent = true;
-      });
+    const acquisition = await store.acquire(cacheKey);
+    if (acquisition.kind === "hit") {
+      tier = "store-hit";
+      await writeStoredAsset(socket, acquisition.asset, markHeadSent);
       return;
     }
-    await streamPassthrough(socket, outcome.response, () => {
-      headSent = true;
-    });
+    try {
+      const response = await fetcher();
+      if (!response.cacheable || !response.body) {
+        tier = "no-store";
+        acquisition.complete(null);
+        await streamPassthrough(socket, response, markHeadSent, countTransferred);
+        return;
+      }
+      cacheableResponse = true;
+      const stored = await streamAndPopulateImmutableAsset(
+        socket,
+        store,
+        cacheKey,
+        { ...response, body: response.body },
+        markHeadSent,
+        countTransferred
+      );
+      acquisition.complete(stored);
+    } catch (error) {
+      acquisition.fail(error);
+      throw error;
+    }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.warn(`[panel-facade] asset fetch failed for ${target}: ${message}`);
@@ -437,7 +373,44 @@ async function handleRequest(
     } catch {
       // already gone
     }
+  } finally {
+    const phase =
+      tier === "store-hit"
+        ? "workspace-panel-asset-store-hit"
+        : tier === "no-store"
+          ? "workspace-panel-asset-no-store"
+          : "workspace-panel-asset-pipe-miss";
+    const telemetry = JSON.stringify({
+      routeClass: gatewayPath.split("?", 1)[0]?.split("/", 3)[1] || "root",
+      cacheKeyHash: telemetryDigest(cacheKey),
+      tier,
+      cacheableResponse,
+      transferredBytes,
+      bridgeCrossings,
+      ttfbMs,
+      totalMs: Date.now() - startedAt,
+    });
+    console.log(`[VibestudioMobileSmoke] phase=${phase} ${telemetry}`);
+    if (tier === "miss" && cacheableResponse) {
+      console.log(
+        `[VibestudioMobileSmoke] phase=workspace-panel-cacheable-asset-pipe-miss ${telemetry}`
+      );
+    }
   }
+}
+
+/** Compact opaque request correlation without logging route/query context. */
+function telemetryDigest(value: string): string {
+  let left = 0x811c9dc5;
+  let right = 0x9e3779b9;
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    left = Math.imul(left ^ code, 0x01000193);
+    right = Math.imul(right ^ code, 0x85ebca6b);
+  }
+  return `${(left >>> 0).toString(16).padStart(8, "0")}${(right >>> 0)
+    .toString(16)
+    .padStart(8, "0")}`;
 }
 
 /** DecodedFramedStream → the façade's normalized, cache-agnostic shape. */
@@ -471,9 +444,14 @@ function normalizeResult(result: {
     gzip,
     contentType,
     replayHeaders,
-    cacheable: result.status === 200 && cacheControl.includes("immutable"),
+    cacheable: result.status === 200 && isImmutableCachePolicy(cacheControl),
     body: result.body,
   };
+}
+
+function isImmutableCachePolicy(cacheControl: string): boolean {
+  const directives = cacheControl.split(",").map((token) => token.trim().toLowerCase());
+  return directives.includes("immutable") && !directives.includes("no-store");
 }
 
 function buildHead(
@@ -502,26 +480,96 @@ function buildHead(
   return out.join("\r\n");
 }
 
-/**
- * Serve a fully-buffered (cache-hit or just-cached) asset with a Content-Length.
- * `onHeadSent` fires the instant the response head write resolves, so a caller's
- * error handler knows the head is already on the wire even if a later body write
- * throws (writing a second head would corrupt the response — destroy instead).
- */
-async function writeBufferedAsset(
+/** Serve a native-store hit without bringing its body through Hermes. */
+async function writeStoredAsset(
   socket: TcpSocketConn,
-  asset: MobileCachedAsset,
+  asset: MobileStoredAsset,
   onHeadSent: () => void
 ): Promise<void> {
+  const metadata = asset.metadata;
   await writeToSocket(
     socket,
-    buildHead(asset.status, asset.statusText, asset.contentType, asset.gzip, asset.replayHeaders, {
-      contentLength: asset.body.byteLength,
-    })
+    buildHead(
+      metadata.status,
+      metadata.statusText,
+      metadata.contentType,
+      metadata.gzip,
+      metadata.replayHeaders,
+      {
+        contentLength: asset.size,
+      }
+    )
   );
   onHeadSent();
-  if (asset.body.byteLength > 0) await writeToSocket(socket, asset.body);
+  await new Promise<void>((resolve, reject) => {
+    socket.writeStoredAsset(asset.handle, (error?: Error) => {
+      if (error) reject(error);
+      else resolve();
+    });
+  });
   socket.end();
+}
+
+/**
+ * Cold immutable miss: stream each received chunk to the WebView while also
+ * staging it in the durable store. Only the completed, integrity-checked body
+ * is published to the cache. A body failure after the HTTP head is visible as
+ * an ordinary truncated HTTP response; it is never retried behind the same
+ * response and never publishes partial bytes.
+ */
+export async function streamAndPopulateImmutableAsset(
+  socket: TcpSocketConn,
+  store: Pick<MobileAssetStore, "openWrite" | "append" | "commit" | "abort">,
+  cacheKey: string,
+  response: MobileFetchedResponse & { body: ReadableStream<Uint8Array> },
+  onHeadSent: () => void,
+  onTransferred: (bytes: number) => void
+): Promise<MobileStoredAsset> {
+  const writeId = await store.openWrite(cacheKey);
+  const reader = response.body.getReader();
+  let committed = false;
+  try {
+    await writeToSocket(
+      socket,
+      buildHead(
+        response.status,
+        response.statusText,
+        response.contentType,
+        response.gzip,
+        response.replayHeaders,
+        { chunked: true }
+      )
+    );
+    onHeadSent();
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value || value.byteLength === 0) continue;
+      onTransferred(value.byteLength);
+      await Promise.all([
+        store.append(writeId, value),
+        writeToSocket(socket, frameHttpChunk(value)),
+      ]);
+    }
+    const metadata: MobileStoredAssetMetadata = {
+      status: 200,
+      statusText: response.statusText,
+      gzip: response.gzip,
+      contentType: response.contentType,
+      replayHeaders: response.replayHeaders,
+    };
+    const stored = await store.commit(writeId, metadata);
+    committed = true;
+    // Do not make the HTTP response complete until atomic cache publication has
+    // succeeded. If commit fails, the client sees a truncated response and can
+    // retry normally; it can never mistake an uncommitted body for success.
+    await writeToSocket(socket, "0\r\n\r\n");
+    socket.end();
+    return stored;
+  } finally {
+    reader.releaseLock();
+    if (!committed) await store.abort(writeId);
+  }
 }
 
 /**
@@ -533,7 +581,8 @@ async function writeBufferedAsset(
 export async function streamPassthrough(
   socket: TcpSocketConn,
   response: MobileFetchedResponse,
-  onHeadSent: () => void
+  onHeadSent: () => void,
+  onTransferred: (bytes: number) => void = () => undefined
 ): Promise<void> {
   await writeToSocket(
     socket,
@@ -558,9 +607,8 @@ export async function streamPassthrough(
       const { done, value } = await reader.read();
       if (done) break;
       if (value && value.byteLength > 0) {
-        await writeToSocket(socket, `${value.byteLength.toString(16)}\r\n`);
-        await writeToSocket(socket, value);
-        await writeToSocket(socket, "\r\n");
+        onTransferred(value.byteLength);
+        await writeToSocket(socket, frameHttpChunk(value));
       }
     }
     await writeToSocket(socket, "0\r\n\r\n");
@@ -570,37 +618,14 @@ export async function streamPassthrough(
   socket.end();
 }
 
-async function streamToUint8Array(
-  stream: ReadableStream<Uint8Array>,
-  maxBytes: number
-): Promise<Uint8Array> {
-  const reader = stream.getReader();
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  try {
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      if (value && value.byteLength > 0) {
-        if (total + value.byteLength > maxBytes) {
-          const err = new MobileCachePopulationTooLargeError(maxBytes);
-          void reader.cancel(err).catch(() => {});
-          throw err;
-        }
-        chunks.push(value);
-        total += value.byteLength;
-      }
-    }
-  } finally {
-    reader.releaseLock();
-  }
-  const out = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) {
-    out.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return out;
+function frameHttpChunk(value: Uint8Array): Uint8Array {
+  const prefix = Buffer.from(`${value.byteLength.toString(16)}\r\n`, "ascii");
+  const suffix = Buffer.from("\r\n", "ascii");
+  const framed = new Uint8Array(prefix.byteLength + value.byteLength + suffix.byteLength);
+  framed.set(prefix, 0);
+  framed.set(value, prefix.byteLength);
+  framed.set(suffix, prefix.byteLength + value.byteLength);
+  return framed;
 }
 
 function collectForwardHeaders(headerLines: string[]): Record<string, string> {

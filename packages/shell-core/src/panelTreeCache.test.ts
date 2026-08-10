@@ -25,6 +25,49 @@ function source(): PanelTreeQuerySource {
 }
 
 describe("PanelTreeCache", () => {
+  it("round-trips one coherent durable startup projection without querying", async () => {
+    const querySource = source();
+    vi.mocked(querySource.rootGroups).mockResolvedValue({
+      revision: 1,
+      groups: [{ ownerUserId: "user", rootCount: 1 }],
+      nextCursor: null,
+    });
+    const original = new PanelTreeCache(querySource);
+    await original.loadRootGroups(true);
+    await original.loadFirst({ kind: "roots", ownerUserId: "user" });
+    const snapshot = original.snapshot();
+    expect(snapshot).not.toBeNull();
+
+    const restoredSource = source();
+    const restored = new PanelTreeCache(restoredSource);
+    restored.restore(snapshot!);
+
+    expect(restored.getRootGroups()).toEqual(original.getRootGroups());
+    expect(
+      restored.getGroup({ kind: "roots", ownerUserId: "user" })?.nodes.map((node) => node.slotId)
+    ).toEqual(["newer"]);
+    expect(restoredSource.rootGroups).not.toHaveBeenCalled();
+    expect(restoredSource.page).not.toHaveBeenCalled();
+  });
+
+  it("rejects a mixed-revision startup projection instead of merging it", () => {
+    const cache = new PanelTreeCache(source());
+    expect(() =>
+      cache.restore({
+        revision: 2,
+        rootGroups: { revision: 2, groups: [], nextCursor: null },
+        groups: [
+          {
+            group: { kind: "roots", ownerUserId: "user" },
+            revision: 1,
+            nodes: [],
+            nextCursor: null,
+          },
+        ],
+      })
+    ).toThrow(/revision-coherent/u);
+  });
+
   it("pages without replacing already loaded newer siblings", async () => {
     const cache = new PanelTreeCache(source());
     const group = { kind: "roots" as const, ownerUserId: "user" };
