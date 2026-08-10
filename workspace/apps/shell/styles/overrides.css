@@ -135,25 +135,24 @@ body,
   --card-padding: 0;
 }
 
-/* Panel tree scroller. The slim thumb is global (tokens.css); what's specific
-   here is the reserved gutter: the virtualizer measures this element, so a
-   scrollbar that appears and disappears as rows expand would reflow the tree. */
+/* Panel tree scroller. What's specific here is the reserved gutter: the
+   virtualizer measures this element, so a scrollbar that appears and
+   disappears as rows expand would reflow the tree. */
 .panel-tree-scroll {
   /* `stable` alone reserves the lane on the inline-end side only, so the tree
-     sat 10px off the right edge and 0 off the left while the filter and footer
+     sat off the right edge and flush on the left while the filter and footer
      — which are outside this scroller — used their own margin and matched
-     neither. `both-edges` makes the reserved lane symmetric, and a narrower
-     scrollbar scoped to this scroller brings it down to the same gutter the
-     rest of the sidebar uses, so one value lines up every region. Reserving
+     neither. `both-edges` makes the reserved lane symmetric. Reserving
      (rather than overlaying) is still required: the virtualizer measures this
      element, so a scrollbar appearing as rows expand would reflow the tree.
 
-     The reserved lane is the whole horizontal inset the tree pays, so it is
-     pinned to the sidebar's 4px gutter (Radix space-1, the same step the
-     filter field and footer use). Dropping the thumb's transparent border
-     keeps the visible thumb at the 4px it was before — the inset was only
-     ever there to shrink a wider lane. */
+     That lane is the whole horizontal inset the tree pays, so it has to equal
+     the sidebar's 4px gutter or the rows come out visibly narrower than the
+     filter field and footer button. Its width is the scrollbar's width, which
+     tokens.css derives from `--scrollbar-size` — so narrowing that variable
+     here narrows the lane, no override of the scrollbar rules themselves. */
   scrollbar-gutter: stable both-edges;
+  /* Thumb fills the lane: at 4px a transparent inset would leave nothing. */
   --scrollbar-size: 4px;
   --scrollbar-inset: 0px;
 }

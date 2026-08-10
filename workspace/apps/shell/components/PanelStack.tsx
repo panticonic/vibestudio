@@ -1365,22 +1365,39 @@ export const PanelStack = memo(function PanelStack({
             onPointerEnter={() => setIsResizeHover(true)}
             onPointerLeave={() => setIsResizeHover(false)}
             style={{
-              // A roomy, invisible grab area keeps resizing easy while the
-              // visible divider stays a slim hairline.
+              // The divider takes only its hairline in the layout: a wider
+              // element here would read as extra padding on the sidebar's
+              // right edge alone, breaking the even gutter the tree keeps on
+              // its other three sides. The roomy grab area and the hover
+              // thickening are both absolutely positioned below, so neither
+              // costs a pixel of flow.
               cursor: "col-resize",
               flexShrink: 0,
-              width: 7,
+              width: 1,
               alignSelf: "stretch",
               touchAction: "none",
-              display: "flex",
-              justifyContent: "center",
+              position: "relative",
               background: "transparent",
             }}
           >
             <Box
+              aria-hidden
               style={{
+                position: "absolute",
+                top: 0,
+                bottom: 0,
+                left: -3,
+                right: -3,
+                cursor: "col-resize",
+              }}
+            />
+            <Box
+              style={{
+                position: "absolute",
+                top: 0,
+                bottom: 0,
+                left: 0,
                 width: isResizingSidebar || isResizeHover ? 2 : 1,
-                alignSelf: "stretch",
                 backgroundColor:
                   isResizingSidebar || isResizeHover ? "var(--accent-8)" : "var(--gray-a6)",
                 transition: "background-color 120ms ease-out, width 120ms ease-out",
