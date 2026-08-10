@@ -324,6 +324,33 @@ function runtimeReferences(config: WorkspaceConfig): Array<[owner: string, targe
   return refs;
 }
 
+type AuthoringPackageMetadata = { name?: string; dependencies: string[] };
+
+async function workspacePackageMetadata(
+  ctx: ExtensionContextLike,
+  observation: SemanticWorkspaceObservation,
+  repoPaths: readonly string[]
+): Promise<ReadonlyMap<string, AuthoringPackageMetadata>> {
+  const entries: Array<readonly [string, AuthoringPackageMetadata]> = [];
+  // A full workspace can contain hundreds of repositories. Keep semantic VCS
+  // reads concurrent without flooding the extension RPC lane with an
+  // unbounded Promise.all fan-out.
+  const concurrency = 8;
+  for (let offset = 0; offset < repoPaths.length; offset += concurrency) {
+    entries.push(
+      ...(await Promise.all(
+        repoPaths
+          .slice(offset, offset + concurrency)
+          .map(
+            async (repoPath) =>
+              [repoPath, await packageMetadata(ctx, observation, repoPath)] as const
+          )
+      ))
+    );
+  }
+  return new Map(entries);
+}
+
 export async function inspectTemplateAuthoring(
   ctx: ExtensionContextLike,
   observation: SemanticWorkspaceObservation,
@@ -353,13 +380,7 @@ export async function inspectTemplateAuthoring(
     if (!selectable.has(repoPath)) throw new Error(`Unknown workspace repository ${repoPath}`);
   }
 
-  const metadata = new Map<string, { name?: string; dependencies: string[] }>(
-    await Promise.all(
-      selectableParts.map(
-        async (repoPath) => [repoPath, await packageMetadata(ctx, observation, repoPath)] as const
-      )
-    )
-  );
+  const metadata = await workspacePackageMetadata(ctx, observation, selectableParts);
   const packageOwners = new Map<string, string>();
   for (const [repoPath, value] of metadata) {
     if (!value.name) continue;

@@ -2157,6 +2157,27 @@ describe("EgressProxy", () => {
     expect(authorizeInternalRequest).toHaveBeenCalledTimes(1);
   });
 
+  it("owns the dispatcher used by long-running Git HTTP requests", async () => {
+    const fetchMock = vi.fn(async () => new Response(new Uint8Array(), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const proxy = createProxy(undefined, new MemoryAuditLog(), {
+      authorizeInternalRequest: vi.fn(async () => ({})),
+    });
+
+    await proxy.forwardGitHttp({
+      authority: { kind: "runtime", caller: workerCaller("worker:test") },
+      credential: { kind: "anonymous" },
+      url: "https://example.test/project.git/info/refs?service=git-upload-pack",
+      method: "GET",
+    });
+
+    const dispatcher = fetchMock.mock.calls[0]?.[1]?.dispatcher;
+    expect(dispatcher).toBeDefined();
+    const close = vi.spyOn(dispatcher!, "close");
+    await proxy.stop();
+    expect(close).toHaveBeenCalled();
+  });
+
   it("rejects a bare host caller on the runtime Git authority path", async () => {
     const proxy = createProxy(undefined, new MemoryAuditLog());
     await expect(

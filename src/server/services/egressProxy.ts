@@ -1,6 +1,7 @@
 import { createServer, request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
 import { createHash, createHmac, randomBytes } from "node:crypto";
+import { lookup as systemLookup, resolve4, resolve6 } from "node:dns";
 import type {
   IncomingHttpHeaders,
   IncomingMessage,
@@ -8,9 +9,10 @@ import type {
   Server,
   ServerResponse,
 } from "node:http";
-import type { AddressInfo } from "node:net";
+import type { AddressInfo, LookupFunction } from "node:net";
 import type { Duplex } from "node:stream";
 import { pipeline } from "node:stream/promises";
+import { Agent, type Dispatcher } from "undici";
 
 import type { AuditLog } from "@vibestudio/credential-client/audit";
 import type {
@@ -92,6 +94,56 @@ const CIRCUIT_FAILURE_THRESHOLD = 5;
 const CIRCUIT_OPEN_MS = 30_000;
 const WEBSOCKET_DIAGNOSTIC_BODY_LIMIT = 512;
 const GITHUB_BINDING_CATALOG_VERSION = "github:v2";
+const GIT_HTTP_RESPONSE_TIMEOUT_MS = 15 * 60_000;
+const GIT_HTTP_LOOKUP_TIMEOUT_MS = 10_000;
+
+const gitHttpLookup: LookupFunction = (hostname, options, callback) => {
+  let settled = false;
+  let pending = 2;
+  let lastError: NodeJS.ErrnoException | null = null;
+  const finish = (
+    error: NodeJS.ErrnoException | null,
+    address: string | import("node:dns").LookupAddress[],
+    family?: number
+  ) => {
+    if (settled) return;
+    if (error) {
+      lastError = error;
+      pending -= 1;
+      if (pending > 0) return;
+    }
+    settled = true;
+    clearTimeout(timer);
+    callback(error, address, family);
+  };
+  const timer = setTimeout(() => {
+    if (settled) return;
+    settled = true;
+    const error = lastError ?? new Error(`DNS lookup timed out for ${hostname}`);
+    (error as NodeJS.ErrnoException).code ??= "ETIMEDOUT";
+    callback(error as NodeJS.ErrnoException, "", 0);
+  }, GIT_HTTP_LOOKUP_TIMEOUT_MS);
+
+  systemLookup(hostname, options, finish);
+  const requestedFamily = options.family === 6 || options.family === "IPv6" ? 6 : 4;
+  const resolve = requestedFamily === 6 ? resolve6 : resolve4;
+  resolve(hostname, (error, addresses) => {
+    if (error || addresses.length === 0) {
+      const unavailable = error ?? new Error(`DNS returned no addresses for ${hostname}`);
+      (unavailable as NodeJS.ErrnoException).code ??= "ENOTFOUND";
+      finish(unavailable as NodeJS.ErrnoException, "", requestedFamily);
+      return;
+    }
+    if (options.all) {
+      finish(
+        null,
+        addresses.map((address) => ({ address, family: requestedFamily }))
+      );
+      return;
+    }
+    finish(null, addresses[0]!, requestedFamily);
+  });
+};
 
 interface GitIntentMetadata {
   force: boolean;
@@ -275,6 +327,8 @@ export class EgressProxy {
   private sharedServer: { server: Server; port: number } | null = null;
   private sharedSecret: string | null = null;
   private callerResolver: ((callerId: string) => VerifiedCaller | null) | null = null;
+  private fetchDispatcher: Agent | null = null;
+  private gitHttpDispatcher: Agent | null = null;
 
   constructor(private readonly deps: EgressProxyDeps) {
     this.sessionGrantStore = deps.sessionGrantStore ?? new CredentialSessionGrantStore();
@@ -420,12 +474,18 @@ export class EgressProxy {
     this.sharedServer = null;
     const attributed = [...this.attributedServers.values()];
     this.attributedServers.clear();
+    const gitHttpDispatcher = this.gitHttpDispatcher;
+    this.gitHttpDispatcher = null;
+    const fetchDispatcher = this.fetchDispatcher;
+    this.fetchDispatcher = null;
     await Promise.all([
       ...(server ? [new Promise<void>((resolve) => server.close(() => resolve()))] : []),
       ...(shared ? [new Promise<void>((resolve) => shared.server.close(() => resolve()))] : []),
       ...attributed.map(
         ({ server }) => new Promise<void>((resolve) => server.close(() => resolve()))
       ),
+      ...(gitHttpDispatcher ? [gitHttpDispatcher.close()] : []),
+      ...(fetchDispatcher ? [fetchDispatcher.close()] : []),
     ]);
   }
 
@@ -483,12 +543,17 @@ export class EgressProxy {
       initialBytesOut: bytesOut,
       replaySafe: true,
       execute: async (targetUrl, headers, _authorization, manualRedirects) => {
+        this.fetchDispatcher ??= new Agent({
+          pipelining: 0,
+          connect: { lookup: gitHttpLookup },
+        });
         const response = await fetch(targetUrl.toString(), {
           method: params.method,
           headers: headers as HeadersInit,
           body: body as BodyInit | undefined,
           redirect: manualRedirects ? "manual" : "follow",
-        });
+          dispatcher: this.fetchDispatcher,
+        } as RequestInit & { dispatcher: Dispatcher });
         const responseBody = new Uint8Array(await response.arrayBuffer());
         await this.deps.recordExternalIngestion?.(
           params.caller,
@@ -576,6 +641,10 @@ export class EgressProxy {
       replaySafe: false,
       maxRetries: 0,
       execute: async (targetUrl, headers, authorization, manualRedirects) => {
+        this.fetchDispatcher ??= new Agent({
+          pipelining: 0,
+          connect: { lookup: gitHttpLookup },
+        });
         const upstream = await fetch(targetUrl.toString(), {
           method: params.method,
           headers: headers as HeadersInit,
@@ -584,7 +653,8 @@ export class EgressProxy {
           redirect: manualRedirects ? "manual" : "follow",
           // undici requires half-duplex to be declared for stream bodies.
           ...(bodyIsStream ? { duplex: "half" } : {}),
-        } as RequestInit);
+          dispatcher: this.fetchDispatcher,
+        } as RequestInit & { dispatcher: Dispatcher });
 
         await this.deps.recordExternalIngestion?.(
           params.caller,
@@ -705,12 +775,23 @@ export class EgressProxy {
       // caller never declared. The redirect is surfaced as a rejection so the
       // caller fixes the remote URL instead of silently following it.
       execute: async (targetUrl, headers) => {
+        // Git receive-pack may legitimately withhold response headers while the
+        // remote validates a large uploaded pack. Undici's implicit five-minute
+        // header deadline must not terminate that semantic operation. This
+        // dispatcher is owned by the proxy and closed in stop().
+        this.gitHttpDispatcher ??= new Agent({
+          headersTimeout: GIT_HTTP_RESPONSE_TIMEOUT_MS,
+          bodyTimeout: GIT_HTTP_RESPONSE_TIMEOUT_MS,
+          pipelining: 0,
+          connect: { lookup: gitHttpLookup },
+        });
         const response = await fetch(targetUrl.toString(), {
           method: params.method,
           headers: headers as HeadersInit,
           body: body as BodyInit | undefined,
           redirect: "manual",
-        });
+          dispatcher: this.gitHttpDispatcher,
+        } as RequestInit & { dispatcher: Dispatcher });
         if (isRedirectStatus(response.status)) {
           throw new ForwardRejection(
             403,

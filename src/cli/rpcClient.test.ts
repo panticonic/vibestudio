@@ -244,6 +244,28 @@ describe("rpcClient", () => {
     });
   });
 
+  it("gives semantic HTTP RPC calls an explicitly owned dispatcher", async () => {
+    const requests: Array<{ url: string; dispatcher?: unknown }> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: URL, init?: RequestInit & { dispatcher?: unknown }) => {
+        requests.push({ url: String(url), dispatcher: init?.dispatcher });
+        if (String(url).endsWith("/refresh-shell")) {
+          return new Response(refreshShellResult("tok"));
+        }
+        return new Response(rpcResult("done"));
+      })
+    );
+
+    const client = new RpcClient(CREDS);
+    await expect(client.call("templates.publish", [])).resolves.toBe("done");
+
+    expect(requests).toHaveLength(2);
+    expect(requests[0]?.dispatcher).toBeUndefined();
+    expect(requests[1]?.dispatcher).toBeDefined();
+    await client.close();
+  });
+
   it("refreshes exactly once on a 401 and retries the call", async () => {
     let rpcCalls = 0;
     let refreshes = 0;

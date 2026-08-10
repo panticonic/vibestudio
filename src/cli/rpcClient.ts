@@ -16,6 +16,7 @@ import { resolveLocalHubControlTransport } from "./localHubTransport.js";
 import { HubWorkspaceRouteSchema } from "@vibestudio/service-schemas/hubControl";
 import type { CallerKind } from "@vibestudio/shared/serviceDispatcher";
 import type { RpcErrorData, RpcErrorKind, RpcStreamOptions } from "@vibestudio/rpc";
+import { Agent, type Dispatcher } from "undici";
 import {
   RefreshAgentResponseSchema,
   RefreshShellResponseSchema,
@@ -145,9 +146,11 @@ function isLoopbackHostname(hostname: string): boolean {
   return hostname === "127.0.0.1" || hostname === "localhost" || hostname === "::1";
 }
 
-async function fetchOrAuthError(url: URL, init: RequestInit): Promise<Response> {
+type RpcRequestInit = RequestInit & { dispatcher?: Dispatcher };
+
+async function fetchOrAuthError(url: URL, init: RpcRequestInit): Promise<Response> {
   try {
-    return await fetch(url, init);
+    return await fetch(url, init as RequestInit);
   } catch (error) {
     throw new ConnectionError(`cannot reach ${url.origin}: ${networkErrorMessage(error)}`);
   }
@@ -234,6 +237,7 @@ export class RpcClient {
   private webRtcClient: Promise<import("./webrtcClient.js").WebRtcRpcClient> | null = null;
   private wsClient: Promise<import("./wsClient.js").WsRpcClient> | null = null;
   private localWorkspaceClient: Promise<RpcClient | null> | null = null;
+  private httpDispatcher: Agent | null = null;
   private readonly cliCredentials: CliDeviceCredentials | null;
   private keepPushOpen = false;
   private retainedConnections = 0;
@@ -432,9 +436,11 @@ export class RpcClient {
     const webRtc = this.webRtcClient;
     const ws = this.wsClient;
     const local = this.localWorkspaceClient;
+    const httpDispatcher = this.httpDispatcher;
     this.webRtcClient = null;
     this.wsClient = null;
     this.localWorkspaceClient = null;
+    this.httpDispatcher = null;
     const resources = [
       ...(webRtc ? [{ label: "WebRTC client", close: async () => (await webRtc).close() }] : []),
       ...(ws ? [{ label: "WebSocket client", close: async () => (await ws).close() }] : []),
@@ -450,6 +456,14 @@ export class RpcClient {
                 const client = await local.catch(() => null);
                 await client?.close();
               },
+            },
+          ]
+        : []),
+      ...(httpDispatcher
+        ? [
+            {
+              label: "HTTP RPC dispatcher",
+              close: async () => await httpDispatcher.close(),
             },
           ]
         : []),
@@ -564,6 +578,15 @@ export class RpcClient {
   }
 
   private postRpc(token: string, body: Record<string, unknown>): Promise<Response> {
+    // RPC methods own their semantic lifetime. Template publication, builds,
+    // and reviewed operations may legitimately remain open past Undici's
+    // implicit ~300s response-header deadline. Cancellation belongs to the
+    // caller or connection lifecycle, not an undocumented transport timer.
+    this.httpDispatcher ??= new Agent({
+      headersTimeout: 0,
+      bodyTimeout: 0,
+      pipelining: 0,
+    });
     return fetchOrAuthError(serverRpcHttpUrl(this.url), {
       method: "POST",
       headers: {
@@ -571,6 +594,7 @@ export class RpcClient {
         Authorization: `Bearer ${token}`,
       },
       body: JSON.stringify(body),
+      dispatcher: this.httpDispatcher,
     });
   }
 
