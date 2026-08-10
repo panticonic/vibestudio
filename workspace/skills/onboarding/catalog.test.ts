@@ -46,6 +46,7 @@ describe("onboarding catalog", () => {
   it("describes only capabilities shipped in the base workspace", () => {
     expect(JSON.stringify(onboardingCatalog)).not.toContain('"via":"template"');
     expect(JSON.stringify(onboardingCatalog)).not.toContain('"install"');
+    expect(onboardingCatalog.some((entry) => entry.id === "contextual.news")).toBe(false);
   });
 
   it("uses the concise browser import label", () => {

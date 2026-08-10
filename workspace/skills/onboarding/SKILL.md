@@ -25,8 +25,8 @@ from `hubControl.listDevices` and `hubControl.listWorkspaces`, plus the
 client-local route mode. A failed read becomes an honest `unknown` row and does
 not suppress the rest. These owners currently ship in the base workspace. If
 one cannot be discovered, that row is **Unavailable** because the shipped base
-capability is broken or incomplete; onboarding never offers a template as a
-substitute.
+capability is broken or incomplete; onboarding never offers an optional
+template as a substitute for a broken base capability.
 
 The opening message is short. The inline setup overview is the first-screen
 information architecture. Do not load or publish an onboarding action bar.
@@ -87,12 +87,28 @@ device IDs, pairing links, profile paths, or private topology.
 ## Templates
 
 Onboarding reflects the capabilities actually composed into the current
-workspace. It does not hard-code planned template ids or advertise future
-extractions. Template discovery, preparation, review, and installation belong
-to the Templates surface and template composer, which may show only entries
-from a verified deployed catalog. If a future optional template is installed,
-ordinary runtime owner discovery can expose its setup workflow without adding
-a second catalog or installation path to onboarding.
+workspace. When the user's stated goal requires one of these optional official
+outcomes and its units are absent, offer to add it through the Templates skill:
+
+| User outcome | Official template URL |
+| --- | --- |
+| Learn from or start with Vibestudio examples | `git+https://github.com/panticonic/vibestudio-template-examples.git` |
+| Read, collect, or work with news | `git+https://github.com/panticonic/vibestudio-template-news.git` |
+| Write or edit MDX with Spectrolite | `git+https://github.com/panticonic/vibestudio-template-spectrolite.git` |
+
+First inspect current template status. If the outcome is already present,
+continue with its discovered owner instead of adding it again. Otherwise ask
+the user whether to add the named outcome, then follow the Templates skill's
+canonical direct-URL `prepareAdd` and reviewed `add` workflow unchanged. Never
+guess a tag or commit, silently install from an inferred interest, or reproduce
+template preparation inside onboarding. The Templates surface and composer
+remain the sole installation path; onboarding only recognizes the need and
+hands off the user's approved intent.
+
+Do not advertise all optional templates as a generic first-run checklist. They
+appear contextually when the user's goal calls for them. Once installed,
+ordinary runtime owner discovery exposes any setup workflow the new units
+provide.
 
 ## Product rules
 

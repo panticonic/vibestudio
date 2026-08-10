@@ -2,11 +2,12 @@
 
 Status: updated 2026-08-10. The three optional templates have been published
 and updated through the running app as private candidate repositories. The
-current releases are Examples `v1.0.2`, News `v1.0.1`, and Spectrolite
-`v1.0.2`. They remain in `workspace/` until product cutover, and no verified
-template catalog entries or external base repository have been deployed.
-Promotion and product cutover therefore remain outstanding; publishing a
-standalone npm SDK is explicitly not an extraction prerequisite.
+current releases are Examples `v1.0.3`, News `v1.0.2`, and Spectrolite
+`v1.0.3`. Their outcome-specific source units have been removed from the base
+`workspace/`; no verified template catalog entries or external base repository
+have been deployed. Registry promotion and external-base cutover therefore
+remain outstanding; publishing a standalone npm SDK is explicitly not an
+extraction prerequisite.
 
 ## Outcome
 
@@ -256,9 +257,9 @@ temporary ownership workaround.
 
 | Template | Published repository | Immutable release | Commit | Snapshot |
 | --- | --- | --- | --- | --- |
-| Examples | `panticonic/vibestudio-template-examples` | `refs/tags/v1.0.2` | `85b3f47e64cc281a22d5d911dfe70c40f37e9337` | `v1-sha256:9746fadf3422206e5dc32a950f6b245a2f736d53dae12622ba6b4a6718fa07e8` |
-| News | `panticonic/vibestudio-template-news` | `refs/tags/v1.0.1` | `77cd04bbede0c2e498819c758a666dde37c55386` | `v1-sha256:51d0e32bf5ac7c4dd3bca92e53c6ccc92981f35fbde70a44ccb8b64a3b545860` |
-| Spectrolite | `panticonic/vibestudio-template-spectrolite` | `refs/tags/v1.0.2` | `05e21e15361776ed0556802f47957904bf789ee6` | `v1-sha256:0425cd3ff5b0f8ec438c9609e25c02b3f7445c1b6bc24ba7008e64211f7cbd08` |
+| Examples | `panticonic/vibestudio-template-examples` | `refs/tags/v1.0.3` | `bc4b1ec5ecf6bbb4b3584db2f3e6d651da693aca` | `v1-sha256:159d39fc9223c186b2a50e07fad15aaf40087cbe1ca8349d13bf91725381544e` |
+| News | `panticonic/vibestudio-template-news` | `refs/tags/v1.0.2` | `090e1ba17abcd01a426b914a41d0a0218579b0ff` | `v1-sha256:f6ad5837333dd3defb49f2cf334c1a551d4abacbef50acbbc48a3f649165bbdc` |
+| Spectrolite | `panticonic/vibestudio-template-spectrolite` | `refs/tags/v1.0.3` | `e6ddffbea9f28fef8988b6b612e017c8348917a0` | `v1-sha256:27b61de2e6abc3fb952293be22e09acb4649b470406141c79b7f13eeafad824d` |
 
 The publication receipts are authoritative because Git Bridge reads the
 published commit back into an exact snapshot before returning. These updates
@@ -409,24 +410,26 @@ Current migration state:
 2. **Done:** the contribution inventory in §Repository inventory is reflected by
    the authoring inventory/closure API and validated against buildable source.
 3. **Done:** onboarding uses runtime owner discovery and has no compile-time
-   imports of capability implementations. While every planned extraction
-   owner remains in base, a missing owner is reported as unavailable base
-   functionality, never as an installable template.
+   imports of capability implementations. For the three extracted outcomes it
+   recognizes an explicit user goal, asks before adding anything, and hands
+   the official repository URL to the canonical Templates workflow. It never
+   substitutes a template for a broken base capability.
 4. **Done:** URL-only `templates.use`, lock-first resolution, derived aliases,
    exact epoch matching, and build-gated publication are live.
 5. **Done:** establish the consumer-composition validation and repair contract
    (§Extracted-repository validation contract); no npm SDK publication gate.
-6. **Feature candidates done:** extract and publish exactly three optional
-   templates—`examples`, `news`, and `spectrolite`—from the current workspace.
-   The external `vibestudio-workspace-base` repository is still outstanding.
-   Everything not selected by one of those three templates remains in base for
-   this cut. In particular, Google Workspace, GitHub, local models, mobile,
-   browser, and terminal functionality remain in base.
-7. **Publication done; promotion outstanding:** the three private `v1.0.0`
-   candidates were published through the in-app authoring path with the exact
-   coordinates recorded above. Add representative cross-composition tests,
-   fix the concurrent same-command publication race and long-call transport
-   DX, then create the registry repository with reviewed promotion.
+6. **Feature extraction done:** publish exactly three optional templates—
+   `examples`, `news`, and `spectrolite`—from current semantic workspace state,
+   then remove their direct source units from base. The external
+   `vibestudio-workspace-base` repository is still outstanding. Everything not
+   selected by one of those three outcomes remains in base for this cut. In
+   particular, Google Workspace, GitHub, local models, mobile, browser, and
+   terminal functionality remain in base.
+7. **Publication done; promotion outstanding:** the latest private candidates
+   were published through the in-app authoring path with the exact coordinates
+   recorded above. Add representative cross-composition tests, fix the
+   concurrent same-command publication race and repeated-review DX, then create
+   the registry repository with reviewed promotion.
 8. **Code side done:** the verified Git registry client binds selection to
    registry commit + snapshot across the service schema, composer, skill
    contract, onboarding, CLI, and tests. Creating and promoting the external
@@ -435,13 +438,12 @@ Current migration state:
    snapshot, delete the in-tree `workspace/` source, and prove that production
    builds and fresh workspace creation have no checkout-relative fallback.
    This does not republish or revalidate feature templates against that base.
-10. **After repositories and catalog entries are deployed**, change onboarding
-    discovery and presentation so capabilities supplied by
-    an optional template are shown as installable, not ready or configurable.
-    Selecting one routes through the ordinary verified registry selection and
-    template-install flow. After installation, the same catalog entry
-    re-resolves to its ordinary setup/use workflow from the newly installed
-    owner skill.
+10. **Direct-URL handoff done; catalog presentation outstanding:** onboarding
+    recognizes explicit Examples, News, and Spectrolite goals and hands them to
+    the ordinary reviewed template-install flow. After registry deployment,
+    the Templates surface may additionally present promoted catalog entries;
+    onboarding must still use the same composer workflow rather than gaining a
+    second installer.
 
 ## Final extraction boundary
 

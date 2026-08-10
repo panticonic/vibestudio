@@ -69,8 +69,9 @@ commit, and content digest only in a labeled Details view.
 
 1. Invoke `prepareAdd` with `{ url, credential? }` or `{ catalogId,
 refreshCatalog? }`. Use `refreshCatalog: true` only when the user explicitly
-   asked to refresh the Templates surface. Onboarding does not offer template
-   installation. The composer binds a catalog id to the verified
+   asked to refresh the Templates surface. Onboarding may hand off an
+   explicitly approved user outcome to this same workflow; it does not install
+   the template itself. The composer binds a catalog id to the verified
    registry coordinates and returns `{ name, description?, inspection }`.
    `credential`, when present, is the workspace's logical credential name,
    never a concrete credential id. Explain the affected repositories and
@@ -196,9 +197,10 @@ imply registry governance or silently merge a catalog change.
 The template composer owns preparation and mutation. The shared template
 management component owns the human review state machine. The Templates page
 and shell settings embed that same component; agents invoke the same
-`prepareAdd` and `add` methods directly. Onboarding does not advertise or
-install templates. No surface implements its own catalog-to-inspection
-orchestration.
+`prepareAdd` and `add` methods directly. Onboarding may recognize that an
+explicit user goal needs an absent official template and hand that intent to
+this workflow; it does not install templates itself or maintain a parallel
+catalog. No surface implements its own catalog-to-inspection orchestration.
 
 Catalog reads are cache-only. Invoke `catalog` with no arguments when rendering
 or inspecting the current observation. Invoke `catalog` with

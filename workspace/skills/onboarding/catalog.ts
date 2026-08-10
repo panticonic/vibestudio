@@ -268,17 +268,6 @@ export const onboardingCatalog: readonly OnboardingCapabilityDefinition[] = [
     visibility: "contextual",
   },
   {
-    id: "contextual.news",
-    title: "News briefings",
-    summary: "Choose feeds, topics, and a schedule when you create a News channel.",
-    category: "personalization",
-    role: "contextual-setup",
-    scope: "channel",
-    tier: "direct",
-    ownerSkillPath: "panels/news/SKILL.md",
-    visibility: "contextual",
-  },
-  {
     id: "contextual.slack",
     title: "Slack",
     summary: "Available when a dependable Slack owner workflow and status read are installed.",
