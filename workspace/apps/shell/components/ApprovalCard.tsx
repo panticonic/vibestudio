@@ -249,6 +249,19 @@ export function ApprovalCard({
   const attribution = getApprovalAttribution(approval);
   const accent = approvalAccent(approval);
 
+  const lifecycleActions = validationPending ? (
+    <Button variant="soft" color="gray" onClick={() => emitForApproval({ type: "minimize" })}>
+      Run in background
+    </Button>
+  ) : validationTerminal ? (
+    <Button
+      variant="soft"
+      color="gray"
+      onClick={() => emitForApproval({ type: "decide", decision: "dismiss" })}
+    >
+      Dismiss
+    </Button>
+  ) : null;
   const actions =
     approval.kind === "client-config" ? (
       <ClientConfigActions
@@ -311,7 +324,6 @@ export function ApprovalCard({
     ) : (
       <StandardApprovalActions
         approval={approval}
-        terminal={validationTerminal}
         decide={(decision) => emitForApproval({ type: "decide", decision })}
         onBlock={() => emitForApproval({ type: "decide", decision: "lock" })}
       />
@@ -617,30 +629,24 @@ export function ApprovalCard({
           review's actions live here rather than at the end of its list, because
           `Add to workspace` under fifty-three parts is a decision you have to go
           looking for. */}
-      {validationPending ? null : (
-        <fieldset
-          className="approval-card-footer"
-          disabled={actionPending}
-          aria-busy={actionPending}
-        >
-          {approval.kind === "unit-install-review" ? (
-            <InstallReviewActions
-              approval={approval}
-              selection={installSelection}
-              busy={actionPending}
-              onResolve={(resolution) =>
-                emitForApproval({ type: "resolve-install-review", resolution })
-              }
-            />
-          ) : null}
-          {actions}
-          {actionPending ? (
-            <Text size="1" color="gray" ml="2" role="status" aria-live="polite">
-              Saving…
-            </Text>
-          ) : null}
-        </fieldset>
-      )}
+      <fieldset className="approval-card-footer" disabled={actionPending} aria-busy={actionPending}>
+        {!validationPending && !validationTerminal && approval.kind === "unit-install-review" ? (
+          <InstallReviewActions
+            approval={approval}
+            selection={installSelection}
+            busy={actionPending}
+            onResolve={(resolution) =>
+              emitForApproval({ type: "resolve-install-review", resolution })
+            }
+          />
+        ) : null}
+        {lifecycleActions ?? actions}
+        {actionPending ? (
+          <Text size="1" color="gray" ml="2" role="status" aria-live="polite">
+            Saving…
+          </Text>
+        ) : null}
+      </fieldset>
     </div>
   );
 }
@@ -853,20 +859,16 @@ function CallerChip({ caller, onShow }: { caller: CallerInfo; onShow: () => void
 
 function StandardApprovalActions({
   approval,
-  terminal,
   decide,
   onBlock,
 }: {
   approval: PendingCredentialApproval | PendingCapabilityApproval;
-  terminal: boolean;
   decide: (decision: ApprovalDecision) => void;
   onBlock: () => void;
 }) {
   const recommendedDecision = getRecommendedStandardDecision(approval);
   const isSevereCapability = approval.kind === "capability" && approval.severity === "severe";
-  const actions = getStandardApprovalDecisionActions(approval).filter(
-    (action) => !terminal || action.decision === "deny"
-  );
+  const actions = getStandardApprovalDecisionActions(approval);
   return (
     <Flex align="center" className="approval-actions" gap="2" wrap="wrap">
       {actions.map((action) => {

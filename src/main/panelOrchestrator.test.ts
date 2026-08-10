@@ -6,6 +6,11 @@ import { asPanelEntityId, asPanelSlotId } from "@vibestudio/shared/panel/ids";
 import type { PanelRuntimeLease } from "@vibestudio/shared/panel/panelLease";
 import { PanelOrchestrator } from "./panelOrchestrator.js";
 
+type PanelViewWebContents = Pick<
+  Electron.WebContents,
+  "id" | "isDestroyed" | "getURL" | "isLoading"
+>;
+
 function makePanel(id: string, children: Panel[] = [], overrides?: Partial<Panel>): Panel {
   const snapshot = {
     source: `panels/${id}`,
@@ -71,7 +76,7 @@ function createOrchestrator(
       async (_panelId: string, _url: string, _contextId: string, _partition: string) => {}
     ),
     hasView: vi.fn((_panelId: string) => false),
-    getWebContents: vi.fn((_panelId: string) => null),
+    getWebContents: vi.fn((_panelId: string): PanelViewWebContents | null => null),
     getViewPartition: vi.fn((_panelId: string) => undefined as string | undefined),
     setViewVisible: vi.fn((_panelId: string, _visible: boolean) => {}),
     destroyView: vi.fn((_panelId: string) => {}),
