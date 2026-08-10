@@ -706,6 +706,26 @@ export const templatesCommands: CliCommand[] = [
   },
   {
     group: "templates",
+    name: "adopt",
+    summary: "Record an existing template lineage without merging historical content",
+    usage: "vibestudio templates adopt URL_OR_ALIAS [--catalog ID] [--credential NAME]",
+    flags: [CATALOG, CREDENTIAL, COMMAND_ID, JSON_FLAG],
+    run: (inv) =>
+      run(
+        inv,
+        async (templates) => {
+          const locator = await resolvedTarget(templates, inv);
+          const inspection = await templates.inspect(locator);
+          return templates.adopt({
+            commandId: commandId(inv),
+            pin: inspection.pin,
+          });
+        },
+        renderPending
+      ),
+  },
+  {
+    group: "templates",
     name: "pull",
     summary: "Ask to update one template",
     usage: "vibestudio templates pull ALIAS [--to-ref VERSION]",

@@ -55,6 +55,11 @@
       "arguments": ["{ commandId, pin, onBuildFailure?: discard-context|retain-context }"],
       "returns": "PendingTemplateOperation"
     },
+    "adopt": {
+      "tier": "approval",
+      "arguments": ["{ commandId, pin, onBuildFailure?: discard-context|retain-context }"],
+      "returns": "PendingTemplateOperation"
+    },
     "pull": {
       "tier": "approval",
       "arguments": ["{ commandId, alias, toRef? }"],
@@ -100,11 +105,13 @@
     "TemplateInspection": "{ pin: { url, credential?, ref, commit, snapshot }, fingerprint, roots, templates, affectedParts, excludedSuggestions: [{ alias, section, value }] }",
     "TemplateAddPreparation": "{ name, description?, inspection: TemplateInspection }",
     "TemplateSuggestionDecision": "{ operationId, state: accepted|declined, section, publicationEventId? }",
-    "ResumableTemplateOperation": "{ operationId, kind: add|pull|remove|recompose|adopt-bootstrap|publish-authoring, contextId, state: pending|reviewing|repairing, fingerprint, review?, repair? }",
+    "ResumableTemplateOperation": "{ operationId, kind: add|adopt|pull|remove|recompose|adopt-bootstrap|publish-authoring, contextId, state: pending|reviewing|repairing, fingerprint, review?, repair? }",
     "TemplateCatalogSnapshot": "{ version: 1, revision, systemEpoch, entries: [{ id, name, description, tags, recommended, url, promoted: { ref, commit, snapshot } }], source: verified|cache, stale, verifiedAt, refreshError? }"
   },
   "invariants": [
-    "prepareAdd before every new add; UI and agents use the same preparation method",
+    "prepareAdd before every new add or lineage adoption; UI and agents use the same preparation method",
+    "lineage adoption records an exact contribution baseline and generated relationship metadata without merging historical template content into the current workspace",
+    "an unchanged installed node is resolved from its verified lock, generated fragment, and contribution ledger without reacquiring its upstream repository",
     "pass inspect.pin unchanged to add; add never resolves a URL, alias, catalog entry, or moving ref",
     "templates have ordered repository contributions, never exclusive repository ownership; overlap is merged through ordinary VCS external deltas",
     "the current lock wins for every already-resolved URL; catalog selections and unseen dependencies resolve from the reviewed registry revision, while direct URLs use inspect's independently discovered exact pin",

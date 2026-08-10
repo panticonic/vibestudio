@@ -15,7 +15,6 @@
         "workers/explorer-agent",
         "workers/gmail-agent",
         "workers/linked-agent",
-        "workers/news-agent",
         "workers/silent-agent-worker",
         "workers/test-agent"
       ],

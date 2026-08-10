@@ -1,0 +1,153 @@
+apps:
+  - source: apps/shell
+  - source: apps/mobile
+  - source: apps/remote-cli
+defaultRepo: projects/default
+extensions:
+  - source: extensions/git-bridge
+  - source: extensions/template-composer
+  - source: extensions/image-service
+  - source: extensions/pdf-ingest
+  - source: extensions/file-tools
+  - source: extensions/typecheck-service
+  - source: extensions/test-runner
+  - source: extensions/browser-data
+  - source: extensions/shell
+  - source: extensions/claude-code
+  - source: extensions/mobile-debug
+  - source: extensions/react-native
+  - source: extensions/local-models
+hostTargets:
+  electron:
+    app: apps/shell
+  react-native:
+    app: apps/mobile
+    requiresExtensions:
+      - extensions/react-native
+  terminal:
+    app: apps/remote-cli
+initPanels:
+  - source: panels/chat
+    stateArgs:
+      initialPrompt: I just opened this workspace for the first time, help me get onboarded.
+      systemPrompt: |
+        You are the Vibestudio onboarding assistant. Welcome new users and help them make Vibestudio ready for the work they actually want to do. Setup is durable preparation; immediately usable capabilities and ordinary tasks are not unfinished setup.
+
+        ## Opening turn
+
+        Read `skills/onboarding/SKILL.md`, then use the inviting panel's `client_eval` tool to statically import `composeOnboardingSnapshot` from `@workspace-skills/onboarding` and return `await composeOnboardingSnapshot()` with no verification argument. This executes the single composer in the customer's current panel/client context. Give a welcome of at most two short paragraphs and render `skills/onboarding/SetupHub.tsx` with `inline_ui`, passing the returned array as the `snapshot` prop. The inline overview owns the onboarding UI; do not load or publish an action bar. If client eval or rendering is unavailable, give a concise plain-text fallback and do not invent status.
+
+        ## Selection routing
+
+        Inline UI choices arrive as a readable message plus a structured `interaction` object beside the readable user message. Never infer a route from the button label. For `kind: "onboarding-capability"`, use `client_eval` to statically import `executeOnboardingSelection` from `@workspace-skills/onboarding` and call it with the complete structured interaction object. This validates the catalog route in the inviting panel and performs About, panel, or shell navigation. If it returns `handled: false`, follow its returned owner target:
+        - `owner-skill`: read the exact returned `ownerSkillPath` and use that
+          capability's workflow.
+
+        - `model-settings`: use the model-settings service and its existing
+          provider/default workflow.
+
+        - `conversation`: explain or start using the ready capability; do not
+          invent setup status.
+
+
+        Unknown or retired IDs are visible errors. There is no string-matching fallback.
+        For a Google or GitHub `check` action, use `client_eval` to call `composeOnboardingSnapshot({ verifyCapabilityId: interaction.targetId })` and render a new `SetupHub.tsx` observation. Never mutate or claim to refresh the old inline card. For `kind: "onboarding-overview"` and action `refresh`, call the composer through `client_eval` again and render a new observation.
+        Setup, repair, reconnect, success, failure, or cancellation also ends with a newly composed observation. Provider secrets are collected only through trusted credential APIs, never in chat or inline component state.
+
+        ## Presentation rules
+
+        The verified template catalog and owner status reads are the source of the onboarding presentation. Do not enumerate an independent feature menu, inspect private owner storage, count credentials as proof of a live connection, create completion flags, or report a universal setup score. Optional configuration is neutral unless a selected workflow failed. A connection with stored credentials is connected-unverified until the explicit live check succeeds.
+        Ask one question at a time after the overview and adapt to the user's intent. Use `feedback_custom` when a setup workflow must wait for user input, `inline_ui` for durable observations, and the compact action bar only for preparing, resume, reopen, or retry state. This workspace may run on the selected local or self-hosted server; never claim that every operation runs on the user's current machine.
+services:
+  - action: read or change this workspace's semantic source
+    authority:
+      principals:
+        - host
+        - user
+        - code
+        - session
+        - mission
+    description: Owns semantic source, history, projections, and workspace initialization.
+    durableObject:
+      className: GadWorkspaceDO
+    name: gad.workspace
+    notability: everyday
+    presentation:
+      domain: automation
+      verb: manage
+    protocols:
+      - vibestudio.workspace-source.v1
+      - vibestudio.gad.workspace.v1
+    source: workers/workspace-source
+    title: Workspace source
+  - action: send and receive messages in your conversations
+    authority:
+      principals:
+        - host
+        - user
+        - code
+        - session
+        - mission
+    description: Access your workspace's conversations, including sending messages and reading replies.
+    durableObject:
+      className: PubSubChannel
+    name: channel
+    notability: everyday
+    presentation:
+      domain: sharing
+      substanceKind: send
+      verb: act
+    protocols:
+      - vibestudio.channel.v1
+    source: workers/pubsub-channel
+    title: Conversations
+  - action: read or change which AI models your workspace uses
+    authority:
+      principals:
+        - host
+        - user
+        - code
+        - session
+        - mission
+    description: Read or change the AI model and provider settings for this workspace.
+    durableObject:
+      className: ModelSettingsDO
+    name: models
+    notability: everyday
+    presentation:
+      domain: automation
+      verb: manage
+    protocols:
+      - vibestudio.models.v1
+    source: workers/model-settings
+    title: AI model settings
+  - action: run workspace tests and record results
+    authority:
+      principals:
+        - host
+        - user
+        - code
+        - session
+    description: Run this workspace's test suite and record results.
+    durableObject:
+      className: TestkitDriverDO
+    name: testkit-driver
+    notability: everyday
+    presentation:
+      domain: automation
+      verb: act
+    protocols:
+      - vibestudio.testkit-driver.v1
+    source: workers/testkit-driver
+    title: Test runner
+singletonObjects:
+  - className: GadWorkspaceDO
+    key: workspace
+    source: workers/workspace-source
+  - className: ModelSettingsDO
+    key: workspace-model-settings
+    source: workers/model-settings
+  - className: TestkitDriverDO
+    key: workspace-testkit-driver
+    source: workers/testkit-driver
+systemEpoch: 57

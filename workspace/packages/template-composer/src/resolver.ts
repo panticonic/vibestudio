@@ -158,12 +158,16 @@ export interface ResolveTemplateCompositionInput {
   pinOverrides?: Readonly<Record<string, WorkspaceTemplatePin>>;
   localRepoPaths?: ReadonlySet<string>;
   previousLock?: WorkspaceTemplateLock;
+  /** Generated fragments committed beside the previous lock. Unchanged exact
+   * nodes are resolved from this installed evidence without reacquiring their
+   * upstream repositories. */
+  installedFragments?: Readonly<Record<string, string>>;
   expectedSystemEpoch: number;
   ports: TemplateSourcePorts;
 }
 
 interface MutableNode extends ResolvedTemplateNode {
-  snapshot: ExactGitSnapshot;
+  snapshot?: ExactGitSnapshot;
 }
 
 interface ParsedTemplateManifest {
@@ -287,6 +291,7 @@ function parseTemplateManifest(
 }
 
 function enumerateRepoFiles(node: MutableNode): Map<string, ExactSnapshotFile[]> {
+  if (!node.snapshot) return new Map();
   const repositories = new Map<string, ExactSnapshotFile[]>();
   for (const file of node.snapshot.files) {
     const parts = file.path.split("/");
@@ -406,7 +411,8 @@ function normalizedOverrides(
 
 /**
  * Resolve and slice a complete template closure without mutating workspace
- * state. Every external effect is behind `TemplateSourcePorts`.
+ * state. Unchanged installed nodes come from committed lock/fragment evidence;
+ * every remaining external effect is behind `TemplateSourcePorts`.
  */
 export async function resolveTemplateComposition(
   input: ResolveTemplateCompositionInput
@@ -431,6 +437,10 @@ export async function resolveTemplateComposition(
   const lockedByUrl = new Map(
     (previousLock?.nodes ?? []).map((node) => [normalizeTemplateGitUrl(node.pin.url), node.pin])
   );
+  const lockedNodeByUrl = new Map(
+    (previousLock?.nodes ?? []).map((node) => [normalizeTemplateGitUrl(node.pin.url), node])
+  );
+  const lockedNodeById = new Map((previousLock?.nodes ?? []).map((node) => [node.nodeId, node]));
   const selectedPins = new Map<string, WorkspaceTemplatePin>();
   const declaredCredentials = new Map<string, string | undefined>();
   const nodes = new Map<string, MutableNode>();
@@ -499,6 +509,74 @@ export async function resolveTemplateComposition(
     const alias = templateAliasFromUrl(pin.url);
     visiting.push(dependency.url);
     try {
+      const lockedNode = lockedNodeByUrl.get(dependency.url);
+      const installedFragmentYaml = input.installedFragments?.[nodeId];
+      if (
+        lockedNode?.nodeId === nodeId &&
+        lockedNode.pin.commit === pin.commit &&
+        lockedNode.pin.snapshot === pin.snapshot &&
+        installedFragmentYaml !== undefined
+      ) {
+        const fragmentDigest = digestBytes(new TextEncoder().encode(installedFragmentYaml));
+        if (fragmentDigest !== lockedNode.fragmentDigest) {
+          throw new TemplateResolutionError(
+            "template-installed-fragment-integrity",
+            `Installed fragment for ${dependency.url} does not match its committed lock evidence`
+          );
+        }
+        const fragment = WorkspaceConfigFragmentSchema.parse(
+          YAML.parse(installedFragmentYaml) as unknown
+        );
+        if (fragment.systemEpoch !== input.expectedSystemEpoch) {
+          throw new TemplateResolutionError(
+            "template-installed-fragment-incompatible",
+            `Installed fragment for ${dependency.url} has systemEpoch ${fragment.systemEpoch}`
+          );
+        }
+        const node: MutableNode = {
+          nodeId,
+          alias: lockedNode.alias,
+          pin,
+          parents: [],
+          fragment,
+          fragmentYaml: installedFragmentYaml,
+          fragmentDigest,
+          ...(lockedNode.presentation === undefined
+            ? {}
+            : { presentation: lockedNode.presentation }),
+          excludedSuggestions: {
+            ...(lockedNode.suggestions.trust === undefined
+              ? {}
+              : { trust: lockedNode.suggestions.trust.value }),
+            ...(lockedNode.suggestions.providers === undefined
+              ? {}
+              : { providers: lockedNode.suggestions.providers.value }),
+          },
+        };
+        nodes.set(nodeId, node);
+        nodeByUrl.set(dependency.url, nodeId);
+        const parents: string[] = [];
+        for (const parentId of [...lockedNode.parents].sort(compareUtf16CodeUnits)) {
+          const parent = lockedNodeById.get(parentId);
+          if (!parent) {
+            throw new TemplateResolutionError(
+              "template-graph-integrity",
+              `Installed template ${lockedNode.alias} is missing parent ${parentId}`
+            );
+          }
+          parents.push(
+            await visit(
+              {
+                url: parent.pin.url,
+                ...(parent.pin.credential ? { credential: parent.pin.credential } : {}),
+              },
+              [...path, alias]
+            )
+          );
+        }
+        node.parents = [...new Set(parents)].sort(compareUtf16CodeUnits);
+        return nodeId;
+      }
       const snapshot = await input.ports.acquire(pin, nodeId);
       if (snapshot.commit.toLowerCase() !== pin.commit || snapshot.snapshot !== pin.snapshot) {
         throw new TemplateResolutionError(
@@ -553,6 +631,25 @@ export async function resolveTemplateComposition(
   const ordered = topologicalNodes(nodes);
   const claims = new Map<string, Map<string, TemplateRepositoryContribution>>();
   for (const node of ordered) {
+    if (!node.snapshot) {
+      for (const [repoPath, repository] of Object.entries(previousLock?.repositories ?? {})) {
+        const previous = repository.contributions.find(
+          (contribution) => contribution.nodeId === node.nodeId
+        );
+        if (!previous) continue;
+        const repoClaims = claims.get(repoPath) ?? new Map();
+        repoClaims.set(node.nodeId, {
+          repoPath,
+          nodeId: node.nodeId,
+          alias: node.alias,
+          subdir: repoPath,
+          subtreeDigest: previous.subtreeDigest,
+          files: [],
+        });
+        claims.set(repoPath, repoClaims);
+      }
+      continue;
+    }
     for (const [repoPath, files] of enumerateRepoFiles(node)) {
       const repoClaims = claims.get(repoPath) ?? new Map();
       repoClaims.set(node.nodeId, {

@@ -143,6 +143,16 @@ describe("template composer staging", () => {
   });
 
   it("removes temporary repair state before publishing the repaired context", async () => {
+    const record = {
+      version: 1 as const,
+      operationId: "repair-news",
+      kind: "pull" as const,
+      fingerprint: `v1-sha256:${"a".repeat(64)}`,
+      intent: { kind: "pull", alias: "news" },
+      pins: [],
+      affectedParts: ["panels/news"],
+      preparedAffectedRepoPaths: ["panels/news"],
+    };
     const call = vi.fn(async (_target: string, method: string) => {
       if (method === "runtime.createContext") return {};
       if (method === "vcs.status") {
@@ -157,7 +167,7 @@ describe("template composer staging", () => {
       throw new Error(`unexpected RPC ${method}`);
     });
 
-    await clearTemplateOperationRecordFile({ rpc: { call } } as never, "repair-news");
+    await clearTemplateOperationRecordFile({ rpc: { call } } as never, record);
 
     expect(call).toHaveBeenCalledWith(
       "main",
@@ -165,6 +175,11 @@ describe("template composer staging", () => {
       expect.objectContaining({
         changes: [expect.objectContaining({ kind: "file-delete", fileId: "file:record" })],
       })
+    );
+    expect(call).toHaveBeenCalledWith(
+      "main",
+      "vcs.commit",
+      expect.objectContaining({ message: expect.stringMatching(/^template-composer-intent:v1:/u) })
     );
   });
 
@@ -224,6 +239,80 @@ describe("template composer staging", () => {
       relation: "diverged",
     } satisfies Partial<TemplateOperationMainAdvanced>);
     expect(call).not.toHaveBeenCalledWith("main", "vcs.push", expect.anything());
+  });
+
+  it("records adopted lineage metadata without replaying repository contributions", async () => {
+    const call = vi.fn(async (_target: string, method: string) => {
+      if (method === "vcs.status") {
+        return {
+          committed: BASE,
+          workingHead: BASE,
+          clean: true,
+          mainRelation: "at",
+          mainEventId: BASE.eventId,
+        };
+      }
+      if (method === "vcs.resolveRepository") {
+        return { repositoryId: "repository:meta", repoPath: "meta" };
+      }
+      if (method === "vcs.readFile") return null;
+      if (method === "vcs.edit") return {};
+      throw new Error(`unexpected RPC ${method}`);
+    });
+    const ports = createTemplateOperationPorts(
+      { rpc: { call } } as never,
+      "/state",
+      {
+        workspaceId: "workspace-1",
+        top: { systemEpoch: 57, templates: { use: [] } },
+        runtimeTop: { systemEpoch: 57 },
+        localRepoPaths: new Set(["packages/runtime"]),
+      } as never,
+      vi.fn()
+    );
+    const pin = {
+      url: "git+https://example.test/base.git",
+      ref: "refs/tags/v1",
+      commit: "1".repeat(40),
+      snapshot: `v1-sha256:${"1".repeat(64)}`,
+    };
+    const result = await ports.stageComposition("operation-adopt", {
+      kind: "adopt",
+      nextTemplates: { use: [{ url: pin.url }], overrides: {} },
+      plan: {
+        fingerprint: `v1-sha256:${"2".repeat(64)}`,
+        rootNodeIds: ["t-base"],
+        nodes: [
+          {
+            nodeId: "t-base",
+            alias: "base",
+            pin,
+            parents: [],
+            fragment: { systemEpoch: 57 },
+          },
+        ],
+        repositories: {
+          "packages/runtime": {
+            repoPath: "packages/runtime",
+            contributions: [],
+          },
+        },
+        localRepoPaths: ["packages/runtime"],
+        artifacts: [],
+        removedArtifactPaths: [],
+        lock: {} as never,
+      },
+    } as never);
+
+    expect(result).toEqual({ affectedRepoPaths: ["packages/runtime"] });
+    expect(call).toHaveBeenCalledWith(
+      "main",
+      "vcs.edit",
+      expect.objectContaining({ intentSummary: "Update generated template composition metadata" })
+    );
+    expect(call).not.toHaveBeenCalledWith("main", "vcs.registerExternalDelta", expect.anything());
+    expect(call).not.toHaveBeenCalledWith("main", "vcs.importSnapshot", expect.anything());
+    expect(call).not.toHaveBeenCalledWith("main", "vcs.merge", expect.anything());
   });
 
   it("surfaces an overlapping contribution as an ordinary VCS review delta", async () => {

@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "censusDigest": "sha256:51f8619bdd5b55e21a1152c32a74ed984b5a2c85b75f1236d0b41dd6211ee2a9",
+  "censusDigest": "sha256:e519ae9a456def4e3bdabf54fc985c2e25e1141c89b074e541566afeb9633c6f",
   "decisions": {
     "host:auth.mintAgentCredential": {
       "review": "reviewed-subagent-launch-agent-login",

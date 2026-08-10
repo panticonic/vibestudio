@@ -18,6 +18,7 @@ describe("createTemplateManagementClient", () => {
     await client.inspect({ url: "https://example.test/template.git" });
     await client.prepareAdd({ catalogId: "github" });
     await client.add({ commandId: "add-1", pin });
+    await client.adopt({ commandId: "adopt-1", pin });
     await client.pull({ commandId: "pull-1", alias: "github", toRef: "refs/tags/v2" });
     await client.remove({ commandId: "remove-1", alias: "github" });
     await client.suggest({ commandId: "suggest-1", alias: "github", parts: ["skills/github"] });
@@ -42,6 +43,7 @@ describe("createTemplateManagementClient", () => {
       ],
       ["@workspace-extensions/template-composer", "prepareAdd", [{ catalogId: "github" }]],
       ["@workspace-extensions/template-composer", "add", [{ commandId: "add-1", pin }]],
+      ["@workspace-extensions/template-composer", "adopt", [{ commandId: "adopt-1", pin }]],
       [
         "@workspace-extensions/template-composer",
         "pull",

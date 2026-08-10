@@ -309,11 +309,13 @@ export async function updateTemplateOperationRecord(
 }
 
 /** Remove context-local recovery state before publishing the composed result.
- * The record remains recoverable from attributed context history until push. */
+ * The exact resumable record is retained in the clearing commit's attribution
+ * so an interrupted approval-gated push never strands the prepared context. */
 export async function clearTemplateOperationRecordFile(
   ctx: ExtensionContextLike,
-  operationId: string
+  record: TemplateOperationRecord
 ): Promise<void> {
+  const operationId = record.operationId;
   const contextId = await ensureTemplateOperationContext(ctx, operationId);
   let current = await status(ctx, contextId);
   if (!current.clean) {
@@ -339,7 +341,9 @@ export async function clearTemplateOperationRecordFile(
     contextId,
     expectedWorkingHead: current.workingHead,
     intentSummary: "Finalize repaired template operation",
-    message: `Finalize repaired template operation ${operationId}`,
+    message: `${OPERATION_MESSAGE_PREFIX}${Buffer.from(JSON.stringify(record), "utf8").toString(
+      "base64url"
+    )}`,
   });
 }
 
@@ -790,14 +794,21 @@ export function createTemplateOperationPorts(
           ].sort(),
         };
       }
-      const merged = await mergeTemplateContributions(
-        ctx,
-        statePath,
-        contextId,
-        inspection.plan,
-        observation.lock,
-        record
-      );
+      // Lineage adoption deliberately establishes the contribution baseline
+      // without replaying it into the current workspace. The present source is
+      // the local descendant; future pull/remove operations use the adopted
+      // contribution as their ordinary external-delta base.
+      const merged =
+        inspection.kind === "adopt"
+          ? Object.keys(inspection.plan.repositories).sort()
+          : await mergeTemplateContributions(
+              ctx,
+              statePath,
+              contextId,
+              inspection.plan,
+              observation.lock,
+              record
+            );
       await stageMeta(ctx, contextId, observation, inspection);
       return {
         affectedRepoPaths: affectedRepositoryPaths(merged),

@@ -22,6 +22,7 @@ export interface TemplateCatalogSelection {
 export interface TemplateWorkspaceObservation {
   roots: readonly WorkspaceTemplateDeclaration[];
   lock?: WorkspaceTemplateLock;
+  installedFragments?: Readonly<Record<string, string>>;
   localRepoPaths: ReadonlySet<string>;
   overrides?: Readonly<Record<string, WorkspaceTemplatePin>>;
   expectedSystemEpoch: number;
@@ -32,6 +33,14 @@ export interface InspectTemplateAddInput {
   /** Present only for a registry card; direct URLs have an exact discovery proof. */
   selection?: TemplateCatalogSelection;
   template: WorkspaceTemplateDeclaration;
+  workspace: TemplateWorkspaceObservation;
+  sources: TemplateSourcePorts;
+}
+
+export interface InspectTemplateAdoptInput {
+  kind: "adopt";
+  /** Exact release whose contribution history the current workspace claims. */
+  pin: WorkspaceTemplatePin;
   workspace: TemplateWorkspaceObservation;
   sources: TemplateSourcePorts;
 }
@@ -71,6 +80,7 @@ export interface InspectBootstrapAdoptionInput {
 
 export type InspectTemplateOperationInput =
   | InspectTemplateAddInput
+  | InspectTemplateAdoptInput
   | InspectTemplatePullInput
   | InspectTemplateRemoveInput
   | InspectTemplateRecompositionInput
@@ -106,8 +116,9 @@ function reachablePreviousUrls(
 }
 
 /**
- * Produce the complete review payload for add, pull, ordinary recomposition,
- * or first-run bootstrap adoption. No workspace mutation occurs.
+ * Produce the complete review payload for add, lineage adoption, pull,
+ * ordinary recomposition, or first-run bootstrap adoption. No workspace
+ * mutation occurs.
  */
 export async function inspectTemplateOperation(
   input: InspectTemplateOperationInput
@@ -138,8 +149,16 @@ export async function inspectTemplateOperation(
   }
 
   const roots =
-    input.kind === "add"
-      ? [...input.workspace.roots, input.template]
+    input.kind === "add" || input.kind === "adopt"
+      ? [
+          ...input.workspace.roots,
+          input.kind === "add"
+            ? input.template
+            : {
+                url: input.pin.url,
+                ...(input.pin.credential ? { credential: input.pin.credential } : {}),
+              },
+        ]
       : input.kind === "remove"
         ? input.workspace.roots.filter(
             (root) =>
@@ -156,7 +175,7 @@ export async function inspectTemplateOperation(
     )
   );
   const pinOverrides =
-    input.kind === "pull"
+    input.kind === "pull" || input.kind === "adopt"
       ? { ...retainedOverrides, [normalizeTemplateGitUrl(input.pin.url)]: input.pin }
       : retainedOverrides;
   const plan =
@@ -167,6 +186,7 @@ export async function inspectTemplateOperation(
           pinOverrides,
           localRepoPaths: input.workspace.localRepoPaths,
           previousLock: input.workspace.lock,
+          installedFragments: input.workspace.installedFragments,
           expectedSystemEpoch: input.workspace.expectedSystemEpoch,
           ports: input.sources,
         });

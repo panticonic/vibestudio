@@ -209,6 +209,7 @@ export async function observeWorkspace(
     ? WorkspaceConfigTopLayerSchema.parse(YAML.parse(textContent(sourceFile)) as unknown)
     : undefined;
   let top: ReturnType<typeof WorkspaceConfigTopLayerSchema.parse>;
+  const installedFragments: Record<string, string> = {};
   if (lock) {
     if (!storedSource) {
       throw new Error(
@@ -233,6 +234,7 @@ export async function observeWorkspace(
       if (!fragmentFile) {
         throw new Error(`Workspace is missing generated template fragment ${node.nodeId}`);
       }
+      installedFragments[node.nodeId] = textContent(fragmentFile);
       layers.push({
         nodeId: node.nodeId,
         alias: node.alias,
@@ -260,6 +262,7 @@ export async function observeWorkspace(
     runtimeTop,
     roots: top.templates?.use ?? [],
     ...(lock ? { lock } : {}),
+    ...(lock ? { installedFragments } : {}),
     localRepoPaths,
     overrides: top.templates?.overrides,
     expectedSystemEpoch: top.systemEpoch,

@@ -86,7 +86,10 @@ function snapshot(
 function ports(
   pins: readonly WorkspaceTemplatePin[],
   snapshots: ReadonlyMap<string, ExactGitSnapshot>
-): TemplateSourcePorts & { resolvePromoted: ReturnType<typeof vi.fn> } {
+): TemplateSourcePorts & {
+  resolvePromoted: ReturnType<typeof vi.fn>;
+  acquire: ReturnType<typeof vi.fn>;
+} {
   const byUrl = new Map(pins.map((value) => [normalizeTemplateGitUrl(value.url), value]));
   return {
     resolvePromoted: vi.fn(async (declaration: WorkspaceTemplateDeclaration) => {
@@ -94,11 +97,11 @@ function ports(
       if (!exact) throw new Error(`No promoted pin for ${declaration.url}`);
       return exact;
     }),
-    acquire: async (exact) => {
+    acquire: vi.fn(async (exact: WorkspaceTemplatePin) => {
       const value = snapshots.get(normalizeTemplateGitUrl(exact.url));
       if (!value) throw new Error(`No snapshot for ${exact.url}`);
       return value;
-    },
+    }),
   };
 }
 
@@ -169,6 +172,9 @@ describe("resolveTemplateComposition", () => {
     const added = await resolveTemplateComposition({
       roots: [{ url: newsUrl }, { url: browserUrl }],
       previousLock: initial.lock!,
+      installedFragments: Object.fromEntries(
+        initial.nodes.map((node) => [node.nodeId, node.fragmentYaml])
+      ),
       localRepoPaths: new Set(["packages/runtime", "panels/news"]),
       expectedSystemEpoch: epoch,
       ports: addPorts,
@@ -178,6 +184,11 @@ describe("resolveTemplateComposition", () => {
     expect(addPorts.resolvePromoted).toHaveBeenCalledWith({
       url: normalizeTemplateGitUrl(browserUrl),
     });
+    expect(addPorts.acquire).toHaveBeenCalledTimes(1);
+    expect(addPorts.acquire).toHaveBeenCalledWith(
+      expect.objectContaining({ url: normalizeTemplateGitUrl(browserUrl) }),
+      expect.any(String)
+    );
     expect(
       added.nodes.find((node) => node.pin.url === normalizeTemplateGitUrl(baseUrl))?.pin.commit
     ).toBe(base.commit);
@@ -232,9 +243,10 @@ describe("resolveTemplateComposition", () => {
 
     expect(plan.repositories["packages/runtime"]!.contributions).toHaveLength(2);
     expect(plan.lock!.repositories["packages/runtime"]!.contributions).toEqual(
-      plan.repositories["packages/runtime"]!.contributions.map(
-        ({ nodeId, subtreeDigest }) => ({ nodeId, subtreeDigest })
-      )
+      plan.repositories["packages/runtime"]!.contributions.map(({ nodeId, subtreeDigest }) => ({
+        nodeId,
+        subtreeDigest,
+      }))
     );
   });
 

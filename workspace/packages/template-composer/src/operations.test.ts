@@ -136,6 +136,51 @@ describe("template operations", () => {
     expect(inspection.plan.repositories["packages/runtime"]).toBeDefined();
   });
 
+  it("adopts an exact ordinary release without resolving its root from a registry", async () => {
+    const resolvePromoted = vi.fn(async () => {
+      throw new Error("registry should not resolve the adopted root");
+    });
+    const manifest = new TextEncoder().encode("systemEpoch: 57\n");
+    const inspection = await inspectTemplateOperation({
+      kind: "adopt",
+      pin: exactRoot,
+      workspace: {
+        roots: [],
+        localRepoPaths: new Set(["packages/runtime"]),
+        expectedSystemEpoch: 57,
+      },
+      sources: {
+        resolvePromoted,
+        acquire: async (pin) => ({
+          commit: pin.commit,
+          snapshot: pin.snapshot,
+          files: [
+            {
+              path: "meta/template.yml",
+              contentHash: "a".repeat(64),
+              size: manifest.byteLength,
+              mode: 0o644,
+            },
+            {
+              path: "packages/runtime/index.ts",
+              contentHash: "b".repeat(64),
+              size: 1,
+              mode: 0o644,
+            },
+          ],
+          readFile: (path) => (path === "meta/template.yml" ? manifest : null),
+        }),
+      },
+    });
+
+    expect(resolvePromoted).not.toHaveBeenCalled();
+    expect(inspection.kind).toBe("adopt");
+    expect(inspection.nextTemplates?.use).toEqual([
+      { url: "git+https://github.com/vibestudio/workspace-base.git" },
+    ]);
+    expect(inspection.plan.repositories["packages/runtime"]).toBeDefined();
+  });
+
   it("discards the operation context and never publishes when the build gate fails", async () => {
     const publish = vi.fn();
     const discard = vi.fn(async () => undefined);

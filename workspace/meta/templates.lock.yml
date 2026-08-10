@@ -1,0 +1,474 @@
+fingerprint: v1-sha256:7d7633c46c6b262ee780d70a0345d54c96ba9c21fc633cb05879e277667ea29c
+nodes:
+  - alias: base-bc5f8206992a
+    fragmentDigest: v1-sha256:efca01d9f8b8a58522c987a07c050b6f81c007041c4e2039cc9bc96c3f213672
+    nodeId: t-899f070e8551
+    parents: []
+    pin:
+      commit: 8a1027e6708e12c6d3fed4b0a9b3044f4064186d
+      ref: refs/heads/main
+      snapshot: v1-sha256:346d73e78779c7233b446f54a22e86c36d094ab7fc0ca075f6584a902e3f154b
+      url: git+https://github.com/panticonic/vibestudio-workspace-base.git
+    suggestions:
+      providers:
+        digest: v1-sha256:0cbd322bfbe6161db1460a0cedc865e5bc4bc93018300809bba0692c75befede
+        value:
+          browserData:
+            extension: extensions/browser-data
+          claudeCode:
+            extension: extensions/claude-code
+          gitInterop:
+            extension: extensions/git-bridge
+      trust:
+        digest: v1-sha256:fa321164ee886d12afa6c1e1d70eebd8d1c333f18a15b3ccdbd6f348063ba942
+        value:
+          chromeApps:
+            - apps/shell
+            - apps/mobile
+overrides:
+  git+https://github.com/panticonic/vibestudio-workspace-base.git:
+    commit: 8a1027e6708e12c6d3fed4b0a9b3044f4064186d
+    ref: refs/heads/main
+    snapshot: v1-sha256:346d73e78779c7233b446f54a22e86c36d094ab7fc0ca075f6584a902e3f154b
+    url: git+https://github.com/panticonic/vibestudio-workspace-base.git
+repositories:
+  about/about:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:4317937aecd5817ba6525c168078d9dff58c40496fc92931dd870b3e3da2fe0e
+  about/adblock:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:b5c4512ccfb9a6dd54c2eb4c65c0faf7da620cff7cc672c1f821b916664acdc4
+  about/bookmarks:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:4dc78a2349511f529719d9e2c325ffacd342d00ab2180145583406effa120749
+  about/browser-import-inspector:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:241bc9319494713eddc1cb37272ec56b91f9995c151ee6b8a69b45e2fdc8f1b3
+  about/collection:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:aec9a53397893da679d8fd884a3d06cd37bed185cb13967b23bf3e6723d0e937
+  about/credentials:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:36bb6b5733ea62e32904901ae1015fc4e1e0a650d82e08980dbc0c50f38caa6e
+  about/downloads:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:b4fb45fc89bb6d3922ca99e7de7fc886e859c57eabebb7fb94a984aace537c8a
+  about/help:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:ab6147a50a2e3fbd8b8c054cce043f786bb21fab82baf3e97449625f5c07e2c3
+  about/history:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:25b92164387d90cf3b8f29cd1802a7fdbd089b2aa6f8b3d064320a6262f984ac
+  about/keyboard-shortcuts:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:11bd655ae857c8739cb82cfd49d2d47490df78d22a926ec9bcc9f5a435e56df8
+  about/new:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:38d11cb11bfcee7f6dc74af2dc27ced3636ec9a5800c8576e9ee699498839de5
+  about/permissions:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:7fdc806dc5cb63ae325fdac64248d2b44975db973d7edc825d85f079a5247632
+  about/server-logs:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:be4d32a2c709476229bcd941255dc379c273a49e541b0eea69f4b6441c7abf78
+  about/templates:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:73e05771d258211ec9eeebabd1e6845ff87fb41cea71cd793bc857e9d1bff0f9
+  apps/mobile:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:561cd1e3ff303548755aaf36743468ac1e73d89915a504552a04e6f6f6d70581
+  apps/remote-cli:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:8d11dadce761c0c3489669ec2761e3330e1ff98573c4c0e4745689d3583577e6
+  apps/shell:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:38c838461fec02437ef8142b4b86a9fb80cbecaf77aafb94a9505be2d3ca1b46
+  apps/terminal-browser:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:a312349023113415524b43264c691362d8ba9a2e3bac2cc559518d8950a92c16
+  extensions/browser-data:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:300edbade27e856db2966cacbaddf49007d7f552ceda5fc913107cce2c275443
+  extensions/claude-code:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:284b2b597ef6ef87fd2270e7903f60d26619b076a2cdfc093c43fc7d74ed18f7
+  extensions/file-tools:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:fe527ee87d75a4efddd4b30002450fae4082b035a86b8b7cd963ad7d09a17efb
+  extensions/git-bridge:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:d56c1e2e86621d88b1599be0d087a2dee10142064f01c268a888f25aad6bec86
+  extensions/image-service:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:6657fecce35acebabfe6529a735e04ad37110896446f75191935729960b49973
+  extensions/local-models:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:e7ff2b2147347c4dbe585e9ac7597a68d66131aed0013eb2397fb7f51f25ee0c
+  extensions/mobile-debug:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:732b0225ef3764174dcd7a6abec3045779d2374636e362617aa699b2df49d174
+  extensions/pdf-ingest:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:f24e7d11f900afd99d53a3aad5df3dddcd23c53a9135dab7471781b8ef2fe8ce
+  extensions/react-native:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:22097997ac9f91d45ee5d61f8abc09659d17b11e2b3e7007088bf56b1f4d74f6
+  extensions/shell:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:7a273a20f21b1fc2c9cb057c01b35c23c1ef1084386d5dfaa4f00e2a9997b553
+  extensions/template-composer:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:ca98d5086ee13cfc0c0aa318da344cfc3e91bb9c18aa218ea73b3efb45fc8718
+  extensions/test-runner:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:e98e0e259c41e0dfa3ac9b1fa6c77f96dad132d7edc90333b154632a510c2d41
+  extensions/typecheck-service:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:2e944ac5cb252facd2a1341735b6e3026c952a064f87e750f9c1fcea29c49e8a
+  packages/about-shared:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:6e789471fe58e1db4cf72d762c9ef6950f5bf58637d45be6a89572e4cb0898c2
+  packages/agent-loop:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:b23398b479af2ab7d2edfe2df12e5bb1ac5520d8cbbfa2db9340036cb9869f49
+  packages/agentic-chat:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:894b57b75b66373bc5eeaa1a93ad0cbc5561d9c92ee2977340eb459239fd281b
+  packages/agentic-core:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:11c199da6b636c33ce65574a3937ac6e625dc6752ab6cfae821caab9179536a3
+  packages/agentic-do:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:2b87bffda50b10df554599b73c16c0885559786c7153da6742e0df0cf9190d08
+  packages/agentic-protocol:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:9009c5aa0dc8851645a46857837345a6604842f29a613c5b8484eeba17ba5dc5
+  packages/agentic-session:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:5cefd409630fdf18d9fe0e30cd64aa790f99fac313d5377cb00ffa93ea87ac08
+  packages/cdp-client:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:eef30933f354ce02120f29aa6347caeb7ad5c9c414e93a46b3d6de38a31e54f7
+  packages/channel-fork:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:9eb2b8ff0a9a0a49048591d83c7d8a138aabdcf79b89c5f8fcb236ece10ea1df
+  packages/channel-policies:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:3441e7674abbfadfca86728e1e7fd1506573d460dc86d6f247df2c37bd45863b
+  packages/collection-orchestration:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:8fa305567f180e8597af7016aa62e720561976f811b2eafde5c58c3294c34270
+  packages/eval:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:72770d50425c8bc7d9908fdeeedf8f8e5a70fc03c083f744fcb26cf7e0b20232
+  packages/gmail:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:657220606a41c57b3a327346672c6cc2d1ab3b61c5ba17cf7261617cb9143f77
+  packages/harness:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:e54c726d237b7de4c8fbec2f3286ddef8a9e8df5c5578d6fb86046a3105cb6d0
+  packages/integrations:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:ef94f45de30f8192c0b9f70396a0b7e51fcf9da2469e54df860f854d8858ede2
+  packages/model-catalog:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:8248aa8914c2440b4eaa5bded9c7f36aae93f2693e012f1771c7d844e2935ecc
+  packages/pi-core:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:3d53c866df4da389df32c9d1392cd68375dd7bc4f39826cce3e987d95e3730ef
+  packages/pubsub:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:f556f113efe976e9e9b2ae8b1345c7a77d533b81a7339dc6065a0d9a6da9a142
+  packages/react:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:cb7c2c86bc8f1c5191a31571f5402e8190852555b87ee42b1d7a54fc33603d17
+  packages/runtime:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:8ce66eabc6770662c6db04600b62154e9aad1e2a981615dc3b4f433b1d278686
+  packages/svelte:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:4bcaceca62ae57da17ee5ede92472e9ffa2d418430a0d83f6f68e400fbff1b82
+  packages/template-composer:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:1a79c603c59fd0db5b49aa8c249530aec1bfbed72b01f6fe508fc1918955aaef
+  packages/template-management:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:90e2585b10a96119cf1c764006fadfb13e70cc76f3976800f72883932f1b5183
+  packages/template-registry:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:3f0d5dc3255042eaee04cc3ea26e46fd72b2966ed5170fcec04a597bbf917765
+  packages/terminal-host-protocol:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:d5604bcbdba8b0a838e5d112d405eed48254619f2763735ca60d0ddafb1c2857
+  packages/terminal-shim:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:838e3b35cb884a89695dd40e00bbee6b9183a429c68685eaccb15acb1ad79475
+  packages/testkit:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:cb4eec7bbe4b8393efd1f8bd119a273f522a6fa5e2b6c40c2f3c8c1e08581de8
+  packages/tool-ui:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:6a4eb28df55dbb8bad7fd9e869ed6092781c8d6cbdbb0473a8ad9e5747e556af
+  packages/ui:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:21e6175d86304ed45cc42a45d1b811ef2e48406dd25d42342994dd46d2bfef4d
+  packages/vcs-engine:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:f5f0fac91b5f7d184db99496b575d51001e1a33d95d40a119119c919139255cb
+  panels/chat:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:fa2991ec9da1d3aa3935601236bf64b78b2b0cea536807ef6ccd7f8e08a4ee17
+  panels/development:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:ab2f9991b05669d51600b394ef0ed2419e0d0b8b784a3177de154c39730af129
+  panels/gad-browser:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:33fbba0adc43d08d587e1ca813daa1358a8916339603f4471dd25f35a6945876
+  panels/local-models:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:d235e9d2020364ee655095a1c21dd3523b31eb52d1d460e5824c527a995404e1
+  panels/terminal:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:a26e0236080a400bb89e91a988297999393c6294cc9cd29cfddb9157bc3ccb1b
+  panels/testbench:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:4d2323a6801807f402d4fd87ee5f25da0e578b530885f07c14b2ae86ac9da748
+  projects/default:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:e227f6173a814b695176f3e403c24d4a9b6094adba9cfa2eea72f152137cb626
+  skills/agents:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:95f11b73ecdb7064ac20abb872d8246031abba0a3d3e73028e48363469f17c2f
+  skills/api-integrations:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:3588ca1cf8e1f45f4cc3fe75482a21019364d1f05a5dba12c12b390ab7e1ddd2
+  skills/appdev:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:2c0fdd196a6dca7db3b8525390564a863492560922abf4e4c27b1c7d945fc66a
+  skills/architecture:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:513f4d0bc07953e18508e447dfe2acef6579de6eebcbf534dc017e3c60d41daf
+  skills/capabilities:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:ef0172bc3814b7b285b275625beb74a1b530c583381f3ed3021eacb6c3662237
+  skills/extensiondev:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:3eed5cd6732714d5f09bde39585dd602fc31337f461d54571d7d6ccb9d0adce8
+  skills/gad-context:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:3cdb7f97533e726dcf7020b5b8233c6a15dc1cc3c62e713f2cd7c47f7dccacbd
+  skills/github:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:ba7131f264369f08662b5d8eaf4f0182ee9598e7847ffd94e16b4f07ed06d4bc
+  skills/google-drive:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:457beff9e0d1172c0f8d14948f2de24274eda561d0955dcc7e862dad9f435fc6
+  skills/google-workspace:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:8f41786dc24d05e29bc05afb06fbdd0fa9d81fb300e24635f1cc1bd40e2e8705
+  skills/memory:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:8278bbe722294346f91cb6b4d3e64c47a09c4362d9b178c338fc6333533add6a
+  skills/mobile-system-testing:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:c4c6d275c3c6c0dc64c865510e9cc6e50cd93da5cccbd0ac0898703e13c79a44
+  skills/onboarding:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:a57c67c99b0aa1505f311a581876f9614bb2bacd7da3d13dfae9120cdc39182f
+  skills/performance:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:7594813cdb68a8060739615a8bb05e4108bfff08cf4771c4a6457426511dd6f0
+  skills/phone-setup:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:17ee12676a0f64e6c0e1788faa61e535e474951aaeb15eee89ed24e01ac930d1
+  skills/provenance-orientation:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:c929235795926517b50d1f9bbc9d896bf7c5118d6d511d3d59cfc82dad11b421
+  skills/provenance-tuning:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:3d98b6938c14338e3f99cfc2fc9614450b994e8ea2142e7fbdaf305e988d5a5b
+  skills/remote-access:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:a8e3f50d05f4d63af28bc292f0adce3a010c30b131c77c88a34644c001f8f623
+  skills/sandbox:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:3a84994edda79052ff645706c58c1d2e5c9724e701a6afb4747e67eb52ad8792
+  skills/server-logs:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:687ba871bd140694d02a399fc7231787471a3b99410701ad750138b0d6e2adaf
+  skills/system-testing:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:e425d678f793ab83942fd1e9e5b17727e13ece98a7aa893834854085a62e4426
+  skills/templates:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:1fe68d2ecf9c2d35ebc6bbeca30f6d0df73ec543ca48ff4d0ffe897656378a85
+  skills/vibestudio-vcs:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:777a171eaec321157d254b58361058abb407f6254979376ba13f65929afb414e
+  skills/web-research:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:5c6b2eebbe95775939638f4bdd55f195ceba29b0ad7d2fae84f3f8d77b6aef68
+  skills/workspace-dev:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:76dc6345561dc704bad8d99476f1cd18544cb1689de5e61648a60e8f469511b7
+  templates/default:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:09375a7bdab5866ad1bce43d85c229c31d2792d3ed6cbf38f4dde27416f35825
+  templates/svelte:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:d94b15daaa224855bd2df160c089c835cffad276feb95395fbe1039310eb9365
+  templates/vanilla:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:c8e9447d5b5ccf99f708ffcba93f047fa6167b47e71aeba11dadfda2e4e34b65
+  workers/agent-worker:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:bccdf63e65977ede21bf9d90ecbf0b01036a124526b187b4af7a32d35ce015b3
+  workers/explorer-agent:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:0b67171d1356e90fb9550a2e0b352de02ccdf9f9ba3ba685c12614fdf115bde3
+  workers/gmail-agent:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:b192be2e4f6c82b59567da12ee96e126124b6d7055b6bba50f1fb5dbd5609265
+  workers/linked-agent:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:02409fd322edce711b333f9ff852ef78e29a60af10ea33d2f35b5acad7dcb91f
+  workers/model-settings:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:a104a863399297dab9a6538d54e101c21794dc1ace00d904acf01f8b0d069856
+  workers/pubsub-channel:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:c12cdd706f1b37e201768dc860805731bf20d752891903833d4887c4412a03af
+  workers/silent-agent-worker:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:a8c385e6255091d3b67512ccf18bd5c9e80a3f2e507da3f176f480d51c9f6607
+  workers/system-agent:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:bb822f8ba3272cdc80a33ac00410603a093bb874635ccd6e0f017ba04d54b235
+  workers/system-test-runner:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:f3d471107bcd179c8c508419edcc6c7c1e3694a90502844d9be8e6b0029cbbb5
+  workers/terminal-chat:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:06c59c4b96f18367be1de4a3d6d93c447351115a404fee59f12a3454665580da
+  workers/test-agent:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:a951e2da7d70a2712c455e688b7538f8428b3ddcded0dffa31ed8e2afb7452a3
+  workers/testkit-driver:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:8217c2c2dac7fd58f32e6995f6f64222a03f80c3ca58fe5919ca41a9ad3bed2c
+  workers/workspace-source:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:b63d5877387d4815ec910e88910dd2d7e844476336788a064085ee6a1fd620a1
+roots:
+  - url: git+https://github.com/panticonic/vibestudio-workspace-base.git
+verification: verified
+version: 1

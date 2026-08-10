@@ -515,6 +515,53 @@ async function inspectAdd(
   return { inspection };
 }
 
+async function inspectAdopt(
+  ctx: ExtensionContextLike,
+  env: Environment,
+  selected: WorkspaceTemplatePin,
+  pins: readonly WorkspaceTemplatePin[] = []
+): Promise<{
+  inspection: TemplateOperationInspection;
+  observation: SemanticWorkspaceObservation;
+}> {
+  const prepared = await adoptionAwareInput(ctx, env);
+  const selectedSources = {
+    ...prepared.sources,
+    resolvePromoted: async (declaration: WorkspaceTemplateDeclaration) =>
+      normalizeTemplateGitUrl(declaration.url) === normalizeTemplateGitUrl(selected.url)
+        ? selected
+        : prepared.sources.resolvePromoted(declaration),
+  };
+  const inspection = await inspectTemplateOperation({
+    kind: "adopt",
+    pin: selected,
+    workspace: prepared.workspace,
+    sources: createPinnedTemplateSourcePorts(selectedSources, pins),
+  });
+  if (prepared.descriptor && inspection.nextTemplates) {
+    inspection.nextTemplates = {
+      ...inspection.nextTemplates,
+      bootstrapAdopted: prepared.descriptor.rootTemplate,
+    };
+  }
+  const templates = {
+    ...env.observation.top.templates,
+    ...(inspection.nextTemplates ?? { use: [] }),
+  };
+  return {
+    inspection,
+    observation: {
+      ...env.observation,
+      top: projectBootstrapRuntimeToSource(
+        env.observation.runtimeTop,
+        inspection.plan.nodes,
+        env.observation.workspaceId,
+        templates
+      ),
+    },
+  };
+}
+
 function operationParts(
   operationId: string,
   inspection: TemplateOperationInspection,
@@ -592,7 +639,11 @@ async function applyInspection(
           : {}),
       };
     }
-    await clearTemplateOperationRecordFile(ctx, operationId);
+    await clearTemplateOperationRecordFile(ctx, {
+      ...operation.record,
+      preparedAffectedRepoPaths: preparation.prepared.affectedRepoPaths,
+      buildFailures: undefined,
+    });
     const published = await publishPreparedTemplateOperation(
       preparation.prepared,
       env.observation.mainEventId,
@@ -717,7 +768,11 @@ async function resumePreparedOperation(
         : {}),
     };
   }
-  await clearTemplateOperationRecordFile(ctx, record.operationId);
+  await clearTemplateOperationRecordFile(ctx, {
+    ...record,
+    preparedAffectedRepoPaths: preparation.prepared.affectedRepoPaths,
+    buildFailures: undefined,
+  });
   let published: { mainEventId: string };
   try {
     published = await publishPreparedTemplateOperation(
@@ -1011,6 +1066,13 @@ export async function activate(ctx: ExtensionContextLike) {
       };
       if (intent.kind === "add") {
         return this.add({
+          commandId: input.operationId,
+          pin: WorkspaceTemplatePinSchema.parse(intent.target),
+          onBuildFailure: input.onBuildFailure,
+        });
+      }
+      if (intent.kind === "adopt") {
+        return this.adopt({
           commandId: input.operationId,
           pin: WorkspaceTemplatePinSchema.parse(intent.target),
           onBuildFailure: input.onBuildFailure,
@@ -1359,6 +1421,39 @@ export async function activate(ctx: ExtensionContextLike) {
         preview.inspection,
         record?.intent ?? {
           kind: "add",
+          target: selectedPin,
+        },
+        input.onBuildFailure
+      );
+    },
+
+    async adopt(input: {
+      commandId: string;
+      pin: WorkspaceTemplatePin;
+      onBuildFailure?: "discard-context" | "retain-context";
+    }) {
+      const env = await environment(ctx);
+      const record = await operationRecordForMutation(ctx, env, input.commandId);
+      const completed = await completedOperationResult(ctx, record);
+      if (completed) return completed;
+      const requestedPin = WorkspaceTemplatePinSchema.parse(input.pin);
+      const recordedPin = record
+        ? WorkspaceTemplatePinSchema.parse((record.intent as { target?: unknown }).target)
+        : null;
+      if (recordedPin && canonicalJson(recordedPin) !== canonicalJson(requestedPin)) {
+        throw new Error(
+          `Template command ${input.commandId} was already bound to a different exact version`
+        );
+      }
+      const selectedPin = recordedPin ?? requestedPin;
+      const preview = await inspectAdopt(ctx, env, selectedPin, record?.pins ?? []);
+      return applyInspection(
+        ctx,
+        { ...env, observation: preview.observation },
+        input.commandId,
+        preview.inspection,
+        record?.intent ?? {
+          kind: "adopt",
           target: selectedPin,
         },
         input.onBuildFailure

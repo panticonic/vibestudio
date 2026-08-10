@@ -452,6 +452,21 @@ export const templatesMethods = defineServiceMethods({
     returns: templateOperationSchema,
     access: WRITE_ACCESS,
   },
+  adopt: {
+    description:
+      "Record an exact template release as the existing workspace lineage without merging its historical content, then build and publish the generated relationship metadata.",
+    args: z.tuple([
+      z
+        .object({
+          commandId,
+          pin: WorkspaceTemplatePinSchema,
+          onBuildFailure: buildFailureModeSchema.optional(),
+        })
+        .strict(),
+    ]),
+    returns: templateOperationSchema,
+    access: WRITE_ACCESS,
+  },
   pull: {
     description:
       "Resolve a tracked template's promoted pin, review its ordinary VCS deltas, build the operation context, and publish only a clean composition.",
@@ -531,6 +546,7 @@ export const templatesMethods = defineServiceMethods({
           operationId: z.string(),
           kind: z.enum([
             "add",
+            "adopt",
             "pull",
             "remove",
             "recompose",

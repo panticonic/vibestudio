@@ -108,6 +108,24 @@ alias, section, decision: "accept" | "decline" }`. Acceptance writes only
    durably record the decision so it does not reappear after reload. Never fold
    a suggestion into template installation approval.
 
+## Adopt existing template lineage
+
+Use adoption only when the user asserts that the workspace already descends
+from an exact template release and wants Composer to begin tracking that
+lineage. Invoke `prepareAdd` to acquire and review the exact release, then
+invoke `adopt` with the returned pin unchanged and a fresh `commandId`.
+Adoption writes the ordinary template relationship, fragments, and contribution
+ledger but never merges the release's historical repository content into the
+present workspace. The current repositories remain the local descendant and
+are build-gated as-is. Future pulls and removals use the adopted release as the
+ordinary VCS delta base. Never use adoption merely to avoid a difficult add
+merge; the lineage assertion must be true and explicit.
+
+Once committed, an unchanged installed node is complete dependency evidence.
+Composition reuses its exact lock entry, generated fragment, and contribution
+ledger without reacquiring that upstream. A transitive add therefore acquires
+the new template but does not require access to an already-installed Base.
+
 ## Update a template
 
 1. Invoke `check` with `{ alias }`, then invoke `pull` with `{ alias,

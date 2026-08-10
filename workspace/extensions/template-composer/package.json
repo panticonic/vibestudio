@@ -98,6 +98,15 @@
             }
           }
         },
+        "adopt": {
+          "effect": {
+            "kind": "userland-capability",
+            "capability": "workspace.templates.add",
+            "resource": {
+              "kind": "receiver"
+            }
+          }
+        },
         "pull": {
           "effect": {
             "kind": "userland-capability",

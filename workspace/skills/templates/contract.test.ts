@@ -13,6 +13,7 @@ describe("templates skill public contract", () => {
     expect(contract.methods["resume"]?.arguments.join(" ")).toContain("operationId");
     expect(contract.methods["resume"]?.arguments.join(" ")).not.toContain("commandId");
     expect(contract.methods["cancel"]?.arguments.join(" ")).toContain("operationId");
+    expect(contract.methods["adopt"]?.arguments.join(" ")).toContain("pin");
     expect(contract.methods["inspectAuthoring"]?.arguments.join(" ")).toContain("parts");
     expect(contract.methods["publishAuthoring"]?.arguments.join(" ")).toContain(
       "expectedFingerprint"
@@ -22,5 +23,6 @@ describe("templates skill public contract", () => {
     expect(contract.types["TemplateStatusRow"]).not.toContain("contribution");
     expect(skill).toContain("Never fold");
     expect(skill).toContain("a suggestion into template installation approval.");
+    expect(skill).toContain("never merges the release's historical repository content");
   });
 });

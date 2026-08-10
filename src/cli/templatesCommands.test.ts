@@ -14,6 +14,7 @@ describe("templates CLI commands", () => {
       "check",
       "inspect",
       "add",
+      "adopt",
       "pull",
       "remove",
       "suggest",
@@ -83,6 +84,12 @@ describe("templates CLI commands", () => {
     expect(() =>
       parseInvocation(add, ["https://example.test/news.git", "--choice", "panels/news=keep"])
     ).toThrow("Unknown flag");
+  });
+
+  it("exposes lineage adoption as a distinct exact-release operation", () => {
+    const adopt = templatesCommands.find((command) => command.name === "adopt")!;
+    const parsed = parseInvocation(adopt, ["https://example.test/base.git"]);
+    expect(parsed.positionals).toEqual(["https://example.test/base.git"]);
   });
 
   it("makes registry network refresh explicit", () => {

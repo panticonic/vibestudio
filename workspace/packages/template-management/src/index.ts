@@ -13,7 +13,7 @@ const TEMPLATE_COMPOSER = "@workspace-extensions/template-composer";
 
 export interface TemplatePendingOperation {
   operationId: string;
-  kind: "add" | "pull" | "remove" | "recompose" | "adopt-bootstrap" | "publish-authoring";
+  kind: "add" | "adopt" | "pull" | "remove" | "recompose" | "adopt-bootstrap" | "publish-authoring";
   contextId: string;
   state: "pending" | "reviewing" | "repairing";
   fingerprint: string;
@@ -28,6 +28,11 @@ export interface TemplateManagementClient {
   inspect(locator: TemplateLocator): Promise<TemplateInspection>;
   prepareAdd(request: TemplateAddRequest): Promise<TemplateAddPreparation>;
   add(input: {
+    commandId: string;
+    pin: TemplateExactPin;
+    onBuildFailure?: "discard-context" | "retain-context";
+  }): Promise<TemplateOperation>;
+  adopt(input: {
     commandId: string;
     pin: TemplateExactPin;
     onBuildFailure?: "discard-context" | "retain-context";
@@ -87,6 +92,7 @@ export function createTemplateManagementClient(
     prepareAdd: (request) =>
       invoke(TEMPLATE_COMPOSER, "prepareAdd", [request]) as Promise<TemplateAddPreparation>,
     add: (input) => invoke(TEMPLATE_COMPOSER, "add", [input]) as Promise<TemplateOperation>,
+    adopt: (input) => invoke(TEMPLATE_COMPOSER, "adopt", [input]) as Promise<TemplateOperation>,
     pull: (input) => invoke(TEMPLATE_COMPOSER, "pull", [input]) as Promise<TemplateOperation>,
     remove: (input) => invoke(TEMPLATE_COMPOSER, "remove", [input]) as Promise<TemplateOperation>,
     suggest: (input) => invoke(TEMPLATE_COMPOSER, "suggest", [input]) as Promise<TemplateOperation>,
