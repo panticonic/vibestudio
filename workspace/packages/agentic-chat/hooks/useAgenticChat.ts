@@ -999,6 +999,9 @@ export function useAgenticChat({
 
 **Lifecycle:** Component starts expanded. Auto-collapses if taller than 400px.
 Users can expand/collapse at any time. Persists in chat history.
+Pass a stable \`id\` to update an existing inline UI. A later render by the same
+participant with that ID replaces the card and moves it to the newest transcript
+position. Omit \`id\` for a new independent card.
 
 **Available imports:** react, @radix-ui/themes, @radix-ui/react-icons
 You may provide either \`code\` or \`path\`. \`path\` reads a context-relative TSX file, supports static relative imports, and infers bare package imports from the nearest package.json when possible. Use \`imports\` for explicit package versions.
@@ -1046,6 +1049,14 @@ export default function App({ props, chat, scope }) {
 }
 \`\`\``,
             parameters: z.object({
+              id: z
+                .string()
+                .trim()
+                .min(1)
+                .optional()
+                .describe(
+                  "Stable component ID. Reusing it updates and bumps the existing card; omit it to create a new card."
+                ),
               code: z
                 .string()
                 .optional()
@@ -1066,7 +1077,8 @@ export default function App({ props, chat, scope }) {
                 .describe("Props passed to the component as { props }"),
             }),
             execute: async (args: unknown) => {
-              const { code, path, imports, props } = args as {
+              const { id: requestedId, code, path, imports, props } = args as {
+                id?: string;
                 code?: string;
                 path?: string;
                 imports?: Record<string, string>;
@@ -1084,7 +1096,7 @@ export default function App({ props, chat, scope }) {
               }
               const client = core.clientRef.current;
               if (!client) return { ok: false, error: "Not connected" };
-              const id = crypto.randomUUID();
+              const id = requestedId?.trim() || crypto.randomUUID();
               const source = trimmedPath
                 ? { type: "file" as const, path: trimmedPath }
                 : { type: "code" as const, code: code! };
@@ -1103,7 +1115,9 @@ export default function App({ props, chat, scope }) {
                   payload: eventPayload,
                   createdAt: new Date().toISOString(),
                 },
-                { idempotencyKey: `ui:inline:${id}` }
+                // The component ID is intentionally reusable. Event idempotency
+                // remains unique so a later render is reduced as an update.
+                { idempotencyKey: `ui:inline:${id}:${crypto.randomUUID()}` }
               );
               return { ok: true, id };
             },

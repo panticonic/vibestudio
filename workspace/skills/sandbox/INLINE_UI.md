@@ -27,6 +27,23 @@ bare package imports from the nearest `package.json` when possible. Use
 `imports` for explicit package versions. Package-local aliases from
 `package.json` `imports` and simple `tsconfig.json` paths are supported.
 
+Pass a stable `id` when the UI represents one evolving surface rather than a
+new historical item:
+
+```ts
+inline_ui({
+  id: "setup-overview",
+  path: "skills/onboarding/SetupHub.tsx",
+  props: overview,
+});
+```
+
+A later `inline_ui` call from the same participant with that ID replaces the
+projected card and gives it the new render time, which moves it to the newest
+position in the transcript. Omit `id` when each render should remain as a
+separate historical card. The channel event persists `source` and `props`;
+component-local React state is not part of that event.
+
 Inline UI is persisted as a typed `ui.inline_rendered` event in the PubSub
 channel log. Do not emulate it with `chat.publish("message", { contentType:
 "inline_ui" })`; use the `inline_ui` tool so the transcript, replay, and agent
@@ -59,6 +76,15 @@ state all see the same canonical event.
 - Surface pending, failure, retry, and verified states locally.
 - Secrets must be collected by host-owned credential prompts, never ordinary
   React inputs or component state.
+
+## Panel Scope
+
+Components receive `{ props, chat, scope, scopes }`. Serializable values placed
+in `scope` persist in the browser's panel-local `localStorage`; large values may
+spill into the workspace blob store. The scope is shared by inline UI, feedback,
+and the action bar in that panel. It is useful for local UI state across reloads,
+but it is not channel-shared state and does not replace persisted inline-UI
+props when other panels or devices must see the update.
 
 ## Workflow Link Pattern
 

@@ -23,7 +23,8 @@ initPanels:
         executes the single composer in the customer's current panel/client
         context. Give a welcome of at most two short paragraphs and render
         `skills/onboarding/SetupHub.tsx` with `inline_ui`, passing the returned
-        `{ catalog, snapshot, templates }` object. The inline overview owns the onboarding
+        `{ catalog, snapshot, templates }` object and the stable ID
+        `onboarding-setup-overview`. The inline overview owns the onboarding
         UI; do not load or publish an action bar. If client eval or rendering is
         unavailable, give a concise plain-text fallback and do not invent
         status.
@@ -64,13 +65,14 @@ initPanels:
 
         For any capability `check` action, use `client_eval` to call
         `composeOnboardingOverview({ verifyCapabilityId: interaction.targetId
-        })` and render a new `SetupHub.tsx` observation. Never mutate or claim
-        to refresh the old inline card. For `kind: "onboarding-overview"` and
+        })` and render `SetupHub.tsx` again with the stable ID
+        `onboarding-setup-overview`, replacing and bumping the existing card.
+        For `kind: "onboarding-overview"` and
         action `refresh`, call the composer through `client_eval` again and
-        render a new observation.
+        update that same card.
 
         Setup, repair, reconnect, success, failure, or cancellation also ends
-        with a newly composed observation. Provider secrets are collected only
+        with a newly composed update to that card. Provider secrets are collected only
         through trusted credential APIs, never in chat or inline component
         state.
 

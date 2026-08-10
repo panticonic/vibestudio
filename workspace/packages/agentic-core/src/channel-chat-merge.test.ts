@@ -2282,6 +2282,44 @@ describe("chatMessagesFromChannelView", () => {
     });
   });
 
+  it("replaces a stable inline UI id and sorts it by the latest render", () => {
+    const first: AgenticEvent<"ui.inline_rendered"> = {
+      kind: "ui.inline_rendered",
+      actor: agent,
+      payload: {
+        protocol: AGENTIC_PROTOCOL_VERSION,
+        uiType: "inline",
+        id: "setup-overview",
+        source: { type: "file", path: "skills/onboarding/SetupHub.tsx" },
+        props: { revision: 1 },
+      },
+      createdAt: "2026-05-20T12:00:01.000Z",
+    };
+    const middle: AgenticEvent<"message.completed"> = {
+      kind: "message.completed",
+      actor: agent,
+      causality: { messageId: brandId<MessageId>("between") },
+      payload: textPayload("between", "assistant", "Refresh setup"),
+      createdAt: "2026-05-20T12:00:02.000Z",
+    };
+    const updated: AgenticEvent<"ui.inline_rendered"> = {
+      ...first,
+      payload: { ...first.payload, props: { revision: 2 } },
+      createdAt: "2026-05-20T12:00:03.000Z",
+    };
+
+    const state = [first, middle, updated]
+      .map((event, index) => envelope(event, index + 1))
+      .reduce(reduceChannelView, createInitialChannelViewState());
+    const messages = chatMessagesFromChannelView(state);
+
+    expect(messages.map((message) => message.id)).toEqual([
+      "between",
+      "inline-ui:participant-agent-1:setup-overview",
+    ]);
+    expect(messages[1]?.inlineUi?.props).toEqual({ revision: 2 });
+  });
+
   it("projects typed approval events into approval chat messages", () => {
     const requested: AgenticEvent<"approval.requested"> = {
       kind: "approval.requested",

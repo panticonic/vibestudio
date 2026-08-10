@@ -36,6 +36,9 @@ describe("shipped first-run workspace", () => {
     );
     expect(stateArgs["systemPrompt"]).toEqual(expect.stringContaining("SetupHub.tsx"));
     expect(stateArgs["systemPrompt"]).toEqual(
+      expect.stringContaining("onboarding-setup-overview")
+    );
+    expect(stateArgs["systemPrompt"]).toEqual(
       expect.stringContaining("do not load or publish an action bar")
     );
     expect(stateArgs["systemPrompt"]).not.toEqual(expect.stringContaining("onboarding_snapshot"));

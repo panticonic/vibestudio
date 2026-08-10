@@ -79,11 +79,12 @@ and components render in the panel:
   to a channel), `chat` is injected too (see [EVAL.md](EVAL.md#chat-agent-eval));
   CLI/panel eval has no channel and gets no `chat`.
 - **`inline_ui` / `load_action_bar` components** (panel): receive
-  `{ props, chat }`. `feedback_custom` components receive
-  `{ onSubmit, onCancel, onError, chat }`. They do NOT receive `scope`/`scopes`
-  — the eval REPL scope is server-side and is not shared into rendered
-  components. Inside a component, reach runtime services via `chat.rpc.call(...)`
-  (see [CHAT_API.md](CHAT_API.md)).
+  `{ props, chat, scope, scopes }`. Their serializable scope is browser-local,
+  keyed to the panel, and persisted in `localStorage` across reloads; it is not
+  the server-side eval scope or channel-shared application state.
+  `feedback_custom` components receive
+  `{ onSubmit, onCancel, onError, chat, scope, scopes }`. Inside a component,
+  reach runtime services via `chat.rpc.call(...)` (see [CHAT_API.md](CHAT_API.md)).
 
 For panel identity inside components, use `panel.slotId` for panel-tree
 operations and PubSub/channel clients. `rpc.selfId` is the current live runtime

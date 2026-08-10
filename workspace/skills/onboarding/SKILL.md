@@ -18,7 +18,8 @@ base-owned composer inside the inviting panel, the shared boundary that can
 reach workspace owners and the redacted Electron host read.
 
 Render the returned object with `inline_ui` from
-`skills/onboarding/SetupHub.tsx`, passing its `{ catalog, snapshot, templates }`.
+`skills/onboarding/SetupHub.tsx`, passing the stable ID
+`onboarding-setup-overview` and its `{ catalog, snapshot, templates }`.
 The composer reads GitHub, model settings, agent defaults, local models,
 browser imports, web search, installed capability owners, and template status
 directly from their owners. It composes device/workspace topology
@@ -89,9 +90,10 @@ Stored Google/GitHub credentials are `connected-unverified`. For a `check`
 action, use `client_eval` to call
 `composeOnboardingOverview({ verifyCapabilityId: interaction.targetId })`.
 
-Render a new `SetupHub.tsx` observation. Never rewrite the historical card.
-Refresh, workflow success, failure, and cancellation likewise produce a new
-snapshot. Inline props must not contain credential material, browser samples,
+Render `SetupHub.tsx` again with the stable ID `onboarding-setup-overview`.
+The new snapshot replaces the existing card and moves it to the newest position
+in the transcript. Refresh, workflow success, failure, and cancellation use the
+same update path. Inline props must not contain credential material, browser samples,
 device IDs, pairing links, profile paths, or private topology.
 
 ## Templates

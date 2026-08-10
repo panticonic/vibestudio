@@ -251,7 +251,9 @@ export const interactionSurfaceTests: TestCase[] = [
         };
       }
       const inlineCall = completedNamedToolCalls(result, "inline_ui").find(
-        (call) => call.arguments?.["path"] === "skills/onboarding/SetupHub.tsx"
+        (call) =>
+          call.arguments?.["path"] === "skills/onboarding/SetupHub.tsx" &&
+          call.arguments?.["id"] === "onboarding-setup-overview"
       );
       const snapshotProp = inlineCall?.arguments?.["props"];
       if (
@@ -261,7 +263,8 @@ export const interactionSurfaceTests: TestCase[] = [
       ) {
         return {
           passed: false,
-          reason: "SetupHub.tsx was not rendered with the composed snapshot prop",
+          reason:
+            "SetupHub.tsx was not rendered with the stable onboarding ID and composed snapshot prop",
         };
       }
       if (completedNamedToolCalls(result, "load_action_bar").length > 0) {

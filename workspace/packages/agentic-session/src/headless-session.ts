@@ -461,15 +461,17 @@ export class HeadlessSession {
 
     methods["inline_ui"] = {
       description:
-        "Synthetic panel harness: render a persistent inline UI component in the chat transcript. Provide either TSX code or a context-relative path. Publishes the same typed inline UI event as the browser panel tool, but does not mount a browser renderer.",
+        "Synthetic panel harness: render a persistent inline UI component in the chat transcript. Provide either TSX code or a context-relative path. Reuse a stable id to replace and bump an existing card. Publishes the same typed inline UI event as the browser panel tool, but does not mount a browser renderer.",
       parameters: z.object({
+        id: z.string().trim().min(1).optional(),
         code: z.string().optional(),
         path: z.string().optional(),
         imports: z.record(z.string(), z.string()).optional(),
         props: z.record(z.unknown()).optional(),
       }),
       execute: async (args: unknown) => {
-        const { code, path, imports, props } = args as {
+        const { id: requestedId, code, path, imports, props } = args as {
+          id?: string;
           code?: string;
           path?: string;
           imports?: Record<string, string>;
@@ -478,7 +480,7 @@ export class HeadlessSession {
         const trimmedPath = path?.trim();
         if (!trimmedPath && !code) return { ok: false, error: "Missing code or path" };
 
-        const id = crypto.randomUUID();
+        const id = requestedId?.trim() || crypto.randomUUID();
         const source = trimmedPath
           ? { type: "file" as const, path: trimmedPath }
           : { type: "code" as const, code: code! };
@@ -497,7 +499,7 @@ export class HeadlessSession {
             payload: eventPayload,
             createdAt: new Date().toISOString(),
           },
-          `synthetic-ui:inline:${id}`
+          `synthetic-ui:inline:${id}:${crypto.randomUUID()}`
         );
         return { ok: true, id };
       },

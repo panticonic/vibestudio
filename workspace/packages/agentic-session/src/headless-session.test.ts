@@ -688,6 +688,7 @@ describe("HeadlessSession", () => {
 
       await registeredMethods["inline_ui"]!.execute(
         {
+          id: "setup-overview",
           code: "export default function App() { return null; }",
         },
         {} as never
@@ -711,11 +712,12 @@ describe("HeadlessSession", () => {
         kind: "ui.inline_rendered",
         payload: expect.objectContaining({
           uiType: "inline",
+          id: "setup-overview",
           source: { type: "code", code: "export default function App() { return null; }" },
         }),
       }),
       expect.objectContaining({
-        idempotencyKey: expect.stringContaining("synthetic-ui:inline:"),
+        idempotencyKey: expect.stringContaining("synthetic-ui:inline:setup-overview:"),
       }),
     ]);
     expect(publish.mock.calls[1]).toEqual([

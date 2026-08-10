@@ -12,7 +12,8 @@ Use `client_eval` to statically import `composeOnboardingOverview` from
 composer inside the inviting chat panel, where direct owner APIs and the
 redacted Electron host topology read are both reachable.
 
-Render `{ catalog, snapshot, templates }` with the base-owned setup hub. In a non-panel client,
+Render `{ catalog, snapshot, templates }` with the base-owned setup hub using
+the stable inline UI ID `onboarding-setup-overview`. In a non-panel client,
 summarize blocking and attention states concisely and mention that all other
 configuration is optional. A missing owner for a capability shipped in base is
 unavailable, not installable.
@@ -51,8 +52,10 @@ Templates workflow owns exact selection, contribution review, approval, and
 operation recovery.
 
 After any check or workflow outcome, call the composer through `client_eval`
-again and render a new observation. A capability check passes the selected ID
-as `verifyCapabilityId`. Do not update an old card optimistically.
+again and render the setup hub with the same stable ID. The fresh projection
+replaces the existing card and bumps it to the end of the transcript. A
+capability check passes the selected ID as `verifyCapabilityId`; do not update
+the card optimistically before the owner observation completes.
 
 ## Continue from intent
 
