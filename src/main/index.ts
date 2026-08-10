@@ -182,6 +182,8 @@ import {
   type ConnectedStartupMode,
 } from "./startupMode.js";
 import { establishServerSession, type SessionConnection } from "./serverSession.js";
+import { ordinaryQuitServerDecision } from "./quitServerPolicy.js";
+import { installProcessSignalShutdown } from "./processSignalShutdown.js";
 import type { StartupConnectionProgress } from "../startupConnectionProgress.js";
 import { getLocalHubLogPath } from "./hubProcessManager.js";
 import {
@@ -415,6 +417,16 @@ function relaunchWithIntent(opts: RelaunchOptions = {}): void {
   app.quit();
 }
 installRelaunchHandler(relaunchWithIntent);
+installProcessSignalShutdown(process, () => {
+  // Signals and development-runner stop requests are unattended lifecycle
+  // commands, not interactive window closes. Stop the owned hub explicitly so
+  // an ephemeral development session cannot leak behind a prompt nobody can
+  // answer. Preserve stronger update/relaunch intents if one is already active.
+  if (quitIntent.kind === "ordinary") {
+    quitIntent = { kind: "ordinary", serverDecision: "stop" };
+  }
+  app.quit();
+});
 
 const applicationWindow = new ApplicationWindowController({
   eventService,
@@ -3215,22 +3227,23 @@ app.on("window-all-closed", () => {
 // mid-turn — finishes and the next launch reattaches instantly) or stop it.
 // No activity guessing: the user decides, and can persist that choice with
 // "Remember my choice" (cleared by re-toggling in Settings / deleting the
-// `keepServerOnQuit` field). Decided here, consumed by the will-quit cleanup.
+// `keepServerOnQuit` field). Ephemeral development hubs always ask because
+// retaining one must be explicit for that exact quit. Decided here, consumed
+// by the will-quit cleanup.
 
 app.on("before-quit", (event) => {
   if (quitIntent.kind === "npm-update" || quitIntent.kind === "relaunch") return;
   if (quitIntent.serverDecision !== null || isCleaningUp) return;
   const conn = serverSession;
-  if (!conn || conn.serverOwnership !== "desktop-local" || !conn.hubProcessManager) {
-    // Remote/external server: nothing desktop-owned to stop.
-    quitIntent = { kind: "ordinary", serverDecision: "keep" };
-    return;
-  }
-  // Remembered choice: honor it. With no preference, keep the detached server;
-  // its idle monitor reaps it automatically when no clients or work remain.
   const remembered = centralData.getKeepServerOnQuit();
-  if (remembered !== null) {
-    quitIntent = { kind: "ordinary", serverDecision: remembered ? "keep" : "stop" };
+  const ephemeralLocalHub = startupMode.kind === "local" && startupMode.isEphemeral;
+  const decision = ordinaryQuitServerDecision({
+    ownsLocalHub: conn?.serverOwnership === "desktop-local" && conn.hubProcessManager !== null,
+    ephemeralWorkspace: ephemeralLocalHub,
+    rememberedKeepServer: remembered,
+  });
+  if (decision !== "prompt") {
+    quitIntent = { kind: "ordinary", serverDecision: decision };
     return;
   }
   event.preventDefault();
@@ -3248,7 +3261,9 @@ app.on("before-quit", (event) => {
         "The hub and its workspace children can keep running after you close the app so background " +
         "tasks (like agent runs) finish and the next launch reattaches instantly — " +
         "or stop it now. You can change this any time.",
-      checkboxLabel: "Remember my choice",
+      // A disposable development hub may be retained for this exact quit, but
+      // must never silently inherit that choice on a later lifecycle.
+      ...(ephemeralLocalHub ? {} : { checkboxLabel: "Remember my choice" }),
     });
     const keep = response === 0;
     if (checkboxChecked) centralData.setKeepServerOnQuit(keep);
