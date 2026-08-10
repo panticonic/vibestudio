@@ -1,8 +1,5 @@
 import type { CredentialClient, UrlCredentialHandle } from "@workspace/runtime/credentials";
-import {
-  bindingAudience,
-  googleWorkspaceCredential,
-} from "./providers.js";
+import { bindingAudience, googleWorkspaceCredential } from "./providers.js";
 import { GoogleApiError } from "./google-shared.js";
 
 const GOOGLE_DRIVE_API_BASE = "https://www.googleapis.com/drive/v3";
@@ -25,12 +22,18 @@ export const manifest = {
   endpoints: {
     "google-workspace": [
       { url: "https://www.googleapis.com/drive/v3/about", methods: ["GET"] },
-      { url: "https://www.googleapis.com/drive/v3/files", methods: ["GET", "POST", "PATCH", "DELETE"] },
+      {
+        url: "https://www.googleapis.com/drive/v3/files",
+        methods: ["GET", "POST", "PATCH", "DELETE"],
+      },
       { url: "https://www.googleapis.com/upload/drive/v3/files", methods: ["POST", "PATCH"] },
       { url: "https://www.googleapis.com/drive/v3/files/*", methods: ["GET", "PATCH", "DELETE"] },
       { url: "https://www.googleapis.com/drive/v3/files/*/copy", methods: ["POST"] },
       { url: "https://www.googleapis.com/drive/v3/files/*/permissions", methods: ["GET", "POST"] },
-      { url: "https://www.googleapis.com/drive/v3/files/*/permissions/*", methods: ["PATCH", "DELETE"] },
+      {
+        url: "https://www.googleapis.com/drive/v3/files/*/permissions/*",
+        methods: ["PATCH", "DELETE"],
+      },
       { url: "https://www.googleapis.com/drive/v3/files/*/export", methods: ["GET"] },
       { url: "https://www.googleapis.com/drive/v3/files/*/download", methods: ["POST"] },
       { url: "https://www.googleapis.com/drive/v3/changes", methods: ["GET"] },
@@ -306,20 +309,31 @@ export interface DriveClient {
   getFile(fileId: string, options?: DriveGetFileOptions): Promise<DriveFile>;
   downloadFile(fileId: string, options?: DriveGetFileOptions): Promise<Response>;
   downloadFileBytes(fileId: string, options?: DriveGetFileOptions): Promise<DriveFileBytes>;
-  exportFile(fileId: string, mimeType: string, options?: { supportsAllDrives?: boolean; fields?: string }): Promise<Response>;
-  exportFileBytes(fileId: string, mimeType: string, options?: { supportsAllDrives?: boolean; fields?: string }): Promise<DriveFileBytes>;
+  exportFile(
+    fileId: string,
+    mimeType: string,
+    options?: { supportsAllDrives?: boolean; fields?: string }
+  ): Promise<Response>;
+  exportFileBytes(
+    fileId: string,
+    mimeType: string,
+    options?: { supportsAllDrives?: boolean; fields?: string }
+  ): Promise<DriveFileBytes>;
   createFile(
     metadata: Partial<DriveFile>,
-    options?: DriveFileMutationOptions & { media?: DriveUploadMedia },
+    options?: DriveFileMutationOptions & { media?: DriveUploadMedia }
   ): Promise<DriveFile>;
   updateFile(
     fileId: string,
     metadata: Partial<DriveFile>,
-    options?: DriveUpdateFileOptions & { media?: DriveUploadMedia },
+    options?: DriveUpdateFileOptions & { media?: DriveUploadMedia }
   ): Promise<DriveFile>;
   moveFile(
     fileId: string,
-    options: { addParents?: string | string[]; removeParents?: string | string[] } & DriveUpdateFileOptions,
+    options: {
+      addParents?: string | string[];
+      removeParents?: string | string[];
+    } & DriveUpdateFileOptions
   ): Promise<DriveFile>;
   trashFile(fileId: string, options?: DriveUpdateFileOptions): Promise<DriveFile>;
   restoreFile(fileId: string, options?: DriveUpdateFileOptions): Promise<DriveFile>;
@@ -327,30 +341,40 @@ export interface DriveClient {
   copyFile(
     fileId: string,
     metadata?: Partial<DriveFile>,
-    options?: DriveCopyFileOptions,
+    options?: DriveCopyFileOptions
   ): Promise<DriveFile>;
   emptyTrash(): Promise<void>;
-  listPermissions(fileId: string, options?: DriveListPermissionsOptions): Promise<DrivePermissionList>;
+  listPermissions(
+    fileId: string,
+    options?: DriveListPermissionsOptions
+  ): Promise<DrivePermissionList>;
   createPermission(
     fileId: string,
     permission: Partial<DrivePermission>,
-    options?: DrivePermissionMutationOptions,
+    options?: DrivePermissionMutationOptions
   ): Promise<DrivePermission>;
   updatePermission(
     fileId: string,
     permissionId: string,
     permission: Partial<DrivePermission>,
-    options?: DrivePermissionMutationOptions,
+    options?: DrivePermissionMutationOptions
   ): Promise<DrivePermission>;
   deletePermission(
     fileId: string,
     permissionId: string,
-    options?: DrivePermissionMutationOptions,
+    options?: DrivePermissionMutationOptions
   ): Promise<void>;
   listDrives(options?: DriveListDrivesOptions): Promise<DriveDriveList>;
   getDrive(driveId: string, options?: DriveDriveMutationOptions): Promise<DriveDrive>;
-  createDrive(metadata: Partial<DriveDrive>, options?: DriveDriveMutationOptions): Promise<DriveDrive>;
-  updateDrive(driveId: string, metadata: Partial<DriveDrive>, options?: DriveDriveMutationOptions): Promise<DriveDrive>;
+  createDrive(
+    metadata: Partial<DriveDrive>,
+    options?: DriveDriveMutationOptions
+  ): Promise<DriveDrive>;
+  updateDrive(
+    driveId: string,
+    metadata: Partial<DriveDrive>,
+    options?: DriveDriveMutationOptions
+  ): Promise<DriveDrive>;
   deleteDrive(driveId: string, options?: DriveDriveMutationOptions): Promise<void>;
   getStartPageToken(options?: DriveGetStartPageTokenOptions): Promise<DriveStartPageToken>;
   listChanges(options: DriveListChangesOptions): Promise<DriveChangeList>;
@@ -369,7 +393,11 @@ function toQueryValue(value: string | string[] | number | boolean | undefined): 
   return value;
 }
 
-function appendQuery(search: URLSearchParams, key: string, value: string | string[] | number | boolean | undefined) {
+function appendQuery(
+  search: URLSearchParams,
+  key: string,
+  value: string | string[] | number | boolean | undefined
+) {
   const normalized = toQueryValue(value);
   if (typeof normalized !== "undefined" && normalized !== "") {
     search.set(key, normalized);
@@ -380,7 +408,12 @@ function buildQuery(options: Record<string, unknown> = {}): string {
   const search = new URLSearchParams();
   for (const [key, value] of Object.entries(options)) {
     if (value === undefined || value === null) continue;
-    if (Array.isArray(value) || typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    if (
+      Array.isArray(value) ||
+      typeof value === "string" ||
+      typeof value === "number" ||
+      typeof value === "boolean"
+    ) {
       appendQuery(search, key, value as string | string[] | number | boolean);
     }
   }
@@ -414,7 +447,10 @@ function normalizeUploadBody(body: DriveUploadBody): BlobPart {
   return body as unknown as BlobPart;
 }
 
-function createMultipartRelatedBody(metadata: Record<string, unknown>, media: DriveUploadMedia): {
+function createMultipartRelatedBody(
+  metadata: Record<string, unknown>,
+  media: DriveUploadMedia
+): {
   body: Blob;
   contentType: string;
 } {
@@ -497,7 +533,9 @@ function getCopyQuery(options: DriveCopyFileOptions = {}): string {
   });
 }
 
-function getPermissionsQuery(options: DrivePermissionMutationOptions | DriveListPermissionsOptions = {}): string {
+function getPermissionsQuery(
+  options: DrivePermissionMutationOptions | DriveListPermissionsOptions = {}
+): string {
   return buildQuery({
     supportsAllDrives: options.supportsAllDrives ?? true,
     fields: normalizeFields(options.fields),
@@ -506,7 +544,9 @@ function getPermissionsQuery(options: DrivePermissionMutationOptions | DriveList
         ? (options as DrivePermissionMutationOptions).sendNotificationEmail
         : undefined,
     transferOwnership:
-      "transferOwnership" in options ? (options as DrivePermissionMutationOptions).transferOwnership : undefined,
+      "transferOwnership" in options
+        ? (options as DrivePermissionMutationOptions).transferOwnership
+        : undefined,
   });
 }
 
@@ -525,7 +565,8 @@ function getChangeQuery(options: DriveListChangesOptions | DriveGetStartPageToke
     pageToken: "pageToken" in options ? (options as DriveListChangesOptions).pageToken : undefined,
     pageSize: "pageSize" in options ? (options as DriveListChangesOptions).pageSize : undefined,
     driveId: options.driveId,
-    includeRemoved: "includeRemoved" in options ? (options as DriveListChangesOptions).includeRemoved : undefined,
+    includeRemoved:
+      "includeRemoved" in options ? (options as DriveListChangesOptions).includeRemoved : undefined,
     includeCorpusRemovals:
       "includeCorpusRemovals" in options
         ? (options as DriveListChangesOptions).includeCorpusRemovals
@@ -536,14 +577,20 @@ function getChangeQuery(options: DriveListChangesOptions | DriveGetStartPageToke
         : undefined,
     restrictToMyDrive: options.restrictToMyDrive,
     supportsAllDrives: options.supportsAllDrives ?? true,
-    includeLabels: "includeLabels" in options ? (options as DriveListChangesOptions).includeLabels : undefined,
+    includeLabels:
+      "includeLabels" in options ? (options as DriveListChangesOptions).includeLabels : undefined,
     fields: normalizeFields((options as DriveListChangesOptions).fields),
   });
 }
 
 async function parseJsonResponse<T>(response: Response, serviceName: string): Promise<T> {
   if (!response.ok) {
-    throw new GoogleDriveApiError(serviceName, response.status, response.statusText, await response.text());
+    throw new GoogleDriveApiError(
+      serviceName,
+      response.status,
+      response.statusText,
+      await response.text()
+    );
   }
   if (response.status === 204) return undefined as T;
   return (await response.json()) as T;
@@ -551,7 +598,12 @@ async function parseJsonResponse<T>(response: Response, serviceName: string): Pr
 
 async function parseRawResponse(response: Response, serviceName: string): Promise<Response> {
   if (!response.ok) {
-    throw new GoogleDriveApiError(serviceName, response.status, response.statusText, await response.text());
+    throw new GoogleDriveApiError(
+      serviceName,
+      response.status,
+      response.statusText,
+      await response.text()
+    );
   }
   return response;
 }
@@ -575,7 +627,7 @@ function splitHeaderParameters(value: string): string[] {
       escaped = true;
       continue;
     }
-    if (char === "\"") {
+    if (char === '"') {
       quoted = !quoted;
       continue;
     }
@@ -590,7 +642,7 @@ function splitHeaderParameters(value: string): string[] {
 
 function unquoteHeaderValue(value: string): string {
   const trimmed = value.trim();
-  if (trimmed.length >= 2 && trimmed.startsWith("\"") && trimmed.endsWith("\"")) {
+  if (trimmed.length >= 2 && trimmed.startsWith('"') && trimmed.endsWith('"')) {
     return trimmed.slice(1, -1).replace(/\\(["\\])/g, "$1");
   }
   return trimmed;
@@ -599,7 +651,7 @@ function unquoteHeaderValue(value: string): string {
 function decodeExtendedHeaderValue(value: string): string {
   const normalized = unquoteHeaderValue(value);
   const match = /^([^']*)'[^']*'(.*)$/.exec(normalized);
-  const encoded = match ? match[2] ?? "" : normalized;
+  const encoded = match ? (match[2] ?? "") : normalized;
   try {
     return decodeURIComponent(encoded);
   } catch {
@@ -623,7 +675,10 @@ function filenameFromContentDisposition(value: string | null): string | undefine
   return filename ? unquoteHeaderValue(filename) : undefined;
 }
 
-async function responseToDriveFileBytes(response: Response, operation: string): Promise<DriveFileBytes> {
+async function responseToDriveFileBytes(
+  response: Response,
+  operation: string
+): Promise<DriveFileBytes> {
   let bytes: Uint8Array;
   try {
     bytes = new Uint8Array(await response.arrayBuffer());
@@ -646,7 +701,7 @@ async function executeJson<T>(
   auth: UrlCredentialHandle,
   url: string,
   init: RequestInit | undefined,
-  serviceName: string,
+  serviceName: string
 ): Promise<T> {
   const headers = new Headers(init?.headers);
   headers.set("Accept", "application/json");
@@ -661,7 +716,7 @@ async function executeRaw(
   auth: UrlCredentialHandle,
   url: string,
   init: RequestInit | undefined,
-  serviceName: string,
+  serviceName: string
 ): Promise<Response> {
   const headers = new Headers(init?.headers);
   const response = await auth.fetch(url, { ...init, headers });
@@ -670,14 +725,14 @@ async function executeRaw(
 
 function ensureMultipartUpload(
   metadata: Record<string, unknown>,
-  media: DriveUploadMedia,
+  media: DriveUploadMedia
 ): { body: Blob; contentType: string } {
   return createMultipartRelatedBody(metadata, media);
 }
 
 export function createDriveClient(
   credentials: CredentialClient,
-  opts: { credentialId?: string } = {},
+  opts: { credentialId?: string } = {}
 ): DriveClient {
   let handlePromise: Promise<UrlCredentialHandle> | null = null;
   const handle = (): Promise<UrlCredentialHandle> => {
@@ -694,52 +749,85 @@ export function createDriveClient(
     return handlePromise;
   };
 
-  const withHandle = async <T>(fn: (auth: UrlCredentialHandle) => Promise<T>): Promise<T> => fn(await handle());
+  const withHandle = async <T>(fn: (auth: UrlCredentialHandle) => Promise<T>): Promise<T> =>
+    fn(await handle());
 
   const apiUrl = (path: string, base = GOOGLE_DRIVE_API_BASE): string => `${base}${path}`;
 
   const listFiles = async (options: DriveListFilesOptions = {}): Promise<DriveFileList> =>
-    withHandle((auth) => executeJson<DriveFileList>(auth, apiUrl(`/files${getListFilesQuery(options)}`), undefined, "Google Drive"));
+    withHandle((auth) =>
+      executeJson<DriveFileList>(
+        auth,
+        apiUrl(`/files${getListFilesQuery(options)}`),
+        undefined,
+        "Google Drive"
+      )
+    );
 
   const getFile = async (fileId: string, options: DriveGetFileOptions = {}): Promise<DriveFile> =>
-    withHandle((auth) => executeJson<DriveFile>(auth, apiUrl(`/files/${toPathSegment(fileId)}${getFileQuery(options)}`), undefined, "Google Drive"));
+    withHandle((auth) =>
+      executeJson<DriveFile>(
+        auth,
+        apiUrl(`/files/${toPathSegment(fileId)}${getFileQuery(options)}`),
+        undefined,
+        "Google Drive"
+      )
+    );
 
-  const downloadFile = async (fileId: string, options: DriveGetFileOptions = {}): Promise<Response> =>
-    withHandle((auth) => executeRaw(auth, apiUrl(`/files/${toPathSegment(fileId)}${buildQuery({
-      supportsAllDrives: options.supportsAllDrives ?? true,
-      acknowledgeAbuse: options.acknowledgeAbuse,
-    })}&alt=media`), undefined, "Google Drive"));
+  const downloadFile = async (
+    fileId: string,
+    options: DriveGetFileOptions = {}
+  ): Promise<Response> =>
+    withHandle((auth) =>
+      executeRaw(
+        auth,
+        apiUrl(
+          `/files/${toPathSegment(fileId)}${buildQuery({
+            supportsAllDrives: options.supportsAllDrives ?? true,
+            acknowledgeAbuse: options.acknowledgeAbuse,
+          })}&alt=media`
+        ),
+        undefined,
+        "Google Drive"
+      )
+    );
 
-  const downloadFileBytes = async (fileId: string, options: DriveGetFileOptions = {}): Promise<DriveFileBytes> =>
+  const downloadFileBytes = async (
+    fileId: string,
+    options: DriveGetFileOptions = {}
+  ): Promise<DriveFileBytes> =>
     responseToDriveFileBytes(await downloadFile(fileId, options), "Google Drive download");
 
   const exportFile = async (
     fileId: string,
     mimeType: string,
-    options: { supportsAllDrives?: boolean; fields?: string } = {},
+    options: { supportsAllDrives?: boolean; fields?: string } = {}
   ): Promise<Response> =>
     withHandle((auth) =>
       executeRaw(
         auth,
-        apiUrl(`/files/${toPathSegment(fileId)}/export${buildQuery({
-          mimeType,
-          supportsAllDrives: options.supportsAllDrives ?? true,
-          fields: options.fields,
-        })}`),
+        apiUrl(
+          `/files/${toPathSegment(fileId)}/export${buildQuery({
+            mimeType,
+            supportsAllDrives: options.supportsAllDrives ?? true,
+            fields: options.fields,
+          })}`
+        ),
         undefined,
-        "Google Drive",
-      ));
+        "Google Drive"
+      )
+    );
 
   const exportFileBytes = async (
     fileId: string,
     mimeType: string,
-    options: { supportsAllDrives?: boolean; fields?: string } = {},
+    options: { supportsAllDrives?: boolean; fields?: string } = {}
   ): Promise<DriveFileBytes> =>
     responseToDriveFileBytes(await exportFile(fileId, mimeType, options), "Google Drive export");
 
   const createFile = async (
     metadata: Partial<DriveFile>,
-    options: DriveFileMutationOptions & { media?: DriveUploadMedia } = {},
+    options: DriveFileMutationOptions & { media?: DriveUploadMedia } = {}
   ): Promise<DriveFile> =>
     withHandle(async (auth) => {
       const query = getMutationQuery(options);
@@ -748,26 +836,29 @@ export function createDriveClient(
           auth,
           apiUrl(`/files${query}`),
           { method: "POST", body: JSON.stringify(metadata) },
-          "Google Drive",
+          "Google Drive"
         );
       }
       const multipart = ensureMultipartUpload(metadata, options.media);
       return executeJson<DriveFile>(
         auth,
-        apiUrl(`/files?uploadType=multipart${query ? `&${query.slice(1)}` : ""}`, GOOGLE_DRIVE_UPLOAD_API_BASE),
+        apiUrl(
+          `/files?uploadType=multipart${query ? `&${query.slice(1)}` : ""}`,
+          GOOGLE_DRIVE_UPLOAD_API_BASE
+        ),
         {
           method: "POST",
           body: multipart.body,
           headers: { "Content-Type": multipart.contentType },
         },
-        "Google Drive",
+        "Google Drive"
       );
     });
 
   const updateFile = async (
     fileId: string,
     metadata: Partial<DriveFile>,
-    options: DriveUpdateFileOptions & { media?: DriveUploadMedia } = {},
+    options: DriveUpdateFileOptions & { media?: DriveUploadMedia } = {}
   ): Promise<DriveFile> =>
     withHandle(async (auth) => {
       const query = getUpdateQuery(options);
@@ -776,7 +867,7 @@ export function createDriveClient(
           auth,
           apiUrl(`/files/${toPathSegment(fileId)}${query}`),
           { method: "PATCH", body: JSON.stringify(metadata) },
-          "Google Drive",
+          "Google Drive"
         );
       }
       const multipart = ensureMultipartUpload(metadata, options.media);
@@ -784,42 +875,54 @@ export function createDriveClient(
         auth,
         apiUrl(
           `/files/${toPathSegment(fileId)}?uploadType=multipart${query ? `&${query.slice(1)}` : ""}`,
-          GOOGLE_DRIVE_UPLOAD_API_BASE,
+          GOOGLE_DRIVE_UPLOAD_API_BASE
         ),
         {
           method: "PATCH",
           body: multipart.body,
           headers: { "Content-Type": multipart.contentType },
         },
-        "Google Drive",
+        "Google Drive"
       );
     });
 
   const moveFile = async (
     fileId: string,
-    options: { addParents?: string | string[]; removeParents?: string | string[] } & DriveUpdateFileOptions,
+    options: {
+      addParents?: string | string[];
+      removeParents?: string | string[];
+    } & DriveUpdateFileOptions
   ): Promise<DriveFile> => updateFile(fileId, {}, options);
 
-  const trashFile = async (fileId: string, options: DriveUpdateFileOptions = {}): Promise<DriveFile> =>
-    updateFile(fileId, { trashed: true }, options);
+  const trashFile = async (
+    fileId: string,
+    options: DriveUpdateFileOptions = {}
+  ): Promise<DriveFile> => updateFile(fileId, { trashed: true }, options);
 
-  const restoreFile = async (fileId: string, options: DriveUpdateFileOptions = {}): Promise<DriveFile> =>
-    updateFile(fileId, { trashed: false }, options);
+  const restoreFile = async (
+    fileId: string,
+    options: DriveUpdateFileOptions = {}
+  ): Promise<DriveFile> => updateFile(fileId, { trashed: false }, options);
 
-  const deleteFile = async (fileId: string, options: { supportsAllDrives?: boolean } = {}): Promise<void> =>
+  const deleteFile = async (
+    fileId: string,
+    options: { supportsAllDrives?: boolean } = {}
+  ): Promise<void> =>
     withHandle(async (auth) => {
       await executeJson<void>(
         auth,
-        apiUrl(`/files/${toPathSegment(fileId)}${buildQuery({ supportsAllDrives: options.supportsAllDrives ?? true })}`),
+        apiUrl(
+          `/files/${toPathSegment(fileId)}${buildQuery({ supportsAllDrives: options.supportsAllDrives ?? true })}`
+        ),
         { method: "DELETE" },
-        "Google Drive",
+        "Google Drive"
       );
     });
 
   const copyFile = async (
     fileId: string,
     metadata: Partial<DriveFile> = {},
-    options: DriveCopyFileOptions = {},
+    options: DriveCopyFileOptions = {}
   ): Promise<DriveFile> =>
     withHandle(async (auth) => {
       const query = getCopyQuery(options);
@@ -830,7 +933,7 @@ export function createDriveClient(
           method: "POST",
           body: JSON.stringify(metadata),
         },
-        "Google Drive",
+        "Google Drive"
       );
     });
 
@@ -841,66 +944,67 @@ export function createDriveClient(
 
   const listPermissions = async (
     fileId: string,
-    options: DriveListPermissionsOptions = {},
+    options: DriveListPermissionsOptions = {}
   ): Promise<DrivePermissionList> =>
     withHandle((auth) =>
       executeJson<DrivePermissionList>(
         auth,
         apiUrl(`/files/${toPathSegment(fileId)}/permissions${getPermissionsQuery(options)}`),
         undefined,
-        "Google Drive",
-      ));
+        "Google Drive"
+      )
+    );
 
   const createPermission = async (
     fileId: string,
     permission: Partial<DrivePermission>,
-    options: DrivePermissionMutationOptions = {},
+    options: DrivePermissionMutationOptions = {}
   ): Promise<DrivePermission> =>
     withHandle((auth) =>
       executeJson<DrivePermission>(
         auth,
-        apiUrl(
-          `/files/${toPathSegment(fileId)}/permissions${getPermissionsQuery(options)}`,
-        ),
+        apiUrl(`/files/${toPathSegment(fileId)}/permissions${getPermissionsQuery(options)}`),
         {
           method: "POST",
           body: JSON.stringify(permission),
         },
-        "Google Drive",
-      ));
+        "Google Drive"
+      )
+    );
 
   const updatePermission = async (
     fileId: string,
     permissionId: string,
     permission: Partial<DrivePermission>,
-    options: DrivePermissionMutationOptions = {},
+    options: DrivePermissionMutationOptions = {}
   ): Promise<DrivePermission> =>
     withHandle((auth) =>
       executeJson<DrivePermission>(
         auth,
         apiUrl(
-          `/files/${toPathSegment(fileId)}/permissions/${toPathSegment(permissionId)}${getPermissionsQuery(options)}`,
+          `/files/${toPathSegment(fileId)}/permissions/${toPathSegment(permissionId)}${getPermissionsQuery(options)}`
         ),
         {
           method: "PATCH",
           body: JSON.stringify(permission),
         },
-        "Google Drive",
-      ));
+        "Google Drive"
+      )
+    );
 
   const deletePermission = async (
     fileId: string,
     permissionId: string,
-    options: DrivePermissionMutationOptions = {},
+    options: DrivePermissionMutationOptions = {}
   ): Promise<void> =>
     withHandle(async (auth) => {
       await executeJson<void>(
         auth,
         apiUrl(
-          `/files/${toPathSegment(fileId)}/permissions/${toPathSegment(permissionId)}${getPermissionsQuery(options)}`,
+          `/files/${toPathSegment(fileId)}/permissions/${toPathSegment(permissionId)}${getPermissionsQuery(options)}`
         ),
         { method: "DELETE" },
-        "Google Drive",
+        "Google Drive"
       );
     });
 
@@ -910,21 +1014,26 @@ export function createDriveClient(
         auth,
         apiUrl(`/drives${getDrivesQuery(options)}`),
         undefined,
-        "Google Drive",
-      ));
+        "Google Drive"
+      )
+    );
 
-  const getDrive = async (driveId: string, options: DriveDriveMutationOptions = {}): Promise<DriveDrive> =>
+  const getDrive = async (
+    driveId: string,
+    options: DriveDriveMutationOptions = {}
+  ): Promise<DriveDrive> =>
     withHandle((auth) =>
       executeJson<DriveDrive>(
         auth,
         apiUrl(`/drives/${toPathSegment(driveId)}${getDrivesQuery(options)}`),
         undefined,
-        "Google Drive",
-      ));
+        "Google Drive"
+      )
+    );
 
   const createDrive = async (
     metadata: Partial<DriveDrive>,
-    options: DriveDriveMutationOptions = {},
+    options: DriveDriveMutationOptions = {}
   ): Promise<DriveDrive> =>
     withHandle((auth) =>
       executeJson<DriveDrive>(
@@ -934,13 +1043,14 @@ export function createDriveClient(
           method: "POST",
           body: JSON.stringify(metadata),
         },
-        "Google Drive",
-      ));
+        "Google Drive"
+      )
+    );
 
   const updateDrive = async (
     driveId: string,
     metadata: Partial<DriveDrive>,
-    options: DriveDriveMutationOptions = {},
+    options: DriveDriveMutationOptions = {}
   ): Promise<DriveDrive> =>
     withHandle((auth) =>
       executeJson<DriveDrive>(
@@ -950,30 +1060,44 @@ export function createDriveClient(
           method: "PATCH",
           body: JSON.stringify(metadata),
         },
-        "Google Drive",
-      ));
+        "Google Drive"
+      )
+    );
 
-  const deleteDrive = async (driveId: string, options: DriveDriveMutationOptions = {}): Promise<void> =>
+  const deleteDrive = async (
+    driveId: string,
+    options: DriveDriveMutationOptions = {}
+  ): Promise<void> =>
     withHandle(async (auth) => {
       await executeJson<void>(
         auth,
         apiUrl(`/drives/${toPathSegment(driveId)}${getDrivesQuery(options)}`),
         { method: "DELETE" },
-        "Google Drive",
+        "Google Drive"
       );
     });
 
   const about = async (): Promise<DriveAbout> =>
-    withHandle((auth) => executeJson<DriveAbout>(auth, apiUrl("/about?fields=kind,user,storageQuota"), undefined, "Google Drive"));
+    withHandle((auth) =>
+      executeJson<DriveAbout>(
+        auth,
+        apiUrl("/about?fields=kind,user,storageQuota"),
+        undefined,
+        "Google Drive"
+      )
+    );
 
-  const getStartPageToken = async (options: DriveGetStartPageTokenOptions = {}): Promise<DriveStartPageToken> =>
+  const getStartPageToken = async (
+    options: DriveGetStartPageTokenOptions = {}
+  ): Promise<DriveStartPageToken> =>
     withHandle((auth) =>
       executeJson<DriveStartPageToken>(
         auth,
         apiUrl(`/changes/startPageToken${getChangeQuery(options)}`),
         undefined,
-        "Google Drive",
-      ));
+        "Google Drive"
+      )
+    );
 
   const listChanges = async (options: DriveListChangesOptions): Promise<DriveChangeList> =>
     withHandle((auth) =>
@@ -981,8 +1105,9 @@ export function createDriveClient(
         auth,
         apiUrl(`/changes${getChangeQuery(options)}`),
         undefined,
-        "Google Drive",
-      ));
+        "Google Drive"
+      )
+    );
 
   const startPollingChanges = (options: DriveStartPollingOptions): (() => void) => {
     const intervalMs = options.intervalMs ?? 60_000;

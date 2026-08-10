@@ -59,16 +59,22 @@ describe("onboarding selection routing", () => {
   });
 
   it("resolves optional template choices to the canonical Templates owner and URL", () => {
-    expect(
-      resolveOnboardingTemplateSelection(onboardingTemplateInteraction("template.news"))
-    ).toEqual(
+    const selection = {
+      catalogId: "news",
+      registryCommit: "a".repeat(40),
+      registrySnapshot: `v1-sha256:${"b".repeat(64)}`,
+    };
+    expect(resolveOnboardingTemplateSelection(onboardingTemplateInteraction(selection))).toEqual(
       expect.objectContaining({
         ownerSkillPath: "skills/templates/SKILL.md",
-        url: "git+https://github.com/panticonic/vibestudio-template-news.git",
+        selection,
       })
     );
     expect(() =>
-      resolveOnboardingTemplateSelection(onboardingTemplateInteraction("template.retired"))
-    ).toThrow("Unknown or retired onboarding template");
+      resolveOnboardingTemplateSelection({
+        ...onboardingTemplateInteraction(selection),
+        targetId: "template.retired",
+      })
+    ).toThrow("Onboarding template selection metadata is invalid");
   });
 });

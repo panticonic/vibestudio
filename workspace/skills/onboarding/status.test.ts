@@ -1,31 +1,32 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const credentialsMock = vi.hoisted(() => ({
+  getClientConfigStatus: vi.fn(),
+  listStoredCredentials: vi.fn(),
+  fetch: vi.fn(),
+}));
 
 vi.mock("@workspace/runtime", () => ({
   browserData: {},
   callMain: vi.fn(),
   createDurableObjectServiceClient: vi.fn(() => ({ call: vi.fn() })),
-  credentials: {},
+  credentials: credentialsMock,
   extensions: {},
   git: {},
   openExternal: vi.fn(),
   openPanel: vi.fn(),
 }));
 
-import { createStatusAdapters, type OnboardingStatusDependencies } from "./status.js";
+import {
+  createCredentialConnectionStatusAdapter,
+  createStatusAdapters,
+  type OnboardingStatusDependencies,
+} from "./status.js";
 
 function dependencies(
   overrides: Partial<OnboardingStatusDependencies> = {}
 ): OnboardingStatusDependencies {
   return {
-    google: vi.fn(async () => ({
-      stage: "connected" as const,
-      configured: true,
-      readyToConnect: false,
-      connected: true,
-      credentials: [],
-      nextActions: [],
-      warnings: [],
-    })),
     github: vi.fn(async () => ({
       stage: "needs-token" as const,
       connected: false,
@@ -68,36 +69,66 @@ function dependencies(
 }
 
 describe("onboarding status adapters", () => {
-  it("keeps credential presence distinct from live verification", async () => {
-    const deps = dependencies({
-      google: vi
-        .fn()
-        .mockResolvedValueOnce({
-          stage: "connected",
-          connected: true,
-          email: "person@example.test",
-        })
-        .mockResolvedValueOnce({
-          stage: "verified",
-          connected: true,
-          email: "person@example.test",
-          verification: { valid: true },
-        }),
-    });
-    const adapters = createStatusAdapters(deps);
+  beforeEach(() => {
+    vi.clearAllMocks();
+    credentialsMock.getClientConfigStatus.mockResolvedValue({ configured: true });
+    credentialsMock.listStoredCredentials.mockResolvedValue([]);
+  });
 
-    await expect(adapters["google-workspace"]!()).resolves.toEqual(
+  it("keeps declared credential presence distinct from live verification", async () => {
+    credentialsMock.listStoredCredentials.mockResolvedValue([
+      {
+        id: "google-credential",
+        metadata: { providerId: "google-workspace" },
+        accountIdentity: { email: "person@example.test" },
+      },
+    ]);
+    credentialsMock.fetch.mockResolvedValue(
+      new Response(JSON.stringify({ email: "verified@example.test" }))
+    );
+    const adapter = createCredentialConnectionStatusAdapter(
+      {
+        kind: "credential-connection",
+        providerId: "google-workspace",
+        clientConfigId: "google-workspace",
+        verifyUrl: "https://www.googleapis.com/oauth2/v3/userinfo",
+        identityField: "email",
+      },
+      "Google Workspace"
+    );
+
+    await expect(adapter()).resolves.toEqual(
       expect.objectContaining({
         state: "connected-unverified",
         verification: "unverified",
       })
     );
-    await expect(adapters["google-workspace"]!({ verify: true })).resolves.toEqual(
+    await expect(adapter({ verify: true })).resolves.toEqual(
       expect.objectContaining({
         state: "connected",
         verification: "verified",
+        summary: "Verified as verified@example.test.",
       })
     );
+  });
+
+  it("reports an unconfigured declared credential connection without provider literals", async () => {
+    credentialsMock.getClientConfigStatus.mockResolvedValue({ configured: false });
+    const adapter = createCredentialConnectionStatusAdapter(
+      {
+        kind: "credential-connection",
+        providerId: "example-provider",
+        clientConfigId: "example-provider",
+      },
+      "Example Provider"
+    );
+
+    await expect(adapter()).resolves.toEqual({
+      state: "not-configured",
+      summary: "Example Provider needs provider setup before an account can connect.",
+      attention: "optional",
+      rawStage: "needs-setup",
+    });
   });
 
   it("treats the built-in search provider as a healthy default", async () => {
@@ -130,22 +161,6 @@ describe("onboarding status adapters", () => {
         attention: "blocking",
       })
     );
-  });
-
-  it("reports a missing shipped owner as unavailable before calling its status code", async () => {
-    const google = vi.fn();
-    const deps = dependencies({
-      google,
-      hasSkill: vi.fn(async (path) => path !== "skills/google-workspace/SKILL.md"),
-    });
-    await expect(createStatusAdapters(deps)["google-workspace"]!()).resolves.toEqual({
-      state: "unavailable",
-      summary:
-        "Google Workspace is unavailable because its base capability owner could not be loaded.",
-      attention: "blocking",
-      rawStage: "owner-unavailable",
-    });
-    expect(google).not.toHaveBeenCalled();
   });
 
   it("queries the Local Models extension without inventing a skill owner", async () => {

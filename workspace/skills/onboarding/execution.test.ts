@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { panelFailure, PanelOperationError } from "@vibestudio/shared/panel/observation";
 
 vi.mock("@workspace/runtime", () => ({
-  callMain: vi.fn(),
+  callMain: vi.fn(async (method: string) => (method === "workspace.listSkills" ? [] : undefined)),
   openPanel: vi.fn(),
 }));
 

@@ -252,11 +252,17 @@ export const templateAddRequestSchema = z.union([
   z
     .object({
       catalogId: z.string().trim().min(1),
+      registryCommit: WorkspaceGitCommitSchema.optional(),
+      registrySnapshot: WorkspaceGitSnapshotSchema.optional(),
       /** Refresh is explicit because it may perform network work. Omit it to
        * prepare from the last verified catalog snapshot. */
       refreshCatalog: z.boolean().optional(),
     })
-    .strict(),
+    .strict()
+    .refine(
+      (value) => Boolean(value.registryCommit) === Boolean(value.registrySnapshot),
+      "registryCommit and registrySnapshot must be provided together"
+    ),
   z
     .object({
       url: z.string().url(),

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  composeOnboardingCatalog,
   onboardingCatalog,
   validateOnboardingCatalog,
   type OnboardingCapabilityDefinition,
@@ -61,5 +62,65 @@ describe("onboarding catalog", () => {
     );
     expect(localModels?.ownerSkillPath).toBeUndefined();
     expect(localModels?.actions?.setup).toEqual({ via: "panel", path: "panels/local-models" });
+  });
+
+  it("composes and validates declarations from installed owner skills", () => {
+    const catalog = composeOnboardingCatalog([
+      {
+        skillPath: "skills/example/SKILL.md",
+        onboarding: {
+          capabilities: [
+            {
+              id: "connection.example",
+              title: "Example",
+              summary: "Connect Example.",
+              category: "connections",
+              role: "connection",
+              scope: "user-workspace",
+              tier: "direct",
+              visibility: "primary",
+              actions: { setup: { via: "owner-skill" } },
+              setup: {
+                successDescription: "A live check succeeds.",
+                status: {
+                  kind: "credential-connection",
+                  providerId: "example",
+                },
+              },
+            },
+          ],
+        },
+      },
+    ]);
+
+    expect(catalog.find((entry) => entry.id === "connection.example")).toEqual(
+      expect.objectContaining({
+        ownerSkillPath: "skills/example/SKILL.md",
+        setup: expect.objectContaining({
+          observer: { kind: "credential-connection", providerId: "example" },
+        }),
+      })
+    );
+    expect(() =>
+      composeOnboardingCatalog([
+        {
+          skillPath: "skills/collision/SKILL.md",
+          onboarding: {
+            capabilities: [
+              {
+                id: "connection.github",
+                title: "Collision",
+                summary: "Collision",
+                category: "connections",
+                role: "contextual-setup",
+                scope: "workspace",
+                tier: "direct",
+                visibility: "contextual",
+              },
+            ],
+          },
+        },
+      ])
+    ).toThrow("Duplicate onboarding capability id");
   });
 });

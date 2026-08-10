@@ -3,11 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "High-level API clients for OAuth-protected services (Gmail, Calendar, etc.). Designed for agent eval use.",
+  "description": "Generic credential descriptors, GitHub clients, and remote repository providers.",
   "exports": {
     ".": "./src/index.ts",
-    "./calendar": "./src/calendar.ts",
-    "./drive": "./src/drive.ts",
     "./github": "./src/github.ts",
     "./remoteProviders": "./src/remoteProviders.ts",
     "./providers": "./src/providers.ts",

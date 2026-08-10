@@ -1,12 +1,10 @@
 import { credentials } from "@workspace/runtime";
-import type {
-  StoredCredentialSummary,
-} from "@workspace/runtime";
+import type { StoredCredentialSummary } from "@workspace/runtime";
 import {
   bearerTokenInjection,
   GOOGLE_WORKSPACE_BROAD_SCOPES,
   googleWorkspaceCredential,
-} from "@workspace/integrations/providers";
+} from "@workspace/google-workspace/providers";
 
 const GOOGLE_PROVIDER_ID = "google-workspace";
 const GOOGLE_OAUTH_CLIENT_CONFIG_ID = "google-workspace";

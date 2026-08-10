@@ -4,10 +4,7 @@ import {
   createGoogleWorkspaceCredentialHandle,
   GoogleApiError,
 } from "./google-shared.js";
-import type {
-  CredentialClient,
-  UrlCredentialHandle,
-} from "@workspace/runtime/credentials";
+import type { CredentialClient, UrlCredentialHandle } from "@workspace/runtime/credentials";
 
 const GOOGLE_CALENDAR_BASE_URL = "https://www.googleapis.com/calendar/v3";
 const DEFAULT_PUSH_QUIET_WINDOW_MS = 5 * 60_000;
@@ -19,15 +16,19 @@ export const manifest = {
   endpoints: {
     "google-workspace": [
       { url: "https://www.googleapis.com/calendar/v3/calendars/*", methods: ["GET"] },
-      { url: "https://www.googleapis.com/calendar/v3/calendars/*/events", methods: ["GET", "POST"] },
-      { url: "https://www.googleapis.com/calendar/v3/calendars/*/events/*", methods: ["GET", "PUT", "DELETE"] },
+      {
+        url: "https://www.googleapis.com/calendar/v3/calendars/*/events",
+        methods: ["GET", "POST"],
+      },
+      {
+        url: "https://www.googleapis.com/calendar/v3/calendars/*/events/*",
+        methods: ["GET", "PUT", "DELETE"],
+      },
       { url: "https://www.googleapis.com/calendar/v3/users/me/calendarList", methods: ["GET"] },
     ],
   },
   webhooks: {
-    "google-workspace": [
-      { event: "events.changed", deliver: "onEventsChanged" },
-    ],
+    "google-workspace": [{ event: "events.changed", deliver: "onEventsChanged" }],
   },
 } as const;
 
@@ -113,7 +114,9 @@ function toIsoString(value: string | Date): string {
 
 function buildEventsQuery(options: ListEventsOptions = {}): string {
   if (options.syncToken && (options.timeMin || options.timeMax || options.orderBy)) {
-    throw new Error("Google Calendar does not allow timeMin, timeMax, or orderBy when syncToken is set");
+    throw new Error(
+      "Google Calendar does not allow timeMin, timeMax, or orderBy when syncToken is set"
+    );
   }
 
   const params = new URLSearchParams();
@@ -166,7 +169,9 @@ export interface CalendarClient {
  * The credential handle is resolved on first use and memoized.
  */
 export function createCalendarClient(credentials: CredentialClient): CalendarClient {
-  const handle = createGoogleWorkspaceCredentialHandle(credentials, { bindingId: "google-calendar" });
+  const handle = createGoogleWorkspaceCredentialHandle(credentials, {
+    bindingId: "google-calendar",
+  });
   const sharedApiFetch = createGoogleApiFetcher({
     baseUrl: GOOGLE_CALENDAR_BASE_URL,
     serviceName: "Google Calendar",
@@ -197,7 +202,7 @@ export function createCalendarClient(credentials: CredentialClient): CalendarCli
 
   const listEvents = async (
     calendarId: string,
-    options: ListEventsOptions = {},
+    options: ListEventsOptions = {}
   ): Promise<ListEventsResult> => {
     const events: CalendarEvent[] = [];
     let pageToken: string | undefined;
@@ -207,7 +212,7 @@ export function createCalendarClient(credentials: CredentialClient): CalendarCli
       if (pageToken) params.set("pageToken", pageToken);
       const query = params.toString();
       const page = await apiFetch<EventsListResponse>(
-        `/calendars/${encodePathSegment(calendarId)}/events${query ? `?${query}` : ""}`,
+        `/calendars/${encodePathSegment(calendarId)}/events${query ? `?${query}` : ""}`
       );
       events.push(...(page.items ?? []));
       pageToken = page.nextPageToken;
@@ -239,7 +244,7 @@ export function createCalendarClient(credentials: CredentialClient): CalendarCli
             "google-workspace",
             "events.changed",
             auth.credentialId,
-            options.pushQuietWindowMs ?? DEFAULT_PUSH_QUIET_WINDOW_MS,
+            options.pushQuietWindowMs ?? DEFAULT_PUSH_QUIET_WINDOW_MS
           ))
         ) {
           return;
@@ -261,7 +266,7 @@ export function createCalendarClient(credentials: CredentialClient): CalendarCli
                 showDeleted: options.showDeleted,
                 singleEvents: options.singleEvents,
                 orderBy: options.orderBy,
-              },
+              }
         );
 
         for (const event of result.items) {
@@ -292,7 +297,7 @@ export function createCalendarClient(credentials: CredentialClient): CalendarCli
     listEvents,
     getEvent: (calendarId, eventId) =>
       apiFetch<CalendarEvent>(
-        `/calendars/${encodePathSegment(calendarId)}/events/${encodePathSegment(eventId)}`,
+        `/calendars/${encodePathSegment(calendarId)}/events/${encodePathSegment(eventId)}`
       ),
     createEvent: (calendarId, event) =>
       apiFetch<CalendarEvent>(`/calendars/${encodePathSegment(calendarId)}/events`, {
@@ -305,12 +310,12 @@ export function createCalendarClient(credentials: CredentialClient): CalendarCli
         {
           method: "PUT",
           body: JSON.stringify(event),
-        },
+        }
       ),
     deleteEvent: async (calendarId, eventId) => {
       await apiFetch<void>(
         `/calendars/${encodePathSegment(calendarId)}/events/${encodePathSegment(eventId)}`,
-        { method: "DELETE" },
+        { method: "DELETE" }
       );
     },
     startPolling,
@@ -341,8 +346,8 @@ function isWebhookEvent(value: unknown): value is {
 } {
   return Boolean(
     value &&
-      typeof value === "object" &&
-      typeof (value as { connectionId?: unknown }).connectionId === "string",
+    typeof value === "object" &&
+    typeof (value as { connectionId?: unknown }).connectionId === "string"
   );
 }
 

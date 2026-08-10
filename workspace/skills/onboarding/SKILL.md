@@ -18,7 +18,7 @@ base-owned composer inside the inviting panel, the shared boundary that can
 reach workspace owners and the redacted Electron host read.
 
 Render the returned object with `inline_ui` from
-`skills/onboarding/SetupHub.tsx`, passing its `{ snapshot, templates }`. The composer reads
+`skills/onboarding/SetupHub.tsx`, passing its `{ catalog, snapshot, templates }`. The composer reads
 Google, GitHub, model settings, agent defaults, local models, browser imports,
 web search, and installed-template status directly from their owners. It composes device/workspace topology
 from `hubControl.listDevices` and `hubControl.listWorkspaces`, plus the
@@ -75,7 +75,7 @@ their normal approval flow.
 
 For `kind: "onboarding-template"`, statically import and call
 `resolveOnboardingTemplateSelection` with the complete interaction. Read its
-returned `ownerSkillPath`, then use its returned `url` with the Templates
+returned `ownerSkillPath`, then use its registry-bound `selection` with the Templates
 skill's `prepareAdd` and reviewed `add` workflow. The click expresses the
 user's request to review that template; it is not permission to bypass the
 Composer inspection or host approval boundary.
@@ -93,19 +93,14 @@ device IDs, pairing links, profile paths, or private topology.
 
 ## Templates
 
-Onboarding shows these optional official outcomes together with their actual
-Composer installation status:
-
-| User outcome                                 | Official template URL                                                   |
-| -------------------------------------------- | ----------------------------------------------------------------------- |
-| Learn from or start with Vibestudio examples | `git+https://github.com/panticonic/vibestudio-template-examples.git`    |
-| Read, collect, or work with news             | `git+https://github.com/panticonic/vibestudio-template-news.git`        |
-| Write or edit MDX with Spectrolite           | `git+https://github.com/panticonic/vibestudio-template-spectrolite.git` |
+Onboarding shows recommended outcomes from the current verified template
+registry together with their actual Composer installation status. It does not
+maintain a second list of official repository URLs.
 
 The overview offers `Review & add` only when Composer reports that the outcome
 is available. Installed outcomes are labeled and are not offered again; an
 unknown status is honest and not actionable until refresh. A structured
-selection hands the stable URL to the Templates skill's canonical direct-URL
+selection hands the registry identity to the Templates skill's canonical
 `prepareAdd` and reviewed `add` workflow unchanged. Never
 guess a tag or commit, silently install from an inferred interest, or reproduce
 template preparation inside onboarding. The Templates surface and composer

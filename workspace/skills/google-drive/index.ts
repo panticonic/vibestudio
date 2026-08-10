@@ -1,10 +1,6 @@
 import { credentials } from "@workspace/runtime";
 import type { StoredCredentialSummary } from "@workspace/runtime";
-import {
-  createDriveClient,
-  type DriveAbout,
-  type DriveClient,
-} from "@workspace/integrations";
+import { createDriveClient, type DriveAbout, type DriveClient } from "@workspace/google-workspace";
 import {
   getGoogleOnboardingStatus,
   type GoogleOnboardingStatus,
@@ -12,10 +8,7 @@ import {
 
 type RuntimeCredentials = typeof credentials;
 
-export type GoogleDriveOnboardingStage =
-  | "needs-google-workspace"
-  | "ready"
-  | "error";
+export type GoogleDriveOnboardingStage = "needs-google-workspace" | "ready" | "error";
 
 export interface GoogleDriveVerificationResult {
   valid: boolean;
@@ -54,11 +47,7 @@ function getCredentialRuntime(): RuntimeCredentials {
       "Vibestudio credential runtime is unavailable: @workspace/runtime did not export credentials."
     );
   }
-  for (const method of [
-    "listStoredCredentials",
-    "fetch",
-    "resolveCredential",
-  ] as const) {
+  for (const method of ["listStoredCredentials", "fetch", "resolveCredential"] as const) {
     if (typeof api[method] !== "function") {
       throw new Error(
         `Vibestudio credential runtime is unavailable: credentials.${method} is missing.`
@@ -94,12 +83,12 @@ async function withCredentialRuntime<T>(fn: (api: RuntimeCredentials) => Promise
   }
 }
 
-function getNextActions(status: Pick<GoogleDriveOnboardingStatus, "stage" | "connected" | "verified">): string[] {
+function getNextActions(
+  status: Pick<GoogleDriveOnboardingStatus, "stage" | "connected" | "verified">
+): string[] {
   switch (status.stage) {
     case "needs-google-workspace":
-      return [
-        "Complete Google Workspace onboarding and verify the Google credential first.",
-      ];
+      return ["Complete Google Workspace onboarding and verify the Google credential first."];
     case "ready":
       return [
         "Create a Drive client with createGoogleDriveClient() and start browsing or syncing files.",
@@ -148,14 +137,12 @@ function buildStatus(input: {
   return status;
 }
 
-export function createGoogleDriveClient(
-  opts: GoogleDriveClientOptions = {},
-): DriveClient {
+export function createGoogleDriveClient(opts: GoogleDriveClientOptions = {}): DriveClient {
   return createDriveClient(getCredentialRuntime(), opts);
 }
 
 export async function verifyGoogleDriveAccess(
-  opts: GoogleDriveClientOptions = {},
+  opts: GoogleDriveClientOptions = {}
 ): Promise<GoogleDriveVerificationResult> {
   try {
     const client = createGoogleDriveClient(opts);
@@ -176,7 +163,7 @@ export async function verifyGoogleDriveAccess(
 }
 
 export async function getGoogleDriveOnboardingStatus(
-  opts: GoogleDriveOnboardingStatusOptions = {},
+  opts: GoogleDriveOnboardingStatusOptions = {}
 ): Promise<GoogleDriveOnboardingStatus> {
   const warnings: string[] = [];
   try {
@@ -231,9 +218,7 @@ export async function getGoogleDriveOnboardingStatus(
   }
 }
 
-export function formatGoogleDriveOnboardingStatus(
-  status: GoogleDriveOnboardingStatus,
-): string {
+export function formatGoogleDriveOnboardingStatus(status: GoogleDriveOnboardingStatus): string {
   const lines = [
     `Google Drive stage: ${status.stage}`,
     `connected=${status.connected}`,

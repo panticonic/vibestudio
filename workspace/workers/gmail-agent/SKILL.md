@@ -1,6 +1,16 @@
 ---
 name: gmail
 description: Gmail-aware channel agent setup, model-driven inbox triage, search, compose flows, and Gmail custom message renderers.
+onboarding:
+  capabilities:
+    - id: contextual.gmail-agent
+      title: Gmail agent
+      summary: Configure channel-specific email attention and automation after Google is ready.
+      category: personalization
+      role: contextual-setup
+      scope: channel
+      tier: direct
+      visibility: contextual
 ---
 
 # Gmail Skill
@@ -59,15 +69,15 @@ and starts first-run attention setup when the channel is not configured yet.
 
 Composable tools (generated from the worker's single operation table):
 
-| Tool                   | Purpose                                                                                                                                                                                                                                                                                                          |
-| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Tool                   | Purpose                                                                                                                                                                                                                                                                                                             |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `gmail_search`         | True thread-level search (`threads.list`) with full query syntax, `limit ≤ 50`, `pageToken` pagination; publishes an ephemeral `gmail.search` card unless `mirrorToCard: false`                                                                                                                                     |
 | `gmail_read`           | Thread/message contents; `format: "metadata"` for headers-only, `"full"` for sanitized bodies; optional attachment list                                                                                                                                                                                             |
 | `gmail_modify`         | Real Gmail labels by name (auto-created), `markRead`, `archive`, optional local-only `localCategory`; accepts many thread/message ids (message ids batch through `messages.batchModify`)                                                                                                                            |
 | `gmail_draft`          | Agent-written drafts onto a compose card (`review` when complete, `drafting` when partial); `mode: "reply"` resolves recipient/subject from the thread; default send-as signature appended visibly at draft time; `from` validated against send-as aliases; `saveToGmail` persists (re-saves update, not duplicate) |
 | `gmail_send`           | Immediate send — ONLY on explicit user request; otherwise the compose card's Send click authorizes; `from?` must be a configured send-as alias                                                                                                                                                                      |
 | `gmail_contacts`       | Name → address candidates with interaction evidence (history first, Google contacts fallback); `mode: "suggest"` for offline typeahead                                                                                                                                                                              |
-| `gmail_set_attention`  | Save natural-language attention preferences (`mode: "replace"` or `"append"`, `knownSenderShortcut`, `markConfigured`); tool calls include a scoped dry run re-evaluating recent surfaced/woken mail under the new text                                                                                            |
+| `gmail_set_attention`  | Save natural-language attention preferences (`mode: "replace"` or `"append"`, `knownSenderShortcut`, `markConfigured`); tool calls include a scoped dry run re-evaluating recent surfaced/woken mail under the new text                                                                                             |
 | `gmail_snooze`         | Archive now + reminder wake later (`remindAt` ISO / `inMs`, default 24h); `gmail_list_reminders` lists them                                                                                                                                                                                                         |
 | `gmail_get_attachment` | Save an attachment as a workspace file (sanitized name, 10MB cap, binary-safe) for normal file tooling                                                                                                                                                                                                              |
 | `gmail_publish_digest` | Publish a compact `gmail.digest` card (≤5 rows + `moreCount`)                                                                                                                                                                                                                                                       |
@@ -154,8 +164,8 @@ publishes ONE `gmail.digest` card via `gmail_publish_digest`.
 The helper package still ships five renderer modules (mobile-first: 44px touch
 targets, single column, ≤2 visible actions, whole-row taps):
 
-| Type            | Renderer                                             | Display | Notes                                                                 |
-| --------------- | ---------------------------------------------------- | ------- | --------------------------------------------------------------------- |
+| Type            | Renderer                                               | Display | Notes                                                                 |
+| --------------- | ------------------------------------------------------ | ------- | --------------------------------------------------------------------- |
 | `gmail.setup`   | `../../packages/gmail/src/renderers/gmail-setup.tsx`   | inline  | Connection status, preference text, Edit hands off to chat            |
 | `gmail.digest`  | `../../packages/gmail/src/renderers/gmail-digest.tsx`  | row     | Immutable per-wake digest; scrolls away with chat                     |
 | `gmail.search`  | `../../packages/gmail/src/renderers/gmail-search.tsx`  | row     | Ephemeral; `searching → done` patched in place; new search = new card |
@@ -175,10 +185,10 @@ edits) happens in chat.
 
 ## Files
 
-| Document                                                         | Content                                 |
-| ---------------------------------------------------------------- | --------------------------------------- |
-| [docs/ONBOARDING.md](docs/ONBOARDING.md)                         | Setup flow for agents                   |
-| [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)               | Common Gmail setup and sync failures    |
+| Document                                                                           | Content                                 |
+| ---------------------------------------------------------------------------------- | --------------------------------------- |
+| [docs/ONBOARDING.md](docs/ONBOARDING.md)                                           | Setup flow for agents                   |
+| [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)                                 | Common Gmail setup and sync failures    |
 | [../../packages/gmail/src/action-bar.tsx](../../packages/gmail/src/action-bar.tsx) | Pinned Gmail launcher                   |
-| [docs/system-prompt.md](docs/system-prompt.md)                   | Gmail agent prompt (documentation copy) |
-| [../../packages/gmail/src/agent.ts](../../packages/gmail/src/agent.ts) | Importable onboarding helpers           |
+| [docs/system-prompt.md](docs/system-prompt.md)                                     | Gmail agent prompt (documentation copy) |
+| [../../packages/gmail/src/agent.ts](../../packages/gmail/src/agent.ts)             | Importable onboarding helpers           |

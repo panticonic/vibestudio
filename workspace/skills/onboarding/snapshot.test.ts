@@ -15,6 +15,23 @@ import {
   type OnboardingSnapshotDependencies,
 } from "./snapshot.js";
 import type { CapabilityOnboardingStatusAdapter } from "./status.js";
+import { onboardingCatalog, type OnboardingCapabilityDefinition } from "./catalog.js";
+
+const googleCapability: OnboardingCapabilityDefinition = {
+  id: "connection.google-workspace",
+  title: "Google Workspace",
+  summary: "Connect Google Workspace.",
+  category: "connections",
+  role: "connection",
+  scope: "user-workspace",
+  tier: "direct",
+  ownerSkillPath: "skills/google-workspace/SKILL.md",
+  actions: { setup: { via: "owner-skill" }, check: { via: "owner-skill" } },
+  visibility: "primary",
+  setup: { statusAdapter: "google-workspace", successDescription: "Verified live." },
+};
+
+const installedCatalog = [...onboardingCatalog, googleCapability];
 
 const healthy: CapabilityOnboardingStatusAdapter = vi.fn(
   async (): ReturnType<CapabilityOnboardingStatusAdapter> => ({
@@ -28,6 +45,7 @@ function dependencies(
   adapters: Record<string, CapabilityOnboardingStatusAdapter>
 ): OnboardingSnapshotDependencies {
   return {
+    catalog: installedCatalog,
     adapters,
     readHostTopology: vi.fn(
       async (): ReturnType<NonNullable<OnboardingSnapshotDependencies["readHostTopology"]>> => ({
@@ -64,6 +82,36 @@ describe("composeOnboardingSnapshot", () => {
       {
         ...deps,
         templateStatus: vi.fn(async () => []),
+        templateCatalog: vi.fn(
+          async () =>
+            ({
+              coordinates: {
+                url: "git+https://example.test/registry.git",
+                ref: "refs/heads/main",
+                commit: "a".repeat(40),
+                snapshot: `v1-sha256:${"b".repeat(64)}`,
+              },
+              version: 1,
+              revision: "2026-08-10.1",
+              systemEpoch: 57,
+              source: "verified",
+              stale: false,
+              verifiedAt: "2026-08-10T12:00:00.000Z",
+              entries: ["examples", "news", "spectrolite"].map((id) => ({
+                id,
+                name: id,
+                description: id,
+                tags: [],
+                recommended: true,
+                url: `git+https://example.test/${id}.git`,
+                promoted: {
+                  ref: "refs/tags/v1",
+                  commit: "c".repeat(40),
+                  snapshot: `v1-sha256:${"d".repeat(64)}`,
+                },
+              })),
+            }) as never
+        ),
       }
     );
 

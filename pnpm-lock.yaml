@@ -1888,9 +1888,9 @@ importers:
       '@workspace-skills/google-workspace':
         specifier: workspace:*
         version: link:../../skills/google-workspace
-      '@workspace/integrations':
+      '@workspace/google-workspace':
         specifier: workspace:*
-        version: link:../integrations
+        version: link:../google-workspace
       '@workspace/runtime':
         specifier: workspace:*
         version: link:../runtime
@@ -1898,6 +1898,25 @@ importers:
         specifier: 19.0.0
         version: 19.0.0
     devDependencies:
+      vitest:
+        specifier: ^3.2.2
+        version: 3.2.4(@types/debug@4.1.12)(@types/node@24.10.9)(@vitest/browser@3.2.4)(jiti@2.7.0)(jsdom@29.0.1(@noble/hashes@2.2.0))(terser@5.46.1)(tsx@4.21.0)(yaml@2.9.0)
+
+  workspace/packages/google-workspace:
+    dependencies:
+      '@vibestudio/credential-client':
+        specifier: workspace:*
+        version: link:../../../packages/credential-client
+      '@workspace/integrations':
+        specifier: workspace:*
+        version: link:../integrations
+      '@workspace/runtime':
+        specifier: workspace:*
+        version: link:../runtime
+    devDependencies:
+      '@vibestudio/rpc':
+        specifier: workspace:*
+        version: link:../../../packages/rpc
       vitest:
         specifier: ^3.2.2
         version: 3.2.4(@types/debug@4.1.12)(@types/node@24.10.9)(@vitest/browser@3.2.4)(jiti@2.7.0)(jsdom@29.0.1(@noble/hashes@2.2.0))(terser@5.46.1)(tsx@4.21.0)(yaml@2.9.0)
@@ -2577,9 +2596,9 @@ importers:
       '@workspace-skills/google-workspace':
         specifier: workspace:*
         version: link:../google-workspace
-      '@workspace/integrations':
+      '@workspace/google-workspace':
         specifier: workspace:*
-        version: link:../../packages/integrations
+        version: link:../../packages/google-workspace
       '@workspace/runtime':
         specifier: workspace:*
         version: link:../../packages/runtime
@@ -2592,9 +2611,9 @@ importers:
       '@radix-ui/themes':
         specifier: ^3.2.1
         version: 3.3.0(@types/react-dom@19.2.3(@types/react@19.2.10))(@types/react@19.2.10)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
-      '@workspace/integrations':
+      '@workspace/google-workspace':
         specifier: workspace:*
-        version: link:../../packages/integrations
+        version: link:../../packages/google-workspace
       '@workspace/runtime':
         specifier: workspace:*
         version: link:../../packages/runtime
@@ -2627,6 +2646,9 @@ importers:
       '@workspace/runtime':
         specifier: workspace:*
         version: link:../../packages/runtime
+      '@workspace/template-registry':
+        specifier: workspace:*
+        version: link:../../packages/template-registry
       react:
         specifier: 19.0.0
         version: 19.0.0

@@ -27,6 +27,7 @@
     "@vibestudio/service-schemas": "workspace:*",
     "@workspace/model-catalog": "workspace:*",
     "@workspace/runtime": "workspace:*",
+    "@workspace/template-registry": "workspace:*",
     "@radix-ui/react-icons": "^1.3.2",
     "@radix-ui/themes": "^3.2.1",
     "react": "^19.2.0"

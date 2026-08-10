@@ -12,7 +12,7 @@ import {
 } from "@workspace/model-catalog/catalog";
 import type { LocalModelEntry, LocalModelsStatus } from "@workspace/model-catalog/localModels";
 import type { ImportJobSnapshot } from "@vibestudio/browser-data";
-import type { SetupPresentationState } from "./catalog";
+import type { CredentialConnectionObserver, SetupPresentationState } from "./catalog";
 
 export interface CapabilityOnboardingStatusResult {
   state: SetupPresentationState;
@@ -26,13 +26,6 @@ export type CapabilityOnboardingStatusAdapter = (opts?: {
   verify?: boolean;
 }) => Promise<CapabilityOnboardingStatusResult>;
 
-export interface GoogleOnboardingStatus {
-  stage: "needs-setup" | "ready-to-connect" | "connected" | "verified" | "error";
-  connected: boolean;
-  email?: string;
-  verification?: { valid: boolean };
-}
-
 export interface GitHubOnboardingStatus {
   stage: "needs-token" | "connected" | "verified" | "error";
   connected: boolean;
@@ -42,7 +35,6 @@ export interface GitHubOnboardingStatus {
 }
 
 export interface OnboardingStatusDependencies {
-  google(opts?: { verify?: boolean }): Promise<GoogleOnboardingStatus>;
   github(opts?: { verify?: boolean }): Promise<GitHubOnboardingStatus>;
   modelSettings(): Promise<ModelSettingsSnapshot>;
   localModelsStatus(): Promise<LocalModelsStatus>;
@@ -66,42 +58,6 @@ function activeCredentials(
       typeof credential.metadata?.["providerId"] === "string" &&
       providerIds.includes(credential.metadata["providerId"])
   );
-}
-
-async function googleStatus(opts: { verify?: boolean } = {}): Promise<GoogleOnboardingStatus> {
-  const [config, all] = await Promise.all([
-    credentials.getClientConfigStatus({ configId: "google-workspace" }),
-    credentials.listStoredCredentials(),
-  ]);
-  const primary = activeCredentials(all, ["google-workspace"])[0];
-  if (!primary) {
-    return {
-      stage: config.configured ? "ready-to-connect" : "needs-setup",
-      connected: false,
-    };
-  }
-  if (!opts.verify) {
-    return {
-      stage: "connected",
-      connected: true,
-      ...(primary.accountIdentity?.email ? { email: primary.accountIdentity.email } : {}),
-    };
-  }
-  const response = await credentials.fetch(
-    "https://www.googleapis.com/oauth2/v3/userinfo",
-    { method: "GET" },
-    { credentialId: primary.id }
-  );
-  if (!response.ok) {
-    return { stage: "connected", connected: true, verification: { valid: false } };
-  }
-  const profile = (await response.json()) as { email?: unknown };
-  return {
-    stage: "verified",
-    connected: true,
-    verification: { valid: true },
-    ...(typeof profile.email === "string" ? { email: profile.email } : {}),
-  };
 }
 
 async function githubStatus(opts: { verify?: boolean } = {}): Promise<GitHubOnboardingStatus> {
@@ -160,7 +116,6 @@ export function createDefaultStatusDependencies(): OnboardingStatusDependencies 
       (entries) => new Set(entries.map((entry) => entry.skillPath))
     ));
   return {
-    google: googleStatus,
     github: githubStatus,
     modelSettings: () => modelSettings.call<ModelSettingsSnapshot>("getSettings"),
     localModelsStatus: () =>
@@ -188,50 +143,68 @@ function unavailable(summary: string, rawStage: string): CapabilityOnboardingSta
   };
 }
 
-function googleResult(
-  status: GoogleOnboardingStatus,
-  verify: boolean
-): CapabilityOnboardingStatusResult {
-  if (status.stage === "error") {
-    return unavailable("Google Workspace status is unavailable right now.", status.stage);
-  }
-  if (verify && status.verification && !status.verification.valid) {
-    return {
-      state: "needs-attention",
-      verification: "failed",
-      summary: "The current Google connection check failed.",
-      attention: "blocking",
-      rawStage: status.stage,
-    };
-  }
-  if (status.stage === "verified") {
+export function createCredentialConnectionStatusAdapter(
+  observer: CredentialConnectionObserver,
+  title: string
+): CapabilityOnboardingStatusAdapter {
+  return async (opts = {}) => {
+    const [config, all] = await Promise.all([
+      observer.clientConfigId
+        ? credentials.getClientConfigStatus({ configId: observer.clientConfigId })
+        : Promise.resolve({ configured: true }),
+      credentials.listStoredCredentials(),
+    ]);
+    const primary = activeCredentials(all, [observer.providerId])[0];
+    if (!primary) {
+      return {
+        state: "not-configured",
+        summary: config.configured
+          ? `No ${title} account is connected.`
+          : `${title} needs provider setup before an account can connect.`,
+        attention: "optional",
+        rawStage: config.configured ? "ready-to-connect" : "needs-setup",
+      };
+    }
+    const identity =
+      primary.accountIdentity?.email ?? primary.accountIdentity?.username ?? undefined;
+    if (!opts.verify || !observer.verifyUrl) {
+      return {
+        state: "connected-unverified",
+        verification: "unverified",
+        summary: identity
+          ? `Connected as ${identity}; not checked live.`
+          : "Connected; not checked live.",
+        attention: "none",
+        rawStage: "connected",
+      };
+    }
+    const response = await credentials.fetch(
+      observer.verifyUrl,
+      { method: "GET" },
+      { credentialId: primary.id }
+    );
+    if (!response.ok) {
+      return {
+        state: "needs-attention",
+        verification: "failed",
+        summary: `The current ${title} connection check failed.`,
+        attention: "blocking",
+        rawStage: "verification-failed",
+      };
+    }
+    let verifiedIdentity = identity;
+    if (observer.identityField) {
+      const profile = (await response.json()) as Record<string, unknown>;
+      const candidate = profile[observer.identityField];
+      if (typeof candidate === "string") verifiedIdentity = candidate;
+    }
     return {
       state: "connected",
       verification: "verified",
-      summary: status.email ? `Verified as ${status.email}.` : "Google Workspace verified.",
+      summary: verifiedIdentity ? `Verified as ${verifiedIdentity}.` : `${title} verified.`,
       attention: "none",
-      rawStage: status.stage,
+      rawStage: "verified",
     };
-  }
-  if (status.connected) {
-    return {
-      state: "connected-unverified",
-      verification: "unverified",
-      summary: status.email
-        ? `Connected as ${status.email}; not checked live.`
-        : "Connected; not checked live.",
-      attention: "none",
-      rawStage: status.stage,
-    };
-  }
-  return {
-    state: "not-configured",
-    summary:
-      status.stage === "needs-setup"
-        ? "Google OAuth needs setup before an account can connect."
-        : "No Google Workspace account is connected.",
-    attention: "optional",
-    rawStage: status.stage,
   };
 }
 
@@ -428,13 +401,6 @@ export function createStatusAdapters(
   deps: OnboardingStatusDependencies = createDefaultStatusDependencies()
 ): Readonly<Record<string, CapabilityOnboardingStatusAdapter>> {
   return {
-    "google-workspace": async (opts) =>
-      (await deps.hasSkill("skills/google-workspace/SKILL.md"))
-        ? googleResult(await deps.google({ verify: opts?.verify === true }), opts?.verify === true)
-        : unavailable(
-            "Google Workspace is unavailable because its base capability owner could not be loaded.",
-            "owner-unavailable"
-          ),
     github: async (opts) =>
       (await deps.hasSkill("skills/github/SKILL.md"))
         ? githubResult(await deps.github({ verify: opts?.verify === true }), opts?.verify === true)

@@ -1140,8 +1140,8 @@ export async function activate(ctx: ExtensionContextLike) {
             env,
             templateLocatorSchema.parse({
               catalogId: entry.id,
-              registryCommit: env.catalog!.coordinates.commit,
-              registrySnapshot: env.catalog!.coordinates.snapshot,
+              registryCommit: request.registryCommit ?? env.catalog!.coordinates.commit,
+              registrySnapshot: request.registrySnapshot ?? env.catalog!.coordinates.snapshot,
             })
           ),
         };
@@ -1155,8 +1155,7 @@ export async function activate(ctx: ExtensionContextLike) {
     },
 
     async inspectAuthoring(input: TemplateAuthoringIntent) {
-      const env = await environment(ctx);
-      return inspectTemplateAuthoring(ctx, env.observation, input);
+      return inspectTemplateAuthoring(ctx, await observeWorkspace(ctx), input);
     },
 
     async authoringParts() {
@@ -1180,7 +1179,7 @@ export async function activate(ctx: ExtensionContextLike) {
       };
     }) {
       const existing = await readTemplateOperationRecord(ctx, input.commandId);
-      const env = await environment(ctx);
+      const observation = await observeWorkspace(ctx);
       const creation = {
         private: input.creation?.private ?? true,
         description: input.creation?.description ?? input.intent.description,
@@ -1210,7 +1209,7 @@ export async function activate(ctx: ExtensionContextLike) {
         if (existing.authoringPublication) return existing.authoringPublication;
         current = existing.authoringInspection;
       } else {
-        current = await inspectTemplateAuthoring(ctx, env.observation, input.intent);
+        current = await inspectTemplateAuthoring(ctx, observation, input.intent);
         if (current.fingerprint !== input.expectedFingerprint) {
           throw new Error(
             "The workspace, dependency resolution, or authoring selection changed after inspection; inspect authoring again"
@@ -1228,7 +1227,7 @@ export async function activate(ctx: ExtensionContextLike) {
         });
       }
       const contextId = await ensureTemplateOperationContext(ctx, input.commandId);
-      const build = await createAffectedBuildGate(ctx, env.observation.localRepoPaths)(
+      const build = await createAffectedBuildGate(ctx, observation.localRepoPaths)(
         contextId,
         current.includedParts
       );

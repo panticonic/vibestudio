@@ -338,7 +338,7 @@ describe("exact template selection contracts", () => {
     ).toBe(false);
   });
 
-  it("prepares a human catalog choice without asking callers to reconstruct registry coordinates", () => {
+  it("prepares catalog choices and preserves reviewed registry coordinates when supplied", () => {
     expect(templateAddRequestSchema.parse({ catalogId: "github", refreshCatalog: true })).toEqual({
       catalogId: "github",
       refreshCatalog: true,
@@ -348,6 +348,17 @@ describe("exact template selection contracts", () => {
         { catalogId: "github", registryCommit: "1".repeat(40) },
       ]).success
     ).toBe(false);
+    expect(
+      templateAddRequestSchema.parse({
+        catalogId: "github",
+        registryCommit: "1".repeat(40),
+        registrySnapshot: `v1-sha256:${"2".repeat(64)}`,
+      })
+    ).toEqual({
+      catalogId: "github",
+      registryCommit: "1".repeat(40),
+      registrySnapshot: `v1-sha256:${"2".repeat(64)}`,
+    });
     expect(
       templateAddPreparationSchema.parse({
         name: "GitHub",

@@ -1,18 +1,7 @@
-import type {
-  CredentialClient,
-  UrlCredentialHandle,
-} from "@workspace/runtime/credentials";
-import {
-  bindingAudience,
-  googleWorkspaceCredential,
-} from "@workspace/integrations/providers";
+import type { CredentialClient, UrlCredentialHandle } from "@workspace/runtime/credentials";
+import { bindingAudience, googleWorkspaceCredential } from "@workspace/google-workspace/providers";
 
-import {
-  BatchHttpError,
-  executeBatch,
-  type BatchPart,
-  type BatchPartResult,
-} from "./batch.js";
+import { BatchHttpError, executeBatch, type BatchPart, type BatchPartResult } from "./batch.js";
 
 const GMAIL_API_PATH_PREFIX = "/gmail/v1/users/me";
 const GMAIL_API_BASE = `https://gmail.googleapis.com${GMAIL_API_PATH_PREFIX}`;
@@ -419,7 +408,11 @@ export interface GmailClient {
   getAttachment(messageId: string, attachmentId: string): Promise<GmailAttachmentBody>;
   sendMessage(params: SendMessageParams): Promise<GmailMessage>;
   createDraft(params: CreateDraftParams): Promise<GmailDraft>;
-  listDrafts(opts?: { maxResults?: number; pageToken?: string; q?: string }): Promise<ListDraftsResult>;
+  listDrafts(opts?: {
+    maxResults?: number;
+    pageToken?: string;
+    q?: string;
+  }): Promise<ListDraftsResult>;
   getDraft(draftId: string): Promise<GmailDraft>;
   updateDraft(draftId: string, params: CreateDraftParams): Promise<GmailDraft>;
   deleteDraft(draftId: string): Promise<void>;
@@ -446,9 +439,7 @@ function toQueryParams(params?: Record<string, string | number | string[] | unde
 
 function sanitizeHeaderValue(field: string, value: string): string {
   if (/[\r\n]/.test(value)) {
-    throw new Error(
-      `Gmail sendMessage: ${field} value contains CR/LF - header injection rejected`,
-    );
+    throw new Error(`Gmail sendMessage: ${field} value contains CR/LF - header injection rejected`);
   }
   return value;
 }
@@ -477,10 +468,7 @@ function encodeBase64Url(value: string): string {
 
   let binary = "";
   for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary)
-    .replace(/\+/g, "-")
-    .replace(/\//g, "_")
-    .replace(/=+$/g, "");
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
 }
 
 function buildRawMessage(params: SendMessageParams): string {
@@ -492,7 +480,9 @@ function buildRawMessage(params: SendMessageParams): string {
     params.bcc ? `Bcc: ${f("Bcc", joinAddressList(params.bcc) ?? "")}` : undefined,
     params.replyTo ? `Reply-To: ${f("Reply-To", params.replyTo)}` : undefined,
     params.inReplyTo ? `In-Reply-To: ${f("In-Reply-To", params.inReplyTo)}` : undefined,
-    params.references ? `References: ${f("References", joinAddressList(params.references) ?? "")}` : undefined,
+    params.references
+      ? `References: ${f("References", joinAddressList(params.references) ?? "")}`
+      : undefined,
     `Subject: ${f("Subject", params.subject)}`,
     "MIME-Version: 1.0",
     "Content-Type: text/plain; charset=UTF-8",
@@ -507,7 +497,10 @@ function buildRawMessage(params: SendMessageParams): string {
   return encodeBase64Url(rawLines.join("\r\n"));
 }
 
-function appendThread<T extends { raw: string }>(payload: T, threadId?: string): T & { threadId?: string } {
+function appendThread<T extends { raw: string }>(
+  payload: T,
+  threadId?: string
+): T & { threadId?: string } {
   return threadId ? { ...payload, threadId } : payload;
 }
 
@@ -537,7 +530,8 @@ function aggregateHistoryByThread(history: GmailHistoryResponse): GmailThreadDif
       if (added.message?.threadId) get(added.message.threadId).messagesAdded.push(added.message);
     }
     for (const deleted of entry.messagesDeleted ?? []) {
-      if (deleted.message?.threadId) get(deleted.message.threadId).messagesDeleted.push(deleted.message);
+      if (deleted.message?.threadId)
+        get(deleted.message.threadId).messagesDeleted.push(deleted.message);
     }
     for (const added of entry.labelsAdded ?? []) {
       if (added.message?.threadId) {
@@ -702,8 +696,12 @@ export function createGmailClient(
   const warmupPeopleSearch = (): Promise<void> => {
     if (!peopleWarmupPromise) {
       peopleWarmupPromise = Promise.allSettled([
-        fetchJson(`${PEOPLE_API_BASE}/people:searchContacts${toQueryParams({ query: "", readMask: "names,emailAddresses" })}`),
-        fetchJson(`${PEOPLE_API_BASE}/otherContacts:search${toQueryParams({ query: "", readMask: "names,emailAddresses" })}`),
+        fetchJson(
+          `${PEOPLE_API_BASE}/people:searchContacts${toQueryParams({ query: "", readMask: "names,emailAddresses" })}`
+        ),
+        fetchJson(
+          `${PEOPLE_API_BASE}/otherContacts:search${toQueryParams({ query: "", readMask: "names,emailAddresses" })}`
+        ),
       ]).then(() => undefined);
     }
     return peopleWarmupPromise;
@@ -736,7 +734,7 @@ export function createGmailClient(
           labelId: opts.labelId,
           historyTypes: opts.historyTypes,
           pageToken,
-        })}`,
+        })}`
       );
       combined.historyId = page.historyId;
       combined.history = [...(combined.history ?? []), ...(page.history ?? [])];
@@ -892,12 +890,13 @@ export function createGmailClient(
         `/messages/${encodeURIComponent(messageId)}/attachments/${encodeURIComponent(attachmentId)}`
       ),
     sendMessage,
-    createDraft: (params) => apiFetch<GmailDraft>("/drafts", {
-      method: "POST",
-      body: JSON.stringify({
-        message: appendThread({ raw: buildRawMessage(params) }, params.threadId),
+    createDraft: (params) =>
+      apiFetch<GmailDraft>("/drafts", {
+        method: "POST",
+        body: JSON.stringify({
+          message: appendThread({ raw: buildRawMessage(params) }, params.threadId),
+        }),
       }),
-    }),
     listDrafts: async (opts) => {
       const data = await apiFetch<{ drafts?: GmailDraft[]; nextPageToken?: string }>(
         `/drafts${toQueryParams({ maxResults: opts?.maxResults, pageToken: opts?.pageToken, q: opts?.q })}`
@@ -927,13 +926,16 @@ export function createGmailClient(
       const id = params.messageId ?? params.threadId;
       if (!id) throw new Error("modifyLabels requires messageId or threadId");
       const collection = params.threadId ? "threads" : "messages";
-      return apiFetch<GmailMessage | GmailThread>(`/${collection}/${encodeURIComponent(id)}/modify`, {
-        method: "POST",
-        body: JSON.stringify({
-          addLabelIds: params.addLabelIds ?? [],
-          removeLabelIds: params.removeLabelIds ?? [],
-        }),
-      });
+      return apiFetch<GmailMessage | GmailThread>(
+        `/${collection}/${encodeURIComponent(id)}/modify`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            addLabelIds: params.addLabelIds ?? [],
+            removeLabelIds: params.removeLabelIds ?? [],
+          }),
+        }
+      );
     },
     searchContacts: (query, opts) => searchPeople("people:searchContacts", query, opts),
     searchOtherContacts: (query, opts) => searchPeople("otherContacts:search", query, opts),

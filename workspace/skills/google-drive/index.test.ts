@@ -19,7 +19,7 @@ const driveClientMock = vi.hoisted(() => ({
 
 vi.mock("@workspace/runtime", () => runtimeMock);
 vi.mock("@workspace-skills/google-workspace", () => googleWorkspaceMock);
-vi.mock("@workspace/integrations", () => driveClientMock);
+vi.mock("@workspace/google-workspace", () => driveClientMock);
 
 import {
   createGoogleDriveClient,
@@ -69,7 +69,7 @@ describe("google-drive skill facade", () => {
       new Response(JSON.stringify({ email: "user@example.com" }), {
         status: 200,
         headers: { "content-type": "application/json" },
-      }),
+      })
     );
     runtimeMock.credentials.resolveCredential.mockResolvedValue(googleCredential);
     googleWorkspaceMock.getGoogleOnboardingStatus.mockResolvedValue(googleWorkspaceStatus);
@@ -106,10 +106,9 @@ describe("google-drive skill facade", () => {
   it("creates a Drive client from the runtime credentials", () => {
     createGoogleDriveClient({ credentialId: "cred-google" });
 
-    expect(driveClientMock.createDriveClient).toHaveBeenCalledWith(
-      runtimeMock.credentials,
-      { credentialId: "cred-google" },
-    );
+    expect(driveClientMock.createDriveClient).toHaveBeenCalledWith(runtimeMock.credentials, {
+      credentialId: "cred-google",
+    });
   });
 
   it("verifies Drive access with a live about call", async () => {
@@ -126,7 +125,11 @@ describe("google-drive skill facade", () => {
   it("reports an error status when live Drive verification fails", async () => {
     driveClientMock.createDriveClient.mockReturnValueOnce({
       handle: vi.fn().mockResolvedValue({ credentialId: "cred-google", fetch: vi.fn() }),
-      about: vi.fn().mockRejectedValue(new Error("Google Drive API 400 Bad Request: Invalid field selection rootFolderId")),
+      about: vi
+        .fn()
+        .mockRejectedValue(
+          new Error("Google Drive API 400 Bad Request: Invalid field selection rootFolderId")
+        ),
     });
 
     const status = await getGoogleDriveOnboardingStatus({ verify: true });
@@ -139,11 +142,15 @@ describe("google-drive skill facade", () => {
       valid: false,
       error: "Google Drive API 400 Bad Request: Invalid field selection rootFolderId",
     });
-    expect(status.error).toBe("Google Drive API 400 Bad Request: Invalid field selection rootFolderId");
+    expect(status.error).toBe(
+      "Google Drive API 400 Bad Request: Invalid field selection rootFolderId"
+    );
     expect(status.warnings).toEqual([
       "Google Drive verification failed: Google Drive API 400 Bad Request: Invalid field selection rootFolderId",
     ]);
-    expect(status.nextActions.join(" ")).toContain("Fix the reported Google Workspace or Drive verification error");
+    expect(status.nextActions.join(" ")).toContain(
+      "Fix the reported Google Workspace or Drive verification error"
+    );
     expect(status.nextActions.join(" ")).not.toContain("start browsing or syncing files");
   });
 

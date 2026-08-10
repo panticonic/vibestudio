@@ -1,10 +1,10 @@
 import {
-  capabilityById,
+  onboardingCatalog,
   type OnboardingCapabilityDefinition,
   type SetupAction,
   type SetupActionTarget,
 } from "./catalog";
-import { optionalTemplateById, type OptionalTemplateDefinition } from "./templates";
+import type { OnboardingTemplateSelection } from "./templates";
 
 export const ONBOARDING_INTERACTION_KIND = "onboarding-capability";
 export const ONBOARDING_INTERACTION_SOURCE = "onboarding-setup-hub";
@@ -28,12 +28,14 @@ export interface OnboardingTemplateInteraction {
   kind: "onboarding-template";
   action: "add";
   targetId: string;
+  catalogId: string;
+  registryCommit: string;
+  registrySnapshot: string;
 }
 
 export interface ResolvedOnboardingTemplateSelection {
-  template: OptionalTemplateDefinition;
   ownerSkillPath: "skills/templates/SKILL.md";
-  url: string;
+  selection: OnboardingTemplateSelection;
 }
 
 export function onboardingInteraction(
@@ -48,12 +50,15 @@ export function onboardingInteraction(
   };
 }
 
-export function onboardingTemplateInteraction(targetId: string): OnboardingTemplateInteraction {
+export function onboardingTemplateInteraction(
+  selection: OnboardingTemplateSelection
+): OnboardingTemplateInteraction {
   return {
     source: ONBOARDING_INTERACTION_SOURCE,
     kind: "onboarding-template",
     action: "add",
-    targetId,
+    targetId: `template.${selection.catalogId}`,
+    ...selection,
   };
 }
 
@@ -68,22 +73,28 @@ export function resolveOnboardingTemplateSelection(
     value["source"] !== ONBOARDING_INTERACTION_SOURCE ||
     value["kind"] !== "onboarding-template" ||
     value["action"] !== "add" ||
-    typeof value["targetId"] !== "string"
+    typeof value["targetId"] !== "string" ||
+    typeof value["catalogId"] !== "string" ||
+    typeof value["registryCommit"] !== "string" ||
+    typeof value["registrySnapshot"] !== "string" ||
+    value["targetId"] !== `template.${value["catalogId"]}`
   ) {
     throw new Error("Onboarding template selection metadata is invalid.");
   }
-  const template = optionalTemplateById(value["targetId"]);
-  if (!template) {
-    throw new Error(`Unknown or retired onboarding template: ${value["targetId"]}`);
-  }
   return {
-    template,
     ownerSkillPath: "skills/templates/SKILL.md",
-    url: template.url,
+    selection: {
+      catalogId: value["catalogId"],
+      registryCommit: value["registryCommit"],
+      registrySnapshot: value["registrySnapshot"],
+    },
   };
 }
 
-export function resolveOnboardingSelection(interaction: unknown): ResolvedOnboardingSelection {
+export function resolveOnboardingSelection(
+  interaction: unknown,
+  catalog: readonly OnboardingCapabilityDefinition[] = onboardingCatalog
+): ResolvedOnboardingSelection {
   if (!interaction || typeof interaction !== "object" || Array.isArray(interaction)) {
     throw new Error("Onboarding selection metadata is missing.");
   }
@@ -96,7 +107,7 @@ export function resolveOnboardingSelection(interaction: unknown): ResolvedOnboar
   ) {
     throw new Error("Onboarding selection metadata is invalid.");
   }
-  const capability = capabilityById(value["targetId"]);
+  const capability = catalog.find((entry) => entry.id === value["targetId"]);
   if (!capability) {
     throw new Error(`Unknown or retired onboarding capability: ${value["targetId"]}`);
   }

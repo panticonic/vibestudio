@@ -1,11 +1,5 @@
-import type {
-  CredentialClient,
-  UrlCredentialHandle,
-} from "@workspace/runtime/credentials";
-import {
-  bindingAudience,
-  googleWorkspaceCredential,
-} from "./providers.js";
+import type { CredentialClient, UrlCredentialHandle } from "@workspace/runtime/credentials";
+import { bindingAudience, googleWorkspaceCredential } from "./providers.js";
 
 export class GoogleApiError extends Error {
   status: number;
@@ -25,7 +19,7 @@ export class GoogleApiError extends Error {
 
 export function createGoogleWorkspaceCredentialHandle(
   credentials: CredentialClient,
-  opts: { bindingId?: string; credentialId?: string } = {},
+  opts: { bindingId?: string; credentialId?: string } = {}
 ): () => Promise<UrlCredentialHandle> {
   let handlePromise: Promise<UrlCredentialHandle> | null = null;
   return () => {
@@ -49,13 +43,11 @@ export function createGoogleWorkspaceCredentialHandle(
   };
 }
 
-export function createGoogleApiFetcher(
-  opts: {
-    baseUrl: string;
-    serviceName: string;
-    handle: () => Promise<UrlCredentialHandle>;
-  },
-): <T>(path: string, init?: RequestInit) => Promise<T> {
+export function createGoogleApiFetcher(opts: {
+  baseUrl: string;
+  serviceName: string;
+  handle: () => Promise<UrlCredentialHandle>;
+}): <T>(path: string, init?: RequestInit) => Promise<T> {
   return async <T>(path: string, init: RequestInit = {}): Promise<T> => {
     const auth = await opts.handle();
     const headers = new Headers(init.headers);
@@ -65,7 +57,12 @@ export function createGoogleApiFetcher(
     }
     const response = await auth.fetch(`${opts.baseUrl}${path}`, { ...init, headers });
     if (!response.ok) {
-      throw new GoogleApiError(opts.serviceName, response.status, response.statusText, await response.text());
+      throw new GoogleApiError(
+        opts.serviceName,
+        response.status,
+        response.statusText,
+        await response.text()
+      );
     }
     if (response.status === 204) return undefined as T;
     return (await response.json()) as T;

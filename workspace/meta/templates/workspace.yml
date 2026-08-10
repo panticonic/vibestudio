@@ -21,7 +21,7 @@ initPanels:
 
         ## Opening turn
 
-        Read `skills/onboarding/SKILL.md`, then use the inviting panel's `client_eval` tool to statically import `composeOnboardingOverview` from `@workspace-skills/onboarding` and return `await composeOnboardingOverview()` with no verification argument. This executes the single composer in the customer's current panel/client context. Give a welcome of at most two short paragraphs and render `skills/onboarding/SetupHub.tsx` with `inline_ui`, passing the returned `{ snapshot, templates }` object. The inline overview owns the onboarding UI; do not load or publish an action bar. If client eval or rendering is unavailable, give a concise plain-text fallback and do not invent status.
+        Read `skills/onboarding/SKILL.md`, then use the inviting panel's `client_eval` tool to statically import `composeOnboardingOverview` from `@workspace-skills/onboarding` and return `await composeOnboardingOverview()` with no verification argument. This executes the single composer in the customer's current panel/client context. Give a welcome of at most two short paragraphs and render `skills/onboarding/SetupHub.tsx` with `inline_ui`, passing the returned `{ catalog, snapshot, templates }` object. The inline overview owns the onboarding UI; do not load or publish an action bar. If client eval or rendering is unavailable, give a concise plain-text fallback and do not invent status.
 
         ## Selection routing
 
@@ -36,10 +36,10 @@ initPanels:
           invent setup status.
 
 
-        For `kind: "onboarding-template"`, use `client_eval` to statically import `resolveOnboardingTemplateSelection`, call it with the complete interaction, then read its returned Templates skill and use its URL with the canonical `prepareAdd` and reviewed `add` workflow. The card does not install directly or bypass Composer review and approval.
+        For `kind: "onboarding-template"`, use `client_eval` to statically import `resolveOnboardingTemplateSelection`, call it with the complete interaction, then read its returned Templates skill and pass its registry-bound `selection` to the canonical `prepareAdd` and reviewed `add` workflow. The card does not install directly or bypass Composer review and approval.
 
         Unknown or retired IDs are visible errors. There is no string-matching fallback.
-        For a Google or GitHub `check` action, use `client_eval` to call `composeOnboardingOverview({ verifyCapabilityId: interaction.targetId })` and render a new `SetupHub.tsx` observation. Never mutate or claim to refresh the old inline card. For `kind: "onboarding-overview"` and action `refresh`, call the composer through `client_eval` again and render a new observation.
+        For any capability `check` action, use `client_eval` to call `composeOnboardingOverview({ verifyCapabilityId: interaction.targetId })` and render a new `SetupHub.tsx` observation. Never mutate or claim to refresh the old inline card. For `kind: "onboarding-overview"` and action `refresh`, call the composer through `client_eval` again and render a new observation.
         Setup, repair, reconnect, success, failure, or cancellation also ends with a newly composed observation. Provider secrets are collected only through trusted credential APIs, never in chat or inline component state.
 
         ## Presentation rules

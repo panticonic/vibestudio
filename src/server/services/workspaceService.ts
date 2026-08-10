@@ -347,6 +347,9 @@ export function createWorkspaceService(deps: WorkspaceServiceDeps): ServiceDefin
               description: frontmatter.description ?? "",
               dirPath: split.repoPath,
               skillPath: relative,
+              ...(frontmatter.onboarding !== undefined
+                ? { onboarding: frontmatter.onboarding }
+                : {}),
             };
           })
         );

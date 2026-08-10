@@ -1,6 +1,32 @@
 ---
 name: google-workspace
 description: Set up broad Google Workspace OAuth credentials with staged local bindings for Gmail, Calendar, Drive, Docs, Sheets, Slides, People, and identity.
+onboarding:
+  capabilities:
+    - id: connection.google-workspace
+      title: Google Workspace
+      summary: Connect Gmail, Calendar, and Drive through one durable Google relationship.
+      category: connections
+      role: connection
+      scope: user-workspace
+      tier: direct
+      visibility: primary
+      actions:
+        setup: { via: owner-skill }
+        repair: { via: owner-skill }
+        reconnect: { via: owner-skill }
+        check: { via: owner-skill }
+        inspect: { via: about-page, page: credentials }
+        revoke: { via: about-page, page: credentials }
+        grants: { via: about-page, page: permissions }
+      setup:
+        successDescription: A live Google user-info check succeeds for the stored connection.
+        status:
+          kind: credential-connection
+          providerId: google-workspace
+          clientConfigId: google-workspace
+          verifyUrl: https://www.googleapis.com/oauth2/v3/userinfo
+          identityField: email
 ---
 
 # Google Workspace Skill

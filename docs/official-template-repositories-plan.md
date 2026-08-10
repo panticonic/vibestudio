@@ -1,13 +1,18 @@
 # Official template repositories: overlapping contributions with agentic composition
 
-Status: updated 2026-08-10. The three optional templates have been published
-and updated through the running app as private candidate repositories. The
-current releases are Examples `v1.0.3`, News `v1.0.2`, and Spectrolite
-`v1.0.3`. Their outcome-specific source units have been removed from the base
-`workspace/`; no verified template catalog entries or external base repository
-have been deployed. Registry promotion and external-base cutover therefore
-remain outstanding; publishing a standalone npm SDK is explicitly not an
-extraction prerequisite.
+Status: updated 2026-08-10. Examples, News, and Spectrolite have been published
+and updated through the running app; their outcome-specific source units have
+been removed from the base `workspace/`. Google Workspace is the fourth
+optional outcome in this cut. Its implementation has been separated from the
+generic integrations package, its exact five-unit authoring closure has been
+inspected successfully, and its onboarding contribution is discovered from
+the installed skill. The source units remain in `workspace/` until the public
+release is durably published: the isolated agentic publication run correctly
+stopped at the GitHub credential-consent boundary, which cannot be silently
+auto-approved. No verified template catalog or external base repository has
+been deployed. Registry promotion and external-base cutover therefore remain
+outstanding; publishing a standalone npm SDK is explicitly not an extraction
+prerequisite.
 
 ## Outcome
 
@@ -18,7 +23,7 @@ Git repositories, composed by a userland package that ships in base:
   It is one possible source of shared infrastructure, not an authoring parent
   whose release coordinates feature templates must capture.
 - **Feature template repositories** — one per user-visible outcome (news,
-  Spectrolite, and examples), each publishing the repositories it needs to
+  Spectrolite, examples, and Google Workspace), each publishing the repositories it needs to
   contribute. Templates correspond to outcomes a user would ask for, never to
   packages: a user adds "News" and gets a working news workspace; they never
   reason about `packages/feeds`.
@@ -212,12 +217,13 @@ base pin—is the compatibility boundary.
 
 ## Repository inventory
 
-| Repository                        | Contents                                                                                                                                                                                                                                                                                                               |
-| --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `vibestudio-workspace-base`       | The complete default workspace other than the three outcomes selected for extraction in this cut. It may overlap a feature template when that feature needs to distribute shared-infrastructure changes.                                                                                                                              |
-| `vibestudio-template-news`        | `panels/news`, `workers/news-agent`, and `packages/feeds`; shared `packages/channel-fork` remains in base because base-owned agent chat also consumes it                                                                                                                                                               |
-| `vibestudio-template-spectrolite` | Spectrolite panel, MDX editor package                                                                                                                                                                                                                                                                                  |
-| `vibestudio-template-examples`    | `panels/hello-vanilla`, `panels/hello-svelte`, `workers/hello`, and `workers/sample-do`; these modern examples were restored after an earlier cleanup deleted them instead of extracting them                                                                                                                          |
+| Repository                             | Contents                                                                                                                                                                                                |
+| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `vibestudio-workspace-base`            | The complete default workspace other than the four outcomes selected for extraction in this cut. It may overlap a feature template when that feature needs to distribute shared-infrastructure changes. |
+| `vibestudio-template-news`             | `panels/news`, `workers/news-agent`, and `packages/feeds`; shared `packages/channel-fork` remains in base because base-owned agent chat also consumes it                                                |
+| `vibestudio-template-spectrolite`      | Spectrolite panel, MDX editor package                                                                                                                                                                   |
+| `vibestudio-template-examples`         | `panels/hello-vanilla`, `panels/hello-svelte`, `workers/hello`, and `workers/sample-do`; these modern examples were restored after an earlier cleanup deleted them instead of extracting them           |
+| `vibestudio-template-google-workspace` | `packages/google-workspace`, `packages/gmail`, `skills/google-workspace`, `skills/google-drive`, and `workers/gmail-agent`. Generic credential and GitHub machinery remains in `packages/integrations`. |
 
 **Developer tools belong to base.** Vibestudio is a place where people build
 things; the development surface (`panels/development`, `panels/testbench`,
@@ -236,9 +242,9 @@ include a shared repository when distributing a coherent infrastructure
 change. Later overlap is an ordinary contribution delta and may require an
 ordinary merge decision; no ownership-transfer protocol exists.
 
-## Published candidate releases (2026-08-10)
+## Published and prepared releases (2026-08-10)
 
-All three candidates were inspected and published through
+The three existing candidates were inspected and published through
 `@workspace-extensions/template-composer`, reached through the generic in-app
 extension broker. Each authoring manifest contains only this semantic
 dependency:
@@ -255,11 +261,21 @@ made each release self-contained by including every required repository from
 the observed protected workspace state. This is intentional overlap, not a
 temporary ownership workaround.
 
-| Template | Published repository | Immutable release | Commit | Snapshot |
-| --- | --- | --- | --- | --- |
-| Examples | `panticonic/vibestudio-template-examples` | `refs/tags/v1.0.3` | `bc4b1ec5ecf6bbb4b3584db2f3e6d651da693aca` | `v1-sha256:159d39fc9223c186b2a50e07fad15aaf40087cbe1ca8349d13bf91725381544e` |
-| News | `panticonic/vibestudio-template-news` | `refs/tags/v1.0.2` | `090e1ba17abcd01a426b914a41d0a0218579b0ff` | `v1-sha256:f6ad5837333dd3defb49f2cf334c1a551d4abacbef50acbbc48a3f649165bbdc` |
+| Template    | Published repository                         | Immutable release  | Commit                                     | Snapshot                                                                     |
+| ----------- | -------------------------------------------- | ------------------ | ------------------------------------------ | ---------------------------------------------------------------------------- |
+| Examples    | `panticonic/vibestudio-template-examples`    | `refs/tags/v1.0.3` | `bc4b1ec5ecf6bbb4b3584db2f3e6d651da693aca` | `v1-sha256:159d39fc9223c186b2a50e07fad15aaf40087cbe1ca8349d13bf91725381544e` |
+| News        | `panticonic/vibestudio-template-news`        | `refs/tags/v1.0.2` | `090e1ba17abcd01a426b914a41d0a0218579b0ff` | `v1-sha256:f6ad5837333dd3defb49f2cf334c1a551d4abacbef50acbbc48a3f649165bbdc` |
 | Spectrolite | `panticonic/vibestudio-template-spectrolite` | `refs/tags/v1.0.3` | `e6ddffbea9f28fef8988b6b612e017c8348917a0` | `v1-sha256:27b61de2e6abc3fb952293be22e09acb4649b470406141c79b7f13eeafad824d` |
+
+Google Workspace has been inspected through the same composer with requested
+and included parts exactly equal to the five repositories in the inventory;
+the composer added no required parts. Its manifest contains the same semantic
+Base URL and no exact Base coordinate. Publication target is
+`panticonic/vibestudio-template-google-workspace`, initial release `v0.1.0`,
+with idempotency key `publish-google-workspace-0.1.0`. Publication and source
+deletion remain one ordered migration: authorize the GitHub credential,
+publish and read back the exact release, validate add/adoption, then delete the
+five units from Base and regenerate its workspace metadata.
 
 The publication receipts are authoritative because Git Bridge reads the
 published commit back into an exact snapshot before returning. These updates
@@ -410,22 +426,22 @@ Current migration state:
 2. **Done:** the contribution inventory in §Repository inventory is reflected by
    the authoring inventory/closure API and validated against buildable source.
 3. **Done:** onboarding uses runtime owner discovery and has no compile-time
-   imports of capability implementations. For the three extracted outcomes it
-   recognizes an explicit user goal, asks before adding anything, and hands
-   the official repository URL to the canonical Templates workflow. It never
-   substitutes a template for a broken base capability.
+   imports of capability implementations. Installed skills contribute their
+   own capability definitions and generic status observers. Optional template
+   cards come only from the composer's verified registry snapshot and carry
+   its exact commit and snapshot into the canonical Templates workflow. It
+   never substitutes a template for a broken base capability or embeds an
+   official repository table.
 4. **Done:** URL-only `templates.use`, lock-first resolution, derived aliases,
    exact epoch matching, and build-gated publication are live.
 5. **Done:** establish the consumer-composition validation and repair contract
    (§Extracted-repository validation contract); no npm SDK publication gate.
-6. **Feature extraction done:** publish exactly three optional templates—
-   `examples`, `news`, and `spectrolite`—from current semantic workspace state,
-   then remove their direct source units from base. The external
-   `vibestudio-workspace-base` repository is still outstanding. Everything not
-   selected by one of those three outcomes remains in base for this cut. In
-   particular, Google Workspace, GitHub, local models, mobile, browser, and
-   terminal functionality remain in base.
-7. **Publication done; promotion outstanding:** the latest private candidates
+6. **Three extractions done; Google prepared:** Examples, News, and Spectrolite
+   are published and absent from Base. Google Workspace has a clean five-unit
+   closure and is ready for the same publish → validate → delete sequence once
+   its GitHub credential request is approved. GitHub, local models, mobile,
+   browser, and terminal functionality remain in Base.
+7. **Three publications done; Google publication and promotion outstanding:** the latest candidates
    were published through the in-app authoring path with the exact coordinates
    recorded above. Add representative cross-composition tests, fix the
    concurrent same-command publication race and repeated-review DX, then create
@@ -438,23 +454,23 @@ Current migration state:
    snapshot, delete the in-tree `workspace/` source, and prove that production
    builds and fresh workspace creation have no checkout-relative fallback.
    This does not republish or revalidate feature templates against that base.
-10. **Direct-URL handoff done; catalog presentation outstanding:** onboarding
-    recognizes explicit Examples, News, and Spectrolite goals and hands them to
-    the ordinary reviewed template-install flow. After registry deployment,
-    the Templates surface may additionally present promoted catalog entries;
-    onboarding must still use the same composer workflow rather than gaining a
-    second installer.
+10. **Registry-bound handoff done; registry deployment outstanding:** onboarding
+    presents recommended entries from the verified composer catalog and hands
+    the reviewed registry coordinates to the ordinary template-install flow.
+    Without a configured verified registry it presents no invented template
+    choices. Registry deployment must include all four optional outcomes.
 
 ## Final extraction boundary
 
 The split is closed-world for this release:
 
-| Repository                        | Content rule                                                                                                                                                                                                                                                                                                                                              |
-| --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `vibestudio-workspace-base`       | Everything retained in the default distribution for this cut, including root metadata, onboarding, Google Workspace, GitHub, local models, mobile, template composer/registry client, shell, browser, terminal, and system-test infrastructure. It may overlap the feature rows.                                                   |
-| `vibestudio-template-examples`    | Example/demo repositories and their declarations only                                                                                                                                                                                                                                                                                                     |
-| `vibestudio-template-news`        | News panel/agent and direct dependencies                                                                                                                                                                                                                                                                                                                  |
-| `vibestudio-template-spectrolite` | Spectrolite panel and direct dependencies                                                                                                                                                                                                                                                                                                                 |
+| Repository                             | Content rule                                                                                                                                                                                                                                                                                                                                                        |
+| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `vibestudio-workspace-base`            | Everything retained in the default distribution for this cut, including root metadata, onboarding, GitHub, local models, mobile, template composer/registry client, shell, browser, terminal, and system-test infrastructure. It may overlap the feature rows. Google Workspace remains temporarily until its inspected release is published and install-validated. |
+| `vibestudio-template-examples`         | Example/demo repositories and their declarations only                                                                                                                                                                                                                                                                                                               |
+| `vibestudio-template-news`             | News panel/agent and direct dependencies                                                                                                                                                                                                                                                                                                                            |
+| `vibestudio-template-spectrolite`      | Spectrolite panel and direct dependencies                                                                                                                                                                                                                                                                                                                           |
+| `vibestudio-template-google-workspace` | Google Workspace credential/API implementation, Gmail package and agent, and Google owner skills.                                                                                                                                                                                                                                                                   |
 
 Selections are produced and validated by the authoring inventory/closure API.
 The table names outcomes; it is not a hand-maintained file list or an ownership

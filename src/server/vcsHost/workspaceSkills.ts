@@ -8,6 +8,7 @@ import { CONTAINER_SECTIONS, FLAT_SECTIONS } from "@vibestudio/shared/runtime/en
 export interface SkillFrontmatter {
   name?: string;
   description?: string;
+  onboarding?: unknown;
 }
 
 export interface SkillEntry {
@@ -19,6 +20,8 @@ export interface SkillEntry {
   dirPath: string;
   /** Workspace-relative path to the skill document. */
   skillPath: string;
+  /** Optional userland onboarding declaration carried by the installed skill. */
+  onboarding?: unknown;
 }
 
 export async function listWorkspaceSkillEntries(workspaceRoot: string): Promise<SkillEntry[]> {
@@ -43,6 +46,7 @@ export async function readWorkspaceSkillEntry(
     description: frontmatter.description ?? "",
     dirPath: repoPath,
     skillPath,
+    ...(frontmatter.onboarding !== undefined ? { onboarding: frontmatter.onboarding } : {}),
   };
 }
 
@@ -65,9 +69,11 @@ export function parseSkillFrontmatter(content: string): SkillFrontmatter {
     const record = parsed as Record<string, unknown>;
     const name = record["name"];
     const description = record["description"];
+    const onboarding = record["onboarding"];
     return {
       ...(typeof name === "string" && name ? { name } : {}),
       ...(typeof description === "string" ? { description } : {}),
+      ...(onboarding !== undefined ? { onboarding } : {}),
     };
   } catch {
     return {};

@@ -14,7 +14,7 @@ on top of the verified `google-workspace` connection and reuses the staged
 
 Google Drive has no separate console setup beyond Google Workspace. The user
 must first complete
-[Google Workspace onboarding](../../skills/google-workspace/ONBOARDING.md) and
+[Google Workspace onboarding](../google-workspace/ONBOARDING.md) and
 reach the verified stage.
 
 ## Runtime Helpers
@@ -39,7 +39,7 @@ Recommended flow:
 
 ## What The Client Can Do
 
-The underlying client comes from `@workspace/integrations/drive` and supports:
+The underlying client comes from `@workspace/google-workspace/drive` and supports:
 
 - `about()` for account and storage metadata
 - `listFiles()`, `getFile()`, `createFile()`, `updateFile()`, `moveFile()`
@@ -75,7 +75,7 @@ const extensionBytes = {
 
 ## Files
 
-| Document | Content |
-|----------|---------|
-| [src/drive.ts](src/drive.ts) | Google Drive API client |
-| [../../skills/google-drive/index.ts](../../skills/google-drive/index.ts) | Importable Drive skill helpers |
+| Document                                                                                     | Content                        |
+| -------------------------------------------------------------------------------------------- | ------------------------------ |
+| [../../packages/google-workspace/src/drive.ts](../../packages/google-workspace/src/drive.ts) | Google Drive API client        |
+| [index.ts](index.ts)                                                                         | Importable Drive skill helpers |

@@ -6,7 +6,7 @@
     ".": "./index.ts"
   },
   "dependencies": {
-    "@workspace/integrations": "workspace:*",
+    "@workspace/google-workspace": "workspace:*",
     "@workspace/runtime": "workspace:*",
     "@workspace-skills/google-workspace": "workspace:*"
   }

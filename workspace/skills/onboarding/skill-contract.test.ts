@@ -5,13 +5,9 @@ describe("onboarding skill template handoff", () => {
   it("routes optional official outcomes through the canonical Templates workflow", () => {
     const skill = fs.readFileSync(new URL("SKILL.md", import.meta.url), "utf8");
 
-    expect(skill).toContain(
-      "git+https://github.com/panticonic/vibestudio-template-examples.git"
-    );
-    expect(skill).toContain("git+https://github.com/panticonic/vibestudio-template-news.git");
-    expect(skill).toContain(
-      "git+https://github.com/panticonic/vibestudio-template-spectrolite.git"
-    );
+    expect(skill).toContain("current verified template\nregistry");
+    expect(skill).toContain("does not\nmaintain a second list of official repository URLs");
+    expect(skill).not.toContain("vibestudio-template-examples.git");
     expect(skill).toContain("`prepareAdd` and reviewed `add`");
     expect(skill).toContain("`Review & add`");
     expect(skill).toContain("resolveOnboardingTemplateSelection");

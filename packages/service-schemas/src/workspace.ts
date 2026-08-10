@@ -128,6 +128,8 @@ export const SkillEntrySchema = z.object({
   dirPath: z.string(),
   /** Workspace-relative path to the SKILL.md file. */
   skillPath: z.string(),
+  /** Optional userland declaration consumed by the workspace onboarding composer. */
+  onboarding: z.unknown().optional(),
 });
 
 export type WorkspaceTreeNode = WorkspaceNode;
@@ -400,7 +402,7 @@ export const workspaceMethods = defineServiceMethods({
       rationale: "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family",
     },
     description:
-      "List repo-embedded workspace skills with name, description, repo path, and SKILL.md path parsed from each repo's top-level SKILL.md frontmatter. Context-bound runtimes use their verified ambient context; contextless host clients must provide an explicit contextId.",
+      "List repo-embedded workspace skills with identity, paths, and optional onboarding declarations parsed from each repo's top-level SKILL.md frontmatter. Context-bound runtimes use their verified ambient context; contextless host clients must provide an explicit contextId.",
     args: z.tuple([
       z
         .object({ contextId: z.string().min(1) })

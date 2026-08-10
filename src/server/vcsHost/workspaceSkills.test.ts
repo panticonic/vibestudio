@@ -59,6 +59,14 @@ describe("workspaceSkills", () => {
       name: "quoted",
       description: "YAML string",
     });
+    expect(
+      parseSkillFrontmatter(
+        "---\nname: declared\nonboarding:\n  capabilities:\n    - id: connection.example\n---\n"
+      )
+    ).toEqual({
+      name: "declared",
+      onboarding: { capabilities: [{ id: "connection.example" }] },
+    });
     expect(parseSkillFrontmatter("---\nname: [unterminated\n---\n")).toEqual({});
   });
 

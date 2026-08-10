@@ -65,10 +65,24 @@ export interface OnboardingCapabilityDefinition {
   actions?: Partial<Record<SetupAction, SetupActionTarget>>;
   visibility: "primary" | "secondary" | "advanced" | "contextual";
   setup?: {
-    statusAdapter: string;
+    statusAdapter?: string;
+    observer?: CredentialConnectionObserver;
     successDescription: string;
   };
   examples?: readonly string[];
+}
+
+export interface CredentialConnectionObserver {
+  kind: "credential-connection";
+  providerId: string;
+  clientConfigId?: string;
+  verifyUrl?: string;
+  identityField?: string;
+}
+
+export interface OnboardingSkillEntry {
+  skillPath: string;
+  onboarding?: unknown;
 }
 
 const connectionManagement = {
@@ -98,28 +112,6 @@ export const onboardingCatalog: readonly OnboardingCapabilityDefinition[] = [
       statusAdapter: "ai-provider",
       successDescription:
         "The selected model has a usable, audience-matched credential or is startable locally.",
-    },
-  },
-  {
-    id: "connection.google-workspace",
-    title: "Google Workspace",
-    summary: "Connect Gmail, Calendar, and Drive through one durable Google relationship.",
-    category: "connections",
-    role: "connection",
-    scope: "user-workspace",
-    tier: "direct",
-    ownerSkillPath: "skills/google-workspace/SKILL.md",
-    actions: {
-      setup: { via: "owner-skill" },
-      repair: { via: "owner-skill" },
-      reconnect: { via: "owner-skill" },
-      check: { via: "owner-skill" },
-      ...connectionManagement,
-    },
-    visibility: "primary",
-    setup: {
-      statusAdapter: "google-workspace",
-      successDescription: "A live Google user-info check succeeds for the stored connection.",
     },
   },
   {
@@ -257,17 +249,6 @@ export const onboardingCatalog: readonly OnboardingCapabilityDefinition[] = [
     },
   },
   {
-    id: "contextual.gmail-agent",
-    title: "Gmail agent",
-    summary: "Configure channel-specific email attention and automation after Google is ready.",
-    category: "personalization",
-    role: "contextual-setup",
-    scope: "channel",
-    tier: "direct",
-    ownerSkillPath: "workers/gmail-agent/SKILL.md",
-    visibility: "contextual",
-  },
-  {
     id: "contextual.slack",
     title: "Slack",
     summary: "Available when a dependable Slack owner workflow and status read are installed.",
@@ -369,7 +350,9 @@ export function validateOnboardingCatalog(
     ids.add(entry.id);
 
     if (setupRoles.has(entry.role)) {
-      if (!entry.setup?.statusAdapter) errors.push(`${entry.id} requires a status adapter`);
+      if (!entry.setup?.statusAdapter && !entry.setup?.observer) {
+        errors.push(`${entry.id} requires a status observer`);
+      }
       if (!entry.setup?.successDescription) errors.push(`${entry.id} requires a success condition`);
       if (!entry.actions || Object.keys(entry.actions).length === 0) {
         errors.push(`${entry.id} requires at least one dependable action`);
@@ -413,4 +396,174 @@ export function validateOnboardingCatalog(
 
 export function capabilityById(id: string): OnboardingCapabilityDefinition | undefined {
   return onboardingCatalog.find((entry) => entry.id === id);
+}
+
+function object(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`${label} must be an object.`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function string(value: unknown, label: string): string {
+  if (typeof value !== "string" || !value.trim()) throw new Error(`${label} must be a string.`);
+  return value;
+}
+
+function oneOf<T extends string>(value: unknown, values: readonly T[], label: string): T {
+  if (typeof value !== "string" || !values.includes(value as T)) {
+    throw new Error(`${label} must be one of ${values.join(", ")}.`);
+  }
+  return value as T;
+}
+
+function parseActionTarget(value: unknown, label: string): SetupActionTarget {
+  const source = object(value, label);
+  const via = oneOf(
+    source["via"],
+    [
+      "owner-skill",
+      "about-page",
+      "model-settings",
+      "panel",
+      "shell-navigation",
+      "conversation",
+    ] as const,
+    `${label}.via`
+  );
+  if (via === "about-page") {
+    return {
+      via,
+      page: oneOf(source["page"], ["credentials", "permissions"] as const, `${label}.page`),
+    };
+  }
+  if (via === "panel") {
+    return {
+      via,
+      path: oneOf(
+        source["path"],
+        ["panels/local-models", "about/browser-import-inspector"] as const,
+        `${label}.path`
+      ),
+    };
+  }
+  if (via === "shell-navigation") {
+    return {
+      via,
+      target: oneOf(
+        source["target"],
+        ["connection-settings", "workspace-chooser"] as const,
+        `${label}.target`
+      ),
+    };
+  }
+  return { via };
+}
+
+function parseDeclaredCapability(
+  value: unknown,
+  skillPath: string,
+  index: number
+): OnboardingCapabilityDefinition {
+  const label = `${skillPath} onboarding.capabilities[${index}]`;
+  const source = object(value, label);
+  const actionsSource =
+    source["actions"] === undefined ? undefined : object(source["actions"], `${label}.actions`);
+  const actions: Partial<Record<SetupAction, SetupActionTarget>> = {};
+  for (const [action, target] of Object.entries(actionsSource ?? {})) {
+    const parsedAction = oneOf(action, setupActions, `${label}.actions key`);
+    actions[parsedAction] = parseActionTarget(target, `${label}.actions.${action}`);
+  }
+  let setup: OnboardingCapabilityDefinition["setup"];
+  if (source["setup"] !== undefined) {
+    const setupSource = object(source["setup"], `${label}.setup`);
+    const status = object(setupSource["status"], `${label}.setup.status`);
+    const kind = oneOf(
+      status["kind"],
+      ["credential-connection"] as const,
+      `${label}.setup.status.kind`
+    );
+    setup = {
+      successDescription: string(
+        setupSource["successDescription"],
+        `${label}.setup.successDescription`
+      ),
+      observer: {
+        kind,
+        providerId: string(status["providerId"], `${label}.setup.status.providerId`),
+        ...(status["clientConfigId"] !== undefined
+          ? {
+              clientConfigId: string(
+                status["clientConfigId"],
+                `${label}.setup.status.clientConfigId`
+              ),
+            }
+          : {}),
+        ...(status["verifyUrl"] !== undefined
+          ? { verifyUrl: string(status["verifyUrl"], `${label}.setup.status.verifyUrl`) }
+          : {}),
+        ...(status["identityField"] !== undefined
+          ? {
+              identityField: string(status["identityField"], `${label}.setup.status.identityField`),
+            }
+          : {}),
+      },
+    };
+  }
+  return {
+    id: string(source["id"], `${label}.id`),
+    title: string(source["title"], `${label}.title`),
+    summary: string(source["summary"], `${label}.summary`),
+    category: oneOf(
+      source["category"],
+      ["connections", "environment", "access", "personalization", "ready-now"] as const,
+      `${label}.category`
+    ),
+    role: oneOf(
+      source["role"],
+      [
+        "connection",
+        "optional-configuration",
+        "migration",
+        "contextual-setup",
+        "ready-capability",
+        "ordinary-task",
+      ] as const,
+      `${label}.role`
+    ),
+    scope: oneOf(
+      source["scope"],
+      ["user-workspace", "workspace", "server", "device", "channel", "project"] as const,
+      `${label}.scope`
+    ),
+    tier: oneOf(source["tier"], ["direct", "host-topology"] as const, `${label}.tier`),
+    ownerSkillPath: skillPath,
+    ...(Object.keys(actions).length ? { actions } : {}),
+    visibility: oneOf(
+      source["visibility"],
+      ["primary", "secondary", "advanced", "contextual"] as const,
+      `${label}.visibility`
+    ),
+    ...(setup ? { setup } : {}),
+  };
+}
+
+export function composeOnboardingCatalog(
+  skills: readonly OnboardingSkillEntry[]
+): readonly OnboardingCapabilityDefinition[] {
+  const contributed = skills.flatMap((skill) => {
+    if (skill.onboarding === undefined) return [];
+    const declaration = object(skill.onboarding, `${skill.skillPath} onboarding`);
+    const capabilities = declaration["capabilities"];
+    if (!Array.isArray(capabilities)) {
+      throw new Error(`${skill.skillPath} onboarding.capabilities must be an array.`);
+    }
+    return capabilities.map((entry, index) =>
+      parseDeclaredCapability(entry, skill.skillPath, index)
+    );
+  });
+  const catalog = [...onboardingCatalog, ...contributed];
+  const errors = validateOnboardingCatalog(catalog);
+  if (errors.length) throw new Error(`Invalid installed onboarding catalog: ${errors.join(" ")}`);
+  return catalog;
 }

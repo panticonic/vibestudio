@@ -68,7 +68,9 @@ commit, and content digest only in a labeled Details view.
 ## Add a template
 
 1. Invoke `prepareAdd` with `{ url, credential? }` or `{ catalogId,
-refreshCatalog? }`. Use `refreshCatalog: true` only when the user explicitly
+registryCommit?, registrySnapshot?, refreshCatalog? }`. A reviewed catalog card
+   supplies all three registry selection fields; pass them unchanged so a stale
+   card fails instead of drifting to a newer catalog. Use `refreshCatalog: true` only when the user explicitly
    asked to refresh the Templates surface. Onboarding may hand off an
    explicitly approved user outcome to this same workflow; it does not install
    the template itself. The composer binds a catalog id to the verified

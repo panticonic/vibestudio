@@ -9,6 +9,27 @@ import { lintRendererSource } from "@workspace/agentic-core";
 import SetupHub from "./SetupHub.js";
 import type { SetupCapabilitySnapshot } from "./snapshot.js";
 import type { OptionalTemplateSnapshot } from "./templates.js";
+import { onboardingCatalog, type OnboardingCapabilityDefinition } from "./catalog.js";
+
+const googleCapability: OnboardingCapabilityDefinition = {
+  id: "connection.google-workspace",
+  title: "Google Workspace",
+  summary: "Connect Google Workspace.",
+  category: "connections",
+  role: "connection",
+  scope: "user-workspace",
+  tier: "direct",
+  ownerSkillPath: "skills/google-workspace/SKILL.md",
+  actions: { check: { via: "owner-skill" } },
+  visibility: "primary",
+  setup: { statusAdapter: "google", successDescription: "Verified live." },
+};
+const catalog = [...onboardingCatalog, googleCapability];
+const selection = {
+  catalogId: "examples",
+  registryCommit: "a".repeat(40),
+  registrySnapshot: `v1-sha256:${"b".repeat(64)}`,
+};
 
 const observedAt = new Date().toISOString();
 const snapshots: SetupCapabilitySnapshot[] = [
@@ -37,21 +58,30 @@ const snapshots: SetupCapabilitySnapshot[] = [
 const templates: OptionalTemplateSnapshot[] = [
   {
     id: "template.examples",
+    title: "Examples",
+    description: "Sample panels and workers.",
     state: "available",
     summary: "Available to review and add.",
     observedAt,
+    selection,
   },
   {
     id: "template.news",
+    title: "News",
+    description: "News tools.",
     state: "installed",
     summary: "Installed in this workspace.",
     observedAt,
+    selection: { ...selection, catalogId: "news" },
   },
   {
     id: "template.spectrolite",
+    title: "Spectrolite",
+    description: "MDX writing.",
     state: "unknown",
     summary: "Installation status could not be read right now.",
     observedAt,
+    selection: { ...selection, catalogId: "spectrolite" },
   },
 ];
 describe("SetupHub", () => {
@@ -63,7 +93,7 @@ describe("SetupHub", () => {
   it("separates setup state from ready-now capabilities", () => {
     const view = render(
       <Theme>
-        <SetupHub props={{ snapshot: snapshots }} chat={{ send: vi.fn() }} />
+        <SetupHub props={{ catalog, snapshot: snapshots }} chat={{ send: vi.fn() }} />
       </Theme>
     );
     expect(view.getByText("Google Workspace")).toBeTruthy();
@@ -87,7 +117,7 @@ describe("SetupHub", () => {
     ];
     const view = render(
       <Theme>
-        <SetupHub props={{ snapshot: unavailableMobile }} chat={{ send: vi.fn() }} />
+        <SetupHub props={{ catalog, snapshot: unavailableMobile }} chat={{ send: vi.fn() }} />
       </Theme>
     );
 
@@ -99,7 +129,7 @@ describe("SetupHub", () => {
     const send = vi.fn(async () => undefined);
     const view = render(
       <Theme>
-        <SetupHub props={{ snapshot: snapshots }} chat={{ send }} />
+        <SetupHub props={{ catalog, snapshot: snapshots }} chat={{ send }} />
       </Theme>
     );
 
@@ -124,7 +154,7 @@ describe("SetupHub", () => {
     const send = vi.fn(async () => undefined);
     const view = render(
       <Theme>
-        <SetupHub props={{ snapshot: snapshots, templates }} chat={{ send }} />
+        <SetupHub props={{ catalog, snapshot: snapshots, templates }} chat={{ send }} />
       </Theme>
     );
 
@@ -142,6 +172,7 @@ describe("SetupHub", () => {
             kind: "onboarding-template",
             action: "add",
             targetId: "template.examples",
+            ...selection,
           },
         },
       })

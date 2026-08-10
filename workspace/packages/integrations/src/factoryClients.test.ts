@@ -4,8 +4,6 @@ import {
   type StoredCredentialSummary,
 } from "@workspace/runtime/credentials";
 import { createGitHubClient, resolveGitHubPublishOperation } from "./github.js";
-import { createGmailClient } from "@workspace/gmail";
-import { createCalendarClient } from "./calendar.js";
 
 /**
  * Build a mock RPC caller that:
@@ -392,36 +390,6 @@ describe("createGitHubClient", () => {
   });
 });
 
-describe("createGmailClient", () => {
-  it("memoizes the credential handle across method calls", async () => {
-    const { credentials, stats } = makeMockEnv((url) => {
-      if (url.endsWith("/profile"))
-        return jsonResponse({ emailAddress: "a@b.com", historyId: "100" });
-      if (url.endsWith("/labels"))
-        return jsonResponse({ labels: [{ id: "INBOX", name: "INBOX" }] });
-      return jsonResponse({});
-    });
-    const gmail = createGmailClient(credentials);
-
-    await gmail.getProfile();
-    await gmail.listLabels();
-    await gmail.getProfile();
-
-    expect(stats.resolveCalls).toBe(1);
-    expect(stats.fetchCalls).toHaveLength(3);
-  });
-
-  it("encodes search queries via listMessages", async () => {
-    const { credentials, stats } = makeMockEnv(() => jsonResponse({ messages: [] }));
-    const gmail = createGmailClient(credentials);
-
-    await gmail.search("from:boss subject:report");
-
-    expect(stats.fetchCalls).toHaveLength(1);
-    expect(stats.fetchCalls[0]!.url).toContain("q=from%3Aboss");
-  });
-});
-
 describe("factory client retry semantics", () => {
   it("retries credential resolution after a failed first call", async () => {
     // Mid-session credential registration: first call fails (no
@@ -461,66 +429,5 @@ describe("factory client retry semantics", () => {
     // rejected promise from the first attempt.
     const user = await github.getUser();
     expect(user.login).toBe("u");
-  });
-});
-
-describe("createGmailClient header injection", () => {
-  it("rejects CR/LF in Subject", async () => {
-    const { credentials } = makeMockEnv(() => jsonResponse({}));
-    const gmail = createGmailClient(credentials);
-    await expect(
-      gmail.sendMessage({
-        to: "a@b.com",
-        subject: "Hello\r\nBcc: attacker@evil.com",
-        body: "x",
-      })
-    ).rejects.toThrow(/header injection rejected/);
-  });
-
-  it("rejects newlines in To", async () => {
-    const { credentials } = makeMockEnv(() => jsonResponse({}));
-    const gmail = createGmailClient(credentials);
-    await expect(
-      gmail.sendMessage({
-        to: "a@b.com\nBcc: attacker@evil.com",
-        subject: "ok",
-        body: "x",
-      })
-    ).rejects.toThrow(/header injection rejected/);
-  });
-
-  it("rejects invalid header names in params.headers", async () => {
-    const { credentials } = makeMockEnv(() => jsonResponse({}));
-    const gmail = createGmailClient(credentials);
-    await expect(
-      gmail.sendMessage({
-        to: "a@b.com",
-        subject: "ok",
-        body: "x",
-        headers: { "X-Bad\r\nInject": "y" },
-      })
-    ).rejects.toThrow(/invalid header name/);
-  });
-});
-
-describe("createCalendarClient", () => {
-  it("memoizes the credential handle across method calls", async () => {
-    const { credentials, stats } = makeMockEnv(() =>
-      jsonResponse({ items: [{ id: "primary", summary: "Primary" }] })
-    );
-    const cal = createCalendarClient(credentials);
-
-    await cal.listCalendars();
-    await cal.listEvents("primary");
-    await cal.listCalendars();
-
-    expect(stats.resolveCalls).toBe(1);
-  });
-
-  it("returns 204 deletions as undefined", async () => {
-    const { credentials } = makeMockEnv(() => new Response(null, { status: 204 }));
-    const cal = createCalendarClient(credentials);
-
-    await expect(cal.deleteEvent("primary", "evt-1")).resolves.toBeUndefined();
   });
 });

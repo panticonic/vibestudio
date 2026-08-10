@@ -6,22 +6,15 @@ import {
   ReloadIcon,
 } from "@radix-ui/react-icons";
 import { useState } from "react";
-import {
-  onboardingCatalog,
-  type OnboardingCapabilityDefinition,
-  type SetupAction,
-} from "./catalog";
+import { type OnboardingCapabilityDefinition, type SetupAction } from "./catalog";
 import type { SetupCapabilitySnapshot } from "./snapshot";
-import {
-  optionalTemplateCatalog,
-  type OptionalTemplateDefinition,
-  type OptionalTemplateSnapshot,
-} from "./templates";
+import { type OptionalTemplateSnapshot } from "./templates";
 
 interface SetupHubProps {
   props: {
     snapshot?: SetupCapabilitySnapshot[];
     templates?: OptionalTemplateSnapshot[];
+    catalog?: readonly OnboardingCapabilityDefinition[];
   };
   chat: {
     send: (content: string, options?: { metadata?: Record<string, unknown> }) => Promise<unknown>;
@@ -178,11 +171,12 @@ function SetupRow({
 export default function SetupHub({ props, chat }: SetupHubProps) {
   const snapshots = props.snapshot ?? [];
   const templateSnapshots = props.templates ?? [];
+  const catalog = props.catalog ?? [];
   const [pending, setPending] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const byId = new Map(snapshots.map((snapshot) => [snapshot.id, snapshot]));
-  const definitions = onboardingCatalog.filter((entry) => byId.has(entry.id));
-  const ready = onboardingCatalog.filter((entry) => entry.role === "ready-capability");
+  const definitions = catalog.filter((entry) => byId.has(entry.id));
+  const ready = catalog.filter((entry) => entry.role === "ready-capability");
   const blocker = snapshots.find((snapshot) => snapshot.attention === "blocking");
 
   async function sendInteraction(definition: OnboardingCapabilityDefinition, action: SetupAction) {
@@ -228,7 +222,7 @@ export default function SetupHub({ props, chat }: SetupHubProps) {
     }
   }
 
-  async function sendTemplateInteraction(definition: OptionalTemplateDefinition) {
+  async function sendTemplateInteraction(definition: OptionalTemplateSnapshot) {
     const key = `${definition.id}:add`;
     setPending(key);
     setError(null);
@@ -240,6 +234,7 @@ export default function SetupHub({ props, chat }: SetupHubProps) {
             kind: "onboarding-template",
             action: "add",
             targetId: definition.id,
+            ...definition.selection,
           },
         },
       });
@@ -267,7 +262,7 @@ export default function SetupHub({ props, chat }: SetupHubProps) {
     )
     .slice(0, 3)
     .map((snapshot) => {
-      const definition = onboardingCatalog.find((entry) => entry.id === snapshot.id);
+      const definition = catalog.find((entry) => entry.id === snapshot.id);
       return definition
         ? `${definition.title} ${snapshot.state === "configured" ? "ready" : "connected"}`
         : "";
@@ -378,9 +373,7 @@ export default function SetupHub({ props, chat }: SetupHubProps) {
           <Text size="1" color="gray">
             Review reusable workspace additions before installing them.
           </Text>
-          {optionalTemplateCatalog.map((definition) => {
-            const snapshot = templateSnapshots.find((entry) => entry.id === definition.id);
-            if (!snapshot) return null;
+          {templateSnapshots.map((definition) => {
             return (
               <Card key={definition.id} size="1">
                 <Flex align="center" justify="between" gap="2" wrap="wrap">
@@ -389,28 +382,28 @@ export default function SetupHub({ props, chat }: SetupHubProps) {
                       {definition.title}
                     </Text>
                     <Text as="div" size="1" color="gray">
-                      {definition.summary}
+                      {definition.description}
                     </Text>
                   </Box>
                   <Flex align="center" gap="2">
                     <Badge
                       size="1"
                       color={
-                        snapshot.state === "installed"
+                        definition.state === "installed"
                           ? "green"
-                          : snapshot.state === "unknown"
+                          : definition.state === "unknown"
                             ? "orange"
                             : "gray"
                       }
                       variant="soft"
                     >
-                      {snapshot.state === "installed"
+                      {definition.state === "installed"
                         ? "Installed"
-                        : snapshot.state === "unknown"
+                        : definition.state === "unknown"
                           ? "Unknown"
                           : "Available"}
                     </Badge>
-                    {snapshot.state === "available" ? (
+                    {definition.state === "available" ? (
                       <Button
                         size="1"
                         variant="soft"

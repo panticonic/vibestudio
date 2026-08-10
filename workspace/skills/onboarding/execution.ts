@@ -8,6 +8,7 @@ import {
   type OnboardingInteraction,
   type ResolvedOnboardingSelection,
 } from "./routing";
+import { readInstalledOnboardingCatalog } from "./snapshot";
 
 export interface OnboardingExecutionDependencies {
   openWorkspacePanel: (source: string) => Promise<{
@@ -15,6 +16,7 @@ export interface OnboardingExecutionDependencies {
     readiness?: "ready" | "unconfirmed";
   }>;
   openShellSurface: (target: "connection-settings" | "workspace-chooser") => Promise<void>;
+  readCatalog?: typeof readInstalledOnboardingCatalog;
 }
 
 export interface OnboardingExecutionResult {
@@ -32,6 +34,7 @@ const defaultDependencies: OnboardingExecutionDependencies = {
     return { id: panel.id, readiness: "ready" as const };
   },
   openShellSurface: (target) => callMain<void>("app.openShellSurface", target),
+  readCatalog: readInstalledOnboardingCatalog,
 };
 
 async function openNavigationPanel(
@@ -70,7 +73,8 @@ export async function executeOnboardingSelection(
   interaction: OnboardingInteraction,
   dependencies: OnboardingExecutionDependencies = defaultDependencies
 ): Promise<OnboardingExecutionResult> {
-  const route = resolveOnboardingSelection(interaction);
+  const catalog = await (dependencies.readCatalog ?? readInstalledOnboardingCatalog)();
+  const route = resolveOnboardingSelection(interaction, catalog);
   if (route.target.via === "about-page") {
     return openNavigationPanel(`about/${route.target.page}`, route.target, dependencies);
   }

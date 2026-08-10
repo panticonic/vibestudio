@@ -2,7 +2,7 @@ export async function hasRecentPushDelivery(
   _providerId: string,
   _eventType: string,
   _connectionId: string,
-  quietWindowMs: number,
+  quietWindowMs: number
 ): Promise<boolean> {
   void quietWindowMs;
   return false;

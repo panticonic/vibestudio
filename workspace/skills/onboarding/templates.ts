@@ -1,77 +1,88 @@
 import type { TemplateStatusRow } from "@vibestudio/service-schemas/templates";
+import type { TemplateCatalogSnapshot } from "@workspace/template-registry";
 
-export interface OptionalTemplateDefinition {
-  id: string;
-  title: string;
-  summary: string;
-  url: string;
+export interface OnboardingTemplateSelection {
+  catalogId: string;
+  registryCommit: string;
+  registrySnapshot: string;
 }
 
 export interface OptionalTemplateSnapshot {
   id: string;
+  title: string;
+  description: string;
   state: "available" | "installed" | "unknown";
   summary: string;
   observedAt: string;
+  selection: OnboardingTemplateSelection;
 }
-
-export const optionalTemplateCatalog: readonly OptionalTemplateDefinition[] = [
-  {
-    id: "template.examples",
-    title: "Examples",
-    summary: "Sample panels and workers for learning and experimentation.",
-    url: "git+https://github.com/panticonic/vibestudio-template-examples.git",
-  },
-  {
-    id: "template.news",
-    title: "News",
-    summary: "A news panel, feed tools, and an agent for collecting and briefing news.",
-    url: "git+https://github.com/panticonic/vibestudio-template-news.git",
-  },
-  {
-    id: "template.spectrolite",
-    title: "Spectrolite",
-    summary: "An MDX writing and editing workspace with collaborative agent tooling.",
-    url: "git+https://github.com/panticonic/vibestudio-template-spectrolite.git",
-  },
-] as const;
 
 export interface OptionalTemplateSnapshotDependencies {
   status?: () => Promise<TemplateStatusRow[]>;
+  catalog?: () => Promise<TemplateCatalogSnapshot | null>;
   now?: () => Date;
 }
 
-async function templateStatus(): Promise<TemplateStatusRow[]> {
+async function composerStatus(): Promise<TemplateStatusRow[]> {
   const { extensions } = await import("@workspace/runtime");
   return extensions.invoke("@workspace-extensions/template-composer", "status", []) as Promise<
     TemplateStatusRow[]
   >;
 }
 
+async function composerCatalog(): Promise<TemplateCatalogSnapshot | null> {
+  const { extensions } = await import("@workspace/runtime");
+  return extensions.invoke(
+    "@workspace-extensions/template-composer",
+    "catalog",
+    []
+  ) as Promise<TemplateCatalogSnapshot>;
+}
+
 export async function composeOptionalTemplateSnapshot(
   dependencies: OptionalTemplateSnapshotDependencies = {}
 ): Promise<OptionalTemplateSnapshot[]> {
   const observedAt = (dependencies.now?.() ?? new Date()).toISOString();
+  let catalog: TemplateCatalogSnapshot | null;
   try {
-    const status = await (dependencies.status ?? templateStatus)();
-    const installedUrls = new Set(status.map((entry) => entry.url));
-    return optionalTemplateCatalog.map((definition) => ({
-      id: definition.id,
-      state: installedUrls.has(definition.url) ? "installed" : "available",
-      summary: installedUrls.has(definition.url)
-        ? "Installed in this workspace."
-        : "Available to review and add.",
-      observedAt,
-    }));
+    catalog = await (dependencies.catalog ?? composerCatalog)();
   } catch {
-    return optionalTemplateCatalog.map((definition) => ({
-      id: definition.id,
-      state: "unknown",
-      summary: "Installation status could not be read right now.",
-      observedAt,
-    }));
+    return [];
   }
-}
-
-export function optionalTemplateById(id: string): OptionalTemplateDefinition | undefined {
-  return optionalTemplateCatalog.find((entry) => entry.id === id);
+  if (!catalog) return [];
+  let installedUrls: ReadonlySet<string> | undefined;
+  try {
+    installedUrls = new Set(
+      (await (dependencies.status ?? composerStatus)()).map((entry) => entry.url)
+    );
+  } catch {
+    installedUrls = undefined;
+  }
+  return catalog.entries
+    .filter((entry) => entry.recommended)
+    .map((entry) => {
+      const state = installedUrls
+        ? installedUrls.has(entry.url)
+          ? "installed"
+          : "available"
+        : "unknown";
+      return {
+        id: `template.${entry.id}`,
+        title: entry.name,
+        description: entry.description,
+        state,
+        summary:
+          state === "installed"
+            ? "Installed in this workspace."
+            : state === "available"
+              ? "Available to review and add."
+              : "Installation status could not be read right now.",
+        observedAt,
+        selection: {
+          catalogId: entry.id,
+          registryCommit: catalog.coordinates.commit,
+          registrySnapshot: catalog.coordinates.snapshot,
+        },
+      } satisfies OptionalTemplateSnapshot;
+    });
 }

@@ -1,13 +1,19 @@
 import { callMain, gatewayConfig } from "@workspace/runtime";
 import {
-  onboardingCatalog,
+  composeOnboardingCatalog,
+  type OnboardingCapabilityDefinition,
+  type OnboardingSkillEntry,
   type OnboardingRole,
   type OnboardingScope,
   type OnboardingTier,
   type SetupAction,
   type SetupPresentationState,
 } from "./catalog";
-import { createStatusAdapters, type CapabilityOnboardingStatusAdapter } from "./status";
+import {
+  createCredentialConnectionStatusAdapter,
+  createStatusAdapters,
+  type CapabilityOnboardingStatusAdapter,
+} from "./status";
 import {
   composeOptionalTemplateSnapshot,
   type OptionalTemplateSnapshot,
@@ -49,19 +55,23 @@ export interface SetupCapabilitySnapshot {
 }
 
 export interface ComposeOnboardingSnapshotOptions {
-  verifyCapabilityId?: "connection.google-workspace" | "connection.github";
+  verifyCapabilityId?: string;
 }
 
 export interface OnboardingOverview {
+  catalog: readonly OnboardingCapabilityDefinition[];
   snapshot: SetupCapabilitySnapshot[];
   templates: OptionalTemplateSnapshot[];
 }
 
 export interface OnboardingOverviewDependencies extends OnboardingSnapshotDependencies {
   templateStatus?: OptionalTemplateSnapshotDependencies["status"];
+  templateCatalog?: OptionalTemplateSnapshotDependencies["catalog"];
 }
 
 export interface OnboardingSnapshotDependencies {
+  catalog?: readonly OnboardingCapabilityDefinition[];
+  readCatalog?: () => Promise<readonly OnboardingCapabilityDefinition[]>;
   adapters?: Readonly<Record<string, CapabilityOnboardingStatusAdapter>>;
   readHostTopology?: () => Promise<OnboardingHostTopologySnapshot>;
   hasSkill?: (skillPath: string) => Promise<boolean>;
@@ -130,6 +140,13 @@ async function hasSkill(skillPath: string): Promise<boolean> {
   return entries.some((entry) => entry.skillPath === skillPath);
 }
 
+export async function readInstalledOnboardingCatalog(): Promise<
+  readonly OnboardingCapabilityDefinition[]
+> {
+  const entries = await callMain<OnboardingSkillEntry[]>("workspace.listSkills");
+  return composeOnboardingCatalog(entries);
+}
+
 function nextAction(
   state: SetupPresentationState,
   role: OnboardingRole,
@@ -171,12 +188,13 @@ function unknownSnapshot(
 }
 
 function hostSnapshots(
+  catalog: readonly OnboardingCapabilityDefinition[],
   host: OnboardingHostTopologySnapshot,
   mobileOwnerAvailable: boolean,
   observedAt: string
 ): SetupCapabilitySnapshot[] {
-  const device = onboardingCatalog.find((entry) => entry.id === "connection.device")!;
-  const remote = onboardingCatalog.find((entry) => entry.id === "connection.remote-server")!;
+  const device = catalog.find((entry) => entry.id === "connection.device")!;
+  const remote = catalog.find((entry) => entry.id === "connection.remote-server")!;
   const deviceActions = device.actions ?? {};
   const remoteActions = remote.actions ?? {};
 
@@ -236,13 +254,26 @@ export async function composeOnboardingSnapshot(
   dependencies: OnboardingSnapshotDependencies = {}
 ): Promise<SetupCapabilitySnapshot[]> {
   const observedAt = (dependencies.now?.() ?? new Date()).toISOString();
-  const adapters = dependencies.adapters ?? createStatusAdapters();
-  const directEntries = onboardingCatalog.filter((entry) => entry.setup && entry.tier === "direct");
+  const catalog =
+    dependencies.catalog ?? (await (dependencies.readCatalog ?? readInstalledOnboardingCatalog)());
+  const declaredAdapters = Object.fromEntries(
+    catalog.flatMap((entry) =>
+      entry.setup?.observer
+        ? [[entry.id, createCredentialConnectionStatusAdapter(entry.setup.observer, entry.title)]]
+        : []
+    )
+  );
+  const adapters = {
+    ...createStatusAdapters(),
+    ...declaredAdapters,
+    ...(dependencies.adapters ?? {}),
+  };
+  const directEntries = catalog.filter((entry) => entry.setup && entry.tier === "direct");
 
   const direct = await Promise.all(
     directEntries.map(async (entry): Promise<SetupCapabilitySnapshot> => {
       const actions = entry.actions ?? {};
-      const adapter = adapters[entry.setup!.statusAdapter];
+      const adapter = adapters[entry.setup!.statusAdapter ?? entry.id];
       if (!adapter) {
         return unknownSnapshot(entry.id, entry.scope, entry.tier, observedAt, actions);
       }
@@ -270,9 +301,9 @@ export async function composeOnboardingSnapshot(
       (dependencies.readHostTopology ?? readHostTopology)(),
       (dependencies.hasSkill ?? hasSkill)("skills/phone-setup/SKILL.md"),
     ]);
-    host = hostSnapshots(topology, mobileOwnerAvailable, observedAt);
+    host = hostSnapshots(catalog, topology, mobileOwnerAvailable, observedAt);
   } catch {
-    host = onboardingCatalog
+    host = catalog
       .filter((entry) => entry.setup && entry.tier === "host-topology")
       .map((entry) =>
         unknownSnapshot(entry.id, entry.scope, entry.tier, observedAt, entry.actions ?? {})
@@ -280,7 +311,7 @@ export async function composeOnboardingSnapshot(
   }
 
   const byId = new Map([...direct, ...host].map((entry) => [entry.id, entry]));
-  return onboardingCatalog.flatMap((entry) => {
+  return catalog.flatMap((entry) => {
     const snapshot = byId.get(entry.id);
     return snapshot ? [snapshot] : [];
   });
@@ -292,9 +323,15 @@ export async function composeOnboardingOverview(
 ): Promise<OnboardingOverview> {
   const now = dependencies.now?.() ?? new Date();
   const sharedNow = () => now;
+  const catalog =
+    dependencies.catalog ?? (await (dependencies.readCatalog ?? readInstalledOnboardingCatalog)());
   const [snapshot, templates] = await Promise.all([
-    composeOnboardingSnapshot(options, { ...dependencies, now: sharedNow }),
-    composeOptionalTemplateSnapshot({ status: dependencies.templateStatus, now: sharedNow }),
+    composeOnboardingSnapshot(options, { ...dependencies, catalog, now: sharedNow }),
+    composeOptionalTemplateSnapshot({
+      status: dependencies.templateStatus,
+      catalog: dependencies.templateCatalog,
+      now: sharedNow,
+    }),
   ]);
-  return { snapshot, templates };
+  return { catalog, snapshot, templates };
 }
