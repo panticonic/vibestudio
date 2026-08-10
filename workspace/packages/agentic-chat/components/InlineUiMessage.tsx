@@ -11,7 +11,7 @@ import { EventErrorBoundary } from "@workspace/tool-ui/components/EventErrorBoun
 import { SurfaceFrame } from "@workspace/tool-ui/components/SurfaceFrame";
 import { wrapChatForErrorReporting, wrapScopesForErrorReporting } from "../utils/wrapSandboxApis";
 import type { InlineUiData } from "@workspace/pubsub";
-import type { ChatSandboxValue } from "@workspace/agentic-core";
+import type { ChatSandboxValue, InlineUiCardPayload } from "@workspace/agentic-core";
 import { useChatContext } from "../context/ChatContext";
 
 // ---------------------------------------------------------------------------
@@ -88,12 +88,13 @@ export function InlineUiErrorCallout({
 // ---------------------------------------------------------------------------
 
 interface InlineUiMessageProps {
-  data: InlineUiData;
+  data: InlineUiData | InlineUiCardPayload;
   compiledComponent?: ComponentType<{
     props: Record<string, unknown>;
     chat: Record<string, unknown>;
     scope: Record<string, unknown>;
     scopes: Record<string, unknown>;
+    inlineUi?: { id: string; renderedAt?: string };
   }>;
   compilationError?: string;
 }
@@ -216,6 +217,10 @@ export function InlineUiMessage({ data, compiledComponent: CompiledComponent, co
               chat={wrappedChat as unknown as Record<string, unknown>}
               scope={scope}
               scopes={wrappedScopes as unknown as Record<string, unknown>}
+              inlineUi={{
+                id: data.id,
+                renderedAt: "renderedAt" in data ? data.renderedAt : undefined,
+              }}
             />
           </Suspense>
         </EventErrorBoundary>

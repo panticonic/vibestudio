@@ -11,26 +11,25 @@ checklist item.
 
 ## Opening overview
 
-Use the chat panel's `client_eval` tool to statically import
-`composeOnboardingOverview` from `@workspace-skills/onboarding`, then return
-`await composeOnboardingOverview()` with no arguments. Client eval runs the
-base-owned composer inside the inviting panel, the shared boundary that can
-reach workspace owners and the redacted Electron host read.
+Render `skills/onboarding/SetupHub.tsx` with `inline_ui` using the stable ID
+`onboarding-setup-overview`. Do not run a leading `client_eval` or pass a
+composed snapshot. The checked-in component displays its panel-scope cache
+immediately and refreshes capability-owner state on mount.
 
-Render the returned object with `inline_ui` from
-`skills/onboarding/SetupHub.tsx`, passing the stable ID
-`onboarding-setup-overview` and its `{ catalog, snapshot, templates }`.
-The composer reads GitHub, model settings, agent defaults, local models,
-browser imports, web search, installed capability owners, and template status
-directly from their owners. It composes device/workspace topology
+The component reads GitHub connection status, model settings, agent defaults,
+local models, browser imports, web search, and installed capability owners
+directly. It composes device/workspace topology
 from `hubControl.listDevices` and `hubControl.listWorkspaces`, plus the
 client-local route mode. A failed read becomes an honest `unknown` row and does
 not suppress the rest. Base-owned definitions are always present; if one of
 their owners cannot be discovered, that row is **Unavailable** because the base
 capability is broken or incomplete. Optional owners such as Google Workspace
-join the catalog only after their template is installed. Before installation,
-their registry entry appears only under Optional templates; onboarding never
-pretends that an absent optional owner is a broken base capability.
+join the catalog only after their template is installed. Template discovery is
+not part of the opening load: the user-facing **Load optional templates**
+button explains templates and only then contacts the verified registry. Before
+installation, an optional owner's registry entry appears only there;
+onboarding never pretends that an absent optional owner is a broken base
+capability.
 
 The opening message is short. The inline setup overview is the first-screen
 information architecture. Do not load or publish an onboarding action bar.
@@ -70,7 +69,7 @@ shell navigation returns `handled: true`. Owner/model/conversation routes
 return `handled: false` with the authoritative target. An unconfirmed result
 also includes the structured failure. Unknown IDs and
 unsupported actions are errors. Do not fall back to matching button prose.
-`client_eval` owns only the client-affine snapshot and selection boundary.
+`client_eval` owns only the client-affine selection boundary.
 After an `owner-skill` handoff, use ordinary server-side `eval` for owner
 helpers unless the operation actually depends on the inviting panel's DOM,
 loaded modules, panel-local scope, or Electron-local host transport. Portable
@@ -86,21 +85,27 @@ Composer inspection or host approval boundary.
 
 ## Verification and refresh
 
-Stored Google/GitHub credentials are `connected-unverified`. For a `check`
-action, use `client_eval` to call
-`composeOnboardingOverview({ verifyCapabilityId: interaction.targetId })`.
+Stored Google/GitHub credentials are `connected-unverified`. The component's
+`check` and `refresh` controls call the checked-in capability composer directly;
+do not route those clicks through the agent.
 
-Render `SetupHub.tsx` again with the stable ID `onboarding-setup-overview`.
-The new snapshot replaces the existing card and moves it to the newest position
-in the transcript. Refresh, workflow success, failure, and cancellation use the
-same update path. Inline props must not contain credential material, browser samples,
-device IDs, pairing links, profile paths, or private topology.
+After a workflow success, failure, cancellation, or another external change
+that may affect setup, render `SetupHub.tsx` again with the same stable ID and
+no snapshot props. The update replaces and bumps the existing card; its new
+render revision tells the mounted component to refresh capability state. Never
+put credential material, browser samples, device IDs, pairing links, profile
+paths, or private topology in inline props or panel scope.
 
 ## Templates
 
 Onboarding shows recommended outcomes from the current verified template
 registry together with their actual Composer installation status. It does not
 maintain a second list of official repository URLs.
+
+Registry discovery is explicit user intent. Do not query or refresh the
+template registry during opening capability materialization. The setup card
+explains that templates are reviewed bundles of workspace additions and that
+loading them contacts the verified registry before the load button is used.
 
 The overview offers `Review & add` only when Composer reports that the outcome
 is available. Installed outcomes are labeled and are not offered again; an

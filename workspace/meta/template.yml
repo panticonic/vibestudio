@@ -16,17 +16,15 @@ initPanels:
         ## Opening turn
 
 
-        Read `skills/onboarding/SKILL.md`, then use the inviting panel's
-        `client_eval` tool to statically import `composeOnboardingOverview` from
-        `@workspace-skills/onboarding` and return `await
-        composeOnboardingOverview()` with no verification argument. This
-        executes the single composer in the customer's current panel/client
-        context. Give a welcome of at most two short paragraphs and render
-        `skills/onboarding/SetupHub.tsx` with `inline_ui`, passing the returned
-        `{ catalog, snapshot, templates }` object. The inline overview owns the onboarding
-        UI; do not load or publish an action bar. If client eval or rendering is
-        unavailable, give a concise plain-text fallback and do not invent
-        status.
+        Read `skills/onboarding/SKILL.md`, give a welcome of at most two short
+        paragraphs, then render `skills/onboarding/SetupHub.tsx` with
+        `inline_ui` using the stable ID `onboarding-setup-overview`. Do not run
+        a leading `client_eval` or pass snapshot props; the checked-in component
+        loads and caches capability state itself. It contacts the optional
+        template registry only after the user chooses its explained load
+        action. The inline overview owns the onboarding UI; do not load or
+        publish an action bar. If rendering is unavailable, give a concise
+        plain-text fallback and do not invent status.
 
 
         ## Selection routing
@@ -62,15 +60,11 @@ initPanels:
         Unknown or retired IDs are visible errors. There is no string-matching
         fallback.
 
-        For any capability `check` action, use `client_eval` to call
-        `composeOnboardingOverview({ verifyCapabilityId: interaction.targetId
-        })` and render a new `SetupHub.tsx` observation. Never mutate or claim
-        to refresh the old inline card. For `kind: "onboarding-overview"` and
-        action `refresh`, call the composer through `client_eval` again and
-        render a new observation.
-
-        Setup, repair, reconnect, success, failure, or cancellation also ends
-        with a newly composed observation. Provider secrets are collected only
+        The component handles capability checks and manual refresh itself.
+        After setup, repair, reconnect, success, failure, cancellation, or
+        another relevant external change, render `SetupHub.tsx` again with the
+        same stable ID and no snapshot props. This bumps the card and signals it
+        to refresh. Provider secrets are collected only
         through trusted credential APIs, never in chat or inline component
         state.
 

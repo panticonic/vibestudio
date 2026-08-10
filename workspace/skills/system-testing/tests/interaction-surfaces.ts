@@ -72,43 +72,6 @@ async function runWithSyntheticPanelUi(
   return execution;
 }
 
-const onboardingSnapshotFixture = [
-  {
-    id: "connection.ai-provider",
-    state: "configured",
-    summary: "Test model is ready.",
-    scope: "workspace",
-    tier: "direct",
-    attention: "none",
-    nextAction: "change",
-    rawStage: "ready",
-    observedAt: "2026-07-24T12:00:00.000Z",
-  },
-  {
-    id: "connection.google-workspace",
-    state: "connected-unverified",
-    verification: "unverified",
-    summary: "Connected; not checked live.",
-    scope: "user-workspace",
-    tier: "direct",
-    attention: "none",
-    nextAction: "check",
-    rawStage: "connected",
-    observedAt: "2026-07-24T12:00:00.000Z",
-  },
-  {
-    id: "connection.device",
-    state: "connected",
-    summary: "This device is paired.",
-    scope: "device",
-    tier: "host-topology",
-    attention: "none",
-    nextAction: "change",
-    rawStage: "paired",
-    observedAt: "2026-07-24T12:00:00.000Z",
-  },
-] as const;
-
 async function runOnboardingOpening(
   context: TestOrchestrationContext
 ): Promise<TestExecutionResult> {
@@ -118,19 +81,6 @@ async function runOnboardingOpening(
     additionalSystemPrompt: `
 
 Use the shipped onboarding skill to handle this first-run request in the synthetic panel. Keep the overview inline in the conversation rather than publishing a separate action bar.`,
-    methods: {
-      client_eval: {
-        description:
-          "Execute TypeScript in the synthetic panel which initiated this turn. Static workspace imports resolve in that client context.",
-        parameters: z
-          .object({
-            code: z.string(),
-            syntax: z.enum(["javascript", "typescript", "jsx", "tsx"]).optional(),
-          })
-          .strict(),
-        execute: async () => onboardingSnapshotFixture,
-      },
-    },
   });
   let sendError: unknown;
   try {
@@ -218,36 +168,20 @@ Use the shipped onboarding skill to handle the selected structured setup action 
 export const interactionSurfaceTests: TestCase[] = [
   {
     name: "onboarding-opening-overview",
-    description: "Compose and publish the checked-in setup overview inside the inviting panel",
+    description: "Publish the self-materializing setup overview inside the inviting panel",
     category: "interaction-surfaces",
     prompt: "I just opened this workspace for the first time. Show me the setup overview.",
     orchestrate: runOnboardingOpening,
     validate: (result) => {
-      const tools = requireCompletedTools(result, ["client_eval", "inline_ui"]);
+      const tools = requireCompletedTools(result, ["inline_ui"]);
       if (!tools.passed) return tools;
-      if (completedNamedToolCalls(result, "eval").length > 0) {
-        return {
-          passed: false,
-          reason: "Opening onboarding used server-side eval instead of inviting-panel client_eval",
-        };
-      }
-      const snapshotCall = completedNamedToolCalls(result, "client_eval")[0];
-      const code = snapshotCall?.arguments?.["code"];
       if (
-        typeof code !== "string" ||
-        !code.includes("@workspace-skills/onboarding") ||
-        !code.includes("composeOnboardingSnapshot")
+        completedNamedToolCalls(result, "eval").length > 0 ||
+        completedNamedToolCalls(result, "client_eval").length > 0
       ) {
         return {
           passed: false,
-          reason:
-            "Opening onboarding did not statically import and call the snapshot composer in client_eval",
-        };
-      }
-      if (code.includes("verifyCapabilityId")) {
-        return {
-          passed: false,
-          reason: "Opening onboarding requested live verification instead of the cheap snapshot",
+          reason: "Opening onboarding ran an eval before rendering the self-materializing card",
         };
       }
       const inlineCall = completedNamedToolCalls(result, "inline_ui").find(
@@ -255,16 +189,11 @@ export const interactionSurfaceTests: TestCase[] = [
           call.arguments?.["path"] === "skills/onboarding/SetupHub.tsx" &&
           call.arguments?.["id"] === "onboarding-setup-overview"
       );
-      const snapshotProp = inlineCall?.arguments?.["props"];
-      if (
-        !snapshotProp ||
-        typeof snapshotProp !== "object" ||
-        !Array.isArray((snapshotProp as Record<string, unknown>)["snapshot"])
-      ) {
+      if (!inlineCall || inlineCall.arguments?.["props"] !== undefined) {
         return {
           passed: false,
           reason:
-            "SetupHub.tsx was not rendered with the stable onboarding ID and composed snapshot prop",
+            "SetupHub.tsx was not rendered with the stable onboarding ID and no snapshot props",
         };
       }
       if (completedNamedToolCalls(result, "load_action_bar").length > 0) {

@@ -40,9 +40,11 @@ inline_ui({
 
 A later `inline_ui` call from the same participant with that ID replaces the
 projected card and gives it the new render time, which moves it to the newest
-position in the transcript. Omit `id` when each render should remain as a
-separate historical card. The channel event persists `source` and `props`;
-component-local React state is not part of that event.
+position in the transcript. Components receive that identity as
+`inlineUi: { id, renderedAt }`; use `renderedAt` as an effect dependency when a
+stable-ID rerender should trigger a data refresh. Omit `id` when each render
+should remain as a separate historical card. The channel event persists
+`source` and `props`; component-local React state is not part of that event.
 
 Inline UI is persisted as a typed `ui.inline_rendered` event in the PubSub
 channel log. Do not emulate it with `chat.publish("message", { contentType:
@@ -79,7 +81,7 @@ state all see the same canonical event.
 
 ## Panel Scope
 
-Components receive `{ props, chat, scope, scopes }`. Serializable values placed
+Components receive `{ props, chat, scope, scopes, inlineUi }`. Serializable values placed
 in `scope` persist in the browser's panel-local `localStorage`; large values may
 spill into the workspace blob store. The scope is shared by inline UI, feedback,
 and the action bar in that panel. It is useful for local UI state across reloads,

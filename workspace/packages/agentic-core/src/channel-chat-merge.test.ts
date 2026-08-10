@@ -2318,6 +2318,7 @@ describe("chatMessagesFromChannelView", () => {
       "inline-ui:participant-agent-1:setup-overview",
     ]);
     expect(messages[1]?.inlineUi?.props).toEqual({ revision: 2 });
+    expect(messages[1]?.inlineUi?.renderedAt).toBe("2026-05-20T12:00:03.000Z");
   });
 
   it("projects typed approval events into approval chat messages", () => {

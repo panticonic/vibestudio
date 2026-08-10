@@ -26,6 +26,8 @@ export interface InlineUiCardPayload {
   source: SandboxSource;
   imports?: Record<string, string>;
   props?: Record<string, unknown>;
+  /** Latest render event time. Changes when a stable-ID card is refreshed. */
+  renderedAt?: string;
 }
 
 export interface ActionBarPayload {

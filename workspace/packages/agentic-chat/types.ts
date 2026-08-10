@@ -77,6 +77,7 @@ export interface InlineUiComponentEntry {
     chat: Record<string, unknown>;
     scope: Record<string, unknown>;
     scopes: Record<string, unknown>;
+    inlineUi?: { id: string; renderedAt?: string };
   }>;
   cacheKey: string;
   error?: string;

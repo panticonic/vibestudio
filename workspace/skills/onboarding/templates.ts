@@ -32,23 +32,27 @@ async function composerStatus(): Promise<TemplateStatusRow[]> {
 
 async function composerCatalog(): Promise<TemplateCatalogSnapshot | null> {
   const { extensions } = await import("@workspace/runtime");
-  return extensions.invoke(
-    "@workspace-extensions/template-composer",
-    "catalog",
-    [{ refresh: true }]
-  ) as Promise<TemplateCatalogSnapshot>;
+  return extensions.invoke("@workspace-extensions/template-composer", "catalog", [
+    { refresh: true },
+  ]) as Promise<TemplateCatalogSnapshot>;
 }
 
 export async function composeOptionalTemplateSnapshot(
   dependencies: OptionalTemplateSnapshotDependencies = {}
 ): Promise<OptionalTemplateSnapshot[]> {
-  const observedAt = (dependencies.now?.() ?? new Date()).toISOString();
-  let catalog: TemplateCatalogSnapshot | null;
   try {
-    catalog = await (dependencies.catalog ?? composerCatalog)();
+    return await loadOptionalTemplateSnapshot(dependencies);
   } catch {
     return [];
   }
+}
+
+/** Explicit UI load path. Catalog failures remain visible to the caller. */
+export async function loadOptionalTemplateSnapshot(
+  dependencies: OptionalTemplateSnapshotDependencies = {}
+): Promise<OptionalTemplateSnapshot[]> {
+  const observedAt = (dependencies.now?.() ?? new Date()).toISOString();
+  const catalog = await (dependencies.catalog ?? composerCatalog)();
   if (!catalog) return [];
   let installedUrls: ReadonlySet<string> | undefined;
   try {

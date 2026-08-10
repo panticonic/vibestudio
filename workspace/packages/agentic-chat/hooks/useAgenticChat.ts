@@ -977,8 +977,10 @@ export function useAgenticChat({
 - \`inline_ui\`: User-triggered side-effects + rich data presentation. Renders controls/visualizations. Users interact when they choose. Non-blocking.
 - \`feedback_form\`/\`feedback_custom\`: Blocks until user responds. Returns data to agent.
 
-**The component receives { props, chat, scope, scopes }:**
+**The component receives { props, chat, scope, scopes, inlineUi }:**
 - props: data you pass via the props parameter
+- inlineUi: stable component identity \`{ id, renderedAt }\`; \`renderedAt\` changes
+  whenever the same ID is rendered again and can trigger a data-refresh effect
 - chat: full chat API for interacting with the conversation:
   - chat.send(content, options?) — send a visible message to the conversation.
     Example: chat.send("User clicked Deploy")

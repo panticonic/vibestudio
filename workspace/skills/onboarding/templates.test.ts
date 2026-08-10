@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { composeOptionalTemplateSnapshot } from "./templates.js";
+import { composeOptionalTemplateSnapshot, loadOptionalTemplateSnapshot } from "./templates.js";
 
 const runtime = vi.hoisted(() => ({ invoke: vi.fn() }));
 
@@ -120,5 +120,15 @@ describe("optional onboarding templates", () => {
         }),
       })
     ).resolves.toEqual([]);
+  });
+
+  it("keeps an explicit UI load failure visible to its caller", async () => {
+    await expect(
+      loadOptionalTemplateSnapshot({
+        catalog: vi.fn(async () => {
+          throw new Error("registry unavailable");
+        }),
+      })
+    ).rejects.toThrow("registry unavailable");
   });
 });

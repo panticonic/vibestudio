@@ -111,6 +111,24 @@ function messageDelta(
   };
 }
 
+function inlineUiRendered(
+  props: Record<string, unknown>,
+  createdAt: string
+): AgenticEvent<"ui.inline_rendered"> {
+  return {
+    kind: "ui.inline_rendered",
+    actor: { kind: "agent", id: "agent:onboarding" },
+    payload: {
+      protocol: AGENTIC_PROTOCOL_VERSION,
+      uiType: "inline",
+      id: "onboarding-setup-overview",
+      source: { type: "file", path: "skills/onboarding/SetupHub.tsx" },
+      props,
+    },
+    createdAt,
+  };
+}
+
 function pubsubAgenticEvent(seq: number, payload: AgenticEvent) {
   return {
     type: AGENTIC_EVENT_PAYLOAD_KIND,
@@ -326,6 +344,61 @@ describe("useChannelMessages", () => {
       expect(latest!.messages.map((message) => message.id)).toEqual(["msg-1", "msg-2"]);
     });
     expect(latest!.messageTypes).toBe(registryProjection);
+  });
+
+  it("moves a stable inline UI update to the transcript tail and exposes its render revision", async () => {
+    let latest: UseChannelMessagesResult | undefined;
+    const stream = createEventStream();
+    const client = createClient([], { events: vi.fn(() => stream.iterator) });
+
+    render(
+      <Probe
+        client={client}
+        onValue={(value) => {
+          latest = value;
+        }}
+      />
+    );
+
+    await act(async () => {
+      stream.push(
+        livePubsubAgenticEvent(
+          1,
+          inlineUiRendered({ revision: 1 }, "2026-05-21T08:00:00.000Z")
+        ) as IncomingEvent
+      );
+      stream.push(
+        livePubsubAgenticEvent(
+          2,
+          messageCompleted("between", "Refresh", "2026-05-21T08:01:00.000Z")
+        ) as IncomingEvent
+      );
+    });
+    await waitFor(() => {
+      expect(latest!.messages.map((message) => message.id)).toEqual([
+        "inline-ui:agent:onboarding:onboarding-setup-overview",
+        "between",
+      ]);
+    });
+
+    await act(async () => {
+      stream.push(
+        livePubsubAgenticEvent(
+          3,
+          inlineUiRendered({ revision: 2 }, "2026-05-21T08:02:00.000Z")
+        ) as IncomingEvent
+      );
+    });
+    await waitFor(() => {
+      expect(latest!.messages.map((message) => message.id)).toEqual([
+        "between",
+        "inline-ui:agent:onboarding:onboarding-setup-overview",
+      ]);
+      expect(latest!.messages[1]?.inlineUi).toMatchObject({
+        props: { revision: 2 },
+        renderedAt: "2026-05-21T08:02:00.000Z",
+      });
+    });
   });
 
   it("re-renders the projection when receipts / retract land (sameChatMessage gate)", async () => {

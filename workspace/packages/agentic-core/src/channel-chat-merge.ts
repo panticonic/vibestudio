@@ -993,6 +993,7 @@ function projectedInlineUiToChatMessage(
   const payload: InlineUiCardPayload = {
     id: inlineUi.id,
     source: inlineUi.source,
+    renderedAt: inlineUi.renderedAt,
   };
   if (inlineUi.imports !== undefined) payload.imports = inlineUi.imports;
   if (inlineUi.props !== undefined) payload.props = inlineUi.props;

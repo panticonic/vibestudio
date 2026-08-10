@@ -10,7 +10,7 @@ vi.mock("./status.js", () => ({
 }));
 
 import {
-  composeOnboardingOverview,
+  composeOnboardingCapabilities,
   composeOnboardingSnapshot,
   type OnboardingSnapshotDependencies,
 } from "./snapshot.js";
@@ -67,7 +67,7 @@ function dependencies(
 }
 
 describe("composeOnboardingSnapshot", () => {
-  it("composes capability and template observations at one observation time", async () => {
+  it("composes capability definitions and owner observations without template discovery", async () => {
     const deps = dependencies({
       "ai-provider": healthy,
       "google-workspace": healthy,
@@ -77,53 +77,14 @@ describe("composeOnboardingSnapshot", () => {
       "agent-defaults": healthy,
       "web-search": healthy,
     });
-    const overview = await composeOnboardingOverview(
-      {},
-      {
-        ...deps,
-        templateStatus: vi.fn(async () => []),
-        templateCatalog: vi.fn(
-          async () =>
-            ({
-              coordinates: {
-                url: "git+https://example.test/registry.git",
-                ref: "refs/heads/main",
-                commit: "a".repeat(40),
-                snapshot: `v1-sha256:${"b".repeat(64)}`,
-              },
-              version: 1,
-              revision: "2026-08-10.1",
-              systemEpoch: 57,
-              source: "verified",
-              stale: false,
-              verifiedAt: "2026-08-10T12:00:00.000Z",
-              entries: ["examples", "news", "spectrolite"].map((id) => ({
-                id,
-                name: id,
-                description: id,
-                tags: [],
-                recommended: true,
-                url: `git+https://example.test/${id}.git`,
-                promoted: {
-                  ref: "refs/tags/v1",
-                  commit: "c".repeat(40),
-                  snapshot: `v1-sha256:${"d".repeat(64)}`,
-                },
-              })),
-            }) as never
-        ),
-      }
-    );
+    const overview = await composeOnboardingCapabilities({}, deps);
 
     expect(overview.snapshot.length).toBeGreaterThan(0);
-    expect(overview.templates.map((entry) => entry.state)).toEqual([
-      "available",
-      "available",
-      "available",
-    ]);
-    expect(
-      new Set([...overview.snapshot, ...overview.templates].map((entry) => entry.observedAt))
-    ).toEqual(new Set(["2026-07-24T12:00:00.000Z"]));
+    expect(overview.catalog).toBe(installedCatalog);
+    expect(new Set(overview.snapshot.map((entry) => entry.observedAt))).toEqual(
+      new Set(["2026-07-24T12:00:00.000Z"])
+    );
+    expect(overview).not.toHaveProperty("templates");
   });
 
   it("preflights optional host reads instead of logging denied IPC calls", async () => {

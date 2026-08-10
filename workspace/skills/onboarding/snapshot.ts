@@ -14,11 +14,6 @@ import {
   createStatusAdapters,
   type CapabilityOnboardingStatusAdapter,
 } from "./status";
-import {
-  composeOptionalTemplateSnapshot,
-  type OptionalTemplateSnapshot,
-  type OptionalTemplateSnapshotDependencies,
-} from "./templates";
 
 interface OnboardingHostTopologySnapshot {
   devices: {
@@ -58,15 +53,9 @@ export interface ComposeOnboardingSnapshotOptions {
   verifyCapabilityId?: string;
 }
 
-export interface OnboardingOverview {
+export interface OnboardingCapabilitiesOverview {
   catalog: readonly OnboardingCapabilityDefinition[];
   snapshot: SetupCapabilitySnapshot[];
-  templates: OptionalTemplateSnapshot[];
-}
-
-export interface OnboardingOverviewDependencies extends OnboardingSnapshotDependencies {
-  templateStatus?: OptionalTemplateSnapshotDependencies["status"];
-  templateCatalog?: OptionalTemplateSnapshotDependencies["catalog"];
 }
 
 export interface OnboardingSnapshotDependencies {
@@ -317,21 +306,17 @@ export async function composeOnboardingSnapshot(
   });
 }
 
-export async function composeOnboardingOverview(
+/**
+ * Compose only local/setup-owner state. This deliberately excludes optional
+ * template discovery because that path may refresh the remote registry and is
+ * owned by an explicit user action in the onboarding UI.
+ */
+export async function composeOnboardingCapabilities(
   options: ComposeOnboardingSnapshotOptions = {},
-  dependencies: OnboardingOverviewDependencies = {}
-): Promise<OnboardingOverview> {
-  const now = dependencies.now?.() ?? new Date();
-  const sharedNow = () => now;
+  dependencies: OnboardingSnapshotDependencies = {}
+): Promise<OnboardingCapabilitiesOverview> {
   const catalog =
     dependencies.catalog ?? (await (dependencies.readCatalog ?? readInstalledOnboardingCatalog)());
-  const [snapshot, templates] = await Promise.all([
-    composeOnboardingSnapshot(options, { ...dependencies, catalog, now: sharedNow }),
-    composeOptionalTemplateSnapshot({
-      status: dependencies.templateStatus,
-      catalog: dependencies.templateCatalog,
-      now: sharedNow,
-    }),
-  ]);
-  return { catalog, snapshot, templates };
+  const snapshot = await composeOnboardingSnapshot(options, { ...dependencies, catalog });
+  return { catalog, snapshot };
 }

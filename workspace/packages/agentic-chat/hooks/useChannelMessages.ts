@@ -158,6 +158,10 @@ export function useChannelMessages<T extends ParticipantMetadata = ParticipantMe
         byId.set(msg.id, existing && sameChatMessage(existing, msg) ? existing : msg);
         agenticMessageIdsRef.current.add(msg.id);
       }
+      // The shared projection is the ordering authority. In particular, a
+      // stable-ID inline UI update receives a fresh renderedAt and moves to the
+      // transcript tail without creating a second message.
+      order.splice(0, order.length, ...projected.map((message) => message.id));
       flush(trimTail);
     },
     [flush]

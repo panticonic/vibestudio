@@ -1,22 +1,24 @@
 # Getting started
 
 The first-run chat opens directly in the transcript. The agent reads
-[SKILL.md](SKILL.md), composes the authoritative snapshot, gives a short
-welcome, and renders [SetupHub.tsx](SetupHub.tsx) inline. Onboarding does not
-install an action bar.
+[SKILL.md](SKILL.md), gives a short welcome, and renders
+[SetupHub.tsx](SetupHub.tsx) inline with the stable ID
+`onboarding-setup-overview`. The component displays its panel-scope cache and
+refreshes capability-owner state on mount. Onboarding does not install an
+action bar.
 
 ## Run the setup projection
 
-Use `client_eval` to statically import `composeOnboardingOverview` from
-`@workspace-skills/onboarding` and return its result. This runs the one
-composer inside the inviting chat panel, where direct owner APIs and the
-redacted Electron host topology read are both reachable.
-
-Render `{ catalog, snapshot, templates }` with the base-owned setup hub using
-the stable inline UI ID `onboarding-setup-overview`. In a non-panel client,
+Render the base-owned setup hub by path with no leading `client_eval` and no
+snapshot props. In a non-panel client,
 summarize blocking and attention states concisely and mention that all other
 configuration is optional. A missing owner for a capability shipped in base is
 unavailable, not installable.
+
+The component loads installed capability definitions and statuses directly.
+It does not load optional templates on mount. The user must choose **Load
+optional templates** after reading the explanation that templates are reviewed
+workspace additions and discovery contacts the verified registry.
 
 ## Handle a choice
 
@@ -51,11 +53,10 @@ reviewed `add` workflow. The onboarding card never installs directly. The
 Templates workflow owns exact selection, contribution review, approval, and
 operation recovery.
 
-After any check or workflow outcome, call the composer through `client_eval`
-again and render the setup hub with the same stable ID. The fresh projection
-replaces the existing card and bumps it to the end of the transcript. A
-capability check passes the selected ID as `verifyCapabilityId`; do not update
-the card optimistically before the owner observation completes.
+The component handles refresh and connection checks directly and caches the
+result in panel scope. After any external workflow outcome, render the setup
+hub by path with the same stable ID and no snapshot props. The update replaces
+and bumps the card; its render revision triggers a fresh owner read.
 
 ## Continue from intent
 

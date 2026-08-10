@@ -79,7 +79,9 @@ and components render in the panel:
   to a channel), `chat` is injected too (see [EVAL.md](EVAL.md#chat-agent-eval));
   CLI/panel eval has no channel and gets no `chat`.
 - **`inline_ui` / `load_action_bar` components** (panel): receive
-  `{ props, chat, scope, scopes }`. Their serializable scope is browser-local,
+  `{ props, chat, scope, scopes }`; inline UI also receives
+  `{ inlineUi: { id, renderedAt } }` so stable-ID updates can trigger refresh.
+  Their serializable scope is browser-local,
   keyed to the panel, and persisted in `localStorage` across reloads; it is not
   the server-side eval scope or channel-shared application state.
   `feedback_custom` components receive
