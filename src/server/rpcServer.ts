@@ -344,7 +344,7 @@ type RelayCallMeta = {
 };
 
 type RelayCallerScope = {
-  /** Exact caller stamped at transport admission (never re-resolved by runtime id). */
+  /** Transport-admitted principal with host-owned live relationships refreshed. */
   authenticatedCaller: VerifiedCaller;
   /** Host-resolved initiator whose verified account subject authorizes the operation. */
   authorizingCaller: VerifiedCaller;
@@ -1308,10 +1308,28 @@ export class RpcServer {
     message: Pick<RpcRequest, "parentRequestId">
   ): RelayCallerScope {
     const parent = this.resolveExtensionParentCaller(client, message);
+    const authenticatedCaller = this.withLiveRuntimeRelationships(client.caller);
     return {
-      authenticatedCaller: client.caller,
-      authorizingCaller: parent?.authorizingCaller ?? client.caller,
+      authenticatedCaller,
+      authorizingCaller: parent?.authorizingCaller ?? authenticatedCaller,
     };
+  }
+
+  /**
+   * Refresh relationships that are owned by workspace state without replacing
+   * the principal, code identity, or account subject admitted by the transport.
+   *
+   * A worker can establish its self-channel binding after its long-lived RPC
+   * socket has authenticated. Treating that connection-time snapshot as live
+   * authority made the routed unary path disagree with HTTP and streaming RPC,
+   * both of which already resolve the active entity for every request.
+   */
+  private withLiveRuntimeRelationships(caller: VerifiedCaller): VerifiedCaller {
+    if (caller.runtime.kind !== "worker" && caller.runtime.kind !== "do") return caller;
+    const active = this.deps.entityCache?.resolveActive(caller.runtime.id);
+    if (!active) return caller;
+    const { agentBinding: _staleBinding, ...admitted } = caller;
+    return active.agentBinding ? { ...admitted, agentBinding: active.agentBinding } : admitted;
   }
 
   private connectionKey(callerId: string, connectionId: string): string {
@@ -4043,8 +4061,9 @@ export class RpcServer {
         callerKind === "panel"
           ? (this.deps.runtimeCoordinator?.getLease(callerId)?.slotId ?? undefined)
           : undefined;
-      const transportCaller =
-        relayCallerScope?.authenticatedCaller ?? this.verifiedCallerFor(callerId, callerKind);
+      const transportCaller = this.withLiveRuntimeRelationships(
+        relayCallerScope?.authenticatedCaller ?? this.verifiedCallerFor(callerId, callerKind)
+      );
       const attributedCaller =
         callerKind === "server"
           ? createHostCaller(callerId, "server", SYSTEM_SUBJECT)

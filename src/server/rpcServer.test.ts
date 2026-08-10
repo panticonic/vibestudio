@@ -1558,6 +1558,80 @@ describe("RpcServer relay behavior", () => {
     });
   });
 
+  it("refreshes a connected agent's self-channel binding before routed DO authority", async () => {
+    const request = vi.fn();
+    const { server, entityCache } = createServer({
+      resolveWorkspaceDirectAuthority: async () => [
+        {
+          capability: "workspace-service:channel",
+          methodEffect: { kind: "open" },
+          methodCapability: "workspace-service:channel",
+          methodTier: "open",
+          principals: ["code"],
+          presentation: { domain: "sharing", verb: "act" },
+          title: "Conversations",
+          action: "send and receive messages in your conversations",
+          declaredBy: "workers/pubsub-channel",
+        },
+      ],
+      directAuthorityAcquirer: {
+        request,
+        acquire: vi.fn(),
+        consume: vi.fn(() => true),
+        invalidate: vi.fn(),
+      },
+    });
+    const agentId = "do:workers/agent-worker:AiChatWorker:agent-1";
+    const channelId = "chat-agent-1";
+    const targetId = `do:workers/pubsub-channel:PubSubChannel:${channelId}`;
+    entityCache._onActivate(
+      makeRecord(agentId, "do", {
+        contextId: "ctx-agent-1",
+        repoPath: "workers/agent-worker",
+        agentBinding: { entityId: agentId, contextId: "ctx-agent-1", channelId },
+      })
+    );
+    entityCache._onActivate(makeRecord(targetId, "do"));
+    server.setWorkerdUrl("http://127.0.0.1:1111");
+    server.setWorkerdGatewayToken("gateway-token");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            from: targetId,
+            target: "main",
+            delivery: { caller: { callerId: targetId, callerKind: "do" } },
+            provenance: [],
+            message: { type: "response", requestId: "x", result: { ok: true } },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        )
+      )
+    );
+    const admittedBeforeBinding = createVerifiedCaller(agentId, "do", {
+      callerId: agentId,
+      callerKind: "do",
+      repoPath: "workers/agent-worker",
+      effectiveVersion: "ev-test",
+      executionDigest: "a".repeat(64),
+      requested: [
+        {
+          capability: "workspace-service:channel",
+          resource: { kind: "prefix", prefix: "" },
+        },
+      ],
+    });
+    admittedBeforeBinding.codeApproved = true;
+
+    await testServer(server).relayToDO(agentId, "do", targetId, "subscribe", [], undefined, {
+      authenticatedCaller: admittedBeforeBinding,
+      authorizingCaller: admittedBeforeBinding,
+    });
+
+    expect(request).not.toHaveBeenCalled();
+  });
+
   it("rejects distinct live panel runtime connections for the same caller", () => {
     const { server, grantPanel } = createServer();
     const ws1 = {

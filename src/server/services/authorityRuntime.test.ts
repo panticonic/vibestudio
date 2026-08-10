@@ -572,6 +572,7 @@ describe("authority runtime", () => {
         capability,
         resourceKey,
         tier,
+        contextIntegrity: { class: "internal", latchEpoch: 0, externalKeys: [] },
         now: 100,
       });
     const allowed = resolve(ownChannel);

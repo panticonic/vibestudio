@@ -8,6 +8,7 @@ import type { DirectAuthorityAttestation } from "@vibestudio/rpc/internal";
 import { randomUUID } from "node:crypto";
 import {
   evaluateAuthority,
+  lineageClasses,
   requirementForPrincipals,
   scopeCovers,
 } from "@vibestudio/shared/authorization";
@@ -326,6 +327,15 @@ export function authorizeVerifiedCaller(
       issuedBy: product.hostPrincipal,
       createdAt: now,
       provenance: "authenticated-agent-channel-binding-v1",
+      // This is recomputed from a live host relationship on every call; it is
+      // not historical user consent. Stamp the caller's current lineage so the
+      // generic consent-latch check cannot turn that relationship back into a
+      // prompt merely because the bound conversation carries context.
+      constraints: {
+        lineageAtConsent: facts.contextIntegrity
+          ? lineageClasses(facts.contextIntegrity)
+          : ["none"],
+      },
     });
   }
   if (facts.grantStore) {
