@@ -5,7 +5,7 @@ surface and the verification evidence expected for future changes.
 
 ## Invariants
 
-- The native host ABI is `rn-host-2` on Android and iOS.
+- The native host ABI is `rn-host-3` on Android and iOS.
 - Workspace app delivery uses the shared streamed bundle mechanism over the
   active paired connection.
 - The native shell owns pairing, scanner, paste-link entry, OAuth browser
@@ -20,7 +20,7 @@ surface and the verification evidence expected for future changes.
 
 | WP | Outcome | Primary artifacts |
 | --- | --- | --- |
-| WP-i1 native host parity | Android and iOS use `rn-host-2` and the same streamed delivery module. The shipped entrypoint rejects stale bundle contracts and resets connection state before a new pair. | `apps/mobile/index.js`, `apps/mobile/metroNativeBoundary.cjs`, `packages/mobile-webrtc/src/bundleDelivery.ts`, `workspace/apps/mobile/src/services/appBootstrap.ts` |
+| WP-i1 native host parity | Android and iOS use `rn-host-3` and the same streamed delivery module. The shipped entrypoint rejects stale bundle contracts and releases bootstrap transport ownership before reloading. | `apps/mobile/index.js`, `apps/mobile/metroNativeBoundary.cjs`, `packages/mobile-webrtc/src/bundleDelivery.ts`, `workspace/apps/mobile/src/services/appBootstrap.ts` |
 | WP-i2 signing | Xcode signing configuration is generated locally. Associated domains, camera, notification, and local-network usage are config-driven. | `scripts/cli/ios-entitlements.mjs`, `apps/mobile/ios/Signing.template.xcconfig`, `apps/mobile/ios/.gitignore`, `apps/mobile/ios/Vibestudio.xcodeproj/project.pbxproj`, `tests/ios-entitlements.test.ts` |
 | WP-i3 install | `mobile install --platform ios` builds, installs, and launches simulator/device targets with entitlement generation and CocoaPods checks. | `scripts/cli/mobile-install.mjs`, `apps/mobile/ios/README.md`, `docs/cli.md` |
 | WP-i4 dev loop | `mobile dev --platform ios` uses the simctl backend for install, launch, screenshot, and log streaming; mobile-debug documents both Android and iOS backends. | `scripts/cli/mobile-dev.mjs`, `scripts/cli/mobile-logs.mjs`, `workspace/extensions/mobile-debug/index.ts`, `workspace/extensions/mobile-debug/SKILL.md` |
@@ -44,7 +44,7 @@ node scripts/cli/mobile-smoke.mjs --platform ios --simulator <name>
 
 ## State And Configuration
 
-- `RN_HOST_ABI = "rn-host-2"` is the cross-cutting contract in the native shell
+- `RN_HOST_ABI = "rn-host-3"` is the cross-cutting contract in the native shell
   and workspace app manifest.
 - `apps/mobile/ios/Signing.local.xcconfig` is developer-local and ignored. It
   is included by the checked-in `Vibestudio.Debug.xcconfig` and
