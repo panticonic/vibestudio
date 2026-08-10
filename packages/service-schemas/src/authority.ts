@@ -4,6 +4,7 @@ import type { ServiceAuthorityPolicy } from "@vibestudio/shared/serviceAuthority
 import type { AuthorityRow } from "@vibestudio/shared/authority/authorityRows";
 import { AUTHORITY_DOMAINS, AUTHORITY_VERBS } from "@vibestudio/shared/authority/authorityDomains";
 import { AUTHORITY_ACQUISITION_DECISIONS } from "@vibestudio/shared/approvalContract";
+import { AUTHORITY_PROMPT_CARD_TYPES } from "@vibestudio/shared/authority/promptRegistry";
 
 /** Shared authority wire primitives live with the authority service schema so
  * consumers do not create an initialization cycle between build and approval. */
@@ -167,7 +168,7 @@ export const authorityMethods = defineServiceMethods({
         severityPreview: z.enum(["routine", "sensitive", "critical"]).optional(),
         wouldPrompt: z
           .object({
-            cardType: z.enum(["permission.gated", "permission.outside", "confirm.critical"]),
+            cardType: z.enum(AUTHORITY_PROMPT_CARD_TYPES),
             renderedAction: z.string(),
           })
           .strict()

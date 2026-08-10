@@ -1,8 +1,26 @@
 import { describe, expect, it } from "vitest";
 import { authorityRow } from "@vibestudio/shared/authority/authorityRows";
+import { AUTHORITY_PROMPT_CARD_TYPES } from "@vibestudio/shared/authority/promptRegistry";
 import { shellApprovalMethods, templateInstallResolutionSchema } from "./shellApproval.js";
 
 describe("shellApproval service contract", () => {
+  it("carries every registered authority prompt card across listPending", () => {
+    const approvals = AUTHORITY_PROMPT_CARD_TYPES.map((cardType, index) => ({
+      approvalId: `approval-${index}`,
+      callerId: "extension:template-composer",
+      callerKind: "extension" as const,
+      repoPath: "extensions/template-composer",
+      effectiveVersion: "extension:test",
+      requestedAt: index,
+      kind: "capability" as const,
+      capability: `template-operation-${index}`,
+      title: `Template operation ${index}`,
+      cardType,
+    }));
+
+    expect(shellApprovalMethods.listPending.returns.parse(approvals)).toEqual(approvals);
+  });
+
   it("exposes semantic workspace creation-review preparation states", () => {
     expect(
       shellApprovalMethods.getWorkspaceCreationReviewState.returns.parse({

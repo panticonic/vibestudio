@@ -9,6 +9,7 @@ import type {
 import type { ApprovalDecisionId } from "./approvalContract.js";
 import type { InvocationSnapshot } from "@vibestudio/rpc";
 import type { UnitAuthorityRequest } from "./authorityManifest.js";
+import type { AuthorityPromptCardType } from "./authority/promptRegistry.js";
 
 export type ApprovalDecision = ApprovalDecisionId;
 export type ApprovalConfigFieldType = "text" | "secret";
@@ -355,14 +356,7 @@ export interface PendingCapabilityApproval extends PendingApprovalBase {
     format?: ApprovalDetailFormat;
   }>;
   snapshot?: InvocationSnapshot;
-  cardType?:
-    | "permission.gated"
-    | "permission.outside"
-    | "confirm.critical"
-    | "template.add"
-    | "template.update"
-    | "template.remove"
-    | "template.suggest";
+  cardType?: AuthorityPromptCardType;
   /** Host-derived decisions this exact authority request can meaningfully mint. */
   allowedDecisions?: ApprovalDecision[];
   /** Canonical server-side projection used by every authority surface. */

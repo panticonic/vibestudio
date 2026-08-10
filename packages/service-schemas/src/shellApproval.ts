@@ -28,6 +28,7 @@ import {
 } from "@vibestudio/shared/typedServiceClient";
 import { requirementForPrincipals } from "@vibestudio/shared/authorization";
 import { AUTHORITY_DOMAINS } from "@vibestudio/shared/authority/authorityDomains";
+import { AUTHORITY_PROMPT_CARD_TYPES } from "@vibestudio/shared/authority/promptRegistry";
 import type { AuthorityRowDiff } from "@vibestudio/shared/authority/authorityRowDiff";
 import { authorityRowSchema } from "./authority.js";
 export { authorityRowSchema } from "./authority.js";
@@ -751,7 +752,7 @@ export const pendingApprovalSchema = z.discriminatedUnion("kind", [
         .optional(),
       details: z.array(approvalDetailSchema).optional(),
       snapshot: invocationSnapshotSchema.optional(),
-      cardType: z.enum(["permission.gated", "permission.outside", "confirm.critical"]).optional(),
+      cardType: z.enum(AUTHORITY_PROMPT_CARD_TYPES).optional(),
       allowedDecisions: z.array(z.enum(APPROVAL_DECISIONS)).optional(),
       authorityRow: authorityRowSchema.optional(),
       operationSubstance: z

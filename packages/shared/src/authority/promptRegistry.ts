@@ -1,3 +1,15 @@
+export const AUTHORITY_PROMPT_CARD_TYPES = [
+  "permission.gated",
+  "permission.outside",
+  "confirm.critical",
+  "template.add",
+  "template.update",
+  "template.remove",
+  "template.suggest",
+] as const;
+
+export type AuthorityPromptCardType = (typeof AUTHORITY_PROMPT_CARD_TYPES)[number];
+
 export const AUTHORITY_PROMPT_REGISTRY = {
   "permission.gated": {
     title: "Allow {agent} to {action}?",
@@ -42,9 +54,7 @@ export const AUTHORITY_PROMPT_REGISTRY = {
     actions: ["Send suggestion", "Cancel"],
     push: "none",
   },
-} as const;
-
-export type AuthorityPromptCardType = keyof typeof AUTHORITY_PROMPT_REGISTRY;
+} as const satisfies Record<AuthorityPromptCardType, unknown>;
 
 export function authorityPromptCardType(input: {
   tier: "gated" | "critical";
