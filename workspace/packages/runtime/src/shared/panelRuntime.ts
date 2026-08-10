@@ -221,7 +221,7 @@ export interface CreatePanelRuntimeOptions {
       | "runtime.createEntity"
       | "runtime.reserveEntity"
       | "workspace-state.slot.create"
-      | "panel.updateTitle";
+      | "panel.index";
     durationMs: number;
     outcome: "ok" | "error";
   }) => void;
@@ -1346,7 +1346,7 @@ export function createPanelRuntime(options: CreatePanelRuntimeOptions): PanelRun
         | "runtime.createEntity"
         | "runtime.reserveEntity"
         | "workspace-state.slot.create"
-        | "panel.updateTitle",
+        | "panel.index",
       operation: () => Promise<T>
     ): Promise<T> => {
       const startedAt = Date.now();
@@ -1471,9 +1471,12 @@ export function createPanelRuntime(options: CreatePanelRuntimeOptions): PanelRun
         normalizePanelTitle(parsedUrl?.protocol.replace(/:$/, "")) ??
         normalizePanelTitle(source) ??
         "panel";
-      await timed("panel.updateTitle", () =>
-        callState("panel.updateTitle", [id, title, { explicit: explicitTitle !== undefined }])
+      await timed("panel.index", () =>
+        callState("panel.index", [{ id, title, path: historySource }])
       );
+      if (explicitTitle !== undefined) {
+        await callState("panel.updateTitle", [id, title, { explicit: true }]);
+      }
       const panelHandle = fromMetadata({
         id,
         title,

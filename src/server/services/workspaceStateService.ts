@@ -277,11 +277,17 @@ export function createWorkspaceStateService(deps: WorkspaceStateServiceDeps): Se
         dispatch<PanelSourceUsage[]>("panelSourceUsage", [limit]),
       "panel.index": async (_ctx, [input]) => {
         const detail = await dispatch<WorkspacePanelDetail | null>("panelTreeDetail", [input.id]);
-        if (detail?.entity.id && deps.isEntityTitleExplicit?.(detail.entity.id)) {
-          return detail.entity.id;
+        const hasExplicitTitle = Boolean(
+          detail?.entity.id && deps.isEntityTitleExplicit?.(detail.entity.id)
+        );
+        const indexedInput =
+          hasExplicitTitle && detail?.slot.current_entity_title
+            ? { ...input, title: detail.slot.current_entity_title }
+            : input;
+        const entityId = await dispatch<string | null>("panelIndex", [indexedInput]);
+        if (entityId && input?.title && !hasExplicitTitle) {
+          deps.onPanelTitleChanged?.(entityId, input.title, false);
         }
-        const entityId = await dispatch<string | null>("panelIndex", [input]);
-        if (entityId && input?.title) deps.onPanelTitleChanged?.(entityId, input.title, false);
         return entityId;
       },
       "panel.updateTitle": async (_ctx, [slotId, title, options]) => {

@@ -8,6 +8,7 @@ import { PanelLifecycleAggregateError, PanelManager } from "./panelManager.js";
 import { PanelNavigationCommitError } from "./panelNavigationTransaction.js";
 import { canonicalEntityId, runtimeEntitySource } from "@vibestudio/shared/runtime/entitySpec";
 import type { PanelEntityId, PanelSlotId } from "@vibestudio/shared/panel/ids";
+import type { PanelSearchIndex } from "@vibestudio/shared/panelSearchTypes";
 import type {
   EntityRecord,
   RuntimeEntityCreateSpec,
@@ -553,6 +554,53 @@ describe("PanelManager", () => {
       aboutResult.source
     );
     expect(mem.state.slots.size).toBe(2);
+  });
+
+  it("does not finish browser creation before the panel is searchable", async () => {
+    const registry = new PanelRegistry({});
+    const { deps } = makeManagerDeps("/tmp/workspace");
+    let releaseIndex!: () => void;
+    const indexBlocked = new Promise<void>((resolve) => {
+      releaseIndex = resolve;
+    });
+    const indexed = new Map<string, { title: string; path?: string }>();
+    const indexPanel = vi.fn(async (panel: { id: string; title: string; path?: string }) => {
+      await indexBlocked;
+      indexed.set(panel.id, panel);
+    });
+    const searchIndex: PanelSearchIndex = {
+      indexPanel,
+      async search(query) {
+        return [...indexed]
+          .filter(([, panel]) => `${panel.title} ${panel.path ?? ""}`.includes(query))
+          .map(([id, panel]) => ({ id, title: panel.title, relevance: 0, accessCount: 0 }));
+      },
+      incrementAccessCount: vi.fn(),
+      updateTitle: vi.fn(),
+      rebuildIndex: vi.fn(),
+    };
+    const manager = new PanelManager({
+      registry,
+      ...deps,
+      searchIndex,
+      allowMissingManifests: true,
+    });
+
+    let creationSettled = false;
+    const creation = manager
+      .createBrowser(null, "https://example.com/", { addAsRoot: true })
+      .finally(() => {
+        creationSettled = true;
+      });
+    await vi.waitFor(() => expect(indexPanel).toHaveBeenCalledOnce());
+    expect(creationSettled).toBe(false);
+
+    releaseIndex();
+    const created = await creation;
+
+    await expect(searchIndex.search("example.com", 10)).resolves.toEqual([
+      expect.objectContaining({ id: created.panelId, title: "example.com" }),
+    ]);
   });
 
   it("projects one root when concurrent first reads resolve together", async () => {

@@ -296,6 +296,7 @@ function runtimeHarness(
             else signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
           })) as T;
         case "workspace-state.panel.updateTitle":
+        case "workspace-state.panel.index":
         case "runtime.retireEntity":
         case "view.focusPanel":
           return undefined as T;
@@ -713,7 +714,7 @@ describe("panel runtime topology composition", () => {
     expect(onCreateSlotTiming.mock.calls.map(([event]) => event.stage)).toEqual([
       "runtime.reserveEntity",
       "workspace-state.slot.create",
-      "panel.updateTitle",
+      "panel.index",
     ]);
   });
 
@@ -765,6 +766,13 @@ describe("panel runtime topology composition", () => {
       source: "https://example.com/",
     });
     expect(call.mock.calls.map((entry) => entry[1])).not.toContain("panelRuntime.observeSlot");
+    expect(call).toHaveBeenCalledWith("main", "workspace-state.panel.index", [
+      {
+        id: expect.any(String),
+        title: "example.com",
+        path: "browser:https://example.com/",
+      },
+    ]);
   });
 
   it("reports each durable external-slot creation stage", async () => {
@@ -776,7 +784,7 @@ describe("panel runtime topology composition", () => {
     expect(onCreateSlotTiming.mock.calls.map(([event]) => event.stage)).toEqual([
       "runtime.createEntity",
       "workspace-state.slot.create",
-      "panel.updateTitle",
+      "panel.index",
     ]);
     expect(onCreateSlotTiming.mock.calls.every(([event]) => event.outcome === "ok")).toBe(true);
   });

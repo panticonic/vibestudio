@@ -299,6 +299,41 @@ describe("workspaceStateService — title mirror hooks", () => {
     expect(onPanelTitleChanged).not.toHaveBeenCalled();
   });
 
+  it("indexes source metadata without replacing an existing explicit title", async () => {
+    const onPanelTitleChanged = vi.fn();
+    const { svc, calls } = makeService({
+      onPanelTitleChanged,
+      isEntityTitleExplicit: () => true,
+      dispatchReturns: {
+        panelTreeDetail: {
+          entity: { id: "entity:abc-current" },
+          slot: { current_entity_title: "Pinned title" },
+        },
+        panelIndex: "entity:abc-current",
+      },
+    });
+
+    const result = await svc.handler(makeCtx() as never, "panel.index", [
+      { id: "panel:abc", title: "Inferred title", path: "browser:https://example.com/" },
+    ]);
+
+    expect(calls).toEqual([
+      { method: "panelTreeDetail", args: ["panel:abc"] },
+      {
+        method: "panelIndex",
+        args: [
+          {
+            id: "panel:abc",
+            title: "Pinned title",
+            path: "browser:https://example.com/",
+          },
+        ],
+      },
+    ]);
+    expect(onPanelTitleChanged).not.toHaveBeenCalled();
+    expect(result).toBe("entity:abc-current");
+  });
+
   it("fires onPanelTitleChanged with the resolved entity id on panel.updateTitle", async () => {
     const onPanelTitleChanged = vi.fn();
     const { svc } = makeService({

@@ -484,7 +484,7 @@ export class PanelManager {
     this.registry.addPanel(panel, null, { addAsRoot: true });
     this.touchRuntimePanel(slotId);
 
-    this.indexPanel(slotId, displayTitle, relativePath);
+    await this.indexPanel(slotId, displayTitle, relativePath);
 
     return {
       panelId: slotId,
@@ -631,7 +631,7 @@ export class PanelManager {
     };
     this.registry.addPanel(panel, null, { addAsRoot: true });
     this.touchRuntimePanel(slotId);
-    this.indexPanel(slotId, title, browserSource);
+    await this.indexPanel(slotId, title, browserSource);
 
     return {
       panelId: slotId,
@@ -946,7 +946,7 @@ export class PanelManager {
       livePanel.navigation = { canGoBack: transition.cursor > 0, canGoForward: false };
     }
 
-    this.indexPanel(slotId, title, nextSnapshot.source);
+    await this.indexPanel(slotId, title, nextSnapshot.source);
 
     return {
       panelId: slotId,
@@ -1677,12 +1677,12 @@ export class PanelManager {
     });
   }
 
-  private indexPanel(slotId: PanelSlotId, title: string, panelPath: string): void {
+  private async indexPanel(slotId: PanelSlotId, title: string, panelPath: string): Promise<void> {
     if (!this.searchIndex) return;
-    Promise.resolve(this.searchIndex.indexPanel({ id: slotId, title, path: panelPath })).catch(
-      (error) => {
-        log.warn(`Failed to index panel ${slotId}:`, error);
-      }
-    );
+    try {
+      await this.searchIndex.indexPanel({ id: slotId, title, path: panelPath });
+    } catch (error) {
+      log.warn(`Failed to index panel ${slotId}:`, error);
+    }
   }
 }
