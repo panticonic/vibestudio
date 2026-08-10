@@ -22,12 +22,16 @@ export { createReactNativeWebRtcProvider } from "./reactNativeWebRtcPeer.js";
 export { completeFreshMobilePairing } from "./freshPairing.js";
 export type { CompleteFreshMobilePairingOptions } from "./freshPairing.js";
 export { MobileConnectionAggregateError } from "./connectionPair.js";
-export { createStoredShellCredential, parseStoredShellCredential } from "./storedCredential.js";
+export {
+  createPairedMobileConnection,
+  createRoutedMobileConnection,
+  parseStoredMobileConnection,
+  replaceMobileConnectionCredential,
+} from "./storedCredential.js";
 export {
   randomRequestId,
   makeShellTokenProvider,
-  persistShellCredential,
-  persistStoredShellCredential,
+  persistStoredMobileConnection,
   loadShellCredential,
   clearShellCredential,
   establishWebRtcConnection,
@@ -35,6 +39,7 @@ export {
   reconnectMobileSession,
 } from "./connect.js";
 export { createMobileHubControlClient } from "./hubControlClient.js";
+export { isTransientConnectionError, retryAfterConnectionLoss } from "./connectionRecovery.js";
 export type {
   MobileHubControlClient,
   MobileHubWorkspace,
@@ -44,7 +49,9 @@ export type {
   ShellPairing,
   StoredShellPairing,
   ShellCredential,
-  StoredShellCredential,
+  StoredMobileConnection,
+  StoredPairedMobileConnection,
+  StoredRoutedMobileConnection,
   ShellTokenProvider,
   WebRtcConnection,
   WebRtcConnectionHandlers,

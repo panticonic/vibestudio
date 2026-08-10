@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { WebRtcConnection } from "./connect.js";
 import { completeFreshMobilePairing } from "./freshPairing.js";
+import type { StoredMobileConnection } from "./storedCredential.js";
 
 const credential = {
   deviceId: `dev_${"d".repeat(24)}`,
@@ -63,8 +64,8 @@ function fixture(
     rpc: { call: vi.fn() },
     close: workspaceClose,
   } as unknown as WebRtcConnection;
-  const persistCredential = vi.fn(async () => {
-    events.push("persist");
+  const persistConnection = vi.fn(async (stored: StoredMobileConnection) => {
+    events.push(`persist-${stored.phase}`);
     await overrides.persist?.();
   });
   const connectWorkspace = vi.fn(async () => {
@@ -77,7 +78,7 @@ function fixture(
     call,
     close,
     workspaceClose,
-    persistCredential,
+    persistConnection,
     connectWorkspace,
     events,
   };
@@ -90,7 +91,7 @@ describe("fresh mobile pairing commit", () => {
       workspaceConnection,
       call,
       close,
-      persistCredential,
+      persistConnection,
       connectWorkspace,
       events,
     } = fixture();
@@ -100,25 +101,44 @@ describe("fresh mobile pairing commit", () => {
       credential,
       pairingContext,
       controlPairing,
-      persistCredential,
+      persistConnection,
       connectWorkspace,
     });
 
     expect(call.mock.calls).toEqual([
       ["main", "hubControl.routeWorkspace", [{ workspaceId: "ws-b" }]],
     ]);
-    expect(persistCredential).toHaveBeenCalledWith(credential, controlPairing, workspaceReach);
+    expect(persistConnection.mock.calls.map(([stored]) => stored)).toEqual([
+      expect.objectContaining({
+        schemaVersion: 4,
+        phase: "paired",
+        credential,
+        selectedWorkspaceId: "ws-b",
+        controlPairing: expect.not.objectContaining({ code: expect.anything() }),
+      }),
+      expect.objectContaining({
+        schemaVersion: 4,
+        phase: "routed",
+        selectedWorkspaceId: "ws-b",
+        workspacePairing: workspaceReach,
+      }),
+    ]);
     expect(connectWorkspace).toHaveBeenCalledWith(workspaceReach, credential);
     expect(workspaceConnection.deviceId).toBe(credential.deviceId);
     expect(connection.hubControlRpc).toBe(controlConnection.rpc);
     expect(close).not.toHaveBeenCalled();
-    expect(events).toEqual(["hubControl.routeWorkspace", "persist", "connect-workspace"]);
+    expect(events).toEqual([
+      "persist-paired",
+      "hubControl.routeWorkspace",
+      "persist-routed",
+      "connect-workspace",
+    ]);
     await connection.close();
     expect(events.slice(-2)).toEqual(["workspace-close", "close"]);
   });
 
   it("requires a durable issuer credential and closes without issuing RPC", async () => {
-    const { controlConnection, call, close, persistCredential, connectWorkspace } = fixture();
+    const { controlConnection, call, close, persistConnection, connectWorkspace } = fixture();
 
     await expect(
       completeFreshMobilePairing({
@@ -126,18 +146,18 @@ describe("fresh mobile pairing commit", () => {
         credential: null,
         pairingContext,
         controlPairing,
-        persistCredential,
+        persistConnection,
         connectWorkspace,
       })
     ).rejects.toThrow(/did not issue/u);
 
     expect(call).not.toHaveBeenCalled();
-    expect(persistCredential).not.toHaveBeenCalled();
+    expect(persistConnection).not.toHaveBeenCalled();
     expect(close).toHaveBeenCalledTimes(1);
   });
 
   it("requires the workspace identity issued with the credential", async () => {
-    const { controlConnection, call, close, persistCredential, connectWorkspace } = fixture();
+    const { controlConnection, call, close, persistConnection, connectWorkspace } = fixture();
 
     await expect(
       completeFreshMobilePairing({
@@ -145,18 +165,18 @@ describe("fresh mobile pairing commit", () => {
         credential,
         pairingContext: null,
         controlPairing,
-        persistCredential,
+        persistConnection,
         connectWorkspace,
       })
     ).rejects.toThrow(/did not identify its workspace/u);
 
     expect(call).not.toHaveBeenCalled();
-    expect(persistCredential).not.toHaveBeenCalled();
+    expect(persistConnection).not.toHaveBeenCalled();
     expect(close).toHaveBeenCalledTimes(1);
   });
 
   it("closes on malformed routes or identity changes", async () => {
-    const { controlConnection, close, persistCredential, connectWorkspace } = fixture({
+    const { controlConnection, close, persistConnection, connectWorkspace } = fixture({
       route: { ...route, workspaceId: "different" },
     });
 
@@ -166,11 +186,12 @@ describe("fresh mobile pairing commit", () => {
         credential,
         pairingContext,
         controlPairing,
-        persistCredential,
+        persistConnection,
         connectWorkspace,
       })
     ).rejects.toThrow(/changed the pairing target/u);
-    expect(persistCredential).not.toHaveBeenCalled();
+    expect(persistConnection).toHaveBeenCalledTimes(1);
+    expect(persistConnection.mock.calls[0]?.[0]).toMatchObject({ phase: "paired" });
     expect(close).toHaveBeenCalledTimes(1);
   });
 
@@ -186,7 +207,7 @@ describe("fresh mobile pairing commit", () => {
         credential,
         pairingContext,
         controlPairing,
-        persistCredential: first.persistCredential,
+        persistConnection: first.persistConnection,
         connectWorkspace: first.connectWorkspace,
       })
     ).rejects.toThrow("keychain locked");
@@ -206,7 +227,7 @@ describe("fresh mobile pairing commit", () => {
         credential,
         pairingContext,
         controlPairing,
-        persistCredential: second.persistCredential,
+        persistConnection: second.persistConnection,
         connectWorkspace: second.connectWorkspace,
       })
     ).rejects.toThrow(/keychain locked.*pipe close failed/u);
@@ -225,15 +246,16 @@ describe("fresh mobile pairing commit", () => {
         credential,
         pairingContext,
         controlPairing,
-        persistCredential: failed.persistCredential,
+        persistConnection: failed.persistConnection,
         connectWorkspace: failed.connectWorkspace,
       })
     ).rejects.toThrow("workspace unavailable");
 
     expect(failed.close).toHaveBeenCalledTimes(1);
     expect(failed.events).toEqual([
+      "persist-paired",
       "hubControl.routeWorkspace",
-      "persist",
+      "persist-routed",
       "connect-workspace",
       "close",
     ]);

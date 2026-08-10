@@ -2,7 +2,13 @@ import { HubWorkspaceRouteSchema } from "@vibestudio/service-schemas/hubControl"
 import type { PairingContext } from "@vibestudio/rpc/transports/pairedConnection";
 import type { WebRtcConnection } from "./connect.js";
 import { composeMobileSession } from "./connectionPair.js";
-import type { ShellCredential, ShellPairing } from "./storedCredential.js";
+import {
+  createPairedMobileConnection,
+  createRoutedMobileConnection,
+  type ShellCredential,
+  type ShellPairing,
+  type StoredMobileConnection,
+} from "./storedCredential.js";
 
 export interface CompleteFreshMobilePairingOptions {
   /** Stable-hub pipe retained alongside the selected workspace pipe. */
@@ -10,11 +16,7 @@ export interface CompleteFreshMobilePairingOptions {
   credential: ShellCredential | null;
   pairingContext: PairingContext | null;
   controlPairing: ShellPairing;
-  persistCredential(
-    credential: ShellCredential,
-    controlPairing: ShellPairing,
-    workspacePairing: ShellPairing
-  ): Promise<void>;
+  persistConnection(connection: StoredMobileConnection): Promise<void>;
   /** Open the actual workspace pipe after the durable route is committed. */
   connectWorkspace(
     workspacePairing: ShellPairing,
@@ -37,7 +39,7 @@ export async function completeFreshMobilePairing(
     credential,
     pairingContext,
     controlPairing,
-    persistCredential,
+    persistConnection,
     connectWorkspace,
   } = options;
   let controlCloseAttempted = false;
@@ -53,6 +55,12 @@ export async function completeFreshMobilePairing(
     if (!pairingContext?.workspaceId) {
       throw new Error("Fresh pairing did not identify its workspace");
     }
+    const paired = createPairedMobileConnection(
+      credential,
+      controlPairing,
+      pairingContext.workspaceId
+    );
+    await persistConnection(paired);
     const route = HubWorkspaceRouteSchema.parse(
       await controlConnection.rpc.call("main", "hubControl.routeWorkspace", [
         { workspaceId: pairingContext.workspaceId },
@@ -61,7 +69,8 @@ export async function completeFreshMobilePairing(
     if (route.workspaceId !== pairingContext.workspaceId) {
       throw new Error("Workspace route changed the pairing target");
     }
-    await persistCredential(credential, controlPairing, route.workspaceReach);
+    const routed = createRoutedMobileConnection(paired, route.workspaceReach);
+    await persistConnection(routed);
     const workspaceConnection = await connectWorkspace(route.workspaceReach, credential);
     workspaceConnection.deviceId = credential.deviceId;
     return composeMobileSession(controlConnection, workspaceConnection);

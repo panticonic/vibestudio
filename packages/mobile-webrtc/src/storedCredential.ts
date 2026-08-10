@@ -25,17 +25,39 @@ export interface ShellCredential {
 
 export type StoredShellPairing = Omit<ShellPairing, "code">;
 
-export interface StoredShellCredential extends ShellCredential {
+interface StoredMobileConnectionBase {
+  schemaVersion: 4;
+  credential: ShellCredential;
+  controlPairing: StoredShellPairing;
+  selectedWorkspaceId: string;
+  pairedAt: number;
+}
+
+export interface StoredPairedMobileConnection extends StoredMobileConnectionBase {
+  phase: "paired";
+}
+
+export interface StoredRoutedMobileConnection extends StoredMobileConnectionBase {
+  phase: "routed";
+  workspacePairing: StoredShellPairing;
+}
+
+export type StoredMobileConnection = StoredPairedMobileConnection | StoredRoutedMobileConnection;
+
+/** Strict migration input. Never re-exported from the package public surface. */
+export interface LegacyStoredMobileConnectionV3 extends ShellCredential {
   schemaVersion: 3;
   controlPairing: StoredShellPairing;
   workspacePairing: StoredShellPairing;
   pairedAt: number;
 }
 
+export type LoadedMobileConnection = StoredMobileConnection | LegacyStoredMobileConnectionV3;
+
 const CREDENTIAL_KEYS = new Set(["deviceId", "refreshToken"]);
 const PAIRING_KEYS = new Set(["room", "fp", "sig", "v", "ice"]);
 const FRESH_PAIRING_KEYS = new Set([...PAIRING_KEYS, "code"]);
-const STORED_KEYS = new Set([
+const LEGACY_STORED_KEYS = new Set([
   "schemaVersion",
   "deviceId",
   "refreshToken",
@@ -43,6 +65,15 @@ const STORED_KEYS = new Set([
   "workspacePairing",
   "pairedAt",
 ]);
+const PAIRED_STORED_KEYS = new Set([
+  "schemaVersion",
+  "phase",
+  "credential",
+  "controlPairing",
+  "selectedWorkspaceId",
+  "pairedAt",
+]);
+const ROUTED_STORED_KEYS = new Set([...PAIRED_STORED_KEYS, "workspacePairing"]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -119,86 +150,158 @@ function describePairingValidationFailure(value: unknown, allowCode: boolean): s
   return "is not a current WebRTC pairing";
 }
 
-export function createStoredShellCredential(
-  credential: ShellCredential,
-  controlPairing: ShellPairing,
-  workspacePairing: ShellPairing,
-  pairedAt = Date.now()
-): StoredShellCredential {
+function canonicalizePairing(pairing: ShellPairing, label: string): StoredShellPairing {
+  if (!isCurrentPairing(pairing, true, false)) {
+    throw new Error(
+      `Cannot persist the ${label} WebRTC pairing: ${describePairingValidationFailure(pairing, true)}`
+    );
+  }
+  const signaling = parseSignalingEndpoint(pairing.sig);
+  if (signaling.kind === "error") throw new Error("Cannot persist a non-canonical WebRTC pairing");
+  return {
+    room: pairing.room,
+    fp: normalizeFingerprint(pairing.fp),
+    sig: signaling.url,
+    v: PAIRING_PROTOCOL_VERSION,
+    ice: pairing.ice,
+  };
+}
+
+function validateSelectedWorkspaceId(selectedWorkspaceId: string): void {
+  if (
+    !selectedWorkspaceId ||
+    selectedWorkspaceId !== selectedWorkspaceId.trim() ||
+    selectedWorkspaceId.length > 512 ||
+    selectedWorkspaceId.includes("\0")
+  ) {
+    throw new Error("Cannot persist an invalid selected workspace identity");
+  }
+}
+
+function validateCredentialAndTimestamp(credential: ShellCredential, pairedAt: number): void {
   if (!isCurrentShellCredential(credential)) {
     throw new Error(
       "Cannot persist a device credential that was not emitted by the current issuer"
     );
   }
-  if (!isCurrentPairing(controlPairing, true, false)) {
-    throw new Error(
-      `Cannot persist the control WebRTC pairing: ${describePairingValidationFailure(controlPairing, true)}`
-    );
-  }
-  if (!isCurrentPairing(workspacePairing, true, false)) {
-    throw new Error(
-      `Cannot persist the workspace WebRTC pairing: ${describePairingValidationFailure(workspacePairing, true)}`
-    );
-  }
   if (!Number.isSafeInteger(pairedAt) || pairedAt <= 0) {
     throw new Error("Cannot persist a device credential with an invalid pairing timestamp");
   }
-  const canonicalize = (pairing: ShellPairing): StoredShellPairing => {
-    const signaling = parseSignalingEndpoint(pairing.sig);
-    if (signaling.kind === "error") {
-      throw new Error("Cannot persist a non-canonical WebRTC pairing");
-    }
-    return {
-      room: pairing.room,
-      fp: normalizeFingerprint(pairing.fp),
-      sig: signaling.url,
-      v: PAIRING_PROTOCOL_VERSION,
-      ice: pairing.ice,
-    };
-  };
+}
+
+export function createPairedMobileConnection(
+  credential: ShellCredential,
+  controlPairing: ShellPairing,
+  selectedWorkspaceId: string,
+  pairedAt = Date.now()
+): StoredPairedMobileConnection {
+  validateCredentialAndTimestamp(credential, pairedAt);
+  validateSelectedWorkspaceId(selectedWorkspaceId);
   return {
-    schemaVersion: 3,
-    deviceId: credential.deviceId,
-    refreshToken: credential.refreshToken,
-    controlPairing: canonicalize(controlPairing),
-    workspacePairing: canonicalize(workspacePairing),
+    schemaVersion: 4,
+    phase: "paired",
+    credential: { ...credential },
+    controlPairing: canonicalizePairing(controlPairing, "control"),
+    selectedWorkspaceId,
     pairedAt,
   };
 }
 
-export function parseStoredShellCredential(
+export function createRoutedMobileConnection(
+  paired: StoredPairedMobileConnection,
+  workspacePairing: ShellPairing
+): StoredRoutedMobileConnection {
+  return {
+    ...paired,
+    phase: "routed",
+    workspacePairing: canonicalizePairing(workspacePairing, "workspace"),
+  };
+}
+
+export function replaceMobileConnectionCredential(
+  connection: StoredMobileConnection,
+  credential: ShellCredential
+): StoredMobileConnection {
+  validateCredentialAndTimestamp(credential, connection.pairedAt);
+  return { ...connection, credential: { ...credential } };
+}
+
+export function migrateLegacyMobileConnection(
+  legacy: LegacyStoredMobileConnectionV3,
+  selectedWorkspaceId: string
+): StoredRoutedMobileConnection {
+  return createRoutedMobileConnection(
+    createPairedMobileConnection(
+      { deviceId: legacy.deviceId, refreshToken: legacy.refreshToken },
+      legacy.controlPairing,
+      selectedWorkspaceId,
+      legacy.pairedAt
+    ),
+    legacy.workspacePairing
+  );
+}
+
+function parseLegacyRecord(parsed: Record<string, unknown>): LegacyStoredMobileConnectionV3 | null {
+  if (!hasOnlyKeys(parsed, LEGACY_STORED_KEYS) || parsed["schemaVersion"] !== 3) return null;
+  const credential = { deviceId: parsed["deviceId"], refreshToken: parsed["refreshToken"] };
+  const controlPairing = parsed["controlPairing"];
+  const workspacePairing = parsed["workspacePairing"];
+  const pairedAt = parsed["pairedAt"];
+  if (
+    !isCurrentShellCredential(credential) ||
+    !isCurrentPairing(controlPairing, false, true) ||
+    !isCurrentPairing(workspacePairing, false, true) ||
+    typeof pairedAt !== "number" ||
+    !Number.isSafeInteger(pairedAt) ||
+    pairedAt <= 0
+  ) {
+    return null;
+  }
+  return { schemaVersion: 3, ...credential, controlPairing, workspacePairing, pairedAt };
+}
+
+export function parseStoredMobileConnection(
   raw: string | null | undefined
-): StoredShellCredential | null {
+): LoadedMobileConnection | null {
   if (!raw) return null;
   try {
     const parsed = JSON.parse(raw) as unknown;
-    if (!isRecord(parsed) || !hasOnlyKeys(parsed, STORED_KEYS)) return null;
-    const credential = {
-      deviceId: parsed["deviceId"],
-      refreshToken: parsed["refreshToken"],
-    };
+    if (!isRecord(parsed)) return null;
+    if (parsed["schemaVersion"] === 3) return parseLegacyRecord(parsed);
+    const phase = parsed["phase"];
+    const allowedKeys = phase === "paired" ? PAIRED_STORED_KEYS : ROUTED_STORED_KEYS;
+    if (parsed["schemaVersion"] !== 4 || !hasOnlyKeys(parsed, allowedKeys)) return null;
+    const credential = parsed["credential"];
     const controlPairing = parsed["controlPairing"];
     const workspacePairing = parsed["workspacePairing"];
+    const selectedWorkspaceId = parsed["selectedWorkspaceId"];
     const pairedAt = parsed["pairedAt"];
     if (
-      parsed["schemaVersion"] !== 3 ||
       !isCurrentShellCredential(credential) ||
       !isCurrentPairing(controlPairing, false, true) ||
-      !isCurrentPairing(workspacePairing, false, true) ||
+      (phase === "routed" && !isCurrentPairing(workspacePairing, false, true)) ||
+      (phase !== "paired" && phase !== "routed") ||
+      typeof selectedWorkspaceId !== "string" ||
+      !selectedWorkspaceId ||
+      selectedWorkspaceId !== selectedWorkspaceId.trim() ||
+      selectedWorkspaceId.length > 512 ||
+      selectedWorkspaceId.includes("\0") ||
       typeof pairedAt !== "number" ||
       !Number.isSafeInteger(pairedAt) ||
       pairedAt <= 0
     ) {
       return null;
     }
-    return {
-      schemaVersion: 3,
-      deviceId: credential.deviceId,
-      refreshToken: credential.refreshToken,
+    const base = {
+      schemaVersion: 4 as const,
+      credential,
       controlPairing,
-      workspacePairing,
+      selectedWorkspaceId,
       pairedAt,
     };
+    return phase === "paired"
+      ? { ...base, phase }
+      : { ...base, phase, workspacePairing: workspacePairing as StoredShellPairing };
   } catch {
     return null;
   }
