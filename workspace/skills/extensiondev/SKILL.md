@@ -29,7 +29,12 @@ If a worker (workerd isolate) is sufficient, prefer that — workers are cheaper
 ## Critical rules
 
 1. **`workspace/extensions/<name>/`** is the location. The package must be `private: true` and `type: "module"`, and the `package.json` must have `vibestudio.extension` (validated at install **and** boot — bad manifests fail closed).
-2. **Give every extension a semantic `vibestudio.icon`.** Prefer one meaningful emoji, or use a repo-local image such as `./assets/icon.svg` for a real branded icon. Keep images at most 1 MiB, do not traverse outside the unit, and never substitute generated initials or a remote favicon service.
+2. **Give every extension a semantic `vibestudio.icon`.** Follow the shared
+   [icon guide](../workspace-dev/references/icons.md): prefer a truthful brand
+   mark for a named integration or a curated Lucide concept otherwise. Use a
+   repo-local image such as `./assets/icon.svg`; keep images at most 1 MiB, do
+   not traverse outside the unit, and never use generated initials, remote
+   favicon services, or another general icon catalog.
 3. **`activate(ctx)` returns a plain object.** Its own enumerable function properties become RPC methods. Inherited methods, `then`, and non-function properties are skipped.
 4. **`ctx.fs` for an extension is unrestricted** — it covers the whole host filesystem. This is not a sandbox; it exists for _auditable_ writes. For silent ambient work, import `node:fs` directly. The install approval is the trust boundary.
 5. **Protect extension-owned resources declaratively.** Add exact

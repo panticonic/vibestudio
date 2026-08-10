@@ -5,7 +5,7 @@
   "type": "module",
   "vibestudio": {
     "title": "Testbench",
-    "icon": "🧪",
+    "icon": "./assets/icon.svg",
     "entry": "index.tsx",
     "exposeModules": [
       "react",

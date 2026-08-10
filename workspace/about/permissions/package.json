@@ -4,7 +4,7 @@
   "private": true,
   "vibestudio": {
     "title": "Permissions",
-    "icon": "🔐",
+    "icon": "./assets/icon.svg",
     "description": "Review and revoke saved app and agent permissions",
     "hiddenInLauncher": false,
     "autoArchiveWhenEmpty": true,

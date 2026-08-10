@@ -5,7 +5,7 @@
   "type": "module",
   "vibestudio": {
     "title": "Hello Svelte",
-    "icon": "👋",
+    "icon": "./assets/icon.svg",
     "entry": "index.ts",
     "template": "svelte",
     "authority": {

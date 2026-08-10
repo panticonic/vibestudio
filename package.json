@@ -49,6 +49,8 @@
     "check:unit-authority": "node scripts/generate-host-authority-catalog.mjs --check && node scripts/check-explicit-authority-manifests.mjs && node --import tsx scripts/check-capability-notability.mjs && pnpm run check:builtin-catalog && node scripts/check-host-residency-baselines.mjs && node --import tsx scripts/generate-runtime-foundation-ledgers.mjs --check",
     "generate:product-seed-records": "node --import tsx scripts/generate-product-seed-records.mjs",
     "check:product-seed-records": "node --import tsx scripts/generate-product-seed-records.mjs --check",
+    "generate:unit-icons": "node scripts/sync-unit-icons.mjs",
+    "check:unit-icons": "node scripts/sync-unit-icons.mjs --check",
     "check:ledger-evidence": "node scripts/check-runtime-foundation-evidence.mjs",
     "check:execution-root-providers": "node scripts/check-execution-root-provider-census.mjs",
     "generate:vcs-skill-release": "node --import tsx scripts/generate-vcs-skill-release.mjs",

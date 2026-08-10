@@ -37,11 +37,15 @@ from panels, workers, and extensions:
 1. `@workspace-apps/foo` maps to `apps/foo`, not `apps/@workspace-apps/foo`.
 2. App identity comes from `package.json` package name plus the approved build
    identity, not from a special filesystem path.
-3. Give every app a semantic `vibestudio.icon`. Prefer a single meaningful emoji;
-   use a repo-local image such as `./assets/icon.svg` for a real branded icon.
+3. Give every app a semantic `vibestudio.icon`. Follow the shared
+   [icon guide](../workspace-dev/references/icons.md): prefer a curated Lucide
+   concept or truthful brand mark, then a meaningful emoji or original artwork.
+   Use a repo-local image such as `./assets/icon.svg` for drawn or branded icons.
    Image paths are relative to `package.json`, may not traverse outside the unit,
    and must be at most 1 MiB. Do not use generated initials or remote favicon
    services.
+   For UI controls, import named Lucide components from `@workspace/ui/icons`;
+   do not add another web icon catalog.
 4. App code is trusted client code. Add capabilities deliberately and keep the
    capability list no broader than the target needs.
 5. App source participates in the workspace-wide semantic VCS. Read

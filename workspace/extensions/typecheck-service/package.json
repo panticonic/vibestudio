@@ -5,7 +5,7 @@
   "type": "module",
   "vibestudio": {
     "displayName": "Typecheck Service",
-    "icon": "🛡️",
+    "icon": "./assets/icon.svg",
     "entry": "index.ts",
     "sourcemap": true,
     "extension": {

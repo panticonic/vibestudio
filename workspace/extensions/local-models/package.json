@@ -11,7 +11,7 @@
   },
   "vibestudio": {
     "displayName": "Local Models",
-    "icon": "🧠",
+    "icon": "./assets/icon.svg",
     "entry": "index.ts",
     "sourcemap": true,
     "extension": {

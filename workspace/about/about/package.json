@@ -4,7 +4,7 @@
   "private": true,
   "vibestudio": {
     "title": "About Vibestudio",
-    "icon": "ℹ️",
+    "icon": "./assets/icon.svg",
     "description": "Version info and credits",
     "hiddenInLauncher": false,
     "autoArchiveWhenEmpty": true,

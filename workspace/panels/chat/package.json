@@ -5,7 +5,7 @@
   "type": "module",
   "vibestudio": {
     "title": "Agentic Chat",
-    "icon": "💬",
+    "icon": "./assets/icon.svg",
     "entry": "index.tsx",
     "exposeModules": [
       "react",

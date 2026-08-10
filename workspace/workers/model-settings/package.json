@@ -5,7 +5,7 @@
   "type": "module",
   "vibestudio": {
     "title": "Model Settings Service",
-    "icon": "🎛️",
+    "icon": "./assets/icon.svg",
     "kind": "worker",
     "entry": "index.ts",
     "durable": {

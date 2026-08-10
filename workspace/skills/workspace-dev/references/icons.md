@@ -1,0 +1,55 @@
+# Icons
+
+Use one restrained icon system across workspace UI and unit identity.
+
+## Interface icons
+
+- For React panels/apps/packages, import named Lucide components from
+  `@workspace/ui/icons`, for example
+  `import { GitBranch, FileText } from "@workspace/ui/icons"`.
+- Imports are tree-shakeable. Import named components only; never import an
+  all-icons object, sprite, font, or runtime icon loader.
+- Mobile already uses `lucide-react-native`; use it directly for native UI.
+- Existing Radix icons may remain in established shell surfaces. Do not add
+  Font Awesome, Iconify, React Icons, Heroicons, or another general catalog.
+- Give icon-only controls an accessible name (`aria-label` on web,
+  `accessibilityLabel` on React Native). Decorative icons must be hidden from
+  assistive technology. Never rely on color alone to communicate state.
+
+## Unit identity icons
+
+Every user-visible or executable unit declares exactly one
+`vibestudio.icon`. Choose in this order:
+
+1. A truthful brand mark when the unit directly implements or integrates that
+   named technology (for example Git, TypeScript, Claude, Svelte, or Gmail).
+2. A concrete Lucide object/action for a generic concept (for example
+   `file-text`, `database`, `messages-square`, or `shield-check`).
+3. A single semantic emoji only when it is more expressive than a drawn icon.
+4. Original repo-local artwork for a product identity.
+
+For new panels and workers, pass `lucide:<name>` or `brand:<name>` to
+`createProjects`. The scaffold copies only that SVG into `assets/icon.svg` and
+writes `vibestudio.icon: "./assets/icon.svg"`; no icon library enters the unit's
+runtime bundle. Available curated sources live in `assets/icons/lucide/` and
+`assets/icons/brands/` beside this reference.
+
+For apps and extensions, copy the chosen catalog SVG into the unit as
+`assets/icon.svg`, replace Lucide's `currentColor` with a visible fixed color,
+and declare the relative path. Keep artwork square, simple, transparent, and
+legible at 16–20 px. Image assets must remain inside the unit and below 1 MiB.
+
+Do not use generated initials, hash colors, remote favicons, or remote SVG URLs.
+Browser panels use the page's authentic captured favicon instead of a unit icon.
+
+## Built-in catalog and provenance
+
+Run `pnpm generate:unit-icons` after changing the built-in assignment table in
+`scripts/sync-unit-icons.mjs`; run `pnpm check:unit-icons` in validation.
+Generated units contain only their own small SVG.
+
+- Semantic sources: Lucide Static 1.27.0, ISC license.
+- Brand sources: Simple Icons 16.27.1. The collection is CC0, but individual
+  marks remain subject to their owners' trademark and usage rules. Use brand
+  marks only for accurate nominative identification, never as decoration or an
+  implication of endorsement.

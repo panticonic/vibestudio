@@ -55,6 +55,7 @@ Agents read skills by the path shown in the generated skill index, for example
 | [BROWSER.md](BROWSER.md)                   | Browser automation (Playwright/CDP)                                                                                                                              |
 | [TOOLS.md](TOOLS.md)                       | Agent tools reference                                                                                                                                            |
 | [create-project.ts](create-project.ts)     | Project scaffolding helpers (importable via eval `imports` parameter)                                                                                            |
+| [references/icons.md](references/icons.md) | Canonical Lucide/brand icon selection, accessibility, unit assets, and no-bloat rules                                                                            |
 
 For host-process debugging while developing workspace units, pair the relevant
 unit/panel diagnostics below with the [server-logs](../server-logs/SKILL.md)
@@ -111,15 +112,18 @@ an accessibility defect: repair the panel before exercising the flow.
 Never use `.first()`, `.last()`, or `.nth()`to guess which repeated control
 belongs to an item. Ordinals are acceptable only after`inspect()` proves
     the intended rendered ancestor context.
-11. **Give every panel and worker a semantic icon** — pass one recognizable
-    icon as `icon` to `createProjects`. Use an emoji (`💬` chat, `💻` terminal,
-    `🔑` credentials, `📰` news) for the simplest attractive result, or author a
-    real SVG/PNG/WebP/AVIF/JPEG/GIF/ICO asset and use a unit-relative path such as
-    `./assets/icon.svg`. Keep images simple, square, legible at 16–20 px, and at
-    most 1 MiB. The scaffold writes the value to the single canonical
+11. **Give every panel and worker a semantic icon** — read
+    [references/icons.md](references/icons.md), then pass one recognizable icon
+    as `icon` to `createProjects`. Prefer a curated `lucide:<name>` or truthful
+    `brand:<name>` catalog id; the scaffold materializes only that SVG. A single
+    meaningful emoji or original unit-local artwork remains valid when it is the
+    better identity. Keep images simple, square, legible at 16–20 px, and at most
+    1 MiB. The scaffold writes the value to the single canonical
     `vibestudio.icon` field; do not create a parallel agent/panel icon field.
     Prefer a concrete object or action over initials, random colors, or
-    hash-derived identicons. Vibestudio renders it consistently as the panel's
+    hash-derived identicons. For UI controls, import named tree-shakeable Lucide
+    components from `@workspace/ui/icons`; do not add another icon catalog.
+    Vibestudio renders unit identity consistently as the panel's
     HTML favicon and in the launcher, panel tree, breadcrumbs, agent picker, and
     approval prompts. Browser panels are the exception: their authentic site
     favicon is captured and resolved from browser data, so never invent an icon

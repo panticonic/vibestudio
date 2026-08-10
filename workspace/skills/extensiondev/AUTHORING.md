@@ -70,7 +70,7 @@ a fresh install.
 | Field                                 | Default      | Notes                                                                                                                                  |
 | ------------------------------------- | ------------ | -------------------------------------------------------------------------------------------------------------------------------------- |
 | `vibestudio.displayName`              | package name | Human-readable name shown in the units panel.                                                                                          |
-| `vibestudio.icon`                     | kind icon    | Semantic emoji or a repo-local image such as `./assets/icon.svg` (maximum 1 MiB), shown in unit and approval surfaces.                 |
+| `vibestudio.icon`                     | kind icon    | Identity chosen with the shared [icon guide](../workspace-dev/references/icons.md): curated Lucide concept, truthful brand mark, emoji, or repo-local image (maximum 1 MiB). |
 | `vibestudio.extension.dependencyMode` | `"auto"`     | `"auto"` bundles plain JS deps, externalizes native/WASM ones. `"bundle"` forces bundling. `"external"` forces runtime install + load. |
 
 Use `activationEvents: ["onInvoke"]` for extensions whose API is only needed on

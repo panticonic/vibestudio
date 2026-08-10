@@ -229,6 +229,25 @@ describe("createProjects", () => {
     });
   });
 
+  it("materializes a curated Lucide identity without adding an icon runtime", async () => {
+    addFile(
+      "skills/workspace-dev/assets/icons/lucide/messages-square.svg",
+      '<svg stroke="currentColor"><path d="M1 1" /></svg>'
+    );
+    const { createProjects } = await import("./create-project.js");
+
+    await createProjects([
+      { projectType: "panel", name: "inbox", title: "Inbox", icon: "lucide:messages-square" },
+    ]);
+
+    expect(JSON.parse(mocks.files.get("panels/inbox/package.json") as string)).toMatchObject({
+      vibestudio: { icon: "./assets/icon.svg" },
+    });
+    expect(mocks.files.get("panels/inbox/assets/icon.svg")).toBe(
+      '<svg stroke="#8B5CF6"><path d="M1 1" /></svg>'
+    );
+  });
+
   it("keeps the built-in default panel deterministic without consulting template files", async () => {
     addFile("templates/default/template.json", JSON.stringify({ framework: "svelte" }));
     const { createProjects } = await import("./create-project.js");

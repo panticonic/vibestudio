@@ -406,7 +406,7 @@ export interface CreateProjectParams {
   projectType: string;
   name: string;
   title?: string;
-  /** Semantic emoji or ./relative image path. Choose a specific icon; generic defaults are fallback only. */
+  /** Emoji, ./relative image path, or a curated lucide:<name>/brand:<name> catalog id. */
   icon?: string;
   template?: string;
 }
@@ -418,6 +418,42 @@ interface ResolvedProject {
   title: string;
   files: Record<string, string>;
   preflight: ProjectPreflightReport;
+}
+
+const BRAND_ICON_COLORS: Readonly<Record<string, string>> = {
+  claude: "#D97757",
+  git: "#F05032",
+  gmail: "#EA4335",
+  gnubash: "#4EAA25",
+  javascript: "#F7DF1E",
+  react: "#61DAFB",
+  svelte: "#FF3E00",
+  typescript: "#3178C6",
+};
+
+async function materializeCatalogIcon(
+  icon: string | undefined,
+  files: Record<string, string>
+): Promise<string | undefined> {
+  const match = /^(lucide|brand):([a-z0-9-]+)$/u.exec(icon ?? "");
+  if (!match) return icon;
+  const kind = match[1] as "lucide" | "brand";
+  const name = match[2];
+  if (!name) throw new Error(`Invalid curated icon id: ${icon}`);
+  const library = kind === "brand" ? "brands" : "lucide";
+  const brandColor = BRAND_ICON_COLORS[name];
+  if (kind === "brand" && !brandColor) {
+    throw new Error(`Unknown curated brand icon: ${name}`);
+  }
+  const source = `skills/workspace-dev/assets/icons/${library}/${name}.svg`;
+  if (!(await fs.exists(source))) throw new Error(`Unknown curated ${kind} icon: ${name}`);
+  let svg = (await fs.readFile(source, "utf-8")) as string;
+  svg =
+    kind === "brand"
+      ? `<!-- Source: Simple Icons 16.27.1 (CC0 collection); brand rights remain with their owners. -->\n${svg.replace("<svg ", `<svg fill="${brandColor}" `)}`
+      : svg.replaceAll("currentColor", "#8B5CF6");
+  files["assets/icon.svg"] = svg;
+  return "./assets/icon.svg";
 }
 
 async function resolveProject(params: CreateProjectParams): Promise<ResolvedProject> {
@@ -439,6 +475,7 @@ async function resolveProject(params: CreateProjectParams): Promise<ResolvedProj
   }
 
   const files: Record<string, string> = {};
+  const manifestIcon = await materializeCatalogIcon(icon, files);
 
   switch (projectType) {
     case "panel": {
@@ -471,7 +508,7 @@ async function resolveProject(params: CreateProjectParams): Promise<ResolvedProj
           projectType: "panel",
           name,
           title,
-          icon,
+          icon: manifestIcon,
           entry: "index.ts",
           ...(panelTemplate !== "default" ? { template: panelTemplate } : {}),
           dependencies: {
@@ -526,7 +563,7 @@ async function resolveProject(params: CreateProjectParams): Promise<ResolvedProj
           projectType: "panel",
           name,
           title,
-          icon,
+          icon: manifestIcon,
           entry: "index.tsx",
           ...(panelTemplate !== "default" ? { template: panelTemplate } : {}),
           exposeModules: ["react", "react/jsx-runtime", "react/jsx-dev-runtime"],
@@ -628,7 +665,7 @@ function ${toPascalCase(name)}Content() {
           projectType: "worker",
           name,
           title,
-          icon,
+          icon: manifestIcon,
           entry: "index.ts",
           durableClasses: [className],
           dependencies: {
@@ -725,7 +762,7 @@ describe("${className}", () => {
           projectType: "worker",
           name,
           title,
-          icon,
+          icon: manifestIcon,
           entry: "index.ts",
           dependencies: { "@workspace/runtime": "workspace:*" },
         });

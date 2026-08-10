@@ -4,7 +4,7 @@
   "private": true,
   "vibestudio": {
     "title": "Ad Blocking",
-    "icon": "🛡️",
+    "icon": "./assets/icon.svg",
     "description": "Configure ad and tracker blocking",
     "hiddenInLauncher": false,
     "autoArchiveWhenEmpty": true,

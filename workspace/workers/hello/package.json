@@ -6,7 +6,7 @@
   "vibestudio": {
     "entry": "index.ts",
     "title": "Hello Worker",
-    "icon": "👋",
+    "icon": "./assets/icon.svg",
     "sourcemap": true,
     "authority": {
       "provides": [],
