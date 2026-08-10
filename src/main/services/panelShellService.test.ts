@@ -45,7 +45,7 @@ function createServiceHarness(appCapabilities: string[] = []) {
   const reload = vi.fn();
   const forceReload = vi.fn();
   const getFocusedPanelId = vi.fn(() => "panel-1");
-  const refreshPanelProjection = vi.fn(
+  const readPanelProjection = vi.fn(
     async (
       _panelId: string
     ): Promise<{
@@ -85,7 +85,7 @@ function createServiceHarness(appCapabilities: string[] = []) {
       setFocusedPanelId,
       takeOverPanel,
       getPanelViewRevision: vi.fn(() => 4),
-      refreshPanelProjection,
+      readPanelProjection,
     } as never,
     panelRegistry: {
       getPanel: vi.fn(() => ({
@@ -134,7 +134,7 @@ function createServiceHarness(appCapabilities: string[] = []) {
     reload,
     forceReload,
     getFocusedPanelId,
-    refreshPanelProjection,
+    readPanelProjection,
     serverClient,
   };
 }
@@ -184,7 +184,7 @@ describe("PanelShellService", () => {
 
   it("reads presentation invalidations in one deduplicated batch", async () => {
     const harness = createServiceHarness(["panel-hosting"]);
-    harness.refreshPanelProjection.mockImplementation(async (panelId: string) =>
+    harness.readPanelProjection.mockImplementation(async (panelId: string) =>
       panelId === "missing"
         ? null
         : {
@@ -199,9 +199,9 @@ describe("PanelShellService", () => {
     await expect(
       harness.service.handler(appCtx, "getPresentations", [["panel-1", "missing", "panel-1"]])
     ).resolves.toEqual([expect.objectContaining({ id: "panel-1", hostViewRevision: 4 })]);
-    expect(harness.refreshPanelProjection).toHaveBeenCalledTimes(2);
-    expect(harness.refreshPanelProjection).toHaveBeenCalledWith("panel-1");
-    expect(harness.refreshPanelProjection).toHaveBeenCalledWith("missing");
+    expect(harness.readPanelProjection).toHaveBeenCalledTimes(2);
+    expect(harness.readPanelProjection).toHaveBeenCalledWith("panel-1");
+    expect(harness.readPanelProjection).toHaveBeenCalledWith("missing");
   });
 
   it("denies apps without panel-hosting capability", async () => {

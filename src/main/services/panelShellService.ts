@@ -48,7 +48,7 @@ export interface PanelViewMethodDeps {
 }
 
 async function readPanelPresentation(deps: PanelViewMethodDeps, panelId: string) {
-  const panel = await deps.panelOrchestrator.refreshPanelProjection(panelId);
+  const panel = await deps.panelOrchestrator.readPanelProjection(panelId);
   if (!panel) return null;
   const parentId = deps.panelRegistry.findParentId(panelId);
   const siblings = parentId

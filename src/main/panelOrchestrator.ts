@@ -1172,15 +1172,16 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
     return this.runtime.reportPanelViewTransition(panelId);
   }
 
-  async refreshPanelProjection(panelId: string): Promise<Panel | null> {
-    const slotId = asPanelSlotId(panelId);
-    // Presentation events are an optimization, not a correctness boundary.
-    // An activation can race ahead of local registry hydration, and navigation
-    // can replace the durable entity before this process observes its event.
-    // Every addressed presentation read therefore rejoins the current durable
-    // slot before converging the native view.
-    await this.shellCore.refreshPanel(slotId);
-    await this.runtime.convergePreparedPanelView(panelId);
+  async readPanelProjection(panelId: string): Promise<Panel | null> {
+    const local = this.registry.getPanel(panelId);
+    if (local) return local;
+
+    // Presentation reads expose the Electron host's materialized projection.
+    // They must not refresh an existing slot from durable query state: that
+    // can replace a newer hosted `ready` view with an older `pending` snapshot.
+    // A missing slot is the one legitimate read-through case (for example,
+    // when shell startup wins the race with registry hydration).
+    await this.shellCore.getPanel(asPanelSlotId(panelId));
     return this.registry.getPanel(panelId) ?? null;
   }
 
@@ -1188,10 +1189,10 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
     event: import("@vibestudio/shared/events").EventPayloads["panel:executionActivated"]
   ): Promise<void> {
     if (!this.registry.applyExecutionIdentity(event.panelId, event)) {
-      // Slot creation and server-owned activation are concurrent. A warm build
-      // can activate before the create RPC has returned and inserted the slot
-      // into this host's registry. Rejoin the durable slot projection instead
-      // of making renderer correctness depend on that event ordering.
+      // Activation is the synchronization boundary for a slot the host has not
+      // hydrated yet. Rejoin durable state once here, before convergence; an
+      // already-present slot needs only the sealed identity carried by the
+      // event and avoids an unnecessary server round-trip.
       await this.shellCore.refreshPanel(asPanelSlotId(event.panelId));
       if (!this.registry.applyExecutionIdentity(event.panelId, event)) return;
     }

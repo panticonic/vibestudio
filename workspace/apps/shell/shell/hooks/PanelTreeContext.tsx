@@ -279,6 +279,7 @@ export function PanelTreeProvider({ children }: { children: ReactNode }) {
   const refreshingRef = useRef(false);
   const refreshSequenceRef = useRef(0);
   const presentationRevisionRef = useRef(0);
+  const presentationRevisionByPanelRef = useRef(new Map<string, number>());
   const setPinnedPanelIds = useSetAtom(pinnedPanelIdsAtom);
   const pinMutationSeq = useAtomValue(pinMutationSeqAtom);
   const pinSeq = useRef(pinMutationSeq);
@@ -425,12 +426,21 @@ export function PanelTreeProvider({ children }: { children: ReactNode }) {
       (event) => {
         if (event.revision <= presentationRevisionRef.current) return;
         presentationRevisionRef.current = event.revision;
-        const revision = event.revision;
+        for (const panelId of event.panelIds) {
+          presentationRevisionByPanelRef.current.set(panelId, event.revision);
+        }
         void panel
           .getPresentations(event.panelIds)
           .then((presentations) => {
-            if (presentationRevisionRef.current !== revision) return;
-            mergePresentations(presentations);
+            // A later event only supersedes the same panel. Discarding this
+            // whole batch when an unrelated panel changes loses an edge and
+            // can leave that panel's presentation stale until a focus switch.
+            mergePresentations(
+              presentations.filter(
+                (presentation) =>
+                  presentationRevisionByPanelRef.current.get(presentation.id) === event.revision
+              )
+            );
           })
           .catch(() => {});
       },

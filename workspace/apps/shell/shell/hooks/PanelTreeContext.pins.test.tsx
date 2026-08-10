@@ -209,7 +209,12 @@ beforeEach(() => {
   searchTree.mockResolvedValue({ revision: 1, hits: [], nextCursor: null });
   listPinnedPanelIds.mockReset();
   getPresentation.mockReset();
-  getPresentations.mockClear();
+  getPresentations.mockReset();
+  getPresentations.mockImplementation((panelIds: string[]) =>
+    Promise.all(panelIds.map((panelId) => getPresentation(panelId))).then((presentations) =>
+      presentations.filter((presentation) => presentation != null)
+    )
+  );
   getProfile.mockClear();
 });
 
@@ -772,5 +777,65 @@ describe("PanelTreeProvider local descendant selection", () => {
     });
     await waitFor(() => expect(getPresentation).toHaveBeenCalledTimes(3));
     expect(screen.getByTestId("selection").dataset["renderCount"]).toBe(renderCount);
+  });
+
+  it("does not discard one panel update when a different panel changes later", async () => {
+    listPinnedPanelIds.mockResolvedValue([]);
+    setRootGroups([{ ownerUserId: "alice", slotIds: ["panel:a", "panel:b"] }]);
+    childSlotIds.set("panel:a", ["panel:a-old", "panel:a-new"]);
+    childSlotIds.set("panel:b", ["panel:b-old", "panel:b-new"]);
+    getPresentation.mockImplementation((panelId: string) =>
+      Promise.resolve({ id: panelId, selectedChildId: `${panelId}-old` })
+    );
+
+    render(
+      <PanelTreeProvider>
+        <ChildrenLoader panelId="panel:a" />
+        <ChildrenLoader panelId="panel:b" />
+        <SelectionProbe panelId="panel:a" />
+        <SelectionProbe panelId="panel:b" />
+      </PanelTreeProvider>
+    );
+    await waitFor(() => {
+      expect(screen.getAllByTestId("selection").map((node) => node.textContent)).toEqual([
+        "panel:a-old",
+        "panel:b-old",
+      ]);
+    });
+
+    getPresentations.mockClear();
+    let resolveA!: (value: Array<{ id: string; selectedChildId: string }>) => void;
+    let resolveB!: (value: Array<{ id: string; selectedChildId: string }>) => void;
+    getPresentations
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveA = resolve;
+          })
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveB = resolve;
+          })
+      );
+
+    act(() => {
+      presentationChangeHandler?.({ revision: 3, panelIds: ["panel:a"] });
+      presentationChangeHandler?.({ revision: 4, panelIds: ["panel:b"] });
+    });
+    await waitFor(() => expect(getPresentations).toHaveBeenCalledTimes(2));
+
+    await act(async () => {
+      resolveB([{ id: "panel:b", selectedChildId: "panel:b-new" }]);
+    });
+    await act(async () => {
+      resolveA([{ id: "panel:a", selectedChildId: "panel:a-new" }]);
+    });
+
+    expect(screen.getAllByTestId("selection").map((node) => node.textContent)).toEqual([
+      "panel:a-new",
+      "panel:b-new",
+    ]);
   });
 });

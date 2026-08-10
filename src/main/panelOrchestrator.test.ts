@@ -1619,33 +1619,43 @@ describe("PanelOrchestrator.initializePanelTree", () => {
   });
 });
 
-describe("PanelOrchestrator.refreshPanelProjection", () => {
-  it("refreshes an existing local panel from durable state before returning presentation", async () => {
+describe("PanelOrchestrator.readPanelProjection", () => {
+  it("returns an existing hosted projection without refreshing or converging it", async () => {
     const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
-    const panel = makePanel("panel:tree/stale", [], {
-      runtimeEntityId: "panel:nav-old",
-      buildKey: null,
-      executionDigest: null,
-      artifacts: { buildState: "pending", buildProgress: "Preparing panel runtime..." },
+    const panel = makePanel("panel:tree/ready", [], {
+      runtimeEntityId: "panel:nav-ready",
+      artifacts: {
+        buildState: "ready",
+        htmlPath: "http://localhost/panels/ready/",
+        hostedRuntimeEntityId: "panel:nav-ready",
+      },
     });
     registry.addPanel(panel, null, { addAsRoot: true });
     const { orchestrator, shellCore } = createOrchestrator(registry);
-    shellCore.refreshPanel.mockImplementationOnce(async () => {
-      panel.runtimeEntityId = "panel:nav-current";
-      panel.buildKey = "b".repeat(64);
-      panel.executionDigest = "e".repeat(64);
-      panel.authorityRequests = [];
-      panel.artifacts = { buildState: "building", buildProgress: "Loading panel runtime..." };
+
+    await expect(orchestrator.readPanelProjection(panel.id)).resolves.toBe(panel);
+
+    expect(shellCore.getPanel).not.toHaveBeenCalled();
+    expect(shellCore.refreshPanel).not.toHaveBeenCalled();
+    expect(registry.getPanel(panel.id)?.artifacts).toMatchObject({
+      buildState: "ready",
+      hostedRuntimeEntityId: "panel:nav-ready",
+    });
+  });
+
+  it("hydrates a missing projection once before returning it", async () => {
+    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const panel = makePanel("panel:tree/late");
+    const { orchestrator, shellCore } = createOrchestrator(registry);
+    shellCore.getPanel.mockImplementationOnce(async () => {
+      registry.addPanel(panel, null, { addAsRoot: true });
       return panel;
     });
 
-    await expect(orchestrator.refreshPanelProjection(panel.id)).resolves.toBe(panel);
+    await expect(orchestrator.readPanelProjection(panel.id)).resolves.toBe(panel);
 
-    expect(shellCore.refreshPanel).toHaveBeenCalledWith(asPanelSlotId(panel.id));
-    expect(registry.getPanel(panel.id)).toMatchObject({
-      runtimeEntityId: "panel:nav-current",
-      buildKey: "b".repeat(64),
-    });
+    expect(shellCore.getPanel).toHaveBeenCalledWith(asPanelSlotId(panel.id));
+    expect(shellCore.refreshPanel).not.toHaveBeenCalled();
   });
 });
 
