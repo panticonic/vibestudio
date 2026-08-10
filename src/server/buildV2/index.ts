@@ -518,7 +518,7 @@ export async function initBuildSystemV2(
     rootOptions.appRoot ?? process.env["VIBESTUDIO_APP_ROOT"] ?? path.dirname(workspaceRoot)
   );
   const authorityEpoch = {
-    analyzerVersion: "userland-authority-v5",
+    analyzerVersion: "userland-authority-v6",
     rpcSchemaVersion: workspaceRpcSchemaVersion(),
   } as const;
   const authorityFactEpoch = { analyzerVersion: authorityEpoch.analyzerVersion } as const;
@@ -2145,54 +2145,36 @@ export async function initBuildSystemV2(
       addReverseClosure(view.graph, candidateSeeds);
       addReverseClosure(publishedGraph, publishedSeeds);
 
-      // A current-epoch baseline is required before incremental authority
-      // selection. A cold process may construct it lazily; a blocking
-      // baseline consumer remains affected until its exact report is clean.
-      const publishedState = currentState().stateHash;
-      let publishedIndex = authorityIndexManager.publishedBaseline(authorityEpoch);
-      if (
-        rootOptions.workspaceAuthorityEnvironmentAt &&
-        (!publishedIndex || publishedIndex.stateHash !== publishedState)
-      ) {
-        const publishedView = await viewAt(publishedState);
-        publishedIndex = await authorityIndexAt(publishedState, publishedView, signal);
-        authorityIndexManager.establishPublished(publishedIndex);
+      // Validate and cache the exact candidate authority baseline once. This
+      // is also the source for incremental provider/consumer selection below;
+      // the currently published state must not be materialized from inside the
+      // protected-main host effect because that would re-enter the workspace
+      // source DO which is waiting for this result.
+      const candidateAuthorityIndex = rootOptions.workspaceAuthorityEnvironmentAt
+        ? await authorityIndexAt(ref, view, signal)
+        : null;
+      for (const name of candidateAuthorityIndex?.blockingConsumers ?? []) {
+        if (view.graph.has(name)) names.add(name);
       }
-      if (publishedIndex && rootOptions.workspaceAuthorityEnvironmentAt) {
-        for (const name of publishedIndex.blockingConsumers) {
-          if (view.graph.has(name)) names.add(name);
-        }
-      }
-
-      // The declaration index is the cheap dependency map, not proof that the
-      // source obeys those declarations. Join the current-epoch analyzer
-      // attestation before incremental selection. Startup prewarm and a push
-      // share this single flight; if prewarm is still running, publication
-      // waits for it instead of starting another workspace scan.
-      if (rootOptions.workspaceAuthorityEnvironmentAt) {
-        const publishedView = await viewAt(publishedState);
-        const publishedAttestations = await authorityAttestationsAt(
-          publishedState,
-          publishedView,
-          signal
-        );
-        for (const name of publishedAttestations.blockingConsumers) {
-          if (view.graph.has(name)) names.add(name);
-        }
+      const candidateAuthorityAttestations = rootOptions.workspaceAuthorityEnvironmentAt
+        ? await authorityAttestationsAt(ref, view, signal)
+        : null;
+      for (const name of candidateAuthorityAttestations?.blockingConsumers ?? []) {
+        if (view.graph.has(name)) names.add(name);
       }
 
       // Service authority is intentionally a separate relation from the
       // package DAG. A provider's decorator/manifest/configuration can change
       // a consumer's static authority result without changing its module
-      // closure, so protected validation consults both exact authority views.
+      // closure. The candidate index is the only state that publication needs
+      // to prove: consulting the currently published state from inside the
+      // protected-main host effect would re-enter the workspace source DO that
+      // is awaiting this validation and deadlock a cold process.
       const authorityRelevant = changedPaths.some(
         (changed) => changed === "meta/vibestudio.yml" || changed.startsWith("workers/")
       );
       if (authorityRelevant) {
-        const candidateIndex = await authorityIndexAt(ref, view, signal);
-        const publishedAuthorityIndex =
-          publishedIndex ??
-          (await authorityIndexAt(publishedState, await viewAt(publishedState), signal));
+        const candidateIndex = candidateAuthorityIndex!;
         const candidateProviderUnits = new Set(
           view.graph
             .allNodes()
@@ -2220,17 +2202,22 @@ export async function initBuildSystemV2(
             .map((node) => node.relativePath)
         );
         const changedQueries = new Set<string>();
+        const removedProvider = [...publishedProviderUnits].some(
+          (provider) => !candidateProviderUnits.has(provider)
+        );
         if (
+          removedProvider ||
           changedPaths.some(
             (changed) => changed === "meta/vibestudio.yml" || changed.startsWith("meta/")
           )
         ) {
+          // A removed provider has no candidate provider mapping. Recheck all
+          // surviving service consumers; this remains bounded by the exact
+          // candidate authority index and avoids reconstructing old source.
           for (const query of candidateIndex.consumersByQuery.keys()) changedQueries.add(query);
-          for (const query of publishedAuthorityIndex.consumersByQuery.keys())
-            changedQueries.add(query);
         }
         const authorityConsumers = authorityConsumersForProviderChanges(
-          [candidateIndex, publishedAuthorityIndex],
+          [candidateIndex],
           new Set([...candidateProviderUnits, ...publishedProviderUnits]),
           changedQueries
         );

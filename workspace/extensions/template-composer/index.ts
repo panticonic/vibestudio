@@ -414,6 +414,20 @@ function inspectionResult(
   };
 }
 
+export function selectedTemplateName(
+  inspection: ReturnType<typeof inspectionResult>
+): string {
+  if (!inspection.pin) return "Selected template";
+  const selectedUrl = normalizeTemplateGitUrl(inspection.pin.url);
+  return (
+    inspection.templates.find(
+      (template) =>
+        normalizeTemplateGitUrl(template.url) === selectedUrl &&
+        template.commit === inspection.pin!.commit
+    )?.alias ?? "Selected template"
+  );
+}
+
 function affectedTemplateParts(
   inspection: TemplateOperationInspection,
   previous?: SemanticWorkspaceObservation["lock"]
@@ -1065,28 +1079,28 @@ export async function activate(ctx: ExtensionContextLike) {
         alias?: string;
       };
       if (intent.kind === "add") {
-        return this.add({
+        return api.add({
           commandId: input.operationId,
           pin: WorkspaceTemplatePinSchema.parse(intent.target),
           onBuildFailure: input.onBuildFailure,
         });
       }
       if (intent.kind === "adopt") {
-        return this.adopt({
+        return api.adopt({
           commandId: input.operationId,
           pin: WorkspaceTemplatePinSchema.parse(intent.target),
           onBuildFailure: input.onBuildFailure,
         });
       }
       if (intent.kind === "pull" && intent.alias) {
-        return this.pull({
+        return api.pull({
           commandId: input.operationId,
           alias: intent.alias,
           onBuildFailure: input.onBuildFailure,
         });
       }
       if (intent.kind === "remove" && intent.alias) {
-        return this.remove({
+        return api.remove({
           commandId: input.operationId,
           alias: intent.alias,
           onBuildFailure: input.onBuildFailure,
@@ -1149,7 +1163,7 @@ export async function activate(ctx: ExtensionContextLike) {
       const env = await environment(ctx);
       const inspection = await inspectLocator(ctx, env, request);
       return {
-        name: inspection.templates[0]?.alias ?? "Selected template",
+        name: selectedTemplateName(inspection),
         inspection,
       };
     },

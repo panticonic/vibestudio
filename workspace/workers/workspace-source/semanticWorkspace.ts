@@ -4170,6 +4170,7 @@ export class SemanticWorkspace {
           mode: Number(endpoint["mode"]),
           ...contentDescriptorFromEndpoint(endpoint),
         });
+        if (existing?.fileStateId === result.fileStateId) return [];
       } else {
         if (existing?.presence !== "placed") return [];
         result = workspaceFileStateIdentity({

@@ -137,7 +137,7 @@ instead of creating a separate `skills/<name>` repo.
 Examples:
 
 - `packages/data-model/SKILL.md` for package APIs, schemas, and test commands
-- `workers/gmail-agent/SKILL.md` for worker behavior, queues, and diagnostics
+- `workers/customer-agent/SKILL.md` for worker behavior, queues, and diagnostics
 - `panels/chat/SKILL.md` for panel-specific UI conventions
 - `extensions/browser-data/SKILL.md` for extension setup and operational notes
 - `projects/customer-vault/SKILL.md` for a plain content repo's structure

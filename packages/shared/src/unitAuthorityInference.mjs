@@ -11,6 +11,22 @@ function sourceFilesFor(source) {
   return syntaxService.analyze(source, (sourceFiles) => [...sourceFiles]);
 }
 
+/** Walk valid TypeScript syntax without making source depth a JS stack limit. */
+function walkNodes(root, visit) {
+  const pending = [root];
+  while (pending.length > 0) {
+    const node = pending.pop();
+    visit(node);
+    const children = [];
+    node.forEachChild((child) => {
+      children.push(child);
+    });
+    for (let index = children.length - 1; index >= 0; index -= 1) {
+      pending.push(children[index]);
+    }
+  }
+}
+
 const EXTENSION_CONTEXT_FACADES = {
   extensions: "extensions",
   fs: "fs",
@@ -160,7 +176,7 @@ export function inferDirectRpcCapabilities(source, directCapabilities) {
     });
     if (parameterIndexes.size === 0 || !fn.body) return;
     const methodIndexes = new Set();
-    const inspect = (node) => {
+    walkNodes(fn.body, (node) => {
       if (
         ts.isCallExpression(node) &&
         ts.isPropertyAccessExpression(node.expression) &&
@@ -172,9 +188,7 @@ export function inferDirectRpcCapabilities(source, directCapabilities) {
           if (index !== undefined) methodIndexes.add(index);
         }
       }
-      node.forEachChild(inspect);
-    };
-    inspect(fn.body);
+    });
     if (methodIndexes.size > 0) wrapperMethodArguments.set(name, methodIndexes);
   };
 
@@ -189,9 +203,8 @@ export function inferDirectRpcCapabilities(source, directCapabilities) {
     ) {
       registerWrapper(node.name.text, node.initializer);
     }
-    node.forEachChild(discoverWrappers);
   };
-  for (const sourceFile of sourceFiles) discoverWrappers(sourceFile);
+  for (const sourceFile of sourceFiles) walkNodes(sourceFile, discoverWrappers);
 
   const addLiteral = (argument) => {
     if (!argument || !ts.isStringLiteralLikeNode(argument)) return;
@@ -210,9 +223,8 @@ export function inferDirectRpcCapabilities(source, directCapabilities) {
         addLiteral(node.arguments[index]);
       }
     }
-    node.forEachChild(visit);
   };
-  for (const sourceFile of sourceFiles) visit(sourceFile);
+  for (const sourceFile of sourceFiles) walkNodes(sourceFile, visit);
   return capabilities;
 }
 
@@ -245,9 +257,8 @@ export function inferEventsClientCapabilities(source, serviceMethods) {
         capabilities.add(`service:${service}.${method}`);
       }
     }
-    node.forEachChild(visit);
   };
-  for (const sourceFile of sourceFiles) visit(sourceFile);
+  for (const sourceFile of sourceFiles) walkNodes(sourceFile, visit);
   return capabilities;
 }
 
@@ -275,9 +286,8 @@ export function inferTypedServiceClientCapabilities(source, hostCapabilities) {
         if (service && ts.isStringLiteralLikeNode(service))
           clients.set(node.name.text, service.text);
       }
-      node.forEachChild(collect);
     };
-    collect(parsed);
+    walkNodes(parsed, collect);
 
     const inspect = (node) => {
       if (
@@ -291,9 +301,8 @@ export function inferTypedServiceClientCapabilities(source, hostCapabilities) {
           if (hostCapabilities.has(capability)) capabilities.add(capability);
         }
       }
-      node.forEachChild(inspect);
     };
-    inspect(parsed);
+    walkNodes(parsed, inspect);
   }
   return capabilities;
 }
@@ -319,9 +328,8 @@ export function inferWorkspaceServiceCapabilities(source, serviceSelectors) {
         values.add(node.initializer.text);
         literalBindings.set(node.name.text, values);
       }
-      node.forEachChild(collect);
     };
-    collect(parsed);
+    walkNodes(parsed, collect);
 
     const addSelector = (argument) => {
       const selectors = ts.isStringLiteralLikeNode(argument)
@@ -365,9 +373,8 @@ export function inferWorkspaceServiceCapabilities(source, serviceSelectors) {
           addServiceName(HOSTED_RUNTIME_WORKSPACE_SERVICE_FACADES[node.expression.expression.text]);
         }
       }
-      node.forEachChild(inspect);
     };
-    inspect(parsed);
+    walkNodes(parsed, inspect);
   }
   return capabilities;
 }
@@ -402,9 +409,8 @@ export function inferWorkspacePackageReferences(source, workspacePackageNames) {
     ) {
       addSpecifier(node.arguments[0]);
     }
-    node.forEachChild(visit);
   };
-  for (const sourceFile of sourceFiles) visit(sourceFile);
+  for (const sourceFile of sourceFiles) walkNodes(sourceFile, visit);
   return references;
 }
 

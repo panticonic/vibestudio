@@ -3,16 +3,15 @@
 Status: updated 2026-08-10. Examples, News, and Spectrolite have been published
 and updated through the running app; their outcome-specific source units have
 been removed from the base `workspace/`. Google Workspace is the fourth
-optional outcome in this cut. Its implementation has been separated from the
-generic integrations package, its exact five-unit authoring closure has been
-inspected successfully, and its onboarding contribution is discovered from
-the installed skill. The source units remain in `workspace/` until the public
-release is durably published: the isolated agentic publication run correctly
-stopped at the GitHub credential-consent boundary, which cannot be silently
-auto-approved. No verified template catalog or external base repository has
-been deployed. Registry promotion and external-base cutover therefore remain
-outstanding; publishing a standalone npm SDK is explicitly not an extraction
-prerequisite.
+optional outcome in this cut. Its implementation is separate from the generic
+integrations package, its exact five-unit closure is published as v0.1.1, and
+its onboarding contribution is discovered from the installed skill. Those
+five source units have consequently been removed from the bundled Base
+candidate. The public verified registry is configured in the bundled workspace
+and now promotes all four optional outcomes, including Google Workspace
+v0.1.1. Cutting workspace creation over to an external Base remains a separate
+distribution step. Publishing a standalone npm SDK is explicitly not an
+extraction prerequisite.
 
 ## Outcome
 
@@ -266,16 +265,36 @@ temporary ownership workaround.
 | Examples    | `panticonic/vibestudio-template-examples`    | `refs/tags/v1.0.3` | `bc4b1ec5ecf6bbb4b3584db2f3e6d651da693aca` | `v1-sha256:159d39fc9223c186b2a50e07fad15aaf40087cbe1ca8349d13bf91725381544e` |
 | News        | `panticonic/vibestudio-template-news`        | `refs/tags/v1.0.2` | `090e1ba17abcd01a426b914a41d0a0218579b0ff` | `v1-sha256:f6ad5837333dd3defb49f2cf334c1a551d4abacbef50acbbc48a3f649165bbdc` |
 | Spectrolite | `panticonic/vibestudio-template-spectrolite` | `refs/tags/v1.0.3` | `e6ddffbea9f28fef8988b6b612e017c8348917a0` | `v1-sha256:27b61de2e6abc3fb952293be22e09acb4649b470406141c79b7f13eeafad824d` |
+| Google Workspace | `panticonic/vibestudio-template-google-workspace` | `refs/tags/v0.1.1` | `8bdccc9d5195da9cdb6123396a499f7986a2935b` | `v1-sha256:83602476a3d46139181c23427128e1da30dd0cf79e9a55a2cc32a5186731b6fb` |
 
-Google Workspace has been inspected through the same composer with requested
-and included parts exactly equal to the five repositories in the inventory;
-the composer added no required parts. Its manifest contains the same semantic
-Base URL and no exact Base coordinate. Publication target is
-`panticonic/vibestudio-template-google-workspace`, initial release `v0.1.0`,
-with idempotency key `publish-google-workspace-0.1.0`. Publication and source
-deletion remain one ordered migration: authorize the GitHub credential,
-publish and read back the exact release, validate add/adoption, then delete the
-five units from Base and regenerate its workspace metadata.
+Google Workspace completed the same composer path with requested and included
+parts exactly equal to the five repositories in the inventory; the composer
+added no required parts. Its manifest contains the semantic Base URL and no
+exact Base coordinate. Publication used idempotency key
+`publish-google-workspace-0.1.1`, and Git Bridge read back the immutable receipt
+shown above. A fresh workspace then added that exact release transitively over
+its already-adopted Base lineage. The five overlapping contributions converged
+through ordinary VCS, passed the affected build gate, and published as operation
+`validate-google-workspace-0.1.1-clean-final-proof4`. The Base contribution was
+recorded as lineage without materializing or merging its older files. Only after that proof were the five
+units deleted from the bundled Base candidate.
+
+The public registry was then created and populated through the same running-app
+workflow. Google Workspace's exact publication receipt produced contribution
+commit `3e66740840e71556b1776e574ee59ed9580bc523`; reviewed PR #1 merged it into
+registry `main` at `6fb0b9aed7901a9f2d8f5df495540d3da18bf309`. An in-app refresh verified
+registry revision `2026-08-10.2`, snapshot
+`v1-sha256:6505abe3427f04b66885f9f47f734bfce27cbefa837b800c8911ee57d01b498d`,
+and all four catalog entries. Registry contribution writes use the ordinary
+automatic URL-bound credential selection when no named credential is declared;
+registry reads remain anonymous where possible.
+
+The clean consumer proof also closed three build-gate defects exposed by the
+larger Gmail worker closure: protected validation derives authority only from
+the candidate state (never by re-entering the old workspace build), syntax
+inference walks deep generated ASTs iteratively, and executable-closure
+authority analysis uses one bounded TypeScript project instead of spawning one
+compiler per module.
 
 The publication receipts are authoritative because Git Bridge reads the
 published commit back into an exact snapshot before returning. These updates
@@ -436,29 +455,26 @@ Current migration state:
    exact epoch matching, and build-gated publication are live.
 5. **Done:** establish the consumer-composition validation and repair contract
    (§Extracted-repository validation contract); no npm SDK publication gate.
-6. **Three extractions done; Google prepared:** Examples, News, and Spectrolite
-   are published and absent from Base. Google Workspace has a clean five-unit
-   closure and is ready for the same publish → validate → delete sequence once
-   its GitHub credential request is approved. GitHub, local models, mobile,
-   browser, and terminal functionality remain in Base.
-7. **Three publications done; Google publication and promotion outstanding:** the latest candidates
-   were published through the in-app authoring path with the exact coordinates
-   recorded above. Add representative cross-composition tests, fix the
-   concurrent same-command publication race and repeated-review DX, then create
-   the registry repository with reviewed promotion.
+6. **Four extractions done:** Examples, News, Spectrolite, and Google Workspace
+   are published, consumer-validated, and absent from Base. GitHub, local
+   models, mobile, browser, and terminal functionality remain in Base.
+7. **Done:** all four candidates were published through the in-app authoring
+   path with the exact coordinates recorded above. The public registry was
+   created, its reviewed Google Workspace contribution was merged, and all four
+   entries are promoted.
 8. **Code side done:** the verified Git registry client binds selection to
    registry commit + snapshot across the service schema, composer, skill
-   contract, onboarding, CLI, and tests. Creating and promoting the external
-   registry repository remains part of step 7.
+   contract, onboarding, CLI, and tests. The deployed registry exercises this
+   contract rather than a checked-in fallback catalog.
 9. Separately cut over workspace creation to an externally published base
    snapshot, delete the in-tree `workspace/` source, and prove that production
    builds and fresh workspace creation have no checkout-relative fallback.
    This does not republish or revalidate feature templates against that base.
-10. **Registry-bound handoff done; registry deployment outstanding:** onboarding
+10. **Done:** onboarding
     presents recommended entries from the verified composer catalog and hands
     the reviewed registry coordinates to the ordinary template-install flow.
     Without a configured verified registry it presents no invented template
-    choices. Registry deployment must include all four optional outcomes.
+    choices. The deployed registry includes all four optional outcomes.
 
 ## Final extraction boundary
 
@@ -466,7 +482,7 @@ The split is closed-world for this release:
 
 | Repository                             | Content rule                                                                                                                                                                                                                                                                                                                                                        |
 | -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `vibestudio-workspace-base`            | Everything retained in the default distribution for this cut, including root metadata, onboarding, GitHub, local models, mobile, template composer/registry client, shell, browser, terminal, and system-test infrastructure. It may overlap the feature rows. Google Workspace remains temporarily until its inspected release is published and install-validated. |
+| `vibestudio-workspace-base`            | Everything retained in the default distribution for this cut, including root metadata, onboarding, GitHub, local models, mobile, template composer/registry client, shell, browser, terminal, and system-test infrastructure. It may overlap the feature rows, but no longer bundles the four extracted optional outcomes. |
 | `vibestudio-template-examples`         | Example/demo repositories and their declarations only                                                                                                                                                                                                                                                                                                               |
 | `vibestudio-template-news`             | News panel/agent and direct dependencies                                                                                                                                                                                                                                                                                                                            |
 | `vibestudio-template-spectrolite`      | Spectrolite panel and direct dependencies                                                                                                                                                                                                                                                                                                                           |

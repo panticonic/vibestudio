@@ -401,6 +401,102 @@ describe("template composer staging", () => {
     expect(call).not.toHaveBeenCalledWith("main", "vcs.finalizeExternalDelta", expect.anything());
   });
 
+  it("seeds an absent repository from acquired files instead of ledger-only lineage", async () => {
+    let imported = false;
+    const call = vi.fn(async (_target: string, method: string, input: Record<string, unknown>) => {
+      if (method === "vcs.status") return { committed: BASE, workingHead: BASE, clean: true };
+      if (method === "vcs.resolveRepository") {
+        return imported
+          ? { repositoryId: "repository:one", repoPath: "panels/one" }
+          : null;
+      }
+      if (method === "vcs.importSnapshot") {
+        imported = true;
+        return {};
+      }
+      throw new Error(`unexpected RPC ${method}: ${JSON.stringify(input)}`);
+    });
+    const basePin = {
+      url: "git+https://example.test/base.git",
+      ref: "refs/tags/v1",
+      commit: "1".repeat(40),
+      snapshot: `v1-sha256:${"a".repeat(64)}`,
+    };
+    const featurePin = {
+      url: "git+https://example.test/feature.git",
+      ref: "refs/tags/v1",
+      commit: "2".repeat(40),
+      snapshot: `v1-sha256:${"b".repeat(64)}`,
+    };
+    const baseDigest = semanticRepositoryDigest([
+      { path: "index.ts", contentHash: OLD_ONE, mode: 0o644, byteLength: 1 },
+    ]);
+    const featureDigest = semanticRepositoryDigest([
+      { path: "feature.ts", contentHash: NEW_ONE, mode: 0o644, byteLength: 1 },
+    ]);
+    const previous = {
+      nodes: [{ nodeId: "t-base", alias: "base", pin: basePin }],
+      repositories: {
+        "panels/one": {
+          contributions: [{ nodeId: "t-base", subtreeDigest: baseDigest }],
+        },
+      },
+    };
+    const plan = {
+      nodes: [
+        { nodeId: "t-base", pin: basePin },
+        { nodeId: "t-feature", pin: featurePin },
+      ],
+      repositories: {
+        "panels/one": {
+          repoPath: "panels/one",
+          contributions: [
+            {
+              nodeId: "t-base",
+              alias: "base",
+              subdir: "panels/one",
+              subtreeDigest: baseDigest,
+              files: [],
+            },
+            {
+              nodeId: "t-feature",
+              alias: "feature",
+              subdir: "panels/one",
+              subtreeDigest: featureDigest,
+              files: [
+                { path: "feature.ts", contentHash: NEW_ONE, size: 1, mode: 0o644 },
+              ],
+            },
+          ],
+        },
+      },
+    };
+
+    await expect(
+      mergeTemplateContributions(
+        { rpc: { call } } as never,
+        "/state",
+        "operation-ledger-seed",
+        plan as never,
+        previous as never
+      )
+    ).resolves.toEqual(["panels/one"]);
+    expect(call).toHaveBeenCalledWith(
+      "main",
+      "vcs.importSnapshot",
+      expect.objectContaining({
+        intentSummary: "Import panels/one contribution from feature",
+        repositories: [
+          {
+            repoPath: "panels/one",
+            files: [expect.objectContaining({ path: "feature.ts" })],
+          },
+        ],
+      })
+    );
+    expect(call).not.toHaveBeenCalledWith("main", "vcs.registerExternalDelta", expect.anything());
+  });
+
   it("registers every repository delta before reconciliation mutates the context", async () => {
     const registrations: string[] = [];
     let integrationStarted = false;

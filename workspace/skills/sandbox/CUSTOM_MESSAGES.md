@@ -330,9 +330,9 @@ await assertMessageTypesHealthy(MY_MESSAGE_TYPES, {
 });
 ```
 
-Reference usage: `workspace/packages/gmail/src/renderers/pipeline-repro.test.ts`.
-A type that fails the doctor would have shipped as a stuck spinner or a
-build-service stall in users' panels.
+Keep the doctor invocation in the package that owns the renderer definitions.
+A type that fails it would have shipped as a stuck spinner or a build-service
+stall in users' panels.
 
 ### Failure states, from the user's perspective
 

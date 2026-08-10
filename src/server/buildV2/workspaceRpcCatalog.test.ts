@@ -7,6 +7,29 @@ import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
 import { collectWorkspaceRpcCatalog } from "./workspaceRpcCatalog.js";
 
 describe("workspace RPC build catalog", () => {
+  it("walks deeply generated provider syntax without consuming the JavaScript call stack", async () => {
+    const root = mkdtempSync(join(tmpdir(), "vibestudio-rpc-catalog-deep-"));
+    const generatedExpression = `root${".value".repeat(12_000)}`;
+    writeFileSync(
+      join(root, "provider.ts"),
+      `
+        declare const root: any;
+        const generated = ${generatedExpression};
+        class NotesDO {
+          @rpc({ principals: ["code"], effect: { kind: "open" }, tier: "open", sensitivity: "read" })
+          async getNote(): Promise<void> {}
+        }
+      `
+    );
+
+    await expect(
+      collectWorkspaceRpcCatalog(root, {
+        provider: "workers/notes",
+        authority: { requests: [], provides: [] },
+      })
+    ).resolves.toEqual([expect.objectContaining({ name: "getNote" })]);
+  });
+
   it("derives documented receiver methods from the exact worker source", async () => {
     const root = mkdtempSync(join(tmpdir(), "vibestudio-rpc-catalog-"));
     mkdirSync(join(root, "nested"));

@@ -489,9 +489,9 @@ describe("workspace service agent resources", () => {
         path.join(wsPath, "packages", "foo", "SKILL.md"),
         "---\nname: duplicate\ndescription: Package skill\n---\n"
       );
-      mkdirSync(path.join(wsPath, "workers", "gmail-agent"), { recursive: true });
+      mkdirSync(path.join(wsPath, "workers", "customer-agent"), { recursive: true });
       writeFileSync(
-        path.join(wsPath, "workers", "gmail-agent", "SKILL.md"),
+        path.join(wsPath, "workers", "customer-agent", "SKILL.md"),
         "---\nname: duplicate\ndescription: Worker skill\n---\n"
       );
       mkdirSync(path.join(wsPath, "projects", "vault"), { recursive: true });
@@ -551,8 +551,8 @@ describe("workspace service agent resources", () => {
         {
           name: "duplicate",
           description: "Worker skill",
-          dirPath: "workers/gmail-agent",
-          skillPath: "workers/gmail-agent/SKILL.md",
+          dirPath: "workers/customer-agent",
+          skillPath: "workers/customer-agent/SKILL.md",
         },
       ]);
     });

@@ -18,7 +18,7 @@ import { collectWorkspaceRpcCatalog, type WorkspaceRpcMethodDoc } from "./worksp
 import { workspaceRpcSchema } from "./workspaceRpcSchemas.js";
 import { PRODUCT_BUILTIN_CATALOG } from "@vibestudio/shared/productBuiltinCatalog.generated";
 
-export const USERLAND_AUTHORITY_ANALYZER_VERSION = "userland-authority-v1";
+export const USERLAND_AUTHORITY_ANALYZER_VERSION = "userland-authority-v2";
 
 export interface ExactWorkspaceServiceBinding {
   name: string;

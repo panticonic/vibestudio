@@ -682,45 +682,49 @@ export function analyzeWorkspaceServiceCalls(
     }
   }
   const facts = [...factsByNode.values()];
-  for (const module of input.executableModules ?? []) {
-    const virtualFile = path.isAbsolute(module.moduleId)
-      ? module.moduleId
-      : path.resolve(input.sourceRoot, module.moduleId);
+  const executableModules = input.executableModules ?? [];
+  if (executableModules.length > 0) {
+    const executableRoot = path.resolve(input.sourceRoot, ".vibestudio-authority-executable");
     const service = new TypeCheckService({
-      panelPath: path.dirname(virtualFile),
+      panelPath: executableRoot,
       workspaceContext: null,
       disableTsconfigDiscovery: true,
       skipSuggestions: true,
     });
-    service.updateFile(virtualFile, module.source);
     try {
+      const units = executableModules.map((module, index) => {
+        const relativePath = path.join(
+          ".vibestudio-authority-executable",
+          String(index).padStart(6, "0")
+        );
+        service.updateFile(path.resolve(input.sourceRoot, relativePath, "module.js"), module.source);
+        return {
+          name: module.package.kind === "external" ? module.package.name : "external-module",
+          relativePath,
+          package:
+            module.package.kind === "external"
+              ? {
+                  kind: "external" as const,
+                  name: module.package.name,
+                  versionOrEffectiveVersion: module.package.version,
+                  contentDigest: module.package.packageDigest,
+                }
+              : module.package.kind === "workspace"
+                ? {
+                    kind: "workspace" as const,
+                    name: module.package.name,
+                    versionOrEffectiveVersion: module.package.effectiveVersion,
+                    contentDigest: module.contentDigest,
+                  }
+                : undefined,
+        };
+      });
       facts.push(
         ...analyzeWorkspaceServiceCalls({
           project: service.getProject(),
-          sourceRoot: path.dirname(virtualFile),
-          unitRelativePath: ".",
-          units: [
-            {
-              name: module.package.kind === "external" ? module.package.name : "external-module",
-              relativePath: ".",
-              package:
-                module.package.kind === "external"
-                  ? {
-                      kind: "external",
-                      name: module.package.name,
-                      versionOrEffectiveVersion: module.package.version,
-                      contentDigest: module.package.packageDigest,
-                    }
-                  : module.package.kind === "workspace"
-                    ? {
-                        kind: "workspace",
-                        name: module.package.name,
-                        versionOrEffectiveVersion: module.package.effectiveVersion,
-                        contentDigest: module.contentDigest,
-                      }
-                    : undefined,
-            },
-          ],
+          sourceRoot: input.sourceRoot,
+          unitRelativePath: ".vibestudio-authority-executable",
+          units,
         })
       );
     } finally {

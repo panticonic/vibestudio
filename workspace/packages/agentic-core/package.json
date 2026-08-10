@@ -15,6 +15,7 @@
     "@workspace/agentic-protocol": "workspace:*",
     "@workspace/eval": "workspace:*",
     "@workspace/model-catalog": "workspace:*",
+    "@workspace/pi-core": "workspace:*",
     "@workspace/pubsub": "workspace:*"
   }
 }

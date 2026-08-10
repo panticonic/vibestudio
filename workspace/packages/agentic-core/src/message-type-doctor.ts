@@ -14,9 +14,8 @@
  *      module is satisfiable from host modules + declared imports alone —
  *      and assert it exports a default component.
  *
- * Agent packages that register renderers should run this in their test suite
- * (see packages/gmail/src/renderers/pipeline-repro.test.ts for the
- * reference usage).
+ * Agent packages that register renderers should run this in their own test
+ * suite so the check travels with the renderer implementation.
  */
 
 import {

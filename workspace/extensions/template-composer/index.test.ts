@@ -15,6 +15,7 @@ import {
   loadTemplateCatalog,
   mergeAcceptedTemplateSuggestion,
   operationReviewForTemplate,
+  selectedTemplateName,
 } from "./index.js";
 import { bootstrapWorkspaceSource, projectBootstrapRuntimeToSource } from "./workspace.js";
 
@@ -74,6 +75,29 @@ function approvedRecord(): TemplateOperationRecord {
 }
 
 describe("template composer operation resumption", () => {
+  it("names a direct add after its selected root rather than a sorted dependency", () => {
+    const basePin = { ...oldPin, url: "git+https://example.test/base.git" };
+    const selectedPin = { ...refreshedPin, url: "git+https://example.test/google.git" };
+    expect(
+      selectedTemplateName({
+        pin: selectedPin,
+        fingerprint: `v1-sha256:${"f".repeat(64)}`,
+        roots: ["t-google"],
+        templates: [
+          { nodeId: "t-base", alias: "base", url: basePin.url, commit: basePin.commit },
+          {
+            nodeId: "t-google",
+            alias: "google-workspace",
+            url: selectedPin.url,
+            commit: selectedPin.commit,
+          },
+        ],
+        affectedParts: [],
+        excludedSuggestions: [],
+      })
+    ).toBe("google-workspace");
+  });
+
   it("discards the exact in-flight context", async () => {
     const publishCancellation = vi.fn(async () => undefined);
     const destroy = vi.fn(async () => undefined);

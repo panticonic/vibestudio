@@ -371,8 +371,9 @@ export default function ProviderSetup({ onSubmit, onCancel }) {
 }
 ```
 
-For Google Workspace specifically, use the dedicated
-`google-workspace` skill and its setup workflow UI.
+For Google Workspace specifically, use the dedicated `google-workspace` skill
+and its setup workflow UI when that template is installed. If it is absent,
+offer the Google Workspace template through the onboarding template flow first.
 For GitHub specifically, use the dedicated `github` skill and its fine-grained
 PAT setup workflow.
 For keyed web-search providers (Tavily, Brave, Exa) specifically, use the

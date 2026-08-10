@@ -1724,6 +1724,9 @@ importers:
       '@workspace/model-catalog':
         specifier: workspace:*
         version: link:../model-catalog
+      '@workspace/pi-core':
+        specifier: workspace:*
+        version: link:../pi-core
       '@workspace/pubsub':
         specifier: workspace:*
         version: link:../pubsub
@@ -1872,53 +1875,6 @@ importers:
         version: 7.0.2
       vitest:
         specifier: ^3.2.4
-        version: 3.2.4(@types/debug@4.1.12)(@types/node@24.10.9)(@vitest/browser@3.2.4)(jiti@2.7.0)(jsdom@29.0.1(@noble/hashes@2.2.0))(terser@5.46.1)(tsx@4.21.0)(yaml@2.9.0)
-
-  workspace/packages/gmail:
-    dependencies:
-      '@radix-ui/react-icons':
-        specifier: ^1.3.2
-        version: 1.3.2(react@19.0.0)
-      '@radix-ui/themes':
-        specifier: ^3.2.1
-        version: 3.3.0(@types/react-dom@19.2.3(@types/react@19.2.10))(@types/react@19.2.10)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
-      '@workspace-skills/agents':
-        specifier: workspace:*
-        version: link:../../skills/agents
-      '@workspace-skills/google-workspace':
-        specifier: workspace:*
-        version: link:../../skills/google-workspace
-      '@workspace/google-workspace':
-        specifier: workspace:*
-        version: link:../google-workspace
-      '@workspace/runtime':
-        specifier: workspace:*
-        version: link:../runtime
-      react:
-        specifier: 19.0.0
-        version: 19.0.0
-    devDependencies:
-      vitest:
-        specifier: ^3.2.2
-        version: 3.2.4(@types/debug@4.1.12)(@types/node@24.10.9)(@vitest/browser@3.2.4)(jiti@2.7.0)(jsdom@29.0.1(@noble/hashes@2.2.0))(terser@5.46.1)(tsx@4.21.0)(yaml@2.9.0)
-
-  workspace/packages/google-workspace:
-    dependencies:
-      '@vibestudio/credential-client':
-        specifier: workspace:*
-        version: link:../../../packages/credential-client
-      '@workspace/integrations':
-        specifier: workspace:*
-        version: link:../integrations
-      '@workspace/runtime':
-        specifier: workspace:*
-        version: link:../runtime
-    devDependencies:
-      '@vibestudio/rpc':
-        specifier: workspace:*
-        version: link:../../../packages/rpc
-      vitest:
-        specifier: ^3.2.2
         version: 3.2.4(@types/debug@4.1.12)(@types/node@24.10.9)(@vitest/browser@3.2.4)(jiti@2.7.0)(jsdom@29.0.1(@noble/hashes@2.2.0))(terser@5.46.1)(tsx@4.21.0)(yaml@2.9.0)
 
   workspace/packages/harness:
@@ -2591,36 +2547,6 @@ importers:
         specifier: 19.0.0
         version: 19.0.0
 
-  workspace/skills/google-drive:
-    dependencies:
-      '@workspace-skills/google-workspace':
-        specifier: workspace:*
-        version: link:../google-workspace
-      '@workspace/google-workspace':
-        specifier: workspace:*
-        version: link:../../packages/google-workspace
-      '@workspace/runtime':
-        specifier: workspace:*
-        version: link:../../packages/runtime
-
-  workspace/skills/google-workspace:
-    dependencies:
-      '@radix-ui/react-icons':
-        specifier: ^1.3.2
-        version: 1.3.2(react@19.0.0)
-      '@radix-ui/themes':
-        specifier: ^3.2.1
-        version: 3.3.0(@types/react-dom@19.2.3(@types/react@19.2.10))(@types/react@19.2.10)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
-      '@workspace/google-workspace':
-        specifier: workspace:*
-        version: link:../../packages/google-workspace
-      '@workspace/runtime':
-        specifier: workspace:*
-        version: link:../../packages/runtime
-      react:
-        specifier: 19.0.0
-        version: 19.0.0
-
   workspace/skills/memory: {}
 
   workspace/skills/mobile-system-testing:
@@ -2783,49 +2709,6 @@ importers:
         specifier: ^3.24.0
         version: 3.25.76
     devDependencies:
-      vitest:
-        specifier: ^3.2.2
-        version: 3.2.4(@types/debug@4.1.12)(@types/node@24.10.9)(@vitest/browser@3.2.4)(jiti@2.7.0)(jsdom@29.0.1(@noble/hashes@2.2.0))(terser@5.46.1)(tsx@4.21.0)(yaml@2.9.0)
-
-  workspace/workers/gmail-agent:
-    dependencies:
-      '@earendil-works/pi-ai':
-        specifier: 0.82.0
-        version: 0.82.0(patch_hash=41b4580bff599c99bb9cc0848c4d997430e92e257eca1c850835d0a36fd28830)(@modelcontextprotocol/sdk@1.25.3(@cfworker/json-schema@4.1.1)(hono@4.11.7)(zod@3.25.76))(ws@8.21.1)(zod@3.25.76)
-      '@vibestudio/shared':
-        specifier: workspace:*
-        version: link:../../../packages/shared
-      '@vibestudio/trajectory-identity':
-        specifier: workspace:*
-        version: link:../../../packages/trajectory-identity
-      '@workspace/agentic-do':
-        specifier: workspace:*
-        version: link:../../packages/agentic-do
-      '@workspace/agentic-protocol':
-        specifier: workspace:*
-        version: link:../../packages/agentic-protocol
-      '@workspace/gmail':
-        specifier: workspace:*
-        version: link:../../packages/gmail
-      '@workspace/harness':
-        specifier: workspace:*
-        version: link:../../packages/harness
-      '@workspace/pi-core':
-        specifier: workspace:*
-        version: link:../../packages/pi-core
-      '@workspace/pubsub':
-        specifier: workspace:*
-        version: link:../../packages/pubsub
-      '@workspace/runtime':
-        specifier: workspace:*
-        version: link:../../packages/runtime
-      zod:
-        specifier: ^3.24.0
-        version: 3.25.76
-    devDependencies:
-      '@workspace/agent-loop':
-        specifier: workspace:*
-        version: link:../../packages/agent-loop
       vitest:
         specifier: ^3.2.2
         version: 3.2.4(@types/debug@4.1.12)(@types/node@24.10.9)(@vitest/browser@3.2.4)(jiti@2.7.0)(jsdom@29.0.1(@noble/hashes@2.2.0))(terser@5.46.1)(tsx@4.21.0)(yaml@2.9.0)

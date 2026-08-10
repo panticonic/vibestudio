@@ -104,6 +104,21 @@ describe("inferTypedServiceClientCapabilities", () => {
 
     assert.deepEqual([...inferred], ["service:autofill.confirmSave"]);
   });
+
+  it("walks deeply generated executable syntax without consuming the JavaScript stack", () => {
+    const generatedExpression = `root${".value".repeat(12_000)}`;
+    const inferred = inferTypedServiceClientCapabilities(
+      `
+        declare const root: any;
+        const generated = ${generatedExpression};
+        const autofillClient = createTypedServiceClient("autofill", methods, call);
+        autofillClient.confirmSave("panel", "save");
+      `,
+      host
+    );
+
+    assert.deepEqual([...inferred], ["service:autofill.confirmSave"]);
+  });
 });
 
 describe("hosted runtime service-backed methods", () => {

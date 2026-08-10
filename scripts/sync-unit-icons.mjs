@@ -45,7 +45,6 @@ export const UNIT_ICONS = {
 
   "workers/agent-worker": semantic("bot-message-square", "#8B5CF6"),
   "workers/explorer-agent": semantic("compass", "#06B6D4"),
-  "workers/gmail-agent": brand("gmail", "#EA4335"),
   "workers/hello": semantic("hand", "#F59E0B"),
   "workers/linked-agent": semantic("link", "#3B82F6"),
   "workers/model-settings": semantic("sliders-horizontal", "#8B5CF6"),

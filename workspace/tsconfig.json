@@ -89,7 +89,6 @@
       "@workspace-panels/email/contract": ["./panels/email/contract.ts"],
       "@workspace-skills/agents": ["./skills/agents/index.ts"],
       "@workspace-skills/workspace-dev": ["./skills/workspace-dev/index.ts"],
-      "@workspace-skills/google-workspace": ["./skills/google-workspace/index.ts"],
       "@workspace-skills/github": ["./skills/github/index.ts"],
       "@workspace-skills/onboarding": ["./skills/onboarding/index.ts"],
       "@workspace-skills/web-research": ["./skills/web-research/index.ts"],
@@ -130,18 +129,8 @@
       "@workspace/integrations/github": ["./packages/integrations/src/github.ts"],
       "@workspace/integrations/providers": ["./packages/integrations/src/providers.ts"],
       "@workspace/integrations/remoteProviders": ["./packages/integrations/src/remoteProviders.ts"],
-      "@workspace/google-workspace": ["./packages/google-workspace/src/index.ts"],
-      "@workspace/google-workspace/calendar": ["./packages/google-workspace/src/calendar.ts"],
-      "@workspace/google-workspace/drive": ["./packages/google-workspace/src/drive.ts"],
-      "@workspace/google-workspace/providers": ["./packages/google-workspace/src/providers.ts"],
       "@workspace/model-catalog/*": ["./packages/model-catalog/src/*.ts"],
       "@workspace/channel-fork": ["./packages/channel-fork/src/index.ts"],
-      "@workspace/gmail": ["./packages/gmail/src/index.ts"],
-      "@workspace/gmail/agent": ["./packages/gmail/src/agent.ts"],
-      "@workspace/gmail/test-utils": ["./packages/gmail/src/test-utils.ts"],
-      "@workspace/gmail/renderers/gmail-thread.reducer": [
-        "./packages/gmail/src/renderers/gmail-thread.reducer.ts"
-      ],
       "@workspace/pubsub": ["./packages/pubsub/src/index.ts"],
       "@workspace/react": ["./packages/react/src/index.ts"],
       "@workspace/react/responsive": ["./packages/react/src/responsive.ts"],
@@ -182,8 +171,7 @@
       "@workspace/cdp-client": ["./packages/cdp-client/index.d.ts"],
       "@workspace/svelte": ["./packages/svelte/src/index.ts"],
       "@workspace/tool-ui": ["./packages/tool-ui/src/index.ts"],
-      "@workspace/tool-ui/*": ["./packages/tool-ui/src/*"],
-      "@workspace/gmail/card-types": ["./packages/gmail/src/card-types.ts"]
+      "@workspace/tool-ui/*": ["./packages/tool-ui/src/*"]
     }
   },
   "include": ["**/*"],

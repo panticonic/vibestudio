@@ -818,6 +818,88 @@ describe("SemanticWorkspace snapshot import", () => {
     ).resolves.toMatchObject({ kind: "complete", result: { status: "superseded" } });
   });
 
+  it("registers an external create that is already present as a convergent delta", async () => {
+    const { semantic, initial } = await authorityFixture();
+    const ingress: SemanticDispatchRequest["ingress"] = {
+      causalParent: null,
+      contextIntegrity: { class: "internal", externalKeys: [] },
+    };
+    const file = textFile("index.ts", "already here\n");
+    const imported = await completeImport(
+      semantic,
+      {
+        ingress,
+        input: {
+          contextId: "context:test",
+          commandId: "command:convergent-create-basis",
+          expectedWorkingHead: initial.working.ref,
+          source: {
+            kind: "generated",
+            uri: "fixture://convergent-create-basis",
+            snapshotRevision: "v1",
+          },
+          repositories: [{ repoPath: "projects/convergent-create", files: [file.descriptor] }],
+        },
+      },
+      new Map([[file.descriptor.contentHash, file.bytes]])
+    );
+    const repositoryId = imported.importedRepositoryIds[0]!;
+    const emptySnapshot = canonicalSnapshotDigest([]);
+    const fileSnapshot = canonicalSnapshotDigest([
+      {
+        path: file.descriptor.path,
+        mode: 0o100644,
+        size: file.bytes.byteLength,
+        contentHash: file.descriptor.contentHash,
+      },
+    ]);
+    const target = { kind: "event" as const, eventId: imported.eventId };
+    const registration = await semantic.dispatch("registerExternalDelta", {
+      ingress,
+      input: {
+        contextId: "context:test",
+        commandId: "command:register-convergent-create",
+        expectedWorkingHead: target,
+        repositoryId,
+        repoPath: "projects/convergent-create",
+        oldSource: {
+          kind: "generated",
+          uri: "fixture://convergent-create/empty",
+          snapshotRevision: "empty",
+          snapshot: emptySnapshot,
+        },
+        newSource: {
+          kind: "generated",
+          uri: "fixture://convergent-create/v1",
+          snapshotRevision: "v1",
+          snapshot: fileSnapshot,
+        },
+        oldFiles: [],
+        newFiles: [file.descriptor],
+      },
+    });
+    const registered = acknowledgeImportObservation(
+      semantic,
+      registration,
+      new Map([[file.descriptor.contentHash, file.bytes]])
+    );
+    if (registered.kind !== "complete") throw new Error("delta registration did not complete");
+    const deltaId = (registered.result as { deltaId: string }).deltaId;
+
+    await expect(
+      semantic.dispatch("compare", {
+        ingress,
+        input: { target, source: { kind: "external-delta", deltaId } },
+      })
+    ).resolves.toMatchObject({
+      kind: "complete",
+      result: {
+        counts: { convergent: 1, conflict: 0 },
+        resolution: { complete: true, concluded: false },
+      },
+    });
+  });
+
   it("merges an external content update against its authored base without reverting a local mode", async () => {
     const { semantic, store, initial } = await authorityFixture();
     const ingress: SemanticDispatchRequest["ingress"] = {

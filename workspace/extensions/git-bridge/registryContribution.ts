@@ -144,7 +144,7 @@ export class RegistryContributionEngine {
       http: this.ctx.credentials.gitHttp(
         input.credential
           ? { logicalCredential: { name: input.credential, remoteUrl: transportUrl } }
-          : { credentialId: null }
+          : undefined
       ),
     });
     const info = await this.ctx.workspace.getInfo();

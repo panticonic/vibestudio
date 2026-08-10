@@ -7,8 +7,8 @@ describe("lintRendererSource", () => {
 import { Flex } from "@radix-ui/themes";
 import { useState } from "react";
 import dayjs from "dayjs";
-import type { GmailThreadState } from "@workspace/gmail/renderers/gmail-thread.reducer";
-import { type A, type B } from "@workspace/gmail/card-types";
+import type { CardState } from "@workspace/example-card/reducer";
+import { type A, type B } from "@workspace/example-card/types";
 import { helper } from "./helper";
 // import { ghost } from "commented-out";
 export default function Card() { return null; }
@@ -17,10 +17,10 @@ export default function Card() { return null; }
   });
 
   it("flags value imports of undeclared workspace packages", () => {
-    const code = `import { reduce } from "@workspace/gmail/renderers/gmail-thread.reducer";`;
+    const code = `import { reduce } from "@workspace/example-card/reducer";`;
     const issues = lintRendererSource(code);
     expect(issues).toHaveLength(1);
-    expect(issues[0]!.specifier).toBe("@workspace/gmail/renderers/gmail-thread.reducer");
+    expect(issues[0]!.specifier).toBe("@workspace/example-card/reducer");
     expect(issues[0]!.message).toMatch(/build-service round trip/);
   });
 

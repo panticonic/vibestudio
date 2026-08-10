@@ -515,23 +515,26 @@ export async function mergeTemplateContributions(
       : new Map<string, ContributionSide>();
 
     if (!repository && next.size > 0) {
-      const [url, first] = next.entries().next().value!;
-      await ctx.rpc.call("main", "vcs.importSnapshot", {
-        commandId: `${contextId}:import:${repoPath}`,
-        contextId,
-        expectedWorkingHead: current.workingHead,
-        intentSummary: `Import ${repoPath} contribution from ${first.alias}`,
-        source: gitContributionSource(first),
-        repositories: [{ repoPath, files: first.files }],
-        message: `Import ${repoPath} contribution from ${first.alias}`,
-      });
-      next.delete(url);
-      // The imported snapshot is already the complete next side for this
-      // contribution. Do not subsequently apply its old→new delta to itself.
-      prior.delete(url);
-      changed.push(repoPath);
-      const imported = await status(ctx, contextId);
-      repository = await resolveRepository(ctx, imported.workingHead, repoPath);
+      const seed = [...next.entries()].find(([, contribution]) => contribution.files.length > 0);
+      if (seed) {
+        const [url, first] = seed;
+        await ctx.rpc.call("main", "vcs.importSnapshot", {
+          commandId: `${contextId}:import:${repoPath}`,
+          contextId,
+          expectedWorkingHead: current.workingHead,
+          intentSummary: `Import ${repoPath} contribution from ${first.alias}`,
+          source: gitContributionSource(first),
+          repositories: [{ repoPath, files: first.files }],
+          message: `Import ${repoPath} contribution from ${first.alias}`,
+        });
+        next.delete(url);
+        // The imported snapshot is already the complete next side for this
+        // contribution. Do not subsequently apply its old→new delta to itself.
+        prior.delete(url);
+        changed.push(repoPath);
+        const imported = await status(ctx, contextId);
+        repository = await resolveRepository(ctx, imported.workingHead, repoPath);
+      }
     }
     if (!repository) continue;
     const urls = [...new Set([...prior.keys(), ...next.keys()])].sort();

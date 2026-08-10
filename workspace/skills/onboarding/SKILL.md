@@ -18,15 +18,18 @@ base-owned composer inside the inviting panel, the shared boundary that can
 reach workspace owners and the redacted Electron host read.
 
 Render the returned object with `inline_ui` from
-`skills/onboarding/SetupHub.tsx`, passing its `{ catalog, snapshot, templates }`. The composer reads
-Google, GitHub, model settings, agent defaults, local models, browser imports,
-web search, and installed-template status directly from their owners. It composes device/workspace topology
+`skills/onboarding/SetupHub.tsx`, passing its `{ catalog, snapshot, templates }`.
+The composer reads GitHub, model settings, agent defaults, local models,
+browser imports, web search, installed capability owners, and template status
+directly from their owners. It composes device/workspace topology
 from `hubControl.listDevices` and `hubControl.listWorkspaces`, plus the
 client-local route mode. A failed read becomes an honest `unknown` row and does
-not suppress the rest. These owners currently ship in the base workspace. If
-one cannot be discovered, that row is **Unavailable** because the shipped base
-capability is broken or incomplete; onboarding never offers an optional
-template as a substitute for a broken base capability.
+not suppress the rest. Base-owned definitions are always present; if one of
+their owners cannot be discovered, that row is **Unavailable** because the base
+capability is broken or incomplete. Optional owners such as Google Workspace
+join the catalog only after their template is installed. Before installation,
+their registry entry appears only under Optional templates; onboarding never
+pretends that an absent optional owner is a broken base capability.
 
 The opening message is short. The inline setup overview is the first-screen
 information architecture. Do not load or publish an onboarding action bar.
@@ -110,7 +113,11 @@ hands off the user's selected intent.
 Keep optional templates visually separate from required setup. Their presence
 is discoverability, not an unfinished-setup checklist or recommendation. Once
 installed, ordinary runtime owner discovery exposes any setup workflow the new
-units provide.
+units provide. For Google Workspace this means the catalog first offers the
+template; after the add succeeds, its owner skill contributes the Google
+connection row and controls credential configuration, verification, repair,
+and Gmail setup. Onboarding stores no duplicate Google definition or setup
+state.
 
 ## Product rules
 

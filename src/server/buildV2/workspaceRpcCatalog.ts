@@ -348,9 +348,24 @@ export async function collectWorkspaceRpcCatalog(
             });
           }
         }
-        node.forEachChild(visit);
       };
-      visit(source);
+      // Provider packages can contain generated expressions with thousands of
+      // nested syntax nodes. Recursive descent makes catalog extraction depend
+      // on the JavaScript call-stack limit even though TypeScript parsed the
+      // file successfully. Walk the same tree iteratively so exact authority
+      // analysis remains total for valid source.
+      const pending: ts.Node[] = [source];
+      while (pending.length > 0) {
+        const node = pending.pop()!;
+        visit(node);
+        const children: ts.Node[] = [];
+        node.forEachChild((child) => {
+          children.push(child);
+        });
+        for (let index = children.length - 1; index >= 0; index -= 1) {
+          pending.push(children[index]!);
+        }
+      }
     }
   });
   const sorted = methods.sort(
