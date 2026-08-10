@@ -53,6 +53,7 @@
     "./eventsService": "./src/eventsService.ts",
     "./execution/*": "./src/execution/*.ts",
     "./evalConfinement": "./src/evalConfinement.ts",
+    "./evalRuntimeIdentity": "./src/evalRuntimeIdentity.ts",
     "./extensionRuntimeAbi": "./src/extensionRuntimeAbi.ts",
     "./externalOpen": "./src/externalOpen.ts",
     "./fsService": "./src/fsService.ts",

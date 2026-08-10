@@ -16,6 +16,7 @@ import type { WorkspaceEntityStore } from "../workspaceEntityStore.js";
 import { resolveOwningPanelSlot } from "@vibestudio/shared/panel/owningPanelSlot";
 import type { TokenManager } from "@vibestudio/shared/tokenManager";
 import { createHash, randomUUID } from "node:crypto";
+import { evalRuntimeId } from "@vibestudio/shared/evalRuntimeIdentity";
 import { sha256Canonical } from "@vibestudio/shared/authority/invocationSnapshot";
 import { codePrincipal } from "@vibestudio/shared/authority/codePrincipal";
 import { capabilityPatternCovers } from "@vibestudio/shared/authorityManifest";
@@ -310,16 +311,9 @@ export function createEvalService(deps: {
   const evalExecutionIdentity = internalDOExecutionIdentity(getInternalDOBundle(), EVAL_DO_CLASS);
 
   const evalDoKey = (ownerId: string, subKey: string): string =>
-    createHash("sha256")
-      .update(ownerId + "\0" + subKey)
-      .digest("hex")
-      .slice(0, 40);
+    evalRuntimeId(ownerId, subKey).slice(`do:${INTERNAL_DO_SOURCE}:${EVAL_DO_CLASS}:`.length);
 
-  /**
-   * The EvalDO's canonical entity id (kind `do`). This is the principal the
-   * server resolves on every EvalDO→main callback AND the subject of the
-   * owner-scoped gateway token — the two MUST agree, so both derive it here.
-   */
+  /** The EvalDO identity and object-key derivation share one canonical helper. */
   const evalDoEntityId = (objectKey: string): string =>
     `do:${INTERNAL_DO_SOURCE}:${EVAL_DO_CLASS}:${objectKey}`;
 

@@ -3450,7 +3450,12 @@ async function main() {
               "appendAuthorityEvent",
               executionSession.eval.runId,
               kind,
-              payload
+              {
+                ...payload,
+                callerId: executionSession.eval.runtimeId,
+                taskRef: executionSession.taskRef,
+                taskAuthority: executionSession.taskAuthority,
+              }
             )
             .then(() => undefined);
         });

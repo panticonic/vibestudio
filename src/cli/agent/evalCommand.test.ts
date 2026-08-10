@@ -272,6 +272,25 @@ describe("vibestudio eval commands", () => {
     });
   });
 
+  it("eval run enables invocation-local full-auto approval explicitly", async () => {
+    writeCredentials(tmpDir);
+    writeSession(tmpDir);
+    const { rpcBodies } = stubServer((body) => {
+      if (body.method === "shellApproval.listPending") return [];
+      return terminalStart(OK_RESULT);
+    });
+
+    const { main } = await import("../client.js");
+    await expect(
+      main(["eval", "run", "-e", "return 1;", "--approval-level", "2", "--json"])
+    ).resolves.toBe(0);
+
+    expect(rpcBodies.map((body) => body.method)).toEqual([
+      "shellApproval.listPending",
+      "eval.start",
+    ]);
+  });
+
   it("eval run --path lets the server read the file (no inline code)", async () => {
     writeCredentials(tmpDir);
     writeSession(tmpDir);
@@ -382,6 +401,9 @@ describe("vibestudio eval commands", () => {
     const { main } = await import("../client.js");
     await expect(main(["eval", "run", "-e", "1", "--timeout", "nope", "--json"])).resolves.toBe(2);
     await expect(main(["eval", "run", "-e", "1", "--imports", "[1]", "--json"])).resolves.toBe(2);
+    await expect(main(["eval", "run", "-e", "1", "--approval-level", "3", "--json"])).resolves.toBe(
+      2
+    );
     await expect(main(["eval", "run", "file.ts", "-e", "1", "--json"])).resolves.toBe(2);
     await expect(main(["eval", "run", "-e", "1", "--path", "/a.ts", "--json"])).resolves.toBe(2);
   });

@@ -11,6 +11,8 @@ import * as fs from "node:fs";
 import { randomUUID } from "node:crypto";
 import { createEvalExecutor, evalMethods } from "@vibestudio/service-schemas/eval";
 import { EventsClient } from "@vibestudio/service-schemas/clients/eventsClient";
+import { shellApprovalMethods } from "@vibestudio/service-schemas/shellApproval";
+import { evalRuntimeId } from "@vibestudio/shared/evalRuntimeIdentity";
 import { JSON_FLAG, type CliCommand, type ParsedInvocation } from "../commandTable.js";
 import {
   jsonMode,
@@ -22,6 +24,7 @@ import {
 } from "../output.js";
 import { typedClient } from "../typedClients.js";
 import { resolveSessionScope, SCOPE_FLAGS } from "./sessionContext.js";
+import { createEvalAutoApprover, parseEvalApprovalLevel } from "./evalAutoApproval.js";
 
 // ---------------------------------------------------------------------------
 // Argument parsing
@@ -136,6 +139,7 @@ async function evalRun(inv: ParsedInvocation): Promise<number> {
     const serverPath = typeof inv.flags["path"] === "string" ? inv.flags["path"] : undefined;
     const code = await resolveCode(inv, serverPath);
     const timeoutMs = parseTimeout(inv);
+    const approvalLevel = parseEvalApprovalLevel(inv.flags["approval-level"]);
     const imports = parseImports(inv);
     const syntax = parseSyntax(inv);
     // Scope (credential + context + owner identity) is fully resolved by
@@ -162,11 +166,41 @@ async function evalRun(inv: ParsedInvocation): Promise<number> {
     let activeAuthorityDiagnostic = "";
     let authorityDiagnosticTimer: ReturnType<typeof setTimeout> | undefined;
     let stopLiveEvents: (() => Promise<void>) | undefined;
+    let rejectAutoApproval!: (error: unknown) => void;
+    const autoApprovalFailure = new Promise<never>((_resolve, reject) => {
+      rejectAutoApproval = reject;
+    });
+    const approvals = typedClient("shellApproval", shellApprovalMethods, client);
+    const autoApprover = createEvalAutoApprover({
+      level: approvalLevel,
+      runId: runArgs.runId,
+      callerId: evalRuntimeId(session.entityId, scopeKey),
+      resolve: (approvalId, decision) => approvals.resolve(approvalId, decision),
+      onApproved: ({ capability, tier, decision }) => {
+        process.stderr.write(
+          `eval ${runArgs.runId} auto-approved ${tier} ${capability} for ${decision}\n`
+        );
+      },
+      onError: rejectAutoApproval,
+    });
     {
       const events = new EventsClient(client);
       const removeApprovalListener = events.on("shell-approval:pending-changed", ({ pending }) => {
+        autoApprover.observePending(pending);
         for (const approval of pending) {
-          const diagnostic = `CLI operation is waiting for ${approval.kind} approval ${approval.approvalId}`;
+          const capability =
+            approval.kind === "capability"
+              ? ` ${approval.capability} (${approval.cardType ?? approval.severity ?? "unclassified"})`
+              : "";
+          const lineage =
+            approval.kind === "capability" && approval.snapshot
+              ? ` task ${approval.snapshot.taskRef ?? "-"}/${approval.snapshot.taskAuthority ?? "-"}` +
+                ` decisions [${approval.allowedDecisions?.join(", ") ?? "-"}]` +
+                ` initiated by [${approval.snapshot.initiatorChain.join(", ")}]`
+              : "";
+          const diagnostic =
+            `CLI operation is waiting for ${approval.kind} approval ${approval.approvalId}` +
+            `${capability} from ${approval.callerId}${lineage}`;
           if (diagnostic === lastShellWaitDiagnostic) continue;
           lastShellWaitDiagnostic = diagnostic;
           process.stderr.write(`${diagnostic}\n`);
@@ -179,6 +213,7 @@ async function evalRun(inv: ParsedInvocation): Promise<number> {
             payload.event.payload && typeof payload.event.payload === "object"
               ? (payload.event.payload as Record<string, unknown>)
               : {};
+          autoApprover.observeAuthorityRequested(detail);
           const capability =
             typeof detail["capability"] === "string" ? ` ${detail["capability"]}` : "";
           const acquisition =
@@ -193,6 +228,7 @@ async function evalRun(inv: ParsedInvocation): Promise<number> {
           return;
         }
         if (payload.event.kind === "authority-decided") {
+          autoApprover.observeAuthorityDecided(payload.event.payload);
           if (authorityDiagnosticTimer) clearTimeout(authorityDiagnosticTimer);
           authorityDiagnosticTimer = undefined;
           if (activeAuthorityDiagnostic) {
@@ -213,6 +249,7 @@ async function evalRun(inv: ParsedInvocation): Promise<number> {
       });
       try {
         await events.subscribeAll(["eval:run-event", "shell-approval:pending-changed"]);
+        if (approvalLevel > 0) autoApprover.observePending(await approvals.listPending());
         stopLiveEvents = async () => {
           removeListener();
           removeApprovalListener();
@@ -245,12 +282,14 @@ async function evalRun(inv: ParsedInvocation): Promise<number> {
         });
       }
       const execution = executeEval(runArgs);
+      const observedExecution =
+        approvalLevel === 0 ? execution : Promise.race([execution, autoApprovalFailure]);
       result =
         timeoutMs !== undefined
-          ? await withTimeout(execution, timeoutMs, () =>
+          ? await withTimeout(observedExecution, timeoutMs, () =>
               abort.abort(new TimeoutError(`eval timed out after ${timeoutMs}ms`))
             )
-          : await execution;
+          : await observedExecution;
     } finally {
       await stopLiveEvents?.();
     }
@@ -311,7 +350,8 @@ export const evalCommands: CliCommand[] = [
     group: "eval",
     name: "run",
     summary: "Run TS/JS server-side in the session's eval sandbox",
-    usage: "vibestudio eval run [FILE | -e CODE | - | --path P] [--timeout MS] [--fresh-scope]",
+    usage:
+      "vibestudio eval run [FILE | -e CODE | - | --path P] [--timeout MS] [--approval-level 0|1|2] [--fresh-scope]",
     flags: [
       { name: "code", short: "e", takesValue: true, description: "Inline code" },
       { name: "path", takesValue: true, description: "Context-relative file the server runs" },
@@ -324,6 +364,11 @@ export const evalCommands: CliCommand[] = [
         name: "fresh-scope",
         takesValue: false,
         description: "Reset the REPL scope before running",
+      },
+      {
+        name: "approval-level",
+        takesValue: true,
+        description: "0=prompt, 1=auto-approve gated, 2=auto-approve gated and critical",
       },
       {
         name: "syntax",
