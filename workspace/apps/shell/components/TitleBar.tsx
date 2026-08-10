@@ -1078,7 +1078,7 @@ function buildBrowserAddressRows(
   return { rows, empty: query ? "No matching history" : "No browser history yet" };
 }
 
-const BREADCRUMB_ICON_SIZE = 15;
+const BREADCRUMB_ICON_SIZE = 14;
 
 // Shared styles for breadcrumb items
 const itemStyle: CSSProperties = {

@@ -75,7 +75,7 @@ const ROW_PADDING_LEFT = 6;
 /** Fixed-width gutter that holds the expand caret so titles align by depth. */
 const CARET_SLOT = 14;
 /** Optical artwork size; leaves breathing room inside the dense 22px row. */
-const PANEL_ICON_SIZE = 14;
+const PANEL_ICON_SIZE = 13;
 const ACTION_BUTTON_SIZE = 18;
 const PANEL_TREE_PAGE_SIZE = 50;
 

@@ -801,6 +801,8 @@ function QueueNavigator({
   );
 }
 
+const APPROVAL_CALLER_ICON_SIZE = 14;
+
 function CallerChip({ caller, onShow }: { caller: CallerInfo; onShow: () => void }) {
   const clickable = caller.panelId !== undefined;
   const tooltip = clickable ? `Show panel — ${caller.label}` : caller.label;
@@ -827,7 +829,7 @@ function CallerChip({ caller, onShow }: { caller: CallerInfo; onShow: () => void
           <PanelIcon
             icon={caller.icon}
             source={caller.iconSourcePath}
-            size={18}
+            size={APPROVAL_CALLER_ICON_SIZE}
             fallback={
               caller.kind === "panel"
                 ? "panel"
