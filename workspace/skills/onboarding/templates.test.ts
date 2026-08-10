@@ -1,6 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import { composeOptionalTemplateSnapshot } from "./templates.js";
 
+const runtime = vi.hoisted(() => ({ invoke: vi.fn() }));
+
+vi.mock("@workspace/runtime", () => ({
+  extensions: { invoke: runtime.invoke },
+}));
+
 const coordinates = {
   url: "git+https://example.test/registry.git",
   ref: "refs/heads/main",
@@ -49,6 +55,25 @@ function catalog() {
 }
 
 describe("optional onboarding templates", () => {
+  it("explicitly refreshes the verified registry for a first-run overview", async () => {
+    runtime.invoke.mockImplementation(async (_extension, method) => {
+      if (method === "catalog") return catalog();
+      if (method === "status") return [];
+      throw new Error(`unexpected method ${method}`);
+    });
+
+    const snapshot = await composeOptionalTemplateSnapshot();
+
+    expect(runtime.invoke).toHaveBeenCalledWith(
+      "@workspace-extensions/template-composer",
+      "catalog",
+      [{ refresh: true }]
+    );
+    expect(snapshot).toEqual([
+      expect.objectContaining({ id: "template.examples", state: "available" }),
+    ]);
+  });
+
   it("projects recommended registry entries and their installed state", async () => {
     const status = vi.fn(async () => [{ url: "git+https://example.test/examples.git" }] as never);
     const readCatalog = vi.fn(async () => catalog());

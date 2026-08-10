@@ -35,7 +35,7 @@ async function composerCatalog(): Promise<TemplateCatalogSnapshot | null> {
   return extensions.invoke(
     "@workspace-extensions/template-composer",
     "catalog",
-    []
+    [{ refresh: true }]
   ) as Promise<TemplateCatalogSnapshot>;
 }
 
