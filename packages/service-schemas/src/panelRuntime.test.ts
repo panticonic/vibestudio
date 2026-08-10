@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { panelRuntimeLeaseSchema } from "./panelRuntime.js";
+import {
+  panelRendererViewReportSchema,
+  panelRuntimeLeaseSchema,
+} from "./panelRuntime.js";
 
 describe("panelRuntimeLeaseSchema", () => {
   // The lease schema is .strict(). A lease may carry `keepLoaded` (set when a CDP client pins a panel
@@ -28,5 +31,31 @@ describe("panelRuntimeLeaseSchema", () => {
 
   it("accepts a lease without keepLoaded (optional)", () => {
     expect(() => panelRuntimeLeaseSchema.parse(baseLease)).not.toThrow();
+  });
+});
+
+describe("panelRendererViewReportSchema", () => {
+  it("accepts the canonical observed boot envelope", () => {
+    expect(
+      panelRendererViewReportSchema.parse({
+        url: "http://panel.test/",
+        loading: false,
+        boot: { kind: "observed", observation: { phase: "ready" } },
+      })
+    ).toEqual({
+      url: "http://panel.test/",
+      loading: false,
+      boot: { kind: "observed", observation: { phase: "ready" } },
+    });
+  });
+
+  it("rejects an unwrapped renderer boot observation", () => {
+    expect(() =>
+      panelRendererViewReportSchema.parse({
+        url: "http://panel.test/",
+        loading: false,
+        boot: { phase: "ready" },
+      })
+    ).toThrow();
   });
 });

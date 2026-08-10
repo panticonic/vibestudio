@@ -99,7 +99,8 @@ export const panelHostViewReportSchema = z
   })
   .strict();
 
-const panelRendererViewReportSchema = panelHostViewReportSchema.omit({ failure: true });
+export const panelRendererViewReportSchema = panelHostViewReportSchema.omit({ failure: true });
+export type PanelRendererViewReport = z.infer<typeof panelRendererViewReportSchema>;
 
 export const runtimeLeaseVersionSchema = z
   .object({
