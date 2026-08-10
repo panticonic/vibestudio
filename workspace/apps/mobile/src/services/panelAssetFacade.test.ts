@@ -37,6 +37,13 @@ describe("panelAssetCacheKey", () => {
       })
     );
   });
+
+  it("collapses build-pinned entry documents across runtime contexts", () => {
+    const buildKey = "a".repeat(64);
+    expect(panelAssetCacheKey(`/panels/chat/?contextId=one&buildKey=${buildKey}`, {})).toBe(
+      panelAssetCacheKey(`/panels/chat/?contextId=two&ref=state%3Anew&buildKey=${buildKey}`, {})
+    );
+  });
 });
 
 // -------------------------------------------------------------------------

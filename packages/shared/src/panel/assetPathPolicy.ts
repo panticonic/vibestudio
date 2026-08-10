@@ -1,3 +1,5 @@
+import { sha256HexSyncText } from "@vibestudio/content-addressing";
+
 /**
  * Panel-origin gateway path policy — the allowlist of gateway paths reachable
  * from the panel/loopback origin.
@@ -92,6 +94,60 @@ export function isPanelReachableGatewayPathname(pathname: string): boolean {
 // SPECIAL scheme (http) so backslash/dot-segment handling matches what
 // `fetch()` will actually send to the gateway.
 const PARSE_BASE = "http://panel-gateway.invalid";
+
+const PANEL_BUILD_KEY = /^[0-9a-f]{64}$/u;
+
+/**
+ * Return the representation key used by every panel-asset facade.
+ *
+ * A build-pinned entry document is a pure function of its panel source and
+ * build key. Per-panel launch query parameters (`contextId` and `ref`) select
+ * runtime state but do not alter the HTML body, so retaining them would split
+ * one immutable representation into a cache entry per launch. Unpinned entry
+ * documents and all subresources retain their complete normalized target.
+ */
+export function panelAssetRepresentationPath(rawPath: string): string {
+  let url: URL;
+  try {
+    url = new URL(rawPath, PARSE_BASE);
+  } catch {
+    return rawPath;
+  }
+  if (url.origin !== PARSE_BASE) return rawPath;
+
+  const buildKey = url.searchParams.get("buildKey");
+  if (!buildKey || !PANEL_BUILD_KEY.test(buildKey)) {
+    return `${url.pathname}${url.search}`;
+  }
+
+  let source: string | null = null;
+  if (url.pathname.endsWith("/")) {
+    source = url.pathname;
+  } else if (url.pathname.endsWith("/index.html")) {
+    source = url.pathname.slice(0, -"index.html".length);
+  }
+  return source ? `${source}?buildKey=${buildKey}` : `${url.pathname}${url.search}`;
+}
+
+/**
+ * Shared cache-key contract for the desktop and mobile panel origins.
+ * Forwarded headers remain part of the representation identity; spelling and
+ * insertion order do not.
+ */
+export function panelAssetCacheKey(
+  rawPath: string,
+  forwardHeaders: Readonly<Record<string, string>>
+): string {
+  const representationPath = panelAssetRepresentationPath(rawPath);
+  const vary = Object.entries(forwardHeaders)
+    .map(([name, value]) => [name.toLowerCase(), value] as const)
+    .sort(([a], [b]) => a.localeCompare(b));
+  if (vary.length === 0) return representationPath;
+  // Forwarded headers can contain bearer credentials. Preserve representation
+  // separation without writing those values into the durable desktop index.
+  const digest = sha256HexSyncText(JSON.stringify(vary)).slice(0, 24);
+  return `${representationPath}#h=${digest}`;
+}
 
 export type PanelGatewayPathDecision =
   | {

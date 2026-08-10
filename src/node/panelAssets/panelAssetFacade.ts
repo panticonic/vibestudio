@@ -18,8 +18,9 @@
  *    façade re-derives `Content-Encoding: gzip` so the webview inflates natively
  *    (the façade never touches the bytes).
  *  - A content-addressed on-disk cache ({@link AssetDiskCache}) serves immutable
- *    artifacts from disk on a repeat request — zero pipe bytes. `no-store` HTML
- *    entry documents are never cached. The cache stores the body EXACTLY as
+ *    artifacts from disk on a repeat request — zero pipe bytes. Build-pinned
+ *    entry documents are immutable; unpinned developer entries remain
+ *    `no-store`. The cache stores the body EXACTLY as
  *    received over the pipe (gzip-encoded for compressible immutable assets) and
  *    replays it verbatim with the re-derived `Content-Encoding` — the façade never
  *    inflates; the digest is over those received (encoded) bytes.
@@ -34,7 +35,6 @@
  */
 
 import * as http from "node:http";
-import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { Readable } from "node:stream";
@@ -45,7 +45,10 @@ import {
   STRIP_RESPONSE_HEADERS,
   GZIP_MARKER_HEADER,
 } from "@vibestudio/shared/panel/assetHeaders";
-import { checkPanelGatewayPath } from "@vibestudio/shared/panel/assetPathPolicy";
+import {
+  checkPanelGatewayPath,
+  panelAssetCacheKey,
+} from "@vibestudio/shared/panel/assetPathPolicy";
 import { AssetDiskCache, type FetchedResponse } from "./assetDiskCache.js";
 
 /** Minimal streaming seam shared by Electron and headless Node hosts. */
@@ -54,7 +57,7 @@ export interface PanelAssetStreamClient {
     service: string,
     method: string,
     args?: unknown[],
-    options?: Pick<RpcStreamOptions, "signal" | "body" | "headTimeoutMs">
+    options?: Pick<RpcStreamOptions, "signal" | "headTimeoutMs">
   ): Promise<Response>;
 }
 
@@ -155,15 +158,6 @@ function collectForwardHeaders(req: http.IncomingMessage): Record<string, string
   return headers;
 }
 
-function assetCacheKey(reqPath: string, forwardHeaders: Record<string, string>): string {
-  const vary = Object.entries(forwardHeaders)
-    .map(([name, value]) => [name.toLowerCase(), value] as const)
-    .sort(([a], [b]) => a.localeCompare(b));
-  if (vary.length === 0) return reqPath;
-  const digest = createHash("sha256").update(JSON.stringify(vary)).digest("hex").slice(0, 24);
-  return `${reqPath}#h=${digest}`;
-}
-
 /** Turn the pipe `Response` into the façade's normalized, cache-agnostic shape. */
 function normalizeResponse(response: Response): FetchedResponse {
   const gzip = response.headers.get(GZIP_MARKER_HEADER) === "1";
@@ -184,8 +178,8 @@ function normalizeResponse(response: Response): FetchedResponse {
     gzip,
     contentType: response.headers.get("content-type") ?? "application/octet-stream",
     replayHeaders,
-    // Immutable artifacts carry `Cache-Control: …, immutable`; the SPA HTML entry
-    // is `no-store` and must never be cached.
+    // Immutable artifacts (including build-pinned HTML entries) carry the
+    // immutable marker. Unpinned developer entries remain `no-store`.
     cacheable: response.status === 200 && cacheControl.includes("immutable"),
     digest: response.headers.get(CONTENT_DIGEST_HEADER) ?? undefined,
     body: (response.body as ReadableStream<Uint8Array> | null) ?? null,
@@ -304,6 +298,17 @@ async function handleRequest(
   const reqPath = req.url ?? "/";
   const method = (req.method ?? "GET").toUpperCase();
 
+  // This is an unauthenticated loopback asset origin, not an alternate gateway
+  // or upload channel. Dynamic calls belong on the authenticated panel bridge.
+  if (method !== "GET") {
+    res.writeHead(405, {
+      "Content-Type": "text/plain; charset=utf-8",
+      Allow: "GET",
+    });
+    res.end("Method Not Allowed: the panel asset origin serves immutable GET content only");
+    return;
+  }
+
   // Mirror of the AUTHORITATIVE server-side allowlist in gatewayFetchService
   // (see @vibestudio/shared/panel/assetPathPolicy): reject non-panel-reachable
   // paths (management /_r/s/*, /rpc, workerd internals) here for a cheap,
@@ -318,15 +323,16 @@ async function handleRequest(
   }
   const gatewayPath = decision.target;
 
-  const forwardHeaders = collectForwardHeaders(req);
+  // Worker routes may be panel-reachable through bridge-tunneled gatewayFetch,
+  // but they are dynamic surfaces and never belong on this unauthenticated
+  // origin. This mirrors the mobile facade exactly.
+  if (gatewayPath.startsWith("/_r/w/")) {
+    res.writeHead(403, { "Content-Type": "text/plain; charset=utf-8" });
+    res.end("Blocked: worker routes require the authenticated panel bridge");
+    return;
+  }
 
-  // Request bodies stream through end-to-end (plan §1.6): non-GET/HEAD requests
-  // forward the raw node request stream as the gateway.fetch upload body — a
-  // panel POSTing to its asset origin no longer has its body silently dropped.
-  const requestBody =
-    method !== "GET" && method !== "HEAD"
-      ? (Readable.toWeb(req) as unknown as ReadableStream<Uint8Array>)
-      : null;
+  const forwardHeaders = collectForwardHeaders(req);
 
   // One controller for the whole request: the connect/stall backstops and the
   // webview-cancel path all abort it, which cancels the underlying pipe stream so
@@ -348,7 +354,6 @@ async function handleRequest(
           {
             signal: controller.signal,
             headTimeoutMs: backstops.connectMs,
-            ...(requestBody ? { body: requestBody } : {}),
           }
         ),
       controller,
@@ -359,10 +364,8 @@ async function handleRequest(
   };
 
   try {
-    // Only GET assets are cacheable. Non-GET (and body-bearing) requests bypass
-    // the cache and stream straight through.
-    if (cache && method === "GET") {
-      const outcome = await cache.serve(assetCacheKey(gatewayPath, forwardHeaders), fetcher);
+    if (cache) {
+      const outcome = await cache.serve(panelAssetCacheKey(gatewayPath, forwardHeaders), fetcher);
       if (outcome.kind === "asset") {
         const { asset } = outcome;
         res.writeHead(

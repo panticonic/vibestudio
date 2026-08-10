@@ -18,10 +18,10 @@
  *
  * Two cache layers ride on top (plan §6):
  *  - A content-addressed cache for immutable artifacts so a repeat request costs
- *    zero pipe bytes. Mobile has NO filesystem dependency (only AsyncStorage,
- *    which is a small key/value store unsuited to multi-MB binary blobs), so this
- *    is an IN-MEMORY LRU (256 MiB) rather than an on-disk cache — see
- *    {@link MobileAssetMemoryCache}. `no-store` HTML entry documents are never cached.
+ *    zero pipe bytes. The current façade uses an IN-MEMORY LRU (256 MiB) while
+ *    the native durable artifact store is implemented; see
+ *    {@link MobileAssetMemoryCache}. Build-pinned entries are immutable;
+ *    unpinned developer entries remain `no-store`.
  *  - A stable loopback port persisted in AsyncStorage and re-bound across launches,
  *    so the webview's own HTTP cache (keyed by origin) survives app restarts.
  *
@@ -37,7 +37,11 @@ import {
   STRIP_RESPONSE_HEADERS,
   GZIP_MARKER_HEADER,
 } from "@vibestudio/shared/panel/assetHeaders";
-import { checkPanelGatewayPath } from "@vibestudio/shared/panel/assetPathPolicy";
+import {
+  checkPanelGatewayPath,
+  panelAssetCacheKey,
+} from "@vibestudio/shared/panel/assetPathPolicy";
+export { panelAssetCacheKey } from "@vibestudio/shared/panel/assetPathPolicy";
 import type { MobileRpcClient } from "./mobileTransport";
 import { getNativeAppStorage } from "./nativeAppStorage";
 
@@ -229,17 +233,6 @@ export class MobileAssetMemoryCache {
       if (evicted) this.bytes -= evicted.body.byteLength;
     }
   }
-}
-
-export function panelAssetCacheKey(
-  urlPath: string,
-  forwardHeaders: Record<string, string>
-): string {
-  const vary = Object.entries(forwardHeaders)
-    .map(([name, value]) => [name.toLowerCase(), value] as const)
-    .sort(([a], [b]) => a.localeCompare(b));
-  if (vary.length === 0) return urlPath;
-  return `${urlPath}#headers=${JSON.stringify(vary)}`;
 }
 
 /**

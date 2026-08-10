@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { checkPanelGatewayPath, isPanelReachableGatewayPathname } from "./assetPathPolicy.js";
+import {
+  checkPanelGatewayPath,
+  isPanelReachableGatewayPathname,
+  panelAssetCacheKey,
+  panelAssetRepresentationPath,
+} from "./assetPathPolicy.js";
 
 const DIGEST = "a".repeat(64);
 
@@ -61,5 +66,44 @@ describe("panel gateway asset path policy", () => {
     for (const denied of ["/_r/s/auth/issue-device", "/rpc", "/_w/do/x", "//evil.test/x"]) {
       expect(checkPanelGatewayPath(denied), denied).toMatchObject({ allowed: false });
     }
+  });
+});
+
+describe("panel asset representation keys", () => {
+  const buildKey = "a".repeat(64);
+
+  it("collapses build-pinned entry documents to source and build key", () => {
+    expect(
+      panelAssetRepresentationPath(
+        `/panels/chat/?contextId=panel-one&ref=state%3Aold&buildKey=${buildKey}`
+      )
+    ).toBe(`/panels/chat/?buildKey=${buildKey}`);
+    expect(
+      panelAssetRepresentationPath(
+        `/panels/chat/index.html?contextId=panel-two&buildKey=${buildKey}`
+      )
+    ).toBe(`/panels/chat/?buildKey=${buildKey}`);
+  });
+
+  it("retains complete targets for unpinned entries and subresources", () => {
+    expect(panelAssetRepresentationPath("/panels/chat/?contextId=panel-one")).toBe(
+      "/panels/chat/?contextId=panel-one"
+    );
+    expect(
+      panelAssetRepresentationPath(`/panels/chat/bundle.js?buildKey=${buildKey}&variant=debug`)
+    ).toBe(`/panels/chat/bundle.js?buildKey=${buildKey}&variant=debug`);
+  });
+
+  it("canonicalizes forwarded-header names and order on both platforms", () => {
+    const path = `/panels/chat/?contextId=panel-one&buildKey=${buildKey}`;
+    const keyed = panelAssetCacheKey(path, {
+      Authorization: "Bearer a",
+      Accept: "text/html",
+    });
+    expect(keyed).toBe(
+      panelAssetCacheKey(path, { accept: "text/html", authorization: "Bearer a" })
+    );
+    expect(keyed).not.toContain("Bearer a");
+    expect(panelAssetCacheKey(path, {})).toBe(`/panels/chat/?buildKey=${buildKey}`);
   });
 });

@@ -484,6 +484,7 @@ describe("PanelHttpServer build cache", () => {
     );
 
     expect(response.statusCodeWritten).toBe(200);
+    expect(response.headersWritten?.["Cache-Control"]).toBe("public, max-age=31536000, immutable");
     expect(getBuildByKey).toHaveBeenCalledWith(BUILD_KEY);
     expect(getBuild).not.toHaveBeenCalled();
   });

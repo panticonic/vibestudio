@@ -786,7 +786,7 @@ export class PanelHttpServer {
         (match, attribute: string, quote: string, path: string, suffix: string) =>
           artifactPaths.has(path) ? `${attribute}=${quote}${prefix}${path}${suffix}${quote}` : match
       );
-      await this.writeArtifact(req, res, build, { ...build.htmlArtifact, content });
+      await this.writeArtifact(req, res, build, { ...build.htmlArtifact, content }, true);
       return;
     }
     const artifactPath = resource.replace(/^\/+/, "");
@@ -1024,13 +1024,15 @@ export class PanelHttpServer {
     req: import("http").IncomingMessage,
     res: import("http").ServerResponse,
     build: CachedBuild,
-    artifact: BuildArtifactManifestEntry & { content: string }
+    artifact: BuildArtifactManifestEntry & { content: string },
+    immutableDocument = false
   ): Promise<void> {
-    // Every non-document panel output has a content-derived filename. The HTML
-    // remains the mutable pointer to a build; its JS, CSS, maps, chunks and
-    // assets can be retained indefinitely by both Electron and mobile clients.
+    // A build-pinned entry document is as immutable as its subresources. The
+    // unpinned developer entry remains a mutable pointer and must not be cached.
     const cacheControl =
-      artifact.role === "html" ? "no-store" : "public, max-age=31536000, immutable";
+      artifact.role === "html" && !immutableDocument
+        ? "no-store"
+        : "public, max-age=31536000, immutable";
     if (artifact.encoding === "base64") {
       const body = Buffer.from(artifact.content, "base64");
       res.writeHead(200, {

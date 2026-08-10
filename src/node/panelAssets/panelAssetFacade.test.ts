@@ -104,13 +104,14 @@ describe("startPanelAssetFacade", () => {
     const facade = await startPanelAssetFacade(fakeServerClient(stream));
     try {
       for (const blocked of ["/_r/s/auth/issue-device", "/rpc", "/rpc/stream", "/_w/do/x"]) {
-        const res = await fetch(`http://127.0.0.1:${facade.port}${blocked}`, { method: "POST" });
+        const res = await fetch(`http://127.0.0.1:${facade.port}${blocked}`);
         expect(res.status, blocked).toBe(403);
       }
-      // Worker routes, app artifacts, and the server's exact immutable shared
-      // style namespace stay reachable.
+      // App artifacts and the server's exact immutable shared-style namespace
+      // stay reachable. Dynamic worker routes require the authenticated bridge.
+      const worker = await fetch(`http://127.0.0.1:${facade.port}/_r/w/workers/my-worker/hook`);
+      expect(worker.status).toBe(403);
       for (const allowed of [
-        "/_r/w/workers/my-worker/hook",
         "/_a/build-key/index.html",
         `/__vibestudio/shared-style/${"a".repeat(64)}.css`,
         `/__vibestudio/panel-build/${"b".repeat(64)}/bundle.js`,
@@ -121,7 +122,7 @@ describe("startPanelAssetFacade", () => {
     } finally {
       await facade.close();
     }
-    expect(stream).toHaveBeenCalledTimes(4); // only the allowed paths hit the pipe
+    expect(stream).toHaveBeenCalledTimes(3); // only immutable allowed paths hit the pipe
   });
 
   it("responds 502 when the gateway.fetch stream rejects", async () => {
@@ -213,6 +214,33 @@ describe("panel asset façade content cache", () => {
       const r2 = await fetch(url);
       expect(await r2.text()).toBe(body);
       // Second request served from disk → only one pipe fetch total.
+      expect(stream).toHaveBeenCalledTimes(1);
+    } finally {
+      await facade.close();
+    }
+  });
+
+  it("shares one immutable entry across runtime context ids for the same build", async () => {
+    const buildKey = "a".repeat(64);
+    const body = "<!doctype html><script src='./bundle.js'></script>";
+    const stream = vi.fn<GatewayStream>(
+      async () =>
+        new Response(body, {
+          status: 200,
+          headers: { "content-type": "text/html; charset=utf-8", "cache-control": IMMUTABLE },
+        })
+    );
+    const facade = await startPanelAssetFacade(fakeServerClient(stream), {
+      stateDir: tempStateDir(),
+    });
+    try {
+      const root = `http://127.0.0.1:${facade.port}/panels/chat/`;
+      const first = await fetch(`${root}?contextId=panel-one&buildKey=${buildKey}`);
+      expect(await first.text()).toBe(body);
+      const second = await fetch(
+        `${root}?contextId=panel-two&ref=state%3Anew&buildKey=${buildKey}`
+      );
+      expect(await second.text()).toBe(body);
       expect(stream).toHaveBeenCalledTimes(1);
     } finally {
       await facade.close();
@@ -317,7 +345,7 @@ describe("panel asset façade content cache", () => {
   });
 });
 
-describe("panel asset façade request bodies (§1.6)", () => {
+describe("panel asset façade origin contract", () => {
   type StreamWithOptions = (
     service: string,
     method: string,
@@ -325,29 +353,8 @@ describe("panel asset façade request bodies (§1.6)", () => {
     options?: { body?: ReadableStream<Uint8Array> | null }
   ) => Promise<Response>;
 
-  async function drain(stream: ReadableStream<Uint8Array>): Promise<string> {
-    const reader = stream.getReader();
-    const chunks: Buffer[] = [];
-    for (;;) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      if (value) chunks.push(Buffer.from(value));
-    }
-    return Buffer.concat(chunks).toString("utf-8");
-  }
-
-  it("forwards a POST body as a streamed gateway.fetch upload (and its content-type)", async () => {
-    let captured: CapturedDescriptor | undefined;
-    let uploaded: Promise<string> | undefined;
-    const stream = vi.fn<StreamWithOptions>(async (_service, _method, args, options) => {
-      captured = (args as [CapturedDescriptor])[0];
-      expect(options?.body).toBeInstanceOf(ReadableStream);
-      uploaded = drain(options!.body!);
-      return new Response('{"ok":true}', {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      });
-    });
+  it("rejects non-GET requests without opening a pipe stream", async () => {
+    const stream = vi.fn<StreamWithOptions>(async () => new Response("unexpected"));
 
     const facade = await startPanelAssetFacade(fakeServerClient(stream as never));
     try {
@@ -356,16 +363,19 @@ describe("panel asset façade request bodies (§1.6)", () => {
         headers: { "content-type": "application/json" },
         body: '{"hello":"upload"}',
       });
-      expect(res.status).toBe(200);
-      expect(await res.json()).toEqual({ ok: true });
+      expect(res.status).toBe(405);
+      expect(res.headers.get("allow")).toBe("GET");
+      expect(await res.text()).toMatch(/immutable GET content/u);
+
+      const head = await fetch(`http://127.0.0.1:${facade.port}/apps/shell/`, {
+        method: "HEAD",
+      });
+      expect(head.status).toBe(405);
     } finally {
       await facade.close();
     }
 
-    expect(stream).toHaveBeenCalledTimes(1);
-    expect(captured?.method).toBe("POST");
-    expect(captured?.headers?.["content-type"]).toBe("application/json");
-    await expect(uploaded!).resolves.toBe('{"hello":"upload"}');
+    expect(stream).not.toHaveBeenCalled();
   });
 
   it("GET requests carry a signal but no body (wire body unchanged)", async () => {
