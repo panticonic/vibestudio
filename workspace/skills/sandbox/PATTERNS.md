@@ -1,5 +1,15 @@
 # Common Patterns
 
+Recipes for common tasks using the sandbox.
+
+## Build a Live Transcript Dashboard
+
+For an inline status surface that refreshes itself, caches its last display
+state, and updates in place when the agent renders it again, use the
+[Live Dashboard Pattern](INLINE_UI.md#live-dashboard-pattern). It also covers
+manual refresh, request-race protection, and gating optional remote discovery
+behind an explained user action.
+
 ## Recover From a Durable Object Schema Refusal
 
 Treat `DO_SCHEMA_INCOMPATIBLE` as a schema-design signal. Inspect its structured
@@ -19,8 +29,6 @@ application data.
 `DO_SCHEMA_MIGRATION_FAILED` means the transaction rolled back; fix the named
 migration. `DO_MAINTENANCE_IN_PROGRESS` means the host fence is active; wait
 instead of creating a parallel path.
-
-Recipes for common tasks using the sandbox.
 
 ## Read a File and Display It
 

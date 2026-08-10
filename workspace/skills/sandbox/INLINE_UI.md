@@ -88,6 +88,131 @@ and the action bar in that panel. It is useful for local UI state across reloads
 but it is not channel-shared state and does not replace persisted inline-UI
 props when other panels or devices must see the update.
 
+## Live Dashboard Pattern
+
+Use one file-backed, stable-ID inline UI for status that should stay current
+without filling the transcript with observations. The component owns data
+loading; the agent only renders it initially and signals later refreshes by
+rendering the same ID again:
+
+```ts
+inline_ui({
+  id: "service-health",
+  path: ".vibestudio/ui/ServiceHealth.tsx",
+});
+```
+
+This keeps data acquisition out of a leading `eval` or `client_eval`. On the
+later call, the existing projection moves to the end of the transcript and its
+`inlineUi.renderedAt` changes. The component treats that timestamp as a refresh
+signal. It should also offer a refresh button so the user does not need an
+agent turn.
+
+Use `scope` as a namespaced display cache: initialize from it for an immediate
+render, replace it after loading fresh owner data, and call `scopes.save()`.
+Scope is panel-local and is not authoritative application state. Cross-panel or
+multi-device truth belongs in its owning service or in persisted channel data.
+Never place credentials, tokens, or sensitive topology in the cache.
+
+```tsx
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Button, Callout, Flex, Text } from "@radix-ui/themes";
+import { readServiceHealth, discoverOptionalTemplates } from "./dashboard-data";
+
+const CACHE_KEY = "serviceHealthDashboard";
+
+export default function ServiceHealth({ scope, scopes, inlineUi }) {
+  const cached = scope?.[CACHE_KEY];
+  const [health, setHealth] = useState(cached?.health ?? []);
+  const [templates, setTemplates] = useState(cached?.templates ?? []);
+  const [loading, setLoading] = useState(false);
+  const [loadingTemplates, setLoadingTemplates] = useState(false);
+  const [error, setError] = useState(null);
+  const refreshRequest = useRef(0);
+  const templateRequest = useRef(0);
+
+  const saveCache = useCallback(
+    async (update) => {
+      if (!scope) return;
+      scope[CACHE_KEY] = { ...(scope[CACHE_KEY] ?? {}), ...update };
+      await scopes?.save?.();
+    },
+    [scope, scopes]
+  );
+
+  const refresh = useCallback(async () => {
+    const request = ++refreshRequest.current;
+    setLoading(true);
+    setError(null);
+    try {
+      const next = await readServiceHealth();
+      if (request !== refreshRequest.current) return;
+      setHealth(next);
+      await saveCache({ health: next });
+    } catch (cause) {
+      if (request === refreshRequest.current) {
+        setError(cause instanceof Error ? cause.message : String(cause));
+      }
+    } finally {
+      if (request === refreshRequest.current) setLoading(false);
+    }
+  }, [saveCache]);
+
+  useEffect(() => {
+    void refresh();
+  }, [inlineUi?.renderedAt, refresh]);
+
+  async function loadTemplates() {
+    const request = ++templateRequest.current;
+    setLoadingTemplates(true);
+    setError(null);
+    try {
+      const next = await discoverOptionalTemplates();
+      if (request !== templateRequest.current) return;
+      setTemplates(next);
+      await saveCache({ templates: next });
+    } catch (cause) {
+      if (request === templateRequest.current) {
+        setError(cause instanceof Error ? cause.message : String(cause));
+      }
+    } finally {
+      if (request === templateRequest.current) setLoadingTemplates(false);
+    }
+  }
+
+  return (
+    <Flex direction="column" gap="3" p="2" style={{ width: "100%", minWidth: 0 }}>
+      <Flex align="center" justify="between" gap="2" wrap="wrap">
+        <Text weight="medium">Service health</Text>
+        <Button size="1" variant="soft" disabled={loading} onClick={refresh}>
+          {loading ? "Refreshing…" : "Refresh"}
+        </Button>
+      </Flex>
+      {/* Render health here; cached data remains visible while it refreshes. */}
+      <Text size="2">{health.length} services checked</Text>
+      <Callout.Root>
+        <Callout.Text>
+          Templates are optional reviewed starting points. Loading them contacts
+          the template registry; nothing is requested until you click.
+        </Callout.Text>
+      </Callout.Root>
+      <Button disabled={loadingTemplates} onClick={loadTemplates}>
+        {loadingTemplates ? "Loading…" : "Load optional templates"}
+      </Button>
+      {templates.length > 0 && <Text size="2">{templates.length} templates available</Text>}
+      {error && <Text color="red">{error} — retry when ready.</Text>}
+    </Flex>
+  );
+}
+```
+
+Keep automatically refreshed data cheap, expected, and owned by the local
+workspace. Put remote, expensive, optional, or authority-sensitive discovery
+behind a clearly labeled button. Explain what will be loaded and why a network
+or approval request may appear before the user clicks it. Surface loading,
+failure, and retry in the card. Guard overlapping refreshes with a request
+counter or `AbortController` so stale responses cannot overwrite newer state.
+
 ## Workflow Link Pattern
 
 ```tsx
