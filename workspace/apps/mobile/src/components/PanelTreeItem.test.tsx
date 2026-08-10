@@ -1,7 +1,7 @@
 import React from "react";
-import { Image } from "react-native";
 import { render } from "@testing-library/react-native";
 import { createStore } from "jotai";
+import { SvgUri } from "react-native-svg";
 import { PanelTreeItem } from "./PanelTreeItem";
 import { themeColorsAtom } from "../state/themeAtoms";
 
@@ -60,7 +60,7 @@ describe("PanelTreeItem identity", () => {
       />
     );
 
-    expect(UNSAFE_getByType(Image).props.source.uri).toBe(
+    expect(UNSAFE_getByType(SvgUri).props.uri).toBe(
       "http://127.0.0.1:43100/__vibestudio/unit-icon?source=panels%2Fchat&path=assets%2Ficon.svg"
     );
   });

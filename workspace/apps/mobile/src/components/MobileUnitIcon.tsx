@@ -1,5 +1,6 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Image, StyleSheet, Text, View } from "react-native";
+import { SvgUri } from "react-native-svg";
 import {
   Globe,
   LayoutGrid,
@@ -21,6 +22,10 @@ const FALLBACKS: Record<MobileUnitIconKind, IconComponent> = {
   system: Settings,
 };
 
+function isSvgImage(uri: string): boolean {
+  return /^data:image\/svg\+xml(?:[;,]|$)/i.test(uri) || /\.svg(?:$|[?&#])/i.test(uri);
+}
+
 export function MobileUnitIcon(props: {
   icon?: string;
   source?: string;
@@ -39,18 +44,27 @@ export function MobileUnitIcon(props: {
   }, [props.icon, props.serverUrl, props.source]);
   const image = props.imageOverride ?? manifestImage;
   const [imageFailed, setImageFailed] = useState(false);
+  const handleImageError = useCallback(() => setImageFailed(true), []);
 
   useEffect(() => setImageFailed(false), [image]);
 
   let content: React.ReactNode;
   if (image && !imageFailed) {
-    content = (
+    content = isSvgImage(image) ? (
+      <SvgUri
+        uri={image}
+        width={size}
+        height={size}
+        onError={handleImageError}
+        testID={props.testID ? `${props.testID}-svg` : undefined}
+      />
+    ) : (
       <Image
         accessibilityIgnoresInvertColors
         source={{ uri: image }}
         style={{ width: size, height: size, borderRadius: Math.max(2, Math.round(size / 6)) }}
         resizeMode="contain"
-        onError={() => setImageFailed(true)}
+        onError={handleImageError}
       />
     );
   } else if (props.icon && !props.icon.startsWith("./") && !props.icon.startsWith("data:image/")) {

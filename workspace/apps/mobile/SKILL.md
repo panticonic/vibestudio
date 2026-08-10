@@ -48,7 +48,9 @@ that is streamed to the native host after pairing.
   web rendering idiomatic, but never create a mobile-only fallback data path.
 - For unit identities, use `MobileUnitIcon`/`MobilePanelIcon`; relative manifest
   images must resolve through the authenticated local asset facade, browser
-  panels must use captured favicons, and fallbacks must remain kind-specific.
+  panels must use captured favicons, SVG artwork must render through
+  `react-native-svg` rather than React Native `Image`, and fallbacks must remain
+  kind-specific.
 - Add a focused mobile behavioral test whenever a paired desktop UX changes.
   A desktop test alone is not completion evidence for a shared shell concept.
 

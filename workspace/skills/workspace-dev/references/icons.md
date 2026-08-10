@@ -57,8 +57,9 @@ An identity change is incomplete until both first-party clients are audited:
 Use the same canonical `icon`, source path, and browser-favicon projection in
 both clients. Keep rendering native (`PanelIcon` on desktop,
 `MobileUnitIcon`/`MobilePanelIcon` on mobile); do not add a second identity
-field or a mobile-only resolver. Add focused behavioral coverage for every
-affected row in this table.
+field or a mobile-only resolver. On mobile, SVG artwork is rendered by
+`react-native-svg`; React Native `Image` is only the raster path. Add focused
+behavioral coverage for every affected row in this table.
 
 ## Built-in catalog and provenance
 

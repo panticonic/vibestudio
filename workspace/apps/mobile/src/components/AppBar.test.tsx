@@ -1,7 +1,7 @@
 import React from "react";
-import { Image } from "react-native";
 import { fireEvent, render } from "@testing-library/react-native";
 import { Provider, createStore } from "jotai";
+import { SvgUri } from "react-native-svg";
 import { AppBar } from "./AppBar";
 import type { AddressAutocompleteItem } from "@vibestudio/shared/panelChrome";
 import { shellClientAtom, panelTreeRevisionAtom } from "../state/shellClientAtom";
@@ -66,9 +66,9 @@ describe("AppBar address UX", () => {
     );
 
     const image = getByTestId("active-panel-icon", { includeHiddenElements: true }).findByType(
-      Image
+      SvgUri
     );
-    expect(image.props.source.uri).toBe(
+    expect(image.props.uri).toBe(
       "http://127.0.0.1:43100/__vibestudio/unit-icon?source=panels%2Fchat&path=assets%2Ficon.svg"
     );
   });
