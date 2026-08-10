@@ -116,6 +116,55 @@ paths separately.
   per-test authority policy plus approval level 2 is the supported unattended
   auto-approve path; remote pairing is not.
 
+No live instance is a prerequisite. Create a unique managed instance with
+`pnpm system-test --instance ID doctor`, use its paired CLI for the experiment,
+and stop that exact instance with `pnpm system-test --instance ID stop` in the
+cleanup path. When the experiment specifically needs a direct server rather
+than the managed harness, own a named `pnpm server:live --instance ID
+--ephemeral` process and terminate and await it after closing all inspector
+connections. Never borrow or stop an unrelated instance.
+
+### Worker and Durable Object CPU profiling
+
+Workerd exposes an approval-gated, loopback-only V8 inspector through the
+runtime bridge. Profile the real bounded workload with `@workspace/testkit`:
+
+```ts
+import { listWorkerdTargets, profileDO, profileWorkerd } from "@workspace/testkit";
+
+const targets = await listWorkerdTargets();
+const workerProfile = await profileWorkerd("worker-host", async () => {
+  await runWorkerWorkload();
+});
+const doProfile = await profileDO("example.protocol.v1", async () => {
+  await runDurableObjectWorkload();
+});
+```
+
+Both helpers close their inspector connections and store a standard bounded V8
+`.cpuprofile` in context storage; only its compact reference crosses RPC. Await
+the workload's real semantic completion inside the callback. Inspect targets
+before selecting one: regular workers share the `worker-host` service, so that
+profile can include sibling work, while source-specific Durable Object services
+usually provide precise attribution. Use a quiet isolated instance when shared
+worker-host attribution matters.
+
+Pair CPU evidence with the owning system layers:
+
+- use build metadata for sealed worker size, module composition, and cold versus
+  verified-cache build time;
+- use supervision health/logs for the exact worker or DO entity and incarnation;
+- use `durableWork.inspect` for payload-free claim, execution, settlement,
+  recovery, and queue timing;
+- measure the enclosing RPC call or workflow boundary for wall time. The V8 CPU
+  profile explains active isolate work but does not by itself attribute time
+  spent awaiting storage, RPC, queues, or another process.
+
+For lower-level experiments, `workerdInspectorSession()` provides the raw V8
+inspector protocol. Always close it in `finally`; do not return heap snapshots or
+full profiles through RPC, and do not leave profiling enabled after the bounded
+operation.
+
 Correlate across processes with durable or runtime identity and locally
 measured durations. Do not subtract raw timestamps from different monotonic
 clocks.

@@ -18,6 +18,25 @@ Do not use the generic `web-perf` skill for these tasks: its conventional websit
 and Chrome DevTools MCP workflow does not model Vibestudio's materialization and
 hosting pipeline.
 
+The absence of a running or paired developer instance is never a performance
+investigation blocker. Provision one isolated, uniquely named instance from the
+current checkout. Prefer `pnpm system-test --instance ID doctor` when an
+unattended paired instance is useful; it owns, provisions, waits for, and pairs
+that instance. For a direct server session, run
+`pnpm server:live --instance ID --ephemeral` as an owned long-running process,
+wait for its ready record, and address it only through
+`pnpm cli --instance ID ...`. Never reuse, restart, or stop somebody else's
+instance merely because it is available.
+
+Instance cleanup is part of the profiling operation, not optional housekeeping.
+Use a `finally`-equivalent cleanup path: stop a managed instance with
+`pnpm system-test --instance ID stop`; terminate and await an owned ephemeral
+server process so its supervisor unregisters the instance and removes its
+temporary state. Do not report profiling complete while an owned instance or
+inspector/page connection remains live. Instance startup is a blocker only when
+isolated bootstrap itself fails after its supervisor log has been inspected and
+the infrastructure defect cannot be repaired within the task.
+
 ## Headless system tests
 
 When a task asks to verify, diagnose, or repair Vibestudio through the headless
