@@ -4,6 +4,7 @@ import type { VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import type { AuthorityChallengePresentation } from "@vibestudio/shared/serviceDispatcher";
 import type { OperationSubstance } from "@vibestudio/shared/approvals";
 import type { AuthorityAcquisitionDecision } from "@vibestudio/shared/approvalContract";
+import { canonicalJson } from "@vibestudio/shared/canonicalJson";
 import {
   authorityPromptCardType,
   type AuthorityPromptCardType,
@@ -358,7 +359,7 @@ export class AcquisitionCoordinator {
 
   /** Forget a raced terminal observation before beginning a fresh acquisition cycle. */
   invalidate(snapshotDigest: string, ownerRuntimeId: string, callerPrincipal: string): void {
-    const requestKey = acquisitionRequestKey({
+    const requestKey = exactAcquisitionRequestKey({
       snapshotDigest,
       caller: { runtime: { id: ownerRuntimeId } },
       snapshot: { callerPrincipal },
@@ -864,7 +865,7 @@ function authorityActionTitle(action: string): string {
   return `${clean.charAt(0).toUpperCase()}${clean.slice(1)}`;
 }
 
-function acquisitionRequestKey(input: {
+function exactAcquisitionRequestKey(input: {
   snapshotDigest: string;
   caller: { runtime: { id: string } };
   snapshot: { callerPrincipal: string };
@@ -873,6 +874,47 @@ function acquisitionRequestKey(input: {
     input.snapshotDigest,
     input.caller.runtime.id,
     input.snapshot.callerPrincipal,
+  ]);
+}
+
+/**
+ * Installed code cannot receive an invocation-scoped decision for a gated
+ * request: the only positive choices are the current task (when attested) or
+ * the installed version. Keeping a rendezvous per invocation in that case
+ * creates several indistinguishable cards for concurrent calls, even though
+ * every decision the card offers necessarily covers all of them.
+ *
+ * Coalesce only when the eventual grant and the user-visible operation are the
+ * same. Critical effects and session-origin calls retain their exact invocation
+ * identity because they can still be approved once.
+ */
+function acquisitionRequestKey(input: AcquisitionRequestInput): string {
+  if (
+    input.tier !== "gated" ||
+    !input.snapshot.callerPrincipal.startsWith("code:") ||
+    input.presentation?.installReview
+  ) {
+    return exactAcquisitionRequestKey(input);
+  }
+  return canonicalKey([
+    "reusable-code-acquisition-v1",
+    canonicalJson({
+      ownerRuntimeId: input.caller.runtime.id,
+      callerPrincipal: input.snapshot.callerPrincipal,
+      capability: input.snapshot.capability,
+      resource: input.resource,
+      capabilityDefinitionDigest: input.snapshot.capabilityDefinitionDigest,
+      providerExecutionDigest: input.snapshot.providerExecutionDigest,
+      targetCapability: input.snapshot.targetCapability ?? null,
+      targetRequirement: input.snapshot.targetRequirement ?? null,
+      taskAuthority: input.snapshot.taskAuthority ?? null,
+      taskRef: input.snapshot.taskRef ?? null,
+      lineageClasses: [...(input.snapshot.lineageClasses ?? ["none"])].sort(),
+      codeLineage: input.snapshot.codeLineage,
+      contextLineage: input.snapshot.contextLineage,
+      presentation: input.presentation ?? null,
+      substance: input.substance ?? null,
+    }),
   ]);
 }
 

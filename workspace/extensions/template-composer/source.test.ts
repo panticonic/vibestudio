@@ -139,6 +139,19 @@ describe("template Git source acquisition", () => {
     ]);
   });
 
+  it("uses anonymous Git transport when a template declares no credential", async () => {
+    const statePath = await fsp.mkdtemp(path.join(os.tmpdir(), "template-source-anonymous-"));
+    roots.push(statePath);
+    const ctx = context();
+
+    await discoverDirectTemplatePin(ctx as never, statePath, {
+      url: "https://example.test/template-public.git",
+    });
+
+    expect(ctx.credentials.gitHttp).toHaveBeenCalledWith({ credentialId: null });
+    expect(ctx.credentials.listStoredCredentials).not.toHaveBeenCalled();
+  });
+
   it("does not delete a published exact coordinate when verification fails", async () => {
     const statePath = await fsp.mkdtemp(path.join(os.tmpdir(), "template-source-"));
     roots.push(statePath);

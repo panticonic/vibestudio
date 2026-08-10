@@ -36,7 +36,9 @@ function transportUrl(url: string): string {
 
 function credentialFor(
   source: Pick<TemplateRegistrySource, "url" | "credential">
-): Record<string, never> | { logicalCredential: { name: string; remoteUrl: string } } {
+):
+  | { credentialId: null }
+  | { logicalCredential: { name: string; remoteUrl: string } } {
   return source.credential
     ? {
         logicalCredential: {
@@ -44,7 +46,7 @@ function credentialFor(
           remoteUrl: transportUrl(source.url),
         },
       }
-    : {};
+    : { credentialId: null };
 }
 
 export class TemplateCredentialRequired extends Error {

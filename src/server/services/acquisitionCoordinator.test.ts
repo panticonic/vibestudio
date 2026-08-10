@@ -134,6 +134,72 @@ describe("AcquisitionCoordinator", () => {
     grantStore.close();
   });
 
+  it("coalesces concurrent installed-code asks covered by the same reusable decision", async () => {
+    let resolve!: (decision: "version") => void;
+    const request = vi.fn(
+      () =>
+        new Promise<"version">((done) => {
+          resolve = done;
+        })
+    );
+    const grantStore = new CapabilityGrantStore({
+      statePath: mkdtempSync(join(tmpdir(), "authority-acq-code-coalesced-")),
+    });
+    const coordinator = new AcquisitionCoordinator({
+      approvalQueue: { request } as never,
+      grantStore,
+    });
+    const caller = createVerifiedCaller("do:workers/example:Example:test", "do", {
+      callerId: "do:workers/example:Example:test",
+      callerKind: "do",
+      repoPath: "workers/example",
+      effectiveVersion: "ev-test",
+      executionDigest: "c".repeat(64),
+      requested: [],
+    });
+    const firstSnapshot = {
+      ...snapshot(),
+      callerPrincipal: `code:workers/example@${"c".repeat(64)}` as const,
+    };
+    const secondSnapshot = {
+      ...firstSnapshot,
+      argsDigest: "d".repeat(64),
+      at: firstSnapshot.at + 1,
+    };
+    const common = {
+      tier: "gated" as const,
+      caller,
+      renderedAction: "use the local service",
+      resource: { kind: "exact" as const, key: firstSnapshot.resourceKey },
+      presentation: reviewedPresentation(),
+    };
+
+    const first = coordinator.request({
+      ...common,
+      snapshot: firstSnapshot,
+      snapshotDigest: invocationSnapshotDigest(firstSnapshot),
+    });
+    const second = coordinator.request({
+      ...common,
+      snapshot: secondSnapshot,
+      snapshotDigest: invocationSnapshotDigest(secondSnapshot),
+    });
+
+    expect(second.acquisitionId).toBe(first.acquisitionId);
+    expect(request).toHaveBeenCalledTimes(1);
+    resolve("version");
+    await expect(
+      coordinator.awaitDecision({
+        acquisitionId: first.acquisitionId,
+        ownerRuntimeId: caller.runtime.id,
+      })
+    ).resolves.toEqual({ state: "decided", decision: "version" });
+    expect(
+      grantStore.grantsForSubjects([firstSnapshot.callerPrincipal], firstSnapshot.capability)
+    ).toHaveLength(1);
+    grantStore.close();
+  });
+
   it("projects rich unit review through the canonical acquisition", async () => {
     const grantStore = new CapabilityGrantStore({
       statePath: mkdtempSync(join(tmpdir(), "authority-acq-unit-review-")),
