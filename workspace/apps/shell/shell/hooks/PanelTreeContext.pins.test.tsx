@@ -57,7 +57,9 @@ vi.mock("../useDirectShellEvent.js", () => ({
 }));
 
 import {
+  flattenTree,
   PanelTreeProvider,
+  type PanelTreeViewNode,
   useDescendantSiblingGroups,
   useFullPanel,
   usePanelTree,
@@ -214,6 +216,37 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
+});
+
+describe("flattenTree", () => {
+  it("preserves resolved unit and browser icon presentation on sidebar rows", () => {
+    const favicon = { pageUrl: "https://example.test/", updatedAt: 7 };
+    const panel: PanelTreeViewNode = {
+      id: "chat",
+      title: "Agentic Chat",
+      icon: "💬",
+      source: "panels/chat",
+      favicon,
+      owner: null,
+      parentId: null,
+      childCount: 0,
+      children: [],
+      childrenLoaded: true,
+      childrenLoadedCount: 0,
+      childrenHasMore: false,
+      selectedChildId: null,
+    };
+
+    expect(flattenTree([panel], new Set())[0]?.panel).toEqual({
+      id: "chat",
+      title: "Agentic Chat",
+      icon: "💬",
+      source: "panels/chat",
+      favicon,
+      childCount: 0,
+      position: 0,
+    });
+  });
 });
 
 describe("useFullPanel local presentation", () => {

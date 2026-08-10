@@ -99,6 +99,9 @@ export function flattenTree(
       panel: {
         id: panel.id,
         title: panel.title,
+        ...(panel.icon ? { icon: panel.icon } : {}),
+        ...(panel.source ? { source: panel.source } : {}),
+        ...(panel.favicon ? { favicon: panel.favicon } : {}),
         childCount: panel.childCount,
         position: index,
       },
@@ -210,6 +213,8 @@ function nodeTree(
   const cachedChildren = cache.getGroup(group);
   const children = cachedChildren?.nodes ?? [];
   const presentation = presentations.get(node.slotId);
+  const icon = presentation?.icon ?? node.icon;
+  const source = presentation?.snapshot?.source ?? node.source;
   const favicon = faviconForPresentation(presentation);
   return {
     id: node.slotId,
@@ -217,10 +222,8 @@ function nodeTree(
     owner: node.ownerUserId,
     parentId: node.parentSlotId,
     childCount: node.childCount,
-    ...((presentation?.icon ?? node.icon) ? { icon: presentation?.icon ?? node.icon } : {}),
-    ...((presentation?.snapshot.source ?? node.source)
-      ? { source: presentation?.snapshot.source ?? node.source }
-      : {}),
+    ...(icon ? { icon } : {}),
+    ...(source ? { source } : {}),
     ...(favicon ? { favicon } : {}),
     children: children.map((child) =>
       nodeTree(child, cache, nextSeen, localSelectedChildren, presentations)
@@ -236,14 +239,30 @@ function nodeTree(
 }
 
 function faviconForPresentation(
-  presentation: FullPanel | undefined
+  presentation:
+    | (Pick<FullPanel, "navigation"> & {
+        snapshot?: Pick<PanelSnapshot, "source">;
+      })
+    | undefined
 ): PanelNavigationState["favicon"] | undefined {
   if (!presentation) return undefined;
   if (presentation.navigation?.favicon) return presentation.navigation.favicon;
-  const source = presentation.snapshot.source;
+  const source = presentation.snapshot?.source;
+  if (!source) return undefined;
   if (!source.startsWith("browser:")) return undefined;
   const pageUrl = presentation.navigation?.url ?? source.slice("browser:".length);
   return pageUrl ? { pageUrl, updatedAt: 0 } : undefined;
+}
+
+function hasSameTreePresentation(current: FullPanel | undefined, next: FullPanel): boolean {
+  const currentFavicon = faviconForPresentation(current);
+  const nextFavicon = faviconForPresentation(next);
+  return (
+    current?.icon === next.icon &&
+    current?.snapshot?.source === next.snapshot.source &&
+    currentFavicon?.pageUrl === nextFavicon?.pageUrl &&
+    currentFavicon?.updatedAt === nextFavicon?.updatedAt
+  );
 }
 
 export function PanelTreeProvider({ children }: { children: ReactNode }) {
@@ -281,16 +300,29 @@ export function PanelTreeProvider({ children }: { children: ReactNode }) {
   const mergePresentations = useCallback((nextPresentations: FullPanel[]) => {
     if (nextPresentations.length === 0) return;
     setPresentations((current) => {
-      const next = new Map(current);
-      for (const presentation of nextPresentations) next.set(presentation.id, presentation);
-      return next;
+      let next: Map<string, FullPanel> | null = null;
+      for (const presentation of nextPresentations) {
+        // Tree presentation requires the durable source projection. A
+        // selection-only update still belongs in localSelectedChildren below,
+        // but must not erase or invalidate an existing visual projection.
+        if (!presentation.snapshot) continue;
+        if (hasSameTreePresentation(current.get(presentation.id), presentation)) continue;
+        next ??= new Map(current);
+        next.set(presentation.id, presentation);
+      }
+      return next ?? current;
     });
     setLocalSelectedChildren((current) => {
-      const next = new Map(current);
+      let next: Map<string, string | null> | null = null;
       for (const presentation of nextPresentations) {
-        next.set(presentation.id, presentation.selectedChildId ?? null);
+        const selectedChildId = presentation.selectedChildId ?? null;
+        if (current.has(presentation.id) && current.get(presentation.id) === selectedChildId) {
+          continue;
+        }
+        next ??= new Map(current);
+        next.set(presentation.id, selectedChildId);
       }
-      return next;
+      return next ?? current;
     });
   }, []);
 
@@ -720,6 +752,7 @@ export function useAncestors(panelId: string | null): {
         setAncestors(
           nodes.map((node, index) => {
             const presentation = presentationsById.get(node.slotId);
+            const source = presentation?.snapshot?.source ?? node.source;
             const favicon = faviconForPresentation(presentation);
             return {
               id: node.slotId,
@@ -727,9 +760,7 @@ export function useAncestors(panelId: string | null): {
               ...((presentation?.icon ?? node.icon)
                 ? { icon: presentation?.icon ?? node.icon }
                 : {}),
-              ...((presentation?.snapshot.source ?? node.source)
-                ? { source: presentation?.snapshot.source ?? node.source }
-                : {}),
+              ...(source ? { source } : {}),
               ...(favicon ? { favicon } : {}),
               depth: nodes.length - index,
             };
