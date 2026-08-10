@@ -57,7 +57,7 @@ function createHarness(
     hasView: vi.fn(() => false),
     getViewUrl: vi.fn(() => null),
     isManagedNavigationInFlight: vi.fn(() => options.managedNavigationInFlight ?? false),
-    navigateView: vi.fn(async () => undefined),
+    navigateView: vi.fn(async (): Promise<void> => undefined),
     updateCodeIdentity: vi.fn(),
     updateAppView: vi.fn(async () => undefined),
     createView: vi.fn(() => ({ webContents: wc.webContents })),

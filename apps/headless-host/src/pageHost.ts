@@ -327,10 +327,13 @@ export class PageHost {
       { source: initScript },
       page.mgmtSessionId
     );
-    await this.navigateAndWait(slotId, "panel reload", () =>
-      this.cdp.send("Page.navigate", { url: panelUrl }, page.mgmtSessionId) as Promise<{
-        errorText?: string;
-      }>
+    await this.navigateAndWait(
+      slotId,
+      "panel reload",
+      () =>
+        this.cdp.send("Page.navigate", { url: panelUrl }, page.mgmtSessionId) as Promise<{
+          errorText?: string;
+        }>
     );
   }
 
@@ -343,7 +346,21 @@ export class PageHost {
     this.cdp.releaseSlotSessions(slotId);
     this.consoleHistory.clear(slotId);
     await this.cdp.send("Target.closeTarget", { targetId: page.targetId }).catch(() => undefined);
+    await this.disposeBrowserContextIfUnused(page.contextId);
     log.info(`unloaded panel ${slotId}`);
+  }
+
+  private async disposeBrowserContextIfUnused(contextId: string): Promise<void> {
+    if ([...this.pages.values()].some((page) => page.contextId === contextId)) return;
+    const browserContextId = this.contextsById.get(contextId);
+    if (!browserContextId) return;
+    this.contextsById.delete(contextId);
+    // Closing a target does not dispose its incognito browser context. Leaving
+    // those contexts alive retains Chromium-owned targets and renderer
+    // processes after panel churn, even though PageHost no longer tracks them.
+    await this.cdp
+      .send("Target.disposeBrowserContext", { browserContextId })
+      .catch(() => undefined);
   }
 
   async navigate(
@@ -357,8 +374,10 @@ export class PageHost {
     switch (action) {
       case "navigate": {
         if (!url) throw new Error("navigate requires a url");
-        await this.navigateAndWait(slotId, "navigate", () =>
-          this.cdp.send("Page.navigate", { url }, session) as Promise<{ errorText?: string }>
+        await this.navigateAndWait(
+          slotId,
+          "navigate",
+          () => this.cdp.send("Page.navigate", { url }, session) as Promise<{ errorText?: string }>
         );
         return;
       }
@@ -391,7 +410,9 @@ export class PageHost {
 
   async accessibilityTree(slotId: string): Promise<unknown[]> {
     const page = this.requirePage(slotId);
-    await this.cdp.send("Accessibility.enable", undefined, page.mgmtSessionId).catch(() => undefined);
+    await this.cdp
+      .send("Accessibility.enable", undefined, page.mgmtSessionId)
+      .catch(() => undefined);
     try {
       const result = (await this.cdp.send(
         "Accessibility.getFullAXTree",
@@ -400,7 +421,9 @@ export class PageHost {
       )) as { nodes?: unknown[] };
       return result.nodes ?? [];
     } finally {
-      await this.cdp.send("Accessibility.disable", undefined, page.mgmtSessionId).catch(() => undefined);
+      await this.cdp
+        .send("Accessibility.disable", undefined, page.mgmtSessionId)
+        .catch(() => undefined);
     }
   }
 
@@ -592,7 +615,12 @@ export class PageHost {
       }
       case "Runtime.exceptionThrown": {
         const params = event.params as {
-          exceptionDetails?: { text?: string; exception?: { description?: string }; url?: string; lineNumber?: number };
+          exceptionDetails?: {
+            text?: string;
+            exception?: { description?: string };
+            url?: string;
+            lineNumber?: number;
+          };
           timestamp?: number;
         };
         const details = params.exceptionDetails;

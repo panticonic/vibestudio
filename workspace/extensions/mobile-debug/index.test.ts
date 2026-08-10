@@ -3,7 +3,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { ExtensionContext } from "@vibestudio/extension";
-import { activate, pidScopedLogcatArgs, workspaceReadinessFromLog } from "./index.js";
+import {
+  activate,
+  pidScopedLogcatArgs,
+  workspaceReadinessFromLog,
+} from "./index.js";
 
 describe("@workspace-extensions/mobile-debug", () => {
   it("adds an adb logcat pid filter after resolving a package pid", () => {
@@ -148,4 +152,5 @@ describe("@workspace-extensions/mobile-debug", () => {
       issues: ["invalid distance code"],
     });
   });
+
 });

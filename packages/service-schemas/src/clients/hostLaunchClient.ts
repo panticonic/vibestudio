@@ -100,8 +100,9 @@ export class HostLaunchClient {
       const result = (await this.call("runtime", "supervision.activate", [
         { kind: "extension", releaseId: extension.name },
       ])) as RuntimeSupervisionActivationResult;
-      const terminal = activationResult(target, result);
-      if (terminal) return terminal;
+      if (result.status === "preparing" || result.status === "unavailable") {
+        return { status: result.status, target, reason: result.reason };
+      }
       if (result.status === "approval-required") {
         return this.pendingResult(target, relevantSources);
       }

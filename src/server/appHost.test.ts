@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { gunzipSync } from "node:zlib";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ledgerTest } from "../../tests/helpers/ledgerTest.js";
 
@@ -12,6 +13,7 @@ import { ConnectionGrantService } from "@vibestudio/shared/connectionGrants";
 import type { PendingApproval } from "@vibestudio/shared/approvals";
 import type { ProtectedPublicationEvent } from "@vibestudio/shared/protectedPublicationEvents";
 import { WORKSPACE_SYSTEM_EPOCH } from "@vibestudio/shared/vcs/systemEpoch";
+import { RESUMABLE_GZIP_HEADER } from "@vibestudio/shared/panel/assetHeaders";
 import { canonicalJson } from "@vibestudio/shared/contentTree/canonicalJson";
 import { domainHash } from "@vibestudio/shared/execution/identity";
 import {
@@ -483,6 +485,74 @@ function createMockResponse() {
 }
 
 describe("AppHost", () => {
+  it("serves deterministic gzip byte ranges for resumable native app transfer", () => {
+    const { host, buildSystem, graphNode } = makeHarness();
+    installApp(host, graphNode);
+    const source = Buffer.from("mobile workspace bundle ".repeat(2048));
+    buildSystem.getBuildByKey.mockReturnValue({
+      dir: "/builds/app-key",
+      buildKey: "app-key",
+      metadata: {
+        ...TEST_SEALED_APP_BUILD_METADATA,
+        details: { kind: "app", target: "react-native", integrity: "sha256-app" },
+      },
+      artifacts: [
+        {
+          path: "index.android.bundle",
+          role: "primary",
+          platform: "android",
+          contentType: "application/javascript",
+          encoding: "base64",
+          content: source.toString("base64"),
+          integrity: "sha256-source",
+        },
+      ],
+    } as never);
+
+    const full = createMockResponse();
+    host.handleAppArtifactRequest(
+      { method: "GET", headers: { [RESUMABLE_GZIP_HEADER]: "1" } } as never,
+      full as never,
+      "app-key",
+      "index.android.bundle"
+    );
+    expect(full.statusCode).toBe(200);
+    expect(full.headers["Content-Encoding"]).toBe("gzip");
+    expect(gunzipSync(full.body)).toEqual(source);
+
+    const offset = Math.floor(full.body.length / 2);
+    const resumed = createMockResponse();
+    host.handleAppArtifactRequest(
+      {
+        method: "GET",
+        headers: { [RESUMABLE_GZIP_HEADER]: "1", range: `bytes=${offset}-` },
+      } as never,
+      resumed as never,
+      "app-key",
+      "index.android.bundle"
+    );
+    expect(resumed.statusCode).toBe(206);
+    expect(resumed.headers["Content-Range"]).toBe(
+      `bytes ${offset}-${full.body.length - 1}/${full.body.length}`
+    );
+    expect(Buffer.concat([full.body.subarray(0, offset), resumed.body])).toEqual(full.body);
+
+    const bounded = createMockResponse();
+    host.handleAppArtifactRequest(
+      {
+        method: "GET",
+        headers: { [RESUMABLE_GZIP_HEADER]: "1", range: "bytes=7-38" },
+      } as never,
+      bounded as never,
+      "app-key",
+      "index.android.bundle"
+    );
+    expect(bounded.statusCode).toBe(206);
+    expect(bounded.headers["Content-Range"]).toBe(`bytes 7-38/${full.body.length}`);
+    expect(bounded.headers["Content-Length"]).toBe("32");
+    expect(bounded.body).toEqual(full.body.subarray(7, 39));
+  });
+
   it("computes meta-change approvals from committed workspace config", async () => {
     const readWorkspaceFileAtState = vi.fn(async (_stateHash: string, filePath: string) =>
       filePath === "meta/vibestudio.yml"

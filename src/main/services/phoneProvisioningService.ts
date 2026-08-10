@@ -28,6 +28,8 @@ export interface PhoneProvisioningServiceDeps {
   /** Physical checkout or app.asar.unpacked root used as the child-process cwd. */
   appRoot: string;
   appVersion: string;
+  /** Exact workspace selected by the desktop session hosting this provider. */
+  workspaceName: string;
   resolveScriptPath: (name: string) => string;
   hostPlatform?: NodeJS.Platform;
   runScript?: (
@@ -184,8 +186,20 @@ export function createPhoneProvisioningService(
       .parse(await deps.hubControlClient.call("hubControl", "listDevices", []));
     const knownDeviceIds = new Set(beforePairing.devices.map((device) => device.deviceId));
     const invite = z
-      .object({ pairing: z.object({ deepLink: z.string().min(1) }) })
-      .parse(await deps.hubControlClient.call("hubControl", "pairDevice", [{}]));
+      .object({
+        workspace: z.string().min(1),
+        pairing: z.object({ deepLink: z.string().min(1) }),
+      })
+      .parse(
+        await deps.hubControlClient.call("hubControl", "pairDevice", [
+          { workspace: deps.workspaceName },
+        ])
+      );
+    if (invite.workspace !== deps.workspaceName) {
+      throw new Error(
+        `The phone invite targeted ${invite.workspace}, not the selected workspace ${deps.workspaceName}`
+      );
+    }
 
     const connectArgs = [
       "connect",
@@ -211,6 +225,7 @@ export function createPhoneProvisioningService(
         return PhoneProvisioningResultSchema.parse({
           providerId: localProviderId,
           platform: input.platform,
+          workspace: invite.workspace,
           attachedDeviceId: selected.deviceId,
           installStatus,
           compatibleAppInstalled: true,

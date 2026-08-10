@@ -3,7 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { waitForRootInvite } from "../scripts/cli/lib/smoke-remote-server.mjs";
+import {
+  createRemoteServeArgs,
+  waitForRootInvite,
+} from "../scripts/cli/lib/smoke-remote-server.mjs";
 
 const tempDirs: string[] = [];
 
@@ -20,6 +23,14 @@ afterEach(async () => {
 });
 
 describe("smoke remote-server root invite selection", () => {
+  it("runs an isolated named workspace that survives an intentional server restart", () => {
+    const args = createRemoteServeArgs("/repo", "/tmp/ready.json", 43100);
+    expect(args).toContain("--bootstrap-workspace");
+    expect(args).toContain("mobile-smoke");
+    expect(args).not.toContain("--dev");
+    expect(args).toContain("/repo/scripts/cli/remote-serve.mjs");
+  });
+
   it("selects the one universal invite from the ready-file contract", async () => {
     const ready = {
       rootInvite: { pairUrl: "https://vibestudio.app/pair#root" },

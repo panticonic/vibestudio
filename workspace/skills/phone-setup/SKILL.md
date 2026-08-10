@@ -46,8 +46,22 @@ const providers = await rpc.call(phone.targetId, "providers", []);
 const discovery = await rpc.call(phone.targetId, "devices", [
   { providerId: providers[0]?.providerId },
 ]);
-return { providers, discovery };
+const ready = discovery.devices.filter((device) => device.ready);
+if (ready.length !== 1) return { providers, discovery };
+const provisioned = await rpc.call(phone.targetId, "provision", [
+  {
+    providerId: providers[0].providerId,
+    platform: ready[0].platform,
+    deviceId: ready[0].deviceId,
+    mode: "auto",
+  },
+]);
+return { providers, discovery, provisioned };
 ```
+
+`devices` returns an object shaped as `{ devices, issues }`; it does not return
+the device array directly. Pass the selected device back as `deviceId` (not
+`device`, `serial`, or `id`) when calling `provision`.
 
 Use ordinary eval exactly as shown. Do not add an eval-level `authority`
 override such as `approvals: "pregranted-only"`: the builtin receiver grant is
@@ -75,8 +89,8 @@ defect and must not be retried.
    user to open that desktop app and keep it running, then retry discovery once
    they confirm. This is a desktop-connectivity problem, not a phone problem;
    do not send them into developer settings yet.
-3. Call the resolved service's `devices` method for each provider. If one ready phone exists,
-   select it. If none is ready, use the relevant guided setup below and
+3. Call the resolved service's `devices` method for each provider and inspect
+   its `devices` array. If one ready phone exists, select it. If none is ready, use the relevant guided setup below and
    rediscover after the user's next action.
 4. Ask the user to choose only when multiple providers or ready phones exist.
    Present every applicable provider/device choice in one structured surface;
@@ -86,8 +100,8 @@ defect and must not be retried.
    result may be needed because only the agent has the typed provisioning
    tools. If those tools become panel-callable, replace the feedback handoff
    with a persistent inline component that invokes them directly.
-5. Call the resolved service's `provision` method once with the selected provider, platform,
-   device, and `mode: "auto"`. This is the transaction boundary: the connected
+5. Call the resolved service's `provision` method once with the selected
+   `providerId`, `platform`, `deviceId`, and `mode: "auto"`. This is the transaction boundary: the connected
    desktop skips a compatible install, otherwise resolves `auto` to a local
    build when it owns a source checkout or to the version-matched release in a
    packaged desktop; it then mints a same-account invite, delivers it to the
@@ -172,6 +186,23 @@ For repository development and system tests, pair that semantic result with
 `mobile-debug.verifyWorkspaceReady`, using a `sinceMs` captured before
 provisioning. This is diagnostic evidence that the newly paired app completed
 workspace and panel-host initialization; process liveness alone is not enough.
+Resolve and retain the extension's physical device independently *before*
+provisioning:
+
+```ts
+const debugDevices = await extensions.invoke("mobile-debug", "listDevices", []);
+const serial = debugDevices.find((device: any) => device.state === "device")?.serial;
+if (!serial) throw new Error("mobile-debug found no ready physical Android device");
+const startedAt = Date.now();
+// Run the single phone-provisioning `provision` transaction here.
+const workspace = await extensions.invoke("mobile-debug", "verifyWorkspaceReady", [
+  { device: serial, sinceMs: startedAt, timeoutMs: 180_000 },
+]);
+```
+
+Pass that retained `serial` as `device` directly; do not try to map it from the
+provision result. A provisioning provider ID or newly paired hub `deviceId` is
+not an adb serial and must never be passed to a mobile-debug operation.
 Do not use the development extension in ordinary end-user onboarding.
 
 ## Manual fallback

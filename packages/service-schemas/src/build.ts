@@ -108,9 +108,10 @@ export type BuildBundleResult = z.infer<typeof buildBundleResultSchema>;
 export const buildArtifactSchema = z
   .object({
     path: z.string(),
-    role: z.enum(["primary", "asset", "html", "css", "map", "wasm"]),
+    role: z.enum(["primary", "asset", "html", "css", "shared-style", "map", "wasm"]),
     contentType: z.string(),
     encoding: z.enum(["utf8", "base64"]),
+    byteLength: z.number().int().nonnegative().optional(),
     platform: z.string().optional(),
     integrity: z.string().optional(),
     content: z.string(),

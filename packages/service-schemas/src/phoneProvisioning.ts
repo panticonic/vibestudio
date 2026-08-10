@@ -71,6 +71,7 @@ export type PhoneDeviceDiscovery = z.infer<typeof PhoneDeviceDiscoverySchema>;
 export const PhoneProvisioningResultSchema = z.object({
   providerId: z.string().min(1),
   platform: PhonePlatformSchema,
+  workspace: z.string().min(1),
   attachedDeviceId: z.string().min(1),
   installStatus: z.enum(["installed", "already-compatible"]),
   compatibleAppInstalled: z.literal(true),

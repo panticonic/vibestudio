@@ -10,6 +10,7 @@ try {
     usage: [
       "vibestudio remote serve",
       "vibestudio remote serve --dev",
+      "vibestudio remote serve --bootstrap-workspace mobile-smoke",
       "vibestudio remote serve --port 3030",
     ],
     startupHint:

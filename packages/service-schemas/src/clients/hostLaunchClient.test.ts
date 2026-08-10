@@ -84,6 +84,80 @@ describe("HostLaunchClient", () => {
     ]);
   });
 
+  it("continues from ready prerequisite extensions to the configured app", async () => {
+    let prepared = false;
+    const call = vi.fn(async (service: string, method: string, args?: unknown[]) => {
+      if (service === "workspace" && method === "getConfig") {
+        return {
+          hostTargets: {
+            "react-native": {
+              app: "apps/mobile",
+              requiresExtensions: ["extensions/react-native"],
+            },
+          },
+        };
+      }
+      if (service === "build" && method === "listUnits") {
+        return [
+          {
+            name: "@workspace-extensions/react-native",
+            source: "extensions/react-native",
+            kind: "extension",
+          },
+          {
+            name: "@workspace-apps/mobile",
+            source: "apps/mobile",
+            kind: "app",
+            target: "react-native",
+            activeBuildKey: prepared ? "build-mobile" : null,
+            status: prepared ? "ready" : "available",
+          },
+        ];
+      }
+      if (service === "runtime" && method === "supervision.prepare") {
+        prepared = true;
+        return {
+          releaseId: "@workspace-apps/mobile",
+          buildKey: "build-mobile",
+          effectiveVersion: "ev-mobile",
+        };
+      }
+      if (service === "runtime" && method === "supervision.activate") {
+        const key = (args?.[0] as { kind: string; releaseId: string }) ?? null;
+        if (key.kind === "extension") {
+          return {
+            status: "ready",
+            entity: {
+              identity: { kind: "extension", entityId: key.releaseId },
+              source: "extensions/react-native",
+            },
+          };
+        }
+        return {
+          status: "ready",
+          entity: {
+            identity: { kind: "app", entityId: key.releaseId },
+            source: "apps/mobile",
+          },
+        };
+      }
+      throw new Error(`Unexpected call ${service}.${method}`);
+    });
+
+    const client = new HostLaunchClient(call);
+    await expect(client.launch("react-native")).resolves.toMatchObject({
+      status: "ready",
+      entity: { identity: { kind: "app", entityId: "@workspace-apps/mobile" } },
+    });
+    expect(call).toHaveBeenCalledWith("runtime", "supervision.activate", [
+      { kind: "extension", releaseId: "@workspace-extensions/react-native" },
+    ]);
+    expect(call).toHaveBeenCalledWith("runtime", "supervision.prepare", [
+      { kind: "app", releaseId: "@workspace-apps/mobile" },
+      { ref: "main" },
+    ]);
+  });
+
   it("does not prepare an app while its build is awaiting approval", async () => {
     const call = vi.fn(async (service: string, method: string) => {
       if (service === "workspace" && method === "getConfig") {

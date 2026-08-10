@@ -238,8 +238,10 @@ export async function activate(ctx: ExtensionContext) {
       const timeoutMs = Math.min(Math.max(raw?.timeoutMs ?? 180_000, 1_000), 300_000);
       const deadline = Date.now() + timeoutMs;
       let last = workspaceReadinessFromLog("", sinceMs);
+      let readySince: number | null = null;
 
-      while (Date.now() < deadline) {
+      while (readySince !== null || Date.now() < deadline) {
+        if (readySince !== null && Date.now() - readySince >= 20_000) return last;
         const pid = await adbCapture(device.serial, ["shell", "pidof", packageName])
           .then((result) => result.stdout.trim().split(/\s+/u)[0])
           .catch(() => undefined);
@@ -260,7 +262,17 @@ export async function activate(ctx: ExtensionContext) {
             "*:S",
           ]);
           last = workspaceReadinessFromLog(logs.stdout, sinceMs);
-          if (last.issues.length > 0 || last.ready) return last;
+          if (last.issues.length > 0) return last;
+          if (last.ready) {
+            readySince ??= Date.now();
+            // Readiness markers describe completed startup work, but an ICE
+            // transition can still reject the just-finished RPC moments later.
+            // Reaching ready within the caller's deadline earns one full
+            // reconnect grace window. Do not charge that stability check to
+            // the cold-start budget or return ready=true with a timeout issue.
+          } else {
+            readySince = null;
+          }
         }
         await new Promise((resolve) => setTimeout(resolve, 500));
       }

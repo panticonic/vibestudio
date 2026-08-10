@@ -60,8 +60,9 @@ function harness(data: string) {
 
 function lifecycleHarness(navigateResult: { errorText?: string } = {}) {
   const owners = new Map<string, string>();
-  let eventHandler: ((event: { method: string; params: unknown; sessionId?: string }) => void) | null =
-    null;
+  let eventHandler:
+    | ((event: { method: string; params: unknown; sessionId?: string }) => void)
+    | null = null;
   const send = vi.fn(async (method: string) => {
     if (method === "Target.createBrowserContext") return { browserContextId: "browser-context-1" };
     if (method === "Target.createTarget") return { targetId: "target-1" };
@@ -141,7 +142,9 @@ describe("PageHost navigation readiness", () => {
     const loading = host.loadPanel(input).finally(() => {
       settled = true;
     });
-    await vi.waitFor(() => expect(send).toHaveBeenCalledWith("Page.navigate", { url: input.panelUrl }, "mgmt-1"));
+    await vi.waitFor(() =>
+      expect(send).toHaveBeenCalledWith("Page.navigate", { url: input.panelUrl }, "mgmt-1")
+    );
     expect(settled).toBe(false);
 
     fireDocumentReady();
@@ -177,10 +180,58 @@ describe("PageHost navigation readiness", () => {
   it("rejects an outstanding readiness wait when the panel is unloaded", async () => {
     const { host, input, send } = lifecycleHarness();
     const loading = host.loadPanel(input);
-    await vi.waitFor(() => expect(send).toHaveBeenCalledWith("Page.navigate", { url: input.panelUrl }, "mgmt-1"));
+    await vi.waitFor(() =>
+      expect(send).toHaveBeenCalledWith("Page.navigate", { url: input.panelUrl }, "mgmt-1")
+    );
 
     await host.unloadPanel(input.slotId);
     await expect(loading).rejects.toThrow("unloaded before document readiness");
+  });
+
+  it("disposes the owned browser context when its final panel unloads", async () => {
+    const { host, input, send, fireDocumentReady } = lifecycleHarness();
+    const loading = host.loadPanel(input);
+    await vi.waitFor(() =>
+      expect(send).toHaveBeenCalledWith("Page.navigate", { url: input.panelUrl }, "mgmt-1")
+    );
+    fireDocumentReady();
+    await loading;
+
+    await host.unloadPanel(input.slotId);
+
+    expect(send).toHaveBeenCalledWith("Target.closeTarget", { targetId: "target-1" });
+    expect(send).toHaveBeenCalledWith("Target.disposeBrowserContext", {
+      browserContextId: "browser-context-1",
+    });
+  });
+
+  it("retains a browser context until every panel sharing it unloads", async () => {
+    const { host, input, send, fireDocumentReady } = lifecycleHarness();
+    const loading = host.loadPanel(input);
+    await vi.waitFor(() =>
+      expect(send).toHaveBeenCalledWith("Page.navigate", { url: input.panelUrl }, "mgmt-1")
+    );
+    fireDocumentReady();
+    await loading;
+
+    const pages = (host as unknown as { pages: Map<string, unknown> }).pages;
+    pages.set("panel-2", {
+      slotId: "panel-2",
+      contextId: input.contextId,
+      targetId: "target-2",
+      mgmtSessionId: "mgmt-2",
+      relaySessionId: null,
+      panelUrl: input.panelUrl,
+      lastUsedAt: 0,
+    });
+
+    await host.unloadPanel(input.slotId);
+    expect(send).not.toHaveBeenCalledWith("Target.disposeBrowserContext", expect.anything());
+
+    await host.unloadPanel("panel-2");
+    expect(send).toHaveBeenCalledWith("Target.disposeBrowserContext", {
+      browserContextId: "browser-context-1",
+    });
   });
 });
 

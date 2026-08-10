@@ -4,6 +4,7 @@ import {
   buildDiagnosticSchema,
   buildMetadataSchema,
   buildMethods,
+  buildResultSchema,
   executionArtifactRefSchema,
 } from "./build.js";
 
@@ -139,6 +140,37 @@ describe("build method effects", () => {
         ],
         details: { kind: "generic" },
         builtAt: new Date(0).toISOString(),
+      }).success
+    ).toBe(true);
+  });
+
+  it("accepts the complete artifact manifest emitted by the build store", () => {
+    expect(
+      buildResultSchema.safeParse({
+        dir: "/tmp/build",
+        buildKey: digest,
+        sourceStateHash: `state:${digest}`,
+        metadata: {
+          kind: "panel",
+          name: "@workspace-panels/test",
+          buildKey: digest,
+          sourcePath: "panels/test",
+          ev: "ev:test",
+          sourceStateHash: `state:${digest}`,
+          sourcemap: false,
+          details: { kind: "generic" },
+          builtAt: new Date(0).toISOString(),
+        },
+        artifacts: [
+          {
+            path: "shared.css",
+            role: "shared-style",
+            contentType: "text/css",
+            encoding: "utf8",
+            byteLength: 7,
+            content: "body {}",
+          },
+        ],
       }).success
     ).toBe(true);
   });

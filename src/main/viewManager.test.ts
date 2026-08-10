@@ -529,6 +529,30 @@ describe("ViewManager", () => {
       expect(vm.isPanelSlotted("panel-1")).toBe(true);
     });
 
+    it("preserves measured slot bounds when a bound panel becomes visible", () => {
+      const panelView = vm.createView({ id: "panel-1", type: "panel" });
+      vm.createView({
+        id: "@workspace-apps/shell",
+        type: "app",
+        hostChrome: true,
+        appCapabilities: ["panel-hosting"],
+      });
+      vm.setHostedShellReady("@workspace-apps/shell", true);
+      const bounds = { x: 267, y: 32, width: 933, height: 768 };
+      vm.bindPanelSlot("@workspace-apps/shell", {
+        nativeSlotId: "panel-stack:primary",
+        bindingId: "binding-test",
+        panelId: "panel-1",
+        bounds,
+      });
+      (panelView.setBounds as Mock).mockClear();
+
+      vm.setViewVisible("panel-1", true);
+
+      expect(panelView.setBounds).toHaveBeenLastCalledWith(bounds);
+      expect(panelView.setVisible).toHaveBeenLastCalledWith(true);
+    });
+
     it("does not steal focus when the same focused panel rebinds or resyncs", () => {
       const panelView = vm.createView({ id: "panel-1", type: "panel" });
       vm.createView({

@@ -1273,9 +1273,16 @@ export class ViewManager {
       this.reconcileNativeLayerOrder();
       this.focusVisibleView(managed);
     } else if (visible && managed.type !== "shell") {
-      // Track visible panel and apply calculated bounds
+      // An active native slot is the authoritative geometry for its panel.
+      // Visibility transitions can race immediately after a bind; falling
+      // back to reconstructed legacy chrome bounds here would briefly expand
+      // the panel over hosted-shell chrome until the next slot resync.
       this.visiblePanelId = id;
-      const bounds = this.calculatePanelBounds();
+      const nativeSlotId = this.nativePanelSlots.panelToSlot.get(id);
+      const bounds = nativeSlotId
+        ? (this.nativePanelSlots.activeSlots.get(nativeSlotId)?.bounds ??
+          this.calculatePanelBounds())
+        : this.calculatePanelBounds();
       managed.bounds = bounds;
       managed.view.setBounds(bounds);
 

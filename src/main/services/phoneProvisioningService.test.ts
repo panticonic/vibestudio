@@ -40,7 +40,10 @@ function hubControlClient() {
   return {
     call: vi.fn(async (_service: string, method: string) => {
       if (method === "pairDevice") {
-        return { pairing: { deepLink: "vibestudio://connect?test" } };
+        return {
+          workspace: "current-workspace",
+          pairing: { deepLink: "vibestudio://connect?test" },
+        };
       }
       if (method === "listDevices") {
         listCount += 1;
@@ -69,6 +72,7 @@ describe("desktop phone provisioning service", () => {
     const definition = createPhoneProvisioningService({
       appRoot: "/nonexistent/vibestudio-test-root",
       appVersion: "test",
+      workspaceName: "current-workspace",
       resolveScriptPath: (name) => name,
       runScript: async () => ({ stdout: "", stderr: "" }),
       hubControlClient: hubControlClient(),
@@ -88,12 +92,14 @@ describe("desktop phone provisioning service", () => {
         stderr: "",
       };
     });
+    const hub = hubControlClient();
     const definition = createPhoneProvisioningService({
       appRoot: sourceRoot(),
       appVersion: "0.1.5",
+      workspaceName: "current-workspace",
       resolveScriptPath: (name) => name,
       runScript,
-      hubControlClient: hubControlClient(),
+      hubControlClient: hub,
     });
 
     const result = await definition.handler({} as never, "provision", [
@@ -111,8 +117,12 @@ describe("desktop phone provisioning service", () => {
     expect(result).toMatchObject({
       installStatus: "installed",
       pairingStatus: "paired",
+      workspace: "current-workspace",
       pairedDevice: { deviceId: "paired-mobile" },
     });
+    expect(hub.call).toHaveBeenCalledWith("hubControl", "pairDevice", [
+      { workspace: "current-workspace" },
+    ]);
   });
 
   it("honors an explicit release request even when mobile source is available", async () => {
@@ -128,6 +138,7 @@ describe("desktop phone provisioning service", () => {
     const definition = createPhoneProvisioningService({
       appRoot: sourceRoot(),
       appVersion: "0.1.5",
+      workspaceName: "current-workspace",
       resolveScriptPath: (name) => name,
       runScript,
       hubControlClient: hubControlClient(),

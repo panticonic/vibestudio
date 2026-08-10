@@ -607,7 +607,15 @@ async function main() {
   }
 
   if (options.fromSource && !options.noBuild) {
-    await run("./gradlew", ["assembleInternal", "--rerun-tasks"], { cwd: androidDir });
+    await run(
+      "./gradlew",
+      [
+        "assembleInternal",
+        "--no-daemon",
+        "-Pkotlin.compiler.execution.strategy=in-process",
+      ],
+      { cwd: androidDir }
+    );
   } else if (!options.noBuild && !fs.existsSync(apkPath)) {
     console.log(`[mobile-install] Downloading prebuilt APK: ${options.artifactUrl}`);
     await downloadFile(options.artifactUrl, apkPath);

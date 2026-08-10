@@ -98,6 +98,7 @@ export function parsePairArgs(argv, config) {
     signalUrl: undefined,
     signalSource: "default",
     readyFile: null,
+    bootstrapWorkspace: null,
   };
 
   for (let i = 0; i < argv.length; i++) {
@@ -123,6 +124,10 @@ export function parsePairArgs(argv, config) {
       const readyFile = argv[++i] ?? "";
       if (!readyFile) throw new Error("--ready-file requires a path");
       options.readyFile = path.resolve(readyFile);
+    } else if (arg === "--bootstrap-workspace") {
+      const workspace = argv[++i] ?? "";
+      if (!workspace) throw new Error("--bootstrap-workspace requires a name");
+      options.bootstrapWorkspace = workspace;
     } else if (arg === "--signal-url" || arg === "--signaling-url") {
       options.signalUrl = argv[++i] ?? "";
       options.signalSource = "flag";
@@ -140,6 +145,9 @@ export function parsePairArgs(argv, config) {
   }
 
   if (!options.help) {
+    if (options.dev && options.bootstrapWorkspace) {
+      throw new Error("--dev and --bootstrap-workspace are mutually exclusive");
+    }
     const resolved = resolveSignalingEndpoint(options.signalUrl, signalEnv, config);
     options.signalUrl = resolved.url;
     options.signalSource = resolved.source;
@@ -170,6 +178,8 @@ Options:
   --ready-file <path>
       Write the structured hub-ready payload to this path. Useful for unattended
       pairing; protect and delete it because initial root invites are one-time secrets.
+  --bootstrap-workspace <name>
+      Register a named source workspace and preserve its state across server restarts.
   --dev
       Use a disposable dev workspace copied fresh from the template and deleted
       when the server exits.
@@ -531,6 +541,9 @@ function buildServerArgs(options, config = {}) {
   ];
 
   if (options.dev) args.push("--ephemeral");
+  if (options.bootstrapWorkspace) {
+    args.push("--bootstrap-workspace", options.bootstrapWorkspace);
+  }
   if (options.appRoot) args.push("--app-root", options.appRoot);
   if (options.readyFile) args.push("--ready-file", path.resolve(options.readyFile));
   if (config.requireMobileReady) args.push("--require-mobile-ready");

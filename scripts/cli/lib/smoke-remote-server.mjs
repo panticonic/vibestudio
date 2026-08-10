@@ -4,6 +4,8 @@ import path from "node:path";
 export function createRemoteServeArgs(repoRoot, readyFile, port) {
   return [
     path.join(repoRoot, "scripts", "cli", "remote-serve.mjs"),
+    "--bootstrap-workspace",
+    "mobile-smoke",
     "--app-root",
     repoRoot,
     "--port",

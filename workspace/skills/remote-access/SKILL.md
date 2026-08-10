@@ -69,7 +69,7 @@ connectivity.
 - Treat the invite room's atomic hub-side promotion as the only pairing commit.
   Do not add child activation journals, proposed device credentials,
   `controlReach` route fields, or legacy transport readers.
-- Mobile bundle delivery uses `rn-host-2`: JS fetches over the active WebRTC
+- Mobile bundle delivery uses `rn-host-3`: JS fetches over the active WebRTC
   pipe and native only appends chunks, finalizes integrity, and activates.
 
 ## Golden Paths

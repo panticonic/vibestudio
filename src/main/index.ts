@@ -2737,6 +2737,7 @@ app.on("ready", async () => {
       appVersion: app.getVersion(),
       resolveScriptPath: (name) => getPhysicalAppPath(path.join("scripts", "cli", name)),
       hubControlClient: conn.hubControlClient,
+      workspaceName: conn.workspaceName,
     });
     electronContainer.registerRpc(desktopPhoneProvider);
     electronContainer.registerRpc(createAdblockService({ adBlockManager }));

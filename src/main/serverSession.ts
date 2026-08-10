@@ -108,6 +108,8 @@ export interface SessionConnection {
   externalHost: string;
   gatewayConfig: { serverUrl: string };
   workerdPort: number;
+  /** Exact hub workspace selected by this desktop session. */
+  workspaceName: string;
   workspaceId: string;
   workspacePath: string;
   statePath: string;
@@ -357,6 +359,7 @@ export async function establishServerSession(args: {
       externalHost,
       gatewayConfig,
       workerdPort: 0,
+      workspaceName: mode.workspaceName,
       workspaceId: wsInfo.config.id,
       workspacePath: wsInfo.path,
       /** The local server's own state directory (same host). */
@@ -488,7 +491,11 @@ async function establishRemoteSession(
   const serverClient = workspaceDial.value;
   try {
     phase("prepare-workspace-session");
-    const connection = await buildRemoteSessionConnection(serverClient, hubControlClient);
+    const connection = await buildRemoteSessionConnection(
+      serverClient,
+      hubControlClient,
+      stored.workspaceName
+    );
     log.info(`[Server] Shell client connected over WebRTC remote pipe (${origin})`);
     return connection;
   } catch (error) {
@@ -631,7 +638,11 @@ async function establishFreshPairSession(
       }
     );
     phase("prepare-workspace-session");
-    const connection = await buildRemoteSessionConnection(workspaceClient, controlClient);
+    const connection = await buildRemoteSessionConnection(
+      workspaceClient,
+      controlClient,
+      currentStored.workspaceName
+    );
     log.info("[Server] Shell client connected over WebRTC remote pipe (fresh pairing)");
     return connection;
   } catch (error) {
@@ -674,7 +685,8 @@ function storedReach(
  */
 async function buildRemoteSessionConnection(
   serverClient: ServerClient,
-  hubControlClient: ServerClient
+  hubControlClient: ServerClient,
+  workspaceName: string
 ): Promise<SessionConnection> {
   const protocol = "http" as const;
   const externalHost = "localhost";
@@ -727,6 +739,7 @@ async function buildRemoteSessionConnection(
       externalHost,
       gatewayConfig,
       workerdPort: 0,
+      workspaceName,
       workspaceId: wsInfo.config.id,
       // Remote manifests and assets are served through panelAssetFacade. The
       // remote path remains metadata for labels and workspace identity only.

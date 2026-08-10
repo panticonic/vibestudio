@@ -12,6 +12,7 @@ import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { inflateSync } from "node:zlib";
+import { getSharedDerivedDataPath } from "@vibestudio/env-paths";
 import {
   DEFAULT_SIGNAL_URL,
   createConnectDeepLink,
@@ -21,6 +22,7 @@ import {
 import { parseHubReadyPayload } from "./lib/hub-ready.mjs";
 import { startLocalTurnRelay } from "./lib/local-turn.mjs";
 import { createRemoteServeArgs, waitForRootInvite } from "./lib/smoke-remote-server.mjs";
+import { terminateOwnedProcessTree } from "../owned-process-tree.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const wranglerBin = path.join(repoRoot, "node_modules", ".bin", "wrangler");
@@ -31,6 +33,12 @@ const defaultPackage = "app.vibestudio.mobile.internal";
 const defaultActivity = "app.vibestudio.mobile.MainActivity";
 const smokePrefix = "[VibestudioMobileSmoke]";
 const screenshotDir = path.join(repoRoot, "test-results", "mobile-smoke");
+// Capture this before the smoke replaces HOME/XDG_CONFIG_HOME for its isolated
+// mutable server state. Content-addressed, receipt-validated build artifacts
+// are deliberately shared across instances and must not become per-run data.
+const sharedDerivedCacheDir = getSharedDerivedDataPath();
+const sharedBuildResultCacheDir = path.join(sharedDerivedCacheDir, "build-results");
+const sharedBuildArtifactPoolDir = path.join(sharedDerivedCacheDir, "build-artifacts");
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -54,6 +62,8 @@ function parseArgs(argv) {
     timeoutMs: 420_000,
     pairingTimeoutMs: 180_000,
     agentTimeoutMs: 300_000,
+    skipAgentTurn: false,
+    keepState: false,
     help: false,
   };
 
@@ -93,6 +103,10 @@ function parseArgs(argv) {
       options.pairingTimeoutMs = parsePositiveInt(argv[++i], "--pairing-timeout-ms");
     } else if (arg === "--agent-timeout-ms") {
       options.agentTimeoutMs = parsePositiveInt(argv[++i], "--agent-timeout-ms");
+    } else if (arg === "--skip-agent-turn") {
+      options.skipAgentTurn = true;
+    } else if (arg === "--keep-state") {
+      options.keepState = true;
     } else if (arg === "--help") {
       options.help = true;
     } else {
@@ -156,6 +170,10 @@ Runner options:
   --agent-timeout-ms <ms>
                        Time to wait for the initial agent response after the
                        panel WebView loads. Defaults to 300000.
+  --skip-agent-turn    Validate pairing, panel rendering, durable cache, and
+                       recovery without waiting for the independent agent turn.
+  --keep-state         Retire owned processes but retain isolated smoke state
+                       for inspection instead of deleting its directory.
   --help              Show this help message.
 
 By default, the smoke delegates APK build/install/reset/launcher startup to
@@ -190,6 +208,10 @@ function spawnManaged(command, args, options = {}) {
     cwd: options.cwd ?? repoRoot,
     env: options.env ?? process.env,
     stdio: ["ignore", "pipe", "pipe"],
+    // Long-lived smoke dependencies own a process group. The hub, workerd,
+    // signaling, and TURN can fork children which a bare ChildProcess.kill()
+    // cannot prove have retired.
+    detached: process.platform !== "win32",
   });
   pipeChildOutput(child, options.label ?? command);
   child.once("error", (error) => {
@@ -465,14 +487,33 @@ function signalingHttpUrl(signalUrl, pathname) {
 }
 
 async function verifyExternalSignaling(signalUrl, requireTurn) {
-  const health = await fetch(signalingHttpUrl(signalUrl, "/healthz"));
-  if (!health.ok) throw new Error(`Signaling health failed: HTTP ${health.status}`);
+  const fetchPreflight = async (url, label) => {
+    let lastFailure = null;
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      try {
+        const response = await fetch(url, { signal: AbortSignal.timeout(15_000) });
+        if (response.ok) return response;
+        lastFailure = new Error(`${label} failed: HTTP ${response.status}`);
+        if (response.status < 500 && response.status !== 429) throw lastFailure;
+      } catch (error) {
+        lastFailure = error;
+      }
+      if (attempt < 3) await sleep(500 * attempt);
+    }
+    const detail =
+      lastFailure instanceof Error
+        ? `${lastFailure.message}${lastFailure.cause ? ` (${String(lastFailure.cause)})` : ""}`
+        : String(lastFailure);
+    throw new Error(`${label} could not reach ${url}: ${detail}`);
+  };
+
+  const health = await fetchPreflight(signalingHttpUrl(signalUrl, "/healthz"), "Signaling health");
 
   const room = `mobile-smoke-${randomUUID()}`;
-  const ice = await fetch(
-    signalingHttpUrl(signalUrl, `/room/${encodeURIComponent(room)}/ice-servers`)
+  const ice = await fetchPreflight(
+    signalingHttpUrl(signalUrl, `/room/${encodeURIComponent(room)}/ice-servers`),
+    "Signaling ICE lookup"
   );
-  if (!ice.ok) throw new Error(`Signaling ICE lookup failed: HTTP ${ice.status}`);
   const body = await ice.json();
   const iceServers = Array.isArray(body?.iceServers) ? body.iceServers : [];
   const hasTurn = iceServers.some((server) => {
@@ -571,7 +612,24 @@ function startLogcat(device, expectedPhases, deadlineMs) {
     throw new Error(`Timed out waiting for a new smoke phase ${phase}${recent}`);
   };
 
-  return { child, waitForPhase, waitForPhaseAfter, hasPhase, phaseCount };
+  const waitForAnyPhase = async (candidates, phaseDeadlineMs = deadlineMs) => {
+    while (Date.now() < phaseDeadlineMs) {
+      const observed = candidates.find((candidate) => phases.has(candidate));
+      if (observed) return observed;
+      if (child.exitCode != null) {
+        throw new Error(
+          `adb logcat exited before any of: ${candidates.join(", ")}\n${stderr}`.trim()
+        );
+      }
+      await sleep(250);
+    }
+    const recent = recentLines.length
+      ? `\n\nRecent relevant log lines:\n${recentLines.join("\n")}`
+      : "";
+    throw new Error(`Timed out waiting for any of: ${candidates.join(", ")}${recent}`);
+  };
+
+  return { child, waitForPhase, waitForPhaseAfter, waitForAnyPhase, hasPhase, phaseCount };
 }
 
 async function waitForLogcatReady(device, logcat) {
@@ -600,9 +658,9 @@ async function waitForPhaseTappingApprovals(device, logcat, phase, deadlineMs) {
     if (logcat.hasPhase(phase)) return;
     if (Date.now() - lastApprovalTap > 2_000) {
       lastApprovalTap = Date.now();
-      const reviewedUnits = await tapOptionalButtonByText(device, "Approve all", 500);
+      const reviewedUnits = await tapOptionalButtonByText(device, "Add to workspace", 500);
       if (reviewedUnits) console.log("[mobile-smoke] Approved cold-start workspace units");
-      const approvedLaunch = await tapOptionalButtonByText(device, "Trust and start", 500);
+      const approvedLaunch = await tapOptionalButtonByText(device, "Start", 500);
       if (approvedLaunch) console.log("[mobile-smoke] Approved mobile workspace app launch gate");
     }
     await sleep(250);
@@ -614,6 +672,29 @@ async function waitForPhaseTappingApprovals(device, logcat, phase, deadlineMs) {
     const visible = labels.length > 0 ? `\n\nVisible UI:\n${labels.join("\n")}` : "";
     throw new Error(`${error instanceof Error ? error.message : String(error)}${visible}`);
   }
+}
+
+async function settleWorkspaceStartupApprovals(device, deadlineMs) {
+  const discoveryDeadlineMs = Math.min(deadlineMs, Date.now() + 8_000);
+  let resolved = 0;
+  while (Date.now() < deadlineMs) {
+    const added = await tapOptionalButtonByText(device, "Add to workspace", 500);
+    const allowed = added ? false : await tapOptionalButtonByText(device, "Use once", 500);
+    if (added || allowed) {
+      resolved += 1;
+      console.log("[mobile-smoke] Approved cold-start workspace units");
+      await sleep(750);
+      continue;
+    }
+    const labels = collectWindowLabels(await dumpWindowXml(device));
+    if (hasVisibleApprovalPrompt(labels)) {
+      await sleep(250);
+      continue;
+    }
+    if (resolved > 0 || Date.now() >= discoveryDeadlineMs) return resolved;
+    await sleep(250);
+  }
+  throw new Error("Timed out resolving cold-start workspace approvals");
 }
 
 async function tapButtonByText(device, text, deadlineMs) {
@@ -662,11 +743,23 @@ async function tapOptionalButtonByLabelPrefix(device, text, timeoutMs = 6_000) {
   return false;
 }
 
+let windowDumpTail = Promise.resolve();
+
 async function dumpWindowXml(device) {
-  const dumpPath = "/sdcard/vibestudio-mobile-smoke-window.xml";
-  await adbCapture(device, "shell", "uiautomator", "dump", dumpPath).catch(() => null);
-  const result = await adbCapture(device, "exec-out", "cat", dumpPath).catch(() => null);
-  return result?.stdout ?? "";
+  // Android exposes one UiAutomationService per user. Overlapping dump
+  // processes crash rather than queue, often while an approval is visible.
+  const dump = async () => {
+    const dumpPath = "/sdcard/vibestudio-mobile-smoke-window.xml";
+    await adbCapture(device, "shell", "uiautomator", "dump", dumpPath).catch(() => null);
+    const result = await adbCapture(device, "exec-out", "cat", dumpPath).catch(() => null);
+    return result?.stdout ?? "";
+  };
+  const result = windowDumpTail.then(dump, dump);
+  windowDumpTail = result.then(
+    () => undefined,
+    () => undefined
+  );
+  return result;
 }
 
 async function tapFirstEditableControl(device, deadlineMs) {
@@ -950,8 +1043,16 @@ async function waitForInitialAgentTurn(device, deadlineMs, agentProbe, options =
       await sleep(1_000);
       continue;
     }
+    if (await tapVisibleNode(device, xml, "Add to workspace")) {
+      await sleep(1_000);
+      continue;
+    }
     if (await tapVisibleNode(device, xml, "Use once", { labelPrefix: true })) {
       await sleep(2_000);
+      continue;
+    }
+    if (await tapVisibleNode(device, xml, "Start")) {
+      await sleep(1_000);
       continue;
     }
 
@@ -962,6 +1063,16 @@ async function waitForInitialAgentTurn(device, deadlineMs, agentProbe, options =
       /Runner (?:prompt|continue) completed without/i.test(text) ||
       /Agent turn failed|Cannot continue|DO RPC relay failed|Connection error/i.test(text)
     ) {
+      if (/Something went wrong/i.test(text)) {
+        await tapVisibleNode(device, xml, "Error details");
+        await sleep(250);
+        const diagnosticLabels = collectWindowLabels(await dumpWindowXml(device));
+        throw new Error(
+          `Initial agent turn crashed the panel. Visible labels: ${summarizeLabels(
+            diagnosticLabels
+          )}`
+        );
+      }
       if (/Component error:/i.test(text)) {
         await tapVisibleNode(device, xml, "Technical details");
         await sleep(250);
@@ -1066,7 +1177,7 @@ function visibleAgentTurnState(labels) {
   const agentLabels = agentIndex >= 0 ? labels.slice(agentIndex + 1, agentIndex + 12) : [];
   const agentText = agentLabels.join("\n");
   const hasAgentAttribution =
-    agentIndex >= 0 || /(?:^|\n)AI Chat(?:\s*|\n)@(?:agent|ai-chat)(?:\s|\n|$)/i.test(text);
+    agentIndex >= 0 || /(?:^|\n)AI Chat(?:\s*|\n)@[a-z0-9][a-z0-9_-]*(?:\s|\n|$)/i.test(text);
   const hasTestModelStub = /E2E model response:\s*initial agent turn completed/i.test(text);
   const hasCredentialSetupPrompt =
     /Credential (?:required|needs refresh) for/i.test(agentText) ||
@@ -1091,7 +1202,7 @@ function hasVisibleApprovalPrompt(labels) {
   return labels.some((label) => {
     const normalized = label.replace(/\s+/g, " ").trim();
     return (
-      /^(?:Approve all|Use once|Trust and start)$/i.test(normalized) ||
+      /^(?:Add to workspace|Use once|Start)$/i.test(normalized) ||
       /^Use once\./i.test(normalized) ||
       /Approve workspace extensions/i.test(normalized)
     );
@@ -1101,8 +1212,8 @@ function hasVisibleApprovalPrompt(labels) {
 function isAgentAttributionLabel(label) {
   const normalized = label.replace(/\s+/g, " ").trim();
   return (
-    /^(?:AI Chat\s*)?@(?:agent|ai-chat)$/i.test(normalized) ||
-    /^AI Chat\s*@(?:agent|ai-chat)(?:\s|$)/i.test(normalized)
+    /^(?:AI Chat\s*)?@[a-z0-9][a-z0-9_-]*$/i.test(normalized) ||
+    /^AI Chat\s*@[a-z0-9][a-z0-9_-]*(?:\s|$)/i.test(normalized)
   );
 }
 
@@ -1150,7 +1261,15 @@ async function captureAndAssertPanelVisible(device, agentTimeoutMs, readyInfo, o
     agentTurnCompleted = true;
   }
   await ensureDeviceInteractive(device);
-  assertNoBlockingPermissionDialog(await dumpWindowXml(device));
+  const healthyDeadlineMs = Date.now() + Math.min(agentTimeoutMs, 30_000);
+  let panelXml = "";
+  while (Date.now() < healthyDeadlineMs) {
+    panelXml = await dumpWindowXml(device);
+    const panelText = unescapeXmlAttribute(panelXml);
+    if (!/Connection error|DO RPC relay failed/i.test(panelText)) break;
+    await sleep(500);
+  }
+  assertNoBlockingPermissionDialog(panelXml);
   await fsp.mkdir(screenshotDir, { recursive: true });
   const screenshotPath = path.join(
     screenshotDir,
@@ -1200,7 +1319,9 @@ function assertNoBlockingPermissionDialog(xml) {
   }
   if (/Connection error/i.test(text) || /DO RPC relay failed/i.test(text)) {
     throw new Error(
-      "Panel rendered an error banner instead of healthy content; expected the panel content to be usable"
+      `Panel connection did not recover automatically. Visible labels: ${summarizeLabels(
+        collectWindowLabels(xml)
+      )}`
     );
   }
 }
@@ -1409,19 +1530,40 @@ async function main() {
   const cleanup = async () => {
     if (cleanedUp) return;
     cleanedUp = true;
-    for (const child of children.reverse()) {
-      if (child.exitCode == null && !child.killed) child.kill("SIGTERM");
+    // Every launched emulator is registered in `children` at startup. Retiring
+    // it a second time races two process-group terminators against the same
+    // PID and can turn an otherwise successful smoke into a cleanup failure.
+    const ownedChildren = [...children.reverse()];
+    const retirements = await Promise.allSettled(
+      ownedChildren.map(async (child) => {
+        if (!child.pid) return;
+        const result = await terminateOwnedProcessTree(child.pid, {
+          termTimeoutMs: 8_000,
+          killTimeoutMs: 5_000,
+        });
+        if (!result.gone) {
+          throw new Error(result.detail ?? `owned process tree ${child.pid} did not retire`);
+        }
+      })
+    );
+    for (const retirement of retirements) {
+      if (retirement.status === "rejected") {
+        console.error(`[mobile-smoke] cleanup failed: ${String(retirement.reason)}`);
+      }
     }
-    if (emulatorChild && emulatorChild.exitCode == null && !emulatorChild.killed) {
-      emulatorChild.kill("SIGTERM");
-    }
-    await Promise.all(children.map((child) => waitForChildExit(child)));
-    if (emulatorChild) await waitForChildExit(emulatorChild);
     await turn?.cleanupArtifacts();
-    try {
-      await fsp.unlink(readyFilePath);
-    } catch {}
-    await fsp.rm(tempRoot, { recursive: true, force: true }).catch(() => undefined);
+    if (options.keepState) {
+      console.log(`[mobile-smoke] Retained isolated state: ${tempRoot}`);
+    } else {
+      try {
+        await fsp.unlink(readyFilePath);
+      } catch {}
+      await fsp
+        .rm(tempRoot, { recursive: true, force: true, maxRetries: 8, retryDelay: 250 })
+        .catch((error) => {
+          console.error(`[mobile-smoke] failed to remove temporary state ${tempRoot}: ${error}`);
+        });
+    }
   };
 
   process.on("SIGINT", () => {
@@ -1503,8 +1645,17 @@ async function main() {
     const serverEnv = {
       ...process.env,
       NODE_ENV: process.env.NODE_ENV ?? "development",
+      // A source-checkout smoke must exercise the source server. Otherwise the
+      // phone is rebuilt from current code while pairing against stale dist.
+      VIBESTUDIO_SERVER_ENTRY: "live",
       HOME: serverHome,
       XDG_CONFIG_HOME: serverConfig,
+      VIBESTUDIO_SHARED_DERIVED_CACHE_DIR: sharedDerivedCacheDir,
+      // Build results and artifact payloads are immutable, source-keyed data.
+      // Keeping them inside the ephemeral profile makes each smoke create and
+      // then synchronously unlink hundreds of megabytes of duplicate files.
+      VIBESTUDIO_SHARED_BUILD_CACHE_DIR: sharedBuildResultCacheDir,
+      VIBESTUDIO_BUILD_ARTIFACT_POOL_DIR: sharedBuildArtifactPoolDir,
       // Emulator: force relay-only through the local coturn (a direct NAT'd pipe
       // can't hold ICE consent freshness). The answerer threads this into the
       // pairing link's `ice=relay`, which the client honors.
@@ -1562,6 +1713,7 @@ async function main() {
     // there is no native HTTP pairing). Phases are emitted by apps/mobile/index.js.
     const phases = [
       "embedded-deep-link-received",
+      "embedded-usb-provisioning-approved",
       "embedded-pairing-complete",
       "embedded-workspace-selected",
       "embedded-host-target-approval-required",
@@ -1573,6 +1725,11 @@ async function main() {
       "workspace-panel-activate-start",
       "workspace-panel-materialized",
       "workspace-panel-webview-loaded",
+      "workspace-panel-ready",
+      "workspace-panel-asset-store-hit",
+      "workspace-panel-asset-pipe-miss",
+      "workspace-panel-cacheable-asset-pipe-miss",
+      "workspace-panel-asset-no-store",
     ];
     const pairingDeadlineMs = Date.now() + options.pairingTimeoutMs;
     const logcat = startLogcat(options.device, phases, pairingDeadlineMs);
@@ -1598,35 +1755,28 @@ async function main() {
     // JS listener is attached.
     await adb(options.device, "shell", "am", "force-stop", options.packageName).catch(() => null);
     await startConnectIntent(options.device, options.packageName, options.activityName, link);
-    await logcat.waitForPhase("embedded-deep-link-received");
+    const connectPresentation = await logcat.waitForAnyPhase([
+      "embedded-deep-link-received",
+      "embedded-usb-provisioning-approved",
+    ]);
     await ensureDeviceInteractive(options.device);
 
-    // The deep link surfaces a "Pair" button; tapping it starts WebRTC pairing.
-    // The host then auto-selects the single workspace the room targets (no
-    // workspace-picker tap), so wait straight through to the launch gate.
-    if (!options.noTap) {
+    // Ordinary deep links surface a Pair button. The adb-shell-only
+    // provisioning component records a one-use approval before launching the
+    // same app intent, so that trusted desktop path begins pairing immediately.
+    if (!options.noTap && connectPresentation === "embedded-deep-link-received") {
       await tapButtonByText(options.device, "Pair", pairingDeadlineMs);
     }
     await logcat.waitForPhase("embedded-pairing-complete");
     await logcat.waitForPhase("embedded-workspace-selected");
-    // Reviews are real queue entries. Keep a best-effort launch-gate tap active
-    // while the phase driver handles both unit review and host-target trust.
-    if (!options.noTap) {
-      void tapOptionalButtonByText(options.device, "Trust and start", 12_000)
-        .then((approved) => {
-          if (approved) console.log("[mobile-smoke] Approved mobile workspace app launch gate");
-        })
-        .catch(() => {});
-    }
-
     // Pairing, host-target launch, and the independently reloaded managed app
     // are separate lifecycle boundaries. Give each the configured phase budget
     // so ICE negotiation cannot silently consume the clean workspace build's
     // budget (and a build cannot consume the managed client's connection
     // budget). A stuck phase still fails within the configured timeout.
-    const hostTargetLaunchDeadlineMs = Date.now() + options.pairingTimeoutMs;
     for (const phase of ["embedded-bundle-activate-start", "embedded-bundle-activate-complete"]) {
-      await waitForPhaseTappingApprovals(options.device, logcat, phase, hostTargetLaunchDeadlineMs);
+      const phaseDeadlineMs = Date.now() + options.pairingTimeoutMs;
+      await waitForPhaseTappingApprovals(options.device, logcat, phase, phaseDeadlineMs);
     }
     const managedLaunchDeadlineMs = Date.now() + options.pairingTimeoutMs;
     await waitForPhaseTappingApprovals(
@@ -1635,6 +1785,9 @@ async function main() {
       "workspace-connected",
       managedLaunchDeadlineMs
     );
+    if (!options.noTap) {
+      await settleWorkspaceStartupApprovals(options.device, managedLaunchDeadlineMs);
+    }
     // The product no longer creates an onboarding panel during workspace
     // startup. Exercise the default user path instead of relying on hidden
     // fixture state: open the standard new-panel launcher directly.
@@ -1657,7 +1810,7 @@ async function main() {
       const chatLoadedCount = logcat.phaseCount("workspace-panel-webview-loaded");
       await tapFirstEditableControl(options.device, managedLaunchDeadlineMs);
       await adb(options.device, "shell", "input", "text", "Help%sme%sget%sstarted");
-      await tapButtonByText(options.device, "Chat", managedLaunchDeadlineMs);
+      await tapButtonByText(options.device, "Send", managedLaunchDeadlineMs);
       // about/new navigates its existing managed panel to panels/chat, so this
       // is a WebView route transition rather than a second panel activation.
       await logcat.waitForPhaseAfter(
@@ -1671,7 +1824,7 @@ async function main() {
       options.device,
       options.agentTimeoutMs,
       readyInfo,
-      { realModel: options.realModel }
+      { realModel: options.realModel, checkAgentTurn: !options.skipAgentTurn }
     );
 
     // Recovery contract: a paired installation must cold-start without another
@@ -1680,7 +1833,14 @@ async function main() {
     // cannot satisfy either recovery assertion.
     const appRestartWorkspaceCount = logcat.phaseCount("workspace-connected");
     const appRestartPanelCount = logcat.phaseCount("workspace-panel-webview-loaded");
+    const appRestartPanelReadyCount = logcat.phaseCount("workspace-panel-ready");
     await adb(options.device, "shell", "am", "force-stop", options.packageName);
+    // Snapshot asset activity only after the old app is gone. This excludes a
+    // late write from the initial materialization from the warm-relaunch window.
+    await sleep(250);
+    const appRestartCacheablePipeMissCount = logcat.phaseCount(
+      "workspace-panel-cacheable-asset-pipe-miss"
+    );
     await adb(
       options.device,
       "shell",
@@ -1701,10 +1861,24 @@ async function main() {
       appRestartPanelCount,
       options.pairingTimeoutMs
     );
-    console.log("[mobile-smoke] Recovery: persisted app cold-start reconnected");
+    await logcat.waitForPhaseAfter(
+      "workspace-panel-ready",
+      appRestartPanelReadyCount,
+      options.pairingTimeoutMs
+    );
+    if (
+      logcat.phaseCount("workspace-panel-cacheable-asset-pipe-miss") !==
+      appRestartCacheablePipeMissCount
+    ) {
+      throw new Error("Warm app relaunch fetched panel artifact bytes over the WebRTC pipe");
+    }
+    console.log(
+      "[mobile-smoke] Recovery: persisted app cold-start reconnected with zero panel-asset pipe misses"
+    );
 
     const serverRestartRecoveryCount = logcat.phaseCount("workspace-recovery-complete");
     const serverRestartPanelCount = logcat.phaseCount("workspace-panel-webview-loaded");
+    const serverRestartPanelReadyCount = logcat.phaseCount("workspace-panel-ready");
     const serverExit = new Promise((resolve) => serverChild.once("exit", resolve));
     serverChild.kill("SIGTERM");
     await Promise.race([serverExit, sleep(10_000)]);
@@ -1714,6 +1888,10 @@ async function main() {
       // port. SIGKILL is asynchronous with respect to Node's ChildProcess state.
       await serverExit;
     }
+    // With the old server stopped, any later pipe miss belongs to recovery.
+    const serverRestartCacheablePipeMissCount = logcat.phaseCount(
+      "workspace-panel-cacheable-asset-pipe-miss"
+    );
     try {
       await fsp.unlink(readyFilePath);
     } catch {}
@@ -1743,6 +1921,17 @@ async function main() {
       serverRestartPanelCount,
       options.pairingTimeoutMs
     );
+    await logcat.waitForPhaseAfter(
+      "workspace-panel-ready",
+      serverRestartPanelReadyCount,
+      options.pairingTimeoutMs
+    );
+    if (
+      logcat.phaseCount("workspace-panel-cacheable-asset-pipe-miss") !==
+      serverRestartCacheablePipeMissCount
+    ) {
+      throw new Error("Warm server recovery fetched panel artifact bytes over the WebRTC pipe");
+    }
     await captureAndAssertPanelVisible(options.device, options.agentTimeoutMs, readyInfo, {
       realModel: false,
       // If the deliberately bounded initial probe moved on while a turn was
@@ -1751,7 +1940,9 @@ async function main() {
       // do not misreport that old turn as a new recovery failure.
       checkAgentTurn: panelResult.agentTurnCompleted,
     });
-    console.log("[mobile-smoke] Recovery: server restart reconnected the persisted device room");
+    console.log(
+      "[mobile-smoke] Recovery: server restart reconnected with zero panel-asset pipe misses"
+    );
 
     console.log(
       panelResult.agentTurnCompleted

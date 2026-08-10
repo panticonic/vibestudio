@@ -3,6 +3,7 @@ import * as path from "node:path";
 import { isProductSeedTrusted } from "@vibestudio/shared/productSeedTrust";
 import { createHash } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { gzipSync } from "node:zlib";
 import {
   UnitHost,
   UnitRegistry,
@@ -56,6 +57,7 @@ import {
 } from "@vibestudio/shared/unitManifest";
 import type { HostTarget, HostTargetCandidate } from "@vibestudio/shared/hostTargets";
 import { appArtifactRoute, appArtifactUrl } from "@vibestudio/shared/appArtifacts";
+import { RESUMABLE_GZIP_HEADER } from "@vibestudio/shared/panel/assetHeaders";
 import type { EntityCache } from "@vibestudio/shared/runtime/entityCache";
 import type { EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
 import { writeAppDistBake, type AppDistBakeManifest } from "./buildV2/distBake.js";
@@ -1196,10 +1198,49 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
       headers["Content-Security-Policy"] =
         "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' ws: wss: http: https:";
     }
-    const body =
+    const identityBody =
       artifact.encoding === "base64"
         ? Buffer.from(artifact.content, "base64")
         : Buffer.from(artifact.content);
+    const requestHeaders = req.headers ?? {};
+    const resumableGzip = requestHeaders[RESUMABLE_GZIP_HEADER] === "1";
+    const body = resumableGzip ? gzipSync(identityBody, { level: 6 }) : identityBody;
+    if (resumableGzip) {
+      headers["Content-Encoding"] = "gzip";
+      headers["Accept-Ranges"] = "bytes";
+      headers["X-Vibestudio-Resumable-Gzip"] = "1";
+      if (artifact.integrity) headers["X-Vibestudio-Artifact-Integrity"] = artifact.integrity;
+    }
+
+    const rangeHeader = resumableGzip ? requestHeaders.range : undefined;
+    const rawRange = typeof rangeHeader === "string" ? rangeHeader : undefined;
+    if (rawRange) {
+      const match = /^bytes=(\d+)-(\d*)$/u.exec(rawRange);
+      const start = match ? Number(match[1]) : Number.NaN;
+      const requestedEnd = match?.[2] ? Number(match[2]) : body.byteLength - 1;
+      if (
+        !Number.isSafeInteger(start) ||
+        !Number.isSafeInteger(requestedEnd) ||
+        start < 0 ||
+        requestedEnd < start ||
+        start >= body.byteLength
+      ) {
+        headers["Content-Range"] = `bytes */${body.byteLength}`;
+        headers["Content-Length"] = "0";
+        res.writeHead(416, headers);
+        res.end();
+        return;
+      }
+      const end = Math.min(requestedEnd, body.byteLength - 1);
+      const partial = body.subarray(start, end + 1);
+      headers["Content-Range"] = `bytes ${start}-${end}/${body.byteLength}`;
+      headers["Content-Length"] = String(partial.byteLength);
+      res.writeHead(206, headers);
+      if (req.method === "HEAD") res.end();
+      else res.end(partial);
+      return;
+    }
+
     headers["Content-Length"] = String(body.byteLength);
     res.writeHead(200, headers);
     if (req.method === "HEAD") res.end();

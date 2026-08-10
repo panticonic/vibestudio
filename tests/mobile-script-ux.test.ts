@@ -31,6 +31,133 @@ afterEach(() => {
 });
 
 describe("mobile script platform and relay guarantees", () => {
+  it("builds source APKs without leaving Gradle or Kotlin compiler daemons behind", () => {
+    const source = fs.readFileSync(
+      path.join(process.cwd(), "scripts/cli/mobile-install.mjs"),
+      "utf8"
+    );
+    expect(source).toContain('"--no-daemon"');
+    expect(source).toContain('"-Pkotlin.compiler.execution.strategy=in-process"');
+    expect(source).not.toContain('"--rerun-tasks"');
+  });
+
+  it("tracks monorepo and workspace Metro sources in the Android bundle task", () => {
+    const gradle = fs.readFileSync(
+      path.join(process.cwd(), "apps/mobile/android/app/build.gradle"),
+      "utf8"
+    );
+    expect(gradle).toContain('rootProject.file("../../../packages")');
+    expect(gradle).toContain('rootProject.file("../../../workspace/apps/mobile")');
+    expect(gradle).toContain('task.name.startsWith("createBundle")');
+    expect(gradle).toContain('withPropertyName("vibestudioMetroSources")');
+    expect(gradle).toContain("PathSensitivity.RELATIVE");
+    expect(gradle).toContain('System.getenv("VIBESTUDIO_RN_BUNDLE_WORKERS") ?: "2"');
+    expect(gradle).toContain('"--max-workers"');
+  });
+
+  it("keeps managed panel artifacts warm across ordinary background transitions", () => {
+    const webView = fs.readFileSync(
+      path.join(process.cwd(), "workspace/apps/mobile/src/components/PanelWebView.tsx"),
+      "utf8"
+    );
+    expect(webView).toContain("cacheEnabled\n");
+    expect(webView).toContain('cacheMode="LOAD_DEFAULT"');
+    expect(webView).not.toContain("LOAD_NO_CACHE");
+
+    const lifecycle = fs.readFileSync(
+      path.join(process.cwd(), "workspace/apps/mobile/src/hooks/useAppLifecycle.ts"),
+      "utf8"
+    );
+    expect(lifecycle.match(/shellClient\.trimMemory\(\)/gu)).toHaveLength(1);
+    expect(lifecycle).toMatch(/memoryWarning[\s\S]*shellClient\.trimMemory\(\)/u);
+    expect(lifecycle).not.toContain("shellClient.panels");
+  });
+
+  it("gives the shell recovery coordinator sole ownership of panel refresh", () => {
+    const main = fs.readFileSync(
+      path.join(process.cwd(), "workspace/apps/mobile/src/components/MainScreen.tsx"),
+      "utf8"
+    );
+    const reconnectBlock = main.match(
+      /const unsubReconnect = shellClient\.transport\.onReconnect\(\(\) => \{([\s\S]*?)\n    \}\);/u
+    )?.[1];
+    expect(reconnectBlock).toBeDefined();
+    expect(reconnectBlock).not.toContain("panels.refresh");
+    expect(main).toContain('if (kind !== "cold-recover") return;');
+    expect(main).toContain('mobilePanelMaterializationState(panel, entry) === "current"');
+  });
+
+  it("bounds one-shot Metro builds and preserves its content cache", () => {
+    const source = fs.readFileSync(
+      path.join(process.cwd(), "workspace/extensions/react-native/index.ts"),
+      "utf8"
+    );
+    expect(source).toContain('"--max-workers"');
+    expect(source).toContain('process.env["VIBESTUDIO_RN_BUNDLE_WORKERS"] ?? "2"');
+    expect(source).not.toContain('"--reset-cache"');
+    expect(source).toContain("export async function deactivate()");
+    expect(source).toContain("ownedTempDirs.clear()");
+  });
+
+  it("advances mobile panel projections on the server's execution activation edge", () => {
+    const source = fs.readFileSync(
+      path.join(process.cwd(), "workspace/apps/mobile/src/services/shellClient.ts"),
+      "utf8"
+    );
+    expect(source).toContain('this.events.on("panel:executionActivated"');
+    expect(source).toContain('this.events.subscribe("panel:executionActivated")');
+    expect(source).toContain("handleExecutionActivated");
+    expect(source).not.toContain('this.events.subscribe("panel-presentation-changed")');
+  });
+
+  it("keeps observing launch approval resolved by the desktop or server", () => {
+    const source = fs.readFileSync(path.join(process.cwd(), "apps/mobile/index.js"), "utf8");
+    const approvalBranch = source.match(
+      /if \(launch\.status === "approval-required"\) \{([\s\S]*?)\n        \}/u
+    )?.[1];
+    expect(approvalBranch).toBeDefined();
+    expect(approvalBranch).toContain("setBusy(false)");
+    expect(approvalBranch).toContain("continue;");
+    expect(approvalBranch).not.toContain("setBusy(true)");
+    expect(approvalBranch).not.toMatch(/setApprovals\(launch\.approvals\);\s+return;/u);
+  });
+
+  it("serializes Android accessibility snapshots and has one approval driver", () => {
+    const source = fs.readFileSync(
+      path.join(process.cwd(), "scripts/cli/mobile-smoke.mjs"),
+      "utf8"
+    );
+    expect(source).toContain("let windowDumpTail = Promise.resolve()");
+    expect(source).toContain("windowDumpTail.then(dump, dump)");
+    expect(source).not.toContain('void tapOptionalButtonByText(options.device, "Start"');
+  });
+
+  it("keeps launch decisions above expanded first-use trust details", () => {
+    const source = fs.readFileSync(path.join(process.cwd(), "apps/mobile/index.js"), "utf8");
+    const approvalView = source.slice(
+      source.indexOf("launchGate.nativeCodeWarning"),
+      source.indexOf("launchGate.declineConsequence")
+    );
+    expect(approvalView.indexOf("launchGate.acceptLabel")).toBeGreaterThanOrEqual(0);
+    expect(approvalView.indexOf("launchGate.acceptLabel")).toBeLessThan(
+      approvalView.indexOf("launchGateDetailsOpen")
+    );
+    expect(approvalView.indexOf("launchGate.declineLabel")).toBeLessThan(
+      approvalView.indexOf("launchGateDetailsOpen")
+    );
+  });
+
+  it("gives host build and bundle transfer independent phase deadlines", () => {
+    const source = fs.readFileSync(
+      path.join(process.cwd(), "scripts/cli/mobile-smoke.mjs"),
+      "utf8"
+    );
+    expect(source).toMatch(
+      /for \(const phase of \["embedded-bundle-activate-start", "embedded-bundle-activate-complete"\]\) \{\s+const phaseDeadlineMs = Date\.now\(\) \+ options\.pairingTimeoutMs;/u
+    );
+    expect(source).not.toContain("hostTargetLaunchDeadlineMs");
+  });
+
   it("opens the New Panel launcher without the retired panel-kind chooser", () => {
     const source = fs.readFileSync(
       path.join(process.cwd(), "scripts/cli/mobile-smoke.mjs"),
@@ -40,6 +167,62 @@ describe("mobile script platform and relay guarantees", () => {
       'tapButtonByText(options.device, "Create new panel", managedLaunchDeadlineMs)'
     );
     expect(source).not.toContain("tapButtonAndChoose");
+  });
+
+  it("bounds and retries transient hosted signaling preflight failures", () => {
+    const source = fs.readFileSync(
+      path.join(process.cwd(), "scripts/cli/mobile-smoke.mjs"),
+      "utf8"
+    );
+    expect(source).toContain("attempt <= 3");
+    expect(source).toContain("AbortSignal.timeout(15_000)");
+    expect(source).toContain("could not reach ${url}");
+  });
+
+  it("pairs the rebuilt phone with the current source server", () => {
+    const source = fs.readFileSync(
+      path.join(process.cwd(), "scripts/cli/mobile-smoke.mjs"),
+      "utf8"
+    );
+    expect(source).toContain('VIBESTUDIO_SERVER_ENTRY: "live"');
+  });
+
+  it("proves warm panel artifacts stay off the WebRTC pipe during recovery", () => {
+    const source = fs.readFileSync(
+      path.join(process.cwd(), "scripts/cli/mobile-smoke.mjs"),
+      "utf8"
+    );
+    expect(source).toContain('"workspace-panel-ready"');
+    expect(source).toContain('"workspace-panel-cacheable-asset-pipe-miss"');
+    expect(source).toContain("Warm app relaunch fetched panel artifact bytes over the WebRTC pipe");
+    expect(source).toContain(
+      "Warm server recovery fetched panel artifact bytes over the WebRTC pipe"
+    );
+    expect(source).toMatch(
+      /am", "force-stop"[\s\S]*?await sleep\(250\);[\s\S]*?appRestartCacheablePipeMissCount/u
+    );
+    expect(source).toMatch(
+      /await serverExit;[\s\S]*?serverRestartCacheablePipeMissCount[\s\S]*?spawnManaged/u
+    );
+    expect(source).not.toContain("appRestartStoreHitCount");
+    expect(source).not.toContain("serverRestartStoreHitCount");
+
+    const mainScreen = fs.readFileSync(
+      path.join(process.cwd(), "workspace/apps/mobile/src/components/MainScreen.tsx"),
+      "utf8"
+    );
+    expect(mainScreen.indexOf("phase=workspace-panel-ready")).toBeLessThan(
+      mainScreen.indexOf(".reportView(runtimeEntityId, connectionId, observation)")
+    );
+  });
+
+  it("recognizes generated agent handles in the visible-turn validator", () => {
+    const source = fs.readFileSync(
+      path.join(process.cwd(), "scripts/cli/mobile-smoke.mjs"),
+      "utf8"
+    );
+    expect(source).toContain("@[a-z0-9][a-z0-9_-]*");
+    expect(source).not.toContain("@(?:agent|ai-chat)");
   });
 
   it("fails iOS smoke explicitly instead of reporting install/launch as a pass", () => {
