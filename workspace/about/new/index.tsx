@@ -18,6 +18,7 @@ import {
   normalizeBrowserAddressSuggestions,
   type BrowserAddressSuggestion,
 } from "@vibestudio/shared/panelChrome";
+import { isReviewPending } from "@vibestudio/shared/authority/reviewPending";
 import type { PanelSourceUsage } from "@vibestudio/shared/panelSearchTypes";
 import { useIsMobile } from "@workspace/react/responsive";
 import { AboutPage, AboutThemeRoot } from "../../packages/about-shared/ui";
@@ -252,11 +253,9 @@ function LauncherNotice({ color, children }: { color: "orange" | "red"; children
       <Callout.Icon>
         <ExclamationTriangleIcon />
       </Callout.Icon>
-      <Callout.Text>
-        <Flex align="center" gap="3" wrap="wrap">
-          {children}
-        </Flex>
-      </Callout.Text>
+      <Flex align="center" gap="3" wrap="wrap">
+        {children}
+      </Flex>
     </Callout.Root>
   );
 }
@@ -345,6 +344,8 @@ function NewPanelPage() {
   const [openPanels, setOpenPanels] = useState<OpenPanel[]>([]);
   const [browserSuggestions, setBrowserSuggestions] = useState<BrowserAddressSuggestion[]>([]);
   const [historyError, setHistoryError] = useState(false);
+  const [historyReviewPending, setHistoryReviewPending] = useState(false);
+  const [historyRefreshEpoch, setHistoryRefreshEpoch] = useState(0);
   const [favicons, setFavicons] = useState<Record<string, string | null>>({});
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [pendingId, setPendingId] = useState<string | null>(null);
@@ -440,6 +441,10 @@ function NewPanelPage() {
       void refreshCatalog();
       cancelAnimationFrame(liveDataFrame);
       liveDataFrame = requestAnimationFrame(refreshLiveData);
+      // A first read can race workspace admission or BrowserData materialization.
+      // Focus is level-triggered evidence that the launcher is active again, so
+      // converge its history projection instead of preserving a stale failure.
+      setHistoryRefreshEpoch((epoch) => epoch + 1);
     });
     const offNavigationError = panel.onChildCreationError(({ error }) => {
       navigationStartedRef.current = false;
@@ -457,6 +462,8 @@ function NewPanelPage() {
     const requestId = ++historyRequestRef.current;
     if (parsedInput.mode === "panels" || parsedInput.mode === "chat") {
       setBrowserSuggestions([]);
+      setHistoryError(false);
+      setHistoryReviewPending(false);
       return;
     }
     const timer = window.setTimeout(
@@ -470,17 +477,25 @@ function NewPanelPage() {
             if (requestId !== historyRequestRef.current) return;
             setBrowserSuggestions(normalizeBrowserAddressSuggestions(rows));
             setHistoryError(false);
+            setHistoryReviewPending(false);
           })
-          .catch(() => {
+          .catch((error: unknown) => {
             if (requestId !== historyRequestRef.current) return;
             setBrowserSuggestions([]);
-            setHistoryError(true);
+            setHistoryReviewPending(isReviewPending(error));
+            setHistoryError(!isReviewPending(error));
           });
       },
       parsedInput.query ? 100 : 0
     );
     return () => clearTimeout(timer);
-  }, [parsedInput]);
+  }, [historyRefreshEpoch, parsedInput]);
+
+  useEffect(() => {
+    if (!historyReviewPending) return;
+    const timer = window.setTimeout(() => setHistoryRefreshEpoch((epoch) => epoch + 1), 2_000);
+    return () => clearTimeout(timer);
+  }, [historyReviewPending, historyRefreshEpoch]);
 
   const baseSuggestions = useMemo(
     () =>
@@ -771,9 +786,14 @@ function NewPanelPage() {
       ) : null}
       {historyError ? (
         <LauncherNotice color="orange">
-          <Text size="2">
-            Browser history is unavailable right now — panels and addresses still work.
-          </Text>
+          <Text size="2">History suggestions couldn&apos;t be loaded.</Text>
+          <Button
+            size="1"
+            variant="soft"
+            onClick={() => setHistoryRefreshEpoch((epoch) => epoch + 1)}
+          >
+            Retry
+          </Button>
         </LauncherNotice>
       ) : null}
       {navigationError ? (

@@ -92,6 +92,54 @@ describe("BrowserDataDO schema", () => {
   });
 });
 
+describe("BrowserDataDO canonical history", () => {
+  it("returns an empty history before any native visits or imports", () => {
+    const db = new DatabaseSync(":memory:");
+    const store = createBrowserDataDO(db);
+
+    expect(store.getHistory({ limit: 10 })).toEqual([]);
+    db.close();
+  });
+
+  it("combines native and imported visits in one history summary", async () => {
+    const db = new DatabaseSync(":memory:");
+    const store = createBrowserDataDO(db);
+    const url = "https://example.test/docs";
+
+    store.recordHistoryVisit({
+      url,
+      title: "Native title",
+      visitTime: 100,
+      transition: "typed",
+      typed: true,
+      panelId: "panel-1",
+    });
+    await store.addHistoryBatch(
+      [
+        {
+          url,
+          title: "Imported title",
+          visitCount: 1,
+          lastVisitTime: 200,
+        },
+      ],
+      { sourceId: "chromium-profile" }
+    );
+
+    expect(store.getHistory({ limit: 10 })).toEqual([
+      expect.objectContaining({
+        url,
+        title: "Imported title",
+        visit_count: 2,
+        typed_count: 1,
+        first_visit: 100,
+        last_visit: 200,
+      }),
+    ]);
+    db.close();
+  });
+});
+
 describe("BrowserDataDO form-fill field identity", () => {
   it("rejects credentials and transient secrets from reusable form history", async () => {
     const db = new DatabaseSync(":memory:");

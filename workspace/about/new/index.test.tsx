@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import AboutPanelRoot from "./index";
@@ -120,11 +120,37 @@ describe("new panel launcher", () => {
     expect(screen.getAllByRole("option").length).toBeGreaterThanOrEqual(3);
   });
 
+  it("treats an empty canonical history as a normal empty result", async () => {
+    mocks.getHistory.mockResolvedValue([]);
+
+    render(<AboutPanelRoot />);
+
+    expect(await screen.findByText("Terminal")).toBeTruthy();
+    await waitFor(() => expect(mocks.getHistory).toHaveBeenCalledTimes(1));
+    expect(screen.queryByText(/History suggestions couldn/)).toBeNull();
+  });
+
+  it("quietly reconciles history after the workspace review resolves", async () => {
+    mocks.getHistory.mockRejectedValueOnce(
+      Object.assign(new Error("workspace review pending"), { code: "EREVIEWPENDING" })
+    );
+
+    render(<AboutPanelRoot />);
+
+    await waitFor(() => expect(mocks.getHistory).toHaveBeenCalledTimes(1));
+    expect(screen.queryByText(/History suggestions couldn/)).toBeNull();
+    act(() => panelFocusCallback());
+
+    expect(await screen.findByText("Example Docs")).toBeTruthy();
+    await waitFor(() => expect(screen.queryByText(/History suggestions couldn/)).toBeNull());
+    expect(mocks.getHistory).toHaveBeenCalledTimes(2);
+  });
+
   it("renders a warm catalog before any revalidation API completes", () => {
     storageValues.set(
       "vibestudio:new-panel-catalog",
       JSON.stringify({
-        version: 1,
+        version: 2,
         groups: { panels: [{ path: "panels/terminal", title: "Terminal" }], about: [] },
       })
     );
@@ -162,7 +188,7 @@ describe("new panel launcher", () => {
     render(<AboutPanelRoot />);
     await waitFor(() => expect(mocks.children).toHaveBeenCalledTimes(1));
 
-    panelFocusCallback();
+    act(() => panelFocusCallback());
     await waitFor(() => expect(mocks.roots).toHaveBeenCalledTimes(2));
     expect(mocks.children).toHaveBeenCalledTimes(1);
     expect(mocks.sourceTree).toHaveBeenCalledTimes(1);
