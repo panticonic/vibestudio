@@ -411,6 +411,8 @@ interface ContributionSide {
   files: Array<{ path: string; contentHash: string; mode: 0o644 | 0o755 }>;
 }
 
+type PreviousContributionSide = Omit<ContributionSide, "files">;
+
 function emptyContributionSource(nodeId: string, repoPath: string) {
   return {
     kind: "generated" as const,
@@ -456,27 +458,15 @@ function nextContributionSides(
   );
 }
 
-async function previousContributionSides(
-  ctx: ExtensionContextLike,
-  statePath: string,
+function previousContributionSides(
   previous: NonNullable<SemanticWorkspaceObservation["lock"]>,
   repoPath: string
-): Promise<Map<string, ContributionSide>> {
-  const result = new Map<string, ContributionSide>();
+): Map<string, PreviousContributionSide> {
+  const result = new Map<string, PreviousContributionSide>();
   for (const contribution of previous.repositories[repoPath]?.contributions ?? []) {
     const node = previous.nodes.find((candidate) => candidate.nodeId === contribution.nodeId);
     if (!node) {
       throw new Error(`Previous template lock is missing node ${contribution.nodeId}`);
-    }
-    const snapshot = await acquireTemplateSnapshot(ctx, statePath, node.pin, node.nodeId);
-    const files = subtreeFiles(snapshot.files, repoPath);
-    if (
-      semanticRepositoryDigest(files.map((file) => ({ ...file, byteLength: file.size }))) !==
-      contribution.subtreeDigest
-    ) {
-      throw new Error(
-        `Previous template contribution ${node.alias} for ${repoPath} is inconsistent`
-      );
     }
     result.set(normalizeTemplateGitUrl(node.pin.url), {
       nodeId: node.nodeId,
@@ -484,10 +474,31 @@ async function previousContributionSides(
       pin: node.pin,
       subtreeDigest: contribution.subtreeDigest,
       subdir: repoPath,
-      files: files.map(({ path, contentHash, mode }) => ({ path, contentHash, mode })),
     });
   }
   return result;
+}
+
+async function materializePreviousContribution(
+  ctx: ExtensionContextLike,
+  statePath: string,
+  side: PreviousContributionSide,
+  acquire: typeof acquireTemplateSnapshot
+): Promise<ContributionSide> {
+  const snapshot = await acquire(ctx, statePath, side.pin, side.nodeId);
+  const files = subtreeFiles(snapshot.files, side.subdir);
+  if (
+    semanticRepositoryDigest(files.map((file) => ({ ...file, byteLength: file.size }))) !==
+    side.subtreeDigest
+  ) {
+    throw new Error(
+      `Previous template contribution ${side.alias} for ${side.subdir} is inconsistent`
+    );
+  }
+  return {
+    ...side,
+    files: files.map(({ path, contentHash, mode }) => ({ path, contentHash, mode })),
+  };
 }
 
 export async function mergeTemplateContributions(
@@ -502,6 +513,20 @@ export async function mergeTemplateContributions(
   const changed: string[] = [];
   const completedDeltas: Array<{ repoPath: string; deltaId: string }> = [];
   const registeredDeltas: Array<{ repoPath: string; deltaId: string }> = [];
+  const previousSnapshots = new Map<string, ReturnType<typeof acquireTemplateSnapshot>>();
+  const acquirePrevious: typeof acquireTemplateSnapshot = (
+    operationCtx,
+    operationStatePath,
+    pin,
+    nodeId
+  ) => {
+    let snapshot = previousSnapshots.get(nodeId);
+    if (!snapshot) {
+      snapshot = acquireTemplateSnapshot(operationCtx, operationStatePath, pin, nodeId);
+      previousSnapshots.set(nodeId, snapshot);
+    }
+    return snapshot;
+  };
   let deltaBasis = record?.deltaBasis;
   const repoPaths = [
     ...new Set([...Object.keys(previous?.repositories ?? {}), ...Object.keys(plan.repositories)]),
@@ -511,11 +536,28 @@ export async function mergeTemplateContributions(
     let repository = await resolveRepository(ctx, current.workingHead, repoPath);
     const next = nextContributionSides(plan, repoPath);
     const prior = previous
-      ? await previousContributionSides(ctx, statePath, previous, repoPath)
-      : new Map<string, ContributionSide>();
+      ? previousContributionSides(previous, repoPath)
+      : new Map<string, PreviousContributionSide>();
+    const urls = [...new Set([...prior.keys(), ...next.keys()])].sort();
+    const changedUrls = urls.filter((url) => {
+      const oldSide = prior.get(url);
+      const newSide = next.get(url);
+      return !(
+        oldSide &&
+        newSide &&
+        oldSide.pin.commit === newSide.pin.commit &&
+        oldSide.subtreeDigest === newSide.subtreeDigest
+      );
+    });
 
     if (!repository && next.size > 0) {
-      const seed = [...next.entries()].find(([, contribution]) => contribution.files.length > 0);
+      // An absent repository is current workspace state. Seed it only from a
+      // genuinely new contribution; unchanged lineage must never resurrect an
+      // upstream repository that the workspace has deleted.
+      const seed = changedUrls
+        .filter((url) => !prior.has(url))
+        .map((url) => [url, next.get(url)!] as const)
+        .find(([, contribution]) => contribution.files.length > 0);
       if (seed) {
         const [url, first] = seed;
         await ctx.rpc.call("main", "vcs.importSnapshot", {
@@ -537,18 +579,13 @@ export async function mergeTemplateContributions(
       }
     }
     if (!repository) continue;
-    const urls = [...new Set([...prior.keys(), ...next.keys()])].sort();
-    for (const url of urls) {
-      const oldSide = prior.get(url);
+    for (const url of changedUrls) {
+      const previousSide = prior.get(url);
       const newSide = next.get(url);
-      if (
-        oldSide &&
-        newSide &&
-        oldSide.pin.commit === newSide.pin.commit &&
-        oldSide.subtreeDigest === newSide.subtreeDigest
-      ) {
-        continue;
-      }
+      const oldSide = previousSide
+        ? await materializePreviousContribution(ctx, statePath, previousSide, acquirePrevious)
+        : undefined;
+      if (!oldSide && !newSide) continue;
       const identity = oldSide?.nodeId ?? newSide!.nodeId;
       const action = oldSide && newSide ? "Update" : newSide ? "Add" : "Remove";
       const basis = await status(ctx, contextId);

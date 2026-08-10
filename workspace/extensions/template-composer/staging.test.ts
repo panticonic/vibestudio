@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { semanticRepositoryDigest } from "./semanticRepository.js";
+import { acquireTemplateSnapshot } from "./source.js";
 
 vi.mock("./source.js", () => ({
   acquireTemplateSnapshot: vi.fn(async () => ({
@@ -402,13 +403,12 @@ describe("template composer staging", () => {
   });
 
   it("seeds an absent repository from acquired files instead of ledger-only lineage", async () => {
+    vi.mocked(acquireTemplateSnapshot).mockClear();
     let imported = false;
     const call = vi.fn(async (_target: string, method: string, input: Record<string, unknown>) => {
       if (method === "vcs.status") return { committed: BASE, workingHead: BASE, clean: true };
       if (method === "vcs.resolveRepository") {
-        return imported
-          ? { repositoryId: "repository:one", repoPath: "panels/one" }
-          : null;
+        return imported ? { repositoryId: "repository:one", repoPath: "panels/one" } : null;
       }
       if (method === "vcs.importSnapshot") {
         imported = true;
@@ -463,9 +463,7 @@ describe("template composer staging", () => {
               alias: "feature",
               subdir: "panels/one",
               subtreeDigest: featureDigest,
-              files: [
-                { path: "feature.ts", contentHash: NEW_ONE, size: 1, mode: 0o644 },
-              ],
+              files: [{ path: "feature.ts", contentHash: NEW_ONE, size: 1, mode: 0o644 }],
             },
           ],
         },
@@ -495,9 +493,104 @@ describe("template composer staging", () => {
       })
     );
     expect(call).not.toHaveBeenCalledWith("main", "vcs.registerExternalDelta", expect.anything());
+    expect(acquireTemplateSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("does not acquire or replay unchanged lineage when a new template restores a deleted repository", async () => {
+    vi.mocked(acquireTemplateSnapshot).mockClear();
+    let imported = false;
+    const call = vi.fn(async (_target: string, method: string, input: Record<string, unknown>) => {
+      if (method === "vcs.status") return { committed: BASE, workingHead: BASE, clean: true };
+      if (method === "vcs.resolveRepository") {
+        return imported ? { repositoryId: "repository:gmail", repoPath: "packages/gmail" } : null;
+      }
+      if (method === "vcs.importSnapshot") {
+        imported = true;
+        return {};
+      }
+      throw new Error(`unexpected RPC ${method}: ${JSON.stringify(input)}`);
+    });
+    const basePin = {
+      url: "git+https://example.test/base.git",
+      ref: "refs/heads/main",
+      commit: "1".repeat(40),
+      snapshot: `v1-sha256:${"a".repeat(64)}`,
+    };
+    const googlePin = {
+      url: "git+https://example.test/google-workspace.git",
+      ref: "refs/tags/v1",
+      commit: "2".repeat(40),
+      snapshot: `v1-sha256:${"b".repeat(64)}`,
+    };
+    const baseDigest = semanticRepositoryDigest([
+      { path: "legacy.ts", contentHash: OLD_ONE, mode: 0o644, byteLength: 1 },
+    ]);
+    const googleDigest = semanticRepositoryDigest([
+      { path: "index.ts", contentHash: NEW_ONE, mode: 0o644, byteLength: 1 },
+    ]);
+    const previous = {
+      nodes: [{ nodeId: "t-base", alias: "base", pin: basePin }],
+      repositories: {
+        "packages/gmail": {
+          contributions: [{ nodeId: "t-base", subtreeDigest: baseDigest }],
+        },
+      },
+    };
+    const plan = {
+      nodes: [
+        { nodeId: "t-base", pin: basePin },
+        { nodeId: "t-google", pin: googlePin },
+      ],
+      repositories: {
+        "packages/gmail": {
+          repoPath: "packages/gmail",
+          contributions: [
+            {
+              nodeId: "t-base",
+              alias: "base",
+              subdir: "packages/gmail",
+              subtreeDigest: baseDigest,
+              files: [{ path: "legacy.ts", contentHash: OLD_ONE, size: 1, mode: 0o644 }],
+            },
+            {
+              nodeId: "t-google",
+              alias: "google-workspace",
+              subdir: "packages/gmail",
+              subtreeDigest: googleDigest,
+              files: [{ path: "index.ts", contentHash: NEW_ONE, size: 1, mode: 0o644 }],
+            },
+          ],
+        },
+      },
+    };
+
+    await expect(
+      mergeTemplateContributions(
+        { rpc: { call } } as never,
+        "/state",
+        "operation-google",
+        plan as never,
+        previous as never
+      )
+    ).resolves.toEqual(["packages/gmail"]);
+    expect(call).toHaveBeenCalledWith(
+      "main",
+      "vcs.importSnapshot",
+      expect.objectContaining({
+        intentSummary: "Import packages/gmail contribution from google-workspace",
+        repositories: [
+          {
+            repoPath: "packages/gmail",
+            files: [expect.objectContaining({ path: "index.ts" })],
+          },
+        ],
+      })
+    );
+    expect(acquireTemplateSnapshot).not.toHaveBeenCalled();
   });
 
   it("registers every repository delta before reconciliation mutates the context", async () => {
+    vi.mocked(acquireTemplateSnapshot).mockClear();
     const registrations: string[] = [];
     let integrationStarted = false;
     const call = vi.fn(async (_target: string, method: string, ...args: unknown[]) => {
@@ -630,5 +723,6 @@ describe("template composer staging", () => {
     ).resolves.toEqual(["panels/one", "panels/two"]);
     expect(registrations).toEqual(["panels/one", "panels/one", "panels/two"]);
     expect(integrationStarted).toBe(true);
+    expect(acquireTemplateSnapshot).toHaveBeenCalledTimes(1);
   });
 });

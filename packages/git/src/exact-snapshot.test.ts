@@ -72,16 +72,26 @@ describe("readExactGitSnapshot", () => {
     ).rejects.toThrow("entries the semantic workspace cannot represent");
   });
 
-  it("rejects dirty checkout evidence and sink integrity mismatches", async () => {
+  it("reads the immutable commit tree without scanning the worktree", async () => {
+    const git = fakeGit([blob("a", "x")], [["a", 1, 2, 1]]);
     await expect(
       readExactGitSnapshot({
-        git: fakeGit([blob("a", "x")], [["a", 1, 2, 1]]),
+        git,
         dir: "/checkout",
         commit: COMMIT,
         label: "projects/example",
-        sink: { put: vi.fn() },
+        sink: {
+          put: vi.fn(async (bytes: Uint8Array) => ({
+            digest: sha256Hex(bytes),
+            size: bytes.byteLength,
+          })),
+        },
       })
-    ).rejects.toThrow("checkout is not the exact Git HEAD tree");
+    ).resolves.toMatchObject({ commit: COMMIT });
+    expect(git.statusMatrix).not.toHaveBeenCalled();
+  });
+
+  it("rejects content sink integrity mismatches", async () => {
     await expect(
       readExactGitSnapshot({
         git: fakeGit([blob("a", "x")]),

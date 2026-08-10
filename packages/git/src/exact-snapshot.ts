@@ -255,17 +255,10 @@ export async function readExactGitSnapshot(
         `(expected ${options.commit}, observed ${observedHead ?? "no commit"}); retry`
     );
   }
-  const matrix = await options.git.statusMatrix(options.dir);
-  const mismatched = matrix
-    .filter(([, head, workdir, stage]) => head !== 1 || workdir !== 1 || stage !== 1)
-    .map(([path]) => path)
-    .sort(compareUtf16CodeUnits);
-  if (mismatched.length > 0) {
-    throw new Error(
-      `Cannot import ${options.label}: checkout is not the exact Git HEAD tree ` +
-        `(mismatched paths: ${mismatched.join(", ")})`
-    );
-  }
+  // The immutable commit tree, rather than the checkout's worktree, is the
+  // snapshot source. Verifying every worktree path here is both redundant and
+  // prohibitively expensive for a large template: local worktree changes
+  // cannot influence readCommitTree(commit).
   const tree = await options.git.readCommitTree(options.dir, options.commit);
   const selected = selectSubtree(tree, options.subdir);
   const admitted = await admitAndStore(
