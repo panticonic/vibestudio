@@ -156,7 +156,6 @@ const extensionsClient = createTypedServiceClient(
 );
 const browserDataClient = createBrowserDataClient({
   callService: (service, method, args) => rpc.call("main", `${service}.${method}`, args),
-  callTarget: (targetId, method, args) => rpc.call(targetId, method, args),
 });
 const browserEnvironmentClient = createTypedServiceClient(
   "browserEnvironment",

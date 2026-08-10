@@ -2609,7 +2609,6 @@ app.on("ready", async () => {
     const { serverClient: sc } = conn;
     const browserDataClient = createBrowserDataClient({
       callService: (service, method, args) => sc.call(service, method, args),
-      callTarget: (targetId, method, args) => sc.callTarget(targetId, method, args),
     });
     const { BrowserPermissionController } =
       await import("./services/browserPermissionController.js");

@@ -235,9 +235,11 @@ receiver-object and opaque-handle examples.
 
 `browserData` from `@workspace/runtime` is a **panel/component runtime**
 capability: it invokes the manifest-selected `browserData` provider namespace,
-whose extension only accepts **shell** callers. It does not resolve or invoke an
-extension package directly. Server-side eval (caller kind `server`) cannot use
-it — run browser-data work from panel code or an
+whose broker extension preserves the verified caller and is the only code
+source admitted by the canonical BrowserDataDO. Panel code must not resolve or
+call that DO directly. Imported records and Vibestudio-native visits share this
+one provider and one store. Server-side eval (caller kind `server`) cannot use
+the desktop import operations — run browser-import work from panel code or an
 `inline_ui`/`feedback_custom` component:
 
 ```tsx

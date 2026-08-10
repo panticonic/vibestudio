@@ -500,8 +500,12 @@ function NewPanelPage() {
           .catch((error: unknown) => {
             if (requestId !== historyRequestRef.current) return;
             setBrowserSuggestions([]);
-            setHistoryReviewPending(isReviewPending(error));
-            setHistoryError(!isReviewPending(error));
+            const reviewPending = isReviewPending(error);
+            setHistoryReviewPending(reviewPending);
+            setHistoryError(!reviewPending);
+            if (!reviewPending) {
+              console.warn("[new-panel] Canonical browser history query failed", error);
+            }
           });
       },
       parsedInput.query ? 100 : 0

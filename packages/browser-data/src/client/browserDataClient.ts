@@ -1,5 +1,4 @@
 import type { extensionsMethods } from "@vibestudio/service-schemas/extensions";
-import type { browserDataMethods } from "@vibestudio/service-schemas/browserData";
 import type {
   ApplyCookieMutationsRequest,
   BrowserEnvironmentIdentity,
@@ -34,7 +33,6 @@ import type { HistoryQuery } from "../types.js";
 
 interface BrowserDataRpc {
   callService(service: string, method: string, args: unknown[]): Promise<unknown>;
-  callTarget(targetId: string, method: string, args: unknown[]): Promise<unknown>;
 }
 
 type BrowserEnvironmentMethod =
@@ -192,41 +190,12 @@ export function createBrowserDataClient(rpc: BrowserDataRpc): BrowserDataClient 
     callExtension("invokeProvider", "browserData", method, args);
   const callBrowserEnvironment = <T>(method: BrowserEnvironmentMethod, ...args: unknown[]) =>
     rpc.callService("browserEnvironment", method, args) as Promise<T>;
-  let resolvedTarget: Promise<string> | null = null;
-  const target = (): Promise<string> => {
-    resolvedTarget ??= rpc
-      .callService("workers", "resolveService", ["vibestudio.browser-data.v1", null])
-      .then((resolved) => {
-        if (
-          !resolved ||
-          typeof resolved !== "object" ||
-          (resolved as { kind?: unknown }).kind !== "durable-object" ||
-          typeof (resolved as { targetId?: unknown }).targetId !== "string"
-        ) {
-          throw new Error("The browser.data builtin did not resolve to a Durable Object");
-        }
-        return (resolved as { targetId: string }).targetId;
-      })
-      .catch((error: unknown) => {
-        resolvedTarget = null;
-        throw error;
-      });
-    return resolvedTarget;
-  };
-  const callData = async <T>(
-    method: keyof typeof browserDataMethods & string,
-    ...args: unknown[]
-  ) => {
-    const { callTypedServiceMethod } = await import("@vibestudio/shared/typedServiceClient");
-    return callTypedServiceMethod(
-      "browser.data",
-      (await import("@vibestudio/service-schemas/browserData")).browserDataMethods,
-      async (_service, wireMethod, wireArgs) =>
-        rpc.callTarget(await target(), wireMethod, wireArgs),
-      method,
-      args
-    ) as Promise<T>;
-  };
+  // BrowserDataDO deliberately admits only its installed broker extension as
+  // a code caller. Panels therefore use the same broker for live and imported
+  // data; resolving the DO and relaying to it directly would lose that
+  // receiver relationship and fail with EACCES for panel principals.
+  const callData = <T>(method: string, ...args: unknown[]): Promise<T> =>
+    callNative(method, ...args);
 
   return {
     getBrowserEnvironment: () => callNative("getBrowserEnvironment"),

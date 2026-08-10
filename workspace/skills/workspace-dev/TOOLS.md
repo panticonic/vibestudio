@@ -636,6 +636,9 @@ are never exposed.
 
 `startImport` is source-keyed and deterministic. Repeat imports update changed
 records and add new records without duplicating canonical data.
+The runtime client always uses the manifest-selected broker: imported history
+and visits recorded by Vibestudio are rows in the same canonical BrowserDataDO.
+Do not resolve or call BrowserDataDO directly from a panel or worker.
 `openTabsAsPanels` is an action and creates panels on each call. Its default
 destination is a new workspace root containing one collection per imported
 browser window; pass `destination: "caller"` to attach it to the invoking panel.

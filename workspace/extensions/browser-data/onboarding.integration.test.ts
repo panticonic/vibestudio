@@ -85,7 +85,6 @@ describe("onboarding browser-data component chain", () => {
     );
     const browserData = createBrowserDataClient({
       callService: (service, method, args) => routeCall("main", `${service}.${method}`, args),
-      callTarget: (targetId, method, args) => routeCall(targetId, method, args),
     });
     const statusDeps = {
       google: vi.fn(),

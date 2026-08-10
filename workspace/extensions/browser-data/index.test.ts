@@ -357,6 +357,18 @@ describe("@workspace-extensions/browser-data", () => {
     });
   });
 
+  it("brokers canonical history reads through its admitted Durable Object source", async () => {
+    const { ctx, rpcCall } = makeContext("panel");
+    const api = (await activate(ctx as never)).providerContracts.browserData;
+
+    await expect(api.getHistory({ limit: 60 })).resolves.toEqual([]);
+    expect(rpcCall).toHaveBeenCalledWith(
+      "do:vibestudio/internal:BrowserDataDO:environment-key",
+      "getHistory",
+      { limit: 60 }
+    );
+  });
+
   it("degrades health on store resolution failure and retries the dependency", async () => {
     const { ctx, resolveService, health } = makeContext();
     resolveService.mockRejectedValueOnce(new Error("backing store refused"));

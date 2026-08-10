@@ -292,7 +292,6 @@ export function createHostedRuntime(host: RuntimeHost): WorkspaceRuntime {
     "browserData",
     createBrowserDataClient({
       callService: (service, method, args) => rpc.call("main", `${service}.${method}`, args),
-      callTarget: (targetId, method, args) => rpc.call(targetId, method, args),
     })
   );
   const gad = helpfulNamespace("gad", createGadClient(rpc));

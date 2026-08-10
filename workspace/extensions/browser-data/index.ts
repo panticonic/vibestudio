@@ -80,6 +80,53 @@ interface ExtensionContextLike {
 
 const BROWSER_DATA_PROTOCOL = "vibestudio.browser-data.v1";
 const TRUSTED_CALLER_KINDS = new Set(["shell", "server"]);
+const BROWSER_DATA_STORE_METHODS = [
+  "getSitePreferences",
+  "setSiteZoom",
+  "getBookmarks",
+  "addBookmark",
+  "updateBookmark",
+  "deleteBookmark",
+  "moveBookmark",
+  "searchBookmarks",
+  "getHistory",
+  "deleteHistoryEntry",
+  "deleteHistoryRange",
+  "clearAllHistory",
+  "searchHistory",
+  "searchHistoryForAutocomplete",
+  "recordHistoryVisit",
+  "updateHistoryTitle",
+  "getPasswords",
+  "getPasswordForSite",
+  "addPassword",
+  "updatePassword",
+  "deletePassword",
+  "updateLastUsed",
+  "addNeverSave",
+  "isNeverSave",
+  "getNeverSaveOrigins",
+  "removeNeverSave",
+  "getFormFillSuggestions",
+  "addFormFillValue",
+  "updateFormFillValue",
+  "markFormFillValueUsed",
+  "deleteFormFillValue",
+  "clearFormFillValues",
+  "getSearchEngines",
+  "setDefaultEngine",
+  "applyCookieMutations",
+  "getCookieSnapshot",
+  "getCookiesForOrigin",
+  "clearCookiesForOrigin",
+  "clearAllCookies",
+  "endBrowserSession",
+  "getCookieSiteSummary",
+  "listDownloadRecords",
+  "upsertDownloadRecord",
+  "putPageFavicon",
+  "getPageFavicon",
+] as const;
 
 function collectionOrchestrationRpc(ctx: ExtensionContextLike): CollectionOrchestrationRpc {
   return {
@@ -283,6 +330,16 @@ export async function activate(ctx: ExtensionContextLike) {
     const { identity } = await currentIdentity();
     return callStoreForIdentity<T>(identity, method, ...args);
   };
+  const storeMethods = Object.fromEntries(
+    BROWSER_DATA_STORE_METHODS.map((method) => [
+      method,
+      guarded(method, (...args: unknown[]) => callStore(method, ...args)),
+    ])
+  ) as {
+    [Method in (typeof BROWSER_DATA_STORE_METHODS)[number]]: (
+      ...args: unknown[]
+    ) => Promise<unknown>;
+  };
   const browserData = {
     getBrowserEnvironment: guarded("getBrowserEnvironment", async () => {
       const invocation = ctx.invocation.current();
@@ -384,6 +441,11 @@ export async function activate(ctx: ExtensionContextLike) {
         sourceName,
       });
     }),
+
+    // One broker owns both imported and Vibestudio-native browser data. The
+    // Durable Object's receiver contract admits this extension's code source,
+    // while callers retain their verified user/workspace identity here.
+    ...storeMethods,
 
     exportBookmarks: guarded("exportBookmarks", async (format: "html" | "json" | "chrome-json") =>
       exportBookmarks(format, await callStore<Array<Record<string, unknown>>>("getAllBookmarks"))

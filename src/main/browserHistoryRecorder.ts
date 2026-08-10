@@ -19,7 +19,6 @@ export class BrowserHistoryRecorder {
   constructor(serverClient: ServerClient) {
     this.browserData = createBrowserDataClient({
       callService: (service, method, args) => serverClient.call(service, method, args),
-      callTarget: (targetId, method, args) => serverClient.callTarget(targetId, method, args),
     });
   }
 

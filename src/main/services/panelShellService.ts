@@ -316,7 +316,6 @@ function requireBrowserDataClient(serverClient?: ServerClient | null) {
   if (!serverClient) throw new Error("Browser environment is unavailable");
   return createBrowserDataClient({
     callService: (service, method, args) => serverClient.call(service, method, args),
-    callTarget: (targetId, method, args) => serverClient.callTarget(targetId, method, args),
   });
 }
 

@@ -140,16 +140,22 @@ describe("createHostedRuntime", () => {
     expect(typeof core.credentials.connect).toBe("function");
   });
 
-  it("routes browser data through the main extension-provider service", async () => {
+  it("routes imported and live browser data through the main extension-provider service", async () => {
     const { host, calls } = recordingHost();
     const core = createHostedRuntime(host);
 
     await core.browserData.listImportJobs();
+    await core.browserData.getHistory({ limit: 60 });
 
     expect(calls).toContainEqual({
       target: "main",
       method: "extensions.invokeProvider",
       args: ["browserData", "listImportJobs", []],
+    });
+    expect(calls).toContainEqual({
+      target: "main",
+      method: "extensions.invokeProvider",
+      args: ["browserData", "getHistory", [{ limit: 60 }]],
     });
   });
 

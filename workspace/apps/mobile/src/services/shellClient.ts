@@ -223,8 +223,6 @@ class MobilePanels implements PanelHost {
     this.browserData = createBrowserDataClient({
       callService: (service: string, method: string, args: unknown[]) =>
         this.deps.transport.call("main", `${service}.${method}`, args),
-      callTarget: (targetId: string, method: string, args: unknown[]) =>
-        this.deps.transport.call(targetId, method, args),
     });
     const source: PanelTreeQuerySource = {
       rootGroups: (input) => this.workspaceState.panelTree.rootGroups(input),
