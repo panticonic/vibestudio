@@ -116,70 +116,7 @@ describe("BuildSystemV2 startup", () => {
     fs.rmSync(root, { recursive: true, force: true });
   });
 
-  it("prewarms missing panel artifacts through one coalesced background lane", async () => {
-    const panelDir = path.join(workspaceRoot, "panels", "slow-panel");
-    fs.mkdirSync(panelDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(panelDir, "package.json"),
-      JSON.stringify({
-        name: "@workspace-panels/slow-panel",
-        version: "0.1.0",
-        type: "module",
-      })
-    );
-    for (const [relativePath, name] of [
-      ["workers/warm-worker", "@workspace-workers/warm-worker"],
-      ["extensions/approval-owned", "@workspace-extensions/approval-owned"],
-    ] as const) {
-      const dir = path.join(workspaceRoot, relativePath);
-      fs.mkdirSync(dir, { recursive: true });
-      fs.writeFileSync(
-        path.join(dir, "package.json"),
-        JSON.stringify({ name, version: "0.1.0", type: "module" })
-      );
-    }
-
-    vi.doMock("./builder.js", async () => {
-      const actual = await vi.importActual<typeof import("./builder.js")>("./builder.js");
-      return {
-        ...actual,
-        buildUnit: vi.fn(),
-      };
-    });
-
-    const { initBuildSystemV2 } = await import("./index.js");
-    const { buildUnit } = await import("./builder.js");
-    buildSystem = await initBuildSystemV2(workspaceRoot, fakeWorkspaceSource(workspaceRoot), []);
-    expect(vi.mocked(buildUnit)).not.toHaveBeenCalled();
-
-    const first = buildSystem.prewarmWorkspaceBuilds();
-    const coalesced = buildSystem.prewarmWorkspaceBuilds();
-    expect(coalesced).toBe(first);
-    await expect(first).resolves.toMatchObject({
-      stateHash: TEST_STATE,
-      candidates: 2,
-      ready: 2,
-      failed: 0,
-      superseded: false,
-    });
-    expect(vi.mocked(buildUnit)).toHaveBeenCalledTimes(2);
-    expect(vi.mocked(buildUnit).mock.calls.map((call) => call[0])).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          name: "@workspace-panels/slow-panel",
-          kind: "panel",
-          relativePath: "panels/slow-panel",
-        }),
-        expect.objectContaining({
-          name: "@workspace-workers/warm-worker",
-          kind: "worker",
-          relativePath: "workers/warm-worker",
-        }),
-      ])
-    );
-  }, 15_000);
-
-  it("starts authority prewarm after readiness and shares it with publication validation", async () => {
+  it("keeps authority analysis cold until publication validation needs it", async () => {
     let resolveEnvironment!: (value: { services: [] }) => void;
     const environment = new Promise<{ services: [] }>((resolve) => {
       resolveEnvironment = resolve;
@@ -191,43 +128,16 @@ describe("BuildSystemV2 startup", () => {
       workspaceAuthorityEnvironmentAt,
     });
 
-    // The host starts prewarm only after it has published readiness.
-    buildSystem.prewarmAuthorityIndex();
     await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(workspaceAuthorityEnvironmentAt).toHaveBeenCalledTimes(1);
-    expect(workspaceAuthorityEnvironmentAt).toHaveBeenCalledWith(TEST_STATE);
+    expect(workspaceAuthorityEnvironmentAt).not.toHaveBeenCalled();
 
     const publicationValidation = buildSystem.listAffectedBuildUnits(TEST_STATE, []);
     await new Promise((resolve) => setImmediate(resolve));
     expect(workspaceAuthorityEnvironmentAt).toHaveBeenCalledTimes(1);
+    expect(workspaceAuthorityEnvironmentAt).toHaveBeenCalledWith(TEST_STATE);
 
     resolveEnvironment({ services: [] });
     await expect(publicationValidation).resolves.toEqual([]);
-  });
-
-  it("logs a failed authority prewarm and lets publication retry", async () => {
-    const workspaceAuthorityEnvironmentAt = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("authority store unavailable"))
-      .mockResolvedValueOnce({ services: [] });
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-
-    const { initBuildSystemV2 } = await import("./index.js");
-    buildSystem = await initBuildSystemV2(workspaceRoot, fakeWorkspaceSource(workspaceRoot), [], {
-      workspaceAuthorityEnvironmentAt,
-    });
-    buildSystem.prewarmAuthorityIndex();
-    await new Promise((resolve) => setTimeout(resolve, 0));
-
-    expect(workspaceAuthorityEnvironmentAt).toHaveBeenCalledTimes(1);
-    expect(warn).toHaveBeenCalledWith(
-      "[BuildV2] Authority baseline prewarm failed; publication will retry:",
-      "authority store unavailable"
-    );
-    await expect(buildSystem.listAffectedBuildUnits(TEST_STATE, [])).resolves.toEqual([]);
-    expect(workspaceAuthorityEnvironmentAt).toHaveBeenCalledTimes(2);
-
-    warn.mockRestore();
   });
 
   it("restores the exact authority baseline without reanalyzing units after restart", async () => {

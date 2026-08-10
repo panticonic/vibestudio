@@ -7022,25 +7022,6 @@ async function main() {
     }
   }
 
-  // Readiness is a host lifecycle fact, not a timer heuristic. Only after the
-  // ready record is visible may speculative compilers enter the build lane.
-  // Starting this from the build-system service races restored foreground
-  // panels while the semantic workspace and workerd generation are still on
-  // the critical path.
-  const steadyStateBuildSystem =
-    container.get<import("./buildV2/index.js").BuildSystemV2>("buildSystem");
-  void steadyStateBuildSystem.prewarmWorkspaceBuilds().catch((error: unknown) => {
-    console.warn(
-      "[BuildV2] Workspace panel/worker prewarm failed:",
-      error instanceof Error ? error.message : String(error)
-    );
-  });
-
-  // Authority indexing is manifest-only at the unchanged analyzer epoch. Any
-  // proof revalidation it schedules uses the dedicated analysis worker, so it
-  // is safe to begin opportunistically only after the ready record is visible.
-  steadyStateBuildSystem.prewarmAuthorityIndex();
-
   // Eval libraries are additionally warmed for persistent workspaces. Apps and
   // extensions continue to activate their own dependency graphs on demand.
   if (!workspaceIsEphemeral) {

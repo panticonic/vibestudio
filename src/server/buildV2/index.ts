@@ -143,16 +143,6 @@ export interface RuntimeImageBinding {
   authority: UnitAuthorityManifest;
 }
 
-export interface WorkspaceBuildPrewarmResult {
-  stateHash: string;
-  candidates: number;
-  ready: number;
-  failed: number;
-  superseded: boolean;
-  durationMs: number;
-  failures: Array<{ source: string; error: string }>;
-}
-
 // ---------------------------------------------------------------------------
 // Exact-state unit build report — agent-actionable, not a blob.
 // ---------------------------------------------------------------------------
@@ -361,12 +351,6 @@ export interface BuildSystemV2 {
 
   /** Stage the complete authority index for an exact candidate state. */
   stageAuthorityIndex(stateHash: string, signal?: AbortSignal): Promise<void>;
-
-  /** Begin opportunistic analysis after the owning host has published readiness. */
-  prewarmAuthorityIndex(): void;
-
-  /** Fill missing panel and worker runtime artifacts in one background lane. */
-  prewarmWorkspaceBuilds(): Promise<WorkspaceBuildPrewarmResult>;
 
   /** Return the current authority-analysis epoch for publication coordination. */
   authorityAnalysisEpoch(): { analyzerVersion: string; rpcSchemaVersion: string };
@@ -1302,112 +1286,6 @@ export async function initBuildSystemV2(
     return flight;
   };
 
-  let shuttingDown = false;
-  let authorityPrewarmStarted = false;
-  const authorityPrewarmController = new AbortController();
-  let workspaceBuildPrewarmFlight: Promise<WorkspaceBuildPrewarmResult> | null = null;
-  const prewarmAuthorityIndex = (): void => {
-    if (authorityPrewarmStarted || shuttingDown || !rootOptions.workspaceAuthorityEnvironmentAt)
-      return;
-    authorityPrewarmStarted = true;
-    const prewarmState = currentState().stateHash;
-    const startedAt = Date.now();
-    void authorityIndexAt(prewarmState, currentState(), authorityPrewarmController.signal)
-      .then((index) => {
-        if (currentState().stateHash !== prewarmState) return;
-        authorityIndexManager.establishPublished(index);
-        console.log(
-          `[BuildV2] Prewarmed authority baseline for ${prewarmState} (${Date.now() - startedAt}ms)`
-        );
-        void authorityAttestationsAt(
-          prewarmState,
-          currentState(),
-          authorityPrewarmController.signal
-        )
-          .then((attestations) => {
-            console.log("[BuildV2] Prewarmed authority attestations", {
-              stateHash: prewarmState,
-              complete: attestations.complete,
-              blockingConsumers: [...attestations.blockingConsumers].sort(),
-            });
-          })
-          .catch((error: unknown) => {
-            if (authorityPrewarmController.signal.aborted) return;
-            console.warn(
-              "[BuildV2] Authority attestation prewarm failed:",
-              error instanceof Error ? error.message : String(error)
-            );
-          });
-      })
-      .catch((error) => {
-        console.warn(
-          `[BuildV2] Authority baseline prewarm failed; publication will retry:`,
-          error instanceof Error ? error.message : String(error)
-        );
-      });
-  };
-
-  const prewarmWorkspaceBuilds = (): Promise<WorkspaceBuildPrewarmResult> => {
-    if (workspaceBuildPrewarmFlight) return workspaceBuildPrewarmFlight;
-    const startedAt = Date.now();
-    const snapshot = currentState();
-    const candidates = snapshot.graph
-      .topologicalOrder()
-      .filter((node) => (node.kind === "panel" || node.kind === "worker") && isNodeBuildable(node));
-    const flight = (async (): Promise<WorkspaceBuildPrewarmResult> => {
-      let ready = 0;
-      const failures: WorkspaceBuildPrewarmResult["failures"] = [];
-      let superseded = false;
-
-      // Never compile in the same turn that initialized the build system.
-      await new Promise<void>((resolve) => setImmediate(resolve));
-      for (const node of candidates) {
-        if (shuttingDown || currentState().stateHash !== snapshot.stateHash) {
-          superseded = currentState().stateHash !== snapshot.stateHash;
-          break;
-        }
-        const ev = snapshot.evMap[node.name];
-        if (!ev) continue;
-        const buildKey = computeBuildUnitKey(node, ev);
-        if (buildStore.has(buildKey)) {
-          ready += 1;
-          await new Promise<void>((resolve) => setImmediate(resolve));
-          continue;
-        }
-
-        recordBuildEvent({ type: "build-started", name: node.name });
-        try {
-          await buildUnit(node, ev, snapshot.graph, workspaceRoot, snapshot.stateHash);
-          ready += 1;
-          recordBuildEvent({ type: "build-complete", name: node.name, buildKey });
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          failures.push({ source: node.relativePath, error: message });
-          recordBuildEvent({ type: "build-error", name: node.name, error: message });
-        }
-        // Let panel requests, approvals, RPC, and file tools drain before the
-        // next speculative compiler job enters the shared build semaphore.
-        await new Promise<void>((resolve) => setImmediate(resolve));
-      }
-
-      const result: WorkspaceBuildPrewarmResult = {
-        stateHash: snapshot.stateHash,
-        candidates: candidates.length,
-        ready,
-        failed: failures.length,
-        superseded,
-        durationMs: Date.now() - startedAt,
-        failures,
-      };
-      console.info("[BuildV2] Workspace panel/worker prewarm settled", result);
-      return result;
-    })().finally(() => {
-      if (workspaceBuildPrewarmFlight === flight) workspaceBuildPrewarmFlight = null;
-    });
-    workspaceBuildPrewarmFlight = flight;
-    return flight;
-  };
-
   const rediscoverAt = (atStateHash: string): Promise<void> => trigger.rediscoverAt(atStateHash);
 
   // Runtime bindings are immutable facts. Cache them by the exact protected
@@ -1439,6 +1317,7 @@ export async function initBuildSystemV2(
   };
 
   const bindRuntimeImage: BuildSystemV2["bindRuntimeImage"] = async (unitPath, requestedRef) => {
+    const bindingStartedAt = performance.now();
     const ref = validateBuildRef(requestedRef);
 
     if ((!ref || ref === MAIN_HEAD) && trigger.isSettled()) {
@@ -1502,7 +1381,14 @@ export async function initBuildSystemV2(
     if (existingFlight) return existingFlight;
 
     const flight = (async (): Promise<RuntimeImageBinding> => {
+      console.log(
+        `[BuildV2] Runtime binding build started for ${node.relativePath} at ${stateHash}`
+      );
       const build = await buildUnit(node, ev, graphAtState, workspaceRoot, stateHash);
+      console.log(
+        `[BuildV2] Runtime binding build completed for ${node.relativePath} in ` +
+          `${Math.round(performance.now() - bindingStartedAt)}ms`
+      );
       const authority = build.metadata.authority;
       if (!authority) {
         throw new Error(`Runtime build ${build.buildKey} is missing its sealed authority envelope`);
@@ -2369,9 +2255,6 @@ export async function initBuildSystemV2(
       authorityIndexManager.stageCandidate(index);
     },
 
-    prewarmAuthorityIndex,
-    prewarmWorkspaceBuilds,
-
     authorityAnalysisEpoch(): { analyzerVersion: string; rpcSchemaVersion: string } {
       return { ...authorityEpoch };
     },
@@ -2720,10 +2603,7 @@ export async function initBuildSystemV2(
     },
 
     async shutdown(): Promise<void> {
-      shuttingDown = true;
-      authorityPrewarmController.abort();
       trigger.stop();
-      await workspaceBuildPrewarmFlight?.catch(() => undefined);
       await authorityAnalysisWorker.close();
       authorityPublicationUnsubscribe();
       setBuildSourceProvider(null);
