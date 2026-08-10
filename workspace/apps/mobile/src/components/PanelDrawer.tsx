@@ -122,6 +122,9 @@ export function PanelDrawer({ onSelectPanel }: PanelDrawerProps) {
         title: node.title,
         parentId: node.parentSlotId,
         owner: node.ownerUserId,
+        icon: node.icon,
+        source: node.source,
+        kind: node.kind,
         childCount: node.childCount,
         childrenLoadedCount: childGroup?.loadedCount ?? 0,
         childrenHaveMore: childGroup?.nextCursor !== null && childGroup !== null,
@@ -205,6 +208,9 @@ export function PanelDrawer({ onSelectPanel }: PanelDrawerProps) {
                     : node.title,
                 parentId: node.parentSlotId,
                 owner: node.ownerUserId,
+                icon: node.icon,
+                source: node.source,
+                kind: node.kind,
                 childCount: node.childCount,
                 children: [],
               }))
@@ -245,6 +251,9 @@ export function PanelDrawer({ onSelectPanel }: PanelDrawerProps) {
                 : node.title,
             parentId: node.parentSlotId,
             owner: node.ownerUserId,
+            icon: node.icon,
+            source: node.source,
+            kind: node.kind,
             childCount: node.childCount,
             children: [],
           }))
@@ -504,6 +513,9 @@ export function PanelDrawer({ onSelectPanel }: PanelDrawerProps) {
         depth: trimmedQuery ? 0 : item.depth,
         childCount: trimmedQuery ? 0 : item.panel.children.length,
         isCollapsed: item.isCollapsed,
+        icon: item.panel.icon,
+        source: item.panel.source,
+        kind: item.panel.kind,
       };
       return (
         <PanelTreeItem
@@ -511,6 +523,10 @@ export function PanelDrawer({ onSelectPanel }: PanelDrawerProps) {
           isActive={panelItem.id === activePanelId}
           isPinned={pinnedPanelIds.has(panelItem.id)}
           colors={colors}
+          serverUrl={shellClient?.serverUrl ?? ""}
+          resolveBrowserFavicon={(url) =>
+            shellClient?.panels.getPageFaviconDataUrl(url) ?? Promise.resolve(null)
+          }
           onPress={handlePanelPress}
           onLongPress={handlePanelLongPress}
           onToggleCollapse={handleToggleCollapse}

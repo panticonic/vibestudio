@@ -1,14 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  classifyError,
-  hueFor,
-  initialsFor,
-  mask,
-  plural,
-  prettyHost,
-  prettyPath,
-  relativeTime,
-} from "./format";
+import { classifyError, mask, plural, prettyHost, prettyPath, relativeTime } from "./format";
 
 describe("classifyError", () => {
   it("maps EACCES to denied", () => {
@@ -19,7 +10,9 @@ describe("classifyError", () => {
   });
 
   it("maps 'denied by user' messages to denied", () => {
-    expect(classifyError(new Error("browser-data.getCookies denied by user")).status).toBe("denied");
+    expect(classifyError(new Error("browser-data.getCookies denied by user")).status).toBe(
+      "denied"
+    );
   });
 
   it("maps other errors to error", () => {
@@ -63,29 +56,6 @@ describe("prettyHost / prettyPath", () => {
   it("survives non-URL strings like about:newtab", () => {
     expect(prettyHost("about:newtab")).toBe("about:newtab");
     expect(prettyPath("about:newtab")).toBe("");
-  });
-});
-
-describe("hueFor", () => {
-  it("is stable and in range", () => {
-    expect(hueFor("github.com")).toBe(hueFor("github.com"));
-    expect(hueFor("github.com")).toBeGreaterThanOrEqual(0);
-    expect(hueFor("github.com")).toBeLessThan(360);
-  });
-  it("separates different hosts", () => {
-    expect(hueFor("github.com")).not.toBe(hueFor("reddit.com"));
-  });
-});
-
-describe("initialsFor", () => {
-  it("takes the first two letters of the label", () => {
-    expect(initialsFor("github.com")).toBe("GI");
-  });
-  it("splits hyphenated labels", () => {
-    expect(initialsFor("my-site.com")).toBe("MS");
-  });
-  it("falls back for empty input", () => {
-    expect(initialsFor("")).toBe("?");
   });
 });
 

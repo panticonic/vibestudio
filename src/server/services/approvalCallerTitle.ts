@@ -10,6 +10,7 @@ import type {
 export interface ApprovalCallerTitleDeps {
   entityCache: Pick<EntityCache, "resolve">;
   getTitle(entityId: string): string | undefined;
+  getIcon?(repoPath: string): string | undefined;
 }
 
 export interface ApprovalRequesterInput {
@@ -192,6 +193,8 @@ export function resolveApprovalRequester(
     (input.callerKind === "worker" || input.callerKind === "do"
       ? (panelTitle ?? directTitle)
       : (directTitle ?? panelTitle)) ?? fallbackLabel(callerRecord, input.callerId);
+  const iconSource = panel?.source.repoPath ?? callerRecord?.source.repoPath ?? input.repoPath;
+  const icon = cleanTitle(deps.getIcon?.(iconSource));
   const evalIdentity = input.eval ?? evalMeta(callerRecord);
   const internalIdentity =
     effectiveVersion === "internal" || sourcePath === "vibestudio/internal" || category === "eval";
@@ -217,6 +220,8 @@ export function resolveApprovalRequester(
     kind: input.callerKind,
     category,
     title,
+    ...(icon ? { icon } : {}),
+    ...(icon ? { iconSourcePath: iconSource } : {}),
     ...(panel
       ? {
           panel: {

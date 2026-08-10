@@ -77,6 +77,7 @@ const WorkerSourceSchema = z
     name: z.string().describe("Workspace package name."),
     source: z.string().describe('Workspace-relative worker source, e.g. "workers/my-worker".'),
     title: z.string().optional().describe("Human-readable worker title, when declared."),
+    icon: z.string().optional().describe("Semantic unit icon declared by the worker manifest."),
     entry: z
       .string()
       .optional()
@@ -427,6 +428,7 @@ export function createWorkerService(deps: {
           name: n.unitName,
           source: n.unitPath,
           title: n.manifest.title,
+          icon: n.manifest.icon,
           entry: n.manifest.entry,
           classes: n.manifest.durable?.classes ?? [],
           agent: n.manifest.agent,

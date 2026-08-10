@@ -64,6 +64,7 @@ import {
 } from "../shell/client";
 import { useNativeShellOverlay } from "../shell/useNativeShellOverlay";
 import { BrowserFavicon } from "./BrowserFavicon";
+import { PanelIcon } from "./PanelIcon";
 import type { FocusedPaneChromeState, PaneChromeCommand } from "./paneChrome";
 
 const isMac = /Mac|iPhone|iPad|iPod/i.test(
@@ -1083,6 +1084,7 @@ const itemStyle: CSSProperties = {
   WebkitAppRegion: "no-drag",
   display: "inline-flex",
   alignItems: "center",
+  gap: "6px",
   border: "1px solid transparent",
   minWidth: 0,
   maxWidth: "clamp(72px, 16vw, 180px)",
@@ -1115,6 +1117,9 @@ const groupStyle = {
 interface HoverableBreadcrumbItemProps {
   panelId: string;
   title: string;
+  icon?: string;
+  source?: string;
+  favicon?: PanelSummary["favicon"];
   isActive: boolean;
   isCurrent: boolean;
   onNavigate: () => void;
@@ -1131,6 +1136,9 @@ interface HoverableBreadcrumbItemProps {
 function HoverableBreadcrumbItem({
   panelId,
   title,
+  icon,
+  source,
+  favicon,
   isActive,
   isCurrent,
   onNavigate,
@@ -1219,6 +1227,13 @@ function HoverableBreadcrumbItem({
         onMouseEnter={() => setIsHovered(true)}
         onMouseLeave={() => setIsHovered(false)}
       >
+        <PanelIcon
+          icon={icon}
+          source={source}
+          favicon={favicon}
+          size={17}
+          fallback={source?.startsWith("browser:") ? "browser" : "panel"}
+        />
         <Text
           as="span"
           size="2"
@@ -1475,6 +1490,9 @@ function BreadcrumbBar({
       key={panel.id}
       panelId={panel.id}
       title={panel.title}
+      icon={panel.icon}
+      source={panel.source}
+      favicon={panel.favicon}
       isActive={isActive}
       isCurrent={isCurrent}
       onNavigate={() => onNavigateToId?.(panel.id)}
@@ -1489,6 +1507,9 @@ function BreadcrumbBar({
       key={ancestor.id}
       panelId={ancestor.id}
       title={ancestor.title}
+      icon={ancestor.icon}
+      source={ancestor.source}
+      favicon={ancestor.favicon}
       isActive={true}
       isCurrent={false}
       onNavigate={() => onNavigateToId?.(ancestor.id)}

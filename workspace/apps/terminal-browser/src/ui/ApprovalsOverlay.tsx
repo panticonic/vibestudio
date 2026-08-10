@@ -63,7 +63,8 @@ export interface ApprovalsOverlayProps {
 }
 
 function summarizeTitle(a: PendingApproval): string {
-  const caller = getApprovalCallerPresentation(a).label;
+  const callerPresentation = getApprovalCallerPresentation(a);
+  const caller = `${terminalUnitIcon(callerPresentation.icon, callerPresentation.kind)} ${callerPresentation.label}`;
   switch (a.kind) {
     case "unit-install-review":
       return a.title;
@@ -74,6 +75,15 @@ function summarizeTitle(a: PendingApproval): string {
     default:
       return `${a.kind} · ${caller}`;
   }
+}
+
+function terminalUnitIcon(icon: string | undefined, kind: string): string {
+  if (icon && !icon.startsWith("./") && !icon.startsWith("data:image/")) return icon;
+  if (kind === "panel") return "▦";
+  if (kind === "app") return "▣";
+  if (kind === "extension") return "◇";
+  if (kind === "system") return "◆";
+  return "⚙";
 }
 
 function genericDetail(a: PendingApproval): string {
@@ -188,7 +198,7 @@ function InstallReviewDetail({
       {approval.parts.map((part, i) => (
         <Box flexDirection="column" key={part.identityKey}>
           <Text inverse={i === focused}>
-            {`${partCheckboxGlyph(part, selection)} ${partChangeSign(part)}${part.title}   ${part.label}`}
+            {`${partCheckboxGlyph(part, selection)} ${terminalUnitIcon(part.icon, part.kind)} ${partChangeSign(part)}${part.title}   ${part.label}`}
           </Text>
           <Text dimColor>{`    ${partNotableLine(part)}`}</Text>
           {i === focused ? (

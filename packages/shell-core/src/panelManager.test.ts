@@ -594,6 +594,32 @@ describe("PanelManager", () => {
     expect(projectedRegistry.getRootPanels().map((panel) => panel.id)).toEqual([created.panelId]);
   });
 
+  it("uses the server-owned icon when refreshing native presentation", async () => {
+    const sourceRegistry = new PanelRegistry({});
+    const { deps } = makeManagerDeps("/tmp/workspace");
+    const sourceManager = new PanelManager({
+      registry: sourceRegistry,
+      ...deps,
+      allowMissingManifests: true,
+    });
+    const created = await sourceManager.createBrowser(null, "about:blank", { addAsRoot: true });
+    const originalGetPanelDetail = deps.workspaceState.getPanelDetail.bind(deps.workspaceState);
+    vi.spyOn(deps.workspaceState, "getPanelDetail").mockImplementation(async (slotId) => {
+      const detail = await originalGetPanelDetail(slotId);
+      return detail ? { ...detail, icon: "💬" } : detail;
+    });
+
+    const projectedRegistry = new PanelRegistry({});
+    const projectedManager = new PanelManager({
+      registry: projectedRegistry,
+      ...deps,
+      allowMissingManifests: true,
+    });
+    await projectedManager.refreshPanel(created.panelId);
+
+    expect(projectedRegistry.getPanel(created.panelId)?.icon).toBe("💬");
+  });
+
   it("places an external panel in an explicitly shared orchestration context", async () => {
     const registry = new PanelRegistry({});
     const { deps } = makeManagerDeps("/tmp/workspace");

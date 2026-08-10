@@ -322,9 +322,16 @@ export const PanelDiagnosticPacketSchema: z.ZodType<PanelDiagnosticPacket> = z.o
 export const PanelNavigationStateSchema: z.ZodType<PanelNavigationState> = z.object({
   url: z.string().optional(),
   pageTitle: z.string().optional(),
+  favicon: z
+    .object({
+      pageUrl: z.string(),
+      updatedAt: z.number(),
+    })
+    .optional(),
   isLoading: z.boolean().optional(),
   canGoBack: z.boolean().optional(),
   canGoForward: z.boolean().optional(),
+  mediaPlaying: z.boolean().optional(),
 });
 
 export const MovePanelRequestSchema = z.object({
@@ -427,6 +434,7 @@ export const PanelSchema: z.ZodType<Panel> = z.lazy(() =>
   z.object({
     id: z.string(),
     title: z.string(),
+    icon: z.string().max(256).optional(),
     runtimeEntityId: z.string().nullable().optional(),
     effectiveVersion: z.string().nullable().optional(),
     buildKey: z

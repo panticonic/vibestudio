@@ -347,6 +347,38 @@ describe("PanelHttpServer build cache", () => {
     expect(response.headersWritten?.["Cache-Control"]).toBe("public, max-age=31536000, immutable");
   });
 
+  it("serves a panel or worker image icon from its immutable build", async () => {
+    const server = new PanelHttpServer();
+    const iconBuild = {
+      ...buildResult,
+      artifacts: [
+        ...buildResult.artifacts,
+        {
+          path: "assets/icon.svg",
+          role: "asset",
+          contentType: "image/svg+xml",
+          encoding: "utf8",
+          content: '<svg xmlns="http://www.w3.org/2000/svg"/>',
+        },
+      ],
+    } as import("./buildV2/buildStore.js").BuildResult;
+    const getBuild = vi.fn(async () => iconBuild);
+    server.setCallbacks({
+      getBuild,
+      getBuildByKey: vi.fn(() => null),
+    });
+
+    const response = await handlePanelRequest(
+      server,
+      "/__vibestudio/unit-icon?source=workers%2Fmail&path=assets%2Ficon.svg"
+    );
+
+    expect(getBuild).toHaveBeenCalledWith("workers/mail");
+    expect(response.statusCodeWritten).toBe(200);
+    expect(response.headersWritten?.["Content-Type"]).toBe("image/svg+xml");
+    expect(String(response.body)).toContain("<svg");
+  });
+
   it("does not synthesize build refs from panel context ids", async () => {
     const server = new PanelHttpServer();
     const getBuild = vi.fn(async () => buildResult);

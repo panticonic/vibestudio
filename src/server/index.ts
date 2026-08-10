@@ -1032,9 +1032,21 @@ async function main() {
   const { createApprovalQueue } = await import("./services/approvalQueue.js");
   const { resolveApprovalCallerTitle, resolveApprovalRequester } =
     await import("./services/approvalCallerTitle.js");
+  const getWorkspaceUnitIcon = (repoPath: string): string | undefined => {
+    try {
+      const packageJson = JSON.parse(
+        fs.readFileSync(path.join(workspacePath, repoPath, "package.json"), "utf8")
+      ) as { vibestudio?: { icon?: unknown } };
+      const icon = packageJson.vibestudio?.icon;
+      return typeof icon === "string" && icon.trim().length <= 256 ? icon.trim() : undefined;
+    } catch {
+      return undefined;
+    }
+  };
   const approvalRequesterDeps = {
     entityCache,
     getTitle: (id: string) => entityTitleService.getTitle(id),
+    getIcon: getWorkspaceUnitIcon,
   };
   const { InstallReviewSelectionStore } = await import("./services/installReviewSelections.js");
   const installReviewSelections = new InstallReviewSelectionStore();
@@ -3563,6 +3575,7 @@ async function main() {
         workspaceStateDefinition = createWorkspaceStateService({
           doDispatch,
           workspaceId,
+          getUnitIcon: getWorkspaceUnitIcon,
           panelAccess: (
             await import("./services/createPanelAccessPermissionDeps.js")
           ).createPanelAccessPermissionDeps({

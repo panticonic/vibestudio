@@ -93,12 +93,12 @@ interface WorkerSourceEntry {
   name: string;
   source: string;
   title?: string;
+  icon?: string;
   classes: Array<{ className: string }>;
   /** Present iff this worker declares itself a chat agent (manifest `agent` block). */
   agent?: {
     displayName?: string;
     description?: string;
-    icon?: string;
     defaultConfig?: AgentSubscriptionConfig;
   };
 }
@@ -643,7 +643,7 @@ export default function ChatPanel() {
               className: cls.className,
               name: source.agent.displayName ?? source.title ?? source.name,
               description: source.agent.description,
-              icon: source.agent.icon,
+              icon: source.icon,
               defaultConfig: source.agent.defaultConfig,
               proposedHandle: source.name.split("-")[0] ?? source.name,
             });

@@ -42,6 +42,7 @@ export interface WorkspacePanelTreeHistoryRow {
 /** Addressed runtime detail for one panel; bounded independently of tree size/history length. */
 export interface WorkspacePanelDetail {
   revision: number;
+  icon?: string;
   slot: WorkspacePanelTreeSlot;
   currentHistory: WorkspacePanelTreeHistoryRow;
   entity: EntityRecord;

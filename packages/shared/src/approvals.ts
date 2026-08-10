@@ -90,6 +90,10 @@ export interface ApprovalRequesterIdentity {
   category: ApprovalRequesterCategory;
   /** Primary human display name chosen by the server. */
   title?: string;
+  /** Semantic icon declared by the requester's owning unit. */
+  icon?: string;
+  /** Unit source used to resolve a relative image icon. */
+  iconSourcePath?: string;
   /** Nearest owning panel, when this requester belongs to panel-owned work. */
   panel?: {
     id: string;
@@ -424,6 +428,8 @@ export interface ReviewedUnit {
   unitKind: ReviewedUnitKind;
   unitName: string;
   displayName: string;
+  /** Semantic icon declared by the unit. */
+  icon?: string;
   version?: string | null;
   /** One sentence, from the unit's own description: what it is for. */
   purpose?: string;

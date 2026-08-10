@@ -589,6 +589,8 @@ export interface InstallReviewPart {
   name: string;
   /** Human-facing label for navigation results; absent in older payloads. */
   displayName?: string;
+  /** Semantic icon declared by this part. */
+  icon?: string;
   title: string;
   purpose: string;
   repoPath: string;

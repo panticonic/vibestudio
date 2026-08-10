@@ -35,6 +35,8 @@ export interface PackageManifest {
   title?: string;
   /** Optional description shown in the launcher and used as documentation. */
   description?: string;
+  /** Semantic emoji or unit-relative image path used consistently everywhere this unit appears. */
+  icon?: string;
   /** Entry file relative to the package root (e.g., `"index.tsx"`, `"index.ts"`). */
   entry?: string;
   /** Extension discriminator block. Presence marks this package as an extension unit. */
@@ -113,7 +115,7 @@ export interface PackageManifest {
    * Presence of this block is what distinguishes chat-agent DOs from service DOs
    * (pubsub-channel, semantic control plane, fork, …) in the chat panel's agent picker.
    */
-  agent?: { displayName?: string; description?: string; icon?: string };
+  agent?: { displayName?: string; description?: string };
   // Note: workspace services and HTTP routes are no longer declared per worker.
   // They live in `workspace/meta/vibestudio.yml` under `services:` and `routes:`,
   // joined against `singletonObjects:` for DO singleton keys.
@@ -389,6 +391,8 @@ export interface PanelSnapshotHistory {
 export interface Panel {
   id: string;
   title: string;
+  /** Semantic icon declared by the current workspace panel manifest. */
+  icon?: string;
   runtimeEntityId?: string | null;
   effectiveVersion?: string | null;
   /** Content-addressed BuildV2 artifact executed by this panel incarnation. */
@@ -511,6 +515,9 @@ export interface PaginatedRootPanels {
 export interface PanelSummary {
   id: string;
   title: string;
+  icon?: string;
+  /** Workspace unit that owns a relative image icon. */
+  source?: string;
   childCount: number;
   buildState?: string;
   position: number;
@@ -523,6 +530,10 @@ export interface PanelSummary {
 export interface PanelAncestor {
   id: string;
   title: string;
+  icon?: string;
+  /** Workspace unit that owns a relative image icon. */
+  source?: string;
+  favicon?: PanelNavigationState["favicon"];
   depth: number;
 }
 
@@ -564,6 +575,7 @@ export interface WorkspaceNode {
     type: "app";
     title: string;
     description?: string;
+    icon?: string;
     hidden?: boolean;
   };
   /**

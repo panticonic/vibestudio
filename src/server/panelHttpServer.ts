@@ -449,6 +449,43 @@ export class PanelHttpServer {
       return;
     }
 
+    if (pathname === "/__vibestudio/unit-icon") {
+      const source = url.searchParams.get("source");
+      const artifactPath = url.searchParams.get("path");
+      if (!source || !artifactPath || artifactPath.startsWith("/") || artifactPath.includes("..")) {
+        res.writeHead(400, { "Content-Type": "text/plain; charset=utf-8" });
+        res.end("Invalid unit icon request");
+        return;
+      }
+      try {
+        const build = await this.callbacks?.getBuild(source);
+        const artifact = build?.artifacts.find(
+          (candidate) => candidate.role === "asset" && candidate.path === artifactPath
+        );
+        if (!artifact) {
+          res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
+          res.end("Unit icon not found");
+          return;
+        }
+        const body =
+          artifact.encoding === "base64"
+            ? Buffer.from(artifact.content, "base64")
+            : Buffer.from(artifact.content, "utf8");
+        res.writeHead(200, {
+          "Content-Type": artifact.contentType,
+          "Content-Length": body.byteLength,
+          "Cache-Control": "no-cache",
+          "X-Content-Type-Options": "nosniff",
+        });
+        res.end(body);
+      } catch (error) {
+        log.warn(`Unit icon build failed for ${source}: ${String(error)}`);
+        res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
+        res.end("Unit icon unavailable");
+      }
+      return;
+    }
+
     const activatedArtifactMatch = pathname.match(
       /^\/__vibestudio\/panel-build\/([0-9a-f]{64})(\/.*)$/u
     );

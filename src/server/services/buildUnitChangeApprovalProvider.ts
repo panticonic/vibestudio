@@ -100,10 +100,18 @@ export function createBuildUnitChangeApprovalProvider(deps: {
     const parsed = JSON.parse(packageJsonSource) as {
       name?: unknown;
       version?: unknown;
-      vibestudio?: { displayName?: unknown; title?: unknown };
+      vibestudio?: { displayName?: unknown; title?: unknown; icon?: unknown };
     };
     if (parsed.name !== candidate.unitName) {
       throw new Error(`Candidate package name does not match ${candidate.unitName}`);
+    }
+    if (
+      parsed.vibestudio?.icon !== undefined &&
+      (typeof parsed.vibestudio.icon !== "string" ||
+        !parsed.vibestudio.icon.trim() ||
+        parsed.vibestudio.icon.trim().length > 256)
+    ) {
+      throw new Error(`Candidate ${candidate.unitName} has an invalid vibestudio.icon`);
     }
 
     const previousAuthority = previous
@@ -196,6 +204,9 @@ export function createBuildUnitChangeApprovalProvider(deps: {
             : typeof parsed.vibestudio?.title === "string"
               ? parsed.vibestudio.title
               : candidate.unitName,
+        ...(typeof parsed.vibestudio?.icon === "string" && parsed.vibestudio.icon.trim()
+          ? { icon: parsed.vibestudio.icon.trim() }
+          : {}),
         version: typeof parsed.version === "string" ? parsed.version : null,
         source: { kind: "workspace-repo", repo: candidate.unitPath, ref: "main" },
         ev: candidate.effectiveVersion,

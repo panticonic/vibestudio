@@ -20,8 +20,6 @@ export {
   DATA_TYPES,
   prettyHost,
   prettyPath,
-  hueFor,
-  initialsFor,
   plural,
 } from "./format";
 export type { AsyncState, AsyncStatus } from "./format";

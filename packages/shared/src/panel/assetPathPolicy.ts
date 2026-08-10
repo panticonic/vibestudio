@@ -42,6 +42,7 @@ export const PANEL_GATEWAY_EXACT_PATHS: ReadonlySet<string> = new Set([
   "/index.html", // same index page
   "/__loader.js", // panel config loader (PanelHttpServer.serveRuntimeHelper)
   "/__transport.js", // browser RPC transport helper
+  "/__vibestudio/unit-icon", // immutable, build-owned unit icon assets
 ]);
 
 /** Reserved-namespace prefixes panels DO legitimately need. */

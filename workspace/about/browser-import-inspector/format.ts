@@ -82,27 +82,6 @@ export function prettyPath(url: string): string {
   }
 }
 
-/**
- * Deterministic hue for a string, so a site keeps the same accent colour every
- * render (and across sessions) without any network fetch for a real favicon.
- */
-export function hueFor(value: string): number {
-  let hash = 0;
-  for (let index = 0; index < value.length; index += 1) {
-    hash = (hash * 31 + value.charCodeAt(index)) % 360_000;
-  }
-  return hash % 360;
-}
-
-/** One or two letters to stand in for a site icon. */
-export function initialsFor(host: string): string {
-  const label = host.split(".")[0] ?? host;
-  if (!label) return "?";
-  const parts = label.split(/[-_]/).filter(Boolean);
-  if (parts.length > 1) return `${parts[0]![0]}${parts[1]![0]}`.toUpperCase();
-  return label.slice(0, 2).toUpperCase();
-}
-
 /** "3 tabs" / "1 tab" — small enough to inline, common enough to share. */
 export function plural(count: number, singular: string, pluralForm = `${singular}s`): string {
   return `${count} ${count === 1 ? singular : pluralForm}`;

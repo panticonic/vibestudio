@@ -113,6 +113,8 @@ export function getRequesterCategoryLabel(category: ApprovalRequesterCategory): 
 
 export interface ApprovalCallerPresentation {
   label: string;
+  icon?: string;
+  iconSourcePath?: string;
   kindLabel: string;
   kind: PendingApproval["callerKind"];
   panelId?: string;
@@ -140,6 +142,10 @@ export function getApprovalCallerPresentation(
         ) ??
         userFacingCallerLabel(basename(approval.requester.repoPath || approval.repoPath)) ??
         kindLabel,
+      ...(approval.requester.icon ? { icon: approval.requester.icon } : {}),
+      ...(approval.requester.iconSourcePath
+        ? { iconSourcePath: approval.requester.iconSourcePath }
+        : {}),
       kindLabel,
       kind: approval.requester.kind,
       ...(approval.requester.panel?.id

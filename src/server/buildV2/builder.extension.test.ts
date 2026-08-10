@@ -52,6 +52,7 @@ describe("buildUnit extension builds", () => {
         private: true,
         vibestudio: {
           displayName: "Hello Extension",
+          icon: "./assets/icon.svg",
           entry: "index.ts",
           sourcemap: true,
           extension: {
@@ -65,6 +66,11 @@ describe("buildUnit extension builds", () => {
           },
         },
       })
+    );
+    fs.mkdirSync(path.join(extensionDir, "assets"));
+    fs.writeFileSync(
+      path.join(extensionDir, "assets", "icon.svg"),
+      '<svg xmlns="http://www.w3.org/2000/svg"><circle cx="8" cy="8" r="8"/></svg>'
     );
     fs.writeFileSync(
       path.join(extensionDir, "index.ts"),
@@ -118,6 +124,13 @@ describe("buildUnit extension builds", () => {
     const bundle = primaryTextArtifactContent(result);
     expect(bundle).toContain("ping() {");
     expect(bundle).toContain("sourceMappingURL=data:application/json");
+    expect(result.artifacts).toContainEqual(
+      expect.objectContaining({
+        path: "assets/icon.svg",
+        role: "asset",
+        contentType: "image/svg+xml",
+      })
+    );
   });
 
   it("runs bundled CommonJS dependencies from an ESM extension bundle", async () => {

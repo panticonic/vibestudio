@@ -3,6 +3,9 @@ export interface MobilePanelTreeNode {
   title: string;
   parentId: string | null;
   owner: string | null;
+  icon?: string;
+  source?: string;
+  kind?: "workspace" | "browser";
   childCount: number;
   childrenLoadedCount?: number;
   childrenHaveMore?: boolean;

@@ -54,7 +54,7 @@ import {
   workspaceChooserDialogOpenAtom,
 } from "../state/appModeAtoms.js";
 import { assertPresent } from "../utils/assertPresent";
-import { BrowserFavicon } from "./BrowserFavicon";
+import { PanelIcon } from "./PanelIcon";
 import { ConnectionStatusBadge } from "./ConnectionStatusBadge";
 import { buildGuides } from "./panelTreeGuides.js";
 import { ThemeSettings } from "./ThemeSettings";
@@ -543,7 +543,13 @@ const SortableTreeItem = memo(
             )}
           </Flex>
 
-          {panel.favicon ? <BrowserFavicon handle={panel.favicon} size={14} /> : null}
+          <PanelIcon
+            icon={panel.icon}
+            source={panel.source}
+            favicon={panel.favicon}
+            size={16}
+            fallback={panel.source?.startsWith("browser:") ? "browser" : "panel"}
+          />
 
           {/* Title — the focal element; brightened + weighted when selected */}
           <Text
@@ -640,6 +646,8 @@ const SortableTreeItem = memo(
       prev.item.collapsed === next.item.collapsed &&
       prev.item.parentId === next.item.parentId &&
       prev.item.panel.title === next.item.panel.title &&
+      prev.item.panel.icon === next.item.panel.icon &&
+      prev.item.panel.source === next.item.panel.source &&
       prev.item.panel.childCount === next.item.panel.childCount &&
       prev.item.panel.buildState === next.item.panel.buildState &&
       prev.item.panel.favicon?.pageUrl === next.item.panel.favicon?.pageUrl &&

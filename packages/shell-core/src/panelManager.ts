@@ -1222,6 +1222,9 @@ export class PanelManager {
           currentSnapshot.source,
           slot.current_entity_title ?? undefined
         );
+        const nextIcon = detail?.icon;
+        if (nextIcon) panel.icon = nextIcon;
+        else delete panel.icon;
         this.registry.replaceCurrentSnapshot(slotId, currentSnapshot, {
           entries: [currentSnapshot],
           index: 0,
@@ -1561,6 +1564,7 @@ export class PanelManager {
         const entity = detail.entity;
         const source = entity.source;
         const isBrowser = snapshot.source.startsWith("browser:");
+        const manifestIcon = detail.icon;
         if (detail.slot.current_entity_title == null) this.localPanelTitles.delete(slotId);
         const preservesMaterializedView =
           panel?.runtimeEntityId === detail.slot.current_entity_id &&
@@ -1573,6 +1577,7 @@ export class PanelManager {
             snapshot.source,
             detail.slot.current_entity_title ?? undefined
           ),
+          ...(manifestIcon ? { icon: manifestIcon } : {}),
           runtimeEntityId: detail.slot.current_entity_id,
           effectiveVersion: source.effectiveVersion,
           buildKey: entity.activeBuildKey ?? null,

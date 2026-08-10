@@ -406,6 +406,8 @@ export interface CreateProjectParams {
   projectType: string;
   name: string;
   title?: string;
+  /** Semantic emoji or ./relative image path. Choose a specific icon; generic defaults are fallback only. */
+  icon?: string;
   template?: string;
 }
 
@@ -419,7 +421,7 @@ interface ResolvedProject {
 }
 
 async function resolveProject(params: CreateProjectParams): Promise<ResolvedProject> {
-  const { projectType, name, title = name, template } = params;
+  const { projectType, name, title = name, icon, template } = params;
 
   assertProjectIdentity(name, title);
 
@@ -469,6 +471,7 @@ async function resolveProject(params: CreateProjectParams): Promise<ResolvedProj
           projectType: "panel",
           name,
           title,
+          icon,
           entry: "index.ts",
           ...(panelTemplate !== "default" ? { template: panelTemplate } : {}),
           dependencies: {
@@ -523,6 +526,7 @@ async function resolveProject(params: CreateProjectParams): Promise<ResolvedProj
           projectType: "panel",
           name,
           title,
+          icon,
           entry: "index.tsx",
           ...(panelTemplate !== "default" ? { template: panelTemplate } : {}),
           exposeModules: ["react", "react/jsx-runtime", "react/jsx-dev-runtime"],
@@ -624,6 +628,7 @@ function ${toPascalCase(name)}Content() {
           projectType: "worker",
           name,
           title,
+          icon,
           entry: "index.ts",
           durableClasses: [className],
           dependencies: {
@@ -720,6 +725,7 @@ describe("${className}", () => {
           projectType: "worker",
           name,
           title,
+          icon,
           entry: "index.ts",
           dependencies: { "@workspace/runtime": "workspace:*" },
         });

@@ -26,6 +26,7 @@ import {
   ChevronRightIcon,
   DownloadIcon,
   DrawingPinFilledIcon,
+  GlobeIcon,
   MagnifyingGlassIcon,
   OpenInNewWindowIcon,
   StopIcon,
@@ -42,8 +43,6 @@ import {
   browserData,
   classifyError,
   DATA_TYPES,
-  hueFor,
-  initialsFor,
   plural,
   prettyHost,
   prettyPath,
@@ -486,7 +485,9 @@ function BreakdownCard(props: { breakdowns: readonly ImportCategoryBreakdown[] }
                 <Flex direction="column" gap="1" pb="2" pl="4">
                   {breakdown.groups.map((group) => (
                     <Flex key={group.label} align="center" gap="2">
-                      {breakdown.groupedBy === "site" && <SiteMark host={group.label} />}
+                      {breakdown.groupedBy === "site" && (
+                        <SiteMark host={group.label} url={`https://${group.label}/`} />
+                      )}
                       <Text size="1" truncate style={{ flex: 1 }}>
                         {group.label}
                       </Text>
@@ -534,26 +535,23 @@ function BreakdownCard(props: { breakdowns: readonly ImportCategoryBreakdown[] }
 
 function SourceHeader(props: { selection: ImportSourceSelection }) {
   const name = props.selection.source.displayName;
-  const hue = hueFor(name);
   return (
     <Card style={{ flexShrink: 0 }}>
       <Flex gap="3" align="center">
         <Flex
           align="center"
           justify="center"
+          title={`${name} browser data`}
           style={{
             width: 44,
             height: 44,
             flexShrink: 0,
             borderRadius: "var(--radius-3)",
-            background: `linear-gradient(140deg, hsl(${hue} 70% 52%), hsl(${(hue + 40) % 360} 70% 42%))`,
-            color: "white",
-            fontWeight: 700,
-            fontSize: 17,
-            letterSpacing: "-0.02em",
+            background: "var(--accent-a3)",
+            color: "var(--accent-11)",
           }}
         >
-          {initialsFor(name)}
+          <GlobeIcon width="23" height="23" />
         </Flex>
         <Box style={{ minWidth: 0 }}>
           <Flex gap="2" align="center">
@@ -1140,7 +1138,7 @@ function WindowGroup(props: {
         {props.collapsed && (
           <Flex gap="1" align="center" style={{ minWidth: 0 }}>
             {hosts.map((host) => (
-              <SiteMark key={host} host={host} />
+              <SiteMark key={host} host={host} url={`https://${host}/`} />
             ))}
             {tabs.length > hosts.length && (
               <Text size="1" color="gray">
@@ -1191,7 +1189,7 @@ function TabRow(props: {
     >
       <label>
         <Checkbox checked={props.checked} onCheckedChange={() => props.onToggle(!props.checked)} />
-        <SiteMark host={host} />
+        <SiteMark host={host} url={props.tab.url} />
         <Box style={{ minWidth: 0, flex: 1 }}>
           <Flex align="center" gap="1" style={{ minWidth: 0 }}>
             {props.tab.pinned && (
@@ -1218,9 +1216,38 @@ function TabRow(props: {
   );
 }
 
-/** Letter-mark stand-in for a favicon — deterministic colour, no network fetch. */
-function SiteMark(props: { host: string }) {
-  const hue = hueFor(props.host);
+const faviconCache = new Map<string, string | null>();
+const faviconRequests = new Map<string, Promise<string | null>>();
+
+function loadStoredFavicon(url: string): Promise<string | null> {
+  if (faviconCache.has(url)) return Promise.resolve(faviconCache.get(url) ?? null);
+  const active = faviconRequests.get(url);
+  if (active) return active;
+  const request = browserData
+    .getPageFavicon(url)
+    .then((favicon) => (favicon ? `data:${favicon.mime_type};base64,${favicon.image_data}` : null))
+    .catch(() => null)
+    .then((value) => {
+      faviconCache.set(url, value);
+      faviconRequests.delete(url);
+      return value;
+    });
+  faviconRequests.set(url, request);
+  return request;
+}
+
+/** Uses only favicon bytes already stored in the workspace; never contacts the site. */
+function SiteMark(props: { host: string; url: string }) {
+  const [src, setSrc] = useState<string | null>(() => faviconCache.get(props.url) ?? null);
+  useEffect(() => {
+    let mounted = true;
+    void loadStoredFavicon(props.url).then((value) => {
+      if (mounted) setSrc(value);
+    });
+    return () => {
+      mounted = false;
+    };
+  }, [props.url]);
   return (
     <Flex
       align="center"
@@ -1231,14 +1258,24 @@ function SiteMark(props: { host: string }) {
         height: 18,
         flexShrink: 0,
         borderRadius: "var(--radius-1)",
-        background: `hsl(${hue} 55% 45%)`,
-        color: "white",
-        fontSize: 9,
-        fontWeight: 700,
+        background: "var(--gray-a3)",
+        color: "var(--gray-10)",
         lineHeight: 1,
+        overflow: "hidden",
       }}
     >
-      {initialsFor(props.host)}
+      {src ? (
+        <img
+          src={src}
+          alt=""
+          width="18"
+          height="18"
+          style={{ display: "block", objectFit: "contain" }}
+          onError={() => setSrc(null)}
+        />
+      ) : (
+        <GlobeIcon width="13" height="13" />
+      )}
     </Flex>
   );
 }

@@ -179,6 +179,7 @@ export const EntityRecordSchema = z.object({
 export const PanelDetailSchema = z
   .object({
     revision: z.number().int().nonnegative(),
+    icon: z.string().max(256).optional(),
     slot: SlotRowSchema,
     currentHistory: SlotHistoryRowSchema,
     entity: EntityRecordSchema,
@@ -196,6 +197,7 @@ const PanelTreeNodeSchema = z
     parentSlotId: z.string().nullable(),
     ownerUserId: z.string().nullable(),
     title: z.string(),
+    icon: z.string().max(256).optional(),
     createdAt: z.number(),
     childCount: z.number().int().nonnegative(),
     source: z.string().optional(),

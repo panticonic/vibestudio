@@ -73,6 +73,7 @@ export interface BuildProjectManifestInput {
   projectType: Exclude<ProjectType, "project">;
   name: string;
   title: string;
+  icon?: string;
   entry?: string;
   template?: string;
   exports?: Record<string, string>;
@@ -144,6 +145,7 @@ export function buildProjectManifest(input: BuildProjectManifestInput): Record<s
   if (executable) {
     manifest["vibestudio"] = {
       title: input.title,
+      icon: input.icon ?? (input.projectType === "panel" ? "🧩" : "⚙️"),
       entry: input.entry,
       ...(input.exposeModules ? { exposeModules: [...input.exposeModules] } : {}),
       authority: { requests: EXECUTABLE_BASELINE_AUTHORITY, provides: [] },

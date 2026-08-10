@@ -683,6 +683,25 @@ html[data-overlay-dragging] * {
 .approval-caller-chip-kind {
   color: var(--gray-10);
   flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.install-review-part-icon {
+  display: inline-flex;
+  width: 20px;
+  height: 20px;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  font-size: 18px;
+  line-height: 1;
+  font-family:
+    Apple Color Emoji,
+    Segoe UI Emoji,
+    Noto Color Emoji,
+    sans-serif;
 }
 
 /* Approval details: native disclosure with shell chrome styling */

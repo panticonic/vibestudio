@@ -50,6 +50,7 @@ import {
   primaryArtifactFilePath,
   primaryTextArtifactContent,
   type BuildArtifactInput,
+  type BuildArtifactWithContent,
   type BuildArtifacts,
   type BuildMetadata,
   type BuildResult,
@@ -1147,6 +1148,7 @@ export function injectHtmlTransforms(
     bundleSrc?: string;
     cssHref?: string;
     sharedStyleHrefs?: readonly string[];
+    iconHref?: string;
   } = {}
 ): string {
   let result = html;
@@ -1188,6 +1190,12 @@ export function injectHtmlTransforms(
       /(<head\b[^>]*>)/i,
       `$1\n  <base href="${escapeHtml(effectiveBaseHref)}">`
     );
+  }
+  if (assetPaths.iconHref && !/<link\b[^>]*\brel\s*=\s*["'][^"']*\bicon\b/iu.test(result)) {
+    const iconLink = `<link rel="icon" href="${escapeHtml(assetPaths.iconHref)}" />`;
+    result = /<\/head>/iu.test(result)
+      ? result.replace(/<\/head>/iu, `  ${iconLink}\n</head>`)
+      : `${iconLink}\n${result}`;
   }
   // Globally order-safe base styles must precede panel/component CSS so the
   // existing cascade remains intact.
@@ -1250,6 +1258,7 @@ function generatePanelHtml(
     bundleSrc?: string;
     cssHref?: string;
     sharedStyleHrefs?: readonly string[];
+    iconHref?: string;
   }
 ): string {
   const usePanelLoader = options.usePanelLoader ?? true;
@@ -1267,7 +1276,12 @@ function generatePanelHtml(
       options.externals,
       title,
       usePanelLoader,
-      { bundleSrc, cssHref, sharedStyleHrefs: options.sharedStyleHrefs }
+      {
+        bundleSrc,
+        cssHref,
+        sharedStyleHrefs: options.sharedStyleHrefs,
+        iconHref: options.iconHref,
+      }
     );
   }
 
@@ -1299,6 +1313,7 @@ function generatePanelHtml(
   ${baseHref ? `<base href="${escapeHtml(baseHref)}">` : ""}
   ${PANEL_CSP_META}
   <title>${escapeHtml(title)}</title>
+  ${options.iconHref ? `<link rel="icon" href="${escapeHtml(options.iconHref)}" />` : ""}
   ${importMapScript}${cdnLinks}${cssLink}
   ${usePanelLoader ? panelPreloadLinks(bundleSrc) : ""}
   <style>
@@ -1901,6 +1916,55 @@ function bundleArtifacts(bundle: string): BuildArtifacts {
   };
 }
 
+const MAX_UNIT_ICON_BYTES = 1024 * 1024;
+
+/**
+ * Materialize a manifest image icon into the immutable build. Emoji icons have
+ * no artifact; they remain presentation metadata. A missing or oversized image
+ * is a broken unit declaration, so fail the build instead of silently showing a
+ * different icon at different surfaces.
+ */
+function manifestIconArtifact(
+  manifest: Record<string, unknown>,
+  sourcePath: string
+): BuildArtifactInput | null {
+  const icon = manifest["icon"];
+  if (typeof icon !== "string" || !icon.startsWith("./")) return null;
+
+  const artifactPath = icon.slice(2);
+  const sourceRoot = path.resolve(sourcePath);
+  const iconPath = path.resolve(sourceRoot, artifactPath);
+  if (!iconPath.startsWith(`${sourceRoot}${path.sep}`)) {
+    throw new Error(`vibestudio.icon escapes the unit source: ${icon}`);
+  }
+  const stat = fs.statSync(iconPath);
+  if (!stat.isFile()) throw new Error(`vibestudio.icon is not a file: ${icon}`);
+  if (stat.size > MAX_UNIT_ICON_BYTES) {
+    throw new Error(`vibestudio.icon exceeds ${MAX_UNIT_ICON_BYTES} bytes: ${icon}`);
+  }
+
+  const bytes = fs.readFileSync(iconPath);
+  const isSvg = path.extname(iconPath).toLowerCase() === ".svg";
+  return {
+    path: artifactPath,
+    role: "asset",
+    contentType: contentTypeForPath(artifactPath),
+    encoding: isSvg ? "utf8" : "base64",
+    content: isSvg ? bytes.toString("utf8") : bytes.toString("base64"),
+  };
+}
+
+function manifestIconHref(
+  manifest: Record<string, unknown>,
+  artifact: BuildArtifactInput | null
+): string | undefined {
+  if (artifact) return relativeAssetHref(artifact.path);
+  const icon = manifest["icon"];
+  if (typeof icon !== "string" || !icon || icon.startsWith("./")) return undefined;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><text x="32" y="50" font-size="52" text-anchor="middle">${escapeHtml(icon)}</text></svg>`;
+  return `data:image/svg+xml;base64,${Buffer.from(svg, "utf8").toString("base64")}`;
+}
+
 function workerBundleArtifacts(bundle: string, sourceMap: string | null): BuildArtifacts {
   return {
     entries: [
@@ -2314,6 +2378,11 @@ async function buildPanel(
       }
     }
 
+    const iconArtifact = manifestIconArtifact(extractedManifest, panelSourcePath);
+    if (iconArtifact && !artifactEntries.some((entry) => entry.path === iconArtifact.path)) {
+      artifactEntries.push(iconArtifact);
+    }
+
     // Generate HTML using template or adapter fallback
     const title = extractedManifest.title ?? node.name;
     const html = generatePanelHtml(title, node.relativePath, resolved.htmlPath, adapter, {
@@ -2323,6 +2392,7 @@ async function buildPanel(
       bundleSrc: relativeAssetHref(bundleArtifactPath),
       cssHref: cssArtifactPath ? relativeAssetHref(cssArtifactPath) : undefined,
       sharedStyleHrefs: sharedStyleMetadata?.map((style) => style.url),
+      iconHref: manifestIconHref(extractedManifest, iconArtifact),
     });
 
     artifactEntries.push({
@@ -2890,6 +2960,8 @@ async function buildWorker(
       bundle,
       sourcemap && fs.existsSync(sourceMapPath) ? fs.readFileSync(sourceMapPath, "utf-8") : null
     );
+    const iconArtifact = manifestIconArtifact(extractedManifest, workerSourcePath);
+    if (iconArtifact) workerArtifacts.entries.push(iconArtifact);
 
     if (terminalWorker) {
       // Emit the JS bundle plus the extracted yoga.wasm so workerdManager can
@@ -3374,6 +3446,13 @@ async function buildExtension(
 
     const bundlePath = path.join(outdir, "bundle.js");
     const bundle = fs.readFileSync(bundlePath, "utf-8");
+    const extensionArtifacts = bundleArtifacts(bundle);
+    const iconArtifact = manifestIconArtifact(extractedManifest, extensionSourcePath);
+    if (iconArtifact) extensionArtifacts.entries.push(iconArtifact);
+    const smokeArtifacts: BuildArtifactWithContent[] = extensionArtifacts.entries.map((entry) => ({
+      ...entry,
+      encoding: entry.encoding ?? "utf8",
+    }));
     fs.writeFileSync(path.join(outdir, "package.json"), '{"type":"module"}');
     const smokeResult: BuildResult = {
       dir: outdir,
@@ -3401,15 +3480,7 @@ async function buildExtension(
         },
         builtAt: new Date().toISOString(),
       },
-      artifacts: [
-        {
-          path: "bundle.js",
-          role: "primary",
-          contentType: "text/javascript; charset=utf-8",
-          encoding: "utf8",
-          content: bundle,
-        },
-      ],
+      artifacts: smokeArtifacts,
     };
     await smokeTestExtensionBuild(smokeResult, node, {
       dependencyDiagnostics,
@@ -3436,7 +3507,8 @@ async function buildExtension(
           classifiedDeps,
           smokeTest: { mode: "child-process", passed: true },
         },
-      }
+      },
+      extensionArtifacts
     );
     if (runtimeDeps.nodeModulesDir) {
       linkExtensionRuntimeDeps(result.dir, runtimeDeps.nodeModulesDir, node.name);

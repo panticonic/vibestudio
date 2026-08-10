@@ -11,6 +11,7 @@ function node(
   options: {
     title?: string;
     hidden?: boolean;
+    icon?: string;
     children?: WorkspaceNode[];
     launchable?: boolean;
   } = {}
@@ -25,6 +26,7 @@ function node(
           launchable: {
             type: "app" as const,
             title: options.title ?? path,
+            ...(options.icon ? { icon: options.icon } : {}),
             ...(options.hidden ? { hidden: true } : {}),
           },
         }
@@ -38,7 +40,7 @@ describe("collectLaunchablePanelGroups", () => {
       node("panels", {
         children: [
           node("panels/terminal", { launchable: true, title: "Terminal" }),
-          node("panels/chat", { launchable: true, title: "Chat" }),
+          node("panels/chat", { launchable: true, title: "Chat", icon: "💬" }),
           node("panels/internal", { launchable: true, title: "Internal", hidden: true }),
         ],
       }),
@@ -55,7 +57,7 @@ describe("collectLaunchablePanelGroups", () => {
 
     expect(groups).toEqual({
       panels: [
-        { path: "panels/chat", title: "Chat" },
+        { path: "panels/chat", title: "Chat", icon: "💬" },
         { path: "panels/terminal", title: "Terminal" },
       ],
       about: [
@@ -82,7 +84,7 @@ describe("collectLaunchablePanelGroups", () => {
     expect(
       parseCachedLaunchablePanelGroups(
         JSON.stringify({
-          version: 1,
+          version: 2,
           groups: {
             panels: [{ path: "workers/agent", title: "Agent" }],
             about: [],

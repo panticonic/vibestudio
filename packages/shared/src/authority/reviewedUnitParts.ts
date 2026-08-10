@@ -105,6 +105,7 @@ export function reviewedUnitPart(input: ReviewedUnitPartInput): InstallReviewPar
     surfaces,
     name: unit.unitName,
     ...(unit.displayName?.trim() ? { displayName: unit.displayName.trim() } : {}),
+    ...(unit.icon?.trim() ? { icon: unit.icon.trim() } : {}),
     title: installReviewPartTitle(unit.source.repo),
     purpose: unit.purpose ?? "",
     repoPath: unit.source.repo,

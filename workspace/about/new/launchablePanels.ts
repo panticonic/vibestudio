@@ -4,6 +4,7 @@ export interface LaunchablePanel {
   path: string;
   title: string;
   description?: string;
+  icon?: string;
 }
 
 export interface LaunchablePanelGroups {
@@ -12,7 +13,7 @@ export interface LaunchablePanelGroups {
 }
 
 interface CachedLaunchablePanelGroups {
-  version: 1;
+  version: 2;
   groups: LaunchablePanelGroups;
 }
 
@@ -25,6 +26,7 @@ function launchablePanel(node: WorkspaceNode): LaunchablePanel {
     path: node.path,
     title: node.launchable?.title ?? node.name,
     ...(node.launchable?.description ? { description: node.launchable.description } : {}),
+    ...(node.launchable?.icon ? { icon: node.launchable.icon } : {}),
   };
 }
 
@@ -61,7 +63,9 @@ function isLaunchablePanel(
     panel["path"].startsWith(`${namespace}/`) &&
     typeof panel["title"] === "string" &&
     panel["title"].length > 0 &&
-    (panel["description"] === undefined || typeof panel["description"] === "string")
+    (panel["description"] === undefined || typeof panel["description"] === "string") &&
+    (panel["icon"] === undefined ||
+      (typeof panel["icon"] === "string" && panel["icon"].length <= 256))
   );
 }
 
@@ -71,7 +75,7 @@ export function parseCachedLaunchablePanelGroups(raw: string | null): Launchable
   try {
     const cached = JSON.parse(raw) as Partial<CachedLaunchablePanelGroups>;
     if (
-      cached.version !== 1 ||
+      cached.version !== 2 ||
       !cached.groups ||
       !Array.isArray(cached.groups.panels) ||
       !cached.groups.panels.every((panel) => isLaunchablePanel(panel, "panels")) ||
@@ -87,5 +91,5 @@ export function parseCachedLaunchablePanelGroups(raw: string | null): Launchable
 }
 
 export function serializeLaunchablePanelGroups(groups: LaunchablePanelGroups): string {
-  return JSON.stringify({ version: 1, groups } satisfies CachedLaunchablePanelGroups);
+  return JSON.stringify({ version: 2, groups } satisfies CachedLaunchablePanelGroups);
 }

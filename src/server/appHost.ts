@@ -653,6 +653,7 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
         vibestudio?: {
           displayName?: unknown;
           title?: unknown;
+          icon?: unknown;
           authority?: unknown;
           app?: { target?: unknown; capabilities?: unknown };
         };
@@ -779,6 +780,9 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
           dependencyEvs: candidate.dependencyEvs,
           externalDeps,
         }),
+        ...(typeof packageJson.vibestudio?.icon === "string" && packageJson.vibestudio.icon.trim()
+          ? { icon: packageJson.vibestudio.icon.trim() }
+          : {}),
         target,
         capabilities,
         authority,

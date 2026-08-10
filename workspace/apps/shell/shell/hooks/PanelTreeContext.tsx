@@ -38,6 +38,9 @@ export type { DescendantSiblingGroup, PanelAncestor, PanelSummary };
 export interface PanelTreeViewNode {
   id: string;
   title: string;
+  icon?: string;
+  source?: string;
+  favicon?: PanelNavigationState["favicon"];
   owner: string | null;
   parentId: string | null;
   childCount: number;
@@ -53,12 +56,13 @@ export interface PanelTreeViewNode {
 export interface FullPanel {
   id: string;
   title: string;
-  contextId: string;
+  icon?: string;
+  contextId?: string;
   runtimeEntityId?: string | null;
   buildKey?: string | null;
   parentId: string | null;
   position: number;
-  selectedChildId: string | null;
+  selectedChildId?: string | null;
   snapshot: PanelSnapshot;
   artifacts: PanelArtifacts;
   state?: PanelExplicitState;
@@ -195,7 +199,8 @@ function nodeTree(
   node: PanelTreeNode,
   cache: PanelTreeCache,
   seen: Set<string>,
-  localSelectedChildren: ReadonlyMap<string, string | null>
+  localSelectedChildren: ReadonlyMap<string, string | null>,
+  presentations: ReadonlyMap<string, FullPanel>
 ): PanelTreeViewNode {
   if (seen.has(node.slotId)) {
     throw new Error(`Panel tree cycle detected at ${node.slotId}`);
@@ -204,13 +209,22 @@ function nodeTree(
   const group = { kind: "children" as const, parentSlotId: node.slotId };
   const cachedChildren = cache.getGroup(group);
   const children = cachedChildren?.nodes ?? [];
+  const presentation = presentations.get(node.slotId);
+  const favicon = faviconForPresentation(presentation);
   return {
     id: node.slotId,
     title: node.title,
     owner: node.ownerUserId,
     parentId: node.parentSlotId,
     childCount: node.childCount,
-    children: children.map((child) => nodeTree(child, cache, nextSeen, localSelectedChildren)),
+    ...((presentation?.icon ?? node.icon) ? { icon: presentation?.icon ?? node.icon } : {}),
+    ...((presentation?.snapshot.source ?? node.source)
+      ? { source: presentation?.snapshot.source ?? node.source }
+      : {}),
+    ...(favicon ? { favicon } : {}),
+    children: children.map((child) =>
+      nodeTree(child, cache, nextSeen, localSelectedChildren, presentations)
+    ),
     childrenLoaded: cachedChildren !== null,
     childrenLoadedCount: cachedChildren?.loadedCount ?? 0,
     childrenHasMore: cachedChildren?.nextCursor !== null && cachedChildren !== null,
@@ -219,6 +233,17 @@ function nodeTree(
       : (children[0]?.slotId ?? null),
     ...(node.placement ? { placement: node.placement } : {}),
   };
+}
+
+function faviconForPresentation(
+  presentation: FullPanel | undefined
+): PanelNavigationState["favicon"] | undefined {
+  if (!presentation) return undefined;
+  if (presentation.navigation?.favicon) return presentation.navigation.favicon;
+  const source = presentation.snapshot.source;
+  if (!source.startsWith("browser:")) return undefined;
+  const pageUrl = presentation.navigation?.url ?? source.slice("browser:".length);
+  return pageUrl ? { pageUrl, updatedAt: 0 } : undefined;
 }
 
 export function PanelTreeProvider({ children }: { children: ReactNode }) {
@@ -231,6 +256,7 @@ export function PanelTreeProvider({ children }: { children: ReactNode }) {
   const [localSelectedChildren, setLocalSelectedChildren] = useState<Map<string, string | null>>(
     () => new Map()
   );
+  const [presentations, setPresentations] = useState<Map<string, FullPanel>>(() => new Map());
   const refreshingRef = useRef(false);
   const refreshSequenceRef = useRef(0);
   const presentationRevisionRef = useRef(0);
@@ -251,6 +277,30 @@ export function PanelTreeProvider({ children }: { children: ReactNode }) {
   const cache = cacheRef.current;
 
   useEffect(() => cache.subscribe(() => rerender((value) => value + 1)), [cache]);
+
+  const mergePresentations = useCallback((nextPresentations: FullPanel[]) => {
+    if (nextPresentations.length === 0) return;
+    setPresentations((current) => {
+      const next = new Map(current);
+      for (const presentation of nextPresentations) next.set(presentation.id, presentation);
+      return next;
+    });
+    setLocalSelectedChildren((current) => {
+      const next = new Map(current);
+      for (const presentation of nextPresentations) {
+        next.set(presentation.id, presentation.selectedChildId ?? null);
+      }
+      return next;
+    });
+  }, []);
+
+  const hydratePresentations = useCallback(
+    async (nodes: readonly PanelTreeNode[]) => {
+      if (nodes.length === 0) return;
+      mergePresentations(await panel.getPresentations(nodes.map((node) => node.slotId)));
+    },
+    [mergePresentations]
+  );
 
   const reconcilePins = useCallback(async () => {
     const dispatchedAt = pinSeq.current;
@@ -279,7 +329,10 @@ export function PanelTreeProvider({ children }: { children: ReactNode }) {
             groups.set(panelTreeGroupKey(group), group);
           }
         }
-        await Promise.all([...groups.values()].map((group) => cache.loadFirst(group)));
+        const loaded = await Promise.all(
+          [...groups.values()].map((group) => cache.loadFirst(group))
+        );
+        await hydratePresentations(loaded.flatMap((group) => group.nodes));
         if (options.reconcilePinState) await reconcilePins();
         setTreeLoadError(null);
         setInitialized(true);
@@ -293,7 +346,7 @@ export function PanelTreeProvider({ children }: { children: ReactNode }) {
         }
       }
     },
-    [cache, reconcilePins]
+    [cache, hydratePresentations, reconcilePins]
   );
 
   const refreshTree = useCallback(
@@ -336,35 +389,32 @@ export function PanelTreeProvider({ children }: { children: ReactNode }) {
   );
   useDirectShellEvent(
     "panel-presentation-changed",
-    useCallback((event) => {
-      if (event.revision <= presentationRevisionRef.current) return;
-      presentationRevisionRef.current = event.revision;
-      const revision = event.revision;
-      void panel
-        .getPresentations(event.panelIds)
-        .then((presentations) => {
-          if (presentationRevisionRef.current !== revision) return;
-          setLocalSelectedChildren((current) => {
-            let next: Map<string, string | null> | null = null;
-            for (const presentation of presentations) {
-              const panelId = presentation.id;
-              const selectedChildId = presentation?.selectedChildId ?? null;
-              if (current.has(panelId) && current.get(panelId) === selectedChildId) continue;
-              next ??= new Map(current);
-              next.set(panelId, selectedChildId);
-            }
-            return next ?? current;
-          });
-        })
-        .catch(() => {});
-    }, [])
+    useCallback(
+      (event) => {
+        if (event.revision <= presentationRevisionRef.current) return;
+        presentationRevisionRef.current = event.revision;
+        const revision = event.revision;
+        void panel
+          .getPresentations(event.panelIds)
+          .then((presentations) => {
+            if (presentationRevisionRef.current !== revision) return;
+            mergePresentations(presentations);
+          })
+          .catch(() => {});
+      },
+      [mergePresentations]
+    )
   );
 
   const loadChildren = useCallback(
     async (panelId: string) => {
-      await cache.loadFirst({ kind: "children", parentSlotId: panelId as PanelSlotId });
+      const loaded = await cache.loadFirst({
+        kind: "children",
+        parentSlotId: panelId as PanelSlotId,
+      });
+      await hydratePresentations(loaded.nodes);
     },
-    [cache]
+    [cache, hydratePresentations]
   );
   const loadSelectionPath = useCallback(
     async (panelId: string, maxDepth: number) => {
@@ -399,19 +449,21 @@ export function PanelTreeProvider({ children }: { children: ReactNode }) {
   );
   const loadMore = useCallback(
     async (group: PanelTreeGroup) => {
-      await cache.loadMore(group);
+      const loaded = await cache.loadMore(group);
+      await hydratePresentations(loaded.nodes);
     },
-    [cache]
+    [cache, hydratePresentations]
   );
   const loadMoreRootGroups = useCallback(async () => {
     const groups = await cache.loadRootGroups(false);
-    await Promise.all(
+    const loaded = await Promise.all(
       groups.groups.map((owner) => {
         const group = { kind: "roots" as const, ownerUserId: owner.ownerUserId };
-        return cache.getGroup(group) ? Promise.resolve() : cache.loadFirst(group);
+        return cache.getGroup(group) ?? cache.loadFirst(group);
       })
     );
-  }, [cache]);
+    await hydratePresentations(loaded.flatMap((group) => group.nodes));
+  }, [cache, hydratePresentations]);
   const search = useCallback(
     (query: string, cursor?: string) =>
       cache.search({ query, ...(cursor ? { cursor } : {}), limit: 50 }),
@@ -439,11 +491,11 @@ export function PanelTreeProvider({ children }: { children: ReactNode }) {
           rootLoadedCount: cached?.loadedCount ?? 0,
           rootsHaveMore: cached !== null && cached.nextCursor !== null,
           rootPanels: (cached?.nodes ?? []).map((node) =>
-            nodeTree(node, cache, new Set(), localSelectedChildren)
+            nodeTree(node, cache, new Set(), localSelectedChildren, presentations)
           ),
         };
       }),
-    [cache, cacheVersion, localSelectedChildren, orderedGroups, treeRevision]
+    [cache, cacheVersion, localSelectedChildren, orderedGroups, presentations, treeRevision]
   );
   useEffect(() => {
     const retained: PanelTreeGroup[] = orderedGroups.map((owner) => ({
@@ -501,6 +553,9 @@ function summary(node: PanelTreeViewNode, position: number): PanelSummary {
   return {
     id: node.id,
     title: node.title,
+    ...(node.icon ? { icon: node.icon } : {}),
+    ...(node.source ? { source: node.source } : {}),
+    ...(node.favicon ? { favicon: node.favicon } : {}),
     childCount: node.childCount,
     position,
   };
@@ -543,6 +598,7 @@ export function useFullPanel(panelId: string | null): {
       setValue({
         id: presentation.id,
         title: presentation.title,
+        ...(presentation.icon ? { icon: presentation.icon } : {}),
         contextId: presentation.snapshot.contextId,
         runtimeEntityId: presentation.runtimeEntityId,
         buildKey: presentation.buildKey,
@@ -655,15 +711,29 @@ export function useAncestors(panelId: string | null): {
     setLoading(true);
     void panel
       .getTreePath(panelId)
-      .then((path) => {
+      .then(async (path) => {
         if (cancelled) return;
         const nodes = path?.nodes.slice(0, -1) ?? [];
+        const presentations = await panel.getPresentations(nodes.map((node) => node.slotId));
+        const presentationsById = new Map(presentations.map((entry) => [entry.id, entry]));
+        if (cancelled) return;
         setAncestors(
-          nodes.map((node, index) => ({
-            id: node.slotId,
-            title: node.title,
-            depth: nodes.length - index,
-          }))
+          nodes.map((node, index) => {
+            const presentation = presentationsById.get(node.slotId);
+            const favicon = faviconForPresentation(presentation);
+            return {
+              id: node.slotId,
+              title: node.title,
+              ...((presentation?.icon ?? node.icon)
+                ? { icon: presentation?.icon ?? node.icon }
+                : {}),
+              ...((presentation?.snapshot.source ?? node.source)
+                ? { source: presentation?.snapshot.source ?? node.source }
+                : {}),
+              ...(favicon ? { favicon } : {}),
+              depth: nodes.length - index,
+            };
+          })
         );
       })
       .finally(() => {

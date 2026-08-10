@@ -27,7 +27,6 @@ import {
   CubeIcon,
   DragHandleDots2Icon,
   CrossCircledIcon,
-  EnterIcon,
   ExclamationTriangleIcon,
   ExternalLinkIcon,
   GearIcon,
@@ -48,6 +47,7 @@ import type {
   PendingDeviceCodeApproval,
   PendingMissionReviewApproval,
 } from "@vibestudio/shared/approvals";
+import { PanelIcon } from "./PanelIcon";
 import {
   formatAccount,
   formatInjection,
@@ -824,11 +824,22 @@ function CallerChip({ caller, onShow }: { caller: CallerInfo; onShow: () => void
         }
       >
         <span className="approval-caller-chip-kind" aria-hidden="true">
-          {caller.kind === "panel" ? (
-            <EnterIcon width={11} height={11} />
-          ) : (
-            <GearIcon width={11} height={11} />
-          )}
+          <PanelIcon
+            icon={caller.icon}
+            source={caller.iconSourcePath}
+            size={18}
+            fallback={
+              caller.kind === "panel"
+                ? "panel"
+                : caller.kind === "app"
+                  ? "app"
+                  : caller.kind === "extension"
+                    ? "extension"
+                    : caller.kind === "system"
+                      ? "system"
+                      : "worker"
+            }
+          />
         </span>
         <span className="approval-caller-chip-title">{caller.label}</span>
       </span>

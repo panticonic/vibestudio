@@ -48,6 +48,8 @@ export type SlotStateChange =
 export interface WorkspaceStateServiceDeps {
   doDispatch: DoDispatcher;
   workspaceId: string;
+  /** Resolve canonical presentation metadata from the server-owned workspace source. */
+  getUnitIcon?: (source: string) => string | undefined;
   /**
    * Optional hook for mirroring authoritative panel titles into the
    * server-side display-title registry. Called whenever `panel.updateTitle`
@@ -78,6 +80,14 @@ export function createWorkspaceStateService(deps: WorkspaceStateServiceDeps): Se
   };
   const dispatch = <T>(method: string, args: unknown[]) =>
     deps.doDispatch.dispatch(ref, method, ...args) as Promise<T>;
+  const withNodeIcon = <T extends { source?: string }>(node: T): T => {
+    const icon = node.source ? deps.getUnitIcon?.(node.source) : undefined;
+    return icon ? { ...node, icon } : node;
+  };
+  const withPageIcons = (page: WorkspacePanelTreePage): WorkspacePanelTreePage => ({
+    ...page,
+    nodes: page.nodes.map(withNodeIcon),
+  });
   const panelTarget = async (slotId: string): Promise<PanelAccessPermissionTarget> => {
     const detail = await dispatch<WorkspacePanelDetail | null>("panelTreeDetail", [slotId]);
     if (!detail) return { id: slotId };
@@ -159,24 +169,41 @@ export function createWorkspaceStateService(deps: WorkspaceStateServiceDeps): Se
     handler: defineServiceHandler("workspace-state", workspaceStateMethods, {
       "panelTree.rootGroups": (_ctx, [input]) =>
         dispatch<WorkspacePanelTreeRootGroupPage>("panelTreeRootGroups", [input]),
-      "panelTree.rootsForCaller": (ctx, [input]) =>
-        dispatch<WorkspacePanelTreePage>("panelTreePage", [
-          {
-            group: {
-              kind: "roots",
-              ownerUserId: ctx.caller.subject?.userId ?? null,
+      "panelTree.rootsForCaller": async (ctx, [input]) =>
+        withPageIcons(
+          await dispatch<WorkspacePanelTreePage>("panelTreePage", [
+            {
+              group: {
+                kind: "roots",
+                ownerUserId: ctx.caller.subject?.userId ?? null,
+              },
+              ...input,
             },
-            ...input,
-          },
-        ]),
-      "panelTree.page": (_ctx, [input]) =>
-        dispatch<WorkspacePanelTreePage>("panelTreePage", [input]),
-      "panelTree.path": (_ctx, [slotId]) =>
-        dispatch<WorkspacePanelTreePath | null>("panelTreePath", [slotId]),
-      "panelTree.detail": (_ctx, [slotId]) =>
-        dispatch<WorkspacePanelDetail | null>("panelTreeDetail", [slotId]),
-      "panelTree.search": (_ctx, [input]) =>
-        dispatch<WorkspacePanelTreeSearchPage>("panelTreeSearch", [input]),
+          ])
+        ),
+      "panelTree.page": async (_ctx, [input]) =>
+        withPageIcons(await dispatch<WorkspacePanelTreePage>("panelTreePage", [input])),
+      "panelTree.path": async (_ctx, [slotId]) => {
+        const path = await dispatch<WorkspacePanelTreePath | null>("panelTreePath", [slotId]);
+        return path ? { ...path, nodes: path.nodes.map(withNodeIcon) } : null;
+      },
+      "panelTree.detail": async (_ctx, [slotId]) => {
+        const detail = await dispatch<WorkspacePanelDetail | null>("panelTreeDetail", [slotId]);
+        if (!detail) return null;
+        const icon = deps.getUnitIcon?.(detail.currentHistory.source);
+        return icon ? { ...detail, icon } : detail;
+      },
+      "panelTree.search": async (_ctx, [input]) => {
+        const page = await dispatch<WorkspacePanelTreeSearchPage>("panelTreeSearch", [input]);
+        return {
+          ...page,
+          hits: page.hits.map((hit) => ({
+            ...hit,
+            node: withNodeIcon(hit.node),
+            ancestors: hit.ancestors.map(withNodeIcon),
+          })),
+        };
+      },
       "slot.get": (_ctx, [slotId]) => dispatch<unknown>("slotGet", [slotId]),
       "slot.historyRelative": (_ctx, [slotId, delta]) =>
         dispatch<unknown>("slotHistoryRelative", [slotId, delta]),

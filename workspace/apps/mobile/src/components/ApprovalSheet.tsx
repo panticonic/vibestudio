@@ -89,6 +89,8 @@ import {
 } from "@vibestudio/shared/authority/unitInstallReview";
 import { useAtomValue } from "jotai";
 import { themeColorsAtom } from "../state/themeAtoms";
+import { shellClientAtom } from "../state/shellClientAtom";
+import { MobileUnitIcon, type MobileUnitIconKind } from "./MobileUnitIcon";
 import {
   hairline,
   pressedOpacity,
@@ -107,7 +109,6 @@ import {
   ChevronRight,
   ExternalLink,
   Globe,
-  LayoutPanelTop,
   Lock,
   Settings2,
   User,
@@ -859,8 +860,17 @@ function CallerRow({
   onPress: () => void;
 }) {
   const colors = useAtomValue(themeColorsAtom);
-  const KindIcon =
-    caller.kind === "panel" ? LayoutPanelTop : caller.kind === "worker" ? Workflow : Settings2;
+  const shellClient = useAtomValue(shellClientAtom);
+  const iconKind: MobileUnitIconKind =
+    caller.kind === "panel"
+      ? "panel"
+      : caller.kind === "app"
+        ? "app"
+        : caller.kind === "extension"
+          ? "extension"
+          : caller.kind === "system"
+            ? "system"
+            : "worker";
   const chip = (
     <View
       style={[
@@ -868,7 +878,14 @@ function CallerRow({
         { backgroundColor: colors.surfaceSunken, borderColor: colors.borderSubtle },
       ]}
     >
-      <KindIcon size={12} color={colors.textSecondary} />
+      <MobileUnitIcon
+        icon={caller.icon}
+        source={caller.iconSourcePath}
+        kind={iconKind}
+        serverUrl={shellClient?.serverUrl ?? ""}
+        size={18}
+        color={colors.textSecondary}
+      />
       <Text numberOfLines={1} style={[styles.callerChipLabel, { color: colors.text }]}>
         {caller.label}
       </Text>
@@ -1722,6 +1739,7 @@ function InstallReviewPartRow({
   onToggleRow: (rowKey: string, checked: boolean) => void;
 }) {
   const colors = useAtomValue(themeColorsAtom);
+  const shellClient = useAtomValue(shellClientAtom);
   const [open, setOpen] = useState(false);
   const clearable = clearableRows(part);
   const allSelected = clearable.length > 0 && clearable.every((row) => selected.has(row.key));
@@ -1743,6 +1761,22 @@ function InstallReviewPartRow({
         ) : (
           <ChevronRight size={14} color={colors.textSecondary} />
         )}
+        <MobileUnitIcon
+          icon={part.icon}
+          source={part.repoPath}
+          kind={
+            part.kind === "panel"
+              ? "panel"
+              : part.kind === "app"
+                ? "app"
+                : part.kind === "extension"
+                  ? "extension"
+                  : "worker"
+          }
+          serverUrl={shellClient?.serverUrl ?? ""}
+          size={20}
+          color={colors.textSecondary}
+        />
         <View style={styles.unitReviewSummary}>
           <Text style={[styles.detailsSummaryText, { color: colors.text }]}>
             {part.title} · {part.label}

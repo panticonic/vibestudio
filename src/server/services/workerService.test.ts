@@ -94,6 +94,7 @@ function createDeps() {
       name: "example-store",
       relativePath: "workers/example-store",
       manifest: {
+        icon: "🗃️",
         durable: { classes: [{ className: "ExampleStoreDO" }] },
       },
     },
@@ -260,6 +261,7 @@ describe("workerService workspace service resolution", () => {
       expect.objectContaining({
         name: "example-store",
         source: "workers/example-store",
+        icon: "🗃️",
         classes: [{ className: "ExampleStoreDO" }],
       }),
       expect.objectContaining({

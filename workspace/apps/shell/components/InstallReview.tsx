@@ -33,6 +33,7 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import type { Dispatch, KeyboardEvent as ReactKeyboardEvent, SetStateAction } from "react";
 import { Badge, Button, Checkbox, Flex, Text, Tooltip } from "@radix-ui/themes";
+import { PanelIcon } from "./PanelIcon";
 import { ChevronDownIcon, InfoCircledIcon, LockClosedIcon } from "@radix-ui/react-icons";
 import type { PendingUnitInstallReviewApproval } from "@vibestudio/shared/approvals";
 // The resolution is the *answer* to a review, so it lives with the method that
@@ -769,6 +770,14 @@ function PartRow({
           onClick={onOpen}
         >
           <span className="install-review-part-head">
+            <span className="install-review-part-icon" aria-hidden="true">
+              <PanelIcon
+                icon={part.icon}
+                source={part.repoPath}
+                size={18}
+                fallback={part.kind === "panel" ? "panel" : part.kind}
+              />
+            </span>
             <Text as="span" size="2" weight="medium">
               {part.title}
             </Text>

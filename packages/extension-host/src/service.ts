@@ -773,6 +773,7 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
         vibestudio?: {
           displayName?: unknown;
           title?: unknown;
+          icon?: unknown;
           authority?: unknown;
           extension?: unknown;
         };
@@ -860,6 +861,9 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
           dependencyEvs: candidate.dependencyEvs,
           externalDeps: candidate.externalDeps,
         }),
+        ...(typeof packageJson.vibestudio.icon === "string" && packageJson.vibestudio.icon.trim()
+          ? { icon: packageJson.vibestudio.icon.trim() }
+          : {}),
         target: null,
         capabilities,
         authority,

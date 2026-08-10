@@ -44,6 +44,19 @@ describe("panel gateway asset path policy", () => {
     }
   });
 
+  it("admits the read-only unit icon route without opening its namespace", () => {
+    expect(
+      checkPanelGatewayPath("/__vibestudio/unit-icon?source=panels%2Fchat&path=assets%2Ficon.svg")
+    ).toEqual({
+      allowed: true,
+      target: "/__vibestudio/unit-icon?source=panels%2Fchat&path=assets%2Ficon.svg",
+    });
+    expect(checkPanelGatewayPath("/__vibestudio/unit-icon/other")).toMatchObject({
+      allowed: false,
+      denied: "policy",
+    });
+  });
+
   it("continues to deny management and origin-escape paths", () => {
     for (const denied of ["/_r/s/auth/issue-device", "/rpc", "/_w/do/x", "//evil.test/x"]) {
       expect(checkPanelGatewayPath(denied), denied).toMatchObject({ allowed: false });

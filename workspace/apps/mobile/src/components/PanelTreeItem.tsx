@@ -10,7 +10,7 @@
  * - Swipe-to-archive gesture (swipe left reveals "Archive" action)
  */
 
-import React, { useCallback } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { View, Text, StyleSheet, Pressable } from "react-native";
 import {
   Gesture,
@@ -29,6 +29,7 @@ import ReactNativeHapticFeedback from "react-native-haptic-feedback";
 import type { ThemeColors } from "../state/themeAtoms";
 import { radius, spacing, type } from "../design/tokens";
 import { Archive, ChevronDown, ChevronRight, Pin } from "../design/icons";
+import { MobileUnitIcon } from "./MobileUnitIcon";
 
 function triggerHaptic() {
   try {
@@ -51,6 +52,9 @@ export interface FlatPanelItem {
   depth: number;
   childCount: number;
   isCollapsed: boolean;
+  icon?: string;
+  source?: string;
+  kind?: "workspace" | "browser";
 }
 
 interface PanelTreeItemProps {
@@ -58,6 +62,8 @@ interface PanelTreeItemProps {
   isActive: boolean;
   isPinned?: boolean;
   colors: ThemeColors;
+  serverUrl: string;
+  resolveBrowserFavicon: (url: string) => Promise<string | null>;
   onPress: (panelId: string) => void;
   onLongPress?: (panelId: string) => void;
   onToggleCollapse: (panelId: string, collapsed: boolean) => void;
@@ -69,6 +75,8 @@ export function PanelTreeItem({
   isActive,
   isPinned = false,
   colors,
+  serverUrl,
+  resolveBrowserFavicon,
   onPress,
   onLongPress,
   onToggleCollapse,
@@ -196,6 +204,12 @@ export function PanelTreeItem({
             accessibilityRole="button"
             accessibilityLabel={`${item.title}. Long-press for actions.`}
           >
+            <MobilePanelIcon
+              item={item}
+              serverUrl={serverUrl}
+              color={mutedColor}
+              resolveBrowserFavicon={resolveBrowserFavicon}
+            />
             <Text
               style={[type.body, isActive && type.bodyStrong, styles.title, { color: titleColor }]}
               numberOfLines={1}
@@ -221,6 +235,43 @@ export function PanelTreeItem({
         </Animated.View>
       </GestureDetector>
     </Animated.View>
+  );
+}
+
+function MobilePanelIcon(props: {
+  item: FlatPanelItem;
+  serverUrl: string;
+  color: string;
+  resolveBrowserFavicon: (url: string) => Promise<string | null>;
+}) {
+  const browserUrl =
+    props.item.kind === "browser" && props.item.source?.startsWith("browser:")
+      ? props.item.source.slice("browser:".length)
+      : null;
+  const [favicon, setFavicon] = useState<string | null>(null);
+  useEffect(() => {
+    let mounted = true;
+    setFavicon(null);
+    if (browserUrl) {
+      void props.resolveBrowserFavicon(browserUrl).then((value) => {
+        if (mounted) setFavicon(value);
+      });
+    }
+    return () => {
+      mounted = false;
+    };
+  }, [browserUrl, props.resolveBrowserFavicon]);
+
+  return (
+    <MobileUnitIcon
+      icon={props.item.icon}
+      source={props.item.source}
+      imageOverride={favicon}
+      kind={props.item.kind === "browser" ? "browser" : "panel"}
+      serverUrl={props.serverUrl}
+      size={18}
+      color={props.color}
+    />
   );
 }
 
@@ -261,12 +312,16 @@ const styles = StyleSheet.create({
   },
   titlePressable: {
     flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
     justifyContent: "center",
     marginLeft: spacing.xs,
     alignSelf: "stretch",
   },
   title: {
     lineHeight: undefined,
+    flexShrink: 1,
   },
   childCount: {
     marginLeft: spacing.sm,

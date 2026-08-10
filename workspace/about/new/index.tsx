@@ -198,10 +198,6 @@ function activationLabel(suggestion: DisplaySuggestion | undefined): string {
   return suggestion.kind === "chat" ? "Send" : "Open";
 }
 
-function panelHue(path: string): number {
-  return [...path].reduce((sum, char) => (sum * 31 + char.charCodeAt(0)) % 360, 0);
-}
-
 function SuggestionIcon({
   suggestion,
   favicon,
@@ -209,14 +205,24 @@ function SuggestionIcon({
   suggestion: LauncherSuggestion;
   favicon?: string;
 }) {
+  const panelIcon = suggestion.kind === "panel" ? suggestion.panel.icon : undefined;
+  const [imageFailed, setImageFailed] = useState(false);
+  useEffect(() => setImageFailed(false), [panelIcon]);
   if (suggestion.kind === "panel") {
+    if (panelIcon?.startsWith("./") && !imageFailed) {
+      return (
+        <img
+          className="launcher-icon launcher-image-icon"
+          src={`${buildPanelLink(suggestion.panel.path)}../../__vibestudio/unit-icon?source=${encodeURIComponent(suggestion.panel.path)}&path=${encodeURIComponent(panelIcon.slice(2))}`}
+          alt=""
+          aria-hidden="true"
+          onError={() => setImageFailed(true)}
+        />
+      );
+    }
     return (
-      <span
-        className="launcher-icon launcher-monogram"
-        aria-hidden="true"
-        style={{ "--launcher-hue": panelHue(suggestion.panel.path) } as CSSProperties}
-      >
-        {suggestion.panel.title.trim().charAt(0).toUpperCase() || "P"}
+      <span className="launcher-icon launcher-semantic-icon" aria-hidden="true">
+        {panelIcon?.startsWith("./") ? "🧩" : (panelIcon ?? "🧩")}
       </span>
     );
   }

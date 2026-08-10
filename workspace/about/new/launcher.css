@@ -6,8 +6,7 @@
  * what produced the stray horizontal scrollbar in the first cut.
  *
  * Everything keys off Radix scales and the shared token layer, so light and
- * dark both read correctly without a per-rule branch. The one exception is the
- * per-panel monogram hue, which carries an explicit pair of theme values.
+ * dark both read correctly without a per-rule branch.
  */
 
 .launcher-search,
@@ -335,18 +334,20 @@
   color: var(--accent-11);
 }
 
-.launcher-monogram {
-  --monogram-ink: hsl(var(--launcher-hue) 45% 30%);
-  --monogram-tint: hsl(var(--launcher-hue) 55% 90%);
-  background: var(--monogram-tint);
-  color: var(--monogram-ink);
-  font-size: 13px;
-  font-weight: 700;
+.launcher-semantic-icon {
+  font-size: 20px;
+  line-height: 1;
+  font-family:
+    Apple Color Emoji,
+    Segoe UI Emoji,
+    Noto Color Emoji,
+    sans-serif;
 }
 
-.radix-themes:where(.dark, .dark-theme) .launcher-monogram {
-  --monogram-ink: hsl(var(--launcher-hue) 70% 82%);
-  --monogram-tint: hsl(var(--launcher-hue) 40% 26%);
+.launcher-image-icon {
+  display: block;
+  object-fit: contain;
+  border-radius: 5px;
 }
 
 /* ---- Placeholder state --------------------------------------------------- */

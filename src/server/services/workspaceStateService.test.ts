@@ -33,6 +33,7 @@ function makeService(opts: {
   onPanelTitleChanged?: (entityId: string, title: string) => void;
   isEntityTitleExplicit?: (entityId: string) => boolean;
   onSlotStateChanged?: (change?: SlotStateChange) => void;
+  getUnitIcon?: (source: string) => string | undefined;
   /**
    * Map of DO method → return value. The dispatcher uses this to drive
    * outcomes (e.g. simulating the entity-id WorkspaceDO returns from
@@ -51,6 +52,7 @@ function makeService(opts: {
   const svc = createWorkspaceStateService({
     doDispatch: doDispatch as never,
     workspaceId: "test-workspace",
+    ...(opts.getUnitIcon ? { getUnitIcon: opts.getUnitIcon } : {}),
     panelAccess: {
       contextExists: () => false,
       resolveCallerContext: async () => null,
@@ -124,7 +126,16 @@ describe("workspaceStateService — title mirror hooks", () => {
   });
 
   it("derives current roots from the verified caller instead of caller input", async () => {
-    const { svc, calls } = makeService({});
+    const { svc, calls } = makeService({
+      dispatchReturns: {
+        panelTreePage: {
+          revision: 1,
+          group: { kind: "roots", ownerUserId: "usr-current" },
+          nodes: [],
+          nextCursor: null,
+        },
+      },
+    });
     const ctx = makeCtx();
     ctx.caller.subject = { userId: "usr-current" };
 
@@ -141,6 +152,55 @@ describe("workspaceStateService — title mirror hooks", () => {
         ],
       },
     ]);
+  });
+
+  it("enriches panel detail from the server-owned unit manifest", async () => {
+    const detail = {
+      revision: 1,
+      slot: { current_entity_title: "Chat" },
+      currentHistory: { source: "panels/chat", context_id: "ctx-chat" },
+      entity: { id: "panel:chat" },
+    };
+    const { svc } = makeService({
+      dispatchReturns: { panelTreeDetail: detail },
+      getUnitIcon: (source) => (source === "panels/chat" ? "💬" : undefined),
+    });
+
+    await expect(
+      svc.handler(makeCtx() as never, "panelTree.detail", ["panel:chat"])
+    ).resolves.toEqual({ ...detail, icon: "💬" });
+  });
+
+  it("enriches tree rows before they cross into native shell presentation", async () => {
+    const page = {
+      revision: 1,
+      group: { kind: "roots" as const, ownerUserId: null },
+      nodes: [
+        {
+          slotId: "panel:chat",
+          parentSlotId: null,
+          ownerUserId: null,
+          title: "Chat",
+          source: "panels/chat",
+          createdAt: 1,
+          childCount: 0,
+        },
+      ],
+      nextCursor: null,
+    };
+    const { svc } = makeService({
+      dispatchReturns: { panelTreePage: page },
+      getUnitIcon: (source) => (source === "panels/chat" ? "💬" : undefined),
+    });
+
+    await expect(
+      svc.handler(makeCtx() as never, "panelTree.page", [
+        { group: { kind: "roots", ownerUserId: null } },
+      ])
+    ).resolves.toEqual({
+      ...page,
+      nodes: [{ ...page.nodes[0], icon: "💬" }],
+    });
   });
 
   it("exposes lifecycle lease methods to DO callers", async () => {
@@ -436,7 +496,23 @@ describe("workspaceStateService — slot-state change hook", () => {
   for (const [method, args] of reads) {
     it(`does not fire onSlotStateChanged for read/non-tree method ${method}`, async () => {
       const onSlotStateChanged = vi.fn();
-      const { svc } = makeService({ onSlotStateChanged });
+      const dispatchReturns =
+        method === "panelTree.rootsForCaller" || method === "panelTree.page"
+          ? {
+              panelTreePage: {
+                revision: 1,
+                group: { kind: "roots", ownerUserId: null },
+                nodes: [],
+                nextCursor: null,
+              },
+            }
+          : method === "panelTree.search"
+            ? { panelTreeSearch: { revision: 1, hits: [], nextCursor: null } }
+            : undefined;
+      const { svc } = makeService({
+        onSlotStateChanged,
+        ...(dispatchReturns ? { dispatchReturns } : {}),
+      });
       await svc.handler(makeCtx() as never, method, args);
       expect(onSlotStateChanged).not.toHaveBeenCalled();
     });

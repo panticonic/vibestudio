@@ -141,6 +141,7 @@ export const WorkspaceTreeNodeSchema: z.ZodType<WorkspaceTreeNode> = z.lazy(() =
         type: z.literal("app"),
         title: z.string(),
         description: z.string().optional(),
+        icon: z.string().max(256).optional(),
         hidden: z.boolean().optional(),
       })
       .optional(),

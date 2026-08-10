@@ -13,6 +13,7 @@ export interface PanelTreeNode {
   parentSlotId: string | null;
   ownerUserId: string | null;
   title: string;
+  icon?: string;
   createdAt: number;
   childCount: number;
   source?: string;

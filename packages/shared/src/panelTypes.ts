@@ -78,6 +78,30 @@ export function loadPanelManifest(panelPath: string): LoadedPanelManifest {
   if (!manifest.title) {
     throw new Error("vibestudio.title must be specified in package.json");
   }
+  if (manifest.icon !== undefined) {
+    if (typeof manifest.icon !== "string" || !manifest.icon.trim()) {
+      throw new Error("vibestudio.icon must be a semantic emoji or a relative image path");
+    }
+    const icon = manifest.icon.trim();
+    if (icon.startsWith("./")) {
+      const segments = icon.slice(2).split("/");
+      const validAssetPath =
+        icon.length <= 256 &&
+        !icon.includes("\\") &&
+        segments.every((segment) => segment.length > 0 && segment !== "." && segment !== "..") &&
+        /\.(?:avif|gif|ico|jpe?g|png|svg|webp)$/iu.test(icon);
+      if (!validAssetPath) {
+        throw new Error(
+          "vibestudio.icon image paths must start with ./, stay inside the unit, and name a supported image"
+        );
+      }
+    } else if (icon.length > 16) {
+      throw new Error(
+        "vibestudio.icon emoji must be at most 16 UTF-16 code units; use ./path/to/icon.svg for an image"
+      );
+    }
+    manifest.icon = icon;
+  }
 
   // Validate the placement hint block, if declared.
   const placement = sanitizePlacementHint(manifest.placement);

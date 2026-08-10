@@ -601,6 +601,10 @@ class MobilePanels implements PanelHost {
       },
     });
   }
+  async getPageFaviconDataUrl(pageUrl: string): Promise<string | null> {
+    const favicon = await this.browserData.getPageFavicon(pageUrl);
+    return favicon ? `data:${favicon.mime_type};base64,${favicon.image_data}` : null;
+  }
   async recordHistoryVisit(request: RecordHistoryVisitRequest): Promise<void> {
     await this.browserData.recordHistoryVisit(request);
   }

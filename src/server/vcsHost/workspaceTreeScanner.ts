@@ -127,6 +127,7 @@ export class WorkspaceTreeScanner {
           vibestudio?: {
             title?: string;
             description?: string;
+            icon?: string;
             hiddenInLauncher?: boolean;
             shell?: unknown;
           };
@@ -161,13 +162,16 @@ export class WorkspaceTreeScanner {
     node: WorkspaceNode,
     unitRel: string,
     name: string,
-    manifest: { title?: string; description?: string; hiddenInLauncher?: boolean } | undefined
+    manifest:
+      | { title?: string; description?: string; icon?: string; hiddenInLauncher?: boolean }
+      | undefined
   ): void {
     if (!manifest || (!unitRel.startsWith("panels/") && !isAboutSource(unitRel))) return;
     node.launchable = {
       type: "app",
       title: manifest.title ?? name,
       ...(manifest.description ? { description: manifest.description } : {}),
+      ...(manifest.icon ? { icon: manifest.icon } : {}),
       ...(manifest.hiddenInLauncher ? { hidden: true } : {}),
     };
   }
