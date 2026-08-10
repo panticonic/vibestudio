@@ -37,9 +37,14 @@ from panels, workers, and extensions:
 1. `@workspace-apps/foo` maps to `apps/foo`, not `apps/@workspace-apps/foo`.
 2. App identity comes from `package.json` package name plus the approved build
    identity, not from a special filesystem path.
-3. App code is trusted client code. Add capabilities deliberately and keep the
+3. Give every app a semantic `vibestudio.icon`. Prefer a single meaningful emoji;
+   use a repo-local image such as `./assets/icon.svg` for a real branded icon.
+   Image paths are relative to `package.json`, may not traverse outside the unit,
+   and must be at most 1 MiB. Do not use generated initials or remote favicon
+   services.
+4. App code is trusted client code. Add capabilities deliberately and keep the
    capability list no broader than the target needs.
-4. App source participates in the workspace-wide semantic VCS. Read
+5. App source participates in the workspace-wide semantic VCS. Read
    [vibestudio-vcs](../vibestudio-vcs/SKILL.md) before changing it. Author exact
    working intent, build or test the returned working head, commit the complete
    local application chain, and publish through `vcs.push`. Explicit checks are
@@ -47,13 +52,13 @@ from panels, workers, and extensions:
    the exact-candidate build/typecheck gate, obtains approval, and atomically
    advances protected refs. Do not reconstruct the workflow from
    filesystem dirtiness, paths, or repository state hashes.
-5. Electron shell apps that manage panel layout must declare `panel-hosting`.
-6. React Native workspace apps are loaded by the shipped native host bootstrap;
+6. Electron shell apps that manage panel layout must declare `panel-hosting`.
+7. React Native workspace apps are loaded by the shipped native host bootstrap;
    clean-install pairing must work before the workspace app bundle is available.
-7. Terminal apps run as supervised Node processes only after they are selected
+8. Terminal apps run as supervised Node processes only after they are selected
    for launch or explicitly activated through
    `runtime.supervision.activate({ kind: "app", releaseId: appName })`.
-8. Apps that need durable shared data should call a manifest-declared worker
+9. Apps that need durable shared data should call a manifest-declared worker
    Durable Object service. The app itself does not get a generic workspace SQL
    database; use `workers.resolveService(...)` + `rpc.call(...)` against narrow
    DO methods. Admit the relevant authenticated principal families in both the
@@ -61,15 +66,15 @@ from panels, workers, and extensions:
    `@rpc({ principals, effect, tier, sensitivity })` policy. For editable
    content that benefits from history and agent collaboration, use
    version-controlled files under `projects/` instead.
-9. **Respect the host theme** — use `usePanelTheme()` from `@workspace/react`
-   for live dark/light awareness. Do not hardcode a color scheme. Build
-   mobile-friendly, responsive layouts — apps render on desktop and mobile
-   hosts.
-10. **Agentically enabled by default** — expose app DO methods with explicit
-   `@rpc` contracts so agents can call them alongside human UIs. If the app has
-   a conversational or collaborative dimension, integrate it with the workspace
-   channel/messaging system using `addAgentToChannel`. Every meaningful app
-   surface should be programmable by agents as a first-class concern.
+10. **Respect the host theme** — use `usePanelTheme()` from `@workspace/react`
+    for live dark/light awareness. Do not hardcode a color scheme. Build
+    mobile-friendly, responsive layouts — apps render on desktop and mobile
+    hosts.
+11. **Agentically enabled by default** — expose app DO methods with explicit
+    `@rpc` contracts so agents can call them alongside human UIs. If the app has
+    a conversational or collaborative dimension, integrate it with the workspace
+    channel/messaging system using `addAgentToChannel`. Every meaningful app
+    surface should be programmable by agents as a first-class concern.
 
 ## Quick Start
 
@@ -92,6 +97,7 @@ Minimal Electron app package:
   "type": "module",
   "vibestudio": {
     "displayName": "My App",
+    "icon": "✨",
     "app": {
       "target": "electron",
       "renderer": "index.tsx",

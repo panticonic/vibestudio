@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "vibestudio": {
+    "icon": "📧",
     "entry": "index.ts",
     "durable": {
       "classes": [
@@ -15,7 +16,6 @@
     "agent": {
       "displayName": "Gmail Agent",
       "description": "Reads and triages your Gmail",
-      "icon": "📧",
       "defaultConfig": {
         "handle": "gmail",
         "respondPolicy": "mentioned-or-followup"

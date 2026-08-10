@@ -5,6 +5,7 @@
   "type": "module",
   "vibestudio": {
     "displayName": "Template Composer",
+    "icon": "🧩",
     "entry": "index.ts",
     "sourcemap": true,
     "extension": {

@@ -24,6 +24,7 @@ Each app is a normal package with a `vibestudio.app` manifest in `package.json`:
   "type": "module",
   "vibestudio": {
     "displayName": "Foo",
+    "icon": "✨",
     "app": {
       "target": "electron",
       "renderer": "index.tsx",
@@ -37,6 +38,8 @@ Fields:
 
 - `name`: stable app principal identity. Must use `@workspace-apps/<name>`.
 - `vibestudio.displayName`: user-facing name in approval and unit surfaces.
+- `vibestudio.icon`: semantic emoji or a repo-local image path such as
+  `./assets/icon.svg` (maximum 1 MiB). It is shown in unit lists and approvals.
 - `vibestudio.app.target`: one of `electron`, `react-native`, or `terminal`.
 - Target entry:
   - `electron`: `renderer`

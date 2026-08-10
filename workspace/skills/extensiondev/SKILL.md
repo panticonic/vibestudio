@@ -29,16 +29,17 @@ If a worker (workerd isolate) is sufficient, prefer that — workers are cheaper
 ## Critical rules
 
 1. **`workspace/extensions/<name>/`** is the location. The package must be `private: true` and `type: "module"`, and the `package.json` must have `vibestudio.extension` (validated at install **and** boot — bad manifests fail closed).
-2. **`activate(ctx)` returns a plain object.** Its own enumerable function properties become RPC methods. Inherited methods, `then`, and non-function properties are skipped.
-3. **`ctx.fs` for an extension is unrestricted** — it covers the whole host filesystem. This is not a sandbox; it exists for _auditable_ writes. For silent ambient work, import `node:fs` directly. The install approval is the trust boundary.
-4. **Protect extension-owned resources declaratively.** Add exact
+2. **Give every extension a semantic `vibestudio.icon`.** Prefer one meaningful emoji, or use a repo-local image such as `./assets/icon.svg` for a real branded icon. Keep images at most 1 MiB, do not traverse outside the unit, and never substitute generated initials or a remote favicon service.
+3. **`activate(ctx)` returns a plain object.** Its own enumerable function properties become RPC methods. Inherited methods, `then`, and non-function properties are skipped.
+4. **`ctx.fs` for an extension is unrestricted** — it covers the whole host filesystem. This is not a sandbox; it exists for _auditable_ writes. For silent ambient work, import `node:fs` directly. The install approval is the trust boundary.
+5. **Protect extension-owned resources declaratively.** Add exact
    `authority.provides` definitions and bind protected methods with
    `vibestudio.extension.methodAuthority`. The extension dispatcher enforces
    them before `activate()` API code runs; never add an advisory prompt inside
    a method.
-5. **Prefer ESM**. For external CommonJS packages, use default imports + destructure (`import pkg from "x"; const { fn } = pkg`). Named imports from CJS are blocked.
-6. **No `console.log` in production paths.** Use `ctx.log.{debug,info,warn,error}` so logs land in the exact supervised entity's stream (`runtime.supervision.logs(identity)`). `console.*` is captured too, but as `source: "stdout"` / `"stderr"` instead of structured records.
-7. **Protected semantic publication is the dev signal.** Read
+6. **Prefer ESM**. For external CommonJS packages, use default imports + destructure (`import pkg from "x"; const { fn } = pkg`). Named imports from CJS are blocked.
+7. **No `console.log` in production paths.** Use `ctx.log.{debug,info,warn,error}` so logs land in the exact supervised entity's stream (`runtime.supervision.logs(identity)`). `console.*` is captured too, but as `source: "stdout"` / `"stderr"` instead of structured records.
+8. **Protected semantic publication is the dev signal.** Read
    [vibestudio-vcs](../vibestudio-vcs/SKILL.md), author source on an exact
    working head, commit the complete local application chain, and publish the
    committed event through semantic ancestry/integration validation, approval,
@@ -50,7 +51,7 @@ If a worker (workerd isolate) is sufficient, prefer that — workers are cheaper
    retains the previous runnable extension on any build or activation failure.
    Working or merely committed context work does not update the active
    extension.
-8. **Every extension ships a repo-local `SKILL.md`.** Put it at
+9. **Every extension ships a repo-local `SKILL.md`.** Put it at
    `workspace/extensions/<name>/SKILL.md` and document the extension's RPC
    surface, logs, trust boundaries, and any remote-server topology assumptions.
    This is part of done for new extensions.
@@ -66,6 +67,7 @@ If a worker (workerd isolate) is sufficient, prefer that — workers are cheaper
   "private": true,
   "vibestudio": {
     "displayName": "Hello",
+    "icon": "👋",
     "entry": "index.ts",
     "sourcemap": true,
     "extension": { "activationEvents": ["onInvoke"] }

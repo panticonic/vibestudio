@@ -5,6 +5,7 @@
   "type": "module",
   "vibestudio": {
     "title": "History",
+    "icon": "🕘",
     "description": "Browse and clear browsing history",
     "hiddenInLauncher": false,
     "autoArchiveWhenEmpty": true,

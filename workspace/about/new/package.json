@@ -4,6 +4,7 @@
   "private": true,
   "vibestudio": {
     "title": "New Panel",
+    "icon": "➕",
     "hiddenInLauncher": true,
     "autoArchiveWhenEmpty": true,
     "authority": {

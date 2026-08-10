@@ -5,6 +5,7 @@
   "type": "module",
   "vibestudio": {
     "displayName": "Claude Code",
+    "icon": "🤖",
     "entry": "index.ts",
     "sourcemap": true,
     "extension": {

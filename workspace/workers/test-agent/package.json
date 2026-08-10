@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "vibestudio": {
+    "icon": "🧪",
     "entry": "index.ts",
     "durable": {
       "classes": [

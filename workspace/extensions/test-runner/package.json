@@ -5,6 +5,7 @@
   "type": "module",
   "vibestudio": {
     "displayName": "Workspace Test Runner",
+    "icon": "✅",
     "entry": "index.ts",
     "sourcemap": true,
     "extension": {

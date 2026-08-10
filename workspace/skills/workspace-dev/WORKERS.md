@@ -1,5 +1,13 @@
 # Worker Runtime API
 
+Every worker manifest declares one semantic icon in `vibestudio.icon`. Use a
+specific, recognizable emoji, or a unit-relative image such as
+`"./assets/icon.svg"`; image icons are copied into the immutable build and may
+be SVG, PNG, JPEG, WebP, AVIF, GIF, or ICO (up to 1 MiB). It is the worker's
+recognizable identity in install and capability approval prompts, so choose an
+icon for what the worker does rather than its implementation technology. Do not
+add a second icon under `vibestudio.agent`.
+
 Credentials are URL-bound and may only be used through host-mediated egress.
 
 The portable `@workspace/runtime` surface is shared by panels, workers, Durable

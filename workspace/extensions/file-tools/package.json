@@ -5,6 +5,7 @@
   "type": "module",
   "vibestudio": {
     "displayName": "File Tools",
+    "icon": "📁",
     "entry": "index.ts",
     "sourcemap": true,
     "extension": {

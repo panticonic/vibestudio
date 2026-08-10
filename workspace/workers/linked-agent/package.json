@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "vibestudio": {
+    "icon": "🔗",
     "entry": "index.ts",
     "durable": {
       "classes": [
@@ -14,8 +15,7 @@
     },
     "agent": {
       "displayName": "Linked Agent",
-      "description": "Vessel for an externally-driven agent (e.g. a Claude Code session) attached over RPC",
-      "icon": "🔗"
+      "description": "Vessel for an externally-driven agent (e.g. a Claude Code session) attached over RPC"
     },
     "exposeModules": [
       "@workspace/runtime",

@@ -5,6 +5,7 @@
   "type": "module",
   "vibestudio": {
     "displayName": "Vibestudio Remote CLI",
+    "icon": "⌨️",
     "app": {
       "target": "terminal",
       "entry": "index.ts"

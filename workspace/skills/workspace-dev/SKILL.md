@@ -111,6 +111,19 @@ an accessibility defect: repair the panel before exercising the flow.
 Never use `.first()`, `.last()`, or `.nth()`to guess which repeated control
 belongs to an item. Ordinals are acceptable only after`inspect()` proves
     the intended rendered ancestor context.
+11. **Give every panel and worker a semantic icon** — pass one recognizable
+    icon as `icon` to `createProjects`. Use an emoji (`💬` chat, `💻` terminal,
+    `🔑` credentials, `📰` news) for the simplest attractive result, or author a
+    real SVG/PNG/WebP/AVIF/JPEG/GIF/ICO asset and use a unit-relative path such as
+    `./assets/icon.svg`. Keep images simple, square, legible at 16–20 px, and at
+    most 1 MiB. The scaffold writes the value to the single canonical
+    `vibestudio.icon` field; do not create a parallel agent/panel icon field.
+    Prefer a concrete object or action over initials, random colors, or
+    hash-derived identicons. Vibestudio renders it consistently as the panel's
+    HTML favicon and in the launcher, panel tree, breadcrumbs, agent picker, and
+    approval prompts. Browser panels are the exception: their authentic site
+    favicon is captured and resolved from browser data, so never invent an icon
+    for a website.
 
 ## Persistence
 
@@ -178,8 +191,8 @@ eval({
   import { openPanel } from "@workspace/runtime";
 
   scope.created = await createProjects([
-    { projectType: "worker", name: "task-board-store", title: "Task Board Store" },
-    { projectType: "panel", name: "task-board", title: "Task Board" },
+    { projectType: "worker", name: "task-board-store", title: "Task Board Store", icon: "🗃️" },
+    { projectType: "panel", name: "task-board", title: "Task Board", icon: "📋" },
   ]);
   scope.createdPanel = await openPanel(scope.created[1].created);
   return {

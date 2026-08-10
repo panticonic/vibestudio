@@ -4,6 +4,7 @@
   "private": true,
   "vibestudio": {
     "title": "Server Logs",
+    "icon": "📜",
     "description": "Live tail of the workspace server's host logs",
     "hiddenInLauncher": false,
     "autoArchiveWhenEmpty": true,

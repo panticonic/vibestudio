@@ -5,6 +5,7 @@
   "type": "module",
   "vibestudio": {
     "displayName": "Vibestudio Shell",
+    "icon": "🖥️",
     "app": {
       "target": "electron",
       "renderer": "index.tsx",

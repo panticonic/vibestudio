@@ -7,6 +7,7 @@
   },
   "vibestudio": {
     "title": "Sample Durable Object",
+    "icon": "🧱",
     "kind": "worker",
     "entry": "index.ts",
     "durable": {

@@ -5,6 +5,7 @@
   "type": "module",
   "vibestudio": {
     "displayName": "React Native Build Provider",
+    "icon": "⚛️",
     "entry": "index.ts",
     "sourcemap": true,
     "extension": {

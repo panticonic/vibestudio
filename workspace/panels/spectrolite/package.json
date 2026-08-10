@@ -9,6 +9,7 @@
   },
   "vibestudio": {
     "title": "Spectrolite",
+    "icon": "✨",
     "entry": "index.tsx",
     "exposeModules": [
       "react",

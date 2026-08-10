@@ -5,6 +5,7 @@
   "type": "module",
   "vibestudio": {
     "title": "Hello Vanilla",
+    "icon": "👋",
     "entry": "index.ts",
     "template": "vanilla",
     "authority": {

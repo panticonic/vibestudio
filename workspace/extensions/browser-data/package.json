@@ -5,6 +5,7 @@
   "type": "module",
   "vibestudio": {
     "displayName": "Browser Data",
+    "icon": "🌐",
     "entry": "index.ts",
     "sourcemap": true,
     "authority": {

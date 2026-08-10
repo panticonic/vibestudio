@@ -4,6 +4,7 @@
   "private": true,
   "vibestudio": {
     "title": "About Vibestudio",
+    "icon": "ℹ️",
     "description": "Version info and credits",
     "hiddenInLauncher": false,
     "autoArchiveWhenEmpty": true,

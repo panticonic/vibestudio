@@ -5,6 +5,7 @@
   "type": "module",
   "vibestudio": {
     "title": "Templates",
+    "icon": "🧩",
     "description": "Manage the templates connected to this workspace",
     "hiddenInLauncher": false,
     "autoArchiveWhenEmpty": true,

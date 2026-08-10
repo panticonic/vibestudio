@@ -5,6 +5,7 @@
   "type": "module",
   "vibestudio": {
     "title": "Downloads",
+    "icon": "⬇️",
     "description": "Review and control browser downloads",
     "hiddenInLauncher": false,
     "autoArchiveWhenEmpty": true,

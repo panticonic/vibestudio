@@ -5,6 +5,7 @@
   "type": "module",
   "vibestudio": {
     "title": "Bookmarks",
+    "icon": "🔖",
     "description": "Browse and manage saved websites",
     "hiddenInLauncher": false,
     "autoArchiveWhenEmpty": true,

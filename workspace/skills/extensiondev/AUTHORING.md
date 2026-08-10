@@ -23,6 +23,7 @@ External extensions clone into the same tree at install time. There is no per-us
   "private": true,
   "vibestudio": {
     "displayName": "Hello",
+    "icon": "👋",
     "entry": "index.ts",
     "sourcemap": true,
     "extension": {
@@ -69,6 +70,7 @@ a fresh install.
 | Field                                 | Default      | Notes                                                                                                                                  |
 | ------------------------------------- | ------------ | -------------------------------------------------------------------------------------------------------------------------------------- |
 | `vibestudio.displayName`              | package name | Human-readable name shown in the units panel.                                                                                          |
+| `vibestudio.icon`                     | kind icon    | Semantic emoji or a repo-local image such as `./assets/icon.svg` (maximum 1 MiB), shown in unit and approval surfaces.                 |
 | `vibestudio.extension.dependencyMode` | `"auto"`     | `"auto"` bundles plain JS deps, externalizes native/WASM ones. `"bundle"` forces bundling. `"external"` forces runtime install + load. |
 
 Use `activationEvents: ["onInvoke"]` for extensions whose API is only needed on

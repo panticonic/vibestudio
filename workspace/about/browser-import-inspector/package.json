@@ -5,6 +5,7 @@
   "type": "module",
   "vibestudio": {
     "title": "Browser Migration & State",
+    "icon": "🧳",
     "description": "Migrate browser data, preview imports, inspect imported cookies/passwords/history, and debug the address bar",
     "hiddenInLauncher": false,
     "authority": {

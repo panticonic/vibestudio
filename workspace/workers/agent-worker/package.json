@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "vibestudio": {
+    "icon": "💬",
     "entry": "index.ts",
     "durable": {
       "classes": [
@@ -14,8 +15,7 @@
     },
     "agent": {
       "displayName": "Chat Agent",
-      "description": "General-purpose coding & chat agent",
-      "icon": "💬"
+      "description": "General-purpose coding & chat agent"
     },
     "exposeModules": [
       "@workspace/runtime",

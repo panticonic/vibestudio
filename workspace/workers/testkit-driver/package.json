@@ -5,6 +5,7 @@
   "type": "module",
   "vibestudio": {
     "title": "Testkit Driver",
+    "icon": "🔌",
     "kind": "worker",
     "entry": "index.ts",
     "durable": {

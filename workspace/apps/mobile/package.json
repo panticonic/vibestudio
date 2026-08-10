@@ -6,6 +6,7 @@
   "//dependencies": "Keep react-native-webview pinned with apps/mobile; 13.17.0 makes JSX props resolve to never under our TS/React setup.",
   "vibestudio": {
     "displayName": "Vibestudio Mobile",
+    "icon": "📱",
     "app": {
       "target": "react-native",
       "renderer": "App.tsx",

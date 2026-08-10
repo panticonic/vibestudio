@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "vibestudio": {
+    "icon": "✦",
     "entry": "index.ts",
     "durable": {
       "classes": [
@@ -14,8 +15,7 @@
     },
     "agent": {
       "displayName": "System Agent",
-      "description": "Product-owned workspace and shell operator",
-      "icon": "✦"
+      "description": "Product-owned workspace and shell operator"
     },
     "exposeModules": [
       "@workspace/runtime",

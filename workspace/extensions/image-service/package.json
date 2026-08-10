@@ -5,6 +5,7 @@
   "type": "module",
   "vibestudio": {
     "displayName": "Image Service",
+    "icon": "🖼️",
     "entry": "index.ts",
     "sourcemap": true,
     "extension": {

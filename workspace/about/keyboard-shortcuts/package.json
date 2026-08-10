@@ -4,6 +4,7 @@
   "private": true,
   "vibestudio": {
     "title": "Keyboard Shortcuts",
+    "icon": "⌨️",
     "description": "View keyboard shortcuts",
     "hiddenInLauncher": false,
     "autoArchiveWhenEmpty": true,

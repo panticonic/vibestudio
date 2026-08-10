@@ -5,6 +5,7 @@
   "type": "module",
   "vibestudio": {
     "displayName": "PDF Ingest",
+    "icon": "📄",
     "entry": "index.ts",
     "sourcemap": true,
     "extension": {

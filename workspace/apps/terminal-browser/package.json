@@ -5,6 +5,7 @@
   "type": "module",
   "vibestudio": {
     "displayName": "Vibestudio Terminal",
+    "icon": "💻",
     "app": {
       "target": "terminal",
       "entry": "src/index.ts",

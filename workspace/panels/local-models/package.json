@@ -5,6 +5,7 @@
   "type": "module",
   "vibestudio": {
     "title": "Local Models",
+    "icon": "🧠",
     "entry": "index.tsx",
     "exposeModules": [
       "react",

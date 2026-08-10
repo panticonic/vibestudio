@@ -5,6 +5,7 @@
   "type": "module",
   "vibestudio": {
     "title": "Collection",
+    "icon": "🗂️",
     "description": "Organize a recursive panel subtree with an embedded resident agent that can inspect and automate its children",
     "hiddenInLauncher": false,
     "autoArchiveWhenEmpty": true,

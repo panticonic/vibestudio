@@ -5,6 +5,7 @@
   "type": "module",
   "vibestudio": {
     "title": "Workspace History",
+    "icon": "🕰️",
     "entry": "index.tsx",
     "exposeModules": [
       "react",
