@@ -4,7 +4,11 @@ import { createConnectedClientTransportService } from "./connectedClientTranspor
 const context = {
   caller: {
     runtime: { id: "do:phone", kind: "do" },
-    subject: { userId: "alice" },
+    subject: { userId: "system", handle: "system" },
+  },
+  authorizingCaller: {
+    runtime: { id: "agent:alice", kind: "agent" },
+    subject: { userId: "alice", handle: "alice" },
   },
 } as never;
 
@@ -49,5 +53,25 @@ describe("connected-client transport", () => {
         { clientId: "shell:bob", method: "desktopPhoneProvider.providers", args: [] },
       ])
     ).rejects.toThrow("no longer connected");
+  });
+
+  it("does not treat a bare system deputy as a human account", async () => {
+    const service = createConnectedClientTransportService({
+      getUserConnections: () => [],
+      getClientBridge: () => undefined,
+    });
+
+    await expect(
+      service.handler(
+        {
+          caller: {
+            runtime: { id: "do:phone", kind: "do" },
+            subject: { userId: "system", handle: "system" },
+          },
+        } as never,
+        "list",
+        []
+      )
+    ).rejects.toThrow("requires an authenticated user account");
   });
 });

@@ -1,6 +1,9 @@
 import { connectedClientTransportMethods } from "@vibestudio/service-schemas/connectedClientTransport";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
-import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
+import {
+  verifiedInitiatingUserId,
+  type ServiceContext,
+} from "@vibestudio/shared/serviceDispatcher";
 
 interface ConnectedClient {
   caller: { runtime: { id: string; kind: string } };
@@ -19,7 +22,11 @@ export interface ConnectedClientTransportDeps {
 }
 
 function requireUserId(ctx: ServiceContext): string {
-  const userId = ctx.caller.subject?.userId;
+  // PhoneProvisioningDO is the authenticated user's reviewed deputy. The
+  // immediate transport caller is therefore a system-owned DO, while the
+  // dispatcher carries the host-verified human origin as authorizingCaller.
+  // Never infer account routing from the deputy's synthetic subject.
+  const userId = verifiedInitiatingUserId(ctx);
   if (!userId || userId === "system") {
     throw new Error("Connected-client transport requires an authenticated user account");
   }

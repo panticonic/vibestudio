@@ -50,7 +50,11 @@ import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
 import { ServiceError } from "@vibestudio/shared/serviceDispatcher";
 import { checkPanelGatewayPath } from "@vibestudio/shared/panel/assetPathPolicy";
-import { GZIP_MARKER_HEADER, hasRangeRequestHeader } from "@vibestudio/shared/panel/assetHeaders";
+import {
+  GZIP_MARKER_HEADER,
+  RESUMABLE_GZIP_HEADER,
+  hasRangeRequestHeader,
+} from "@vibestudio/shared/panel/assetHeaders";
 
 /** Loopback fetch request shape sent by the panel-asset façade. The request
  * body (if any) rides the bulk channel as a stream (`ctx.body`), never in here. */
@@ -151,6 +155,17 @@ function rawLoopbackFetch(
       request.end();
     }
   });
+}
+
+function requestHeader(
+  headers: Record<string, string> | undefined,
+  expectedName: string
+): string | undefined {
+  if (!headers) return undefined;
+  const found = Object.entries(headers).find(
+    ([name]) => name.toLowerCase() === expectedName.toLowerCase()
+  );
+  return found?.[1];
 }
 
 const gatewayFetchMethods = defineServiceMethods({
@@ -271,8 +286,11 @@ export function createGatewayFetchService(deps: {
         // from the same channel. A buffered base64 body in either direction would
         // exceed that limit for real payloads (MB).
         const requestHasRange = hasRangeRequestHeader(descriptor.headers);
+        const resumableGzip =
+          descriptor.gzip === true &&
+          requestHeader(descriptor.headers, RESUMABLE_GZIP_HEADER) === "1";
         const response =
-          descriptor.gzip && !requestHasRange
+          descriptor.gzip && (!requestHasRange || resumableGzip)
             ? await rawLoopbackFetch(port, target, descriptor, ctx.body)
             : await fetch(url, {
                 method: descriptor.method ?? "GET",
@@ -285,8 +303,21 @@ export function createGatewayFetchService(deps: {
 
         const hasRangeSemantics =
           requestHasRange || response.status === 206 || response.headers.has("content-range");
-        if (descriptor.gzip && response.ok && response.body && !hasRangeSemantics) {
+        if (
+          descriptor.gzip &&
+          response.ok &&
+          response.body &&
+          (!hasRangeSemantics || resumableGzip)
+        ) {
           const headers = new Headers(response.headers);
+          if (resumableGzip && headers.get(RESUMABLE_GZIP_HEADER) !== "1") {
+            throw new ServiceError(
+              serviceName,
+              "fetch",
+              "gateway.fetch resumable gzip representation was not honored",
+              "EIO"
+            );
+          }
           headers.set(GZIP_MARKER_HEADER, "1");
           if (headers.get("content-encoding")?.toLowerCase() === "gzip") {
             // The raw Node request deliberately bypasses fetch's transparent
