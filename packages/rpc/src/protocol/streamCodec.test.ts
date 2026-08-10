@@ -92,6 +92,20 @@ describe("inbound stream mux → framed Response decode", () => {
     expect(mux.size).toBe(0);
   });
 
+  it("rejects a truncated body when END declares more bytes than arrived", async () => {
+    const mux = createInboundStreamMux();
+    const body = mux.acquire(6);
+    const response = decodeFramedResponseToStreaming(body, "https://truncated/");
+    mux.push(6, FRAME_HEAD, headPayload(200, "OK", [], "https://truncated/"));
+    mux.push(6, FRAME_DATA, enc.encode("partial"));
+    mux.push(6, FRAME_END, enc.encode(JSON.stringify({ bytesIn: 96_886 })));
+
+    const decoded = await response;
+    await expect(decoded.text()).rejects.toThrow(
+      /body length mismatch: expected 96886 bytes, received 7/
+    );
+  });
+
   it("fails LOUD when HEAD never arrives within the deadline instead of hanging (bug #7)", async () => {
     vi.useFakeTimers();
     const mux = createInboundStreamMux();

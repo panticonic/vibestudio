@@ -88,6 +88,12 @@ export type { StreamFrameType } from "../protocol/bulkMux.js";
 
 /** Drain high-water for BOTH channels (§1.3/§1.4 — 256 KiB, symmetric). */
 const BUFFER_HIGH_WATER = 256 * 1024;
+// react-native-webrtc's receive bridge can lose/corrupt a burst of back-to-back
+// 16 KiB binary messages even though SCTP itself is reliable. A mobile peer is
+// therefore paced one bulk message at a time: after each send, the scheduler
+// waits for the channel's buffered amount to drain to zero. Control remains at
+// the normal high-water because its frames are small and latency-sensitive.
+const MOBILE_BULK_LOW_WATER = 0;
 /** Hard ceiling on the negotiated chunk size (§1.1). */
 const MAX_CHUNK_SIZE = 256 * 1024;
 /** Keepalive parameters this end advertises in its hello (§1.1). */
@@ -241,6 +247,7 @@ export function createWebRtcAnswererPipe(options: WebRtcAnswererOptions): WebRtc
 
   // --- codecs / handlers ----------------------------------------------------
   const controlCodec = createControlCodec();
+  const outboundBulkStats = new Map<number, { dataFrames: number; dataBytes: number; messages: number }>();
   let controlHandler: ((data: Uint8Array) => void) | null = null;
   let bulkFrameHandler:
     | ((streamId: number, type: StreamFrameType, payload: Uint8Array) => void)
@@ -712,6 +719,9 @@ export function createWebRtcAnswererPipe(options: WebRtcAnswererOptions): WebRtc
     if (pipeUp || closed) return;
     if (!remoteHello || !localHelloSent || !controlOpen || !bulkOpen) return;
     effectiveChunk = Math.min(localMaxMsg, remoteHello.maxMsg, MAX_CHUNK_SIZE);
+    if (remoteHello.platform === "mobile" && bulk) {
+      bulk.bufferedAmountLowThreshold = MOBILE_BULK_LOW_WATER;
+    }
     keepaliveTimeoutMs = Math.min(
       LOCAL_KEEPALIVE.timeoutMs,
       remoteHello.keepalive?.timeoutMs ?? Number.POSITIVE_INFINITY
@@ -998,6 +1008,7 @@ export function createWebRtcAnswererPipe(options: WebRtcAnswererOptions): WebRtc
     // continue a dead pipe's partial HEAD/ERROR accumulations.
     controlCodec.reset();
     demux.reset();
+    outboundBulkStats.clear();
     prePipeUpControlFrames.length = 0;
     prePipeUpControlBytes = 0;
     remoteHello = null;
@@ -1053,10 +1064,32 @@ export function createWebRtcAnswererPipe(options: WebRtcAnswererOptions): WebRtc
       type: StreamFrameType,
       payload: Uint8Array
     ): Promise<void> {
-      await bulkScheduler.enqueue(streamId, encodeBulkFrameParts(streamId, type, payload));
+      const parts = encodeBulkFrameParts(streamId, type, payload);
+      const outcome = await bulkScheduler.enqueue(streamId, parts);
+      if (outcome !== "flushed") return;
+      const stats = outboundBulkStats.get(streamId) ?? {
+        dataFrames: 0,
+        dataBytes: 0,
+        messages: 0,
+      };
+      stats.messages += parts.length;
+      if (type === FRAME_DATA) {
+        stats.dataFrames += 1;
+        stats.dataBytes += payload.byteLength;
+      }
+      if (type === FRAME_END) {
+        console.log(
+          `${log} bulk stream sent stream=${streamId} dataFrames=${stats.dataFrames} ` +
+            `dataBytes=${stats.dataBytes} messages=${stats.messages}`
+        );
+        outboundBulkStats.delete(streamId);
+      } else {
+        outboundBulkStats.set(streamId, stats);
+      }
     },
 
     dropBulkStream(streamId: number): void {
+      outboundBulkStats.delete(streamId);
       bulkScheduler.dropKey(streamId);
     },
 

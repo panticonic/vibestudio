@@ -1,7 +1,9 @@
 import { NativeModules, Platform } from "react-native";
+import { RESUMABLE_GZIP_HEADER } from "@vibestudio/shared/panel/assetHeaders";
 import { loadShellCredential } from "./connect.js";
+import { retryBundleTransfer } from "./bundleTransferRetry.js";
 
-export const RN_HOST_ABI = "rn-host-2";
+export const RN_HOST_ABI = "rn-host-3";
 
 export interface NativeBundleHost {
   appendBundleChunk(
@@ -19,11 +21,20 @@ export interface NativeBundleHost {
     buildKey: string,
     integrity: string
   ): Promise<{ activated: boolean }>;
+  reloadActiveAppBundle(): Promise<{ reloading: boolean }>;
 }
 
 export interface BundleDeliveryTransport {
   rpc?: BundleDeliveryRpc;
   streamReadable?: BundleDeliveryRpc["streamReadable"];
+  /** Await the existing authenticated transport when a transfer trips over recovery. */
+  waitUntilConnected?: (timeoutMs: number) => Promise<void>;
+  /**
+   * Bundle delivery consumes the bootstrap transport. It must be fully closed
+   * before native starts the workspace runtime, otherwise both runtimes retain
+   * offerer ownership and continuously supersede one another.
+   */
+  close(): Promise<void>;
 }
 
 export interface BundleDeliveryRpc {
@@ -56,6 +67,22 @@ export interface ActivateWorkspaceAppOptions {
   smokePhase?: (phase: string) => void;
 }
 
+const MOBILE_BOOTSTRAP_WAIT_MS = 180_000;
+const MOBILE_BOOTSTRAP_RETRY_MS = 1_000;
+const MOBILE_BUNDLE_TRANSFER_RETRY_MS = 1_500;
+const MOBILE_BUNDLE_RECONNECT_WAIT_MS = 30_000;
+const MOBILE_BUNDLE_TRANSFER_TIMEOUT_MS = 5 * 60_000;
+// A bounded response window is application-level backpressure across React
+// Native's native-to-JS event bridge. SCTP can report its own queue drained
+// before JS has consumed the corresponding events; limiting each RPC response
+// prevents one long artifact stream from flooding that final hop.
+// Keep the application window below the one-MiB native/JS delivery boundary,
+// rather than landing exactly on it. A physical RN data channel repeatedly
+// delivered an exact one-MiB range 20 bytes short (one mux header per 256-KiB
+// transport segment); the integrity guard recovered, but retries must be an
+// exceptional recovery path. 512 KiB keeps peak base64 allocation modest
+// (~683 KiB) and costs only one additional range round trip for today's bundle.
+const BUNDLE_RANGE_WINDOW_BYTES = 512 * 1024;
 const B64_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 const B64_CODES = (() => {
   const codes = new Uint8Array(64);
@@ -179,36 +206,121 @@ function selectPrimaryArtifact(bootstrap: Record<string, unknown>, platform: "io
   return artifact;
 }
 
+function retryableMobileBootstrapError(error: unknown): boolean {
+  return (
+    error instanceof BundleGatewayFetchError &&
+    error.status === 503 &&
+    error.message.includes('"code":"MOBILE_APP_UNAVAILABLE"')
+  );
+}
+
+async function waitForMobileBootstrap(
+  rpc: BundleDeliveryRpc,
+  bootstrapBody: Record<string, unknown>,
+  options: ActivateWorkspaceAppOptions
+): Promise<Uint8Array> {
+  const deadline = Date.now() + MOBILE_BOOTSTRAP_WAIT_MS;
+  for (;;) {
+    try {
+      return await gatewayFetchBytes(
+        rpc,
+        {
+          path: "/_r/s/auth/mobile-app-bootstrap",
+          method: "POST",
+          headers: { "content-type": "application/json" },
+        },
+        JSON.stringify(bootstrapBody)
+      );
+    } catch (error) {
+      if (!retryableMobileBootstrapError(error) || Date.now() >= deadline) throw error;
+      options.smokePhase?.("embedded-host-target-preparing");
+      await new Promise((resolve) => setTimeout(resolve, MOBILE_BOOTSTRAP_RETRY_MS));
+    }
+  }
+}
+
 async function streamArtifactToNative(
   rpc: BundleDeliveryRpc,
   nativeHost: NativeBundleHost,
   descriptor: Record<string, unknown>,
   buildKey: string,
-  artifactPath: string
+  artifactPath: string,
+  transfer: { offset: number }
 ): Promise<boolean> {
-  const decoded = await rpc.streamReadable("main", "gateway.fetch", [descriptor]);
-  if (decoded.status !== 200) {
-    const bytes = await drainStream(decoded.body);
-    throw new Error(
-      `bundle artifact fetch failed (${decoded.status}): ` +
-        new TextDecoder().decode(bytes).slice(0, 300)
-    );
-  }
-  const gzipped = decoded.headers.some(
-    (h) => h[0].toLowerCase() === "x-vibestudio-content-gzip" && h[1] === "1"
-  );
-  const reader = decoded.body.getReader();
-  let first = true;
+  const expectedOffset = transfer.offset;
+  let totalLength: number | null = null;
   for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    if (value?.length) {
-      await nativeHost.appendBundleChunk(uint8ToBase64(value), buildKey, artifactPath, first);
-      first = false;
+    const windowStartedAt = Date.now();
+    const rangeEnd = transfer.offset + BUNDLE_RANGE_WINDOW_BYTES - 1;
+    const headers = {
+      ...((descriptor["headers"] as Record<string, string> | undefined) ?? {}),
+      [RESUMABLE_GZIP_HEADER]: "1",
+      Range: `bytes=${transfer.offset}-${rangeEnd}`,
+    };
+    const decoded = await rpc.streamReadable("main", "gateway.fetch", [
+      { ...descriptor, gzip: true, headers },
+    ]);
+    if (decoded.status !== 206) {
+      const bytes = await drainStream(decoded.body);
+      throw new Error(
+        `bundle artifact fetch failed (${decoded.status}): ` +
+          new TextDecoder().decode(bytes).slice(0, 300)
+      );
     }
+    const gzipped = decoded.headers.some(
+      (h) => h[0].toLowerCase() === "x-vibestudio-content-gzip" && h[1] === "1"
+    );
+    if (!gzipped) throw new Error("bundle artifact server did not honor resumable gzip transfer");
+    const contentRange = decoded.headers.find((h) => h[0].toLowerCase() === "content-range")?.[1];
+    const match = contentRange ? /^bytes (\d+)-(\d+)\/(\d+)$/u.exec(contentRange) : null;
+    const rangeStart = Number(match?.[1]);
+    const declaredEnd = Number(match?.[2]);
+    const declaredTotal = Number(match?.[3]);
+    if (
+      rangeStart !== transfer.offset ||
+      !Number.isSafeInteger(declaredEnd) ||
+      !Number.isSafeInteger(declaredTotal) ||
+      declaredEnd < rangeStart ||
+      declaredEnd >= declaredTotal ||
+      (totalLength !== null && declaredTotal !== totalLength)
+    ) {
+      throw new Error("bundle artifact response declared an invalid byte range");
+    }
+    const window = await drainStream(decoded.body);
+    const declaredLength = declaredEnd - rangeStart + 1;
+    if (window.length !== declaredLength) {
+      const error = new Error(
+        `bundle artifact range was incomplete: expected ${declaredLength} bytes, received ${window.length}`
+      ) as Error & { code: string };
+      error.code = "BUNDLE_RANGE_INCOMPLETE";
+      throw error;
+    }
+    totalLength = declaredTotal;
+    await nativeHost.appendBundleChunk(
+      uint8ToBase64(window),
+      buildKey,
+      artifactPath,
+      transfer.offset === 0
+    );
+    transfer.offset += window.length;
+    console.info(
+      `[mobile-bundle] received ${window.length} bytes at offset ${rangeStart} in ` +
+        `${Date.now() - windowStartedAt}ms (${transfer.offset}/${totalLength})`
+    );
+    if (transfer.offset === totalLength) break;
   }
-  if (first) throw new Error("bundle artifact stream was empty");
-  return gzipped;
+  if (transfer.offset === expectedOffset) throw new Error("bundle artifact stream was empty");
+  return true;
+}
+
+function transferCanResume(error: unknown): boolean {
+  const code =
+    error && typeof error === "object" && typeof (error as { code?: unknown }).code === "string"
+      ? (error as { code: string }).code
+      : "";
+  if (code === "CONNECTION_LOST" || code === "BUNDLE_RANGE_INCOMPLETE") return true;
+  const message = error instanceof Error ? error.message : String(error);
+  return /connection lost|not connected to server|pipe down|ice failed/iu.test(message);
 }
 
 export async function activateApprovedWorkspaceApp(
@@ -222,23 +334,18 @@ export async function activateApprovedWorkspaceApp(
       "Pair this device with a trusted Vibestudio server before loading the workspace app."
     );
   }
+  if (stored.schemaVersion !== 4 || stored.phase !== "routed") {
+    throw new Error("The mobile workspace route was not committed before app activation.");
+  }
   const rpc = rpcFor(transport);
   const bootstrapBody: Record<string, unknown> = {
-    deviceId: stored.deviceId,
-    refreshToken: stored.refreshToken,
+    deviceId: stored.credential.deviceId,
+    refreshToken: stored.credential.refreshToken,
   };
   if (typeof options.source === "string" && options.source.length > 0) {
     bootstrapBody["source"] = options.source;
   }
-  const manifestBytes = await gatewayFetchBytes(
-    rpc,
-    {
-      path: "/_r/s/auth/mobile-app-bootstrap",
-      method: "POST",
-      headers: { "content-type": "application/json" },
-    },
-    JSON.stringify(bootstrapBody)
-  );
+  const manifestBytes = await waitForMobileBootstrap(rpc, bootstrapBody, options);
   const bootstrap = JSON.parse(new TextDecoder().decode(manifestBytes))?.bootstrap as
     | Record<string, unknown>
     | undefined;
@@ -264,15 +371,36 @@ export async function activateApprovedWorkspaceApp(
     throw new Error("Mobile app artifact is missing integrity or URL");
   const artifactPath = new URL(artifactUrl).pathname;
   const nativeArtifactPath = String(artifact["path"] ?? artifactPath);
-  const gzipped = await streamArtifactToNative(
-    rpc,
-    nativeHost,
-    { path: artifactPath, method: "GET", gzip: true },
-    buildKey,
-    nativeArtifactPath
+  const transfer = { offset: 0 };
+  const prepared = await retryBundleTransfer(
+    async () => {
+      const gzipped = await streamArtifactToNative(
+        rpc,
+        nativeHost,
+        { path: artifactPath, method: "GET" },
+        buildKey,
+        nativeArtifactPath,
+        transfer
+      );
+      return await nativeHost.finalizeBundleWrite(integrity, gzipped);
+    },
+    {
+      timeoutMs: MOBILE_BUNDLE_TRANSFER_TIMEOUT_MS,
+      onRetry: (error) => {
+        if (!transferCanResume(error)) transfer.offset = 0;
+        options.smokePhase?.("embedded-bundle-transfer-retry");
+        console.warn(
+          `[mobile-bundle] retrying offset=${transfer.offset}: ${error instanceof Error ? error.message : String(error)}`
+        );
+      },
+      wait: () =>
+        transport.waitUntilConnected?.(MOBILE_BUNDLE_RECONNECT_WAIT_MS) ??
+        new Promise((resolve) => setTimeout(resolve, MOBILE_BUNDLE_TRANSFER_RETRY_MS)),
+    }
   );
-  const prepared = await nativeHost.finalizeBundleWrite(integrity, gzipped);
   await nativeHost.activatePreparedAppBundle(prepared.localPath, buildKey, integrity);
+  await transport.close();
+  await nativeHost.reloadActiveAppBundle();
   options.smokePhase?.("embedded-bundle-activate-complete");
   return bootstrap;
 }

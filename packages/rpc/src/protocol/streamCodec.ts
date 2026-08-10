@@ -325,6 +325,7 @@ export async function decodeFramedStream(
   let headSeen = false;
   let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
   let bodyCancelNotified = false;
+  let bodyBytesReceived = 0;
   const notifyBodyCancel = (reason?: unknown): void => {
     if (bodyCancelNotified || bodyClosed) return;
     bodyCancelNotified = true;
@@ -367,10 +368,20 @@ export async function decodeFramedStream(
     if (type === FRAME_DATA) {
       const copy = new Uint8Array(payload.byteLength);
       copy.set(payload);
+      bodyBytesReceived += copy.byteLength;
       bodyController?.enqueue(copy);
       return;
     }
     if (type === FRAME_END) {
+      const end = parseEndFrame(payload);
+      if (!Number.isSafeInteger(end.bytesIn) || end.bytesIn < 0 || end.bytesIn !== bodyBytesReceived) {
+        errorBody(
+          new Error(
+            `Streaming RPC body length mismatch: expected ${String(end.bytesIn)} bytes, received ${bodyBytesReceived}`
+          )
+        );
+        return;
+      }
       closeBody();
       return;
     }

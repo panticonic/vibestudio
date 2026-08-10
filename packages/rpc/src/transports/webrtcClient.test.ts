@@ -741,6 +741,43 @@ describe("WebRTC transport — keepalive", () => {
 });
 
 // ---------------------------------------------------------------------------
+// control scheduling fairness
+// ---------------------------------------------------------------------------
+
+describe("WebRTC transport — control scheduling fairness", () => {
+  it("does not strand a stream-open behind a fragmented ordinary RPC from the same session", async () => {
+    const fabric = new Fabric();
+    const transport = makeTransport(fabric);
+    await transport.connect();
+    const session = transport.openSession({ connectionId: "c1", getToken: () => "g" });
+    await session.ready!();
+
+    const control = fabric.clientControl!;
+    control.autoDrain = false;
+    control.bufferedAmount = 1_000_000;
+    fabric.frames.length = 0;
+
+    // Both writes park before reaching the wire. The RPC needs many fragments;
+    // the stream-open is small. Once capacity returns, traffic-class fairness
+    // must let the complete stream request arrive before the RPC finishes.
+    await session.send(requestEnvelope("fs.read", "large-rpc", ["x".repeat(1024 * 1024)]));
+    const pendingStream = session.stream!(streamEnvelope("fair-stream"));
+    await flushMicrotasks(20);
+    expect(fabric.frames).toHaveLength(0);
+
+    control.autoDrain = true;
+    control.drain();
+    await flushMicrotasks(200);
+
+    const delivered = fabric.frames.filter((frame) => frame.t === "rpc" || frame.t === "stream-open");
+    expect(delivered.map((frame) => frame.t)).toEqual(["stream-open", "rpc"]);
+
+    await transport.close();
+    await pendingStream.catch(() => undefined);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // recovery state machine
 // ---------------------------------------------------------------------------
 
@@ -1715,6 +1752,32 @@ describe("WebRTC transport — reconnect liveness (bug #2)", () => {
     expect(sig.offersSent).toBe(2);
     await connecting;
     expect(transport.status()).toBe("connected");
+    await transport.close();
+  });
+
+  it("does not replay an offer after the remote answer is applied but hello is still pending", async () => {
+    const fabric = new Fabric({ hello: "defer" });
+    let sig!: FakeSignaling;
+    const transport = makeTransport(fabric, {
+      createSignaling: () => {
+        sig = new FakeSignaling((s) => {
+          s.emitDescription({ type: "answer", sdp: "server-answer" });
+        });
+        fabric.currentSignaling = sig;
+        return sig;
+      },
+    });
+    const connecting = transport.connect();
+    await flushMicrotasks();
+    expect(sig.offersSent).toBe(1);
+    expect(transport.status()).toBe("connecting");
+
+    sig.emitPeerJoined();
+    await flushMicrotasks();
+    expect(sig.offersSent).toBe(1);
+
+    fabric.sendHello();
+    await connecting;
     await transport.close();
   });
 

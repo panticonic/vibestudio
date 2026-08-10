@@ -366,6 +366,15 @@ describe("WebRTC answerer pipe (v2)", () => {
     await h.pipe.close();
   });
 
+  it("paces outbound bulk frames one at a time for a mobile peer", async () => {
+    const h = makeHarness();
+    const { control, bulk } = await pairUp(h, { platform: "mobile" });
+
+    expect(control.bufferedAmountLowThreshold).toBe(256 * 1024);
+    expect(bulk.bufferedAmountLowThreshold).toBe(0);
+    await h.pipe.close();
+  });
+
   it("rejects non-positive remote hello maxMsg", async () => {
     const h = makeHarness();
     void h.pipe.connect().catch(() => {});

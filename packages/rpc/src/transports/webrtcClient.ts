@@ -8,9 +8,11 @@
  *
  * - **control channel** (reliable/ordered): JSON `SessionControlFrame`s,
  *   fragmented under the negotiated chunk (`controlFraming.ts`) and scheduled
- *   per-session round-robin (`frameScheduler.ts`). `hello`/`ping`/`pong`
- *   bypass the scheduler (direct sends) so a saturated link can never starve
- *   its own keepalive.
+ *   per-session, per-traffic-class round-robin (`frameScheduler.ts`). Stream
+ *   lifecycle frames have their own lane so fragmented ordinary RPC traffic
+ *   cannot prevent a stream request from reaching the peer. `hello`/`ping`/
+ *   `pong` bypass the scheduler (direct sends) so a saturated link can never
+ *   starve its own keepalive.
  * - **bulk channel** (reliable/ordered): self-describing mux messages
  *   (`protocol/bulkMux.ts` — `[streamId:u32][flags:u8][payload]`) carrying
  *   proxyFetch/asset bodies, demuxed by stream id. The v1 byte-stream decoder
@@ -522,7 +524,22 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
   // Bulk channel → self-describing mux messages → per-stream bodies (§1.2).
   // Reset on reconnect (a fresh pipe's continuations never concatenate onto a
   // dead pipe's partial HEAD/ERROR accumulations).
+  const inboundBulkStats = new Map<number, { dataFrames: number; dataBytes: number }>();
   const bulkDemux = createBulkDemux((streamId, type, payload) => {
+    const stats = inboundBulkStats.get(streamId) ?? { dataFrames: 0, dataBytes: 0 };
+    if (type === FRAME_DATA) {
+      stats.dataFrames += 1;
+      stats.dataBytes += payload.byteLength;
+      inboundBulkStats.set(streamId, stats);
+    } else if (type === FRAME_END) {
+      logWarn(
+        `${log} bulk stream received stream=${streamId} dataFrames=${stats.dataFrames} ` +
+          `dataBytes=${stats.dataBytes}`
+      );
+      inboundBulkStats.delete(streamId);
+    } else if (type === FRAME_ERROR) {
+      inboundBulkStats.delete(streamId);
+    }
     inboundMux.push(streamId, type, payload);
     if (type === FRAME_END || type === FRAME_ERROR) settleStream(streamId);
   });
@@ -565,10 +582,26 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
   // -- channel writes ---------------------------------------------------------
 
   /**
+   * Keep stream lifecycle ordering within a session, while making it fair
+   * against that session's ordinary RPC/control traffic. A lane per stream
+   * would let one session manufacture scheduler weight by opening many
+   * streams; one lifecycle lane per session retains bounded fairness.
+   */
+  function controlLane(frame: SessionControlFrame): string {
+    const sid = (frame as { sid?: string }).sid;
+    if (!sid) return PIPE_LANE;
+    if (frame.t === SESSION_STREAM_OPEN || frame.t === SESSION_STREAM_CANCEL) {
+      return `${sid}:stream-lifecycle`;
+    }
+    return sid;
+  }
+
+  /**
    * Session-addressed control write: fragments under the negotiated chunk and
-   * enqueues on the per-session lane (pipe-level frames use `__pipe`). Throws
-   * synchronously when the channel is not open (callers rely on it); the
-   * enqueue itself settles-never-rejects (pipe-down is the failure signal).
+   * enqueues on the session's traffic-class lane (pipe-level frames use
+   * `__pipe`). Throws synchronously when the channel is not open (callers rely
+   * on it); the enqueue itself settles-never-rejects (pipe-down is the failure
+   * signal).
    */
   function writeControlFrame(frame: SessionControlFrame): void {
     const scheduler = controlScheduler;
@@ -577,7 +610,7 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
     }
     const bytes = encoder.encode(encodeControlFrame(frame));
     const parts = controlCodec.frame(bytes, effectiveChunk);
-    const lane = (frame as { sid?: string }).sid ?? PIPE_LANE;
+    const lane = controlLane(frame);
     // The enqueue settles-never-rejects; its outcome ('flushed' | 'dropped')
     // feeds the §3.4 unflushed-routed-request tracking above.
     trackRoutedFrame(frame, scheduler.enqueue(lane, parts));
@@ -1108,6 +1141,7 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
     // A fresh pipe must not reassemble against the dead pipe's leftovers: drop any
     // half-demuxed bulk continuations and half-reassembled control fragments.
     bulkDemux.reset();
+    inboundBulkStats.clear();
     controlCodec.reset();
   }
 
@@ -1131,6 +1165,11 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
     // The offer we last sent — re-sent on `peer-joined` (bug #2) so a
     // late-arriving server recovers without waiting out the establish deadline.
     let lastLocalOffer: { type: "offer" | "answer"; sdp: string } | null = null;
+    // Once the answer has been applied, replaying the offer is renegotiation,
+    // not late-peer recovery. In particular, a peer-joined notification can
+    // race the answer/hello boundary; replaying there makes the answerer reset
+    // an already-used peer and closes the channels we are trying to establish.
+    let remoteDescApplied = false;
     // Signaling is CRITICAL only until the descriptions have been exchanged.
     // Before that, a room-WS drop means we can never complete → tear down.
     // AFTER the remote description is applied, ICE/DTLS can finish on its own
@@ -1162,6 +1201,7 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
       unsubs.push(
         sig.onPeerJoined(() => {
           if (thisGeneration !== generation || closed || status === "connected") return;
+          if (remoteDescApplied) return;
           if (!lastLocalOffer) return; // offer not created yet — the normal send covers it
           void sig
             .sendDescription(lastLocalOffer)
@@ -1236,7 +1276,6 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
     // Candidate buffering (§3.2): queue inbound remote candidates until a remote
     // description has been applied to the CURRENT peer, then flush. RN's
     // setRemoteDescription is genuinely async — candidates racing it were dropped.
-    let remoteDescApplied = false;
     const pendingCandidates: RtcIceCandidate[] = [];
     const applyRemoteDescription = async (desc: {
       type: "offer" | "answer";
@@ -1442,6 +1481,7 @@ export function createWebRtcTransport(options: WebRtcTransportOptions): WebRtcTr
     const stream = activeStreams.get(streamId);
     if (!stream) return;
     activeStreams.delete(streamId);
+    inboundBulkStats.delete(streamId);
     stream.offAbort();
     // The request settled (END/ERROR/abort/cancel): a still-running upload has
     // nothing left to feed — stop it. Completed pumps ignore this (no-op).

@@ -5,9 +5,9 @@
  * - bulk: keys are stream ids; parts are complete mux messages
  *   (`protocol/bulkMux.ts`), so one stream's transfer stalls another by at most
  *   one message (~16–256 KB), never one transfer.
- * - control: keys are session ids; parts are the fragment set of one control
- *   frame (`controlFraming.ts` — fragment sets are keyed by frameId, so
- *   interleaving fragment sets across sessions is already legal on the wire).
+ * - control: keys are session + traffic class; parts are the fragment set of
+ *   one control frame (`controlFraming.ts` — fragment sets are keyed by
+ *   frameId, so interleaving fragment sets across lanes is legal on the wire).
  *
  * It replaces the single FIFO write chains (`bulkWriteChain` /
  * `controlWriteChain`): those serialized every stream and session behind one
