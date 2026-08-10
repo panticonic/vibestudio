@@ -201,14 +201,15 @@ describe("panelRuntimeService attempt waits", () => {
     await expect(waiting).rejects.toThrow("cancelled by eval");
   });
 
-  it("ensureSlot returns the coordinator-minted attempt", async () => {
-    const { service, attempt } = setup();
+  it("ensureSlot converges execution before returning the coordinator-minted attempt", async () => {
+    const { service, attempt, ensureExecutable } = setup();
     await expect(
       service.handler(desktopCtx, "ensureSlot", ["panel:tree/a", "panel:nav-a"])
     ).resolves.toMatchObject({
       status: "already-held",
       attempt: { attemptId: attempt.attemptId, runtimeEntityId: "panel:nav-a" },
     });
+    expect(ensureExecutable).toHaveBeenCalledWith("panel:tree/a", "panel:nav-a");
   });
 
   it("publishes browser readiness as a host-owned lifecycle fact", async () => {

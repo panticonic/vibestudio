@@ -178,6 +178,13 @@ export function createPanelRuntimeService(deps: {
           const lifecycle = deps.coordinator.observeSlotLifecycle(slotId);
           if (!lifecycle.build) deps.coordinator.setBuildState(slotId, { state: "building" });
         }
+        await deps.ensureExecutable(slotId, entityId);
+        const executableCurrent = await deps.currentEntityForSlot(slotId);
+        if (executableCurrent !== entityId) {
+          throw new Error(
+            `Panel runtime assignment target ${entityId} is no longer current for slot ${slotId}`
+          );
+        }
         let result = deps.coordinator.ensureDefaultCdpHostForSlot(slotId, entityId);
         if (
           !result.assigned &&
