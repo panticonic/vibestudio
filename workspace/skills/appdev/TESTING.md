@@ -84,6 +84,14 @@ Verify:
   use `app:apps/<name>:<device-id>`
 - approval notifications and in-app approval sheet still work
 - app remains recoverable when no active mobile bootstrap exists
+- shared shell identities and states agree across desktop and mobile: title
+  bar/AppBar, panel tree/drawer, approval callers and install parts,
+  launcher/about/new flows, browser favicons, and loading/error/empty states
+
+For a user-facing change in either first-party shell, identify the paired
+surface in the other client and run its smallest behavioral test. If no paired
+surface exists, record that fact in the handoff; do not infer parity from a
+desktop-only screenshot or test.
 
 ## Terminal Smoke Checklist
 

@@ -42,6 +42,24 @@ legible at 16–20 px. Image assets must remain inside the unit and below 1 MiB.
 Do not use generated initials, hash colors, remote favicons, or remote SVG URLs.
 Browser panels use the page's authentic captured favicon instead of a unit icon.
 
+### Cross-client coverage
+
+An identity change is incomplete until both first-party clients are audited:
+
+| Concept           | Desktop shell    | Mobile shell         |
+| ----------------- | ---------------- | -------------------- |
+| Active panel      | title breadcrumb | AppBar title pill    |
+| Panel collection  | tree/sidebar     | drawer tree          |
+| Privileged caller | approval card    | approval sheet       |
+| Unit installation | install review   | install review sheet |
+| Browser identity  | captured favicon | captured favicon     |
+
+Use the same canonical `icon`, source path, and browser-favicon projection in
+both clients. Keep rendering native (`PanelIcon` on desktop,
+`MobileUnitIcon`/`MobilePanelIcon` on mobile); do not add a second identity
+field or a mobile-only resolver. Add focused behavioral coverage for every
+affected row in this table.
+
 ## Built-in catalog and provenance
 
 Run `pnpm generate:unit-icons` after changing the built-in assignment table in

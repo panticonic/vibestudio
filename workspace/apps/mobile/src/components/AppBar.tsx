@@ -16,14 +16,17 @@ import type { StyleProp, TextStyle } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useAtomValue, useSetAtom } from "jotai";
 import { themeColorsAtom } from "../state/themeAtoms";
-import { shellClientAtom } from "../state/shellClientAtom";
+import { panelTreeRevisionAtom, shellClientAtom } from "../state/shellClientAtom";
+import { activePanelIdAtom } from "../state/navigationAtoms";
 import { showActionSheetAtom } from "../state/actionSheetAtoms";
 import { pushToastAtom } from "../state/toastAtoms";
 import {
+  isBrowserPanelSource,
   splitTextByMatchRanges,
   type AddressAutocompleteItem,
   type TextMatchRange,
 } from "@vibestudio/shared/panelChrome";
+import { getCurrentSnapshot } from "@vibestudio/shared/panel/accessors";
 import { hairline, radius, spacing, touchTarget, type } from "../design/tokens";
 import {
   ArrowLeft,
@@ -44,6 +47,7 @@ import {
   type IconComponent,
 } from "../design/icons";
 import { IconButton } from "./ui/primitives";
+import { MobilePanelIcon } from "./MobilePanelIcon";
 
 interface AppBarProps {
   /** Title to display in the address pill */
@@ -92,11 +96,28 @@ export function AppBar({
   const insets = useSafeAreaInsets();
   const colors = useAtomValue(themeColorsAtom);
   const shellClient = useAtomValue(shellClientAtom);
+  const activePanelId = useAtomValue(activePanelIdAtom);
+  const panelTreeRevision = useAtomValue(panelTreeRevisionAtom);
   const showActionSheet = useSetAtom(showActionSheetAtom);
   const pushToast = useSetAtom(pushToastAtom);
   const [addressValue, setAddressValue] = useState(address);
   const [addressFocused, setAddressFocused] = useState(false);
   const inputRef = useRef<TextInput | null>(null);
+  const activePanelIdentity = useMemo(() => {
+    if (!shellClient || !activePanelId) return null;
+    const panel = shellClient.panels.registry.getPanel(activePanelId);
+    if (!panel) return null;
+    const source = getCurrentSnapshot(panel).source;
+    return {
+      icon: panel.icon,
+      source,
+      kind: isBrowserPanelSource(source) ? ("browser" as const) : ("workspace" as const),
+    };
+  }, [activePanelId, panelTreeRevision, shellClient]);
+  const resolveBrowserFavicon = useCallback(
+    (url: string) => shellClient?.panels.getPageFaviconDataUrl(url) ?? Promise.resolve(null),
+    [shellClient]
+  );
   const visibleSuggestions = useMemo(
     () => (addressFocused ? addressSuggestions.slice(0, 8) : []),
     [addressFocused, addressSuggestions]
@@ -183,12 +204,17 @@ export function AppBar({
               },
             ]}
           >
-            {isLoading ? (
-              <ActivityIndicator
-                size="small"
-                color={colors.textSecondary}
-                style={styles.pillSpinner}
-              />
+            {activePanelIdentity ? (
+              <View style={styles.pillIdentity}>
+                <MobilePanelIcon
+                  {...activePanelIdentity}
+                  serverUrl={shellClient?.serverUrl ?? ""}
+                  resolveBrowserFavicon={resolveBrowserFavicon}
+                  size={17}
+                  color={colors.textSecondary}
+                  testID="active-panel-icon"
+                />
+              </View>
             ) : null}
             <View style={styles.pillCopy}>
               <Text
@@ -208,6 +234,13 @@ export function AppBar({
                 </Text>
               ) : null}
             </View>
+            {isLoading ? (
+              <ActivityIndicator
+                size="small"
+                color={colors.textSecondary}
+                style={styles.pillSpinner}
+              />
+            ) : null}
           </Pressable>
           {onShowActions ? (
             <IconButton
@@ -398,6 +431,9 @@ const styles = StyleSheet.create({
     marginHorizontal: spacing.xxs,
   },
   pillSpinner: {
+    marginLeft: spacing.sm,
+  },
+  pillIdentity: {
     marginRight: spacing.sm,
   },
   pillCopy: {

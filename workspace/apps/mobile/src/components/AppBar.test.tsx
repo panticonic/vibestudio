@@ -1,9 +1,16 @@
 import React from "react";
+import { Image } from "react-native";
 import { fireEvent, render } from "@testing-library/react-native";
+import { Provider, createStore } from "jotai";
 import { AppBar } from "./AppBar";
 import type { AddressAutocompleteItem } from "@vibestudio/shared/panelChrome";
+import { shellClientAtom, panelTreeRevisionAtom } from "../state/shellClientAtom";
+import { activePanelIdAtom } from "../state/navigationAtoms";
 
 jest.mock("@vibestudio/shared/panelChrome", () => ({
+  isBrowserPanelSource: (source: string) => source.startsWith("browser:"),
+  browserUrlFromPanelSource: (source: string) =>
+    source.startsWith("browser:") ? source.slice("browser:".length) : null,
   splitTextByMatchRanges: (text: string, ranges?: Array<{ start: number; end: number }>) => {
     if (!ranges?.length) return [{ text, highlighted: false }];
     const [range] = ranges;
@@ -34,6 +41,38 @@ const suggestion: AddressAutocompleteItem = {
 };
 
 describe("AppBar address UX", () => {
+  it("shows the active panel's canonical image identity in the header", () => {
+    const store = createStore();
+    store.set(activePanelIdAtom, "panel-1");
+    store.set(panelTreeRevisionAtom, 1);
+    store.set(shellClientAtom, {
+      serverUrl: "http://127.0.0.1:43100",
+      panels: {
+        registry: {
+          getPanel: () => ({
+            id: "panel-1",
+            icon: "./assets/icon.svg",
+            snapshot: { source: "panels/chat" },
+          }),
+        },
+        getPageFaviconDataUrl: jest.fn(async () => null),
+      },
+    } as never);
+
+    const { getByTestId } = render(
+      <Provider store={store}>
+        <AppBar title="Agentic Chat" onMenuPress={jest.fn()} />
+      </Provider>
+    );
+
+    const image = getByTestId("active-panel-icon", { includeHiddenElements: true }).findByType(
+      Image
+    );
+    expect(image.props.source.uri).toBe(
+      "http://127.0.0.1:43100/__vibestudio/unit-icon?source=panels%2Fchat&path=assets%2Ficon.svg"
+    );
+  });
+
   it("updates the address query and selects shared autocomplete actions", () => {
     const onAddressQueryChange = jest.fn();
     const onSelectAddressSuggestion = jest.fn();

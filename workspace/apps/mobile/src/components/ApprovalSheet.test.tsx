@@ -905,6 +905,19 @@ describe("ApprovalSheet", () => {
       ...base,
       callerKind: "panel",
       callerTitle: "My Project",
+      requester: {
+        id: "panel:my-project",
+        kind: "panel",
+        category: "panel",
+        title: "My Project",
+        icon: "💬",
+        panel: { id: "panel:my-project", title: "My Project" },
+        repoPath: "panels/chat",
+        effectiveVersion: "v1",
+        stableIdentityKey: "panels/chat@v1",
+        ephemeralInstanceKey: "panel:my-project",
+        breadcrumbs: [],
+      },
       kind: "capability",
       capability: "open-url",
       title: "Open URL",
@@ -913,6 +926,7 @@ describe("ApprovalSheet", () => {
     const { getByText, getByTestId } = renderSheet(titledPanel);
     expect(getByTestId("approval-caller-chip")).toBeTruthy();
     expect(getByText("My Project")).toBeTruthy();
+    expect(getByText("💬", { includeHiddenElements: true })).toBeTruthy();
     expect(getByText("panel")).toBeTruthy();
   });
 

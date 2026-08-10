@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { Image, StyleSheet, Text } from "react-native";
+import { Image, StyleSheet, Text, View } from "react-native";
 import {
   Globe,
   LayoutGrid,
@@ -29,6 +29,7 @@ export function MobileUnitIcon(props: {
   serverUrl: string;
   size?: number;
   color: string;
+  testID?: string;
 }) {
   const size = props.size ?? 18;
   const manifestImage = useMemo(() => {
@@ -41,8 +42,9 @@ export function MobileUnitIcon(props: {
 
   useEffect(() => setImageFailed(false), [image]);
 
+  let content: React.ReactNode;
   if (image && !imageFailed) {
-    return (
+    content = (
       <Image
         accessibilityIgnoresInvertColors
         source={{ uri: image }}
@@ -51,9 +53,8 @@ export function MobileUnitIcon(props: {
         onError={() => setImageFailed(true)}
       />
     );
-  }
-  if (props.icon && !props.icon.startsWith("./") && !props.icon.startsWith("data:image/")) {
-    return (
+  } else if (props.icon && !props.icon.startsWith("./") && !props.icon.startsWith("data:image/")) {
+    content = (
       <Text
         accessibilityElementsHidden
         style={[styles.emoji, { width: size, fontSize: size - 1, lineHeight: size + 1 }]}
@@ -61,12 +62,30 @@ export function MobileUnitIcon(props: {
         {props.icon}
       </Text>
     );
+  } else {
+    const Fallback = FALLBACKS[props.kind];
+    content = <Fallback size={size - 1} color={props.color} />;
   }
-  const Fallback = FALLBACKS[props.kind];
-  return <Fallback size={size - 1} color={props.color} />;
+
+  return (
+    <View
+      testID={props.testID}
+      accessibilityElementsHidden
+      importantForAccessibility="no-hide-descendants"
+      pointerEvents="none"
+      style={[styles.frame, { width: size, height: size }]}
+    >
+      {content}
+    </View>
+  );
 }
 
 const styles = StyleSheet.create({
+  frame: {
+    flexShrink: 0,
+    alignItems: "center",
+    justifyContent: "center",
+  },
   emoji: {
     flexShrink: 0,
     textAlign: "center",

@@ -476,6 +476,11 @@ export function PanelDrawer({ onSelectPanel }: PanelDrawerProps) {
     navigation.getParent()?.navigate("Settings" as never);
   }, [navigation]);
 
+  const resolveBrowserFavicon = useCallback(
+    (url: string) => shellClient?.panels.getPageFaviconDataUrl(url) ?? Promise.resolve(null),
+    [shellClient]
+  );
+
   const renderItem = useCallback(
     ({ item }: { item: MobilePanelForestRow }) => {
       if (item.kind === "owner") {
@@ -524,9 +529,7 @@ export function PanelDrawer({ onSelectPanel }: PanelDrawerProps) {
           isPinned={pinnedPanelIds.has(panelItem.id)}
           colors={colors}
           serverUrl={shellClient?.serverUrl ?? ""}
-          resolveBrowserFavicon={(url) =>
-            shellClient?.panels.getPageFaviconDataUrl(url) ?? Promise.resolve(null)
-          }
+          resolveBrowserFavicon={resolveBrowserFavicon}
           onPress={handlePanelPress}
           onLongPress={handlePanelLongPress}
           onToggleCollapse={handleToggleCollapse}
@@ -544,6 +547,7 @@ export function PanelDrawer({ onSelectPanel }: PanelDrawerProps) {
       handleArchive,
       handleLoadMore,
       loadingGroupKey,
+      resolveBrowserFavicon,
       trimmedQuery,
     ]
   );

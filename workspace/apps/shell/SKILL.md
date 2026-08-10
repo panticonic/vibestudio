@@ -28,6 +28,16 @@ hosts desktop panel chrome and device-management UI.
 - Pairing URLs can arrive through the desktop protocol handler or as typed URLs;
   both carriers must feed the shared parser.
 
+## Mobile Parity
+
+- Treat desktop shell UX and `workspace/apps/mobile` as paired clients of the
+  same workspace model. Before finishing a user-facing shell change, audit the
+  mobile equivalent: title bar/AppBar, panel tree/drawer, approvals, launcher
+  and about/new flows, browser favicons, and loading/error/empty states.
+- Share canonical data and presentation rules, not renderer components. Add a
+  focused behavioral test in every affected client; explicitly state when a
+  surface has no mobile equivalent instead of silently omitting it.
+
 ## Panel Lifecycle and UI Projections
 
 - `view.createPanel` and `panel.createPanel` resolve at the durable slot-commit

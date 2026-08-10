@@ -38,6 +38,20 @@ that is streamed to the native host after pairing.
   selected bundle.
 - Keep `rnHostAbi` aligned with the native host. Current ABI: `rn-host-2`.
 
+## Desktop Parity
+
+- Treat `workspace/apps/shell` and this app as paired clients. Every shared UX
+  concept must be audited across the desktop title bar/tree/approval surfaces
+  and the mobile AppBar/drawer/approval sheet, including browser favicons,
+  launcher/about/new flows, and loading/error/empty states.
+- Consume the same canonical identity and state projections. Keep native and
+  web rendering idiomatic, but never create a mobile-only fallback data path.
+- For unit identities, use `MobileUnitIcon`/`MobilePanelIcon`; relative manifest
+  images must resolve through the authenticated local asset facade, browser
+  panels must use captured favicons, and fallbacks must remain kind-specific.
+- Add a focused mobile behavioral test whenever a paired desktop UX changes.
+  A desktop test alone is not completion evidence for a shared shell concept.
+
 ## Verification
 
 - Run `pnpm -C apps/mobile type-check` for native/bootstrap TS.
