@@ -44,6 +44,16 @@ export function wireVcsDurability(deps: VcsDurabilityBootstrapDeps): void {
     name: "vcsAttach",
     dependencies: ["doDispatch", "workerdManager"],
     async start(resolve) {
+      const startedAt = performance.now();
+      let phaseStartedAt = startedAt;
+      const phaseComplete = (phase: string): void => {
+        const now = performance.now();
+        console.log(
+          `[Vcs] Bootstrap ${phase} completed in ${Math.round(now - phaseStartedAt)}ms ` +
+            `(total ${Math.round(now - startedAt)}ms)`
+        );
+        phaseStartedAt = now;
+      };
       const doDispatch = assertPresent(resolve<DODispatch>("doDispatch"));
       const workerdManager = assertPresent(resolve<WorkerdManager>("workerdManager"));
       const gadRef = deps.workspaceSourceProvider;
@@ -59,11 +69,15 @@ export function wireVcsDurability(deps: VcsDurabilityBootstrapDeps): void {
         key: gadRef.objectKey,
         contextId,
       });
+      phaseComplete("runtime binding");
       await deps.publishBootstrapEntity(workerdManager, { ...gadRef, contextId, ...prepared });
+      phaseComplete("entity publication");
       await deps.workspaceVcs.attachGad(createWorkspaceSemanticPort(doDispatch, gadRef));
+      phaseComplete("semantic port attachment");
       deps.workspaceVcs.attachWorkspaceSourceProvider(
         createWorkspaceSourceProviderV1(doDispatch, gadRef)
       );
+      phaseComplete("source-provider attachment");
       console.log(
         `[Vcs] Attached manifest-declared workspace source provider (${gadRef.source}:${gadRef.className})`
       );

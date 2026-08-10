@@ -1028,6 +1028,7 @@ export class WorkerdManager {
     executionDigest: string;
     authority: RuntimeImageRecord["authority"];
   }> {
+    const startedAt = performance.now();
     this.requireWorkspaceProvider("Durable Object entity activation");
     const targetId = canonicalEntityId({
       kind: "do",
@@ -1042,6 +1043,10 @@ export class WorkerdManager {
       imageId: targetId,
       stateArgs: args.stateArgs,
     });
+    log.info(
+      `Durable Object runtime binding ready for ${args.source}:${args.className} in ` +
+        `${Math.round(performance.now() - startedAt)}ms`
+    );
     const serviceKey = doServiceKey(args.source, args.className);
     const svc = this.doServices.get(serviceKey);
     if (!svc) {

@@ -30,23 +30,24 @@ const WORKER_BOOTSTRAP_RELATIVE_PATH =
  * Packaged builds resolve the emitted bundle. Running from source, the entry
  * lives beside this module in the server tree — which is not necessarily
  * `appRoot`: that option points at the build dependency workspace and is a
- * temporary directory in tests and embedded hosts. Probe the plausible roots
- * rather than assuming one of them owns the server source.
+ * temporary directory in tests and embedded hosts. Source processes are
+ * launched with the checkout as cwd; packaged processes use the emitted entry
+ * injected by build.mjs and never enter this resolver.
  */
-function workerEntry(appRoot: string): { filename: string; execArgv?: string[] } {
-  const emitted = globalThis.__VIBESTUDIO_AUTHORITY_WORKER_ENTRY__;
-  if (emitted) return { filename: path.resolve(path.dirname(process.argv[1]!), emitted) };
+export function resolveAuthorityAnalysisWorkerEntry(appRoot: string): string {
   const roots = [appRoot, process.env["VIBESTUDIO_APP_ROOT"], process.cwd()].filter(
     (root): root is string => typeof root === "string" && root.length > 0
   );
   const candidates = roots.map((root) => path.join(root, WORKER_BOOTSTRAP_RELATIVE_PATH));
   const source = candidates.find((candidate) => fs.existsSync(candidate));
-  if (!source) {
-    throw new Error(
-      `Authority analysis worker entry is missing; looked in ${candidates.join(", ")}`
-    );
-  }
-  return { filename: source };
+  if (source) return source;
+  throw new Error(`Authority analysis worker entry is missing; looked in ${candidates.join(", ")}`);
+}
+
+function workerEntry(appRoot: string): { filename: string; execArgv?: string[] } {
+  const emitted = globalThis.__VIBESTUDIO_AUTHORITY_WORKER_ENTRY__;
+  if (emitted) return { filename: path.resolve(path.dirname(process.argv[1]!), emitted) };
+  return { filename: resolveAuthorityAnalysisWorkerEntry(appRoot) };
 }
 
 export class AuthorityAnalysisWorkerClient {

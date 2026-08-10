@@ -2,13 +2,24 @@ import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { AuthorityAnalysisWorkerClient } from "./authorityAnalysisWorkerClient.js";
+import {
+  AuthorityAnalysisWorkerClient,
+  resolveAuthorityAnalysisWorkerEntry,
+} from "./authorityAnalysisWorkerClient.js";
 
 describe("AuthorityAnalysisWorkerClient", () => {
   const clients: AuthorityAnalysisWorkerClient[] = [];
 
   afterEach(async () => {
     await Promise.all(clients.splice(0).map((client) => client.close()));
+  });
+
+  it("resolves the source-owned worker when the application root is a workspace clone", () => {
+    const unrelatedAppRoot = mkdtempSync(join(tmpdir(), "vibestudio-app-root-"));
+
+    expect(resolveAuthorityAnalysisWorkerEntry(unrelatedAppRoot)).toMatch(
+      /src\/server\/buildV2\/authorityAnalysisWorkerBootstrap\.mjs$/u
+    );
   });
 
   it("executes the compiler snapshot outside the server thread", async () => {
