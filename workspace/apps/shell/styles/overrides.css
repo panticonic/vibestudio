@@ -146,10 +146,16 @@ body,
      scrollbar scoped to this scroller brings it down to the same gutter the
      rest of the sidebar uses, so one value lines up every region. Reserving
      (rather than overlaying) is still required: the virtualizer measures this
-     element, so a scrollbar appearing as rows expand would reflow the tree. */
+     element, so a scrollbar appearing as rows expand would reflow the tree.
+
+     The reserved lane is the whole horizontal inset the tree pays, so it is
+     pinned to the sidebar's 4px gutter (Radix space-1, the same step the
+     filter field and footer use). Dropping the thumb's transparent border
+     keeps the visible thumb at the 4px it was before — the inset was only
+     ever there to shrink a wider lane. */
   scrollbar-gutter: stable both-edges;
-  --scrollbar-size: 8px;
-  --scrollbar-inset: 2px;
+  --scrollbar-size: 4px;
+  --scrollbar-inset: 0px;
 }
 
 /* Radix Card paints its surface border on `::after`, so the element's

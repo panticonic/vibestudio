@@ -728,7 +728,7 @@ function SidebarFooter({ activeWorkspaceName, onSwitchWorkspace, onNewPanel }: S
   );
 
   return (
-    <Box px="2" py="1">
+    <Box px="1" py="1">
       <Button
         variant="soft"
         color="gray"
@@ -1259,7 +1259,7 @@ export function LazyPanelTreeSidebar({
 
   const diagnostics =
     treeLoadError || selfIdentityError ? (
-      <Flex direction="column" gap="1" mx="2" mb="1">
+      <Flex direction="column" gap="1" mx="1" mb="1">
         {treeLoadError ? (
           <Flex
             role="alert"
@@ -1343,11 +1343,15 @@ export function LazyPanelTreeSidebar({
       <Flex
         align="center"
         gap="1"
-        mx="2"
+        mx="1"
         mt="1"
         mb="1"
-        px="2"
         style={{
+          // The outer margin is the sidebar gutter (4px, matching the tree
+          // scroller's reserved lane and the footer); the inner padding is the
+          // row gutter, so the search icon lands on the same x as a row's
+          // expander and nothing steps in twice.
+          paddingInline: ROW_PADDING_LEFT,
           minHeight: 24,
           borderRadius: 5,
           background: "var(--gray-a3)",
