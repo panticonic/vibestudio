@@ -1,11 +1,12 @@
 # Official template repositories: overlapping contributions with agentic composition
 
 Status: updated 2026-08-10. The three optional templates have been published
-through the running app as private `v1.0.0` candidate repositories. They remain
-in `workspace/` until product cutover, and no verified template catalog entries
-or external base repository have been deployed. Promotion and product cutover
-therefore remain outstanding; publishing a standalone npm SDK is explicitly
-not an extraction prerequisite.
+and updated through the running app as private candidate repositories. The
+current releases are Examples `v1.0.2`, News `v1.0.1`, and Spectrolite
+`v1.0.2`. They remain in `workspace/` until product cutover, and no verified
+template catalog entries or external base repository have been deployed.
+Promotion and product cutover therefore remain outstanding; publishing a
+standalone npm SDK is explicitly not an extraction prerequisite.
 
 ## Outcome
 
@@ -255,21 +256,38 @@ temporary ownership workaround.
 
 | Template | Published repository | Immutable release | Commit | Snapshot |
 | --- | --- | --- | --- | --- |
-| Examples | `panticonic/vibestudio-template-examples` | `refs/tags/v1.0.0` | `5385e586db97e6d69ceed74be72a307f9a22e46f` | `v1-sha256:708bb68e5cdc9b14ac8d535c4aae49134d49288332868744e546220873c7ef50` |
-| News | `panticonic/vibestudio-template-news` | `refs/tags/v1.0.0` | `7151f486dfdf2ced4c86c976a0c8b0386b28c88c` | `v1-sha256:468e6b191a0a893e3ac79960eee998ac7e7952bb3a284d202c563dd4cb6bb0fd` |
-| Spectrolite | `panticonic/vibestudio-template-spectrolite` | `refs/tags/v1.0.0` | `a82fef4d4848e1a3f61d562e82a735d7be68abb9` | `v1-sha256:e09838884c3c61ffaea5403f6b0c74321138f8e22bfd6084de0f0da38fb3b277` |
+| Examples | `panticonic/vibestudio-template-examples` | `refs/tags/v1.0.2` | `85b3f47e64cc281a22d5d911dfe70c40f37e9337` | `v1-sha256:9746fadf3422206e5dc32a950f6b245a2f736d53dae12622ba6b4a6718fa07e8` |
+| News | `panticonic/vibestudio-template-news` | `refs/tags/v1.0.1` | `77cd04bbede0c2e498819c758a666dde37c55386` | `v1-sha256:51d0e32bf5ac7c4dd3bca92e53c6ccc92981f35fbde70a44ccb8b64a3b545860` |
+| Spectrolite | `panticonic/vibestudio-template-spectrolite` | `refs/tags/v1.0.2` | `05e21e15361776ed0556802f47957904bf789ee6` | `v1-sha256:0425cd3ff5b0f8ec438c9609e25c02b3f7445c1b6bc24ba7008e64211f7cbd08` |
 
 The publication receipts are authoritative because Git Bridge reads the
-published commit back into an exact snapshot before returning. News also
-exercised crash/retry behavior: its first CLI request timed out while the
-server-side publication continued, and replaying the same durable command ID
-returned the one existing release. The intermediate concurrent replay exposed
-a remaining DX defect: publication calls are idempotent after settlement but
-are not serialized while the first invocation is still in flight, so two live
-invocations can contend on the same Git ref. Before presenting unattended
-publication as fully polished, the Composer should coalesce concurrent calls
-for one command ID and the CLI transport should tolerate long build gates (or
-switch to a durable start/status protocol).
+published commit back into an exact snapshot before returning. These updates
+were produced from the current workspace source, including local source edits,
+without requiring shared Git history with the template repositories. The
+semantic event protects the inspected workspace state; Git Bridge constructs
+the next repository commit from exact protected snapshots and uses the durable
+operation ID to recognize its own prior commit on retry.
+
+This update run exercised partial-publication recovery concretely. News's main
+commit landed before the tag push lost network connectivity. Replaying the same
+operation ID found that commit, verified the recorded request fingerprint and
+tree, and added only the missing immutable `v1.0.1` tag. It also exposed and
+repaired transport assumptions that made the agentic path brittle:
+
+- CLI RPC now owns a dispatcher without an implicit response-header deadline;
+  reviewed publication and build operations control their own lifetime.
+- credential-proxied REST and Git HTTP use owned dispatchers, resilient DNS
+  lookup, and explicit cleanup; ordinary REST calls disable connection reuse,
+  which had made the second GitHub API request hang or fail.
+- Git receive-pack has a bounded 15-minute response/body allowance rather than
+  Undici's implicit five-minute header timeout.
+- authoring metadata inspection uses bounded concurrency rather than flooding
+  the extension RPC lane with every workspace repository at once.
+
+Remaining DX work is narrower: concurrent live invocations for one command ID
+should be coalesced, repeated permission requests during a single reviewed
+publication should be presented as one coherent operation, and Git transfer
+failures should preserve the low-level cause in the agent-facing diagnostic.
 
 ## Registry design
 
