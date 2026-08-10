@@ -1750,6 +1750,11 @@ export function createApprovalQueue(deps: {
       if (existing) return existing.approval.approvalId;
       const approval = {
         ...createPendingApproval(req),
+        // Preparation is progress, not a decision. It may be inspected from
+        // the notification pill, but must never seize the approval surface
+        // before there is anything the user can answer. The ready request
+        // replaces this object atomically and restores its requested attention.
+        attention: "queue" as const,
         lifecycle: { state: "preparing" as const },
       };
       const entry: QueueEntry = {
@@ -1795,6 +1800,7 @@ export function createApprovalQueue(deps: {
       if (!entry || entry.approval.lifecycle?.state !== "preparing") return;
       entry.approval = {
         ...entry.approval,
+        attention: "interrupt",
         lifecycle: {
           state: "failed",
           diagnostics: preparationDiagnostics(error),

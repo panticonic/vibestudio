@@ -866,6 +866,17 @@ const CAPABILITY_COPY_HANDLERS: Record<
   string,
   (approval: PendingCapabilityApproval) => ApprovalCopyResult | null
 > = {
+  "workspace-service:channel"(approval) {
+    const caller = getApprovalCallerPresentation(approval).label;
+    const conversation =
+      approval.resource?.label?.toLowerCase() === "conversation"
+        ? approval.resource.value
+        : "this conversation";
+    return {
+      title: `Let ${caller} join ${conversation}?`,
+      summary: `Allow ${caller} to read messages and send replies in ${conversation}.`,
+    };
+  },
   "workspace-main-advance"(approval) {
     const destination = approval.resource?.value ?? "this repository";
     if (approval.grantResourceKey?.startsWith("workspace-source-change:")) {

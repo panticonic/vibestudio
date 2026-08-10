@@ -360,6 +360,21 @@ describe("ConsentApprovalBar coordinator", () => {
     await waitFor(() => expect(overlay.options?.props?.approval?.approvalId).toBe("queued"));
   });
 
+  it("keeps publication preparation non-blocking until its review is ready", async () => {
+    shellClient.listPending.mockResolvedValueOnce([
+      capabilityApproval({
+        approvalId: "preparing",
+        title: "Preparing workspace update…",
+        attention: "queue",
+        lifecycle: { state: "preparing" },
+      }),
+    ]);
+    mountBar();
+
+    await screen.findByRole("button", { name: "Review approval: Preparing workspace update…" });
+    expect(overlay.options).toBeNull();
+  });
+
   it("shows an interrupting approval ahead of earlier queued attention", async () => {
     shellClient.listPending.mockResolvedValueOnce([
       capabilityApproval({ approvalId: "queued", title: "Queued", attention: "queue" }),

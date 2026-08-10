@@ -617,28 +617,30 @@ export function ApprovalCard({
           review's actions live here rather than at the end of its list, because
           `Add to workspace` under fifty-three parts is a decision you have to go
           looking for. */}
-      <fieldset
-        className="approval-card-footer"
-        disabled={actionPending || validationPending}
-        aria-busy={actionPending || validationPending}
-      >
-        {approval.kind === "unit-install-review" ? (
-          <InstallReviewActions
-            approval={approval}
-            selection={installSelection}
-            busy={actionPending}
-            onResolve={(resolution) =>
-              emitForApproval({ type: "resolve-install-review", resolution })
-            }
-          />
-        ) : null}
-        {actions}
-        {actionPending || validationPending ? (
-          <Text size="1" color="gray" ml="2" role="status" aria-live="polite">
-            {validationPending ? "Preparing review…" : "Saving…"}
-          </Text>
-        ) : null}
-      </fieldset>
+      {validationPending ? null : (
+        <fieldset
+          className="approval-card-footer"
+          disabled={actionPending}
+          aria-busy={actionPending}
+        >
+          {approval.kind === "unit-install-review" ? (
+            <InstallReviewActions
+              approval={approval}
+              selection={installSelection}
+              busy={actionPending}
+              onResolve={(resolution) =>
+                emitForApproval({ type: "resolve-install-review", resolution })
+              }
+            />
+          ) : null}
+          {actions}
+          {actionPending ? (
+            <Text size="1" color="gray" ml="2" role="status" aria-live="polite">
+              Saving…
+            </Text>
+          ) : null}
+        </fieldset>
+      )}
     </div>
   );
 }

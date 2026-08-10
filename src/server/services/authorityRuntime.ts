@@ -304,6 +304,30 @@ export function authorizeVerifiedCaller(
     grantStore: facts.grantStore,
     tier: facts.tier,
   });
+  // A host-verified agent binding is the durable membership fact for one
+  // conversation. Opening or refreshing that participant's delivery stream is
+  // therefore not a new grant of conversation access: it is use of the exact
+  // relationship the host already established. Keep this deliberately exact —
+  // the same agent still needs ordinary authority for every other channel, and
+  // relationship authority never satisfies a critical effect.
+  const boundChannelResource = caller.agentBinding
+    ? `do:workers/pubsub-channel:PubSubChannel:${caller.agentBinding.channelId}`
+    : null;
+  if (
+    facts.tier !== "critical" &&
+    facts.capability === "workspace-service:channel" &&
+    boundChannelResource === facts.resourceKey
+  ) {
+    grants.push({
+      subject: authorizingOrigin.principal,
+      capability: facts.capability,
+      resource: { kind: "exact", key: boundChannelResource },
+      effect: "allow",
+      issuedBy: product.hostPrincipal,
+      createdAt: now,
+      provenance: "authenticated-agent-channel-binding-v1",
+    });
+  }
   if (facts.grantStore) {
     const subjects = [
       authorizingOrigin.principal,

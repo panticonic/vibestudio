@@ -43,6 +43,7 @@ function capabilityApproval(
     authorityRow: partial.authorityRow,
     operationSubstance: partial.operationSubstance,
     approvalId: partial.approvalId,
+    lifecycle: partial.lifecycle,
   };
 }
 
@@ -211,6 +212,22 @@ function renderCard(
 }
 
 describe("ApprovalCard", () => {
+  it("renders preparation as progress without offering consent decisions", () => {
+    renderCard(
+      capabilityApproval({
+        approvalId: "publication-preparing",
+        title: "Preparing workspace update…",
+        lifecycle: { state: "preparing" },
+      })
+    );
+
+    expect(screen.getByRole("status").textContent).toBe("Checking builds, schemas, and authority…");
+    expect(screen.queryByRole("button", { name: "Allow once" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Allow for now" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Trust this version" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Don't allow" })).toBeNull();
+  });
+
   it("exposes a labelled, described dialog and assertive decision errors with long copy", () => {
     const title =
       "Autoriser la publication de cette très longue synthèse dans l’espace de travail partagé";

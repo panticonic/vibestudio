@@ -450,6 +450,30 @@ describe("approvalCopy", () => {
     expect(getRequesterCategoryLabel("unknown")).toBe("Requester");
   });
 
+  it("describes genuine cross-conversation access without exposing runtime ids", () => {
+    const approval = {
+      ...base,
+      kind: "capability",
+      capability: "workspace-service:channel",
+      title: "send and receive messages in your conversations",
+      callerId: "do:workers/agent-worker:AiChatWorker:ai-chat-deadbeef",
+      callerKind: "do",
+      callerTitle: "Workspace onboarding",
+      resource: {
+        type: "conversation",
+        label: "Conversation",
+        value: "Project planning",
+      },
+    } as PendingApproval;
+
+    const copy = getApprovalCopy(approval);
+    expect(copy).toEqual({
+      title: "Let Workspace onboarding join Project planning?",
+      summary: "Allow Workspace onboarding to read messages and send replies in Project planning.",
+    });
+    expect(JSON.stringify(copy)).not.toContain("ai-chat-deadbeef");
+  });
+
   it("derives semantic attribution chips, never raw ids", () => {
     const byName = (name: string) => fixtures.find((fixture) => fixture.name === name)!.approval;
 
@@ -559,9 +583,7 @@ describe("approvalCopy", () => {
       } as NonNullable<Extract<PendingApproval, { kind: "capability" }>["snapshot"]>,
     };
 
-    expect(getApprovalCallerPresentation(approval).label).toBe(
-      "Workspace maintenance agent"
-    );
+    expect(getApprovalCallerPresentation(approval).label).toBe("Workspace maintenance agent");
     expect(getStandardApprovalDecisionActions(approval)).toEqual([
       expect.objectContaining({
         decision: "agent",

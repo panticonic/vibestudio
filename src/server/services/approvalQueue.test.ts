@@ -55,7 +55,11 @@ describe("approvalQueue", () => {
       title: "Preparing workspace update…",
     });
     expect(queue.listPending()).toEqual([
-      expect.objectContaining({ approvalId, lifecycle: { state: "preparing" } }),
+      expect.objectContaining({
+        approvalId,
+        attention: "queue",
+        lifecycle: { state: "preparing" },
+      }),
     ]);
     await expect(queue.resolve(approvalId, "once")).rejects.toThrow(/still preparing/);
 
@@ -96,6 +100,7 @@ describe("approvalQueue", () => {
     expect(queue.listPending()).toEqual([
       expect.objectContaining({
         approvalId,
+        attention: "interrupt",
         lifecycle: {
           state: "failed",
           diagnostics: ["workers/store/index.ts:12: Undeclared service protocol"],

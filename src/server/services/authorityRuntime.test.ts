@@ -541,6 +541,77 @@ describe("authority runtime", () => {
     expect(resolved.context.contextIntegrity?.class).toBe("not-applicable");
   });
 
+  it("lets a bound agent attach only to its own conversation without another approval", () => {
+    const capability = "workspace-service:channel";
+    const ownChannel = "do:workers/pubsub-channel:PubSubChannel:channel-agent";
+    const caller = createVerifiedCaller(
+      "do:workers/agent-worker:AiChatWorker:worker-1",
+      "do",
+      {
+        callerId: "do:workers/agent-worker:AiChatWorker:worker-1",
+        callerKind: "do",
+        repoPath: "workers/agent-worker",
+        effectiveVersion: "ev-agent",
+        executionDigest: digest,
+        requested: [{ capability, resource: { kind: "prefix", prefix: "" } }],
+      },
+      {
+        entityId: "agent:worker-1",
+        contextId: "ctx-agent",
+        channelId: "channel-agent",
+        agentId: "agent:worker-1",
+      },
+      { userId: "u1", handle: "u1" }
+    );
+    const resolve = (resourceKey: string, tier: "gated" | "critical" = "gated") =>
+      authorizeVerifiedCaller(caller, {
+        workspaceId: "ws-1",
+        workspaceMember: true,
+        sessionId: "channel-agent",
+        audience: ownChannel,
+        capability,
+        resourceKey,
+        tier,
+        now: 100,
+      });
+    const allowed = resolve(ownChannel);
+    expect(
+      evaluateAuthority({
+        context: allowed.context,
+        requirement: requirementForPrincipals(["code"], capability),
+        resourceKey: ownChannel,
+        grants: allowed.grants,
+        tier: "gated",
+        now: 101,
+      }).allowed
+    ).toBe(true);
+
+    const otherChannel = "do:workers/pubsub-channel:PubSubChannel:channel-other";
+    const denied = resolve(otherChannel);
+    expect(
+      evaluateAuthority({
+        context: denied.context,
+        requirement: requirementForPrincipals(["code"], capability),
+        resourceKey: otherChannel,
+        grants: denied.grants,
+        tier: "gated",
+        now: 101,
+      }).allowed
+    ).toBe(false);
+
+    const critical = resolve(ownChannel, "critical");
+    expect(
+      evaluateAuthority({
+        context: critical.context,
+        requirement: requirementForPrincipals(["code"], capability),
+        resourceKey: ownChannel,
+        grants: critical.grants,
+        tier: "critical",
+        now: 101,
+      }).allowed
+    ).toBe(false);
+  });
+
   it("falls back to the authenticated user when incomplete code metadata has no entity binding", () => {
     const capability = "service:workers.resolveService";
     const caller = createVerifiedCaller(
