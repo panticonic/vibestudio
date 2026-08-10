@@ -229,8 +229,9 @@ export function persistEvState(state: Omit<PersistedEvState, "version">): void {
  * the build-key derivation itself changes, to invalidate all cached builds.
  *
  * "28": generated panel entries publish readiness at their mount boundary.
+ * "29": worker builds preserve dynamic imports as workerd module-map chunks.
  */
-const BUILD_CACHE_VERSION = "28";
+const BUILD_CACHE_VERSION = "29";
 
 /**
  * Host-root files whose CONTENTS are folded into every build key. Changing the

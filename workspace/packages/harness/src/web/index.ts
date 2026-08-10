@@ -23,7 +23,6 @@ import { searchDuckDuckGo } from "./duckduckgo.js";
 import { searchTavily } from "./tavily.js";
 import { searchBrave } from "./brave.js";
 import { searchExa } from "./exa.js";
-import { extractPage } from "./extract.js";
 import { selectSearchProvider, type CredentialPresenceProbe } from "./provider.js";
 export type WebRpcCaller = <T = unknown>(target: string, method: string, args: unknown[]) => Promise<T>;
 export interface WebToolsDeps {
@@ -266,6 +265,10 @@ export function createWebTools(deps: WebToolsDeps): AgentTool[] {
                     }
                     // Blob was pruned out from under us; fall through and re-fetch.
                 }
+                // HTML/PDF extraction carries Readability, DOM parsing, and PDF
+                // support. Keep that feature payload out of every agent's cold
+                // isolate; workerd loads the split module on the first fetch.
+                const { extractPage } = await import("./extract.js");
                 const page = await extractPage(url, withAbort(fetcher, signal) as never, signal);
                 await deps.recordIngestion?.({ key: `web:${sourceHost}`, via: "web-fetch", classification: "external" });
                 const stored = await deps.rpc.call<{

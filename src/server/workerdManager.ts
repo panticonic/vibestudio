@@ -23,7 +23,7 @@ import { createVerifiedCaller, type VerifiedCaller } from "@vibestudio/shared/se
 import type { FsService } from "@vibestudio/shared/fsService";
 import type { ExecutionPublicationPort } from "@vibestudio/shared/execution/retention";
 import { canonicalEntityId, type EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
-import { primaryTextArtifactContent, type BuildResult } from "./buildV2/buildStore.js";
+import type { BuildResult } from "./buildV2/buildStore.js";
 import { executionArtifactRefFromBuild } from "./executionRootProviders.js";
 import type { WorkspaceRpcMethodDoc } from "./buildV2/workspaceRpcCatalog.js";
 import type { ProtectedPublicationEvent, RuntimeImageBinding } from "./buildV2/index.js";
@@ -67,6 +67,30 @@ const DEFAULT_WORKERD_STARTUP_READY_TIMEOUT_MS = 15_000;
 const WORKERD_STARTUP_OUTPUT_LINES = 40;
 declare const __filename: string | undefined;
 declare const __dirname: string | undefined;
+
+/**
+ * Materialize the immutable JavaScript portion of a worker build as the exact
+ * module map consumed by workerd's workerLoader. The primary artifact keeps
+ * the historical `worker.js` loader identity; relative imports from it resolve
+ * against chunk artifact paths at the module-map root.
+ */
+function workerJavaScriptModules(build: BuildResult): Record<string, string> {
+  const primary = build.artifacts.find(
+    (artifact) => artifact.role === "primary" && artifact.encoding === "utf8"
+  );
+  if (!primary) throw new Error(`Build ${build.metadata.buildKey} has no primary text artifact`);
+  const modules: Record<string, string> = { "worker.js": primary.content };
+  for (const artifact of build.artifacts) {
+    if (
+      artifact.role === "asset" &&
+      artifact.encoding === "utf8" &&
+      artifact.path.endsWith(".js")
+    ) {
+      modules[artifact.path] = artifact.content;
+    }
+  }
+  return modules;
+}
 
 export class RuntimeImageWarmingError extends Error {
   readonly code = RUNTIME_IMAGE_WARMING_ERROR_CODE;
@@ -1835,7 +1859,7 @@ export class WorkerdManager {
     instance.buildKey = image.artifact.buildKey;
     instance.executionDigest = image.artifact.executionDigest;
     instance.effectiveVersion = image.artifact.sourceState.effectiveVersion;
-    const bundleContent = primaryTextArtifactContent(buildResult);
+    const modules = workerJavaScriptModules(buildResult);
 
     // WorkerCode `env` (unlike the old capnp config) supports non-string values
     // natively — so `json` bindings / STATE_ARGS / aliases keep their PARSED
@@ -1877,7 +1901,7 @@ export class WorkerdManager {
       compatibilityDate: "2025-12-01",
       compatibilityFlags: ["nodejs_compat"],
       mainModule: "worker.js",
-      modules: { "worker.js": bundleContent },
+      modules,
       env,
       callerId: instance.callerId,
     };
@@ -2020,7 +2044,7 @@ export class WorkerdManager {
         compatibilityDate: "2025-12-01",
         compatibilityFlags: ["nodejs_compat"],
         mainModule: "worker.js",
-        modules: { "worker.js": primaryTextArtifactContent(probe.build) },
+        modules: workerJavaScriptModules(probe.build),
         ...(Object.keys(wasmModules).length > 0 ? { wasmModules } : {}),
         env: {
           WORKER_SOURCE: source,
@@ -2050,7 +2074,7 @@ export class WorkerdManager {
     } else {
       svc.buildKey = image.artifact.buildKey;
     }
-    const bundleContent = primaryTextArtifactContent(buildResult);
+    const modules = workerJavaScriptModules(buildResult);
     // Terminal (Ink) DOs import a pre-compiled `yoga.wasm` module — it must be
     // loaded alongside the JS bundle (the only way to run WASM in workerd).
     const wasmModules: Record<string, string> = {};
@@ -2091,7 +2115,7 @@ export class WorkerdManager {
       compatibilityDate: "2025-12-01",
       compatibilityFlags: ["nodejs_compat"],
       mainModule: "worker.js",
-      modules: { "worker.js": bundleContent },
+      modules,
       ...(Object.keys(wasmModules).length > 0 ? { wasmModules } : {}),
       env,
     };

@@ -185,10 +185,15 @@ describe("buildUnit terminal worker builds", () => {
         'import { freshWorkerSymbol } from "@workspace/stale-dist-lib";',
         "export class StaleDistWorker {",
         "  async fetch() {",
-        "    return new Response(freshWorkerSymbol);",
+        '    const lazy = await import("./lazy.js");',
+        "    return new Response(freshWorkerSymbol + lazy.lazyWorkerSymbol);",
         "  }",
         "}",
       ].join("\n")
+    );
+    fs.writeFileSync(
+      path.join(workerDir, "lazy.ts"),
+      'export const lazyWorkerSymbol = "lazy-worker-export";\n'
     );
     commit(workerDir, "stale dist worker");
 
@@ -204,6 +209,15 @@ describe("buildUnit terminal worker builds", () => {
     const bundle = result.artifacts.find((a) => a.role === "primary")?.content ?? "";
     expect(bundle).toContain("fresh-source-export");
     expect(bundle).not.toContain("stale-dist-export");
+    expect(bundle).not.toContain("lazy-worker-export");
+    const lazyChunk = result.artifacts.find(
+      (artifact) =>
+        artifact.role === "asset" &&
+        artifact.path.endsWith(".js") &&
+        artifact.content.includes("lazy-worker-export")
+    );
+    expect(lazyChunk?.path).toMatch(/^chunks\/(?:lazy|chunk)-[A-Z0-9]+\.js$/);
+    expect(lazyChunk?.content).toContain("lazy-worker-export");
 
     const laterState = `state:${"d".repeat(64)}`;
     const reused = await buildUnit(

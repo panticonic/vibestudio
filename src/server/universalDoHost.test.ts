@@ -123,7 +123,12 @@ export class SchemaProbeDO extends DurableObject {
 }
 export default { fetch() { return new Response("probe host"); } };`;
 
-function doBuild(source: string, ev: string, bundle = COUNTER_DO): BuildResult {
+function doBuild(
+  source: string,
+  ev: string,
+  bundle = COUNTER_DO,
+  extraArtifacts: BuildResult["artifacts"] = []
+): BuildResult {
   const buildKey = `build:${source}:${ev}`;
   return {
     dir: "/tmp/test-build",
@@ -158,6 +163,7 @@ function doBuild(source: string, ev: string, bundle = COUNTER_DO): BuildResult {
         encoding: "utf8",
         content: bundle,
       },
+      ...extraArtifacts,
     ],
   };
 }
@@ -655,6 +661,33 @@ export default { fetch() { return new Response("h"); } };`;
       "get"
     );
     expect(res).toEqual({ wasmLoaded: true, cls: "WasmDO" });
+  }, 30_000);
+
+  it("loads JavaScript chunks from a userland DO module map", async () => {
+    const source = "workers/chunked-do";
+    const primary = `import { DurableObject } from "cloudflare:workers";
+export class ChunkedDO extends DurableObject {
+  async fetch() {
+    const { value } = await import("./chunks/lazy.js");
+    return Response.json({ result: value });
+  }
+}
+export default { fetch() { return new Response("chunked host"); } };`;
+    const build = doBuild(source, "v1", primary, [
+      {
+        path: "chunks/lazy.js",
+        role: "asset",
+        contentType: "text/javascript; charset=utf-8",
+        encoding: "utf8",
+        content: 'export const value = "loaded lazily";',
+      },
+    ]);
+    active = await createHarness({ [source]: build });
+    const { manager, dispatch } = active;
+    await manager.ensureDOClass(source, "ChunkedDO");
+    await expect(
+      dispatch({ source, className: "ChunkedDO", objectKey: "one" }, "fetch")
+    ).resolves.toBe("loaded lazily");
   }, 30_000);
 
   it("registers a brand-new DO class with no restart", async () => {

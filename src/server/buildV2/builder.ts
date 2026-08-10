@@ -3,7 +3,7 @@
  *
  * Two build strategies:
  *   - Panel/About (browser target): ESM, code splitting, fs/path shims
- *   - Worker (workerd target): ESM, no splitting
+ *   - Worker (workerd target): ESM, code splitting into an in-memory module map
  *   - Extension (Node target): ESM, no splitting
  *
  * Build options are manifest-derived, not caller-supplied.
@@ -1966,23 +1966,33 @@ function manifestIconHref(
   return `data:image/svg+xml;base64,${Buffer.from(svg, "utf8").toString("base64")}`;
 }
 
-function workerBundleArtifacts(bundle: string, sourceMap: string | null): BuildArtifacts {
-  return {
-    entries: [
-      ...bundleArtifacts(bundle).entries,
-      ...(sourceMap === null
-        ? []
-        : [
-            {
-              path: "bundle.js.map",
-              role: "map" as const,
-              contentType: "application/json; charset=utf-8",
-              encoding: "utf8" as const,
-              content: sourceMap,
-            },
-          ]),
-    ],
-  };
+function workerBundleArtifacts(
+  outdir: string,
+  outputFiles: readonly esbuild.OutputFile[]
+): BuildArtifacts {
+  const entries = outputFiles
+    .map((file): BuildArtifactInput => {
+      const artifactPath = path.relative(outdir, file.path).replaceAll(path.sep, "/");
+      const primary = artifactPath === "bundle.js";
+      return {
+        path: artifactPath,
+        role: primary ? "primary" : artifactPath.endsWith(".map") ? "map" : "asset",
+        contentType: artifactPath.endsWith(".map")
+          ? "application/json; charset=utf-8"
+          : "text/javascript; charset=utf-8",
+        encoding: "utf8",
+        content: file.text,
+      };
+    })
+    .sort((left, right) => {
+      if (left.role === "primary") return -1;
+      if (right.role === "primary") return 1;
+      return left.path.localeCompare(right.path);
+    });
+  if (!entries.some((entry) => entry.role === "primary")) {
+    throw new Error("Worker build did not emit bundle.js");
+  }
+  return { entries };
 }
 
 // ---------------------------------------------------------------------------
@@ -2837,10 +2847,10 @@ async function buildWorker(
     conditions: WORKER_CONDITIONS,
   });
 
-  // Workers run as a single inline esModule in workerd — no module filesystem
-  // or package resolution at runtime. All dependencies must be bundled inline.
-  // manifest.externals is intentionally ignored (unlike panels which can use
-  // import maps, workers have no way to resolve external imports).
+  // Workers run from an immutable in-memory module map supplied to workerd's
+  // workerLoader. Package resolution is unavailable there, so dependencies are
+  // bundled, but native ESM chunks remain separate: dynamic imports must not be
+  // collapsed into the startup module.
 
   // Read the manifest from the materialized source state rather than
   // `node.manifest`, so exact-state builds never observe mutable source directories.
@@ -2920,8 +2930,11 @@ async function buildWorker(
       platform: "neutral",
       target: "es2022",
       format: "esm",
-      splitting: false,
-      outfile: path.join(outdir, "bundle.js"),
+      splitting: true,
+      outdir,
+      entryNames: "bundle",
+      chunkNames: "chunks/[name]-[hash]",
+      write: false,
       // Keep debugger provenance in the immutable build without making
       // workerd parse and retain it as part of every runtime module. The
       // runtime loader mounts only the primary artifact; the linked map stays
@@ -2957,13 +2970,8 @@ async function buildWorker(
       graph
     );
 
-    const bundlePath = path.join(outdir, "bundle.js");
-    const bundle = fs.readFileSync(bundlePath, "utf-8");
-    const sourceMapPath = path.join(outdir, "bundle.js.map");
-    const workerArtifacts = workerBundleArtifacts(
-      bundle,
-      sourcemap && fs.existsSync(sourceMapPath) ? fs.readFileSync(sourceMapPath, "utf-8") : null
-    );
+    const workerArtifacts = workerBundleArtifacts(outdir, buildResult.outputFiles ?? []);
+    const bundle = workerArtifacts.entries.find((artifact) => artifact.role === "primary")!.content;
     const iconArtifact = manifestIconArtifact(extractedManifest, workerSourcePath);
     if (iconArtifact) workerArtifacts.entries.push(iconArtifact);
 
