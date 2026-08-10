@@ -88,6 +88,7 @@ import { collectWorkspaceRpcCatalog } from "./workspaceRpcCatalog.js";
 import { workspaceRpcSchema } from "./workspaceRpcSchemas.js";
 import { createPanelBundleReport } from "./panelBundleReport.js";
 import { generatePanelEntry } from "./panelEntryProtocol.js";
+import { createSharedStyleDedupePlugin } from "./sharedStyleDedupe.js";
 export { generatePanelEntry } from "./panelEntryProtocol.js";
 
 /**
@@ -2178,6 +2179,9 @@ async function buildPanel(
 
   // Build plugins: resolve plugin uses materialized source paths.
   const plugins: esbuild.Plugin[] = [
+    ...(sharedStyleEntryPath
+      ? [createSharedStyleDedupePlugin(sharedStyles)]
+      : []),
     ...(node.kind === "app" ? [createAppRuntimeShimPlugin()] : []),
     createWorkspaceResolvePlugin(graph, workspaceRoot, sourceRoot),
     createTsExtensionPlugin(sourceRoot),

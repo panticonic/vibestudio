@@ -8,6 +8,16 @@ So when you hit a wall -- a case that doesn't fit, a spec that breaks, an assump
 
 What you must NEVER do is patch around the wall to comply with my words: a flag, a special case, a conversion shim, a second channel, a parallel path, a test rewritten to dodge a broken rule. The patch IS the failure. Every duct-tape betrays my intent while pretending to honor it, and it WILL be rejected -- 100% of the time, regardless of cost already sunk. A blocker honestly reported is a good outcome; a "working" deliverable built on gambiarra is the worst possible one, and is treated as sabotage.
 
+## Performance investigations
+
+For Vibestudio panel, app, worker, build, startup, and agent-workflow performance,
+use the repository's native profiling system documented in
+`workspace/skills/performance/SKILL.md`. It measures the real panel lifecycle,
+runtime builds, Electron/CDP pages, services, and managed system-test instances.
+Do not use the generic `web-perf` skill for these tasks: its conventional website
+and Chrome DevTools MCP workflow does not model Vibestudio's materialization and
+hosting pipeline.
+
 ## Headless system tests
 
 When a task asks to verify, diagnose, or repair Vibestudio through the headless

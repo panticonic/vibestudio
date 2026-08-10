@@ -59,6 +59,7 @@ type ModePrefix = "" | ">" | "@" | "/";
 
 const PANEL_USAGE_CACHE_KEY = "vibestudio:new-panel-durable-usage";
 const CATALOG_REVALIDATE_INTERVAL_MS = 30_000;
+const BACKGROUND_REFRESH_DEADLINE_MS = 500;
 
 /** With nothing typed there is no relevance signal, so lead with the workspace. */
 const IDLE_GROUP_ORDER: LauncherSuggestion["kind"][] = ["panel", "history", "url", "chat"];
@@ -68,6 +69,16 @@ const MODES: Array<{ prefix: Exclude<ModePrefix, "">; mode: LauncherMode; label:
   { prefix: "@", mode: "history", label: "History" },
   { prefix: "/", mode: "chat", label: "Chat" },
 ];
+
+/** Let the launcher paint and accept input before optional ranking data starts crossing RPC. */
+function scheduleBackgroundRefresh(callback: () => void): () => void {
+  if (typeof window.requestIdleCallback === "function") {
+    const id = window.requestIdleCallback(callback, { timeout: BACKGROUND_REFRESH_DEADLINE_MS });
+    return () => window.cancelIdleCallback(id);
+  }
+  const id = window.setTimeout(callback, 0);
+  return () => window.clearTimeout(id);
+}
 
 function readCachedPanelGroups(): LaunchablePanelGroups | null {
   try {
@@ -362,6 +373,7 @@ function NewPanelPage() {
   const liveRefreshRef = useRef(0);
   const liveRefreshInFlightRef = useRef<Promise<void> | null>(null);
   const openTreeRevisionRef = useRef<number | null>(null);
+  const catalogWasWarmAtMountRef = useRef(panelGroups !== null);
 
   const parsedInput = useMemo(() => parseLauncherInput(value), [value]);
   const browserUrl = useMemo(
@@ -435,12 +447,17 @@ function NewPanelPage() {
   }, []);
 
   useEffect(() => {
-    void refreshCatalog(true);
-    let liveDataFrame = requestAnimationFrame(refreshLiveData);
+    const cancelCatalogRefresh = catalogWasWarmAtMountRef.current
+      ? scheduleBackgroundRefresh(() => void refreshCatalog(true))
+      : (() => {
+          void refreshCatalog(true);
+          return () => {};
+        })();
+    let cancelLiveDataRefresh = scheduleBackgroundRefresh(refreshLiveData);
     const offFocus = panel.onFocus(() => {
       void refreshCatalog();
-      cancelAnimationFrame(liveDataFrame);
-      liveDataFrame = requestAnimationFrame(refreshLiveData);
+      cancelLiveDataRefresh();
+      cancelLiveDataRefresh = scheduleBackgroundRefresh(refreshLiveData);
       // A first read can race workspace admission or BrowserData materialization.
       // Focus is level-triggered evidence that the launcher is active again, so
       // converge its history projection instead of preserving a stale failure.
@@ -452,7 +469,8 @@ function NewPanelPage() {
       setNavigationError(error);
     });
     return () => {
-      cancelAnimationFrame(liveDataFrame);
+      cancelCatalogRefresh();
+      cancelLiveDataRefresh();
       offFocus();
       offNavigationError();
     };
