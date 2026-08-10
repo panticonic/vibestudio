@@ -7,7 +7,7 @@
  *   REAL llama-server (local-models extension, real weights) → streamed reply
  *   → publish back through the channel.
  *
- * Then switches the agent's model from local:lfm2.5-1.2b (utility server) to
+ * Then switches the agent's model from local:lfm2.5-2.6b (utility server) to
  * local:lfm2.5-350m (router/main server) and runs a second turn, proving
  * model switching across server processes.
  *
@@ -65,7 +65,7 @@ class LiveVessel extends AgentVesselBase {
     return { type: "agent", name: "LocalAgent", handle: "local" } as ParticipantDescriptor;
   }
   protected override getDefaultModel(): string {
-    return "local:lfm2.5-1.2b";
+    return "local:lfm2.5-2.6b";
   }
   protected override getDefaultRespondPolicy(): "all" {
     // Respond to every message — the test publishes plain user text with no
@@ -310,7 +310,7 @@ describe.runIf(RUN)("full agent turn over pubsub with real local models", () => 
       vessel.instance.callerIdForTest = USER_PID;
       vessel.instance.callerKindForTest = "panel";
       await vessel.instance.registerSubscriptionForTest(CHANNEL, {
-        model: "local:lfm2.5-1.2b",
+        model: "local:lfm2.5-2.6b",
         respondPolicy: "all",
         approvalLevel: 2,
       });
@@ -437,7 +437,7 @@ describe.runIf(RUN)("full agent turn over pubsub with real local models", () => 
         .join("")
         .trim();
       expect(firstText.length, "empty assistant reply").toBeGreaterThan(0);
-      expect(ensureLoadedCalls).toContain("lfm2.5-1.2b");
+      expect(ensureLoadedCalls).toContain("lfm2.5-2.6b");
 
       // ── SWITCH: configure the agent onto the 350M router model ─────────
       // The direct settings write (the eval `agent.configure` path uses the

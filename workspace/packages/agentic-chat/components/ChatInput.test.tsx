@@ -183,9 +183,9 @@ describe("ChatInput /model command", () => {
       providers: [],
       models: [
         makeTestCatalogEntry({
-          ref: "local:lfm2.5-1.2b",
-          id: "lfm2.5-1.2b",
-          name: "LFM2.5 1.2B",
+          ref: "local:lfm2.5-2.6b",
+          id: "lfm2.5-2.6b",
+          name: "LFM2.5 2.6B",
           provider: "local",
           baseUrl: "http://127.0.0.1:43117/v1",
           auth: "loopback",
@@ -215,7 +215,7 @@ describe("ChatInput /model command", () => {
     await waitFor(() => expect(onReplaceAgent).toHaveBeenCalledTimes(1));
     expect(onCallMethodResult).toHaveBeenCalledWith("agent-1", "getAgentSettings", {});
     expect(onReplaceAgent).toHaveBeenCalledWith("agent-1", undefined, {
-      model: "local:lfm2.5-1.2b",
+      model: "local:lfm2.5-2.6b",
       handle: "ai-chat",
       thinkingLevel: "max",
       approvalLevel: 1,

@@ -6,11 +6,11 @@ import {
 } from "./model-spec.js";
 
 describe("local model materialization", () => {
-  it("uses the bundled model's real 32K window before catalog refresh", () => {
-    expect(LOCAL_FALLBACK_MODEL_REF).toBe("local:lfm2.5-1.2b");
-    expect(materializeModel("local", "lfm2.5-1.2b", null)?.spec).toMatchObject({
-      contextWindow: 32_768,
-      maxTokens: 32_768,
+  it("uses the bundled model's real 128K window before catalog refresh", () => {
+    expect(LOCAL_FALLBACK_MODEL_REF).toBe("local:lfm2.5-2.6b");
+    expect(materializeModel("local", "lfm2.5-2.6b", null)?.spec).toMatchObject({
+      contextWindow: 128_000,
+      maxTokens: 128_000,
     });
   });
 

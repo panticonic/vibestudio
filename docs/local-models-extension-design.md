@@ -4,8 +4,8 @@ Local LLM inference as a first-class provider, delivered as a workspace extensio
 (`@workspace-extensions/local-models`) that installs and supervises **llama.cpp**,
 auto-tunes it to the host hardware, exposes local models through the existing pi-ai
 provider/catalog machinery so the chat panel and every Pi-harness agent can use them,
-ships a **model manager panel**, and guarantees a tiny fallback model
-(**LFM2.5-1.2B-Instruct**) — loaded lazily on demand, never kept warm — so the system
+ships a **model manager panel**, and guarantees a compact agentic fallback model
+(**LFM2.5-2.6B**) — loaded lazily on demand, never kept warm — so the system
 can answer even with zero working cloud providers, including on low-powered, GPU-less
 machines, without paying for a resident model it may never use.
 
@@ -35,8 +35,8 @@ handled *inside* this change. Companion reading: `EXTENSIONS.md`, `PANEL_SYSTEM.
 5. **Honest availability in the picker** — the model selection UI knows which
    providers are *actually usable right now* (credentialed cloud, running local) and
    says so, instead of listing 200 models it can't call.
-6. **Guaranteed floor** — LFM2.5-1.2B-Instruct (~696 MB GGUF Q4_0, runs under
-   1 GB RAM) is installed by default and available on demand. It uses the fastest
+6. **Guaranteed floor** — LFM2.5-2.6B (~1.56 GB GGUF Q4_K_M) is installed by
+   default and available on demand. It uses the fastest
    validated engine on the machine and degrades to the universal CPU build only if
    accelerated execution fails; when no other provider works, the system falls back
    to it automatically.
@@ -145,12 +145,11 @@ llama.cpp / model ecosystem (researched 2026-07-07):
   models from an INI preset / `--models-dir`, loading on demand, selected by the
   request's `"model"` field; `--models-max` bounds simultaneously-loaded models.
   Caveats: eviction is on-switch (no idle TTL), still maturing.
-- **LFM2.5-1.2B-Instruct (Liquid AI) — confirmed.** HF `LiquidAI/LFM2.5-1.2B-Instruct`,
-  corrected GGUF `NobodyWho/LFM2.5-1.2B-Instruct-GGUF` (Q4_0 696 MB,
-  bit-identical Liquid weights with the multi-turn tool-call fix embedded in model metadata;
-  Q8_0 1.25 GB). 1.17 B params, hybrid conv+GQA ("lfm2" arch, supported in llama.cpp),
-  32 K context, ChatML-like template, tool calling via `<|tool_call_start|>` Pythonic
-  format. ~239 tok/s decode on desktop CPUs — comfortably usable with no GPU.
+- **LFM2.5-2.6B (Liquid AI) — confirmed.** Official HF GGUF
+  `LiquidAI/LFM2.5-2.6B-GGUF` (Q4_K_M 1.56 GB, Q8_0 2.68 GB). 2.6 B parameters,
+  hybrid conv+GQA ("lfm2" arch, supported in llama.cpp), 128 K context, and an
+  embedded tool-capable chat template using `<|tool_call_start|>` Pythonic calls.
+  Liquid trained it specifically for multi-step agentic work and tool use.
   **License: LFM1.0 (Liquid's own, not OSI). Decided: acceptable — we download from
   HF at install time rather than bundling, so we distribute a download URL, not the
   weights.**
@@ -207,8 +206,8 @@ universal CPU engine:
 |---|---|---|
 | Purpose | LFM2.5 fallback, loaded on demand | User's model library |
 | Build | Best validated backend; automatic CPU degradation after failure | Best validated backend (CUDA/Metal/Vulkan/ROCm, or CPU) |
-| Models | `LFM2.5-1.2B-Instruct` pinned, single-model mode | Router mode over the library, load-on-demand, `--models-max 1` (configurable) |
-| Footprint | 0 when cold (the default); model weights plus its 32K KV cache while loaded | 0 when cold; whatever the loaded model needs (auto-fit) |
+| Models | `LFM2.5-2.6B` pinned, single-model mode | Router mode over the library, load-on-demand, `--models-max 1` (configurable) |
+| Footprint | 0 when cold (the default); model weights plus its 128K context state while loaded | 0 when cold; whatever the loaded model needs (auto-fit) |
 | Lifecycle | **Cold until the first fallback `ensureLoaded`**; restarts with backoff while in use, then stops after 15 min idle | Starts on the first non-fallback `ensureLoaded`; weights load on demand via `ensureLoaded` (§6.3), then the server stops after 15 min idle — llama.cpp's router has no native idle TTL (§2) |
 | Port | `127.0.0.1:<utilityPort>` | `127.0.0.1:<mainPort>` |
 
@@ -393,7 +392,7 @@ model-settings worker subscribes and rebuilds its snapshot), `download.progress`
 
 The fallback is a **lazy floor, not a warm guarantee**: it loads on first demand and
 is never kept resident. This is the deliberate default — a machine that never falls
-back to local should never pay RAM, CPU, or a 696 MB download for a model it does not
+back to local should never pay RAM, CPU, or a 1.56 GB download for a model it does not
 use. The floor is a *promise that it will be there when needed*, not a running process.
 
 First activation (after the standard extension install approval, whose prompt copy
@@ -404,14 +403,14 @@ runs local inference servers on demand"*):
 2. Download + smoke-test the CPU engine (and the GPU engine, if any) in the same pass,
    so the first model load is instant. The LFM2.5 GGUF is **not** downloaded here.
 3. Resolve the single-owner lock (ports + api-key) → emit `models.changed`. Both
-   servers stay **cold**. `local:lfm2.5-1.2b` appears in the picker as **"Available to
+   servers stay **cold**. `local:lfm2.5-2.6b` appears in the picker as **"Available to
    start"** (loads on first use), never as a running server.
 
-On-demand load (the first `ensureLoaded("lfm2.5-1.2b")`, e.g. when every cloud provider
+On-demand load (the first `ensureLoaded("lfm2.5-2.6b")`, e.g. when every cloud provider
 fails): download the GGUF if absent (idempotent), then start the utility server and
 wait out its model-load window. Time-to-first-local-token on a warm-engine cold-model
 box is the model-load latency; on a fully cold box it additionally pays the one-time
-696 MB download, surfaced as an in-chat progress signal.
+1.56 GB download, surfaced as an in-chat progress signal.
 
 Steady-state invariants:
 
@@ -425,7 +424,7 @@ Steady-state invariants:
 - The extension refuses to delete the LFM2.5 GGUF while fallback duty is assigned to
   it (the panel offers "replace fallback model" instead, gated on the replacement
   being downloaded and smoke-tested first).
-- `status().fallback = { ready: boolean, warm: boolean, modelRef: "local:lfm2.5-1.2b",
+- `status().fallback = { ready: boolean, warm: boolean, modelRef: "local:lfm2.5-2.6b",
   reason? }` is the single source of truth consumed by fallback selection (§8):
   `ready` = downloaded and loadable on demand; `warm` = currently serving.
 
@@ -434,8 +433,8 @@ Steady-state invariants:
 ## 6. Provider integration (pi-ai / catalog / executor / credentials)
 
 Provider id: **`local`** (display "Local (llama.cpp)"). Model refs:
-`local:lfm2.5-1.2b`, `local:<slug>` for library models (slug = stable, derived from
-repo+file, e.g. `local:qwen3-8b-q4km`).
+`local:lfm2.5-2.6b`, `local:<slug>` for library models (slug = stable, derived from
+repo+file, e.g. `local:qwen3.5-9b`).
 
 ### 6.1 Catalog: append at the `buildModelCatalog()` seam — do not patch pi-ai
 
@@ -633,8 +632,8 @@ from *Connected / Recommended / All* to **status-first**:
 │ ▸ Ready                             │   status dot ● green
 │   ● Claude Sonnet 5     anthropic   │   badges: reasoning/vision/ctx (existing)
 │   ● GPT-5.6 Sol         openai-codex│
-│   ● Qwen3 8B      local · on-device │   local entries: "on-device · free" chip,
-│   ● LFM2.5 1.2B   local · fallback  │   tok/s estimate from last benchmark
+│   ● Qwen3.5 9B    local · on-device │   local entries: "on-device · free" chip,
+│   ● LFM2.5 2.6B   local · fallback  │   tok/s estimate from last benchmark
 │ ▸ Available to start                │   ◐ amber — local models that load on use
 │   ◐ Llama 3.3 70B partial-offload   │   fit hint from auto-fit estimator
 │ ▸ Needs setup                       │   ○ grey — one-line CTA per provider:
@@ -670,11 +669,12 @@ Selection-time (deterministic and simple):
 1. `resolveSettings`/`pickFallbackModel` (`model-settings/index.ts`) runs an
    availability pass: if the stored default and `DEFAULT_AGENT_MODEL_REF` are both
    not `ready`/`startable`, fall back to the first `ready` recommended model, then to
-   **`local:lfm2.5-1.2b` whenever it is present in the catalog** (the extension always
+   **`local:lfm2.5-2.6b` whenever it is present in the catalog** (the extension always
    advertises the floor entry, even before download, as `startable`). The snapshot's
    existing `defaultModelSource: "fallback"` marker lets the chat panel render a
    banner: *"No cloud provider connected — using LFM2.5 (local). Answers will be
-   simpler. [Connect a provider]"*. Honest expectation-setting matters at 1.2 B.
+   simpler. [Connect a provider]"*. Honest expectation-setting still matters for a
+   compact on-device model.
 2. New-workspace default: if no credential exists at all, the default agent config
    points at the local fallback from the start — first-run chat works with zero
    cloud credentials. The first such turn triggers the one-time GGUF download (§5)
@@ -687,7 +687,7 @@ change**:
 
 - **Interactive turns**: the failure card gains a one-click **"Retry with local
   model"** action pre-wired to the fallback ref. This is a decision, not a deferral:
-  swapping a frontier model for a 1.2 B model mid-conversation is a quality cliff a
+  swapping a frontier model for a 2.6 B model mid-conversation is a quality cliff a
   present human should approve — and approval costs exactly one click.
 - **Unattended turns** (heartbeats, scheduled agents — nobody there to click,
   `docs/agent-heartbeats-design.md`): the loop **automatically retries the turn on
@@ -708,7 +708,7 @@ Layout (single scrolling page, Radix Themes to match the chat panel):
 1. **Hardware header** — "Optimized for NVIDIA RTX 4060 Laptop (8 GB VRAM) · CUDA ·
    12 threads · 15 GB RAM", engine build tag, backend actually in use (with the
    degradation reason if the GPU build failed), Re-detect button.
-2. **Fallback card** — LFM2.5 status (● Always ready · CPU · 0.8 GB), last-checked
+2. **Fallback card** — LFM2.5 status (● Always ready · CPU · 1.6 GB), last-checked
    health, benchmark tok/s, "Test" button (one-shot prompt round-trip).
 3. **Model library** — table: name, quant, size on disk, fit indicator
    (● full GPU / ◐ partial / CPU), context, tools ✓/✗, state (loaded/idle),
@@ -795,9 +795,9 @@ to end** — no mocked servers.
 1. **Cold bootstrap** — fresh state dir -> headless host boots, extension installs
    (auto-approved startup units) -> the extension `status()` API shows engines
    installed with **both servers cold** (`fallback.warm === false`); engine checksums
-   verified. The first `ensureLoaded("lfm2.5-1.2b")` then downloads the GGUF, warms the
+   verified. The first `ensureLoaded("lfm2.5-2.6b")` then downloads the GGUF, warms the
    utility server, and flips `fallback.warm` true — the lazy floor (§5).
-2. **Full agent turn** — `agent turn --model local:lfm2.5-1.2b` → streamed deltas
+2. **Full agent turn** — `agent turn --model local:lfm2.5-2.6b` → streamed deltas
    arrived as channel signals; terminal `message.completed`; journaled `modelSpec`
    matches the catalog entry **and carries no auth material** (the loopback key
    appears nowhere in the journal or in catalog snapshots).

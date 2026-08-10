@@ -244,12 +244,12 @@ describe("modelCallExecutor", () => {
     const outcome = await modelCallExecutor.execute({
       descriptor: descriptor({
         provider: "local",
-        model: "lfm2.5-1.2b",
+        model: "lfm2.5-2.6b",
         auth: "loopback",
         // Journaled placeholder port — the LIVE ensureLoaded endpoint must win.
         modelSpec: {
-          id: "lfm2.5-1.2b",
-          name: "LFM2.5 1.2B Instruct",
+          id: "lfm2.5-2.6b",
+          name: "LFM2.5 2.6B",
           api: "openai-completions",
           provider: "local",
           baseUrl: "http://127.0.0.1:0/v1",
@@ -269,15 +269,15 @@ describe("modelCallExecutor", () => {
 
     expect(outcome).toMatchObject({ kind: "model", stopReason: "completed" });
     expect(getApiKey).not.toHaveBeenCalled();
-    expect(ensureLoaded).toHaveBeenCalledWith("lfm2.5-1.2b", expect.any(AbortSignal));
+    expect(ensureLoaded).toHaveBeenCalledWith("lfm2.5-2.6b", expect.any(AbortSignal));
     expect(attempts).toMatchObject([
       {
         phase: "started",
         channelId: "channel-1",
         messageId: "msg-1",
         provider: "local",
-        model: "lfm2.5-1.2b",
-        ref: "local:lfm2.5-1.2b",
+        model: "lfm2.5-2.6b",
+        ref: "local:lfm2.5-2.6b",
         api: "openai-completions",
         baseUrl: "http://127.0.0.1:43117/v1",
         auth: "loopback",
@@ -291,7 +291,7 @@ describe("modelCallExecutor", () => {
         .map((event) => JSON.parse(String((event as { content?: unknown }).content)))
     ).toEqual([
       { message: "Starting local model…" },
-      { message: "Loading LFM2.5 1.2B Instruct… (first use may download)" },
+      { message: "Loading LFM2.5 2.6B… (first use may download)" },
     ]);
     expect(streamOptions).toMatchObject({ apiKey: "loopback-key", maxTokens: 4096 });
     // pi-ai constructs its client from model.baseUrl and IGNORES a baseUrl
@@ -321,12 +321,12 @@ describe("modelCallExecutor", () => {
     const pending = modelCallExecutor.execute({
       descriptor: descriptor({
         provider: "local",
-        model: "lfm2.5-1.2b",
+        model: "lfm2.5-2.6b",
         auth: "loopback",
         modelSpec: {
           ...descriptor().request.modelSpec,
-          id: "lfm2.5-1.2b",
-          name: "LFM2.5 1.2B Instruct",
+          id: "lfm2.5-2.6b",
+          name: "LFM2.5 2.6B",
           provider: "local",
           api: "openai-completions",
           baseUrl: "http://127.0.0.1:0/v1",
@@ -342,7 +342,7 @@ describe("modelCallExecutor", () => {
     controller.abort(new Error("durable-object activation released"));
 
     await expect(pending).rejects.toThrow("durable-object activation released");
-    expect(ensureLoaded).toHaveBeenCalledWith("lfm2.5-1.2b", controller.signal);
+    expect(ensureLoaded).toHaveBeenCalledWith("lfm2.5-2.6b", controller.signal);
   });
 
   it("does not start provider transport after cancellation during credential resolution", async () => {
@@ -383,7 +383,7 @@ describe("modelCallExecutor", () => {
     delete inputDeps.localModels;
 
     const outcome = await modelCallExecutor.execute({
-      descriptor: descriptor({ provider: "local", model: "lfm2.5-1.2b", auth: "loopback" }),
+      descriptor: descriptor({ provider: "local", model: "lfm2.5-2.6b", auth: "loopback" }),
       state: initialAgentState({ channelId: "channel-1", config }),
       signal: new AbortController().signal,
       deps: inputDeps,
@@ -1375,11 +1375,11 @@ describe("modelCallExecutor", () => {
     const outcome = await modelCallExecutor.execute({
       descriptor: descriptor({
         provider: "local",
-        model: "lfm2.5-1.2b",
+        model: "lfm2.5-2.6b",
         auth: "loopback",
         modelSpec: {
           ...modelSpec,
-          id: "lfm2.5-1.2b",
+          id: "lfm2.5-2.6b",
           name: "LFM2.5",
           provider: "local",
           baseUrl: "http://127.0.0.1:43117/v1",

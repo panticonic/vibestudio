@@ -19,9 +19,9 @@ interface TestDownloadJob {
 const modelLibraryMock = vi.hoisted(() => {
   const initialJob = (id = "job-1"): TestDownloadJob => ({
     id,
-    slug: "lfm2.5-1.2b",
-    hfRepo: "NobodyWho/LFM2.5-1.2B-Instruct-GGUF",
-    file: "LFM2.5-1.2B-Instruct-Q4_0-vendor-sampling.gguf",
+    slug: "lfm2.5-2.6b",
+    hfRepo: "LiquidAI/LFM2.5-2.6B-GGUF",
+    file: "LFM2.5-2.6B-Q4_K_M.gguf",
     totalBytes: 100,
     receivedBytes: 25,
     phase: "active",
@@ -120,6 +120,10 @@ const supervisorMock = vi.hoisted(() => {
   return state;
 });
 
+const hardwareMock = vi.hoisted(() => ({
+  tier: "cpu-min" as "cpu-min" | "gpu-large",
+}));
+
 vi.mock("./library.js", () => ({
   createModelLibrary: vi.fn(() => modelLibraryMock.library),
   isCurrentFallbackRecord: vi.fn(
@@ -149,7 +153,7 @@ vi.mock("./hardware.js", () => ({
       usableRamMB: 8192,
       chosenBackend: "cpu",
       chosenGpu: null,
-      tier: "cpu-min",
+      tier: hardwareMock.tier,
       notes: [],
     })),
   })),
@@ -191,12 +195,51 @@ describe("local-models extension", () => {
     modelLibraryMock.reset();
     engineMock.reset();
     supervisorMock.reset();
+    hardwareMock.tier = "cpu-min";
   });
 
   afterEach(() => {
     vi.unstubAllEnvs();
     vi.restoreAllMocks();
     if (tempRoot) rmSync(tempRoot, { recursive: true, force: true });
+  });
+
+  it("offers LFM2.5 2.6B as the only small curated agent model", async () => {
+    const { activate } = await import("./index.js");
+    const api = await activate({
+      log: { info: vi.fn(), warn: vi.fn() },
+      emit: vi.fn(),
+    });
+
+    await expect(api.searchCatalog("LFM2.5")).resolves.toEqual([
+      expect.objectContaining({
+        slug: FALLBACK_MODEL.slug,
+        hfRepo: FALLBACK_MODEL.hfRepo,
+        quantByTier: expect.objectContaining({ "cpu-min": "Q4_K_M" }),
+      }),
+    ]);
+  });
+
+  it("offers the current Qwen3.5 models", async () => {
+    hardwareMock.tier = "gpu-large";
+    const { activate } = await import("./index.js");
+    const api = await activate({
+      log: { info: vi.fn(), warn: vi.fn() },
+      emit: vi.fn(),
+    });
+
+    await expect(api.searchCatalog("Qwen3.5")).resolves.toEqual([
+      expect.objectContaining({
+        slug: "qwen3.5-4b",
+        hfRepo: "unsloth/Qwen3.5-4B-GGUF",
+        sha256ByQuant: expect.objectContaining({ Q4_K_M: expect.any(String) }),
+      }),
+      expect.objectContaining({
+        slug: "qwen3.5-9b",
+        hfRepo: "unsloth/Qwen3.5-9B-GGUF",
+        sha256ByQuant: expect.objectContaining({ Q4_K_M: expect.any(String) }),
+      }),
+    ]);
   });
 
   it("describes its navigation surfaces as capabilities", async () => {
@@ -229,14 +272,14 @@ describe("local-models extension", () => {
     });
 
     const response = api.downloadModel({
-      hfRepo: "NobodyWho/LFM2.5-1.2B-Instruct-GGUF",
-      file: "LFM2.5-1.2B-Instruct-Q4_0-vendor-sampling.gguf",
-      slug: "lfm2.5-1.2b",
+      hfRepo: "LiquidAI/LFM2.5-2.6B-GGUF",
+      file: "LFM2.5-2.6B-Q4_K_M.gguf",
+      slug: "lfm2.5-2.6b",
     });
     const lines = jsonLineReader(response);
 
     await expect(lines.next()).resolves.toMatchObject({
-      slug: "lfm2.5-1.2b",
+      slug: "lfm2.5-2.6b",
       receivedBytes: 25,
       totalBytes: 100,
     });
@@ -250,7 +293,7 @@ describe("local-models extension", () => {
     modelLibraryMock.resolveDownload(finalJob);
 
     await expect(lines.next()).resolves.toMatchObject({
-      slug: "lfm2.5-1.2b",
+      slug: "lfm2.5-2.6b",
       receivedBytes: 100,
       totalBytes: 100,
     });
@@ -261,9 +304,9 @@ describe("local-models extension", () => {
     modelLibraryMock.downloads = [
       {
         id: "pre-existing",
-        slug: "lfm2.5-1.2b",
-        hfRepo: "NobodyWho/LFM2.5-1.2B-Instruct-GGUF",
-        file: "LFM2.5-1.2B-Instruct-Q4_0-vendor-sampling.gguf",
+        slug: "lfm2.5-2.6b",
+        hfRepo: "LiquidAI/LFM2.5-2.6B-GGUF",
+        file: "LFM2.5-2.6B-Q4_K_M.gguf",
         totalBytes: 100,
         receivedBytes: 80,
         phase: "active",
@@ -277,15 +320,15 @@ describe("local-models extension", () => {
     });
 
     const response = api.downloadModel({
-      hfRepo: "NobodyWho/LFM2.5-1.2B-Instruct-GGUF",
-      file: "LFM2.5-1.2B-Instruct-Q4_0-vendor-sampling.gguf",
-      slug: "lfm2.5-1.2b",
+      hfRepo: "LiquidAI/LFM2.5-2.6B-GGUF",
+      file: "LFM2.5-2.6B-Q4_K_M.gguf",
+      slug: "lfm2.5-2.6b",
     });
     const lines = jsonLineReader(response);
 
     await expect(lines.next()).resolves.toMatchObject({
       id: "job-1",
-      slug: "lfm2.5-1.2b",
+      slug: "lfm2.5-2.6b",
       receivedBytes: 25,
     });
 
@@ -506,7 +549,7 @@ function fallbackRecord(runtimeValidation?: ModelRecord["runtimeValidation"]): M
     file: `/models/${FALLBACK_MODEL.file}`,
     sizeBytes: 700 * 1024 * 1024,
     quant: FALLBACK_MODEL.quant,
-    paramCount: "1.2B",
+    paramCount: "2.6B",
     arch: "lfm2",
     trainedContextLength: FALLBACK_MODEL.contextLength,
     toolsCapable: true,

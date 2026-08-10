@@ -17,10 +17,14 @@ import {
   getBuiltinProviders as getProviders,
 } from "@earendil-works/pi-ai/providers/all";
 import type { AgentModelSpec, ModelAuthMode } from "@workspace/agent-loop";
+import {
+  LOCAL_FALLBACK_MODEL,
+  LOCAL_FALLBACK_MODEL_REF as CATALOG_LOCAL_FALLBACK_MODEL_REF,
+} from "@workspace/model-catalog/catalog";
 
 export const LOCAL_PROVIDER_ID = "local";
 export const LOCAL_MODELS_EXTENSION_ID = "@workspace-extensions/local-models";
-export const LOCAL_FALLBACK_MODEL_REF = "local:lfm2.5-1.2b";
+export const LOCAL_FALLBACK_MODEL_REF = CATALOG_LOCAL_FALLBACK_MODEL_REF;
 
 /** llama-server quirks profile (design §6.4). Locked against the pinned
  *  build by the e2e tool-round-trip test; revisit on every pin bump. */
@@ -113,11 +117,11 @@ export function materializeLocalModel(entry: LocalModelDescriptor): Materialized
  */
 export function bundledLocalFallbackModel(): MaterializedModel {
   return materializeLocalModel({
-    slug: "lfm2.5-1.2b",
-    displayName: "LFM2.5 1.2B Instruct",
+    slug: LOCAL_FALLBACK_MODEL.id,
+    displayName: LOCAL_FALLBACK_MODEL.name,
     baseUrl: "http://127.0.0.1:0/v1",
-    contextWindow: 32_768,
-    maxTokens: 32_768,
+    contextWindow: LOCAL_FALLBACK_MODEL.contextWindow,
+    maxTokens: LOCAL_FALLBACK_MODEL.contextWindow,
     toolsCapable: true,
   });
 }
@@ -138,7 +142,7 @@ export function materializeModel(
 ): MaterializedModel | null {
   if (providerId === LOCAL_PROVIDER_ID) {
     if (localEntry) return materializeLocalModel(localEntry);
-    return modelId === "lfm2.5-1.2b" ? bundledLocalFallbackModel() : null;
+    return modelId === LOCAL_FALLBACK_MODEL.id ? bundledLocalFallbackModel() : null;
   }
   return materializeCloudModel(providerId, modelId);
 }

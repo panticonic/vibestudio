@@ -12,8 +12,8 @@ const BASE_CONFIG = { id: "test", systemEpoch: WORKSPACE_SYSTEM_EPOCH } as const
 
 function localEntry(fields: Partial<LocalModelEntry> = {}): LocalModelEntry {
   return {
-    slug: "lfm2.5-1.2b",
-    displayName: "LFM2.5 1.2B Instruct",
+    slug: "lfm2.5-2.6b",
+    displayName: "LFM2.5 2.6B",
     baseUrl: "http://127.0.0.1:0/v1",
     server: "utility",
     contextWindow: 32_768,
@@ -292,14 +292,14 @@ describe("ModelSettingsDO", () => {
 
     const snapshot = await call("getSettings");
     expect(snapshot).toMatchObject({
-      defaultModel: "local:lfm2.5-1.2b",
+      defaultModel: "local:lfm2.5-2.6b",
       defaultModelSource: "fallback",
     });
     const catalog = (snapshot as { catalog: ModelCatalog }).catalog;
     expect(catalog.providers.find((provider) => provider.id === "local")?.label).toBe(
       "Local inference (experimental)"
     );
-    const local = catalog.models.find((m) => m.ref === "local:lfm2.5-1.2b");
+    const local = catalog.models.find((m) => m.ref === "local:lfm2.5-2.6b");
     expect(local).toMatchObject({
       auth: "loopback",
       availability: { state: "ready" },

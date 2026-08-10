@@ -358,9 +358,9 @@ describe("useDeferredAgent", () => {
       providers: [],
       models: [
         makeTestCatalogEntry({
-          ref: "local:lfm2.5-1.2b",
-          id: "lfm2.5-1.2b",
-          name: "LFM2.5 1.2B Instruct",
+          ref: "local:lfm2.5-2.6b",
+          id: "lfm2.5-2.6b",
+          name: "LFM2.5 2.6B",
           provider: "local",
           baseUrl: "http://127.0.0.1:0/v1",
           availability: { state: "needs-setup", detail: "not-installed" },
@@ -371,8 +371,8 @@ describe("useDeferredAgent", () => {
       initialProps: makeParams(m, {
         initialPrompt: "help me get onboarded",
         modelCatalog: unavailableCatalog,
-        defaultModelRef: "local:lfm2.5-1.2b",
-        defaultAgentConfig: { model: "local:lfm2.5-1.2b" },
+        defaultModelRef: "local:lfm2.5-2.6b",
+        defaultAgentConfig: { model: "local:lfm2.5-2.6b" },
         firstAgentModelPreflight: "selection-required",
       }),
     });

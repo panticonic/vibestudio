@@ -102,7 +102,13 @@ interface LocalModelsStatus {
   hardware: HardwareProfile | null;
   engine: EngineState | null;
   servers: { utility: ServerState; main: ServerState };
-  fallback: { ready: boolean; warm: boolean; modelRef: string; reason: string | null };
+  fallback: {
+    ready: boolean;
+    warm: boolean;
+    modelRef: string;
+    downloadSizeBytes: number;
+    reason: string | null;
+  };
   downloads: DownloadJob[];
   storageRoot: string;
   diskFreeBytes: number;
@@ -130,6 +136,7 @@ interface CuratedModel {
   displayName: string;
   hfRepo: string;
   quantByTier: Record<string, string>;
+  sha256ByQuant: Record<string, string>;
   toolsCapable: boolean;
   blurb: string;
 }
@@ -315,7 +322,8 @@ export default function LocalModelsPanel() {
       (c) => c.displayName.toLowerCase().includes(q) || c.hfRepo.toLowerCase().includes(q)
     );
   }, [catalog, installedSlugs, query]);
-  const fallbackJob = status?.downloads.find((job) => job.slug === "lfm2.5-1.2b") ?? null;
+  const fallbackModel = models.find((model) => model.server === "utility") ?? null;
+  const fallbackJob = status?.downloads.find((job) => job.slug === fallbackModel?.slug) ?? null;
   const fallbackDownload = fallbackJob && !fallbackJob.error ? fallbackJob : null;
   const fallbackFailure = fallbackJob?.error ?? null;
 
@@ -425,7 +433,7 @@ export default function LocalModelsPanel() {
                               : "Fallback model — not installed"}
                     </Text>
                     <Text size="1" color="gray" as="p">
-                      {status?.fallback.modelRef ?? "local:lfm2.5-1.2b"}
+                      {status?.fallback.modelRef ?? "Local fallback"}
                       {status?.fallback.warm
                         ? " · serving now · answers with zero cloud providers"
                         : status?.fallback.ready
@@ -434,7 +442,9 @@ export default function LocalModelsPanel() {
                             ? " · keep this panel open or continue working while it downloads"
                             : fallbackFailure
                               ? ` · ${fallbackFailure}`
-                              : " · approximately 700 MB · runs privately on this device"}
+                              : status
+                                ? ` · approximately ${formatBytes(status.fallback.downloadSizeBytes)} · runs privately on this device`
+                                : " · model details loading"}
                     </Text>
                   </Box>
                 </Flex>
@@ -582,7 +592,7 @@ export default function LocalModelsPanel() {
                         </Text>
                         <Text size="1" color="gray" as="p">
                           local:{model.slug}
-                          {model.slug === "lfm2.5-1.2b" ? " · fallback" : ""}
+                          {model.server === "utility" ? " · fallback" : ""}
                         </Text>
                       </Table.Cell>
                       <Table.Cell>{fitBadge(model.fit.fit)}</Table.Cell>
@@ -659,7 +669,7 @@ export default function LocalModelsPanel() {
                               </IconButton>
                             </Tooltip>
                           )}
-                          {model.slug !== "lfm2.5-1.2b" && (
+                          {model.server !== "utility" && (
                             <Tooltip content="Delete model">
                               <IconButton
                                 size="1"
@@ -733,6 +743,9 @@ export default function LocalModelsPanel() {
                         disabled={busy !== null || !quant}
                         onClick={() =>
                           act("download", async () => {
+                            if (!quant) {
+                              throw new Error("No compatible model build is available");
+                            }
                             // File naming follows the HF convention the curated
                             // catalog pins: <repo-basename>-<QUANT>.gguf.
                             const repoBase = entry.hfRepo.split("/")[1] ?? entry.slug;
@@ -741,6 +754,7 @@ export default function LocalModelsPanel() {
                               {
                                 hfRepo: entry.hfRepo,
                                 file,
+                                expectedSha256: entry.sha256ByQuant[quant],
                                 displayName: entry.displayName,
                                 slug: entry.slug,
                               },

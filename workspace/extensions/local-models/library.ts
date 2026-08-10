@@ -128,10 +128,8 @@ class CancelledDownload extends Error {
 }
 
 /**
- * The fallback reference is stable across releases, but the artifact behind it
- * is not. Template and tokenizer metadata are executable runtime compatibility
- * data, so an older GGUF with the same slug must not masquerade as the current
- * fallback.
+ * Template and tokenizer metadata are executable runtime compatibility data,
+ * so an older GGUF must not masquerade as the current bundled fallback.
  */
 export function isCurrentFallbackRecord(record: ModelRecord | null): record is ModelRecord {
   return (

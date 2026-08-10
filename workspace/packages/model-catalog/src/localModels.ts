@@ -163,6 +163,7 @@ export interface LocalModelsStatus {
     ready: boolean;
     warm: boolean;
     modelRef: string;
+    downloadSizeBytes: number;
     reason: string | null;
   };
   downloads: DownloadJob[];

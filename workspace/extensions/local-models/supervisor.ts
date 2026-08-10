@@ -108,7 +108,7 @@ interface ServerRuntime {
 
 const HEALTH_POLL_MS = 10_000;
 /** Model load keeps /health at 503 for tens of seconds after spawn (CPU load
- *  of a ~700 MB GGUF) — the request path waits this long before giving up. */
+ *  of a ~1.6 GB GGUF) — the request path waits this long before giving up. */
 const HEALTH_WAIT_MS = 120_000;
 const HEALTH_WAIT_STEP_MS = 1_000;
 const HEALTH_FAILURE_LIMIT = 3;
@@ -995,7 +995,7 @@ class ServerSupervisor {
           String(runtimeContextLengthFor(fallback)),
           "--jinja",
           // Single sequence, not `-np 2`: llama.cpp splits the KV cache evenly
-          // across parallel slots. The fallback needs its full advertised 32K
+          // across parallel slots. The fallback needs its full advertised 128K
           // window for the agent prompt, tool schemas, history, and response.
           // The utility server is a lazy, single-purpose floor (design §5), so
           // full context per turn beats concurrency; simultaneous fallbacks

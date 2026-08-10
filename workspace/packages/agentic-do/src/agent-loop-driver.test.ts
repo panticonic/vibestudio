@@ -45,10 +45,10 @@ const config: AgentLoopConfig = {
   roster: { participants: [] },
 };
 
-const fallbackModelRef = "local:lfm2.5-1.2b";
+const fallbackModelRef = "local:lfm2.5-2.6b";
 const fallbackModelSpec: NonNullable<AgentLoopConfig["fallbackModelSpec"]> = {
-  id: "lfm2.5-1.2b",
-  name: "LFM2.5 1.2B Instruct",
+  id: "lfm2.5-2.6b",
+  name: "LFM2.5 2.6B",
   api: "openai-completions",
   provider: "local",
   baseUrl: "http://127.0.0.1:0/v1",
@@ -608,7 +608,7 @@ describe("AgentLoopDriver", () => {
         descriptor.kind === "model_call"
           ? ({
               kind: "model_call",
-              execute: ({ signal }) => ensureLoaded("lfm2.5-1.2b", signal),
+              execute: ({ signal }) => ensureLoaded("lfm2.5-2.6b", signal),
             } as EffectExecutor)
           : null,
     });
@@ -629,7 +629,7 @@ describe("AgentLoopDriver", () => {
 
     await harness.driver.dispatchReadyEffectsForTest();
     expect(executions).toBe(1);
-    expect(ensureLoaded).toHaveBeenCalledWith("lfm2.5-1.2b", expect.any(AbortSignal));
+    expect(ensureLoaded).toHaveBeenCalledWith("lfm2.5-2.6b", expect.any(AbortSignal));
   });
 
   it("does not let a non-cooperative executor hold lifecycle release or journal a late result", async () => {
@@ -1719,7 +1719,7 @@ describe("AgentLoopDriver", () => {
 
     expect(modelDispatches).toEqual([
       { provider: "anthropic", model: "claude-sonnet-4-6", auth: undefined },
-      { provider: "local", model: "lfm2.5-1.2b", auth: "loopback" },
+      { provider: "local", model: "lfm2.5-2.6b", auth: "loopback" },
     ]);
     expect(harness.channelPublishes).not.toContainEqual(
       expect.objectContaining({ payloadKind: CREDENTIAL_CONNECT_PAYLOAD_KIND })
@@ -1737,7 +1737,7 @@ describe("AgentLoopDriver", () => {
     );
     expect(JSON.parse(starts.rows.at(-1)!.payload_ref_json).modelRequest).toMatchObject({
       provider: "local",
-      model: "lfm2.5-1.2b",
+      model: "lfm2.5-2.6b",
       auth: "loopback",
       modelSpec: fallbackModelSpec,
     });

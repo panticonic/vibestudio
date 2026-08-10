@@ -3,7 +3,7 @@
  * real llama.cpp release download, real LFM2.5 GGUF download, real
  * llama-server, real OpenAI-compatible + tool-calling round-trips.
  *
- * Gated behind RUN_LOCAL_MODELS_E2E=1 — it downloads ~700 MB on first run
+ * Gated behind RUN_LOCAL_MODELS_E2E=1 — it downloads ~1.6 GB on first run
  * (cached machine-globally afterwards) and starts local servers. Locks
  * design risks #1 (loopback fetch), #2 (embedded tool template under --jinja),
  * and the pinned-build asset naming against reality.
@@ -140,7 +140,7 @@ describe.runIf(RUN)("local-models live e2e", () => {
       ).toBeGreaterThan(0);
       expect(toolCalls[0]?.function?.name).toBe("get_time");
 
-      // The selected fallback publishes its corrected template inside the
+      // The selected fallback publishes its tool-aware template inside the
       // GGUF. Lock that artifact contract at the wire boundary: a prior
       // assistant call survives into the next turn instead of becoming empty.
       const templateRes = await fetch(`${baseUrl.replace(/\/v1$/u, "")}/apply-template`, {
@@ -196,7 +196,7 @@ describe.runIf(RUN)("local-models live e2e", () => {
       const templateBody = (await templateRes.json()) as { prompt?: string };
       const prompt = templateBody.prompt ?? "";
       expect(prompt).toContain(
-        '<|tool_call_start|>[get_time(timezone="Europe/Berlin")]<|tool_call_end|>'
+        "<|tool_call_start|>[get_time(timezone='Europe/Berlin')]<|tool_call_end|>"
       );
       expect(prompt).toContain('<|im_start|>tool\n{"time":"10:30"}<|im_end|>');
     },

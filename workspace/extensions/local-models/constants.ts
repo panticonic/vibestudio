@@ -1,4 +1,5 @@
 import type { QuantName, ServerKind } from "@workspace/model-catalog/localModels";
+import { LOCAL_FALLBACK_MODEL as CATALOG_FALLBACK_MODEL } from "@workspace/model-catalog/catalog";
 
 /** Machine-global storage layout owned by the local-model implementation. */
 export const ROOT_LAYOUT = {
@@ -12,11 +13,12 @@ export const ROOT_LAYOUT = {
 } as const;
 
 export const FALLBACK_MODEL = {
-  slug: "lfm2.5-1.2b",
-  ref: "local:lfm2.5-1.2b",
-  displayName: "LFM2.5 1.2B Instruct",
-  hfRepo: "NobodyWho/LFM2.5-1.2B-Instruct-GGUF",
-  quant: "Q4_0" as QuantName,
-  file: "LFM2.5-1.2B-Instruct-Q4_0-vendor-sampling.gguf",
-  contextLength: 32_768,
+  slug: CATALOG_FALLBACK_MODEL.id,
+  ref: CATALOG_FALLBACK_MODEL.ref,
+  displayName: CATALOG_FALLBACK_MODEL.name,
+  hfRepo: "LiquidAI/LFM2.5-2.6B-GGUF",
+  quant: "Q4_K_M" as QuantName,
+  file: "LFM2.5-2.6B-Q4_K_M.gguf",
+  downloadSizeBytes: CATALOG_FALLBACK_MODEL.downloadSizeBytes,
+  contextLength: CATALOG_FALLBACK_MODEL.contextWindow,
 } as const;

@@ -156,9 +156,9 @@ describe("chatMessagesFromChannelView", () => {
       payload: {
         ...textPayload("msg-model", "assistant", "done"),
         model: {
-          ref: "local:lfm2.5-1.2b",
+          ref: "local:lfm2.5-2.6b",
           provider: "local",
-          displayName: "LFM2.5 1.2B Instruct",
+          displayName: "LFM2.5 2.6B",
         },
       },
       createdAt: "2026-05-20T12:00:00.000Z",
@@ -169,9 +169,9 @@ describe("chatMessagesFromChannelView", () => {
     expect(chatMessagesFromChannelView(state)[0]).toMatchObject({
       id: "msg-model",
       model: {
-        ref: "local:lfm2.5-1.2b",
+        ref: "local:lfm2.5-2.6b",
         provider: "local",
-        displayName: "LFM2.5 1.2B Instruct",
+        displayName: "LFM2.5 2.6B",
       },
     });
   });

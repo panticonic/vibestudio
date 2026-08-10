@@ -17,7 +17,14 @@ export const WORKSPACE_DEFAULT_AGENT_CONFIG_FIELD = "defaultAgentConfig";
 export const DEFAULT_AGENT_MODEL_REF = "openai-codex:gpt-5.6-sol";
 /** The local provider id and its bundled, explicitly installable fallback. */
 export const LOCAL_PROVIDER_ID = "local";
-export const LOCAL_FALLBACK_MODEL_REF = "local:lfm2.5-1.2b";
+export const LOCAL_FALLBACK_MODEL = {
+  id: "lfm2.5-2.6b",
+  ref: "local:lfm2.5-2.6b",
+  name: "LFM2.5 2.6B",
+  contextWindow: 128_000,
+  downloadSizeBytes: 1_674_454_848,
+} as const;
+export const LOCAL_FALLBACK_MODEL_REF = LOCAL_FALLBACK_MODEL.ref;
 export const LOCAL_MODELS_EXTENSION_ID = "@workspace-extensions/local-models";
 
 /** Enabled effort levels the agent harness accepts (excludes pi's "off"). */

@@ -57,10 +57,10 @@ const promptingRoster: AgentLoopConfig["roster"] = {
   ],
 };
 
-const fallbackModelRef = "local:lfm2.5-1.2b";
+const fallbackModelRef = "local:lfm2.5-2.6b";
 const fallbackModelSpec: AgentModelSpec = {
-  id: "lfm2.5-1.2b",
-  name: "LFM2.5 1.2B",
+  id: "lfm2.5-2.6b",
+  name: "LFM2.5 2.6B",
   api: "openai-completions",
   provider: "local",
   baseUrl: "http://127.0.0.1:0/v1",
@@ -1153,7 +1153,7 @@ describe("agent-loop core lifecycle", () => {
       .modelRequest;
     expect(request).toMatchObject({
       provider: "local",
-      model: "lfm2.5-1.2b",
+      model: "lfm2.5-2.6b",
       auth: "loopback",
       modelSpec: fallbackModelSpec,
       attemptId: ids.attemptId(msg1),
