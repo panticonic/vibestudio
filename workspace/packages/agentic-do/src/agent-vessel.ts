@@ -14,14 +14,13 @@
 
 import {
   DurableObjectBase,
-  rpc,
   type DurableObjectContext,
   type LifecyclePrepareInput,
   type LifecyclePrepareResult,
   type LifecycleResumeInput,
-  assertExactSqlTableSchema,
-} from "@workspace/runtime/worker";
-import { withCausalParent, type RpcClient } from "@vibestudio/rpc";
+} from "@workspace/runtime/worker/durable-base";
+import { assertExactSqlTableSchema } from "@workspace/runtime/worker/sql-table-schema";
+import { rpc, withCausalParent, type RpcClient } from "@vibestudio/rpc";
 import {
   createGadServiceClient,
   type DurableObjectServiceClient,
@@ -34,19 +33,19 @@ import type {
 } from "@workspace/pubsub";
 import { iterateChannelReplayAfterPages } from "@workspace/pubsub";
 import {
-  composeSystemPrompt,
   driveMerge,
+  renderCompareReview,
+  renderMergeReview,
+} from "@workspace/harness/merge-driver";
+import { composeSystemPrompt, type SystemPromptMode } from "@workspace/harness/system-prompt";
+import {
   evalToolParameters,
   formatEvalResult,
   normalizeEvalToolSource,
-  resolveToolFile,
-  renderCompareReview,
-  renderMergeReview,
-  type ChannelEvent,
   type EvalRunResult,
-  type ParticipantDescriptor,
-  type SystemPromptMode,
-} from "@workspace/harness";
+} from "@workspace/harness/tools/eval";
+import { resolveToolFile } from "@workspace/harness/semantic-file-resolution";
+import type { ChannelEvent, ParticipantDescriptor } from "@workspace/harness/types";
 import {
   AGENTIC_EVENT_PAYLOAD_KIND,
   AGENTIC_PROTOCOL_VERSION,
@@ -79,11 +78,13 @@ import {
   createSubagentContext,
   initAgentFromTrajectoryFork,
   publishAgentTaskSeed,
+  subscribeAgentToChannel,
+} from "@workspace/agentic-core/agent-launch";
+import {
   subagentFirstTaskPrompt,
   subagentRuntimePrompt,
-  subscribeAgentToChannel,
   type SubagentIdentity,
-} from "@workspace/agentic-core";
+} from "@workspace/agentic-core/subagent-prompt";
 import type { DoAlarmSchedule } from "@vibestudio/shared/doDispatcher";
 import type {
   ClaimRequest,
@@ -504,8 +505,11 @@ export interface AgentPromptOverride {
 
 // Moved to @workspace/agentic-core so external launcher extensions render the
 // same contract; re-exported here for local tests and downstream launchers.
-export { subagentFirstTaskPrompt, subagentRuntimePrompt } from "@workspace/agentic-core";
-export type { SubagentIdentity } from "@workspace/agentic-core";
+export {
+  subagentFirstTaskPrompt,
+  subagentRuntimePrompt,
+} from "@workspace/agentic-core/subagent-prompt";
+export type { SubagentIdentity } from "@workspace/agentic-core/subagent-prompt";
 
 type BrowserOpenMode = "internal" | "external";
 type BrowserHandoffCallerKind = "app" | "panel" | "shell";
@@ -1056,8 +1060,9 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     if (typeof config?.systemPrompt === "string") {
       override.systemPrompt = config.systemPrompt;
     }
-    if (isSystemPromptMode(config?.systemPromptMode)) {
-      override.systemPromptMode = config.systemPromptMode;
+    const systemPromptMode = config?.systemPromptMode;
+    if (isSystemPromptMode(systemPromptMode)) {
+      override.systemPromptMode = systemPromptMode;
     }
     return override;
   }
@@ -1173,7 +1178,10 @@ export abstract class AgentVesselBase extends DurableObjectBase {
   }
 
   /** Local tools registered with the local-tool executor. */
-  protected getLoopTools(_channelId: string, _execution?: AgentToolExecutionContext): AgentTool[] {
+  protected getLoopTools(
+    _channelId: string,
+    _execution?: AgentToolExecutionContext
+  ): AgentTool[] | Promise<AgentTool[]> {
     return [];
   }
 
@@ -2222,7 +2230,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       if (this.includeMemoryRecallTool()) {
         registry.set("memory_recall", this.createMemoryRecallTool());
       }
-      for (const tool of this.getLoopTools(channelId, execution)) {
+      for (const tool of await this.getLoopTools(channelId, execution)) {
         registry.set(tool.name, tool);
       }
       return registry;
@@ -2233,7 +2241,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       if (this.includeMemoryRecallTool()) {
         registry.set("memory_recall", this.createMemoryRecallTool());
       }
-      for (const tool of this.getLoopTools(channelId)) {
+      for (const tool of await this.getLoopTools(channelId)) {
         registry.set(tool.name, tool);
       }
       this.localTools.set(channelId, registry);

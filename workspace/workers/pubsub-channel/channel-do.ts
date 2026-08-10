@@ -22,7 +22,7 @@ import {
   DurableObjectBase,
   type DurableObjectContext,
   type DurableObjectServiceClient,
-} from "@workspace/runtime/worker";
+} from "@workspace/runtime/worker/kernel";
 import { canonicalJson } from "@vibestudio/content-addressing";
 import type { ChannelEvent } from "@workspace/harness";
 import {

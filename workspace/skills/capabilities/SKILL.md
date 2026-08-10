@@ -192,7 +192,7 @@ or edit `meta/vibestudio.yml` merely to demonstrate consumption.
 Provider receiver (`workers/local-greeting/index.ts`):
 
 ```ts
-import { DurableObjectBase, rpc } from "@workspace/runtime/worker";
+import { DurableObjectBase, rpc } from "@workspace/runtime/worker/kernel";
 
 export class LocalGreetingDO extends DurableObjectBase {
   protected schemaProductionBaseline() {

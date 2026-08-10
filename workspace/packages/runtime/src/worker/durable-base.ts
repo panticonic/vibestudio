@@ -54,14 +54,6 @@ import {
 import { createCredentialClient, type CredentialClient } from "../shared/credentials.js";
 import { createNotificationClient, type NotificationClient } from "../shared/notifications.js";
 import { _initFsWithRpc } from "./fs.js";
-import { createNonPanelRuntimeHandle } from "../shared/handles.js";
-import {
-  createPanelRuntime,
-  type CreatePanelSlotOptions,
-  type OpenPanelOptions,
-  type PanelRuntimeApi,
-  type PanelRuntimeTree,
-} from "../shared/panelRuntime.js";
 import type { AuthenticatedCaller } from "@vibestudio/rpc";
 import {
   DIRECT_AUTHORITY_ACCEPTED_AT_HEADER,
@@ -74,7 +66,6 @@ import {
   inspectResidentSessions,
   type ResidentChannelDeliveryInput,
 } from "@vibestudio/shared/residentSession";
-import type { PanelHandle } from "../core/index.js";
 import {
   DURABLE_WORK_READY_HEADER,
   encodeDurableWorkReady,
@@ -260,7 +251,6 @@ export abstract class DurableObjectBase {
   protected _currentRpcIdempotencyKey: string | null = null;
   private _currentVerifiedCaller: AttestedCaller | null = null;
   private readonly _invocationContext = new InvocationContext<RpcInvocationContext>();
-  private _panelRuntime: PanelRuntimeApi | null = null;
   private _credentials: CredentialClient | null = null;
   private _notifications: NotificationClient | null = null;
   private _fs: RuntimeFs | null = null;
@@ -593,27 +583,6 @@ export abstract class DurableObjectBase {
     return context ? context.callerPanelId : this._currentRpcCallerPanelId;
   }
 
-  /** Get a handle to the parent (first dispatcher) */
-  protected getParent(): PanelHandle | null {
-    const callerId = this.rpcCallerId;
-    if (!callerId) return null;
-    if (this.rpcCallerKind === "panel") {
-      const panelId = this.rpcCallerPanelId ?? callerId;
-      return this.panelRuntime.fromMetadata({
-        id: panelId,
-        title: panelId,
-        source: panelId,
-        kind: "workspace",
-        parentId: null,
-        rpcTargetId: callerId,
-      });
-    }
-    if (this.rpcCallerKind === "worker" || this.rpcCallerKind === "do") {
-      return createNonPanelRuntimeHandle({ id: callerId });
-    }
-    return null;
-  }
-
   /** Correlation id of the inbound call, when the caller stamped one. */
   protected get rpcRequestId(): string | null {
     const context = this._invocationContext.current();
@@ -624,48 +593,6 @@ export abstract class DurableObjectBase {
   protected get rpcIdempotencyKey(): string | null {
     const context = this._invocationContext.current();
     return context ? context.idempotencyKey : this._currentRpcIdempotencyKey;
-  }
-
-  private get panelRuntime(): PanelRuntimeApi {
-    if (!this._panelRuntime) {
-      this._panelRuntime = createPanelRuntime({
-        rpc: this.rpc,
-        selfHandle: () =>
-          createNonPanelRuntimeHandle({
-            id: String(this.env["DO_ID"] ?? this.ctx.id.toString()),
-          }),
-        defaultOpenParentId: null,
-        requesterPanelId: () =>
-          this._currentRpcCallerKind === "panel"
-            ? (this._currentRpcCallerPanelId ?? this._currentRpcCallerId)
-            : null,
-      });
-    }
-    return this._panelRuntime;
-  }
-
-  /** Commit an executable workspace or browser panel without presenting it. */
-  protected createPanelSlot(
-    source: string,
-    options?: CreatePanelSlotOptions
-  ): Promise<PanelHandle> {
-    return this.panelRuntime.createPanelSlot(source, options);
-  }
-
-  /** Open a workspace or browser panel and wait for application readiness. */
-  protected openPanel(source: string, options?: OpenPanelOptions): Promise<PanelHandle> {
-    return this.panelRuntime.openPanel(source, options);
-  }
-
-  /** List all visible panels. */
-  /** Get a handle for a known panel slot id. */
-  protected getPanelHandle(id: string, kind?: "workspace" | "browser"): PanelHandle {
-    return this.panelRuntime.getPanelHandle(id, kind);
-  }
-
-  /** Panel tree API for Durable Objects. */
-  protected get panelTree(): PanelRuntimeTree {
-    return this.panelRuntime.panelTree;
   }
 
   /** Last value pushed via `setOwnTitle` during this activation. Used to
@@ -1609,7 +1536,6 @@ export abstract class DurableObjectBase {
 
   protected resetRpcClients(): void {
     this._connectionless = null;
-    this._panelRuntime = null;
     this._credentials = null;
     this._notifications = null;
     this._fs = null;

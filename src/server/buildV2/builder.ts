@@ -1342,9 +1342,9 @@ function generatePanelHtml(
  * - `"panel"` — full bootstrap including `__vibestudioRequireAsync__`, which uses
  *   browser-native `import(id)` to lazily load unbundled modules. Used by
  *   `compileComponent` (inline_ui / feedback_custom).
- * - `"worker"` — bootstrap without `__vibestudioRequireAsync__`. workerd does not
- *   support dynamic `import(id)` of arbitrary specifiers, and no worker code
- *   path consumes the async fallback (compileComponent is panel-only).
+ * - `"worker"` — async loading is restricted to generated literal loaders.
+ *   workerd cannot resolve arbitrary runtime `import(id)` specifiers, but the
+ *   worker build preserves literal dynamic imports as sealed module chunks.
  */
 export type BootstrapTarget = "panel" | "worker";
 
@@ -1359,7 +1359,30 @@ globalThis.__vibestudioRequire__ = function(id) {
   throw new Error('Module "' + id + '" not available. Workspace packages (@workspace/*, @vibestudio/*) are auto-resolved. For npm packages, use imports: { "' + id + '": "npm:latest" }');
 };`;
 
-  if (target === "worker") return base;
+  if (target === "worker") {
+    return `${base}
+globalThis.__vibestudioModuleLoaders__ = globalThis.__vibestudioModuleLoaders__ || {};
+globalThis.__vibestudioModuleLoadingPromises__ = globalThis.__vibestudioModuleLoadingPromises__ || {};
+globalThis.__vibestudioRequireAsync__ = async function(id) {
+  if (globalThis.__vibestudioModuleMap__[id]) return globalThis.__vibestudioModuleMap__[id];
+  if (globalThis.__vibestudioModuleLoadingPromises__[id]) return globalThis.__vibestudioModuleLoadingPromises__[id];
+  const loader = globalThis.__vibestudioModuleLoaders__[id];
+  if (!loader) throw new Error('Module "' + id + '" has no generated worker loader');
+  const loadPromise = loader().then((mod) => {
+    globalThis.__vibestudioModuleMap__[id] = mod;
+    return mod;
+  }).finally(() => {
+    delete globalThis.__vibestudioModuleLoadingPromises__[id];
+  });
+  globalThis.__vibestudioModuleLoadingPromises__[id] = loadPromise;
+  return loadPromise;
+};
+globalThis.__vibestudioPreloadModules__ = function(ids) {
+  return Promise.all(ids.map(function(id) {
+    return globalThis.__vibestudioRequireAsync__(id);
+  }));
+};`;
+  }
 
   return `${base}
 globalThis.__vibestudioModuleLoaders__ = globalThis.__vibestudioModuleLoaders__ || {};
@@ -1454,11 +1477,16 @@ function __vibestudioLoadRuntime__() {
   });
   return __vibestudioRuntimeLoadPromise__;
 }
+function __vibestudioLoadRuntimeAlias__(id) {
+  return __vibestudioLoadRuntime__().then(function() {
+    return globalThis.__vibestudioModuleMap__[id];
+  });
+}
 globalThis.__vibestudioModuleLoaders__[${JSON.stringify(RUNTIME_MODULE)}] = __vibestudioLoadRuntime__;
-globalThis.__vibestudioModuleLoaders__["fs"] = __vibestudioLoadRuntime__;
-globalThis.__vibestudioModuleLoaders__["node:fs"] = __vibestudioLoadRuntime__;
-globalThis.__vibestudioModuleLoaders__["fs/promises"] = __vibestudioLoadRuntime__;
-globalThis.__vibestudioModuleLoaders__["node:fs/promises"] = __vibestudioLoadRuntime__;`);
+globalThis.__vibestudioModuleLoaders__["fs"] = function() { return __vibestudioLoadRuntimeAlias__("fs"); };
+globalThis.__vibestudioModuleLoaders__["node:fs"] = function() { return __vibestudioLoadRuntimeAlias__("node:fs"); };
+globalThis.__vibestudioModuleLoaders__["fs/promises"] = function() { return __vibestudioLoadRuntimeAlias__("fs/promises"); };
+globalThis.__vibestudioModuleLoaders__["node:fs/promises"] = function() { return __vibestudioLoadRuntimeAlias__("node:fs/promises"); };`);
     }
 
     return `${generateModuleMapBootstrap(target, nativeImportSpecifiers)}
@@ -1466,37 +1494,52 @@ ${loaderLines.join("\n")}
 `;
   }
 
-  const importLines = effectiveExposeModules.map(
-    (dep, index) => `import * as __mod${index}__ from ${JSON.stringify(dep)};`
-  );
-  const registerLines = effectiveExposeModules.map(
-    (dep, index) => `globalThis.__vibestudioModuleMap__[${JSON.stringify(dep)}] = __mod${index}__;`
-  );
+  const loaderLines = effectiveExposeModules.flatMap((dep) => {
+    if (dep === RUNTIME_MODULE) return [];
+    return [
+      `globalThis.__vibestudioModuleLoaders__[${JSON.stringify(dep)}] = function() { return import(${JSON.stringify(dep)}); };`,
+    ];
+  });
 
-  // Register Node built-in shims if the runtime SDK is exposed.
-  // This lets eval code use `import fs from "fs"` and `import path from "path"`
-  // transparently — they delegate to the runtime's RPC-backed implementations.
-  const shimLines: string[] = [];
+  // Register Node built-in shims when the runtime SDK is first requested.
+  // The aliases share the runtime's single-flight loader.
   const runtimeIndex = effectiveExposeModules.indexOf(RUNTIME_MODULE);
   if (runtimeIndex >= 0) {
-    const rtVar = `__mod${runtimeIndex}__`;
-    shimLines.push(`(function() {
-  var _fs = ${rtVar}["fs"];
-  if (!_fs) return;
+    loaderLines.push(`var __vibestudioRuntimeLoadPromise__;
+function __vibestudioLoadRuntime__() {
+  if (__vibestudioRuntimeLoadPromise__) return __vibestudioRuntimeLoadPromise__;
+  __vibestudioRuntimeLoadPromise__ = import(${JSON.stringify(RUNTIME_MODULE)}).then(function(mod) {
+  var map = globalThis.__vibestudioModuleMap__;
+  map[${JSON.stringify(RUNTIME_MODULE)}] = mod;
+  var _fs = mod["fs"];
+  if (!_fs) return mod;
   var fsShim = { promises: _fs, default: null, constants: {} };
   var methods = ["readFile","writeFile","readdir","stat","lstat","mkdir","rmdir","unlink","rename","copyFile","access","rm","symlink","readlink","realpath","appendFile","chmod","truncate","utimes","open"];
   methods.forEach(function(m) { if (_fs[m]) fsShim[m] = function() { return _fs[m].apply(_fs, arguments); }; });
   fsShim.default = fsShim;
-  var map = globalThis.__vibestudioModuleMap__;
   map["fs"] = fsShim; map["node:fs"] = fsShim;
   map["fs/promises"] = _fs; map["node:fs/promises"] = _fs;
-})();`);
+  return mod;
+  }).catch(function(error) {
+    __vibestudioRuntimeLoadPromise__ = undefined;
+    throw error;
+  });
+  return __vibestudioRuntimeLoadPromise__;
+}
+function __vibestudioLoadRuntimeAlias__(id) {
+  return __vibestudioLoadRuntime__().then(function() {
+    return globalThis.__vibestudioModuleMap__[id];
+  });
+}
+globalThis.__vibestudioModuleLoaders__[${JSON.stringify(RUNTIME_MODULE)}] = __vibestudioLoadRuntime__;
+globalThis.__vibestudioModuleLoaders__["fs"] = function() { return __vibestudioLoadRuntimeAlias__("fs"); };
+globalThis.__vibestudioModuleLoaders__["node:fs"] = function() { return __vibestudioLoadRuntimeAlias__("node:fs"); };
+globalThis.__vibestudioModuleLoaders__["fs/promises"] = function() { return __vibestudioLoadRuntimeAlias__("fs/promises"); };
+globalThis.__vibestudioModuleLoaders__["node:fs/promises"] = function() { return __vibestudioLoadRuntimeAlias__("node:fs/promises"); };`);
   }
 
   return `${generateModuleMapBootstrap(target)}
-${importLines.join("\n")}
-${registerLines.join("\n")}
-${shimLines.join("\n")}
+${loaderLines.join("\n")}
 `;
 }
 

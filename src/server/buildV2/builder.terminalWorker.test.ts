@@ -234,4 +234,47 @@ describe("buildUnit terminal worker builds", () => {
     expect(reused.metadata.sourceStateHash).toBe(laterState);
     expect(reused.metadata.execution?.sourceState.contentRoots[0]?.stateHash).toBe(laterState);
   });
+
+  it("keeps exposed eval dependencies out of the activation module", async () => {
+    const workerDir = path.join(workspaceRoot, "workers", "lazy-expose-worker");
+    fs.mkdirSync(workerDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(workerDir, "package.json"),
+      JSON.stringify({
+        name: "@workspace-workers/lazy-expose-worker",
+        version: "0.1.0",
+        private: true,
+        type: "module",
+        vibestudio: {
+          entry: "worker.ts",
+          durable: { classes: [{ className: "LazyExposeWorker" }] },
+          exposeModules: ["zod"],
+        },
+        dependencies: { zod: "^3.24.0" },
+      })
+    );
+    fs.writeFileSync(
+      path.join(workerDir, "worker.ts"),
+      "export class LazyExposeWorker { fetch() { return new Response('ready'); } }\n"
+    );
+    commit(workerDir, "lazy exposed module worker");
+
+    const graph = discoverPackageGraph(workspaceRoot);
+    const result = await buildUnit(
+      graph.get("@workspace-workers/lazy-expose-worker"),
+      "e".repeat(64),
+      graph,
+      workspaceRoot,
+      SOURCE_STATE_HASH
+    );
+
+    const primary = result.artifacts.find((artifact) => artifact.role === "primary")?.content ?? "";
+    expect(primary).toContain('import("./chunks/');
+    expect(primary).not.toContain("ZodError");
+
+    const exposedChunk = result.artifacts.find(
+      (artifact) => artifact.role === "asset" && artifact.content.includes("ZodError")
+    );
+    expect(exposedChunk?.path).toMatch(/^chunks\/(?:zod|chunk)-[A-Z0-9]+\.js$/);
+  });
 });

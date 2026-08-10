@@ -9,7 +9,7 @@
  * instance memory: they die if the DO hibernates or restarts, which is fine
  * for test-scoped use — callers reopen on "unknown session" errors.
  */
-import { DurableObjectBase, rpc } from "@workspace/runtime/worker";
+import { DurableObjectBase, rpc } from "@workspace/runtime/worker/kernel";
 import { CdpConnection } from "@workspace/cdp-client";
 import {
   cpuProfileRef,

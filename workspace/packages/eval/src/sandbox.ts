@@ -1558,6 +1558,11 @@ export async function executeSandbox(
     }
     throwIfAborted(signal);
     if (!validation.valid) {
+      const preload = await withAbort(preloadRequires(transformed.requires), signal);
+      if (preload.success) validation = validateRequires(transformed.requires, requireFn);
+    }
+    throwIfAborted(signal);
+    if (!validation.valid) {
       const missing = validation.missingModule!;
       if (missing.startsWith("node:")) {
         return {

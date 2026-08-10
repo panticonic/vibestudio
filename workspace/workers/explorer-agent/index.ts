@@ -139,12 +139,12 @@ export class ExplorerAgentWorker extends SilentAgentWorker {
     return defaultPolicies();
   }
 
-  protected override getLoopTools(
+  protected override async getLoopTools(
     channelId: string,
     execution?: AgentToolExecutionContext
-  ): AgentTool[] {
+  ): Promise<AgentTool[]> {
     return [
-      ...super.getLoopTools(channelId, execution),
+      ...(await super.getLoopTools(channelId, execution)),
       this.createReportFindingTool(channelId, execution?.rpc ?? this.rpc),
     ];
   }

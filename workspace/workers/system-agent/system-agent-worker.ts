@@ -1,5 +1,5 @@
 import { AgentWorkerBase, type AgentToolExecutionContext } from "@workspace/agentic-do";
-import { createEvalTool, type ParticipantDescriptor } from "@workspace/harness";
+import type { ParticipantDescriptor } from "@workspace/harness";
 import type { AgentTool } from "@workspace/pi-core";
 import { createRpcFs } from "@workspace/runtime/worker";
 import { SYSTEM_AGENT_EVAL_GUIDE, SYSTEM_AGENT_PROMPT } from "./prompts.js";
@@ -64,10 +64,11 @@ export class SystemAgentWorker extends AgentWorkerBase {
     return false;
   }
 
-  protected override getLoopTools(
+  protected override async getLoopTools(
     channelId: string,
     execution?: AgentToolExecutionContext
-  ): AgentTool[] {
+  ): Promise<AgentTool[]> {
+    const { createEvalTool } = await import("@workspace/harness/tools/eval");
     const toolRpc = execution?.rpc ?? this.rpc;
     const fs = createRpcFs(toolRpc as never);
     return [

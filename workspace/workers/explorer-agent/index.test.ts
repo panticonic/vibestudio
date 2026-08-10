@@ -17,18 +17,20 @@ class TestExplorerAgentWorker extends ExplorerAgentWorker {
   policies(): StepPolicy[] {
     return this.getStepPolicies("ch-1");
   }
-  tools(): AgentTool[] {
+  async tools(): Promise<AgentTool[]> {
     return this.getLoopTools("ch-1");
   }
   respondPolicy(): string {
     return this.getDefaultRespondPolicy();
   }
-  reportTool(rpc: RpcClient): AgentTool {
-    return this.getLoopTools("ch-1", {
-      invocationId: "tool-1",
-      commandId: "command:tool-1",
-      rpc,
-    }).find((tool) => tool.name === "report_finding")!;
+  async reportTool(rpc: RpcClient): Promise<AgentTool> {
+    return (
+      await this.getLoopTools("ch-1", {
+        invocationId: "tool-1",
+        commandId: "command:tool-1",
+        rpc,
+      })
+    ).find((tool) => tool.name === "report_finding")!;
   }
   prepareChannel(): void {
     this.sql.exec(
@@ -79,7 +81,7 @@ describe("ExplorerAgentWorker", () => {
   it("exposes report_finding alongside the inherited say tool", async () => {
     const { instance } = await createTestDO(TestExplorerAgentWorker);
     const worker = instance as TestExplorerAgentWorker;
-    const names = worker.tools().map((tool) => tool.name);
+    const names = (await worker.tools()).map((tool) => tool.name);
     expect(names).toContain("report_finding");
     expect(names).toContain("say");
   });
@@ -121,7 +123,7 @@ describe("ExplorerAgentWorker", () => {
       },
       stream: async () => new Response(),
     } as unknown as RpcClient;
-    const tool = worker.reportTool(rpc);
+    const tool = await worker.reportTool(rpc);
     const params = {
       runId: "run-1",
       class: "BUG",
@@ -255,7 +257,7 @@ describe("ExplorerAgentWorker", () => {
     } as unknown as RpcClient;
 
     await expect(
-      worker.reportTool(rpc).execute!(
+      (await worker.reportTool(rpc)).execute!(
         "tool-1",
         {
           runId: "run-1",

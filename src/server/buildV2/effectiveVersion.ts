@@ -230,8 +230,9 @@ export function persistEvState(state: Omit<PersistedEvState, "version">): void {
  *
  * "28": generated panel entries publish readiness at their mount boundary.
  * "29": worker builds preserve dynamic imports as workerd module-map chunks.
+ * "30": worker exposed modules are emitted as lazy feature chunks.
  */
-const BUILD_CACHE_VERSION = "29";
+const BUILD_CACHE_VERSION = "30";
 
 /**
  * Host-root files whose CONTENTS are folded into every build key. Changing the

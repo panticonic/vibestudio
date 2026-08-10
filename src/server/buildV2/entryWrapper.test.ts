@@ -70,11 +70,11 @@ describe("generateModuleMapBootstrap (worker target)", () => {
     expect(code).toContain("globalThis.__vibestudioRequire__");
   });
 
-  it("omits __vibestudioRequireAsync__ entirely (workerd has no dynamic import)", () => {
+  it("uses generated loaders without an arbitrary runtime import", () => {
     const code = generateModuleMapBootstrap("worker");
-    expect(code).not.toContain("__vibestudioRequireAsync__");
-    expect(code).not.toContain("__vibestudioModuleLoadingPromises__");
-    // No `import(id)` either — that's the body of the async fallback.
+    expect(code).toContain("__vibestudioRequireAsync__");
+    expect(code).toContain("__vibestudioModuleLoadingPromises__");
+    expect(code).toContain("has no generated worker loader");
     expect(code).not.toMatch(/\bimport\(id\)/);
   });
 
@@ -120,22 +120,21 @@ describe("generateExposeModuleCode", () => {
 
   it("worker target produces the worker-flavored bootstrap", () => {
     const code = generateExposeModuleCode(["@workspace/runtime"], "worker");
-    expect(code).not.toContain("__vibestudioRequireAsync__");
-    expect(code).toContain('import * as __mod0__ from "@workspace/runtime"');
+    expect(code).toContain("__vibestudioRequireAsync__");
+    expect(code).toContain('import("@workspace/runtime")');
+    expect(code).not.toContain("import * as");
   });
 
-  it("worker target preloads only the canonical CDP client when runtime handles are exposed", () => {
+  it("worker target registers a lazy canonical CDP client companion", () => {
     const code = generateExposeModuleCode(["@workspace/runtime"], "worker");
-    expect(code).toContain('import * as __mod1__ from "@workspace/cdp-client"');
-    expect(code).toContain(
-      'globalThis.__vibestudioModuleMap__["@workspace/cdp-client"] = __mod1__'
-    );
+    expect(code).toContain('import("@workspace/cdp-client")');
+    expect(code).toContain('globalThis.__vibestudioModuleLoaders__["@workspace/cdp-client"]');
   });
 
   it("worker target synthesizes fs shims from runtime exports", () => {
     const code = generateExposeModuleCode(["@workspace/runtime"], "worker");
     expect(code).toContain('map["fs"]');
-    expect(code).toContain('__mod0__["fs"]');
+    expect(code).toContain('mod["fs"]');
   });
 
   it("panel target produces the panel-flavored bootstrap", () => {
@@ -212,10 +211,10 @@ describe("generateExposeModuleCode", () => {
     const code = generateExposeModuleCode(["@workspace/runtime"], "panel");
     expect(code).toContain("__vibestudioRuntimeLoadPromise__");
     expect(code).toContain(
-      'globalThis.__vibestudioModuleLoaders__["fs"] = __vibestudioLoadRuntime__'
+      'globalThis.__vibestudioModuleLoaders__["fs"] = function() { return __vibestudioLoadRuntimeAlias__("fs"); }'
     );
     expect(code).toContain(
-      'globalThis.__vibestudioModuleLoaders__["node:fs/promises"] = __vibestudioLoadRuntime__'
+      'globalThis.__vibestudioModuleLoaders__["node:fs/promises"] = function() { return __vibestudioLoadRuntimeAlias__("node:fs/promises"); }'
     );
   });
 

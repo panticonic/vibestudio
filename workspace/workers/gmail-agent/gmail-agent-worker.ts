@@ -378,13 +378,13 @@ export class GmailAgentWorker extends AgentWorkerBase {
       .trim();
   }
 
-  protected override getLoopTools(
+  protected override async getLoopTools(
     channelId: string,
     execution?: AgentToolExecutionContext
-  ): AgentTool[] {
-    const universalTools = super
-      .getLoopTools(channelId, execution)
-      .filter((tool) => GMAIL_UNIVERSAL_LOOP_TOOL_NAMES.has(tool.name));
+  ): Promise<AgentTool[]> {
+    const universalTools = (await super.getLoopTools(channelId, execution)).filter((tool) =>
+      GMAIL_UNIVERSAL_LOOP_TOOL_NAMES.has(tool.name)
+    );
     const gmailTools = toolOperations().map(
       (op) =>
         ({

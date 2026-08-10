@@ -901,7 +901,7 @@ function repositorySeedFiles(
       {
         path: "index.ts",
         content: [
-          'import { DurableObjectBase, rpc } from "@workspace/runtime/worker";',
+          'import { DurableObjectBase, rpc } from "@workspace/runtime/worker/kernel";',
           "",
           "export class FixtureWorkerDO extends DurableObjectBase {",
           '  protected schemaProductionBaseline() { return { version: 1, name: "fixture-worker-v1" } as const; }',

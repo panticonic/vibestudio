@@ -314,7 +314,7 @@ export class LinkedAgentWorker extends AgentWorkerBase {
   /** No in-process model loop: prompt/tool artifacts are never composed. */
   protected override async ensurePromptArtifacts(_channelId: string): Promise<void> {}
 
-  protected override getLoopTools(_channelId: string): AgentTool[] {
+  protected override async getLoopTools(_channelId: string): Promise<AgentTool[]> {
     return [];
   }
 

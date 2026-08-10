@@ -5,7 +5,8 @@
  * directions.
  */
 
-import { assertExactSqlTableSchema, type SqlStorage } from "@workspace/runtime/worker";
+import type { SqlStorage } from "@workspace/runtime/worker/durable-base";
+import { assertExactSqlTableSchema } from "@workspace/runtime/worker/sql-table-schema";
 import type { EffectDescriptor, EffectKind } from "@workspace/agent-loop";
 
 export interface OutboxRow {

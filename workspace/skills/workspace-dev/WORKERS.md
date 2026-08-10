@@ -362,7 +362,7 @@ Canonical shape:
 Minimal store:
 
 ```ts
-import { DurableObjectBase, rpc } from "@workspace/runtime/worker";
+import { DurableObjectBase, rpc } from "@workspace/runtime/worker/kernel";
 
 type TodoRow = {
   id: string;
@@ -436,6 +436,28 @@ export class TodoStore extends DurableObjectBase {
   }
 }
 ```
+
+### Keep the activation kernel small
+
+`DurableObjectBase` is the storage, RPC, and lifecycle kernel. Import it from
+`@workspace/runtime/worker/kernel` for ordinary services. Import narrow worker
+entry points when another shared package offers them; a package barrel can
+retain every exported feature in the eager worker graph even when source code
+only names one export.
+
+Use `PanelDurableObjectBase` from
+`@workspace/runtime/worker/panel-durable-base` only when the DO itself calls
+the protected panel-tree helpers (`createPanelSlot`, `openPanel`,
+`getPanelHandle`, or `panelTree`). Those facilities intentionally live outside
+the base kernel so non-panel workers do not parse and initialize panel-runtime
+code during activation.
+
+Keep expensive capability families behind literal dynamic imports. A worker
+may expose packages to eval while keeping them out of its activation bundle:
+the generated runtime preloads the exact required feature chunk before running
+otherwise-synchronous eval code. Do not recreate a synchronous registry or a
+root-barrel import to make lazy code convenient; that silently folds parsers,
+schema libraries, and runtime catalogs back into every activation.
 
 Declare it. A `singletonObjects` row gives the service a default object key
 (`main` below); omit the singleton only when the service is intentionally a
@@ -632,7 +654,7 @@ effect literal because live docs are extracted from the exact source build
 without executing that source.
 
 ```ts
-import { DurableObjectBase, rpc } from "@workspace/runtime/worker";
+import { DurableObjectBase, rpc } from "@workspace/runtime/worker/kernel";
 
 export class MyStoreDO extends DurableObjectBase {
   protected override schemaProductionBaseline() {

@@ -5,7 +5,8 @@
   "type": "module",
   "private": true,
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./agent-worker-base": "./src/agent-worker-base.ts"
   },
   "dependencies": {
     "@earendil-works/pi-ai": "^0.82.0",

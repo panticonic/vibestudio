@@ -1,7 +1,7 @@
 /** Durable supervisor index for retained subagent execution results. */
 
-import type { SqlStorage } from "@workspace/runtime/worker";
-import { assertExactSqlTableSchema } from "@workspace/runtime/worker";
+import type { SqlStorage } from "@workspace/runtime/worker/durable-base";
+import { assertExactSqlTableSchema } from "@workspace/runtime/worker/sql-table-schema";
 
 export type SubagentRunStatus =
   | "starting"

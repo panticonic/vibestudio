@@ -6,27 +6,8 @@
  * agent method roster.
  */
 
-import { createRpcFs, type DurableObjectContext } from "@workspace/runtime/worker";
-import {
-  createEditTool,
-  createFindTool,
-  createGrepTool,
-  createLsTool,
-  createReadTool,
-  createProvenanceTool,
-  createWriteTool,
-  createMoveFileTool,
-  createCopyFileTool,
-  createWorkspaceVcsTool,
-  createSuspendTurnTool,
-  createEvalTool,
-  createDocsSearchTool,
-  createDocsOpenTool,
-  createWorkspaceServiceTool,
-  createWebTools,
-  createToolVcs,
-  loadVibestudioResources,
-} from "@workspace/harness";
+import type { DurableObjectContext } from "@workspace/runtime/worker/durable-base";
+import { createRpcFs } from "@workspace/runtime/worker/rpc-fs";
 import type { AgentTool } from "@workspace/pi-core";
 import type { ParticipantDescriptor } from "@workspace/harness";
 import type { AgentTurnContextPolicy, ThinkingLevel } from "@workspace/agent-loop";
@@ -119,7 +100,8 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
     if (this.promptResourceCache) return this.promptResourceCache;
     if (this.promptResourceLoad) return this.promptResourceLoad;
 
-    const load = loadVibestudioResources({ rpc: this.rpc })
+    const load = import("@workspace/harness/resource-loader")
+      .then(({ loadVibestudioResources }) => loadVibestudioResources({ rpc: this.rpc }))
       .then(
         (resources): AgentPromptResources => ({
           workspacePrompt: resources.systemPrompt,
@@ -271,10 +253,33 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
   /** The six workerd-clean file tools over the agent's context folder
    *  (fs RPC scopes paths to the caller's context). Without them, agents
    *  whose prompts say `read(".../SKILL.md")` can only flail. */
-  protected override getLoopTools(
+  protected override async getLoopTools(
     channelId: string,
     execution?: AgentToolExecutionContext
-  ): AgentTool[] {
+  ): Promise<AgentTool[]> {
+    // The complete authoring toolset carries parsers, runtime catalogs, schema
+    // conversion, and provider adapters. A DO can service lifecycle and
+    // inspection calls without any of those features, so load the factories
+    // only when a turn first asks for its model-facing registry.
+    const {
+      createEditTool,
+      createFindTool,
+      createGrepTool,
+      createLsTool,
+      createReadTool,
+      createProvenanceTool,
+      createWriteTool,
+      createMoveFileTool,
+      createCopyFileTool,
+      createWorkspaceVcsTool,
+      createSuspendTurnTool,
+      createEvalTool,
+      createDocsSearchTool,
+      createDocsOpenTool,
+      createWorkspaceServiceTool,
+      createWebTools,
+      createToolVcs,
+    } = await import("@workspace/harness/standard-tools");
     const toolRpc = execution?.rpc ?? this.rpc;
     const fs = createRpcFs(toolRpc as never);
     const cwd = "/";

@@ -41,13 +41,13 @@ export class SilentAgentWorker extends AiChatWorker {
     return "say-only";
   }
 
-  protected override getLoopTools(
+  protected override async getLoopTools(
     channelId: string,
     execution?: AgentToolExecutionContext
-  ): AgentTool[] {
+  ): Promise<AgentTool[]> {
     const cfg = asSilentAgentConfig(this.subscriptions.getConfig(channelId));
     // The generalized `say` tool is provided by AgentWorkerBase.getLoopTools.
-    const tools = super.getLoopTools(channelId, execution);
+    const tools = await super.getLoopTools(channelId, execution);
     if (!cfg.allowedTools || cfg.allowedTools.length === 0) return tools;
     const allowed = new Set([...cfg.allowedTools, "say"]);
     return tools.filter((tool) => allowed.has(tool.name));

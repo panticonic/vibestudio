@@ -12,7 +12,7 @@ class TestSystemAgentWorker extends SystemAgentWorker {
     });
   }
 
-  tools(): AgentTool[] {
+  async tools(): Promise<AgentTool[]> {
     return this.getLoopTools("channel-1");
   }
 
@@ -73,7 +73,7 @@ describe("SystemAgentWorker", () => {
 
   it("exposes exactly ordinary eval and say, without workspace memory", async () => {
     const { instance } = await createTestDO(TestSystemAgentWorker);
-    expect(instance.tools().map((tool) => tool.name)).toEqual(["eval", "say"]);
+    expect((await instance.tools()).map((tool) => tool.name)).toEqual(["eval", "say"]);
     expect(instance.includesMemory()).toBe(false);
   });
 

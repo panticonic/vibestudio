@@ -41,9 +41,9 @@
  *     `pause()` separately.)
  */
 
-import type { SqlStorage } from "@workspace/runtime/worker";
+import type { SqlStorage } from "@workspace/runtime/worker/durable-base";
 import type { AgentTurnContextPolicy } from "@workspace/agent-loop";
-import { assertExactSqlTableSchema } from "@workspace/runtime/worker";
+import { assertExactSqlTableSchema } from "@workspace/runtime/worker/sql-table-schema";
 
 export type HeartbeatStatus = "running" | "paused" | "stopped";
 

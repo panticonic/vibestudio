@@ -115,6 +115,7 @@ export type {
 } from "../shared/extensions.js";
 export type * from "../shared/gad.js";
 export { DurableObjectBase } from "./durable-base.js";
+export { PanelDurableObjectBase } from "./panel-durable-base.js";
 export { assertExactSqlTableSchema } from "./sql-table-schema.js";
 // `@rpc` exposure decorator — mark a DO method as reachable over RPC (opt-in / default-deny).
 import { rpc as rpcDecorator } from "@vibestudio/rpc";

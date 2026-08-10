@@ -111,6 +111,8 @@
         "./packages/agentic-chat/components/ErrorBoundary.tsx"
       ],
       "@workspace/agentic-core": ["./packages/agentic-core/src/index.ts"],
+      "@workspace/agentic-core/agent-launch": ["./packages/agentic-core/src/agent-launch.ts"],
+      "@workspace/agentic-core/subagent-prompt": ["./packages/agentic-core/src/subagent-prompt.ts"],
       "@workspace/agentic-session": ["./packages/agentic-session/src/index.ts"],
       "@workspace/agentic-chat/styles.css": ["./packages/agentic-chat/styles.css"],
       "@workspace/agentic-chat/types": ["./packages/agentic-chat/types.ts"],
@@ -118,6 +120,9 @@
       "@workspace/ui/panel": ["./packages/ui/src/panel.ts"],
       "@workspace/ui/tokens.css": ["./packages/ui/src/tokens.css"],
       "@workspace/agentic-do": ["./packages/agentic-do/src/index.ts"],
+      "@workspace/agentic-do/agent-worker-base": [
+        "./packages/agentic-do/src/agent-worker-base.ts"
+      ],
       "@workspace/agentic-protocol": ["./packages/agentic-protocol/src/index.ts"],
       "@workspace/agentic-protocol/*": ["./packages/agentic-protocol/src/*"],
       "@workspace/eval": ["./packages/eval/src/index.ts"],
@@ -149,12 +154,29 @@
       "@workspace/runtime/credentials": ["./packages/runtime/src/shared/credentials.ts"],
       "@workspace/runtime/worker": ["./packages/runtime/src/worker/index.ts"],
       "@workspace/runtime/worker/durable-base": ["./packages/runtime/src/worker/durable-base.ts"],
+      "@workspace/runtime/worker/kernel": ["./packages/runtime/src/worker/kernel.ts"],
+      "@workspace/runtime/worker/panel-durable-base": [
+        "./packages/runtime/src/worker/panel-durable-base.ts"
+      ],
+      "@workspace/runtime/worker/rpc-fs": ["./packages/runtime/src/shared/rpcFs.ts"],
+      "@workspace/runtime/worker/sql-table-schema": [
+        "./packages/runtime/src/worker/sql-table-schema.ts"
+      ],
       "@workspace/runtime/worker/credentials": ["./packages/runtime/src/worker/credentials.ts"],
       "@workspace/runtime/panel/credentials": ["./packages/runtime/src/panel/credentials.ts"],
       "@workspace/runtime/worker/test-utils": [
         "./packages/runtime/src/worker/durable-test-utils.ts"
       ],
       "@workspace/runtime/workerd-client": ["./packages/runtime/src/shared/workerd.ts"],
+      "@workspace/harness/resource-loader": ["./packages/harness/src/resource-loader.ts"],
+      "@workspace/harness/standard-tools": ["./packages/harness/src/standard-tools.ts"],
+      "@workspace/harness/merge-driver": ["./packages/harness/src/merge-driver.ts"],
+      "@workspace/harness/semantic-file-resolution": [
+        "./packages/harness/src/semantic-file-resolution.ts"
+      ],
+      "@workspace/harness/system-prompt": ["./packages/harness/src/system-prompt.ts"],
+      "@workspace/harness/tools/eval": ["./packages/harness/src/tools/eval.ts"],
+      "@workspace/harness/types": ["./packages/harness/src/types.ts"],
       "@workspace/vcs-engine": ["./packages/vcs-engine/src/index.ts"],
       "@workspace/cdp-client": ["./packages/cdp-client/index.d.ts"],
       "@workspace/svelte": ["./packages/svelte/src/index.ts"],

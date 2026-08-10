@@ -375,8 +375,8 @@ class TestGmailAgentWorker extends GmailAgentWorker {
     return this.getAgentPrompt(channelId);
   }
 
-  runnerTools(channelId = "ch-1") {
-    return this.getLoopTools(channelId).map((tool) => tool.name);
+  async runnerTools(channelId = "ch-1") {
+    return (await this.getLoopTools(channelId)).map((tool) => tool.name);
   }
 
   seedUserRoster(channelId = "ch-1") {
@@ -392,8 +392,8 @@ class TestGmailAgentWorker extends GmailAgentWorker {
     );
   }
 
-  runnerTool(name: string, channelId = "ch-1") {
-    return this.getLoopTools(channelId).find((tool) => tool.name === name);
+  async runnerTool(name: string, channelId = "ch-1") {
+    return (await this.getLoopTools(channelId)).find((tool) => tool.name === name);
   }
 
   participant() {
@@ -554,8 +554,8 @@ describe("GmailAgentWorker", () => {
     const worker = instance as TestGmailAgentWorker;
     worker.seedUserRoster();
 
-    expect(worker.runnerTools()).not.toContain("gmail_upsertAttentionRule");
-    expect(worker.runnerTools()).toEqual([
+    expect(await worker.runnerTools()).not.toContain("gmail_upsertAttentionRule");
+    expect(await worker.runnerTools()).toEqual([
       "suspend_turn",
       "ask_user",
       "gmail_search",
@@ -576,7 +576,7 @@ describe("GmailAgentWorker", () => {
     const { instance } = await createTestDO(TestGmailAgentWorker);
     const worker = instance as TestGmailAgentWorker;
 
-    expect(worker.runnerTool("gmail_search")?.parameters).toMatchObject({
+    expect((await worker.runnerTool("gmail_search"))?.parameters).toMatchObject({
       type: "object",
       required: ["q"],
       additionalProperties: false,
@@ -586,7 +586,7 @@ describe("GmailAgentWorker", () => {
         limit: { type: "number", maximum: 50 },
       },
     });
-    expect(worker.runnerTool("gmail_modify")?.parameters).toMatchObject({
+    expect((await worker.runnerTool("gmail_modify"))?.parameters).toMatchObject({
       type: "object",
       additionalProperties: false,
       properties: {

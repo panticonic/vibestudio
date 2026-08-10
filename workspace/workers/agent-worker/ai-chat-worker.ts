@@ -1,4 +1,4 @@
-import { AgentWorkerBase } from "@workspace/agentic-do";
+import { AgentWorkerBase } from "@workspace/agentic-do/agent-worker-base";
 import type { ParticipantDescriptor } from "@workspace/harness";
 
 type ChatAgentConfig = {
