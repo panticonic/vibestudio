@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import process from "node:process";
 import { resolveElectronExecutableForVibestudio } from "./branded-electron.mjs";
+import { createRunnerShutdown, signalExitCode } from "./run-electron-lifecycle.mjs";
 
 const electronBinary = resolveElectronExecutableForVibestudio();
 
@@ -27,6 +28,17 @@ function isStringArray(value) {
 let child = null;
 const activeChildren = new Set();
 let nextArgs = initialElectronArgs();
+const shutdown = createRunnerShutdown({
+  activeChildren,
+  exit: (code) => process.exit(code),
+  requestGracefulStop: (electron, signal) => {
+    if (electron.connected) {
+      electron.send({ type: "vibestudio:dev-shutdown", signal });
+      return;
+    }
+    electron.kill(signal);
+  },
+});
 
 async function runElectron(args) {
   return new Promise((resolve) => {
@@ -59,6 +71,7 @@ async function runElectron(args) {
     currentChild.on("exit", (code, signal) => {
       activeChildren.delete(currentChild);
       if (child === currentChild) child = null;
+      shutdown.childExited();
       finish({ code, signal, relaunchArgs });
     });
   });
@@ -66,25 +79,16 @@ async function runElectron(args) {
 
 // Forward signals to the active Electron process for proper shutdown.
 for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
-  process.on(signal, () => {
-    for (const activeChild of activeChildren) {
-      if (!activeChild.killed) {
-        activeChild.kill(signal);
-      }
-    }
-  });
+  process.on(signal, () => shutdown.request(signal));
 }
 
 for (;;) {
   const result = await runElectron(nextArgs);
-  if (result.relaunchArgs) {
+  if (result.relaunchArgs && !shutdown.requestedSignal()) {
     nextArgs = result.relaunchArgs;
     continue;
   }
 
-  if (result.signal) {
-    process.kill(process.pid, result.signal);
-  } else {
-    process.exit(result.code ?? 0);
-  }
+  const signal = shutdown.requestedSignal() ?? result.signal;
+  process.exit(signal ? signalExitCode(signal) : (result.code ?? 0));
 }
