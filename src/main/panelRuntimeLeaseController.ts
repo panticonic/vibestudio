@@ -529,6 +529,10 @@ export class PanelRuntimeLeaseController {
     if (!result.acquired) {
       throw new Error(formatPanelRuntimeLeaseDeniedMessage(panelId, result.lease));
     }
+    // Lease acquisition joins server-side execution activation. Rehydrate the
+    // exact durable slot at that boundary so startup remains correct even when
+    // executionActivated was published before this host connected.
+    await this.deps.shellCore.refreshPanel(asPanelSlotId(panelId));
     // Acquire is idempotent when this host already owns the entity (notably
     // after an automatic replacement transfer). The returned lease is the
     // authority; the proposed connection id may never have been installed.

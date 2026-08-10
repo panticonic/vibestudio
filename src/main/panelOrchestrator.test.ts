@@ -538,6 +538,42 @@ describe("PanelOrchestrator.ensureLoaded", () => {
     });
   });
 
+  it("rehydrates executable state after lease acquisition without an activation event", async () => {
+    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const panel = makePanel("panel:tree/activated-before-host-connected", [], {
+      runtimeEntityId: "panel:nav-panel:tree/activated-before-host-connected",
+      buildKey: null,
+      executionDigest: null,
+      artifacts: { buildState: "building", buildProgress: "Preparing panel runtime..." },
+    });
+    registry.addPanel(panel, null, { addAsRoot: true });
+    const { orchestrator, panelView, shellCore } = createOrchestrator(registry);
+    let viewCreated = false;
+    panelView.createViewForPanel.mockImplementation(async () => {
+      viewCreated = true;
+    });
+    panelView.hasView.mockImplementation(() => viewCreated);
+    shellCore.refreshPanel.mockImplementationOnce(async () => {
+      panel.effectiveVersion = "effective-ready";
+      panel.buildKey = "b".repeat(64);
+      panel.executionDigest = "e".repeat(64);
+      panel.authorityRequests = [];
+      return panel;
+    });
+
+    await expect(orchestrator.ensureLoaded(panel.id)).resolves.toMatchObject({
+      status: "loaded",
+      loaded: true,
+    });
+
+    expect(shellCore.refreshPanel).toHaveBeenCalledWith(asPanelSlotId(panel.id));
+    expect(panelView.createViewForPanel).toHaveBeenCalledWith(
+      panel.id,
+      expect.stringContaining(`buildKey=${"b".repeat(64)}`),
+      panel.snapshot.contextId
+    );
+  });
+
   it("rejoins durable state when activation beats the local slot projection", async () => {
     const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
     const panel = makePanel("panel:tree/activation-before-create-response", [], {

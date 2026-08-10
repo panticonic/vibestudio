@@ -17,6 +17,7 @@ interface PanelHostViewReport {
 
 export function createPanelRuntimeService(deps: {
   coordinator: PanelRuntimeCoordinator;
+  ensureExecutable(slotId: string, entityId: string): Promise<void>;
   currentEntityForSlot(slotId: string): Promise<string | null>;
   observeHostSlot(slotId: string): Promise<PanelHostViewReport | null>;
   browserSourceForSlot?: (slotId: string) => Promise<string | null>;
@@ -154,12 +155,14 @@ export function createPanelRuntimeService(deps: {
           else if (ctx.signal?.aborted) onAbort();
         });
       },
-      acquire: (ctx, [panelId, request]) => {
+      acquire: async (ctx, [panelId, request]) => {
         assertOwnsClientSession(ctx.caller.runtime.id, request.clientSessionId);
+        await deps.ensureExecutable(request.slotId, panelId);
         return deps.coordinator.acquire(panelId, request);
       },
-      takeOver: (ctx, [panelId, request]) => {
+      takeOver: async (ctx, [panelId, request]) => {
         assertOwnsClientSession(ctx.caller.runtime.id, request.clientSessionId);
+        await deps.ensureExecutable(request.slotId, panelId);
         return deps.coordinator.takeOver(panelId, request);
       },
       ensureSlot: async (_ctx, [slotId, entityId]) => {

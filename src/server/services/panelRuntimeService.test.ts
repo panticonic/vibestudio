@@ -35,8 +35,10 @@ function setup(
     connectionId: "route-a",
   });
   const observeHostSlot = vi.fn(input.observeHostSlot ?? (async () => null));
+  const ensureExecutable = vi.fn(async () => undefined);
   const service = createPanelRuntimeService({
     coordinator,
+    ensureExecutable,
     currentEntityForSlot: async () => "panel:nav-a",
     observeHostSlot,
     browserSourceForSlot: async () => input.browserSource ?? null,
@@ -45,6 +47,7 @@ function setup(
     coordinator,
     service,
     observeHostSlot,
+    ensureExecutable,
     attempt: coordinator.currentAttemptForSlot("panel:tree/a")!,
   };
 }
@@ -52,6 +55,21 @@ function setup(
 afterEach(() => vi.useRealTimers());
 
 describe("panelRuntimeService attempt waits", () => {
+  it("joins execution convergence before granting a runtime lease", async () => {
+    const { service, ensureExecutable } = setup();
+    await expect(
+      service.handler(desktopCtx, "acquire", [
+        "panel:nav-a",
+        {
+          slotId: "panel:tree/a",
+          clientSessionId: "desktop",
+          connectionId: "route-a",
+        },
+      ])
+    ).resolves.toMatchObject({ acquired: true });
+    expect(ensureExecutable).toHaveBeenCalledWith("panel:tree/a", "panel:nav-a");
+  });
+
   it("observes the canonical composite without polling the host", async () => {
     const { service, observeHostSlot, attempt } = setup();
     await expect(

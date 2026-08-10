@@ -4976,6 +4976,8 @@ async function main() {
         const cdpBridge = assertPresent(resolve<import("./cdpBridge.js").CdpBridge>("cdpBridge"));
         panelRuntimeDefinition = createPanelRuntimeService({
           coordinator: panelRuntimeCoordinator,
+          ensureExecutable: (slotId, entityId) =>
+            panelExecutionReconciler.ensureExecutable(slotId, entityId),
           observeHostSlot: async (slotId) => {
             if (!cdpBridge.isTargetRegistered(slotId)) return null;
             const { PanelHostObservationSchema } =

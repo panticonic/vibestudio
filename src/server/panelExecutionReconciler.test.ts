@@ -90,6 +90,28 @@ describe("PanelExecutionReconciler", () => {
     expect(activate).toHaveBeenCalledTimes(1);
   });
 
+  it("lets a runtime host join activation and verifies the durable executable state", async () => {
+    let currentDetail: WorkspacePanelDetail = detail;
+    const activate = vi.fn(async () => {
+      currentDetail = {
+        ...detail,
+        entity: { ...detail.entity, status: "active" as const },
+      };
+      return activeHandle;
+    });
+    const reconciler = new PanelExecutionReconciler({
+      getDetail: vi.fn(async () => currentDetail),
+      resolveSlotByEntity: vi.fn(async () => detail.slot.slot_id),
+      listPreparingPanels: vi.fn(async () => [entity]),
+      activate,
+      onError: vi.fn(),
+    });
+
+    await reconciler.ensureExecutable(detail.slot.slot_id, entity.id);
+
+    expect(activate).toHaveBeenCalledTimes(1);
+  });
+
   it("retries a transient activation failure without another slot event", async () => {
     vi.useFakeTimers();
     try {
