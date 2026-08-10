@@ -161,6 +161,7 @@ interface BuildSystemLike {
       manifest: {
         displayName?: string;
         title?: string;
+        icon?: string;
         extension?: {
           activationEvents?: string[];
           streamingMethods?: string[];
@@ -854,6 +855,9 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
               : typeof packageJson.vibestudio.title === "string"
                 ? packageJson.vibestudio.title
                 : candidate.unitName,
+          ...(typeof packageJson.vibestudio.icon === "string"
+            ? { icon: packageJson.vibestudio.icon }
+            : {}),
           version: typeof packageJson.version === "string" ? packageJson.version : "unknown",
           sourceRepo: candidate.unitPath,
           ref: declaration.ref,
@@ -861,9 +865,6 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
           dependencyEvs: candidate.dependencyEvs,
           externalDeps: candidate.externalDeps,
         }),
-        ...(typeof packageJson.vibestudio.icon === "string" && packageJson.vibestudio.icon.trim()
-          ? { icon: packageJson.vibestudio.icon.trim() }
-          : {}),
         target: null,
         capabilities,
         authority,
@@ -1937,6 +1938,7 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
         unitKind: "extension",
         name: node.name,
         displayName: node.manifest.displayName ?? node.manifest.title,
+        ...(node.manifest.icon ? { icon: node.manifest.icon } : {}),
         version: this.readNodeVersion(node.path),
         sourceRepo: node.relativePath,
         ref,
@@ -2391,6 +2393,7 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
           unitKind: "extension",
           unitName: node.name,
           displayName: node.manifest.displayName ?? node.manifest.title ?? node.name,
+          ...(node.manifest.icon?.trim() ? { icon: node.manifest.icon.trim() } : {}),
           version: entry?.version ?? this.readNodeVersion(node.path),
           target: null,
           source,

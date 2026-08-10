@@ -175,6 +175,7 @@ export interface UnitGraphNode {
   manifest?: {
     displayName?: string;
     title?: string;
+    icon?: string;
   };
 }
 
@@ -307,6 +308,7 @@ export interface ReviewedUnitBase<Kind extends UnitKind = UnitKind> {
   unitKind: Kind;
   unitName: string;
   displayName: string;
+  icon?: string;
   version: string | null;
   source: UnitSource;
   ev: string | null;
@@ -318,6 +320,7 @@ export interface ReviewedUnitBaseOptions<Kind extends UnitKind> {
   unitKind: Kind;
   name: string;
   displayName?: string;
+  icon?: string;
   version: string | null;
   sourceRepo: string;
   ref: string;
@@ -1188,6 +1191,7 @@ export function createReviewedUnitBase<Kind extends UnitKind>(
     unitKind: opts.unitKind,
     unitName: opts.name,
     displayName: opts.displayName ?? opts.name,
+    ...(opts.icon?.trim() ? { icon: opts.icon.trim() } : {}),
     version: opts.version,
     source: { kind: "workspace-repo", repo: normalizeUnitRepoPath(opts.sourceRepo), ref: opts.ref },
     ev: opts.effectiveVersion,

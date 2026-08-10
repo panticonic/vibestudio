@@ -255,6 +255,7 @@ interface AppGraphNode {
   manifest: {
     displayName?: string;
     title?: string;
+    icon?: string;
     app?: { target?: WorkspaceAppTarget; capabilities?: AppCapability[] };
   };
 }
@@ -773,6 +774,9 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
               : typeof packageJson.vibestudio?.title === "string"
                 ? packageJson.vibestudio.title
                 : candidate.unitName,
+          ...(typeof packageJson.vibestudio?.icon === "string"
+            ? { icon: packageJson.vibestudio.icon }
+            : {}),
           version: typeof packageJson.version === "string" ? packageJson.version : "unknown",
           sourceRepo: candidate.unitPath,
           ref: declaration.ref,
@@ -780,9 +784,6 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
           dependencyEvs: candidate.dependencyEvs,
           externalDeps,
         }),
-        ...(typeof packageJson.vibestudio?.icon === "string" && packageJson.vibestudio.icon.trim()
-          ? { icon: packageJson.vibestudio.icon.trim() }
-          : {}),
         target,
         capabilities,
         authority,
@@ -1987,6 +1988,7 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
         unitKind: "app",
         name: node.name,
         displayName: node.manifest.displayName ?? node.manifest.title,
+        ...(node.manifest.icon ? { icon: node.manifest.icon } : {}),
         version: readPackageVersion(node.path),
         sourceRepo: node.relativePath,
         ref: decl.ref,

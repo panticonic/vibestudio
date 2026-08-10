@@ -115,6 +115,7 @@ function makeHarness(
       version: "1.0.0",
       vibestudio: {
         displayName: "Shell App",
+        icon: "🖥️",
         app: {
           target: "electron",
           renderer: "index.tsx",
@@ -149,6 +150,7 @@ function makeHarness(
     internalDeps: [],
     manifest: {
       displayName: "Shell App",
+      icon: "🖥️",
       app: { target: "electron" as const, capabilities: ["notifications" as const] },
     },
   };
@@ -916,6 +918,7 @@ describe("AppHost", () => {
           expect.objectContaining({
             unitKind: "app",
             unitName: "@workspace-apps/shell",
+            icon: "🖥️",
             source: { kind: "workspace-repo", repo: "apps/shell", ref: "main" },
           }),
         ],

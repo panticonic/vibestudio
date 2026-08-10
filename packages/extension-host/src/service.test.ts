@@ -98,6 +98,7 @@ function makeHost(
     internalDeps: ["@workspace/runtime"],
     manifest: {
       displayName: "Git Tools",
+      icon: "🌿",
       extension: {
         activationEvents: overrides.activationEvents ?? ["*"],
         providerContracts: overrides.sourceProviderContracts ?? {},
@@ -115,6 +116,7 @@ function makeHost(
       version: "1.0.0",
       vibestudio: {
         displayName: "Git Tools",
+        icon: "🌿",
         extension: {
           activationEvents: overrides.activationEvents ?? ["*"],
           methodAuthority: {
@@ -626,6 +628,7 @@ describe("ExtensionHost reload approval", () => {
           expect.objectContaining({
             unitKind: "extension",
             unitName: extensionNode.name,
+            icon: "🌿",
             source: expect.objectContaining({ repo: extensionNode.relativePath, ref: "main" }),
             ev: "ev-current",
           }),
@@ -711,6 +714,7 @@ describe("ExtensionHost reconcileDeclared", () => {
           expect.objectContaining({
             unitKind: "extension",
             unitName: extensionNode.name,
+            icon: "🌿",
             source: { kind: "workspace-repo", repo: extensionNode.relativePath, ref: "main" },
           }),
         ],
