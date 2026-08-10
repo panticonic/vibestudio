@@ -18,6 +18,7 @@ import { systemTestFailure } from "./structured-error.js";
 import { materializeValidationEvidence } from "./validation-evidence.js";
 import { DEFAULT_SYSTEM_TEST_TIMEOUT_MS } from "./config.js";
 import { projectValidationInput, validationFailureProvenance } from "./validation-failure.js";
+import { channelDeliveryLatencyViolations } from "./delivery-latency.js";
 import type { SystemTestJsonValue } from "./structured-error.js";
 import { assertSystemTestDeclaration } from "./prompt-contract.js";
 import { findFinalAgentCompletionMessage, isAgentCompletionMessage } from "./agent-message.js";
@@ -205,7 +206,8 @@ export class TestRunner {
 
   async runOne(test: TestCase): Promise<{ result: TestResult; execution: TestExecutionResult }> {
     const startTime = Date.now();
-    const testTimeoutMs = this.opts?.testTimeoutMs ?? DEFAULT_SYSTEM_TEST_TIMEOUT_MS;
+    const testTimeoutMs =
+      this.opts?.testTimeoutMs ?? test.timeoutMs ?? DEFAULT_SYSTEM_TEST_TIMEOUT_MS;
     const testDeadline = startTime + testTimeoutMs;
     const testRunner =
       typeof this.runner.forTest === "function"
@@ -237,13 +239,14 @@ export class TestRunner {
         targetSession: HeadlessSession,
         prompt: string,
         phase?: string
-      ): Promise<unknown> => {
+      ): Promise<{ response: ChatMessage; modelExecutionEvidence: unknown }> => {
         const timeoutMessage = phase
           ? `Timed out waiting for agent to finish test "${test.name}" during ${phase}`
           : `Timed out waiting for agent to finish test "${test.name}"`;
         const controller = new AbortController();
         let stopAuthorityWatch: (() => void) | undefined;
         let authorityFailure: Promise<never> | undefined;
+        let response!: ChatMessage;
         this.activeWaits.add(controller);
         if (this.cancellationError) controller.abort(this.cancellationError);
         try {
@@ -269,12 +272,12 @@ export class TestRunner {
             signal: controller.signal,
             terminalWaitingReasons: NON_INTERACTIVE_TERMINAL_WAIT_REASONS,
           });
-          await this.withTimeout(
+          response = (await this.withTimeout(
             authorityFailure ? Promise.race([wait, authorityFailure]) : wait,
             remaining,
             timeoutMessage,
             controller
-          );
+          )) as ChatMessage;
           stopAuthorityWatch?.();
         } catch (error) {
           const terminalError = this.cancellationError ?? error;
@@ -296,24 +299,28 @@ export class TestRunner {
           stopAuthorityWatch?.();
           this.activeWaits.delete(controller);
         }
-        return await this.captureAndAssertModelExecution(
-          targetSession,
-          test.name,
-          phase ?? "agent turn"
-        );
+        return {
+          response,
+          modelExecutionEvidence: await this.captureAndAssertModelExecution(
+            targetSession,
+            test.name,
+            phase ?? "agent turn"
+          ),
+        };
       };
       const execution = test.orchestrate
         ? await test.orchestrate({
             runner: testRunner,
             remainingTimeMs,
             sendAndWait: async (targetSession, prompt, phase) => {
-              await sendAndCapture(targetSession, prompt, phase);
+              const completed = await sendAndCapture(targetSession, prompt, phase);
+              return completed.response;
             },
           })
         : await (async (): Promise<TestExecutionResult> => {
             session = await testRunner.spawn();
             enterPhase("agent-turn");
-            const modelExecutionEvidence = await sendAndCapture(session, test.prompt);
+            const { modelExecutionEvidence } = await sendAndCapture(session, test.prompt);
 
             const messages = [...session.messages] as ChatMessage[];
             const snapshot = session.snapshot();
@@ -401,14 +408,32 @@ export class TestRunner {
         execution,
       };
     } finally {
-      if (outcome && !outcome.execution.diagnostics) {
+      if (outcome) {
         try {
-          outcome.execution.diagnostics = await testRunner.collectDiagnostics({
-            channelId: session?.channelId,
+          const diagnosticChannelId =
+            session?.channelId ??
+            outcome.execution.provenance?.channelId ??
+            outcome.execution.snapshot?.channelId;
+          const sharedDiagnostics = await testRunner.collectDiagnostics({
+            channelId: diagnosticChannelId,
           });
+          outcome.execution.diagnostics = {
+            ...(outcome.execution.diagnostics ?? {}),
+            ...sharedDiagnostics,
+          };
+          const latencyViolations = channelDeliveryLatencyViolations(outcome.execution.diagnostics);
+          if (outcome.result.passed && latencyViolations.length > 0) {
+            outcome.result = {
+              passed: false,
+              reason: `Channel delivery latency regression: ${latencyViolations.join("; ")}`,
+            };
+          }
         } catch (diagnosticErr) {
           outcome.execution.diagnostics = {
-            generatedAt: new Date().toISOString(),
+            ...(outcome.execution.diagnostics ?? {}),
+            generatedAt:
+              (outcome.execution.diagnostics?.["generatedAt"] as string | undefined) ??
+              new Date().toISOString(),
             diagnosticCollectionFailure: systemTestFailure("diagnostic:collection", diagnosticErr),
           };
         }

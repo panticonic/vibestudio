@@ -15,6 +15,12 @@ const mocks = vi.hoisted(() => ({
   rpc: {
     selfId: "do:vibestudio/internal:EvalDO:test-eval",
     call: vi.fn(),
+    stream: vi.fn(),
+    on: vi.fn(() => () => undefined),
+    registerResidentSession: vi.fn(() => ({
+      transport: { call: (...args: unknown[]) => mocks.rpc.call(...args) },
+      close: vi.fn(),
+    })),
   },
   gad: {},
   blobstore: { putText: vi.fn() },
@@ -49,6 +55,9 @@ describe("HeadlessRunner", () => {
   beforeEach(() => {
     mocks.createWithAgent.mockClear();
     mocks.rpc.call.mockReset();
+    mocks.rpc.stream.mockReset();
+    mocks.rpc.on.mockClear();
+    mocks.rpc.registerResidentSession.mockClear();
     for (const method of Object.values(mocks.vcs)) method.mockReset();
     mocks.blobstore.putText.mockReset();
     mocks.blobstore.putText.mockImplementation(async (text: string) => ({
@@ -213,6 +222,60 @@ describe("HeadlessRunner", () => {
       "runtime.faultAbortAgentVessel",
       [{ targetId: "do:workers/agent-worker:AiChatWorker:agent-1" }]
     );
+  });
+
+  it("injects bounded per-session RPC faults without changing lifecycle RPCs", async () => {
+    const runner = new HeadlessRunner("ctx-test");
+    mocks.rpc.call.mockResolvedValue({ claimed: true });
+    mocks.rpc.stream.mockResolvedValue(new Response());
+
+    const session = await runner.spawn({
+      rpcFaults: [
+        {
+          transport: "call",
+          method: "claimMethodCall",
+          occurrence: 1,
+          message: "transient claim failure",
+          code: "EAGAIN",
+        },
+      ],
+    });
+    const config = mocks.createWithAgent.mock.calls[0]![0] as {
+      config: {
+        rpc: {
+          call: typeof mocks.rpc.call;
+          registerResidentSession: (
+            channelId: string,
+            receiver: (payload: unknown) => void
+          ) => { transport: { call: typeof mocks.rpc.call } };
+        };
+      };
+      rpcCall: typeof mocks.rpc.call;
+    };
+
+    const resident = config.config.rpc.registerResidentSession("channel", () => undefined);
+    await expect(resident.transport.call("channel", "claimMethodCall", [])).rejects.toMatchObject({
+      message: "transient claim failure",
+      code: "EAGAIN",
+    });
+    await expect(resident.transport.call("channel", "claimMethodCall", [])).resolves.toEqual({
+      claimed: true,
+    });
+    await config.rpcCall("main", "runtime.listEntities", []);
+
+    expect(mocks.rpc.call.mock.calls.map((call) => call[1])).toEqual([
+      "claimMethodCall",
+      "runtime.listEntities",
+    ]);
+    expect(runner.rpcFaultEvidence(session as never)).toEqual([
+      expect.objectContaining({
+        transport: "call",
+        method: "claimMethodCall",
+        occurrence: 1,
+        injected: true,
+        code: "EAGAIN",
+      }),
+    ]);
   });
 
   it("does not attach a fallback route to an explicit model override", async () => {

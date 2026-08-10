@@ -33,6 +33,7 @@
   },
   "dependencies": {
     "@vibestudio/content-addressing": "workspace:*",
+    "@vibestudio/shell-core": "workspace:*",
     "@workspace/agentic-session": "workspace:*",
     "@workspace/agentic-core": "workspace:*",
     "@workspace/agentic-protocol": "workspace:*",

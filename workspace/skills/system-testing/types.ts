@@ -116,6 +116,12 @@ export interface TestCase {
   name: string;
   description: string;
   category: string;
+  /**
+   * Case-specific end-to-end budget. Use this only when the user-visible
+   * operation has an intrinsically longer deadline than the catalog default.
+   * An explicit run-level timeout still takes precedence.
+   */
+  timeoutMs?: number;
   /** Natural language task prompt sent to the test agent */
   prompt: string;
   /**
@@ -175,7 +181,11 @@ export interface TestOrchestrationContext {
   runner: HeadlessRunner;
   /** Milliseconds left in this test's one agent-turn budget, or undefined when unbounded. */
   remainingTimeMs(): number | undefined;
-  sendAndWait(session: HeadlessSession, prompt: string, phase: string): Promise<void>;
+  /** Run one bounded turn and return the exact completed response that ended
+   * that phase. Orchestrated validators use this identity instead of guessing
+   * turn boundaries from transcript rows that intentionally omit local user
+   * publications. */
+  sendAndWait(session: HeadlessSession, prompt: string, phase: string): Promise<ChatMessage>;
 }
 
 export interface TestExecutionResult {

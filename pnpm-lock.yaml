@@ -2660,6 +2660,9 @@ importers:
       '@vibestudio/content-addressing':
         specifier: workspace:*
         version: link:../../../packages/content-addressing
+      '@vibestudio/shell-core':
+        specifier: workspace:*
+        version: link:../../../packages/shell-core
       '@workspace-skills/vibestudio-vcs':
         specifier: workspace:*
         version: link:../vibestudio-vcs

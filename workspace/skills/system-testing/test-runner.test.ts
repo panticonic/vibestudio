@@ -747,6 +747,7 @@ describe("TestRunner", () => {
       sendAndWait: vi.fn(async () => undefined),
       captureModelExecutionEvidence: vi.fn(async () => modelEvidence()),
       snapshot: vi.fn(() => ({
+        channelId: "chat-orchestrated",
         messages,
         invocations: [],
         debugEvents: [],
@@ -760,7 +761,9 @@ describe("TestRunner", () => {
     const runner = {
       modelRef: TEST_MODEL,
       spawn: vi.fn(async () => session),
-      collectDiagnostics: vi.fn(async () => ({})),
+      collectDiagnostics: vi.fn(async () => ({
+        channelDelivery: { deliveryLifecycle: { latencyHistogram: [] } },
+      })),
     } as unknown as HeadlessRunner;
     const tester = new TestRunner(runner, { testTimeoutMs: 5 });
 
@@ -776,6 +779,7 @@ describe("TestRunner", () => {
           messages: [...target.messages],
           duration: 1,
           snapshot: target.snapshot(),
+          diagnostics: { orchestratedEvidence: { recovered: true } },
         };
       },
       validation: "harness" as const,
@@ -786,6 +790,11 @@ describe("TestRunner", () => {
 
     expect(result.passed).toBe(true);
     expect(execution.messages).toEqual(messages);
+    expect(execution.diagnostics).toMatchObject({
+      orchestratedEvidence: { recovered: true },
+      channelDelivery: { deliveryLifecycle: { latencyHistogram: [] } },
+    });
+    expect(runner.collectDiagnostics).toHaveBeenCalledWith({ channelId: "chat-orchestrated" });
     expect(session.sendAndWait).toHaveBeenCalledWith(
       "phase prompt",
       expect.objectContaining({ signal: expect.any(AbortSignal) })

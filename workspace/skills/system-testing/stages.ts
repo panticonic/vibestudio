@@ -1,4 +1,5 @@
 import type { TestCase } from "./types.js";
+import { deliveryHardeningTests as _deliveryHardening } from "./tests/delivery-hardening.js";
 import { assertSystemTestDeclaration } from "./prompt-contract.js";
 
 export { smokeTests } from "./tests/smoke.js";
@@ -36,6 +37,7 @@ export { extensionSurfaceTests } from "./tests/extensions-surface.js";
 export { harnessToolTests } from "./tests/harness-tools.js";
 export { credentialTests } from "./tests/credentials.js";
 export { agentOrchestrationTests } from "./tests/agent-orchestration.js";
+export { deliveryHardeningTests } from "./tests/delivery-hardening.js";
 
 import { smokeTests as _smoke } from "./tests/smoke.js";
 import { filesystemTests as _fs } from "./tests/filesystem.js";
@@ -129,6 +131,7 @@ export function allTests(): TestCase[] {
     ..._webhooks,
     ..._extensionSurface,
     ..._harnessTools,
+    ..._deliveryHardening,
     ..._docsDiscovery,
     ..._interaction,
     ..._projectLifecycle,

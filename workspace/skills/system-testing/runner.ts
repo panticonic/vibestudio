@@ -22,6 +22,7 @@ import { vcsStateNodeRefSchema, type VcsStateNodeRef } from "@vibestudio/service
 import type { AttachedHostApprovalAuditEvent } from "@vibestudio/service-schemas/attachedHosts";
 import type { TestAuthorityPolicy } from "./types.js";
 import type { BlobReader } from "@workspace/agentic-protocol";
+import { createRecoveryCoordinator } from "@vibestudio/shell-core/recoveryCoordinator";
 
 // This runner is eval'd server-side (in the orchestrating agent's EvalDO), so it
 // uses the portable client surface — NOT panel-only `getStateArgs`/`slotId`.
@@ -93,6 +94,23 @@ export interface EvalEventPagesProbe {
 export interface AgentVesselFaultProbe {
   targetId: string;
   aborted: true;
+}
+
+export interface SystemTestRpcFault {
+  transport: "call" | "stream";
+  method: string;
+  occurrence?: number;
+  message: string;
+  code?: string;
+}
+
+export interface SystemTestRpcFaultEvidence {
+  transport: "call" | "stream";
+  method: string;
+  occurrence: number;
+  injected: boolean;
+  message: string;
+  code?: string;
 }
 
 export interface SelfDevelopmentRepository {
@@ -167,6 +185,10 @@ export class HeadlessRunner {
   private readonly workspaceRepoFixtureLifecycle: WorkspaceRepoFixtureLifecycle | null;
   private readonly testAuthorityPolicy: AgentExecutionTestPolicySpec | null;
   private developmentTargetPromise: Promise<string> | null = null;
+  private readonly sessionRpcFaultEvidence = new WeakMap<
+    HeadlessSession,
+    SystemTestRpcFaultEvidence[]
+  >();
 
   /**
    * Model is per-agent, so each spawned headless agent is created with the
@@ -415,6 +437,10 @@ export class HeadlessRunner {
      * fault-injection seam for harness resilience tests, not a product tool.
      */
     validationRetryProbeTool?: boolean;
+    /** Give the session a real recovery coordinator for reconnect probes. */
+    recoverSubscriptions?: boolean;
+    /** Harness-owned RPC failures injected before the production client sees the call. */
+    rpcFaults?: readonly SystemTestRpcFault[];
     /** Additional test-owned participant methods advertised to the agent. */
     methods?: HeadlessWithAgentConfig["methods"];
     /** Test-specific policy appended after the shared system-test prompt. */
@@ -451,10 +477,89 @@ export class HeadlessRunner {
             )} is already present in this context. It is the only repository owned by this test; ` +
             `all other repositories are outside the fixture scope.`
       : "";
+    const rpcFaultEvidence: SystemTestRpcFaultEvidence[] = [];
+    const occurrenceByOperation = new Map<string, number>();
+    const callWithFault = async <R = unknown>(
+      targetId: string,
+      method: string,
+      args: unknown[],
+      options?: { timeoutMs?: number; signal?: AbortSignal }
+    ): Promise<R> => {
+      const key = `call:${method}`;
+      const occurrence = (occurrenceByOperation.get(key) ?? 0) + 1;
+      occurrenceByOperation.set(key, occurrence);
+      const fault = opts?.rpcFaults?.find(
+        (candidate) =>
+          candidate.transport === "call" &&
+          candidate.method === method &&
+          (candidate.occurrence ?? 1) === occurrence
+      );
+      if (fault) {
+        rpcFaultEvidence.push({
+          transport: "call",
+          method,
+          occurrence,
+          injected: true,
+          message: fault.message,
+          ...(fault.code ? { code: fault.code } : {}),
+        });
+        throw Object.assign(new Error(fault.message), fault.code ? { code: fault.code } : {});
+      }
+      return rpcConfig.call<R>(targetId, method, args, options);
+    };
+    const faultingRpc: NonNullable<ConnectionConfig["rpc"]> = {
+      selfId: rpcConfig.selfId,
+      call: callWithFault,
+      stream: async (targetId, method, args, options) => {
+        const key = `stream:${method}`;
+        const occurrence = (occurrenceByOperation.get(key) ?? 0) + 1;
+        occurrenceByOperation.set(key, occurrence);
+        const fault = opts?.rpcFaults?.find(
+          (candidate) =>
+            candidate.transport === "stream" &&
+            candidate.method === method &&
+            (candidate.occurrence ?? 1) === occurrence
+        );
+        if (fault) {
+          rpcFaultEvidence.push({
+            transport: "stream",
+            method,
+            occurrence,
+            injected: true,
+            message: fault.message,
+            ...(fault.code ? { code: fault.code } : {}),
+          });
+          throw Object.assign(new Error(fault.message), fault.code ? { code: fault.code } : {});
+        }
+        return rpcConfig.stream(targetId, method, args, options);
+      },
+      on: (event, listener) => rpcConfig.on(event, listener),
+      ...(rpcConfig.registerResidentSession
+        ? {
+            registerResidentSession: (...args) => {
+              const registration = rpcConfig.registerResidentSession!(...args);
+              return {
+                transport: {
+                  call: <R = unknown>(targetId: string, method: string, callArgs: unknown[]) =>
+                    callWithFault<R>(targetId, method, callArgs),
+                },
+                close: () => registration.close(),
+                ...(registration.relationshipEnded
+                  ? { relationshipEnded: () => registration.relationshipEnded!() }
+                  : {}),
+              };
+            },
+          }
+        : {}),
+    };
+    const recoveryCoordinator = opts?.recoverSubscriptions
+      ? createRecoveryCoordinator()
+      : undefined;
     const session = await HeadlessSession.createWithAgent({
       config: {
         clientId: rpc.selfId,
-        rpc: rpcConfig,
+        rpc: faultingRpc,
+        ...(recoveryCoordinator ? { recoveryCoordinator } : {}),
       },
       rpcCall: (t: string, m: string, args: unknown[], options) =>
         rpcConfig.call(t, m, args, options),
@@ -491,6 +596,7 @@ export class HeadlessRunner {
           : {}),
       },
     });
+    this.sessionRpcFaultEvidence.set(session, rpcFaultEvidence);
     this.shared.sessions.add(session);
     this.shared.testNames.set(session, this.testName);
     const sessionPolicy: ModelPolicyState = {
@@ -504,6 +610,10 @@ export class HeadlessRunner {
     };
     this.shared.sessionPolicies.set(session, sessionPolicy);
     return session;
+  }
+
+  rpcFaultEvidence(session: HeadlessSession): readonly SystemTestRpcFaultEvidence[] {
+    return [...(this.sessionRpcFaultEvidence.get(session) ?? [])];
   }
 
   /** Non-blocking live snapshots for CLI inspection. Observation never issues
@@ -538,6 +648,21 @@ export class HeadlessRunner {
       diagnostics["durableWorkFailure"] = systemTestFailure("diagnostic:durable-work", err);
     }
     if (channelId) {
+      try {
+        const service = (await rpc.call("main", "workers.resolveService", [
+          "vibestudio.channel.v1",
+          channelId,
+        ])) as { kind?: unknown; targetId?: unknown };
+        if (service.kind !== "durable-object" || typeof service.targetId !== "string") {
+          throw new Error("channel service did not resolve to a Durable Object");
+        }
+        diagnostics["channelDelivery"] = await rpc.call(service.targetId, "getState", []);
+      } catch (err) {
+        diagnostics["channelDeliveryFailure"] = systemTestFailure(
+          "diagnostic:channel-delivery",
+          err
+        );
+      }
       try {
         diagnostics["agentHealth"] = await gad.inspectAgentHealth({
           channelId,
