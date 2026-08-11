@@ -36,6 +36,27 @@ export class DurableWorkReadiness {
     });
   }
 
+  diagnostics(queues: readonly DurableWorkQueue[]): Array<{
+    queue: DurableWorkQueue;
+    readyGeneration: number;
+    acknowledgedGeneration: number;
+    pending: boolean;
+  }> {
+    return queues.map((queue) => {
+      const readyGeneration = this.generation(`${READY_GENERATION_PREFIX}${queue}`, queue);
+      const acknowledgedGeneration = this.generation(`${ACK_GENERATION_PREFIX}${queue}`, queue);
+      if (acknowledgedGeneration > readyGeneration) {
+        throw new Error(`Invalid durable work generations for ${queue}`);
+      }
+      return {
+        queue,
+        readyGeneration,
+        acknowledgedGeneration,
+        pending: readyGeneration > acknowledgedGeneration,
+      };
+    });
+  }
+
   acknowledge(queue: DurableWorkQueue): void {
     const ready = this.generation(`${READY_GENERATION_PREFIX}${queue}`, queue);
     this.store.set(`${ACK_GENERATION_PREFIX}${queue}`, String(ready));

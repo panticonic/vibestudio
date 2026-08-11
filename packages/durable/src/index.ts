@@ -295,6 +295,12 @@ export abstract class DurableObjectBase {
       throw error;
     }
     if (this.schemaReady) return;
+    this.ensureSchema();
+    if (this.env["VIBESTUDIO_SCHEMA_PROBE"] !== true) this.afterSchemaReady();
+    this.schemaReady = true;
+  }
+
+  private ensureSchema(): void {
     installDurableObjectSchema({
       className: this.constructor.name,
       version: (this.constructor as typeof DurableObjectBase).schemaVersion,
@@ -305,8 +311,6 @@ export abstract class DurableObjectBase {
       createSchema: () => this.createTables(),
       validateSchema: () => this.validateSchema(),
     });
-    if (this.env["VIBESTUDIO_SCHEMA_PROBE"] !== true) this.afterSchemaReady();
-    this.schemaReady = true;
   }
 
   /** Constructor-time schema preparation whose failure remains fetch-guarded. */
@@ -689,6 +693,10 @@ export abstract class DurableObjectBase {
               403
             );
           }
+          // Live module replacement may update the class schema while this
+          // activation retains its previous schemaReady cache. Lifecycle is the
+          // generation boundary, so transactionally refresh migrations here.
+          this.ensureSchema();
           const result =
             method === "__lifecycle/prepare"
               ? await (async () => {
@@ -1111,6 +1119,10 @@ export abstract class DurableObjectBase {
 
   protected acknowledgeDurableWorkReady(queue: DurableWorkQueue): void {
     this.durableWorkReadiness.acknowledge(queue);
+  }
+
+  protected durableWorkReadinessDiagnostics() {
+    return this.durableWorkReadiness.diagnostics(this.durableWorkQueues());
   }
 
   /** Framework queue capabilities are probed by the host during activation. */

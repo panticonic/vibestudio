@@ -944,6 +944,11 @@ export abstract class DurableObjectBase {
               }
             );
           }
+          // Live module replacement may update the class schema while this
+          // activation retains its previous schemaReady cache. Lifecycle is the
+          // generation boundary, so transactionally refresh migrations here.
+          this.ensureSchema();
+          this._schemaInstalled = true;
           const result =
             method === "__lifecycle/prepare"
               ? await (async () => {
@@ -1414,6 +1419,10 @@ export abstract class DurableObjectBase {
 
   protected acknowledgeDurableWorkReady(queue: DurableWorkQueue): void {
     this._durableWorkReadiness.acknowledge(queue);
+  }
+
+  protected durableWorkReadinessDiagnostics() {
+    return this._durableWorkReadiness.diagnostics(this.durableWorkQueues());
   }
 
   /** Queue capabilities are registered by the host before entity activation
