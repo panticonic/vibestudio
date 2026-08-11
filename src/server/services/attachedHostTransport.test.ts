@@ -164,7 +164,7 @@ async function fixture(queueDecision: "once" | "deny" | "reject" = "once") {
     endpoint: parent,
     approvalQueue: queue as never,
   });
-  const parentRoutes = attachedHostParentHttpRoutes(parent, presenter);
+  const parentRoutes = attachedHostParentHttpRoutes(presenter);
   const parentServer = createServer((req, res) => {
     const suffix = new URL(req.url ?? "/", "http://localhost").pathname.split("/").at(-1);
     const route = parentRoutes.find((candidate) => candidate.path === `/${suffix}`);

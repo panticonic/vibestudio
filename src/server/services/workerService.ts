@@ -657,7 +657,7 @@ export function createWorkerService(deps: {
     }
 
     try {
-      assertDurableObjectExists(buildSystem, workspaceDecls, source, className);
+      assertDurableObjectExists(buildSystem, source, className);
       return {
         decls: workspaceDecls,
         scope: "main",
@@ -770,7 +770,6 @@ function listServiceRows(decls: WorkspaceDeclarations): ServiceListRow[] {
 
 function assertDurableObjectExists(
   buildSystem: BuildSystemV2,
-  workspaceDecls: WorkspaceDeclarations,
   source: string,
   className: string
 ): void {

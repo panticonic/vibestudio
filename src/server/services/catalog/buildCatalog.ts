@@ -146,7 +146,7 @@ export function buildCatalog(deps: BuildCatalogDeps): CatalogEntry[] {
         // discovery contract self-contradictory.
         ...(documentedMembers.length > 0 ? { members: documentedMembers } : {}),
         access: directMethod
-          ? runtimeMethodAccess(deps, schemaDefinition!, directMethodName!, directMethod, callers)
+          ? runtimeMethodAccess(schemaDefinition!, directMethodName!, directMethod, callers)
           : { callers },
         ...(directSerialized?.argsSchema ? { argsSchema: directSerialized.argsSchema } : {}),
         ...(directSerialized?.returnsSchema
@@ -172,7 +172,7 @@ export function buildCatalog(deps: BuildCatalogDeps): CatalogEntry[] {
           ...(generated?.signature ? { signature: generated.signature } : {}),
           ...(serialized.description ? { description: serialized.description } : {}),
           access: method
-            ? runtimeMethodAccess(deps, schemaDefinition!, member, method, callers)
+            ? runtimeMethodAccess(schemaDefinition!, member, method, callers)
             : { ...(serialized.access ?? {}), callers },
           ...(serialized.argsSchema ? { argsSchema: serialized.argsSchema } : {}),
           ...(serialized.returnsSchema ? { returnsSchema: serialized.returnsSchema } : {}),
@@ -236,7 +236,6 @@ export function buildCatalog(deps: BuildCatalogDeps): CatalogEntry[] {
 }
 
 function runtimeMethodAccess(
-  deps: BuildCatalogDeps,
   definition: ServiceDefinition,
   methodName: string,
   method: MethodSchema,

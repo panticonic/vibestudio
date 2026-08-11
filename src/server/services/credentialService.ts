@@ -459,7 +459,7 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
   }
 
   async function getClientConfigStatus(
-    ctx: ServiceContext,
+    _ctx: ServiceContext,
     params: GetClientConfigStatusParams
   ): Promise<ClientConfigStatus> {
     const request = params as GetClientConfigStatusRequest;

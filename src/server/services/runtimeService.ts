@@ -2041,7 +2041,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
         await deps.faultAbortAgentVessel(ctx.caller, target);
         return { aborted: true as const };
       },
-      retireEntity: async (ctx, [{ id, removeContext }]) => {
+      retireEntity: async (_ctx, [{ id, removeContext }]) => {
         await retireEntity(id, removeContext);
       },
       recoverExecution: (ctx, [input]) => recoverExecution(ctx.caller, input),
@@ -2058,7 +2058,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
           },
           cloneArgs
         ),
-      destroyContext: async (ctx, [{ contextId, recursive }]) => {
+      destroyContext: async (_ctx, [{ contextId, recursive }]) => {
         await destroyContext({ contextId, recursive });
       },
       forkSemanticContext: (_ctx, [input]) => forkSemanticContext(input),

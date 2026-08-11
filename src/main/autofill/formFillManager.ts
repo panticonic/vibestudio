@@ -535,7 +535,7 @@ export class FormFillManager {
             ? state.credentials[0]
             : null;
         if (matchedCred && pulled.fields.usernameSelector) {
-          await this.fillUsernameOnly(wcId, wc, state, matchedCred, pulled.fields.usernameSelector);
+          await this.fillUsernameOnly(wc, state, matchedCred, pulled.fields.usernameSelector);
           state.hasAutoFilled = true;
         }
       }
@@ -657,7 +657,6 @@ export class FormFillManager {
   }
 
   private async fillUsernameOnly(
-    wcId: number,
     wc: WebContents,
     state: FormFillPanelState,
     credential: StoredPassword,

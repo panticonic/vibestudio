@@ -208,7 +208,6 @@ function isPublicNamespace(
 }
 
 function propertyCall(
-  checker: Checker,
   call: ts.CallExpression,
   name: string
 ): ts.PropertyAccessExpression | null {
@@ -360,7 +359,7 @@ export function analyzeWorkspaceServiceCalls(
   }
 
   const isResolverCall = (call: ts.CallExpression): boolean => {
-    const property = propertyCall(checker, call, "resolveService");
+    const property = propertyCall(call, "resolveService");
     if (!property || !RESOLVER_NAMES.has(property.name.text)) return false;
     const receiver = property.expression;
     return (

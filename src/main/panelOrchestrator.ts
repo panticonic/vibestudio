@@ -175,9 +175,6 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
   private get shellCore() {
     return this.deps.shellCore;
   }
-  private get externalHost() {
-    return this.deps.externalHost;
-  }
   private getPanelView() {
     return this.deps.getPanelView?.() ?? null;
   }

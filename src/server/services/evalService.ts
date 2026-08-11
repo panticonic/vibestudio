@@ -975,7 +975,7 @@ export function createEvalService(deps: {
           // acknowledgement keeps admission alive: the EvalDO may already have
           // durably accepted the run. Structured remote rejections are
           // definitive and were unwound above.
-          void reconcileAmbiguousStart(deps.doDispatch, evalDoRef, runId, startArgs).catch(
+          void reconcileAmbiguousStart(deps.doDispatch, evalDoRef, startArgs).catch(
             (reconcileError) => {
               closeAdmission();
               console.warn(
@@ -1113,7 +1113,6 @@ export function createEvalService(deps: {
 async function reconcileAmbiguousStart(
   dispatch: HeldDoDispatcher,
   ref: { source: string; className: string; objectKey: string },
-  runId: string,
   startArgs: Record<string, unknown>
 ): Promise<void> {
   for (;;) {
