@@ -324,6 +324,7 @@ export function setupTestApi(
         panelId,
         source: panel ? getPanelSource(panel) : null,
         nativeSlotBound,
+        presentation: panelOrchestrator.getLocalPresentation(panelId),
         observation,
       });
     },

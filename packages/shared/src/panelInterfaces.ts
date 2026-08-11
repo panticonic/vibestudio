@@ -107,6 +107,8 @@ export interface ServerInfoLike {
  */
 export interface PanelViewLike {
   createViewForPanel(panelId: string, url: string, contextId?: string): Promise<void>;
+  /** Refresh the authority identity retained by an existing code view without navigating it. */
+  updatePanelCodeIdentity(panelId: string): void;
   createViewForApp?(
     appId: string,
     url: string,

@@ -51,7 +51,8 @@ import {
   getPanelRef,
 } from "@vibestudio/shared/panel/accessors";
 import { assertPresent } from "../lintHelpers";
-import { PanelRuntimeLeaseController } from "./panelRuntimeLeaseController.js";
+import { PanelPresentationController } from "./panelRuntimeLeaseController.js";
+import type { PanelPresentationSnapshot } from "@vibestudio/shared/panel/presentation";
 import type {
   PanelBootProbeResult,
   PanelFailureCode,
@@ -72,6 +73,7 @@ export interface PanelOrchestratorDeps {
     cleanupPanelAccess(panelId: string): void;
     unregisterTarget?(panelId: string): void;
     getAccessibilityTree?(panelId: string): Promise<unknown[]>;
+    getBootObservation?(panelId: string): Promise<PanelBootProbeResult>;
   };
   panelHttpServer: PanelHttpServerLike;
   externalHost: string;
@@ -109,6 +111,9 @@ export interface PanelOrchestratorDeps {
    * the GC alongside the focused panel (§5.3). Absent on headless hosts.
    */
   getResidentPanelIds?: () => string[];
+  getNativeBinding?: (panelId: string) => { nativeSlotId: string } | null;
+  attachNativeBinding?: (panelId: string) => { nativeSlotId: string } | null;
+  publishPresentation?: (snapshot: PanelPresentationSnapshot) => void;
 }
 
 export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
@@ -122,12 +127,12 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
     scaling: "100%",
     panelBackground: "translucent",
   };
-  private readonly runtime: PanelRuntimeLeaseController;
+  private readonly runtime: PanelPresentationController;
   private readonly restorePolicy: PanelRestorePolicy;
 
   constructor(deps: PanelOrchestratorDeps) {
     this.deps = deps;
-    this.runtime = new PanelRuntimeLeaseController({
+    this.runtime = new PanelPresentationController({
       registry: deps.registry,
       eventService: deps.eventService,
       shellCore: deps.shellCore,
@@ -143,6 +148,9 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
         (() => Promise.reject(new Error("Browser environment is unavailable"))),
       pinStore: deps.pinStore,
       ...(deps.getResidentPanelIds ? { getResidentPanelIds: deps.getResidentPanelIds } : {}),
+      ...(deps.getNativeBinding ? { getNativeBinding: deps.getNativeBinding } : {}),
+      ...(deps.attachNativeBinding ? { attachNativeBinding: deps.attachNativeBinding } : {}),
+      ...(deps.publishPresentation ? { publishPresentation: deps.publishPresentation } : {}),
       client: deps.runtimeClient ?? {},
     });
     this.restorePolicy =
@@ -170,6 +178,34 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
   }
   private get panelHttpServer() {
     return this.deps.panelHttpServer;
+  }
+
+  getLocalPresentation(panelId: string): PanelPresentationSnapshot {
+    return this.runtime.getPresentation(panelId);
+  }
+
+  onNativeSlotDeclared(panelId: string): void {
+    this.runtime.onNativeSlotDeclared(panelId);
+  }
+
+  onNativeSlotCleared(panelId: string): void {
+    this.runtime.handleNativeSlotCleared(panelId);
+  }
+
+  onExternalDocumentCommitted(panelId: string, url: string): void {
+    this.runtime.handleExternalDocumentCommitted(panelId, url);
+  }
+
+  onPanelBoot(
+    panelId: string,
+    webContentsId: number,
+    observation: import("@vibestudio/shared/panel/observation").PanelBootObservation
+  ): void {
+    this.runtime.handlePanelBoot(panelId, webContentsId, observation);
+  }
+
+  handlePanelViewCrash(panelId: string, reason: string): Promise<void> {
+    return this.runtime.handleViewCrash(panelId, reason);
   }
   private operationClients(caller?: ScopedServerCaller): PanelOperationClients | undefined {
     if (!caller) return undefined;
@@ -308,6 +344,11 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
       this.operationClients(scopedCaller)
     );
     if (!result) return null;
+    // Durable navigation and local presentation form one host-owned
+    // transaction. The committed entity is now reflected in the registry;
+    // supersede any ready/terminal record and present that exact incarnation
+    // instead of waiting for an eventually delivered lease/activation event.
+    await this.runtime.loadPanelIntoView(panelId, "acquire", true);
     return { id: result.panelId, title: result.title };
   }
 
@@ -322,6 +363,7 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
       this.operationClients(caller)
     );
     if (!result) return null;
+    await this.runtime.loadPanelIntoView(panelId, "acquire", true);
     return { id: result.id, title: result.title };
   }
 
@@ -408,19 +450,21 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
   // =========================================================================
 
   async reloadPanel(panelId: string): Promise<PanelLifecycleResult> {
-    const view = this.getPanelView();
-    if (view?.hasView(panelId)) {
-      const reloaded = await view.reloadView(panelId);
-      return this.lifecycleResult(panelId, "reload", "reloaded", {
-        loaded: reloaded,
-        reloaded,
-      });
-    }
-    const result = await this.ensureLoaded(panelId);
-    return this.lifecycleResult(panelId, "reload", result.status, {
-      loaded: result.loaded,
-      reloaded: result.loaded,
-    });
+    const hadView = this.getPanelView()?.hasView(panelId) ?? false;
+    const loaded = await this.runtime.reloadPanelView(panelId);
+    return this.lifecycleResult(
+      panelId,
+      "reload",
+      loaded ? (hadView ? "reloaded" : "loaded") : "view_creation_failed",
+      {
+        loaded,
+        reloaded: loaded,
+      }
+    );
+  }
+
+  async forceReloadPanelView(panelId: string): Promise<void> {
+    await this.runtime.reloadPanelView(panelId);
   }
 
   async rebuildUnloadedPanel(
@@ -1197,9 +1241,7 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
       if (!this.registry.applyExecutionIdentity(event.panelId, event)) return;
     }
     try {
-      await this.runtime.convergePreparedPanelView(event.panelId, {
-        refreshPresentedIdentity: true,
-      });
+      await this.runtime.loadPanelIntoView(event.panelId);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.runtime.recordPanelViewFailure(event.panelId, message);
@@ -1222,6 +1264,7 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
       hostedRuntimeEntityId: undefined,
     });
     this.registry.notifyPanelTreeUpdate(event.panelId);
+    this.runtime.recordPanelPreparationFailure(event.panelId, event.message);
   }
 
   /**

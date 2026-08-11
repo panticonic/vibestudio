@@ -66,12 +66,20 @@ function createOrchestrator(
     workspaceConfig?: ConstructorParameters<typeof PanelOrchestrator>[0]["workspaceConfig"];
     pinStore?: ConstructorParameters<typeof PanelOrchestrator>[0]["pinStore"];
     waitForBrowserSessionPartition?: () => Promise<string>;
+    getNativeBinding?: ConstructorParameters<typeof PanelOrchestrator>[0]["getNativeBinding"];
+    getResidentPanelIds?: ConstructorParameters<typeof PanelOrchestrator>[0]["getResidentPanelIds"];
+    attachNativeBinding?: ConstructorParameters<typeof PanelOrchestrator>[0]["attachNativeBinding"];
+    publishPresentation?: ConstructorParameters<typeof PanelOrchestrator>[0]["publishPresentation"];
+    getBootObservation?: NonNullable<
+      ConstructorParameters<typeof PanelOrchestrator>[0]["cdpHost"]["getBootObservation"]
+    >;
   } = {}
 ) {
   const closedIds: string[] = [];
   let createCounter = 0;
   const panelView = {
     createViewForPanel: vi.fn(async (_panelId: string, _url: string, _contextId?: string) => {}),
+    updatePanelCodeIdentity: vi.fn((_panelId: string) => {}),
     createViewForBrowser: vi.fn(
       async (_panelId: string, _url: string, _contextId: string, _partition: string) => {}
     ),
@@ -161,7 +169,10 @@ function createOrchestrator(
       entityId: panelId,
       gatewayConfig: { serverUrl: "http://127.0.0.1:1234", token: "token" },
     })),
-    getCurrentEntityId: vi.fn(async (panelId: string) => `panel:nav-${panelId}`),
+    getCurrentEntityId: vi.fn(
+      async (panelId: string) =>
+        registry.getPanel(panelId)?.runtimeEntityId ?? `panel:nav-${panelId}`
+    ),
     refreshSlotEntity: vi.fn(async (panelId: string) => `panel:nav-${panelId}`),
     getPanel: vi.fn(async (panelId: string) => registry.getPanel(panelId) ?? null),
     refreshPanel: vi.fn(async (panelId: string) => registry.getPanel(panelId) ?? null),
@@ -231,6 +242,7 @@ function createOrchestrator(
     registerTarget: vi.fn(),
     cleanupPanelAccess: vi.fn(),
     unregisterTarget: vi.fn(),
+    ...(opts.getBootObservation ? { getBootObservation: opts.getBootObservation } : {}),
   };
   const sendPanelEvent = vi.fn();
   const orchestrator = new PanelOrchestrator({
@@ -254,6 +266,10 @@ function createOrchestrator(
     pinStore: opts.pinStore,
     waitForBrowserSessionPartition:
       opts.waitForBrowserSessionPartition ?? (() => Promise.resolve("persist:browser-test")),
+    ...(opts.getNativeBinding ? { getNativeBinding: opts.getNativeBinding } : {}),
+    ...(opts.getResidentPanelIds ? { getResidentPanelIds: opts.getResidentPanelIds } : {}),
+    ...(opts.attachNativeBinding ? { attachNativeBinding: opts.attachNativeBinding } : {}),
+    ...(opts.publishPresentation ? { publishPresentation: opts.publishPresentation } : {}),
   });
   orchestratorRef = orchestrator;
 
@@ -478,7 +494,7 @@ describe("PanelOrchestrator.ensureLoaded", () => {
       status: "loaded",
       focused: false,
       loaded: true,
-    });
+    } as never);
 
     expect(serverClient.call).toHaveBeenCalledWith("panelRuntime", "acquire", [
       expect.stringMatching(/^panel:nav-panel:tree\/panel-1$/),
@@ -629,7 +645,7 @@ describe("PanelOrchestrator.ensureLoaded", () => {
     expect(registry.getFocusedPanelId()).toBe(panel.id);
   });
 
-  it("refreshes an already-presented native view when execution authority activates", async () => {
+  it("refreshes an already-presented native view identity without navigating", async () => {
     const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
     const panel = makePanel("panel:tree/already-presented", [], {
       runtimeEntityId: "panel:nav-already-presented",
@@ -660,11 +676,295 @@ describe("PanelOrchestrator.ensureLoaded", () => {
       ],
     });
 
-    expect(panelView.createViewForPanel).toHaveBeenCalledWith(
-      panel.id,
-      panel.artifacts.htmlPath,
-      panel.snapshot.contextId
+    expect(panelView.updatePanelCodeIdentity).toHaveBeenCalledWith(panel.id);
+    expect(panelView.createViewForPanel).not.toHaveBeenCalled();
+  });
+});
+
+describe("PanelOrchestrator local presentation", () => {
+  it("publishes loading and ready only after the native slot is attached", async () => {
+    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const panel = makePanel("panel:tree/presentation-ready");
+    registry.addPanel(panel, null, { addAsRoot: true });
+    const published: Array<{ presentation: { state: string } }> = [];
+    const { orchestrator, panelView } = createOrchestrator(registry, vi.fn(), {
+      getNativeBinding: () => ({ nativeSlotId: "pane:primary" }),
+      publishPresentation: (snapshot) => published.push(snapshot),
+    });
+    const loaded = new Set<string>();
+    panelView.hasView.mockImplementation((panelId: string) => loaded.has(panelId));
+    panelView.createViewForPanel.mockImplementation(async (panelId: string) => {
+      loaded.add(panelId);
+    });
+    panelView.getWebContents.mockReturnValue({
+      id: 42,
+      isDestroyed: () => false,
+      getURL: () => "http://127.0.0.1:1234/panels/example/",
+      isLoading: () => false,
+    });
+
+    await orchestrator.ensureLoaded(panel.id);
+
+    expect(published.map((snapshot) => snapshot.presentation.state)).toContain("loading");
+    expect(orchestrator.getLocalPresentation(panel.id).presentation).toMatchObject({
+      state: "ready",
+      slotId: panel.id,
+      nativeSlotId: "pane:primary",
+      webContentsId: 42,
+    });
+  });
+
+  it("keeps code panels booting until the exact renderer entity reports ready", async () => {
+    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const panel = makePanel("panel:tree/presentation-boot");
+    registry.addPanel(panel, null, { addAsRoot: true });
+    const { orchestrator, panelView } = createOrchestrator(registry, vi.fn(), {
+      getNativeBinding: () => ({ nativeSlotId: "pane:primary" }),
+      getBootObservation: vi.fn(async () => ({ kind: "unavailable" as const })),
+    });
+    const loaded = new Set<string>();
+    panelView.hasView.mockImplementation((panelId: string) => loaded.has(panelId));
+    panelView.createViewForPanel.mockImplementation(async (panelId: string) => {
+      loaded.add(panelId);
+    });
+    panelView.getWebContents.mockReturnValue({
+      id: 47,
+      isDestroyed: () => false,
+      getURL: () => "http://127.0.0.1:1234/panels/boot/",
+      isLoading: () => false,
+    });
+
+    await orchestrator.ensureLoaded(panel.id);
+    expect(orchestrator.getLocalPresentation(panel.id).presentation).toMatchObject({
+      state: "loading",
+      stage: "booting",
+    });
+
+    orchestrator.onPanelBoot(panel.id, 47, {
+      phase: "ready",
+      runtimeEntityId: "panel:nav-stale",
+    });
+    expect(orchestrator.getLocalPresentation(panel.id).presentation.state).toBe("loading");
+
+    const connection = orchestrator.getPanelRuntimeConnection(panel.id);
+    orchestrator.onPanelBoot(panel.id, 47, {
+      phase: "ready",
+      runtimeEntityId: connection?.runtimeEntityId,
+    });
+    expect(orchestrator.getLocalPresentation(panel.id).presentation).toMatchObject({
+      state: "ready",
+      surface: "code",
+      runtimeEntityId: connection?.runtimeEntityId,
+      webContentsId: 47,
+    });
+  });
+
+  it("reattaches an already-ready view without reacquiring or navigating", async () => {
+    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const panel = makePanel("panel:tree/presentation-reattach");
+    registry.addPanel(panel, null, { addAsRoot: true });
+    const attachNativeBinding = vi.fn(() => ({ nativeSlotId: "pane:primary" }));
+    const { orchestrator, panelView, serverClient } = createOrchestrator(registry, vi.fn(), {
+      attachNativeBinding,
+    });
+    const loaded = new Set<string>();
+    panelView.hasView.mockImplementation((panelId: string) => loaded.has(panelId));
+    panelView.createViewForPanel.mockImplementation(async (panelId: string) => {
+      loaded.add(panelId);
+    });
+    panelView.getWebContents.mockReturnValue({
+      id: 44,
+      isDestroyed: () => false,
+      getURL: () => "http://127.0.0.1:1234/panels/reattach/",
+      isLoading: () => false,
+    });
+
+    await orchestrator.ensureLoaded(panel.id);
+    const attemptId = orchestrator.getLocalPresentation(panel.id).presentation;
+    const acquireCount = serverClient.call.mock.calls.filter(
+      ([service, method]) => service === "panelRuntime" && method === "acquire"
+    ).length;
+
+    orchestrator.onNativeSlotDeclared(panel.id);
+
+    expect(panelView.createViewForPanel).toHaveBeenCalledTimes(1);
+    expect(
+      serverClient.call.mock.calls.filter(
+        ([service, method]) => service === "panelRuntime" && method === "acquire"
+      )
+    ).toHaveLength(acquireCount);
+    expect(attachNativeBinding).toHaveBeenCalledTimes(2);
+    expect(orchestrator.getLocalPresentation(panel.id).presentation).toMatchObject({
+      state: "ready",
+      attemptId: attemptId.state === "ready" ? attemptId.attemptId : "",
+    });
+  });
+
+  it("represents normal lease contention as unavailable with takeover identity", async () => {
+    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const panel = makePanel("panel:tree/presentation-contended", [], {
+      runtimeEntityId: "panel:nav-presentation-contended",
+    });
+    registry.addPanel(panel, null, { addAsRoot: true });
+    const { orchestrator, serverClient } = createOrchestrator(registry);
+    const foreignLease = runtimeLease(
+      panel.runtimeEntityId!,
+      {
+        slotId: panel.id,
+        clientSessionId: "remote-session",
+        connectionId: "remote-connection",
+      },
+      { holderLabel: "Laptop" }
     );
+    serverClient.call.mockImplementation(async (_service: string, method: string) => {
+      if (method === "acquire") return { acquired: false, lease: foreignLease };
+      return undefined;
+    });
+
+    await orchestrator.ensureLoaded(panel.id);
+
+    expect(orchestrator.getLocalPresentation(panel.id).presentation).toMatchObject({
+      state: "unavailable",
+      reason: "leased-elsewhere",
+      lease: {
+        runtimeEntityId: foreignLease.runtimeEntityId,
+        connectionId: "remote-connection",
+        holderLabel: "Laptop",
+      },
+    });
+  });
+
+  it("installs a fresh attempt when an explicit retry follows failure", async () => {
+    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const panel = makePanel("panel:tree/presentation-retry");
+    registry.addPanel(panel, null, { addAsRoot: true });
+    const { orchestrator, panelView } = createOrchestrator(registry);
+    const loaded = new Set<string>();
+    panelView.hasView.mockImplementation((panelId: string) => loaded.has(panelId));
+    panelView.createViewForPanel
+      .mockRejectedValueOnce(new Error("first navigation failed"))
+      .mockImplementationOnce(async (panelId: string) => {
+        loaded.add(panelId);
+      });
+    panelView.getWebContents.mockReturnValue({
+      id: 43,
+      isDestroyed: () => false,
+      getURL: () => "http://127.0.0.1:1234/panels/retry/",
+      isLoading: () => false,
+    } as never);
+
+    await orchestrator.ensureLoaded(panel.id);
+    const failed = orchestrator.getLocalPresentation(panel.id).presentation;
+    expect(failed).toMatchObject({ state: "failed", message: "first navigation failed" });
+
+    await orchestrator.reloadPanel(panel.id);
+    const ready = orchestrator.getLocalPresentation(panel.id).presentation;
+    expect(ready.state).toBe("ready");
+    expect(ready.state === "ready" && failed.state === "failed" && ready.attemptId).not.toBe(
+      failed.state === "failed" ? failed.attemptId : ""
+    );
+  });
+
+  it("revokes ready immediately when the native slot is cleared", async () => {
+    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const panel = makePanel("panel:tree/presentation-detached");
+    registry.addPanel(panel, null, { addAsRoot: true });
+    let attached = true;
+    const { orchestrator, panelView } = createOrchestrator(registry, vi.fn(), {
+      getNativeBinding: () => (attached ? { nativeSlotId: "pane:primary" } : null),
+    });
+    const loaded = new Set<string>();
+    panelView.hasView.mockImplementation((panelId: string) => loaded.has(panelId));
+    panelView.createViewForPanel.mockImplementation(async (panelId: string) => {
+      loaded.add(panelId);
+    });
+    panelView.getWebContents.mockReturnValue({
+      id: 45,
+      isDestroyed: () => false,
+      getURL: () => "http://127.0.0.1:1234/panels/detached/",
+      isLoading: () => false,
+    });
+
+    await orchestrator.ensureLoaded(panel.id);
+    expect(orchestrator.getLocalPresentation(panel.id).presentation.state).toBe("ready");
+
+    attached = false;
+    orchestrator.onNativeSlotCleared(panel.id);
+
+    expect(orchestrator.getLocalPresentation(panel.id).presentation).toMatchObject({
+      state: "loading",
+      stage: "waiting-for-slot",
+    });
+  });
+
+  it("advances an external document revision only at main-frame commit", async () => {
+    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const panel = makePanel("panel:tree/presentation-browser", [], {
+      snapshot: {
+        source: "browser:https://example.com/",
+        contextId: "ctx-presentation-browser",
+        options: {},
+      },
+      artifacts: { buildState: "ready" },
+    });
+    registry.addPanel(panel, null, { addAsRoot: true });
+    const { orchestrator, panelView } = createOrchestrator(registry, vi.fn(), {
+      getNativeBinding: () => ({ nativeSlotId: "pane:primary" }),
+    });
+    const loaded = new Set<string>();
+    panelView.hasView.mockImplementation((panelId: string) => loaded.has(panelId));
+    panelView.createViewForBrowser.mockImplementation(async (panelId: string) => {
+      loaded.add(panelId);
+    });
+    panelView.getWebContents.mockReturnValue({
+      id: 46,
+      isDestroyed: () => false,
+      getURL: () => "https://example.com/",
+      isLoading: () => false,
+    });
+
+    await orchestrator.ensureLoaded(panel.id);
+    const before = orchestrator.getLocalPresentation(panel.id).presentation;
+    expect(before).toMatchObject({ state: "ready", surface: "external" });
+
+    orchestrator.onExternalDocumentCommitted(panel.id, "https://example.org/next");
+
+    const after = orchestrator.getLocalPresentation(panel.id).presentation;
+    expect(after).toMatchObject({
+      state: "ready",
+      surface: "external",
+      url: "https://example.org/next",
+    });
+    expect(after.state === "ready" && before.state === "ready" && after.documentRevision).toBe(
+      before.state === "ready" ? before.documentRevision + 1 : -1
+    );
+  });
+
+  it("publishes an active preparation failure to the canonical snapshot", async () => {
+    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const panel = makePanel("panel:tree/presentation-build-failure", [], {
+      buildKey: null,
+      executionDigest: null,
+      runtimeEntityId: asPanelEntityId("panel:nav-presentation-build-failure"),
+      artifacts: { buildState: "pending" },
+    });
+    registry.addPanel(panel, null, { addAsRoot: true });
+    const { orchestrator } = createOrchestrator(registry);
+
+    await orchestrator.ensureLoaded(panel.id);
+    expect(orchestrator.getLocalPresentation(panel.id).presentation.state).toBe("loading");
+
+    orchestrator.applyPanelExecutionFailed({
+      panelId: panel.id,
+      runtimeEntityId: panel.runtimeEntityId!,
+      message: "compile failed",
+    });
+
+    expect(orchestrator.getLocalPresentation(panel.id).presentation).toMatchObject({
+      state: "failed",
+      code: "preparation_failed",
+      message: "compile failed",
+    });
   });
 });
 
@@ -966,7 +1266,7 @@ describe("PanelOrchestrator.createPanel", () => {
     expect(panelView.createViewForPanel).not.toHaveBeenCalled();
   });
 
-  it("focuses after creating the native view for focused panels", async () => {
+  it("materializes a focused created panel without a second placement event", async () => {
     const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
     const caller = makePanel("panel:tree/caller");
     registry.addPanel(caller, null, { addAsRoot: true });
@@ -1019,11 +1319,7 @@ describe("PanelOrchestrator.createPanel", () => {
         `ctx-${id}`
       )
     );
-    expect(panelView.setViewVisible).toHaveBeenCalledWith(id, true);
     expect(emit).not.toHaveBeenCalledWith("navigate-to-panel", expect.anything());
-    expect(panelView.createViewForPanel.mock.invocationCallOrder[0]).toBeLessThan(
-      panelView.setViewVisible.mock.invocationCallOrder[0] ?? 0
-    );
   });
 
   it("keeps a created workspace panel visible with an error when reactive native view creation fails", async () => {
@@ -1307,7 +1603,7 @@ describe("PanelOrchestrator.createPanel", () => {
 });
 
 describe("PanelOrchestrator.navigatePanel", () => {
-  it("routes replacement through the shell connection without reconstructing the tree", async () => {
+  it("commits replacement through the shell connection and presents the committed entity", async () => {
     const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
     const panel = makePanel("panel:tree/current", [], {
       runtimeEntityId: asPanelEntityId("panel:nav-current"),
@@ -1325,7 +1621,13 @@ describe("PanelOrchestrator.navigatePanel", () => {
       { stateArgs: { initialPrompt: "hello" } },
       undefined
     );
-    expect(panelView.createViewForPanel).not.toHaveBeenCalled();
+    expect(panelView.createViewForPanel).toHaveBeenCalledWith(
+      panel.id,
+      expect.stringContaining(
+        "buildKey=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      ),
+      panel.snapshot.contextId
+    );
   });
 });
 
@@ -1809,7 +2111,15 @@ describe("PanelOrchestrator.handleRuntimeLeaseChanged", () => {
       },
     });
     registry.addPanel(panel, null, { addAsRoot: true });
-    const { orchestrator, panelView } = createOrchestrator(registry);
+    const { orchestrator, panelView } = createOrchestrator(registry, vi.fn(), {
+      runtimeClient: {
+        clientSessionId: "desktop-session",
+        label: "Desktop",
+        platform: "desktop",
+        supportsCdp: true,
+        loadOnLeaseAssignment: true,
+      },
+    });
     panelView.hasView.mockReturnValue(true);
 
     await orchestrator.handleRuntimeLeaseChanged({
@@ -1846,7 +2156,15 @@ describe("PanelOrchestrator.handleRuntimeLeaseChanged", () => {
       artifacts: { buildState: "ready" },
     });
     registry.addPanel(panel, null, { addAsRoot: true });
-    const { orchestrator, panelView } = createOrchestrator(registry);
+    const { orchestrator, panelView } = createOrchestrator(registry, vi.fn(), {
+      runtimeClient: {
+        clientSessionId: "desktop-session",
+        label: "Desktop",
+        platform: "desktop",
+        supportsCdp: true,
+        loadOnLeaseAssignment: true,
+      },
+    });
     panelView.hasView.mockReturnValue(true);
     const event = {
       type: "panel:runtimeLeaseChanged" as const,
@@ -1886,7 +2204,15 @@ describe("PanelOrchestrator.handleRuntimeLeaseChanged", () => {
       },
     });
     registry.addPanel(panel, null, { addAsRoot: true });
-    const { orchestrator, panelView, serverClient } = createOrchestrator(registry);
+    const { orchestrator, panelView, serverClient } = createOrchestrator(registry, vi.fn(), {
+      runtimeClient: {
+        clientSessionId: "desktop-session",
+        label: "Desktop",
+        platform: "desktop",
+        supportsCdp: true,
+        loadOnLeaseAssignment: true,
+      },
+    });
     panelView.hasView.mockReturnValue(true);
     panelView.createViewForPanel.mockRejectedValueOnce(new Error("News renderer failed to load"));
 
@@ -1974,6 +2300,54 @@ describe("PanelOrchestrator.handleRuntimeLeaseChanged", () => {
       buildState: "pending",
       buildProgress: "Panel unloaded - will rebuild when focused",
     });
+  });
+
+  it("recovers a shell-declared resident panel when its lease is released before attachment", async () => {
+    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const panel = makePanel("panel:tree/resident-lease-recovery", [], {
+      runtimeEntityId: "panel:nav-resident-lease-recovery",
+    });
+    registry.addPanel(panel, null, { addAsRoot: true });
+    const { orchestrator, shellCore, serverClient } = createOrchestrator(registry, vi.fn(), {
+      getResidentPanelIds: () => [panel.id],
+    });
+    shellCore.refreshSlotEntity.mockResolvedValue(panel.runtimeEntityId!);
+    const lease = runtimeLease(panel.runtimeEntityId!, {
+      slotId: panel.id,
+      clientSessionId: orchestrator.getRuntimeClientSessionId(),
+      connectionId: "startup-connection",
+    });
+
+    await orchestrator.handleRuntimeLeaseChanged({
+      type: "panel:runtimeLeaseChanged",
+      version: { epoch: "test", counter: 2 },
+      slotId: asPanelSlotId(panel.id),
+      runtimeEntityId: lease.runtimeEntityId,
+      previous: null,
+      next: lease,
+      reason: "acquired",
+    });
+    await orchestrator.handleRuntimeLeaseChanged({
+      type: "panel:runtimeLeaseChanged",
+      version: { epoch: "test", counter: 3 },
+      slotId: asPanelSlotId(panel.id),
+      runtimeEntityId: lease.runtimeEntityId,
+      previous: lease,
+      next: null,
+      reason: "released",
+    });
+
+    expect(orchestrator.getLocalPresentation(panel.id).presentation).toMatchObject({
+      state: "loading",
+    });
+    await vi.waitFor(() =>
+      expect(
+        serverClient.call.mock.calls.some(
+          ([service, method]) => service === "panelRuntime" && method === "acquire"
+        )
+      ).toBe(true)
+    );
+    expect(orchestrator.getLocalPresentation(panel.id).presentation.state).not.toBe("idle");
   });
 
   it("ignores an old lease release after the slot has navigated to a new entity", async () => {
@@ -2131,7 +2505,7 @@ describe("PanelOrchestrator.handleRuntimeLeaseChanged", () => {
         label: "Desktop",
         platform: "desktop",
         supportsCdp: true,
-        loadOnLeaseAssignment: false,
+        loadOnLeaseAssignment: true,
         restorePolicy: "none",
       },
     });

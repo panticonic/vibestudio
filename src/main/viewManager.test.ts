@@ -113,6 +113,16 @@ vi.mock("electron", () => {
 
 // Import after mocks are set up
 import { ViewManager } from "./viewManager.js";
+
+function declareAndAttachPanelSlot(
+  manager: ViewManager,
+  ownerViewId: string,
+  request: Parameters<ViewManager["bindPanelSlot"]>[1]
+) {
+  const result = manager.bindPanelSlot(ownerViewId, request);
+  if (result.status === "bound") manager.attachDeclaredPanelSlot(request.panelId);
+  return result;
+}
 import { BaseWindow, WebContentsView, ipcMain } from "electron";
 
 type MockBaseWindow = InstanceType<typeof BaseWindow>;
@@ -418,7 +428,7 @@ describe("ViewManager", () => {
         appCapabilities: ["panel-hosting"],
       });
       vm.setHostedShellReady("@workspace-apps/shell", true);
-      vm.bindPanelSlot("@workspace-apps/shell", {
+      declareAndAttachPanelSlot(vm, "@workspace-apps/shell", {
         nativeSlotId: "panel-stack:primary",
         bindingId: "binding-test",
         panelId: "panel-1",
@@ -463,6 +473,20 @@ describe("ViewManager", () => {
       });
     });
 
+    it("targets shell events at the active hosted shell document", () => {
+      expect(vm.getHostedShellWebContents()).toBeNull();
+      const hostView = vm.createView({
+        id: "@workspace-apps/shell",
+        type: "app",
+        hostChrome: true,
+        appCapabilities: ["panel-hosting"],
+      });
+
+      vm.setHostedShellReady("@workspace-apps/shell", true);
+
+      expect(vm.getHostedShellWebContents()).toBe(hostView.webContents);
+    });
+
     it("keeps an unbound panel hidden until hosted shell binds its measured slot", () => {
       const panelView = vm.createView({ id: "panel-1", type: "panel" });
       vm.setViewVisible("panel-1", true);
@@ -483,7 +507,7 @@ describe("ViewManager", () => {
       expect(panelView.setBounds).toHaveBeenLastCalledWith({ x: 0, y: 0, width: 0, height: 0 });
       expect(panelView.setVisible).toHaveBeenLastCalledWith(false);
 
-      vm.bindPanelSlot("@workspace-apps/shell", {
+      declareAndAttachPanelSlot(vm, "@workspace-apps/shell", {
         nativeSlotId: "panel-stack:primary",
         bindingId: "binding-test",
         panelId: "panel-1",
@@ -509,7 +533,7 @@ describe("ViewManager", () => {
       const panelView = vm.createView({ id: "panel-1", type: "panel" });
 
       vm.setHostedShellReady("@workspace-apps/shell", true);
-      vm.bindPanelSlot("@workspace-apps/shell", {
+      declareAndAttachPanelSlot(vm, "@workspace-apps/shell", {
         nativeSlotId: "panel-stack:primary",
         bindingId: "binding-test",
         panelId: "panel-1",
@@ -525,7 +549,7 @@ describe("ViewManager", () => {
         height: 301,
       });
       expect(panelView.setVisible).toHaveBeenCalledWith(true);
-      expect(panelView.webContents.focus).toHaveBeenCalled();
+      expect(panelView.webContents.focus).not.toHaveBeenCalled();
       expect(vm.isPanelSlotted("panel-1")).toBe(true);
     });
 
@@ -539,7 +563,7 @@ describe("ViewManager", () => {
       });
       vm.setHostedShellReady("@workspace-apps/shell", true);
       const bounds = { x: 267, y: 32, width: 933, height: 768 };
-      vm.bindPanelSlot("@workspace-apps/shell", {
+      declareAndAttachPanelSlot(vm, "@workspace-apps/shell", {
         nativeSlotId: "panel-stack:primary",
         bindingId: "binding-test",
         panelId: "panel-1",
@@ -553,7 +577,7 @@ describe("ViewManager", () => {
       expect(panelView.setVisible).toHaveBeenLastCalledWith(true);
     });
 
-    it("does not steal focus when the same focused panel rebinds or resyncs", () => {
+    it("does not steal focus while a focused declaration attaches or resyncs", () => {
       const panelView = vm.createView({ id: "panel-1", type: "panel" });
       vm.createView({
         id: "@workspace-apps/shell",
@@ -570,17 +594,20 @@ describe("ViewManager", () => {
         focused: true,
       };
 
-      vm.bindPanelSlot("@workspace-apps/shell", request);
-      expect(panelView.webContents.focus).toHaveBeenCalledTimes(1);
+      declareAndAttachPanelSlot(vm, "@workspace-apps/shell", request);
+      expect(panelView.webContents.focus).not.toHaveBeenCalled();
 
-      vm.bindPanelSlot("@workspace-apps/shell", { ...request, bindingId: "binding-new" });
+      declareAndAttachPanelSlot(vm, "@workspace-apps/shell", {
+        ...request,
+        bindingId: "binding-new",
+      });
       vm.updatePanelSlot("@workspace-apps/shell", {
         nativeSlotId: request.nativeSlotId,
         bindingId: "binding-new",
         focused: true,
       });
 
-      expect(panelView.webContents.focus).toHaveBeenCalledTimes(1);
+      expect(panelView.webContents.focus).not.toHaveBeenCalled();
     });
 
     it("updates and clears a panel slot", async () => {
@@ -593,7 +620,7 @@ describe("ViewManager", () => {
       });
 
       vm.setHostedShellReady("@workspace-apps/shell", true);
-      vm.bindPanelSlot("@workspace-apps/shell", {
+      declareAndAttachPanelSlot(vm, "@workspace-apps/shell", {
         nativeSlotId: "panel-stack:primary",
         bindingId: "binding-test",
         panelId: "panel-1",
@@ -632,13 +659,13 @@ describe("ViewManager", () => {
         appCapabilities: ["panel-hosting"],
       });
       vm.setHostedShellReady("@workspace-apps/shell", true);
-      vm.bindPanelSlot("@workspace-apps/shell", {
+      declareAndAttachPanelSlot(vm, "@workspace-apps/shell", {
         nativeSlotId: "panel-stack:primary",
         bindingId: "binding-old",
         panelId: "panel-1",
         bounds: { x: 10, y: 20, width: 300, height: 200 },
       });
-      vm.bindPanelSlot("@workspace-apps/shell", {
+      declareAndAttachPanelSlot(vm, "@workspace-apps/shell", {
         nativeSlotId: "panel-stack:primary",
         bindingId: "binding-new",
         panelId: "panel-1",
@@ -673,7 +700,7 @@ describe("ViewManager", () => {
         operationSequence: 2,
       });
       expect(
-        vm.bindPanelSlot("@workspace-apps/shell", {
+        declareAndAttachPanelSlot(vm, "@workspace-apps/shell", {
           nativeSlotId: "panel-stack:primary",
           bindingId: "binding-a",
           bindingSequence: 1,
@@ -703,7 +730,7 @@ describe("ViewManager", () => {
       vm.setHostedShellReady("@workspace-apps/shell", true);
 
       expect(
-        vm.bindPanelSlot("@workspace-apps/shell", {
+        declareAndAttachPanelSlot(vm, "@workspace-apps/shell", {
           nativeSlotId: "panel-stack:primary",
           bindingId: "binding-b",
           bindingSequence: 2,
@@ -713,7 +740,7 @@ describe("ViewManager", () => {
         })
       ).toEqual({ status: "bound" });
       expect(
-        vm.bindPanelSlot("@workspace-apps/shell", {
+        declareAndAttachPanelSlot(vm, "@workspace-apps/shell", {
           nativeSlotId: "panel-stack:primary",
           bindingId: "binding-a",
           bindingSequence: 1,
@@ -736,7 +763,7 @@ describe("ViewManager", () => {
         appCapabilities: ["panel-hosting"],
       });
       vm.setHostedShellReady("@workspace-apps/shell", true);
-      vm.bindPanelSlot("@workspace-apps/shell", {
+      declareAndAttachPanelSlot(vm, "@workspace-apps/shell", {
         nativeSlotId: "panel-stack:primary",
         bindingId: "binding-old",
         bindingSequence: 1,
@@ -745,8 +772,8 @@ describe("ViewManager", () => {
         bounds: { x: 10, y: 20, width: 300, height: 200 },
       });
 
-      expect(() =>
-        vm.bindPanelSlot("@workspace-apps/shell", {
+      expect(
+        declareAndAttachPanelSlot(vm, "@workspace-apps/shell", {
           nativeSlotId: "panel-stack:primary",
           bindingId: "binding-new",
           bindingSequence: 2,
@@ -754,7 +781,7 @@ describe("ViewManager", () => {
           panelId: "panel-new",
           bounds: { x: 10, y: 20, width: 300, height: 200 },
         })
-      ).toThrow("Native panel slot target is not a panel view: panel-new");
+      ).toEqual({ status: "bound" });
 
       expect(previousView.setVisible).toHaveBeenLastCalledWith(false);
       expect(vm.isPanelSlotted("panel-old")).toBe(false);
@@ -768,16 +795,7 @@ describe("ViewManager", () => {
       expect(vm.isPanelSlotted("panel-old")).toBe(false);
 
       vm.createView({ id: "panel-new", type: "panel" });
-      expect(
-        vm.bindPanelSlot("@workspace-apps/shell", {
-          nativeSlotId: "panel-stack:primary",
-          bindingId: "binding-new",
-          bindingSequence: 2,
-          operationSequence: 2,
-          panelId: "panel-new",
-          bounds: { x: 10, y: 20, width: 300, height: 200 },
-        })
-      ).toEqual({ status: "bound" });
+      vm.attachDeclaredPanelSlot("panel-new");
       expect(vm.isPanelSlotted("panel-new")).toBe(true);
     });
 
@@ -791,7 +809,7 @@ describe("ViewManager", () => {
         appCapabilities: ["panel-hosting"],
       });
       vm.setHostedShellReady("@workspace-apps/shell", true);
-      vm.bindPanelSlot("@workspace-apps/shell", {
+      declareAndAttachPanelSlot(vm, "@workspace-apps/shell", {
         nativeSlotId: "panel-stack:primary",
         bindingId: "binding-old",
         bindingSequence: 1,
@@ -799,7 +817,7 @@ describe("ViewManager", () => {
         panelId: "panel-old",
         bounds: { x: 10, y: 20, width: 300, height: 200 },
       });
-      vm.bindPanelSlot("@workspace-apps/shell", {
+      declareAndAttachPanelSlot(vm, "@workspace-apps/shell", {
         nativeSlotId: "panel-stack:secondary",
         bindingId: "binding-new-secondary",
         bindingSequence: 2,
@@ -809,7 +827,7 @@ describe("ViewManager", () => {
       });
 
       expect(() =>
-        vm.bindPanelSlot("@workspace-apps/shell", {
+        declareAndAttachPanelSlot(vm, "@workspace-apps/shell", {
           nativeSlotId: "panel-stack:primary",
           bindingId: "binding-new-primary",
           bindingSequence: 3,
@@ -834,7 +852,7 @@ describe("ViewManager", () => {
         appCapabilities: ["panel-hosting"],
       });
       vm.setHostedShellReady("@workspace-apps/shell", true, "renderer-old");
-      vm.bindPanelSlot("@workspace-apps/shell", {
+      declareAndAttachPanelSlot(vm, "@workspace-apps/shell", {
         nativeSlotId: "panel-stack:primary",
         rendererInstanceId: "renderer-old",
         bindingId: "binding-old",
@@ -846,7 +864,7 @@ describe("ViewManager", () => {
 
       vm.setHostedShellReady("@workspace-apps/shell", true, "renderer-new");
       expect(
-        vm.bindPanelSlot("@workspace-apps/shell", {
+        declareAndAttachPanelSlot(vm, "@workspace-apps/shell", {
           nativeSlotId: "panel-stack:primary",
           rendererInstanceId: "renderer-new",
           bindingId: "binding-new",
@@ -871,7 +889,7 @@ describe("ViewManager", () => {
         appCapabilities: ["panel-hosting"],
       });
       vm.setHostedShellReady("@workspace-apps/shell", true);
-      vm.bindPanelSlot("@workspace-apps/shell", {
+      declareAndAttachPanelSlot(vm, "@workspace-apps/shell", {
         nativeSlotId: "panel-stack:pane-a",
         bindingId: "binding-test",
         panelId: "panel-1",
@@ -931,7 +949,7 @@ describe("ViewManager", () => {
       });
 
       vm.setHostedShellReady("@workspace-apps/shell", true);
-      vm.bindPanelSlot("@workspace-apps/shell", {
+      declareAndAttachPanelSlot(vm, "@workspace-apps/shell", {
         nativeSlotId: "panel-stack:primary",
         bindingId: "binding-test",
         panelId: "panel-1",
@@ -966,7 +984,7 @@ describe("ViewManager", () => {
       });
 
       vm.setHostedShellReady("@workspace-apps/shell", true);
-      vm.bindPanelSlot("@workspace-apps/shell", {
+      declareAndAttachPanelSlot(vm, "@workspace-apps/shell", {
         nativeSlotId: "panel-stack:primary",
         bindingId: "binding-test",
         panelId: "panel-1",
@@ -998,7 +1016,7 @@ describe("ViewManager", () => {
       });
 
       vm.setHostedShellReady("@workspace-apps/shell", true);
-      vm.bindPanelSlot("@workspace-apps/shell", {
+      declareAndAttachPanelSlot(vm, "@workspace-apps/shell", {
         nativeSlotId: "slot-a",
         bindingId: "binding-test",
         panelId: "panel-1",
@@ -1006,7 +1024,7 @@ describe("ViewManager", () => {
       });
 
       expect(() =>
-        vm.bindPanelSlot("@workspace-apps/shell", {
+        declareAndAttachPanelSlot(vm, "@workspace-apps/shell", {
           nativeSlotId: "slot-b",
           bindingId: "binding-test",
           panelId: "panel-1",
@@ -1026,7 +1044,7 @@ describe("ViewManager", () => {
       });
 
       vm.setHostedShellReady("@workspace-apps/shell", true);
-      vm.bindPanelSlot("@workspace-apps/shell", {
+      declareAndAttachPanelSlot(vm, "@workspace-apps/shell", {
         nativeSlotId: "panel-stack:primary",
         bindingId: "binding-test",
         panelId: "panel-1",
@@ -1050,7 +1068,7 @@ describe("ViewManager", () => {
       });
 
       vm.setHostedShellReady("@workspace-apps/shell", true);
-      vm.bindPanelSlot("@workspace-apps/shell", {
+      declareAndAttachPanelSlot(vm, "@workspace-apps/shell", {
         nativeSlotId: "panel-stack:primary",
         bindingId: "binding-test",
         panelId: "panel-1",
@@ -1074,7 +1092,7 @@ describe("ViewManager", () => {
       });
 
       vm.setHostedShellReady("@workspace-apps/shell", true);
-      vm.bindPanelSlot("@workspace-apps/shell", {
+      declareAndAttachPanelSlot(vm, "@workspace-apps/shell", {
         nativeSlotId: "panel-stack:primary",
         bindingId: "binding-test",
         panelId: "panel-1",
@@ -1105,7 +1123,7 @@ describe("ViewManager", () => {
         });
 
         localVm.setHostedShellReady("@workspace-apps/shell", true);
-        localVm.bindPanelSlot("@workspace-apps/shell", {
+        declareAndAttachPanelSlot(localVm, "@workspace-apps/shell", {
           nativeSlotId: "panel-stack:primary",
           bindingId: "binding-test",
           panelId: "panel-1",
@@ -1126,7 +1144,7 @@ describe("ViewManager", () => {
       }
     });
 
-    it("restores the slot binding and focus listener when a panel view is recreated", () => {
+    it("reattaches a retained slot declaration and focus listener after recreation", () => {
       vm.createView({ id: "panel-1", type: "panel" });
       vm.createView({
         id: "@workspace-apps/shell",
@@ -1136,7 +1154,7 @@ describe("ViewManager", () => {
       });
 
       vm.setHostedShellReady("@workspace-apps/shell", true);
-      vm.bindPanelSlot("@workspace-apps/shell", {
+      declareAndAttachPanelSlot(vm, "@workspace-apps/shell", {
         nativeSlotId: "panel-stack:primary",
         bindingId: "binding-test",
         panelId: "panel-1",
@@ -1151,6 +1169,7 @@ describe("ViewManager", () => {
       expect(vm.isPanelSlotted("panel-1")).toBe(false);
 
       const recreated = vm.createView({ id: "panel-1", type: "panel" });
+      vm.attachDeclaredPanelSlot("panel-1");
 
       expect(vm.isPanelSlotted("panel-1")).toBe(true);
       expect(recreated.setBounds).toHaveBeenLastCalledWith({
@@ -1180,7 +1199,7 @@ describe("ViewManager", () => {
       });
 
       vm.setHostedShellReady("@workspace-apps/shell", true);
-      vm.bindPanelSlot("@workspace-apps/shell", {
+      declareAndAttachPanelSlot(vm, "@workspace-apps/shell", {
         nativeSlotId: "panel-stack:primary",
         bindingId: "binding-test",
         panelId: "panel-1",
@@ -1206,7 +1225,7 @@ describe("ViewManager", () => {
       });
 
       vm.setHostedShellReady("@workspace-apps/shell", true);
-      vm.bindPanelSlot("@workspace-apps/shell", {
+      declareAndAttachPanelSlot(vm, "@workspace-apps/shell", {
         nativeSlotId: "panel-stack:primary",
         bindingId: "binding-test",
         panelId: "panel-1",
@@ -1240,7 +1259,7 @@ describe("ViewManager", () => {
       ]);
 
       vm.setHostedShellReady("@workspace-apps/shell", true);
-      vm.bindPanelSlot("@workspace-apps/shell", {
+      declareAndAttachPanelSlot(vm, "@workspace-apps/shell", {
         nativeSlotId: "panel-stack:primary",
         bindingId: "binding-test",
         panelId: "panel-1",
@@ -1509,7 +1528,7 @@ describe("ViewManager", () => {
       expect(panelView.setBounds).toHaveBeenLastCalledWith({ x: 0, y: 0, width: 0, height: 0 });
       expect(panelView.setVisible).toHaveBeenLastCalledWith(false);
 
-      gatedVm.bindPanelSlot("@workspace-apps/shell", {
+      declareAndAttachPanelSlot(gatedVm, "@workspace-apps/shell", {
         nativeSlotId: "panel-stack:primary",
         bindingId: "binding-test",
         panelId: "panel-1",

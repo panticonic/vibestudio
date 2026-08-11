@@ -1,36 +1,49 @@
 import { useCallback, useEffect, useState } from "react";
 import { Box, Button, Flex, Spinner, Text } from "@radix-ui/themes";
 import { VibestudioLogo } from "@workspace/ui";
+import type { PanelPresentationSnapshot } from "@vibestudio/shared/panel/presentation";
 
-import type {
-  PanelRuntimeLease,
-  PanelRuntimeLeaseChangedEvent,
-} from "@vibestudio/shared/panel/panelLease";
-import { useFullPanel } from "../shell/hooks/PanelTreeContext";
 import { panel as panelService, view } from "../shell/client";
-import { useShellEvent } from "../shell/useShellEvent";
-import { leasedElsewhereInfo } from "./PanelStackVisibility";
+import { useDirectShellEvent } from "../shell/useDirectShellEvent";
 import { PanelSurface } from "./PanelSurface";
 import { nativeSlotIdForPane } from "../layout/types";
 
 interface PaneContentProps {
   paneId: string;
   panelId: string;
-  /** False while the pane's column is parked (§5.4): slot cleared, no load. */
   resident: boolean;
   focused: boolean;
-  /** Bumped on committed layout/viewport changes; forces surface bounds resync. */
   layoutEpoch: number;
   unresponsive: boolean;
   onDismissUnresponsive: (panelId: string) => void;
   onFocusPane: (paneId: string) => void;
 }
 
-/**
- * One pane's content state machine — loading / unresponsive / leased-elsewhere
- * + Take Over / build-error / building / ready surface. Extracted from the old
- * single-panel `renderPanelContent()`; every piece of state here is per-pane.
- */
+function CenteredState({
+  state,
+  panelId,
+  children,
+}: {
+  state: string;
+  panelId: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <Flex
+      data-panel-content-state={state}
+      data-panel-id={panelId}
+      direction="column"
+      align="center"
+      justify="center"
+      gap="3"
+      height="100%"
+      p="4"
+    >
+      {children}
+    </Flex>
+  );
+}
+
 export function PaneContent({
   paneId,
   panelId,
@@ -41,111 +54,62 @@ export function PaneContent({
   onDismissUnresponsive,
   onFocusPane,
 }: PaneContentProps) {
-  const { panel: fullPanel } = useFullPanel(panelId);
-  const [runtimeLease, setRuntimeLease] = useState<PanelRuntimeLease | null>(null);
+  const [snapshot, setSnapshot] = useState<PanelPresentationSnapshot | null>(null);
   const [takeoverBusy, setTakeoverBusy] = useState(false);
-  const [takeoverError, setTakeoverError] = useState<string | null>(null);
-  const [buildSlow, setBuildSlow] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [slow, setSlow] = useState(false);
 
-  useShellEvent(
-    "panel:runtimeLeaseChanged",
+  useDirectShellEvent(
+    "panel-local-presentation-changed",
     useCallback(
-      (event: PanelRuntimeLeaseChangedEvent) => {
-        if (event.slotId === panelId) setRuntimeLease(event.next);
+      (next) => {
+        if (next.presentation.slotId !== panelId) return;
+        setSnapshot((current) => (!current || next.revision > current.revision ? next : current));
       },
       [panelId]
     )
   );
 
   useEffect(() => {
-    let cancelled = false;
-    setRuntimeLease(null);
+    let live = true;
+    setSnapshot(null);
+    // The event listener above is installed first. Revisions close the
+    // subscribe/query race without polling or a second readiness predicate.
     void panelService
-      .getRuntimeLease(panelId)
-      .then((lease) => {
-        if (!cancelled) setRuntimeLease(lease);
+      .getLocalPresentation(panelId)
+      .then((next) => {
+        if (!live) return;
+        setSnapshot((current) => (!current || next.revision > current.revision ? next : current));
       })
-      .catch(() => {
-        if (!cancelled) setRuntimeLease(null);
+      .catch((error: unknown) => {
+        if (live) setActionError(error instanceof Error ? error.message : String(error));
       });
     return () => {
-      cancelled = true;
+      live = false;
     };
   }, [panelId]);
 
+  const presentation = snapshot?.presentation ?? { state: "idle" as const, slotId: panelId };
+
   useEffect(() => {
-    setTakeoverError(null);
-    setTakeoverBusy(false);
-    setBuildSlow(false);
-    if (
-      !fullPanel ||
-      fullPanel.artifacts?.htmlPath ||
-      fullPanel.artifacts?.error ||
-      fullPanel.artifacts?.viewFailure
-    )
-      return;
-    const timer = window.setTimeout(() => setBuildSlow(true), 60_000);
+    setActionError(null);
+    setSlow(false);
+    if (presentation.state !== "loading") return;
+    const elapsed = Math.max(0, Date.now() - presentation.enteredAt);
+    const timer = window.setTimeout(() => setSlow(true), Math.max(0, 60_000 - elapsed));
     return () => window.clearTimeout(timer);
-  }, [
-    fullPanel?.id,
-    fullPanel?.artifacts?.htmlPath,
-    fullPanel?.artifacts?.error,
-    fullPanel?.artifacts?.viewFailure,
-  ]);
+  }, [presentation.state, presentation.state === "loading" ? presentation.attemptId : ""]);
 
-  // Reconcile on immutable runtime identity as well as residency. Panel
-  // preparation and lease assignment are independent: no renderer exists for
-  // a non-executable principal, and the build-key transition is the canonical
-  // signal to create the real panel view.
-  useEffect(() => {
-    if (!resident) return;
-    void panelService
-      .ensureLoaded(panelId)
-      .then((result) => {
-        if (result.status === "leased_elsewhere" || result.status === "view_creation_failed") {
-          console.warn("Panel load did not create a view", result);
-        }
-      })
-      .catch((error) => {
-        console.error("Failed to ensure panel is loaded", error);
-      });
-  }, [panelId, resident, fullPanel?.buildKey]);
-
-  // Never use one slot's runtime/artifact readiness to present another slot.
-  // useFullPanel enforces this identity boundary too; keep it explicit here
-  // because crossing it would grant the wrong native view ownership of this
-  // pane rather than merely render stale text.
-  if (!fullPanel || fullPanel.id !== panelId) {
+  if (!resident) {
     return (
-      <Flex
-        data-panel-content-state="loading"
-        data-panel-id={panelId}
-        direction="column"
-        align="center"
-        justify="center"
-        gap="3"
-        height="100%"
-      >
-        <VibestudioLogo size={56} variant="symbol" />
-        <Spinner size="3" />
-        <Text>Loading panel...</Text>
-      </Flex>
+      <Box data-panel-content-state="parked" data-panel-id={panelId} style={{ flex: "1 1 0" }} />
     );
   }
 
-  const artifacts = fullPanel.artifacts;
+  let content: React.ReactNode = null;
   if (unresponsive) {
-    return (
-      <Flex
-        data-panel-content-state="unresponsive"
-        data-panel-id={panelId}
-        direction="column"
-        align="center"
-        justify="center"
-        height="100%"
-        gap="3"
-        p="4"
-      >
+    content = (
+      <CenteredState state="unresponsive" panelId={panelId}>
         <Text size="4" weight="bold">
           This panel is not responding
         </Text>
@@ -166,109 +130,71 @@ export function PaneContent({
             Force reload
           </Button>
         </Flex>
-      </Flex>
+      </CenteredState>
     );
-  }
-
-  const leasedElsewhere = leasedElsewhereInfo(panelId, runtimeLease, fullPanel.state?.runtime);
-  if (leasedElsewhere) {
-    return (
-      <Flex
-        data-panel-content-state="leased-elsewhere"
-        data-panel-id={panelId}
-        direction="column"
-        align="center"
-        justify="center"
-        height="100%"
-        gap="3"
-        p="4"
-      >
+  } else if (presentation.state === "unavailable") {
+    content = (
+      <CenteredState state="leased-elsewhere" panelId={panelId}>
         <Text size="4" weight="bold">
-          Running on {leasedElsewhere.holderLabel}
+          Running on {presentation.lease.holderLabel}
         </Text>
         <Button
           disabled={takeoverBusy}
           onClick={() => {
             setTakeoverBusy(true);
-            setTakeoverError(null);
+            setActionError(null);
             void panelService
-              .takeOver(leasedElsewhere.slotId)
-              .catch((error) => {
-                console.error("Failed to take over panel", error);
-                setTakeoverError(error instanceof Error ? error.message : String(error));
-              })
+              .takeOver(panelId)
+              .catch((error: unknown) =>
+                setActionError(error instanceof Error ? error.message : String(error))
+              )
               .finally(() => setTakeoverBusy(false));
           }}
         >
           {takeoverBusy ? "Taking over…" : "Take Over"}
         </Button>
-        {takeoverError ? (
+        {actionError ? (
           <Text color="red" size="2" role="alert">
-            Couldn&apos;t take over: {takeoverError}
+            Couldn&apos;t take over: {actionError}
           </Text>
         ) : null}
-      </Flex>
+      </CenteredState>
     );
-  }
-
-  const panelError = artifacts?.error ?? artifacts?.viewFailure?.message;
-  if (panelError) {
-    const isBuildFailure = Boolean(artifacts?.error);
-    return (
-      <Flex
-        data-panel-content-state="failed"
-        data-panel-id={panelId}
-        direction="column"
-        align="center"
-        justify="center"
-        height="100%"
-        p="4"
-      >
-        <Text color="red" size="4" weight="bold" mb="2">
-          {isBuildFailure ? "Panel build failed" : "Panel failed to load"}
+  } else if (presentation.state === "failed") {
+    content = (
+      <CenteredState state="failed" panelId={panelId}>
+        <Text color="red" size="4" weight="bold">
+          Panel failed to load
         </Text>
         <Text color="red" size="2" style={{ fontFamily: "monospace" }}>
-          {panelError}
+          {presentation.message}
         </Text>
-        <Flex gap="2" mt="3">
+        <Flex gap="2">
           <Button variant="soft" onClick={() => void panelService.reload(panelId)}>
-            Reload
+            Retry
           </Button>
-          {isBuildFailure ? (
-            <Button onClick={() => void panelService.rebuildPanel(panelId)}>Rebuild</Button>
-          ) : null}
+          <Button onClick={() => void panelService.rebuildPanel(panelId)}>Rebuild</Button>
         </Flex>
-      </Flex>
+      </CenteredState>
     );
-  }
-
-  const presentsCurrentEntity =
-    Boolean(artifacts?.htmlPath) && artifacts?.hostedRuntimeEntityId === fullPanel.runtimeEntityId;
-
-  if (!presentsCurrentEntity) {
-    return (
-      <Flex
-        data-panel-content-state="preparing"
-        data-panel-id={panelId}
-        data-panel-build-key={fullPanel.buildKey ?? ""}
-        data-panel-build-state={artifacts?.buildState ?? ""}
-        data-panel-runtime-phase={artifacts?.buildProgress ?? ""}
-        direction="column"
-        align="center"
-        justify="center"
-        height="100%"
+  } else if (presentation.state !== "ready") {
+    content = (
+      <CenteredState
+        state={presentation.state === "loading" ? "preparing" : "loading"}
+        panelId={panelId}
       >
+        {presentation.state === "idle" ? <VibestudioLogo size={56} variant="symbol" /> : null}
         <Spinner size="3" />
-        <Text mt="3">{"Preparing panel..."}</Text>
-        {artifacts?.buildProgress ? (
-          <Text size="2" color="gray" mt="1">
-            {artifacts.buildProgress}
+        <Text>{presentation.state === "loading" ? "Preparing panel..." : "Loading panel..."}</Text>
+        {presentation.state === "loading" ? (
+          <Text size="2" color="gray">
+            {presentation.stage}
           </Text>
         ) : null}
-        {buildSlow ? (
-          <Flex direction="column" align="center" gap="2" mt="3">
+        {slow ? (
+          <Flex direction="column" align="center" gap="2">
             <Text size="2" color="amber">
-              This build is taking longer than expected.
+              This presentation is taking longer than expected.
             </Text>
             <Flex gap="2">
               <Button
@@ -278,21 +204,18 @@ export function PaneContent({
               >
                 View server logs
               </Button>
-              <Button size="1" onClick={() => void panelService.rebuildPanel(panelId)}>
-                Rebuild
+              <Button size="1" onClick={() => void panelService.reload(panelId)}>
+                Retry
               </Button>
             </Flex>
           </Flex>
         ) : null}
-      </Flex>
-    );
-  }
-
-  if (!resident) {
-    // Parked: the native slot is cleared; keep lease/timers mounted but render
-    // no surface so nothing binds (§5.4).
-    return (
-      <Box data-panel-content-state="parked" data-panel-id={panelId} style={{ flex: "1 1 0" }} />
+        {actionError ? (
+          <Text color="red" size="2">
+            {actionError}
+          </Text>
+        ) : null}
+      </CenteredState>
     );
   }
 
@@ -301,16 +224,6 @@ export function PaneContent({
       key={panelId}
       nativeSlotId={nativeSlotIdForPane(paneId)}
       panelId={panelId}
-      bindingKey={[
-        panelId,
-        fullPanel.path ?? "",
-        fullPanel.contextId,
-        artifacts.htmlPath ?? "",
-        artifacts.hostedRuntimeEntityId ?? "",
-        artifacts.buildRevision ?? "",
-        artifacts.buildState ?? "",
-        fullPanel.hostViewRevision ?? "",
-      ].join("|")}
       focused={focused}
       layoutEpoch={layoutEpoch}
       onPointerDown={(event) => {
@@ -320,6 +233,8 @@ export function PaneContent({
           y: Math.round(event.clientY),
         });
       }}
-    />
+    >
+      {content}
+    </PanelSurface>
   );
 }

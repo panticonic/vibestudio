@@ -4,11 +4,12 @@ import * as path from "node:path";
 import YAML from "yaml";
 
 import {
-  clickPanelSelector,
+  clickPanelText,
   createManagedTestWorkspace,
   ELECTRON_DISPLAY_UNAVAILABLE_MESSAGE,
   ensureHostedShellReady,
   getPanelDiagnostics,
+  getPanelReadiness,
   getPanelText,
   getPanelTree,
   hasElectronDisplay,
@@ -150,34 +151,44 @@ test.describe("Panel navigation convergence", () => {
           timeout: 30_000,
           intervals: [250, 500, 1_000],
         })
-        .toContain("Start a chat");
+        .toContain("Jump to a panel, revisit a page, or ask an agent.");
       await expect
         .poll(
           async () => {
             try {
               const panel = (await getPanelTree(testApp!.app))[0];
-              const converged =
+              const readiness = await getPanelReadiness(testApp!.app, initialPanelId);
+              if (
                 panel?.id === initialPanelId &&
-                panel.snapshot?.source === "panels/chat" &&
-                (await isPanelReady(testApp!.app, initialPanelId));
-              if (converged) return true;
+                panel.snapshot?.source === "about/about" &&
+                readiness.terminal
+              ) {
+                return { source: panel.snapshot.source, state: readiness.presentation.state };
+              }
 
               // A dispatched native click is not the navigation outcome. Keep
               // the idempotent user action coupled to the authoritative panel
               // tree until the same panel has actually converged.
-              await clickPanelSelector(
+              await clickPanelText(
                 testApp!.app,
                 initialPanelId,
-                'a[href*="/panels/chat/"]'
+                ".launcher-title",
+                "About Vibestudio"
               ).catch(() => false);
-              return false;
-            } catch {
-              return false;
+              return {
+                source: panel?.snapshot?.source ?? null,
+                state: readiness.presentation.state,
+              };
+            } catch (error) {
+              return {
+                source: null,
+                state: error instanceof Error ? error.message : String(error),
+              };
             }
           },
-          { timeout: 180_000, intervals: [250, 500, 1_000, 2_000] }
+          { timeout: 120_000, intervals: [250, 500, 1_000, 2_000] }
         )
-        .toBe(true);
+        .toEqual({ source: "about/about", state: "ready" });
 
       await expect
         .poll(() => shellStatus(testApp!.app), {
@@ -187,11 +198,6 @@ test.describe("Panel navigation convergence", () => {
         .toEqual({ buildingCount: 0, hasOperationFailure: false });
 
       for (const surface of [
-        {
-          source: "about/about",
-          readyText: "Your personal vibe computer",
-          pendingText: "Loading version and connection",
-        },
         {
           source: "about/adblock",
           readyText: "Enable Ad Blocking",

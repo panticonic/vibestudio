@@ -13,6 +13,7 @@ import type {
   RpcEnvelope,
 } from "@vibestudio/rpc";
 import { createIpcTransport } from "./ipcTransport.js";
+import type { PanelBootObservation } from "@vibestudio/shared/panel/observation";
 
 type RecoveryKind = "resubscribe" | "cold-recover";
 
@@ -63,6 +64,7 @@ const vibestudioShell = {
   getPanelInit: () => ipcRenderer.invoke("vibestudio:getPanelInit"),
   getBootstrapConfig: () => ipcRenderer.invoke("vibestudio:getPanelInit"),
   getInfo: () => ipcRenderer.invoke("vibestudio:bridge.getInfo"),
+  reportPanelBoot: (boot: PanelBootObservation) => ipcRenderer.send("vibestudio:panel-boot", boot),
   focusPanel: (
     panelId: string,
     options?: {

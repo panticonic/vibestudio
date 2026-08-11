@@ -2357,7 +2357,12 @@ app.on("ready", async () => {
     const ipcDispatcher = new IpcDispatcher({
       dispatcher,
       serverClient: conn.serverClient,
-      getShellWebContents: () => applicationWindow.viewManager?.getShellWebContents() ?? null,
+      getShellWebContents: () => {
+        const viewManager = applicationWindow.viewManager;
+        return (
+          viewManager?.getHostedShellWebContents() ?? viewManager?.getShellWebContents() ?? null
+        );
+      },
       resolveCallerForWebContents: (webContentsId) => {
         const viewManager = applicationWindow.viewManager;
         if (!viewManager) return null;
@@ -2437,9 +2442,16 @@ app.on("ready", async () => {
       },
       workspaceConfig: conn.workspaceConfig,
       pinStore: panelPinStore,
-      // Resident-set GC protection (§5.3): every slot-bound (visible) pane's
-      // panel is protected from idle sweep and cap eviction, not just focus.
-      getResidentPanelIds: () => applicationWindow.viewManager?.getSlotBoundPanelIds() ?? [],
+      // Resident-set GC protection (§5.3) follows shell-declared presentation
+      // demand, including the interval before native attachment commits.
+      getResidentPanelIds: () => applicationWindow.viewManager?.getDeclaredPanelSlotIds() ?? [],
+      getNativeBinding: (panelId) =>
+        applicationWindow.viewManager?.getNativePanelSlotBinding(panelId) ?? null,
+      attachNativeBinding: (panelId) =>
+        applicationWindow.viewManager?.attachDeclaredPanelSlot(panelId) ?? null,
+      publishPresentation: (snapshot) => {
+        ipcDispatcher.sendEventToShell("panel-local-presentation-changed", snapshot);
+      },
       runtimeClient: IS_HEADLESS_HOST
         ? {
             label: "Headless",
@@ -2994,6 +3006,47 @@ app.on("ready", async () => {
       const callerId = tryResolveCallerId(event);
       if (!callerId) return null;
       return panelOrchestrator?.getBootstrapConfig(callerId);
+    });
+
+    ipcMain.on("vibestudio:panel-boot", (event, observation: unknown) => {
+      const panelId = getViewManager().findViewIdByWebContentsId(event.sender.id);
+      if (!panelId || !observation || typeof observation !== "object") return;
+      const candidate = observation as {
+        phase?: unknown;
+        runtimeEntityId?: unknown;
+        source?: unknown;
+        contextId?: unknown;
+        effectiveVersion?: unknown;
+        buildKey?: unknown;
+        message?: unknown;
+        errorName?: unknown;
+        stack?: unknown;
+        failureStage?: unknown;
+        updatedAt?: unknown;
+      };
+      if (
+        !["loading", "booting", "ready", "failed"].includes(String(candidate.phase)) ||
+        typeof candidate.runtimeEntityId !== "string"
+      ) {
+        return;
+      }
+      const optionalString = (value: unknown) => (typeof value === "string" ? value : undefined);
+      const normalized: import("@vibestudio/shared/panel/observation").PanelBootObservation = {
+        phase: candidate.phase as "loading" | "booting" | "ready" | "failed",
+        runtimeEntityId: candidate.runtimeEntityId,
+        source: optionalString(candidate.source),
+        contextId: optionalString(candidate.contextId),
+        effectiveVersion: optionalString(candidate.effectiveVersion),
+        buildKey: optionalString(candidate.buildKey),
+        message: optionalString(candidate.message),
+        errorName: optionalString(candidate.errorName),
+        stack: optionalString(candidate.stack),
+        failureStage: ["config", "bundle-load", "entry"].includes(String(candidate.failureStage))
+          ? (candidate.failureStage as "config" | "bundle-load" | "entry")
+          : undefined,
+        updatedAt: typeof candidate.updatedAt === "number" ? candidate.updatedAt : undefined,
+      };
+      panelOrchestrator?.onPanelBoot(panelId, event.sender.id, normalized);
     });
 
     ipcMain.handle(

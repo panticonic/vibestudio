@@ -5486,6 +5486,17 @@ export const HOST_AUTHORITY_METHODS = {
     capability: null,
     presentation: null,
   },
+  "view.getLocalPresentation": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "panel.read",
+      rationale: "Trusted panel chrome reads Electron's canonical local presentation state",
+    },
+    capability: null,
+    presentation: null,
+  },
   "view.getPanelLayout": {
     tier: {
       tier: "open",

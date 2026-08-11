@@ -36,7 +36,6 @@ import {
   panelSourceFromBrowserUrl,
 } from "@vibestudio/shared/panelChrome";
 import type { PanelNavigationState, PanelPlacementHint } from "@vibestudio/shared/types";
-import { logMemorySnapshot } from "./memoryMonitor.js";
 import type { BrowserHistoryRecorder, BrowserNavigationIntent } from "./browserHistoryRecorder.js";
 // Persistence removed — server panel service handles all persistence
 
@@ -126,6 +125,7 @@ export class PanelView implements PanelViewLike {
   ) => Promise<boolean>;
   private onPanelResponsivenessChanged?: (panelId: string, responsive: boolean) => void;
   private onPanelViewTransition?: (panelId: string) => void;
+  private onPanelDocumentCommitted?: (panelId: string, url: string) => void;
   private formFillManager?: FormFillManagerLike;
   private browserFaviconObserver?: BrowserFaviconObserverLike;
   private browserFaviconCleanup = new Map<string, () => void>();
@@ -146,9 +146,6 @@ export class PanelView implements PanelViewLike {
     string,
     { domReady?: () => void; didFinishLoad?: () => void }
   >();
-  private crashHistory = new Map<string, number[]>();
-  private readonly MAX_CRASHES = 3;
-  private readonly CRASH_WINDOW_MS = 60000;
 
   private get gatewayPort() {
     return this.serverInfo.gatewayPort;
@@ -166,6 +163,7 @@ export class PanelView implements PanelViewLike {
     requestSiteCapability(contents: Electron.WebContents, capability: "popups"): Promise<boolean>;
     onPanelResponsivenessChanged?: (panelId: string, responsive: boolean) => void;
     onPanelViewTransition?: (panelId: string) => void;
+    onPanelDocumentCommitted?: (panelId: string, url: string) => void;
     formFillManager?: FormFillManagerLike;
     browserFaviconObserver?: BrowserFaviconObserverLike;
     autofillPreloadPath?: string;
@@ -190,6 +188,7 @@ export class PanelView implements PanelViewLike {
     this.requestSiteCapability = deps.requestSiteCapability;
     this.onPanelResponsivenessChanged = deps.onPanelResponsivenessChanged;
     this.onPanelViewTransition = deps.onPanelViewTransition;
+    this.onPanelDocumentCommitted = deps.onPanelDocumentCommitted;
     this.formFillManager = deps.formFillManager;
     this.browserFaviconObserver = deps.browserFaviconObserver;
     this.autofillPreloadPath = deps.autofillPreloadPath;
@@ -280,6 +279,21 @@ export class PanelView implements PanelViewLike {
 
   // ==== PanelViewLike implementation ========================================
 
+  updatePanelCodeIdentity(panelId: string): void {
+    const panel = this.panelRegistry.getPanel(panelId);
+    this.viewManager.updateCodeIdentity(
+      panelId,
+      panel
+        ? {
+            source: panel.snapshot.source,
+            effectiveVersion: panel.effectiveVersion,
+            executionDigest: panel.executionDigest,
+            requested: panel.authorityRequests,
+          }
+        : undefined
+    );
+  }
+
   async createViewForPanel(panelId: string, url: string, contextId?: string): Promise<void> {
     const panel = this.panelRegistry.getPanel(panelId) as
       | import("@vibestudio/shared/types").Panel
@@ -295,7 +309,7 @@ export class PanelView implements PanelViewLike {
       : undefined;
     const documentId = panel?.runtimeEntityId ?? undefined;
     if (this.viewManager.hasView(panelId)) {
-      this.viewManager.updateCodeIdentity(panelId, identity);
+      this.updatePanelCodeIdentity(panelId);
       const contents = this.viewManager.getWebContents(panelId);
       if (!contents) throw new Error(`Panel view disappeared before navigation: ${panelId}`);
       await this.navigateWorkspacePanelUntilDomReady(panelId, contents, url, documentId);
@@ -421,7 +435,6 @@ export class PanelView implements PanelViewLike {
     this.cleanupLinkInterception(panelId, contents ?? undefined);
     this.cdpHost.cleanupPanelAccess(panelId);
     this.cdpHost.unregisterTarget(panelId);
-    this.crashHistory.delete(panelId);
     this.viewManager.destroyView(panelId);
   }
 
@@ -517,39 +530,6 @@ export class PanelView implements PanelViewLike {
     this.browserHistoryRecorder?.markNext(panelId, intent);
   }
 
-  /** Handle a view crash — implements recovery policy with loop protection. */
-  handleViewCrashed(viewId: string, reason: string): void {
-    console.warn(`[PanelView] View ${viewId} crashed: ${reason}`);
-    void logMemorySnapshot({ reason: `view-crash:${viewId}:${reason}` });
-
-    if (!this.shouldAttemptReload(viewId)) {
-      console.error(`[PanelView] Giving up on ${viewId} after repeated crashes`);
-      this.showPanelErrorPage(
-        viewId,
-        "Panel crashed repeatedly",
-        `The panel's renderer crashed ${this.MAX_CRASHES} times in a row (last reason: ${reason}). ` +
-          "Automatic recovery was stopped to avoid a crash loop."
-      );
-      return;
-    }
-    log.verbose(` Attempting reload of ${viewId}`);
-    void this.viewManager
-      .reloadView(viewId)
-      .then((reloaded) => {
-        if (reloaded) return;
-        console.warn(`[PanelView] Reload failed for ${viewId}, attempting view recreation`);
-        return this.recreatePanelView(viewId);
-      })
-      .catch((error: unknown) => {
-        console.warn(
-          `[PanelView] Reload failed for ${viewId}: ${
-            error instanceof Error ? error.message : String(error)
-          }; attempting view recreation`
-        );
-        return this.recreatePanelView(viewId);
-      });
-  }
-
   // ==== Browser state tracking ==============================================
 
   private setupBrowserStateTracking(panelId: string, contents: Electron.WebContents): void {
@@ -577,6 +557,7 @@ export class PanelView implements PanelViewLike {
     const handlers = {
       didNavigate: (_event: Electron.Event, url: string) => {
         log.trace(` Panel ${panelId} navigated to: ${url}`);
+        this.onPanelDocumentCommitted?.(panelId, url);
         queueStateUpdate({ url });
         const panel = this.panelRegistry.getPanel(panelId);
         if (!panel) return;
@@ -1139,48 +1120,6 @@ export class PanelView implements PanelViewLike {
           }`
         );
       });
-  }
-
-  private shouldAttemptReload(viewId: string): boolean {
-    const now = Date.now();
-    const history = this.crashHistory.get(viewId) ?? [];
-    const recent = history.filter((t) => now - t < this.CRASH_WINDOW_MS);
-    if (recent.length >= this.MAX_CRASHES) return false;
-    recent.push(now);
-    this.crashHistory.set(viewId, recent);
-    return true;
-  }
-
-  private async recreatePanelView(panelId: string): Promise<void> {
-    const panel = this.panelRegistry.getPanel(panelId);
-    if (!panel) {
-      console.error(`[PanelView] Cannot recreate view: panel ${panelId} not found`);
-      return;
-    }
-
-    if (this.viewManager.hasView(panelId)) {
-      log.verbose(` Destroying zombie view for ${panelId}`);
-      this.viewManager.destroyView(panelId);
-    }
-
-    try {
-      const builtUrl = getCurrentSnapshot(panel).resolvedUrl;
-      if (builtUrl) {
-        await this.createViewForPanel(panelId, builtUrl, getPanelContextId(panel));
-        log.verbose(` Recreated view for ${panelId}`);
-      } else {
-        log.verbose(` No built URL for ${panelId}, triggering rebuild`);
-        panel.artifacts = { buildState: "pending" };
-        this.panelRegistry.notifyPanelTreeUpdate(panelId);
-      }
-    } catch (error) {
-      console.error(
-        `[PanelView] Failed to recreate view for ${panelId}:`,
-        error instanceof Error ? error.message : error
-      );
-      panel.artifacts = { buildState: "pending" };
-      this.panelRegistry.notifyPanelTreeUpdate(panelId);
-    }
   }
 }
 

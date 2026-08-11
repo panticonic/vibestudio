@@ -117,12 +117,7 @@ describe("installFallbackShellBridge", () => {
     } as BrowserShellBridgeGlobals);
 
     await expect(shell?.getInfo?.()).resolves.toBeNull();
-    await expect(shell?.focusPanel?.("panel:tree/slot-b")).resolves.toEqual({
-      panelId: "panel:tree/slot-b",
-      status: "focused",
-      focused: true,
-      loaded: true,
-    });
+    expect(shell?.focusPanel).toBeUndefined();
     expect(mocks.send).toHaveBeenCalledWith(
       expect.objectContaining({
         target: "main",
@@ -130,16 +125,9 @@ describe("installFallbackShellBridge", () => {
       }),
       undefined
     );
-    expect(mocks.send).toHaveBeenCalledWith(
-      expect.objectContaining({
-        target: "main",
-        message: expect.objectContaining({
-          method: "view.focusPanel",
-          args: ["panel:tree/slot-b", {}],
-        }),
-      }),
-      undefined
-    );
+    expect(
+      mocks.send.mock.calls.some(([envelope]) => envelope?.message?.method === "view.focusPanel")
+    ).toBe(false);
   });
 
   it("does not let the shell RPC client answer panel runtime requests", async () => {

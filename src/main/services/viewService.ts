@@ -97,7 +97,9 @@ export function createViewService(
         ctx.caller.runtime.kind,
         "bindNativePanelSlot"
       );
-      return vm.bindPanelSlot(ctx.caller.runtime.id, request);
+      const result = vm.bindPanelSlot(ctx.caller.runtime.id, request);
+      deps.panelOrchestrator?.onNativeSlotDeclared(request.panelId);
+      return result;
     },
     updateNativePanelSlot: (ctx, [request]) => {
       const vm = deps.getViewManager();
@@ -107,7 +109,12 @@ export function createViewService(
         ctx.caller.runtime.kind,
         "updateNativePanelSlot"
       );
-      return vm.updatePanelSlot(ctx.caller.runtime.id, request);
+      const result = vm.updatePanelSlot(ctx.caller.runtime.id, request);
+      if (result.status === "updated") {
+        const panelId = vm.getPanelIdForNativeSlot(request.nativeSlotId);
+        if (panelId) deps.panelOrchestrator?.onNativeSlotDeclared(panelId);
+      }
+      return result;
     },
     clearNativePanelSlot: (ctx, [request]) => {
       const vm = deps.getViewManager();
@@ -117,7 +124,16 @@ export function createViewService(
         ctx.caller.runtime.kind,
         "clearNativePanelSlot"
       );
-      vm.clearPanelSlot(ctx.caller.runtime.id, request.nativeSlotId, request.bindingId, request);
+      const panelId = vm.getPanelIdForNativeSlot(request.nativeSlotId);
+      const cleared = vm.clearPanelSlot(
+        ctx.caller.runtime.id,
+        request.nativeSlotId,
+        request.bindingId,
+        request
+      );
+      if (cleared && panelId && !vm.getDeclaredPanelSlotIds().includes(panelId)) {
+        deps.panelOrchestrator?.onNativeSlotCleared(panelId);
+      }
       return;
     },
     setHostedShellReady: (ctx, [request]) => {
@@ -128,7 +144,12 @@ export function createViewService(
         ctx.caller.runtime.kind,
         "setHostedShellReady"
       );
+      const previousPanelIds = vm.getDeclaredPanelSlotIds();
       vm.setHostedShellReady(ctx.caller.runtime.id, request.ready, request.rendererInstanceId);
+      const retainedPanelIds = new Set(vm.getDeclaredPanelSlotIds());
+      for (const panelId of previousPanelIds) {
+        if (!retainedPanelIds.has(panelId)) deps.panelOrchestrator?.onNativeSlotCleared(panelId);
+      }
       return;
     },
     setShellOverlay: (ctx, [active]) => {
@@ -227,7 +248,7 @@ export function createViewService(
       vm.reload(browserId);
       return;
     },
-    browserForceReload: (ctx, [browserId]) => {
+    browserForceReload: async (ctx, [browserId]) => {
       const vm = deps.getViewManager();
       assertOwnsOrViewHost(
         vm,
@@ -236,7 +257,11 @@ export function createViewService(
         browserId,
         "browserForceReload"
       );
-      vm.forceReload(browserId);
+      if (deps.panelRegistry?.getPanel(browserId) && deps.panelOrchestrator) {
+        await deps.panelOrchestrator.forceReloadPanelView(browserId);
+      } else {
+        vm.forceReload(browserId);
+      }
       return;
     },
     browserStop: (ctx, [browserId]) => {

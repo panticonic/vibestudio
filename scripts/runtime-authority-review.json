@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "censusDigest": "sha256:764cce9195e711fdc3904d603a64e7ff7a72429fc27d8c0db0f2397c3f17e61a",
+  "censusDigest": "sha256:33e429cca4a361ce2ba707082a9eee895df7c75e734983e29f2470be7b40bf5c",
   "decisions": {
     "direct:workspace/workers/pubsub-channel/channel-do.ts:markMethodCallExecutionStarted": {
       "review": "participant-bound-current-provider-claim-observation",
@@ -77,6 +77,10 @@
     "host:view.getPresentation": {
       "review": "trusted-chrome-local-panel-presentation-read",
       "change": "Adds an open, read-only lookup of one exact panel's Electron-local presentation projection. The service handler additionally requires the trusted panel-hosting app capability; it exposes no cross-panel mutation or server lifecycle authority."
+    },
+    "host:view.getLocalPresentation": {
+      "review": "trusted-chrome-canonical-local-lifecycle-read",
+      "change": "Adds an open, read-only lookup of one exact panel slot's revisioned Electron-local lifecycle snapshot. The handler requires trusted panel-hosting chrome and returns bounded loading, contention, ready, or failure facts without acquiring a lease, creating a view, changing focus, or exposing foreign panel state."
     },
     "host:view.getPresentations": {
       "review": "trusted-chrome-bounded-local-panel-presentation-read",

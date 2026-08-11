@@ -37,7 +37,7 @@ test.describe("Panel Rebuild Lifecycle", () => {
       await approvePendingWorkspaceCreationReview(testApp.app);
 
       const before = await ensureHostedShellReady(testApp.app, { panelSource: "panels/chat" });
-      expect(before.attempt?.phase).toBe("ready");
+      expect(before.presentation.state).toBe("ready");
       expect(before.runtimeEntityId).toBeTruthy();
 
       const result = await rebuildPanel(testApp.app, before.panelId);
@@ -50,7 +50,7 @@ test.describe("Panel Rebuild Lifecycle", () => {
       try {
         await expect
           .poll(
-            async () => (await getPanelReadiness(testApp!.app, before.panelId)).attempt?.phase,
+            async () => (await getPanelReadiness(testApp!.app, before.panelId)).presentation.state,
             {
               timeout: 120_000,
             }
@@ -65,7 +65,11 @@ test.describe("Panel Rebuild Lifecycle", () => {
       }
       const after = await getPanelReadiness(testApp.app, before.panelId);
       expect(after.runtimeEntityId).not.toBe(before.runtimeEntityId);
-      expect(after.attempt?.attemptId).not.toBe(before.attempt?.attemptId);
+      expect(after.presentation).toMatchObject({ state: "ready" });
+      if (before.presentation.state !== "ready" || after.presentation.state !== "ready") {
+        throw new Error("Expected ready presentations before and after rebuild");
+      }
+      expect(after.presentation.attemptId).not.toBe(before.presentation.attemptId);
     } finally {
       if (testApp) await testApp.cleanup();
       removeManagedTestWorkspace(workspacePath);

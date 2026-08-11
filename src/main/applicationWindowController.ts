@@ -281,6 +281,9 @@ export class ApplicationWindowController {
           });
         });
       },
+      onPanelDocumentCommitted: (panelId, url) => {
+        services.panelOrchestrator.onExternalDocumentCommitted(panelId, url);
+      },
       ...(services.formFillManager ? { formFillManager: services.formFillManager } : {}),
       ...(services.browserFaviconObserver
         ? { browserFaviconObserver: services.browserFaviconObserver }
@@ -333,7 +336,15 @@ export class ApplicationWindowController {
       viewManager.onViewOrderChanged(() => formFillManager.onViewOrderChanged());
       viewManager.onViewHidden((viewId) => formFillManager.onPanelHidden(viewId));
     }
-    viewManager.onViewCrashed((viewId, reason) => panelView.handleViewCrashed(viewId, reason));
+    viewManager.onViewCrashed((viewId, reason) => {
+      void services.panelOrchestrator.handlePanelViewCrash(viewId, reason).catch((error) => {
+        log.warn("Failed to recover crashed panel presentation", {
+          panelId: viewId,
+          reason,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    });
     setupTestApi(services.panelOrchestrator, services.panelRegistry, panelView);
   }
 

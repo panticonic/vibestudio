@@ -36,7 +36,9 @@ function makeViewManager(capabilities: string[] = [], opts: { id?: string; sourc
     setHostedShellReady: vi.fn(),
     bindPanelSlot: vi.fn(() => ({ status: "bound" as const })),
     updatePanelSlot: vi.fn(),
-    clearPanelSlot: vi.fn(),
+    clearPanelSlot: vi.fn(() => true),
+    getPanelIdForNativeSlot: vi.fn(() => "panel-1"),
+    getDeclaredPanelSlotIds: vi.fn((): string[] => []),
     setThemeCss: vi.fn(),
     setViewVisible: vi.fn(),
   };
@@ -136,6 +138,37 @@ describe("view service", () => {
     });
 
     expect(vm.updatePanelSlot).toHaveBeenCalledWith("@workspace-apps/shell", request);
+  });
+
+  it("does not revoke readiness for a stale native-slot cleanup", async () => {
+    const vm = makeViewManager(["panel-hosting"]);
+    vm.clearPanelSlot.mockReturnValue(false);
+    const onNativeSlotCleared = vi.fn();
+    const service = createViewService({
+      getViewManager: () => vm as never,
+      panelOrchestrator: { onNativeSlotCleared } as never,
+    });
+    const request = {
+      nativeSlotId: "panel-stack:primary",
+      rendererInstanceId: "renderer-test",
+      bindingId: "binding-stale",
+      bindingSequence: 1,
+      operationSequence: 2,
+    };
+
+    await service.handler(
+      { caller: createVerifiedCaller("@workspace-apps/shell", "app") },
+      "clearNativePanelSlot",
+      [request]
+    );
+
+    expect(vm.clearPanelSlot).toHaveBeenCalledWith(
+      "@workspace-apps/shell",
+      request.nativeSlotId,
+      request.bindingId,
+      request
+    );
+    expect(onNativeSlotCleared).not.toHaveBeenCalled();
   });
 
   it("rejects bootstrap shell callers for native panel slots", async () => {

@@ -314,6 +314,7 @@ export const panel = {
   observe: (panelId: string) => productPanelRuntime.panelTree.get(panelId).observe(),
   getPresentation: (panelId: string) => viewClient.getPresentation(panelId),
   getPresentations: (panelIds: string[]) => viewClient.getPresentations(panelIds),
+  getLocalPresentation: (panelId: string) => viewClient.getLocalPresentation(panelId),
   getFocusedPanelId: () => viewClient.getFocusedPanelId(),
   setFocusedPanelId: (panelId: string) => viewClient.setFocusedPanelId(panelId),
   focus: focusPanel,

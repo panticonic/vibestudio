@@ -127,7 +127,6 @@ export function installFallbackShellBridge(
     },
     getPanelInit: async () => panelInit,
     getInfo: () => panelShell.getPanelDetail(slotId),
-    focusPanel: (panelId) => panelShell.focusPanel(panelId),
     openDevtools: () => Promise.reject(new Error("openDevtools is not supported on headless host")),
     openFolderDialog: async () => null,
   };

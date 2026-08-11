@@ -80,36 +80,7 @@ describe("PanelSurface", () => {
     });
   });
 
-  it("retries binding when the panel WebContentsView is not ready yet", async () => {
-    shellClient.bindNativePanelSlot
-      .mockRejectedValueOnce(new Error("Native panel slot target is not a panel view: panel-1"))
-      .mockResolvedValueOnce({ status: "bound" });
-
-    render(<PanelSurface nativeSlotId="slot-1" panelId="panel-1" focused />);
-
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(0);
-    });
-    expect(shellClient.bindNativePanelSlot).toHaveBeenCalledTimes(1);
-
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(50);
-    });
-
-    expect(shellClient.bindNativePanelSlot).toHaveBeenCalledTimes(2);
-    expect(shellClient.bindNativePanelSlot).toHaveBeenLastCalledWith({
-      nativeSlotId: "slot-1",
-      rendererInstanceId: "renderer-test",
-      bindingId: expect.any(String),
-      bindingSequence: expect.any(Number),
-      operationSequence: expect.any(Number),
-      panelId: "panel-1",
-      focused: true,
-      bounds: { x: 20, y: 30, width: 400, height: 300 },
-    });
-  });
-
-  it("rebinds when main reports that an existing native slot is missing", async () => {
+  it("updates focus without rebinding the declaration", async () => {
     const { rerender } = render(
       <PanelSurface nativeSlotId="slot-1" panelId="panel-1" focused={false} />
     );
@@ -118,11 +89,6 @@ describe("PanelSurface", () => {
       await vi.advanceTimersByTimeAsync(0);
     });
     expect(shellClient.bindNativePanelSlot).toHaveBeenCalledTimes(1);
-
-    shellClient.updateNativePanelSlot.mockResolvedValueOnce({
-      status: "missing",
-      reason: "unknown native panel slot: slot-1",
-    });
 
     rerender(<PanelSurface nativeSlotId="slot-1" panelId="panel-1" focused />);
 
@@ -138,26 +104,12 @@ describe("PanelSurface", () => {
       focused: true,
     });
 
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(50);
-    });
-
-    expect(shellClient.bindNativePanelSlot).toHaveBeenCalledTimes(2);
-    expect(shellClient.bindNativePanelSlot).toHaveBeenLastCalledWith({
-      nativeSlotId: "slot-1",
-      rendererInstanceId: "renderer-test",
-      bindingId: expect.any(String),
-      bindingSequence: expect.any(Number),
-      operationSequence: expect.any(Number),
-      panelId: "panel-1",
-      focused: true,
-      bounds: { x: 20, y: 30, width: 400, height: 300 },
-    });
+    expect(shellClient.bindNativePanelSlot).toHaveBeenCalledTimes(1);
   });
 
-  it("rebinds the same panel slot when the native view binding key changes", async () => {
+  it("resyncs geometry when the layout epoch changes", async () => {
     const { rerender } = render(
-      <PanelSurface nativeSlotId="slot-1" panelId="panel-1" bindingKey="view-1" focused />
+      <PanelSurface nativeSlotId="slot-1" panelId="panel-1" layoutEpoch={1} focused />
     );
 
     await act(async () => {
@@ -165,23 +117,27 @@ describe("PanelSurface", () => {
     });
     expect(shellClient.bindNativePanelSlot).toHaveBeenCalledTimes(1);
 
-    rerender(<PanelSurface nativeSlotId="slot-1" panelId="panel-1" bindingKey="view-2" focused />);
+    HTMLElement.prototype.getBoundingClientRect = vi.fn(() => ({
+      x: 40,
+      y: 50,
+      left: 40,
+      top: 50,
+      right: 440,
+      bottom: 350,
+      width: 400,
+      height: 300,
+      toJSON: () => ({}),
+    })) as typeof HTMLElement.prototype.getBoundingClientRect;
+    rerender(<PanelSurface nativeSlotId="slot-1" panelId="panel-1" layoutEpoch={2} focused />);
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(0);
     });
 
-    expect(shellClient.bindNativePanelSlot).toHaveBeenCalledTimes(2);
-    expect(shellClient.bindNativePanelSlot).toHaveBeenLastCalledWith({
-      nativeSlotId: "slot-1",
-      rendererInstanceId: "renderer-test",
-      bindingId: expect.any(String),
-      bindingSequence: expect.any(Number),
-      operationSequence: expect.any(Number),
-      panelId: "panel-1",
-      focused: true,
-      bounds: { x: 20, y: 30, width: 400, height: 300 },
-    });
+    expect(shellClient.bindNativePanelSlot).toHaveBeenCalledTimes(1);
+    expect(shellClient.updateNativePanelSlot).toHaveBeenCalledWith(
+      expect.objectContaining({ bounds: { x: 40, y: 50, width: 400, height: 300 } })
+    );
   });
 
   it("releases a pending bind and ignores its late completion after unmount", async () => {
@@ -217,7 +173,7 @@ describe("PanelSurface", () => {
     expect(shellClient.bindNativePanelSlot).toHaveBeenCalledTimes(1);
   });
 
-  it("reconciles focus that changes while the initial bind is pending", async () => {
+  it("publishes focus changes even while the declaration response is pending", async () => {
     let resolveBind: ((result: { status: "bound" }) => void) | undefined;
     shellClient.bindNativePanelSlot.mockImplementationOnce(
       () =>
@@ -230,16 +186,16 @@ describe("PanelSurface", () => {
     );
 
     rerender(<PanelSurface nativeSlotId="slot-1" panelId="panel-1" focused />);
-    expect(shellClient.updateNativePanelSlot).not.toHaveBeenCalled();
+    expect(shellClient.updateNativePanelSlot).toHaveBeenCalledWith(
+      expect.objectContaining({ focused: true })
+    );
 
     await act(async () => {
       resolveBind?.({ status: "bound" });
       await vi.advanceTimersByTimeAsync(0);
     });
 
-    expect(shellClient.updateNativePanelSlot).toHaveBeenCalledWith(
-      expect.objectContaining({ focused: true })
-    );
+    expect(shellClient.bindNativePanelSlot).toHaveBeenCalledTimes(1);
   });
 
   it("orders StrictMode release and replay as one binding incarnation", async () => {

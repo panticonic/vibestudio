@@ -67,6 +67,7 @@ function bakedExecution(artifacts: Array<Record<string, unknown>>) {
 function createPanelView(): PanelViewLike {
   return {
     createViewForPanel: vi.fn(),
+    updatePanelCodeIdentity: vi.fn(),
     createViewForApp: vi.fn(async () => {}),
     hasView: vi.fn(() => false),
     getViewPartition: vi.fn(() => null),

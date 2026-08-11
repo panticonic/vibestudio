@@ -118,6 +118,10 @@ export function buildPanelViewHandler(deps: PanelViewMethodDeps): ServiceHandler
       );
       return presentations.filter((presentation) => presentation !== null);
     },
+    getLocalPresentation: (ctx, [panelId]) => {
+      requirePanelHostingAppCapability(ctx, deps.getViewManager(), "getLocalPresentation");
+      return deps.panelOrchestrator.getLocalPresentation(panelId);
+    },
     getChromeState: (ctx, [panelId]) => {
       requirePanelHostingAppCapability(ctx, deps.getViewManager(), "getChromeState");
       const panel = deps.panelRegistry.getPanel(panelId);

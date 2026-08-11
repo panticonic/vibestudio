@@ -6,6 +6,7 @@ import { z } from "zod";
 import { BROWSER_NAVIGATION_TRANSITIONS } from "@vibestudio/shared/panelCommands";
 import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
 import type { MethodAccessDescriptor } from "@vibestudio/shared/serviceAuthority";
+import type { PanelPresentationSnapshot } from "@vibestudio/shared/panel/presentation";
 import {
   PanelFocusResultSchema,
   PanelSchema,
@@ -105,6 +106,73 @@ const PanelPresentationSchema = z.intersection(
     hostViewRevision: z.number().int().nonnegative(),
   })
 );
+
+const LocalPanelPresentationSnapshotSchema: z.ZodType<PanelPresentationSnapshot> = z.object({
+  revision: z.number().int().nonnegative(),
+  presentation: z.discriminatedUnion("state", [
+    z.object({ state: z.literal("idle"), slotId: z.string() }),
+    z.object({
+      state: z.literal("loading"),
+      slotId: z.string(),
+      attemptId: z.string(),
+      stage: z.enum([
+        "resolving",
+        "leasing",
+        "creating-view",
+        "navigating",
+        "booting",
+        "waiting-for-slot",
+        "attaching",
+        "recovering",
+      ]),
+      enteredAt: z.number(),
+    }),
+    z.object({
+      state: z.literal("unavailable"),
+      slotId: z.string(),
+      attemptId: z.string(),
+      reason: z.literal("leased-elsewhere"),
+      lease: z.object({
+        runtimeEntityId: z.string(),
+        connectionId: z.string(),
+        clientSessionId: z.string(),
+        holderLabel: z.string(),
+        holderPlatform: z.enum(["desktop", "headless", "mobile"]),
+      }),
+      enteredAt: z.number(),
+    }),
+    z.object({
+      state: z.literal("ready"),
+      slotId: z.string(),
+      attemptId: z.string(),
+      surface: z.enum(["code", "external"]),
+      runtimeEntityId: z.string(),
+      webContentsId: z.number().int().nonnegative(),
+      nativeSlotId: z.string(),
+      documentRevision: z.number().int().nonnegative(),
+      url: z.string(),
+      enteredAt: z.number(),
+    }),
+    z.object({
+      state: z.literal("failed"),
+      slotId: z.string(),
+      attemptId: z.string(),
+      stage: z.enum([
+        "resolving",
+        "leasing",
+        "creating-view",
+        "navigating",
+        "booting",
+        "waiting-for-slot",
+        "attaching",
+        "recovering",
+      ]),
+      code: z.string(),
+      message: z.string(),
+      enteredAt: z.number(),
+    }),
+  ]),
+});
 
 export const panelMethods = defineServiceMethods({
   createPanel: {
@@ -231,6 +299,19 @@ export const panelMethods = defineServiceMethods({
     description: "Return local presentation projections for a bounded set of panels in one IPC.",
     args: z.tuple([z.array(z.string()).max(2_000)]),
     returns: z.array(PanelPresentationSchema),
+    access: READ_ACCESS,
+  },
+  getLocalPresentation: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "panel.read",
+      rationale: "Trusted panel chrome reads Electron's canonical local presentation state",
+    },
+    description: "Return the revisioned Electron-local lifecycle snapshot for one panel slot.",
+    args: z.tuple([z.string()]),
+    returns: LocalPanelPresentationSnapshotSchema,
     access: READ_ACCESS,
   },
   getChromeState: {

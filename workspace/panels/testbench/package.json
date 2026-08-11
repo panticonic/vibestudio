@@ -57,6 +57,15 @@
           "evidence": "intentional-broad"
         },
         {
+          "capability": "workspace.runtime-state.manage",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          },
+          "tier": "gated",
+          "evidence": "intentional-broad"
+        },
+        {
           "capability": "workspace-service:channel",
           "resource": {
             "kind": "prefix",

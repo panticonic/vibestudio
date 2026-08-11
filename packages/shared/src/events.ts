@@ -8,6 +8,7 @@
 import type { BrowserSitePermissionCapability, PendingApproval } from "./approvals.js";
 import type { PanelCommandId } from "./panelCommands.js";
 import type { PanelRuntimeLeaseChangedEvent } from "./panel/panelLease.js";
+import type { PanelPresentationSnapshot } from "./panel/presentation.js";
 import type { PanelTreeInvalidation } from "./panel/treeIndex.js";
 import type { CallerKind } from "./principalKinds.js";
 import type { ProtectedPublicationEvent } from "./protectedPublicationEvents.js";
@@ -34,6 +35,7 @@ export type EventName =
   | "panel:stateArgsChanged"
   | "panel-title-updated"
   | "panel-presentation-changed"
+  | "panel-local-presentation-changed"
   | "panel:snapshot"
   | "system-theme-changed"
   | "panel-tree-invalidated"
@@ -250,6 +252,7 @@ export interface EventPayloads {
   };
   "panel-title-updated": { panelId: string; title: string | null; explicit?: boolean };
   "panel-presentation-changed": { revision: number; panelIds: string[] };
+  "panel-local-presentation-changed": PanelPresentationSnapshot;
   "panel:snapshot": PanelRecoverySnapshot;
   "open-workspace-switcher": undefined;
   "open-connection-settings": undefined;
@@ -458,6 +461,7 @@ export const VALID_EVENT_NAMES: EventName[] = [
   "panel:stateArgsChanged",
   "panel-title-updated",
   "panel-presentation-changed",
+  "panel-local-presentation-changed",
   "panel:snapshot",
   "open-workspace-switcher",
   "open-connection-settings",

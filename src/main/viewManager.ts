@@ -275,7 +275,8 @@ export class ViewManager {
    * another bind on its own, so main re-applies the binding when the view
    * reappears.
    */
-  private pendingSlotRestores = new Map<string, NativePanelSlotState>();
+  /** Accepted shell declarations awaiting (or surviving replacement of) a panel view. */
+  private declaredPanelSlots = new Map<string, NativePanelSlotState>();
   /** Whether a shell overlay (dialog) is active — panel views are hidden while true */
   private shellOverlayActive = false;
   /** Synchronously maintained by the hosted shell preload for key forwarding. */
@@ -558,6 +559,15 @@ export class ViewManager {
     return this.shellView.webContents;
   }
 
+  /** The workspace shell app that owns panel layout and presentation UI. */
+  getHostedShellWebContents(): WebContents | null {
+    const ownerId = this.nativePanelSlots.activeHostedShellViewId;
+    if (!ownerId) return null;
+    const owner = this.views.get(ownerId);
+    if (!owner || owner.type !== "app" || !owner.hostChrome) return null;
+    return owner.view.webContents.isDestroyed() ? null : owner.view.webContents;
+  }
+
   /**
    * Create a new view for a panel or browser.
    *
@@ -704,10 +714,6 @@ export class ViewManager {
       this.setViewProtection(config.id, true);
     }
 
-    if (config.type === "panel") {
-      this.restorePanelSlotIfPending(config.id, managed);
-    }
-
     if (this.nativePanelSlots.activeSlots.size > 0 || this.visiblePanelId) {
       this.reconcileNativeLayerOrder();
     }
@@ -721,17 +727,19 @@ export class ViewManager {
    * leaves the new view invisible while the hosted shell's surface still
    * believes it is bound and never rebinds.
    */
-  private restorePanelSlotIfPending(panelId: string, managed: ManagedView): void {
-    const slot = this.pendingSlotRestores.get(panelId);
-    if (!slot) return;
-    this.pendingSlotRestores.delete(panelId);
+  attachDeclaredPanelSlot(panelId: string): { nativeSlotId: string } | null {
+    const managed = this.views.get(panelId);
+    if (!managed || managed.type !== "panel") return null;
+    const slot = this.declaredPanelSlots.get(panelId);
+    if (!slot) return this.getNativePanelSlotBinding(panelId);
+    this.declaredPanelSlots.delete(panelId);
 
     if (
       !this.nativePanelSlots.hostedShellReady ||
       slot.ownerGeneration !== this.nativePanelSlots.hostedShellGeneration ||
       this.nativePanelSlots.activeSlots.has(slot.nativeSlotId)
     ) {
-      return;
+      return null;
     }
 
     log.trace(
@@ -753,6 +761,7 @@ export class ViewManager {
       this.setFocusedNativePanelSlot(slot.nativeSlotId, false);
     }
     this.reconcileNativeLayerOrder();
+    return { nativeSlotId: slot.nativeSlotId };
   }
 
   /**
@@ -882,7 +891,7 @@ export class ViewManager {
         // re-slotted automatically — the hosted shell still believes the
         // panel is bound and will not issue another bind on its own.
         const slot = this.nativePanelSlots.activeSlots.get(nativeSlotId);
-        if (slot) this.pendingSlotRestores.set(id, { ...slot, bounds: { ...slot.bounds } });
+        if (slot) this.declaredPanelSlots.set(id, { ...slot, bounds: { ...slot.bounds } });
         this.clearPanelSlotInternal(nativeSlotId, { notifyHidden: false });
       }
     }
@@ -1034,20 +1043,6 @@ export class ViewManager {
       };
     }
     const previousSlot = this.nativePanelSlots.activeSlots.get(nativeSlotId);
-    const managed = this.views.get(panelId);
-    if (!managed || managed.type !== "panel") {
-      // The accepted binding sequence is now the slot's desired owner and
-      // fences every older operation. If its view is not materialized yet,
-      // the previous owner must be hidden as part of that same ownership
-      // transition; otherwise its later clear is stale and its pixels can
-      // remain indefinitely under the new logical pane.
-      if (previousSlot) {
-        this.clearPanelSlotInternal(nativeSlotId);
-        this.reconcileNativeLayerOrder();
-      }
-      throw new Error(`Native panel slot target is not a panel view: ${panelId}`);
-    }
-
     const existingSlotForPanel = this.nativePanelSlots.panelToSlot.get(panelId);
     if (existingSlotForPanel && existingSlotForPanel !== nativeSlotId) {
       const message = `Panel ${panelId} is already bound to native slot ${existingSlotForPanel}; cannot bind to ${nativeSlotId}`;
@@ -1063,51 +1058,23 @@ export class ViewManager {
     }
 
     // A fresh bind supersedes any remembered binding for this panel or slot.
-    this.pendingSlotRestores.delete(panelId);
-    for (const [pendingPanelId, pending] of this.pendingSlotRestores) {
-      if (pending.nativeSlotId === nativeSlotId) this.pendingSlotRestores.delete(pendingPanelId);
+    this.declaredPanelSlots.delete(panelId);
+    for (const [pendingPanelId, pending] of this.declaredPanelSlots) {
+      if (pending.nativeSlotId === nativeSlotId) this.declaredPanelSlots.delete(pendingPanelId);
     }
 
-    const wasSameFocusedPanel =
-      previousSlot?.panelId === panelId &&
-      previousSlot.focused &&
-      this.nativePanelSlots.focusedNativeSlotId === nativeSlotId;
-    if (previousSlot && previousSlot.panelId !== panelId) {
-      this.clearPanelSlotInternal(nativeSlotId);
-    } else if (previousSlot) {
-      // Same panel rebinding the same slot: drop the old focus listener so the
-      // fresh bind below never stacks a duplicate.
-      previousSlot.detachFocusListener?.();
-    }
-
-    log.trace(` Bind native panel slot ${nativeSlotId} -> ${panelId}`);
-    const bounds = this.normalizeAndClampPanelSlotBounds(request.bounds);
-    const generation = this.nativePanelSlots.hostedShellGeneration;
-    const focused = request.focused === true;
-    const slot: NativePanelSlotState = {
+    if (previousSlot) this.clearPanelSlotInternal(nativeSlotId);
+    const declaration: NativePanelSlotState = {
       nativeSlotId,
       bindingId,
       panelId,
-      bounds,
-      focused,
+      bounds: this.normalizeAndClampPanelSlotBounds(request.bounds),
+      focused: request.focused === true,
       ownerViewId,
-      ownerGeneration: generation,
+      ownerGeneration: this.nativePanelSlots.hostedShellGeneration,
     };
-    this.nativePanelSlots.activeSlots.set(nativeSlotId, slot);
-    this.attachNativeSlotFocusListener(slot, managed);
-    this.nativePanelSlots.panelToSlot.set(panelId, nativeSlotId);
-    this.visiblePanelId = panelId;
-
-    managed.bounds = bounds;
-    managed.visible = true;
-    managed.view.setBounds(bounds);
-    managed.view.setVisible(!this.shellOverlayActive);
-
-    if (focused) {
-      this.setFocusedNativePanelSlot(nativeSlotId, !wasSameFocusedPanel);
-    } else if (this.nativePanelSlots.focusedNativeSlotId === nativeSlotId) {
-      this.nativePanelSlots.focusedNativeSlotId = null;
-    }
+    this.declaredPanelSlots.set(panelId, declaration);
+    log.trace(` Declare native panel slot ${nativeSlotId} -> ${panelId}`);
     this.reconcileNativeLayerOrder();
     return { status: "bound" };
   }
@@ -1132,7 +1099,11 @@ export class ViewManager {
         reason: `stale native panel slot update: ${nativeSlotId}`,
       };
     }
-    const slot = this.nativePanelSlots.activeSlots.get(nativeSlotId);
+    const slot =
+      this.nativePanelSlots.activeSlots.get(nativeSlotId) ??
+      [...this.declaredPanelSlots.values()].find(
+        (candidate) => candidate.nativeSlotId === nativeSlotId
+      );
     if (!slot) {
       const reason = `unknown native panel slot: ${nativeSlotId}`;
       log.trace(`Ignoring update for ${reason}`);
@@ -1148,11 +1119,9 @@ export class ViewManager {
 
     const managed = this.views.get(slot.panelId);
     if (!managed || managed.type !== "panel") {
-      this.clearPanelSlotInternal(nativeSlotId);
-      return {
-        status: "missing",
-        reason: `native panel slot target is no longer a panel view: ${slot.panelId}`,
-      };
+      if (request.bounds) slot.bounds = this.normalizeAndClampPanelSlotBounds(request.bounds);
+      if (typeof request.focused === "boolean") slot.focused = request.focused;
+      return { status: "updated" };
     }
 
     if (request.bounds) {
@@ -1185,11 +1154,11 @@ export class ViewManager {
       bindingSequence?: number;
       operationSequence?: number;
     }
-  ): void {
+  ): boolean {
     this.assertActiveHostedShellOwner(ownerViewId);
     if (!this.acceptNativeSlotOperation(nativeSlotId, ordering)) {
       log.trace(` Ignore stale native panel slot operation ${nativeSlotId} (${bindingId})`);
-      return;
+      return false;
     }
     const slot = this.nativePanelSlots.activeSlots.get(nativeSlotId);
     if (slot) this.assertSlotOwner(slot, ownerViewId);
@@ -1197,24 +1166,25 @@ export class ViewManager {
       log.trace(
         ` Ignore stale native panel slot clear ${nativeSlotId} (${bindingId}; active=${slot.bindingId})`
       );
-      return;
+      return false;
     }
     log.trace(` Clear native panel slot ${nativeSlotId} (was ${slot?.panelId ?? "empty"})`);
     // The shell explicitly released this slot — drop any remembered binding.
-    for (const [pendingPanelId, pending] of this.pendingSlotRestores) {
-      if (pending.nativeSlotId === nativeSlotId) this.pendingSlotRestores.delete(pendingPanelId);
+    for (const [pendingPanelId, pending] of this.declaredPanelSlots) {
+      if (pending.nativeSlotId === nativeSlotId) this.declaredPanelSlots.delete(pendingPanelId);
     }
     this.clearPanelSlotInternal(nativeSlotId);
     this.reconcileNativeLayerOrder();
+    return true;
   }
 
   clearAllPanelSlots(): void {
-    if (this.nativePanelSlots.activeSlots.size > 0 || this.pendingSlotRestores.size > 0) {
+    if (this.nativePanelSlots.activeSlots.size > 0 || this.declaredPanelSlots.size > 0) {
       log.trace(
-        ` Clear all native panel slots (${this.nativePanelSlots.activeSlots.size} active, ${this.pendingSlotRestores.size} pending restore)`
+        ` Clear all native panel slots (${this.nativePanelSlots.activeSlots.size} active, ${this.declaredPanelSlots.size} declared)`
       );
     }
-    this.pendingSlotRestores.clear();
+    this.declaredPanelSlots.clear();
     this.nativePanelSlots.latestOperations.clear();
     for (const nativeSlotId of Array.from(this.nativePanelSlots.activeSlots.keys())) {
       this.clearPanelSlotInternal(nativeSlotId);
@@ -1222,6 +1192,26 @@ export class ViewManager {
     this.nativePanelSlots.focusedNativeSlotId = null;
     this.visiblePanelId = null;
     this.reconcileNativeLayerOrder();
+  }
+
+  getNativePanelSlotBinding(panelId: string): { nativeSlotId: string } | null {
+    const nativeSlotId = this.nativePanelSlots.panelToSlot.get(panelId);
+    return nativeSlotId ? { nativeSlotId } : null;
+  }
+
+  getDeclaredPanelSlotIds(): string[] {
+    return [
+      ...new Set([...this.nativePanelSlots.panelToSlot.keys(), ...this.declaredPanelSlots.keys()]),
+    ];
+  }
+
+  getPanelIdForNativeSlot(nativeSlotId: string): string | null {
+    const active = this.nativePanelSlots.activeSlots.get(nativeSlotId);
+    if (active) return active.panelId;
+    for (const declaration of this.declaredPanelSlots.values()) {
+      if (declaration.nativeSlotId === nativeSlotId) return declaration.panelId;
+    }
+    return null;
   }
 
   /**
@@ -1620,10 +1610,7 @@ export class ViewManager {
     };
   }
 
-  /**
-   * Panel ids currently bound to a native slot (i.e. resident in the shell's
-   * column viewport). The resource policy protects these from GC (§5.3).
-   */
+  /** Panel ids whose native attachment has committed. */
   getSlotBoundPanelIds(): string[] {
     return [...this.nativePanelSlots.panelToSlot.keys()];
   }

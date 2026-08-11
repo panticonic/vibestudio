@@ -2940,6 +2940,23 @@
         "capability": null,
         "presentation": null
       },
+      "getLocalPresentation": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "panel.read",
+          "rationale": "Trusted panel chrome reads Electron's canonical local presentation state"
+        },
+        "capability": null,
+        "presentation": null
+      },
       "getPanelLayout": {
         "authority": {
           "inherits": true
