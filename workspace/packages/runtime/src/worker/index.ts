@@ -36,18 +36,11 @@ import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient"
 import { canonicalEntityId } from "@vibestudio/shared/runtime/entitySpec";
 import { workerLogMethods } from "@vibestudio/service-schemas/workerLog";
 import type { OpenExternalOptions, OpenExternalResult } from "@vibestudio/shared/externalOpen";
-import { fs, _initFsWithRpc } from "./fs.js";
-import type { WebhookIngressClient } from "../shared/webhooks.js";
-import {
-  createDurableObjectServiceClient,
-  createWorkerdClient,
-  doTargetId,
-  type WorkerdClient,
-  type DurableObjectServiceClient,
-} from "../shared/workerd.js";
+import { _initFsWithRpc } from "./fs.js";
+import { createWorkerdClient } from "../shared/workerd.js";
 import { createNonPanelRuntimeHandle, createRuntimeParentHandle } from "../shared/handles.js";
 import { helpfulNamespace } from "../shared/helpfulNamespace.js";
-import { createGatewayFetch, type GatewayFetch } from "../shared/gatewayFetch.js";
+import { createGatewayFetch } from "../shared/gatewayFetch.js";
 import { createMainCaller } from "../shared/mainRpc.js";
 import { createPanelRuntime, type PanelRuntimeApi } from "../shared/panelRuntime.js";
 import {

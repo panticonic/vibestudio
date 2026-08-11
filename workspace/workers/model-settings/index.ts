@@ -26,7 +26,6 @@ import {
   type ModelCatalogEntry,
   type ModelCatalogProvider,
   type ModelSettingsSnapshot,
-  type PiModelSpec,
   type PiModelInput,
 } from "@workspace/model-catalog/catalog";
 import {

@@ -1,6 +1,5 @@
 import {
   findLastAgentMessage,
-  getToolCalls,
   noIncompleteInvocations,
   successfulEvalCode,
   successfulEvalObservedValues,

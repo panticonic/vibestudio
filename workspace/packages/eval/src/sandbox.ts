@@ -1659,7 +1659,7 @@ export async function executeSandbox(
       : await runUserCode();
     throwIfAborted(signal);
     const panelJournalFooter = journal
-      ? await renderPanelJournalFooter(runtimeModule, journal).catch(() => undefined)
+      ? await renderPanelJournalFooter(journal).catch(() => undefined)
       : undefined;
     return {
       success: true,
@@ -1721,10 +1721,7 @@ function createRuntimeJournal(runtimeModule: any): any | null {
   return new runtimeModule.journal.Journal();
 }
 
-async function renderPanelJournalFooter(
-  runtimeModule: any,
-  journal: any
-): Promise<string | undefined> {
+async function renderPanelJournalFooter(journal: any): Promise<string | undefined> {
   const entries = Array.isArray(journal?.entries) ? journal.entries : [];
   if (entries.length === 0) return undefined;
   const operations = entries.map((entry: any) => {

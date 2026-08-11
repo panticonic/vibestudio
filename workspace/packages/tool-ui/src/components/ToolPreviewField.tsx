@@ -22,7 +22,6 @@ import {
 export interface ToolPreviewFieldProps {
   toolName: string;
   args: unknown;
-  theme?: "light" | "dark";
 }
 
 /**
@@ -42,33 +41,25 @@ function formatArgs(args: unknown): string {
   }
 }
 
-/** Simple type guard helpers for preview components */
-function isRecord(v: unknown): v is Record<string, unknown> {
-  return typeof v === "object" && v !== null && !Array.isArray(v);
-}
-
 /**
  * Render the appropriate preview component for the tool arguments.
  * Returns the rich preview if available, otherwise falls back to JSON.
  */
-export function ToolPreviewField({
-  toolName,
-  args,
-  theme = "dark",
-}: ToolPreviewFieldProps): ReactNode {
-  const a = isRecord(args) ? args : undefined;
-
+export function ToolPreviewField({ toolName, args }: ToolPreviewFieldProps): ReactNode {
   // bash - Pretty command display
   if (toolName === "bash" && isBashArgs(args)) {
-    return <BashPreview command={(args as { command: string }).command} description={(args as { description?: string }).description} />;
+    return (
+      <BashPreview
+        command={(args as { command: string }).command}
+        description={(args as { description?: string }).description}
+      />
+    );
   }
 
   // enter_plan_mode - Plan mode entry request
   if (toolName === "enter_plan_mode" && isEnterPlanModeArgs(args)) {
     const extendedArgs = args as Record<string, unknown>;
-    const reason = typeof extendedArgs["reason"] === "string"
-      ? extendedArgs["reason"]
-      : undefined;
+    const reason = typeof extendedArgs["reason"] === "string" ? extendedArgs["reason"] : undefined;
     return <EnterPlanModePreview reason={reason} />;
   }
 
@@ -76,14 +67,17 @@ export function ToolPreviewField({
   if (toolName === "exit_plan_mode" && isExitPlanModeArgs(args)) {
     // planFilePath and plan content may be passed by SDK
     const extendedArgs = args as Record<string, unknown>;
-    const planFilePath = typeof extendedArgs["planFilePath"] === "string"
-      ? extendedArgs["planFilePath"]
-      : undefined;
-    const plan = typeof extendedArgs["plan"] === "string"
-      ? extendedArgs["plan"]
-      : undefined;
+    const planFilePath =
+      typeof extendedArgs["planFilePath"] === "string" ? extendedArgs["planFilePath"] : undefined;
+    const plan = typeof extendedArgs["plan"] === "string" ? extendedArgs["plan"] : undefined;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    return <ExitPlanModePreview plan={plan} allowedPrompts={extendedArgs["allowedPrompts"] as any} planFilePath={planFilePath} />;
+    return (
+      <ExitPlanModePreview
+        plan={plan}
+        allowedPrompts={extendedArgs["allowedPrompts"] as any}
+        planFilePath={planFilePath}
+      />
+    );
   }
 
   // Default: JSON display

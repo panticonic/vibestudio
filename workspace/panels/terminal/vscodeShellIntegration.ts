@@ -11,14 +11,12 @@ import type { IDisposable, ITerminalAddon, Terminal } from "@xterm/xterm";
  * live while exposing small, system-local events for CWD and command lifecycle.
  */
 export class VscodeShellIntegrationAddon implements ITerminalAddon {
-  private terminal: Terminal | undefined;
   private disposables: IDisposable[] = [];
   private readonly listeners = new Set<(event: VscodeShellIntegrationEvent) => void>();
   readonly seenSequences = new Set<string>();
   status: VscodeShellIntegrationStatus = VscodeShellIntegrationStatus.Off;
 
   activate(terminal: Terminal): void {
-    this.terminal = terminal;
     this.disposables.push(
       terminal.parser.registerOscHandler(ShellIntegrationOscPs.VSCode, (data) =>
         this.handleVSCodeSequence(data)
@@ -42,7 +40,6 @@ export class VscodeShellIntegrationAddon implements ITerminalAddon {
     for (const disposable of this.disposables) safeDispose(disposable);
     this.disposables = [];
     this.listeners.clear();
-    this.terminal = undefined;
   }
 
   onEvent(listener: (event: VscodeShellIntegrationEvent) => void): IDisposable {

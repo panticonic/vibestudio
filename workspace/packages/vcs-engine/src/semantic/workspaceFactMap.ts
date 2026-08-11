@@ -1,7 +1,6 @@
 import { compareUtf16CodeUnits } from "@vibestudio/content-addressing";
 import { compactId } from "./identity.js";
 import {
-  authenticatePersistentRadixRoot,
   composePersistentRadix,
   emptyPersistentRadixRoot,
   persistentRadixEntryAt,

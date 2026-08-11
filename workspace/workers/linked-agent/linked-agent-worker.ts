@@ -479,11 +479,11 @@ export class LinkedAgentWorker extends AgentWorkerBase {
           this.bridgeStream = stream;
           const ack = encodeChannelSubscriptionRecord({ kind: "subscribed", result });
           if (enqueueChannelSubscriptionBytes(controller, ack) !== "enqueued") {
-            void this.closeBridgeStream(token, "subscription-ack-too-large");
+            void this.closeBridgeStream(token);
           }
         },
         pull: async () => this.pumpBridgeReplay(token),
-        cancel: async () => this.closeBridgeStream(token, "response-cancelled"),
+        cancel: async () => this.closeBridgeStream(token),
       },
       channelSubscriptionQueuingStrategy()
     );
@@ -492,7 +492,7 @@ export class LinkedAgentWorker extends AgentWorkerBase {
       await this.refreshPresence();
     } catch (error) {
       try {
-        await this.closeBridgeStream(token, "setup-failed");
+        await this.closeBridgeStream(token);
       } catch (cleanupError) {
         throw new AggregateError(
           [error, cleanupError],
@@ -601,7 +601,7 @@ export class LinkedAgentWorker extends AgentWorkerBase {
     return { ok: true, deliveryId, batchId, state: "transport-accepted" };
   }
 
-  private async closeBridgeStream(token: symbol, reason: string, failure?: unknown): Promise<void> {
+  private async closeBridgeStream(token: symbol, failure?: unknown): Promise<void> {
     const stream = this.bridgeStream;
     if (!stream || stream.token !== token) return;
     this.bridgeStream = null;
@@ -614,9 +614,9 @@ export class LinkedAgentWorker extends AgentWorkerBase {
     await this.refreshPresence();
   }
 
-  private async closeCurrentBridge(reason: string): Promise<void> {
+  private async closeCurrentBridge(): Promise<void> {
     const stream = this.bridgeStream;
-    if (stream) await this.closeBridgeStream(stream.token, reason);
+    if (stream) await this.closeBridgeStream(stream.token);
   }
 
   /** Re-advertise participant metadata (attachment state) on every channel. */
@@ -851,7 +851,7 @@ export class LinkedAgentWorker extends AgentWorkerBase {
       await pump;
     } catch (error) {
       try {
-        await this.closeBridgeStream(token, "replay-failed", error);
+        await this.closeBridgeStream(token, error);
       } catch (cleanupError) {
         throw new AggregateError([error, cleanupError], "linked bridge replay and cleanup failed");
       }
@@ -942,10 +942,10 @@ export class LinkedAgentWorker extends AgentWorkerBase {
       }
       const bytes = encodeChannelSubscriptionRecord({ kind: "message", payload: exactPayload });
       if (enqueueChannelSubscriptionBytes(stream.controller, bytes) !== "enqueued") {
-        void this.closeBridgeStream(stream.token, "response-buffer-full");
+        void this.closeBridgeStream(stream.token);
       }
     } catch {
-      void this.closeBridgeStream(stream.token, "response-write-failed");
+      void this.closeBridgeStream(stream.token);
     }
   }
 
@@ -1106,7 +1106,7 @@ export class LinkedAgentWorker extends AgentWorkerBase {
     if (!opts?.runId || opts.runId !== sub.runId) return { ok: true, settled: false };
     if (this.getStateValue(COMPLETED_KEY)) return { ok: true, settled: false };
     this.setStateValue(COMPLETED_KEY, "1");
-    await this.closeCurrentBridge("process-result");
+    await this.closeCurrentBridge();
     const report =
       typeof opts.report === "string" && opts.report.trim()
         ? opts.report.trim()
@@ -1142,7 +1142,7 @@ export class LinkedAgentWorker extends AgentWorkerBase {
     if (opts?.runId && opts.runId !== sub.runId) return { ok: true, settled: false };
     if (this.getStateValue(COMPLETED_KEY)) return { ok: true, settled: false };
     this.setStateValue(COMPLETED_KEY, "1");
-    await this.closeCurrentBridge("process-exit");
+    await this.closeCurrentBridge();
     const exitDesc =
       typeof opts?.signal === "string" && opts.signal
         ? `signal ${opts.signal}`
@@ -2181,7 +2181,7 @@ export class LinkedAgentWorker extends AgentWorkerBase {
     newChannelId: string;
     forkPointPubsubId: number;
   }): Promise<void> {
-    await this.closeCurrentBridge("channel-forked");
+    await this.closeCurrentBridge();
     this.setStateValue(COMPLETED_KEY, "");
     this.setStateValue(OPEN_TURN_KEY, "");
     this.setStateValue(SESSION_KEY, "");

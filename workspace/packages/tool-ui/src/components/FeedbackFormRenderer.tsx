@@ -197,12 +197,8 @@ export function FeedbackFormRenderer({
   // Custom field renderers for toolPreview and approvalHeader fields
   const customFieldRenderers = useMemo(
     () => ({
-      toolPreview: ({ field, theme }: CustomFieldRendererProps) => (
-        <ToolPreviewField
-          toolName={field.toolName ?? "unknown"}
-          args={field.toolArgs}
-          theme={theme}
-        />
+      toolPreview: ({ field }: CustomFieldRendererProps) => (
+        <ToolPreviewField toolName={field.toolName ?? "unknown"} args={field.toolArgs} />
       ),
       approvalHeader: ({ field }: CustomFieldRendererProps) => (
         <ApprovalHeaderField

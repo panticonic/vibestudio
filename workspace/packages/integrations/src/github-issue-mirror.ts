@@ -32,10 +32,6 @@ type GitHubRepository = {
   owner: GitHubOwner;
 };
 
-type GitHubUser = {
-  login: string;
-};
-
 /**
  * Issue payload as received from the GitHub webhook OR from the API
  * — the API's `GitHubIssue` is the widest shape, accept it.

@@ -151,8 +151,6 @@ describe("VscodeTerminalInstance", () => {
   });
 });
 
-const encoder = new TextEncoder();
-
 function createInstance(opts: {
   frontend: FakeFrontend;
   shell: ShellApi;
