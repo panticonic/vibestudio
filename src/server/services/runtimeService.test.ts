@@ -3415,9 +3415,19 @@ describe("runtimeService.destroyContext", () => {
     );
   });
 
-  it("recursively tears down the LIFECYCLE subtree post-order, never crossing lineage", async () => {
-    const dropContext = vi.fn(async () => {});
-    const { service, instance } = await buildDeps({ semanticContexts: { dropContext } });
+  it("prepares a lifecycle tree parent-first, cleans it post-order, and never crosses lineage", async () => {
+    const order: string[] = [];
+    const dropContext = vi.fn(async (contextId: string) => {
+      order.push(`drop:${contextId}`);
+    });
+    const releaseEntity = vi.fn(async (record: EntityRecord) => {
+      order.push(`release:${record.contextId}`);
+      return { status: "ready" as const };
+    });
+    const { service, instance } = await buildDeps({
+      releaseEntity,
+      semanticContexts: { dropContext },
+    });
     const rootAgent = await seedDO(service, "ctx-r", "r-agent");
     const childAgent = await seedDO(service, "ctx-c", "c-agent");
     const lineageAgent = await seedDO(service, "ctx-l", "l-agent");
@@ -3437,6 +3447,7 @@ describe("runtimeService.destroyContext", () => {
     expect(dropContext).toHaveBeenCalledWith("ctx-c");
     expect(dropContext).toHaveBeenCalledWith("ctx-r");
     expect(dropContext).not.toHaveBeenCalledWith("ctx-l");
+    expect(order).toEqual(["release:ctx-r", "release:ctx-c", "drop:ctx-c", "drop:ctx-r"]);
     // Registry edges for the destroyed lifecycle child were cleared.
     const owned = (await service.handler({ caller: serverCaller }, "listOwnedContexts", [
       { contextId: "ctx-r", kind: "lifecycle" },
