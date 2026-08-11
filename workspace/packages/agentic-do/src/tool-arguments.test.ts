@@ -109,6 +109,56 @@ describe("prepareAgentToolArguments", () => {
     ).toThrow("/status: Expected 'conflict'");
   });
 
+  it("reports the selected union branch for operations nested in an array", () => {
+    const parameters = Type.Object({
+      operations: Type.Array(
+        Type.Union([
+          Type.Object(
+            {
+              kind: Type.Literal("replace"),
+              replacements: Type.Array(Type.String()),
+            },
+            { additionalProperties: false }
+          ),
+          Type.Object(
+            {
+              kind: Type.Literal("write_binary"),
+              base64: Type.String(),
+            },
+            { additionalProperties: false }
+          ),
+        ])
+      ),
+    });
+    const selected = { ...tool(), name: "apply_patch", parameters } as AgentTool;
+
+    expect(() =>
+      prepareAgentToolArguments(selected, {
+        operations: [
+          {
+            kind: "write_binary",
+            base64: "AP8B/g==",
+            intent: "misplaced operation intent",
+          },
+        ],
+      })
+    ).toThrow("/operations/0/intent: Unexpected property");
+
+    expect(() =>
+      prepareAgentToolArguments(selected, {
+        operations: [{ kind: "chmod", mode: 0o644 }],
+      })
+    ).toThrow('/operations/0/kind: Expected one of "replace", "write_binary"');
+
+    const input = {
+      operations: [
+        { kind: "replace", replacements: ["old"] },
+        { kind: "write_binary", base64: "AP8B/g==" },
+      ],
+    };
+    expect(prepareAgentToolArguments(selected, input)).toBe(input);
+  });
+
   it("validates plain JSON-schema tools at the same execution boundary", () => {
     const plain = {
       ...tool(),
