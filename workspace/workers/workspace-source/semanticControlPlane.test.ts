@@ -239,7 +239,7 @@ describe("GadWorkspaceDO unified log and semantic VCS schema", () => {
 
   // §3.1 — schema shape
   it("creates the canonical semantic graph and leaves no retired VCS infrastructure", async () => {
-    const { call, sql } = await createTestDO(GadWorkspaceDO);
+    const { sql } = await createTestDO(GadWorkspaceDO);
     const tables = await querySql<{ rows: Array<{ name: string }> }>(
       sql,
       "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name",
@@ -919,7 +919,7 @@ describe("appendLogEvent core (§3.2)", () => {
   });
 
   it("still rejects a DIVERGENT already-applied event after a new one", async () => {
-    const { call, sql } = await createTestDO(GadWorkspaceDO);
+    const { call } = await createTestDO(GadWorkspaceDO);
     await call<any>("appendLogEvent", {
       logId: "traj-midbatch-div",
       head: "main",
@@ -966,7 +966,7 @@ describe("appendLogEvent core (§3.2)", () => {
   });
 
   it("rejects appending with a different log_kind to an existing log", async () => {
-    const { call, sql } = await createTestDO(GadWorkspaceDO);
+    const { call } = await createTestDO(GadWorkspaceDO);
     await call("appendLogEvent", {
       logId: "log-kind-1",
       head: "main",
@@ -993,7 +993,7 @@ describe("appendLogEvent core (§3.2)", () => {
   });
 
   it("enforces expectedHeadHash CAS on appendLogEvent", async () => {
-    const { call, sql } = await createTestDO(GadWorkspaceDO);
+    const { call } = await createTestDO(GadWorkspaceDO);
     const first = await call<any>("appendLogEvent", {
       logId: "log-cas",
       head: "main",
@@ -1067,7 +1067,9 @@ describe("appendLogEvent core (§3.2)", () => {
 
 describe("trajectory projection invariants", () => {
   it("walks prompting intent through its turn and invocation to the semantic command", async () => {
-    const { call, instance, sql } = await createTestDO(GadWorkspaceDO);
+    const { call, instance } = await createTestDO(GadWorkspaceDO, {
+      WORKSPACE_ID: "workspace-test",
+    });
     const triggerMessageId = "recv:channel-1:prompt-envelope-1";
     const turnId = "turn-1";
     const invocationId = "invocation-1";
@@ -1232,7 +1234,7 @@ describe("trajectory projection invariants", () => {
   });
 
   it("rejects duplicate turn.opened events for the same branch turn", async () => {
-    const { call, sql } = await createTestDO(GadWorkspaceDO);
+    const { call } = await createTestDO(GadWorkspaceDO);
 
     await appendTrajectoryEvents(call, {
       trajectoryId: "traj-1",
@@ -1270,7 +1272,7 @@ describe("trajectory projection invariants", () => {
   });
 
   it("rejects duplicate turn.opened events within the same append batch", async () => {
-    const { call, sql } = await createTestDO(GadWorkspaceDO);
+    const { call } = await createTestDO(GadWorkspaceDO);
 
     await expect(
       appendTrajectoryEvents(call, {
@@ -1401,7 +1403,7 @@ describe("trajectory projection invariants", () => {
   });
 
   it("rejects reused event ids with different event content", async () => {
-    const { call, sql } = await createTestDO(GadWorkspaceDO);
+    const { call } = await createTestDO(GadWorkspaceDO);
     await appendTrajectoryEvents(call, {
       trajectoryId: "traj-1",
       branchId: "main",
@@ -1442,7 +1444,7 @@ describe("trajectory projection invariants", () => {
   });
 
   it("rejects appends whose expectedHeadHash does not match the current head", async () => {
-    const { call, sql } = await createTestDO(GadWorkspaceDO);
+    const { call } = await createTestDO(GadWorkspaceDO);
     const first = await appendTrajectoryEvents<any>(call, {
       trajectoryId: "traj-1",
       branchId: "main",
@@ -1531,7 +1533,7 @@ describe("trajectory projection invariants", () => {
   });
 
   it("inspects turn and invocation state without hydrating full payloads", async () => {
-    const { call, sql } = await createTestDO(GadWorkspaceDO);
+    const { call } = await createTestDO(GadWorkspaceDO);
     await appendTrajectoryEvents(call, {
       trajectoryId: "traj-1",
       branchId: "main",
@@ -1640,7 +1642,7 @@ describe("trajectory projection invariants", () => {
   });
 
   it("does not count failed terminal messages as streaming", async () => {
-    const { call, sql } = await createTestDO(GadWorkspaceDO);
+    const { call } = await createTestDO(GadWorkspaceDO);
     await appendTrajectoryEvents(call, {
       trajectoryId: "traj-failed-terminal",
       branchId: "main",
@@ -1703,7 +1705,7 @@ describe("trajectory projection invariants", () => {
 
 describe("channel projections (§3.4)", () => {
   it("stores generic opaque channel envelopes and exposes replay windows", async () => {
-    const { call, sql } = await createTestDO(GadWorkspaceDO);
+    const { call } = await createTestDO(GadWorkspaceDO);
     await call("appendChannelEnvelope", {
       channelId: "channel-1",
       envelopeId: "env-1",
@@ -2147,7 +2149,7 @@ describe("channel projections (§3.4)", () => {
   });
 
   it("applies registry mutations atomically with upsert/clear ordering", async () => {
-    const { call, sql } = await createTestDO(GadWorkspaceDO);
+    const { call } = await createTestDO(GadWorkspaceDO);
     const appendRegistryEvent = (input: {
       envelopeId: string;
       kind: "messageType.registered" | "messageType.cleared";
@@ -2217,7 +2219,7 @@ describe("channel projections (§3.4)", () => {
   });
 
   it("provides compact channel envelope inspection for debugging", async () => {
-    const { call, sql } = await createTestDO(GadWorkspaceDO);
+    const { call } = await createTestDO(GadWorkspaceDO);
     await call("appendChannelEnvelope", {
       channelId: "channel-1",
       envelopeId: "env-large",
@@ -2429,7 +2431,7 @@ describe("forkLog no-copy (§3.5)", () => {
   });
 
   it("forks channel history through the canonical unified-log RPC", async () => {
-    const { call, sql } = await createTestDO(GadWorkspaceDO);
+    const { call } = await createTestDO(GadWorkspaceDO);
     await call("appendChannelEnvelope", {
       channelId: "channel-parent",
       envelopeId: "env-1",
@@ -2666,7 +2668,7 @@ describe("fork-divergent deterministic terminals (§3.6)", () => {
 
 describe("refs (§3.7)", () => {
   it("performs CAS ref updates with a reflog and supports kind/prefix listing", async () => {
-    const { call, sql } = await createTestDO(GadWorkspaceDO);
+    const { call } = await createTestDO(GadWorkspaceDO);
 
     // create with expected: null (must not exist)
     const created = await call<any>("updateRef", {
@@ -2745,7 +2747,7 @@ describe("refs (§3.7)", () => {
   });
 
   it("treats ref prefixes literally instead of as LIKE patterns", async () => {
-    const { call, sql } = await createTestDO(GadWorkspaceDO);
+    const { call } = await createTestDO(GadWorkspaceDO);
     await call("updateRef", {
       refName: "context:literal_%:one",
       kind: "context",
@@ -2824,7 +2826,7 @@ describe("projection replay", () => {
 
 describe("terminal idempotency guards (§3.13)", () => {
   it("enforces terminal invocation idempotency at append time", async () => {
-    const { call, sql } = await createTestDO(GadWorkspaceDO);
+    const { call } = await createTestDO(GadWorkspaceDO);
     await appendTrajectoryEvents(call, {
       trajectoryId: "traj-1",
       branchId: "main",
@@ -2953,7 +2955,7 @@ describe("terminal idempotency guards (§3.13)", () => {
   });
 
   it("rejects terminal invocation events without typed terminal outcome", async () => {
-    const { call, sql } = await createTestDO(GadWorkspaceDO);
+    const { call } = await createTestDO(GadWorkspaceDO);
     await expect(
       appendTrajectoryEvents(call, {
         trajectoryId: "traj-1",
@@ -3089,7 +3091,7 @@ describe("stored-value refs (§3.14)", () => {
   });
 
   it("rejects raw unbounded trajectory payload fields", async () => {
-    const { call, sql } = await createTestDO(GadWorkspaceDO);
+    const { call } = await createTestDO(GadWorkspaceDO);
     await expect(
       appendTrajectoryEvents(call, {
         trajectoryId: "traj-1",
@@ -3114,7 +3116,7 @@ describe("stored-value refs (§3.14)", () => {
   });
 
   it("reports oversized storage rows through diagnostics and integrity checks", async () => {
-    const { call, sql } = await createTestDO(GadWorkspaceDO);
+    const { call } = await createTestDO(GadWorkspaceDO);
     await call("appendChannelEnvelope", {
       channelId: "channel-1",
       envelopeId: "env-oversized",
@@ -3142,7 +3144,7 @@ describe("stored-value refs (§3.14)", () => {
   });
 
   it("reports stored-value references without a second blob-ownership protocol", async () => {
-    const { call, sql } = await createTestDO(GadWorkspaceDO);
+    const { call } = await createTestDO(GadWorkspaceDO);
     await appendTrajectoryEvents(call, {
       trajectoryId: "traj-1",
       branchId: "main",
@@ -3180,7 +3182,7 @@ describe("stored-value refs (§3.14)", () => {
 
 describe("lineage queries over causality edges (§3.15)", () => {
   it("links trajectory events to deterministic channel publications and back", async () => {
-    const { call, sql } = await createTestDO(GadWorkspaceDO);
+    const { call } = await createTestDO(GadWorkspaceDO);
     const result = await appendTrajectoryEvents<any>(call, {
       trajectoryId: "traj-1",
       branchId: "main",
@@ -3316,7 +3318,7 @@ describe("lineage queries over causality edges (§3.15)", () => {
   });
 
   it("keeps side trajectory events private while joining a published summary back to downstream consumers", async () => {
-    const { call, sql } = await createTestDO(GadWorkspaceDO);
+    const { call } = await createTestDO(GadWorkspaceDO);
     await appendTrajectoryEvents(call, {
       trajectoryId: "traj-main",
       branchId: "side-task",

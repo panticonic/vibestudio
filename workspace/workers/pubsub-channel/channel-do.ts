@@ -87,13 +87,10 @@ import {
   type BroadcastDeps,
   type BroadcastParticipant,
 } from "./broadcast.js";
-import {
-  ChannelDeliveryProjection,
-  CHANNEL_RELATIONSHIP_EVENT_TYPES,
-} from "./delivery-projection.js";
+import { ChannelDeliveryProjection } from "./delivery-projection.js";
 import { ChannelLog, type ChannelReplayContext } from "./log-store.js";
 import type { MessageTypeDefinition } from "@workspace/pubsub";
-import { PolicyHost, policyViewFromLogEnvelope } from "./policy-host.js";
+import { PolicyHost } from "./policy-host.js";
 import { CallTransport, type PendingCallRow } from "./calls.js";
 import {
   assertDeclaredAgenticEventAudience,
@@ -2483,8 +2480,6 @@ export class PubSubChannel extends DurableObjectBase {
     if (doRef) {
       throw new Error("Durable Object participants must use finite join delivery");
     }
-    const transport = "rpc";
-
     // ── Principal-derived human identity (WP6 §3-4) ──────────────────────
     // A human panel/shell joins as the STABLE account participant
     // `user:<userId>` (kind "user"), stamped from the host-verified caller

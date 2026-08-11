@@ -29,7 +29,6 @@ import type {
   DeleteChannelMembershipInput,
   PutChannelMembershipInput,
 } from "@vibestudio/shared/channelInvites";
-import { withPrivateAccountSubject } from "@vibestudio/shared/actorIdentity";
 import { parseLineageKey } from "@vibestudio/shared/authority/contextIntegrity";
 import {
   channelEnvelopePageInfo,
@@ -41,7 +40,6 @@ import type {
   AgentHealthInspection,
   ChannelEnvelopeInspection,
   StoredChannelMessageTypeDefinition,
-  ChannelPublication,
   ChannelRosterInspection,
   EnvelopeLineage,
   InvocationStateInspection,
@@ -94,7 +92,6 @@ import {
 } from "@vibestudio/shared/userNotifications";
 import {
   AGENTIC_EVENT_PAYLOAD_KIND,
-  AGENTIC_PROTOCOL_VERSION,
   GENESIS_EVENT_HASH,
   assertAgenticEventStoredValuesEncoded,
   brandId,
@@ -110,7 +107,6 @@ import {
   type ChannelEnvelope,
   type ChannelId,
   type EnvelopeId,
-  type InvocationId,
   type LogEnvelope,
   type LogEventCausality,
   type LogKind,
@@ -126,13 +122,10 @@ import {
   type LogEnvelopeSemanticInput,
 } from "@workspace/agentic-protocol";
 import {
-  manifestHashForEntries,
   sha256HexSyncText,
   sortForCanonicalJson,
   canonicalJson,
   stateHashForRoot,
-  EMPTY_MANIFEST_HASH,
-  EMPTY_STATE_HASH,
 } from "@vibestudio/content-addressing";
 import { createSemanticVcsSchema, SEMANTIC_VCS_REQUIRED_TABLES } from "./semanticVcsSchema.js";
 import { SemanticVcsError, SemanticVcsStore } from "./semanticVcsStore.js";
@@ -529,14 +522,6 @@ function snippetAround(text: string, query: string, radius = 160): string {
   const start = Math.max(0, index - radius);
   const end = Math.min(text.length, index + firstTerm.length + radius);
   return `${start > 0 ? "…" : ""}${text.slice(start, end)}${end < text.length ? "…" : ""}`;
-}
-
-/** One bounded insight fragment for a §7.5 attachment line (whitespace
- *  collapsed, hard-capped, ellipsized) — semantics are recalled verbatim, never
- *  synthesized, so this only trims. */
-function truncateInsight(text: string, max: number): string {
-  const collapsed = text.replace(/\s+/gu, " ").trim();
-  return collapsed.length > max ? `${collapsed.slice(0, max - 1)}…` : collapsed;
 }
 
 function summarizeJsonForInspection(value: unknown, depth = 0): unknown {
@@ -1365,12 +1350,20 @@ export class GadWorkspaceDO extends DurableObjectBase {
 
   private semanticWorkspace(): SemanticWorkspace {
     return new SemanticWorkspace({
-      workspaceId: this.objectKey,
+      workspaceId: this.semanticWorkspaceId(),
       sql: this.sql,
       store: this.semanticVcsStore(),
       now: nowIso,
       transaction: (fn) => this.transaction(fn),
     });
+  }
+
+  private semanticWorkspaceId(): string {
+    const configured = this.env["WORKSPACE_ID"];
+    if (typeof configured !== "string" || configured.length === 0) {
+      throw new Error("GadWorkspaceDO requires the topology-owned WORKSPACE_ID binding");
+    }
+    return configured;
   }
 
   @schemaRpc()
@@ -2022,17 +2015,6 @@ export class GadWorkspaceDO extends DurableObjectBase {
     return this.transaction(() => {
       const existed = this.logHeadRow(input.logId, input.head) != null;
       // This head's OWN events (post-fork; inherited ones live on the parent).
-      const eventIds = (
-        this.sql
-          .exec(
-            `SELECT envelope_id FROM log_events WHERE log_id = ? AND head = ?`,
-            input.logId,
-            input.head
-          )
-          .toArray() as JsonRecord[]
-      )
-        .map((r) => asString(r["envelope_id"]))
-        .filter((id): id is string => !!id);
       this.sql.exec(
         `DELETE FROM log_events WHERE log_id = ? AND head = ?`,
         input.logId,
@@ -3457,14 +3439,6 @@ export class GadWorkspaceDO extends DurableObjectBase {
       participantId,
       String(openRow["joined_at"])
     );
-  }
-
-  private semanticWorkspaceId(): string {
-    const configured = this.env["WORKSPACE_ID"];
-    if (typeof configured !== "string" || configured.length === 0) {
-      throw new Error("GadWorkspaceDO requires the topology-owned WORKSPACE_ID binding");
-    }
-    return configured;
   }
 
   // -------------------------------------------------------------------------

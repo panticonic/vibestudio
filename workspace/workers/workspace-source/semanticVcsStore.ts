@@ -2,8 +2,6 @@
 import { canonicalJson, compareUtf16CodeUnits } from "@vibestudio/content-addressing";
 import type { VcsExternalSnapshot } from "@vibestudio/service-schemas/vcs";
 import {
-  NORMALIZATION_PROTOCOL,
-  SEMANTIC_PROTOCOL,
   canonicalDigest,
   compactId,
   type ContentMapping,
