@@ -111,6 +111,15 @@ export function isRe2Available(): boolean {
  */
 export function compileUserRegex(source: string, flags: string): RegexLike {
   rejectRedosShape(source);
+  // V8 is used only as a syntax parser here, never as the matcher when RE2 is
+  // available. This lets us distinguish malformed regex syntax from a valid
+  // JavaScript construct that RE2 deliberately does not implement.
+  try {
+    RegExp(source, flags);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new Error(`Invalid regular expression: ${reason}`);
+  }
   if (RE2) {
     try {
       return new RE2(source, flags);
