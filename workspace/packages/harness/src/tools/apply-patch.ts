@@ -202,7 +202,7 @@ export function createApplyPatchTool(
     name: "apply_patch",
     label: "apply_patch",
     description:
-      "Atomically mutate one or more managed workspace files in a single semantic work unit. Supports exact multi-replacement edits, whole text or binary writes, deletion, and mode changes. Each path may appear once. Use expectedHash from read/provenance when stale-write protection matters. Operations are all validated before anything changes; move_file and copy_file remain the identity-preserving structural tools.",
+      "Atomically mutate one or more managed workspace files in a single semantic work unit. Every path must name a file inside an existing repository, including its top-level section and repository name (for example projects/app/README.md); workspace-root files and bare section paths are not managed repositories. Supports exact multi-replacement edits, whole text or binary writes, deletion, and mode changes. Each path may appear once. Use expectedHash from read/provenance when stale-write protection matters. Operations are all validated before anything changes; move_file and copy_file remain the identity-preserving structural tools.",
     parameters: applyPatchSchema,
     cancellationMode: "settle",
     execute: async (

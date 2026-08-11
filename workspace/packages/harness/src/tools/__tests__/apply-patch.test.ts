@@ -6,6 +6,14 @@ import { StubVcs } from "./stub-vcs.js";
 const authority = { contextId: "context:test", commandId: "command:patch" };
 
 describe("apply_patch", () => {
+  it("advertises the complete managed repository path boundary", () => {
+    const tool = createApplyPatchTool("/", new StubVcs(), authority);
+
+    expect(tool.description).toContain("top-level section and repository name");
+    expect(tool.description).toContain("projects/app/README.md");
+    expect(tool.description).toContain("workspace-root files");
+  });
+
   it("applies a multi-file content, presence, and mode transaction", async () => {
     const vcs = new StubVcs({
       files: {
