@@ -124,9 +124,6 @@ export function SettingsScreen({ navigation }: SettingsScreenProps) {
     let previousCredential: Awaited<ReturnType<typeof loadShellCredential>>;
     try {
       previousCredential = await loadShellCredential();
-      if (previousCredential?.schemaVersion === 3) {
-        throw new Error("The saved mobile connection has not completed its required migration.");
-      }
       await clearShellCredential();
     } catch (error) {
       Alert.alert(

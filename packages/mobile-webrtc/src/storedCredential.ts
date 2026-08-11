@@ -44,27 +44,9 @@ export interface StoredRoutedMobileConnection extends StoredMobileConnectionBase
 
 export type StoredMobileConnection = StoredPairedMobileConnection | StoredRoutedMobileConnection;
 
-/** Strict migration input. Never re-exported from the package public surface. */
-export interface LegacyStoredMobileConnectionV3 extends ShellCredential {
-  schemaVersion: 3;
-  controlPairing: StoredShellPairing;
-  workspacePairing: StoredShellPairing;
-  pairedAt: number;
-}
-
-export type LoadedMobileConnection = StoredMobileConnection | LegacyStoredMobileConnectionV3;
-
 const CREDENTIAL_KEYS = new Set(["deviceId", "refreshToken"]);
 const PAIRING_KEYS = new Set(["room", "fp", "sig", "v", "ice"]);
 const FRESH_PAIRING_KEYS = new Set([...PAIRING_KEYS, "code"]);
-const LEGACY_STORED_KEYS = new Set([
-  "schemaVersion",
-  "deviceId",
-  "refreshToken",
-  "controlPairing",
-  "workspacePairing",
-  "pairedAt",
-]);
 const PAIRED_STORED_KEYS = new Set([
   "schemaVersion",
   "phase",
@@ -226,48 +208,13 @@ export function replaceMobileConnectionCredential(
   return { ...connection, credential: { ...credential } };
 }
 
-export function migrateLegacyMobileConnection(
-  legacy: LegacyStoredMobileConnectionV3,
-  selectedWorkspaceId: string
-): StoredRoutedMobileConnection {
-  return createRoutedMobileConnection(
-    createPairedMobileConnection(
-      { deviceId: legacy.deviceId, refreshToken: legacy.refreshToken },
-      legacy.controlPairing,
-      selectedWorkspaceId,
-      legacy.pairedAt
-    ),
-    legacy.workspacePairing
-  );
-}
-
-function parseLegacyRecord(parsed: Record<string, unknown>): LegacyStoredMobileConnectionV3 | null {
-  if (!hasOnlyKeys(parsed, LEGACY_STORED_KEYS) || parsed["schemaVersion"] !== 3) return null;
-  const credential = { deviceId: parsed["deviceId"], refreshToken: parsed["refreshToken"] };
-  const controlPairing = parsed["controlPairing"];
-  const workspacePairing = parsed["workspacePairing"];
-  const pairedAt = parsed["pairedAt"];
-  if (
-    !isCurrentShellCredential(credential) ||
-    !isCurrentPairing(controlPairing, false, true) ||
-    !isCurrentPairing(workspacePairing, false, true) ||
-    typeof pairedAt !== "number" ||
-    !Number.isSafeInteger(pairedAt) ||
-    pairedAt <= 0
-  ) {
-    return null;
-  }
-  return { schemaVersion: 3, ...credential, controlPairing, workspacePairing, pairedAt };
-}
-
 export function parseStoredMobileConnection(
   raw: string | null | undefined
-): LoadedMobileConnection | null {
+): StoredMobileConnection | null {
   if (!raw) return null;
   try {
     const parsed = JSON.parse(raw) as unknown;
     if (!isRecord(parsed)) return null;
-    if (parsed["schemaVersion"] === 3) return parseLegacyRecord(parsed);
     const phase = parsed["phase"];
     const allowedKeys = phase === "paired" ? PAIRED_STORED_KEYS : ROUTED_STORED_KEYS;
     if (parsed["schemaVersion"] !== 4 || !hasOnlyKeys(parsed, allowedKeys)) return null;

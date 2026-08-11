@@ -31,9 +31,8 @@ import {
   replaceMobileConnectionCredential,
   type ShellCredential,
   type ShellPairing,
-  type LoadedMobileConnection,
   type StoredMobileConnection,
-  type StoredRoutedMobileConnection,
+  type StoredShellPairing,
 } from "./storedCredential.js";
 import { createReactNativeWebRtcProvider } from "./reactNativeWebRtcPeer.js";
 import { resumeMobileConnection } from "./resumeConnection.js";
@@ -156,16 +155,9 @@ export function makeShellTokenProvider(
  * out of sync with it.
  */
 export async function persistStoredMobileConnection(stored: StoredMobileConnection): Promise<void> {
-  await persistLoadedMobileConnection(stored, false);
-}
-
-async function persistLoadedMobileConnection(
-  stored: LoadedMobileConnection,
-  allowLegacyMigrationInput: boolean
-): Promise<void> {
   const payload = JSON.stringify(stored);
   const parsed = parseStoredMobileConnection(payload);
-  if (parsed === null || (!allowLegacyMigrationInput && parsed.schemaVersion !== 4)) {
+  if (parsed === null) {
     throw new Error("Cannot persist an invalid current WebRTC shell credential");
   }
   // The refresh secret is the device's durable secret — store it in the OS
@@ -181,7 +173,7 @@ async function persistLoadedMobileConnection(
   }
 }
 
-export async function loadShellCredential(): Promise<LoadedMobileConnection | null> {
+export async function loadShellCredential(): Promise<StoredMobileConnection | null> {
   const result = await Keychain.getGenericPassword({ service: KEYCHAIN_SERVICE });
   return result ? parseStoredMobileConnection(result.password) : null;
 }
@@ -318,27 +310,22 @@ export async function establishWebRtcConnection(
 
 /** Returning device: reconnect with the stored refresh secret over the same room. */
 export async function reconnectViaWebRtc(
-  stored: LoadedMobileConnection,
+  stored: StoredMobileConnection,
   onRecovery?: (kind: "resubscribe" | "cold-recover") => void | Promise<void>,
   reach: "workspace" | "control" = "workspace",
-  onCredentialStored?: (stored: LoadedMobileConnection) => void
+  onCredentialStored?: (stored: StoredMobileConnection) => void
 ): Promise<WebRtcConnection> {
   let currentStored = stored;
-  if (reach === "workspace" && stored.schemaVersion === 4 && stored.phase !== "routed") {
-    throw new Error("Cannot connect a workspace before its route is durably committed");
+  let pairing: StoredShellPairing;
+  if (reach === "control") {
+    pairing = stored.controlPairing;
+  } else {
+    if (stored.phase !== "routed") {
+      throw new Error("Cannot connect a workspace before its route is durably committed");
+    }
+    pairing = stored.workspacePairing;
   }
-  const pairing =
-    reach === "control"
-      ? stored.controlPairing
-      : (
-          stored as
-            | StoredRoutedMobileConnection
-            | Extract<LoadedMobileConnection, { schemaVersion: 3 }>
-        ).workspacePairing;
-  const initialCredential =
-    stored.schemaVersion === 3
-      ? { deviceId: stored.deviceId, refreshToken: stored.refreshToken }
-      : stored.credential;
+  const initialCredential = stored.credential;
   const tokenProvider = makeShellTokenProvider(pairing, initialCredential);
   const persistFailure: { current: Error | null } = { current: null };
   const connection = await establishWebRtcConnection(pairing, tokenProvider, {
@@ -347,11 +334,8 @@ export async function reconnectViaWebRtc(
       // RETURNED (not void'd) so the shared bootstrap AWAITS it with retry — a
       // dropped rotation would otherwise leave the device unable to reconnect.
       tokenProvider.setCredential(credential);
-      currentStored =
-        currentStored.schemaVersion === 3
-          ? { ...currentStored, ...credential }
-          : replaceMobileConnectionCredential(currentStored, credential);
-      await persistLoadedMobileConnection(currentStored, currentStored.schemaVersion === 3);
+      currentStored = replaceMobileConnectionCredential(currentStored, credential);
+      await persistStoredMobileConnection(currentStored);
       onCredentialStored?.(currentStored);
     },
     onPersistError: (error) => {
@@ -376,7 +360,7 @@ export async function reconnectViaWebRtc(
  * `hubControlRpc` explicitly for the one server-wide control surface.
  */
 export async function reconnectMobileSession(
-  stored: LoadedMobileConnection,
+  stored: StoredMobileConnection,
   onRecovery?: (kind: "resubscribe" | "cold-recover") => void | Promise<void>
 ): Promise<WebRtcConnection> {
   return resumeMobileConnection(stored, {

@@ -56,9 +56,6 @@ export async function selectMobileWorkspace(
   }
   const initialStored = await dependencies.loadCredential();
   if (!initialStored) throw missingCredentialError();
-  if (initialStored.schemaVersion === 3) {
-    throw new Error("Finish upgrading this mobile connection before switching workspaces.");
-  }
   if (initialStored.phase !== "routed") {
     throw new Error("Finish preparing the selected workspace before switching workspaces.");
   }
