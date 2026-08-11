@@ -1574,6 +1574,36 @@ async function main() {
     if (!file || file.content.kind !== "text") return null;
     return file.content.text;
   };
+  const initiateShippedBaseTemplatePull = async (): Promise<void> => {
+    const { baseTemplatePullForRelease, readBaseTemplateRelease } =
+      await import("./baseTemplateRelease.js");
+    const release = readBaseTemplateRelease(appRoot);
+    if (!release) {
+      console.warn("[Templates] This host build has no base-template release artifact");
+      return;
+    }
+    const { stateHash } = await workspaceVcs.ensureFresh();
+    const lockText = await readWorkspaceFileAtState(stateHash, "meta/templates.lock.yml");
+    if (!lockText) return;
+    const [{ default: YAML }, { assertTemplateLockIntegrityForRead }] = await Promise.all([
+      import("yaml"),
+      import("@vibestudio/workspace/templateLock"),
+    ]);
+    const lock = assertTemplateLockIntegrityForRead(YAML.parse(lockText) as unknown);
+    const pull = baseTemplatePullForRelease(release, lock);
+    if (!pull) return;
+    const host = container.get<import("@vibestudio/extension-host").ExtensionHost>("extensionHost");
+    const result = await host.invoke(
+      { caller: rootTemplateCaller },
+      "@workspace-extensions/template-composer",
+      "pull",
+      [pull]
+    );
+    console.info("[Templates] Opened the shipped base-template release operation", {
+      commandId: pull.commandId,
+      result,
+    });
+  };
   {
     // Origin is the axis every unit review is organized on, and it is the one
     // fact nothing under review may assert about itself — so it is derived here,
@@ -6965,6 +6995,15 @@ async function main() {
       // publishPending starts the queue entries synchronously; its promise is the
       // later human decision/application and therefore remains detached.
       await Promise.resolve(startupExtensionStaging);
+      // The host release unit moves independently of userland. Schedule its
+      // exact base pull before startup approvals are exposed; Composer records
+      // the durable intent and owns all subsequent review/repair/publication.
+      void initiateShippedBaseTemplatePull().catch((err: unknown) =>
+        console.warn(
+          "[Templates] Failed to open the shipped base-template release operation:",
+          err instanceof Error ? err.message : String(err)
+        )
+      );
       void unitInstallReviewCoordinator
         .publishPending("startup")
         .catch((err: unknown) => console.warn("[Units] Failed to publish startup approvals:", err));

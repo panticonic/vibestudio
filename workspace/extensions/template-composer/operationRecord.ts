@@ -9,6 +9,7 @@ export async function ensureTemplateOperationIntent(input: {
   intent: unknown;
   existing: TemplateOperationRecord | null;
   affectedParts: string[];
+  migrationFacets: string[];
   persist(record: TemplateOperationRecord): Promise<void>;
 }): Promise<{ record: TemplateOperationRecord; resumed: boolean }> {
   if (input.existing) {
@@ -34,6 +35,7 @@ export async function ensureTemplateOperationIntent(input: {
     intent: input.intent,
     pins: input.inspection.plan.nodes.map((node) => node.pin as WorkspaceTemplatePin),
     affectedParts: input.affectedParts,
+    ...(input.migrationFacets.length > 0 ? { migrationFacets: input.migrationFacets } : {}),
   };
   await input.persist(record);
   return { record, resumed: false };

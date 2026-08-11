@@ -26,6 +26,7 @@ import {
   canonicalTemplateNodeId,
   normalizeTemplateGitUrl,
 } from "@vibestudio/workspace/templateCoordinates";
+import { migrationFacetsForRepoPaths } from "@vibestudio/workspace/migrationNotes";
 import {
   inspectTemplateOperation,
   publishPreparedTemplateOperation,
@@ -84,6 +85,52 @@ interface Environment {
   info: Awaited<ReturnType<ExtensionContextLike["workspace"]["getInfo"]>>;
   observation: SemanticWorkspaceObservation;
   catalog?: TemplateCatalogSnapshot;
+}
+
+const TEMPLATE_OPERATIONS_CHANGED_EVENT = "operations.changed";
+
+function emitTemplateOperationsChanged(
+  ctx: ExtensionContextLike,
+  operationId: string,
+  state: "pending" | "repairing" | "applied" | "cancelled"
+): void {
+  ctx.emit(TEMPLATE_OPERATIONS_CHANGED_EVENT, { operationId, state });
+}
+
+function migrationFields(facets: readonly string[]): { migration?: { facets: string[] } } {
+  return facets.length > 0 ? { migration: { facets: [...facets] } } : {};
+}
+
+function migrationRepairFailures(facets: readonly string[]) {
+  return facets.map((facet) => ({
+    unit: `migrations/${facet}`,
+    message:
+      "Read the incoming contract notes, repair the retained workspace, run every note verification and the normal gates, then resume",
+  }));
+}
+
+/** The single staging decision migration notes add to Composer. */
+export function preparedMigrationHold(
+  record: TemplateOperationRecord,
+  prepared: { contextId: string; affectedRepoPaths: string[] }
+):
+  | {
+      record: TemplateOperationRecord;
+      repair: { contextId: string; failures: Array<{ unit: string; message: string }> };
+    }
+  | undefined {
+  if (!record.migrationFacets?.length) return undefined;
+  return {
+    record: {
+      ...record,
+      preparedAffectedRepoPaths: prepared.affectedRepoPaths,
+      buildFailures: undefined,
+    },
+    repair: {
+      contextId: prepared.contextId,
+      failures: migrationRepairFailures(record.migrationFacets),
+    },
+  };
 }
 
 export interface TemplateCallerContextIntegration {
@@ -183,6 +230,7 @@ async function completedOperationResult(
     publicationEventId: status.mainEventId,
     ...(contextIntegration ? { contextIntegration } : {}),
     affectedParts: record.affectedParts,
+    ...migrationFields(record.migrationFacets ?? []),
   };
 }
 
@@ -677,9 +725,15 @@ function operationParts(
   inspection: TemplateOperationInspection,
   previous?: SemanticWorkspaceObservation["lock"]
 ) {
+  const affectedParts = affectedTemplateParts(inspection, previous);
+  const migrationFacets = migrationFacetsForRepoPaths(affectedParts);
   return {
-    operationId,
-    affectedParts: affectedTemplateParts(inspection, previous),
+    migrationFacets,
+    response: {
+      operationId,
+      affectedParts,
+      ...migrationFields(migrationFacets),
+    },
   };
 }
 
@@ -741,7 +795,8 @@ async function applyInspection(
     inspection,
     intent,
     existing,
-    affectedParts: parts.affectedParts,
+    affectedParts: parts.response.affectedParts,
+    migrationFacets: parts.migrationFacets,
     persist: (record) => writeTemplateOperationRecord(ctx, record),
   });
   const ports = createTemplateOperationPorts(
@@ -760,6 +815,16 @@ async function applyInspection(
     });
     contextId = prepared.contextId;
     preparedAffectedRepoPaths = prepared.affectedRepoPaths;
+    const migrationHold = preparedMigrationHold(operation.record, prepared);
+    if (migrationHold) {
+      await updateTemplateOperationRecord(ctx, migrationHold.record);
+      emitTemplateOperationsChanged(ctx, operationId, "repairing");
+      return {
+        ...parts.response,
+        state: "repairing" as const,
+        repair: migrationHold.repair,
+      };
+    }
     await clearTemplateOperationRecordFile(ctx, {
       ...operation.record,
       preparedAffectedRepoPaths: prepared.affectedRepoPaths,
@@ -776,7 +841,7 @@ async function applyInspection(
       published.mainEventId
     );
     return {
-      ...parts,
+      ...parts.response,
       state: "applied" as const,
       publicationEventId: published.mainEventId,
       ...(contextIntegration ? { contextIntegration } : {}),
@@ -798,8 +863,11 @@ async function applyInspection(
         preparedAffectedRepoPaths,
         buildFailures: failures,
       });
+      if (operation.record.migrationFacets?.length) {
+        emitTemplateOperationsChanged(ctx, operationId, "repairing");
+      }
       return {
-        ...parts,
+        ...parts.response,
         state: "error" as const,
         blocker: {
           state: "error" as const,
@@ -812,7 +880,7 @@ async function applyInspection(
     }
     if (error instanceof TemplateCredentialRequired) {
       return {
-        ...parts,
+        ...parts.response,
         state: "waiting-for-credential" as const,
         blocker: {
           state: "waiting-for-credential" as const,
@@ -830,8 +898,11 @@ async function applyInspection(
         reviews: [...error.items],
         deltaBasis: error.deltaBasis,
       });
+      if (operation.record.migrationFacets?.length) {
+        emitTemplateOperationsChanged(ctx, operationId, "pending");
+      }
       return {
-        ...parts,
+        ...parts.response,
         state: "pending" as const,
         review: {
           operationId,
@@ -847,7 +918,7 @@ async function applyInspection(
         mainAdvanceEventId: error.mainEventId,
       });
       return {
-        ...parts,
+        ...parts.response,
         state: "error" as const,
         blocker: {
           state: "error" as const,
@@ -904,6 +975,7 @@ async function resumePreparedOperation(
       operationId: record.operationId,
       state: "error" as const,
       affectedParts: record.affectedParts,
+      ...migrationFields(record.migrationFacets ?? []),
       blocker: {
         state: "error" as const,
         code: "TemplateMainAdvanced",
@@ -927,10 +999,12 @@ async function resumePreparedOperation(
     record.operationId,
     published.mainEventId
   );
+  emitTemplateOperationsChanged(ctx, record.operationId, "applied");
   return {
     operationId: record.operationId,
     state: "applied" as const,
     affectedParts: record.affectedParts,
+    ...migrationFields(record.migrationFacets ?? []),
     publicationEventId: published.mainEventId,
     ...(contextIntegration ? { contextIntegration } : {}),
   };
@@ -1093,6 +1167,7 @@ export async function activate(ctx: ExtensionContextLike) {
               ? ("repairing" as const)
               : ("pending" as const),
           fingerprint: record.fingerprint,
+          ...migrationFields(record.migrationFacets ?? []),
           ...(record.reviews?.length
             ? {
                 review: {
@@ -1117,7 +1192,7 @@ export async function activate(ctx: ExtensionContextLike) {
                             message: `Merge protected-main event ${record.mainAdvanceEventId} into this context, resolve any semantic conflicts, then resume`,
                           },
                         ]
-                      : []),
+                      : migrationRepairFailures(record.migrationFacets ?? [])),
                 },
               }
             : {}),
@@ -1127,7 +1202,7 @@ export async function activate(ctx: ExtensionContextLike) {
     },
 
     async cancel(input: { operationId: string }) {
-      return cancelTemplateOperation({
+      const result = await cancelTemplateOperation({
         operationId: input.operationId,
         findContext: async () => {
           const listed = await ctx.rpc.call<{ contexts: string[] }>(
@@ -1160,6 +1235,8 @@ export async function activate(ctx: ExtensionContextLike) {
             recursive: false,
           }),
       });
+      emitTemplateOperationsChanged(ctx, input.operationId, "cancelled");
+      return result;
     },
 
     async resume(input: { operationId: string }) {
@@ -1534,37 +1611,62 @@ export async function activate(ctx: ExtensionContextLike) {
       );
     },
 
-    async pull(input: { commandId: string; alias: string; toRef?: string }) {
+    async pull(input: {
+      commandId: string;
+      alias: string;
+      toRef?: string;
+      pin?: WorkspaceTemplatePin;
+    }) {
       let env = await environment(ctx);
       const record = await operationRecordForMutation(ctx, env, input.commandId);
       const completed = await completedOperationResult(ctx, record);
       if (completed) return completed;
-      if (!record && !env.catalog) {
+      const requestedPin = input.pin ? WorkspaceTemplatePinSchema.parse(input.pin) : null;
+      if (!record && !requestedPin && !env.catalog) {
         env = await environment(ctx, { requireCatalog: true });
       }
       const node = env.observation.lock?.nodes.find((candidate) => candidate.alias === input.alias);
       if (!node) throw new Error(`Unknown installed template alias: ${input.alias}`);
+      if (
+        requestedPin &&
+        normalizeTemplateGitUrl(requestedPin.url) !== normalizeTemplateGitUrl(node.pin.url)
+      ) {
+        throw new Error(
+          `Exact pull target ${requestedPin.url} does not match installed template ${node.pin.url}`
+        );
+      }
       const entry = env.catalog?.entries.find(
         (candidate) =>
           normalizeTemplateGitUrl(candidate.url) === normalizeTemplateGitUrl(node.pin.url)
       );
-      if (!entry && !record) {
+      if (!entry && !record && !requestedPin) {
         throw new Error(`Template ${input.alias} is absent from the registry`);
       }
-      const promotedRef = record
-        ? WorkspaceTemplatePinSchema.parse((record.intent as { target?: unknown }).target).ref
-        : entry!.promoted.ref;
-      if (input.toRef && input.toRef !== promotedRef) {
+      const recordedPin = record
+        ? WorkspaceTemplatePinSchema.parse((record.intent as { target?: unknown }).target)
+        : null;
+      if (
+        recordedPin &&
+        requestedPin &&
+        canonicalJson(recordedPin) !== canonicalJson(requestedPin)
+      ) {
         throw new Error(
-          `Template updates use the registry-promoted ref ${promotedRef}, not ${input.toRef}`
+          `Template command ${input.commandId} was already bound to a different exact version`
         );
       }
-      const pin: WorkspaceTemplatePin = record
-        ? WorkspaceTemplatePinSchema.parse((record.intent as { target?: unknown }).target)
-        : WorkspaceTemplatePinSchema.parse({
-            url: node.pin.url,
-            ...entry!.promoted,
-          });
+      const promotedRef = recordedPin?.ref ?? requestedPin?.ref ?? entry!.promoted.ref;
+      if (input.toRef && input.toRef !== promotedRef) {
+        throw new Error(
+          `Template updates use the selected exact target ref ${promotedRef}, not ${input.toRef}`
+        );
+      }
+      const pin: WorkspaceTemplatePin =
+        recordedPin ??
+        requestedPin ??
+        WorkspaceTemplatePinSchema.parse({
+          url: node.pin.url,
+          ...entry!.promoted,
+        });
       const ordinarySources = sourcePortsForEnvironment(ctx, env);
       const inspection = await inspectTemplateOperation({
         kind: "pull",

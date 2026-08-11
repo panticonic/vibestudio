@@ -77,6 +77,9 @@ export interface TemplateOperationRecord {
   intent: unknown;
   pins: WorkspaceTemplatePin[];
   affectedParts: string[];
+  /** Note facets carried by the incoming delta. Presence retains this ordinary
+   * operation for contract-first agentic repair before publication. */
+  migrationFacets?: string[];
   authoringInspection?: TemplateAuthoringInspection;
   authoringPublication?: import("@vibestudio/service-schemas/templates").TemplatePublication;
   reviews?: TemplateReviewItem[];
