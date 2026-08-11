@@ -37,6 +37,7 @@ export type {
 export type {
   AgentApprovalLevel,
   AgentConfig,
+  AgentObservationConfig,
   AgentRespondPolicy,
   AgentSettingKey,
   AgentSubscriptionConfig,
@@ -44,7 +45,11 @@ export type {
   AgentThinkingLevel,
   ChannelSubscriptionConfig,
 } from "./agent-subscription-config.js";
-export { AGENT_SETTING_KEYS, toSubscriptionConfig } from "./agent-subscription-config.js";
+export {
+  AGENT_SETTING_KEYS,
+  resolveAgentObservationConfig,
+  toSubscriptionConfig,
+} from "./agent-subscription-config.js";
 export {
   buildAgentEntityCreateSpec,
   buildAgentTaskSeedEvent,
@@ -132,10 +137,7 @@ export type {
 export type { CustomMessageComponentProps, MessageTypeModule } from "./custom-message-types.js";
 
 // --- Invocation card payload (derived UI shape for invocation events) ---
-export type {
-  InvocationCardPayload,
-  ToolExecutionState,
-} from "./invocation-card-payload.js";
+export type { InvocationCardPayload, ToolExecutionState } from "./invocation-card-payload.js";
 export { parseInvocationCardPayload } from "./invocation-card-payload.js";
 export type { SubagentRunState, TaskCardPayload } from "./task-card-payload.js";
 

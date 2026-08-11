@@ -27,6 +27,7 @@ export type Command =
        *  acks, edits and retracts all key on this. */
       sourceMessageId?: string;
       content: UserContent;
+      structuredInput?: unknown;
       senderRef: ParticipantRef;
       agentHops?: number;
       metadata?: AgentTurnMetadata;
@@ -38,6 +39,7 @@ export type Command =
       source: { envelopeId: string };
       sourceMessageId?: string;
       content: UserContent;
+      structuredInput?: unknown;
       senderRef: ParticipantRef;
       agentHops?: number;
       metadata?: AgentTurnMetadata;
@@ -50,6 +52,7 @@ export type Command =
       source: { envelopeId: string };
       sourceMessageId?: string;
       content: UserContent;
+      structuredInput?: unknown;
       senderRef: ParticipantRef;
       agentHops?: number;
       metadata?: AgentTurnMetadata;

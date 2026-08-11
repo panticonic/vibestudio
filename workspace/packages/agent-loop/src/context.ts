@@ -58,6 +58,16 @@ function modelMessageFromEntry(entry: SessionEntry, selfId?: string): ModelMessa
   switch (entry.kind) {
     case "user": {
       const interaction = entry.metadata?.interaction;
+      if (entry.structuredInput !== undefined) {
+        return {
+          role: "user",
+          content: {
+            message: readableUserMessage(entry.content),
+            structuredInput: entry.structuredInput,
+            ...(interaction ? { interaction } : {}),
+          },
+        };
+      }
       return {
         role: "user",
         content: interaction
@@ -92,4 +102,25 @@ function modelMessageFromEntry(entry: SessionEntry, selfId?: string): ModelMessa
     case "note":
       return { role: "user", content: { note: entry.text } };
   }
+}
+
+/** Extract the readable text paired with a structured prompt sidecar. */
+function readableUserMessage(content: unknown): unknown {
+  if (content && typeof content === "object" && !Array.isArray(content)) {
+    const blocks = (content as { blocks?: unknown }).blocks;
+    if (Array.isArray(blocks)) {
+      const text = blocks
+        .map((block) =>
+          block &&
+          typeof block === "object" &&
+          typeof (block as { content?: unknown }).content === "string"
+            ? (block as { content: string }).content
+            : null
+        )
+        .filter((value): value is string => value !== null)
+        .join("\n");
+      if (text) return text;
+    }
+  }
+  return content;
 }

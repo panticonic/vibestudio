@@ -61,7 +61,7 @@ import {
   type CustomMessageDisplayMode,
   type ParticipantRef,
 } from "@workspace/agentic-protocol";
-import { sha256HexSyncText, stableSha256Hex } from "@vibestudio/content-addressing";
+import { canonicalJson, sha256HexSyncText, stableSha256Hex } from "@vibestudio/content-addressing";
 import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
 import {
   createDeferredEvalExecutor,
@@ -80,6 +80,7 @@ import {
   publishAgentTaskSeed,
   subscribeAgentToChannel,
 } from "@workspace/agentic-core/agent-launch";
+import { resolveAgentObservationConfig } from "@workspace/agentic-core";
 import {
   subagentFirstTaskPrompt,
   subagentRuntimePrompt,
@@ -417,6 +418,27 @@ function isFallbackOn(value: unknown): value is string[] {
  * behavior config is not.
  */
 const AGENT_SETTINGS_KEY = "agent:settings";
+
+const MAX_CHANNEL_OBSERVATION_CHARS = 32_768;
+const MAX_CHANNEL_OBSERVATION_PREVIEW_CHARS = 8_192;
+
+export interface ChannelObservationInput {
+  kind: "channel-observation";
+  version: 1;
+  source: {
+    channelId: string;
+    envelopeId: string;
+    sequence?: number;
+    payloadKind: string;
+    timestamp: number;
+    sender: ParticipantRef;
+  };
+  payload: unknown;
+  truncated?: {
+    originalChars: number;
+    preview: string;
+  };
+}
 
 /**
  * Resolve a per-agent `respondFrom` allowlist (handles and/or participant ids) to
@@ -1265,6 +1287,40 @@ export abstract class AgentVesselBase extends DurableObjectBase {
   /** Hook before addressing — return true to swallow the event. */
   protected async onChannelEvent(_channelId: string, _event: ChannelEvent): Promise<boolean> {
     return false;
+  }
+
+  /** Build the bounded, model-facing form of an opted-in non-chat envelope. */
+  protected resolveChannelObservation(
+    channelId: string,
+    event: ChannelEvent
+  ): ChannelObservationInput | null {
+    const serializedPayload = canonicalJson(event.payload);
+    const source: ChannelObservationInput["source"] = {
+      channelId,
+      envelopeId: event.messageId,
+      ...(Number.isFinite(event.id) ? { sequence: event.id } : {}),
+      payloadKind: event.type,
+      timestamp: event.ts,
+      sender: participantRefFromMetadata(event.senderId, event.senderMetadata),
+    };
+    if (serializedPayload.length <= MAX_CHANNEL_OBSERVATION_CHARS) {
+      return {
+        kind: "channel-observation",
+        version: 1,
+        source,
+        payload: event.payload,
+      };
+    }
+    return {
+      kind: "channel-observation",
+      version: 1,
+      source,
+      payload: null,
+      truncated: {
+        originalChars: serializedPayload.length,
+        preview: serializedPayload.slice(0, MAX_CHANNEL_OBSERVATION_PREVIEW_CHARS),
+      },
+    };
   }
 
   protected getModelCredentialSetupProps(_providerId: string): Record<string, unknown> | null {
@@ -3303,7 +3359,10 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     const handledBySubclass = await this.onChannelEvent(channelId, event);
     if (await this.routeSupervisedTaskTerminal(channelId, event)) return;
     if (handledBySubclass) return;
-    if (event.type !== AGENTIC_EVENT_PAYLOAD_KIND) return;
+    if (event.type !== AGENTIC_EVENT_PAYLOAD_KIND) {
+      await this.routeConfiguredObservation(channelId, event);
+      return;
+    }
     const maybeFeedback = event.payload as AgenticEvent | null;
     if (maybeFeedback && (maybeFeedback as { kind?: string }).kind === "ui.feedback") {
       const payload = (maybeFeedback as AgenticEvent<"ui.feedback">).payload;
@@ -3364,6 +3423,58 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     await this.recordMessageIngestion(channelId, event, "channel-message");
 
     await this.dispatchApprovedInput(channelId, event, sourceMessageId);
+  }
+
+  private async routeConfiguredObservation(
+    channelId: string,
+    event: ChannelEvent
+  ): Promise<boolean> {
+    const subscriptionConfig = this.subscriptions.getConfig(channelId);
+    const configured = subscriptionConfig?.observations;
+    if (configured === undefined) return false;
+    const observationConfig = resolveAgentObservationConfig(configured);
+    if (!observationConfig) {
+      console.warn("[agent-vessel] invalid observation configuration", {
+        channelId,
+        envelopeId: event.messageId,
+        payloadKind: event.type,
+        truncated: false,
+      });
+      return false;
+    }
+    if (configuredWakePolicy(subscriptionConfig) !== "every-envelope") return false;
+    if (!observationConfig.payloadKinds.has(event.type)) return false;
+    if (event.senderId === this.participantId()) {
+      console.debug("[agent-vessel] skipped self-authored channel observation", {
+        channelId,
+        envelopeId: event.messageId,
+        payloadKind: event.type,
+        truncated: false,
+      });
+      return false;
+    }
+
+    const observation = this.resolveChannelObservation(channelId, event);
+    if (!observation) return false;
+    await this.recordMessageIngestion(channelId, event, "channel-observation");
+    await this.driver.handleIncoming(channelId, {
+      type: "command",
+      command: {
+        kind: "prompt",
+        channelId,
+        source: { envelopeId: event.messageId },
+        content: `Channel observation: ${event.type}`,
+        structuredInput: observation,
+        senderRef: observation.source.sender,
+      },
+    });
+    console.debug("[agent-vessel] dispatched channel observation", {
+      channelId,
+      envelopeId: event.messageId,
+      payloadKind: event.type,
+      truncated: observation.truncated !== undefined,
+    });
+    return true;
   }
 
   /** A terminal task fact is both the retained card result and the supervisor

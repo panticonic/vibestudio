@@ -376,6 +376,7 @@ export type SessionEntry =
       sourceMessageId?: string;
       senderRef?: ParticipantRef;
       content: unknown;
+      structuredInput?: unknown;
       metadata?: AgentTurnMetadata;
     }
   | {

@@ -205,6 +205,7 @@ export function applyEvent(prev: AgentState, envelope: LogEnvelope): AgentState 
       }
       // user (or panel) message — row 3
       const metadata = metadataFromPayload(payload);
+      const structuredInput = payload["structuredInput"];
       const sourceMessageId = sourceMessageIdFromPayload(payload);
       const senderRef = senderRefFromPayload(payload, envelope.actor);
       const artifactsReady = payload["promptArtifactsReady"] === true;
@@ -253,6 +254,7 @@ export function applyEvent(prev: AgentState, envelope: LogEnvelope): AgentState 
         ...(sourceMessageId ? { sourceMessageId } : {}),
         senderRef,
         content: payload,
+        ...(structuredInput !== undefined ? { structuredInput } : {}),
         ...(metadata ? { metadata } : {}),
         ...(artifactsReady ? { artifactsReady: true } : {}),
       };

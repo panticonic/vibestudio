@@ -145,6 +145,43 @@ describe("fold: an agent only owns turns it authored", () => {
     });
   });
 
+  it("reconstructs structured prompt input from the private trajectory event", () => {
+    const selfId = "agent:self";
+    const structuredInput = {
+      kind: "channel-observation",
+      version: 1,
+      source: { payloadKind: "application.incident.v1" },
+      payload: { incidentId: "inc-7" },
+    };
+    const persisted = envelope(
+      selfId,
+      "message.completed",
+      {
+        role: "user",
+        blocks: [{ type: "text", content: "Channel observation: application.incident.v1" }],
+        outcome: "completed",
+        turnTriggerEnvelopeId: "custom-envelope-7",
+        structuredInput,
+        senderRef: { kind: "external", id: "service:incidents" },
+      },
+      { messageId: "recv:observation-7" },
+      1
+    );
+
+    const state = applyEvent(initialAgentState({ channelId: "c", config, selfId }), persisted);
+
+    expect(state.entries[0]).toMatchObject({ kind: "user", structuredInput });
+    expect(buildModelContext(state)).toEqual([
+      {
+        role: "user",
+        content: {
+          message: "Channel observation: application.incident.v1",
+          structuredInput,
+        },
+      },
+    ]);
+  });
+
   it("rejects descriptor-less model requests instead of replaying pre-materialization events", () => {
     const selfId = "agent:self";
     const turnId = "t:c:trigger:agent:self";

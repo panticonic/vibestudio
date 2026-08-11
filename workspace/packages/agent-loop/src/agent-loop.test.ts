@@ -19,6 +19,7 @@ import {
 import { derivePendingEffects } from "./effects.js";
 import { defaultPolicies, publishPolicyPolicy } from "./policies/index.js";
 import { ids } from "./ids.js";
+import { buildModelContext } from "./context.js";
 import type { StepPolicy } from "./step.js";
 
 const primaryModelSpec: AgentModelSpec = {
@@ -145,6 +146,45 @@ const turn1 = ids.turnId("chan-1", "env-1", "agent:self");
 const msg0 = ids.messageId(turn1, 0);
 
 describe("agent-loop core lifecycle", () => {
+  it("preserves structured input from prompt command through fold and model context", () => {
+    const s = scenario();
+    const structuredInput = {
+      kind: "channel-observation",
+      version: 1,
+      source: {
+        channelId: "chan-1",
+        envelopeId: "incident-envelope-7",
+        payloadKind: "application.incident.v1",
+      },
+      payload: { incidentId: "inc-7", severity: "high" },
+    };
+
+    dispatch(s, {
+      type: "command",
+      command: {
+        kind: "prompt",
+        channelId: "chan-1",
+        source: { envelopeId: "incident-envelope-7" },
+        content: "Channel observation: application.incident.v1",
+        structuredInput,
+        senderRef: { kind: "external", id: "service:incidents" },
+      },
+    });
+
+    expect(s.log.find((row) => row.payloadKind === "message.completed")?.payload).toMatchObject({
+      role: "user",
+      structuredInput,
+    });
+    expect(s.state.entries[0]).toMatchObject({ kind: "user", structuredInput });
+    expect(buildModelContext(s.state)[0]).toEqual({
+      role: "user",
+      content: {
+        message: "Channel observation: application.incident.v1",
+        structuredInput,
+      },
+    });
+  });
+
   it("journals prompt preparation before opening a turn or admitting a model call", () => {
     const s = scenario();
     const triggerEnvelopeId = ids.recvUserMessage("chan-1", "env-1");

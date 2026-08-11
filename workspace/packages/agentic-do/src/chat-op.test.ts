@@ -256,6 +256,7 @@ class TestVessel extends AgentVesselBase {
         if (property === "call") {
           return async (targetId: string, method: string, args: unknown[], options?: unknown) => {
             if (targetId === "main" && method === "contextIntegrity.ingest") {
+              vessel.operationLog.push("rpc:main:contextIntegrity.ingest");
               return { class: "internal", latchEpoch: 0, externalKeys: [] };
             }
             if (
@@ -540,8 +541,18 @@ class LifecycleReleaseProbe extends TestVessel {
 }
 
 class PromptEventProbe extends TestVessel {
-  readonly handleIncomingSpy = vi.fn(async (_channelId: string, _incoming: unknown) => {});
+  readonly handleIncomingSpy = vi.fn(async (_channelId: string, _incoming: unknown) => {
+    this.operationLog.push("driver:handleIncoming");
+  });
   useDeliveredDecisionContext = false;
+  consumePayloadKind: string | null = null;
+
+  protected override async onChannelEvent(
+    _channelId: string,
+    event: ChannelEvent
+  ): Promise<boolean> {
+    return event.type === this.consumePayloadKind;
+  }
 
   protected override async shouldRespond(
     channelId: string,
@@ -653,11 +664,29 @@ async function makeVessel(): Promise<TestVessel> {
   return instance;
 }
 
-async function makePromptProbe(): Promise<PromptEventProbe> {
+async function makePromptProbe(config?: unknown): Promise<PromptEventProbe> {
   const { instance } = await createTestDO(PromptEventProbe, TEST_AGENT_ENV);
-  await instance.registerSubscriptionForTest();
+  await instance.registerSubscriptionForTest(CHANNEL, config);
   instance.markEmptyRosterFresh(CHANNEL);
   return instance;
+}
+
+function customChannelEvent(type: string, overrides: Partial<ChannelEvent> = {}): ChannelEvent {
+  return {
+    id: 17,
+    messageId: "custom-envelope-17",
+    type,
+    payload: { incidentId: "inc-17", severity: "high" },
+    senderId: "app:incident-feed",
+    senderMetadata: {
+      type: "app",
+      name: "Incident feed",
+      handle: "incidents",
+      privateCredential: "must-not-leak",
+    },
+    ts: 1_786_400_000_000,
+    ...overrides,
+  };
 }
 
 /** The EvalDO objectKey the eval service derives, and the caller id chatOp
@@ -1174,6 +1203,183 @@ describe("AgentVesselBase.processChannelEvent", () => {
         metadata: { deliverAfterTurn: true },
       },
     });
+  });
+
+  it("ignores an unconfigured custom payload", async () => {
+    const vessel = await makePromptProbe();
+
+    await vessel.processChannelEvent(CHANNEL, customChannelEvent("application.incident.v1"));
+
+    expect(vessel.handleIncomingSpy).not.toHaveBeenCalled();
+  });
+
+  it("dispatches one exact configured payload with sanitized provenance and structure", async () => {
+    const vessel = await makePromptProbe({
+      observations: { payloadKinds: ["application.incident.v1"] },
+    });
+    const payload = { incidentId: "inc-17", severity: "high", details: { region: "eu" } };
+
+    await vessel.processChannelEvent(
+      CHANNEL,
+      customChannelEvent("application.incident.v1", { payload })
+    );
+
+    expect(vessel.handleIncomingSpy).toHaveBeenCalledOnce();
+    expect(vessel.handleIncomingSpy).toHaveBeenCalledWith(CHANNEL, {
+      type: "command",
+      command: {
+        kind: "prompt",
+        channelId: CHANNEL,
+        source: { envelopeId: "custom-envelope-17" },
+        content: "Channel observation: application.incident.v1",
+        structuredInput: {
+          kind: "channel-observation",
+          version: 1,
+          source: {
+            channelId: CHANNEL,
+            envelopeId: "custom-envelope-17",
+            sequence: 17,
+            payloadKind: "application.incident.v1",
+            timestamp: 1_786_400_000_000,
+            sender: {
+              kind: "external",
+              id: "app:incident-feed",
+              participantId: "app:incident-feed",
+              displayName: "Incident feed",
+              metadata: {
+                type: "app",
+                name: "Incident feed",
+                handle: "incidents",
+              },
+            },
+          },
+          payload,
+        },
+        senderRef: {
+          kind: "external",
+          id: "app:incident-feed",
+          participantId: "app:incident-feed",
+          displayName: "Incident feed",
+          metadata: { type: "app", name: "Incident feed", handle: "incidents" },
+        },
+      },
+    });
+    expect(vessel.operationLog).toEqual(
+      expect.arrayContaining(["rpc:main:contextIntegrity.ingest", "driver:handleIncoming"])
+    );
+    expect(vessel.operationLog.indexOf("rpc:main:contextIntegrity.ingest")).toBeLessThan(
+      vessel.operationLog.indexOf("driver:handleIncoming")
+    );
+  });
+
+  it("requires an exact payload-kind match", async () => {
+    const vessel = await makePromptProbe({
+      observations: { payloadKinds: ["application.incident.v1"] },
+    });
+
+    await vessel.processChannelEvent(
+      CHANNEL,
+      customChannelEvent("application.incident.v1.updated")
+    );
+
+    expect(vessel.handleIncomingSpy).not.toHaveBeenCalled();
+  });
+
+  it("ignores self-authored configured payloads", async () => {
+    const vessel = await makePromptProbe({
+      observations: { payloadKinds: ["application.incident.v1"] },
+    });
+
+    await vessel.processChannelEvent(
+      CHANNEL,
+      customChannelEvent("application.incident.v1", { senderId: AGENT_ID })
+    );
+
+    expect(vessel.handleIncomingSpy).not.toHaveBeenCalled();
+  });
+
+  it("replaces an oversized payload with a bounded canonical preview", async () => {
+    const vessel = await makePromptProbe({
+      observations: { payloadKinds: ["application.incident.v1"] },
+    });
+    const payload = { details: "x".repeat(40_000) };
+    const serialized = JSON.stringify(payload);
+
+    await vessel.processChannelEvent(
+      CHANNEL,
+      customChannelEvent("application.incident.v1", { payload })
+    );
+
+    const incoming = vessel.handleIncomingSpy.mock.calls[0]?.[1] as {
+      command?: { structuredInput?: { payload?: unknown; truncated?: Record<string, unknown> } };
+    };
+    expect(incoming.command?.structuredInput).toMatchObject({
+      payload: null,
+      truncated: {
+        originalChars: serialized.length,
+        preview: serialized.slice(0, 8_192),
+      },
+    });
+  });
+
+  it.each(["manual", "explicit"] as const)(
+    "suppresses configured observations for the %s wake policy",
+    async (wakePolicy) => {
+      const vessel = await makePromptProbe({
+        wakePolicy,
+        observations: { payloadKinds: ["application.incident.v1"] },
+      });
+
+      await vessel.processChannelEvent(CHANNEL, customChannelEvent("application.incident.v1"));
+
+      expect(vessel.handleIncomingSpy).not.toHaveBeenCalled();
+    }
+  );
+
+  it("never routes agentic infrastructure events as observations", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const vessel = await makePromptProbe({
+      observations: { payloadKinds: [AGENTIC_EVENT_PAYLOAD_KIND] },
+    });
+
+    await vessel.processChannelEvent(CHANNEL, {
+      ...customChannelEvent(AGENTIC_EVENT_PAYLOAD_KIND),
+      payload: {
+        kind: "system.event",
+        actor: { kind: "system", id: "system" },
+        payload: { protocol: AGENTIC_PROTOCOL_VERSION },
+        createdAt: new Date().toISOString(),
+      },
+    });
+
+    expect(vessel.handleIncomingSpy).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it("lets the subclass hook consume a configured custom payload first", async () => {
+    const vessel = await makePromptProbe({
+      observations: { payloadKinds: ["application.incident.v1"] },
+    });
+    vessel.consumePayloadKind = "application.incident.v1";
+
+    await vessel.processChannelEvent(CHANNEL, customChannelEvent("application.incident.v1"));
+
+    expect(vessel.handleIncomingSpy).not.toHaveBeenCalled();
+  });
+
+  it("keeps delivery retryable when prompt admission fails", async () => {
+    const vessel = await makePromptProbe({
+      observations: { payloadKinds: ["application.incident.v1"] },
+    });
+    const event = customChannelEvent("application.incident.v1");
+    vessel.handleIncomingSpy.mockRejectedValueOnce(new Error("prompt admission failed"));
+
+    await expect(vessel.processChannelEvent(CHANNEL, event)).rejects.toThrow(
+      "prompt admission failed"
+    );
+    await expect(vessel.processChannelEvent(CHANNEL, event)).resolves.toBeUndefined();
+
+    expect(vessel.handleIncomingSpy).toHaveBeenCalledTimes(2);
   });
 });
 

@@ -214,6 +214,9 @@ function recvItem(
         : [{ type: "text", content: String(command.content ?? "") }],
       outcome: "completed",
       turnTriggerEnvelopeId: command.source.envelopeId,
+      ...(command.structuredInput !== undefined
+        ? { structuredInput: command.structuredInput }
+        : {}),
       ...(command.metadata ? { metadata: command.metadata } : {}),
       // Sender's canonical id, carried IN ADDITION to the private recv envelope
       // id so the fold can correlate read acks / edits / retracts.

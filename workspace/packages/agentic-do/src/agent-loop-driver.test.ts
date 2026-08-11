@@ -211,6 +211,35 @@ function promptIncoming(envelopeId = "env-1", content = "hello", metadata?: Agen
   };
 }
 
+function observationIncoming(
+  envelopeId = "observation-env-1",
+  payloadKind = "application.incident.v1"
+) {
+  const structuredInput = {
+    kind: "channel-observation" as const,
+    version: 1 as const,
+    source: {
+      channelId: CHANNEL,
+      envelopeId,
+      payloadKind,
+      timestamp: 1_786_400_000_000,
+      sender: { kind: "external" as const, id: "app:incident-feed" },
+    },
+    payload: { incidentId: envelopeId },
+  };
+  return {
+    type: "command" as const,
+    command: {
+      kind: "prompt" as const,
+      channelId: CHANNEL,
+      source: { envelopeId },
+      content: `Channel observation: ${payloadKind}`,
+      structuredInput,
+      senderRef: structuredInput.source.sender,
+    },
+  };
+}
+
 async function logKinds(gad: {
   sql: { exec(query: string, ...bindings: unknown[]): { toArray(): Record<string, unknown>[] } };
 }) {
@@ -276,6 +305,80 @@ function deferred<T>() {
 }
 
 describe("AgentLoopDriver", () => {
+  it("deduplicates a replayed structured observation by source envelope", async () => {
+    const harness = await makeHarness({ script: { model: [textReply("done")], tool: [] } });
+    const incoming = observationIncoming("observation-replayed");
+
+    await harness.driver.handleIncoming(CHANNEL, incoming);
+    await harness.driver.handleIncoming(CHANNEL, incoming);
+    await settle(harness.driver);
+
+    expect((await logKinds(harness.gad)).filter((kind) => kind === "turn.opened")).toHaveLength(1);
+    const userRows = inspectSql<{ rows: Array<{ payload_ref_json: string }> }>(
+      harness.gad,
+      `SELECT payload_ref_json FROM log_events WHERE log_id = ? AND payload_kind = 'message.completed' ORDER BY seq`,
+      [LOG_ID]
+    ).rows.filter((row) => JSON.parse(row.payload_ref_json).role === "user");
+    expect(userRows).toHaveLength(1);
+    expect(JSON.parse(userRows[0]!.payload_ref_json)).toMatchObject({
+      structuredInput: incoming.command.structuredInput,
+    });
+  });
+
+  it("admits different observation envelopes as different inputs", async () => {
+    const harness = await makeHarness({
+      script: { model: [textReply("first"), textReply("second")], tool: [] },
+    });
+
+    await harness.driver.handleIncoming(CHANNEL, observationIncoming("observation-a"));
+    await settle(harness.driver);
+    await harness.driver.handleIncoming(CHANNEL, observationIncoming("observation-b"));
+    await settle(harness.driver);
+
+    expect((await logKinds(harness.gad)).filter((kind) => kind === "turn.opened")).toHaveLength(2);
+    expect(
+      (await harness.driver.loop(CHANNEL)).state.entries.filter((entry) => entry.kind === "user")
+    ).toHaveLength(2);
+  });
+
+  it("uses the existing steering queue for an observation during an open turn", async () => {
+    const harness = await makeHarness({ script: { model: [], tool: [] } });
+
+    await harness.driver.handleIncoming(CHANNEL, observationIncoming("observation-open-a"));
+    const preparation = harness.driver.outbox.all()[0];
+    expect(preparation).toMatchObject({ kind: "prompt_artifacts" });
+    await harness.driver.applyOutcome(preparation!, { kind: "prompt-artifacts", patch: {} });
+    const originalTurnId = (await harness.driver.loop(CHANNEL)).state.openTurn?.turnId;
+
+    await harness.driver.handleIncoming(CHANNEL, observationIncoming("observation-open-b"));
+
+    const state = (await harness.driver.loop(CHANNEL)).state;
+    expect(state.openTurn?.turnId).toBe(originalTurnId);
+    expect(state.steeringQueue).toHaveLength(1);
+    expect(state.steeringQueue[0]?.turnTriggerEnvelopeId).toBe("observation-open-b");
+    expect((await logKinds(harness.gad)).filter((kind) => kind === "turn.opened")).toHaveLength(1);
+  });
+
+  it("can retry the same observation after failure before prompt admission", async () => {
+    let failAdmission = true;
+    const harness = await makeHarness({
+      script: { model: [], tool: [] },
+      gadFault: (method) =>
+        failAdmission && method === "appendLogEvent" ? new Error("trajectory unavailable") : null,
+    });
+    const incoming = observationIncoming("observation-retry");
+
+    await expect(harness.driver.handleIncoming(CHANNEL, incoming)).rejects.toThrow(
+      "trajectory unavailable"
+    );
+    failAdmission = false;
+    await expect(harness.driver.handleIncoming(CHANNEL, incoming)).resolves.toBeUndefined();
+
+    expect(
+      (await harness.driver.loop(CHANNEL)).state.entries.filter((entry) => entry.kind === "user")
+    ).toHaveLength(1);
+  });
+
   it("records distinct provider attempts even when a retry reuses the message id", async () => {
     const harness = await makeHarness({ script: { model: [], tool: [] } });
     const record = (

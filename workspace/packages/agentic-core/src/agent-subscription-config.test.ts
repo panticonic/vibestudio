@@ -7,6 +7,7 @@
 import { describe, expect, it } from "vitest";
 import {
   AGENT_SETTING_KEYS,
+  resolveAgentObservationConfig,
   toSubscriptionConfig,
   type ChannelSubscriptionConfig,
 } from "./agent-subscription-config.js";
@@ -26,6 +27,7 @@ describe("toSubscriptionConfig", () => {
       systemPromptMode: "append",
       deterministicResponse: true,
       code: "read('a')",
+      observations: { payloadKinds: ["application.incident.v1"] },
     });
 
     for (const key of AGENT_SETTING_KEYS) {
@@ -38,6 +40,7 @@ describe("toSubscriptionConfig", () => {
       systemPromptMode: "append",
       deterministicResponse: true,
       code: "read('a')",
+      observations: { payloadKinds: ["application.incident.v1"] },
     });
   });
 
@@ -55,4 +58,32 @@ describe("toSubscriptionConfig", () => {
     (out as ChannelSubscriptionConfig)["workerExtra"] = 1;
     expect(out.systemPrompt).toBe("ok");
   });
+
+  it("resolves exact observation kinds and normalizes duplicates", () => {
+    const resolved = resolveAgentObservationConfig({
+      payloadKinds: ["application.incident.v1", "application.incident.v1", "build.finished"],
+    });
+
+    expect([...resolved!.payloadKinds]).toEqual(["application.incident.v1", "build.finished"]);
+  });
+
+  it.each([
+    undefined,
+    null,
+    {},
+    { payloadKinds: [] },
+    { payloadKinds: "application.incident.v1" },
+    { payloadKinds: [""] },
+    { payloadKinds: [1] },
+    { payloadKinds: Array.from({ length: 33 }, (_, index) => `custom.${index}`) },
+  ])("fails closed for missing or malformed observation config %#", (value) => {
+    expect(resolveAgentObservationConfig(value)).toBeNull();
+  });
+
+  it.each(["agentic.trajectory.v1/event", "presence"])(
+    "rejects reserved observation kind %s",
+    (payloadKind) => {
+      expect(resolveAgentObservationConfig({ payloadKinds: [payloadKind] })).toBeNull();
+    }
+  );
 });

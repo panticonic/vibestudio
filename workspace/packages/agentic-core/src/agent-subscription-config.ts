@@ -19,6 +19,11 @@ export type AgentSystemPromptMode = "append" | "replace" | "replace-vibestudio";
  */
 export type AgentWakePolicy = "every-envelope" | "explicit" | "manual";
 
+export interface AgentObservationConfig {
+  /** Exact non-agentic channel payload kinds that may wake this subscription. */
+  payloadKinds: string[];
+}
+
 /**
  * The per-agent BEHAVIOR settings. These are PER-AGENT: seeded into the agent's
  * creation `stateArgs.agentConfig` and persisted in its settings record. They must
@@ -83,6 +88,8 @@ export interface AgentSubscriptionConfig extends AgentConfig {
    *  intentionally excluded from AGENT_SETTING_KEYS so it rides the subscription).
    *  Resolved in the vessel. Absent ⇒ "every-envelope". */
   wakePolicy?: AgentWakePolicy;
+  /** Structured non-chat channel payloads exposed to the model on this channel. */
+  observations?: AgentObservationConfig;
   /** Worker-specific extras (e.g. the test-agent's deterministic-mode keys). */
   [key: string]: unknown;
 }
@@ -113,4 +120,41 @@ export function toSubscriptionConfig(
     if (!settings.has(key)) out[key] = value;
   }
   return out as ChannelSubscriptionConfig;
+}
+
+const MAX_AGENT_OBSERVATION_PAYLOAD_KINDS = 32;
+const RESERVED_AGENT_OBSERVATION_PAYLOAD_KINDS = new Set([
+  "agentic.trajectory.v1/event",
+  "presence",
+]);
+
+/**
+ * Resolve the optional observation block at the runtime boundary. Invalid input
+ * fails closed so a malformed subscription never broadens what reaches a model.
+ */
+export function resolveAgentObservationConfig(
+  value: unknown
+): { payloadKinds: ReadonlySet<string> } | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const payloadKinds = (value as Record<string, unknown>)["payloadKinds"];
+  if (
+    !Array.isArray(payloadKinds) ||
+    payloadKinds.length === 0 ||
+    payloadKinds.length > MAX_AGENT_OBSERVATION_PAYLOAD_KINDS
+  ) {
+    return null;
+  }
+
+  const normalized = new Set<string>();
+  for (const kind of payloadKinds) {
+    if (
+      typeof kind !== "string" ||
+      kind.length === 0 ||
+      RESERVED_AGENT_OBSERVATION_PAYLOAD_KINDS.has(kind)
+    ) {
+      return null;
+    }
+    normalized.add(kind);
+  }
+  return { payloadKinds: normalized };
 }
