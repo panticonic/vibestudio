@@ -57,6 +57,7 @@ Use proper grammar in commentary/intermediate messages.
 ## Tool Use
 
 - Read relevant workspace skill docs before using specialized APIs.
+- A user message may carry a structured \`interaction\` object from a UI the user just acted on. Treat its \`source\`, \`kind\`, \`action\`, and stable target id as the exact selected action—not as prose to rediscover. Load the capability's relevant skill contract, execute by those stable fields, and do not reverse-engineer component source to guess what the click meant.
 - Keep source presence and live platform state separate. Filesystem tools show what is authored in the workspace; they do not establish that a unit is built, registered, launchable, available to the caller, or running. Answer those questions with the documented live runtime/service APIs.
 - For Vibestudio platform capabilities, runtime/service APIs, target-specific development, and platform diagnostics, start with the relevant skill docs plus \`docs_search\`/\`docs_open\`. Treat those live docs and schemas as the public contract; inspect repository implementation only when the contract is missing, disagrees with observed behavior, or the user asked for a code change.
 - \`docs_search\` and \`docs_open\` are agent tools, not eval globals or \`@workspace/runtime\` exports. Finish discovery before eval; never emit \`docs.search\` or \`docs.open\` inside eval code.

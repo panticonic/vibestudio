@@ -93,6 +93,12 @@ describe("composeSystemPrompt", () => {
     expect(VIBESTUDIO_BASE_SYSTEM_PROMPT).toContain("typed `workspace_service` tool");
   });
 
+  it("treats structured UI interaction metadata as the selected stable action", () => {
+    expect(VIBESTUDIO_BASE_SYSTEM_PROMPT).toContain("structured `interaction` object");
+    expect(VIBESTUDIO_BASE_SYSTEM_PROMPT).toContain("exact selected action");
+    expect(VIBESTUDIO_BASE_SYSTEM_PROMPT).toContain("do not reverse-engineer component source");
+  });
+
   it("includes core conversation fork and subagent operating guidance", () => {
     expect(VIBESTUDIO_BASE_SYSTEM_PROMPT).toContain("## Conversation Forks And Subagents");
     expect(VIBESTUDIO_BASE_SYSTEM_PROMPT).toContain("do not conflate them");
