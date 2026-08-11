@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { DURABLE_OBJECT_FRAMEWORK_RPC_METHODS } from "@vibestudio/durable";
 import { createTestDO } from "@vibestudio/durable/test-utils";
 import { rpcExposedMethodNames } from "@vibestudio/rpc";
 import { phoneProvisioningMethods } from "@vibestudio/service-schemas/phoneProvisioning";
@@ -17,7 +18,7 @@ describe("PhoneProvisioningDO", () => {
   it("exposes exactly the typed builtin contract", async () => {
     const { instance } = await phone();
     const methods = [...rpcExposedMethodNames(instance)].filter(
-      (method) => method !== "durableWorkCapabilities"
+      (method) => !DURABLE_OBJECT_FRAMEWORK_RPC_METHODS.has(method)
     );
     expect(methods.sort()).toEqual(Object.keys(phoneProvisioningMethods).sort());
   });

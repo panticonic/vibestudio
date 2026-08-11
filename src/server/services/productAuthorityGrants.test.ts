@@ -1,8 +1,29 @@
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { productAuthorityGrants } from "./productAuthorityGrants.js";
 import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 
 const GAD_CAPABILITY = "workspace-service:gad.workspace";
+
+const originalAppRoot = process.env["VIBESTUDIO_APP_ROOT"];
+const appRoot = mkdtempSync(join(tmpdir(), "vibestudio-product-authority-"));
+
+beforeAll(() => {
+  mkdirSync(join(appRoot, "dist"));
+  writeFileSync(
+    join(appRoot, "dist", "host-build-fingerprint.json"),
+    JSON.stringify({ fingerprint: "a".repeat(64) })
+  );
+  process.env["VIBESTUDIO_APP_ROOT"] = appRoot;
+});
+
+afterAll(() => {
+  if (originalAppRoot === undefined) delete process.env["VIBESTUDIO_APP_ROOT"];
+  else process.env["VIBESTUDIO_APP_ROOT"] = originalAppRoot;
+  rmSync(appRoot, { recursive: true, force: true });
+});
 
 describe("product bootstrap authority", () => {
   it("admits an authenticated trusted user at gated—but never critical—tiers", () => {

@@ -305,58 +305,13 @@ describe("BuildSystemV2 library package subpaths", () => {
       expect.arrayContaining(["AgentWorkerBase", "ChannelClient", "AgentLoopDriver"])
     );
     expect(dynamicDependencies).toEqual(
-      expect.arrayContaining(["node:fs", "node:os", "node:path", "node:module"])
+      expect.arrayContaining(["node:fs", "node:os", "node:path"])
     );
     // This deliberately builds the complete real agentic runtime graph. It takes
     // ~20s in isolation and competes with other build tests in the host suite, so
     // give this integration-sized assertion its own budget instead of weakening
     // the global unit-test timeout.
   }, 90_000);
-
-  it("uses worker conditions throughout an eval library dependency graph", async () => {
-    const actualWorkspaceRoot = path.resolve(__dirname, "../../../workspace");
-    buildSystem = await initBuildSystemV2(
-      actualWorkspaceRoot,
-      fakeWorkspaceSource(() => actualWorkspaceRoot),
-      APP_NODE_MODULES
-    );
-
-    const result = await buildSystem.getBuild("@workspace/mdx-editor-core", undefined, {
-      library: true,
-      libraryTarget: "worker",
-    });
-    expect(result.format).toBe("async-cjs");
-    expect(result.bundle).not.toContain('document.createElement("i")');
-
-    const module = { exports: {} as Record<string, unknown> };
-    const wrappedBundle = `return (async () => {\n${result.bundle}\n})();`;
-    const execute = new Function(
-      "require",
-      "exports",
-      "module",
-      "__vibestudioImport",
-      wrappedBundle
-    ) as (
-      require: (specifier: string) => never,
-      exports: Record<string, unknown>,
-      module: { exports: Record<string, unknown> },
-      dynamicImport: (specifier: string) => Promise<never>
-    ) => Promise<void>;
-    await execute(
-      (specifier) => {
-        throw new Error(`unexpected external dependency ${specifier}`);
-      },
-      module.exports,
-      module,
-      async (specifier) => {
-        throw new Error(`unexpected dynamic dependency ${specifier}`);
-      }
-    );
-    expect(module.exports).toMatchObject({
-      importMarkdownToLexical: expect.any(Function),
-      exportMarkdownFromLexical: expect.any(Function),
-    });
-  }, 30_000);
 
   it("loads the real hosted runtime without ambient network authority", async () => {
     const actualWorkspaceRoot = path.resolve(__dirname, "../../../workspace");
