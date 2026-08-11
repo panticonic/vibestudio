@@ -40,4 +40,21 @@ describe("agent-worker authority manifest", () => {
       evidence: "intentional-broad",
     });
   });
+
+  it("declares the provider-bound test capability used by first-class verification", () => {
+    const manifest = JSON.parse(
+      readFileSync(new URL("./package.json", import.meta.url), "utf8")
+    ) as {
+      vibestudio: { authority: { requests: AuthorityRequest[] } };
+    };
+    expect(manifest.vibestudio.authority.requests).toContainEqual({
+      capability: "userland:extensions/test-runner/native.tests.execute#*",
+      resource: {
+        kind: "exact",
+        key: "native.tests:extension:@workspace-extensions/test-runner",
+      },
+      tier: "gated",
+      evidence: "bounded-dynamic",
+    });
+  });
 });

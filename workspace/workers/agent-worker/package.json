@@ -152,6 +152,15 @@
           "evidence": "intentional-broad"
         },
         {
+          "capability": "userland:extensions/test-runner/native.tests.execute#*",
+          "resource": {
+            "kind": "exact",
+            "key": "native.tests:extension:@workspace-extensions/test-runner"
+          },
+          "tier": "gated",
+          "evidence": "bounded-dynamic"
+        },
+        {
           "capability": "workspace-main-advance",
           "resource": {
             "kind": "prefix",
