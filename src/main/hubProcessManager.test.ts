@@ -28,6 +28,11 @@ vi.mock("node:child_process", () => ({
   spawn: (...args: unknown[]) => spawnMock(...args),
 }));
 
+const terminateOwnedProcessTreeMock = vi.fn();
+vi.mock("../../scripts/owned-process-tree.mjs", () => ({
+  terminateOwnedProcessTree: (...args: unknown[]) => terminateOwnedProcessTreeMock(...args),
+}));
+
 import { getLocalHubLogPath, HubProcessManager, parseHubReadyFile } from "./hubProcessManager.js";
 
 const SERVER_ID = `srv_${"S".repeat(24)}`;
@@ -79,6 +84,11 @@ function makeCentralData(initial: typeof LEASE | null = LEASE) {
   let lease: typeof LEASE | null = initial;
   return {
     getHubProcessLease: vi.fn(() => lease),
+    releaseHubProcessLease: vi.fn((ownerBootId: string) => {
+      if (lease?.ownerBootId !== ownerBootId) return false;
+      lease = null;
+      return true;
+    }),
     setLease: (next: typeof LEASE | null) => {
       lease = next;
     },
@@ -163,6 +173,8 @@ function workspaceRoute(workspace: string, workspaceId: string) {
 
 beforeEach(() => {
   spawnMock.mockReset();
+  terminateOwnedProcessTreeMock.mockReset();
+  terminateOwnedProcessTreeMock.mockResolvedValue({ gone: true, escalated: false });
   credentialStore.loadDeviceCredentialByServerId.mockReset();
   credentialStore.saveDeviceCredential.mockReset();
 });
@@ -639,6 +651,95 @@ describe("HubProcessManager", () => {
       "dev",
       "--ephemeral",
     ]);
+  });
+
+  it("stops a newly spawned hub when workspace routing fails", async () => {
+    const readyFile = "/tmp/vibestudio-hub-manager-test/server-auth/hub-ready.json";
+    fs.rmSync(readyFile, { force: true });
+    credentialStore.loadDeviceCredentialByServerId.mockReturnValue({
+      serverId: SERVER_ID,
+      transport: "loopback",
+      deviceId: "dev-1",
+      refreshToken: "refresh-1",
+      pairedAt: 1,
+    });
+    const child = new EventEmitter() as EventEmitter & { pid: number; unref(): void };
+    child.pid = 99_999_998;
+    child.unref = () => undefined;
+    const centralData = makeCentralData(null);
+    spawnMock.mockImplementation(() => {
+      fs.writeFileSync(
+        readyFile,
+        JSON.stringify({
+          mode: "hub",
+          gatewayUrl: "http://127.0.0.1:5000",
+          rootInvite: readyInvite(),
+          serverId: SERVER_ID,
+          serverBootId: SERVER_BOOT_ID,
+          gatewayPort: 5000,
+          pid: child.pid,
+          version: "1.2.3",
+          buildId: BUILD_ID,
+          workspaces: [],
+        })
+      );
+      const future = new Date(Date.now() + 1_000);
+      fs.utimesSync(readyFile, future, future);
+      centralData.setLease({ ...LEASE, pid: child.pid });
+      return child;
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json({ error: "workspace runtime unavailable" }, { status: 503 }))
+    );
+
+    await expect(manager(centralData).attachOrSpawn()).rejects.toThrow(
+      "workspace runtime unavailable"
+    );
+
+    expect(terminateOwnedProcessTreeMock).toHaveBeenCalledWith(child.pid, {
+      termTimeoutMs: 12_000,
+      killTimeoutMs: 5_000,
+    });
+    expect(centralData.releaseHubProcessLease).toHaveBeenCalledWith(SERVER_BOOT_ID);
+    expect(centralData.getHubProcessLease()).toBeNull();
+  });
+
+  it("leaves a pre-existing hub running when workspace routing fails", async () => {
+    credentialStore.loadDeviceCredentialByServerId.mockReturnValue({
+      serverId: SERVER_ID,
+      transport: "loopback",
+      deviceId: "dev-1",
+      refreshToken: "refresh-1",
+      pairedAt: 1,
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL) => {
+        if (String(input).endsWith("/healthz")) {
+          return Response.json({
+            ok: true,
+            mode: "hub",
+            serverId: RECORD.serverId,
+            serverBootId: RECORD.serverBootId,
+            gatewayPort: RECORD.gatewayPort,
+            pid: RECORD.pid,
+            version: RECORD.version,
+            buildId: RECORD.buildId,
+          });
+        }
+        return Response.json({ error: "workspace runtime unavailable" }, { status: 503 });
+      })
+    );
+
+    const centralData = makeCentralData();
+    await expect(manager(centralData).attachOrSpawn()).rejects.toThrow(
+      "workspace runtime unavailable"
+    );
+
+    expect(spawnMock).not.toHaveBeenCalled();
+    expect(terminateOwnedProcessTreeMock).not.toHaveBeenCalled();
+    expect(centralData.releaseHubProcessLease).not.toHaveBeenCalled();
   });
 
   it("never terminates a live PID whose hub identity cannot be verified", async () => {

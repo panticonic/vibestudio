@@ -246,16 +246,35 @@ export class HubProcessManager {
     if (!processTarget) {
       processTarget = await this.spawnDetached();
     }
-    const credential = await this.ensureDeviceCredential(processTarget);
-    // Hub process readiness and selected-workspace readiness are distinct
-    // lifecycle facts. Routing may coalesce onto a cold workspace child for
-    // many seconds; expose the boundary so the desktop does not misleadingly
-    // attribute that wait to starting the local server.
-    options.onHubReady?.();
-    const target = await this.routeWorkspace(processTarget, credential);
-    this.current = target;
     this.currentHubPid = processTarget.record.pid;
-    return target;
+    try {
+      const credential = await this.ensureDeviceCredential(processTarget);
+      // Hub process readiness and selected-workspace readiness are distinct
+      // lifecycle facts. Routing may coalesce onto a cold workspace child for
+      // many seconds; expose the boundary so the desktop does not misleadingly
+      // attribute that wait to starting the local server.
+      options.onHubReady?.();
+      const target = await this.routeWorkspace(processTarget, credential);
+      this.current = target;
+      return target;
+    } catch (error) {
+      if (processTarget.attached) {
+        // This launch did not create the incumbent. It may still serve other
+        // devices or background work, so failed routing only relinquishes our
+        // local reference.
+        this.detach();
+        throw error;
+      }
+      try {
+        await this.discardSpawnedHub(processTarget);
+      } catch (cleanupError) {
+        throw new AggregateError(
+          [error, cleanupError],
+          "Local workspace routing failed and the newly spawned hub could not be stopped"
+        );
+      }
+      throw error;
+    }
   }
 
   private liveLease(): HubProcessLeaseRecord | null {
@@ -667,21 +686,31 @@ export class HubProcessManager {
   }
 
   private async discardReplacementHub(target: HubProcessTarget): Promise<void> {
-    this.currentHubPid = target.record.pid;
     try {
-      await this.terminateVerifiedHub(target.record.pid);
-      this.verifiedHubPids.delete(target.record.pid);
-      if (this.currentHubPid === target.record.pid) this.currentHubPid = null;
-      const lease = this.config.centralData.getHubProcessLease();
-      if (lease?.pid === target.record.pid) {
-        this.config.centralData.releaseHubProcessLease(lease.ownerBootId);
-      }
+      await this.discardVerifiedHub(target);
     } catch (error) {
       log.error(
         `[supervise] replacement hub termination deferred: ${
           error instanceof Error ? error.message : String(error)
         }`
       );
+    }
+  }
+
+  /** Terminate only a hub returned by this manager's spawn path. */
+  private async discardSpawnedHub(target: HubProcessTarget): Promise<void> {
+    if (target.attached) throw new Error("Refusing to discard a hub this manager only attached to");
+    await this.discardVerifiedHub(target);
+  }
+
+  private async discardVerifiedHub(target: HubProcessTarget): Promise<void> {
+    this.currentHubPid = target.record.pid;
+    await this.terminateVerifiedHub(target.record.pid);
+    this.verifiedHubPids.delete(target.record.pid);
+    if (this.currentHubPid === target.record.pid) this.currentHubPid = null;
+    const lease = this.config.centralData.getHubProcessLease();
+    if (lease?.pid === target.record.pid) {
+      this.config.centralData.releaseHubProcessLease(lease.ownerBootId);
     }
   }
 
