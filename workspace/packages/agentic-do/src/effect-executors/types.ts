@@ -142,9 +142,12 @@ export interface LocalToolPort {
     // parks the leased row (deferRedrive backstop), exactly like channel_call/http_call.
     | { deferred: true; reason: "external-result" }
   >;
-  /** Mutation-replay guard (§1.4.2): true when the fold already recorded an
-   *  applied worktree mutation for this invocation. */
-  alreadyApplied(state: AgentState, invocationId: string): Promise<boolean>;
+  /** Mutation-replay guard (§1.4.2). A completed semantic command is durable
+   * evidence that this invocation must be recovered, not executed again. */
+  alreadyApplied(
+    state: AgentState,
+    invocationId: string
+  ): Promise<{ commandId: string; command: unknown } | null>;
 }
 
 export interface HttpCallPort {

@@ -1716,7 +1716,9 @@ export abstract class AgentVesselBase extends DurableObjectBase {
               node: { kind: "command", commandId },
               edgeLimit: 1,
             });
-            return inspected.node.kind === "command" && inspected.node.value.status === "complete";
+            return inspected.node.kind === "command" && inspected.node.value.status === "complete"
+              ? { commandId, command: inspected.node }
+              : null;
           } catch (error) {
             const code =
               typeof error === "object" && error !== null
@@ -1727,7 +1729,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
             // is therefore the ordinary "not applied" case; every other failure
             // must preserve the claim so infrastructure trouble cannot authorize
             // a duplicate mutation.
-            if (code === "InvalidReference") return false;
+            if (code === "InvalidReference") return null;
             throw error;
           }
         },
@@ -2068,6 +2070,9 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       localToolExecutionModes: JSON.parse(
         this.getStateValue(`agent:toolExecutionModes:${channelId}`) ?? "{}"
       ) as Record<string, "sequential" | "parallel">,
+      localToolCancellationModes: JSON.parse(
+        this.getStateValue(`agent:toolCancellationModes:${channelId}`) ?? "{}"
+      ) as Record<string, "interruptible" | "settle">,
       roster: { participants: [] }, // roster snapshots fold from system.event
       maxSubagentDepth: this.getMaxSubagentDepth(),
       maxSubagents: this.getMaxSubagents(),
@@ -2190,6 +2195,12 @@ export abstract class AgentVesselBase extends DurableObjectBase {
         tool.executionMode === "parallel" ? "parallel" : "sequential",
       ])
     ) satisfies Record<string, "sequential" | "parallel">;
+    const cancellationModes = Object.fromEntries(
+      [...registry.values()].map((tool) => [
+        tool.name,
+        tool.cancellationMode === "settle" ? "settle" : "interruptible",
+      ])
+    ) satisfies Record<string, "interruptible" | "settle">;
     // Channel tools: roster participants' advertised methods become model
     // tools dispatched as channel_call effects (the panel's UI surface —
     // inline_ui/feedback/action_bar). eval is a LOCAL tool now, not a channel method.
@@ -2228,11 +2239,13 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     const schemasJson = JSON.stringify(schemas);
     const names = JSON.stringify([...registry.keys()]);
     const executionModesJson = JSON.stringify(executionModes);
-    const signature = stableSha256Hex({ systemPrompt, schemas, executionModes });
+    const cancellationModesJson = JSON.stringify(cancellationModes);
+    const signature = stableSha256Hex({ systemPrompt, schemas, executionModes, cancellationModes });
     const promptHashKey = `agent:promptHash:${channelId}`;
     const toolsHashKey = `agent:toolsHash:${channelId}`;
     const toolNamesKey = `agent:toolNames:${channelId}`;
     const toolExecutionModesKey = `agent:toolExecutionModes:${channelId}`;
+    const toolCancellationModesKey = `agent:toolCancellationModes:${channelId}`;
     const artifactSigKey = `agent:artifactSig:${channelId}`;
     const existingPromptHash = this.getStateValue(promptHashKey) ?? "";
     const existingToolsHash = this.getStateValue(toolsHashKey) ?? "";
@@ -2241,7 +2254,8 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       !existingToolsHash ||
       this.getStateValue(artifactSigKey) !== signature ||
       this.getStateValue(toolNamesKey) !== names ||
-      this.getStateValue(toolExecutionModesKey) !== executionModesJson
+      this.getStateValue(toolExecutionModesKey) !== executionModesJson ||
+      this.getStateValue(toolCancellationModesKey) !== cancellationModesJson
     ) {
       const prompt = await stage("prompt-artifacts.prompt-blob", () =>
         this.rpc.call<{ digest?: string }>("main", "blobstore.putText", [systemPrompt])
@@ -2260,6 +2274,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       this.setStateValue(toolsHashKey, toolsHash);
       this.setStateValue(toolNamesKey, names);
       this.setStateValue(toolExecutionModesKey, executionModesJson);
+      this.setStateValue(toolCancellationModesKey, cancellationModesJson);
       this.setStateValue(artifactSigKey, signature);
     }
     throwIfAborted();

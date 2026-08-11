@@ -16,7 +16,7 @@ describe("localToolExecutor", () => {
       signal: new AbortController().signal,
       deps: {
         localTools: {
-          alreadyApplied: async () => false,
+          alreadyApplied: async () => null,
           run: async () => ({
             result: { protocolContent: [], details: { outcome: "success" } },
             isError: false,
@@ -49,7 +49,10 @@ describe("localToolExecutor", () => {
       signal: new AbortController().signal,
       deps: {
         localTools: {
-          alreadyApplied: async () => true,
+          alreadyApplied: async () => ({
+            commandId: "command-replayed",
+            command: { kind: "command", value: { status: "complete" } },
+          }),
           run,
         },
       } as never,
@@ -60,7 +63,18 @@ describe("localToolExecutor", () => {
     expect(outcome).toMatchObject({
       kind: "tool",
       isError: false,
-      result: { replayed: true },
+      result: {
+        protocolContent: [
+          {
+            type: "text",
+            text: expect.stringContaining("command-replayed"),
+          },
+        ],
+        details: {
+          replayed: true,
+          evidence: { commandId: "command-replayed" },
+        },
+      },
     });
   });
 });

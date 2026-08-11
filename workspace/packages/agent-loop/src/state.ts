@@ -110,6 +110,9 @@ export interface AgentLoopConfig {
   /** Execution ordering declared by local AgentTool metadata. Missing entries
    * fail safe to sequential execution. */
   localToolExecutionModes?: Record<string, "sequential" | "parallel">;
+  /** Cancellation settlement declared by local AgentTool metadata. Missing
+   * entries are interruptible. */
+  localToolCancellationModes?: Record<string, "interruptible" | "settle">;
   roster: RosterSnapshot;
   agentHopLimit?: number;
   /** Channel publication discipline (gated by `publishPolicyPolicy`, appended

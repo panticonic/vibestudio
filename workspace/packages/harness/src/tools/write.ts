@@ -67,6 +67,7 @@ export function createWriteTool(
     description:
       "Write a text file. Use .tmp/<name> for temporary files. Managed source paths become uncommitted VCS edits and must be inside an existing repository (such as projects/default or packages/<name>).",
     parameters: writeSchema,
+    cancellationMode: "settle",
     execute: async (_toolCallId, input, signal) => {
       const { path, content } = input;
       if (typeof path !== "string" || typeof content !== "string") {
@@ -100,7 +101,6 @@ export function createWriteTool(
       const repo = splitRepoPath(relPath);
       if (!repo && fs) {
         await fs.writeFile(relPath, content);
-        if (signal?.aborted) throw new Error("Operation aborted");
         return {
           content: [
             { type: "text", text: `Successfully wrote ${content.length} bytes to ${path}` },
@@ -199,7 +199,6 @@ export function createWriteTool(
                 },
         ],
       });
-      if (signal?.aborted) throw new Error("Operation aborted");
 
       const out: { content: (TextContent | ImageContent)[]; details: WriteToolDetails } = {
         content: [

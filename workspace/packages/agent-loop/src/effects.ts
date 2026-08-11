@@ -68,6 +68,7 @@ export interface LocalToolEffect extends EffectDescriptorBase {
   invocationSeq: number;
   /** Per-tool ordering contract captured when the invocation was journaled. */
   executionMode: "sequential" | "parallel";
+  cancellationMode: "interruptible" | "settle";
   tool: string;
   args: unknown;
 }
@@ -84,6 +85,9 @@ export interface ChannelCallEffect extends EffectDescriptorBase {
   /** approval-form / ask-user calls map their outcome to approval.resolved. */
   purpose?: "tool" | "approval-form" | "ask-user";
   approvalId?: string;
+  /** Present when this call came from a model tool invocation. */
+  invocationSeq?: number;
+  executionMode?: "sequential" | "parallel";
 }
 
 export interface HttpCallEffect extends EffectDescriptorBase {
@@ -93,6 +97,8 @@ export interface HttpCallEffect extends EffectDescriptorBase {
   targetUrl?: string;
   target?: { service: string; method: string };
   request: unknown;
+  invocationSeq: number;
+  executionMode: "sequential" | "parallel";
 }
 
 export interface CredentialWaitEffect extends EffectDescriptorBase {
@@ -161,6 +167,10 @@ export function invocationEffect(
       kind: "local_tool",
       invocationSeq: invocation.startedAtSeq,
       executionMode: invocation.executionMode,
+      cancellationMode:
+        state.config.localToolCancellationModes?.[invocation.name] === "settle"
+          ? "settle"
+          : "interruptible",
       tool: invocation.name,
       args: invocation.request,
     };
@@ -174,6 +184,8 @@ export function invocationEffect(
       target: transport.target,
       method: invocation.name,
       args: invocation.request,
+      invocationSeq: invocation.startedAtSeq,
+      executionMode: invocation.executionMode,
       ...(invocation.approvalId
         ? { purpose: "tool" as const, approvalId: invocation.approvalId }
         : {}),
@@ -185,6 +197,8 @@ export function invocationEffect(
     targetUrl: transport.targetUrl,
     idempotencyKey: transport.idempotencyKey,
     request: invocation.request,
+    invocationSeq: invocation.startedAtSeq,
+    executionMode: invocation.executionMode,
   };
 }
 

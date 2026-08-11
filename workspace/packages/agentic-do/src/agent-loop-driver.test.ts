@@ -146,9 +146,7 @@ async function makeHarness(opts: {
           channelPublishes.push(input);
           await opts.channelPublish?.(input);
         },
-        recordReadReceipt: async (
-          input: Parameters<ChannelCallPort["recordReadReceipt"]>[0]
-        ) => {
+        recordReadReceipt: async (input: Parameters<ChannelCallPort["recordReadReceipt"]>[0]) => {
           readReceipts.push(input);
         },
         sendSignalEvent: async () => {},
@@ -488,6 +486,86 @@ describe("AgentLoopDriver", () => {
     });
     await Promise.resolve();
     expect(await logKinds(harness.gad)).toEqual(kindsAfterInterrupt);
+    expect(harness.driver.outbox.all()).toEqual([]);
+  });
+
+  it("settles an admitted mutation before journaling a user interrupt", async () => {
+    const started = deferred<void>();
+    let committed = false;
+    const mutationConfig: AgentLoopConfig = {
+      ...config,
+      activeToolNames: ["write"],
+      localToolExecutionModes: { write: "sequential" },
+      localToolCancellationModes: { write: "settle" },
+    };
+    const harness = await makeHarness({
+      config: mutationConfig,
+      script: {
+        model: [
+          {
+            kind: "model",
+            blocks: [
+              {
+                type: "toolCall",
+                id: "write-1",
+                name: "write",
+                arguments: { path: "meta/out.txt", content: "value" },
+              },
+            ],
+            stopReason: "completed",
+          },
+        ],
+        tool: [],
+      },
+      executorOverride: (descriptor) =>
+        descriptor.kind === "local_tool"
+          ? ({
+              kind: "local_tool",
+              execute: ({ signal }) => {
+                started.resolve();
+                return new Promise<EffectOutcome>((resolve) => {
+                  signal.addEventListener(
+                    "abort",
+                    () => {
+                      // Models the tool's atomic RPC returning success after
+                      // the parent cancellation raced with its commit.
+                      committed = true;
+                      resolve({
+                        kind: "tool",
+                        result: {
+                          protocolContent: [{ type: "text", text: "write committed" }],
+                          details: { committed: true },
+                        },
+                        isError: false,
+                      });
+                    },
+                    { once: true }
+                  );
+                });
+              },
+            } as EffectExecutor)
+          : null,
+    });
+    await harness.driver.handleIncoming(CHANNEL, promptIncoming("env-settle-mutation"));
+    const dispatch = harness.driver.dispatchReadyEffectsForTest();
+    await started.promise;
+
+    await harness.driver.interruptChannel(CHANNEL);
+    await dispatch;
+
+    expect(committed).toBe(true);
+    const rows = harness.gad.sql
+      .exec(
+        `SELECT payload_kind FROM log_events
+         WHERE log_id = ? AND payload_kind IN ('invocation.completed', 'system.event')
+         ORDER BY seq`,
+        LOG_ID
+      )
+      .toArray();
+    const terminalKinds = rows.map((row) => row["payload_kind"]);
+    expect(terminalKinds.lastIndexOf("invocation.completed")).toBeLessThan(
+      terminalKinds.lastIndexOf("system.event")
+    );
     expect(harness.driver.outbox.all()).toEqual([]);
   });
 
@@ -989,6 +1067,7 @@ describe("AgentLoopDriver", () => {
       turnId: `turn:${channelId}`,
       invocationSeq: 1,
       executionMode: "parallel",
+      cancellationMode: "interruptible",
       tool: "read",
       args: {},
     });
@@ -1018,6 +1097,7 @@ describe("AgentLoopDriver", () => {
       turnId: "turn:restart",
       invocationSeq: tool === "eval" ? 1 : 2,
       executionMode: "parallel",
+      cancellationMode: "interruptible",
       tool,
       args: {},
     });
@@ -1067,6 +1147,7 @@ describe("AgentLoopDriver", () => {
       turnId: "turn:ordered-wave",
       invocationSeq,
       executionMode,
+      cancellationMode: "interruptible",
       tool,
       args: {},
     });

@@ -99,8 +99,8 @@ export function ensureOutboxSchema(sql: SqlStorage): void {
   `);
 }
 
-export function maxAttempts(kind: EffectKind, mutating = false): number {
-  switch (kind) {
+export function maxAttempts(descriptor: EffectDescriptor): number {
+  switch (descriptor.kind) {
     case "prompt_artifacts":
       // Prompt/tool materialization is read-mostly and its blob writes are
       // content-addressed. Brief host-RPC transport failures must not discard
@@ -114,7 +114,10 @@ export function maxAttempts(kind: EffectKind, mutating = false): number {
       // partition into permanent loss of an otherwise untouched turn.
       return Number.POSITIVE_INFINITY;
     case "local_tool":
-      return mutating ? 1 : 3;
+      // A settle boundary may have committed before its transport reported an
+      // error. Do not redrive it blindly; durable semantic mutations recover
+      // through command evidence, while scratch mutations have no replay key.
+      return descriptor.cancellationMode === "settle" ? 1 : 3;
     case "channel_call":
     case "http_call":
       return 5;
@@ -147,15 +150,33 @@ function mapRow(row: Record<string, unknown>): OutboxRow {
   };
 }
 
-function compareDispatchOrder(left: OutboxRow, right: OutboxRow): number {
-  const leftDescriptor = left.descriptor;
-  const rightDescriptor = right.descriptor;
+function invocationOrder(row: OutboxRow): {
+  turnId: string;
+  sequence: number;
+  executionMode: "sequential" | "parallel";
+} | null {
+  const descriptor = row.descriptor;
   if (
-    leftDescriptor.kind === "local_tool" &&
-    rightDescriptor.kind === "local_tool" &&
-    leftDescriptor.turnId === rightDescriptor.turnId
+    (descriptor.kind === "local_tool" ||
+      descriptor.kind === "channel_call" ||
+      descriptor.kind === "http_call") &&
+    typeof descriptor.invocationSeq === "number" &&
+    (descriptor.executionMode === "sequential" || descriptor.executionMode === "parallel")
   ) {
-    const sequence = leftDescriptor.invocationSeq - rightDescriptor.invocationSeq;
+    return {
+      turnId: descriptor.turnId,
+      sequence: descriptor.invocationSeq,
+      executionMode: descriptor.executionMode,
+    };
+  }
+  return null;
+}
+
+function compareDispatchOrder(left: OutboxRow, right: OutboxRow): number {
+  const leftInvocation = invocationOrder(left);
+  const rightInvocation = invocationOrder(right);
+  if (leftInvocation && rightInvocation && leftInvocation.turnId === rightInvocation.turnId) {
+    const sequence = leftInvocation.sequence - rightInvocation.sequence;
     if (sequence !== 0) return sequence;
   }
   if (left.createdAt !== right.createdAt) return left.createdAt - right.createdAt;
@@ -377,23 +398,32 @@ export class EffectOutbox {
         .filter((row) => row.channelId === channelId)
         .sort(compareDispatchOrder);
       selected.push(
-        ...rows.filter(
-          (row) =>
-            (row.kind === "record_receipt" ||
-              row.kind === "channel_call" ||
-              row.kind === "http_call") &&
-            dueKeys.has(`${row.branchId}\u0000${row.effectId}`)
-        )
+        ...rows.filter((row) => {
+          const independentlyDispatchable =
+            row.kind === "record_receipt" ||
+            ((row.kind === "channel_call" || row.kind === "http_call") &&
+              invocationOrder(row) === null);
+          return independentlyDispatchable && dueKeys.has(`${row.branchId}\u0000${row.effectId}`);
+        })
       );
       const semantic = rows.filter(
         (row) =>
-          row.kind !== "record_receipt" && row.kind !== "channel_call" && row.kind !== "http_call"
+          row.kind !== "record_receipt" &&
+          !(
+            (row.kind === "channel_call" || row.kind === "http_call") &&
+            invocationOrder(row) === null
+          )
       );
       const first = semantic[0];
       if (!first) continue;
-      if (first.descriptor.kind === "local_tool" && first.descriptor.executionMode === "parallel") {
+      const firstInvocation = invocationOrder(first);
+      if (firstInvocation?.executionMode === "parallel") {
         for (const row of semantic) {
-          if (row.descriptor.kind !== "local_tool" || row.descriptor.executionMode !== "parallel") {
+          const invocation = invocationOrder(row);
+          if (
+            invocation?.executionMode !== "parallel" ||
+            invocation.turnId !== firstInvocation.turnId
+          ) {
             break;
           }
           if (dueKeys.has(`${row.branchId}\u0000${row.effectId}`)) selected.push(row);

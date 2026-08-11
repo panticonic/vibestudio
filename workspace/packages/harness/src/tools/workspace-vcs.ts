@@ -279,6 +279,7 @@ export function createWorkspaceVcsTool(
     description:
       "Inspect and change semantic workspace history: compare intent and coordinate net effects (use compare view:'local' for working state relative to protected main), merge, review composed results, revert, commit, discard, blame, or push. Browse and edit ordinary paths with the dedicated filesystem tools.",
     parameters: workspaceVcsSchema,
+    cancellationMode: "settle",
     execute: async (
       _toolCallId,
       input,

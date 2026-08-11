@@ -2,10 +2,29 @@ import { describe, expect, it } from "vitest";
 import { createInMemorySql, createTestDO } from "@workspace/runtime/worker/test-utils";
 import type { SqlStorage } from "@workspace/runtime/worker";
 import { GadWorkspaceDO } from "@workspace-workers/workspace-source";
-import { EffectOutbox } from "./effect-outbox.js";
+import { EffectOutbox, maxAttempts } from "./effect-outbox.js";
 import type { EffectDescriptor } from "@workspace/agent-loop";
 
 describe("EffectOutbox host-generation claims", () => {
+  it("never blindly retries a local mutation settlement boundary", () => {
+    const descriptor = (cancellationMode: "interruptible" | "settle"): EffectDescriptor => ({
+      kind: "local_tool",
+      effectId: "effect-1",
+      channelId: "channel-1",
+      idempotencyKey: "tool-1",
+      invocationId: "tool-1",
+      turnId: "turn-1",
+      invocationSeq: 1,
+      executionMode: "sequential",
+      cancellationMode,
+      tool: "write",
+      args: {},
+    });
+
+    expect(maxAttempts(descriptor("interruptible"))).toBe(3);
+    expect(maxAttempts(descriptor("settle"))).toBe(1);
+  });
+
   it("rejects an obsolete globally keyed outbox instead of replacing it", async () => {
     const sql = (await createInMemorySql()) as unknown as SqlStorage;
     sql.exec(`
@@ -94,6 +113,7 @@ describe("EffectOutbox host-generation claims", () => {
       turnId: "turn-1",
       invocationSeq,
       executionMode: "sequential",
+      cancellationMode: "interruptible",
       tool: `tool-${invocationSeq}`,
       args: {},
     });
@@ -109,5 +129,87 @@ describe("EffectOutbox host-generation claims", () => {
     expect(claims.map((row) => row.descriptor)).toEqual([
       expect.objectContaining({ kind: "local_tool", invocationSeq: 2 }),
     ]);
+  });
+
+  it("preserves sequential invocation order across local and channel transports", async () => {
+    const host = await createTestDO(GadWorkspaceDO, { __objectKey: "outbox-cross-order-host" });
+    const outbox = new EffectOutbox(host.sql as never);
+    const channel = {
+      kind: "channel_call",
+      effectId: "effect-channel",
+      channelId: "channel-1",
+      idempotencyKey: "transport-channel",
+      transportCallId: "transport-channel",
+      invocationId: "tool-channel",
+      turnId: "turn-1",
+      invocationSeq: 2,
+      executionMode: "sequential",
+      target: { id: "participant-1" },
+      method: "render",
+      args: {},
+    } as unknown as EffectDescriptor;
+    const local: EffectDescriptor = {
+      kind: "local_tool",
+      effectId: "effect-local",
+      channelId: "channel-1",
+      idempotencyKey: "tool-local",
+      invocationId: "tool-local",
+      turnId: "turn-1",
+      invocationSeq: 1,
+      executionMode: "sequential",
+      cancellationMode: "interruptible",
+      tool: "read",
+      args: {},
+    };
+    // Insert the later transport first to prove creation order cannot overtake
+    // the model's numeric invocation order.
+    outbox.insert("branch-1", channel, 0);
+    outbox.insert("branch-1", local, 0);
+    host.sql.exec(`UPDATE effect_outbox SET created_at = 1`);
+
+    const first = outbox.claimReady({ workerId: "worker-1", now: 2, limit: 64 });
+    expect(first.map((row) => row.effectId)).toEqual(["effect-local"]);
+
+    outbox.delete("branch-1", "effect-local");
+    const second = outbox.claimReady({ workerId: "worker-1", now: 2, limit: 64 });
+    expect(second.map((row) => row.effectId)).toEqual(["effect-channel"]);
+  });
+
+  it("dispatches one parallel invocation wave across local and HTTP transports", async () => {
+    const host = await createTestDO(GadWorkspaceDO, {
+      __objectKey: "outbox-cross-parallel-host",
+    });
+    const outbox = new EffectOutbox(host.sql as never);
+    const local: EffectDescriptor = {
+      kind: "local_tool",
+      effectId: "effect-local",
+      channelId: "channel-1",
+      idempotencyKey: "tool-local",
+      invocationId: "tool-local",
+      turnId: "turn-1",
+      invocationSeq: 1,
+      executionMode: "parallel",
+      cancellationMode: "interruptible",
+      tool: "read",
+      args: {},
+    };
+    const http: EffectDescriptor = {
+      kind: "http_call",
+      effectId: "effect-http",
+      channelId: "channel-1",
+      idempotencyKey: "transport-http",
+      invocationId: "tool-http",
+      turnId: "turn-1",
+      invocationSeq: 2,
+      executionMode: "parallel",
+      target: { service: "remote", method: "query" },
+      request: {},
+    };
+    outbox.insert("branch-1", http, 0);
+    outbox.insert("branch-1", local, 0);
+    host.sql.exec(`UPDATE effect_outbox SET created_at = 1`);
+
+    const claims = outbox.claimReady({ workerId: "worker-1", now: 2, limit: 64 });
+    expect(claims.map((row) => row.effectId)).toEqual(["effect-local", "effect-http"]);
   });
 });

@@ -7,6 +7,10 @@ const CWD = "/";
 const authority = { contextId: "context:test", commandId: "command:write" };
 
 describe("canonical write tool", () => {
+  it("declares an admitted mutation as a cancellation settlement boundary", () => {
+    expect(createWriteTool(CWD, new StubVcs(), authority).cancellationMode).toBe("settle");
+  });
+
   it("creates a new repository file through a state-checked change", async () => {
     const vcs = new StubVcs();
     const tool = createWriteTool(CWD, vcs, authority);
@@ -79,6 +83,45 @@ describe("canonical write tool", () => {
     const result = await tool.execute("invocation:3", { path: ".tmp/out.txt", content: "scratch" });
     await expect(fs.readFile(".tmp/out.txt", "utf8")).resolves.toBe("scratch");
     expect(result.details.storage).toBe("scratch");
+    expect(vcs.lastEditInput).toBeUndefined();
+  });
+
+  it("reports success when cancellation arrives after the semantic edit committed", async () => {
+    const controller = new AbortController();
+    class AbortAfterCommitVcs extends StubVcs {
+      override async edit(input: Parameters<StubVcs["edit"]>[0]) {
+        const result = await super.edit(input);
+        controller.abort(new Error("turn interrupted after commit"));
+        return result;
+      }
+    }
+    const vcs = new AbortAfterCommitVcs();
+    const tool = createWriteTool(CWD, vcs, authority);
+
+    const result = await tool.execute(
+      "invocation:post-commit-cancel",
+      { path: "meta/out.txt", content: "committed" },
+      controller.signal
+    );
+
+    expect(controller.signal.aborted).toBe(true);
+    expect(vcs.read("meta/out.txt")).toBe("committed");
+    expect(result.details).toMatchObject({ storage: "vcs", bytesWritten: 9 });
+  });
+
+  it("rejects cancellation before mutation admission", async () => {
+    const controller = new AbortController();
+    controller.abort(new Error("cancelled before admission"));
+    const vcs = new StubVcs();
+    const tool = createWriteTool(CWD, vcs, authority);
+
+    await expect(
+      tool.execute(
+        "invocation:pre-admission-cancel",
+        { path: "meta/out.txt", content: "never" },
+        controller.signal
+      )
+    ).rejects.toThrow("Operation aborted");
     expect(vcs.lastEditInput).toBeUndefined();
   });
 

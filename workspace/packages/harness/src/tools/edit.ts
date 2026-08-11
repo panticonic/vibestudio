@@ -82,6 +82,7 @@ export function createEditTool(
     description:
       'Replace exact text in a file. Every call must include path, oldText, and newText together; oldText must match exactly (including whitespace). Use write instead when replacing the whole file. To undo a managed semantic change, use vcs({ operation: "revert", changeIds: [...] }); editing the bytes back creates unrelated new intent.',
     parameters: editSchema,
+    cancellationMode: "settle",
     execute: async (_toolCallId, input, signal) => {
       const { path, oldText, newText } = input;
       if (typeof path !== "string" || typeof oldText !== "string" || typeof newText !== "string") {
@@ -187,7 +188,10 @@ export function createEditTool(
       const end = matchResult.index + matchResult.matchLength;
       const matchedText = baseContent.slice(start, end);
       const nearbyText = matchedText || baseContent.slice(0, start) || baseContent.slice(end);
-      const replacementText = restoreLineEndings(normalizeToLF(newText), detectLineEnding(nearbyText));
+      const replacementText = restoreLineEndings(
+        normalizeToLF(newText),
+        detectLineEnding(nearbyText)
+      );
       const newContent = baseContent.slice(0, start) + replacementText + baseContent.slice(end);
       if (baseContent === newContent) {
         return {
@@ -230,7 +234,6 @@ export function createEditTool(
       } else if (fs) {
         await fs.writeFile(relPath, storedNewContent);
       }
-      if (signal?.aborted) throw new Error("Operation aborted");
 
       const diffResult = generateDiffString(baseContent, newContent);
       const content_: (TextContent | ImageContent)[] = [

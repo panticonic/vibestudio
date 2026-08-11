@@ -140,6 +140,7 @@ function deferredEvalRuntimeLostOutcome(row: OutboxRow, message: string): Effect
 
 interface ActiveEffectDispatch {
   controller: AbortController;
+  settlesOnCancellation: boolean;
   branchId: string;
   effectId: string;
   channelId: string;
@@ -1338,6 +1339,8 @@ export class AgentLoopDriver {
     });
     const active: ActiveEffectDispatch = {
       controller,
+      settlesOnCancellation:
+        row.descriptor.kind === "local_tool" && row.descriptor.cancellationMode === "settle",
       branchId: row.branchId,
       effectId: row.effectId,
       channelId: row.channelId,
@@ -1408,13 +1411,16 @@ export class AgentLoopDriver {
           if (!controller.signal.aborted) this.recordModelExecutionAttempt(event);
         },
       });
-      outcome = await awaitEffectBoundary(
-        execution,
-        controller.signal,
-        row.kind === "model_call"
-          ? ({ kind: "model", blocks: [], stopReason: "aborted" } satisfies EffectOutcome)
-          : undefined
-      );
+      outcome =
+        descriptor.kind === "local_tool" && descriptor.cancellationMode === "settle"
+          ? await execution
+          : await awaitEffectBoundary(
+              execution,
+              controller.signal,
+              row.kind === "model_call"
+                ? ({ kind: "model", blocks: [], stopReason: "aborted" } satisfies EffectOutcome)
+                : undefined
+            );
     } catch (err) {
       // Lifecycle suspension deliberately leaves the durable outbox row as-is.
       // Recording the abort as a model/tool outcome would turn process
@@ -1502,7 +1508,7 @@ export class AgentLoopDriver {
         }
       }
       const updated = this.outbox.recordFailure(row.branchId, row.effectId, this.deps.now());
-      if (updated && updated.attempts >= maxAttempts(updated.kind)) {
+      if (updated && updated.attempts >= maxAttempts(updated.descriptor)) {
         await this.settleExhaustedEffect(updated, message);
       } else {
         this.scheduleEarliest();
@@ -1755,7 +1761,7 @@ export class AgentLoopDriver {
       this.deps.now(),
       outcome.retryAfterMs
     );
-    if (updated && updated.attempts >= maxAttempts(updated.kind)) {
+    if (updated && updated.attempts >= maxAttempts(updated.descriptor)) {
       await this.settleExhaustedEffect(updated, outcome.reason);
       return;
     }
@@ -2077,6 +2083,14 @@ export class AgentLoopDriver {
     }
 
     await this.withEffectAdmissionClosed(channelId, async (active) => {
+      // An admitted mutation owns its atomic boundary. Ask it to stop, then
+      // let its authoritative success/failure journal before the interrupt;
+      // otherwise the interrupt could erase the invocation while its bytes
+      // were already committed outside the agent log.
+      const settling = active.filter((entry) => entry.settlesOnCancellation);
+      for (const entry of settling) entry.controller.abort();
+      await Promise.all(settling.map((entry) => entry.settled));
+
       const pendingModel = loop.state.inFlightModelCall
         ? this.outbox.get(loop.logId, ids.modelEffect(loop.state.inFlightModelCall.messageId))
         : null;
@@ -2119,12 +2133,13 @@ export class AgentLoopDriver {
     this.closedEffectAdmission.set(channelId, (this.closedEffectAdmission.get(channelId) ?? 0) + 1);
     const active = [...this.activeDispatches].filter((entry) => entry.channelId === channelId);
     try {
-      // Retirement is stronger than a user interrupt: once requested, no
-      // admitted transport may continue while we wait to journal the marker.
-      // The inbound mutation boundary is shared with outcome commits, so
-      // either a result that was already committing lands first and is then
-      // retired, or retirement lands first and the queued result observes its
-      // outbox row gone.
+      // Settle admitted atomic mutations before retiring their invocations;
+      // interruptible transports are fenced immediately afterward. Thus a
+      // committed mutation is always journaled before the retirement marker,
+      // while non-cooperative model/network work cannot delay retirement.
+      const settling = active.filter((entry) => entry.settlesOnCancellation);
+      for (const entry of settling) entry.controller.abort();
+      await Promise.all(settling.map((entry) => entry.settled));
       for (const entry of active) entry.controller.abort();
       await this.handleIncoming(channelId, {
         type: "command",

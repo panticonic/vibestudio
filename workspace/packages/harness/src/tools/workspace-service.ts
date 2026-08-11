@@ -233,6 +233,7 @@ export function createWorkspaceServiceTool(
     description:
       "Atomically add, update, or remove a live context-local service declaration in meta/vibestudio.yml. For Durable Objects, transport.objectKey declares the matching singleton in the same validated edit. Use this instead of splicing the services or singletonObjects YAML lists by hand; then confirm the live contract with docs_search/docs_open before eval.",
     parameters: workspaceServiceSchema,
+    cancellationMode: "settle",
     execute: async (
       _toolCallId,
       input,

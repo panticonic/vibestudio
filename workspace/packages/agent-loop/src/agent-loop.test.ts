@@ -44,6 +44,7 @@ const baseConfig: AgentLoopConfig = {
   systemPromptHash: "blob:system-prompt",
   activeToolNames: ["read", "write"],
   localToolExecutionModes: { read: "parallel", write: "sequential" },
+  localToolCancellationModes: { read: "interruptible", write: "settle" },
   roster: { participants: [] },
 };
 
@@ -377,6 +378,7 @@ describe("agent-loop core lifecycle", () => {
         invocationId: "tc-1",
         invocationSeq: started.seq,
         executionMode: "parallel",
+        cancellationMode: "interruptible",
       })
     );
 
@@ -880,10 +882,12 @@ describe("agent-loop core lifecycle", () => {
       expect.objectContaining({
         invocationId: "tc-write-1",
         executionMode: "sequential",
+        cancellationMode: "settle",
       }),
       expect.objectContaining({
         invocationId: "tc-write-2",
         executionMode: "sequential",
+        cancellationMode: "settle",
       }),
     ]);
     expect(effects[0]!.invocationSeq).toBeLessThan(effects[1]!.invocationSeq!);

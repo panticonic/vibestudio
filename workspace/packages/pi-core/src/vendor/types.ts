@@ -396,6 +396,14 @@ export interface AgentTool<TParameters extends TSchema = TSchema, TDetails = any
 	 * If omitted, the default execution mode applies.
 	 */
 	executionMode?: ToolExecutionMode;
+	/**
+	 * Cancellation contract for an admitted execution.
+	 * - "interruptible" (default): the runtime may stop awaiting as soon as the parent aborts.
+	 * - "settle": abort is forwarded, but the runtime waits for the tool to report whether its
+	 *   atomic effect committed. Use this for mutation boundaries where "cancelled" must never
+	 *   conceal an already-applied change.
+	 */
+	cancellationMode?: "interruptible" | "settle";
 }
 
 /** Context snapshot passed into the low-level agent loop. */

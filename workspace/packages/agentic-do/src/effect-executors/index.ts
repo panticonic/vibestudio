@@ -64,10 +64,20 @@ export const localToolExecutor: EffectExecutor<LocalToolEffect> = {
   async execute({ descriptor, state, signal, deps, onEphemeral }) {
     // §1.4.2 retry rule: a mutating tool whose applied worktree mutation is
     // already folded synthesizes success instead of re-executing.
-    if (await deps.localTools.alreadyApplied(state, descriptor.invocationId)) {
+    const replayEvidence = await deps.localTools.alreadyApplied(state, descriptor.invocationId);
+    if (replayEvidence) {
       return {
         kind: "tool",
-        result: { replayed: true, note: "mutation already applied (crash-replay guard)" },
+        result: {
+          protocolContent: [
+            {
+              type: "text",
+              text: `Recovered completed workspace mutation ${replayEvidence.commandId}; it was not executed twice.`,
+            },
+          ],
+          details: { replayed: true, evidence: replayEvidence },
+        },
+        summary: "Recovered a completed workspace mutation",
         isError: false,
       } satisfies EffectOutcome;
     }

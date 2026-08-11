@@ -130,6 +130,7 @@ function createFileTransferTool(
         ? "Move a file atomically. Managed workspace files preserve stable identity and history; .tmp files move within context-local scratch storage. Never emulate a managed move with write/delete."
         : "Copy a file atomically. Managed workspace files mint distinct identity with explicit copy provenance; .tmp files copy within context-local scratch storage. Never emulate a managed copy with read/write.",
     parameters: fileTransferSchema,
+    cancellationMode: "settle",
     execute: async (
       _toolCallId,
       input,
@@ -147,7 +148,6 @@ function createFileTransferTool(
       if (!sourceRoute && !destinationRoute && fs) {
         if (kind === "move") await fs.rename(sourcePath, destinationPath);
         else await fs.copyFile(sourcePath, destinationPath);
-        if (signal?.aborted) throw new Error("Operation aborted");
         return {
           content: [
             {
@@ -229,8 +229,6 @@ function createFileTransferTool(
                 },
               ],
             });
-      if (signal?.aborted) throw new Error("Operation aborted");
-
       const produced = await resolveToolFile(vcs, result.workingHead, destinationPath);
       if (!produced) throw new Error(`${operation} did not produce ${destinationPath}`);
       if (
