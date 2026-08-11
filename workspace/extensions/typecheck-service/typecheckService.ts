@@ -146,7 +146,9 @@ async function ensureExternalDeps(deps: Record<string, string>): Promise<string>
         if (fsSync.existsSync(sentinelPath)) {
           try {
             fsSync.rmSync(tmpDir, { recursive: true, force: true });
-          } catch {}
+          } catch (cleanupError) {
+            console.warn("[typecheck-service] Failed to remove a redundant install:", cleanupError);
+          }
           return nodeModulesDir;
         }
         fsSync.rmSync(cacheDir, { recursive: true, force: true });
@@ -159,7 +161,9 @@ async function ensureExternalDeps(deps: Record<string, string>): Promise<string>
   } catch (error) {
     try {
       fsSync.rmSync(tmpDir, { recursive: true, force: true });
-    } catch {}
+    } catch (cleanupError) {
+      console.warn("[typecheck-service] Failed to clean up an incomplete install:", cleanupError);
+    }
     throw new Error(
       `Failed to install external dependencies for typecheck: ${error instanceof Error ? error.message : String(error)}`
     );

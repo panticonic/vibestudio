@@ -25,13 +25,21 @@ async function captureCpuProfile(
     await session.send("Profiler.setSamplingInterval", { interval: opts.samplingIntervalUs });
   }
   await session.send("Profiler.start");
+  let savedProfile: ProfileRef | undefined;
   try {
     await run();
   } finally {
     const result = (await session.send("Profiler.stop")) as { profile: V8Profile };
-    await session.send("Profiler.disable").catch(() => undefined);
-    return saveProfile(cpuProfileRef(target, startedAt, result.profile), JSON.stringify(result.profile));
+    await session
+      .send("Profiler.disable")
+      .catch((error: unknown) => console.warn("[profile] Failed to disable the profiler:", error));
+    savedProfile = await saveProfile(
+      cpuProfileRef(target, startedAt, result.profile),
+      JSON.stringify(result.profile)
+    );
   }
+  if (!savedProfile) throw new Error("CPU profile was not saved");
+  return savedProfile;
 }
 
 /** Profile a panel's main world while `run` executes. */
