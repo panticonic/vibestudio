@@ -897,7 +897,7 @@ describe("PanelOrchestrator local presentation", () => {
     });
   });
 
-  it("advances an external document revision only at main-frame commit", async () => {
+  it("revokes external readiness until the committed document is durable", async () => {
     const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
     const panel = makePanel("panel:tree/presentation-browser", [], {
       snapshot: {
@@ -908,7 +908,7 @@ describe("PanelOrchestrator local presentation", () => {
       artifacts: { buildState: "ready" },
     });
     registry.addPanel(panel, null, { addAsRoot: true });
-    const { orchestrator, panelView } = createOrchestrator(registry, vi.fn(), {
+    const { orchestrator, panelView, shellCore } = createOrchestrator(registry, vi.fn(), {
       getNativeBinding: () => ({ nativeSlotId: "pane:primary" }),
     });
     const loaded = new Set<string>();
@@ -931,12 +931,15 @@ describe("PanelOrchestrator local presentation", () => {
 
     const after = orchestrator.getLocalPresentation(panel.id).presentation;
     expect(after).toMatchObject({
-      state: "ready",
-      surface: "external",
-      url: "https://example.org/next",
+      state: "loading",
+      stage: "resolving",
     });
-    expect(after.state === "ready" && before.state === "ready" && after.documentRevision).toBe(
-      before.state === "ready" ? before.documentRevision + 1 : -1
+    await vi.waitFor(() =>
+      expect(shellCore.replaceCurrentSnapshot).toHaveBeenCalledWith(panel.id, {
+        contextId: panel.snapshot.contextId,
+        source: "browser:https://example.org/next",
+        stateArgs: {},
+      })
     );
   });
 

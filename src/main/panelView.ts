@@ -30,11 +30,7 @@ import {
   type PanelLocation,
 } from "@vibestudio/shared/panelLocation";
 import { selectedWorkspaceNameFromUrl } from "@vibestudio/shared/connect";
-import {
-  classifyPanelUrl,
-  isBrowserPanelSource,
-  panelSourceFromBrowserUrl,
-} from "@vibestudio/shared/panelChrome";
+import { classifyPanelUrl, isBrowserPanelSource } from "@vibestudio/shared/panelChrome";
 import type { PanelNavigationState, PanelPlacementHint } from "@vibestudio/shared/types";
 import type { BrowserHistoryRecorder, BrowserNavigationIntent } from "./browserHistoryRecorder.js";
 // Persistence removed — server panel service handles all persistence
@@ -567,12 +563,6 @@ export class PanelView implements PanelViewLike {
           classifyPanelUrl(url).disposition === "browser-panel"
         ) {
           this.browserHistoryRecorder?.recordNavigation(panelId, url, panel.navigation?.pageTitle);
-          const nextSource = panelSourceFromBrowserUrl(url);
-          if (nextSource !== currentSource) {
-            void this.panelOrchestrator
-              .replaceCurrentSnapshot(panelId, getPanelContextId(panel), nextSource)
-              .catch(() => {});
-          }
           return;
         }
 

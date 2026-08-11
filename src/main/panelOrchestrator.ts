@@ -41,7 +41,11 @@ import { shouldMaterializePanelOnCreate } from "@vibestudio/shared/panelInterfac
 import type { WorkspaceConfig } from "@vibestudio/workspace-contracts/types";
 import type { PanelRestorePolicy } from "@vibestudio/workspace-contracts/types";
 import { buildPanelUrl } from "@vibestudio/shared/panelFactory";
-import { browserUrlFromPanelSource, isOpenPanelBrowserUrl } from "@vibestudio/shared/panelChrome";
+import {
+  browserUrlFromPanelSource,
+  isOpenPanelBrowserUrl,
+  panelSourceFromBrowserUrl,
+} from "@vibestudio/shared/panelChrome";
 import { asPanelSlotId } from "@vibestudio/shared/panel/ids";
 import type { PanelPinStoreApi } from "./panelPinStore.js";
 import {
@@ -128,6 +132,7 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
     panelBackground: "translucent",
   };
   private readonly runtime: PanelPresentationController;
+  private readonly externalDocumentCommitBySlot = new Map<string, Promise<void>>();
   private readonly restorePolicy: PanelRestorePolicy;
 
   constructor(deps: PanelOrchestratorDeps) {
@@ -193,7 +198,36 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
   }
 
   onExternalDocumentCommitted(panelId: string, url: string): void {
-    this.runtime.handleExternalDocumentCommitted(panelId, url);
+    if (!this.runtime.handleExternalDocumentCommitted(panelId, url)) return;
+    const previous = this.externalDocumentCommitBySlot.get(panelId);
+    const commit = (async () => {
+      await previous?.catch(() => undefined);
+      const panel = this.registry.getPanel(panelId);
+      if (!panel || browserUrlFromPanelSource(getPanelSource(panel)) === null) return;
+      await this.shellCore.replaceCurrentSnapshot(asPanelSlotId(panelId), {
+        contextId: getPanelContextId(panel),
+        source: panelSourceFromBrowserUrl(url),
+        stateArgs: (getCurrentSnapshot(panel).stateArgs ?? {}) as Record<string, unknown>,
+      });
+      await this.runtime.loadPanelIntoView(panelId, "acquire", true);
+    })();
+    this.externalDocumentCommitBySlot.set(panelId, commit);
+    void commit.then(
+      () => {
+        if (this.externalDocumentCommitBySlot.get(panelId) === commit) {
+          this.externalDocumentCommitBySlot.delete(panelId);
+        }
+      },
+      (error) => {
+        if (this.externalDocumentCommitBySlot.get(panelId) === commit) {
+          this.externalDocumentCommitBySlot.delete(panelId);
+          this.runtime.recordPanelPreparationFailure(
+            panelId,
+            error instanceof Error ? error.message : String(error)
+          );
+        }
+      }
+    );
   }
 
   onPanelBoot(

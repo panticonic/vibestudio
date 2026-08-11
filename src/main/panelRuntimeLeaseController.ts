@@ -352,7 +352,7 @@ export class PanelPresentationController {
    * Electron's main-frame commit event. Network load start/stop events are not
    * document identity and must never bump this revision.
    */
-  handleExternalDocumentCommitted(panelId: string, url: string): void {
+  handleExternalDocumentCommitted(panelId: string, url: string): boolean {
     const current = this.getPresentation(panelId).presentation;
     const binding = this.deps.getNativeBinding?.(panelId);
     const contents = this.deps.getPanelView()?.getWebContents(panelId) as
@@ -367,19 +367,18 @@ export class PanelPresentationController {
       contents.isDestroyed?.() ||
       typeof contents.id !== "number"
     ) {
-      return;
+      return false;
     }
+    if (current.url === url) return false;
     const documentRevision =
       (this.documentRevisionBySlot.get(panelId) ?? current.documentRevision) + 1;
     this.documentRevisionBySlot.set(panelId, documentRevision);
-    this.publish({
-      ...current,
-      webContentsId: contents.id,
-      nativeSlotId: binding.nativeSlotId,
-      documentRevision,
-      url,
-      enteredAt: Date.now(),
-    });
+    this.createAttempt(
+      panelId,
+      `${current.runtimeEntityId}|document:${documentRevision}|${url}`,
+      "resolving"
+    );
+    return true;
   }
 
   handlePanelBoot(panelId: string, webContentsId: number, observation: PanelBootObservation): void {
