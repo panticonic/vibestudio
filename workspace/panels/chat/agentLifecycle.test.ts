@@ -4,7 +4,11 @@
  * entity's creation stateArgs while the subscription stays presentation-only.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { AgentLaunchRpc } from "@workspace/agentic-core";
+import {
+  ProvisionalAgentLifecycle,
+  type AgentLaunchRpc,
+  type ProvisionalAgentIntent,
+} from "@workspace/agentic-core";
 
 const mocks = vi.hoisted(() => ({
   waitForApprovalResolution: vi.fn(async () => undefined),
@@ -23,11 +27,7 @@ vi.mock("@workspace/pubsub", () => ({
   waitForApprovalResolution: mocks.waitForApprovalResolution,
 }));
 
-import {
-  ProvisionalAgentLifecycle,
-  createAndSubscribeAgent,
-  type ProvisionalAgentIntent,
-} from "./agentLifecycle.js";
+import { createAndSubscribeAgent } from "./agentLifecycle.js";
 
 function callsFor(method: string): unknown[][] {
   return mocks.call.mock.calls.filter((c) => c[1] === method).map((c) => c[2] as unknown[]);

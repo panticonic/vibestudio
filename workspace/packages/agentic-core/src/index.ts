@@ -62,6 +62,15 @@ export {
   subscribeAgentToChannel,
   unsubscribeAgentFromChannel,
 } from "./agent-launch.js";
+export {
+  ProvisionalAgentLifecycle,
+  withWorkspaceReviewRetry,
+} from "./provisional-agent-lifecycle.js";
+export type {
+  ClaimedProvisionalAgent,
+  ProvisionalAgentIntent,
+  WorkspaceReviewWaiter,
+} from "./provisional-agent-lifecycle.js";
 export type {
   AgentChannelSubscriptionInput,
   AgentChannelUnsubscriptionInput,
