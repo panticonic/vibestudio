@@ -6,7 +6,7 @@ import {
   diffLines,
   MAX_RENDERED_DIFF_LINES,
   splitLines,
-} from "./lineDiff";
+} from "@vibestudio/shared/lineDiff";
 
 describe("splitLines", () => {
   it("drops the trailing-newline empty element", () => {

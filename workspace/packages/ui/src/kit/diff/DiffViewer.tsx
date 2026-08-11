@@ -25,8 +25,14 @@ import {
   ExternalLinkIcon,
   FileIcon,
 } from "@radix-ui/react-icons";
+import {
+  allAdded,
+  allRemoved,
+  diffLines,
+  type DiffRow,
+  type LineDiffResult,
+} from "@vibestudio/shared/lineDiff";
 import type { DiffChangedFile, DiffContentFetcher, DiffReviewEntry } from "./types";
-import { allAdded, allRemoved, diffLines, type DiffRow, type LineDiffResult } from "./lineDiff";
 import { highlightBlob, type HighlightAppearance, type HighlightedLine } from "./highlight";
 
 export interface DiffViewerProps {
