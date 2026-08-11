@@ -6,6 +6,12 @@ import {
   useTemplateManagementController,
 } from "@workspace/template-management/react";
 import {
+  templateMigrationPrompt,
+  templateOperationStage,
+  templateOperationTitle,
+  type TemplatePendingOperation,
+} from "@workspace/template-management";
+import {
   filterTemplateCatalog,
   gitCredentialInputRequest,
   isTemplateHttpUrl,
@@ -15,7 +21,7 @@ import {
   TemplateReviewPanel,
   type TemplateReviewPanelProps,
 } from "@workspace/about-shared/template-review";
-import { credentials, templates, vcs } from "../shell/client";
+import { credentials, panel, templates, vcs } from "../shell/client";
 
 function message(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -164,6 +170,21 @@ export function TemplatesSection() {
     });
   };
 
+  const continueMigration = async (operation: TemplatePendingOperation) => {
+    if (!operation.migration) return;
+    await controller.execute({
+      key: `operation:${operation.operationId}`,
+      task: () =>
+        panel.createPanel("panels/chat", {
+          contextId: operation.contextId,
+          title: `Upgrade ${templateOperationTitle(operation)}`,
+          stateArgs: { initialPrompt: templateMigrationPrompt(operation) },
+        }),
+      success: () => `Opened the ${templateOperationTitle(operation)} upgrade session.`,
+      failure: (failure) => `Couldn't open the upgrade session. ${message(failure)}`,
+    });
+  };
+
   const decideSuggestion = async (
     alias: string,
     section: "trust" | "providers",
@@ -213,19 +234,28 @@ export function TemplatesSection() {
                 <Box>
                   <Flex align="center" gap="2">
                     <Text as="div" size="2" weight="medium">
-                      {operation.kind} template operation
+                      {operation.migration
+                        ? templateOperationTitle(operation)
+                        : `${operation.kind} template operation`}
                     </Text>
                     {operation.migration ? (
                       <Badge color="amber" variant="soft">
-                        Upgrading workspace
+                        {templateOperationStage(operation)}
                       </Badge>
                     ) : null}
                   </Flex>
-                  <Text as="div" size="1" color="gray">
-                    {operation.operationId}
-                  </Text>
                 </Box>
                 <Flex gap="1">
+                  {operation.migration ? (
+                    <Button
+                      size="1"
+                      variant="soft"
+                      disabled={controller.isBusy(`operation:${operation.operationId}`)}
+                      onClick={() => void continueMigration(operation)}
+                    >
+                      Continue upgrade
+                    </Button>
+                  ) : null}
                   {!operation.review && !operation.migration ? (
                     <Button
                       size="1"
@@ -236,15 +266,17 @@ export function TemplatesSection() {
                       {operation.repair ? "Rebuild" : "Resume"}
                     </Button>
                   ) : null}
-                  <Button
-                    size="1"
-                    variant="soft"
-                    color="red"
-                    disabled={controller.isBusy(`operation:${operation.operationId}`)}
-                    onClick={() => void cancel(operation.operationId)}
-                  >
-                    Discard
-                  </Button>
+                  {operation.initiator !== "host-release" ? (
+                    <Button
+                      size="1"
+                      variant="soft"
+                      color="red"
+                      disabled={controller.isBusy(`operation:${operation.operationId}`)}
+                      onClick={() => void cancel(operation.operationId)}
+                    >
+                      Discard
+                    </Button>
+                  ) : null}
                 </Flex>
               </Flex>
               {operation.review ? (
@@ -259,9 +291,15 @@ export function TemplatesSection() {
                 <Box>
                   <Text as="div" size="2" color="orange">
                     {operation.migration
-                      ? `Continue with an agent: read and verify the incoming ${operation.migration.facets.join(", ")} contract notes before resuming.`
+                      ? `${operation.migration.notes.length || "Incoming"} contract ${operation.migration.notes.length === 1 ? "note needs" : "notes need"} agent repair and verification before this update can finish.`
                       : "The merged result is retained for repair."}
                   </Text>
+                  {operation.migration?.notes.map((note) => (
+                    <Text key={note.path} as="div" size="1" color="gray">
+                      {note.title}
+                      {!note.degradedOk ? " · workspace may be incompatible" : ""}
+                    </Text>
+                  ))}
                   {operation.repair.failures.map((failure) => (
                     <Text key={`${failure.unit}:${failure.message}`} as="div" size="1" color="gray">
                       {failure.unit}: {failure.message}

@@ -25,6 +25,7 @@ import { canonicalJson, sha256HexSyncText } from "@vibestudio/content-addressing
 import {
   canonicalTemplateNodeId,
   normalizeTemplateGitUrl,
+  templateAliasFromUrl,
 } from "@vibestudio/workspace/templateCoordinates";
 import { migrationFacetsForRepoPaths } from "@vibestudio/workspace/migrationNotes";
 import {
@@ -97,8 +98,10 @@ function emitTemplateOperationsChanged(
   ctx.emit(TEMPLATE_OPERATIONS_CHANGED_EVENT, { operationId, state });
 }
 
-function migrationFields(facets: readonly string[]): { migration?: { facets: string[] } } {
-  return facets.length > 0 ? { migration: { facets: [...facets] } } : {};
+function migrationFields(migration: TemplateOperationRecord["migration"]): {
+  migration?: NonNullable<TemplateOperationRecord["migration"]>;
+} {
+  return migration ? { migration } : {};
 }
 
 function migrationRepairFailures(facets: readonly string[]) {
@@ -119,7 +122,7 @@ export function preparedMigrationHold(
       repair: { contextId: string; failures: Array<{ unit: string; message: string }> };
     }
   | undefined {
-  if (!record.migrationFacets?.length) return undefined;
+  if (!record.migration) return undefined;
   return {
     record: {
       ...record,
@@ -128,8 +131,38 @@ export function preparedMigrationHold(
     },
     repair: {
       contextId: prepared.contextId,
-      failures: migrationRepairFailures(record.migrationFacets),
+      failures: migrationRepairFailures(record.migration.facets),
     },
+  };
+}
+
+function operationTarget(record: TemplateOperationRecord): {
+  target?: { alias: string; ref?: string };
+} {
+  if (!record.intent || typeof record.intent !== "object" || Array.isArray(record.intent))
+    return {};
+  const intent = record.intent as Record<string, unknown>;
+  const parsedTarget = WorkspaceTemplatePinSchema.safeParse(intent["target"]);
+  const alias =
+    typeof intent["alias"] === "string"
+      ? intent["alias"]
+      : parsedTarget.success
+        ? templateAliasFromUrl(parsedTarget.data.url)
+        : undefined;
+  if (!alias) return {};
+  return {
+    target: {
+      alias,
+      ...(parsedTarget.success ? { ref: parsedTarget.data.ref } : {}),
+    },
+  };
+}
+
+function operationFields(record: TemplateOperationRecord) {
+  return {
+    initiator: record.initiator,
+    ...operationTarget(record),
+    ...migrationFields(record.migration),
   };
 }
 
@@ -141,6 +174,22 @@ export interface TemplateCallerContextIntegration {
 function invokingContextId(ctx: ExtensionContextLike): string | undefined {
   const invocation = ctx.invocation.current();
   return invocation?.chainCaller?.contextId ?? invocation?.caller.contextId;
+}
+
+export function templatePullInitiator(
+  ctx: Pick<ExtensionContextLike, "invocation">,
+  hasExactPin: boolean
+): TemplateOperationRecord["initiator"] {
+  if (!hasExactPin) return "user";
+  const invocation = ctx.invocation.current();
+  if (
+    invocation?.caller.callerKind !== "server" ||
+    invocation.caller.callerId !== "server" ||
+    invocation.chainCaller
+  ) {
+    throw new Error("Exact template pins are reserved for the host release handshake");
+  }
+  return "host-release";
 }
 
 /**
@@ -230,7 +279,7 @@ async function completedOperationResult(
     publicationEventId: status.mainEventId,
     ...(contextIntegration ? { contextIntegration } : {}),
     affectedParts: record.affectedParts,
-    ...migrationFields(record.migrationFacets ?? []),
+    ...operationFields(record),
   };
 }
 
@@ -722,19 +771,33 @@ async function inspectAdopt(
   };
 }
 
+export function migrationForTemplateOperation(
+  inspection: TemplateOperationInspection,
+  affectedParts: readonly string[]
+): TemplateOperationRecord["migration"] {
+  const migrationFacets = migrationFacetsForRepoPaths(affectedParts);
+  const migrationFacetSet = new Set(migrationFacets);
+  const migrationNotes = inspection.plan.nodes
+    .flatMap((node) => node.migrationNotes)
+    .filter((note) => migrationFacetSet.has(note.path.split("/")[1] ?? ""))
+    .sort((left, right) => left.path.localeCompare(right.path));
+  return migrationFacets.length > 0
+    ? { facets: migrationFacets, notes: migrationNotes }
+    : undefined;
+}
+
 function operationParts(
   operationId: string,
   inspection: TemplateOperationInspection,
   previous?: SemanticWorkspaceObservation["state"]
 ) {
   const affectedParts = affectedTemplateParts(inspection, previous);
-  const migrationFacets = migrationFacetsForRepoPaths(affectedParts);
+  const migration = migrationForTemplateOperation(inspection, affectedParts);
   return {
-    migrationFacets,
+    migration,
     response: {
       operationId,
       affectedParts,
-      ...migrationFields(migrationFacets),
     },
   };
 }
@@ -788,7 +851,8 @@ async function applyInspection(
   env: Environment,
   operationId: string,
   inspection: TemplateOperationInspection,
-  intent: unknown
+  intent: unknown,
+  initiator: TemplateOperationRecord["initiator"]
 ) {
   const parts = operationParts(operationId, inspection, env.observation.state);
   const existing = await readTemplateOperationRecord(ctx, operationId);
@@ -797,10 +861,12 @@ async function applyInspection(
     inspection,
     intent,
     existing,
+    initiator,
     affectedParts: parts.response.affectedParts,
-    migrationFacets: parts.migrationFacets,
+    migration: parts.migration,
     persist: (record) => writeTemplateOperationRecord(ctx, record),
   });
+  const response = { ...parts.response, ...operationFields(operation.record) };
   const ports = createTemplateOperationPorts(
     ctx,
     env.info.statePath,
@@ -822,7 +888,7 @@ async function applyInspection(
       await updateTemplateOperationRecord(ctx, migrationHold.record);
       emitTemplateOperationsChanged(ctx, operationId, "repairing");
       return {
-        ...parts.response,
+        ...response,
         state: "repairing" as const,
         repair: migrationHold.repair,
       };
@@ -843,7 +909,7 @@ async function applyInspection(
       published.mainEventId
     );
     return {
-      ...parts.response,
+      ...response,
       state: "applied" as const,
       publicationEventId: published.mainEventId,
       ...(contextIntegration ? { contextIntegration } : {}),
@@ -865,11 +931,11 @@ async function applyInspection(
         preparedAffectedRepoPaths,
         buildFailures: failures,
       });
-      if (operation.record.migrationFacets?.length) {
+      if (operation.record.migration) {
         emitTemplateOperationsChanged(ctx, operationId, "repairing");
       }
       return {
-        ...parts.response,
+        ...response,
         state: "error" as const,
         blocker: {
           state: "error" as const,
@@ -882,7 +948,7 @@ async function applyInspection(
     }
     if (error instanceof TemplateCredentialRequired) {
       return {
-        ...parts.response,
+        ...response,
         state: "waiting-for-credential" as const,
         blocker: {
           state: "waiting-for-credential" as const,
@@ -900,11 +966,11 @@ async function applyInspection(
         reviews: [...error.items],
         deltaBasis: error.deltaBasis,
       });
-      if (operation.record.migrationFacets?.length) {
+      if (operation.record.migration) {
         emitTemplateOperationsChanged(ctx, operationId, "pending");
       }
       return {
-        ...parts.response,
+        ...response,
         state: "pending" as const,
         review: {
           operationId,
@@ -920,7 +986,7 @@ async function applyInspection(
         mainAdvanceEventId: error.mainEventId,
       });
       return {
-        ...parts.response,
+        ...response,
         state: "error" as const,
         blocker: {
           state: "error" as const,
@@ -977,7 +1043,7 @@ async function resumePreparedOperation(
       operationId: record.operationId,
       state: "error" as const,
       affectedParts: record.affectedParts,
-      ...migrationFields(record.migrationFacets ?? []),
+      ...operationFields(record),
       blocker: {
         state: "error" as const,
         code: "TemplateMainAdvanced",
@@ -1006,7 +1072,7 @@ async function resumePreparedOperation(
     operationId: record.operationId,
     state: "applied" as const,
     affectedParts: record.affectedParts,
-    ...migrationFields(record.migrationFacets ?? []),
+    ...operationFields(record),
     publicationEventId: published.mainEventId,
     ...(contextIntegration ? { contextIntegration } : {}),
   };
@@ -1038,6 +1104,14 @@ export async function cancelTemplateOperation(input: {
   }
   if (latest) await input.destroy(latest.contextId);
   return { operationId: input.operationId, state: "cancelled" };
+}
+
+export function assertTemplateOperationCancellable(record: TemplateOperationRecord | null): void {
+  if (record?.initiator === "host-release") {
+    throw new Error(
+      "The host release workspace update cannot be cancelled; continue its retained repair session"
+    );
+  }
 }
 
 async function activeTemplateOperations(
@@ -1168,7 +1242,7 @@ export async function activate(ctx: ExtensionContextLike) {
               ? ("repairing" as const)
               : ("pending" as const),
           fingerprint: record.fingerprint,
-          ...migrationFields(record.migrationFacets ?? []),
+          ...operationFields(record),
           ...(record.reviews?.length
             ? {
                 review: {
@@ -1193,7 +1267,7 @@ export async function activate(ctx: ExtensionContextLike) {
                             message: `Merge protected-main event ${record.mainAdvanceEventId} into this context, resolve any semantic conflicts, then resume`,
                           },
                         ]
-                      : migrationRepairFailures(record.migrationFacets ?? [])),
+                      : migrationRepairFailures(record.migration?.facets ?? [])),
                 },
               }
             : {}),
@@ -1203,6 +1277,8 @@ export async function activate(ctx: ExtensionContextLike) {
     },
 
     async cancel(input: { operationId: string }) {
+      const existing = await readTemplateOperationRecord(ctx, input.operationId);
+      assertTemplateOperationCancellable(existing);
       const result = await cancelTemplateOperation({
         operationId: input.operationId,
         findContext: async () => {
@@ -1214,6 +1290,10 @@ export async function activate(ctx: ExtensionContextLike) {
           for (const contextId of listed.contexts) {
             const record = await readTemplateOperationRecordInContext(ctx, contextId);
             if (record?.operationId !== input.operationId) continue;
+            // Recheck the durable record at the mutation point. An exact host
+            // pull may commit its intent between the optimistic read above and
+            // context discovery; cancellation must never win that race.
+            assertTemplateOperationCancellable(record);
             return {
               contextId,
               applied: Boolean(
@@ -1383,6 +1463,7 @@ export async function activate(ctx: ExtensionContextLike) {
           version: 1,
           operationId: input.commandId,
           kind: "publish-authoring",
+          initiator: "user",
           fingerprint: current.fingerprint,
           intent: publicationIntent,
           pins: [],
@@ -1580,7 +1661,8 @@ export async function activate(ctx: ExtensionContextLike) {
           kind: "add",
           source: input.source,
           target: resolved.pin,
-        }
+        },
+        "user"
       );
     },
 
@@ -1608,7 +1690,8 @@ export async function activate(ctx: ExtensionContextLike) {
         record?.intent ?? {
           kind: "adopt",
           target: selectedPin,
-        }
+        },
+        "user"
       );
     },
 
@@ -1618,11 +1701,17 @@ export async function activate(ctx: ExtensionContextLike) {
       toRef?: string;
       pin?: WorkspaceTemplatePin;
     }) {
+      const requestedPin = input.pin ? WorkspaceTemplatePinSchema.parse(input.pin) : null;
+      const initiator = templatePullInitiator(ctx, requestedPin !== null);
       let env = await environment(ctx);
       const record = await operationRecordForMutation(ctx, env, input.commandId);
+      if (record && record.initiator !== initiator) {
+        throw new Error(
+          `Template operation ${input.commandId} was reused by a different initiator`
+        );
+      }
       const completed = await completedOperationResult(ctx, record);
       if (completed) return completed;
-      const requestedPin = input.pin ? WorkspaceTemplatePinSchema.parse(input.pin) : null;
       if (!record && !requestedPin && !env.catalog) {
         env = await environment(ctx, { requireCatalog: true });
       }
@@ -1686,7 +1775,8 @@ export async function activate(ctx: ExtensionContextLike) {
           kind: "pull",
           alias: input.alias,
           target: pin,
-        }
+        },
+        initiator
       );
     },
 
@@ -1721,7 +1811,8 @@ export async function activate(ctx: ExtensionContextLike) {
           kind: "remove",
           alias: input.alias,
           templateUrl: node.pin.url,
-        }
+        },
+        "user"
       );
     },
 
@@ -1817,6 +1908,7 @@ export async function activate(ctx: ExtensionContextLike) {
       ]);
       return {
         operationId: input.commandId,
+        initiator: "user" as const,
         state: "applied" as const,
         contribution: result.branch
           ? { branch: result.branch, ...(result.url ? { url: result.url } : {}) }

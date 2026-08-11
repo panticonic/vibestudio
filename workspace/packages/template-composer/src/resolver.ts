@@ -36,7 +36,11 @@ import {
   normalizeTemplateStateDeclaration,
   templateSuggestionDigest,
 } from "@vibestudio/workspace/templateState";
-import { parseMigrationNote } from "@vibestudio/workspace/migrationNotes";
+import {
+  parseMigrationNote,
+  summarizeMigrationNote,
+  type MigrationNoteSummary,
+} from "@vibestudio/workspace/migrationNotes";
 
 const TEMPLATE_FRAGMENT_DIR = "meta/templates";
 const TEMPLATE_STATE_PATH = "meta/templates.state.yml";
@@ -106,6 +110,9 @@ export interface ResolvedTemplateNode {
     trust?: unknown;
     providers?: unknown;
   };
+  /** Current living notes from this exact acquired release. Installed nodes
+   * that were not reacquired contribute none to an incoming migration hold. */
+  migrationNotes: MigrationNoteSummary[];
 }
 
 export interface TemplateRepositoryContribution {
@@ -166,6 +173,7 @@ interface ParsedTemplateManifest {
   fragmentYaml: string;
   presentation?: WorkspaceTemplatePresentation;
   excludedSuggestions: ResolvedTemplateNode["excludedSuggestions"];
+  migrationNotes: MigrationNoteSummary[];
 }
 
 function canonicalYaml(value: unknown): string {
@@ -267,11 +275,38 @@ function parseTemplateManifest(
         ...(top.trust === undefined ? {} : { trust: top.trust }),
         ...(top.providers === undefined ? {} : { providers: top.providers }),
       },
+      migrationNotes: parseSnapshotMigrationNotes(nodeId, snapshot),
     };
   } catch (error) {
     if (error instanceof TemplateManifestError) throw error;
     throw new TemplateManifestError(nodeId, error instanceof Error ? error.message : String(error));
   }
+}
+
+function parseSnapshotMigrationNotes(
+  nodeId: string,
+  snapshot: ExactGitSnapshot
+): MigrationNoteSummary[] {
+  return snapshot.files
+    .filter((file) => file.path.startsWith("migrations/") && file.path.endsWith(".md"))
+    .map((file) => {
+      const bytes = snapshot.readFile(file.path);
+      if (!bytes) {
+        throw new TemplateManifestError(nodeId, `missing migration-note bytes for ${file.path}`);
+      }
+      try {
+        return summarizeMigrationNote(
+          parseMigrationNote(file.path, new TextDecoder("utf-8", { fatal: true }).decode(bytes))
+        );
+      } catch (error) {
+        if (error instanceof TemplateManifestError) throw error;
+        throw new TemplateManifestError(
+          nodeId,
+          error instanceof Error ? error.message : String(error)
+        );
+      }
+    })
+    .sort((left, right) => compareUtf16CodeUnits(left.path, right.path));
 }
 
 function enumerateRepoFiles(node: MutableNode): Map<string, ExactSnapshotFile[]> {
@@ -290,23 +325,6 @@ function enumerateRepoFiles(node: MutableNode): Map<string, ExactSnapshotFile[]>
     }
     const unit = parts[1];
     if (!unit || parts.length < 3) continue;
-    if (section === "migrations" && file.path.endsWith(".md")) {
-      const bytes = node.snapshot.readFile(file.path);
-      if (!bytes) {
-        throw new TemplateManifestError(
-          node.nodeId,
-          `missing migration-note bytes for ${file.path}`
-        );
-      }
-      try {
-        parseMigrationNote(file.path, new TextDecoder("utf-8", { fatal: true }).decode(bytes));
-      } catch (error) {
-        throw new TemplateManifestError(
-          node.nodeId,
-          error instanceof Error ? error.message : String(error)
-        );
-      }
-    }
     const repoPath = normalizeWorkspaceRepoPath(`${section}/${unit}`);
     const list = repositories.get(repoPath) ?? [];
     list.push({ ...file, path: parts.slice(2).join("/") });
@@ -546,6 +564,7 @@ export async function resolveTemplateComposition(
               ? {}
               : { providers: installedNode.suggestions.providers.value }),
           },
+          migrationNotes: [],
         };
         nodes.set(nodeId, node);
         nodeByUrl.set(dependency.url, nodeId);
@@ -584,6 +603,7 @@ export async function resolveTemplateComposition(
         fragmentYaml: parsed.fragmentYaml,
         ...(parsed.presentation === undefined ? {} : { presentation: parsed.presentation }),
         excludedSuggestions: parsed.excludedSuggestions,
+        migrationNotes: parsed.migrationNotes,
       };
       nodes.set(nodeId, node);
       nodeByUrl.set(dependency.url, nodeId);

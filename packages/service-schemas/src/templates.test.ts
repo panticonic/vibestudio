@@ -41,6 +41,7 @@ describe("template recovery contracts", () => {
       operationId: "pull-1",
       kind: "pull",
       contextId: "template-composer-operation-1",
+      initiator: "user" as const,
       fingerprint: `v1-sha256:${"a".repeat(64)}`,
     };
     expect(
@@ -61,16 +62,31 @@ describe("template recovery contracts", () => {
           operationId: "pull-base",
           kind: "pull",
           contextId: "template-composer-operation-base",
+          initiator: "host-release",
+          target: { alias: "base", ref: "refs/tags/v2" },
           state: "repairing",
           fingerprint: `v1-sha256:${"a".repeat(64)}`,
-          migration: { facets: ["system"] },
+          migration: {
+            facets: ["system"],
+            notes: [
+              {
+                path: "migrations/system/current-contract.md",
+                title: "Current contract",
+                degradedOk: false,
+              },
+            ],
+          },
           repair: {
             contextId: "template-composer-operation-base",
             failures: [],
           },
         },
       ])[0]
-    ).toMatchObject({ migration: { facets: ["system"] } });
+    ).toMatchObject({
+      initiator: "host-release",
+      target: { alias: "base", ref: "refs/tags/v2" },
+      migration: { facets: ["system"] },
+    });
   });
 
   it("accepts an exact host-shipped target on the ordinary pull method", () => {
@@ -108,6 +124,7 @@ describe("template recovery contracts", () => {
     expect(
       templateOperationSchema.parse({
         operationId: "add:private",
+        initiator: "user",
         state: "waiting-for-credential",
         blocker,
         affectedParts: [],
@@ -119,6 +136,7 @@ describe("template recovery contracts", () => {
     expect(
       templateOperationSchema.parse({
         operationId: "add:news",
+        initiator: "user",
         state: "error",
         affectedParts: ["panels/news"],
         blocker: {
@@ -142,6 +160,7 @@ describe("template recovery contracts", () => {
     expect(
       templateOperationSchema.parse({
         operationId: "pull:news",
+        initiator: "user",
         state: "error",
         affectedParts: ["panels/news"],
         blocker: {
@@ -177,6 +196,7 @@ describe("template recovery contracts", () => {
     expect(() =>
       templateOperationSchema.parse({
         operationId: "add:private",
+        initiator: "user",
         state: "pending",
         cardRef: "internal-approval-record",
         affectedParts: [],

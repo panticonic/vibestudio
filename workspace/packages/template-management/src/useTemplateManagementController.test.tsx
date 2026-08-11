@@ -33,6 +33,7 @@ const attachedOperation = {
   operationId,
   kind: "pull",
   contextId: "ctx:pull",
+  initiator: "user",
   state: "reviewing",
   fingerprint: `v1-sha256:${"a".repeat(64)}`,
   review: deferredRow.review,

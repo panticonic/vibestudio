@@ -10,6 +10,7 @@ describe("TemplateAddButton", () => {
   it("starts one install transaction without a separate preparation call", async () => {
     const add = vi.fn(async () => ({
       operationId: "add-github",
+      initiator: "user" as const,
       state: "applied" as const,
       affectedParts: ["extensions/github"],
     }));
@@ -41,6 +42,7 @@ describe("TemplateAddButton", () => {
       .mockRejectedValueOnce(new Error("registry unavailable"))
       .mockResolvedValueOnce({
         operationId: "add-news",
+        initiator: "user" as const,
         state: "applied" as const,
         affectedParts: ["panels/news"],
       });

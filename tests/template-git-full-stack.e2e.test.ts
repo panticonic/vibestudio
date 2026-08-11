@@ -431,6 +431,69 @@ async function replaceProtectedText(
   ]);
 }
 
+async function readManagedText(
+  contextId: string,
+  repoPath: string,
+  filePath: string
+): Promise<string | null> {
+  const current = await status(contextId);
+  const repository = await agentCall<{ repositoryId: string } | null>("vcs.resolveRepository", [
+    { state: current.workingHead, repoPath },
+  ]);
+  if (!repository) throw new Error(`Missing semantic repository ${repoPath}`);
+  const file = await agentCall<{
+    content: { kind: "text"; text: string } | { kind: "bytes"; base64: string };
+  } | null>("vcs.readFile", [
+    {
+      state: current.workingHead,
+      repositoryId: repository.repositoryId,
+      file: { kind: "path", path: filePath },
+    },
+  ]);
+  if (!file) return null;
+  if (file.content.kind !== "text") throw new Error(`Expected text at ${repoPath}/${filePath}`);
+  return file.content.text;
+}
+
+async function createManagedText(
+  contextId: string,
+  repoPath: string,
+  filePath: string,
+  text: string
+): Promise<void> {
+  const before = await status(contextId);
+  const repository = await agentCall<{ repositoryId: string } | null>("vcs.resolveRepository", [
+    { state: before.workingHead, repoPath },
+  ]);
+  if (!repository) throw new Error(`Missing semantic repository ${repoPath}`);
+  const edited = await agentCall<{ workingHead: unknown }>("vcs.edit", [
+    {
+      commandId: `template-e2e-repair:${randomUUID()}`,
+      contextId,
+      expectedWorkingHead: before.workingHead,
+      intentSummary: "Satisfy the incoming template migration contract",
+      changes: [
+        {
+          kind: "file-create",
+          repositoryId: repository.repositoryId,
+          path: filePath,
+          content: { kind: "text", text },
+          mode: 0o644,
+        },
+      ],
+    },
+  ]);
+  await agentCall("vcs.commit", [
+    {
+      commandId: `template-e2e-commit-repair:${randomUUID()}`,
+      contextId,
+      expectedWorkingHead: edited.workingHead,
+      intentSummary: "Record the verified migration repair",
+      message: "Satisfy the v2 runtime migration contract",
+    },
+  ]);
+}
+
 async function waitForContribution(alias: string): Promise<{ branch: string; url?: string }> {
   for (let attempt = 0; attempt < 120; attempt += 1) {
     const rows = (
@@ -469,6 +532,26 @@ async function writeTemplateFixture(worktree: string, revision: "v1" | "v2"): Pr
     path.join(worktree, "packages", templateAlias, "index.ts"),
     `export const templateRevision = ${JSON.stringify(revision)};\n`
   );
+  if (revision === "v2") {
+    const migrationDirectory = path.join(worktree, "migrations", templateAlias);
+    await fs.mkdir(migrationDirectory, { recursive: true });
+    await fs.writeFile(
+      path.join(migrationDirectory, "runtime-contract.md"),
+      [
+        "---",
+        "degraded-ok: false",
+        "verify: |",
+        `  Confirm packages/${templateAlias}/migration-ready.ts exists and the localCustomization export remains in index.ts.`,
+        "---",
+        "",
+        "# Preserve the customized runtime while adopting v2",
+        "",
+        "The v2 runtime requires migration-ready.ts. Preserve any workspace-owned",
+        "localCustomization export while bringing the template revision to v2.",
+        "",
+      ].join("\n")
+    );
+  }
 }
 
 async function canonicalGitSnapshot(worktree: string, commit: string): Promise<string> {
@@ -885,6 +968,20 @@ describe("full-stack template Git UX", () => {
           expect.objectContaining({ alias: installedTemplateAlias, commit: contributionCommit })
         );
 
+        // Keep a real workspace-owned edit in the same repository the next
+        // release changes. The migration rehearsal must preserve it rather
+        // than replacing the local layer with the template's v2 snapshot.
+        await replaceProtectedText(
+          templateRepoPath,
+          "index.ts",
+          [
+            'export const templateRevision = "suggested-by-workspace";',
+            "export const localCustomization = true;",
+            "",
+          ].join("\n")
+        );
+        await waitForTemplateState(installedTemplateAlias, "local-changes");
+
         // A second real smart-HTTP remote proves the ordinary workspace Git
         // bridge path; it is not the template fixture's native Git push above.
         const workspaceRemote = await fixtureGit.create("workspace-push", "main");
@@ -942,7 +1039,7 @@ describe("full-stack template Git UX", () => {
         const pullId = `template-pull:${randomUUID()}`;
         const pulled = await runWithTemplateApprovals<{
           operationId: string;
-          review?: { contextId: string; items: Array<{ deltaId: string }> };
+          review?: { contextId: string; items: Array<{ sourceDeltaId: string }> };
         }>(["templates", "pull", installedTemplateAlias, "--command-id", pullId, "--json"]);
 
         // A changed owned part produces external deltas.  Review their exact
@@ -950,7 +1047,7 @@ describe("full-stack template Git UX", () => {
         expect(pulled.value.review?.items.length).toBeGreaterThan(0);
         const contextId = pulled.value.review!.contextId;
         let reviewedChanges = 0;
-        for (const { deltaId } of pulled.value.review!.items) {
+        for (const { sourceDeltaId } of pulled.value.review!.items) {
           const current = await status(contextId);
           const comparison = await cli<{
             changes: Array<{ changeId: string; disposition: { status: string } }>;
@@ -960,7 +1057,7 @@ describe("full-stack template Git UX", () => {
             "vcs.compare",
             JSON.stringify([
               {
-                source: { kind: "external-delta", deltaId },
+                source: { kind: "external-delta", deltaId: sourceDeltaId },
                 target: current.workingHead,
                 limit: 200,
               },
@@ -981,7 +1078,7 @@ describe("full-stack template Git UX", () => {
                 commandId: `template-adopt:${randomUUID()}`,
                 contextId,
                 expectedWorkingHead: current.workingHead,
-                source: { kind: "external-delta", deltaId },
+                source: { kind: "external-delta", deltaId: sourceDeltaId },
                 coordinates: mergeable,
               },
             ]),
@@ -989,11 +1086,102 @@ describe("full-stack template Git UX", () => {
           ]);
         }
         expect(reviewedChanges).toBeGreaterThan(0);
-        await runWithTemplateApprovals(
+        const held = await runWithTemplateApprovals<{
+          operationId: string;
+          initiator: "user" | "host-release";
+          state: string;
+          migration?: {
+            facets: string[];
+            notes: Array<{ path: string; title: string; degradedOk: boolean }>;
+          };
+          repair?: { contextId: string };
+        }>(
           ["templates", "pull", installedTemplateAlias, "--command-id", pullId, "--json"],
           180_000
         );
-        await waitForTemplateState(installedTemplateAlias, "current");
+        expect(held.value).toMatchObject({
+          operationId: pullId,
+          initiator: "user",
+          state: "repairing",
+          migration: {
+            facets: [templateAlias],
+            notes: [
+              {
+                path: `migrations/${templateAlias}/runtime-contract.md`,
+                title: "Preserve the customized runtime while adopting v2",
+                degradedOk: false,
+              },
+            ],
+          },
+          repair: { contextId },
+        });
+
+        // The note's probe fails in the retained context before repair, while
+        // the overlapping local customization is already preserved.
+        expect(await readManagedText(contextId, templateRepoPath, "migration-ready.ts")).toBeNull();
+        expect(await readManagedText(contextId, templateRepoPath, "index.ts")).toContain(
+          "localCustomization"
+        );
+
+        // Restart the exact Composer execution. Its process-local state is
+        // discarded; operations() must reconstruct this repair from the
+        // durable semantic context.
+        const supervised = await agentCall<
+          Array<{
+            identity: { kind: "extension"; entityId: string };
+            source: string;
+          }>
+        >("runtime.supervision.list", []);
+        const composer = supervised.find(
+          (unit) =>
+            unit.identity.kind === "extension" && unit.source === "extensions/template-composer"
+        );
+        expect(composer).toBeDefined();
+        await runWithAnyApprovals(() =>
+          agentCall("runtime.supervision.restart", [composer!.identity])
+        );
+        const resumedOperations = await cli<
+          Array<{
+            operationId: string;
+            contextId: string;
+            state: string;
+            migration?: { notes: Array<{ title: string }> };
+          }>
+        >(["templates", "operations", "--json"]);
+        expect(resumedOperations.value).toContainEqual(
+          expect.objectContaining({
+            operationId: pullId,
+            contextId,
+            state: "repairing",
+            migration: {
+              notes: [
+                expect.objectContaining({
+                  title: "Preserve the customized runtime while adopting v2",
+                }),
+              ],
+            },
+          })
+        );
+
+        await createManagedText(
+          contextId,
+          templateRepoPath,
+          "migration-ready.ts",
+          'export const migrationReady = "v2";\n'
+        );
+        expect(await readManagedText(contextId, templateRepoPath, "migration-ready.ts")).toContain(
+          'migrationReady = "v2"'
+        );
+        expect(await readManagedText(contextId, templateRepoPath, "index.ts")).toContain(
+          "localCustomization"
+        );
+
+        const resumed = await runWithTemplateApprovals<{ state: string }>(
+          ["templates", "resume", pullId, "--json"],
+          180_000
+        );
+        expect(resumed.value.state).toBe("applied");
+        await waitForTemplateState(installedTemplateAlias, "local-changes");
         expect(
           (await cli<Array<{ alias: string; commit: string }>>(["templates", "status", "--json"]))
             .value

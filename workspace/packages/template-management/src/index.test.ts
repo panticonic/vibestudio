@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-import { createTemplateManagementClient } from "./index.js";
+import {
+  createTemplateManagementClient,
+  templateMigrationPrompt,
+  templateOperationStage,
+  templateOperationTitle,
+} from "./index.js";
 
 describe("createTemplateManagementClient", () => {
   it("exposes the complete template-composer API through one invocation path", async () => {
@@ -82,5 +87,37 @@ describe("createTemplateManagementClient", () => {
         ],
       ],
     ]);
+  });
+});
+
+describe("template migration handoff", () => {
+  const operation = {
+    operationId: "host-release-v2",
+    kind: "pull" as const,
+    contextId: "template-operation-v2",
+    initiator: "host-release" as const,
+    target: { alias: "workspace-base", ref: "refs/tags/v2" },
+    state: "repairing" as const,
+    fingerprint: `v1-sha256:${"a".repeat(64)}`,
+    migration: {
+      facets: ["system"],
+      notes: [
+        {
+          path: "migrations/system/runtime.md",
+          title: "Runtime contract",
+          degradedOk: false,
+        },
+      ],
+    },
+  };
+
+  it("builds a human target label and exact in-context agent handoff", () => {
+    expect(templateOperationTitle(operation)).toBe("workspace-base · v2");
+    expect(templateOperationStage(operation)).toBe("Repair needed");
+    expect(templateMigrationPrompt(operation)).toContain("Use the Templates skill");
+    expect(templateMigrationPrompt(operation)).not.toContain("host-release-v2");
+    expect(templateMigrationPrompt(operation)).toContain(
+      "migrations/system/runtime.md: Runtime contract"
+    );
   });
 });

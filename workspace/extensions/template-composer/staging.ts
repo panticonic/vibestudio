@@ -12,6 +12,7 @@ import type {
 } from "@vibestudio/service-schemas/vcs";
 import type { WorkspaceTemplatePin } from "@vibestudio/workspace-contracts/types";
 import type { TemplateAuthoringInspection } from "@vibestudio/service-schemas/templates";
+import type { MigrationNoteSummary } from "@vibestudio/workspace/migrationNotes";
 import { composeWorkspaceConfig } from "@vibestudio/workspace/configComposition";
 import { normalizeTemplateGitUrl } from "@vibestudio/workspace/templateCoordinates";
 import type {
@@ -72,13 +73,14 @@ export interface TemplateOperationRecord {
   version: 1;
   operationId: string;
   kind: TemplateOperationInspection["kind"] | "publish-authoring";
+  initiator: "user" | "host-release";
   fingerprint: string;
   intent: unknown;
   pins: WorkspaceTemplatePin[];
   affectedParts: string[];
-  /** Note facets carried by the incoming delta. Presence retains this ordinary
-   * operation for contract-first agentic repair before publication. */
-  migrationFacets?: string[];
+  /** Current notes carried by the exact incoming delta. Presence retains this
+   * ordinary operation for contract-first agentic repair before publication. */
+  migration?: { facets: string[]; notes: MigrationNoteSummary[] };
   authoringInspection?: TemplateAuthoringInspection;
   authoringPublication?: import("@vibestudio/service-schemas/templates").TemplatePublication;
   reviews?: TemplateReviewItem[];
