@@ -624,6 +624,7 @@ export const vcsEditChangeSchema = z.discriminatedUnion("kind", [
       repositoryId: id("Repository containing the file."),
       fileId: id("Stable file identity."),
       edits: z.array(vcsTextEditSchema).min(1).max(1_000),
+      mode: z.number().int().nonnegative().max(0o777).optional(),
     })
     .strict(),
   z
@@ -632,6 +633,7 @@ export const vcsEditChangeSchema = z.discriminatedUnion("kind", [
       repositoryId: id("Repository containing the file."),
       fileId: id("Stable file identity."),
       base64: z.string(),
+      mode: z.number().int().nonnegative().max(0o777).optional(),
     })
     .strict(),
   z

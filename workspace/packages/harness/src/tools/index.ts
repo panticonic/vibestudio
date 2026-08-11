@@ -23,6 +23,13 @@ export type { ProvenanceBlockInput } from "./provenance-format.js";
 export { createEditTool } from "./edit.js";
 export type { EditToolInput, EditToolDetails } from "./edit.js";
 
+export { createApplyPatchTool } from "./apply-patch.js";
+export type {
+  ApplyPatchOperation,
+  ApplyPatchToolInput,
+  ApplyPatchToolDetails,
+} from "./apply-patch.js";
+
 export { createWriteTool } from "./write.js";
 export type { WriteToolInput, WriteToolDetails } from "./write.js";
 

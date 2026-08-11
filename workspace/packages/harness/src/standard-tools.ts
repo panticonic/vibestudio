@@ -7,6 +7,7 @@
  */
 export {
   createEditTool,
+  createApplyPatchTool,
   createFindTool,
   createGrepTool,
   createLsTool,

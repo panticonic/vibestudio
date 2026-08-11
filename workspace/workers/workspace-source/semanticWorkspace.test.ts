@@ -991,6 +991,7 @@ describe("SemanticWorkspace repository counteractions", () => {
             repositoryId,
             fileId: copiedFileId,
             edits: [{ start: 3, end: 4, text: "X" }],
+            mode: 0o755,
           },
         ],
       },
@@ -1019,6 +1020,11 @@ describe("SemanticWorkspace repository counteractions", () => {
     }>(resumed);
     acknowledgeMaterialization(resumed);
     const editChangeId = edited.changeIds[0]!;
+    const editedRoot = store.stateRoot(edited.workingHead);
+    expect(store.facts.file(editedRoot, copiedFileId)?.state).toMatchObject({
+      presence: "placed",
+      mode: 0o755,
+    });
 
     expect(
       sql

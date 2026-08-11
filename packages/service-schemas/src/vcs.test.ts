@@ -286,6 +286,7 @@ describe("simple local mutations", () => {
           repositoryId: "repository:1",
           fileId: "file:1",
           edits: [{ start: 0, end: 5, text: "hello" }],
+          mode: 0o755,
         },
         {
           kind: "file-create",
@@ -296,6 +297,7 @@ describe("simple local mutations", () => {
       ],
     };
     const parsed = vcsEditInputSchema.parse(input);
+    expect(parsed.changes[0]).toMatchObject({ mode: 0o755 });
     expect(parsed.changes[1]).toMatchObject({ mode: 0o644 });
     for (const legacyKey of [
       "target",

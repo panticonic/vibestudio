@@ -263,13 +263,12 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
     // inspection calls without any of those features, so load the factories
     // only when a turn first asks for its model-facing registry.
     const {
-      createEditTool,
+      createApplyPatchTool,
       createFindTool,
       createGrepTool,
       createLsTool,
       createReadTool,
       createProvenanceTool,
-      createWriteTool,
       createMoveFileTool,
       createCopyFileTool,
       createWorkspaceVcsTool,
@@ -328,8 +327,7 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
       createLsTool(cwd, fs),
       createGrepTool(cwd, fs, { rpc: toolRpc }),
       createFindTool(cwd, fs, { rpc: toolRpc }),
-      createEditTool(cwd, vcs, mutationContext, fs),
-      createWriteTool(cwd, vcs, mutationContext, fs),
+      createApplyPatchTool(cwd, vcs, mutationContext),
       createMoveFileTool(cwd, vcs, mutationContext, fs),
       createCopyFileTool(cwd, vcs, mutationContext, fs),
       createWorkspaceVcsTool(cwd, vcs, mutationContext),

@@ -57,10 +57,19 @@ export async function resolveToolFile(
   const split = splitRepoPath(workspacePath);
   if (!split?.repoRelPath) throw new Error(`${workspacePath} is not a file in a workspace repo`);
   const repository = await resolveToolRepository(vcs, state, split.repoPath);
+  return resolveToolFileInRepository(vcs, state, repository, split.repoRelPath);
+}
+
+export async function resolveToolFileInRepository(
+  vcs: Pick<ToolVcs, "readFile">,
+  state: VcsStateNodeRef,
+  repository: PresentToolRepository,
+  repoRelativePath: string
+): Promise<ToolFileResolution | null> {
   const file = await vcs.readFile({
     state,
     repositoryId: repository.repositoryId,
-    file: { kind: "path", path: split.repoRelPath },
+    file: { kind: "path", path: repoRelativePath },
   });
   if (!file || !file.repositoryId || !file.fileId) return null;
   return {

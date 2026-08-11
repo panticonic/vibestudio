@@ -28,7 +28,7 @@
     },
     {
       "path": "references/compare-and-merge.md",
-      "sha256": "b64d8f8961970c904d8bdde718f5722155be1286fe1a41517ac400d00120474e"
+      "sha256": "5a98387aff8031307f058bf69958c4288ce3d4a17c93aec924ec8b83e79c95bf"
     },
     {
       "path": "references/contexts-and-state.md",
@@ -48,7 +48,7 @@
     },
     {
       "path": "references/public-contract.json",
-      "sha256": "2b44f0d4a1a1c1b2f1fbeb671cd44a924f9eddce0878f4183dc3fb59a623949c"
+      "sha256": "2ea9800d7f1c41ef8ed9069bbd1c220e4969411945bded5ab4ea564c2ef62e57"
     },
     {
       "path": "references/public-contract.md",
@@ -60,7 +60,7 @@
     },
     {
       "path": "references/scenarios.md",
-      "sha256": "989bc46c9225282490aaef0b9c1b472e831cf389fa2c52cbddf2c2ccc5cee3c0"
+      "sha256": "36883cbff3d020e38907ca98c34d9cdabeb17805108acc26b269afd0981c4012"
     },
     {
       "path": "references/semantic-commit.md",
@@ -68,8 +68,8 @@
     },
     {
       "path": "references/typed-recovery.md",
-      "sha256": "da812b84a24fb5faf50d0dba3732f5569637dfb609d1615e956f1292910c9564"
+      "sha256": "1b8a8b5b185b47039733272129292f2d6442205bb02d4b07e328790795eb77cb"
     }
   ],
-  "packageDigest": "e58456eba29eadc6f3faf012cdd83452a78dd905919c166dd6f82ea2b1ad959e"
+  "packageDigest": "529047a21b60974c09440da21032440ff3556741369643c12271e2aa9430f2ad"
 }

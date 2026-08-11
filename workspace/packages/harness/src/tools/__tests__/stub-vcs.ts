@@ -8,6 +8,8 @@ import type { ToolEditingVcs } from "../tool-vcs.js";
 
 export interface StubVcsInit {
   files?: Record<string, string>;
+  binaryFiles?: Record<string, string>;
+  modes?: Record<string, number>;
 }
 
 function normalize(path: string): string {
@@ -16,6 +18,8 @@ function normalize(path: string): string {
 
 export class StubVcs implements ToolEditingVcs {
   readonly files = new Map<string, string>();
+  readonly binaryFiles = new Map<string, string>();
+  readonly modes = new Map<string, number>();
   lastEditInput?: VcsEditInput;
   lastCommitInput?: VcsCommitInput;
   private version = 0;
@@ -24,6 +28,12 @@ export class StubVcs implements ToolEditingVcs {
   constructor(init?: StubVcsInit) {
     for (const [path, text] of Object.entries(init?.files ?? {})) {
       this.files.set(normalize(path), text);
+    }
+    for (const [path, base64] of Object.entries(init?.binaryFiles ?? {})) {
+      this.binaryFiles.set(normalize(path), base64);
+    }
+    for (const [path, mode] of Object.entries(init?.modes ?? {})) {
+      this.modes.set(normalize(path), mode);
     }
   }
 
@@ -41,7 +51,7 @@ export class StubVcs implements ToolEditingVcs {
       "projects/tmp_dir_test_root",
       "projects/note",
     ]);
-    for (const file of this.files.keys()) {
+    for (const file of [...this.files.keys(), ...this.binaryFiles.keys()]) {
       const parts = file.split("/");
       paths.add(parts[0] === "meta" ? "meta" : `${parts[0]}/${parts[1]}`);
     }
@@ -50,6 +60,10 @@ export class StubVcs implements ToolEditingVcs {
 
   read(path: string): string | undefined {
     return this.files.get(normalize(path));
+  }
+
+  readBinary(path: string): string | undefined {
+    return this.binaryFiles.get(normalize(path));
   }
 
   async status(input: Parameters<ToolEditingVcs["status"]>[0]) {
@@ -81,14 +95,15 @@ export class StubVcs implements ToolEditingVcs {
       requestedPath = input.file.path;
     } else {
       const fileId = input.file.fileId;
-      requestedPath = [...this.files.keys()]
+      requestedPath = [...this.files.keys(), ...this.binaryFiles.keys()]
         .find((path) => `file:${path}` === fileId)
         ?.slice(repoPath.length + 1);
     }
     if (!requestedPath) return null;
     const fullPath = `${repoPath}/${requestedPath}`;
     const text = this.files.get(fullPath);
-    if (text === undefined) return null;
+    const base64 = this.binaryFiles.get(fullPath);
+    if (text === undefined && base64 === undefined) return null;
     return {
       repositoryId: `repository:${repoPath}`,
       fileId: `file:${fullPath}`,
@@ -99,8 +114,11 @@ export class StubVcs implements ToolEditingVcs {
       authoredByWorkUnitId: `work:${this.version}`,
       contentClass: "internal" as const,
       externalKeys: [],
-      mode: 0o644,
-      content: { kind: "text" as const, text },
+      mode: this.modes.get(fullPath) ?? 0o644,
+      content:
+        text !== undefined
+          ? { kind: "text" as const, text }
+          : { kind: "bytes" as const, base64: base64! },
     };
   }
 
@@ -132,19 +150,28 @@ export class StubVcs implements ToolEditingVcs {
     }
     const repoPath = change.repositoryId.slice("repository:".length);
     if (change.kind === "file-create") {
-      if (change.content.kind !== "text") throw new Error("stub only supports text");
-      this.files.set(`${repoPath}/${change.path}`, change.content.text);
+      const fullPath = `${repoPath}/${change.path}`;
+      if (change.content.kind === "text") this.files.set(fullPath, change.content.text);
+      else this.binaryFiles.set(fullPath, change.content.base64);
+      this.modes.set(fullPath, change.mode);
       return;
     }
     const fullPath = [...this.files.keys()].find((path) => `file:${path}` === change.fileId);
     if (!fullPath) throw new Error(`file not found: ${change.fileId}`);
     if (change.kind === "file-delete") {
       this.files.delete(fullPath);
+      this.binaryFiles.delete(fullPath);
+      this.modes.delete(fullPath);
       return;
     }
-    if (change.kind === "file-mode") return;
+    if (change.kind === "file-mode") {
+      this.modes.set(fullPath, change.mode);
+      return;
+    }
     if (change.kind === "binary-replace") {
-      this.files.set(fullPath, Buffer.from(change.base64, "base64").toString("utf8"));
+      this.files.delete(fullPath);
+      this.binaryFiles.set(fullPath, change.base64);
+      if (change.mode !== undefined) this.modes.set(fullPath, change.mode);
       return;
     }
     let next = this.files.get(fullPath)!;
@@ -152,6 +179,7 @@ export class StubVcs implements ToolEditingVcs {
       next = next.slice(0, edit.start) + edit.text + next.slice(edit.end);
     }
     this.files.set(fullPath, next);
+    if (change.mode !== undefined) this.modes.set(fullPath, change.mode);
   }
 
   async commit(input: VcsCommitInput) {

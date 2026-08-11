@@ -2037,6 +2037,7 @@ export class SemanticWorkspace {
           contentKind: "bytes",
           byteLength: bytes.length,
           coordinateExtent: bytes.length,
+          ...(change.mode !== undefined ? { mode: change.mode } : {}),
         };
       } else {
         if (point.state.contentKind !== "text") {
@@ -2071,6 +2072,7 @@ export class SemanticWorkspace {
           contentKind: "text",
           byteLength: bytes.length,
           coordinateExtent: next.length,
+          ...(change.mode !== undefined ? { mode: change.mode } : {}),
         };
       }
       const resultEndpoint = endpointForFile(
@@ -8007,8 +8009,7 @@ export class SemanticWorkspace {
       const endpoint = endpoints.get(keyFor(coordinate.coordinate))!;
       if (endpoint["kind"] !== "file") continue;
       const repository = { kind: "repository" as const, id: String(endpoint["repositoryId"]) };
-      const repositoryEndpoint =
-        endpoints.get(keyFor(repository)) ?? targetEndpoint(repository);
+      const repositoryEndpoint = endpoints.get(keyFor(repository)) ?? targetEndpoint(repository);
       const targetRepositoryEndpoint = targetEndpoint(repository);
       if (
         targetRepositoryEndpoint["presence"] !== "present" &&
