@@ -21,6 +21,11 @@ def configuredHermesCommand = providers
     .gradleProperty("vibestudioHermesCommand")
     .orElse(providers.environmentVariable("VIBESTUDIO_HERMESC"))
     .orNull
+def configuredReactNativeArchitectures = providers
+    .gradleProperty("reactNativeArchitectures")
+    .map { value -> value.split(",").collect { architecture -> architecture.trim() }.findAll { it } }
+    .orElse([])
+    .get()
 
 // Apply google-services only when the JSON exists locally. Devs without
 // Firebase can copy google-services.template.json to google-services.json.
@@ -86,6 +91,14 @@ android {
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 1
+        // React Native's plugin intentionally skips application-level ABI
+        // filtering on the old architecture. Keep its canonical architecture
+        // property authoritative for both CMake compilation and APK packaging.
+        if (!configuredReactNativeArchitectures.isEmpty()) {
+            ndk {
+                abiFilters.addAll(configuredReactNativeArchitectures)
+            }
+        }
         // The desktop compares the installed app version with the product
         // version before deciding whether installation is necessary. Keep one
         // source of truth so a source build is immediately recognized as the

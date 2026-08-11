@@ -6,6 +6,11 @@ import {
   signalingTurnVars,
   startLocalTurnRelay,
 } from "../scripts/cli/lib/local-turn.mjs";
+// @ts-expect-error Script modules are plain .mjs and intentionally untyped.
+import {
+  parseAndroidDeviceAbi,
+  resolveAdbInstallTarget,
+} from "../scripts/cli/lib/mobile-android.mjs";
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
@@ -37,8 +42,33 @@ describe("mobile script platform and relay guarantees", () => {
       "utf8"
     );
     expect(source).toContain('"--no-daemon"');
+    expect(source).toContain('"--max-workers=2"');
     expect(source).toContain('"-Pkotlin.compiler.execution.strategy=in-process"');
+    expect(source).toContain("-PreactNativeArchitectures=${deviceAbi}");
     expect(source).not.toContain('"--rerun-tasks"');
+  });
+
+  it("resolves one adb target and validates its primary build ABI", () => {
+    const devices = [
+      "List of devices attached",
+      "phone-1 device product:oriole model:Pixel_6 transport_id:1",
+      "",
+    ].join("\n");
+    expect(resolveAdbInstallTarget(devices, null)).toBe("phone-1");
+    expect(resolveAdbInstallTarget(devices, "phone-1")).toBe("phone-1");
+    expect(parseAndroidDeviceAbi("arm64-v8a\n")).toBe("arm64-v8a");
+    expect(() => parseAndroidDeviceAbi("mips\n")).toThrow(/unsupported primary ABI/u);
+  });
+
+  it("requires an explicit adb target when more than one device is ready", () => {
+    const devices = [
+      "List of devices attached",
+      "phone-1 device product:oriole",
+      "emulator-5554 device product:sdk_gphone64_x86_64",
+      "",
+    ].join("\n");
+    expect(() => resolveAdbInstallTarget(devices, null)).toThrow(/multiple install targets/u);
+    expect(resolveAdbInstallTarget(devices, "emulator-5554")).toBe("emulator-5554");
   });
 
   it("tracks monorepo and workspace Metro sources in the Android bundle task", () => {
@@ -53,6 +83,8 @@ describe("mobile script platform and relay guarantees", () => {
     expect(gradle).toContain("PathSensitivity.RELATIVE");
     expect(gradle).toContain('System.getenv("VIBESTUDIO_RN_BUNDLE_WORKERS") ?: "2"');
     expect(gradle).toContain('"--max-workers"');
+    expect(gradle).toContain('.gradleProperty("reactNativeArchitectures")');
+    expect(gradle).toContain("abiFilters.addAll(configuredReactNativeArchitectures)");
   });
 
   it("keeps managed panel artifacts warm across ordinary background transitions", () => {

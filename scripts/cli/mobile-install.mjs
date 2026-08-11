@@ -11,6 +11,7 @@ import https from "node:https";
 import os from "node:os";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
+import { parseAndroidDeviceAbi, resolveAdbInstallTarget } from "./lib/mobile-android.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const androidDir = path.join(repoRoot, "apps", "mobile", "android");
@@ -516,19 +517,7 @@ async function ensureAdb() {
   return adbPath;
 }
 
-function parseAdbDevices(stdout) {
-  return stdout
-    .split(/\r?\n/)
-    .slice(1)
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line) => {
-      const [serial, state] = line.split(/\s+/, 2);
-      return { serial, state, line };
-    });
-}
-
-async function assertInstallTarget(adbPath, device) {
+async function resolveInstallTarget(adbPath, device) {
   let result;
   try {
     result = await runCapture(adbPath, ["devices", "-l"]);
@@ -538,45 +527,20 @@ async function assertInstallTarget(adbPath, device) {
         String(error instanceof Error ? error.message : error)
     );
   }
-
-  const devices = parseAdbDevices(result.stdout);
-  if (device) {
-    const match = devices.find((entry) => entry.serial === device);
-    if (!match) {
-      throw new Error(
-        `adb does not see device "${device}".\n\n${result.stdout.trim() || "No adb output"}`
-      );
-    }
-    if (match.state !== "device") {
-      throw new Error(
-        `adb sees "${device}" but it is "${match.state}". Unlock the phone and accept the USB debugging prompt.`
-      );
-    }
-    return;
+  try {
+    return resolveAdbInstallTarget(result.stdout, device);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`${message}\nThen confirm with: ${adbPath} devices -l`);
   }
+}
 
-  const ready = devices.filter((entry) => entry.state === "device");
-  if (ready.length === 1) return;
-
-  if (ready.length > 1) {
-    throw new Error(
-      "adb sees multiple install targets. Re-run with --device <serial>.\n\n" + result.stdout.trim()
-    );
-  }
-
-  if (devices.length > 0) {
-    throw new Error(
-      "adb sees a device, but it is not ready. Unlock the phone and accept the USB debugging prompt.\n\n" +
-        result.stdout.trim()
-    );
-  }
-
-  throw new Error(
-    "adb does not see any Android device or emulator.\n\n" +
-      "Check that the phone is plugged in, Developer options are enabled, USB debugging is on, " +
-      "the phone is unlocked, and the USB debugging authorization prompt has been accepted.\n" +
-      `Then confirm with: ${adbPath} devices -l`
+async function readAndroidDeviceAbi(adbPath, device) {
+  const result = await runCapture(
+    adbPath,
+    adbArgs(device, ["shell", "getprop", "ro.product.cpu.abi"])
   );
+  return parseAndroidDeviceAbi(result.stdout);
 }
 
 async function main() {
@@ -597,7 +561,7 @@ async function main() {
   }
 
   const adbPath = await ensureAdb();
-  await assertInstallTarget(adbPath, options.device);
+  options.device = await resolveInstallTarget(adbPath, options.device);
 
   let apkPath;
   if (options.fromSource || options.noBuild) {
@@ -607,12 +571,16 @@ async function main() {
   }
 
   if (options.fromSource && !options.noBuild) {
+    const deviceAbi = await readAndroidDeviceAbi(adbPath, options.device);
+    console.log(`[mobile-install] Building native libraries for ${deviceAbi}`);
     await run(
       "./gradlew",
       [
         "assembleInternal",
         "--no-daemon",
+        "--max-workers=2",
         "-Pkotlin.compiler.execution.strategy=in-process",
+        `-PreactNativeArchitectures=${deviceAbi}`,
       ],
       { cwd: androidDir }
     );
