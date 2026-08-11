@@ -708,6 +708,47 @@ describe("FsService", () => {
     });
   });
 
+  describe("bounded binary reads", () => {
+    it("streams an exact byte range with a complete-file hash and continuation", async () => {
+      const ctx = makeWorkerCtx("do:src:class:key");
+      registerContext(ctx.caller.runtime.id, "do", "ctx-read-bytes");
+      const root = path.join(tmpRoot, "ctx-read-bytes");
+      mkdirSync(root, { recursive: true });
+      writeFileSync(path.join(root, "value.bin"), Buffer.from([0, 255, 1, 254, 2, 253]));
+
+      await expect(
+        service.handleCall(ctx, "readBytes", ["/value.bin", { offset: 1, limit: 3 }])
+      ).resolves.toEqual({
+        base64: Buffer.from([255, 1, 254]).toString("base64"),
+        contentHash: expect.stringMatching(/^[a-f0-9]{64}$/u),
+        totalBytes: 6,
+        maxBytes: 3,
+        start: 1,
+        end: 4,
+        truncated: true,
+        nextOffset: 4,
+      });
+    });
+
+    it("returns an empty terminal range when the byte offset is past EOF", async () => {
+      const ctx = makeWorkerCtx("do:src:class:key");
+      registerContext(ctx.caller.runtime.id, "do", "ctx-read-bytes-eof");
+      const root = path.join(tmpRoot, "ctx-read-bytes-eof");
+      mkdirSync(root, { recursive: true });
+      writeFileSync(path.join(root, "value.bin"), Buffer.from([1, 2]));
+
+      await expect(
+        service.handleCall(ctx, "readBytes", ["/value.bin", { offset: 20, limit: 3 }])
+      ).resolves.toMatchObject({
+        base64: "",
+        totalBytes: 2,
+        start: 2,
+        end: 2,
+        truncated: false,
+      });
+    });
+  });
+
   // ─── mktemp ───────────────────────────────────────────────────────────────
   describe("mktemp", () => {
     it("creates .tmp/ and returns a unique path on each call", async () => {

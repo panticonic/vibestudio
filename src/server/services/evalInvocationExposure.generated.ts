@@ -8699,6 +8699,19 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     },
   },
   {
+    id: "host:fs.readBytes",
+    rpcPlane: "host-service",
+    capability: "service:fs.readBytes",
+    authorityPrincipals: ["code", "host", "user"],
+    owner: "fs",
+    method: "readBytes",
+    sensitivity: "read",
+    resourceDerivation: {
+      kind: "literal",
+      key: "service:fs.readBytes",
+    },
+  },
+  {
     id: "host:fs.readdir",
     rpcPlane: "host-service",
     capability: "service:fs.readdir",
@@ -13247,6 +13260,10 @@ export const EVAL_SERVER_HOST_METHODS = [
   },
   {
     service: "fs",
+    method: "readBytes",
+  },
+  {
+    service: "fs",
     method: "readdir",
   },
   {
@@ -14582,6 +14599,7 @@ export const EVAL_INVOCATION_EXPOSURE_CAPABILITIES = [
   "service:fs.mkdir",
   "service:fs.mktemp",
   "service:fs.open",
+  "service:fs.readBytes",
   "service:fs.readFile",
   "service:fs.readText",
   "service:fs.readdir",

@@ -27869,6 +27869,52 @@
       "parityAssertion": "generated-census:host-authority"
     },
     {
+      "id": "host:fs.readBytes",
+      "rpcPlane": "host-service",
+      "owner": "fs",
+      "method": "readBytes",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "fs.read",
+      "reviewRationale": "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:fs.readBytes"
+      },
+      "authorityPrincipals": [
+        "code",
+        "host",
+        "user"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:fs.readBytes),allOf(capability(user,service:fs.readBytes),workspace-member),allOf(capability(code,service:fs.readBytes),workspace-member))",
+      "r3b": {
+        "review": "bounded-workspace-binary-range-read",
+        "change": "Adds the existing workspace-local fs.read authority to a bounded lossless byte-range transport. Managed files still resolve at the caller's exact semantic working head and scratch files remain context-contained; each response is capped at 1 MiB, carries canonical base64, exact byte continuation coordinates, total size, and a whole-file SHA-256, and grants no write or path-enumeration authority."
+      },
+      "capability": "service:fs.readBytes",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
       "id": "host:fs.readdir",
       "rpcPlane": "host-service",
       "owner": "fs",

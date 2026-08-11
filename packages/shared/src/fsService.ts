@@ -61,6 +61,7 @@ const CANONICAL_SOURCE_ROOT_BY_LOWER = new Map(
 const DISK_READ_PATH_METHODS = new Set([
   "readFile",
   "readText",
+  "readBytes",
   "readdir",
   "stat",
   "lstat",
@@ -73,6 +74,7 @@ const DISK_READ_PATH_METHODS = new Set([
 const AUTHORITY_PATH_METHODS = new Set([
   "readFile",
   "readText",
+  "readBytes",
   "writeFile",
   "appendFile",
   "readdir",
@@ -1091,6 +1093,24 @@ export interface ReadTextResult {
   firstLineExceedsLimit: boolean;
 }
 
+export interface ReadBytesOptions {
+  /** First byte to return (zero-based). */
+  offset?: number;
+  /** Maximum raw bytes to return. */
+  limit?: number;
+}
+
+export interface ReadBytesResult {
+  base64: string;
+  contentHash: string;
+  totalBytes: number;
+  maxBytes: number;
+  start: number;
+  end: number;
+  truncated: boolean;
+  nextOffset?: number;
+}
+
 interface RawGrepMatch {
   /** Absolute file path. */
   file: string;
@@ -1104,6 +1124,83 @@ const READ_TEXT_DEFAULT_LINES = 2_000;
 const READ_TEXT_MAX_LINES = 10_000;
 const READ_TEXT_DEFAULT_BYTES = 50 * 1024;
 const READ_TEXT_MAX_BYTES = 1024 * 1024;
+const READ_BYTES_DEFAULT_LIMIT = 50 * 1024;
+const READ_BYTES_MAX_LIMIT = 1024 * 1024;
+
+function normalizedReadBytesOptions(options: ReadBytesOptions = {}): Required<ReadBytesOptions> {
+  const offset = options.offset ?? 0;
+  const limit = options.limit ?? READ_BYTES_DEFAULT_LIMIT;
+  if (!Number.isInteger(offset) || offset < 0) {
+    throw new RangeError("readBytes offset must be a non-negative integer");
+  }
+  if (!Number.isInteger(limit) || limit < 1 || limit > READ_BYTES_MAX_LIMIT) {
+    throw new RangeError(`readBytes limit must be an integer from 1 to ${READ_BYTES_MAX_LIMIT}`);
+  }
+  return { offset, limit };
+}
+
+function byteRangeResult(
+  bytes: Buffer,
+  totalBytes: number,
+  contentHash: string,
+  options: Required<ReadBytesOptions>
+): ReadBytesResult {
+  const start = Math.min(options.offset, totalBytes);
+  const end = Math.min(totalBytes, options.offset + bytes.length);
+  const truncated = end < totalBytes;
+  return {
+    base64: bytes.toString("base64"),
+    contentHash,
+    totalBytes,
+    maxBytes: options.limit,
+    start,
+    end,
+    truncated,
+    ...(truncated ? { nextOffset: end } : {}),
+  };
+}
+
+function readBytesRangeFromBuffer(bytes: Buffer, rawOptions?: ReadBytesOptions): ReadBytesResult {
+  const options = normalizedReadBytesOptions(rawOptions);
+  const selected = bytes.subarray(options.offset, options.offset + options.limit);
+  return byteRangeResult(
+    selected,
+    bytes.length,
+    createHash("sha256").update(bytes).digest("hex"),
+    options
+  );
+}
+
+async function readBytesRangeFromFile(
+  filePath: string,
+  rawOptions: ReadBytesOptions | undefined,
+  signal?: AbortSignal
+): Promise<ReadBytesResult> {
+  if (signal?.aborted) throw signal.reason ?? new Error("Operation aborted");
+  const options = normalizedReadBytesOptions(rawOptions);
+  const selected: Buffer[] = [];
+  const hash = createHash("sha256");
+  let totalBytes = 0;
+  const stream = fsSync.createReadStream(filePath);
+  try {
+    for await (const value of stream) {
+      if (signal?.aborted) throw signal.reason ?? new Error("Operation aborted");
+      const chunk = Buffer.from(value as Uint8Array);
+      const chunkStart = totalBytes;
+      const chunkEnd = chunkStart + chunk.length;
+      hash.update(chunk);
+      totalBytes = chunkEnd;
+      const overlapStart = Math.max(options.offset, chunkStart);
+      const overlapEnd = Math.min(options.offset + options.limit, chunkEnd);
+      if (overlapStart < overlapEnd) {
+        selected.push(chunk.subarray(overlapStart - chunkStart, overlapEnd - chunkStart));
+      }
+    }
+    return byteRangeResult(Buffer.concat(selected), totalBytes, hash.digest("hex"), options);
+  } finally {
+    stream.destroy();
+  }
+}
 
 function normalizedReadTextOptions(options: ReadTextOptions = {}): Required<ReadTextOptions> {
   const offset = options.offset ?? 1;
@@ -2156,6 +2253,22 @@ export class FsService {
           ),
         };
       }
+      case "readBytes": {
+        const userPath = args[0] as string;
+        const rel = await relOf(userPath);
+        if (!(await tracked(rel))) return { handled: false };
+        const content = await readWsFile(rel, true);
+        if (!content) {
+          throw codedError("ENOENT", `readBytes: managed file not found: ${userPath}`);
+        }
+        return {
+          handled: true,
+          result: readBytesRangeFromBuffer(
+            contentToBuffer(content),
+            args[1] as ReadBytesOptions | undefined
+          ),
+        };
+      }
       case "writeFile": {
         const rel = await relOf(args[0] as string);
         if (!(await tracked(rel))) return { handled: false };
@@ -2698,6 +2811,11 @@ export class FsService {
       case "readText": {
         const p = await resolveFsFilePath(scope, args[0] as string);
         return readTextRangeFromFile(p, args[1] as ReadTextOptions | undefined, ctx.signal);
+      }
+
+      case "readBytes": {
+        const p = await resolveFsFilePath(scope, args[0] as string);
+        return readBytesRangeFromFile(p, args[1] as ReadBytesOptions | undefined, ctx.signal);
       }
 
       case "writeFile": {

@@ -2848,6 +2848,18 @@ export const HOST_AUTHORITY_METHODS = {
     capability: null,
     presentation: null,
   },
+  "fs.readBytes": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "fs.read",
+      rationale:
+        "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+    },
+    capability: null,
+    presentation: null,
+  },
   "fs.readdir": {
     tier: {
       tier: "open",

@@ -1,7 +1,11 @@
 {
   "version": 1,
-  "censusDigest": "sha256:177d43c2fdeff14c133ad41b80b32eaa99c52ea4f222d75a724577ab2dc88022",
+  "censusDigest": "sha256:f64d14774520442716db0ebac85609f6991fbe6dcd8c7b360e3fb22092c828da",
   "decisions": {
+    "host:fs.readBytes": {
+      "review": "bounded-workspace-binary-range-read",
+      "change": "Adds the existing workspace-local fs.read authority to a bounded lossless byte-range transport. Managed files still resolve at the caller's exact semantic working head and scratch files remain context-contained; each response is capped at 1 MiB, carries canonical base64, exact byte continuation coordinates, total size, and a whole-file SHA-256, and grants no write or path-enumeration authority."
+    },
     "host:fs.readText": {
       "review": "bounded-workspace-text-range-read",
       "change": "Adds the existing workspace-local fs.read authority to a bounded UTF-8 text-range transport. The receiver retains semantic path admission for managed files and scratch-root containment for disk files, caps each response at 10,000 lines and 1 MiB, returns continuation coordinates plus a content hash, and grants no write or path-enumeration authority."

@@ -41,6 +41,12 @@ const readLocationSchema = Type.Union([
 ]);
 
 const readOptionsSchema = Type.Object({
+  encoding: Type.Optional(
+    Type.Union([Type.Literal("text"), Type.Literal("base64")], {
+      description:
+        'Output encoding (default: "text"; images default to native image attachments). Use "base64" for lossless binary inspection and round-tripping.',
+    })
+  ),
   offset: Type.Optional(
     Type.Integer({ minimum: 1, description: "Line number to start reading from (1-indexed)" })
   ),
@@ -49,6 +55,21 @@ const readOptionsSchema = Type.Object({
       minimum: 1,
       maximum: 10_000,
       description: "Maximum number of lines to read (maximum: 10000)",
+    })
+  ),
+  byteOffset: Type.Optional(
+    Type.Integer({
+      minimum: 0,
+      description:
+        'Zero-based byte offset for encoding="base64". Do not combine with text offset/limit.',
+    })
+  ),
+  byteLimit: Type.Optional(
+    Type.Integer({
+      minimum: 1,
+      maximum: 1024 * 1024,
+      description:
+        'Maximum raw bytes for encoding="base64" (default: 50 KiB; maximum: 1 MiB). Do not combine with text offset/limit.',
     })
   ),
 });
@@ -74,6 +95,14 @@ export interface ReadToolDetails {
   extensionFallback?: string;
   missing?: boolean;
   suggestions?: string[];
+  encoding?: "text" | "base64";
+  contentHash?: string;
+  byteRange?: {
+    start: number;
+    end: number;
+    totalBytes: number;
+    nextOffset?: number;
+  };
   displayedRange?: {
     coordinateKind: "utf16";
     start: number;
@@ -119,6 +148,16 @@ interface FsReadTextResult {
   truncatedBy?: "lines" | "bytes";
   nextOffset?: number;
   firstLineExceedsLimit: boolean;
+}
+interface FsReadBytesResult {
+  base64: string;
+  contentHash: string;
+  totalBytes: number;
+  maxBytes: number;
+  start: number;
+  end: number;
+  truncated: boolean;
+  nextOffset?: number;
 }
 interface ImageServiceApi {
   detectMimeType(bytes: Uint8Array): Promise<string | null>;
@@ -284,7 +323,7 @@ export function createReadTool(
     name: "read",
     label: "read",
     executionMode: "parallel",
-    description: `Read the contents of a file. Supports text files and images (jpg, png, gif, webp). Images are sent as attachments. For text files, output is truncated to ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first). Use offset/limit for large files. When you need the full file, continue with offset until complete.`,
+    description: `Read a file as bounded text, lossless base64, or a native image attachment. Text is truncated to ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB; continue with offset. Use encoding="base64" plus byteOffset/byteLimit for arbitrary binary data; continue with the returned next byte offset. Images (jpg, png, gif, webp) default to attachments.`,
     parameters: readSchema,
     execute: async (_toolCallId, input, signal, _onUpdate) => {
       const path = normalizeReadLocation(input);
@@ -299,11 +338,63 @@ export function createReadTool(
           details: { missing: true, suggestions: [] },
         };
       }
-      const { offset, limit } = input;
+      const { offset, limit, byteOffset, byteLimit } = input;
       if (signal?.aborted) {
         throw new Error("Operation aborted");
       }
       const absolutePath = resolveToCwd(path, cwd);
+      if (input.encoding === "base64") {
+        if (offset !== undefined || limit !== undefined) {
+          throw new Error(
+            'read encoding="base64" uses byteOffset/byteLimit, not text offset/limit'
+          );
+        }
+        try {
+          if (runtimeRpc) {
+            const bounded = await runtimeRpc.call<FsReadBytesResult>(
+              "main",
+              "fs.readBytes",
+              [
+                absolutePath,
+                {
+                  offset: byteOffset ?? 0,
+                  limit: byteLimit ?? DEFAULT_MAX_BYTES,
+                },
+              ],
+              signal ? { signal } : undefined
+            );
+            return formatBoundedBytesResult(bounded, path);
+          }
+          const rawBytes = await retryTransientRuntimeFs(() => fs.readFile(absolutePath), signal);
+          const bytes = Buffer.from(rawBytes);
+          const start = Math.min(byteOffset ?? 0, bytes.length);
+          const selected = bytes.subarray(start, start + (byteLimit ?? DEFAULT_MAX_BYTES));
+          const end = start + selected.length;
+          return formatBoundedBytesResult(
+            {
+              base64: selected.toString("base64"),
+              contentHash: sha256Hex(bytes),
+              totalBytes: bytes.length,
+              maxBytes: byteLimit ?? DEFAULT_MAX_BYTES,
+              start,
+              end,
+              truncated: end < bytes.length,
+              ...(end < bytes.length ? { nextOffset: end } : {}),
+            },
+            path
+          );
+        } catch (err) {
+          const recovered = await recoverReadFailure(fs, path, absolutePath, signal);
+          if (recovered) return recovered;
+          if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+            return missingResult(path, absolutePath);
+          }
+          throw err;
+        }
+      }
+      if (byteOffset !== undefined || byteLimit !== undefined) {
+        throw new Error('read byteOffset/byteLimit require encoding="base64"');
+      }
       // --- Image/text read ---------------------------------------------------------------
       // Text with a recognizable filename remains a single compact UTF-8 RPC
       // response. Runtime artifacts such as screenshots intentionally use
@@ -562,6 +653,34 @@ function formatBoundedTextResult(bounded: FsReadTextResult, displayPath: string)
         startLine: bounded.startLine,
         endLine: bounded.endLine,
       },
+    },
+  };
+}
+
+function formatBoundedBytesResult(bounded: FsReadBytesResult, displayPath: string): ReadResult {
+  const range = {
+    start: bounded.start,
+    end: bounded.end,
+    totalBytes: bounded.totalBytes,
+    ...(bounded.nextOffset !== undefined ? { nextOffset: bounded.nextOffset } : {}),
+  };
+  const payload = {
+    path: displayPath,
+    encoding: "base64" as const,
+    contentHash: bounded.contentHash,
+    range,
+    base64: bounded.base64,
+  };
+  return {
+    content: [{ type: "text", text: JSON.stringify(payload) }],
+    details: {
+      path: displayPath,
+      engine: "runtime-fs",
+      encoding: "base64",
+      contentHash: bounded.contentHash,
+      size: bounded.end - bounded.start,
+      originalSize: bounded.totalBytes,
+      byteRange: range,
     },
   };
 }

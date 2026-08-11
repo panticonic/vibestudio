@@ -372,6 +372,72 @@ describe("createReadTool", () => {
     );
   });
 
+  it("reads arbitrary bytes losslessly through the bounded host service", async () => {
+    const bytes = Buffer.from([0, 255, 1, 254, 2, 253]);
+    const fs = new StubFs({ files: { [`${CWD}/value.bin`]: bytes } });
+    const readFile = vi.spyOn(fs, "readFile");
+    const rpc = {
+      call: vi.fn().mockImplementation((_target, method) => {
+        if (method !== "fs.readBytes") throw new Error(`Unexpected RPC ${method}`);
+        return Promise.resolve({
+          base64: bytes.subarray(1, 4).toString("base64"),
+          contentHash: "c".repeat(64),
+          totalBytes: bytes.length,
+          maxBytes: 3,
+          start: 1,
+          end: 4,
+          truncated: true,
+          nextOffset: 4,
+        });
+      }),
+      stream: vi.fn(async () => new Response()),
+    };
+    const tool = createReadTool(CWD, fs, { rpc });
+
+    const input = {
+      path: "value.bin",
+      encoding: "base64" as const,
+      byteOffset: 1,
+      byteLimit: 3,
+    };
+    expect(Value.Check(tool.parameters, input)).toBe(true);
+    const result = await tool.execute("call-bytes", input);
+
+    expect(JSON.parse((result.content[0] as { text: string }).text)).toEqual({
+      path: "value.bin",
+      encoding: "base64",
+      contentHash: "c".repeat(64),
+      range: { start: 1, end: 4, totalBytes: 6, nextOffset: 4 },
+      base64: bytes.subarray(1, 4).toString("base64"),
+    });
+    expect(result.details).toMatchObject({
+      encoding: "base64",
+      size: 3,
+      originalSize: 6,
+      byteRange: { start: 1, end: 4, totalBytes: 6, nextOffset: 4 },
+    });
+    expect(rpc.call).toHaveBeenCalledWith(
+      "main",
+      "fs.readBytes",
+      [`${CWD}/value.bin`, { offset: 1, limit: 3 }],
+      undefined
+    );
+    expect(readFile).not.toHaveBeenCalled();
+  });
+
+  it("rejects mixing line and byte coordinates", async () => {
+    const fs = new StubFs({ files: { [`${CWD}/value.bin`]: Buffer.from([1]) } });
+    const tool = createReadTool(CWD, fs);
+
+    await expect(
+      tool.execute("call-mixed", {
+        path: "value.bin",
+        encoding: "base64",
+        offset: 1,
+      })
+    ).rejects.toThrow("byteOffset/byteLimit");
+  });
+
   it("reads known text files without requiring the optional image extension", async () => {
     const fs = new StubFs({ files: { [`${CWD}/guide.md`]: "approval guide" } });
     const unavailable = Object.assign(new Error("Extension is not installed"), {

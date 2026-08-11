@@ -84,6 +84,29 @@ const readTextResultSchema = z.object({
     .boolean()
     .describe("True when the first requested line alone exceeds maxBytes."),
 });
+const readBytesOptionsSchema = z.object({
+  offset: z.number().int().min(0).optional().describe("First byte to return (zero-based)."),
+  limit: z
+    .number()
+    .int()
+    .min(1)
+    .max(1024 * 1024)
+    .optional()
+    .describe("Maximum raw bytes to return (default 50 KiB; maximum 1 MiB)."),
+});
+const readBytesResultSchema = z.object({
+  base64: z.string().describe("Selected bytes encoded as canonical base64."),
+  contentHash: z
+    .string()
+    .regex(/^[a-f0-9]{64}$/u)
+    .describe("SHA-256 of the complete file bytes."),
+  totalBytes: z.number().int().min(0).describe("Total bytes in the complete file."),
+  maxBytes: z.number().int().min(1).describe("Applied raw-byte bound."),
+  start: z.number().int().min(0).describe("Requested zero-based byte offset."),
+  end: z.number().int().min(0).describe("Exclusive byte offset after the returned range."),
+  truncated: z.boolean().describe("True when more bytes remain after this result."),
+  nextOffset: z.number().int().min(0).optional().describe("Byte offset for the next read."),
+});
 const voidSchema = z.void();
 const statSchema = z.object({
   isFile: z.boolean().describe("True if the entry is a regular file."),
@@ -247,6 +270,25 @@ export const fsMethods = defineServiceMethods({
     returns: readTextResultSchema,
     access: READ_ACCESS,
     examples: [{ args: ["/src/index.ts", { offset: 200, limit: 100, maxBytes: 51_200 }] }],
+  },
+  readBytes: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "fs.read",
+      rationale:
+        "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+    },
+    description:
+      "Read a bounded byte range without decoding or transferring the complete file. Returns canonical base64, exact byte coordinates, total size, continuation metadata, and a SHA-256 hash of the complete bytes. Managed files resolve through exact semantic authority; scratch files are streamed from disk.",
+    args: z.union([
+      z.tuple([z.string(), readBytesOptionsSchema.optional()]),
+      z.tuple([z.string(), z.string(), readBytesOptionsSchema.optional()]),
+    ]),
+    returns: readBytesResultSchema,
+    access: READ_ACCESS,
+    examples: [{ args: ["/assets/data.bin", { offset: 0, limit: 51_200 }] }],
   },
   writeFile: {
     tier: {
