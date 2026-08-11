@@ -8,11 +8,9 @@ import {
 import {
   applyTemplateOperation,
   inspectTemplateOperation,
-  prepareTemplateOperation,
   publishPreparedTemplateOperation,
-  rebuildPreparedTemplateOperation,
+  stageTemplateOperation,
   templateStatus,
-  TemplateBuildGateError,
 } from "./operations.js";
 
 const exactRoot = {
@@ -181,8 +179,8 @@ describe("template operations", () => {
     expect(inspection.plan.repositories["packages/runtime"]).toBeDefined();
   });
 
-  it("discards the operation context and never publishes when the build gate fails", async () => {
-    const publish = vi.fn();
+  it("uses protected publication as the only validation gate", async () => {
+    const publish = vi.fn(async () => ({ mainEventId: "event-2" }));
     const discard = vi.fn(async () => undefined);
     const plan = { repositories: {} } as TemplateCompositionPlan;
 
@@ -194,29 +192,22 @@ describe("template operations", () => {
         ports: {
           openContext: async () => ({ contextId: "template-composer-operation-op-1" }),
           stageComposition: async () => ({ affectedRepoPaths: ["panels/news"] }),
-          buildAffected: async () => ({
-            failures: [{ unit: "panels/news", message: "type error" }],
-          }),
           publish,
           discard,
         },
       })
-    ).rejects.toBeInstanceOf(TemplateBuildGateError);
+    ).resolves.toEqual({ mainEventId: "event-2" });
 
-    expect(publish).not.toHaveBeenCalled();
-    expect(discard).toHaveBeenCalledWith("template-composer-operation-op-1");
+    expect(publish).toHaveBeenCalledWith("template-composer-operation-op-1", "event-1");
+    expect(discard).not.toHaveBeenCalled();
   });
 
-  it("retains an interactive failed context so an in-context repair can ship atomically", async () => {
-    let repaired = false;
+  it("stages once and publishes the retained context without an intermediate build", async () => {
     const discard = vi.fn();
     const publish = vi.fn(async () => ({ mainEventId: "event-2" }));
     const ports = {
       openContext: async () => ({ contextId: "template-composer-operation-op-2" }),
       stageComposition: async () => ({ affectedRepoPaths: ["panels/news"] }),
-      buildAffected: async () => ({
-        failures: repaired ? [] : [{ unit: "panels/news", message: "type error" }],
-      }),
       publish,
       discard,
     };
@@ -226,18 +217,13 @@ describe("template operations", () => {
       nextTemplates: null,
     };
 
-    const failed = await prepareTemplateOperation({
+    const prepared = await stageTemplateOperation({
       operationId: "op-2",
       inspection,
       ports,
     });
-    expect(failed.status).toBe("build-failed");
     expect(discard).not.toHaveBeenCalled();
-
-    repaired = true;
-    const rebuilt = await rebuildPreparedTemplateOperation(failed.prepared, ports);
-    expect(rebuilt.status).toBe("ready");
-    await publishPreparedTemplateOperation(rebuilt.prepared, "event-1", ports);
+    await publishPreparedTemplateOperation(prepared, "event-1", ports);
     expect(publish).toHaveBeenCalledWith("template-composer-operation-op-2", "event-1");
   });
 });

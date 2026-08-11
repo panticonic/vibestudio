@@ -57,10 +57,23 @@ const workspaceVcsSchema = Type.Union([
   Type.Object(
     {
       operation: Type.Literal("compare"),
+      contextId: Type.Optional(
+        Type.String({
+          minLength: 1,
+          description:
+            "Exact retained workspace context returned by another operation; omit to use the current task context.",
+        })
+      ),
       sourceEventId: Type.Optional(
         Type.String({
           minLength: 1,
           description: "Exact incoming committed event; omit when view is local.",
+        })
+      ),
+      sourceDeltaId: Type.Optional(
+        Type.String({
+          minLength: 1,
+          description: "Exact external semantic delta returned for review.",
         })
       ),
       view: Type.Optional(
@@ -78,7 +91,15 @@ const workspaceVcsSchema = Type.Union([
   Type.Object(
     {
       operation: Type.Literal("merge"),
-      sourceEventId: Type.String({ minLength: 1 }),
+      contextId: Type.Optional(
+        Type.String({
+          minLength: 1,
+          description:
+            "Exact retained workspace context returned by another operation; omit to use the current task context.",
+        })
+      ),
+      sourceEventId: Type.Optional(Type.String({ minLength: 1 })),
+      sourceDeltaId: Type.Optional(Type.String({ minLength: 1 })),
       coordinates: Type.Optional(Type.Array(coordinateSchema, { maxItems: 500 })),
       resolutions: Type.Optional(
         Type.Union([
@@ -168,7 +189,9 @@ export type WorkspaceVcsToolInput =
   | { operation: "neighbors"; root: VcsSemanticNodeRef; after?: string; limit?: number }
   | {
       operation: "compare";
+      contextId?: string;
       sourceEventId?: string;
+      sourceDeltaId?: string;
       view?: "local";
       status?: "conflict";
       after?: string;
@@ -176,7 +199,9 @@ export type WorkspaceVcsToolInput =
     }
   | {
       operation: "merge";
-      sourceEventId: string;
+      contextId?: string;
+      sourceEventId?: string;
+      sourceDeltaId?: string;
       coordinates?: Array<{ kind: "file" | "repository"; id: string }>;
       resolutions?:
         | Array<{
@@ -330,20 +355,29 @@ export function createWorkspaceVcsTool(
       }
 
       if (command.operation === "compare") {
+        const selectedContextId = command.contextId ?? contextId;
         const localView = command.view === "local";
         const sourceEventId = command.sourceEventId;
-        if (localView === (sourceEventId !== undefined)) {
+        const sourceDeltaId = command.sourceDeltaId;
+        if (
+          Number(localView) +
+            Number(sourceEventId !== undefined) +
+            Number(sourceDeltaId !== undefined) !==
+          1
+        ) {
           throw new Error(
-            "Compare requires exactly one source selector: view:'local' for current working state, or sourceEventId for incoming committed work."
+            "Compare requires exactly one source selector: view:'local', sourceEventId, or sourceDeltaId."
           );
         }
-        const status = localView ? await vcs.status({ contextId }) : null;
+        const status = localView ? await vcs.status({ contextId: selectedContextId }) : null;
         const target = localView
           ? ({ kind: "event", eventId: status!.mainEventId } as const)
-          : await resolveToolWorkingState(vcs, context);
+          : await resolveToolWorkingState(vcs, { contextId: selectedContextId });
         const source = sourceEventId
           ? ({ kind: "event", eventId: sourceEventId } as const)
-          : status!.workingHead;
+          : sourceDeltaId
+            ? ({ kind: "external-delta", deltaId: sourceDeltaId } as const)
+            : status!.workingHead;
         const result = await vcs.compare({
           target,
           source,
@@ -359,26 +393,41 @@ export function createWorkspaceVcsTool(
       }
 
       if (command.operation === "merge") {
-        const expectedWorkingHead = await resolveToolWorkingState(vcs, context);
+        const selectedContextId = command.contextId ?? contextId;
+        if (
+          Number(command.sourceEventId !== undefined) +
+            Number(command.sourceDeltaId !== undefined) !==
+          1
+        ) {
+          throw new Error(
+            "Merge requires exactly one source selector: sourceEventId or sourceDeltaId."
+          );
+        }
+        if (command.sourceEventId?.startsWith("external-delta:")) {
+          throw new Error(
+            "This is an external delta, not an event. Pass it unchanged as sourceDeltaId."
+          );
+        }
+        const expectedWorkingHead = await resolveToolWorkingState(vcs, {
+          contextId: selectedContextId,
+        });
         const baseCommandId = toolCommandId(context);
-        const source = { kind: "event" as const, eventId: command.sourceEventId };
+        const source = command.sourceEventId
+          ? ({ kind: "event", eventId: command.sourceEventId } as const)
+          : ({ kind: "external-delta", deltaId: command.sourceDeltaId! } as const);
         const driven = await driveMerge({
           vcs,
-          contextId,
+          contextId: selectedContextId,
           expectedWorkingHead,
           source,
           ...(command.coordinates ? { coordinates: command.coordinates } : {}),
           ...(command.resolutions ? { resolutions: command.resolutions } : {}),
           ...(command.intent ? { intentSummary: command.intent } : {}),
-          headline: `Merge ${command.sourceEventId}`,
+          headline: `Merge ${command.sourceEventId ?? command.sourceDeltaId}`,
           commandIdForPage: ({ expectedWorkingHead: pageHead }) =>
-            `${baseCommandId}:merge:${sha256HexSyncText(canonicalJson({ contextId, expectedWorkingHead: pageHead, source, coordinates: command.coordinates, resolutions: command.resolutions, intentSummary: command.intent }))}`,
+            `${baseCommandId}:merge:${sha256HexSyncText(canonicalJson({ contextId: selectedContextId, expectedWorkingHead: pageHead, source, coordinates: command.coordinates, resolutions: command.resolutions, intentSummary: command.intent }))}`,
         });
-        return resultOf(
-          command.operation,
-          renderMergeReview(driven.review),
-          driven
-        );
+        return resultOf(command.operation, renderMergeReview(driven.review), driven);
       }
 
       if (command.operation === "revert") {

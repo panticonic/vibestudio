@@ -82,7 +82,8 @@ are not copied into authored templates.
 
 A dependency URL is recorded whether or not that template is installed. When it
 is installed, authoring reports its current contribution closure as explanatory
-`inheritedParts`. Explicitly selecting an overlapping repository is allowed;
+`dependencyParts`, with the exact selected intersection in `overlapParts`.
+Explicitly selecting an overlapping repository is allowed;
 the downstream VCS composition workflow provides repairable feedback.
 Missing `workspace:*` package dependencies and runtime references in the live
 workspace remain concrete source errors.

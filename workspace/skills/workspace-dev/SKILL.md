@@ -1,6 +1,6 @@
 ---
 name: workspace-dev
-description: Build and develop Vibestudio workspace units — project scaffolding, panels, workers, Durable Objects, runtime publishing, repo-local SKILL.md authoring, and development workflow.
+description: Build, develop, and diagnose Vibestudio workspace units — project scaffolding, panel lifecycle/loading, workers, Durable Objects, runtime publishing, repo-local SKILL.md authoring, and development workflow.
 ---
 
 # Workspace Development Skill
@@ -10,6 +10,25 @@ packages, skills, and extensions.
 
 For trusted workspace apps under `apps/` (`@workspace-apps/*`, Electron shell,
 mobile React Native, or terminal targets), use the `appdev` skill instead.
+
+## Panel loading and lifecycle triage
+
+For “Preparing panel…”, blank-panel, failed boot, or repeatedly stuck loading
+reports, stop routing here: read the diagnostics section of
+[`skills/workspace-dev/PANEL_API.md`](PANEL_API.md#diagnostics) first. Do not
+preload the general file catalog or adjacent VCS, sandbox, server-log,
+performance, or panel-authoring skills. Reuse the exact existing handle, call
+its read-only `observe()`, then make one bounded `diagnose()` call. That packet
+owns the current attempt identity, lifecycle phase, structured failure, host
+state, console history, and build provenance.
+
+Choose a narrower surface only from that evidence: supervision for its exact
+live runtime entity, the build report for the exact source/ref, and server logs
+only when the packet places the defect below the lifecycle boundary. Do not
+rebuild, reload, open a duplicate panel, inspect system-test source, or enter
+VCS merely to discover why the current attempt is stuck. Use the performance
+skill only after the lifecycle is healthy and elapsed-time attribution is the
+remaining question.
 
 When authoring skill docs, keep repo-specific guidance in the repo it documents
 as a top-level `SKILL.md`. Use `skills/<name>` only for cross-repo workflows or
@@ -47,7 +66,7 @@ Agents read skills by the path shown in the generated skill index, for example
 | ------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | [WORKFLOW.md](WORKFLOW.md)                 | Canonical agent workflow: scaffold, open, inspect, edit, rebuild/reload, close                                                                                   |
 | [PANEL_DEBUG_LOOP.md](PANEL_DEBUG_LOOP.md) | Short canonical create/build/screenshot/rebuild/interact/publish recipe for panel debugging and polish tasks                                                     |
-| [PANEL_API.md](PANEL_API.md)               | Runtime panel API reference                                                                                                                                      |
+| [PANEL_API.md](PANEL_API.md)               | Runtime panel lifecycle API, including canonical observation, failed/stalled loading diagnosis, and structured failure ownership                                 |
 | [WORKERS.md](WORKERS.md)                   | Workers & Durable Objects: DO-backed app databases, AgentWorkerBase (@workspace/agentic-do), DurableObjectBase, PiRunner, custom shared-resource approval grants |
 | [capabilities](../capabilities/SKILL.md)   | Explicit requests and provided capabilities, dynamic workspace service discovery, host grants, receiver-owned acquisition, and content provenance                |
 | [performance](../performance/SKILL.md)     | Bounded panel/app profiling plus build, worker, startup, and optimization workflow                                                                               |
@@ -80,7 +99,8 @@ For a panel build/debug/polish task, read and follow
 [PANEL_DEBUG_LOOP.md](PANEL_DEBUG_LOOP.md) first. It is the canonical bounded
 recipe. Do not preload the full workflow, browser, panel, and eval manuals; open
 only the specific reference needed when the recipe reaches an unfamiliar typed
-result.
+result. A read-only loading/lifecycle triage is not a build/debug/polish task;
+use the panel-loading route above without loading this authoring loop.
 
 1. **Relative workspace paths only** — use `panels/my-app/index.tsx`, NEVER host absolute paths such as `/home/.../workspace/...`. In runtime `fs.*` calls, `/panels/...` is context-root absolute and accepted, but docs and source-edit examples prefer `panels/...` to avoid ambiguity.
 2. **NEVER use Bash** for vcs, file listing, or file creation — use the structured tools

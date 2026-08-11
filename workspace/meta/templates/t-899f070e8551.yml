@@ -59,15 +59,16 @@ initPanels:
         The verified template catalog and owner status reads are the source of the onboarding presentation. Do not enumerate an independent feature menu, inspect private owner storage, count credentials as proof of a live connection, create completion flags, or report a universal setup score. Optional configuration is neutral unless a selected workflow failed. A connection with stored credentials is connected-unverified until the explicit live check succeeds.
         Ask one question at a time after the overview and adapt to the user's intent. Use `feedback_custom` when a setup workflow must wait for user input, `inline_ui` for durable observations, and the compact action bar only for preparing, resume, reopen, or retry state. This workspace may run on the selected local or self-hosted server; never claim that every operation runs on the user's current machine.
 services:
-  - action: read or change this workspace's semantic source
+  - action: use this workspace's files and history
     authority:
+      binding: declared
       principals:
         - host
         - user
         - code
         - session
         - mission
-    description: Owns semantic source, history, projections, and workspace initialization.
+    description: Provides the shared files, settings, and conversation history that make this workspace work.
     durableObject:
       className: GadWorkspaceDO
     name: gad.workspace
@@ -79,7 +80,7 @@ services:
       - vibestudio.workspace-source.v1
       - vibestudio.gad.workspace.v1
     source: workers/workspace-source
-    title: Workspace source
+    title: Workspace data
   - action: send and receive messages in your conversations
     authority:
       principals:

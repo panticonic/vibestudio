@@ -11,7 +11,7 @@
  */
 
 import { useState, useCallback, useMemo } from "react";
-import { Box, Button, Flex, Heading } from "@radix-ui/themes";
+import { Box, Button, Flex, Heading, Text } from "@radix-ui/themes";
 import { InfoCircledIcon, ExclamationTriangleIcon } from "@radix-ui/react-icons";
 import { FormRenderer, type CustomFieldRendererProps } from "@workspace/react";
 import { FREE_TEXT_CHOICE_VALUE, type FieldDefinition, type FieldValue } from "@vibestudio/types";
@@ -19,7 +19,7 @@ import type { FeedbackCallbacks } from "../types";
 import { ToolPreviewField } from "./ToolPreviewField";
 import { ApprovalHeaderField } from "./ApprovalHeaderField";
 
-export interface FeedbackFormRendererProps extends FeedbackCallbacks {
+export interface FeedbackFormRendererProps extends Omit<FeedbackCallbacks, "onError"> {
   title: string;
   fields: FieldDefinition[];
   initialValues?: Record<string, FieldValue>;
@@ -47,7 +47,9 @@ function getSeverityIcon(severity: "info" | "warning" | "danger" | undefined) {
 /**
  * Get the color for a severity level
  */
-function getSeverityColor(severity: "info" | "warning" | "danger" | undefined): "blue" | "amber" | "red" {
+function getSeverityColor(
+  severity: "info" | "warning" | "danger" | undefined
+): "blue" | "amber" | "red" {
   switch (severity) {
     case "danger":
       return "red";
@@ -84,7 +86,10 @@ function withDefaultFreeText(fields: FieldDefinition[]): FieldDefinition[] {
   });
 }
 
-function hasActiveFreeTextChoice(fields: FieldDefinition[], values: Record<string, FieldValue>): boolean {
+function hasActiveFreeTextChoice(
+  fields: FieldDefinition[],
+  values: Record<string, FieldValue>
+): boolean {
   return fields.some((field) => {
     if (!isChoiceField(field) || field.allowFreeText !== true) return false;
     const value = values[field.key];
@@ -94,7 +99,10 @@ function hasActiveFreeTextChoice(fields: FieldDefinition[], values: Record<strin
   });
 }
 
-function normalizeFreeTextValues(fields: FieldDefinition[], values: Record<string, FieldValue>): Record<string, FieldValue> {
+function normalizeFreeTextValues(
+  fields: FieldDefinition[],
+  values: Record<string, FieldValue>
+): Record<string, FieldValue> {
   const normalized = { ...values };
   for (const field of fields) {
     if (!isChoiceField(field) || field.allowFreeText !== true) continue;
@@ -130,7 +138,6 @@ export function FeedbackFormRenderer({
   showTitle = true,
   onSubmit,
   onCancel,
-  onError,
 }: FeedbackFormRendererProps) {
   const effectiveFields = useMemo(() => withDefaultFreeText(fields), [fields]);
 
@@ -144,61 +151,71 @@ export function FeedbackFormRenderer({
     }
     return { ...defaults, ...initialValues };
   });
+  const [validationError, setValidationError] = useState<string | null>(null);
 
   const handleChange = useCallback((key: string, value: FieldValue) => {
+    setValidationError(null);
     setValues((prev) => ({ ...prev, [key]: value }));
   }, []);
 
-  const handleSubmit = useCallback(() => {
-    // Validate required fields
-    for (const field of effectiveFields) {
-      if (field.required) {
-        const value = values[field.key];
-        if (value === undefined || value === "" || (Array.isArray(value) && value.length === 0)) {
-          onError(`Required field "${field.label ?? field.key}" is missing`);
+  const handleSubmit = useCallback(
+    (submittedValues?: Record<string, FieldValue>) => {
+      const currentValues = submittedValues ?? values;
+      // Validate required fields
+      for (const field of effectiveFields) {
+        if (field.required) {
+          const value = currentValues[field.key];
+          if (value === undefined || value === "" || (Array.isArray(value) && value.length === 0)) {
+            setValidationError(`Required field "${field.label ?? field.key}" is missing`);
+            return;
+          }
+        }
+        if (
+          isChoiceField(field) &&
+          field.allowFreeText === true &&
+          hasActiveFreeTextChoice([field], currentValues) &&
+          String(currentValues[getFreeTextKey(field)] ?? "").trim() === ""
+        ) {
+          setValidationError(`Required field "${field.label ?? field.key}" is missing`);
           return;
         }
       }
-      if (
-        isChoiceField(field) &&
-        field.allowFreeText === true &&
-        hasActiveFreeTextChoice([field], values) &&
-        String(values[getFreeTextKey(field)] ?? "").trim() === ""
-      ) {
-        onError(`Required field "${field.label ?? field.key}" is missing`);
-        return;
-      }
-    }
-    onSubmit(normalizeFreeTextValues(effectiveFields, values));
-  }, [effectiveFields, values, onSubmit, onError]);
+      setValidationError(null);
+      onSubmit(normalizeFreeTextValues(effectiveFields, currentValues));
+    },
+    [effectiveFields, values, onSubmit]
+  );
 
   // Check if we should show any buttons
   const showSubmit = !hideSubmit || hasActiveFreeTextChoice(effectiveFields, values);
   const showButtons = showSubmit || !hideCancel;
 
   // Don't show title if we have an approvalHeader field (header contains its own title)
-  const hasApprovalHeader = effectiveFields.some(f => f.type === "approvalHeader");
+  const hasApprovalHeader = effectiveFields.some((f) => f.type === "approvalHeader");
   const shouldShowTitle = showTitle && !hasApprovalHeader && title;
 
   // Custom field renderers for toolPreview and approvalHeader fields
-  const customFieldRenderers = useMemo(() => ({
-    toolPreview: ({ field, theme }: CustomFieldRendererProps) => (
-      <ToolPreviewField
-        toolName={field.toolName ?? "unknown"}
-        args={field.toolArgs}
-        theme={theme}
-      />
-    ),
-    approvalHeader: ({ field }: CustomFieldRendererProps) => (
-      <ApprovalHeaderField
-        agentName={field.agentName ?? "unknown"}
-        toolName={field.toolName ?? "unknown"}
-        displayName={field.displayName}
-        isFirstTimeGrant={field.isFirstTimeGrant ?? false}
-        floorLevel={field.floorLevel ?? 1}
-      />
-    ),
-  }), []);
+  const customFieldRenderers = useMemo(
+    () => ({
+      toolPreview: ({ field, theme }: CustomFieldRendererProps) => (
+        <ToolPreviewField
+          toolName={field.toolName ?? "unknown"}
+          args={field.toolArgs}
+          theme={theme}
+        />
+      ),
+      approvalHeader: ({ field }: CustomFieldRendererProps) => (
+        <ApprovalHeaderField
+          agentName={field.agentName ?? "unknown"}
+          toolName={field.toolName ?? "unknown"}
+          displayName={field.displayName}
+          isFirstTimeGrant={field.isFirstTimeGrant ?? false}
+          floorLevel={field.floorLevel ?? 1}
+        />
+      ),
+    }),
+    []
+  );
 
   return (
     <Box>
@@ -224,6 +241,12 @@ export function FeedbackFormRenderer({
           theme="dark"
         />
 
+        {validationError ? (
+          <Text color="red" size="2" role="alert">
+            {validationError}
+          </Text>
+        ) : null}
+
         {showButtons && (
           <Flex gap="3" mt="2" justify="end">
             {!hideCancel && (
@@ -232,7 +255,10 @@ export function FeedbackFormRenderer({
               </Button>
             )}
             {showSubmit && (
-              <Button color={severity ? getSeverityColor(severity) : undefined} onClick={handleSubmit}>
+              <Button
+                color={severity ? getSeverityColor(severity) : undefined}
+                onClick={() => handleSubmit()}
+              >
                 {submitLabel}
               </Button>
             )}

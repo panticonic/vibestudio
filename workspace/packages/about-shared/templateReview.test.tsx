@@ -6,7 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 import { TemplateReviewPanel } from "./templateReview.js";
 
 const target = { kind: "event", eventId: "event:workspace" } as const;
-const item = { repoPath: "panels/news", deltaId: "delta:news" };
+const item = { repoPath: "panels/news", sourceDeltaId: "delta:news" };
 
 describe("TemplateReviewPanel", () => {
   it("records an ordinary VCS merge decision instead of discarding the comparison", async () => {
@@ -14,17 +14,32 @@ describe("TemplateReviewPanel", () => {
       .fn()
       .mockResolvedValueOnce({
         target,
-        source: { kind: "external-delta", deltaId: item.deltaId },
+        source: { kind: "external-delta", deltaId: item.sourceDeltaId },
         base: target,
         resolution: { complete: false, remainingCoordinateCount: 1, concluded: false },
         counts: { adopt: 1, convergent: 0, composed: 0, conflict: 0, resolved: 0 },
         intentCounts: { merged: 0, settled: 0, split: 0, contested: 0, pending: 1 },
         coordinates: [
           {
-            coordinate: { kind: "file", id: "file:news", paths: { theirs: "panels/news/index.ts" } },
+            coordinate: {
+              kind: "file",
+              id: "file:news",
+              paths: { theirs: "panels/news/index.ts" },
+            },
             status: "adopt",
-            aspects: [{ aspect: "presence", base: "absent", ours: "absent", theirs: "present", status: "adopt" }],
-            attribution: { ours: [], theirs: [{ changeId: "change:news", workUnitId: "work:news" }] },
+            aspects: [
+              {
+                aspect: "presence",
+                base: "absent",
+                ours: "absent",
+                theirs: "present",
+                status: "adopt",
+              },
+            ],
+            attribution: {
+              ours: [],
+              theirs: [{ changeId: "change:news", workUnitId: "work:news" }],
+            },
             resolutions: ["theirs", "ours", "current"],
             summary: "Add the News panel",
           },
@@ -35,12 +50,14 @@ describe("TemplateReviewPanel", () => {
       })
       .mockResolvedValueOnce({
         target,
-        source: { kind: "external-delta", deltaId: item.deltaId },
+        source: { kind: "external-delta", deltaId: item.sourceDeltaId },
         base: target,
         resolution: { complete: true, remainingCoordinateCount: 0, concluded: true },
         counts: { adopt: 0, convergent: 0, composed: 0, conflict: 0, resolved: 1 },
         intentCounts: { merged: 1, settled: 0, split: 0, contested: 0, pending: 0 },
-        coordinates: [], intents: [], intentsTruncated: false,
+        coordinates: [],
+        intents: [],
+        intentsTruncated: false,
         nextCursor: null,
       });
     const merge = vi.fn(async () => undefined);
@@ -65,9 +82,7 @@ describe("TemplateReviewPanel", () => {
         item,
         expectedWorkingHead: target,
         coordinates: [{ kind: "file", id: "file:news" }],
-        resolutions: [
-          { coordinate: { kind: "file", id: "file:news" }, resolution: "theirs" },
-        ],
+        resolutions: [{ coordinate: { kind: "file", id: "file:news" }, resolution: "theirs" }],
       })
     );
     const finish = await screen.findByRole("button", { name: "Finish template operation" });
@@ -79,7 +94,7 @@ describe("TemplateReviewPanel", () => {
   it("accepts a composed result and includes its complete structural group", async () => {
     const comparison = {
       target,
-      source: { kind: "external-delta" as const, deltaId: item.deltaId },
+      source: { kind: "external-delta" as const, deltaId: item.sourceDeltaId },
       base: target,
       resolution: { complete: false, remainingCoordinateCount: 2, concluded: false },
       counts: { adopt: 1, convergent: 0, composed: 1, conflict: 0, resolved: 0 },
@@ -172,12 +187,14 @@ describe("TemplateReviewPanel", () => {
   it("can finish a review that was already complete when the surface reopened", async () => {
     const compare = vi.fn(async () => ({
       target,
-      source: { kind: "external-delta" as const, deltaId: item.deltaId },
+      source: { kind: "external-delta" as const, deltaId: item.sourceDeltaId },
       base: target,
       resolution: { complete: true, remainingCoordinateCount: 0, concluded: true },
       counts: { adopt: 0, convergent: 0, composed: 0, conflict: 0, resolved: 1 },
       intentCounts: { merged: 1, settled: 0, split: 0, contested: 0, pending: 0 },
-      coordinates: [], intents: [], intentsTruncated: false,
+      coordinates: [],
+      intents: [],
+      intentsTruncated: false,
       nextCursor: null,
     }));
     const onCompleted = vi.fn();
@@ -200,7 +217,7 @@ describe("TemplateReviewPanel", () => {
   it("renders coordinates from every comparison page", async () => {
     const base = {
       target,
-      source: { kind: "external-delta" as const, deltaId: item.deltaId },
+      source: { kind: "external-delta" as const, deltaId: item.sourceDeltaId },
       base: target,
       resolution: { complete: false, remainingCoordinateCount: 2, concluded: false },
       counts: { adopt: 2, convergent: 0, composed: 0, conflict: 0, resolved: 0 },

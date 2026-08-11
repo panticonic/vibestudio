@@ -264,11 +264,14 @@ describe("workspace VCS agent tool", () => {
       contextId: "context:test",
       commandId: "command:compare-schema",
     });
-    const compareBranches = (tool.parameters as { anyOf: Array<Record<string, unknown>> }).anyOf
-      .filter((branch) => JSON.stringify(branch).includes('"const":"compare"'));
+    const compareBranches = (
+      tool.parameters as { anyOf: Array<Record<string, unknown>> }
+    ).anyOf.filter((branch) => JSON.stringify(branch).includes('"const":"compare"'));
 
     expect(compareBranches).toHaveLength(1);
     expect(JSON.stringify(compareBranches[0])).toContain('"sourceEventId"');
+    expect(JSON.stringify(compareBranches[0])).toContain('"sourceDeltaId"');
+    expect(JSON.stringify(compareBranches[0])).toContain('"contextId"');
     expect(JSON.stringify(compareBranches[0])).toContain('"view"');
   });
 
@@ -372,6 +375,47 @@ describe("workspace VCS agent tool", () => {
         /Resolution: complete=true; concluded=true; remaining=0[\s\S]*Intent: theirs\/merged[\s\S]*Composed: file:file:source/
       ),
     });
+  });
+
+  it("merges an external delta into the retained context that returned it", async () => {
+    const f = fixture();
+    const tool = createWorkspaceVcsTool("/", f.vcs, {
+      contextId: "context:test",
+      commandId: "command:template-review",
+    });
+
+    await tool.execute("call:template-review", {
+      operation: "merge",
+      contextId: "context:template-operation",
+      sourceDeltaId: "external-delta:examples",
+      intent: "Integrate the reviewed Examples contribution",
+    });
+
+    expect(f.status).toHaveBeenCalledWith({ contextId: "context:template-operation" });
+    expect(f.merge).toHaveBeenCalledWith(
+      expect.objectContaining({
+        contextId: "context:template-operation",
+        source: { kind: "external-delta", deltaId: "external-delta:examples" },
+        intentSummary: "Integrate the reviewed Examples contribution",
+      })
+    );
+  });
+
+  it("rejects a merge without exactly one source", async () => {
+    const f = fixture();
+    const tool = createWorkspaceVcsTool("/", f.vcs, {
+      contextId: "context:test",
+      commandId: "command:ambiguous-merge",
+    });
+
+    await expect(
+      tool.execute("call:ambiguous-merge", {
+        operation: "merge",
+        sourceEventId: "event:source",
+        sourceDeltaId: "external-delta:source",
+      })
+    ).rejects.toThrow(/exactly one source selector/);
+    expect(f.merge).not.toHaveBeenCalled();
   });
 
   it("passes an exact current-value resolution at the observed working head", async () => {

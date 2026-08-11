@@ -257,6 +257,7 @@ const WorkspaceServiceSchema = z.union([
       authority: z
         .object({
           principals: z.array(WorkspaceServicePrincipalSchema).min(1),
+          binding: z.enum(["consent", "declared"]).optional(),
         })
         .strict(),
       durableObject: z.object({ className: z.string() }).strict(),
@@ -275,6 +276,7 @@ const WorkspaceServiceSchema = z.union([
       authority: z
         .object({
           principals: z.array(WorkspaceServicePrincipalSchema).min(1),
+          binding: z.enum(["consent", "declared"]).optional(),
         })
         .strict(),
       worker: z.object({ routePath: z.string() }).strict(),

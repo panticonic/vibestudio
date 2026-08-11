@@ -157,7 +157,7 @@ describe("template composer operation resumption", () => {
     const record = {
       ...approvedRecord(),
       intent: { kind: "pull", alias: "template", target: refreshedPin },
-      reviews: [{ repoPath: "panels/news", deltaId: "delta:news" }],
+      reviews: [{ repoPath: "panels/news", sourceDeltaId: "delta:news" }],
     };
     expect(
       operationReviewForTemplate([{ contextId: "template-composer-operation-pull", record }], {
@@ -170,7 +170,7 @@ describe("template composer operation resumption", () => {
     });
   });
 
-  it("keeps registry-independent operations usable without a cached catalog", async () => {
+  it("loads a configured verified catalog without exposing an empty-cache state", async () => {
     const client = {
       catalog: vi.fn(async () => {
         throw new TemplateRegistryUnavailableError();
@@ -178,11 +178,10 @@ describe("template composer operation resumption", () => {
       refresh: vi.fn(),
     };
 
-    await expect(loadTemplateCatalog(client)).resolves.toBeUndefined();
-    await expect(loadTemplateCatalog(client, { requireCatalog: true })).rejects.toThrow(
-      TemplateRegistryUnavailableError
-    );
-    expect(client.refresh).not.toHaveBeenCalled();
+    const refreshed = { revision: "2026-08-11" } as never;
+    client.refresh.mockResolvedValueOnce(refreshed);
+    await expect(loadTemplateCatalog(client)).resolves.toBe(refreshed);
+    expect(client.refresh).toHaveBeenCalledTimes(1);
   });
 
   it("retains exact context intent on resume", async () => {

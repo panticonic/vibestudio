@@ -78,7 +78,8 @@ describe("template authoring inspection", () => {
     );
 
     expect(plan.requiredParts).toEqual(["packages/shared"]);
-    expect(plan.inheritedParts).toEqual(["packages/base-runtime"]);
+    expect(plan.dependencyParts).toEqual(["packages/base-runtime"]);
+    expect(plan.overlapParts).toEqual([]);
     expect(plan.includedParts).toEqual(["extensions/demo", "packages/shared"]);
     expect(plan.request.dependencies).toEqual([{ url: base.url }]);
     expect(YAML.parse(plan.manifest)).toMatchObject({
@@ -144,7 +145,8 @@ describe("template authoring inspection", () => {
       }
     );
 
-    expect(plan.inheritedParts).toEqual(["packages/base-runtime", "packages/feature-runtime"]);
+    expect(plan.dependencyParts).toEqual(["packages/base-runtime", "packages/feature-runtime"]);
+    expect(plan.overlapParts).toEqual([]);
     expect(YAML.parse(plan.manifest).templates.use).toEqual([{ url: feature.url }]);
   });
 
@@ -171,7 +173,8 @@ describe("template authoring inspection", () => {
       dependencies: [{ url: base.url }],
     });
     expect(overlapping.includedParts).toEqual(["packages/base-runtime"]);
-    expect(overlapping.inheritedParts).toEqual(["packages/base-runtime"]);
+    expect(overlapping.dependencyParts).toEqual(["packages/base-runtime"]);
+    expect(overlapping.overlapParts).toEqual(["packages/base-runtime"]);
 
     const unavailable = await inspectTemplateAuthoring(context({}) as never, observation as never, {
       name: "Missing",
@@ -179,7 +182,8 @@ describe("template authoring inspection", () => {
       parts: ["packages/base-runtime"],
       dependencies: [{ url: "git+https://example.test/other.git" }],
     });
-    expect(unavailable.inheritedParts).toEqual([]);
+    expect(unavailable.dependencyParts).toEqual([]);
+    expect(unavailable.overlapParts).toEqual([]);
     expect(unavailable.request.dependencies).toEqual([
       { url: "git+https://example.test/other.git" },
     ]);

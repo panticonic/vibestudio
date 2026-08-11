@@ -21,7 +21,7 @@ import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient"
 import { credentials, extensions, rpc } from "@workspace/runtime";
 import { createTemplateManagementClient } from "@workspace/template-management";
 import {
-  TemplateAddDialog,
+  TemplateAddButton,
   useTemplateManagementController,
   type TemplateManagementController,
 } from "@workspace/template-management/react";
@@ -84,7 +84,7 @@ function AboutTemplateReview({
       const status = await vcs.status({ contextId: review.contextId });
       return vcs.compare({
         target: status.workingHead,
-        source: { kind: "external-delta", deltaId: item.deltaId },
+        source: { kind: "external-delta", deltaId: item.sourceDeltaId },
         limit: 200,
         ...(cursor ? { cursor } : {}),
       });
@@ -97,7 +97,7 @@ function AboutTemplateReview({
         commandId: commandId(),
         contextId: review.contextId,
         expectedWorkingHead,
-        source: { kind: "external-delta", deltaId: item.deltaId },
+        source: { kind: "external-delta", deltaId: item.sourceDeltaId },
         coordinates,
         resolutions,
       }),
@@ -159,8 +159,7 @@ function TemplateRow({
               {presentation.label}
             </Badge>
             <Text size="1" color="gray">
-              {row.contributedParts}{" "}
-              {row.contributedParts === 1 ? "contribution" : "contributions"}
+              {row.contributedParts} {row.contributedParts === 1 ? "contribution" : "contributions"}
             </Text>
           </Flex>
           {/* §7.7 lists a template by version, origin, and parts. The origin
@@ -505,7 +504,7 @@ function TemplatesPage() {
                         {entry.description}
                       </Text>
                     </Box>
-                    <TemplateAddDialog
+                    <TemplateAddButton
                       client={templates}
                       request={{ catalogId: entry.id }}
                       triggerLabel="Add"
@@ -547,7 +546,7 @@ function TemplatesPage() {
                     aria-label="Logical Git credential"
                     style={{ flex: "1 1 220px" }}
                   />
-                  <TemplateAddDialog
+                  <TemplateAddButton
                     client={templates}
                     request={{
                       url: url.trim(),

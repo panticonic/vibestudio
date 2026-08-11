@@ -39,11 +39,7 @@
         },
         "resume": {
           "effect": {
-            "kind": "userland-capability",
-            "capability": "workspace.templates.change",
-            "resource": {
-              "kind": "receiver"
-            }
+            "kind": "open"
           }
         },
         "check": {
@@ -52,11 +48,6 @@
           }
         },
         "inspect": {
-          "effect": {
-            "kind": "open"
-          }
-        },
-        "prepareAdd": {
           "effect": {
             "kind": "open"
           }
@@ -91,47 +82,27 @@
         },
         "add": {
           "effect": {
-            "kind": "userland-capability",
-            "capability": "workspace.templates.add",
-            "resource": {
-              "kind": "receiver"
-            }
+            "kind": "open"
           }
         },
         "adopt": {
           "effect": {
-            "kind": "userland-capability",
-            "capability": "workspace.templates.add",
-            "resource": {
-              "kind": "receiver"
-            }
+            "kind": "open"
           }
         },
         "pull": {
           "effect": {
-            "kind": "userland-capability",
-            "capability": "workspace.templates.update",
-            "resource": {
-              "kind": "receiver"
-            }
+            "kind": "open"
           }
         },
         "remove": {
           "effect": {
-            "kind": "userland-capability",
-            "capability": "workspace.templates.remove",
-            "resource": {
-              "kind": "receiver"
-            }
+            "kind": "open"
           }
         },
         "decideSuggestion": {
           "effect": {
-            "kind": "userland-capability",
-            "capability": "workspace.templates.change",
-            "resource": {
-              "kind": "receiver"
-            }
+            "kind": "open"
           }
         },
         "suggest": {
@@ -147,54 +118,6 @@
     },
     "authority": {
       "provides": [
-        {
-          "name": "workspace.templates.add",
-          "title": "Add this template?",
-          "action": "add this template",
-          "tier": "gated",
-          "sensitivity": "write",
-          "resourceType": "workspace.templates",
-          "presentation": {
-            "domain": "files",
-            "verb": "manage"
-          },
-          "notability": "headline",
-          "grantScopes": [
-            "once"
-          ]
-        },
-        {
-          "name": "workspace.templates.update",
-          "title": "Update this template?",
-          "action": "update this template",
-          "tier": "gated",
-          "sensitivity": "write",
-          "resourceType": "workspace.templates",
-          "presentation": {
-            "domain": "files",
-            "verb": "manage"
-          },
-          "notability": "headline",
-          "grantScopes": [
-            "once"
-          ]
-        },
-        {
-          "name": "workspace.templates.remove",
-          "title": "Remove this template?",
-          "action": "remove this template relationship while keeping its parts",
-          "tier": "gated",
-          "sensitivity": "write",
-          "resourceType": "workspace.templates",
-          "presentation": {
-            "domain": "files",
-            "verb": "manage"
-          },
-          "notability": "headline",
-          "grantScopes": [
-            "once"
-          ]
-        },
         {
           "name": "workspace.templates.suggest",
           "title": "Suggest your changes?",
@@ -248,6 +171,15 @@
           },
           "tier": "gated",
           "evidence": "intentional-broad"
+        },
+        {
+          "capability": "network.response.read",
+          "resource": {
+            "kind": "origin",
+            "origin": "https://github.com"
+          },
+          "tier": "gated",
+          "evidence": "bounded-dynamic"
         },
         {
           "capability": "network.response.read",

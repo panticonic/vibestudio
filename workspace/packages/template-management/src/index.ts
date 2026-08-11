@@ -1,5 +1,4 @@
 import type {
-  TemplateAddPreparation,
   TemplateAddRequest,
   TemplateExactPin,
   TemplateInspection,
@@ -26,27 +25,22 @@ export interface TemplateManagementClient {
   catalog(options?: { refresh?: boolean }): Promise<TemplateCatalogSnapshot | null>;
   check(options?: { alias?: string }): Promise<Array<{ alias: string }>>;
   inspect(locator: TemplateLocator): Promise<TemplateInspection>;
-  prepareAdd(request: TemplateAddRequest): Promise<TemplateAddPreparation>;
   add(input: {
     commandId: string;
-    pin: TemplateExactPin;
-    onBuildFailure?: "discard-context" | "retain-context";
+    source: TemplateAddRequest;
   }): Promise<TemplateOperation>;
   adopt(input: {
     commandId: string;
     pin: TemplateExactPin;
-    onBuildFailure?: "discard-context" | "retain-context";
   }): Promise<TemplateOperation>;
   pull(input: {
     commandId: string;
     alias: string;
     toRef?: string;
-    onBuildFailure?: "discard-context" | "retain-context";
   }): Promise<TemplateOperation>;
   remove(input: {
     commandId: string;
     alias: string;
-    onBuildFailure?: "discard-context" | "retain-context";
   }): Promise<TemplateOperation>;
   suggest(input: {
     commandId: string;
@@ -56,7 +50,6 @@ export interface TemplateManagementClient {
   operations(): Promise<TemplatePendingOperation[]>;
   resume(input: {
     operationId: string;
-    onBuildFailure?: "discard-context" | "retain-context";
   }): Promise<TemplateOperation>;
   cancel(input: { operationId: string }): Promise<{ operationId: string; state: "cancelled" }>;
   decideSuggestion(input: {
@@ -89,8 +82,6 @@ export function createTemplateManagementClient(
       >,
     inspect: (locator) =>
       invoke(TEMPLATE_COMPOSER, "inspect", [locator]) as Promise<TemplateInspection>,
-    prepareAdd: (request) =>
-      invoke(TEMPLATE_COMPOSER, "prepareAdd", [request]) as Promise<TemplateAddPreparation>,
     add: (input) => invoke(TEMPLATE_COMPOSER, "add", [input]) as Promise<TemplateOperation>,
     adopt: (input) => invoke(TEMPLATE_COMPOSER, "adopt", [input]) as Promise<TemplateOperation>,
     pull: (input) => invoke(TEMPLATE_COMPOSER, "pull", [input]) as Promise<TemplateOperation>,

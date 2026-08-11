@@ -240,7 +240,40 @@ function templateAuthoringPrepared(result: TestExecutionResult) {
       };
 }
 
+function templateInstalledThroughSingleTransaction(result: TestExecutionResult) {
+  const base = completedScenarioEvidence(result);
+  if (!base.passed) return base;
+  if (!invokedComposerOperation(base.evidence.evalCode, "add")) {
+    return { passed: false, reason: "Agent did not invoke the canonical template add operation" };
+  }
+  if (invokedComposerOperation(base.evidence.evalCode, "prepareAdd")) {
+    return { passed: false, reason: "Agent used the removed preparation ceremony before add" };
+  }
+  const records = walkRecords(base.evidence.evalValues);
+  const applied = records.some(
+    (record) =>
+      record["state"] === "applied" &&
+      typeof record["operationId"] === "string" &&
+      Array.isArray(record["affectedParts"])
+  );
+  const final = findLastAgentMessage(result);
+  return applied && /examples?[\s\S]*(?:added|installed|connected)|(?:added|installed|connected)[\s\S]*examples?/iu.test(final)
+    ? { passed: true, reason: undefined }
+    : {
+        passed: false,
+        reason: "Template add did not return an applied operation and a truthful completion",
+      };
+}
+
 export const templateTests: TestCase[] = [
+  {
+    name: "templates-install-examples",
+    description: "Install one official template through the single reviewed transaction",
+    category: "templates",
+    prompt:
+      "Use the shipped Templates skill to add the Examples template from the verified catalog. Complete the canonical install transaction and report the outcome. Do not perform a separate read-only inspection unless the install reports an actionable conflict or validation failure.",
+    validate: templateInstalledThroughSingleTransaction,
+  },
   {
     name: "templates-status-catalog",
     description: "Inspect exact template relationships and the verified registry cache",

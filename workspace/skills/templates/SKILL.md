@@ -33,9 +33,11 @@ commit, and content digest only in a labeled Details view.
 
 ## Rules that do not bend
 
-- Invoke composer `prepareAdd` before every new `add`. It is the shared
-  Templates workflow used by direct UI and agents; do not reproduce catalog
-  resolution or guess an exact version.
+- Invoke composer `add` once with the selected catalog identity or direct URL.
+  Composer owns resolution, transitive acquisition, VCS merge, retained repair
+  context, and the single protected-main review. Do not preflight the same
+  template with `inspect` unless the user explicitly asks for a read-only
+  comparison.
 - Agents propose; the host approval boundary decides. A returned pending
   operation means approved composition changes are waiting for ordinary VCS
   review, not that host approval is still pending. Never show or repeat an
@@ -67,35 +69,31 @@ commit, and content digest only in a labeled Details view.
 
 ## Add a template
 
-1. Invoke `prepareAdd` with `{ url, credential? }` or `{ catalogId,
-registryCommit?, registrySnapshot?, refreshCatalog? }`. A reviewed catalog card
-   supplies all three registry selection fields; pass them unchanged so a stale
-   card fails instead of drifting to a newer catalog. Use `refreshCatalog: true` only when the user explicitly
-   asked to refresh the Templates surface. Onboarding may hand off an
-   explicitly approved user outcome to this same workflow; it does not install
-   the template itself. The composer binds a catalog id to the verified
-   registry coordinates and returns `{ name, description?, inspection }`.
-   `credential`, when present, is the workspace's logical credential name,
-   never a concrete credential id. Explain the affected repositories and
-   optional setup suggestions in plain language. Overlap is expected and is
-   not a separate choice at this stage.
-2. Template dependencies name URLs only. Catalog selections and previously
-   unseen dependencies resolve from the reviewed registry revision; a direct
-   URL is independently discovered and verified to the exact pin returned by
-   the preparation.
-3. Invoke `add` with `{ pin: preparation.inspection.pin, commandId }` and a fresh
-   `commandId`. Pass the preparation pin
-   unchanged: it is the one exact version already fetched and verified by
-   `inspect`; never reconstruct it or send the locator again. The invocation
-   itself crosses the host approval boundary.
-4. If it returns `pending`, use its review items through the normal VCS flow,
-   then invoke `resume` with the same `operationId`. Resume requests fresh host
+1. Invoke `add` with `{ source, commandId }` and a fresh `commandId`. `source`
+   is `{ url, credential? }` or `{ catalogId, registryCommit?,
+registrySnapshot?, refreshCatalog? }`. Pass registry coordinates supplied by
+   a rendered catalog card unchanged. Use `refreshCatalog: true` only when the
+   user explicitly requested a refresh. `credential` is a logical workspace
+   credential name, never a concrete credential id.
+2. This one invocation resolves and verifies the selected release and any
+   previously unseen URL-only dependencies, stages all overlapping
+   contributions through ordinary VCS, and opens one host review for the exact
+   merged workspace diff. Do not explain commits, fingerprints, internal
+   contexts, or contribution bookkeeping before that review.
+3. If it returns `pending`, merge every `review.items[].sourceDeltaId` into
+   `review.contextId` with the ordinary VCS tool's `sourceDeltaId` and
+   `contextId` selectors. Invoke the `vcs` tool directly; it is not an importable
+   package and must not be loaded inside an eval. Resolve only genuine conflicts semantically; clean
+   and composed coordinates are drained by the merge driver. Then invoke
+   `resume` with the same `operationId`. Resume requests fresh host
    approval before publishing. After `applied`, request fresh status and
    render a fresh observation. Do not alter an old catalog card to pretend it
    updated.
    If the user abandons the operation, invoke `cancel` with its `operationId`;
    this discards the complete isolated operation context.
-   If it returns `error` with `repair`, edit that exact `repair.contextId`
+   If the canonical protected-main validation fails, use its structured
+   diagnostics and retained operation context for ordinary agentic repair,
+   then invoke `resume`. If it returns `error` with `repair`, edit that exact `repair.contextId`
    using ordinary workspace/VCS tools. Use every structured failure as repair
    feedback, then invoke `resume`. Resume rebuilds the retained result without
    reacquiring or replaying template contributions.
@@ -103,19 +101,18 @@ registryCommit?, registrySnapshot?, refreshCatalog? }`. A reviewed catalog card
    into `repair.contextId` with ordinary VCS tools, resolve its semantic
    coordinates, and then resume. Do not abandon the contribution plan merely
    because unrelated main work landed while it was under review.
-5. Treat every returned `excludedSuggestions` item as a separate decision.
-   Show its exact value, then invoke `decideSuggestion` with `{ commandId,
-alias, section, decision: "accept" | "decline" }`. Acceptance writes only
-   that reviewed trust/provider section to the workspace layer. Both choices
-   durably record the decision so it does not reappear after reload. Never fold
-   a suggestion into template installation approval.
+4. Do not proactively surface excluded trust/provider suggestions after an
+   install. They are optional hints, not unfinished installation. Consult them
+   only when the user later asks for the corresponding capability or a concrete
+   runtime failure identifies the setting as relevant. Then invoke
+   `decideSuggestion` directly so the host approval is the only decision.
 
 ## Adopt existing template lineage
 
 Use adoption only when the user asserts that the workspace already descends
 from an exact template release and wants Composer to begin tracking that
-lineage. Invoke `prepareAdd` to acquire and review the exact release, then
-invoke `adopt` with the returned pin unchanged and a fresh `commandId`.
+lineage. Invoke read-only `inspect` to resolve that explicit lineage assertion,
+then invoke `adopt` with the returned pin and a fresh `commandId`.
 Adoption writes the ordinary template relationship, fragments, and contribution
 ledger but never merges the release's historical repository content into the
 present workspace. The current repositories remain the local descendant and
@@ -168,10 +165,13 @@ workspace.
    `{ name, description, parts, dependencies?: [{ url, credential? }] }`.
    Pass that intent to `inspectAuthoring`. Do not make the agent choose refs,
    commits, snapshots, or aliases for dependencies.
-2. Review `requestedParts` and `requiredParts`. `inheritedParts` is only an
-   explanatory contribution hint when a dependency happens to be installed; it
-   is not validation and does not prevent explicitly selecting an overlapping
-   repository. Required
+2. Review `requestedParts`, `requiredParts`, `dependencyParts`, and
+   `overlapParts`. `dependencyParts` names repositories already supplied by the
+   declared installed dependency closure. `overlapParts` is the exact
+   intersection the new template will deliberately publish again; an empty list
+   is the normal case. A non-empty list is allowed, but report its purpose
+   plainly instead of describing those repositories as ordinary transitive
+   requirements. Required
    parts are deterministic `workspace:*` or runtime dependencies; do not remove
    them.
 3. Show the generated manifest and `fingerprint` in a technical details view.
@@ -214,10 +214,9 @@ imply registry governance or silently merge a catalog change.
 
 ## Catalog ownership
 
-The template composer owns preparation and mutation. The shared template
-management component owns the human review state machine. The Templates page
-and shell settings embed that same component; agents invoke the same
-`prepareAdd` and `add` methods directly. Onboarding may recognize that an
+The template composer owns resolution and mutation. Protected main owns the
+single human review state machine. The Templates page, shell settings, and
+agents invoke the same `add` method. Onboarding may recognize that an
 explicit user goal needs an absent official template and hand that intent to
 this workflow; it does not install templates itself or maintain a parallel
 catalog. No surface implements its own catalog-to-inspection orchestration.

@@ -80,9 +80,61 @@ describe("template composer affected build gate", () => {
   it("accepts an intentionally removed prior unit instead of treating it as a malformed add", async () => {
     const ctx = context(null);
     await expect(
-      createAffectedBuildGate(ctx as never, new Set(["about/help"]))("operation-1", [
-        "about/help",
-      ])
+      createAffectedBuildGate(ctx as never, new Set(["about/help"]))("operation-1", ["about/help"])
     ).resolves.toEqual({ failures: [] });
+  });
+
+  it("builds independent affected units with bounded concurrency", async () => {
+    let active = 0;
+    let maxActive = 0;
+    const units = Array.from({ length: 7 }, (_, index) => `about/unit-${index}`);
+    const call = vi.fn(async (_target: string, method: string, ...args: unknown[]) => {
+      if (method === "vcs.status") return { workingHead: STATE };
+      if (method === "vcs.listDirectory") {
+        const input = args[0] as { path: string };
+        if (input.path === "") {
+          return {
+            entries: [{ path: "about", kind: "directory", repositoryRoot: false }],
+            nextCursor: null,
+          };
+        }
+        if (input.path === "about") {
+          return {
+            entries: units.map((repoPath) => ({
+              path: repoPath,
+              kind: "directory",
+              repositoryRoot: true,
+            })),
+            nextCursor: null,
+          };
+        }
+      }
+      if (method === "vcs.resolveRepository") {
+        const input = args[0] as { repoPath: string };
+        return { repositoryId: `repo:${input.repoPath}`, repoPath: input.repoPath };
+      }
+      if (method === "vcs.readFile") {
+        const input = args[0] as { repositoryId: string };
+        return {
+          content: {
+            kind: "text",
+            text: JSON.stringify({ name: `@workspace/${input.repositoryId.slice(5)}` }),
+          },
+        };
+      }
+      if (method === "build.getBuild") {
+        active += 1;
+        maxActive = Math.max(maxActive, active);
+        await new Promise((resolve) => setTimeout(resolve, 1));
+        active -= 1;
+        return { ok: true };
+      }
+      throw new Error(`unexpected RPC ${method}`);
+    });
+
+    await expect(
+      createAffectedBuildGate({ rpc: { call } } as never)("operation-many", units)
+    ).resolves.toEqual({ failures: [] });
+    expect(maxActive).toBe(4);
   });
 });

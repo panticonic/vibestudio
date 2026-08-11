@@ -591,6 +591,10 @@ function preparationDiagnostics(error: unknown): string[] {
 
 export interface ApprovalQueue {
   beginPreparation?(req: CapabilityApprovalQueueRequest & { dedupKey: string }): string;
+  updatePreparation?(
+    dedupKey: string,
+    progress: { label: string; completed?: number; total?: number }
+  ): void;
   failPreparation?(dedupKey: string, error: unknown): void;
   discardPreparation?(dedupKey: string): void;
   request(req: UnitInstallReviewQueueRequest): Promise<UnitInstallReviewQueueDecision>;
@@ -1793,6 +1797,19 @@ export function createApprovalQueue(deps: {
         timeToVisibleMs: Date.now() - approval.requestedAt,
       });
       return approval.approvalId;
+    },
+
+    updatePreparation(dedupKey, progress) {
+      const entry = preparationsByProducerKey.get(dedupKey);
+      if (!entry || entry.approval.lifecycle?.state !== "preparing") return;
+      entry.approval = {
+        ...entry.approval,
+        lifecycle: {
+          state: "preparing",
+          progress: { ...progress, updatedAt: Date.now() },
+        },
+      };
+      emitPendingChanged();
     },
 
     failPreparation(dedupKey, error) {

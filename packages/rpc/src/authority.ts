@@ -519,7 +519,7 @@ export interface DirectAuthorityAttestation {
   /** Semantic capability naming the live target; distinct from a protected method effect. */
   targetCapability?: string;
   /** Tier of the live target declaration, evaluated independently of the method tier. */
-  targetTier?: "gated" | "critical";
+  targetTier?: "open" | "gated" | "critical";
   /** Canonical protected invocation bound to a critical one-shot confirmation. */
   invocationDigest?: string;
   /** Invocation digest for the independently authorized live target leaf. */

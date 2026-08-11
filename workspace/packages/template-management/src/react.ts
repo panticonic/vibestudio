@@ -1,8 +1,8 @@
 export {
-  TemplateAddDialog,
+  TemplateAddButton,
   type TemplateAddClient,
-  type TemplateAddDialogProps,
-} from "./TemplateAddDialog.js";
+  type TemplateAddButtonProps,
+} from "./TemplateAddButton.js";
 export {
   useTemplateManagementController,
   type TemplateLifecycleClient,

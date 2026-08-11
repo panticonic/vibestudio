@@ -99,9 +99,9 @@ singletonObjects:
 services:
   - source: workers/workspace-source
     name: gad.workspace
-    title: Workspace source
-    action: read or change this workspace's semantic source
-    description: Owns semantic source, history, projections, and workspace initialization.
+    title: Workspace data
+    action: use this workspace's files and history
+    description: Provides the shared files, settings, and conversation history that make this workspace work.
     notability: everyday
     presentation:
       domain: automation
@@ -110,6 +110,7 @@ services:
       - vibestudio.workspace-source.v1
       - vibestudio.gad.workspace.v1
     authority:
+      binding: declared
       principals:
         - host
         - user

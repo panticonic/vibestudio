@@ -38,11 +38,12 @@ return { candidates, intent, inspection };
 ```
 
 The inspection names optional parts available at protected main, selected parts,
-automatically required parts, the full repository contribution supplied by the
-selected source, any contribution hints available for installed dependencies, the
-generated URL-only manifest, and a compact fingerprint. Review the selected and
-automatically included parts with the user. Dependency contribution hints are not
-compatibility proof and do not forbid an explicit overlapping selection.
+automatically required parts, repositories supplied by the declared installed
+dependency closure, and the exact selected overlap with those repositories. It
+also returns the generated URL-only manifest and a compact fingerprint. An empty
+`overlapParts` list is the normal focused-template result. A non-empty list is a
+deliberate overlay: explain why each overlap belongs to this template. Overlap
+remains supported; it must simply be visible in the publication plan.
 
 Publish the same intent against the reviewed fingerprint:
 

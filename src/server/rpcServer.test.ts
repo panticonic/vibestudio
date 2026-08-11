@@ -2678,8 +2678,74 @@ describe("RpcServer relay behavior", () => {
       expect.objectContaining({
         tier: "gated",
         snapshot: expect.objectContaining({ capability: "workspace-service:channel" }),
+        presentation: expect.objectContaining({
+          title: "Conversations",
+          description: expect.stringContaining("Conversations"),
+        }),
       })
     );
+  });
+
+  it("treats a declared workspace-service binding as wiring, not another consent", async () => {
+    const request = vi.fn();
+    const { server } = createServer({
+      resolveWorkspaceDirectAuthority: async () => [
+        {
+          capability: "workspace-service:gad.workspace",
+          serviceBinding: "declared",
+          methodEffect: {
+            kind: "host-capability",
+            capability: "workspace.graph.read",
+            resource: { kind: "receiver-object" },
+          },
+          methodCapability: "workspace.graph.read",
+          methodTier: "open",
+          principals: ["code"],
+          presentation: { domain: "automation", verb: "manage" },
+          title: "Workspace data",
+          action: "use this workspace's files and history",
+          declaredBy: "workers/workspace-source",
+        },
+      ],
+      directAuthorityAcquirer: {
+        request,
+        acquire: vi.fn(),
+        consume: vi.fn(() => true),
+        invalidate: vi.fn(),
+      },
+    });
+    const caller = createVerifiedCaller("do:workers/pubsub-channel:PubSubChannel:chat-a", "do", {
+      callerId: "do:workers/pubsub-channel:PubSubChannel:chat-a",
+      callerKind: "do",
+      repoPath: "workers/pubsub-channel",
+      effectiveVersion: "ev-channel",
+      executionDigest: "a".repeat(64),
+      requested: [
+        {
+          capability: "workspace-service:gad.workspace",
+          resource: { kind: "prefix", prefix: "" },
+        },
+      ],
+    });
+
+    const attestation = await testServer(server).directDOAuthorization({
+      caller,
+      ref: {
+        source: "workers/workspace-source",
+        className: "GadWorkspaceDO",
+        objectKey: "workspace",
+      },
+      method: "readGraph",
+      args: [],
+      readOnly: true,
+    });
+
+    expect(attestation).toMatchObject({
+      capability: "workspace.graph.read",
+      targetCapability: "workspace-service:gad.workspace",
+      targetTier: "open",
+    });
+    expect(request).not.toHaveBeenCalled();
   });
 
   it("preserves admitted test-session policy in direct workspace-service acquisitions", async () => {

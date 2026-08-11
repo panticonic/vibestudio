@@ -158,6 +158,7 @@ function capabilityApproval(
     resource: partial.resource,
     details: partial.details,
     diffReview: partial.diffReview,
+    lifecycle: partial.lifecycle,
     approvalId: partial.approvalId,
   };
 }
@@ -389,8 +390,18 @@ describe("ConsentApprovalBar coordinator", () => {
   it("keeps an active review open when the next approval was queued", async () => {
     shellClient.resolve.mockImplementation(() => new Promise(() => undefined));
     shellClient.listPending.mockResolvedValueOnce([
-      capabilityApproval({ approvalId: "queued", title: "Queued", attention: "queue" }),
-      capabilityApproval({ approvalId: "interrupt", title: "Interrupt", attention: "interrupt" }),
+      capabilityApproval({
+        approvalId: "queued",
+        title: "Queued",
+        callerId: "extension:publisher",
+        attention: "queue",
+      }),
+      capabilityApproval({
+        approvalId: "interrupt",
+        title: "Interrupt",
+        callerId: "extension:publisher",
+        attention: "interrupt",
+      }),
     ]);
     mountBar();
     await waitFor(() => {
@@ -404,6 +415,34 @@ describe("ConsentApprovalBar coordinator", () => {
       expect(overlay.options?.props?.approval?.approvalId).toBe("queued");
     });
     expect(screen.queryByRole("button", { name: "Review approval: Queued" })).toBeNull();
+  });
+
+  it("minimizes queued preparation from a different requester after an interrupt resolves", async () => {
+    shellClient.resolve.mockImplementation(() => new Promise(() => undefined));
+    shellClient.listPending.mockResolvedValueOnce([
+      capabilityApproval({
+        approvalId: "preparing-template",
+        title: "Update meta main",
+        callerId: "@workspace-extensions/template-composer",
+        attention: "queue",
+        lifecycle: { state: "preparing" },
+      }),
+      capabilityApproval({
+        approvalId: "conversation-permission",
+        title: "Join this conversation",
+        callerId: "do:workers/pubsub-channel:chat",
+        attention: "interrupt",
+      }),
+    ]);
+    mountBar();
+    await waitFor(() => {
+      expect(overlay.options?.props?.approval?.approvalId).toBe("conversation-permission");
+    });
+
+    emit({ type: "decide", decision: "once", approvalId: "conversation-permission" });
+
+    await screen.findByRole("button", { name: "Review approval: Update meta main" });
+    expect(overlay.options).toBeNull();
   });
 
   it("resolves and removes an approval on a decide intent", async () => {

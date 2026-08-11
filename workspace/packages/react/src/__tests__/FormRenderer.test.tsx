@@ -7,10 +7,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { FieldDefinition, FieldValue } from "@vibestudio/types";
 import { FormRenderer } from "../FormRenderer";
 
-function renderControlledForm(
-  schema: FieldDefinition[],
-  options: { onSubmit?: () => void } = {}
-) {
+function renderControlledForm(schema: FieldDefinition[], options: { onSubmit?: () => void } = {}) {
   const onChange = vi.fn<(key: string, value: FieldValue) => void>();
 
   function Harness() {
@@ -79,5 +76,6 @@ describe("FormRenderer", () => {
 
     fireEvent.click(screen.getByRole("radio", { name: "A" }));
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(onSubmit).toHaveBeenCalledWith({ answer: "a" });
   });
 });

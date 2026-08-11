@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { fireEvent, render, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, waitFor } from "@testing-library/react";
 import { Theme } from "@radix-ui/themes";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
@@ -97,6 +97,14 @@ const templates: OptionalTemplateSnapshot[] = [
     selection: { ...selection, catalogId: "spectrolite" },
   },
 ];
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
 
 beforeEach(() => {
   loaders.capabilities.mockReset();
@@ -215,6 +223,32 @@ describe("SetupHub", () => {
     fireEvent.click(view.getByRole("button", { name: "Load optional templates" }));
     await waitFor(() => expect(loaders.templates).toHaveBeenCalledOnce());
     expect(view.getByText("Examples")).toBeTruthy();
+  });
+
+  it("animates refresh icons while setup and template data are loading", async () => {
+    const capabilityLoad = deferred<{ catalog: typeof catalog; snapshot: typeof snapshots }>();
+    const templateLoad = deferred<OptionalTemplateSnapshot[]>();
+    loaders.capabilities.mockReturnValue(capabilityLoad.promise);
+    loaders.templates.mockReturnValue(templateLoad.promise);
+    const view = render(
+      <Theme>
+        <SetupHub props={{ catalog, snapshot: snapshots }} chat={{ send: vi.fn() }} />
+      </Theme>
+    );
+
+    const refresh = view.getByRole("button", { name: "Refresh setup overview" });
+    await waitFor(() => expect(refresh.textContent).toContain("Refreshing…"));
+    expect(refresh.querySelector("svg")?.style.animation).toBe("spin 0.8s linear infinite");
+
+    fireEvent.click(view.getByRole("button", { name: "Load optional templates" }));
+    const loadTemplates = view.getByRole("button", { name: "Loading templates…" });
+    expect(loadTemplates.querySelector("svg")?.style.animation).toBe("spin 0.8s linear infinite");
+
+    await act(async () => {
+      capabilityLoad.resolve({ catalog, snapshot: snapshots });
+      templateLoad.resolve(templates);
+    });
+    await waitFor(() => expect(view.getByText("Examples")).toBeTruthy());
   });
 
   it("shows optional templates and sends available choices through structured review", async () => {

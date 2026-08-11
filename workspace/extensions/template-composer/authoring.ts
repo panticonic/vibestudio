@@ -263,7 +263,7 @@ function parsePackageMetadata(
 
 interface ResolvedAuthoringDependencies {
   dependencies: NonNullable<TemplateAuthoringIntent["dependencies"]>;
-  inheritedParts: string[];
+  dependencyParts: string[];
 }
 
 function resolveAuthoringDependencies(
@@ -276,8 +276,8 @@ function resolveAuthoringDependencies(
       url: normalizeTemplateGitUrl(dependency.url),
     })
   );
-  if (!dependencies.length) return { dependencies: [], inheritedParts: [] };
-  if (!observation.lock) return { dependencies, inheritedParts: [] };
+  if (!dependencies.length) return { dependencies: [], dependencyParts: [] };
+  if (!observation.lock) return { dependencies, dependencyParts: [] };
 
   const nodesById = new Map(observation.lock.nodes.map((node) => [node.nodeId, node]));
   const nodesByUrl = new Map(
@@ -297,7 +297,7 @@ function resolveAuthoringDependencies(
   }
   return {
     dependencies,
-    inheritedParts: Object.entries(observation.lock.repositories)
+    dependencyParts: Object.entries(observation.lock.repositories)
       .filter(([, repository]) =>
         repository.contributions.some(({ nodeId }) => inheritedNodeIds.has(nodeId))
       )
@@ -361,7 +361,7 @@ export async function inspectTemplateAuthoring(
   if (!name) throw new Error("Template name is required");
   if (!description) throw new Error("Template description is required");
   const resolvedDependencies = resolveAuthoringDependencies(rawRequest, observation);
-  const inherited = new Set(resolvedDependencies.inheritedParts);
+  const inherited = new Set(resolvedDependencies.dependencyParts);
   const selectableParts = [
     ...new Set([
       ...observation.localRepoPaths,
@@ -425,6 +425,7 @@ export async function inspectTemplateAuthoring(
   }
 
   const includedParts = [...included].sort(compareUtf16CodeUnits);
+  const overlapParts = requestedParts.filter((repoPath) => inherited.has(repoPath));
   const manifest = projectManifest(
     observation.runtimeTop as WorkspaceConfig,
     new Set(includedParts),
@@ -445,7 +446,8 @@ export async function inspectTemplateAuthoring(
     request,
     mainEventId: observation.mainEventId,
     includedParts,
-    inheritedParts: resolvedDependencies.inheritedParts,
+    dependencyParts: resolvedDependencies.dependencyParts,
+    overlapParts,
     manifestDigest,
   };
   return {
@@ -455,7 +457,8 @@ export async function inspectTemplateAuthoring(
     requestedParts,
     includedParts,
     requiredParts: [...required].sort(compareUtf16CodeUnits),
-    inheritedParts: resolvedDependencies.inheritedParts,
+    dependencyParts: resolvedDependencies.dependencyParts,
+    overlapParts,
     manifest,
     manifestDigest,
     fingerprint: `v1-sha256:${sha256HexSyncText(canonicalJson(body))}`,

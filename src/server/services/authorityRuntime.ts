@@ -489,12 +489,16 @@ export interface WorkspaceDoMethodAuthority {
 /**
  * Stamp one exact workspace-service receiver declaration. Both external direct
  * RPC and the server's internal DO dispatcher use this projection so the
- * target service grant and any independent semantic method effect cannot
+ * target service admission and any independent semantic method effect cannot
  * drift into parallel authority paths.
  */
 export function attestWorkspaceDoRpc(
   input: Parameters<typeof attestDirectRpc>[0] & {
-    service: { name: string; principals: readonly PrincipalKind[] };
+    service: {
+      name: string;
+      principals: readonly PrincipalKind[];
+      binding?: "consent" | "declared";
+    };
     methodAuthority: WorkspaceDoMethodAuthority;
   }
 ): DirectAuthorityAttestation {
@@ -509,19 +513,22 @@ export function attestWorkspaceDoRpc(
     effect: input.methodAuthority.effect,
     tier: input.methodAuthority.tier,
   });
-  if (methodCapability !== targetCapability) {
-    const target = attestDirectRpc({
-      ...input,
-      capability: targetCapability,
-      effect: { kind: "open" },
-      tier: "gated",
-    });
+  const target =
+    methodCapability === targetCapability
+      ? attestation
+      : attestDirectRpc({
+          ...input,
+          capability: targetCapability,
+          effect: { kind: "open" },
+          tier: input.service.binding === "declared" ? "open" : "gated",
+        });
+  if (target !== attestation) {
     attestation.grants = Object.freeze([...attestation.grants, ...target.grants]);
   }
   return {
     ...attestation,
     targetRequirement: requirementForPrincipals(input.service.principals, targetCapability),
     targetCapability,
-    targetTier: "gated",
+    targetTier: input.service.binding === "declared" ? "open" : "gated",
   };
 }

@@ -508,14 +508,12 @@ export function ConsentApprovalBar() {
     const intent = payload as ApprovalCardIntent;
     if (!current || intent.approvalId !== current.approvalId) return;
     const continueReviewSession = () => {
-      // An approval's attention class describes how an untouched request first
-      // arrives. Once the user answers an expanded review, they are actively
-      // working through this queue: a queued successor must replace the
-      // current surface instead of disappearing into the notification pill.
-      // Set this even when the local snapshot still contains one item; the
-      // server can already be creating the successor while the pending-changed
-      // event is in flight.
-      reviewingQueuedRef.current = true;
+      // A requester may replace one review with its own queued follow-up while
+      // the decision is being recorded. Keep that continuation on the surface,
+      // including across a briefly empty queue. Do not turn an interrupt into
+      // a general queue-review session: unrelated background work must remain
+      // in the notification pill. An explicitly opened queued review already
+      // has `reviewingQueuedRef` set and therefore continues normally.
       reviewContinuationCallerIdRef.current = current.callerId;
     };
     switch (intent.type) {

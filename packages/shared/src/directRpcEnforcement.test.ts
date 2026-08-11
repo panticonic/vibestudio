@@ -262,6 +262,45 @@ describe("directRpcDenial", () => {
     ).toBe("EACCES");
   });
 
+  it("accepts a declared live target without manufacturing a consent grant", () => {
+    const capability = "workspace-service:gad.workspace";
+    const dynamicContext: AuthorizationContext = {
+      ...context,
+      executingCode: {
+        ...context.executingCode!,
+        requested: [{ capability, resource: { kind: "exact", key: "do:x" } }],
+      },
+    };
+
+    expect(
+      directRpcDenial({
+        kind: "call",
+        method: "readGraph",
+        caller: null,
+        attestation: attestation({
+          method: "readGraph",
+          effect: { kind: "open" },
+          capability,
+          context: dynamicContext,
+          targetRequirement: { kind: "capability", principal: "code", capability },
+          targetCapability: capability,
+          targetTier: "open",
+          grants: [],
+        }),
+        declaration: {
+          tier: "open",
+          principals: ["code"],
+          sensitivity: "read",
+          effect: { kind: "open" },
+        },
+        audience: "do:x",
+        resourceKey: "do:x",
+        capability,
+        now: 100,
+      })
+    ).toBeNull();
+  });
+
   it("evaluates the live target against its own invocation-bound grant", () => {
     const capability = "workspace-service:notes";
     const methodDigest = "m".repeat(64);

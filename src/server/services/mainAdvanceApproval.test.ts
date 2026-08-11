@@ -1274,7 +1274,12 @@ describe("createMainRefAdvanceGate (the reshaped batch approval gate)", () => {
         })
       )
     ).rejects.toThrow("workspace-source coordinates changed");
-    expect(validateCandidateWorkspaceState).toHaveBeenCalledWith("state:candidate", ["meta"]);
+    expect(validateCandidateWorkspaceState).toHaveBeenCalledWith(
+      "state:candidate",
+      ["meta"],
+      undefined,
+      expect.any(Function)
+    );
     expect(beginCandidateReview).toHaveBeenCalledWith(
       expect.objectContaining({
         publicationId: "publication:test",

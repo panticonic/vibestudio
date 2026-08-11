@@ -268,6 +268,12 @@ export interface PendingApprovalBase {
   lifecycle?: {
     state: "preparing" | "ready" | "failed" | "cancelled";
     diagnostics?: readonly string[];
+    progress?: {
+      label: string;
+      completed?: number;
+      total?: number;
+      updatedAt: number;
+    };
   };
   /** Whether shell chrome should open this request immediately or keep it in the waiting pill. */
   attention?: "interrupt" | "queue";

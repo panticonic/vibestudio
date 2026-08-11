@@ -63,6 +63,25 @@ describe("approvalQueue", () => {
     ]);
     await expect(queue.resolve(approvalId, "once")).rejects.toThrow(/still preparing/);
 
+    queue.updatePreparation!(dedupKey, {
+      label: "Building workspace projects",
+      completed: 2,
+      total: 5,
+    });
+    expect(queue.listPending()).toEqual([
+      expect.objectContaining({
+        approvalId,
+        lifecycle: {
+          state: "preparing",
+          progress: expect.objectContaining({
+            label: "Building workspace projects",
+            completed: 2,
+            total: 5,
+          }),
+        },
+      }),
+    ]);
+
     const decision = queue.request(unitInstallReviewRequest({ dedupKey }));
     expect(queue.listPending()).toEqual([
       expect.objectContaining({

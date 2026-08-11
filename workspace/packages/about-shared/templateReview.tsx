@@ -143,7 +143,9 @@ export function TemplateReviewPanel({
   const complete =
     comparisons !== null &&
     comparisons.length > 0 &&
-    comparisons.every((entry) => entry.comparison.resolution.complete && entry.comparison.resolution.concluded);
+    comparisons.every(
+      (entry) => entry.comparison.resolution.complete && entry.comparison.resolution.concluded
+    );
 
   return (
     <Card size="1" mt="2" aria-label="Incoming template changes">
@@ -172,13 +174,14 @@ export function TemplateReviewPanel({
           </Text>
         ) : null}
         {comparisons?.map((entry) => (
-          <Flex key={entry.item.deltaId} direction="column" gap="2">
+          <Flex key={entry.item.sourceDeltaId} direction="column" gap="2">
             <Text size="1" weight="medium">
               {entry.item.repoPath}
             </Text>
             {entry.comparison.coordinates.map((coordinate) => {
               const key = `${coordinate.coordinate.kind}:${coordinate.coordinate.id}`;
-              const unresolved = coordinate.status !== "resolved" && coordinate.status !== "convergent";
+              const unresolved =
+                coordinate.status !== "resolved" && coordinate.status !== "convergent";
               const conflicting = coordinate.status === "conflict";
               return (
                 <Card key={key} size="1">

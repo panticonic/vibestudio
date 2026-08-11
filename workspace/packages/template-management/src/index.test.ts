@@ -16,14 +16,13 @@ describe("createTemplateManagementClient", () => {
     await client.catalog({ refresh: true });
     await client.check({ alias: "github" });
     await client.inspect({ url: "https://example.test/template.git" });
-    await client.prepareAdd({ catalogId: "github" });
-    await client.add({ commandId: "add-1", pin });
+    await client.add({ commandId: "add-1", source: { catalogId: "github" } });
     await client.adopt({ commandId: "adopt-1", pin });
     await client.pull({ commandId: "pull-1", alias: "github", toRef: "refs/tags/v2" });
     await client.remove({ commandId: "remove-1", alias: "github" });
     await client.suggest({ commandId: "suggest-1", alias: "github", parts: ["skills/github"] });
     await client.operations();
-    await client.resume({ operationId: "operation-1", onBuildFailure: "discard-context" });
+    await client.resume({ operationId: "operation-1" });
     await client.cancel({ operationId: "operation-2" });
     await client.decideSuggestion({
       commandId: "decision-1",
@@ -41,8 +40,11 @@ describe("createTemplateManagementClient", () => {
         "inspect",
         [{ url: "https://example.test/template.git" }],
       ],
-      ["@workspace-extensions/template-composer", "prepareAdd", [{ catalogId: "github" }]],
-      ["@workspace-extensions/template-composer", "add", [{ commandId: "add-1", pin }]],
+      [
+        "@workspace-extensions/template-composer",
+        "add",
+        [{ commandId: "add-1", source: { catalogId: "github" } }],
+      ],
       ["@workspace-extensions/template-composer", "adopt", [{ commandId: "adopt-1", pin }]],
       [
         "@workspace-extensions/template-composer",
@@ -60,11 +62,7 @@ describe("createTemplateManagementClient", () => {
         [{ commandId: "suggest-1", alias: "github", parts: ["skills/github"] }],
       ],
       ["@workspace-extensions/template-composer", "operations", []],
-      [
-        "@workspace-extensions/template-composer",
-        "resume",
-        [{ operationId: "operation-1", onBuildFailure: "discard-context" }],
-      ],
+      ["@workspace-extensions/template-composer", "resume", [{ operationId: "operation-1" }]],
       ["@workspace-extensions/template-composer", "cancel", [{ operationId: "operation-2" }]],
       [
         "@workspace-extensions/template-composer",

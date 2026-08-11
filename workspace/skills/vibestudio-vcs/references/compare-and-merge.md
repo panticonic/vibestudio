@@ -9,7 +9,7 @@ applications—compare the local view. The tool resolves working head as source
 and protected main as target, so a status or history preflight adds no value:
 
 ```js
-vcs({ operation: "compare", view: "local" })
+vcs({ operation: "compare", view: "local" });
 ```
 
 Compare is read-only and does not accept `intent`; use intent on authoring or
@@ -20,7 +20,7 @@ For a read-only preview of committed work arriving from another context, name
 that exact incoming event as the source:
 
 ```js
-vcs({ operation: "compare", sourceEventId: "event:source", limit: 500 })
+vcs({ operation: "compare", sourceEventId: "event:source", limit: 500 });
 ```
 
 The source is always the state whose changes are under review. Do not pass main
@@ -78,7 +78,25 @@ vcs({
 });
 ```
 
-For direct service callers, the source is `{ kind: "event", eventId }` or `{ kind: "external-delta", deltaId }`. The compact tool exposes `sourceEventId` and maps it to the event source.
+For direct service callers, the source is `{ kind: "event", eventId }` or
+`{ kind: "external-delta", deltaId }`. The compact tool exposes these as
+`sourceEventId` and `sourceDeltaId`.
+
+For an external delta returned by another workspace operation, use the same
+compact tool with that operation's retained context and exact delta identity:
+
+```js
+vcs({
+  operation: "merge",
+  contextId: "the-retained-context-id",
+  sourceDeltaId: "the-external-delta-id",
+  intent: "Integrate the reviewed contribution",
+});
+```
+
+`sourceEventId` and `sourceDeltaId` are mutually exclusive. The optional
+`contextId` selects an existing retained workspace context; omitting it keeps
+the current task context.
 
 Always inspect the merge result's model-visible `composed` entries. Each item names the coordinate and both resolved intents; the full packet also remains in structured details. Hunk-composed content is a new authored merge change with exact mapped content lineage to both parents.
 

@@ -23,10 +23,8 @@ import {
 } from "@vibestudio/workspace/templateCoordinates";
 import {
   inspectTemplateOperation,
-  prepareTemplateOperation,
   publishPreparedTemplateOperation,
-  rebuildPreparedTemplateOperation,
-  TemplateBuildGateError,
+  stageTemplateOperation,
   templateStatus,
   templateSuggestionDigest,
   type TemplateOperationInspection,
@@ -40,7 +38,7 @@ import {
   type TemplateRegistryClient,
 } from "@workspace/template-registry";
 import YAML from "yaml";
-import { createAffectedBuildGate } from "./build.js";
+import { createAffectedBuildGate, TemplateAuthoringBuildError } from "./build.js";
 import type { ExtensionContextLike } from "./context.js";
 import {
   catalogPin,
@@ -146,8 +144,8 @@ export async function loadTemplateCatalog(
   try {
     return await client.catalog();
   } catch (error) {
-    if (!options.requireCatalog && error instanceof TemplateRegistryUnavailableError) {
-      return undefined;
+    if (error instanceof TemplateRegistryUnavailableError) {
+      return client.refresh();
     }
     throw error;
   }
@@ -215,28 +213,15 @@ async function ensureBootstrapAdoption(
     ...inspection.nextTemplates,
     bootstrapAdopted: descriptor.rootTemplate,
   };
-  const ports = createTemplateOperationPorts(
-    ctx,
-    statePath,
-    observation,
-    createAffectedBuildGate(ctx, observation.localRepoPaths)
-  );
+  const ports = createTemplateOperationPorts(ctx, statePath, observation);
   const operationId = `bootstrap-${descriptor.rootTemplate.commit}`;
-  const preparation = await prepareTemplateOperation({
+  const prepared = await stageTemplateOperation({
     operationId,
     inspection,
     ports,
   });
-  if (preparation.status === "build-failed") {
-    await ports.discard(preparation.prepared.contextId);
-    throw new Error(
-      `Bootstrap template adoption failed to build: ${preparation.failures
-        .map((failure) => failure.unit)
-        .join(", ")}`
-    );
-  }
   try {
-    await publishPreparedTemplateOperation(preparation.prepared, observation.mainEventId, ports);
+    await publishPreparedTemplateOperation(prepared, observation.mainEventId, ports);
   } catch (error) {
     observation = await observeWorkspace(ctx);
     if (observation.top.templates?.bootstrapAdopted) return observation;
@@ -292,6 +277,47 @@ async function pinForLocator(
         url,
         ...(locator.credential ? { credential: locator.credential } : {}),
       });
+}
+
+async function resolveAddSource(
+  ctx: ExtensionContextLike,
+  request: TemplateAddRequest,
+  existing: TemplateOperationRecord | null
+): Promise<{
+  env: Environment;
+  pin: WorkspaceTemplatePin;
+  selection?: { catalogId: string; registryCommit: string; registrySnapshot: string };
+}> {
+  if (existing) {
+    const intent = existing.intent as { source?: unknown; target?: unknown };
+    if (canonicalJson(intent.source) !== canonicalJson(request)) {
+      throw new Error(
+        `Template command ${existing.operationId} was reused with a different source`
+      );
+    }
+    return {
+      env: await environment(ctx),
+      pin: WorkspaceTemplatePinSchema.parse(intent.target),
+    };
+  }
+  if ("catalogId" in request) {
+    const env = await environment(ctx, {
+      requireCatalog: true,
+      refresh: request.refreshCatalog === true,
+    });
+    const registryCommit = request.registryCommit ?? env.catalog!.coordinates.commit;
+    const registrySnapshot = request.registrySnapshot ?? env.catalog!.coordinates.snapshot;
+    return {
+      env,
+      pin: catalogPin(env.catalog!, request.catalogId, registryCommit, registrySnapshot),
+      selection: { catalogId: request.catalogId, registryCommit, registrySnapshot },
+    };
+  }
+  const env = await environment(ctx);
+  return {
+    env,
+    pin: await discoverDirectTemplatePin(ctx, env.info.statePath, request),
+  };
 }
 
 async function inspectLocator(
@@ -414,9 +440,7 @@ function inspectionResult(
   };
 }
 
-export function selectedTemplateName(
-  inspection: ReturnType<typeof inspectionResult>
-): string {
+export function selectedTemplateName(inspection: ReturnType<typeof inspectionResult>): string {
   if (!inspection.pin) return "Selected template";
   const selectedUrl = normalizeTemplateGitUrl(inspection.pin.url);
   return (
@@ -587,13 +611,56 @@ function operationParts(
   };
 }
 
+interface ProtectedMainBuildFailure {
+  code: "BuildGateFailed";
+  affectedUnits: string[];
+  diagnostics: Array<{ file: string; line: number; column: number; message: string }>;
+}
+
+function protectedMainBuildFailure(error: unknown): ProtectedMainBuildFailure | null {
+  if (!error || typeof error !== "object") return null;
+  const data = (error as { errorData?: unknown }).errorData;
+  if (!data || typeof data !== "object") return null;
+  const value = data as Record<string, unknown>;
+  if (
+    value["code"] !== "BuildGateFailed" ||
+    !Array.isArray(value["affectedUnits"]) ||
+    !Array.isArray(value["diagnostics"])
+  ) {
+    return null;
+  }
+  const affectedUnits = value["affectedUnits"].filter(
+    (unit): unit is string => typeof unit === "string" && unit.length > 0
+  );
+  const diagnostics = value["diagnostics"].flatMap((diagnostic) => {
+    if (!diagnostic || typeof diagnostic !== "object") return [];
+    const item = diagnostic as Record<string, unknown>;
+    if (
+      typeof item["file"] !== "string" ||
+      typeof item["line"] !== "number" ||
+      typeof item["column"] !== "number" ||
+      typeof item["message"] !== "string"
+    ) {
+      return [];
+    }
+    return [
+      {
+        file: item["file"],
+        line: item["line"],
+        column: item["column"],
+        message: item["message"],
+      },
+    ];
+  });
+  return { code: "BuildGateFailed", affectedUnits, diagnostics };
+}
+
 async function applyInspection(
   ctx: ExtensionContextLike,
   env: Environment,
   operationId: string,
   inspection: TemplateOperationInspection,
-  intent: unknown,
-  onBuildFailure: "discard-context" | "retain-context" = "retain-context"
+  intent: unknown
 ) {
   const parts = operationParts(operationId, inspection, env.observation.lock);
   const existing = await readTemplateOperationRecord(ctx, operationId);
@@ -609,57 +676,25 @@ async function applyInspection(
     ctx,
     env.info.statePath,
     env.observation,
-    createAffectedBuildGate(ctx, env.observation.localRepoPaths),
     operation.record
   );
+  let contextId: string | undefined;
+  let preparedAffectedRepoPaths: string[] | undefined;
   try {
-    const preparation = await prepareTemplateOperation({
+    const prepared = await stageTemplateOperation({
       operationId,
       inspection,
       ports,
     });
-    if (preparation.status === "build-failed") {
-      if (onBuildFailure === "discard-context") {
-        await ports.discard(preparation.prepared.contextId);
-      } else {
-        await updateTemplateOperationRecord(ctx, {
-          ...operation.record,
-          reviews: undefined,
-          deltaBasis: undefined,
-          mainAdvanceEventId: undefined,
-          preparedAffectedRepoPaths: preparation.prepared.affectedRepoPaths,
-          buildFailures: preparation.failures,
-        });
-      }
-      return {
-        ...parts,
-        state: "error" as const,
-        blocker: {
-          state: "error" as const,
-          code: "TemplateBuildFailed",
-          message: preparation.failures
-            .map((failure) => `${failure.unit}: ${failure.message}`)
-            .join("\n"),
-          nextAction:
-            onBuildFailure === "discard-context" ? ("retry" as const) : ("details" as const),
-        },
-        ...(onBuildFailure === "retain-context"
-          ? {
-              repair: {
-                contextId: preparation.prepared.contextId,
-                failures: preparation.failures,
-              },
-            }
-          : {}),
-      };
-    }
+    contextId = prepared.contextId;
+    preparedAffectedRepoPaths = prepared.affectedRepoPaths;
     await clearTemplateOperationRecordFile(ctx, {
       ...operation.record,
-      preparedAffectedRepoPaths: preparation.prepared.affectedRepoPaths,
+      preparedAffectedRepoPaths: prepared.affectedRepoPaths,
       buildFailures: undefined,
     });
     const published = await publishPreparedTemplateOperation(
-      preparation.prepared,
+      prepared,
       env.observation.mainEventId,
       ports
     );
@@ -669,6 +704,34 @@ async function applyInspection(
       publicationEventId: published.mainEventId,
     };
   } catch (error) {
+    const buildFailure = protectedMainBuildFailure(error);
+    if (buildFailure && contextId) {
+      const failures = buildFailure.diagnostics.length
+        ? buildFailure.diagnostics.map((diagnostic) => ({
+            unit: diagnostic.file || "workspace",
+            message: `${diagnostic.file}:${diagnostic.line}:${diagnostic.column} ${diagnostic.message}`,
+          }))
+        : buildFailure.affectedUnits.map((unit) => ({
+            unit,
+            message: `The protected-main build failed for ${unit}`,
+          }));
+      await updateTemplateOperationRecord(ctx, {
+        ...operation.record,
+        preparedAffectedRepoPaths,
+        buildFailures: failures,
+      });
+      return {
+        ...parts,
+        state: "error" as const,
+        blocker: {
+          state: "error" as const,
+          code: "TemplateBuildFailed",
+          message: "The composed workspace needs repair before this template can be installed",
+          nextAction: "details" as const,
+        },
+        repair: { contextId, failures },
+      };
+    }
     if (error instanceof TemplateCredentialRequired) {
       return {
         ...parts,
@@ -683,14 +746,12 @@ async function applyInspection(
       };
     }
     if (error instanceof TemplateReviewRequired) {
-      if (!operation.record.reviews) {
-        await updateTemplateOperationRecord(ctx, {
-          ...operation.record,
-          mainAdvanceEventId: undefined,
-          reviews: [...error.items],
-          deltaBasis: error.deltaBasis,
-        });
-      }
+      await updateTemplateOperationRecord(ctx, {
+        ...operation.record,
+        mainAdvanceEventId: undefined,
+        reviews: [...error.items],
+        deltaBasis: error.deltaBasis,
+      });
       return {
         ...parts,
         state: "pending" as const,
@@ -735,62 +796,23 @@ async function applyInspection(
 async function resumePreparedOperation(
   ctx: ExtensionContextLike,
   env: Environment,
-  record: TemplateOperationRecord,
-  onBuildFailure: "discard-context" | "retain-context" = "retain-context"
+  record: TemplateOperationRecord
 ) {
   const affectedRepoPaths = record.preparedAffectedRepoPaths;
   if (!affectedRepoPaths) {
     throw new Error(`Template operation ${record.operationId} has not finished staging`);
   }
   const contextId = await ensureTemplateOperationContext(ctx, record.operationId);
-  const ports = createTemplateOperationPorts(
-    ctx,
-    env.info.statePath,
-    env.observation,
-    createAffectedBuildGate(ctx, env.observation.localRepoPaths),
-    record
-  );
-  const preparation = await rebuildPreparedTemplateOperation(
-    { contextId, affectedRepoPaths },
-    ports
-  );
-  if (preparation.status === "build-failed") {
-    if (onBuildFailure === "discard-context") {
-      await ports.discard(contextId);
-    } else {
-      await updateTemplateOperationRecord(ctx, {
-        ...record,
-        mainAdvanceEventId: undefined,
-        buildFailures: preparation.failures,
-      });
-    }
-    return {
-      operationId: record.operationId,
-      state: "error" as const,
-      affectedParts: record.affectedParts,
-      blocker: {
-        state: "error" as const,
-        code: "TemplateBuildFailed",
-        message: preparation.failures
-          .map((failure) => `${failure.unit}: ${failure.message}`)
-          .join("\n"),
-        nextAction:
-          onBuildFailure === "discard-context" ? ("retry" as const) : ("details" as const),
-      },
-      ...(onBuildFailure === "retain-context"
-        ? { repair: { contextId, failures: preparation.failures } }
-        : {}),
-    };
-  }
+  const ports = createTemplateOperationPorts(ctx, env.info.statePath, env.observation, record);
   await clearTemplateOperationRecordFile(ctx, {
     ...record,
-    preparedAffectedRepoPaths: preparation.prepared.affectedRepoPaths,
+    preparedAffectedRepoPaths: affectedRepoPaths,
     buildFailures: undefined,
   });
   let published: { mainEventId: string };
   try {
     published = await publishPreparedTemplateOperation(
-      preparation.prepared,
+      { contextId, affectedRepoPaths },
       env.observation.mainEventId,
       ports
     );
@@ -1056,10 +1078,7 @@ export async function activate(ctx: ExtensionContextLike) {
       });
     },
 
-    async resume(input: {
-      operationId: string;
-      onBuildFailure?: "discard-context" | "retain-context";
-    }) {
+    async resume(input: { operationId: string }) {
       const env = await environment(ctx);
       if (await isTemplateOperationCancelled(ctx, env.observation.mainEventId, input.operationId)) {
         throw new Error(
@@ -1071,39 +1090,38 @@ export async function activate(ctx: ExtensionContextLike) {
       const completed = await completedOperationResult(ctx, record);
       if (completed) return completed;
       if (record.preparedAffectedRepoPaths) {
-        return resumePreparedOperation(ctx, env, record, input.onBuildFailure);
+        return resumePreparedOperation(ctx, env, record);
       }
       const intent = record.intent as {
         kind?: string;
         target?: unknown;
+        source?: TemplateAddRequest;
         alias?: string;
       };
       if (intent.kind === "add") {
+        if (!intent.source)
+          throw new Error(`Template operation ${input.operationId} has no source`);
         return api.add({
           commandId: input.operationId,
-          pin: WorkspaceTemplatePinSchema.parse(intent.target),
-          onBuildFailure: input.onBuildFailure,
+          source: intent.source,
         });
       }
       if (intent.kind === "adopt") {
         return api.adopt({
           commandId: input.operationId,
           pin: WorkspaceTemplatePinSchema.parse(intent.target),
-          onBuildFailure: input.onBuildFailure,
         });
       }
       if (intent.kind === "pull" && intent.alias) {
         return api.pull({
           commandId: input.operationId,
           alias: intent.alias,
-          onBuildFailure: input.onBuildFailure,
         });
       }
       if (intent.kind === "remove" && intent.alias) {
         return api.remove({
           commandId: input.operationId,
           alias: intent.alias,
-          onBuildFailure: input.onBuildFailure,
         });
       }
       throw new Error(`Template operation ${input.operationId} has unsupported intent`);
@@ -1136,36 +1154,6 @@ export async function activate(ctx: ExtensionContextLike) {
     async inspect(locator: TemplateLocator) {
       const env = await environment(ctx);
       return inspectLocator(ctx, env, locator);
-    },
-
-    async prepareAdd(request: TemplateAddRequest) {
-      if ("catalogId" in request) {
-        const env = await environment(ctx, {
-          requireCatalog: true,
-          refresh: request.refreshCatalog === true,
-        });
-        const entry = env.catalog!.entries.find((candidate) => candidate.id === request.catalogId);
-        if (!entry) throw new Error(`Unknown template catalog id: ${request.catalogId}`);
-        return {
-          name: entry.name,
-          description: entry.description,
-          inspection: await inspectLocator(
-            ctx,
-            env,
-            templateLocatorSchema.parse({
-              catalogId: entry.id,
-              registryCommit: request.registryCommit ?? env.catalog!.coordinates.commit,
-              registrySnapshot: request.registrySnapshot ?? env.catalog!.coordinates.snapshot,
-            })
-          ),
-        };
-      }
-      const env = await environment(ctx);
-      const inspection = await inspectLocator(ctx, env, request);
-      return {
-        name: selectedTemplateName(inspection),
-        inspection,
-      };
     },
 
     async inspectAuthoring(input: TemplateAuthoringIntent) {
@@ -1246,7 +1234,7 @@ export async function activate(ctx: ExtensionContextLike) {
         current.includedParts
       );
       if (build.failures.length > 0) {
-        throw new TemplateBuildGateError(build.failures);
+        throw new TemplateAuthoringBuildError(build.failures);
       }
       const publication = await ctx.extensions.invoke<TemplatePublication>(
         "@workspace-extensions/git-bridge",
@@ -1407,26 +1395,20 @@ export async function activate(ctx: ExtensionContextLike) {
       };
     },
 
-    async add(input: {
-      commandId: string;
-      pin: WorkspaceTemplatePin;
-      onBuildFailure?: "discard-context" | "retain-context";
-    }) {
-      const env = await environment(ctx);
+    async add(input: { commandId: string; source: TemplateAddRequest }) {
+      const existing = await readTemplateOperationRecord(ctx, input.commandId);
+      const resolved = await resolveAddSource(ctx, input.source, existing);
+      const env = resolved.env;
       const record = await operationRecordForMutation(ctx, env, input.commandId);
       const completed = await completedOperationResult(ctx, record);
       if (completed) return completed;
-      const requestedPin = WorkspaceTemplatePinSchema.parse(input.pin);
-      const recordedPin = record
-        ? WorkspaceTemplatePinSchema.parse((record.intent as { target?: unknown }).target)
-        : null;
-      if (recordedPin && canonicalJson(recordedPin) !== canonicalJson(requestedPin)) {
-        throw new Error(
-          `Template command ${input.commandId} was already bound to a different exact version`
-        );
-      }
-      const selectedPin = recordedPin ?? requestedPin;
-      const preview = await inspectAdd(ctx, env, selectedPin, record?.pins ?? []);
+      const preview = await inspectAdd(
+        ctx,
+        env,
+        resolved.pin,
+        record?.pins ?? [],
+        resolved.selection
+      );
       return applyInspection(
         ctx,
         env,
@@ -1434,17 +1416,13 @@ export async function activate(ctx: ExtensionContextLike) {
         preview.inspection,
         record?.intent ?? {
           kind: "add",
-          target: selectedPin,
-        },
-        input.onBuildFailure
+          source: input.source,
+          target: resolved.pin,
+        }
       );
     },
 
-    async adopt(input: {
-      commandId: string;
-      pin: WorkspaceTemplatePin;
-      onBuildFailure?: "discard-context" | "retain-context";
-    }) {
+    async adopt(input: { commandId: string; pin: WorkspaceTemplatePin }) {
       const env = await environment(ctx);
       const record = await operationRecordForMutation(ctx, env, input.commandId);
       const completed = await completedOperationResult(ctx, record);
@@ -1468,17 +1446,11 @@ export async function activate(ctx: ExtensionContextLike) {
         record?.intent ?? {
           kind: "adopt",
           target: selectedPin,
-        },
-        input.onBuildFailure
+        }
       );
     },
 
-    async pull(input: {
-      commandId: string;
-      alias: string;
-      toRef?: string;
-      onBuildFailure?: "discard-context" | "retain-context";
-    }) {
+    async pull(input: { commandId: string; alias: string; toRef?: string }) {
       let env = await environment(ctx);
       const record = await operationRecordForMutation(ctx, env, input.commandId);
       const completed = await completedOperationResult(ctx, record);
@@ -1525,16 +1497,11 @@ export async function activate(ctx: ExtensionContextLike) {
           kind: "pull",
           alias: input.alias,
           target: pin,
-        },
-        input.onBuildFailure
+        }
       );
     },
 
-    async remove(input: {
-      commandId: string;
-      alias: string;
-      onBuildFailure?: "discard-context" | "retain-context";
-    }) {
+    async remove(input: { commandId: string; alias: string }) {
       const env = await environment(ctx);
       const record = await operationRecordForMutation(ctx, env, input.commandId);
       const completed = await completedOperationResult(ctx, record);
@@ -1563,8 +1530,7 @@ export async function activate(ctx: ExtensionContextLike) {
           kind: "remove",
           alias: input.alias,
           templateUrl: node.pin.url,
-        },
-        input.onBuildFailure
+        }
       );
     },
 

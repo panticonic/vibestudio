@@ -78,6 +78,22 @@ const scopeLabels = {
   project: "Project",
 } as const;
 
+function BusyReloadIcon({ busy }: { busy: boolean }) {
+  return (
+    <ReloadIcon
+      aria-hidden
+      style={
+        busy
+          ? {
+              animation: "spin 0.8s linear infinite",
+              transformOrigin: "center",
+            }
+          : undefined
+      }
+    />
+  );
+}
+
 function readableAction(definition: OnboardingCapabilityDefinition, action: SetupAction): string {
   return `${actionLabels[action]} ${definition.title}`;
 }
@@ -161,7 +177,13 @@ function SetupRow({
                   disabled={pending !== null}
                   onClick={() => onAction(definition, action)}
                 >
-                  {actionLabels[action]}
+                  {pending === `${definition.id}:${action}` ? (
+                    <>
+                      <BusyReloadIcon busy /> Sending…
+                    </>
+                  ) : (
+                    actionLabels[action]
+                  )}
                 </Button>
               ))}
             </Flex>
@@ -179,9 +201,14 @@ function SetupRow({
               disabled={pending !== null}
               onClick={() => onAction(definition, snapshot.nextAction!)}
             >
-              {pending === `${definition.id}:${snapshot.nextAction}`
-                ? "Sending…"
-                : actionLabels[snapshot.nextAction]}
+              {pending === `${definition.id}:${snapshot.nextAction}` ? (
+                <>
+                  <BusyReloadIcon busy />
+                  {snapshot.nextAction === "check" ? "Checking…" : "Sending…"}
+                </>
+              ) : (
+                actionLabels[snapshot.nextAction]
+              )}
             </Button>
           ) : null}
         </Flex>
@@ -336,9 +363,12 @@ export default function SetupHub({ props = {}, chat, scope, scopes, inlineUi }: 
   if (snapshots.length === 0) {
     return (
       <Flex direction="column" gap="2" style={{ width: "100%", minWidth: 0 }}>
-        <Text size="2" weight="medium">
-          {loadingCapabilities ? "Loading your setup…" : "Setup status is unavailable."}
-        </Text>
+        <Flex align="center" gap="2">
+          {loadingCapabilities ? <BusyReloadIcon busy /> : null}
+          <Text size="2" weight="medium">
+            {loadingCapabilities ? "Loading your setup…" : "Setup status is unavailable."}
+          </Text>
+        </Flex>
         {!loadingCapabilities ? (
           <Button size="1" variant="soft" onClick={() => void refreshCapabilities()}>
             <ReloadIcon /> Try again
@@ -392,7 +422,8 @@ export default function SetupHub({ props = {}, chat, scope, scopes, inlineUi }: 
           onClick={() => void refreshCapabilities()}
           aria-label="Refresh setup overview"
         >
-          <ReloadIcon /> {loadingCapabilities ? "Refreshing…" : "Refresh"}
+          <BusyReloadIcon busy={loadingCapabilities} />
+          {loadingCapabilities ? "Refreshing…" : "Refresh"}
         </Button>
       </Flex>
 
@@ -478,7 +509,7 @@ export default function SetupHub({ props = {}, chat, scope, scopes, inlineUi }: 
             disabled={loadingTemplates || pending !== null}
             onClick={() => void loadTemplates()}
           >
-            <ReloadIcon />
+            <BusyReloadIcon busy={loadingTemplates} />
             {loadingTemplates
               ? "Loading templates…"
               : templatesLoaded
@@ -528,7 +559,13 @@ export default function SetupHub({ props = {}, chat, scope, scopes, inlineUi }: 
                       disabled={pending !== null}
                       onClick={() => void sendTemplateInteraction(definition)}
                     >
-                      {pending === `${definition.id}:add` ? "Sending…" : "Review & add"}
+                      {pending === `${definition.id}:add` ? (
+                        <>
+                          <BusyReloadIcon busy /> Sending…
+                        </>
+                      ) : (
+                        "Review & add"
+                      )}
                     </Button>
                   ) : null}
                 </Flex>

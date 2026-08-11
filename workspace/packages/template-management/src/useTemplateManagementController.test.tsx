@@ -25,7 +25,7 @@ const deferredRow = {
     operationId,
     contextId: "ctx:pull",
     approvalGranted: true,
-    items: [{ repoPath: "extensions/github", deltaId: "delta:github" }],
+    items: [{ repoPath: "extensions/github", sourceDeltaId: "delta:github" }],
   },
   suggestions: [],
 } satisfies TemplateStatusRow;

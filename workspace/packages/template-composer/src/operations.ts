@@ -204,20 +204,6 @@ export async function inspectTemplateOperation(
   };
 }
 
-export interface TemplateBuildFailure {
-  unit: string;
-  message: string;
-}
-
-export class TemplateBuildGateError extends Error {
-  constructor(readonly failures: readonly TemplateBuildFailure[]) {
-    super(
-      `Template composition did not build: ${failures.map((failure) => failure.unit).join(", ")}`
-    );
-    this.name = "TemplateBuildGateError";
-  }
-}
-
 /**
  * Runtime-neutral adapters owned by the userland broker/extension. The
  * operation context is the only journal; implementations must make
@@ -234,12 +220,7 @@ export interface TemplateOperationPorts {
     contextId: string,
     inspection: TemplateOperationInspection
   ): Promise<{ affectedRepoPaths: string[] }>;
-  /** Build the affected unit closure at `ctx:<contextId>`. */
-  buildAffected(
-    contextId: string,
-    affectedRepoPaths: readonly string[]
-  ): Promise<{ failures: TemplateBuildFailure[] }>;
-  /** Publish the already-reviewed context atomically to protected main. */
+  /** Publish atomically through protected main's canonical validation and review gate. */
   publish(contextId: string, expectedMainEventId: string): Promise<{ mainEventId: string }>;
   discard(contextId: string): Promise<void>;
 }
@@ -256,45 +237,22 @@ export interface PreparedTemplateOperation {
   affectedRepoPaths: string[];
 }
 
-export type TemplateOperationPreparation =
-  | { status: "ready"; prepared: PreparedTemplateOperation }
-  | {
-      status: "build-failed";
-      prepared: PreparedTemplateOperation;
-      failures: TemplateBuildFailure[];
-    };
-
-/** Stage and build while retaining the context for an agentic repair on failure. */
-async function prepareInContext(
+/** Stage the exact composition in a retained semantic context. */
+async function stageInContext(
   contextId: string,
   inspection: TemplateOperationInspection,
   ports: TemplateOperationPorts
-): Promise<TemplateOperationPreparation> {
+): Promise<PreparedTemplateOperation> {
   const staged = await ports.stageComposition(contextId, inspection);
-  const prepared = { contextId, affectedRepoPaths: staged.affectedRepoPaths };
-  const build = await ports.buildAffected(contextId, staged.affectedRepoPaths);
-  return build.failures.length === 0
-    ? { status: "ready", prepared }
-    : { status: "build-failed", prepared, failures: build.failures };
+  return { contextId, affectedRepoPaths: staged.affectedRepoPaths };
 }
 
-/** Stage and build while retaining the context for an agentic repair on failure. */
-export async function prepareTemplateOperation(
+/** Stage while retaining the context for protected publication or agentic repair. */
+export async function stageTemplateOperation(
   input: Pick<ApplyTemplateOperationInput, "operationId" | "inspection" | "ports">
-): Promise<TemplateOperationPreparation> {
+): Promise<PreparedTemplateOperation> {
   const { contextId } = await input.ports.openContext(input.operationId);
-  return prepareInContext(contextId, input.inspection, input.ports);
-}
-
-/** Re-run the gate after ordinary semantic edits repaired a retained context. */
-export async function rebuildPreparedTemplateOperation(
-  prepared: PreparedTemplateOperation,
-  ports: TemplateOperationPorts
-): Promise<TemplateOperationPreparation> {
-  const build = await ports.buildAffected(prepared.contextId, prepared.affectedRepoPaths);
-  return build.failures.length === 0
-    ? { status: "ready", prepared }
-    : { status: "build-failed", prepared, failures: build.failures };
+  return stageInContext(contextId, input.inspection, input.ports);
 }
 
 export function publishPreparedTemplateOperation(
@@ -306,9 +264,8 @@ export function publishPreparedTemplateOperation(
 }
 
 /**
- * Non-interactive convenience path. A failed build is discarded and can never
- * advance protected main. Interactive callers use `prepareTemplateOperation`,
- * repair the retained context, rebuild, then publish.
+ * Non-interactive convenience path. Protected main owns the one canonical
+ * build/typecheck/schema/authority gate; this layer only stages and publishes.
  */
 export async function applyTemplateOperation(
   input: ApplyTemplateOperationInput
@@ -316,12 +273,9 @@ export async function applyTemplateOperation(
   let contextId: string | undefined;
   try {
     ({ contextId } = await input.ports.openContext(input.operationId));
-    const preparation = await prepareInContext(contextId, input.inspection, input.ports);
-    if (preparation.status === "build-failed") {
-      throw new TemplateBuildGateError(preparation.failures);
-    }
+    const prepared = await stageInContext(contextId, input.inspection, input.ports);
     return await publishPreparedTemplateOperation(
-      preparation.prepared,
+      prepared,
       input.expectedMainEventId,
       input.ports
     );

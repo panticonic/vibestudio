@@ -21,11 +21,6 @@
       ],
       "returns": "TemplateInspection"
     },
-    "prepareAdd": {
-      "tier": "read",
-      "arguments": ["{ url, credential? } | { catalogId, refreshCatalog? }"],
-      "returns": "TemplateAddPreparation"
-    },
     "inspectAuthoring": {
       "tier": "read",
       "arguments": ["{ name, description, parts, dependencies?: [{ url, credential? }] }"],
@@ -51,22 +46,24 @@
       "returns": "TemplateRegistryContribution"
     },
     "add": {
-      "tier": "approval",
-      "arguments": ["{ commandId, pin, onBuildFailure?: discard-context|retain-context }"],
+      "tier": "write; exact protected-main review",
+      "arguments": [
+        "{ commandId, source: { url, credential? } | { catalogId, registryCommit?, registrySnapshot?, refreshCatalog? } }"
+      ],
       "returns": "PendingTemplateOperation"
     },
     "adopt": {
-      "tier": "approval",
-      "arguments": ["{ commandId, pin, onBuildFailure?: discard-context|retain-context }"],
+      "tier": "write; exact protected-main review",
+      "arguments": ["{ commandId, pin }"],
       "returns": "PendingTemplateOperation"
     },
     "pull": {
-      "tier": "approval",
+      "tier": "write; exact protected-main review",
       "arguments": ["{ commandId, alias, toRef? }"],
       "returns": "PendingTemplateOperation"
     },
     "remove": {
-      "tier": "approval",
+      "tier": "write; exact protected-main review",
       "arguments": ["{ commandId, alias }"],
       "returns": "PendingTemplateOperation"
     },
@@ -76,7 +73,7 @@
       "returns": "PendingTemplateOperation"
     },
     "decideSuggestion": {
-      "tier": "approval",
+      "tier": "write; exact protected-main review",
       "arguments": ["{ commandId, alias, section: trust|providers, decision: accept|decline }"],
       "returns": "TemplateSuggestionDecision"
     },
@@ -86,8 +83,8 @@
       "returns": "ResumableTemplateOperation[]"
     },
     "resume": {
-      "tier": "approval",
-      "arguments": ["{ operationId, onBuildFailure?: discard-context|retain-context }"],
+      "tier": "write; exact protected-main review",
+      "arguments": ["{ operationId }"],
       "returns": "PendingTemplateOperation"
     },
     "cancel": {
@@ -97,30 +94,30 @@
     }
   },
   "types": {
-    "PendingTemplateOperation": "{ operationId, state: pending|applied|local-changes|waiting-for-credential|conflict|error, review?: { operationId, contextId, approvalGranted, items: [{ repoPath, deltaId }] }, repair?: { contextId, mainEventId?, failures: [{ unit, message }] }, contribution?: { branch, url? }, blocker?, affectedParts }",
+    "PendingTemplateOperation": "{ operationId, state: pending|applied|local-changes|waiting-for-credential|conflict|error, review?: { operationId, contextId, approvalGranted, items: [{ repoPath, sourceDeltaId }] }, repair?: { contextId, mainEventId?, failures: [{ unit, message }] }, contribution?: { branch, url? }, blocker?, affectedParts }",
     "TemplateStatusRow": "{ nodeId, alias, url, ref, commit, direct, state: current|update-available|local-changes|reviewing|waiting-for-credential|conflict|error, verification: verified|deferred, review?, suggestions: [{ section: trust|providers, value }], blocker?, contributedParts, pendingReviews, error? }",
-    "TemplateAuthoringInspection": "{ request, mainEventId, selectableParts, requestedParts, includedParts, requiredParts, inheritedParts, manifest, manifestDigest, fingerprint }",
+    "TemplateAuthoringInspection": "{ request, mainEventId, selectableParts, requestedParts, includedParts, requiredParts, dependencyParts, overlapParts, manifest, manifestDigest, fingerprint }",
     "TemplatePublication": "{ operationId, destination: { provider, owner, name }, created, remoteUrl, webUrl, templateUrl, ref, commit, snapshot, parts }",
     "TemplateRegistryContribution": "{ operationId, outcome: pushed|already-at-remote|nothing-to-suggest, registryUrl, baseCommit, branch, headCommit, revision, entry }",
     "TemplateInspection": "{ pin: { url, credential?, ref, commit, snapshot }, fingerprint, roots, templates, affectedParts, excludedSuggestions: [{ alias, section, value }] }",
-    "TemplateAddPreparation": "{ name, description?, inspection: TemplateInspection }",
     "TemplateSuggestionDecision": "{ operationId, state: accepted|declined, section, publicationEventId? }",
     "ResumableTemplateOperation": "{ operationId, kind: add|adopt|pull|remove|recompose|adopt-bootstrap|publish-authoring, contextId, state: pending|reviewing|repairing, fingerprint, review?, repair? }",
     "TemplateCatalogSnapshot": "{ version: 1, revision, systemEpoch, entries: [{ id, name, description, tags, recommended, url, promoted: { ref, commit, snapshot } }], source: verified|cache, stale, verifiedAt, refreshError? }"
   },
   "invariants": [
-    "prepareAdd before every new add or lineage adoption; UI and agents use the same preparation method",
+    "one add call resolves, stages, and requests the exact protected workspace review; UI and agents use the same method",
+    "staging an isolated context is not separately gated; consent belongs to the exact durable protected-main publication",
     "lineage adoption records an exact contribution baseline and generated relationship metadata without merging historical template content into the current workspace",
     "an unchanged installed node is resolved from its verified lock, generated fragment, and contribution ledger without reacquiring its upstream repository",
-    "pass inspect.pin unchanged to add; add never resolves a URL, alias, catalog entry, or moving ref",
+    "add resolves its source once and records the exact selected pins in the retained operation before mutation",
     "templates have ordered repository contributions, never exclusive repository ownership; overlap is merged through ordinary VCS external deltas",
     "the current lock wins for every already-resolved URL; catalog selections and unseen dependencies resolve from the reviewed registry revision, while direct URLs use inspect's independently discovered exact pin",
     "pending review items are opened through normal VCS compare/merge using their context and delta ids; approval record identifiers are host-internal",
-    "build failures retain the staged context by default and return its context id plus structured failures; after ordinary agent edits, resume rebuilds that context without replaying composition",
+    "protected main owns the only build, typecheck, schema, and authority gate; failures retain the staged context and structured diagnostics for agentic repair",
     "when protected main advances during review, the operation returns the new main event and retained context so an agent can merge main semantically and resume instead of discarding the plan",
     "catalog rendering is cache-only; network refresh occurs only through catalog({ refresh: true })",
     "a catalog selection is rejected unless registryCommit and registrySnapshot exactly match the cached verified registry",
-    "excluded trust/provider values come from acquired exact template pins and are accepted or declined through a separate individually approved action",
+    "excluded trust/provider values are optional hints and are not proactively presented after install; when later relevant they use a separate protected settings action",
     "status is a local projection of the committed lock and content-addressed suggestion evidence; it never acquires or fetches template sources",
     "a direct URL may name a logical credential; that name is preserved in inspect.pin and durable operation intent",
     "the userland composer resolves every URL or revision-bound catalog id to an exact version before inspection or approval; there is no host fallback",

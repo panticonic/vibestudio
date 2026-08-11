@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  templateAddPreparationSchema,
   templateAddRequestSchema,
   templateAuthoringInspectionSchema,
   templateInspectionSchema,
@@ -28,11 +27,9 @@ describe("template recovery contracts", () => {
   });
 
   it("uses operationId consistently for resume and cancel", () => {
-    expect(
-      templatesMethods.resume.args.parse([
-        { operationId: "pull-1", onBuildFailure: "retain-context" },
-      ])
-    ).toEqual([{ operationId: "pull-1", onBuildFailure: "retain-context" }]);
+    expect(templatesMethods.resume.args.parse([{ operationId: "pull-1" }])).toEqual([
+      { operationId: "pull-1" },
+    ]);
     expect(() => templatesMethods.resume.args.parse([{ commandId: "pull-1" }])).toThrow();
     expect(templatesMethods.cancel.args.parse([{ operationId: "pull-1" }])).toEqual([
       { operationId: "pull-1" },
@@ -170,7 +167,8 @@ describe("template authoring contracts", () => {
     requestedParts: ["extensions/demo"],
     includedParts: ["extensions/demo", "packages/shared"],
     requiredParts: ["packages/shared"],
-    inheritedParts: [],
+    dependencyParts: [],
+    overlapParts: [],
     manifest: "systemEpoch: 57\n",
     manifestDigest: `v1-sha256:${"a".repeat(64)}`,
     fingerprint: `v1-sha256:${"b".repeat(64)}`,
@@ -319,12 +317,12 @@ describe("exact template selection contracts", () => {
     ).toEqual(pin);
   });
 
-  it("requires add to consume an exact inspected pin and rejects the old locator path", () => {
+  it("lets add resolve one source inside the canonical install transaction", () => {
     expect(
       templatesMethods.add.args.safeParse([
         {
           commandId: "add-private",
-          pin,
+          source: { url: pin.url, credential: pin.credential },
         },
       ]).success
     ).toBe(true);
@@ -332,20 +330,23 @@ describe("exact template selection contracts", () => {
       templatesMethods.add.args.safeParse([
         {
           commandId: "add-private",
-          locator: { url: pin.url, credential: pin.credential },
+          pin,
         },
       ]).success
     ).toBe(false);
   });
 
-  it("prepares catalog choices and preserves reviewed registry coordinates when supplied", () => {
+  it("accepts catalog choices with optional reviewed registry coordinates", () => {
     expect(templateAddRequestSchema.parse({ catalogId: "github", refreshCatalog: true })).toEqual({
       catalogId: "github",
       refreshCatalog: true,
     });
     expect(
-      templatesMethods.prepareAdd.args.safeParse([
-        { catalogId: "github", registryCommit: "1".repeat(40) },
+      templatesMethods.add.args.safeParse([
+        {
+          commandId: "add-github",
+          source: { catalogId: "github", registryCommit: "1".repeat(40) },
+        },
       ]).success
     ).toBe(false);
     expect(
@@ -359,19 +360,5 @@ describe("exact template selection contracts", () => {
       registryCommit: "1".repeat(40),
       registrySnapshot: `v1-sha256:${"2".repeat(64)}`,
     });
-    expect(
-      templateAddPreparationSchema.parse({
-        name: "GitHub",
-        description: "GitHub workspace integration",
-        inspection: {
-          pin,
-          fingerprint: `v1-sha256:${"b".repeat(64)}`,
-          roots: [],
-          templates: [],
-          affectedParts: ["extensions/github"],
-          excludedSuggestions: [],
-        },
-      }).inspection.pin
-    ).toEqual(pin);
   });
 });

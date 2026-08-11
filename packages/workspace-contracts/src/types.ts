@@ -304,7 +304,14 @@ export type WorkspaceServiceDecl = {
     substanceKind?: "change-set" | "send" | "deletion" | "custom";
   };
   protocols?: string[];
-  authority: { principals: ("host" | "user" | "code" | "session" | "mission")[] };
+  authority: {
+    principals: ("host" | "user" | "code" | "session" | "mission")[];
+    /**
+     * `consent` makes use of the service itself a permission. `declared` treats
+     * the binding as reviewed wiring and leaves effects to method authority.
+     */
+    binding?: "consent" | "declared";
+  };
 } & (
   | { durableObject: { className: string }; worker?: never }
   | { worker: { routePath: string }; durableObject?: never }

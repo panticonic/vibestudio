@@ -6,10 +6,24 @@ import type {
   VcsStateNodeRef,
   VcsStatusResult,
 } from "@vibestudio/service-schemas/vcs";
-import type { TemplateOperationPorts } from "@workspace/template-composer";
 import type { ExtensionContextLike } from "./context.js";
+import { mapConcurrent } from "./concurrency.js";
+
+export type AffectedBuildGate = (
+  contextId: string,
+  affectedRepoPaths: readonly string[]
+) => Promise<{ failures: Array<{ unit: string; message: string }> }>;
+
+export class TemplateAuthoringBuildError extends Error {
+  constructor(readonly failures: readonly { unit: string; message: string }[]) {
+    super(`Template publication did not build: ${failures.map(({ unit }) => unit).join(", ")}`);
+    this.name = "TemplateAuthoringBuildError";
+  }
+}
 
 const BUILDABLE_SECTIONS = new Set(["panels", "workers", "extensions", "apps", "about"]);
+const MANIFEST_READ_CONCURRENCY = 8;
+const BUILD_CONCURRENCY = 4;
 
 interface UnitManifest {
   repoPath: string;
@@ -50,12 +64,16 @@ async function allRepositoryPaths(
   state: VcsStateNodeRef
 ): Promise<string[]> {
   const paths = new Set<string>();
-  for (const root of await directoryEntries(ctx, state, "")) {
+  const roots = await directoryEntries(ctx, state, "");
+  for (const root of roots) {
     if (root.repositoryRoot) paths.add(root.path);
-    if (root.kind !== "directory" || root.repositoryRoot) continue;
-    for (const child of await directoryEntries(ctx, state, root.path)) {
-      if (child.repositoryRoot) paths.add(child.path);
-    }
+  }
+  const containers = roots.filter((root) => root.kind === "directory" && !root.repositoryRoot);
+  const children = await mapConcurrent(containers, MANIFEST_READ_CONCURRENCY, (root) =>
+    directoryEntries(ctx, state, root.path)
+  );
+  for (const child of children.flat()) {
+    if (child.repositoryRoot) paths.add(child.path);
   }
   return [...paths].sort();
 }
@@ -106,14 +124,14 @@ async function manifest(
 export function createAffectedBuildGate(
   ctx: ExtensionContextLike,
   repositoriesBeforeOperation: ReadonlySet<string> = new Set()
-): TemplateOperationPorts["buildAffected"] {
+): AffectedBuildGate {
   return async (contextId, affectedRepoPaths) => {
     const status = await ctx.rpc.call<VcsStatusResult>("main", "vcs.status", { contextId });
     const state = status.workingHead;
     const repositoryPaths = await allRepositoryPaths(ctx, state);
     const manifests = (
-      await Promise.all(
-        repositoryPaths.map((repoPath) => manifest(ctx, state, repoPath))
+      await mapConcurrent(repositoryPaths, MANIFEST_READ_CONCURRENCY, (repoPath) =>
+        manifest(ctx, state, repoPath)
       )
     ).filter((candidate): candidate is UnitManifest => candidate !== null);
     const byName = new Map(manifests.map((candidate) => [candidate.name, candidate]));
@@ -128,8 +146,7 @@ export function createAffectedBuildGate(
     }
     const manifestPaths = new Set(manifests.map((candidate) => candidate.repoPath));
     const removedRepository = affectedRepoPaths.some(
-      (repoPath) =>
-        repositoriesBeforeOperation.has(repoPath) && !manifestPaths.has(repoPath)
+      (repoPath) => repositoriesBeforeOperation.has(repoPath) && !manifestPaths.has(repoPath)
     );
     // Once a prior unit disappears its old package name is no longer available
     // to seed the dependant graph. Build every surviving buildable unit: this
@@ -137,9 +154,7 @@ export function createAffectedBuildGate(
     // to remove the contribution.
     const affectedNames = new Set(
       manifests
-        .filter(
-          (candidate) => removedRepository || affectedRepoPaths.includes(candidate.repoPath)
-        )
+        .filter((candidate) => removedRepository || affectedRepoPaths.includes(candidate.repoPath))
         .map((candidate) => candidate.name)
     );
     const pending = [...affectedNames];
@@ -167,16 +182,22 @@ export function createAffectedBuildGate(
         unit,
         message: `Cannot build affected unit ${unit}: package.json with a package name is required`,
       }));
-    for (const unit of units) {
+    const buildFailures = await mapConcurrent(units, BUILD_CONCURRENCY, async (unit) => {
       try {
         await ctx.rpc.call("main", "build.getBuild", unit, `ctx:${contextId}`);
+        return null;
       } catch (error) {
-        failures.push({
+        return {
           unit,
           message: error instanceof Error ? error.message : String(error),
-        });
+        };
       }
-    }
+    });
+    failures.push(
+      ...buildFailures.filter(
+        (failure): failure is { unit: string; message: string } => failure !== null
+      )
+    );
     return { failures };
   };
 }

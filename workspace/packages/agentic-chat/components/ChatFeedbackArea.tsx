@@ -49,7 +49,6 @@ export function ChatFeedbackArea() {
                 showTitle={false}
                 onSubmit={(value) => feedback.complete({ type: "submit", value })}
                 onCancel={() => feedback.complete({ type: "cancel" })}
-                onError={(message) => feedback.complete({ type: "error", message })}
               />
             </FeedbackContainer>
           );

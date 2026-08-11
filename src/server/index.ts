@@ -2843,11 +2843,14 @@ async function main() {
           grantResourceKey: `workspace-source-change:publication:${candidate.publicationId}`,
         });
       },
+      updateCandidateReview: (publicationId, progress) =>
+        approvalQueue.updatePreparation?.(`workspace-publication:${publicationId}`, progress),
       failCandidateReview: (publicationId, error) =>
         approvalQueue.failPreparation?.(`workspace-publication:${publicationId}`, error),
       discardCandidateReview: (publicationId) =>
         approvalQueue.discardPreparation?.(`workspace-publication:${publicationId}`),
-      validateCandidateWorkspaceState: async (stateHash, changedPaths, signal) => {
+      validateCandidateWorkspaceState: async (stateHash, changedPaths, signal, reportProgress) => {
+        reportProgress?.({ label: "Finding affected workspace projects" });
         const candidateConfig = await loadWorkspaceConfigFromState(stateHash);
         const candidateDecls = buildWorkspaceDeclarations(candidateConfig);
         const buildSystem = assertPresent(buildSystemInstance);
@@ -2880,8 +2883,23 @@ async function main() {
               if (!unitNames.includes(source)) unitNames.push(source);
             }
           }
+          let completedBuilds = 0;
+          reportProgress?.({
+            label: "Building and type-checking workspace projects",
+            completed: completedBuilds,
+            total: unitNames.length,
+          });
           const reports = await Promise.all(
-            unitNames.map((unitName) => buildSystem.getBuildReport(unitName, stateHash))
+            unitNames.map(async (unitName) => {
+              const report = await buildSystem.getBuildReport(unitName, stateHash);
+              completedBuilds += 1;
+              reportProgress?.({
+                label: "Building and type-checking workspace projects",
+                completed: completedBuilds,
+                total: unitNames.length,
+              });
+              return report;
+            })
           );
           const failures = reports.flatMap((report) =>
             report.diagnostics
@@ -2909,6 +2927,7 @@ async function main() {
             throw new Error("Durable Object schema publication gate is not ready");
           }
           if (manager) {
+            reportProgress?.({ label: "Checking workspace data compatibility" });
             const probeResults = (
               await Promise.all(
                 schemaReports.flatMap((report) => {
@@ -2986,6 +3005,7 @@ async function main() {
               );
             }
           }
+          reportProgress?.({ label: "Checking permissions and authority declarations" });
           await buildSystem.stageAuthorityIndex(stateHash, signal);
         } catch (error) {
           buildSystem.discardAuthorityIndex(stateHash);
@@ -4523,6 +4543,7 @@ async function main() {
             const methodTier = catalogMethod?.access?.tier ?? "open";
             return matches.map((service) => ({
               capability: `workspace-service:${service.name}`,
+              serviceBinding: service.authority.binding ?? "consent",
               methodEffect,
               principals: service.authority.principals,
               ...(methodCapability ? { methodCapability } : {}),

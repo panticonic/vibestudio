@@ -56,8 +56,9 @@ The chat panel hosts an AI agent that can:
   if the panel is closed)
 - **Render UI** via `inline_ui` (persistent components and self-contained
   workflows in chat), `load_action_bar` / panel `actionBarFile` (compact pinned
-  panel controls), and `feedback_custom` only when the agent needs a returned
-  decision
+  panel controls), and `feedback_custom` only when the agent needs ordinary
+  structured input for reasoning—never for trust, permission, publication, or
+  workspace-settings decisions owned by host approvals
 - **Preserve transcript state** through typed PubSub events: messages,
   invocations, inline UI, and action bars all replay from the same channel log
 - **Read/write files** in the workspace

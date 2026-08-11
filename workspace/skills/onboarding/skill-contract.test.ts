@@ -8,7 +8,7 @@ describe("onboarding skill template handoff", () => {
     expect(skill).toContain("current verified template\nregistry");
     expect(skill).toContain("does not\nmaintain a second list of official repository URLs");
     expect(skill).not.toContain("vibestudio-template-examples.git");
-    expect(skill).toContain("`prepareAdd` and reviewed `add`");
+    expect(skill).toContain("single reviewed `add` workflow");
     expect(skill).toContain("`Review & add`");
     expect(skill).toContain("resolveOnboardingTemplateSelection");
     expect(skill).toContain("Never\nguess a tag or commit");

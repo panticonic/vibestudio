@@ -48,9 +48,9 @@ Owner workflows remain authoritative:
 
 For an `onboarding-template` interaction, call
 `resolveOnboardingTemplateSelection` through `client_eval`, read its returned
-Templates skill, and use its registry-bound selection with the canonical `prepareAdd` and
-reviewed `add` workflow. The onboarding card never installs directly. The
-Templates workflow owns exact selection, contribution review, approval, and
+Templates skill, and pass its registry-bound selection to the canonical
+reviewed `add` workflow. The onboarding card never edits the workspace directly. The
+Templates workflow owns resolution, contribution merge, approval, and
 operation recovery.
 
 The component handles refresh and connection checks directly and caches the
@@ -73,3 +73,8 @@ the agent truly needs structured input for later reasoning. One setup
 selection produces one cohesive owner workflow; do not chain small feedback
 forms for access, provider, browser, or permission choices that can be shown
 together or derived from a recommended default.
+
+Template trust/provider suggestions are not structured input for agent
+reasoning. Propose them through the Templates workflow and let the protected
+workspace approval card carry the decision. Never ask for the same choice in
+`feedback_custom`, chat, inline UI, or an action bar first.

@@ -175,6 +175,15 @@ const pendingApprovalBaseShape = {
     .object({
       state: z.enum(["preparing", "ready", "failed", "cancelled"]),
       diagnostics: z.array(z.string()).readonly().optional(),
+      progress: z
+        .object({
+          label: z.string(),
+          completed: z.number().int().nonnegative().optional(),
+          total: z.number().int().nonnegative().optional(),
+          updatedAt: z.number(),
+        })
+        .strict()
+        .optional(),
     })
     .strict()
     .optional(),

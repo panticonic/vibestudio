@@ -130,9 +130,14 @@ export function createMainRefAdvanceGate(deps: {
   validateCandidateWorkspaceState?(
     stateHash: string,
     changedPaths: readonly string[],
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    reportProgress?: (progress: { label: string; completed?: number; total?: number }) => void
   ): Promise<void>;
   beginCandidateReview?(candidate: MainAdvanceApprovalCandidate): void;
+  updateCandidateReview?(
+    publicationId: string,
+    progress: { label: string; completed?: number; total?: number }
+  ): void;
   failCandidateReview?(publicationId: string, error: unknown): void;
   discardCandidateReview?(publicationId: string): void;
   /** Host-computed dependents of a repo being DELETED (repos whose build unit
@@ -193,14 +198,22 @@ export function createMainRefAdvanceGate(deps: {
     }
     try {
       const changedRepoPaths = batch.entries.map((entry) => entry.repoPath);
+      const reportProgress = (progress: { label: string; completed?: number; total?: number }) =>
+        deps.updateCandidateReview?.(batch.publication.publicationId, progress);
       if (context.signal) {
         await deps.validateCandidateWorkspaceState?.(
           candidateView,
           changedRepoPaths,
-          context.signal
+          context.signal,
+          reportProgress
         );
       } else {
-        await deps.validateCandidateWorkspaceState?.(candidateView, changedRepoPaths);
+        await deps.validateCandidateWorkspaceState?.(
+          candidateView,
+          changedRepoPaths,
+          undefined,
+          reportProgress
+        );
       }
     } catch (error) {
       deps.failCandidateReview?.(batch.publication.publicationId, error);

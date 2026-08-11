@@ -40,6 +40,7 @@ export { credentialTests } from "./tests/credentials.js";
 export { agentOrchestrationTests } from "./tests/agent-orchestration.js";
 export { mobileTests } from "./tests/mobile.js";
 export { deliveryHardeningTests } from "./tests/delivery-hardening.js";
+export { intentDiscoveryTests } from "./tests/intent-discovery.js";
 
 import { smokeTests as _smoke } from "./tests/smoke.js";
 import { filesystemTests as _fs } from "./tests/filesystem.js";
@@ -77,6 +78,7 @@ import { harnessToolTests as _harnessTools } from "./tests/harness-tools.js";
 import { credentialTests as _credentials } from "./tests/credentials.js";
 import { agentOrchestrationTests as _agentOrchestration } from "./tests/agent-orchestration.js";
 import { deterministicTestCases as _deterministic } from "./deterministic.js";
+import { intentDiscoveryTests as _intentDiscovery } from "./tests/intent-discovery.js";
 
 export type TestStage = {
   index: number;
@@ -135,6 +137,7 @@ export function allTests(): TestCase[] {
     ..._harnessTools,
     ..._mobile,
     ..._deliveryHardening,
+    ..._intentDiscovery,
     ..._docsDiscovery,
     ..._interaction,
     ..._projectLifecycle,

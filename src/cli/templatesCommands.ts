@@ -125,11 +125,6 @@ const RECOMMENDED: FlagSpec = {
   takesValue: false,
   description: "Mark the catalog entry as recommended",
 };
-const BUILD_FAILURE: FlagSpec = {
-  name: "on-build-failure",
-  takesValue: true,
-  description: "Failed build handling: retain or discard (defaults to retain)",
-};
 function requireClient(): { rpc: RpcClient; templates: TemplatesClient } {
   const credentials = loadCliCredentials();
   if (!credentials)
@@ -224,13 +219,6 @@ function requireOperationId(inv: ParsedInvocation): string {
   return value.trim();
 }
 
-function buildFailureMode(inv: ParsedInvocation): "retain-context" | "discard-context" {
-  const value = inv.flags["on-build-failure"];
-  if (value === undefined || value === "retain") return "retain-context";
-  if (value === "discard") return "discard-context";
-  throw new UsageError("--on-build-failure must be retain or discard");
-}
-
 function requiredFlag(inv: ParsedInvocation, name: string): string {
   const value = inv.flags[name];
   if (typeof value !== "string" || !value.trim()) throw new UsageError(`--${name} is required`);
@@ -288,7 +276,10 @@ function renderAuthoringPlan(plan: TemplateAuthoringInspection): void {
   console.log(`  requested: ${plan.requestedParts.join(", ")}`);
   console.log(`  included: ${plan.includedParts.join(", ")}`);
   if (plan.requiredParts.length) console.log(`  required: ${plan.requiredParts.join(", ")}`);
-  if (plan.inheritedParts.length) console.log(`  inherited: ${plan.inheritedParts.join(", ")}`);
+  if (plan.dependencyParts.length)
+    console.log(`  supplied by dependencies: ${plan.dependencyParts.join(", ")}`);
+  if (plan.overlapParts.length)
+    console.log(`  deliberate dependency overlaps: ${plan.overlapParts.join(", ")}`);
   console.log(`  manifest: ${plan.manifestDigest}`);
 }
 
@@ -346,7 +337,7 @@ function renderStatus(rows: TemplateStatusRow[]): void {
       } else {
         for (const item of row.review.items) {
           console.log(
-            `    review ${item.repoPath}: vibestudio vcs compare --context ${row.review.contextId} --delta ${item.deltaId}`
+            `    review ${item.repoPath}: vibestudio vcs compare --context ${row.review.contextId} --delta ${item.sourceDeltaId}`
           );
         }
       }
@@ -422,7 +413,7 @@ function renderOperations(operations: Awaited<ReturnType<TemplatesClient["operat
     console.log(`  ${operation.operationId}  ${operation.kind}  ${operation.state}`);
     for (const item of operation.review?.items ?? []) {
       console.log(
-        `    review ${item.repoPath}: vibestudio vcs compare --context ${operation.contextId} --delta ${item.deltaId}`
+        `    review ${item.repoPath}: vibestudio vcs compare --context ${operation.contextId} --delta ${item.sourceDeltaId}`
       );
     }
   }
@@ -687,7 +678,7 @@ export const templatesCommands: CliCommand[] = [
   {
     group: "templates",
     name: "add",
-    summary: "Ask to add a template after inspecting it",
+    summary: "Add a template through one protected workspace review",
     usage: "vibestudio templates add URL_OR_ALIAS [--catalog ID] [--credential NAME]",
     flags: [CATALOG, CREDENTIAL, COMMAND_ID, JSON_FLAG],
     run: (inv) =>
@@ -695,10 +686,10 @@ export const templatesCommands: CliCommand[] = [
         inv,
         async (templates) => {
           const locator = await resolvedTarget(templates, inv);
-          const inspection = await templates.inspect(locator);
+          if ("alias" in locator) throw new UsageError("add needs a template URL or --catalog ID");
           return templates.add({
             commandId: commandId(inv),
-            pin: inspection.pin,
+            source: locator,
           });
         },
         renderPending
@@ -785,14 +776,13 @@ export const templatesCommands: CliCommand[] = [
     name: "resume",
     summary: "Resume an exact pending template operation",
     usage: "vibestudio templates resume OPERATION_ID",
-    flags: [BUILD_FAILURE, JSON_FLAG],
+    flags: [JSON_FLAG],
     run: (inv) =>
       run(
         inv,
         (templates) =>
           templates.resume({
             operationId: requireOperationId(inv),
-            onBuildFailure: buildFailureMode(inv),
           }),
         renderPending
       ),

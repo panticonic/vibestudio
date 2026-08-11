@@ -22,7 +22,7 @@ const digest = z.string().regex(/^v1-sha256:[0-9a-f]{64}$/u);
 export const templateReviewHandleSchema = z
   .object({
     repoPath: z.string(),
-    deltaId: z.string(),
+    sourceDeltaId: z.string(),
   })
   .strict();
 
@@ -172,7 +172,6 @@ export const templateOperationSchema = z
   })
   .strict();
 
-const buildFailureModeSchema = z.enum(["discard-context", "retain-context"]);
 const templateAuthoringIntentSchema = z
   .object({
     name: z.string().trim().min(1),
@@ -189,7 +188,8 @@ export const templateAuthoringInspectionSchema = z
     requestedParts: z.array(z.string()).min(1),
     includedParts: z.array(z.string()).min(1),
     requiredParts: z.array(z.string()),
-    inheritedParts: z.array(z.string()),
+    dependencyParts: z.array(z.string()),
+    overlapParts: z.array(z.string()),
     manifest: z.string().min(1),
     manifestDigest: digest,
     fingerprint: digest,
@@ -270,14 +270,6 @@ export const templateAddRequestSchema = z.union([
     })
     .strict(),
 ]);
-
-export const templateAddPreparationSchema = z
-  .object({
-    name: z.string().trim().min(1),
-    description: z.string().optional(),
-    inspection: templateInspectionSchema,
-  })
-  .strict();
 
 const catalogEntrySchema = z
   .object({
@@ -376,13 +368,6 @@ export const templatesMethods = defineServiceMethods({
     returns: templateInspectionSchema,
     access: READ_ACCESS,
   },
-  prepareAdd: {
-    description:
-      "Prepare one catalog selection or template address as an exact, reviewable add operation without changing the workspace. Catalog refresh remains explicit.",
-    args: z.tuple([templateAddRequestSchema]),
-    returns: templateAddPreparationSchema,
-    access: READ_ACCESS,
-  },
   inspectAuthoring: {
     description:
       "Inspect selected protected-main content in the current composed workspace and record URL-only semantic dependencies. Dependencies are descriptive authoring intent, not compatibility proofs or exact release inputs.",
@@ -445,13 +430,12 @@ export const templatesMethods = defineServiceMethods({
   },
   add: {
     description:
-      "Merge an exact template's contributions through ordinary VCS, build them in a retained semantic context, and publish atomically when clean.",
+      "Resolve one catalog selection or template address, merge its transitive contributions through ordinary VCS, and request one atomic protected-main review.",
     args: z.tuple([
       z
         .object({
           commandId,
-          pin: WorkspaceTemplatePinSchema,
-          onBuildFailure: buildFailureModeSchema.optional(),
+          source: templateAddRequestSchema,
         })
         .strict(),
     ]),
@@ -460,13 +444,12 @@ export const templatesMethods = defineServiceMethods({
   },
   adopt: {
     description:
-      "Record an exact template release as the existing workspace lineage without merging its historical content, then build and publish the generated relationship metadata.",
+      "Record an exact template release as existing workspace lineage without replaying its historical content, then publish the generated relationship metadata through the canonical protected-main gate.",
     args: z.tuple([
       z
         .object({
           commandId,
           pin: WorkspaceTemplatePinSchema,
-          onBuildFailure: buildFailureModeSchema.optional(),
         })
         .strict(),
     ]),
@@ -475,14 +458,13 @@ export const templatesMethods = defineServiceMethods({
   },
   pull: {
     description:
-      "Resolve a tracked template's promoted pin, review its ordinary VCS deltas, build the operation context, and publish only a clean composition.",
+      "Resolve a tracked template's promoted release, merge its ordinary VCS deltas, and request one atomic protected-main review.",
     args: z.tuple([
       z
         .object({
           commandId,
           alias: z.string().trim().min(1),
           toRef: z.string().trim().min(1).optional(),
-          onBuildFailure: buildFailureModeSchema.optional(),
         })
         .strict(),
     ]),
@@ -491,13 +473,12 @@ export const templatesMethods = defineServiceMethods({
   },
   remove: {
     description:
-      "Remove one direct template relationship, merge the removal of its contributions through ordinary VCS review, rebuild, and publish the repaired composition.",
+      "Remove one direct template relationship, merge the contribution removals through ordinary VCS, and request one atomic protected-main review.",
     args: z.tuple([
       z
         .object({
           commandId,
           alias: z.string().trim().min(1),
-          onBuildFailure: buildFailureModeSchema.optional(),
         })
         .strict(),
     ]),
@@ -578,12 +559,11 @@ export const templatesMethods = defineServiceMethods({
   },
   resume: {
     description:
-      "Resume one semantic template operation by operation id. A fully staged repair context is rebuilt as-is; an unfinished VCS review continues composition. The host approval boundary is evaluated again.",
+      "Resume one retained template operation by operation id and publish it through the canonical protected-main validation and review gate.",
     args: z.tuple([
       z
         .object({
           operationId: commandId,
-          onBuildFailure: buildFailureModeSchema.optional(),
         })
         .strict(),
     ]),
@@ -617,7 +597,6 @@ export type TemplateOperation = z.infer<typeof templateOperationSchema>;
 export type TemplateReviewHandle = z.infer<typeof templateReviewHandleSchema>;
 export type TemplateLocator = z.infer<typeof templateLocatorSchema>;
 export type TemplateAddRequest = z.infer<typeof templateAddRequestSchema>;
-export type TemplateAddPreparation = z.infer<typeof templateAddPreparationSchema>;
 export type TemplateExactPin = z.infer<typeof WorkspaceTemplatePinSchema>;
 export type TemplateAuthoringIntent = z.infer<typeof templateAuthoringIntentSchema>;
 export type TemplateAuthoringInspection = z.infer<typeof templateAuthoringInspectionSchema>;

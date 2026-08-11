@@ -152,7 +152,8 @@ describe("template agentic validator", () => {
               requestedParts: ["packages/template-composer"],
               includedParts: ["packages/template-composer", "packages/shared"],
               requiredParts: ["packages/shared"],
-              inheritedParts: [],
+              dependencyParts: [],
+              overlapParts: [],
               manifest: "systemEpoch: 57\n",
             },
           },
@@ -177,7 +178,8 @@ describe("template agentic validator", () => {
       selectedParts: ["packages/template-composer"],
       includedParts: ["packages/template-composer"],
       requiredParts: [],
-      inheritedParts: [],
+      dependencyParts: [],
+      overlapParts: [],
       manifest: "systemEpoch: 57\n",
     };
     expect(
@@ -231,7 +233,8 @@ describe("template agentic validator", () => {
       requestedParts: ["packages/template-composer"],
       includedParts: ["packages/template-composer"],
       requiredParts: [],
-      inheritedParts: [],
+      dependencyParts: [],
+      overlapParts: [],
       manifest: "systemEpoch: 57\n",
     });
     expect(

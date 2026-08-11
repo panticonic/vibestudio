@@ -217,11 +217,22 @@ describe("ApprovalCard", () => {
       capabilityApproval({
         approvalId: "publication-preparing",
         title: "Preparing workspace update…",
-        lifecycle: { state: "preparing" },
+        lifecycle: {
+          state: "preparing",
+          progress: {
+            label: "Building and type-checking workspace projects",
+            completed: 2,
+            total: 6,
+            updatedAt: Date.now(),
+          },
+        },
       })
     );
 
-    expect(screen.getByRole("status").textContent).toBe("Checking builds, schemas, and authority…");
+    expect(screen.getByRole("status").textContent).toMatch(
+      /^Building and type-checking workspace projects \(2 of 6\)… \d+s elapsed$/
+    );
+    expect(screen.getByRole("status").previousElementSibling?.tagName).toBe("svg");
     expect(screen.queryByRole("button", { name: "Allow once" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Allow for now" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Trust this version" })).toBeNull();

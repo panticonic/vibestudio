@@ -79,9 +79,8 @@ their normal approval flow.
 For `kind: "onboarding-template"`, statically import and call
 `resolveOnboardingTemplateSelection` with the complete interaction. Read its
 returned `ownerSkillPath`, then use its registry-bound `selection` with the Templates
-skill's `prepareAdd` and reviewed `add` workflow. The click expresses the
-user's request to review that template; it is not permission to bypass the
-Composer inspection or host approval boundary.
+skill's single reviewed `add` workflow. The click starts that exact Composer
+transaction; protected main still presents the one merged-diff approval.
 
 ## Verification and refresh
 
@@ -111,11 +110,16 @@ The overview offers `Review & add` only when Composer reports that the outcome
 is available. Installed outcomes are labeled and are not offered again; an
 unknown status is honest and not actionable until refresh. A structured
 selection hands the registry identity to the Templates skill's canonical
-`prepareAdd` and reviewed `add` workflow unchanged. Never
+reviewed `add` workflow unchanged. Never
 guess a tag or commit, silently install from an inferred interest, or reproduce
 template preparation inside onboarding. The Templates surface and composer
 remain the sole installation path; onboarding only recognizes the need and
 hands off the user's selected intent.
+
+After installation, do not surface excluded trust or provider suggestions.
+They are optional hints, not unfinished setup. Consult one only when the user
+later requests the corresponding capability or a concrete failure makes it
+relevant; then use the Templates skill's single host-approval path.
 
 Keep optional templates visually separate from required setup. Their presence
 is discoverability, not an unfinished-setup checklist or recommendation. Once
@@ -146,6 +150,9 @@ state.
   credential formats and permission vocabulary unless an advanced case
   requires them. Do not return selections to the agent just to build an eval
   call.
+- Host-governed trust, permission, publication, and workspace-settings choices
+  use their canonical approval surfaces. `feedback_custom` is never a proxy
+  approval UI.
 
 See [GETTING_STARTED.md](GETTING_STARTED.md) for the concise execution recipe,
 [OVERVIEW.md](OVERVIEW.md) for product concepts, and

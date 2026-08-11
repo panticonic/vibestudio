@@ -11,7 +11,7 @@ describe("template-composer authority manifest", () => {
         authority?: {
           requests?: Array<{
             capability?: string;
-            resource?: { kind?: string; prefix?: string };
+            resource?: { kind?: string; prefix?: string; origin?: string };
             tier?: string;
           }>;
         };
@@ -24,6 +24,11 @@ describe("template-composer authority manifest", () => {
         expect.objectContaining({
           capability: "credential.use",
           resource: { kind: "prefix", prefix: "" },
+          tier: "gated",
+        }),
+        expect.objectContaining({
+          capability: "network.response.read",
+          resource: { kind: "origin", origin: "https://github.com" },
           tier: "gated",
         }),
         expect.objectContaining({

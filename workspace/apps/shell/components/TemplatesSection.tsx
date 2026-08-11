@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Badge, Box, Button, Card, Flex, Spinner, Text, TextField } from "@radix-ui/themes";
 import type { TemplateOperation, TemplateStatusRow } from "@vibestudio/service-schemas/templates";
 import {
-  TemplateAddDialog,
+  TemplateAddButton,
   useTemplateManagementController,
 } from "@workspace/template-management/react";
 import {
@@ -68,7 +68,7 @@ function WorkspaceTemplateReview({
 }) {
   const compare = useCallback(
     (item: NonNullable<TemplateOperation["review"]>["items"][number], cursor?: string) =>
-      vcs.compareDelta(review.contextId, item.deltaId, cursor),
+      vcs.compareDelta(review.contextId, item.sourceDeltaId, cursor),
     [review.contextId]
   );
   const merge = useCallback<TemplateReviewPanelProps["merge"]>(
@@ -76,7 +76,7 @@ function WorkspaceTemplateReview({
       vcs.mergeDelta(
         review.contextId,
         expectedWorkingHead,
-        item.deltaId,
+        item.sourceDeltaId,
         coordinates,
         resolutions
       ),
@@ -144,7 +144,7 @@ export function TemplatesSection() {
   const resume = async (operationId: string): Promise<boolean> => {
     const result = await controller.execute({
       key: `operation:${operationId}`,
-      task: () => templates.resume({ operationId, onBuildFailure: "discard-context" }),
+      task: () => templates.resume({ operationId }),
       success: (operation) =>
         operationMessage(operation, {
           applied: "The template change is complete.",
@@ -444,7 +444,7 @@ export function TemplatesSection() {
                   {entry.description}
                 </Text>
               </Box>
-              <TemplateAddDialog
+              <TemplateAddButton
                 client={templates}
                 request={{ catalogId: entry.id }}
                 triggerLabel="Add"
@@ -483,7 +483,7 @@ export function TemplatesSection() {
             aria-label="Template address"
             style={{ flex: "1 1 220px" }}
           />
-          <TemplateAddDialog
+          <TemplateAddButton
             client={templates}
             request={{
               url: url.trim(),

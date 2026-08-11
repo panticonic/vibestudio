@@ -225,6 +225,27 @@ describe("manifest declarations: product workspace services", () => {
     });
   });
 
+  it("accepts a declared service binding whose methods own their authority", () => {
+    expect(
+      parse(`services:
+  - source: workers/workspace-source
+    name: gad.workspace
+    title: Workspace data
+    action: use this workspace's files and history
+    presentation:
+      domain: automation
+      verb: manage
+    authority:
+      binding: declared
+      principals: [code]
+    durableObject:
+      className: GadWorkspaceDO
+`)
+    ).toMatchObject({
+      services: [{ name: "gad.workspace", authority: { binding: "declared" } }],
+    });
+  });
+
   it("accepts the workspace source provider as an ordinary manifest service", () => {
     expect(
       parse(`services:

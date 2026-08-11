@@ -650,6 +650,7 @@ export class RpcServer {
         | Promise<
             readonly {
               capability: string;
+              serviceBinding?: "consent" | "declared";
               methodEffect: RpcAuthorityEffect;
               methodCapability?: string;
               methodReceiverAuthority?: {
@@ -683,6 +684,7 @@ export class RpcServer {
           >
         | readonly {
             capability: string;
+            serviceBinding?: "consent" | "declared";
             methodEffect: RpcAuthorityEffect;
             methodCapability?: string;
             methodReceiverAuthority?: {
@@ -3515,6 +3517,7 @@ export class RpcServer {
           service: {
             name: workspaceAuthority.capability.slice("workspace-service:".length),
             principals: workspaceAuthority.principals,
+            binding: workspaceAuthority.serviceBinding ?? "consent",
           },
           methodAuthority: {
             effect: workspaceAuthority.methodEffect,
@@ -3546,7 +3549,10 @@ export class RpcServer {
               workspaceAuthority.capability
             ),
             targetCapability: workspaceAuthority.capability,
-            targetTier: "gated" as const,
+            targetTier:
+              workspaceAuthority.serviceBinding === "declared"
+                ? ("open" as const)
+                : ("gated" as const),
           }
         : {}),
       ...(input.readOnly ? { readOnly: true as const } : {}),
@@ -3558,6 +3564,8 @@ export class RpcServer {
     const requiredMethodCapability =
       workspaceAuthority?.methodCapability ?? workspaceAuthority?.capability;
     const requiredMethodTier = workspaceAuthority?.methodTier;
+    const requiredServiceTier =
+      workspaceAuthority?.serviceBinding === "declared" ? ("open" as const) : ("gated" as const);
     const staticLeaves =
       workspaceAuthority && requiredMethodCapability && requiredMethodTier
         ? [
@@ -3576,11 +3584,11 @@ export class RpcServer {
               challenge: undefined,
             },
             ...(requiredMethodCapability !== workspaceAuthority.capability ||
-            requiredMethodTier !== "gated"
+            requiredMethodTier !== requiredServiceTier
               ? [
                   {
                     capability: workspaceAuthority.capability,
-                    tier: "gated" as const,
+                    tier: requiredServiceTier,
                     requirement: requirementForPrincipals(
                       workspaceAuthority.principals,
                       workspaceAuthority.capability
@@ -3894,7 +3902,7 @@ export class RpcServer {
             : workspaceAuthority && denied.leaf.capability === workspaceAuthority.capability
               ? {
                   presentation: {
-                    title: `Allow ${input.caller.runtime.id} to ${workspaceAuthority.action}?`,
+                    title: workspaceAuthority.title,
                     description:
                       workspaceAuthority.description ??
                       `Use ${workspaceAuthority.title} in this workspace.`,
