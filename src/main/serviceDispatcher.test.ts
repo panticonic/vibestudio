@@ -460,7 +460,7 @@ describe("ServiceDispatcher", () => {
       },
       handler: async (_ctx, method, args) => {
         seen.set(`fs.${method}`, args);
-        if (method === "glob") return [];
+        if (method === "glob") return { files: [], truncated: false };
         return "";
       },
     });
