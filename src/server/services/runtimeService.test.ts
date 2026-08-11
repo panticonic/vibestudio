@@ -1145,10 +1145,12 @@ describe("runtimeService.createEntity (do kind)", () => {
     expect(instance.entityResolve(handle.id)?.activeAuthority).toEqual({
       requests: authorityRequests,
       provides: [],
+      serviceRequests: [],
     });
     expect(entityCache.resolveActive(handle.id)?.activeAuthority).toEqual({
       requests: authorityRequests,
       provides: [],
+      serviceRequests: [],
     });
   });
 

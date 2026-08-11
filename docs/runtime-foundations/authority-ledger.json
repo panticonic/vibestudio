@@ -9747,257 +9747,6 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:workspace/workers/gmail-agent/gmail-agent-worker.ts:getAttentionPrefs",
-      "rpcPlane": "workspace-do",
-      "owner": "workspace/workers/gmail-agent/gmail-agent-worker.ts",
-      "source": "workers/gmail-agent",
-      "method": "getAttentionPrefs",
-      "resourceDerivation": {
-        "kind": "direct-target",
-        "owner": "workspace/workers/gmail-agent/gmail-agent-worker.ts"
-      },
-      "authorityPrincipals": [
-        "code",
-        "host",
-        "user"
-      ],
-      "sensitivity": "read",
-      "tier": "open",
-      "capability": "rpc:getAttentionPrefs",
-      "authenticatedFacts": [
-        "session",
-        "acting-user-relay",
-        "runtime-entity",
-        "exact-code-artifact",
-        "owner-chain",
-        "agent-binding",
-        "audience-bound-delegation"
-      ],
-      "currentOutcomes": {
-        "allowed": "declared direct-RPC scenarios retain their current behavior",
-        "denied": "missing attested facts or requirement failure is EACCES"
-      },
-      "predicates": [
-        "live-owner-service-relationship",
-        "exact-resource-scope",
-        "next-dispatch-revocation"
-      ],
-      "r3aRequirement": "anyOf(capability(host,rpc:getAttentionPrefs),allOf(capability(user,rpc:getAttentionPrefs),workspace-member),allOf(capability(code,rpc:getAttentionPrefs),workspace-member))",
-      "r3b": {
-        "review": "unchanged-parity",
-        "change": null
-      },
-      "parityAssertion": "generated-census:direct-authority"
-    },
-    {
-      "id": "direct:workspace/workers/gmail-agent/gmail-agent-worker.ts:onGmailPushNotification",
-      "rpcPlane": "workspace-do",
-      "owner": "workspace/workers/gmail-agent/gmail-agent-worker.ts",
-      "source": "workers/gmail-agent",
-      "method": "onGmailPushNotification",
-      "resourceDerivation": {
-        "kind": "direct-target",
-        "owner": "workspace/workers/gmail-agent/gmail-agent-worker.ts"
-      },
-      "authorityPrincipals": [
-        "code",
-        "host"
-      ],
-      "sensitivity": "write",
-      "tier": "open",
-      "capability": "rpc:onGmailPushNotification",
-      "authenticatedFacts": [
-        "session",
-        "acting-user-relay",
-        "runtime-entity",
-        "exact-code-artifact",
-        "owner-chain",
-        "agent-binding",
-        "audience-bound-delegation"
-      ],
-      "currentOutcomes": {
-        "allowed": "declared direct-RPC scenarios retain their current behavior",
-        "denied": "missing attested facts or requirement failure is EACCES"
-      },
-      "predicates": [
-        "live-owner-service-relationship",
-        "exact-resource-scope",
-        "next-dispatch-revocation"
-      ],
-      "r3aRequirement": "anyOf(capability(host,rpc:onGmailPushNotification),allOf(capability(code,rpc:onGmailPushNotification),workspace-member))",
-      "r3b": {
-        "review": "unchanged-parity",
-        "change": null
-      },
-      "parityAssertion": "generated-census:direct-authority"
-    },
-    {
-      "id": "direct:workspace/workers/gmail-agent/gmail-agent-worker.ts:onWebhookDelivery",
-      "rpcPlane": "workspace-do",
-      "owner": "workspace/workers/gmail-agent/gmail-agent-worker.ts",
-      "source": "workers/gmail-agent",
-      "method": "onWebhookDelivery",
-      "resourceDerivation": {
-        "kind": "direct-target",
-        "owner": "workspace/workers/gmail-agent/gmail-agent-worker.ts"
-      },
-      "authorityPrincipals": [
-        "host"
-      ],
-      "sensitivity": "write",
-      "tier": "open",
-      "capability": "rpc:onWebhookDelivery",
-      "authenticatedFacts": [
-        "session",
-        "acting-user-relay",
-        "runtime-entity",
-        "exact-code-artifact",
-        "owner-chain",
-        "agent-binding",
-        "audience-bound-delegation"
-      ],
-      "currentOutcomes": {
-        "allowed": "declared direct-RPC scenarios retain their current behavior",
-        "denied": "missing attested facts or requirement failure is EACCES"
-      },
-      "predicates": [
-        "live-owner-service-relationship",
-        "exact-resource-scope",
-        "next-dispatch-revocation"
-      ],
-      "r3aRequirement": "capability(host,rpc:onWebhookDelivery)",
-      "r3b": {
-        "review": "unchanged-parity",
-        "change": null
-      },
-      "parityAssertion": "generated-census:direct-authority"
-    },
-    {
-      "id": "direct:workspace/workers/gmail-agent/gmail-agent-worker.ts:registerPushTarget",
-      "rpcPlane": "workspace-do",
-      "owner": "workspace/workers/gmail-agent/gmail-agent-worker.ts",
-      "source": "workers/gmail-agent",
-      "method": "registerPushTarget",
-      "resourceDerivation": {
-        "kind": "direct-target",
-        "owner": "workspace/workers/gmail-agent/gmail-agent-worker.ts"
-      },
-      "authorityPrincipals": [
-        "code"
-      ],
-      "sensitivity": "write",
-      "tier": "open",
-      "capability": "rpc:registerPushTarget",
-      "authenticatedFacts": [
-        "session",
-        "acting-user-relay",
-        "runtime-entity",
-        "exact-code-artifact",
-        "owner-chain",
-        "agent-binding",
-        "audience-bound-delegation"
-      ],
-      "currentOutcomes": {
-        "allowed": "declared direct-RPC scenarios retain their current behavior",
-        "denied": "missing attested facts or requirement failure is EACCES"
-      },
-      "predicates": [
-        "live-owner-service-relationship",
-        "exact-resource-scope",
-        "next-dispatch-revocation"
-      ],
-      "r3aRequirement": "allOf(capability(code,rpc:registerPushTarget),workspace-member)",
-      "r3b": {
-        "review": "unchanged-parity",
-        "change": null
-      },
-      "parityAssertion": "generated-census:direct-authority"
-    },
-    {
-      "id": "direct:workspace/workers/gmail-agent/gmail-agent-worker.ts:setAttentionPrefs",
-      "rpcPlane": "workspace-do",
-      "owner": "workspace/workers/gmail-agent/gmail-agent-worker.ts",
-      "source": "workers/gmail-agent",
-      "method": "setAttentionPrefs",
-      "resourceDerivation": {
-        "kind": "direct-target",
-        "owner": "workspace/workers/gmail-agent/gmail-agent-worker.ts"
-      },
-      "authorityPrincipals": [
-        "code",
-        "host",
-        "user"
-      ],
-      "sensitivity": "write",
-      "tier": "open",
-      "capability": "rpc:setAttentionPrefs",
-      "authenticatedFacts": [
-        "session",
-        "acting-user-relay",
-        "runtime-entity",
-        "exact-code-artifact",
-        "owner-chain",
-        "agent-binding",
-        "audience-bound-delegation"
-      ],
-      "currentOutcomes": {
-        "allowed": "declared direct-RPC scenarios retain their current behavior",
-        "denied": "missing attested facts or requirement failure is EACCES"
-      },
-      "predicates": [
-        "live-owner-service-relationship",
-        "exact-resource-scope",
-        "next-dispatch-revocation"
-      ],
-      "r3aRequirement": "anyOf(capability(host,rpc:setAttentionPrefs),allOf(capability(user,rpc:setAttentionPrefs),workspace-member),allOf(capability(code,rpc:setAttentionPrefs),workspace-member))",
-      "r3b": {
-        "review": "unchanged-parity",
-        "change": null
-      },
-      "parityAssertion": "generated-census:direct-authority"
-    },
-    {
-      "id": "direct:workspace/workers/gmail-agent/gmail-agent-worker.ts:unregisterPushTarget",
-      "rpcPlane": "workspace-do",
-      "owner": "workspace/workers/gmail-agent/gmail-agent-worker.ts",
-      "source": "workers/gmail-agent",
-      "method": "unregisterPushTarget",
-      "resourceDerivation": {
-        "kind": "direct-target",
-        "owner": "workspace/workers/gmail-agent/gmail-agent-worker.ts"
-      },
-      "authorityPrincipals": [
-        "code"
-      ],
-      "sensitivity": "write",
-      "tier": "open",
-      "capability": "rpc:unregisterPushTarget",
-      "authenticatedFacts": [
-        "session",
-        "acting-user-relay",
-        "runtime-entity",
-        "exact-code-artifact",
-        "owner-chain",
-        "agent-binding",
-        "audience-bound-delegation"
-      ],
-      "currentOutcomes": {
-        "allowed": "declared direct-RPC scenarios retain their current behavior",
-        "denied": "missing attested facts or requirement failure is EACCES"
-      },
-      "predicates": [
-        "live-owner-service-relationship",
-        "exact-resource-scope",
-        "next-dispatch-revocation"
-      ],
-      "r3aRequirement": "allOf(capability(code,rpc:unregisterPushTarget),workspace-member)",
-      "r3b": {
-        "review": "unchanged-parity",
-        "change": null
-      },
-      "parityAssertion": "generated-census:direct-authority"
-    },
-    {
       "id": "direct:workspace/workers/linked-agent/linked-agent-worker.ts:acceptDelivery",
       "rpcPlane": "workspace-do",
       "owner": "workspace/workers/linked-agent/linked-agent-worker.ts",
@@ -36952,6 +36701,51 @@
         "change": null
       },
       "capability": "service:view.getFocusedPanelId",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:view.getLocalPresentation",
+      "rpcPlane": "host-service",
+      "owner": "view",
+      "method": "getLocalPresentation",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "panel.read",
+      "reviewRationale": "Trusted panel chrome reads Electron's canonical local presentation state",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:view.getLocalPresentation"
+      },
+      "authorityPrincipals": [
+        "user",
+        "code"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(allOf(capability(user,service:view.getLocalPresentation),workspace-member),allOf(capability(code,service:view.getLocalPresentation),workspace-member))",
+      "r3b": {
+        "review": "trusted-chrome-canonical-local-lifecycle-read",
+        "change": "Adds an open, read-only lookup of one exact panel slot's revisioned Electron-local lifecycle snapshot. The handler requires trusted panel-hosting chrome and returns bounded loading, contention, ready, or failure facts without acquiring a lease, creating a view, changing focus, or exposing foreign panel state."
+      },
+      "capability": "service:view.getLocalPresentation",
       "parityAssertion": "generated-census:host-authority"
     },
     {

@@ -13,7 +13,6 @@
       "runtimeSources": [
         "workers/agent-worker",
         "workers/explorer-agent",
-        "workers/gmail-agent",
         "workers/linked-agent",
         "workers/silent-agent-worker",
         "workers/test-agent"

@@ -381,7 +381,7 @@ async function bundleWorker(
     : undefined;
   const authority =
     manifest?.authority === undefined
-      ? { requests: [], provides: [] }
+      ? { requests: [], provides: [], serviceRequests: [] }
       : parseUnitAuthorityManifest(manifest.authority);
   const rpcSchemas = Object.fromEntries(
     (manifest?.durable?.classes ?? [])
@@ -442,7 +442,7 @@ function buildResult(
       sourceStateHash: execution.sourceState.contentRoots[0]!.stateHash,
       sourceState: execution.sourceState.state,
       sourcemap: false,
-      authority: { requests: [], provides: [] },
+      authority: { requests: [], provides: [], serviceRequests: [] },
       workspaceRpcCatalog,
       execution,
       details: { kind: "generic" },

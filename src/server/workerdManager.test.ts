@@ -119,7 +119,7 @@ function mockWorkerBuild(
       sourceState: execution.sourceState.state,
       execution,
       sourcemap: false,
-      authority: { requests: [], provides: [] },
+      authority: { requests: [], provides: [], serviceRequests: [] },
       details: { kind: "generic" },
       builtAt: "2026-01-01T00:00:00.000Z",
     },
@@ -181,7 +181,7 @@ function createMockDeps(overrides: Partial<TestWorkerdDeps> = {}): TestWorkerdDe
       source: unitPath,
       unitName: unitPath,
       artifact: runtimeArtifact(unitPath, ref ?? "main"),
-      authority: { provides: [], requests: [] },
+      authority: { provides: [], requests: [], serviceRequests: [] },
     })),
     getBuildByKey: vi.fn(() => build),
     getBuildByExecution: vi.fn((_key, executionDigest) =>
@@ -558,7 +558,7 @@ describe("WorkerdManager", () => {
         source: "workers/runtime-fixture",
         unitName: "workers/runtime-fixture",
         artifact: runtimeArtifact("workers/runtime-fixture", "main"),
-        authority: { provides: [], requests: [] },
+        authority: { provides: [], requests: [], serviceRequests: [] },
       });
       await mgr.startWorker(startArgs());
 
@@ -787,7 +787,7 @@ describe("WorkerdManager", () => {
         source: unitPath,
         unitName: unitPath,
         artifact: runtimeArtifact(unitPath, "changed"),
-        authority: { provides: [], requests: [] },
+        authority: { provides: [], requests: [], serviceRequests: [] },
       }));
       vi.mocked(deps.bindRuntimeImage).mockClear();
       const restored = new WorkerdManager(deps);
@@ -1030,7 +1030,7 @@ describe("WorkerdManager", () => {
         effectiveVersion: expect.stringMatching(/^[0-9a-f]{64}$/),
         buildKey: expect.stringMatching(/^[0-9a-f]{64}$/),
         executionDigest: expect.stringMatching(/^[0-9a-f]{64}$/),
-        authority: { provides: [], requests: [] },
+        authority: { provides: [], requests: [], serviceRequests: [] },
       });
       expect(deps.bindRuntimeImage).toHaveBeenCalled();
     });
@@ -1222,7 +1222,7 @@ describe("WorkerdManager", () => {
           source: "workers/runtime-fixture",
           unitName: "workers/runtime-fixture",
           artifact: runtimeArtifact("workers/runtime-fixture", "main"),
-          authority: { provides: [], requests: [] },
+          authority: { provides: [], requests: [], serviceRequests: [] },
         })
         .mockRejectedValueOnce(new Error("Unknown vcs ref: ctx:deleted"));
       const deps = createMockDeps({

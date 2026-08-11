@@ -81,6 +81,9 @@ describe("requireActiveExecutionIdentity", () => {
             evidence: "exact",
           },
         ],
+        // Sealed authority always carries the protocol declarations, so an
+        // entity's activation fields stay comparable to a rebuild's manifest.
+        serviceRequests: [],
       },
     });
   });
@@ -110,6 +113,7 @@ describe("declaredWorkspaceServiceActivationInput", () => {
       activeAuthority: {
         provides: [],
         requests: PREPARED_SERVICE.authority.requests,
+        serviceRequests: [],
       },
       className: "ModelSettingsDO",
       key: "workspace-model-settings",
