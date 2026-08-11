@@ -4,7 +4,7 @@
   "files": [
     {
       "path": "SKILL.md",
-      "sha256": "70d853fd290f10d805c27537f3378ef06ddd0ae0041adba0c8e4faa94a4e0ea2"
+      "sha256": "da3bd536e1fde78fb6e1b4d2fc7c31105a46071bbae6649a92660a8c0d9f579c"
     },
     {
       "path": "agents/openai.yaml",
@@ -20,7 +20,7 @@
     },
     {
       "path": "references/authoring-basics.md",
-      "sha256": "154a022556ea0dec2e18833c3a98e6130739c0142926576854e56f5f53192f32"
+      "sha256": "3de69ca101d8c08f3413e47a1f3ad551ea2e92e7b0ff25e2def301431d9fa1c6"
     },
     {
       "path": "references/checks-and-publication.md",
@@ -71,5 +71,5 @@
       "sha256": "1b8a8b5b185b47039733272129292f2d6442205bb02d4b07e328790795eb77cb"
     }
   ],
-  "packageDigest": "529047a21b60974c09440da21032440ff3556741369643c12271e2aa9430f2ad"
+  "packageDigest": "597c3cd21bdb2261278c0d4376774cde4ff8a750c3e2701fab854a3ecf590d5d"
 }

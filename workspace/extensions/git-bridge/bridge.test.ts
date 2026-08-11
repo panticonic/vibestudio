@@ -492,7 +492,7 @@ describe("GitBridge semantic snapshot boundary", () => {
       },
     });
     expect(getCurrentCommit).toHaveBeenCalledTimes(2);
-    expect(statusMatrix).toHaveBeenCalledOnce();
+    expect(statusMatrix).not.toHaveBeenCalled();
     expect(host.vcs.resolveRepository).toHaveBeenCalledOnce();
     expect(host.vcs.resolveRepository).toHaveBeenCalledWith({ state: main, repoPath });
     expect(host.vcs.neighbors).not.toHaveBeenCalled();
@@ -698,28 +698,56 @@ describe("GitBridge semantic snapshot boundary", () => {
     await expect(bridge.importLockedInner(repoPath, {})).rejects.toThrow(
       /link \(blob, mode 120000\).*only regular files and executable files are importable/
     );
-    expect(statusMatrix).toHaveBeenCalledOnce();
+    expect(statusMatrix).not.toHaveBeenCalled();
     expect(host.vcs.importSnapshot).not.toHaveBeenCalled();
   });
 
-  it("rejects a dirty checkout instead of importing timing-derived content", async () => {
+  it("imports the immutable commit tree without consulting mutable checkout content", async () => {
     const repoPath = "projects/demo";
     const dir = path.join(root, repoPath);
     mkdirSync(path.join(dir, ".git"), { recursive: true });
     writeFileSync(path.join(dir, "index.ts"), "dirty\n");
     const { host } = baseHost(root);
     host.vcs.status = vi.fn(async ({ contextId }) => status(contextId, "event:main"));
+    host.vcs.inspect = vi.fn(async ({ node }) => {
+      if (node.kind !== "event") throw new Error("unexpected non-event inspection");
+      const inspection = eventInspection(node.eventId);
+      inspection.node.value.applicationIds = [];
+      return inspection;
+    });
+    host.vcs.importSnapshot = vi.fn(async () =>
+      importSnapshotResult({
+        eventId: "event:imported",
+        applicationId: "application:imported",
+        workUnitId: "work:imported",
+        sourceUri: "https://example.test/demo.git",
+        revision: "b".repeat(40),
+        repositoryId: "repository:projects/demo",
+      })
+    );
     const bridge = new GitBridge(host);
     vi.spyOn(bridge.git, "getCurrentCommit").mockResolvedValue("b".repeat(40));
     vi.spyOn(bridge.git, "readCommitTree").mockResolvedValue([
       commitBlob("index.ts", "committed\n"),
     ]);
-    vi.spyOn(bridge.git, "statusMatrix").mockResolvedValue([["index.ts", 1, 2, 2]]);
+    const statusMatrix = vi
+      .spyOn(bridge.git, "statusMatrix")
+      .mockResolvedValue([["index.ts", 1, 2, 2]]);
 
-    await expect(bridge.importLockedInner(repoPath, {})).rejects.toThrow(
-      /not the exact Git HEAD tree/
+    await expect(
+      bridge.importLockedInner(repoPath, { sourceUri: "https://example.test/demo.git" })
+    ).resolves.toMatchObject({ changed: true });
+    expect(host.vcs.importSnapshot).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source: expect.objectContaining({ commit: "b".repeat(40) }),
+        repositories: [
+          expect.objectContaining({
+            files: [expect.objectContaining({ path: "index.ts" })],
+          }),
+        ],
+      })
     );
-    expect(host.vcs.importSnapshot).not.toHaveBeenCalled();
+    expect(statusMatrix).not.toHaveBeenCalled();
   });
 
   it("rejects when HEAD advances after the immutable revision was resolved", async () => {

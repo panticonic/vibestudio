@@ -80,12 +80,10 @@ export async function resolveDurableObjectService(
   objectKey?: string | null,
   options?: RpcCallOptionsLike
 ): Promise<ResolvedDurableObjectTarget> {
-  const service = await rpc.call<ResolvedWorkspaceService>(
-    "main",
-    "workers.resolveService",
-    [query, objectKey ?? null],
-    options
-  );
+  const args = [query, objectKey ?? null];
+  const service = options
+    ? await rpc.call<ResolvedWorkspaceService>("main", "workers.resolveService", args, options)
+    : await rpc.call<ResolvedWorkspaceService>("main", "workers.resolveService", args);
   if (service.kind !== "durable-object") {
     throw new Error(`Service '${query}' does not expose a Durable Object RPC target`);
   }

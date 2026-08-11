@@ -165,7 +165,10 @@ describe("SetupHub", () => {
       </Theme>
     );
 
-    fireEvent.click(view.getByRole("button", { name: "Check connection" }));
+    const check = view.getByRole("button", { name: "Check connection" }) as HTMLButtonElement;
+    await waitFor(() => expect(check.disabled).toBe(false));
+    loaders.capabilities.mockClear();
+    fireEvent.click(check);
 
     await waitFor(() =>
       expect(loaders.capabilities).toHaveBeenCalledWith({
