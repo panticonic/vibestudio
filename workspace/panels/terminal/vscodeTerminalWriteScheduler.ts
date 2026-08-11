@@ -29,6 +29,7 @@ export class VscodeTerminalWriteScheduler {
 
   writeProcessData(data: string, trackCommit = false): Promise<void> | undefined {
     const leadingSegmentedData: string[] = [];
+    // oxlint-disable-next-line eslint/no-control-regex -- ESC and BEL delimit shell integration OSC frames.
     const matches = data.matchAll(/(?<seq>\x1b\][16]33;(?:C|D(?:;\d+)?)\x07)/g);
     let i = 0;
     for (const match of matches) {
@@ -69,4 +70,3 @@ export class VscodeTerminalWriteScheduler {
     return this.latestXtermParseData;
   }
 }
-

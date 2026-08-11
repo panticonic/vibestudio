@@ -3549,7 +3549,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
           !this.admittingSubagentTerminals.has(candidate.runId)
       ).length;
     const content = [
-      `Subagent \"${run.label || subagentRunHandle(runId)}\" ${terminalStatus}.`,
+      `Subagent "${run.label || subagentRunHandle(runId)}" ${terminalStatus}.`,
       report ? `Report:\n${report}` : "",
       "This is a durable terminal result for the existing user request, not a new request.",
       siblings ? `Supervised runs:\n${siblings}` : "",

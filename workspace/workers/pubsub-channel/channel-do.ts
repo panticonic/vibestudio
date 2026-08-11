@@ -14,6 +14,7 @@
  * presence events).
  */
 
+// oxlint-disable-next-line typescript/triple-slash-reference -- workerd.d.ts supplies runtime-only ambient WebSocket APIs.
 /// <reference path="./workerd.d.ts" />
 import {
   createDurableObjectServiceClient,

@@ -5,23 +5,23 @@
 
 import type { ShellApi } from "./types.js";
 
-export const enum VscodeFlowControlConstants {
+export const VscodeFlowControlConstants = {
   /**
    * The number of _unacknowledged_ chars to have been sent before the pty is paused in order for
    * the client to catch up.
    */
-  HighWatermarkChars = 100000,
+  HighWatermarkChars: 100000,
   /**
    * After flow control pauses the pty for the client the catch up, this is the number of
    * _unacknowledged_ chars to have been caught up to on the client before resuming the pty again.
    */
-  LowWatermarkChars = 5000,
+  LowWatermarkChars: 5000,
   /**
    * The number characters that are accumulated on the client side before sending an ack event.
    * This must be less than or equal to LowWatermarkChars or the terminal max never unpause.
    */
-  CharCountAckSize = 5000,
-}
+  CharCountAckSize: 5000,
+} as const;
 
 export type VscodeProcessDataEvent = {
   bytes: Uint8Array;
@@ -69,11 +69,13 @@ export class VscodeTerminalProcessBridge {
   private streamFailed = false;
   private readonly ackBufferer = new VscodeAckDataBufferer(() => {
     void this.options.shell
-      .acknowledgeDataEvent?.(
-        this.options.sessionId,
-        VscodeFlowControlConstants.CharCountAckSize
-      )
-      .catch(() => {});
+      .acknowledgeDataEvent?.(this.options.sessionId, VscodeFlowControlConstants.CharCountAckSize)
+      .catch((error: unknown) =>
+        console.warn(
+          `[terminal] Failed to acknowledge output for session ${this.options.sessionId}:`,
+          error
+        )
+      );
   });
 
   constructor(private readonly options: VscodeTerminalProcessBridgeOptions) {}

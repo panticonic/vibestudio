@@ -198,7 +198,7 @@ export class CentralDataManager {
         throw new Error("An ephemeral workspace lifecycle is already registered");
       }
       if (this.stmt("SELECT 1 AS one FROM workspaces WHERE name = ?").get(normalized)) {
-        throw new Error(`Cannot shadow persistent workspace \"${normalized}\" with ephemeral dev`);
+        throw new Error(`Cannot shadow persistent workspace "${normalized}" with ephemeral dev`);
       }
       const workspaceId = createWorkspaceId();
       const row = this.stmt(

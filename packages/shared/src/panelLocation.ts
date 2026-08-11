@@ -65,7 +65,12 @@ const PARAMETER_KEYS = new Set([
 const SOURCE_RE = /^[A-Za-z0-9._@-]+\/[A-Za-z0-9._@-]+$/;
 
 function isSafeText(value: string, maxLength: number): boolean {
-  return value.length > 0 && value.length <= maxLength && !/[\u0000-\u001f\u007f]/.test(value);
+  if (value.length === 0 || value.length > maxLength) return false;
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code <= 0x1f || code === 0x7f) return false;
+  }
+  return true;
 }
 
 export function isPanelStateArgs(value: unknown): value is Record<string, unknown> {

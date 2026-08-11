@@ -71,7 +71,14 @@ const HOP_BY_HOP_HEADERS = new Set([
 const BLOCKED_INJECTION_HEADERS = new Set(["host", "content-length", "cookie"]);
 
 const HTTP_TOKEN_RE = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/;
-const CONTROL_CHAR_RE = /[\u0000-\u001f\u007f]/;
+
+function containsAsciiControlCharacter(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code <= 0x1f || code === 0x7f) return true;
+  }
+  return false;
+}
 
 export function normalizeUrlAudience(audience: UrlAudience): UrlAudience {
   const parsed = parseCredentialUrl(audience.url);
@@ -192,7 +199,7 @@ export function normalizeCredentialInjection(injection: CredentialInjection): Cr
 
 export function renderCredentialHeaderValue(template: string, token: string): string {
   const rendered = template.replace("{token}", token);
-  if (CONTROL_CHAR_RE.test(rendered)) {
+  if (containsAsciiControlCharacter(rendered)) {
     throw new Error("Rendered credential header value contains control characters");
   }
   return rendered;
@@ -288,7 +295,7 @@ function validateHeaderName(name: string): void {
   if (!HTTP_TOKEN_RE.test(name)) {
     throw new Error(`Invalid credential header name: ${name}`);
   }
-  if (CONTROL_CHAR_RE.test(name)) {
+  if (containsAsciiControlCharacter(name)) {
     throw new Error("Credential header name contains control characters");
   }
   if (
@@ -308,7 +315,7 @@ function validateCredentialPartTemplate(template: string, opts: { requireToken: 
   if (template.length === 0 || template.length > 256) {
     throw new Error("Credential header template must be between 1 and 256 characters");
   }
-  if (CONTROL_CHAR_RE.test(template)) {
+  if (containsAsciiControlCharacter(template)) {
     throw new Error("Credential header template contains control characters");
   }
   const placeholders = template.match(/\{token\}/g) ?? [];
@@ -354,7 +361,7 @@ function base64EncodeUtf8(value: string): string {
 }
 
 function validateQueryParamName(name: string): void {
-  if (!name || CONTROL_CHAR_RE.test(name) || /[&=#/\\?]/.test(name)) {
+  if (!name || containsAsciiControlCharacter(name) || /[&=#/\\?]/.test(name)) {
     throw new Error(`Invalid credential query parameter name: ${name}`);
   }
 }

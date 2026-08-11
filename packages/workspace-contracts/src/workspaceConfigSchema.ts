@@ -34,6 +34,17 @@ const WorkspaceGitRemoteDeclarationSchema = z
   .object({ url: z.string(), branch: z.string().optional() })
   .strict();
 
+function containsForbiddenGitRefCharacter(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const character = value[index];
+    const code = value.charCodeAt(index);
+    if (code <= 0x20 || code === 0x7f || (character && "~^:?*[\\]".includes(character))) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function isCanonicalWorkspaceGitRef(value: string): boolean {
   if (!value.startsWith("refs/heads/") && !value.startsWith("refs/tags/")) return false;
   if (
@@ -42,7 +53,7 @@ function isCanonicalWorkspaceGitRef(value: string): boolean {
     value.includes("..") ||
     value.includes("@{") ||
     value.includes("//") ||
-    /[\u0000-\u0020\u007f~^:?*[\\]/u.test(value)
+    containsForbiddenGitRefCharacter(value)
   ) {
     return false;
   }
