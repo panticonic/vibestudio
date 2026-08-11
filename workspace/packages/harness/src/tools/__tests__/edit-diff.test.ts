@@ -54,6 +54,21 @@ describe("edit-diff", () => {
       const result = fuzzyFindText(content, '"hello"');
       expect(result.found).toBe(true);
       expect(result.usedFuzzyMatch).toBe(true);
+      expect(result.contentForReplacement).toBe(content);
+      expect(content.slice(result.index, result.index + result.matchLength)).toBe("\u201chello\u201d");
+    });
+
+    it("maps a multiline fuzzy match back across stripped trailing whitespace", () => {
+      const content = "before\nfirst  \r\nsecond\nafter";
+      const result = fuzzyFindText(content, "first\nsecond");
+      expect(result).toMatchObject({ found: true, usedFuzzyMatch: true, index: 7 });
+      expect(content.slice(result.index, result.index + result.matchLength)).toBe(
+        "first  \r\nsecond"
+      );
+    });
+
+    it("rejects an empty old string instead of inventing insertion coordinates", () => {
+      expect(fuzzyFindText("content", "")).toMatchObject({ found: false, index: -1 });
     });
 
     it("returns not-found when no match", () => {

@@ -53,12 +53,69 @@ export interface FuzzyMatchResult {
   contentForReplacement: string;
 }
 
+interface NormalizedMatchSpace {
+  text: string;
+  /** Original UTF-16 start/end for every UTF-16 code unit in `text`. */
+  starts: number[];
+  ends: number[];
+}
+
+function normalizeMatchCharacter(value: string): string {
+  if (/[\u2018\u2019\u201A\u201B]/u.test(value)) return "'";
+  if (/[\u201C\u201D\u201E\u201F]/u.test(value)) return '"';
+  if (/[\u2010\u2011\u2012\u2013\u2014\u2015\u2212]/u.test(value)) return "-";
+  if (/[\u00A0\u2002-\u200A\u202F\u205F\u3000]/u.test(value)) return " ";
+  return value;
+}
+
+/**
+ * Build the forgiving comparison space together with an exact mapping back to
+ * the caller's original UTF-16 coordinates. Normalization is only an index;
+ * the normalized text must never become the base of a write.
+ */
+function normalizedMatchSpace(value: string): NormalizedMatchSpace {
+  const text: string[] = [];
+  const starts: number[] = [];
+  const ends: number[] = [];
+  let cursor = 0;
+  while (cursor < value.length) {
+    let lineEnd = cursor;
+    while (lineEnd < value.length && value[lineEnd] !== "\r" && value[lineEnd] !== "\n") {
+      lineEnd += 1;
+    }
+    let keptEnd = lineEnd;
+    while (keptEnd > cursor && /\s/u.test(value[keptEnd - 1]!)) keptEnd -= 1;
+    for (let index = cursor; index < keptEnd; index += 1) {
+      text.push(normalizeMatchCharacter(value[index]!));
+      starts.push(index);
+      ends.push(index + 1);
+    }
+    if (lineEnd >= value.length) break;
+    const newlineEnd =
+      value[lineEnd] === "\r" && value[lineEnd + 1] === "\n" ? lineEnd + 2 : lineEnd + 1;
+    text.push("\n");
+    starts.push(lineEnd);
+    ends.push(newlineEnd);
+    cursor = newlineEnd;
+  }
+  return { text: text.join(""), starts, ends };
+}
+
 /**
  * Try an exact match first; if that fails, fall back to a fuzzy match in
- * the normalised character space. When fuzzy matched, the returned
- * `contentForReplacement` is the normalised version of `content`.
+ * the normalised character space. A fuzzy result is mapped back to the exact
+ * original coordinates; `contentForReplacement` is always the original input.
  */
 export function fuzzyFindText(content: string, oldText: string): FuzzyMatchResult {
+  if (oldText.length === 0) {
+    return {
+      found: false,
+      index: -1,
+      matchLength: 0,
+      usedFuzzyMatch: false,
+      contentForReplacement: content,
+    };
+  }
   const exactIndex = content.indexOf(oldText);
   if (exactIndex !== -1) {
     return {
@@ -70,9 +127,9 @@ export function fuzzyFindText(content: string, oldText: string): FuzzyMatchResul
     };
   }
 
-  const fuzzyContent = normalizeForFuzzyMatch(content);
-  const fuzzyOldText = normalizeForFuzzyMatch(oldText);
-  const fuzzyIndex = fuzzyContent.indexOf(fuzzyOldText);
+  const fuzzyContent = normalizedMatchSpace(content);
+  const fuzzyOldText = normalizedMatchSpace(oldText).text;
+  const fuzzyIndex = fuzzyContent.text.indexOf(fuzzyOldText);
   if (fuzzyIndex === -1) {
     return {
       found: false,
@@ -83,12 +140,23 @@ export function fuzzyFindText(content: string, oldText: string): FuzzyMatchResul
     };
   }
 
+  const originalStart = fuzzyContent.starts[fuzzyIndex];
+  const originalEnd = fuzzyContent.ends[fuzzyIndex + fuzzyOldText.length - 1];
+  if (originalStart === undefined || originalEnd === undefined) {
+    return {
+      found: false,
+      index: -1,
+      matchLength: 0,
+      usedFuzzyMatch: false,
+      contentForReplacement: content,
+    };
+  }
   return {
     found: true,
-    index: fuzzyIndex,
-    matchLength: fuzzyOldText.length,
+    index: originalStart,
+    matchLength: originalEnd - originalStart,
     usedFuzzyMatch: true,
-    contentForReplacement: fuzzyContent,
+    contentForReplacement: content,
   };
 }
 

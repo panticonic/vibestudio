@@ -38,7 +38,10 @@ import {
 
 const editSchema = Type.Object({
   path: Type.String({ description: "Path to the file to edit (relative or absolute)" }),
-  oldText: Type.String({ description: "Exact text to find and replace (must match exactly)" }),
+  oldText: Type.String({
+    minLength: 1,
+    description: "Exact text to find and replace (must match exactly)",
+  }),
   newText: Type.String({ description: "New text to replace the old text with" }),
   intent: Type.Optional(
     Type.String({
@@ -130,12 +133,7 @@ export function createEditTool(
           ? scratch
           : (scratch?.toString("utf8") ?? "");
       const { bom, text: content } = stripBom(sourceContent);
-      const originalEnding = detectLineEnding(content);
-      const normalizedContent = normalizeToLF(content);
-      const normalizedOldText = normalizeToLF(oldText);
-      const normalizedNewText = normalizeToLF(newText);
-
-      const matchResult = fuzzyFindText(normalizedContent, normalizedOldText);
+      const matchResult = fuzzyFindText(content, oldText);
       if (!matchResult.found) {
         return {
           content: [
@@ -154,8 +152,8 @@ export function createEditTool(
         };
       }
 
-      const fuzzyContent = normalizeForFuzzyMatch(normalizedContent);
-      const fuzzyOldText = normalizeForFuzzyMatch(normalizedOldText);
+      const fuzzyContent = normalizeForFuzzyMatch(normalizeToLF(content));
+      const fuzzyOldText = normalizeForFuzzyMatch(normalizeToLF(oldText));
       const occurrences = fuzzyContent.split(fuzzyOldText).length - 1;
       if (occurrences > 1) {
         const candidateLines: number[] = [];
@@ -187,7 +185,10 @@ export function createEditTool(
       const baseContent = matchResult.contentForReplacement;
       const start = matchResult.index;
       const end = matchResult.index + matchResult.matchLength;
-      const newContent = baseContent.slice(0, start) + normalizedNewText + baseContent.slice(end);
+      const matchedText = baseContent.slice(start, end);
+      const nearbyText = matchedText || baseContent.slice(0, start) || baseContent.slice(end);
+      const replacementText = restoreLineEndings(normalizeToLF(newText), detectLineEnding(nearbyText));
+      const newContent = baseContent.slice(0, start) + replacementText + baseContent.slice(end);
       if (baseContent === newContent) {
         return {
           content: [
@@ -200,7 +201,7 @@ export function createEditTool(
         };
       }
 
-      const storedNewContent = bom + restoreLineEndings(newContent, originalEnding);
+      const storedNewContent = bom + newContent;
       // oldText/newText may include unchanged context solely to identify one
       // match. Derive edits from the exact before/after bytes so those anchors
       // retain their existing provenance instead of becoming newly authored.

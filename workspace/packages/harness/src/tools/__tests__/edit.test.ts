@@ -71,6 +71,25 @@ describe("canonical edit tool", () => {
     });
   });
 
+  it("uses fuzzy comparison only to locate the original span", async () => {
+    const original = "keep — dash  \nsay “hello” world\r\ntail\n";
+    const vcs = new StubVcs({ files: { "meta/a.ts": original } });
+    const tool = createEditTool(CWD, vcs, authority);
+    await tool.execute("invocation:fuzzy", {
+      path: "meta/a.ts",
+      oldText: '"hello"',
+      newText: "goodbye",
+    });
+
+    expect(vcs.read("meta/a.ts")).toBe(
+      "keep — dash  \nsay goodbye world\r\ntail\n"
+    );
+    expect(vcs.lastEditInput?.changes[0]).toMatchObject({
+      kind: "text-edit",
+      edits: [{ start: 18, end: 25, text: "goodbye" }],
+    });
+  });
+
   it("keeps non-repository scratch edits on the scoped filesystem", async () => {
     const vcs = new StubVcs();
     const fs = new StubFs({ files: { ".tmp/note.txt": "before" } });
