@@ -7,7 +7,7 @@
  */
 
 import type { FailureDiagnostic } from "../diagnostics.js";
-import type { ToolFailureSummary } from "../types.js";
+import type { AgentTrajectoryReview, ToolFailureSummary } from "../types.js";
 
 export type StageTestStatus = "passed" | "failed" | "errored";
 
@@ -22,6 +22,8 @@ export interface StageTestRow {
   /** Non-fatal failed tool calls observed while running this test. */
   toolFailures?: ToolFailureSummary[];
   toolFailureCount?: number;
+  /** Present for ordinary agent-goal cases whose transcript needs human review. */
+  trajectoryReview?: AgentTrajectoryReview;
   /** Bounded per-test diagnostic (transcript, tool calls, etc.) for drill-down. */
   detail: FailureDiagnostic;
 }
@@ -33,6 +35,7 @@ export interface StageReportCounts {
   errored: number;
   toolFailureCount?: number;
   testsWithToolFailures?: number;
+  trajectoriesToReview?: number;
   skipped: number;
   durationMs: number;
 }

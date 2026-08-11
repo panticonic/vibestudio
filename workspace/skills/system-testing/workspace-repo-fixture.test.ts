@@ -359,7 +359,10 @@ function createPort() {
     }
   );
   const listFiles = vi.fn(
-    async ({ state, repositoryId }: Parameters<WorkspaceRepoFixturePort["vcs"]["listFiles"]>[0]) => {
+    async ({
+      state,
+      repositoryId,
+    }: Parameters<WorkspaceRepoFixturePort["vcs"]["listFiles"]>[0]) => {
       const isFixture = repositoryId === "repository:fixture";
       const files: Array<{ fileId: string; authoredChangeId: string }> = [];
       if (isFixture) {
@@ -920,9 +923,7 @@ describe("WorkspaceRepoFixtureLifecycle", () => {
       unexpectedPublishedRepositoriesRemoved: [
         { repositoryId: "repository:escaped", repoPath: "projects/outside-fixture" },
       ],
-      counteractedChangeIds: [
-        "change:escaped",
-      ],
+      counteractedChangeIds: ["change:escaped"],
     });
     expect(fake.createContext).toHaveBeenCalledTimes(2);
     expect(fake.revert).toHaveBeenCalledTimes(1);
@@ -1011,12 +1012,7 @@ describe("WorkspaceRepoFixtureLifecycle", () => {
     expect(fake.revert).toHaveBeenCalledWith(
       expect.objectContaining({
         expectedWorkingHead: event("event:import"),
-        changeIds: [
-          "change:file",
-          "change:source",
-          "change:package",
-          "change:repository",
-        ],
+        changeIds: ["change:file", "change:source", "change:package", "change:repository"],
       })
     );
     expect(fake.commit).toHaveBeenCalledTimes(1);

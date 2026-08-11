@@ -153,4 +153,51 @@ describe("self-provisioning system-test instance", () => {
 
     unregisterDevInstance(repoRoot, "system-test");
   });
+
+  it("reclaims a dead managed ephemeral generation and its copied workspace", async () => {
+    const root = fs.mkdtempSync(path.join(tempDir, "stale-managed-"));
+    const instance = registerDevInstance({
+      id: "stale-managed",
+      root,
+      repoRoot,
+      supervisorPid: 2_147_483_647,
+      kind: "server",
+      lifecycle: "ephemeral",
+      startedAt: Date.now(),
+    });
+    fs.writeFileSync(
+      path.join(root, "system-test-managed.json"),
+      JSON.stringify({
+        schemaVersion: 1,
+        instanceId: instance.id,
+        generationId: instance.generationId,
+        repoDigest: createHash("sha256")
+          .update(fs.realpathSync(repoRoot))
+          .digest("hex")
+          .slice(0, 16),
+      })
+    );
+    fs.writeFileSync(path.join(root, "copied-workspace-data"), "owned by stale generation");
+
+    await expect(stopManagedSystemTestInstance(repoRoot, instance.id)).resolves.toBe(true);
+    expect(fs.existsSync(root)).toBe(false);
+    await expect(stopManagedSystemTestInstance(repoRoot, instance.id)).resolves.toBe(false);
+  });
+
+  it("does not reclaim a dead unmanaged generation", async () => {
+    const root = fs.mkdtempSync(path.join(tempDir, "stale-unmanaged-"));
+    const instance = registerDevInstance({
+      id: "stale-unmanaged",
+      root,
+      repoRoot,
+      supervisorPid: 2_147_483_647,
+      kind: "server",
+      lifecycle: "ephemeral",
+      startedAt: Date.now(),
+    });
+
+    await expect(stopManagedSystemTestInstance(repoRoot, instance.id)).resolves.toBe(false);
+    expect(fs.existsSync(root)).toBe(true);
+    unregisterDevInstance(repoRoot, instance.id);
+  });
 });

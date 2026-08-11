@@ -5,7 +5,10 @@ import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import {
   persistentInstanceRoot,
+  readDevInstanceRecord,
+  removeEphemeralInstanceRoot,
   resolveDevInstance,
+  unregisterDevInstance,
   waitForDevInstanceReady,
   type DevInstanceReadyRecord,
   type DevInstanceRecord,
@@ -14,7 +17,11 @@ import {
 const require = createRequire(import.meta.url);
 const tsxCli = require.resolve("tsx/cli");
 const DEFAULT_SYSTEM_TEST_INSTANCE = "system-test";
-const STARTUP_TIMEOUT_MS = 180_000;
+// Cold managed workspaces may need to seal npm-backed runtime dependencies
+// before they can publish semantic readiness. Keep the outer self-provisioner
+// on the same finite budget as the child supervisor; a shorter competing
+// deadline can kill a generation before npm's own bounded operation settles.
+const STARTUP_TIMEOUT_MS = 12 * 60_000;
 const STOP_TIMEOUT_MS = 30_000;
 
 type LauncherArgs = {
@@ -148,6 +155,43 @@ function resolveRunning(repoRoot: string, instanceId: string): DevInstanceRecord
   }
 }
 
+/**
+ * Reclaim a managed ephemeral generation whose supervisor is provably dead.
+ *
+ * A SIGKILL or host crash cannot run runInstance's `finally`, so both the
+ * copied workspace root and registry lock can survive. The managed marker is
+ * the ownership proof: never infer permission to remove an arbitrary stale
+ * developer instance merely from its name or dead PID.
+ */
+function reclaimStaleManagedInstance(repoRoot: string, instanceId: string): boolean {
+  let instance: DevInstanceRecord;
+  try {
+    instance = readDevInstanceRecord(repoRoot, instanceId);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (message.includes("Unknown Vibestudio instance")) return false;
+    throw error;
+  }
+
+  try {
+    process.kill(instance.supervisorPid, 0);
+    return false;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+  }
+
+  if (instance.lifecycle !== "ephemeral" || !readManagedMarker(instance)) return false;
+  const cleanupError = removeEphemeralInstanceRoot(instance.root);
+  if (cleanupError) {
+    throw new Error(
+      `Could not reclaim stale system-test instance ${JSON.stringify(instanceId)} at ` +
+        `${instance.root}: ${cleanupError.message}`
+    );
+  }
+  unregisterDevInstance(repoRoot, instanceId);
+  return true;
+}
+
 function spawnManagedInstance(
   repoRoot: string,
   instanceId: string,
@@ -238,6 +282,7 @@ export async function ensureSystemTestInstance(
   let created = false;
   let outputFile: string | undefined;
   if (!instance) {
+    reclaimStaleManagedInstance(repoRoot, instanceId);
     outputFile = logPath(repoRoot, instanceId);
     spawnManagedInstance(repoRoot, instanceId, outputFile, options.bootstrapWorkspace);
     created = true;
@@ -314,7 +359,7 @@ export async function stopManagedSystemTestInstance(
 ): Promise<boolean> {
   const repoRoot = canonicalRepoRoot(repoRootInput);
   const instance = resolveRunning(repoRoot, instanceId);
-  if (!instance) return false;
+  if (!instance) return reclaimStaleManagedInstance(repoRoot, instanceId);
   if (!readManagedMarker(instance)) {
     throw new Error(
       `Refusing to stop instance ${JSON.stringify(instanceId)} because it was not created by pnpm system-test`

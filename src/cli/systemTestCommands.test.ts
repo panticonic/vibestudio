@@ -185,27 +185,79 @@ describe("system-test startup preparation", () => {
     expect(stateReads).toBe(3);
   });
 
-  it("refuses to autoapprove an unrelated adopt-root review", async () => {
+  it("reapproves a durable startup review slot when its version-bound payload changes", async () => {
+    const review = (effectiveVersion: string) =>
+      ({
+        kind: "unit-install-review" as const,
+        mode: "adopt-root" as const,
+        callerId: "system:units" as const,
+        approvalId: "approval:workspace-startup",
+        parts: [
+          {
+            identityKey: "extension:extensions/mobile-debug",
+            effectiveVersion,
+            change: "added" as const,
+            notableRows: [],
+            everydayRows: [],
+          },
+        ],
+      }) as never;
+    const pending = [[review("version-one")], [review("version-two")], []];
+    const resolvedVersions: string[] = [];
+    let doctorReads = 0;
+
+    const prepared = await settleSystemTestStartup(
+      async () => {
+        doctorReads += 1;
+        return doctorReads < 3
+          ? {
+              ok: false,
+              checks: [
+                {
+                  name: "required-extensions",
+                  ok: false,
+                  detail: "required extensions: mobile-debug=approval-required",
+                },
+              ],
+            }
+          : { ok: true, checks: [{ name: "required-extensions", ok: true, detail: "ready" }] };
+      },
+      {
+        getWorkspaceCreationReviewState: async () => ({ status: "resolved" }),
+        listPending: async () => (pending.shift() ?? []) as never,
+        resolveInstallReview: async (approval) => {
+          resolvedVersions.push(approval.parts[0]!.effectiveVersion);
+        },
+      },
+      { deadlineMs: 1_000, pollMs: 0 }
+    );
+
+    expect(prepared.doctor.ok).toBe(true);
+    expect(resolvedVersions).toEqual(["version-one", "version-two"]);
+    expect(prepared.startupApprovals.approvedReviewIds).toEqual(["approval:workspace-startup"]);
+    expect(prepared.startupApprovals.approvedPartCount).toBe(2);
+  });
+
+  it("leaves unrelated approvals untouched without blocking a ready test workspace", async () => {
+    const resolveInstallReview = vi.fn(async () => undefined);
     await expect(
       settleSystemTestStartup(
         async () => ({ ok: true }),
         {
-          getWorkspaceCreationReviewState: async () => ({ status: "preparing" }),
+          getWorkspaceCreationReviewState: async () => ({ status: "not-required" }),
           listPending: async () =>
             [
               {
-                kind: "unit-install-review",
-                mode: "adopt-root",
-                callerId: "system:template-import",
-                approvalId: "approval:unrelated",
-                parts: [],
+                kind: "credential",
+                approvalId: "approval:unrelated-ui-request",
               },
             ] as never,
-          resolveInstallReview: async () => undefined,
+          resolveInstallReview,
         },
         { deadlineMs: 1_000, pollMs: 0 }
       )
-    ).rejects.toThrow(/unrelated pending approval.*approval:unrelated/i);
+    ).resolves.toMatchObject({ doctor: { ok: true } });
+    expect(resolveInstallReview).not.toHaveBeenCalled();
   });
 
   it("returns terminal doctor failures without masking them as startup settling", async () => {

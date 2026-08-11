@@ -10,6 +10,9 @@ const thrownRecovery = harnessResilienceTests.find(
 const invalidArgsRecovery = harnessResilienceTests.find(
   (test) => test.name === "invalid-tool-args-visible-retry"
 )!;
+const postToolFollowup = harnessResilienceTests.find(
+  (test) => test.name === "post-tool-followup-turn"
+)!;
 
 describe("harness resilience validation", () => {
   it("requires the intentional thrown eval to precede its successful recovery", () => {
@@ -66,6 +69,32 @@ describe("harness resilience validation", () => {
       )
     ).toEqual({ passed: true, reason: undefined });
   });
+
+  it("validates orchestrated follow-up turns by their exact completed response identities", () => {
+    const first = finalMessage("First tool-backed answer.", "answer:first");
+    const second = finalMessage("Fresh follow-up answer.", "answer:second");
+    const result = execution([
+      invocation("read", "complete", false, { content: "small observation" }),
+      first,
+      second,
+    ]);
+    // Headless transcripts intentionally need not echo locally authored user
+    // prompts. The orchestrator supplies the actual phase boundaries.
+    result.messages = result.messages.filter((message) => message.senderId !== "user");
+    result.diagnostics = {
+      followupTurn: {
+        initialResponseId: first.id,
+        followupResponseId: second.id,
+      },
+    };
+
+    expect(postToolFollowup.validate(result)).toEqual({ passed: true, reason: undefined });
+    result.diagnostics["followupTurn"] = {
+      initialResponseId: first.id,
+      followupResponseId: first.id,
+    };
+    expect(postToolFollowup.validate(result).passed).toBe(false);
+  });
 });
 
 function invocation(
@@ -80,6 +109,20 @@ function invocation(
       : name === "eval"
         ? { code: "return { recovered: true };" }
         : undefined;
+  const execution = {
+    status,
+    terminalOutcome: isError ? ("tool_error" as const) : ("success" as const),
+    description: "",
+    isError,
+    result:
+      name === "eval" && status === "complete" ? { details: { returnValue: result } } : result,
+  };
+  const invocationPayload = {
+    id: `call-${name}-${status}-${String(isError)}`,
+    name,
+    arguments: arguments_ ?? {},
+    execution,
+  };
   return {
     id: `${name}-${status}-${String(isError)}`,
     kind: "message",
@@ -87,24 +130,14 @@ function invocation(
     senderMetadata: { type: "agent" },
     complete: true,
     contentType: "invocation",
-    content: JSON.stringify({
-      id: `call-${name}-${status}-${String(isError)}`,
-      name,
-      arguments: arguments_,
-      execution: {
-        status,
-        terminalOutcome: isError ? "tool_error" : "success",
-        isError,
-        result:
-          name === "eval" && status === "complete" ? { details: { returnValue: result } } : result,
-      },
-    }),
+    content: JSON.stringify(invocationPayload),
+    invocation: invocationPayload,
   };
 }
 
-function finalMessage(content: string): ChatMessage {
+function finalMessage(content: string, id = "final-agent-message"): ChatMessage {
   return {
-    id: "final-agent-message",
+    id,
     kind: "message",
     senderId: "agent",
     senderMetadata: { type: "agent" },

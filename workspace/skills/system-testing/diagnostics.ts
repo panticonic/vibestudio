@@ -6,6 +6,7 @@ import type {
   ToolFailureSummary,
 } from "./types.js";
 import { isUnexpectedToolFailure } from "./tool-failure-classification.js";
+import { findFinalAgentCompletionMessage, isAgentAuthoredMessage } from "./agent-message.js";
 
 export interface DiagnosticInvocation {
   id?: string;
@@ -118,6 +119,7 @@ export interface FailureDiagnostic {
   conversation: DiagnosticConversationItem[];
   invocations: DiagnosticInvocation[];
   toolFailures: ToolFailureSummary[];
+  trajectoryReview: TestSuiteResultEntry["execution"]["trajectoryReview"] | null;
   debugEvents: string[];
   cleanupErrors: string[];
   cleanupFailures: SystemTestFailure[];
@@ -201,10 +203,9 @@ function summarizeFailure(
   limits: typeof DEFAULT_LIMITS
 ): FailureDiagnostic {
   const entryExecution = entry["execution"];
-  const selfSenderId = entryExecution["messages"][0]?.senderId;
   const conversation = entryExecution["messages"]
     .slice(-limits.messages)
-    .map((message) => summarizeMessage(message, selfSenderId, limits));
+    .map((message) => summarizeMessage(message, limits));
   const finalAgentMessage =
     clipOptional(findFinalAgentMessage(entryExecution["messages"]) ?? undefined, limits.text) ??
     null;
@@ -256,6 +257,7 @@ function summarizeFailure(
         ...failure,
         ...(failure.error ? { error: clip(failure.error, limits.text) } : {}),
       })),
+    trajectoryReview: entryExecution["trajectoryReview"] ?? null,
     debugEvents,
     cleanupErrors,
     cleanupFailures: entryExecution["cleanupFailures"] ?? [],
@@ -359,21 +361,8 @@ function summarizeModelExecution(value: unknown): FailureDiagnostic["modelExecut
 }
 
 function findFinalAgentMessage(messages: ChatMessage[]): string | null {
-  const selfSenderId = messages[0]?.senderId;
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const message = messages[i]!;
-    if (
-      message.senderId !== selfSenderId &&
-      message.kind === "message" &&
-      message.complete &&
-      message.contentType !== "thinking" &&
-      message.contentType !== "invocation" &&
-      !message.pending
-    ) {
-      return clip(message.content ?? "", DEFAULT_LIMITS.text);
-    }
-  }
-  return null;
+  const message = findFinalAgentCompletionMessage(messages);
+  return message ? clip(message.content ?? "", DEFAULT_LIMITS.text) : null;
 }
 
 function classifyFailure(
@@ -401,7 +390,6 @@ function classifyFailure(
 
 function summarizeMessage(
   message: ChatMessage,
-  selfSenderId: string | undefined,
   limits: typeof DEFAULT_LIMITS
 ): DiagnosticConversationItem {
   const invocation = invocationFromChatMessage(message, limits);
@@ -452,7 +440,7 @@ function summarizeMessage(
 
   return {
     id: message.id,
-    who: message.senderId === selfSenderId ? ("user" as const) : ("agent" as const),
+    who: isAgentAuthoredMessage(message) ? ("agent" as const) : ("user" as const),
     type: message.contentType ?? message.kind ?? "message",
     kind: message.kind,
     contentType: message.contentType,

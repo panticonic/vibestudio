@@ -221,6 +221,11 @@ function StatusBadges({ counts }: { counts: StageReportCounts }) {
           tools {counts.toolFailureCount}
         </Badge>
       )}
+      {(counts.trajectoriesToReview ?? 0) > 0 && (
+        <Badge color="blue" variant="soft">
+          review {counts.trajectoriesToReview}
+        </Badge>
+      )}
       <Text size="1" color="gray">
         {formatDuration(counts.durationMs)}
       </Text>
@@ -284,6 +289,11 @@ function TestRow({ test, defaultOpen = false }: { test: StageTestRow; defaultOpe
         {toolFailures > 0 && (
           <Badge size="1" color="amber" variant="soft">
             {toolFailures} tool error{toolFailures === 1 ? "" : "s"}
+          </Badge>
+        )}
+        {test.trajectoryReview?.required && (
+          <Badge size="1" color="blue" variant="soft">
+            review transcript
           </Badge>
         )}
         <CopyButton
@@ -1118,6 +1128,19 @@ function TestDetail({
         </Text>
         <TypeSummary diagnostic={diagnostic} />
 
+        {diagnostic.trajectoryReview && (
+          <LabeledCallout label="Trajectory review" color="blue">
+            {[
+              `agent outcome: ${diagnostic.trajectoryReview.agentReportedOutcome}`,
+              `tool calls: ${diagnostic.trajectoryReview.invocationCount}`,
+              `unexpected tool failures: ${diagnostic.trajectoryReview.unexpectedToolFailureCount}`,
+              diagnostic.trajectoryReview.repeatedFailureOperations.length > 0
+                ? `repeated failures: ${diagnostic.trajectoryReview.repeatedFailureOperations.join(", ")}`
+                : "repeated failures: none",
+            ].join(" · ")}
+          </LabeledCallout>
+        )}
+
         {diagnostic.validationReason && (
           <LabeledCallout label="Validation" color="red">
             {diagnostic.validationReason}
@@ -1215,10 +1238,7 @@ export default function StageReport({ state }: { state: StageReportState }) {
   const failing = state.tests.filter((t) => !t.passed);
   const testsWithToolFailures = state.tests.filter((t) => (t.toolFailureCount ?? 0) > 0);
   return (
-    <Card
-      className="message-card"
-      style={{ borderLeft: `3px solid var(--${borderColor}-9)` }}
-    >
+    <Card className="message-card" style={{ borderLeft: `3px solid var(--${borderColor}-9)` }}>
       <Flex direction="column" gap="3">
         <Flex align="center" justify="between" gap="3" wrap="wrap">
           <Flex align="center" gap="2">

@@ -56,6 +56,7 @@ export {
   filesystemTests,
   harnessResilienceTests,
   interactionSurfaceTests,
+  mobileTests,
   nextSelectedStage,
   notificationTests,
   oauthTests,

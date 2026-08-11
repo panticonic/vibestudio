@@ -12,7 +12,6 @@
  */
 import { runSuites, summarize, type SuiteRunResult } from "@workspace/testkit";
 import { allSuites } from "@workspace/testkit/suites";
-import { spectrolite } from "@workspace-panels/spectrolite/testkit-suite";
 import type { Suite } from "@workspace/testkit";
 import type { TestCase, TestSuiteResult } from "./types.js";
 import { validateDeterministicSummary } from "./deterministic-validator.js";
@@ -23,10 +22,10 @@ import {
 
 export const DETERMINISTIC_CATEGORY = "deterministic";
 
-/** Built-in platform suites plus feature-owned suites explicitly installed in
- * this workspace's system-test catalog. */
+/** Built-in platform suites. Feature-owned suites stay with their feature and
+ * are run by that feature's CI rather than becoming base dependencies. */
 export function systemTestSuites(): Suite[] {
-  return [...allSuites(), spectrolite];
+  return allSuites();
 }
 
 /** Run testkit suites in-process and adapt to the system-testing result shape. */
@@ -71,15 +70,8 @@ export function deterministicTestCases(suites: Suite[] = systemTestSuites()): Te
         `Run the deterministic testkit suite "${suite.name}" with one eval call:`,
         "```",
         'import { runSuites, summarize } from "@workspace/testkit";',
-        ...(suite === spectrolite
-          ? [
-              'import { spectrolite } from "@workspace-panels/spectrolite/testkit-suite";',
-              "const suites = [spectrolite];",
-            ]
-          : [
-              'import { allSuites } from "@workspace/testkit/suites";',
-              `const suites = allSuites().filter((s) => s.name === ${JSON.stringify(suite.name)});`,
-            ]),
+        'import { allSuites } from "@workspace/testkit/suites";',
+        `const suites = allSuites().filter((s) => s.name === ${JSON.stringify(suite.name)});`,
         "const result = await runSuites(suites);",
         "scope.testkitRun = result;",
         "return summarize(result);",

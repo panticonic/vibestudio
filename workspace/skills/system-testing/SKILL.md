@@ -169,8 +169,10 @@ pnpm system-test --instance system-tests-a doctor --approve-startup \
    `pnpm system-test --instance INSTANCE ...`; never terminate or retarget another
    developer's live instance.
 
-7. After the exact test passes, run its category and then smoke coverage. Use
-   the prior run to rerun every failure or unexpected tool failure:
+7. Expand verification only when the changed behavior or captured trajectory
+   justifies it. Do not automatically run the whole category or smoke suite
+   after an exact pass. Use the prior run to rerun failures that remain
+   relevant to the same repair:
 
    ```bash
    pnpm system-test --instance INSTANCE rerun RUN_ID
@@ -246,6 +248,19 @@ const { suiteResult } = await runDeterministic();
 Use both layers when an agent must discover and perform a workflow whose final
 effects can also be asserted exactly.
 
+An ordinary agentic result is not a mechanical quality verdict. A completed
+turn with a final response establishes that the trajectory was captured; the
+stage report marks that transcript for human review and surfaces its tool-call
+count, unexpected failures, repeated failed operations, and final report. Read
+the trajectory even when the row is green. Confusion, needless source
+searching, retries, and eventual success after a poor route are product and
+documentation findings, not details to erase with a stricter response schema.
+
+Agent-goal prompts must not name internal agent tools, embed API call
+expressions, prescribe model/config objects, or dictate an exact call sequence.
+When exact wire behavior matters, make it an explicit harness probe and keep
+its deterministic validator there.
+
 ## Programmatic orchestration
 
 ```ts
@@ -284,13 +299,37 @@ An explicit `--model REF` selects a single-model diagnostic run and disables
 the default fallback. Use it when the selected model is itself part of the
 experiment, not merely to recover from Spark quota exhaustion.
 
-One named agent session owns one EvalDO notebook: its live heap is retained for
+One named agent session owns one EvalDO notebook: its live heap is retained
 while its kernel activation remains resident and its exact durable scope is cold-recovered, so eval work is
 intentionally FIFO. Concurrent CLI `inspect` and `trajectory` requests wait on
 that same admission queue and inherit caller cancellation; they do not fail
 merely because another read is active and they have no fixed wait deadline.
 Use distinct named server instances for parallel workspace experiments and
 distinct agent sessions when inspection itself must execute in parallel.
+
+Headless channel observation does not keep the channel Durable Object resident.
+The active EvalDO/runtime owner injects a resident receiver registrar, channel
+events arrive through finite durable mailbox delivery, and initial/recovery state
+arrives in the join replay. If a live run has a growing channel mailbox with the
+first row retrying on an EvalDO target, inspect resident-receiver diagnostics and
+relationship revision before attributing the delay to the model. Never restore a
+long-lived channel response stream or raise the test timeout to route around that
+failure.
+
+Recipient-specific delivery may omit every event authored by the headless
+participant itself. Validation and diagnostics therefore derive authorship from
+the channel participant metadata, never from the first visible sender or message
+order. A transcript beginning with an agent tool call is valid and must still
+recognize a later completed agent text response.
+
+A finite channel delivery is a separate inbound EvalDO invocation. The owner
+must re-enter the registering eval execution context for the callback and revoke
+and drain its registrations when that execution settles. Also, recipient mailbox
+sequences are not globally contiguous because self-authored and unaddressed
+events are intentionally omitted; a sequence jump must not trigger replay repair
+from a resident callback. Errors mentioning an inactive retained eval context or
+repeated `getReplayAfter` calls during resident delivery indicate infrastructure
+failure, not a slow model.
 
 ## Interactive staged runs
 

@@ -155,6 +155,7 @@ export async function reportStage(
     reason: reasonFor(entry),
     toolFailures: entry.execution.toolFailures?.filter(isUnexpectedToolFailure),
     toolFailureCount: entry.execution.toolFailures?.filter(isUnexpectedToolFailure).length ?? 0,
+    trajectoryReview: entry.execution.trajectoryReview,
     detail: summarizeEntry(entry, PER_TEST_LIMITS),
   }));
 
@@ -165,6 +166,7 @@ export async function reportStage(
     errored: tests.filter((t) => t.status === "errored").length,
     toolFailureCount: tests.reduce((sum, test) => sum + (test.toolFailureCount ?? 0), 0),
     testsWithToolFailures: tests.filter((test) => (test.toolFailureCount ?? 0) > 0).length,
+    trajectoriesToReview: tests.filter((test) => test.trajectoryReview?.required).length,
     skipped: 0,
     durationMs: entries.reduce((sum, entry) => sum + (entry.execution.duration ?? 0), 0),
   };

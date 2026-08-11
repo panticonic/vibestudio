@@ -3,7 +3,11 @@ import * as path from "node:path";
 import { spawn, type ChildProcess, type StdioOptions } from "node:child_process";
 import { captureOwnedProcessIdentity, type OwnedProcessIdentity } from "./ownedProcessIdentity.js";
 
-const DEFAULT_READY_TIMEOUT_MS = 5 * 60_000;
+// Workspace readiness can include one sealed npm materialization whose own
+// finite deadline is ten minutes. The process owner must outlive that child
+// operation so it can observe success or its canonical timeout and still
+// perform ordered cleanup.
+const DEFAULT_READY_TIMEOUT_MS = 12 * 60_000;
 const DEFAULT_STOP_TIMEOUT_MS = 10_000;
 
 export interface DevInstanceSupervisorOptions {
@@ -109,7 +113,11 @@ function forwardSignals(child: ChildProcess): () => void {
   const handlers = new Map<NodeJS.Signals, () => void>();
   for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
     const handler = () => {
-      signalOwnedProcess(child, signal);
+      // Forward to the owned leader first. That leader owns the graceful
+      // lifecycle of its descendants (for example, the Electron runner asks
+      // the app to enter app.quit()). Explicit stop() and timeout escalation
+      // still target the entire detached group.
+      if (child.exitCode === null && child.signalCode === null) child.kill(signal);
     };
     handlers.set(signal, handler);
     process.on(signal, handler);

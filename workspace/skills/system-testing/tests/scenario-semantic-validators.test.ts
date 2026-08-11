@@ -5,6 +5,7 @@ import { evalLifecycleTests } from "./eval-lifecycle.js";
 import { extensionSurfaceTests } from "./extensions-surface.js";
 import { filesystemTests } from "./filesystem.js";
 import { multiUserTests } from "./multi-user.js";
+import { mobileTests } from "./mobile.js";
 import { workerTests } from "./workers.js";
 import { workspaceTests } from "./workspace.js";
 import { completedScenarioEvidence, requireCodeOperations } from "./_scenario-evidence.js";
@@ -151,6 +152,80 @@ describe("scenario tool protocol semantics", () => {
     } as unknown as TestExecutionResult["messages"][number]);
 
     expect(completedScenarioEvidence(result, [])).toMatchObject({ passed: true });
+  });
+});
+
+describe("mobile onboarding validator", () => {
+  it("combines identity-preserving projections of one provisioning result", () => {
+    const validator = scenario(mobileTests, "onboarding-desktop-mobile-install-android");
+    const fullWorkflow = [
+      'const service = await workers.resolveService("vibestudio.phone-provisioning.v1");',
+      'const providers = await rpc.call(service.targetId, "providers", []);',
+      'const devices = await rpc.call(service.targetId, "devices", []);',
+      'const provisioned = await rpc.call(service.targetId, "provision", []);',
+      'const ready = await extensions.invoke("mobile-debug", "verifyWorkspaceReady", []);',
+      "return { provisioned, ready };",
+    ].join("\n");
+
+    expect(
+      validator.validate(
+        execution("Android app installed, compatible, paired, and workspace ready.", [
+          {
+            code: fullWorkflow,
+            returnValue: {
+              provisioned: {
+                compatibleAppInstalled: true,
+                pairingStatus: "paired",
+                pairedDevice: { deviceId: "mobile-1", label: "Phone" },
+              },
+              ready: {
+                ready: true,
+                workspaceConnected: true,
+                panelHostReady: true,
+                issues: [],
+              },
+              result: {
+                provisioned: {
+                  platform: "android",
+                  installStatus: "installed",
+                  compatibleAppInstalled: true,
+                  pairingStatus: "paired",
+                  pairedDevice: "[Circular]",
+                },
+              },
+            },
+          },
+        ])
+      )
+    ).toMatchObject({ passed: true });
+  });
+
+  it("rejects a provider-less run even when failed attempts contain the full workflow", () => {
+    const validator = scenario(mobileTests, "onboarding-desktop-mobile-install-android");
+    const fullWorkflow = [
+      'const service = await workers.resolveService("vibestudio.phone-provisioning.v1");',
+      'const providers = await rpc.call(service.targetId, "providers", []);',
+      'const devices = await rpc.call(service.targetId, "devices", []);',
+      'const provisioned = await rpc.call(service.targetId, "provision", []);',
+      'const ready = await extensions.invoke("mobile-debug", "verifyWorkspaceReady", []);',
+      "return { devices, provisioned, ready };",
+    ].join("\n");
+
+    expect(
+      validator.validate(
+        execution("❌ Could not start provisioning because no desktop provider was available.", [
+          { code: fullWorkflow, status: "error", result: { details: { message: "No desktop provider available" } } },
+          {
+            code: [
+              'const service = await workers.resolveService("vibestudio.phone-provisioning.v1");',
+              'const providers = await rpc.call(service.targetId, "providers", []);',
+              "return { providersCount: providers.length, providers };",
+            ].join("\n"),
+            returnValue: { providersCount: 0, providers: [] },
+          },
+        ])
+      )
+    ).toMatchObject({ passed: false });
   });
 });
 

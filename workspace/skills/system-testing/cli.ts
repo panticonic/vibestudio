@@ -7,7 +7,6 @@ import { TestRunner } from "./test-runner.js";
 import type { TestCase, TestSuiteResult, TestSuiteResultEntry } from "./types.js";
 import { isUnexpectedToolFailure } from "./tool-failure-classification.js";
 import {
-  DEFAULT_SYSTEM_TEST_TIMEOUT_MS,
   SYSTEM_TEST_AGENT_MODEL,
   systemTestModelRoute,
   type SystemTestThinkingLevel,
@@ -140,7 +139,7 @@ export async function runSystemTests(options: SystemTestRunOptions): Promise<Sys
   const concurrency = normalizePositiveInt(options.concurrency, DEFAULT_CONCURRENCY);
   const testTimeoutMs =
     options.testTimeoutMs === undefined
-      ? DEFAULT_SYSTEM_TEST_TIMEOUT_MS
+      ? undefined
       : normalizePositiveInt(options.testTimeoutMs, options.testTimeoutMs);
   const provenance: SystemTestRunRecord["provenance"] = {};
   const queued = new Set(selected.map((test) => test.name));

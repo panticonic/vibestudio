@@ -13,6 +13,7 @@ import {
   type CliStoredPairing,
 } from "../cli/credentialStore.js";
 import { RpcClient } from "../cli/rpcClient.js";
+import { ConnectionError } from "../cli/output.js";
 
 type PairingResponse = {
   deviceId: string;
@@ -135,19 +136,26 @@ async function pairWithInvite(
       `Development pairing selected unknown workspace ${JSON.stringify(device.workspaceId)}`
     );
   }
-  const rpc = (deps.rpcClient ?? ((credential) => new RpcClient(credential)))({
-    url: input.gatewayUrl,
-    deviceId: device.deviceId,
-    refreshToken: device.refreshToken,
-  });
-  let route;
-  try {
-    route = HubWorkspaceRouteSchema.parse(
-      await rpc.call("hubControl.routeWorkspace", [{ workspaceId: device.workspaceId }])
-    );
-  } finally {
-    await rpc.close();
+  const createRpc = deps.rpcClient ?? ((credential) => new RpcClient(credential));
+  let route: ReturnType<typeof HubWorkspaceRouteSchema.parse> | undefined;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const rpc = createRpc({
+      url: input.gatewayUrl,
+      deviceId: device.deviceId,
+      refreshToken: device.refreshToken,
+    });
+    try {
+      route = HubWorkspaceRouteSchema.parse(
+        await rpc.call("hubControl.routeWorkspace", [{ workspaceId: device.workspaceId }])
+      );
+      break;
+    } catch (error) {
+      if (!(error instanceof ConnectionError) || attempt > 0) throw error;
+    } finally {
+      await rpc.close();
+    }
   }
+  if (!route) throw new Error("Development CLI could not route its paired workspace");
 
   const controlPairing = stableReach(input.invite);
   const workspacePairing = stableReach(route.workspaceReach);

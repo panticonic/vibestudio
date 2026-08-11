@@ -179,7 +179,13 @@ async function withIsolatedSystemTestRunner<T>(
       (failure): failure is NonNullable<typeof failure> => failure !== null
     );
     if (failures.length === 1) throw failures[0];
-    throw new AggregateError(failures, "System-test utility execution or cleanup failed");
+    const details = failures
+      .map((failure) => (failure instanceof Error ? failure.message : String(failure)))
+      .join("; ");
+    throw new AggregateError(
+      failures,
+      `System-test utility execution or cleanup failed: ${details}`
+    );
   }
   return result as T;
 }
@@ -1352,6 +1358,7 @@ export async function settleSystemTestStartup(
   const deadline = options.deadlineMs === undefined ? null : Date.now() + options.deadlineMs;
   const pollMs = options.pollMs ?? 250;
   const approved = new Set<string>();
+  const approvedFingerprints = new Map<string, string>();
   let approvedPartCount = 0;
 
   let lastStatus = "";
@@ -1368,16 +1375,25 @@ export async function settleSystemTestStartup(
     const pending = await approvals.listPending();
     const startupReviews = pending.filter(isManagedStartupInstallReview);
     const unrelated = pending.filter((approval) => !isManagedStartupInstallReview(approval));
-    if (unrelated.length > 0) {
-      throw new CliError(
-        `system-test startup preparation found unrelated pending approval(s): ${unrelated
-          .map((approval) => `${approval.kind}:${approval.approvalId}`)
-          .join(", ")}`
-      );
-    }
     for (const batch of startupReviews) {
-      if (approved.has(batch.approvalId)) continue;
+      // The approval id names the durable review slot, not one immutable
+      // review payload. Compiler/source changes can republish that slot with
+      // new version-bound parts while startup is settling. Remembering only
+      // the id silently treats that new code as already reviewed and leaves
+      // the managed instance waiting forever. Conversely, resolving every
+      // observation can race the pending-change event and submit the same
+      // payload twice. Key the suppression to exactly what is being admitted.
+      const fingerprint = JSON.stringify({
+        mode: batch.mode,
+        parts: batch.parts.map((part) => ({
+          identityKey: part.identityKey,
+          effectiveVersion: part.effectiveVersion,
+          change: part.change,
+        })),
+      });
+      if (approvedFingerprints.get(batch.approvalId) === fingerprint) continue;
       await approvals.resolveInstallReview(batch);
+      approvedFingerprints.set(batch.approvalId, fingerprint);
       approved.add(batch.approvalId);
       approvedPartCount += batch.parts.length;
     }
@@ -1395,7 +1411,7 @@ export async function settleSystemTestStartup(
     }
     const reviewPreparationComplete =
       reviewState.status === "not-required" || reviewState.status === "resolved";
-    const status = `creation review: ${reviewState.status}; pending approvals: ${pending.length}; ${
+    const status = `creation review: ${reviewState.status}; managed startup approvals: ${startupReviews.length}; unrelated approvals left untouched: ${unrelated.length}; ${
       result.ok
         ? "doctor ready"
         : (result.checks ?? [])
@@ -1407,7 +1423,7 @@ export async function settleSystemTestStartup(
       lastStatus = status;
       options.onStatus?.(status);
     }
-    if (result.ok && reviewPreparationComplete && pending.length === 0) {
+    if (result.ok && reviewPreparationComplete && startupReviews.length === 0) {
       return {
         doctor: result,
         startupApprovals: {

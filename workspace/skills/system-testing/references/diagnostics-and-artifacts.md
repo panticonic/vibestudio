@@ -60,11 +60,11 @@ evidence.
 
 Typed, pre-effect agent-control refusals are diagnostic-only for the same
 reason. In particular, `inspect_subagent` may return `InvalidReference` for an
-ambiguous run or repository-relative file query, and `close_subagent` may
-return a typed lifecycle precondition before teardown. Preserve the invocation
-and reason code, require the agent to retry with an exact identity or repair
-the child lifecycle, and do not classify the guard as failed infrastructure.
-Untyped subagent errors remain unexpected.
+ambiguous run or repository-relative file query, and `send_to_subagent` returns
+`SubagentTerminal` when execution has already ended. Preserve the invocation
+and reason code, require the agent to retry with an exact identity or use the
+retained inspect/read/merge surface, and do not classify the guard as failed
+infrastructure. Untyped subagent errors remain unexpected.
 
 For VCS mutations, inspect the exact working state, `commandId`, target context,
 work-unit/application/change identities, resulting event, and publication
@@ -109,6 +109,28 @@ working, classify it as control-plane infrastructure breakage: inspect the
 inner eval status and durable heartbeat, recover the terminal record, and fix
 the runner lifecycle. Do not increase an HTTP/RPC deadline or accept orphaned
 test activity as a completed run.
+
+For channel/subagent latency, distinguish the canonical fact from its derived
+delivery and presentation state. Inspect the task-channel terminal append, the
+parent mailbox commit/claim/admission, and the parent run projection as separate
+coordinates. Child tool activity must remain only on the task channel; ordinary
+activity creating supervisor mailbox rows or parent `task.progress` messages is
+an infrastructure defect. `message.received`/`message.read` shown by replay are
+receipt snapshots, not channel log events, and must create no mailbox work.
+
+Channel state diagnostics report durable relationship counts separately from
+activation-local external transports, plus derivation cursor lag and mailbox
+state. An idle agent relationship must have no streamed response. An external
+panel may own a bounded live stream while connected; a terminal subagent card
+must release its observation unless the transcript is open.
+
+When diagnosing recipient latency, verify the mailbox's versioned at-sequence
+decision context as one unit: relationships and application config, channel
+conversation config and folded state, and reply-to sender identity. The
+recipient claim must not call back into the channel for policy state, config,
+participants, or message sender lookup. A read receipt is a monotone projection
+update; its optional external-session signal is presentation only and must not
+append to GAD or create a durable-entity mailbox row.
 
 ## Cleanup is behavior
 

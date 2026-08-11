@@ -190,18 +190,27 @@ async function captureOrchestratedSession(
 async function orchestrateFollowupTurn(
   context: TestOrchestrationContext
 ): Promise<TestExecutionResult> {
-  return captureOrchestratedSession(context, undefined, async (session) => {
-    await context.sendAndWait(
+  let initialResponseId: string | undefined;
+  let followupResponseId: string | undefined;
+  const execution = await captureOrchestratedSession(context, undefined, async (session) => {
+    const initial = await context.sendAndWait(
       session,
       "Use a harmless read-only tool to inspect something small and summarize it.",
       "initial tool-using turn"
     );
-    await context.sendAndWait(
+    initialResponseId = initial.id;
+    const followup = await context.sendAndWait(
       session,
       "Now give me a fresh one-sentence recap of what you observed.",
       "follow-up turn"
     );
+    followupResponseId = followup.id;
   });
+  execution.diagnostics = {
+    ...(execution.diagnostics ?? {}),
+    followupTurn: { initialResponseId, followupResponseId },
+  };
+  return execution;
 }
 
 async function orchestrateValidationRetry(
@@ -226,12 +235,15 @@ function validateFollowupTurn(result: TestExecutionResult) {
   if (result.error || (result.cleanupErrors?.length ?? 0) > 0) {
     return { passed: false, reason: "The two-turn session or its cleanup failed" };
   }
-  const userId = result.messages[0]?.senderId;
+  const turnEvidence = result.diagnostics?.["followupTurn"] as
+    | { initialResponseId?: unknown; followupResponseId?: unknown }
+    | undefined;
+  const initialResponseId = turnEvidence?.initialResponseId;
+  const followupResponseId = turnEvidence?.followupResponseId;
   const isVisibleAgentMessage = (index: number) => {
     const message = result.messages[index];
     return Boolean(
       message &&
-      message.senderId !== userId &&
       message.kind === "message" &&
       message.complete &&
       message.contentType !== "invocation" &&
@@ -246,18 +258,17 @@ function validateFollowupTurn(result: TestExecutionResult) {
       message.invocation.execution.isError !== true
   );
   const firstAnswer = result.messages.findIndex(
-    (_message, index) => index > toolIndex && isVisibleAgentMessage(index)
-  );
-  const followup = result.messages.findIndex(
-    (message, index) => index > firstAnswer && message.senderId === userId
+    (message, index) => message.id === initialResponseId && isVisibleAgentMessage(index)
   );
   const secondAnswer = result.messages.findIndex(
-    (_message, index) => index > followup && isVisibleAgentMessage(index)
+    (message, index) => message.id === followupResponseId && isVisibleAgentMessage(index)
   );
   return toolIndex >= 0 &&
     firstAnswer > toolIndex &&
-    followup > firstAnswer &&
-    secondAnswer > followup
+    secondAnswer > firstAnswer &&
+    typeof initialResponseId === "string" &&
+    typeof followupResponseId === "string" &&
+    initialResponseId !== followupResponseId
     ? { passed: true, reason: undefined }
     : {
         passed: false,
