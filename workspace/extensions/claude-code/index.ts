@@ -56,7 +56,9 @@ export interface PrepareSubagentBinding {
   task: string;
   parentRef: string;
   parentChannelId: string;
+  taskChannelId: string;
   parentContextId: string;
+  parentParticipantId: string;
   depth: number;
   mode?: "fresh" | "fork";
 }
