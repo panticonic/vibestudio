@@ -351,10 +351,12 @@ export const MessageCard = React.memo(function MessageCard({
   // edit-fork (own read messages) or a steer-fork (agent messages).
   const [editMode, setEditMode] = useState<null | "outbox" | "fork">(null);
   const [editText, setEditText] = useState("");
+  const [editSubmitting, setEditSubmitting] = useState(false);
   const [forkError, setForkError] = useState<string | null>(null);
   const openEdit = useCallback(
     (mode: "outbox" | "fork") => {
       setEditText(msg.content);
+      setForkError(null);
       setEditMode(mode);
     },
     [msg.content]
@@ -369,18 +371,21 @@ export const MessageCard = React.memo(function MessageCard({
   const submitEdit = useCallback(async () => {
     const text = editText;
     const mode = editMode;
-    setEditMode(null);
     if (!text.trim()) return;
     setForkError(null);
+    setEditSubmitting(true);
     try {
       if (mode === "outbox") {
         await editPendingMessage?.(msg.id, text);
       } else if (mode === "fork") {
         await forkState?.actions.editAndForkMessage(msg, text);
       }
+      setEditMode(null);
     } catch (err) {
       console.error("[MessageCard] edit failed:", err);
       if (mode === "fork") setForkError(errorMessage(err, "Edit and fork failed"));
+    } finally {
+      setEditSubmitting(false);
     }
   }, [editText, editMode, editPendingMessage, forkState, msg]);
 
@@ -927,7 +932,10 @@ export const MessageCard = React.memo(function MessageCard({
           )}
         </Flex>
       </Card>
-      <Dialog.Root open={editMode !== null} onOpenChange={(open) => !open && setEditMode(null)}>
+      <Dialog.Root
+        open={editMode !== null}
+        onOpenChange={(open) => !open && !editSubmitting && setEditMode(null)}
+      >
         <Dialog.Content maxWidth="560px">
           <Dialog.Title>
             {editMode === "outbox" ? "Edit message" : "Edit & fork from here"}
@@ -945,14 +953,19 @@ export const MessageCard = React.memo(function MessageCard({
               autoFocus
             />
           </Box>
+          {forkError && editMode === "fork" ? (
+            <Text as="p" size="1" color="red" mt="2">
+              {forkError}
+            </Text>
+          ) : null}
           <Flex justify="end" gap="2" mt="3">
             <Dialog.Close>
-              <Button variant="soft" color="gray">
+              <Button variant="soft" color="gray" disabled={editSubmitting}>
                 Cancel
               </Button>
             </Dialog.Close>
-            <Button onClick={() => void submitEdit()}>
-              {editMode === "outbox" ? "Save" : "Edit & fork"}
+            <Button disabled={editSubmitting || !editText.trim()} onClick={() => void submitEdit()}>
+              {editSubmitting ? "Working…" : editMode === "outbox" ? "Save" : "Edit & fork"}
             </Button>
           </Flex>
         </Dialog.Content>
@@ -980,7 +993,25 @@ function ForkRow({ fork }: { fork: NonNullable<ChatMessage["fork"]> }) {
           <Button
             size="1"
             variant="ghost"
-            onClick={() => forkState?.actions.switchTo(fork.forkedChannelId, fork.forkedContextId)}
+            onClick={() => {
+              if (!forkState) return;
+              forkState.actions.clearError();
+              void (async () => {
+                try {
+                  await forkState.actions.markForkRead?.(fork.forkedChannelId, fork.headSeq);
+                } catch (cause) {
+                  forkState.actions.reportError(
+                    "Could not save the conversation read position",
+                    cause
+                  );
+                }
+                try {
+                  await forkState.actions.switchTo(fork.forkedChannelId, fork.forkedContextId);
+                } catch (cause) {
+                  forkState.actions.reportError("Could not switch conversations", cause);
+                }
+              })();
+            }}
           >
             Switch
           </Button>

@@ -270,8 +270,13 @@ export interface ForkEntry {
   label: string;
   reason: string;
   actorName: string;
+  actorId: string;
   forkPointId: number;
   createdAtSeq: number;
+  /** Latest durable head reported by this fork. */
+  headSeq: number;
+  /** Channel on whose log rename/archive facts for this entry live. */
+  parentChannelId: string;
   archived: boolean;
   /** Live "has unread since our cursor" badge, reconciled on open (§H). */
   unread?: boolean;
@@ -285,23 +290,28 @@ export interface ForkTreeNode {
   provenanceKind: "root" | "fork" | "task";
   children: ForkTreeNode[];
   isCurrent: boolean;
+  headSeq?: number;
   unread?: boolean;
 }
 
 /** Panel-supplied navigation handlers. */
 export interface ForkNavHandlers {
   /** In-place switch: rebind the panel's channel + context and reconnect. */
-  switchTo: (channelId: string, contextId: string) => void;
+  switchTo: (channelId: string, contextId: string) => void | Promise<void>;
   /** Side-by-side: open the fork in a NEW chat panel. */
-  openInNewPanel: (channelId: string, contextId: string) => void;
-  /** A fork the local user did NOT initiate just landed while the panel was
-   *  unfocused — the panel raises a shell toast (with a Switch action). */
+  openInNewPanel: (channelId: string, contextId: string) => void | Promise<void>;
+  /** Panel-persisted lineage read cursors. */
+  readForkCursors?: () => Record<string, number>;
+  /** Persist one monotone lineage read cursor. */
+  markForkRead?: (channelId: string, headSeq: number) => void | Promise<void>;
+  /** A fork the local user did not initiate just landed. The shell owns focus
+   * policy and notification presentation. */
   onExternalFork?: (fork: {
     forkedChannelId: string;
     forkedContextId: string;
     actorName: string;
     forkPointId: number;
-  }) => void;
+  }) => void | Promise<void>;
 }
 
 /** Fork lineage state + actions threaded onto ChatContextValue and read by the
@@ -317,6 +327,8 @@ export interface ForkUiState {
   parent?: { channelId: string; contextId?: string };
   /** True while a fork op is mid-flight (disables the affordances). */
   forking: boolean;
+  /** Last actionable lineage/fork failure; never dropped to console only. */
+  error?: string;
   /** Reconcile siblings + badges from durable heads (call on switcher/tree open). */
   refresh: () => void;
   /** Walk provenance up + forks down into the full lineage tree (lazy). */
@@ -328,6 +340,10 @@ export interface ForkUiState {
     editAndForkMessage: (msg: ChatMessage, newText: string) => Promise<void>;
     /** Channel-level fork at the current head, no seed. */
     newFork: () => Promise<void>;
+    renameFork: (entry: ForkEntry, label: string) => Promise<void>;
+    archiveFork: (entry: ForkEntry) => Promise<void>;
+    clearError: () => void;
+    reportError: (summary: string, error: unknown) => void;
   } & ForkNavHandlers;
 }
 

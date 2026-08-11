@@ -1199,7 +1199,7 @@ export default function ChatPanel() {
   // In-place fork switch: explicitly move the panel runtime to the fork's
   // already-created workspace branch. State args carry only the channel.
   const handleForkSwitch = useCallback(
-    (forkChannelId: string, forkContextId: string) => {
+    async (forkChannelId: string, forkContextId: string) => {
       console.info("[ChatPanel] switching to fork", {
         fromChannelId: stateArgs.channelName ?? bootstrapChannel ?? null,
         fromContextId: resolvedContextId,
@@ -1210,7 +1210,7 @@ export default function ChatPanel() {
       rehydrationCheckedRef.current = false;
       const current = panel.stateArgs.get<ChatStateArgs & { contextId?: unknown }>();
       const { contextId: _obsoleteContextId, ...panelState } = current;
-      void panel.switchContext(forkContextId, {
+      await panel.switchContext(forkContextId, {
         stateArgs: { ...panelState, channelName: forkChannelId },
       });
     },
@@ -1219,14 +1219,14 @@ export default function ChatPanel() {
 
   // Side-by-side: open the fork in a fresh chat panel (news-panel shape).
   const handleOpenForkPanel = useCallback(
-    (forkChannelId: string, forkContextId: string) => {
+    async (forkChannelId: string, forkContextId: string) => {
       console.info("[ChatPanel] opening fork panel", {
         fromChannelId: stateArgs.channelName ?? bootstrapChannel ?? null,
         fromContextId: resolvedContextId,
         forkChannelId,
         forkContextId,
       });
-      void openPanel("panels/chat", {
+      await openPanel("panels/chat", {
         focus: true,
         contextId: forkContextId,
         stateArgs: { channelName: forkChannelId },
@@ -1235,15 +1235,16 @@ export default function ChatPanel() {
     [bootstrapChannel, resolvedContextId, stateArgs.channelName]
   );
 
-  // Shell toast when a fork the user didn't initiate lands while unfocused.
+  // Hand external-fork notification policy to the shell, which owns the real
+  // panel/window focus state.
   const handleExternalFork = useCallback(
-    (fork: {
+    async (fork: {
       forkedChannelId: string;
       forkedContextId: string;
       actorName: string;
       forkPointId: number;
     }) => {
-      void notifications.show({
+      await notifications.show({
         type: "info",
         title: "Conversation forked",
         message: `${fork.actorName} forked from message ${fork.forkPointId}`,
@@ -1251,7 +1252,27 @@ export default function ChatPanel() {
           {
             label: "Switch",
             variant: "solid",
-            onClick: () => handleForkSwitch(fork.forkedChannelId, fork.forkedContextId),
+            onClick: () => {
+              void (async () => {
+                try {
+                  await handleForkSwitch(fork.forkedChannelId, fork.forkedContextId);
+                } catch (cause) {
+                  const message = cause instanceof Error ? cause.message : String(cause);
+                  try {
+                    await notifications.show({
+                      type: "error",
+                      title: "Couldn't switch conversations",
+                      message,
+                    });
+                  } catch (notificationCause) {
+                    console.error(
+                      "[ChatPanel] failed to switch from fork notification and show the error",
+                      { cause, notificationCause }
+                    );
+                  }
+                }
+              })();
+            },
           },
         ],
       });
@@ -1259,13 +1280,42 @@ export default function ChatPanel() {
     [handleForkSwitch]
   );
 
+  const readForkCursors = useCallback(
+    () => panel.stateArgs.get<ChatStateArgs>().forkCursors ?? {},
+    []
+  );
+
+  const forkCursorWriteRef = useRef<Promise<void>>(Promise.resolve());
+  const markForkRead = useCallback(async (forkChannelId: string, headSeq: number) => {
+    const write = forkCursorWriteRef.current.then(async () => {
+      const current = panel.stateArgs.get<ChatStateArgs>();
+      const prior = current.forkCursors?.[forkChannelId] ?? 0;
+      if (prior >= headSeq) return;
+      await panel.stateArgs.set({
+        forkCursors: {
+          ...(current.forkCursors ?? {}),
+          [forkChannelId]: headSeq,
+        },
+      });
+    });
+    // Keep the queue usable after a failed write while returning the original
+    // rejection to the caller so the UI can surface it.
+    forkCursorWriteRef.current = write.then(
+      () => undefined,
+      () => undefined
+    );
+    await write;
+  }, []);
+
   const forkNav: ForkNavHandlers = useMemo(
     () => ({
       switchTo: handleForkSwitch,
       openInNewPanel: handleOpenForkPanel,
+      readForkCursors,
+      markForkRead,
       onExternalFork: handleExternalFork,
     }),
-    [handleForkSwitch, handleOpenForkPanel, handleExternalFork]
+    [handleForkSwitch, handleOpenForkPanel, readForkCursors, markForkRead, handleExternalFork]
   );
 
   // Sandbox config — provides RPC and import loading to agentic-chat.

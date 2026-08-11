@@ -271,6 +271,7 @@ const ChatHeaderInner = React.memo(function ChatHeaderInner({
               onOpenDebugConsole={onDebugConsoleChange ?? undefined}
             />
           ))}
+          <ForkSwitcher />
           <ChatHeaderOverflowMenu
             channelId={channelId}
             participants={participants}

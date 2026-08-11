@@ -44,17 +44,32 @@ function TreeRow({
         </Flex>
         {!node.isCurrent && (
           <Flex gap="1" style={{ flexShrink: 0 }}>
-            <Button size="1" variant="ghost" onClick={() => onSwitch(node.channelId, node.contextId)}>
+            <Button
+              size="1"
+              variant="ghost"
+              onClick={() => onSwitch(node.channelId, node.contextId)}
+            >
               Switch
             </Button>
-            <Button size="1" variant="ghost" color="gray" onClick={() => onOpen(node.channelId, node.contextId)}>
+            <Button
+              size="1"
+              variant="ghost"
+              color="gray"
+              onClick={() => onOpen(node.channelId, node.contextId)}
+            >
               Open
             </Button>
           </Flex>
         )}
       </Flex>
       {node.children.map((child) => (
-        <TreeRow key={child.channelId} node={child} depth={depth + 1} onSwitch={onSwitch} onOpen={onOpen} />
+        <TreeRow
+          key={child.channelId}
+          node={child}
+          depth={depth + 1}
+          onSwitch={onSwitch}
+          onOpen={onOpen}
+        />
       ))}
     </>
   );
@@ -83,11 +98,33 @@ export function ForkTreeView({ open, onClose }: { open: boolean; onClose: () => 
   }, [open, forkState]);
 
   const handleSwitch = (channelId: string, contextId?: string) => {
-    if (contextId) forkState?.actions.switchTo(channelId, contextId);
-    onClose();
+    if (!contextId || !forkState) return;
+    forkState.actions.clearError();
+    const node = tree
+      .flatMap(function flatten(item): ForkTreeNode[] {
+        return [item, ...item.children.flatMap(flatten)];
+      })
+      .find((item) => item.channelId === channelId);
+    void (async () => {
+      try {
+        await forkState.actions.markForkRead?.(channelId, node?.headSeq ?? 0);
+      } catch (cause) {
+        forkState.actions.reportError("Could not save the conversation read position", cause);
+      }
+      try {
+        await forkState.actions.switchTo(channelId, contextId);
+        onClose();
+      } catch (cause) {
+        forkState.actions.reportError("Could not switch conversations", cause);
+      }
+    })();
   };
   const handleOpen = (channelId: string, contextId?: string) => {
-    if (contextId) forkState?.actions.openInNewPanel(channelId, contextId);
+    if (!contextId || !forkState) return;
+    forkState.actions.clearError();
+    void Promise.resolve(forkState.actions.openInNewPanel(channelId, contextId)).catch((cause) =>
+      forkState.actions.reportError("Could not open conversation", cause)
+    );
   };
 
   return (
@@ -108,9 +145,20 @@ export function ForkTreeView({ open, onClose }: { open: boolean; onClose: () => 
               No lineage yet — this is a root conversation.
             </Text>
           )}
+          {forkState?.error && (
+            <Text size="2" color="red">
+              {forkState.error}
+            </Text>
+          )}
           <Flex direction="column" gap="1">
             {tree.map((node) => (
-              <TreeRow key={node.channelId} node={node} depth={0} onSwitch={handleSwitch} onOpen={handleOpen} />
+              <TreeRow
+                key={node.channelId}
+                node={node}
+                depth={0}
+                onSwitch={handleSwitch}
+                onOpen={handleOpen}
+              />
             ))}
           </Flex>
         </Box>

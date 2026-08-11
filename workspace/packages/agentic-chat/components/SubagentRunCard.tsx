@@ -129,9 +129,13 @@ export function SubagentRunCard({ msg }: { msg: ChatMessage }) {
   ).filter((row): row is [string, string] => typeof row[1] === "string" && row[1].length > 0);
 
   const handleOpenPanel = () => {
-    if (subagent.taskChannelId && subagent.contextId) {
-      forkState?.actions.openInNewPanel(subagent.taskChannelId, subagent.contextId);
-    }
+    if (!forkState || !subagent.taskChannelId || !subagent.contextId) return;
+    forkState.actions.clearError();
+    void Promise.resolve(
+      forkState.actions.openInNewPanel(subagent.taskChannelId, subagent.contextId)
+    ).catch((cause) =>
+      forkState.actions.reportError("Could not open subagent conversation", cause)
+    );
   };
 
   return (
