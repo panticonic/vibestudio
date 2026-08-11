@@ -36,6 +36,7 @@ describe("runNpmInstall", () => {
     const [args] = readAttempts(fixture.installDir);
     expect(cacheArg(args!)).toBe(path.join(sharedDerivedDataPath, "npm-cache"));
     expect(args).toContain("--ignore-scripts");
+    expect(args).not.toContain("--legacy-peer-deps");
   });
 
   it("retries a corrupt cacache read once with a clean temporary cache", async () => {

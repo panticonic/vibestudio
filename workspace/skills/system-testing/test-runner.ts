@@ -636,10 +636,13 @@ export class TestRunner {
       const callsByTurn = new Map<string, typeof calls>();
       for (const call of calls) {
         const messageId = String(call?.["messageId"] ?? "");
-        // Model message ids end in the per-turn call index. Evidence from
-        // older fixtures may omit messageId; retain the former single-sequence
-        // behavior for those records.
-        const turnKey = messageId.replace(/:\d+$/u, "") || "legacy";
+        if (!messageId) {
+          throw new Error(
+            `System test "${testName}" recorded a model call without turn identity during ${phase}`
+          );
+        }
+        // Model message ids end in the per-turn call index.
+        const turnKey = messageId.replace(/:\d+$/u, "");
         const turnCalls = callsByTurn.get(turnKey) ?? [];
         turnCalls.push(call);
         callsByTurn.set(turnKey, turnCalls);

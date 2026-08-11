@@ -1265,7 +1265,7 @@ export class ViewManager {
     } else if (visible && managed.type !== "shell") {
       // An active native slot is the authoritative geometry for its panel.
       // Visibility transitions can race immediately after a bind; falling
-      // back to reconstructed legacy chrome bounds here would briefly expand
+      // back to reconstructed host-chrome bounds here would briefly expand
       // the panel over hosted-shell chrome until the next slot resync.
       this.visiblePanelId = id;
       const nativeSlotId = this.nativePanelSlots.panelToSlot.get(id);
@@ -1699,7 +1699,7 @@ export class ViewManager {
    * raises, or creates a view routes through here instead of re-adding child
    * views directly — distributed remove/add calls are how the hosted shell
    * ended up stacked over slotted panels. Re-asserts, bottom to top:
-   * host chrome app views, an active legacy-shell panel, slotted panels with
+   * host chrome app views, an active direct-shell panel, slotted panels with
    * the focused slot last, then the bootstrap launch gate while the hosted
    * shell is not ready. Once hosted chrome owns presentation, an unbound panel
    * is never part of the native stack.
