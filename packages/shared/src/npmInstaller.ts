@@ -58,21 +58,15 @@ export function resolveBundledNpmCliPath(appRoot = process.env["VIBESTUDIO_APP_R
 
 export async function runNpmInstall(
   cwd: string,
-  options:
-    | number
-    | {
-        timeout?: number;
-        ignoreScripts?: boolean;
-        cacheDir?: string;
-      } = DEFAULT_NPM_INSTALL_TIMEOUT_MS
+  options: {
+    timeout?: number;
+    ignoreScripts?: boolean;
+    cacheDir?: string;
+  } = {}
 ): Promise<void> {
-  const timeout =
-    typeof options === "number" ? options : (options.timeout ?? DEFAULT_NPM_INSTALL_TIMEOUT_MS);
-  const ignoreScripts = typeof options === "number" ? true : (options.ignoreScripts ?? true);
-  const cacheDir =
-    typeof options === "number" || !options.cacheDir
-      ? path.join(getSharedDerivedDataPath(), "npm-cache")
-      : options.cacheDir;
+  const timeout = options.timeout ?? DEFAULT_NPM_INSTALL_TIMEOUT_MS;
+  const ignoreScripts = options.ignoreScripts ?? true;
+  const cacheDir = options.cacheDir ?? path.join(getSharedDerivedDataPath(), "npm-cache");
   const npmCli = resolveBundledNpmCliPath();
 
   const discardPartialInstall = (): void => {

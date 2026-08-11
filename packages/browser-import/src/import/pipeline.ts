@@ -11,7 +11,6 @@ import type {
 } from "../types.js";
 import { resolveProfilePath } from "../types.js";
 import { BrowserDataError } from "../errors.js";
-import { detectBrowsers } from "../detection/index.js";
 import { getReader } from "../readers/index.js";
 import { createCryptoProvider } from "../crypto/index.js";
 import { ProgressEmitter, type ProgressCallback } from "./progressEmitter.js";

@@ -62,6 +62,16 @@ export { DurableWorkReadiness } from "./durable-work-readiness.js";
 // Re-export the `@rpc` exposure decorator so DO authors import it alongside the base.
 export { rpc, schemaRpc } from "@vibestudio/rpc";
 
+/** RPC methods supplied by the Durable Object framework rather than a
+ * product service schema. Contract tests use this boundary to distinguish
+ * inherited host/channel plumbing from a built-in's typed product surface. */
+export const DURABLE_OBJECT_FRAMEWORK_RPC_METHODS: ReadonlySet<string> = new Set([
+  "durableWorkCapabilities",
+  "acceptChannelDelivery",
+  "acceptChannelInvocation",
+  "cancelChannelInvocation",
+]);
+
 export interface DurableObjectContext {
   id: { toString(): string; name?: string };
   storage: {

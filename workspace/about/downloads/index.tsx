@@ -4,7 +4,8 @@ import type { BrowserDownloadRecord } from "@vibestudio/browser-data/client";
 import { usePanelTheme } from "@workspace/react";
 import { browserData } from "@workspace/runtime";
 import "@radix-ui/themes/styles.css";
-import "@workspace/ui/tokens.css";
+import "@workspace/ui/foundation.css";
+import "@workspace/ui/themes/vibestudio.css";
 
 export default function DownloadsPanel() {
   const theme = usePanelTheme();
@@ -32,8 +33,12 @@ export default function DownloadsPanel() {
           <Card key={download.id}>
             <Flex justify="between" align="center" gap="3">
               <Flex direction="column" style={{ minWidth: 0, flex: 1 }}>
-                <Text weight="bold" truncate>{download.filename}</Text>
-                <Text size="1" color="gray" truncate>{download.origin ?? download.url}</Text>
+                <Text weight="bold" truncate>
+                  {download.filename}
+                </Text>
+                <Text size="1" color="gray" truncate>
+                  {download.origin ?? download.url}
+                </Text>
                 {download.totalBytes > 0 && (
                   <Progress
                     mt="2"
@@ -41,30 +46,57 @@ export default function DownloadsPanel() {
                   />
                 )}
               </Flex>
-              <Badge color={download.state === "completed" ? "green" : download.state === "interrupted" ? "red" : "gray"}>
+              <Badge
+                color={
+                  download.state === "completed"
+                    ? "green"
+                    : download.state === "interrupted"
+                      ? "red"
+                      : "gray"
+                }
+              >
                 {download.state}
               </Badge>
             </Flex>
             <Flex gap="2" mt="3">
               {download.state === "progressing" && (
-                <Button size="1" variant="soft" onClick={() => void browserData.pauseDownload(download.id).then(refresh)}>
+                <Button
+                  size="1"
+                  variant="soft"
+                  onClick={() => void browserData.pauseDownload(download.id).then(refresh)}
+                >
                   Pause
                 </Button>
               )}
               {download.state === "paused" && (
-                <Button size="1" variant="soft" onClick={() => void browserData.resumeDownload(download.id).then(refresh)}>
+                <Button
+                  size="1"
+                  variant="soft"
+                  onClick={() => void browserData.resumeDownload(download.id).then(refresh)}
+                >
                   Resume
                 </Button>
               )}
               {(download.state === "progressing" || download.state === "paused") && (
-                <Button size="1" color="red" variant="soft" onClick={() => void browserData.cancelDownload(download.id).then(refresh)}>
+                <Button
+                  size="1"
+                  color="red"
+                  variant="soft"
+                  onClick={() => void browserData.cancelDownload(download.id).then(refresh)}
+                >
                   Cancel
                 </Button>
               )}
               {download.state === "completed" && (
                 <>
-                  <Button size="1" onClick={() => void browserData.openDownload(download.id)}>Open</Button>
-                  <Button size="1" variant="soft" onClick={() => void browserData.revealDownload(download.id)}>
+                  <Button size="1" onClick={() => void browserData.openDownload(download.id)}>
+                    Open
+                  </Button>
+                  <Button
+                    size="1"
+                    variant="soft"
+                    onClick={() => void browserData.revealDownload(download.id)}
+                  >
                     Show in folder
                   </Button>
                 </>

@@ -110,9 +110,10 @@ class TestableAiChatWorker extends AiChatWorker {
         return { id: this.published.length };
       },
       relationshipState: async () => ({ revision: 0, active: false }),
-      join: async (input: { participantId: string }) => ({
+      join: async (input: { participantId: string; revision: number }) => ({
         ok: true,
         participantId: input.participantId,
+        revision: input.revision,
         channelConfig: undefined,
         envelope: this.subscribeEnvelope,
       }),

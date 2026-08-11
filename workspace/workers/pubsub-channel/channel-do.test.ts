@@ -2032,6 +2032,7 @@ describe("PubSubChannel", () => {
       expect.objectContaining({
         kind: "invocation.cancelled",
         payload: expect.objectContaining({
+          terminalOutcome: "cancelled",
           to: [{ kind: "participant", participantId: "panel:matrix-caller" }],
         }),
       }),

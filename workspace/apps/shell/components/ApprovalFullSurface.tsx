@@ -27,7 +27,7 @@
  */
 import { useEffect, useRef } from "react";
 import { Dialog } from "@radix-ui/themes";
-import { OVERLAY_Z } from "@workspace/ui";
+import { OVERLAY_Z } from "@workspace/ui/overlay";
 import type { PendingApproval } from "@vibestudio/shared/approvals";
 import { getApprovalCopy } from "@vibestudio/shared/approvalCopy";
 import { useShellOverlay } from "../shell/useShellOverlay";

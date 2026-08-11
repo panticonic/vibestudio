@@ -22,12 +22,15 @@ class CapturingTestAgentWorker extends TestAgentWorker {
 
   seedDeterministicSubscription(channelId = "ch-1", participantId = "agent-test") {
     this.sql.exec(
-      `INSERT OR REPLACE INTO subscriptions (channel_id, context_id, subscribed_at, config, participant_id)
-       VALUES (?, ?, ?, ?, ?)`,
+      `INSERT OR REPLACE INTO subscriptions
+         (channel_id, context_id, revision, subscribed_at, config, relationship_json, participant_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
       channelId,
       "ctx-1",
+      1,
       Date.now(),
       JSON.stringify({ deterministicResponse: true }),
+      "{}",
       participantId
     );
   }

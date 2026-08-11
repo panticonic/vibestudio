@@ -7,7 +7,7 @@ import {
 } from "@radix-ui/react-icons";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { type OnboardingCapabilityDefinition, type SetupAction } from "./catalog";
-import { composeOnboardingCapabilities, type SetupCapabilitySnapshot } from "./snapshot";
+import type { SetupCapabilitySnapshot } from "./snapshot";
 import { loadOptionalTemplateSnapshot, type OptionalTemplateSnapshot } from "./templates";
 
 interface SetupHubProps {
@@ -119,11 +119,13 @@ function SetupRow({
   definition,
   snapshot,
   pending,
+  refreshing,
   onAction,
 }: {
   definition: OnboardingCapabilityDefinition;
   snapshot: SetupCapabilitySnapshot;
   pending: string | null;
+  refreshing: boolean;
   onAction: (definition: OnboardingCapabilityDefinition, action: SetupAction) => void;
 }) {
   const presentation = statePresentation[snapshot.state];
@@ -174,7 +176,7 @@ function SetupRow({
                   key={action}
                   size="1"
                   variant="ghost"
-                  disabled={pending !== null}
+                  disabled={pending !== null || refreshing}
                   onClick={() => onAction(definition, action)}
                 >
                   {pending === `${definition.id}:${action}` ? (
@@ -198,7 +200,7 @@ function SetupRow({
               size="1"
               variant={snapshot.attention === "blocking" ? "solid" : "soft"}
               color={snapshot.attention === "blocking" ? "red" : undefined}
-              disabled={pending !== null}
+              disabled={pending !== null || refreshing}
               onClick={() => onAction(definition, snapshot.nextAction!)}
             >
               {pending === `${definition.id}:${snapshot.nextAction}` ? (
@@ -264,6 +266,7 @@ export default function SetupHub({ props = {}, chat, scope, scopes, inlineUi }: 
       setLoadingCapabilities(true);
       setError(null);
       try {
+        const { composeOnboardingCapabilities } = await import("./snapshot");
         const overview = await composeOnboardingCapabilities(
           verifyCapabilityId ? { verifyCapabilityId } : {}
         );
@@ -480,6 +483,7 @@ export default function SetupHub({ props = {}, chat, scope, scopes, inlineUi }: 
                 definition={definition}
                 snapshot={byId.get(definition.id)!}
                 pending={pending}
+                refreshing={loadingCapabilities}
                 onAction={(entry, action) => void sendInteraction(entry, action)}
               />
             ))}

@@ -13,6 +13,7 @@ vi.mock("@workspace/runtime", () => ({
 
 import { createBrowserDataClient, type ImportJobSnapshot } from "@vibestudio/browser-data";
 import { activate } from "./index.js";
+import { onboardingCatalog } from "../../skills/onboarding/catalog.js";
 import { composeOnboardingSnapshot } from "../../skills/onboarding/snapshot.js";
 import {
   createStatusAdapters,
@@ -114,7 +115,9 @@ describe("onboarding browser-data component chain", () => {
     const snapshot = await composeOnboardingSnapshot(
       {},
       {
+        catalog: onboardingCatalog,
         adapters,
+        hasSkill: async () => true,
         readHostTopology: async () => ({
           devices: {
             availability: "available",

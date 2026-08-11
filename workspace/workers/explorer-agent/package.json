@@ -117,8 +117,10 @@
   "dependencies": {
     "@radix-ui/react-icons": "^1.3.2",
     "@radix-ui/themes": "^3.2.1",
+    "@vibestudio/content-addressing": "workspace:*",
     "@vibestudio/rpc": "workspace:*",
     "@vibestudio/service-schemas": "workspace:*",
+    "@vibestudio/shared": "workspace:*",
     "@workspace/runtime": "workspace:*",
     "@workspace/agentic-do": "workspace:*",
     "@workspace/agent-loop": "workspace:*",

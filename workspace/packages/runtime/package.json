@@ -48,9 +48,7 @@
     "@workspace/agentic-protocol": "workspace:*",
     "@workspace/cdp-client": "workspace:*",
     "buffer": "^6.0.3",
+    "sql.js": "^1.14.0",
     "zod": "^3.24.0"
-  },
-  "devDependencies": {
-    "sql.js": "^1.14.0"
   }
 }

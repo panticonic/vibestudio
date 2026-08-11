@@ -157,21 +157,12 @@ export interface LocalPanelViewStateStore {
   save(state: LocalPanelViewState): Promise<void> | void;
 }
 
-export interface PanelMetadata {
-  title?: string;
-}
-
-export interface PanelMetadataResolver {
-  getPanelMetadata(source: string): Promise<PanelMetadata | null> | PanelMetadata | null;
-}
-
 export interface PanelManagerDeps {
   registry: PanelRegistry;
   workspaceState: WorkspaceStateClient;
   runtime: RuntimeClient;
   activationClient?: ActivationClient;
   viewState?: LocalPanelViewStateStore;
-  metadataResolver?: PanelMetadataResolver;
   serverInfo: PanelManagerServerInfo;
   workspacePath: string;
   searchIndex?: PanelSearchIndex | null;
@@ -215,7 +206,6 @@ export class PanelManager {
   private readonly runtime: RuntimeClient;
   private readonly activationClient?: ActivationClient;
   private readonly viewState?: LocalPanelViewStateStore;
-  private readonly metadataResolver?: PanelMetadataResolver;
   private readonly serverInfo: PanelManagerServerInfo;
   private readonly workspacePath: string;
   private readonly searchIndex: PanelSearchIndex | null;
@@ -252,7 +242,6 @@ export class PanelManager {
     this.runtime = deps.runtime;
     this.activationClient = deps.activationClient;
     this.viewState = deps.viewState;
-    this.metadataResolver = deps.metadataResolver;
     this.serverInfo = deps.serverInfo;
     this.workspacePath = deps.workspacePath;
     this.searchIndex = deps.searchIndex ?? null;
@@ -1302,25 +1291,16 @@ export class PanelManager {
     }
   }
 
-  private resolveCursor(history: SlotHistoryRow[], currentEntryKey: string | null): number | null {
-    if (!currentEntryKey) return history.length > 0 ? history.length - 1 : null;
-    const idx = history.findIndex((row) => row.entry_key === currentEntryKey);
-    return idx >= 0 ? idx : null;
-  }
-
   private titleFor(
     slotId: PanelSlotId,
     source: string,
-    entityTitle?: string,
-    metadata?: PanelMetadata
+    entityTitle?: string
   ): string {
     const normalizedEntityTitle = normalizePanelTitle(entityTitle);
     if (normalizedEntityTitle) return normalizedEntityTitle;
     const manifest = this.tryResolveManifestForSource(source);
     const manifestTitle = normalizePanelTitle(manifest?.title);
     if (manifestTitle) return manifestTitle;
-    const metadataTitle = normalizePanelTitle(metadata?.title);
-    if (metadataTitle) return metadataTitle;
     const localTitle = this.localPanelTitles.get(slotId);
     const normalizedLocalTitle = normalizePanelTitle(localTitle?.title);
     if (localTitle?.source === source && normalizedLocalTitle) return normalizedLocalTitle;
@@ -1332,34 +1312,6 @@ export class PanelManager {
       }
     }
     return path.basename(source) || slotId;
-  }
-
-  private async fetchPanelMetadataForHistories(
-    histories: Map<PanelSlotId, SlotHistoryRow[]>
-  ): Promise<Map<string, PanelMetadata>> {
-    const metadataResolver = this.metadataResolver;
-    if (!metadataResolver) return new Map();
-    const sources = new Set<string>();
-    for (const rows of histories.values()) {
-      for (const row of rows) {
-        if (!row.source.startsWith("browser:")) sources.add(row.source);
-      }
-    }
-    const entries = await Promise.all(
-      [...sources].map(async (source): Promise<[string, PanelMetadata | null]> => {
-        try {
-          return [source, await metadataResolver.getPanelMetadata(source)];
-        } catch (err) {
-          log.warn("Failed to resolve panel metadata", { source, err });
-          return [source, null];
-        }
-      })
-    );
-    const metadataBySource = new Map<string, PanelMetadata>();
-    for (const [source, metadata] of entries) {
-      if (metadata) metadataBySource.set(source, metadata);
-    }
-    return metadataBySource;
   }
 
   private async replaceHistoryAtCurrent(

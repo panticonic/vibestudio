@@ -85,9 +85,10 @@ class TestableLinkedAgentWorker extends LinkedAgentWorker {
   protected override createChannelClient() {
     return {
       relationshipState: async () => ({ revision: 0, active: false }),
-      join: async (input: { participantId: string }) => ({
+      join: async (input: { participantId: string; revision: number }) => ({
         ok: true,
         participantId: input.participantId,
+        revision: input.revision,
       }),
       leave: async () => undefined,
       getParticipants: async () => [],

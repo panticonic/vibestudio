@@ -1,7 +1,8 @@
 import { Theme } from "@radix-ui/themes";
 import "@radix-ui/themes/styles.css";
-import "@workspace/ui/tokens.css";
-import { APP_THEME } from "@workspace/ui";
+import "@workspace/ui/foundation.css";
+import "@workspace/ui/themes/vibestudio.css";
+import { APP_THEME } from "@workspace/ui/theme";
 import { createRoot } from "react-dom/client";
 import { useEffect, useMemo, useRef, useState } from "react";
 import "@xterm/xterm/css/xterm.css";

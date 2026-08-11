@@ -69,7 +69,7 @@ import {
   parseApprovalMarkdown,
   type ApprovalMarkdownInline,
 } from "@vibestudio/shared/approvalMarkdown";
-import { DiffViewer, type DiffContentFetcher, type DiffReviewEntry } from "@workspace/ui";
+import { DiffViewer, type DiffContentFetcher, type DiffReviewEntry } from "@workspace/ui/diff";
 import {
   InstallReview,
   InstallReviewActions,

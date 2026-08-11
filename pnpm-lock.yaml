@@ -518,8 +518,17 @@ importers:
         specifier: ^4.0.0
         version: 4.86.0(@cloudflare/workers-types@4.20260426.1)
 
+  packages/browser-contracts:
+    dependencies:
+      zod:
+        specifier: ^3.24.1
+        version: 3.25.76
+
   packages/browser-data:
     dependencies:
+      '@vibestudio/browser-contracts':
+        specifier: workspace:*
+        version: link:../browser-contracts
       '@vibestudio/service-schemas':
         specifier: workspace:*
         version: link:../service-schemas
@@ -564,6 +573,9 @@ importers:
 
   packages/builtin:
     dependencies:
+      '@vibestudio/browser-data':
+        specifier: workspace:*
+        version: link:../browser-data
       '@vibestudio/content-addressing':
         specifier: workspace:*
         version: link:../content-addressing
@@ -588,6 +600,10 @@ importers:
       sql.js:
         specifier: ^1.14.0
         version: 1.14.1
+    devDependencies:
+      zod:
+        specifier: ^3.24.1
+        version: 3.25.76
 
   packages/content-addressing: {}
 
@@ -621,18 +637,22 @@ importers:
       '@vibestudio/shared':
         specifier: workspace:*
         version: link:../shared
+      sql.js:
+        specifier: ^1.14.0
+        version: 1.14.1
     devDependencies:
       '@types/sql.js':
         specifier: ^1.4.11
         version: 1.4.11
-      sql.js:
-        specifier: ^1.14.0
-        version: 1.14.1
       typescript:
         specifier: 7.0.2
         version: 7.0.2
 
   packages/env-paths:
+    dependencies:
+      electron:
+        specifier: ^43.0.0
+        version: 43.2.0
     devDependencies:
       '@types/node':
         specifier: ^24.10.1
@@ -739,6 +759,9 @@ importers:
 
   packages/mobile-webrtc:
     dependencies:
+      '@react-native-async-storage/async-storage':
+        specifier: ^2.2.0
+        version: 2.2.0(react-native@0.79.7(@babel/core@8.0.1)(@react-native-community/cli@18.0.1(typescript@7.0.2))(@types/react@19.2.10)(react@19.2.4))
       '@react-native-community/netinfo':
         specifier: ^11.4.1
         version: 11.5.2(react-native@0.79.7(@babel/core@8.0.1)(@react-native-community/cli@18.0.1(typescript@7.0.2))(@types/react@19.2.10)(react@19.2.4))(react@19.2.4)
@@ -751,6 +774,9 @@ importers:
       '@vibestudio/shared':
         specifier: workspace:*
         version: link:../shared
+      react-native:
+        specifier: ^0.79.0
+        version: 0.79.7(@babel/core@8.0.1)(@react-native-community/cli@18.0.1(typescript@7.0.2))(@types/react@19.2.10)(react@19.2.4)
       react-native-keychain:
         specifier: ^9.2.2
         version: 9.2.3
@@ -786,6 +812,9 @@ importers:
 
   packages/service-schemas:
     dependencies:
+      '@vibestudio/browser-contracts':
+        specifier: workspace:*
+        version: link:../browser-contracts
       '@vibestudio/content-addressing':
         specifier: workspace:*
         version: link:../content-addressing
@@ -858,9 +887,18 @@ importers:
       '@vscode/ripgrep':
         specifier: 1.18.0
         version: 1.18.0
+      ajv:
+        specifier: ^8.17.1
+        version: 8.20.0
       ignore:
         specifier: 7.0.5
         version: 7.0.5
+      tldts:
+        specifier: ^7.0.19
+        version: 7.0.21
+      typescript:
+        specifier: 7.0.2
+        version: 7.0.2
       zod:
         specifier: ^3.24.1
         version: 3.25.76
@@ -1486,6 +1524,10 @@ importers:
       zod:
         specifier: ^3.22.0
         version: 3.25.76
+    devDependencies:
+      '@vibestudio/extension':
+        specifier: workspace:*
+        version: link:../../../packages/extension
 
   workspace/extensions/file-tools:
     dependencies:
@@ -1536,7 +1578,11 @@ importers:
         specifier: workspace:*
         version: link:../../../packages/builtin
 
-  workspace/extensions/mobile-debug: {}
+  workspace/extensions/mobile-debug:
+    devDependencies:
+      '@vibestudio/extension':
+        specifier: workspace:*
+        version: link:../../../packages/extension
 
   workspace/extensions/pdf-ingest:
     dependencies:
@@ -1552,6 +1598,10 @@ importers:
       tesseract.js:
         specifier: ^7.0.0
         version: 7.0.0(encoding@0.1.13)
+    devDependencies:
+      '@vibestudio/extension':
+        specifier: workspace:*
+        version: link:../../../packages/extension
 
   workspace/extensions/react-native:
     dependencies:
@@ -1567,6 +1617,10 @@ importers:
       zod:
         specifier: ^3.22.0
         version: 3.25.76
+    devDependencies:
+      '@vibestudio/extension':
+        specifier: workspace:*
+        version: link:../../../packages/extension
 
   workspace/extensions/template-composer:
     dependencies:
@@ -1624,6 +1678,9 @@ importers:
       '@radix-ui/themes':
         specifier: ^3.2.1
         version: 3.3.0(@types/react-dom@19.2.3(@types/react@19.2.10))(@types/react@19.2.10)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@vibestudio/service-schemas':
+        specifier: workspace:*
+        version: link:../../../packages/service-schemas
       '@workspace/react':
         specifier: workspace:*
         version: link:../react
@@ -1656,10 +1713,13 @@ importers:
         version: 3.1.1
       '@radix-ui/react-icons':
         specifier: ^1.3.2
-        version: 1.3.2(react@19.2.4)
+        version: 1.3.2(react@19.0.0)
       '@radix-ui/themes':
         specifier: ^3.2.1
-        version: 3.3.0(@types/react-dom@19.2.3(@types/react@19.2.10))(@types/react@19.2.10)(react-dom@19.0.0(react@19.2.4))(react@19.2.4)
+        version: 3.3.0(@types/react-dom@19.2.3(@types/react@19.2.10))(@types/react@19.2.10)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@vibestudio/rpc':
+        specifier: workspace:*
+        version: link:../../../packages/rpc
       '@vibestudio/service-schemas':
         specifier: workspace:*
         version: link:../../../packages/service-schemas
@@ -1684,6 +1744,9 @@ importers:
       '@workspace/pubsub':
         specifier: workspace:*
         version: link:../pubsub
+      '@workspace/react':
+        specifier: workspace:*
+        version: link:../react
       '@workspace/tool-ui':
         specifier: workspace:*
         version: link:../tool-ui
@@ -1696,15 +1759,24 @@ importers:
       mermaid:
         specifier: ^11.16.0
         version: 11.16.0
+      react:
+        specifier: 19.0.0
+        version: 19.0.0
+      react-dom:
+        specifier: 19.0.0
+        version: 19.0.0(react@19.0.0)
       react-markdown:
         specifier: ^9.0.1
-        version: 9.1.0(@types/react@19.2.10)(react@19.2.4)
+        version: 9.1.0(@types/react@19.2.10)(react@19.0.0)
       rehype-highlight:
         specifier: ^7.0.2
         version: 7.0.2
       remark-gfm:
         specifier: ^4.0.0
         version: 4.0.1
+      zod:
+        specifier: ^3.24.1
+        version: 3.25.76
     devDependencies:
       '@panticonic/builtin':
         specifier: workspace:*
@@ -1736,6 +1808,9 @@ importers:
       '@workspace/pubsub':
         specifier: workspace:*
         version: link:../pubsub
+      react:
+        specifier: 19.0.0
+        version: 19.0.0
 
   workspace/packages/agentic-do:
     dependencies:
@@ -1816,6 +1891,9 @@ importers:
       '@workspace/agentic-core':
         specifier: workspace:*
         version: link:../agentic-core
+      '@workspace/agentic-protocol':
+        specifier: workspace:*
+        version: link:../agentic-protocol
       '@workspace/eval':
         specifier: workspace:*
         version: link:../eval
@@ -1875,6 +1953,9 @@ importers:
       acorn:
         specifier: ^8.17.0
         version: 8.18.0
+      react:
+        specifier: 19.0.0
+        version: 19.0.0
       sucrase:
         specifier: ^3.35.0
         version: 3.35.1
@@ -2040,9 +2121,6 @@ importers:
       '@workspace/runtime':
         specifier: workspace:*
         version: link:../runtime
-      '@workspace/ui':
-        specifier: workspace:*
-        version: link:../ui
     devDependencies:
       '@types/react':
         specifier: ^19.2.4
@@ -2104,13 +2182,12 @@ importers:
       buffer:
         specifier: ^6.0.3
         version: 6.0.3
-      zod:
-        specifier: ^3.24.0
-        version: 3.25.76
-    devDependencies:
       sql.js:
         specifier: ^1.14.0
         version: 1.14.1
+      zod:
+        specifier: ^3.24.0
+        version: 3.25.76
 
   workspace/packages/svelte:
     dependencies:
@@ -2204,6 +2281,9 @@ importers:
 
   workspace/packages/testkit:
     dependencies:
+      '@vibestudio/service-schemas':
+        specifier: workspace:*
+        version: link:../../../packages/service-schemas
       '@workspace/cdp-client':
         specifier: workspace:*
         version: link:../cdp-client
@@ -2262,9 +2342,6 @@ importers:
       '@vibestudio/shared':
         specifier: workspace:*
         version: link:../../../packages/shared
-      '@workspace/runtime':
-        specifier: workspace:*
-        version: link:../runtime
       lucide-react:
         specifier: ^1.27.0
         version: 1.31.0(react@19.0.0)
@@ -2397,6 +2474,9 @@ importers:
         specifier: 19.0.0
         version: 19.0.0(react@19.0.0)
     devDependencies:
+      '@testing-library/react':
+        specifier: ^16.1.0
+        version: 16.3.2(@testing-library/dom@10.4.1)(@types/react-dom@19.2.3(@types/react@19.2.10))(@types/react@19.2.10)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
       vitest:
         specifier: ^3.2.2
         version: 3.2.4(@types/debug@4.1.12)(@types/node@24.10.9)(@vitest/browser@3.2.4)(jiti@2.7.0)(jsdom@29.0.1(@noble/hashes@2.2.0))(terser@5.46.1)(tsx@4.21.0)(yaml@2.9.0)
@@ -2575,9 +2655,15 @@ importers:
       '@radix-ui/themes':
         specifier: ^3.2.1
         version: 3.3.0(@types/react-dom@19.2.3(@types/react@19.2.10))(@types/react@19.2.10)(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@vibestudio/browser-data':
+        specifier: workspace:*
+        version: link:../../../packages/browser-data
       '@vibestudio/service-schemas':
         specifier: workspace:*
         version: link:../../../packages/service-schemas
+      '@vibestudio/shared':
+        specifier: workspace:*
+        version: link:../../../packages/shared
       '@workspace/model-catalog':
         specifier: workspace:*
         version: link:../../packages/model-catalog
@@ -2598,9 +2684,18 @@ importers:
       '@vibestudio/content-addressing':
         specifier: workspace:*
         version: link:../../../packages/content-addressing
+      '@vibestudio/service-schemas':
+        specifier: workspace:*
+        version: link:../../../packages/service-schemas
+      '@vibestudio/shared':
+        specifier: workspace:*
+        version: link:../../../packages/shared
       '@vibestudio/shell-core':
         specifier: workspace:*
         version: link:../../../packages/shell-core
+      '@vibestudio/trajectory-identity':
+        specifier: workspace:*
+        version: link:../../../packages/trajectory-identity
       '@workspace-skills/vibestudio-vcs':
         specifier: workspace:*
         version: link:../vibestudio-vcs
@@ -2619,6 +2714,9 @@ importers:
       '@workspace/testkit':
         specifier: workspace:*
         version: link:../../packages/testkit
+      zod:
+        specifier: ^3.24.1
+        version: 3.25.76
 
   workspace/skills/templates: {}
 
@@ -2672,6 +2770,9 @@ importers:
         specifier: ^3.24.0
         version: 3.25.76
     devDependencies:
+      '@vibestudio/rpc':
+        specifier: workspace:*
+        version: link:../../../packages/rpc
       '@workspace/agentic-protocol':
         specifier: workspace:*
         version: link:../../packages/agentic-protocol
@@ -2687,12 +2788,18 @@ importers:
       '@radix-ui/themes':
         specifier: ^3.2.1
         version: 3.3.0(@types/react-dom@19.2.3(@types/react@19.2.10))(@types/react@19.2.10)(react-dom@19.0.0(react@19.2.4))(react@19.2.4)
+      '@vibestudio/content-addressing':
+        specifier: workspace:*
+        version: link:../../../packages/content-addressing
       '@vibestudio/rpc':
         specifier: workspace:*
         version: link:../../../packages/rpc
       '@vibestudio/service-schemas':
         specifier: workspace:*
         version: link:../../../packages/service-schemas
+      '@vibestudio/shared':
+        specifier: workspace:*
+        version: link:../../../packages/shared
       '@workspace-workers/agent-worker':
         specifier: workspace:*
         version: link:../agent-worker
@@ -16181,6 +16288,11 @@ snapshots:
       merge-options: 3.0.4
       react-native: 0.79.7(@babel/core@8.0.1)(@react-native-community/cli@18.0.1(typescript@7.0.2))(@types/react@19.2.10)(react@19.0.0)
 
+  '@react-native-async-storage/async-storage@2.2.0(react-native@0.79.7(@babel/core@8.0.1)(@react-native-community/cli@18.0.1(typescript@7.0.2))(@types/react@19.2.10)(react@19.2.4))':
+    dependencies:
+      merge-options: 3.0.4
+      react-native: 0.79.7(@babel/core@8.0.1)(@react-native-community/cli@18.0.1(typescript@7.0.2))(@types/react@19.2.10)(react@19.2.4)
+
   '@react-native-clipboard/clipboard@1.16.3(react-native@0.79.7(@babel/core@7.29.0)(@react-native-community/cli@18.0.1(typescript@7.0.2))(@types/react@19.2.10)(react@19.0.0))(react@19.0.0)':
     dependencies:
       react: 19.0.0
@@ -22174,24 +22286,6 @@ snapshots:
       html-url-attributes: 3.0.1
       mdast-util-to-hast: 13.2.1
       react: 19.0.0
-      remark-parse: 11.0.0
-      remark-rehype: 11.1.2
-      unified: 11.0.5
-      unist-util-visit: 5.1.0
-      vfile: 6.0.3
-    transitivePeerDependencies:
-      - supports-color
-
-  react-markdown@9.1.0(@types/react@19.2.10)(react@19.2.4):
-    dependencies:
-      '@types/hast': 3.0.4
-      '@types/mdast': 4.0.4
-      '@types/react': 19.2.10
-      devlop: 1.1.0
-      hast-util-to-jsx-runtime: 2.3.6
-      html-url-attributes: 3.0.1
-      mdast-util-to-hast: 13.2.1
-      react: 19.2.4
       remark-parse: 11.0.0
       remark-rehype: 11.1.2
       unified: 11.0.5

@@ -2,7 +2,7 @@
  * Shared dialog/popover wrappers enforcing ONE stacking-context policy.
  *
  * The recon flagged approval-bar vs dialog vs tooltip z-index confusion. These
- * wrappers pin overlay content to the `--z-*` tokens from `tokens.css` so the
+ * wrappers pin overlay content to the `--z-*` tokens from `foundation.css` so the
  * whole app shares one overlay hierarchy:
  *
  *   chrome (10) < approval-bar (50) < popover (100) < dialog (200)

@@ -1,15 +1,13 @@
 import { Box, Button, Flex, Text, Theme } from "@radix-ui/themes";
-import { ShortcutsHelp, EmptyState, type ShortcutGroup } from "@workspace/ui";
-import { useAppTheme } from "@workspace/ui/panel";
-import { useIsMobile, usePaletteCommands, usePanelTheme } from "@workspace/react";
+import { ShortcutsHelp, type ShortcutGroup } from "@workspace/ui/command";
+import { EmptyState } from "@workspace/ui/feedback";
 import {
-  rpc,
-  panel,
-  notifications,
-  runtime,
-  workspace,
-  callMain,
-} from "@workspace/runtime";
+  useIsMobile,
+  usePaletteCommands,
+  usePanelTheme,
+  usePanelThemeConfig,
+} from "@workspace/react";
+import { rpc, panel, notifications, runtime, workspace, callMain } from "@workspace/runtime";
 import type { RuntimeSupervisionDescription } from "@vibestudio/service-schemas/runtime";
 import { isReviewPending } from "@vibestudio/shared/authority/reviewPending";
 
@@ -134,7 +132,7 @@ export function TerminalApp() {
   const lastZoomEscapeRef = useRef(0);
 
   const appearance = state.themeOverride === "auto" ? panelAppearance : state.themeOverride;
-  const appTheme = useAppTheme();
+  const appTheme = usePanelThemeConfig();
   const focusedSessionId = state.focusedSessionId;
   const focusedSession = focusedSessionId ? sessions[focusedSessionId] : undefined;
   const visibleTree: SplitNode | undefined =
@@ -1153,11 +1151,7 @@ function EmptyTerminalState(props: {
 }
 
 type ShellUnitStatus = {
-  status:
-    | RuntimeSupervisionDescription["status"]
-    | "pending-approval"
-    | "building"
-    | "available";
+  status: RuntimeSupervisionDescription["status"] | "pending-approval" | "building" | "available";
   pendingApproval?: { kind: string; submittedAt: number } | null;
 };
 

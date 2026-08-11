@@ -11,13 +11,7 @@ import type {
   ResourceScope,
 } from "@vibestudio/rpc";
 import { capabilityPatternCovers } from "./authorityManifest.js";
-import {
-  allOf,
-  anyOf,
-  capability,
-  relationship,
-  requirementForPrincipals,
-} from "./authorityRequirements.js";
+import { capability } from "./authorityRequirements.js";
 
 export {
   allOf,

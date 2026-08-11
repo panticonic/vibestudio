@@ -1178,18 +1178,6 @@ export class RpcServer {
     );
   }
 
-  private serviceContextFor(
-    callerId: string,
-    callerKind: CallerKind,
-    extras: Omit<ServiceContext, "caller"> = {},
-    agentBinding?: import("@vibestudio/identity/types").AgentBinding
-  ): ServiceContext {
-    return {
-      caller: this.verifiedCallerFor(callerId, callerKind, agentBinding),
-      ...extras,
-    };
-  }
-
   private serviceContextForRpcMessage(
     client: WsClientState,
     message: {
@@ -4008,23 +3996,6 @@ export class RpcServer {
       }
     }
     return result;
-  }
-
-  private async relayResponse(
-    fromId: string,
-    targetId: string,
-    response: RpcResponse
-  ): Promise<void> {
-    const client = this.pickRoutableTarget(targetId);
-    if (client?.ws.readyState === WebSocket.OPEN) {
-      this.sendToWs(client.ws, {
-        type: "ws:routed",
-        envelope: envelopeForWsDelivery(fromId, "unknown", targetId, response),
-      });
-      return;
-    }
-    if (this.sessions.enqueueResponse(targetId, fromId, response)) return;
-    throw createRelayError(`Target not reachable: ${targetId}`, "TARGET_NOT_REACHABLE");
   }
 
   private async ensureDirectDoReady(ref: DORef): Promise<void> {

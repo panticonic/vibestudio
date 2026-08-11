@@ -14,7 +14,6 @@ import { z } from "zod";
 
 import { openCanonicalSqliteDatabase, type CanonicalSqliteSchema } from "@vibestudio/sqlite";
 import {
-  governanceRecordTimestamp,
   isApprovalProvenanceRecord,
   isMembershipGovernanceRecord,
   type ApprovalProvenanceKind,

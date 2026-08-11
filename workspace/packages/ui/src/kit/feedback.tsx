@@ -2,7 +2,7 @@
  * Feedback primitives for the shared app-wide UI kit: a generalized status
  * Badge, a transient NarrationPill, an EmptyState, and a Snackbar/undo toast.
  *
- * All motion uses the centralized keyframes/tokens from `tokens.css` and the
+ * All motion uses the centralized keyframes/tokens from `foundation.css` and the
  * one reduced-motion block there - these components add no per-component motion
  * media queries.
  */
@@ -81,7 +81,11 @@ export interface NarrationPillProps {
 }
 
 const INTENT_VAR: Record<Intent, { fg: string; bg: string; border: string }> = {
-  info: { fg: "var(--intent-info)", bg: "var(--intent-info-surface)", border: "var(--intent-info-border)" },
+  info: {
+    fg: "var(--intent-info)",
+    bg: "var(--intent-info-surface)",
+    border: "var(--intent-info-border)",
+  },
   success: {
     fg: "var(--intent-success)",
     bg: "var(--intent-success-surface)",
@@ -92,7 +96,11 @@ const INTENT_VAR: Record<Intent, { fg: string; bg: string; border: string }> = {
     bg: "var(--intent-warning-surface)",
     border: "var(--intent-warning-border)",
   },
-  error: { fg: "var(--intent-error)", bg: "var(--intent-error-surface)", border: "var(--intent-error-border)" },
+  error: {
+    fg: "var(--intent-error)",
+    bg: "var(--intent-error-surface)",
+    border: "var(--intent-error-border)",
+  },
   consent: {
     fg: "var(--intent-consent)",
     bg: "var(--intent-consent-surface)",
@@ -152,7 +160,14 @@ export interface EmptyStateProps {
 }
 
 /** A centered "nothing here yet" affordance for empty panes. */
-export function EmptyState({ icon, title, description, actions, className, style }: EmptyStateProps) {
+export function EmptyState({
+  icon,
+  title,
+  description,
+  actions,
+  className,
+  style,
+}: EmptyStateProps) {
   return (
     <Flex
       direction="column"
@@ -160,11 +175,15 @@ export function EmptyState({ icon, title, description, actions, className, style
       justify="center"
       gap="3"
       className={className}
-      style={{ height: "100%", minHeight: 160, padding: "var(--space-5)", textAlign: "center", ...style }}
+      style={{
+        height: "100%",
+        minHeight: 160,
+        padding: "var(--space-5)",
+        textAlign: "center",
+        ...style,
+      }}
     >
-      {icon != null && (
-        <Box style={{ color: "var(--gray-9)", opacity: 0.9 }}>{icon}</Box>
-      )}
+      {icon != null && <Box style={{ color: "var(--gray-9)", opacity: 0.9 }}>{icon}</Box>}
       <Box>
         <Text as="div" size="3" weight="medium">
           {title}
@@ -292,7 +311,12 @@ export function useSnackbar() {
       onAction: state.onAction,
       onDismiss: () => setState((s) => ({ ...s, open: false })),
     } satisfies SnackbarProps,
-    show(opts: { message: ReactNode; intent?: Intent; actionLabel?: string; onAction?: () => void }) {
+    show(opts: {
+      message: ReactNode;
+      intent?: Intent;
+      actionLabel?: string;
+      onAction?: () => void;
+    }) {
       setState({
         open: true,
         message: opts.message,

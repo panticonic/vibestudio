@@ -144,7 +144,6 @@ export {
   getPanelEnv,
   getPanelContextId,
   getPanelRef,
-  getInjectHostThemeVariables,
   getBrowserResolvedUrl,
   getPanelStateArgs,
   updatePanelNavigationState,

@@ -1,10 +1,8 @@
 /**
  * Unified async tracking API for both panels and workers.
  *
- * If a runtime provides __vibestudioAsyncTracking__, this module uses it.
- * Otherwise it provides a no-op implementation that preserves the same API
- * shape. The no-op implementation cannot discover unawaited promises; callers
- * should await the work they start.
+ * Runtimes that support tracking publish `__vibestudioAsyncTracking__`.
+ * Consumers treat its absence as tracking being unavailable.
  */
 
 /**
@@ -52,101 +50,4 @@ export function getAsyncTracking(): AsyncTrackingAPI | undefined {
   return (globalThis as Record<string, unknown>)["__vibestudioAsyncTracking__"] as
     | AsyncTrackingAPI
     | undefined;
-}
-
-/**
- * Check if async tracking is available in the current environment.
- */
-export function hasAsyncTracking(): boolean {
-  return getAsyncTracking() !== undefined;
-}
-
-// Fallback context ID counter for environments without native tracking
-let fallbackContextId = 0;
-
-/**
- * Create a fallback tracking context for environments without native async tracking.
- * This doesn't actually track promises but provides API compatibility.
- */
-function createFallbackContext(): TrackingContext {
-  return {
-    id: ++fallbackContextId,
-    promises: new Set(),
-    pauseCount: 0,
-  };
-}
-
-/**
- * Create a fallback async tracking API for testing or non-Vibestudio environments.
- * This implementation maintains the same API but doesn't actually track async operations.
- * Promises must be awaited manually.
- */
-export function createFallbackAsyncTracking(): AsyncTrackingAPI {
-  let currentContext: TrackingContext | null = null;
-
-  return {
-    start(): TrackingContext {
-      currentContext = createFallbackContext();
-      return currentContext;
-    },
-    enter(ctx: TrackingContext): void {
-      currentContext = ctx;
-    },
-    exit(): void {
-      currentContext = null;
-    },
-    stop(ctx?: TrackingContext): void {
-      const target = ctx ?? currentContext;
-      if (target) {
-        target.promises.clear();
-      }
-      if (ctx === currentContext || (!ctx && currentContext)) {
-        currentContext = null;
-      }
-    },
-    pause(ctx?: TrackingContext): void {
-      const target = ctx ?? currentContext;
-      if (target) {
-        target.pauseCount++;
-      }
-    },
-    resume(ctx?: TrackingContext): void {
-      const target = ctx ?? currentContext;
-      if (target) {
-        target.pauseCount = Math.max(0, target.pauseCount - 1);
-      }
-    },
-    ignore<T>(promise: T): T {
-      // No-op in fallback - just return the promise
-      return promise;
-    },
-    waitAll(ctx?: TrackingContext): Promise<void> {
-      const target = ctx ?? currentContext;
-      if (!target || target.promises.size === 0) {
-        return Promise.resolve();
-      }
-      // In fallback mode, we can't track promises automatically,
-      // so we just resolve immediately
-      return Promise.resolve();
-    },
-    pending(ctx?: TrackingContext): number {
-      const target = ctx ?? currentContext;
-      return target?.promises.size ?? 0;
-    },
-    activeContexts(): number[] {
-      return currentContext ? [currentContext.id] : [];
-    },
-  };
-}
-
-/**
- * Get the async tracking API, using the runtime implementation if available,
- * otherwise falling back to a no-op implementation.
- *
- * This allows code to use async tracking unconditionally without checking
- * for availability, but the caller should be aware that in fallback mode
- * async operations won't actually be tracked.
- */
-export function getAsyncTrackingOrFallback(): AsyncTrackingAPI {
-  return getAsyncTracking() ?? createFallbackAsyncTracking();
 }

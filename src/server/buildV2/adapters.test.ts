@@ -52,7 +52,7 @@ describe("reactAdapter", () => {
     // panel/component CSS without coupling style delivery to JS execution.
     expect(adapter.sharedStyles).toEqual([
       "@radix-ui/themes/styles.css",
-      "@workspace/ui/tokens.css",
+      "@workspace/ui/foundation.css",
     ]);
     expect(entry).not.toContain("@radix-ui/themes/styles.css");
     // Imports both the expose side-effect file and the user entry module.

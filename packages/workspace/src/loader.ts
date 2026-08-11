@@ -13,7 +13,6 @@
 import fs from "node:fs";
 import * as path from "path";
 import {
-  getCentralDataPath,
   getProfileDataPath,
   getWorkspacesDir,
   getWorkspaceDir,

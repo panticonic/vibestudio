@@ -1083,17 +1083,6 @@ const semanticIngressSchema = z
     contextIntegrity: semanticContextIntegritySchema,
   })
   .strict();
-const semanticFileDescriptorSchema = z.union([
-  z.object({ contentHash: z.string().min(1), base64: z.string() }).strict(),
-  z
-    .object({
-      contentHash: z.string().min(1),
-      contentKind: z.enum(["text", "bytes"]),
-      byteLength: z.number().int().nonnegative(),
-      coordinateExtent: z.number().int().nonnegative(),
-    })
-    .strict(),
-]);
 const semanticEffectSchema = z
   .object({
     effectId: z.string().min(1),
@@ -1293,19 +1282,6 @@ const workspaceInitializationInspectionSchema = z.discriminatedUnion("state", [
     })
     .strict(),
 ]);
-const semanticStateSchema = z
-  .object({ ref: stateRefSchema, workspaceFactRootId: nonemptyText })
-  .strict();
-const semanticContextSchema = z
-  .object({
-    contextId: nonemptyText,
-    committed: semanticStateSchema.extend({
-      ref: z.object({ kind: z.literal("event"), eventId: nonemptyText }).strict(),
-    }),
-    working: semanticStateSchema,
-    workingHeadApplicationId: nonemptyText.nullable(),
-  })
-  .strict();
 const genericSemanticResultSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("complete"), result: GadJsonValueSchema }).strict(),
   z

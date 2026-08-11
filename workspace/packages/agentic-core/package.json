@@ -6,6 +6,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./agent-launch": "./src/agent-launch.ts",
+    "./provisional-agent-lifecycle": "./src/provisional-agent-lifecycle.ts",
     "./subagent-prompt": "./src/subagent-prompt.ts"
   },
   "dependencies": {
@@ -17,5 +18,8 @@
     "@workspace/model-catalog": "workspace:*",
     "@workspace/pi-core": "workspace:*",
     "@workspace/pubsub": "workspace:*"
+  },
+  "peerDependencies": {
+    "react": "^19.0.0"
   }
 }

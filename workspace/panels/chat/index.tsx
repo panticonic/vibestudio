@@ -19,7 +19,7 @@ import {
 import { EventsClient } from "@vibestudio/service-schemas/clients/eventsClient";
 import { SHELL_APPROVAL_PENDING_CHANGED_EVENT } from "@vibestudio/shell-core/approvalState";
 import { recoveryCoordinator } from "@workspace/runtime/internal/diagnostics";
-import { usePanelTheme, useStateArgs } from "@workspace/react";
+import { usePanelTheme, usePanelThemeConfig, useStateArgs } from "@workspace/react";
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button, Callout, Flex, Spinner, Text, Theme } from "@radix-ui/themes";
 import { ErrorBoundary } from "@workspace/agentic-chat/error-boundary";
@@ -29,8 +29,8 @@ import type {
   ForkNavHandlers,
   NewConversationOptions,
 } from "@workspace/agentic-chat/types";
-import { useAppTheme } from "@workspace/ui/panel";
-import "@workspace/ui/tokens.css";
+import "@workspace/ui/foundation.css";
+import "@workspace/ui/themes/vibestudio.css";
 import { createPanelSandboxConfig, unsubscribeAgentFromChannel } from "@workspace/agentic-core";
 import type {
   AvailableAgent,
@@ -39,6 +39,10 @@ import type {
   ConnectProviderResult,
   ModelSetupResult,
 } from "@workspace/agentic-core";
+import {
+  ProvisionalAgentLifecycle,
+  type ProvisionalAgentIntent,
+} from "@workspace/agentic-core/provisional-agent-lifecycle";
 import { toPanelConnectRequest } from "@workspace/model-catalog/providerConnect";
 import {
   DEFAULT_AGENT_MODEL_REF,
@@ -58,11 +62,7 @@ import {
   requireChatContextId,
   sanitizeHandle,
 } from "./bootstrap.js";
-import {
-  ProvisionalAgentLifecycle,
-  createAndSubscribeAgent,
-  type ProvisionalAgentIntent,
-} from "./agentLifecycle.js";
+import { createAndSubscribeAgent, waitForPanelReview } from "./agentLifecycle.js";
 
 const AgenticChat = lazy(() =>
   import("@workspace/agentic-chat/chat").then((module) => ({ default: module.AgenticChat }))
@@ -214,7 +214,7 @@ async function unsubscribeDOFromChannel(
 
 export default function ChatPanel() {
   const theme = usePanelTheme();
-  const appTheme = useAppTheme();
+  const appTheme = usePanelThemeConfig();
   const stateArgs = useStateArgs<ChatStateArgs>();
   const resolvedContextId = requireChatContextId(contextId);
   const initialPromptCaptured = useRef(stateArgs.initialPrompt);
@@ -235,7 +235,11 @@ export default function ChatPanel() {
   >("checking");
 
   const getProvisionalAgentLifecycle = useCallback(() => {
-    provisionalAgentLifecycleRef.current ??= new ProvisionalAgentLifecycle(rpc);
+    provisionalAgentLifecycleRef.current ??= new ProvisionalAgentLifecycle(
+      rpc,
+      undefined,
+      waitForPanelReview
+    );
     return provisionalAgentLifecycleRef.current;
   }, []);
 

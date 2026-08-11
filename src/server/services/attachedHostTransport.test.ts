@@ -249,6 +249,7 @@ describe("attached-host HTTP routed connectivity", () => {
     });
     let exists = true;
     const credentials = {
+      kind: "device",
       deviceId: "device-bootstrap",
       refreshToken: "refresh-bootstrap",
     } as CliDeviceCredentials;

@@ -815,63 +815,6 @@ export class PanelHttpServer {
   // =========================================================================
 
   /**
-   * Serve a "building" placeholder page for a pending panel.
-   */
-  private serveBuildingPage(res: import("http").ServerResponse, panelLabel: string): void {
-    const html = `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Building — Vibestudio</title>
-  <link rel="icon" type="image/x-icon" href="/favicon.ico">
-  <style>
-    :root {
-      color-scheme: light dark;
-      --page-bg: radial-gradient(circle at top, #f5edff 0%, #fcfaff 58%);
-      --heading: #24152f;
-      --muted: #685875;
-      --accent: #6d28d9;
-      --spinner-track: #e4d8ed;
-      --mark-shadow: drop-shadow(0 18px 24px rgba(109, 40, 217, 0.16));
-    }
-    html { min-height: 100%; background: var(--page-bg); }
-    body { box-sizing: border-box; min-height: 100vh; font-family: ui-sans-serif, system-ui, sans-serif; max-width: 500px; margin: 0 auto; padding: 4rem 1rem; text-align: center; color: var(--heading); }
-    h1 { color: var(--heading); font-size: 1.5rem; }
-    p { color: var(--muted); line-height: 1.6; }
-    code { color: var(--accent); }
-    .brand-mark { width: 74px; height: 74px; margin: 0 auto 1.25rem; filter: var(--mark-shadow); }
-    .brand-mark img { display: block; width: 100%; height: 100%; object-fit: contain; }
-    .spinner { width: 24px; height: 24px; border: 3px solid var(--spinner-track); border-top-color: #a874ff;
-               border-radius: 50%; animation: spin 0.8s linear infinite; margin: 1rem auto; }
-    @media (prefers-color-scheme: dark) {
-      :root {
-        --page-bg: radial-gradient(circle at top, #21122f 0%, #100b18 58%);
-        --heading: #fbf7ff;
-        --muted: #b8a9c5;
-        --accent: #a874ff;
-        --spinner-track: #49305f;
-        --mark-shadow: drop-shadow(0 18px 24px rgba(0, 0, 0, 0.35));
-      }
-    }
-    @media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 1.6s; } }
-    @keyframes spin { to { transform: rotate(360deg); } }
-  </style>
-  <meta http-equiv="refresh" content="2">
-</head>
-<body>
-  <div class="brand-mark"><img src="${BRAND_SYMBOL_DATA_URL}" alt="" aria-hidden="true"></div>
-  <h1>Building Panel</h1>
-  <div class="spinner"></div>
-  <p>The panel <code>${escapeHtml(panelLabel)}</code> is still building. This page will refresh automatically.</p>
-</body>
-</html>`;
-
-    res.writeHead(202, { "Content-Type": "text/html; charset=utf-8" });
-    res.end(html);
-  }
-
-  /**
    * Serve a build error page instead of looping on a failed build.
    */
   private serveBuildErrorPage(

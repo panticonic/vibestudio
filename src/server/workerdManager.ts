@@ -605,8 +605,6 @@ export class WorkerdManager {
    *  the shared egress listener trusts the `X-Vibestudio-Egress-Caller` header. */
   private readonly egressSecret: string;
   private workspaceProvider: WorkerdWorkspaceProvider | null = null;
-  /** Resolved shared egress listener port (memoized after first start). */
-  private sharedEgressPort: number | null = null;
   private readonly doMaintenanceDb: DatabaseSync;
   private readonly doSchemaDescriptorDb: DatabaseSync;
   private readonly schemaProbeBuilds = new Map<string, SchemaProbeBuild>();

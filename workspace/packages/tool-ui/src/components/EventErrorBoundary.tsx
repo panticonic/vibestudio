@@ -151,7 +151,7 @@ export class EventErrorBoundary extends Component<
 
   static getDerivedStateFromProps(
     props: EventErrorBoundaryProps,
-    state: EventErrorBoundaryState,
+    state: EventErrorBoundaryState
   ): Partial<EventErrorBoundaryState> | null {
     if (props.resetKey !== state.prevResetKey) {
       return { error: null, prevResetKey: props.resetKey };
@@ -222,9 +222,9 @@ export class EventErrorBoundary extends Component<
           style={{
             padding: "12px 16px",
             borderRadius: 6,
-            background: "var(--red-3, #fee)",
-            border: "1px solid var(--red-6, #e5c5c5)",
-            color: "var(--red-11, #c33)",
+            background: "var(--intent-error-surface, var(--red-a3))",
+            border: "1px solid var(--intent-error-border, var(--red-a6))",
+            color: "var(--intent-error-text, var(--red-11))",
             fontSize: 13,
             lineHeight: 1.5,
           }}

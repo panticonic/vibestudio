@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { DatabaseSync } from "node:sqlite";
-import type { DurableObjectContext, SqlResult } from "@vibestudio/durable";
+import {
+  DURABLE_OBJECT_FRAMEWORK_RPC_METHODS,
+  type DurableObjectContext,
+  type SqlResult,
+} from "@vibestudio/durable";
 import { rpcExposedMethodNames } from "@vibestudio/rpc";
 import { browserDataMethods } from "@vibestudio/service-schemas/browserData";
 import { BrowserDataDO } from "./BrowserDataDO.js";
@@ -10,7 +14,7 @@ describe("BrowserDataDO schema", () => {
     const db = new DatabaseSync(":memory:");
     const instance = createBrowserDataDO(db);
     const productMethods = [...rpcExposedMethodNames(instance)].filter(
-      (method) => method !== "durableWorkCapabilities"
+      (method) => !DURABLE_OBJECT_FRAMEWORK_RPC_METHODS.has(method)
     );
     expect(productMethods.sort()).toEqual(Object.keys(browserDataMethods).sort());
   });

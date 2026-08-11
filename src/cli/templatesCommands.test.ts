@@ -107,13 +107,13 @@ describe("templates CLI commands", () => {
     expect(parsed.flags["credential"]).toBe("github-main");
   });
 
-  it("retains failed resume contexts unless discard is explicit", () => {
+  it("keeps resume and discard as separate operation lifecycle commands", () => {
     const resume = templatesCommands.find((command) => command.name === "resume")!;
-    expect(parseInvocation(resume, ["operation-1"]).flags["on-build-failure"]).toBeUndefined();
-    expect(
-      parseInvocation(resume, ["operation-1", "--on-build-failure", "discard"]).flags[
-        "on-build-failure"
-      ]
-    ).toBe("discard");
+    const cancel = templatesCommands.find((command) => command.name === "cancel")!;
+    expect(parseInvocation(resume, ["operation-1"]).positionals).toEqual(["operation-1"]);
+    expect(parseInvocation(cancel, ["operation-1"]).positionals).toEqual(["operation-1"]);
+    expect(() => parseInvocation(resume, ["operation-1", "--on-build-failure", "discard"])).toThrow(
+      "Unknown flag"
+    );
   });
 });

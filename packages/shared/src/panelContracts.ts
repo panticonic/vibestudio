@@ -31,15 +31,22 @@ import type {
   PanelTreeSnapshot,
   PanelViewFailure,
   PanelViewStatus,
-  ThemeConfig,
 } from "./types.js";
+import {
+  THEME_ACCENT_COLORS,
+  THEME_GRAY_COLORS,
+  THEME_PANEL_BACKGROUNDS,
+  THEME_RADII,
+  THEME_SCALINGS,
+  type ThemeConfig,
+} from "./theme.js";
 
 export const ThemeConfigSchema: z.ZodType<ThemeConfig> = z.object({
-  accentColor: z.string(),
-  grayColor: z.string(),
-  radius: z.enum(["none", "small", "medium", "large", "full"]),
-  scaling: z.enum(["90%", "95%", "100%", "105%", "110%"]),
-  panelBackground: z.enum(["solid", "translucent"]),
+  accentColor: z.enum(THEME_ACCENT_COLORS),
+  grayColor: z.enum(THEME_GRAY_COLORS),
+  radius: z.enum(THEME_RADII),
+  scaling: z.enum(THEME_SCALINGS),
+  panelBackground: z.enum(THEME_PANEL_BACKGROUNDS),
 });
 
 export const AppInfoSchema: z.ZodType<AppInfo> = z.object({

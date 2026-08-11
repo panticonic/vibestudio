@@ -1,7 +1,6 @@
 import type { UnitRegistryEntryBase } from "@vibestudio/unit-host";
 import type { CallerKind } from "@vibestudio/shared/serviceDispatcher";
 import type { CodeIdentityCallerKind } from "@vibestudio/shared/principalKinds";
-import type { extensionsMethods } from "@vibestudio/service-schemas/extensions";
 import { EXTENSIONS_METHOD_NAMES } from "@vibestudio/service-schemas/clients/generated/runtimeClientMethods";
 import type { GitInteropClient } from "@vibestudio/service-schemas/gitInterop";
 import { EventsClient } from "@vibestudio/service-schemas/clients/eventsClient";

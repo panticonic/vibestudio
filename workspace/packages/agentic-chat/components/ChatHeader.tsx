@@ -224,6 +224,7 @@ const ChatHeaderInner = React.memo(function ChatHeaderInner({
   return (
     <Card
       className="chat-surface-card chat-header-card"
+      data-part="chat-header"
       size="1"
       variant="surface"
       style={{ flexShrink: 0 }}

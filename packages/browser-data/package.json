@@ -36,6 +36,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@vibestudio/browser-contracts": "workspace:*",
     "@vibestudio/service-schemas": "workspace:*",
     "@vibestudio/shared": "workspace:*",
     "zod": "^3.24.1"

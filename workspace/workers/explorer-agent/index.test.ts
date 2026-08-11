@@ -34,8 +34,9 @@ class TestExplorerAgentWorker extends ExplorerAgentWorker {
   }
   prepareChannel(): void {
     this.sql.exec(
-      `INSERT INTO subscriptions (channel_id, context_id, subscribed_at)
-       VALUES ('ch-1', 'ctx-1', 1)`
+      `INSERT INTO subscriptions
+         (channel_id, context_id, revision, subscribed_at, config, relationship_json, participant_id)
+       VALUES ('ch-1', 'ctx-1', 1, 1, NULL, '{}', 'agent:explorer')`
     );
   }
   findingCount(): number {

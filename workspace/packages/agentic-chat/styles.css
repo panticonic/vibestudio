@@ -1,6 +1,5 @@
-/* Unified token layer (motion, semantic color, surface, "you" accent, the
-   centralized keyframes + reduced-motion block). Imported once here. */
-@import "@workspace/ui/tokens.css";
+/* Presentation-neutral motion, intent, surface, and accessibility foundation. */
+@import "@workspace/ui/foundation.css";
 
 /* Cursor blink animation for streaming messages */
 @keyframes cursor-blink {
@@ -123,15 +122,26 @@
 
 .agentic-chat-root {
   --cursor-button: pointer;
-  --chat-root-gap: 2px;
-  --chat-root-padding: 2px;
-  --chat-panel-padding: 0;
-  --message-list-padding: 2px;
+  --agentic-root-gap: 2px;
+  --agentic-root-padding: 2px;
+  --agentic-panel-padding: 0;
+  --agentic-message-list-padding: 2px;
+  --agentic-surface: var(--gray-1);
+  --agentic-surface-card: var(--surface-card);
+  --agentic-surface-raised: var(--surface-raised);
+  --agentic-border: var(--surface-border);
+  --agentic-text: var(--gray-12);
+  --agentic-text-muted: var(--gray-11);
+  --agentic-player-accent: var(--accent-9);
+  --agentic-player-rail: var(--accent-a7);
+  --agentic-player-surface: var(--accent-a2);
+  --agentic-player-surface-strong: var(--accent-a3);
   container-type: inline-size;
   min-inline-size: 0;
   inline-size: 100%;
   overflow: hidden;
-  background: var(--gray-1);
+  color: var(--agentic-text);
+  background: var(--agentic-surface);
 }
 
 .agentic-chat-root,
@@ -210,16 +220,16 @@
 }
 
 .chat-surface-card {
-  --card-padding: var(--chat-panel-padding);
+  --card-padding: var(--agentic-panel-padding);
   --card-border-radius: var(--radius-2);
   --card-border-width: 0;
 }
 
 .chat-header-card {
   --base-card-padding-top: var(--space-1);
-  --base-card-padding-right: var(--chat-panel-padding);
+  --base-card-padding-right: var(--agentic-panel-padding);
   --base-card-padding-bottom: var(--space-1);
-  --base-card-padding-left: var(--chat-panel-padding);
+  --base-card-padding-left: var(--agentic-panel-padding);
 }
 
 .chat-header-menu-button {
@@ -469,8 +479,8 @@
 
 @media (min-width: 720px) {
   .agentic-chat-root {
-    --chat-panel-padding: var(--space-2);
-    --message-list-padding: var(--space-1);
+    --agentic-panel-padding: var(--space-2);
+    --agentic-message-list-padding: var(--space-1);
     background: var(--gray-2);
   }
 
@@ -492,8 +502,8 @@
 
 @media (min-width: 1040px) {
   .agentic-chat-root {
-    --chat-panel-padding: var(--space-2);
-    --message-list-padding: var(--space-2);
+    --agentic-panel-padding: var(--space-2);
+    --agentic-message-list-padding: var(--space-2);
   }
 }
 
@@ -568,7 +578,7 @@
       transparent 42px
     ),
     var(--gray-2);
-  box-shadow: 0 1px 2px rgb(0 0 0 / 0.14);
+  box-shadow: var(--elevation-1);
   overflow: hidden;
   transition:
     border-color 140ms ease,
@@ -577,11 +587,11 @@
 
 .message-card-subagent:hover {
   border-color: var(--gray-a7);
-  box-shadow: 0 2px 8px rgb(0 0 0 / 0.18);
+  box-shadow: var(--elevation-2);
 }
 
 .message-card-subagent.subagent-card-open {
-  box-shadow: 0 4px 14px rgb(0 0 0 / 0.22);
+  box-shadow: var(--elevation-2);
 }
 
 /* Status is echoed on the accent edge so a wall of cards scans at a glance.
@@ -1411,9 +1421,9 @@
 
 /* ===========================================================================
    Delivery model: ack badges, outbox, send button, narration, undo snackbar.
-   Built on the unified token layer (tokens.css). No hard-coded hex; the
-   "you/client" accent is iris via --you-*. Reduced-motion is centralized in
-   tokens.css and overrides all animations below.
+   Built on the presentation-neutral foundation layer. No hard-coded hex; the
+   Player-side emphasis flows through the documented --agentic-player-* roles.
+   Reduced motion is centralized in the foundation stylesheet.
    =========================================================================== */
 
 /* --- Ack badge --------------------------------------------------------------*/
@@ -1471,16 +1481,16 @@
   height: 8px;
   width: 2px;
   margin: 0 auto;
-  background: linear-gradient(var(--you-rail), transparent);
+  background: linear-gradient(var(--agentic-player-rail), transparent);
   border-radius: 2px;
 }
 .outbox-tethered .outbox-panel {
-  box-shadow: inset 0 1px 0 var(--you-surface-strong);
+  box-shadow: inset 0 1px 0 var(--agentic-player-surface-strong);
 }
 .outbox-panel {
-  border: 1px solid var(--surface-border);
+  border: 1px solid var(--agentic-border);
   border-radius: var(--radius-3);
-  background: var(--surface-card);
+  background: var(--agentic-surface-card);
   padding: var(--space-2);
 }
 .outbox-panel-header {
@@ -1502,10 +1512,10 @@
 .outbox-summary-bar {
   width: 100%;
   text-align: left;
-  border: 1px solid var(--surface-border);
-  border-left: 2px solid var(--you-rail);
+  border: 1px solid var(--agentic-border);
+  border-left: 2px solid var(--agentic-player-rail);
   border-radius: var(--radius-3);
-  background: var(--you-surface);
+  background: var(--agentic-player-surface);
   padding: var(--space-2);
   cursor: pointer;
   color: inherit;
@@ -1513,17 +1523,17 @@
 
 /* --- Outbox item ------------------------------------------------------------*/
 .outbox-item {
-  border: 1px solid var(--surface-border);
-  border-left: 2px solid var(--you-rail);
+  border: 1px solid var(--agentic-border);
+  border-left: 2px solid var(--agentic-player-rail);
   border-radius: var(--radius-3);
-  background: var(--you-surface);
+  background: var(--agentic-player-surface);
   padding: var(--space-2);
   transition:
     opacity var(--motion-base) var(--ease-standard),
     transform var(--motion-base) var(--ease-standard);
 }
 .outbox-item-after-turn {
-  background: var(--surface-card);
+  background: var(--agentic-surface-card);
   border-left-color: var(--gray-a7);
   opacity: 0.92;
 }
@@ -1607,16 +1617,16 @@
   align-items: center;
   padding: var(--space-1) var(--space-3);
   border-radius: 9999px;
-  background: var(--you-surface-strong);
-  color: var(--gray-12);
-  border: 1px solid var(--you-rail);
+  background: var(--agentic-player-surface-strong);
+  color: var(--agentic-text);
+  border: 1px solid var(--agentic-player-rail);
   animation: pill-in var(--motion-base) var(--ease-emphasized);
 }
 .chat-undo-snackbar {
   padding: var(--space-2) var(--space-3);
   border-radius: var(--radius-3);
-  background: var(--surface-raised);
-  border: 1px solid var(--surface-border);
+  background: var(--agentic-surface-raised);
+  border: 1px solid var(--agentic-border);
   box-shadow: var(--elevation-2);
   animation: pill-in var(--motion-base) var(--ease-emphasized);
 }
@@ -1667,7 +1677,7 @@
 /* Inline armed-config card shown in the message canvas before the first agent
    exists. The accent glyph signals "this is going to do something on send". */
 .agent-setup-card {
-  border: 1px solid var(--surface-border);
+  border: 1px solid var(--agentic-border);
 }
 .agent-setup-heading-icon {
   align-items: center;
@@ -1719,8 +1729,8 @@
   min-width: 0;
 }
 .pending-delivery-card {
-  border: 1px solid var(--surface-border);
-  border-left: 2px solid var(--you-rail);
+  border: 1px solid var(--agentic-border);
+  border-left: 2px solid var(--agentic-player-rail);
 }
 .pending-delivery-card-failed {
   border-left-color: var(--red-7);
@@ -1733,7 +1743,7 @@
 }
 .pending-delivery-item {
   border-radius: var(--radius-2);
-  background: var(--you-surface);
+  background: var(--agentic-player-surface);
   padding: var(--space-1) var(--space-2);
 }
 .pending-delivery-text {

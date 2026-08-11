@@ -7,9 +7,7 @@ import type {
   PendingCapabilityApproval,
   PendingCredentialApproval,
   PendingCredentialInputApproval,
-  PendingDeviceCodeApproval,
   PendingMissionReviewApproval,
-  PendingSecretInputApproval,
   PendingUnitInstallReviewApproval,
 } from "./approvals.js";
 import { HOST_APPROVAL_COPY } from "./hostApprovalCopy.js";
@@ -770,7 +768,6 @@ export function getApprovalCopy(approval: PendingApproval): {
     case "device-code":
       return HOST_APPROVAL_COPY.headlines.deviceSignIn(
         approval.credentialLabel,
-        approval.userCode,
         originForUrl(approval.verificationUri)
       );
     case "credential":
@@ -975,7 +972,6 @@ function getCredentialCopy(approval: PendingCredentialApproval): ApprovalCopyRes
     if (operation?.force) {
       return HOST_APPROVAL_COPY.headlines.forcePush(
         remote,
-        approval.credentialLabel,
         operation.overwrites
       );
     }
@@ -1008,11 +1004,6 @@ function getCredentialCopy(approval: PendingCredentialApproval): ApprovalCopyRes
       ? HOST_APPROVAL_COPY.headlines.domainMismatch
       : undefined,
   };
-}
-
-function concreteBatchCopy(value: string | undefined, fallback: string): string {
-  const candidate = value?.trim();
-  return candidate && !/\bunits?\b/iu.test(candidate) ? candidate : fallback;
 }
 
 const CALLER_KIND_TO_CATEGORY: Record<string, keyof typeof HOST_APPROVAL_COPY.requesterCategories> =

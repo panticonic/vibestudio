@@ -5,7 +5,7 @@ import { execSync } from "child_process";
 import { randomUUID } from "node:crypto";
 import { builtinModules, createRequire } from "node:module";
 import { collectWorkersFromDependencies, workersToArray } from "./scripts/collectWorkers.mjs";
-import { SERVER_ESM_BANNER } from "./scripts/build-artifact-contracts.mjs";
+import { NODE_ESM_COMPAT_BANNER, SERVER_ESM_BANNER } from "./scripts/build-artifact-contracts.mjs";
 import { generateConnectGrammar } from "./scripts/generate-connect-grammar.mjs";
 import { buildWorkerdPrograms } from "./scripts/build-workerd-programs.mjs";
 import { cleanHostBuildOutput } from "./scripts/clean-host-build-output.mjs";
@@ -310,6 +310,9 @@ const clientConfig = {
   sourcemap: isDev,
   minify: !isDev,
   logOverride,
+  banner: {
+    js: NODE_ESM_COMPAT_BANNER,
+  },
 };
 
 const mainConfig = {

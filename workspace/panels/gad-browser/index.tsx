@@ -55,15 +55,17 @@ import type {
   GitUpstreamStatusRow,
 } from "@vibestudio/service-schemas/gitInterop";
 import { formatRelativeTime } from "@vibestudio/git/formatting";
-import { useIsMobile, usePaletteCommands, usePanelTheme, useStateArgs } from "@workspace/react";
 import {
-  DiffViewer,
-  PanelChrome,
-  type DiffContentFetcher,
-  type DiffReviewEntry,
-} from "@workspace/ui";
-import { useAppTheme } from "@workspace/ui/panel";
-import "@workspace/ui/tokens.css";
+  useIsMobile,
+  usePaletteCommands,
+  usePanelTheme,
+  usePanelThemeConfig,
+  useStateArgs,
+} from "@workspace/react";
+import { DiffViewer, type DiffContentFetcher, type DiffReviewEntry } from "@workspace/ui/diff";
+import { PanelChrome } from "@workspace/ui/layout";
+import "@workspace/ui/foundation.css";
+import "@workspace/ui/themes/vibestudio.css";
 import {
   buildCompareEntry,
   describeDiffTarget,
@@ -1636,7 +1638,7 @@ function GovernanceTab({
 
 export function App() {
   const appearance = usePanelTheme();
-  const appTheme = useAppTheme();
+  const appTheme = usePanelThemeConfig();
   const isMobile = useIsMobile();
   const stateArgs = useStateArgs<StateArgs>();
   // Diff-review deep link (approval card → "open in gad-browser"). gad-browser

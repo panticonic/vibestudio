@@ -130,10 +130,6 @@ function wholeSectionAddress(section: string): string {
   return section;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
 /**
  * Project a mutation made against resolved configuration back onto the
  * workspace-authored layer. Unchanged inherited values are never copied.

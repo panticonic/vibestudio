@@ -18,7 +18,7 @@ import {
   SpeakerLoudIcon,
 } from "@radix-ui/react-icons";
 import { Box, DropdownMenu, Flex, IconButton, Text, TextField, Tooltip } from "@radix-ui/themes";
-import { VibestudioLogo } from "@workspace/ui";
+import { VibestudioLogo } from "@workspace/ui/brand";
 import {
   useCallback,
   useEffect,

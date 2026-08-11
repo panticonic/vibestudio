@@ -56,10 +56,6 @@ export function createShellCore(deps: {
         markPanelActive: (panelId) => call<void>("presence", "markPanelActive", [panelId]),
       },
       viewState: deps.viewState,
-      metadataResolver: {
-        getPanelMetadata: (source) =>
-          call<{ title?: string } | null>("build", "getPanelMetadata", [source]),
-      },
       workspacePath: deps.workspacePath,
       allowMissingManifests: deps.allowMissingManifests,
       workspaceConfig: deps.workspaceConfig,

@@ -16,6 +16,14 @@ import {
 } from "@radix-ui/themes";
 import { ColorWheelIcon, CheckIcon } from "@radix-ui/react-icons";
 import {
+  isThemeGrayColor,
+  isThemePanelBackground,
+  isThemeRadius,
+  isThemeScaling,
+  type ThemeAccentColor,
+  type ThemeGrayColor,
+} from "@vibestudio/shared/theme";
+import {
   themeModeAtom,
   setThemeModeAtom,
   themeConfigAtom,
@@ -33,8 +41,15 @@ const ACCENTS = [
   "tomato",
   "amber",
   "gray",
-] as const;
-const GRAYS = ["gray", "mauve", "slate", "sage", "olive", "sand"] as const;
+] as const satisfies readonly ThemeAccentColor[];
+const GRAYS = [
+  "gray",
+  "mauve",
+  "slate",
+  "sage",
+  "olive",
+  "sand",
+] as const satisfies readonly ThemeGrayColor[];
 /**
  * Panel WebContentsViews are native siblings of the shell's own view, so they
  * always composite above shell DOM — no z-index reaches over them. Dialogs get
@@ -163,7 +178,9 @@ export function ThemeSettings() {
             <Select.Root
               size="1"
               value={config.grayColor}
-              onValueChange={(value) => setConfig({ grayColor: value })}
+              onValueChange={(value) => {
+                if (isThemeGrayColor(value)) setConfig({ grayColor: value });
+              }}
             >
               <Select.Trigger className="app-touch-target" />
               <Select.Content>
@@ -183,7 +200,9 @@ export function ThemeSettings() {
             <Select.Root
               size="1"
               value={config.radius}
-              onValueChange={(value) => setConfig({ radius: value as ThemeConfigValue["radius"] })}
+              onValueChange={(value) => {
+                if (isThemeRadius(value)) setConfig({ radius: value });
+              }}
             >
               <Select.Trigger className="app-touch-target" />
               <Select.Content>
@@ -203,9 +222,9 @@ export function ThemeSettings() {
             <Select.Root
               size="1"
               value={config.scaling}
-              onValueChange={(value) =>
-                setConfig({ scaling: value as ThemeConfigValue["scaling"] })
-              }
+              onValueChange={(value) => {
+                if (isThemeScaling(value)) setConfig({ scaling: value });
+              }}
             >
               <Select.Trigger className="app-touch-target" />
               <Select.Content>
@@ -225,9 +244,9 @@ export function ThemeSettings() {
             <SegmentedControl.Root
               size="1"
               value={config.panelBackground}
-              onValueChange={(value) =>
-                setConfig({ panelBackground: value as ThemeConfigValue["panelBackground"] })
-              }
+              onValueChange={(value) => {
+                if (isThemePanelBackground(value)) setConfig({ panelBackground: value });
+              }}
             >
               <SegmentedControl.Item className="app-touch-target" value="solid">
                 Solid

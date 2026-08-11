@@ -247,11 +247,9 @@ describe("panel asset façade content cache", () => {
     }
   });
 
-  it("varies immutable disk-cache entries by forwarded request headers", async () => {
-    const stream = vi.fn<GatewayStream>(async (_service, _method, args) => {
-      const descriptor = (args as [CapturedDescriptor])[0];
-      const auth = descriptor.headers?.["authorization"] ?? "none";
-      return new Response(`bundle for ${auth}`, {
+  it("reuses an immutable representation across credential rotation", async () => {
+    const stream = vi.fn<GatewayStream>(async () => {
+      return new Response("stable immutable bundle", {
         status: 200,
         headers: { "content-type": "text/javascript; charset=utf-8", "cache-control": IMMUTABLE },
       });
@@ -262,12 +260,12 @@ describe("panel asset façade content cache", () => {
     try {
       const url = `http://127.0.0.1:${facade.port}/apps/shell/assets/app-abc123.js`;
       const a1 = await fetch(url, { headers: { authorization: "Bearer a" } });
-      expect(await a1.text()).toBe("bundle for Bearer a");
+      expect(await a1.text()).toBe("stable immutable bundle");
       const b1 = await fetch(url, { headers: { authorization: "Bearer b" } });
-      expect(await b1.text()).toBe("bundle for Bearer b");
+      expect(await b1.text()).toBe("stable immutable bundle");
       const a2 = await fetch(url, { headers: { authorization: "Bearer a" } });
-      expect(await a2.text()).toBe("bundle for Bearer a");
-      expect(stream).toHaveBeenCalledTimes(2);
+      expect(await a2.text()).toBe("stable immutable bundle");
+      expect(stream).toHaveBeenCalledTimes(1);
     } finally {
       await facade.close();
     }

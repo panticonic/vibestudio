@@ -12,7 +12,8 @@
 import { useEffect, useState } from "react";
 import { Box, Flex, Tabs, Text, Theme } from "@radix-ui/themes";
 import "@radix-ui/themes/styles.css";
-import "@workspace/ui/tokens.css";
+import "@workspace/ui/foundation.css";
+import "@workspace/ui/themes/vibestudio.css";
 import { panel } from "@workspace/runtime";
 import { usePanelTheme, useStateArgs } from "@workspace/react";
 import { ImportSourceRail, type ImportSourceSelection } from "./components/ImportSourceRail";
@@ -47,37 +48,39 @@ export default function BrowserImportInspector() {
 
   return (
     <Theme appearance={theme} accentColor="iris" radius="medium">
-    <Flex style={{ height: "100vh", width: "100%" }}>
-      <ImportSourceRail selected={selection} onSelect={setSelection} />
-      <Box style={{ flex: 1, minWidth: 0, height: "100%", display: "flex", flexDirection: "column" }}>
-        <Tabs.Root
-          value={tab}
-          onValueChange={changeTab}
-          style={{ display: "flex", flexDirection: "column", height: "100%" }}
+      <Flex style={{ height: "100vh", width: "100%" }}>
+        <ImportSourceRail selected={selection} onSelect={setSelection} />
+        <Box
+          style={{ flex: 1, minWidth: 0, height: "100%", display: "flex", flexDirection: "column" }}
         >
-          <Tabs.List>
-            <Tabs.Trigger value="migrate">Migrate</Tabs.Trigger>
-            <Tabs.Trigger value="inspect">Inspect</Tabs.Trigger>
-            <Tabs.Trigger value="debug">Debug</Tabs.Trigger>
-          </Tabs.List>
-          <Box style={{ flex: 1, minHeight: 0 }}>
-            <Tabs.Content value="migrate" style={{ height: "100%" }}>
-              {selection ? (
-                <MigrateTab selection={selection} now={now} />
-              ) : (
-                <EmptyState message="Choose a device and browser to plan an import." />
-              )}
-            </Tabs.Content>
-            <Tabs.Content value="inspect" style={{ height: "100%" }}>
-              <InspectTab now={now} />
-            </Tabs.Content>
-            <Tabs.Content value="debug" style={{ height: "100%" }}>
-              <DebugTab selection={selection} />
-            </Tabs.Content>
-          </Box>
-        </Tabs.Root>
-      </Box>
-    </Flex>
+          <Tabs.Root
+            value={tab}
+            onValueChange={changeTab}
+            style={{ display: "flex", flexDirection: "column", height: "100%" }}
+          >
+            <Tabs.List>
+              <Tabs.Trigger value="migrate">Migrate</Tabs.Trigger>
+              <Tabs.Trigger value="inspect">Inspect</Tabs.Trigger>
+              <Tabs.Trigger value="debug">Debug</Tabs.Trigger>
+            </Tabs.List>
+            <Box style={{ flex: 1, minHeight: 0 }}>
+              <Tabs.Content value="migrate" style={{ height: "100%" }}>
+                {selection ? (
+                  <MigrateTab selection={selection} now={now} />
+                ) : (
+                  <EmptyState message="Choose a device and browser to plan an import." />
+                )}
+              </Tabs.Content>
+              <Tabs.Content value="inspect" style={{ height: "100%" }}>
+                <InspectTab now={now} />
+              </Tabs.Content>
+              <Tabs.Content value="debug" style={{ height: "100%" }}>
+                <DebugTab selection={selection} />
+              </Tabs.Content>
+            </Box>
+          </Tabs.Root>
+        </Box>
+      </Flex>
     </Theme>
   );
 }

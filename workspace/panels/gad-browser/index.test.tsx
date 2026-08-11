@@ -74,11 +74,15 @@ vi.mock("@workspace/react", () => ({
   useIsMobile: () => false,
   usePaletteCommands: () => undefined,
   usePanelTheme: () => "dark",
+  usePanelThemeConfig: () => ({}),
   useStateArgs: () => ({}),
 }));
 
-vi.mock("@workspace/ui", () => ({
+vi.mock("@workspace/ui/diff", () => ({
   DiffViewer: () => null,
+}));
+
+vi.mock("@workspace/ui/layout", () => ({
   PanelChrome: ({
     header,
     headerActions,
@@ -91,8 +95,6 @@ vi.mock("@workspace/ui", () => ({
     </main>
   ),
 }));
-
-vi.mock("@workspace/ui/panel", () => ({ useAppTheme: () => ({}) }));
 
 import { App } from "./index.js";
 

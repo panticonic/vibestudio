@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { Box, Button, Flex, Spinner, Text } from "@radix-ui/themes";
-import { VibestudioLogo } from "@workspace/ui";
+import { VibestudioLogo } from "@workspace/ui/brand";
 import type { PanelPresentationSnapshot } from "@vibestudio/shared/panel/presentation";
 
 import { panel as panelService, view } from "../shell/client";

@@ -7,8 +7,8 @@ import type { ComponentType } from "react";
 import React from "react";
 import { createRoot } from "react-dom/client";
 import { Theme } from "@radix-ui/themes";
-import { useAppTheme } from "@workspace/ui/panel";
 import { createReactPanelMount } from "./reactPanel.js";
+import { usePanelThemeConfig } from "./theme.js";
 
 export interface AutoMountConfig {
   rootId?: string;
@@ -41,7 +41,7 @@ export function autoMountReactPanel(userModule: any, config: AutoMountConfig = {
     config.enableTheme === false
       ? undefined
       : function AppThemeProvider({ appearance, children }: React.ComponentProps<typeof Theme>) {
-          return React.createElement(Theme, { appearance, ...useAppTheme() }, children);
+          return React.createElement(Theme, { appearance, ...usePanelThemeConfig() }, children);
         };
 
   // Create mount function
