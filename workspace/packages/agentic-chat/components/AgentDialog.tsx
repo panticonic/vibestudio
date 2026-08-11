@@ -22,6 +22,7 @@ function sameDraft(a: AgentConfigDraft, b: AgentConfigDraft): boolean {
   return (
     a.model === b.model &&
     a.thinkingLevel === b.thinkingLevel &&
+    a.fastMode === b.fastMode &&
     a.approvalLevel === b.approvalLevel &&
     a.respondPolicy === b.respondPolicy &&
     a.handle === b.handle &&
@@ -127,6 +128,7 @@ export function AgentDialog({ open, onOpenChange, editParticipantId }: AgentDial
         )) as {
           model?: { value: string };
           thinkingLevel?: { value: string };
+          fastMode?: { value: boolean };
           approvalLevel?: { value: number };
           respondPolicy?: { value: string };
           respondFrom?: { value: string[] };
@@ -135,6 +137,7 @@ export function AgentDialog({ open, onOpenChange, editParticipantId }: AgentDial
         setDraft({
           model: settings.model?.value ?? "",
           thinkingLevel: settings.thinkingLevel?.value as AgentConfigDraft["thinkingLevel"],
+          fastMode: settings.fastMode?.value ?? false,
           approvalLevel: (toolApproval?.settings.globalFloor ??
             settings.approvalLevel?.value) as AgentConfigDraft["approvalLevel"],
           respondPolicy: settings.respondPolicy?.value as AgentConfigDraft["respondPolicy"],
@@ -205,6 +208,9 @@ export function AgentDialog({ open, onOpenChange, editParticipantId }: AgentDial
             level: draft.thinkingLevel,
           });
         }
+        await onCallMethodResult(targetParticipantId, "setFastMode", {
+          enabled: draft.fastMode ?? false,
+        });
         if (draft.respondPolicy) {
           await onCallMethodResult(targetParticipantId, "setRespondPolicy", {
             policy: draft.respondPolicy,

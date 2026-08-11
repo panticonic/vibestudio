@@ -82,6 +82,9 @@ export function buildAgentSubscriptionConfig({
     ...(workspaceDefaultAgentConfig.thinkingLevel
       ? { thinkingLevel: workspaceDefaultAgentConfig.thinkingLevel }
       : {}),
+    ...(workspaceDefaultAgentConfig.fastMode !== undefined
+      ? { fastMode: workspaceDefaultAgentConfig.fastMode }
+      : {}),
     ...(workspaceDefaultAgentConfig.approvalLevel !== undefined
       ? { approvalLevel: workspaceDefaultAgentConfig.approvalLevel }
       : {}),

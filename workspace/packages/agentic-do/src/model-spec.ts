@@ -20,6 +20,8 @@ import type { AgentModelSpec, ModelAuthMode } from "@workspace/agent-loop";
 import {
   LOCAL_FALLBACK_MODEL,
   LOCAL_FALLBACK_MODEL_REF as CATALOG_LOCAL_FALLBACK_MODEL_REF,
+  piModelToSpec,
+  type PiModelInput,
 } from "@workspace/model-catalog/catalog";
 
 export const LOCAL_PROVIDER_ID = "local";
@@ -51,44 +53,7 @@ export interface LocalModelDescriptor {
   toolsCapable: boolean;
 }
 
-interface PiModelLike {
-  id: string;
-  name: string;
-  api: string;
-  provider: string;
-  baseUrl: string;
-  reasoning: boolean;
-  input: Array<"text" | "image">;
-  cost: { input: number; output: number; cacheRead: number; cacheWrite: number };
-  contextWindow: number;
-  maxTokens: number;
-  streamIdleTimeoutMs?: number;
-  thinkingLevelMap?: Record<string, unknown>;
-  headers?: Record<string, string>;
-  compat?: Record<string, unknown>;
-}
-
-/** Serialize a pi-ai registry Model into the journal-safe literal. */
-export function piModelToSpec(model: PiModelLike): AgentModelSpec {
-  return {
-    id: model.id,
-    name: model.name,
-    api: model.api,
-    provider: model.provider,
-    baseUrl: model.baseUrl,
-    reasoning: model.reasoning,
-    input: [...model.input],
-    cost: { ...model.cost },
-    contextWindow: model.contextWindow,
-    maxTokens: model.maxTokens,
-    ...(model.streamIdleTimeoutMs !== undefined
-      ? { streamIdleTimeoutMs: model.streamIdleTimeoutMs }
-      : {}),
-    ...(model.thinkingLevelMap ? { thinkingLevelMap: { ...model.thinkingLevelMap } } : {}),
-    ...(model.headers ? { headers: { ...model.headers } } : {}),
-    ...(model.compat ? { compat: { ...model.compat } } : {}),
-  };
-}
+type PiModelLike = PiModelInput;
 
 export function localEntryToSpec(entry: LocalModelDescriptor): AgentModelSpec {
   return {

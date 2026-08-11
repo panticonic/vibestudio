@@ -1212,6 +1212,7 @@ async function executeModelCall(
           }
         : {}),
       ...buildRawThinkingOptions(modelSpec as unknown as RawThinkingModel, request.thinkingLevel),
+      ...(request.serviceTier ? { serviceTier: request.serviceTier } : {}),
     } as never);
   } catch (error) {
     signal.removeEventListener("abort", forwardAbort);

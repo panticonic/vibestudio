@@ -34,3 +34,17 @@ describe("local model materialization", () => {
     expect(materializeModel("local", "custom-model", null)).toBeNull();
   });
 });
+
+describe("Codex service-tier materialization", () => {
+  it("advertises priority only for models supported by Fast mode", () => {
+    expect(materializeModel("openai-codex", "gpt-5.6-sol", null)?.spec.serviceTiers).toEqual([
+      "priority",
+    ]);
+    expect(
+      materializeModel("openai-codex", "gpt-5.3-codex-spark", null)?.spec.serviceTiers
+    ).toBeUndefined();
+    expect(
+      materializeModel("openai-codex", "gpt-5.4-mini", null)?.spec.serviceTiers
+    ).toBeUndefined();
+  });
+});

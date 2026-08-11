@@ -27,6 +27,7 @@ const config: AgentLoopConfig = {
   model: "anthropic:claude-sonnet-4-6",
   modelSpec,
   thinkingLevel: "medium",
+  fastMode: false,
   approvalLevel: 2,
   respondPolicy: "all",
   systemPromptHash: "blob:sys",

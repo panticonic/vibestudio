@@ -175,6 +175,7 @@ describe("ChatInput /model command", () => {
     const onCallMethodResult = vi.fn(async () => ({
       model: "openai-codex:gpt-5.5",
       thinkingLevel: "max",
+      fastMode: true,
       approvalLevel: 1,
       respondPolicy: "from-participants",
       respondFrom: ["user-1"],
@@ -218,6 +219,7 @@ describe("ChatInput /model command", () => {
       model: "local:lfm2.5-2.6b",
       handle: "ai-chat",
       thinkingLevel: "max",
+      fastMode: true,
       approvalLevel: 1,
       respondPolicy: "from-participants",
       respondFrom: ["user-1"],

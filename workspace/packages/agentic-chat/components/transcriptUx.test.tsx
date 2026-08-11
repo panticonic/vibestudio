@@ -60,12 +60,14 @@ describe("agent settings parsing", () => {
         {
           model: { value: "openai-codex:gpt-5.6-sol" },
           thinkingLevel: { value: "max" },
+          fastMode: { value: true },
         },
         null
       )
     ).toMatchObject({
       model: "openai-codex:gpt-5.6-sol",
       thinkingLevel: "max",
+      fastMode: true,
     });
   });
 });

@@ -23,6 +23,7 @@ import { ModelPicker } from "./ModelPicker";
 export interface AgentConfigDraft {
   model: string;
   thinkingLevel?: AgentThinkingLevel;
+  fastMode?: boolean;
   approvalLevel?: AgentApprovalLevel;
   respondPolicy?: AgentRespondPolicy;
   respondFrom?: string[];
@@ -104,6 +105,7 @@ export function AgentConfigForm({
     const config: DefaultAgentConfig = {
       model: value.model,
       ...(value.thinkingLevel ? { thinkingLevel: value.thinkingLevel } : {}),
+      ...(value.fastMode !== undefined ? { fastMode: value.fastMode } : {}),
       approvalLevel: value.approvalLevel ?? 2,
     };
     setSavingDefault(true);
@@ -114,7 +116,7 @@ export function AgentConfigForm({
     } finally {
       setSavingDefault(false);
     }
-  }, [onSaveAsDefault, value.model, value.thinkingLevel, value.approvalLevel]);
+  }, [onSaveAsDefault, value.model, value.thinkingLevel, value.fastMode, value.approvalLevel]);
 
   const selectedModel = useMemo(
     () => catalog?.models.find((m) => m.ref === value.model) ?? null,
@@ -122,6 +124,7 @@ export function AgentConfigForm({
   );
   const thinkingLevels = selectedModel?.thinkingLevels ?? [];
   const showEffort = !!selectedModel?.reasoning && thinkingLevels.length > 0;
+  const showFastMode = selectedModel?.modelSpec?.serviceTiers?.includes("priority") ?? false;
   const effort: AgentThinkingLevel =
     value.thinkingLevel && thinkingLevels.includes(value.thinkingLevel)
       ? value.thinkingLevel
@@ -137,6 +140,7 @@ export function AgentConfigForm({
     !!defaultAgentConfig &&
     value.model === defaultAgentConfig.model &&
     (value.thinkingLevel ?? null) === (defaultAgentConfig.thinkingLevel ?? null) &&
+    (value.fastMode ?? false) === (defaultAgentConfig.fastMode ?? false) &&
     (value.approvalLevel ?? 2) === (defaultAgentConfig.approvalLevel ?? 2);
 
   return (
@@ -202,6 +206,22 @@ export function AgentConfigForm({
                 );
               })}
             </Flex>
+          </Flex>
+        </Field>
+      )}
+
+      {showFastMode && (
+        <Field
+          label="Speed"
+          hint="Runs about 1.5× faster and consumes Codex credits at a higher rate."
+        >
+          <Flex align="center" gap="2">
+            <Checkbox
+              aria-label="Fast mode"
+              checked={value.fastMode ?? false}
+              onCheckedChange={(checked) => set({ fastMode: checked === true })}
+            />
+            <Text size="2">Fast mode</Text>
           </Flex>
         </Field>
       )}

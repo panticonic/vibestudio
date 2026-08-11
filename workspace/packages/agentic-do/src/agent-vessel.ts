@@ -335,6 +335,7 @@ function externalSubagentProviderSlot(agentKind: SubagentAgentKind): string | nu
 const OBSERVABLE_SUBAGENT_CONFIG_KEYS = [
   "model",
   "thinkingLevel",
+  "fastMode",
   "effort",
   "fallbackModel",
   "fallbackThinkingLevel",
@@ -365,6 +366,7 @@ export type CustomMessageReducer = (state: unknown, update: unknown) => unknown;
 export interface AgentSettings {
   model: string;
   thinkingLevel: ThinkingLevel;
+  fastMode: boolean;
   fallbackModel?: string;
   fallbackThinkingLevel?: ThinkingLevel;
   fallbackOn?: string[];
@@ -1937,6 +1939,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     if (typeof c["model"] === "string" && c["model"]) seed.model = c["model"];
     const tl = c["thinkingLevel"];
     if (isThinkingLevel(tl)) seed.thinkingLevel = tl;
+    if (typeof c["fastMode"] === "boolean") seed.fastMode = c["fastMode"];
     if (typeof c["fallbackModel"] === "string" && c["fallbackModel"]) {
       seed.fallbackModel = c["fallbackModel"];
     }
@@ -1962,6 +1965,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     return {
       model: stored.model ?? this.getDefaultModel(),
       thinkingLevel: stored.thinkingLevel ?? this.getDefaultThinkingLevel(),
+      fastMode: stored.fastMode ?? false,
       ...(stored.fallbackModel ? { fallbackModel: stored.fallbackModel } : {}),
       ...(stored.fallbackThinkingLevel
         ? { fallbackThinkingLevel: stored.fallbackThinkingLevel }
@@ -2052,6 +2056,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
           }
         : {}),
       thinkingLevel: settings.thinkingLevel,
+      fastMode: settings.fastMode,
       approvalLevel,
       respondPolicy: settings.respondPolicy,
       systemPromptHash: this.getStateValue(`agent:promptHash:${channelId}`) ?? "",
@@ -4242,6 +4247,16 @@ export abstract class AgentVesselBase extends DurableObjectBase {
           };
         }
         return { result: this.updateSettings({ thinkingLevel: level }) };
+      }
+      case "setFastMode": {
+        const enabled = (args as { enabled?: unknown } | null)?.enabled;
+        if (typeof enabled !== "boolean") {
+          return {
+            result: { error: "setFastMode requires enabled: boolean" },
+            isError: true,
+          };
+        }
+        return { result: this.updateSettings({ fastMode: enabled }) };
       }
       case "setApprovalLevel": {
         const level = (args as { level?: unknown } | null)?.level;
@@ -7703,6 +7718,12 @@ export abstract class AgentVesselBase extends DurableObjectBase {
         throw new Error("thinkingLevel must be minimal|low|medium|high|xhigh|max");
       }
       next.thinkingLevel = l;
+    }
+    if ("fastMode" in patch) {
+      if (typeof patch["fastMode"] !== "boolean") {
+        throw new Error("fastMode must be a boolean");
+      }
+      next.fastMode = patch["fastMode"];
     }
     if ("fallbackModel" in patch) {
       if (typeof patch["fallbackModel"] !== "string" || !patch["fallbackModel"]) {

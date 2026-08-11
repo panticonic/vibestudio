@@ -38,6 +38,7 @@ export function draftToConfig(draft: AgentConfigDraft): AgentSubscriptionConfig 
   const config: AgentSubscriptionConfig = {};
   if (draft.model) config.model = draft.model;
   if (draft.thinkingLevel) config.thinkingLevel = draft.thinkingLevel;
+  if (draft.fastMode !== undefined) config.fastMode = draft.fastMode;
   if (draft.approvalLevel !== undefined) config.approvalLevel = draft.approvalLevel;
   if (draft.respondPolicy) config.respondPolicy = draft.respondPolicy;
   if (draft.respondFrom && draft.respondFrom.length > 0) config.respondFrom = draft.respondFrom;
@@ -74,6 +75,7 @@ export function draftForAgent(
   return {
     model: ws?.model || workerModel || pickDefaultModel(opts.modelCatalog, opts.defaultModelRef),
     thinkingLevel: ws?.thinkingLevel ?? defaults.thinkingLevel ?? "medium",
+    fastMode: ws?.fastMode ?? defaults.fastMode ?? false,
     approvalLevel: ws?.approvalLevel ?? defaults.approvalLevel,
     respondPolicy: defaults.respondPolicy ?? (opts.showReactiveness ? "mentioned" : undefined),
     respondFrom: defaults.respondFrom,

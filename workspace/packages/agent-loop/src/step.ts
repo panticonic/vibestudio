@@ -145,6 +145,9 @@ function modelStartItems(
     modelSpec,
     ...(auth ? { auth } : {}),
     thinkingLevel: override?.thinkingLevel ?? config.thinkingLevel,
+    ...(config.fastMode && modelSpec.serviceTiers?.includes("priority")
+      ? { serviceTier: "priority" as const }
+      : {}),
     systemPromptHash: config.systemPromptHash,
     ...(config.immediatePrompt ? { immediatePrompt: config.immediatePrompt } : {}),
     ...(config.skillIndexHash ? { skillIndexHash: config.skillIndexHash } : {}),

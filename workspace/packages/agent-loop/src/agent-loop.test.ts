@@ -38,6 +38,7 @@ const baseConfig: AgentLoopConfig = {
   model: "anthropic:claude-sonnet-4-6",
   modelSpec: primaryModelSpec,
   thinkingLevel: "medium",
+  fastMode: false,
   approvalLevel: 2,
   respondPolicy: "all",
   systemPromptHash: "blob:system-prompt",
@@ -305,6 +306,27 @@ describe("agent-loop core lifecycle", () => {
     expect(s.state.openTurn).toBeNull();
     expect(pendingEffectIds(s)).toEqual([]);
     expect(s.state.entries.map((entry) => entry.kind)).toEqual(["user", "assistant"]);
+  });
+
+  it("journals the priority service tier when fast mode is enabled for a supporting model", () => {
+    const s = scenario({
+      model: "openai-codex:gpt-5.6-sol",
+      modelSpec: {
+        ...primaryModelSpec,
+        id: "gpt-5.6-sol",
+        api: "openai-codex-responses",
+        provider: "openai-codex",
+        serviceTiers: ["priority"],
+      },
+      fallbackConfig: { fastMode: true },
+    });
+
+    prompt(s);
+
+    const started = s.log.find((row) => row.payloadKind === "message.started")!;
+    expect(
+      (started.payload as { modelRequest: Record<string, unknown> }).modelRequest
+    ).toMatchObject({ serviceTier: "priority" });
   });
 
   it("journals roster refreshes through the ordered command path", () => {

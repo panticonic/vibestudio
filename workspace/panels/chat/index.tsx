@@ -538,17 +538,22 @@ export default function ChatPanel() {
       typeof globalConfig["thinkingLevel"] === "string"
         ? (globalConfig["thinkingLevel"] as DefaultAgentConfig["thinkingLevel"])
         : undefined;
+    const fastMode =
+      typeof globalConfig["fastMode"] === "boolean" ? globalConfig["fastMode"] : undefined;
     const approvalLevel =
       globalConfig["approvalLevel"] === 0 ||
       globalConfig["approvalLevel"] === 1 ||
       globalConfig["approvalLevel"] === 2
         ? globalConfig["approvalLevel"]
         : undefined;
-    if (!model && !thinkingLevel && approvalLevel === undefined) return workspaceDefaultAgentConfig;
+    if (!model && !thinkingLevel && fastMode === undefined && approvalLevel === undefined) {
+      return workspaceDefaultAgentConfig;
+    }
     return {
       ...(workspaceDefaultAgentConfig ?? {}),
       model: model ?? workspaceDefaultAgentConfig?.model ?? DEFAULT_AGENT_MODEL_REF,
       ...(thinkingLevel ? { thinkingLevel } : {}),
+      ...(fastMode !== undefined ? { fastMode } : {}),
       ...(approvalLevel !== undefined ? { approvalLevel } : {}),
     };
   }, [stateArgs.agentConfig, workspaceDefaultAgentConfig]);

@@ -373,6 +373,7 @@ export const WorkspaceConfigSchema = z
       .object({
         model: z.string().optional(),
         thinkingLevel: z.string().optional(),
+        fastMode: z.boolean().optional(),
         approvalLevel: z.number().optional(),
       })
       .strict()

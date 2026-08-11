@@ -61,6 +61,9 @@ function modelSwitchConfigFromSettings(
   if (typeof thinkingLevel === "string" && THINKING_LEVELS.has(thinkingLevel)) {
     config.thinkingLevel = thinkingLevel as AgentSubscriptionConfig["thinkingLevel"];
   }
+  if (typeof source["fastMode"] === "boolean") {
+    config.fastMode = source["fastMode"];
+  }
   const approvalLevel = source["approvalLevel"];
   if (approvalLevel === 0 || approvalLevel === 1 || approvalLevel === 2) {
     config.approvalLevel = approvalLevel;

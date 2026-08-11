@@ -90,6 +90,7 @@ const config: AgentLoopConfig = {
   model: "test:model",
   modelSpec,
   thinkingLevel: "medium",
+  fastMode: false,
   approvalLevel: 2,
   respondPolicy: "all",
   systemPromptHash: "sys",
@@ -464,8 +465,9 @@ describe("modelCallExecutor", () => {
     await modelCallExecutor.execute({
       descriptor: descriptor({
         provider: "openai-codex",
-        model: "gpt-5.3-codex-spark",
+        model: "gpt-5.6-sol",
         modelSpec: codexSpec as never,
+        serviceTier: "priority",
       }),
       state: initialAgentState({ channelId: "channel-1", config }),
       signal: new AbortController().signal,
@@ -487,6 +489,7 @@ describe("modelCallExecutor", () => {
     expect(observedOptions[0]).toMatchObject({
       timeoutMs: 60_000,
       streamIdleTimeoutMs: 60_000,
+      serviceTier: "priority",
     });
     expect(observedOptions[1]).toMatchObject({
       timeoutMs: 45_000,

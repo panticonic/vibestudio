@@ -46,6 +46,22 @@ const extendedThinkingCatalog = {
   ],
 } as unknown as ModelCatalog;
 
+const fastCodexCatalog = {
+  models: [
+    {
+      ref: "openai-codex:gpt-5.6-sol",
+      id: "gpt-5.6-sol",
+      name: "GPT-5.6 Sol",
+      provider: "openai-codex",
+      baseUrl: "https://chatgpt.com/backend-api",
+      connectable: true,
+      reasoning: true,
+      thinkingLevels: ["low", "medium", "high"],
+      modelSpec: { serviceTiers: ["priority"] },
+    },
+  ],
+} as unknown as ModelCatalog;
+
 function renderForm(props: Partial<React.ComponentProps<typeof AgentConfigForm>> = {}) {
   const onChange = vi.fn();
   const value: AgentConfigDraft = { model: "prov:model-a", approvalLevel: 2 };
@@ -110,6 +126,20 @@ describe("AgentConfigForm — save as defaults", () => {
     expect(onChange).toHaveBeenCalledWith({
       model: "prov:model-thinking",
       thinkingLevel: "max",
+      approvalLevel: 2,
+    });
+  });
+
+  it("offers fast mode only on models that advertise the priority service tier", () => {
+    const { onChange } = renderForm({
+      catalog: fastCodexCatalog,
+      value: { model: "openai-codex:gpt-5.6-sol", fastMode: false, approvalLevel: 2 },
+    });
+
+    fireEvent.click(screen.getByRole("checkbox", { name: "Fast mode" }));
+    expect(onChange).toHaveBeenCalledWith({
+      model: "openai-codex:gpt-5.6-sol",
+      fastMode: true,
       approvalLevel: 2,
     });
   });

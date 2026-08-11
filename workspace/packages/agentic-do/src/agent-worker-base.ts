@@ -43,6 +43,7 @@ type StandardAgentMethodName =
   | "connectModelCredential"
   | "setModel"
   | "setThinkingLevel"
+  | "setFastMode"
   | "setApprovalLevel"
   | "setRespondPolicy"
   | "refreshPromptArtifacts"
@@ -899,6 +900,10 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
       {
         name: "setThinkingLevel",
         description: "Set live effort level: minimal, low, medium, high, xhigh, or max",
+      },
+      {
+        name: "setFastMode",
+        description: "Enable or disable the accelerated Codex service tier",
       },
       {
         name: "setApprovalLevel",

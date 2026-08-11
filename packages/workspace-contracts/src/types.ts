@@ -534,6 +534,7 @@ export interface WorkspaceConfig {
   defaultAgentConfig?: {
     model?: string;
     thinkingLevel?: string;
+    fastMode?: boolean;
     approvalLevel?: number;
   };
   /**

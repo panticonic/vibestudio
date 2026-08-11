@@ -38,6 +38,7 @@ const config: AgentLoopConfig = {
     maxTokens: 64_000,
   },
   thinkingLevel: "medium",
+  fastMode: false,
   approvalLevel: 2,
   respondPolicy: "all",
   systemPromptHash: "blob:sys",

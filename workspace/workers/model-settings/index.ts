@@ -18,6 +18,7 @@ import {
   LOCAL_PROVIDER_ID,
   WORKSPACE_DEFAULT_AGENT_CONFIG_FIELD,
   isModelUsable,
+  piModelToSpec,
   type AgentThinkingLevel,
   type DefaultAgentConfig,
   type ModelAvailability,
@@ -26,6 +27,7 @@ import {
   type ModelCatalogProvider,
   type ModelSettingsSnapshot,
   type PiModelSpec,
+  type PiModelInput,
 } from "@workspace/model-catalog/catalog";
 import {
   isTemplatedBaseUrl,
@@ -77,43 +79,11 @@ export function getModelCatalog(): Promise<ModelCatalog> {
   return cachedCatalog;
 }
 
-interface PiModelLike {
-  id: string;
-  name: string;
-  api: string;
-  provider: string;
-  baseUrl: string;
-  reasoning: boolean;
-  input: Array<"text" | "image">;
-  cost: { input: number; output: number; cacheRead: number; cacheWrite: number };
-  contextWindow: number;
-  maxTokens: number;
-  thinkingLevelMap?: Record<string, unknown>;
-  headers?: Record<string, string>;
-  compat?: Record<string, unknown>;
-}
+type PiModelLike = PiModelInput;
 
 function providerLabel(providerId: string): string {
   if (providerId === "openai-codex") return "GPT Codex";
   return providerId;
-}
-
-function piModelToSpec(model: PiModelLike): PiModelSpec {
-  return {
-    id: model.id,
-    name: model.name,
-    api: model.api,
-    provider: model.provider,
-    baseUrl: model.baseUrl,
-    reasoning: model.reasoning,
-    input: [...model.input],
-    cost: { ...model.cost },
-    contextWindow: model.contextWindow,
-    maxTokens: model.maxTokens,
-    ...(model.thinkingLevelMap ? { thinkingLevelMap: { ...model.thinkingLevelMap } } : {}),
-    ...(model.headers ? { headers: { ...model.headers } } : {}),
-    ...(model.compat ? { compat: { ...model.compat } } : {}),
-  };
 }
 
 /** Static pi-ai registry projection. Availability here is a placeholder —
@@ -382,6 +352,7 @@ export class ModelSettingsDO extends DurableObjectBase {
     const config: DefaultAgentConfig = {
       model: model.ref,
       ...(requested.thinkingLevel ? { thinkingLevel: requested.thinkingLevel } : {}),
+      ...(requested.fastMode !== undefined ? { fastMode: requested.fastMode } : {}),
       ...(requested.approvalLevel !== undefined ? { approvalLevel: requested.approvalLevel } : {}),
     };
     await this.setWorkspaceConfigField(WORKSPACE_DEFAULT_AGENT_CONFIG_FIELD, config);
@@ -470,6 +441,7 @@ export class ModelSettingsDO extends DurableObjectBase {
     const stored = parseDefaultAgentConfig(config.defaultAgentConfig);
     const behavior = {
       ...(stored.thinkingLevel ? { thinkingLevel: stored.thinkingLevel } : {}),
+      ...(stored.fastMode !== undefined ? { fastMode: stored.fastMode } : {}),
       ...(stored.approvalLevel !== undefined ? { approvalLevel: stored.approvalLevel } : {}),
     };
     const storedEntry = stored.model
@@ -509,6 +481,7 @@ function parseDefaultAgentConfig(
 ): {
   model: string | null;
   thinkingLevel?: AgentThinkingLevel;
+  fastMode?: boolean;
   approvalLevel?: 0 | 1 | 2;
 } {
   if (value === undefined || value === null) {
@@ -520,7 +493,11 @@ function parseDefaultAgentConfig(
   }
   const v = value as Record<string, unknown>;
   const unknownKeys = Object.keys(v).filter(
-    (key) => key !== "model" && key !== "thinkingLevel" && key !== "approvalLevel"
+    (key) =>
+      key !== "model" &&
+      key !== "thinkingLevel" &&
+      key !== "fastMode" &&
+      key !== "approvalLevel"
   );
   if (unknownKeys.length > 0) {
     throw new Error(`defaultAgentConfig has unknown field(s): ${unknownKeys.join(", ")}`);
@@ -535,6 +512,10 @@ function parseDefaultAgentConfig(
     throw new Error(`Invalid defaultAgentConfig.thinkingLevel: ${String(rawThinking)}`);
   }
   const thinkingLevel = rawThinking as AgentThinkingLevel | undefined;
+  const rawFastMode = v["fastMode"];
+  if (rawFastMode !== undefined && typeof rawFastMode !== "boolean") {
+    throw new Error(`Invalid defaultAgentConfig.fastMode: ${String(rawFastMode)}`);
+  }
   const rawApproval = v["approvalLevel"];
   if (rawApproval !== undefined && rawApproval !== 0 && rawApproval !== 1 && rawApproval !== 2) {
     throw new Error(`Invalid defaultAgentConfig.approvalLevel: ${String(rawApproval)}`);
@@ -543,6 +524,7 @@ function parseDefaultAgentConfig(
   return {
     model,
     ...(thinkingLevel ? { thinkingLevel } : {}),
+    ...(rawFastMode !== undefined ? { fastMode: rawFastMode } : {}),
     ...(approvalLevel !== undefined ? { approvalLevel } : {}),
   };
 }

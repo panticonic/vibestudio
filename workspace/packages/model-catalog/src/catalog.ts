@@ -27,6 +27,14 @@ export const LOCAL_FALLBACK_MODEL = {
 export const LOCAL_FALLBACK_MODEL_REF = LOCAL_FALLBACK_MODEL.ref;
 export const LOCAL_MODELS_EXTENSION_ID = "@workspace-extensions/local-models";
 
+/** Service tiers advertised by the current ChatGPT Codex model catalog. */
+export function modelServiceTiers(provider: string, modelId: string): Array<"priority"> {
+  const supportsPriority =
+    provider === "openai-codex" &&
+    (modelId.startsWith("gpt-5.6-") || modelId === "gpt-5.5" || modelId === "gpt-5.4");
+  return supportsPriority ? ["priority"] : [];
+}
+
 /** Enabled effort levels the agent harness accepts (excludes pi's "off"). */
 export type AgentThinkingLevel = "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 
@@ -40,6 +48,8 @@ export interface DefaultAgentConfig {
   model: string;
   /** Default reasoning effort (reasoning models only). */
   thinkingLevel?: AgentThinkingLevel;
+  /** Use the accelerated Codex service tier for supported models. */
+  fastMode?: boolean;
   /** Default autonomy (0 = Manual, 1 = Auto-safe, 2 = Full-auto). */
   approvalLevel?: 0 | 1 | 2;
 }
@@ -77,9 +87,38 @@ export interface PiModelSpec {
   cost: { input: number; output: number; cacheRead: number; cacheWrite: number };
   contextWindow: number;
   maxTokens: number;
+  serviceTiers?: Array<"priority">;
+  streamIdleTimeoutMs?: number;
   thinkingLevelMap?: Record<string, unknown>;
   headers?: Record<string, string>;
   compat?: Record<string, unknown>;
+}
+
+/** Structural pi-ai model input used by the catalog and runtime materializers. */
+export type PiModelInput = Omit<PiModelSpec, "serviceTiers">;
+
+/** The single secret-free projection from pi-ai registry data to a journaled model spec. */
+export function piModelToSpec(model: PiModelInput): PiModelSpec {
+  const serviceTiers = modelServiceTiers(model.provider, model.id);
+  return {
+    id: model.id,
+    name: model.name,
+    api: model.api,
+    provider: model.provider,
+    baseUrl: model.baseUrl,
+    reasoning: model.reasoning,
+    input: [...model.input],
+    cost: { ...model.cost },
+    contextWindow: model.contextWindow,
+    maxTokens: model.maxTokens,
+    ...(serviceTiers.length > 0 ? { serviceTiers } : {}),
+    ...(model.streamIdleTimeoutMs !== undefined
+      ? { streamIdleTimeoutMs: model.streamIdleTimeoutMs }
+      : {}),
+    ...(model.thinkingLevelMap ? { thinkingLevelMap: { ...model.thinkingLevelMap } } : {}),
+    ...(model.headers ? { headers: { ...model.headers } } : {}),
+    ...(model.compat ? { compat: { ...model.compat } } : {}),
+  };
 }
 
 /** Live usability of a model (design §7.1) — worker-computed, shared by all

@@ -223,6 +223,7 @@ describe("ModelSettingsDO", () => {
       contextWindow: 272_000,
       thinkingLevels: ["minimal", "low", "medium", "high", "xhigh", "max"],
       modelSpec: {
+        serviceTiers: ["priority"],
         thinkingLevelMap: { minimal: "low", xhigh: "xhigh", max: "max" },
       },
     });
@@ -362,6 +363,7 @@ describe("ModelSettingsDO", () => {
       call("setDefaultAgentConfig", {
         model: "anthropic:claude-opus-4-1",
         thinkingLevel: "high",
+        fastMode: true,
         approvalLevel: 2,
       })
     ).resolves.toMatchObject({
@@ -370,13 +372,19 @@ describe("ModelSettingsDO", () => {
       defaultAgentConfig: {
         model: "anthropic:claude-opus-4-1",
         thinkingLevel: "high",
+        fastMode: true,
         approvalLevel: 2,
       },
     });
     expect(TestModelSettingsDO.writes).toEqual([
       {
         key: "defaultAgentConfig",
-        value: { model: "anthropic:claude-opus-4-1", thinkingLevel: "high", approvalLevel: 2 },
+        value: {
+          model: "anthropic:claude-opus-4-1",
+          thinkingLevel: "high",
+          fastMode: true,
+          approvalLevel: 2,
+        },
       },
     ]);
   });

@@ -140,6 +140,8 @@ export function agentConfigFromSettings(
   ) {
     config.thinkingLevel = thinkingLevel;
   }
+  const fastMode = settingValue(record["fastMode"]);
+  if (typeof fastMode === "boolean") config.fastMode = fastMode;
   const approvalLevel = settingValue(record["approvalLevel"]);
   if (approvalLevel === 0 || approvalLevel === 1 || approvalLevel === 2) {
     config.approvalLevel = approvalLevel;

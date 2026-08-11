@@ -30,6 +30,8 @@ export interface AgentConfig {
   model?: string;
   /** Effort level for the model. */
   thinkingLevel?: AgentThinkingLevel;
+  /** Request the provider's accelerated service tier when the model supports it. */
+  fastMode?: boolean;
   /** Optional model used for one journaled failover attempt. */
   fallbackModel?: string;
   /** Effort used only by the fallback request. */
@@ -52,6 +54,7 @@ export interface AgentConfig {
 export const AGENT_SETTING_KEYS = [
   "model",
   "thinkingLevel",
+  "fastMode",
   "fallbackModel",
   "fallbackThinkingLevel",
   "fallbackOn",

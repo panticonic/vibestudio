@@ -35,6 +35,8 @@ export interface AgentModelSpec {
   cost: { input: number; output: number; cacheRead: number; cacheWrite: number };
   contextWindow: number;
   maxTokens: number;
+  /** Provider service tiers supported by this exact catalog model. */
+  serviceTiers?: Array<"priority">;
   /**
    * Optional provider-transport silence deadline. Absent means the model call
    * is unbounded and can be stopped only by explicit lifecycle/caller
@@ -93,6 +95,8 @@ export interface AgentLoopConfig {
   /** Absent preserves the background-only fallback behavior. */
   fallbackScope?: "unattended" | "all-turns";
   thinkingLevel: ThinkingLevel;
+  /** Request the accelerated Codex service tier for eligible model calls. */
+  fastMode: boolean;
   approvalLevel: 0 | 1 | 2;
   respondPolicy: RespondPolicy;
   systemPromptHash: string;
@@ -194,6 +198,8 @@ export interface ModelRequestDescriptor {
   auth?: ModelAuthMode;
   modelBaseUrl?: string;
   thinkingLevel: ThinkingLevel;
+  /** Provider-native service tier pinned at request materialization time. */
+  serviceTier?: "priority";
   systemPromptHash: string;
   /** Per-call instruction appended after the hydrated transcript. */
   immediatePrompt?: string;
