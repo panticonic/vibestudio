@@ -699,12 +699,17 @@ async function attachStartupDiagnostics(testApp: TestApp): Promise<void> {
   const channelReplays = [];
   const agentDebugStates = [];
   for (const channelName of channelNames) {
-    const resolved = await rpcCall(testApp, "workers", "resolveService", [
-      "vibestudio.channel.v1",
-      channelName,
-    ]).catch((error: unknown) => ({
-      error: error instanceof Error ? error.message : String(error),
-    }));
+    const firstPanelId = panels[0]?.id;
+    const resolved = firstPanelId
+      ? await resolveWorkspaceServiceFromPanel(
+          testApp,
+          firstPanelId,
+          "vibestudio.channel.v1",
+          channelName
+        ).catch((error: unknown) => ({
+          error: error instanceof Error ? error.message : String(error),
+        }))
+      : { error: "No hosted panel is available to resolve the creator-context channel" };
     const targetId =
       typeof resolved === "object" &&
       resolved !== null &&
@@ -712,7 +717,6 @@ async function attachStartupDiagnostics(testApp: TestApp): Promise<void> {
       typeof resolved.targetId === "string"
         ? resolved.targetId
         : null;
-    const firstPanelId = panels[0]?.id;
     const participants =
       targetId && firstPanelId
         ? await executePanelScript(
@@ -872,10 +876,12 @@ async function collectStartupAgentCompletion(
   const channels: StartupAgentCompletionState["channels"] = [];
   const errors: string[] = [];
   for (const channelName of channelNames) {
-    const resolved = await rpcCall(testApp, "workers", "resolveService", [
+    const resolved = await resolveWorkspaceServiceFromPanel(
+      testApp,
+      firstPanelId,
       "vibestudio.channel.v1",
-      channelName,
-    ]).catch((error: unknown) => {
+      channelName
+    ).catch((error: unknown) => {
       errors.push(
         `${channelName}: resolveService failed: ${
           error instanceof Error ? error.message : String(error)
@@ -1195,6 +1201,22 @@ async function collectStartupAgentCompletion(
     errors.length === 0;
 
   return { complete, channels, errors };
+}
+
+async function resolveWorkspaceServiceFromPanel(
+  testApp: TestApp,
+  panelId: string,
+  query: string,
+  objectKey: string | null
+): Promise<unknown> {
+  return executePanelScript(
+    testApp.app,
+    panelId,
+    `(async () => {
+      const { workers } = await globalThis.__vibestudioRequireAsync__("@workspace/runtime");
+      return workers.resolveService(${JSON.stringify(query)}, ${JSON.stringify(objectKey)});
+    })()`
+  );
 }
 
 function isUnitBatchApproval(approval: PendingApproval): boolean {
