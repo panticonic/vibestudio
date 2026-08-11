@@ -346,6 +346,8 @@ describe("template composer operation resumption", () => {
         failures: [{ unit: "migrations/system" }],
       },
     });
+    expect(hold?.record.reviews).toBeUndefined();
+    expect(hold?.record.deltaBasis).toBeUndefined();
     expect(
       preparedMigrationHold(approvedRecord(), {
         contextId: "template-composer-operation-ordinary",
@@ -397,6 +399,21 @@ describe("template composer operation resumption", () => {
         },
       ],
     });
+    expect(
+      migrationForTemplateOperation(
+        {
+          ...migrationInspection,
+          plan: {
+            ...migrationInspection.plan,
+            nodes: migrationInspection.plan.nodes.map((node) => ({
+              ...node,
+              migrationNotes: [],
+            })),
+          },
+        },
+        affectedParts
+      )
+    ).toBeUndefined();
   });
 
   it("derives exact host pulls only from the authenticated server caller", () => {

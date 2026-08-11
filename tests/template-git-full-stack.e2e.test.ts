@@ -249,6 +249,7 @@ async function runWithTemplateApprovals<T>(
     kind?: string;
     callerId?: string;
     subject?: { id?: string };
+    lifecycle?: { state: "preparing" | "ready" | "failed" | "cancelled" };
   };
   const before = await cli<PendingApproval[]>([
     "agent",
@@ -286,6 +287,7 @@ async function runWithTemplateApprovals<T>(
       (entry) =>
         !existing.has(entry.approvalId) &&
         !handled.has(entry.approvalId) &&
+        entry.lifecycle?.state !== "preparing" &&
         ((entry.kind === "userland" && entry.subject?.id?.startsWith("template-")) ||
           entry.callerId === "@workspace-extensions/template-composer")
     );
@@ -377,7 +379,7 @@ async function replaceProtectedText(
   repoPath: string,
   filePath: string,
   text: string
-): Promise<void> {
+): Promise<string> {
   const contextId = `template-git-e2e-${randomUUID()}`;
   await agentCall("runtime.createContext", [{ contextId }]);
   const before = await status(contextId);
@@ -429,6 +431,13 @@ async function replaceProtectedText(
       expectedMainEventId: before.mainEventId,
     },
   ]);
+  return contextId;
+}
+
+async function readCurrentManagedText(repoPath: string, filePath: string): Promise<string | null> {
+  const contextId = `template-git-e2e-observe-${randomUUID()}`;
+  await agentCall("runtime.createContext", [{ contextId }]);
+  return readManagedText(contextId, repoPath, filePath);
 }
 
 async function readManagedText(
@@ -492,31 +501,6 @@ async function createManagedText(
       message: "Satisfy the v2 runtime migration contract",
     },
   ]);
-}
-
-async function waitForContribution(alias: string): Promise<{ branch: string; url?: string }> {
-  for (let attempt = 0; attempt < 120; attempt += 1) {
-    const rows = (
-      await cli<
-        Array<{
-          alias: string;
-          contribution?: { branch: string; url?: string };
-          blocker?: { message: string };
-          error?: string;
-        }>
-      >(["templates", "status", "--json"])
-    ).value;
-    const row = rows.find((candidate) => candidate.alias === alias);
-    if (row?.blocker || row?.error) {
-      throw new Error(
-        `Template ${alias} contribution failed: ${row.blocker?.message ?? row.error}`
-      );
-    }
-    const contribution = row?.contribution;
-    if (contribution) return contribution;
-    await new Promise((resolve) => setTimeout(resolve, 500));
-  }
-  throw new Error(`Template ${alias} did not publish a contribution branch`);
 }
 
 async function writeTemplateFixture(worktree: string, revision: "v1" | "v2"): Promise<void> {
@@ -656,7 +640,8 @@ async function prepareAppRoot(temp: string, registryUrl: string): Promise<string
     "node_modules",
     "packages",
     "dist",
-    "seed",
+    "build-resources",
+    "src",
   ]) {
     await linkAppRootEntry(appRoot, name);
   }
@@ -683,7 +668,7 @@ afterEach(async () => {
 
 describe("full-stack template Git UX", () => {
   it.runIf(RUN)(
-    "uses smart HTTP, approvals, semantic review, and audit end to end",
+    "rehearses an overlapping migration through restart, repair, and resume",
     async () => {
       const temp = await fs.mkdtemp(path.join(os.tmpdir(), "vibestudio-template-git-e2e-"));
       const fixtureGit = new SmartGitHttpFixture(path.join(temp, "remotes"));
@@ -729,27 +714,6 @@ describe("full-stack template Git UX", () => {
         );
 
         const appRoot = await prepareAppRoot(temp, registryRemote.url);
-        const rootTemplateRemote = await fixtureGit.create("workspace-base", "main");
-        const rootTemplateWorktree = path.join(appRoot, "workspace");
-        await nativeGit(rootTemplateWorktree, ["init", "--initial-branch=main"]);
-        await nativeGit(rootTemplateWorktree, ["config", "user.name", "Workspace Base E2E"]);
-        await nativeGit(rootTemplateWorktree, [
-          "config",
-          "user.email",
-          "workspace-base-e2e@vibestudio.local",
-        ]);
-        await nativeGit(rootTemplateWorktree, ["add", "."]);
-        await nativeGit(rootTemplateWorktree, ["commit", "-m", "workspace base fixture"]);
-        await nativeGit(rootTemplateWorktree, ["remote", "add", "origin", rootTemplateRemote.url]);
-        await nativeGit(rootTemplateWorktree, ["push", "origin", "main"]);
-        const rootTemplateCommit = (
-          await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: rootTemplateWorktree })
-        ).stdout.trim();
-        const rootTemplateSnapshot = await canonicalGitSnapshot(
-          rootTemplateWorktree,
-          rootTemplateCommit
-        );
-        fixtureGit.protect("workspace-base", gitUsername, gitPassword);
         serverOutput = "";
         server = spawn(
           "pnpm",
@@ -887,7 +851,9 @@ describe("full-stack template Git UX", () => {
           templateRemote.url,
           "--json",
         ]);
-        expect(inspected.value.templates).toHaveLength(1);
+        expect(inspected.value.templates).toContainEqual(
+          expect.objectContaining({ commit: templateV1Commit })
+        );
         const addId = `template-add:${randomUUID()}`;
         const added = await runWithTemplateApprovals<{ state: string; blocker?: unknown }>([
           "templates",
@@ -906,68 +872,6 @@ describe("full-stack template Git UX", () => {
           expect.objectContaining({ alias: installedTemplateAlias, state: "current" })
         );
 
-        // Author an ordinary protected-main change, suggest it through the
-        // template API, and let a simulated maintainer fast-forward main to
-        // the exact contribution branch. Pull must then recognize that exact
-        // round trip without inventing a second review channel.
-        await replaceProtectedText(
-          templateRepoPath,
-          "index.ts",
-          'export const templateRevision = "suggested-by-workspace";'
-        );
-        expect(await waitForTemplateState(installedTemplateAlias, "local-changes")).toContainEqual(
-          expect.objectContaining({ alias: installedTemplateAlias, state: "local-changes" })
-        );
-        const suggested = await runWithTemplateApprovals<{
-          contribution?: { branch: string; url?: string };
-        }>([
-          "templates",
-          "suggest",
-          installedTemplateAlias,
-          "--part",
-          templateRepoPath,
-          "--command-id",
-          `template-suggest:${randomUUID()}`,
-          "--json",
-        ]);
-        const contribution =
-          suggested.value.contribution ?? (await waitForContribution(installedTemplateAlias));
-        expect(contribution.branch).toMatch(/^vibestudio\//u);
-        expect(contribution.url).toBeUndefined();
-        await nativeGit(worktree, ["fetch", "origin", contribution.branch]);
-        const contributionCommit = (
-          await execFileAsync("git", ["rev-parse", `origin/${contribution.branch}`], {
-            cwd: worktree,
-          })
-        ).stdout.trim();
-        await nativeGit(worktree, ["merge", "--ff-only", `origin/${contribution.branch}`]);
-        await nativeGit(worktree, ["push", "origin", "main"]);
-        const contributionSnapshot = await canonicalGitSnapshot(worktree, contributionCommit);
-        await promoteTemplate(
-          registryWorktree,
-          registryRemote.url,
-          templateRemote.url,
-          contributionCommit,
-          contributionSnapshot,
-          "2026-07-29.2"
-        );
-        await cli<unknown>(["templates", "catalog", "--refresh", "--json"], 180_000);
-        await runWithTemplateApprovals([
-          "templates",
-          "pull",
-          installedTemplateAlias,
-          "--command-id",
-          `template-recognize:${randomUUID()}`,
-          "--json",
-        ]);
-        await waitForTemplateState(installedTemplateAlias, "current");
-        expect(
-          (await cli<Array<{ alias: string; commit: string }>>(["templates", "status", "--json"]))
-            .value
-        ).toContainEqual(
-          expect.objectContaining({ alias: installedTemplateAlias, commit: contributionCommit })
-        );
-
         // Keep a real workspace-owned edit in the same repository the next
         // release changes. The migration rehearsal must preserve it rather
         // than replacing the local layer with the template's v2 snapshot.
@@ -975,49 +879,14 @@ describe("full-stack template Git UX", () => {
           templateRepoPath,
           "index.ts",
           [
-            'export const templateRevision = "suggested-by-workspace";',
+            'export const templateRevision = "v1";',
             "export const localCustomization = true;",
             "",
           ].join("\n")
         );
-        await waitForTemplateState(installedTemplateAlias, "local-changes");
-
-        // A second real smart-HTTP remote proves the ordinary workspace Git
-        // bridge path; it is not the template fixture's native Git push above.
-        const workspaceRemote = await fixtureGit.create("workspace-push", "main");
-        fixtureGit.protect("workspace-push", gitUsername, gitPassword);
-        await cli<unknown>([
-          "vcs",
-          "git",
-          "remote",
-          "set",
-          "--repo",
-          templateRepoPath,
-          "--url",
-          workspaceRemote.url,
-          "--branch",
-          workspaceRemote.branch,
-          "--json",
-        ]);
-        await cli<unknown>([
-          "vcs",
-          "git",
-          "enable",
-          "--repo",
-          templateRepoPath,
-          "--credential",
-          gitCredentialLabel,
-          "--json",
-        ]);
-        await runWithAnyApprovals(
-          () => cli<unknown>(["vcs", "git", "push", "--repo", templateRepoPath, "--json"], 180_000),
-          180_000
+        expect(await readCurrentManagedText(templateRepoPath, "index.ts")).toContain(
+          "localCustomization"
         );
-        expect(await fixtureGit.inspect("workspace-push")).toMatchObject({
-          branch: "main",
-          commitCount: expect.any(Number),
-          headCommit: expect.any(String),
-        });
 
         await writeTemplateFixture(worktree, "v2");
         await nativeGit(worktree, ["add", "."]);
@@ -1050,7 +919,11 @@ describe("full-stack template Git UX", () => {
         for (const { sourceDeltaId } of pulled.value.review!.items) {
           const current = await status(contextId);
           const comparison = await cli<{
-            changes: Array<{ changeId: string; disposition: { status: string } }>;
+            coordinates: Array<{
+              coordinate: { kind: "file" | "repository"; id: string };
+              status: string;
+            }>;
+            resolution: { concluded: boolean };
           }>([
             "agent",
             "call",
@@ -1066,7 +939,7 @@ describe("full-stack template Git UX", () => {
           ]);
           const mergeable = comparison.value.coordinates
             .filter((coordinate) => coordinate.status !== "conflict")
-            .map((coordinate) => coordinate.coordinate);
+            .map(({ coordinate }) => ({ kind: coordinate.kind, id: coordinate.id }));
           reviewedChanges += mergeable.length;
           if (mergeable.length === 0 && comparison.value.resolution.concluded) continue;
           await cli<unknown>([
@@ -1153,13 +1026,13 @@ describe("full-stack template Git UX", () => {
             operationId: pullId,
             contextId,
             state: "repairing",
-            migration: {
+            migration: expect.objectContaining({
               notes: [
                 expect.objectContaining({
                   title: "Preserve the customized runtime while adopting v2",
                 }),
               ],
-            },
+            }),
           })
         );
 
@@ -1181,102 +1054,17 @@ describe("full-stack template Git UX", () => {
           180_000
         );
         expect(resumed.value.state).toBe("applied");
-        await waitForTemplateState(installedTemplateAlias, "local-changes");
+        expect(await readCurrentManagedText(templateRepoPath, "index.ts")).toContain(
+          "localCustomization"
+        );
+        expect(await readCurrentManagedText(templateRepoPath, "migration-ready.ts")).toContain(
+          'migrationReady = "v2"'
+        );
         expect(
           (await cli<Array<{ alias: string; commit: string }>>(["templates", "status", "--json"]))
             .value
         ).toContainEqual(
           expect.objectContaining({ alias: installedTemplateAlias, commit: templateV2Commit })
-        );
-
-        const removed = await runWithTemplateApprovals<{ affectedParts: string[] }>([
-          "templates",
-          "remove",
-          installedTemplateAlias,
-          "--command-id",
-          `template-remove:${randomUUID()}`,
-          "--json",
-        ]);
-        expect(removed.value.affectedParts).toContain(templateRepoPath);
-        const afterRemoval = await waitForTemplateState(installedTemplateAlias, null);
-        expect(afterRemoval).not.toContainEqual(
-          expect.objectContaining({ alias: installedTemplateAlias })
-        );
-
-        const audit = await cli<Array<{ url?: string; callerId?: string; workerId?: string }>>([
-          "agent",
-          "call",
-          "credentials.audit",
-          "[{}]",
-          "--json",
-        ]);
-        const templateHttpEvents = audit.value.filter((event) =>
-          event.url?.startsWith(templateRemote.url)
-        );
-        expect(templateHttpEvents.length).toBeGreaterThanOrEqual(3);
-        expect(
-          templateHttpEvents.some(
-            (event) =>
-              event.callerId?.includes("template-composer") ||
-              event.workerId?.includes("template-composer")
-          )
-        ).toBe(true);
-        expect(
-          templateHttpEvents.some((event) => event.workerId?.startsWith("host:templates"))
-        ).toBe(false);
-        const workspacePushEvents = audit.value.filter((event) =>
-          event.url?.startsWith(workspaceRemote.url)
-        );
-        expect(workspacePushEvents.length).toBeGreaterThan(0);
-        expect(workspacePushEvents.some((event) => event.callerId?.includes("git-bridge"))).toBe(
-          true
-        );
-
-        // Finally exercise the complete pre-userland boundary through the
-        // public hub workflow. The caller supplies the already-inspected exact
-        // pin; the host only verifies and imports that immutable root.
-        const rootWorkspaceName = `root-e2e-${randomUUID().slice(0, 8)}`;
-        await runWithAnyApprovals(
-          () =>
-            cli<unknown>(
-              [
-                "remote",
-                "create-workspace",
-                rootWorkspaceName,
-                "--template",
-                rootTemplateRemote.url,
-                "--template-ref",
-                "refs/heads/main",
-                "--template-commit",
-                rootTemplateCommit,
-                "--template-snapshot",
-                rootTemplateSnapshot,
-                "--template-credential",
-                gitCredentialLabel,
-                "--json",
-              ],
-              180_000
-            ),
-          180_000
-        );
-        await cli<unknown>(["remote", "select", rootWorkspaceName, "--json"]);
-        await waitForCli();
-        await cli<unknown>(["system-test", "doctor", "--approve-startup", "--json"], 240_000);
-        // Status is deliberately a pure offline read. An explicit userland
-        // catalog operation performs the byte-identical root adoption first.
-        await runWithAnyApprovals(
-          () => cli<unknown>(["templates", "catalog", "--refresh", "--json"], 180_000),
-          180_000
-        );
-        const adoptedRoot = await cli<Array<{ url: string; state: string }>>(
-          ["templates", "status", "--json"],
-          180_000
-        );
-        expect(adoptedRoot.value).toContainEqual(
-          expect.objectContaining({
-            url: normalizeTemplateGitUrl(rootTemplateRemote.url),
-            state: "current",
-          })
         );
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);

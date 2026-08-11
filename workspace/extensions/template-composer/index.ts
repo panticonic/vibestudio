@@ -112,6 +112,11 @@ function migrationRepairFailures(facets: readonly string[]) {
   }));
 }
 
+function stagedOperationRecord(record: TemplateOperationRecord): TemplateOperationRecord {
+  const { reviews: _reviews, deltaBasis: _deltaBasis, ...staged } = record;
+  return staged;
+}
+
 /** The single staging decision migration notes add to Composer. */
 export function preparedMigrationHold(
   record: TemplateOperationRecord,
@@ -125,7 +130,7 @@ export function preparedMigrationHold(
   if (!record.migration) return undefined;
   return {
     record: {
-      ...record,
+      ...stagedOperationRecord(record),
       preparedAffectedRepoPaths: prepared.affectedRepoPaths,
       buildFailures: undefined,
     },
@@ -781,9 +786,7 @@ export function migrationForTemplateOperation(
     .flatMap((node) => node.migrationNotes)
     .filter((note) => migrationFacetSet.has(note.path.split("/")[1] ?? ""))
     .sort((left, right) => left.path.localeCompare(right.path));
-  return migrationFacets.length > 0
-    ? { facets: migrationFacets, notes: migrationNotes }
-    : undefined;
+  return migrationNotes.length > 0 ? { facets: migrationFacets, notes: migrationNotes } : undefined;
 }
 
 function operationParts(
@@ -927,7 +930,7 @@ async function applyInspection(
             message: `The protected-main build failed for ${unit}`,
           }));
       await updateTemplateOperationRecord(ctx, {
-        ...operation.record,
+        ...stagedOperationRecord(operation.record),
         preparedAffectedRepoPaths,
         buildFailures: failures,
       });
