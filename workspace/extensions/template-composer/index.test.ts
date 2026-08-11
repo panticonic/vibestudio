@@ -16,6 +16,7 @@ import {
   integrateTemplatePublicationIntoCallerContext,
   mergeAcceptedTemplateSuggestion,
   operationReviewForTemplate,
+  preparedMigrationHold,
   selectedTemplateName,
 } from "./index.js";
 import { bootstrapWorkspaceSource, projectBootstrapRuntimeToSource } from "./workspace.js";
@@ -263,10 +264,57 @@ describe("template composer operation resumption", () => {
         intent: { kind: "pull", target: oldPin },
         existing: approvedRecord(),
         affectedParts: [],
+        migrationFacets: [],
         persist,
       })
     ).resolves.toMatchObject({ resumed: true });
     expect(persist).not.toHaveBeenCalled();
+  });
+
+  it("records migration facets on the durable operation intent", async () => {
+    const persist = vi.fn(async () => undefined);
+    const result = await ensureTemplateOperationIntent({
+      operationId: "pull-with-notes",
+      inspection: inspection(),
+      intent: { kind: "pull", target: oldPin },
+      existing: null,
+      affectedParts: ["migrations/system", "packages/runtime"],
+      migrationFacets: ["system"],
+      persist,
+    });
+
+    expect(result.record).toMatchObject({
+      affectedParts: ["migrations/system", "packages/runtime"],
+      migrationFacets: ["system"],
+    });
+    expect(persist).toHaveBeenCalledWith(result.record);
+  });
+
+  it("retains a staged migration instead of allowing automatic publication", () => {
+    const hold = preparedMigrationHold(
+      { ...approvedRecord(), migrationFacets: ["system"] },
+      {
+        contextId: "template-composer-operation-system",
+        affectedRepoPaths: ["migrations/system", "packages/runtime"],
+      }
+    );
+
+    expect(hold).toMatchObject({
+      record: {
+        preparedAffectedRepoPaths: ["migrations/system", "packages/runtime"],
+        migrationFacets: ["system"],
+      },
+      repair: {
+        contextId: "template-composer-operation-system",
+        failures: [{ unit: "migrations/system" }],
+      },
+    });
+    expect(
+      preparedMigrationHold(approvedRecord(), {
+        contextId: "template-composer-operation-ordinary",
+        affectedRepoPaths: ["packages/runtime"],
+      })
+    ).toBeUndefined();
   });
 
   it("keeps every exact in-flight pin when the registry refreshes", async () => {

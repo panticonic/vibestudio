@@ -47,6 +47,7 @@ export const WORKSPACE_TEMPLATE_DIRS = [
   "skills",
   "about",
   "templates",
+  "migrations",
   "apps",
   "extensions",
 ];
@@ -127,6 +128,7 @@ function stageServer() {
   // First-run workspace template (runtimePaths.ts: appRoot/workspace-template).
   stageWorkspaceTemplate(path.join(root, "workspace-template"));
   stageWorkspaceTemplateSupport(root);
+  stageBaseTemplateRelease(root);
 
   // Bin shims.
   copyFile("scripts/vibestudio-launcher.mjs", path.join(root, "scripts/vibestudio-launcher.mjs"));
@@ -164,7 +166,7 @@ function stageServer() {
       vibestudio: "scripts/vibestudio-launcher.mjs",
     },
     engines: { node: ">=22.13.0" },
-    files: ["dist", "vendor", "workspace-template", "patches", "scripts"],
+    files: ["dist", "vendor", "workspace-template", "patches", "scripts", "build-resources"],
     scripts: { postinstall: "node scripts/vendor-install.mjs" },
     // Full host build-dependency surface (app minus electron).
     dependencies: computeHostDependencies({ electron: false }),
@@ -341,6 +343,13 @@ function stageWorkspaceTemplateSupport(pkgRoot) {
     if (!fs.existsSync(src)) continue;
     copyTree(src, path.join(pkgRoot, dir), defaultSkip);
   }
+}
+
+export function stageBaseTemplateRelease(pkgRoot) {
+  copyFile(
+    "build-resources/base-template-release.json",
+    path.join(pkgRoot, "build-resources/base-template-release.json")
+  );
 }
 
 // ---------------------------------------------------------------------------

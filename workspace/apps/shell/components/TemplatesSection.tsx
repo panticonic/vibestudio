@@ -212,15 +212,22 @@ export function TemplatesSection() {
             <Flex direction="column" gap="2">
               <Flex justify="between" align="center" gap="2">
                 <Box>
-                  <Text as="div" size="2" weight="medium">
-                    {operation.kind} template operation
-                  </Text>
+                  <Flex align="center" gap="2">
+                    <Text as="div" size="2" weight="medium">
+                      {operation.kind} template operation
+                    </Text>
+                    {operation.migration ? (
+                      <Badge color="amber" variant="soft">
+                        Upgrading workspace
+                      </Badge>
+                    ) : null}
+                  </Flex>
                   <Text as="div" size="1" color="gray">
                     {operation.operationId}
                   </Text>
                 </Box>
                 <Flex gap="1">
-                  {!operation.review ? (
+                  {!operation.review && !operation.migration ? (
                     <Button
                       size="1"
                       variant="soft"
@@ -252,7 +259,9 @@ export function TemplatesSection() {
               {operation.repair ? (
                 <Box>
                   <Text as="div" size="2" color="orange">
-                    The merged result is retained for repair.
+                    {operation.migration
+                      ? `Continue with an agent: read and verify the incoming ${operation.migration.facets.join(", ")} contract notes before resuming.`
+                      : "The merged result is retained for repair."}
                   </Text>
                   {operation.repair.failures.map((failure) => (
                     <Text key={`${failure.unit}:${failure.message}`} as="div" size="1" color="gray">

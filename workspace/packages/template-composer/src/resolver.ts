@@ -9,7 +9,10 @@ import {
   type CanonicalSnapshotDigest,
 } from "@vibestudio/content-addressing";
 import type { ExactGitSnapshot, ExactSnapshotFile } from "@vibestudio/git";
-import { normalizeWorkspaceRepoPath } from "@vibestudio/shared/runtime/entitySpec";
+import {
+  CONTAINER_SECTIONS,
+  normalizeWorkspaceRepoPath,
+} from "@vibestudio/shared/runtime/entitySpec";
 import {
   WorkspaceConfigFragmentSchema,
   WorkspaceConfigTopLayerSchema,
@@ -35,21 +38,10 @@ import {
   templateLockFingerprint,
   templateSuggestionDigest,
 } from "@vibestudio/workspace/templateLock";
+import { parseMigrationNote } from "@vibestudio/workspace/migrationNotes";
 
 const TEMPLATE_FRAGMENT_DIR = "meta/templates";
 const TEMPLATE_LOCK_PATH = "meta/templates.lock.yml";
-const CONTAINER_SECTIONS = new Set([
-  "panels",
-  "apps",
-  "packages",
-  "workers",
-  "extensions",
-  "skills",
-  "about",
-  "templates",
-  "projects",
-]);
-
 type ParsedTopLayer = ReturnType<typeof WorkspaceConfigTopLayerSchema.parse>;
 export type TemplateManifestFragment = ReturnType<typeof WorkspaceConfigFragmentSchema.parse>;
 
@@ -306,6 +298,23 @@ function enumerateRepoFiles(node: MutableNode): Map<string, ExactSnapshotFile[]>
     }
     const unit = parts[1];
     if (!unit || parts.length < 3) continue;
+    if (section === "migrations" && file.path.endsWith(".md")) {
+      const bytes = node.snapshot.readFile(file.path);
+      if (!bytes) {
+        throw new TemplateManifestError(
+          node.nodeId,
+          `missing migration-note bytes for ${file.path}`
+        );
+      }
+      try {
+        parseMigrationNote(file.path, new TextDecoder("utf-8", { fatal: true }).decode(bytes));
+      } catch (error) {
+        throw new TemplateManifestError(
+          node.nodeId,
+          error instanceof Error ? error.message : String(error)
+        );
+      }
+    }
     const repoPath = normalizeWorkspaceRepoPath(`${section}/${unit}`);
     const list = repositories.get(repoPath) ?? [];
     list.push({ ...file, path: parts.slice(2).join("/") });

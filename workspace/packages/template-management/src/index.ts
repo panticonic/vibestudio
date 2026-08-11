@@ -16,6 +16,7 @@ export interface TemplatePendingOperation {
   contextId: string;
   state: "pending" | "reviewing" | "repairing";
   fingerprint: string;
+  migration?: NonNullable<TemplateOperation["migration"]>;
   review?: NonNullable<TemplateOperation["review"]>;
   repair?: NonNullable<TemplateOperation["repair"]>;
 }
@@ -25,32 +26,22 @@ export interface TemplateManagementClient {
   catalog(options?: { refresh?: boolean }): Promise<TemplateCatalogSnapshot | null>;
   check(options?: { alias?: string }): Promise<Array<{ alias: string }>>;
   inspect(locator: TemplateLocator): Promise<TemplateInspection>;
-  add(input: {
-    commandId: string;
-    source: TemplateAddRequest;
-  }): Promise<TemplateOperation>;
-  adopt(input: {
-    commandId: string;
-    pin: TemplateExactPin;
-  }): Promise<TemplateOperation>;
+  add(input: { commandId: string; source: TemplateAddRequest }): Promise<TemplateOperation>;
+  adopt(input: { commandId: string; pin: TemplateExactPin }): Promise<TemplateOperation>;
   pull(input: {
     commandId: string;
     alias: string;
     toRef?: string;
+    pin?: TemplateExactPin;
   }): Promise<TemplateOperation>;
-  remove(input: {
-    commandId: string;
-    alias: string;
-  }): Promise<TemplateOperation>;
+  remove(input: { commandId: string; alias: string }): Promise<TemplateOperation>;
   suggest(input: {
     commandId: string;
     alias: string;
     parts?: string[];
   }): Promise<TemplateOperation>;
   operations(): Promise<TemplatePendingOperation[]>;
-  resume(input: {
-    operationId: string;
-  }): Promise<TemplateOperation>;
+  resume(input: { operationId: string }): Promise<TemplateOperation>;
   cancel(input: { operationId: string }): Promise<{ operationId: string; state: "cancelled" }>;
   decideSuggestion(input: {
     commandId: string;

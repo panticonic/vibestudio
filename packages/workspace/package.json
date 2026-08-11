@@ -7,11 +7,13 @@
     "buildProfile": "source-only"
   },
   "exports": {
+    "./baseTemplateRelease": "./src/baseTemplateRelease.ts",
     "./configParser": "./src/configParser.ts",
     "./configComposition": "./src/configComposition.ts",
     "./contextProjections": "./src/contextProjections.ts",
     "./gitCheckouts": "./src/gitCheckouts.ts",
     "./loader": "./src/loader.ts",
+    "./migrationNotes": "./src/migrationNotes.ts",
     "./pathPolicy": "./src/pathPolicy.ts",
     "./preparedConfig": "./src/preparedConfig.ts",
     "./remoteUrl": "./src/remoteUrl.ts",

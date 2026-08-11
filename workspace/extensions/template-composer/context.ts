@@ -15,6 +15,7 @@ export interface ExtensionContextLike {
     call<T = unknown>(targetId: string, method: string, ...args: unknown[]): Promise<T>;
   };
   credentials: CredentialClient;
+  emit(event: string, payload: unknown): void;
   extensions: {
     invoke<T = unknown>(extension: string, method: string, args?: unknown[]): Promise<T>;
   };

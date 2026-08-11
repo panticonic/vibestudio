@@ -40,7 +40,8 @@ function snapshot(
   exact: WorkspaceTemplatePin,
   dependencies: readonly WorkspaceTemplateDeclaration[],
   repoPath: string,
-  presentation?: { name?: string; description?: string }
+  presentation?: { name?: string; description?: string },
+  extraFiles: ReadonlyArray<{ path: string; text: string }> = []
 ): ExactGitSnapshot {
   const manifest = new TextEncoder().encode(
     [
@@ -70,10 +71,19 @@ function snapshot(
     ].join("\n")
   );
   const source = new TextEncoder().encode(`export const source = ${JSON.stringify(repoPath)};\n`);
-  const files = [file("meta/template.yml", manifest), file(`${repoPath}/index.ts`, source)];
+  const encodedExtraFiles = extraFiles.map(({ path, text }) => ({
+    path,
+    bytes: new TextEncoder().encode(text),
+  }));
+  const files = [
+    file("meta/template.yml", manifest),
+    file(`${repoPath}/index.ts`, source),
+    ...encodedExtraFiles.map(({ path, bytes }) => file(path, bytes)),
+  ];
   const bytes = new Map([
     ["meta/template.yml", manifest],
     [`${repoPath}/index.ts`, source],
+    ...encodedExtraFiles.map(({ path, bytes }) => [path, bytes] as const),
   ]);
   return {
     commit: exact.commit,
@@ -248,6 +258,73 @@ describe("resolveTemplateComposition", () => {
         subtreeDigest,
       }))
     );
+  });
+
+  it("passes valid migration facets through as ordinary content repositories", async () => {
+    const news = pin(newsUrl, "b");
+    const plan = await resolveTemplateComposition({
+      roots: [{ url: newsUrl }],
+      expectedSystemEpoch: epoch,
+      ports: ports(
+        [news],
+        new Map([
+          [
+            normalizeTemplateGitUrl(newsUrl),
+            snapshot(news, [], "panels/news", undefined, [
+              {
+                path: "migrations/news/current-contract.md",
+                text: [
+                  "---",
+                  "degraded-ok: true",
+                  "verify: pnpm --dir workspace type-check",
+                  "---",
+                  "",
+                  "# Current contract",
+                  "",
+                  "Ensure the news worker exposes the current result shape.",
+                  "",
+                ].join("\n"),
+              },
+              {
+                path: "migrations/news/repair.mjs",
+                text: "export function repair() {}\n",
+              },
+            ]),
+          ],
+        ])
+      ),
+    });
+
+    expect(plan.repositories["migrations/news"]?.contributions[0]?.files).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ path: "current-contract.md" }),
+        expect.objectContaining({ path: "repair.mjs" }),
+      ])
+    );
+  });
+
+  it("rejects malformed markdown notes before they enter a workspace", async () => {
+    const news = pin(newsUrl, "b");
+    await expect(
+      resolveTemplateComposition({
+        roots: [{ url: newsUrl }],
+        expectedSystemEpoch: epoch,
+        ports: ports(
+          [news],
+          new Map([
+            [
+              normalizeTemplateGitUrl(newsUrl),
+              snapshot(news, [], "panels/news", undefined, [
+                {
+                  path: "migrations/news/current-contract.md",
+                  text: "# Missing frontmatter\n",
+                },
+              ]),
+            ],
+          ])
+        ),
+      })
+    ).rejects.toThrow("missing YAML frontmatter");
   });
 
   it("keeps a hostile self-given name out of workspace state entirely", async () => {

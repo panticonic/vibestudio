@@ -35,6 +35,9 @@ extraResources:
     to: "seed"
     filter:
       - "missions/*.json"
+  # Exact base-template release input and host-side rescue notes.
+  - from: "build-resources/base-template-release.json"
+    to: "base-template-release.json"
   # Default workspace template (used to create first workspace on fresh install).
   # Whitelist only source directories — exclude Electron session data, build cache, etc.
   - from: "workspace"
@@ -48,6 +51,7 @@ extraResources:
       - "skills/**/*"
       - "about/**/*"
       - "templates/**/*"
+      - "migrations/**/*"
       - "apps/**/*"
       - "extensions/**/*"
       - "package.json"

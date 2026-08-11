@@ -120,6 +120,45 @@ and installation, not chosen during authoring.
   offered wiring. A template can declare what it wants; it can never grant or
   activate it.
 
+## Write migration notes as living contracts
+
+A release that changes what a composed workspace must look like carries
+markdown notes under `migrations/<template-name>/` in the same commit. The path
+is copied verbatim into the workspace. Use the template's own stable human name
+as its facet; `migrations/system/` is reserved for host contract notes shipped
+by the base template.
+
+Every markdown note has exactly this header:
+
+```markdown
+---
+degraded-ok: true
+verify: |
+  pnpm -C <unit> typecheck
+---
+
+# The current target contract
+```
+
+- Write the body against the target state: say how to recognize old or
+  half-repaired shapes and what each maps to. Assume the workspace diverged.
+- Make the note idempotent. It may be read on a fresh workspace, after skipped
+  releases, or after an interrupted repair.
+- Keep `verify` executable and specific enough to prove the contract. Keep
+  `degraded-ok` honest; it is future lifecycle input, never a risk or authority
+  declaration. Do not add severity, version, identity, or applied-marker fields.
+- Rewrite, merge, and prune notes as reality changes. Git history retains old
+  editorial context; the workspace never carries a migration ledger.
+- Bundle a codemod only when most workspaces share a genuinely mechanical
+  transformation. The applying agent still inspects actual state and repairs
+  the divergent tail.
+
+Before promoting a contract-changing release, install it into a representative
+fork with local changes, perform the retained migration repair, run every note
+verification plus normal gates, and review the migration transcript. A poorly
+guided session is fixed by improving the note or this skill, not by adding a
+parallel mechanism.
+
 ## Make releases usable
 
 Tag each published version. Promote its release coordinates in the Git registry
@@ -162,6 +201,9 @@ or publish a separate npm SDK before extraction.
 5. Test a later tagged update with local and overlapping changes. Verify that
    merge or build failures retain one repairable context with structured
    feedback, and that resume rebuilds and publishes the repaired result.
+6. When that update carries migration notes, verify that even a clean merge is
+   retained until an agent reads the notes, proves conformance, journals the
+   repair, and resumes it.
 
 The publication operation creates a `main` branch and an immutable version tag
 at the same attributed commit. It does not modify the source workspace or add

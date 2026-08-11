@@ -57,10 +57,12 @@ commit, and content digest only in a labeled Details view.
 1. Invoke composer `status`.
 2. Invoke composer `operations`. For every returned operation, continue its
    ordinary VCS review when `state` is `reviewing`; when `state` is `repairing`,
-   edit `repair.contextId` using its structured failures and invoke `resume` to
-   rebuild; otherwise invoke `resume`, or invoke `cancel` when the user abandons it. These
-   operations have already crossed the host approval boundary; never describe
-   them as awaiting an approval card.
+   follow **Migration repair** below when `migration` is present; otherwise edit
+   `repair.contextId` using its structured failures and invoke `resume` to
+   rebuild. For other states invoke `resume`, or invoke `cancel` when the user abandons it. These
+   operations are retained semantic contexts, not approval-card records;
+   `resume` crosses the ordinary host gates at publication. Never describe the
+   retained operation itself as an approval card.
 3. Invoke composer `check` when the user asks to check, or while rendering a
    template status view. Update discovery is on-view; never schedule it.
 4. Describe each result using the template’s display name and its status:
@@ -145,6 +147,39 @@ commandId })` only after the user asks to update.
    and external delta for that normal workflow. Confirm finalization only
    after all resulting decisions are accounted for.
 
+## Migration repair
+
+`operation.migration.facets` means the incoming update carries living contract
+notes under `migrations/<facet>/`. The operation is deliberately retained in
+`repair.contextId` even when its merge is conflict-free and build-green. This
+is the normal template update context, not a separate migration service.
+
+1. Read every incoming markdown note under the named facets in
+   `repair.contextId`, including notes introduced by dependencies. Treat each
+   body as the target contract and inspect the actual retained workspace before
+   editing. A note that is already satisfied is a no-op. For dependent notes,
+   establish the base-template contract before repairing the dependent shape.
+2. Close the observed gap idempotently. Do not replay steps blindly, add a
+   compatibility shim, or write an applied-note marker. Optional scripts beside
+   a note are tools, not an alternate completion protocol; inspect them before
+   use and handle divergent state directly.
+3. Run every note's `verify` command or probe in the retained context, then run
+   the normal affected build/typecheck gates. Note prose and `degraded-ok` grant
+   no authority and never replace ordinary approvals.
+4. Before `resume`, leave a concise account in the migration conversation:
+   which contracts already held, what changed, why, and the verification
+   evidence. Give managed edits meaningful intent and commit messages. The
+   transcript and committed provenance are ordinary workspace memory; never
+   create a migration ledger or correctness marker.
+5. Invoke `resume` only when every applicable verification is green. If the
+   contract cannot be proved, keep the operation retained, report the concrete
+   mismatch and evidence to the user, and ask for help. Never land a partial
+   migration silently.
+
+For a manual “check this workspace against its current contracts” request,
+read the committed `migrations/**` notes, inspect current state, and follow the
+same conformance and verification loop without inventing a template operation.
+
 ## Remove or suggest changes
 
 - Only a template named directly in workspace settings can be removed.
@@ -180,6 +215,9 @@ workspace.
    requirements. Required
    parts are deterministic `workspace:*` or runtime dependencies; do not remove
    them.
+   When the release changes a userland contract, include or refresh its
+   `migrations/<template-name>` repository in the intent and follow the note
+   authoring rules in the reference below.
 3. Show the generated manifest and `fingerprint` in a technical details view.
    The source event binds the current workspace state. The manifest deliberately
    declares only direct URLs (plus logical credential names).

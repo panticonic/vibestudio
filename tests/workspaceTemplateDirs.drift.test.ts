@@ -90,5 +90,13 @@ describe("packaged workspace template staging drift guard", () => {
         expect.arrayContaining([expect.objectContaining({ from: dir, to: dir })])
       );
     }
+    expect(resources).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          from: "build-resources/base-template-release.json",
+          to: "base-template-release.json",
+        }),
+      ])
+    );
   });
 });

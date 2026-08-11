@@ -43,6 +43,13 @@ export const templateContributionSchema = z
   })
   .strict();
 
+export const templateMigrationSchema = z
+  .object({
+    /** Template-owned note facets carried by this exact incoming change. */
+    facets: z.array(z.string().trim().min(1)).min(1),
+  })
+  .strict();
+
 export const templateLifecycleStateSchema = z.enum([
   "current",
   "update-available",
@@ -144,11 +151,13 @@ export const templateOperationSchema = z
       "local-changes",
       "waiting-for-credential",
       "conflict",
+      "repairing",
       "error",
     ]),
     planFingerprint: digest.optional(),
     review: templateReviewSchema.optional(),
     contribution: templateContributionSchema.optional(),
+    migration: templateMigrationSchema.optional(),
     blocker: templateRecoveryBlockerSchema.optional(),
     /** A retained semantic context which an agent may edit with the ordinary
      * workspace/VCS tools before calling resume. */
@@ -475,6 +484,9 @@ export const templatesMethods = defineServiceMethods({
           commandId,
           alias: z.string().trim().min(1),
           toRef: z.string().trim().min(1).optional(),
+          /** Host releases pass the exact base-template pin shipped with the
+           * host. Composer still verifies, stages, and gates it normally. */
+          pin: WorkspaceTemplatePinSchema.optional(),
         })
         .strict(),
     ]),
@@ -553,6 +565,7 @@ export const templatesMethods = defineServiceMethods({
           contextId: z.string(),
           state: z.enum(["pending", "reviewing", "repairing"]),
           fingerprint: digest,
+          migration: templateMigrationSchema.optional(),
           review: templateReviewSchema.optional(),
           repair: z
             .object({

@@ -13,6 +13,7 @@ import type { ChromeCommand } from "./PanelStack";
 import { TitleBar } from "./TitleBar";
 import { NotificationBar } from "./NotificationBar";
 import { UserNotificationBar } from "./UserNotificationBar";
+import { WorkspaceUpgradeBar } from "./WorkspaceUpgradeBar";
 import { ConsentApprovalBar, APPROVAL_OVERLAY_HOST_ID } from "./ConsentApprovalBar";
 import type { PanelChromeState } from "@vibestudio/shared/panelChrome";
 import type { FocusedPaneChromeState, PaneChromeCommand } from "./paneChrome";
@@ -243,6 +244,7 @@ function PanelAppContent() {
         onPaneChromeCommand={handlePaneChromeCommand}
       />
       <NotificationBar />
+      <WorkspaceUpgradeBar />
       <UserNotificationBar />
       <ConsentApprovalBar />
       {/* Panel region — also the positioning host the approval card portals

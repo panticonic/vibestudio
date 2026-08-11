@@ -401,15 +401,29 @@ function TemplatesPage() {
                     <Flex direction="column" gap="2">
                       <Flex align="center" justify="between" gap="2" wrap="wrap">
                         <Box>
-                          <Text as="div" weight="medium">
-                            {operation.kind} template operation
-                          </Text>
+                          <Flex align="center" gap="2">
+                            <Text as="div" weight="medium">
+                              {operation.kind} template operation
+                            </Text>
+                            {operation.migration ? (
+                              <Badge color="amber" variant="soft">
+                                Upgrading workspace
+                              </Badge>
+                            ) : null}
+                          </Flex>
                           <Text as="div" size="1" color="gray">
                             {operation.operationId}
                           </Text>
+                          {operation.migration ? (
+                            <Text as="div" size="1" color="orange">
+                              Continue with an agent: read and verify the incoming{" "}
+                              {operation.migration.facets.join(", ")} contract notes before
+                              resuming.
+                            </Text>
+                          ) : null}
                         </Box>
                         <Flex gap="1">
-                          {!operation.review ? (
+                          {!operation.review && !operation.migration ? (
                             <Button
                               size="1"
                               variant="soft"

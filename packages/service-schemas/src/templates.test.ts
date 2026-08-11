@@ -54,6 +54,37 @@ describe("template recovery contracts", () => {
     ).toThrow();
   });
 
+  it("carries migration facets on a retained repair operation", () => {
+    expect(
+      templatesMethods.operations.returns.parse([
+        {
+          operationId: "pull-base",
+          kind: "pull",
+          contextId: "template-composer-operation-base",
+          state: "repairing",
+          fingerprint: `v1-sha256:${"a".repeat(64)}`,
+          migration: { facets: ["system"] },
+          repair: {
+            contextId: "template-composer-operation-base",
+            failures: [],
+          },
+        },
+      ])[0]
+    ).toMatchObject({ migration: { facets: ["system"] } });
+  });
+
+  it("accepts an exact host-shipped target on the ordinary pull method", () => {
+    const pin = {
+      url: "git+https://example.test/base.git",
+      ref: "refs/heads/main",
+      commit: "a".repeat(40),
+      snapshot: `v1-sha256:${"b".repeat(64)}`,
+    };
+    expect(
+      templatesMethods.pull.args.parse([{ commandId: "host-release", alias: "base", pin }])
+    ).toEqual([{ commandId: "host-release", alias: "base", pin }]);
+  });
+
   it("carries an actionable durable blocker through status", () => {
     expect(
       templateStatusRowSchema.parse({
