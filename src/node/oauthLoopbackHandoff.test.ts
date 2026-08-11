@@ -67,6 +67,50 @@ describe("handleExternalOpenPayload", () => {
     expect(cancelOAuth).not.toHaveBeenCalled();
   });
 
+  it("binds a free client-loopback port before opening the authorize URL", async () => {
+    let callbackResponse: Promise<HttpResult> | undefined;
+    const openExternal = vi.fn(async (authorizeUrl: string) => {
+      const redirectUri = new URL(authorizeUrl).searchParams.get("redirect_uri");
+      expect(redirectUri).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/$/);
+      expect(redirectUri).not.toBe("http://127.0.0.1:0/");
+      callbackResponse = httpGetResult(`${redirectUri}?code=code-dynamic&state=state-dynamic`);
+    });
+    const forwardOAuthCallback = vi.fn(
+      async (_request: { transactionId: string; url: string; state?: string }) => undefined
+    );
+
+    await handleExternalOpenPayload(
+      {
+        url:
+          "https://auth.example.test/oauth/authorize?redirect_uri=" +
+          encodeURIComponent("http://127.0.0.1:0/"),
+        callerId: "shell:test",
+        callerKind: "shell",
+        oauthLoopback: {
+          transactionId: "tx-dynamic",
+          redirectUri: "http://127.0.0.1:0/",
+          host: "127.0.0.1",
+          port: 0,
+          callbackPath: "/",
+          state: "state-dynamic",
+          timeoutMs: 5_000,
+        },
+      },
+      {
+        openExternal,
+        forwardOAuthCallback,
+        cancelOAuth: vi.fn(async () => undefined),
+      }
+    );
+
+    const forwarded = forwardOAuthCallback.mock.calls[0]?.[0];
+    expect(forwarded).toMatchObject({ transactionId: "tx-dynamic", state: "state-dynamic" });
+    expect(forwarded?.url).toMatch(
+      /^http:\/\/127\.0\.0\.1:\d+\/\?code=code-dynamic&state=state-dynamic$/
+    );
+    await expect(callbackResponse).resolves.toMatchObject({ status: 200 });
+  });
+
   it("cancels the server transaction when the browser cannot open", async () => {
     const port = await getFreePort();
     const cancelOAuth = vi.fn(async () => undefined);

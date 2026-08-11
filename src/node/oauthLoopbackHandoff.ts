@@ -24,7 +24,12 @@ export async function handleExternalOpenPayload(
   try {
     const callback = await startOAuthLoopbackCallback(payload.oauthLoopback);
     try {
-      const opening = deps.openExternal(payload.url);
+      const authorizeUrl = authorizeUrlForBoundLoopback(
+        payload.url,
+        payload.oauthLoopback.redirectUri,
+        callback.redirectUri
+      );
+      const opening = deps.openExternal(authorizeUrl);
       // Some launch adapters resolve when the browser process exits rather
       // than when it is spawned. Accept the callback as proof that opening
       // succeeded, while still surfacing a launch rejection that arrives
@@ -53,6 +58,7 @@ export async function handleExternalOpenPayload(
 async function startOAuthLoopbackCallback(
   loopback: NonNullable<ExternalOpenPayload["oauthLoopback"]>
 ): Promise<{
+  redirectUri: string;
   wait: Promise<{
     url: string;
     state?: string;
@@ -64,6 +70,7 @@ async function startOAuthLoopbackCallback(
   let settled = false;
   let listening = false;
   let timer: ReturnType<typeof setTimeout> | null = null;
+  let redirectUri = loopback.redirectUri;
   let resolveCallback!: (value: {
     url: string;
     state?: string;
@@ -81,7 +88,7 @@ async function startOAuthLoopbackCallback(
   });
 
   const server = http.createServer((req, res) => {
-    const url = new URL(req.url ?? "/", loopback.redirectUri);
+    const url = new URL(req.url ?? "/", redirectUri);
     if (url.pathname !== callbackPath) {
       res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
       res.end("not found");
@@ -131,6 +138,14 @@ async function startOAuthLoopbackCallback(
     server.once("listening", onListening);
     server.listen(loopback.port, loopback.host);
   });
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    server.close();
+    throw new Error("OAuth callback listener did not bind a TCP port");
+  }
+  const bound = new URL(loopback.redirectUri);
+  bound.port = String(address.port);
+  redirectUri = bound.toString();
 
   timer = setTimeout(
     () => {
@@ -153,6 +168,7 @@ async function startOAuthLoopbackCallback(
     .catch(() => undefined);
 
   return {
+    redirectUri,
     wait,
     close() {
       if (timer) {
@@ -168,6 +184,20 @@ async function startOAuthLoopbackCallback(
     listening = false;
     server.close();
   }
+}
+
+function authorizeUrlForBoundLoopback(
+  authorizeUrl: string,
+  requestedRedirectUri: string,
+  boundRedirectUri: string
+): string {
+  if (requestedRedirectUri === boundRedirectUri) return authorizeUrl;
+  const url = new URL(authorizeUrl);
+  if (url.searchParams.get("redirect_uri") !== requestedRedirectUri) {
+    throw new Error("OAuth authorize URL does not contain the requested loopback redirect");
+  }
+  url.searchParams.set("redirect_uri", boundRedirectUri);
+  return url.toString();
 }
 
 function escapeHtml(value: string): string {

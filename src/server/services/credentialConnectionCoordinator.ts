@@ -90,6 +90,7 @@ interface BrowserHandoffTarget {
   deliveryCallerId: string;
   deliveryCallerKind: BrowserDeliveryCallerKind;
   deliveryConnectionId?: string;
+  clientPlatform?: "desktop" | "headless" | "mobile";
   parentPanelId?: string;
 }
 
@@ -267,6 +268,7 @@ export interface CredentialConnectionCoordinatorDeps {
     getAuthorizingShell(principalId: string): {
       caller: { runtime: { id: string; kind: string } };
       connectionId: string;
+      clientPlatform?: "desktop" | "headless" | "mobile";
     } | null;
   };
   sessionCredentialCapture?: SessionCredentialCapture;
@@ -434,17 +436,21 @@ export function createCredentialConnectionCoordinator(
   /**
    * Decide which redirect strategy to use when the caller doesn't specify one.
    *
-   * After the WebRTC cutover the server has no public origin, so every remote
-   * platform routes OAuth through the public callback relay (§7). The parity rule
-   * means desktop and mobile share that one relay path rather than special-casing
-   * desktop loopback, so the default is "public" — which now points the IdP at the
-   * relay host (see buildRelayOAuthCallbackUrl), not the server's own URL. Genuinely
-   * co-located callers may still request "loopback"/"client-loopback" explicitly.
+   * Native desktop OAuth clients generally authorize loopback redirects, not the
+   * product relay's HTTPS URL. When the authenticated browser owner is a desktop
+   * (or headless desktop CLI), make its local callback listener the default. Mobile
+   * and unknown clients retain the relay default because a desktop loopback is not
+   * reachable there. An explicit strategy always wins.
    */
   function resolveDefaultRedirectStrategy(
-    requested: OAuthRedirectStrategy | undefined
+    requested: OAuthRedirectStrategy | undefined,
+    browser: "internal" | "external",
+    clientPlatform: BrowserHandoffTarget["clientPlatform"]
   ): OAuthRedirectStrategy {
     if (requested) return requested;
+    if (browser === "external" && (clientPlatform === "desktop" || clientPlatform === "headless")) {
+      return "client-loopback";
+    }
     return "public";
   }
 
@@ -480,21 +486,21 @@ export function createCredentialConnectionCoordinator(
   function buildClientLoopbackRedirectUri(
     redirect: NonNullable<ConnectCredentialRequest["redirect"]>
   ): string {
-    const host = redirect.host ?? "localhost";
+    const host = redirect.host ?? "127.0.0.1";
     if (host !== "localhost" && host !== "127.0.0.1") {
       throw new OAuthConnectionError(
         "redirect_unavailable",
         "client-loopback redirects require localhost or 127.0.0.1"
       );
     }
-    const port = redirect.port;
-    if (!port || port < 1 || port > 65535) {
+    const port = redirect.port ?? 0;
+    if (!Number.isInteger(port) || port < 0 || port > 65535) {
       throw new OAuthConnectionError(
         "redirect_unavailable",
-        "client-loopback redirects require a fixed port"
+        "client-loopback redirects require a valid port"
       );
     }
-    const callbackPath = normalizeCallbackPath(redirect.callbackPath ?? DEFAULT_CALLBACK_PATH);
+    const callbackPath = normalizeCallbackPath(redirect.callbackPath ?? "/");
     return `http://${host}:${port}${callbackPath}`;
   }
 
@@ -645,6 +651,8 @@ export function createCredentialConnectionCoordinator(
           deliveryCallerKind: "shell",
           deliveryConnectionId:
             targetCallerId === ctx.caller.runtime.id ? ctx.connectionId : undefined,
+          clientPlatform:
+            targetCallerId === ctx.caller.runtime.id ? ctx.wsClient?.clientPlatform : undefined,
         },
         "not-required"
       );
@@ -656,6 +664,8 @@ export function createCredentialConnectionCoordinator(
           deliveryCallerKind: "app",
           deliveryConnectionId:
             targetCallerId === ctx.caller.runtime.id ? ctx.connectionId : undefined,
+          clientPlatform:
+            targetCallerId === ctx.caller.runtime.id ? ctx.wsClient?.clientPlatform : undefined,
         },
         "not-required"
       );
@@ -743,6 +753,7 @@ export function createCredentialConnectionCoordinator(
         deliveryCallerId: shellConnection.caller.runtime.id,
         deliveryCallerKind: "shell",
         deliveryConnectionId: shellConnection.connectionId,
+        clientPlatform: shellConnection.clientPlatform,
         parentPanelId,
       },
       "found"
@@ -1952,7 +1963,7 @@ export function createCredentialConnectionCoordinator(
       throw new OAuthConnectionError("client_config_unavailable");
     }
     const redirect = request.redirect ?? {};
-    const redirectStrategy = resolveDefaultRedirectStrategy(redirect.type);
+    const redirectStrategy = redirect.type ?? "public";
     if (redirectStrategy === "client-loopback") {
       throw new OAuthConnectionError(
         "unsupported_flow",
@@ -2107,7 +2118,17 @@ export function createCredentialConnectionCoordinator(
   ): Promise<StoredCredentialSummary> {
     throwIfAborted(signal);
     const redirect = request.redirect ?? {};
-    const redirectStrategy = resolveDefaultRedirectStrategy(redirect.type);
+    const openMode = request.browser ?? "external";
+    const browserResolution = await resolveBrowserHandoffTarget(
+      ctx,
+      explicitHandoffTarget,
+      openMode
+    );
+    const redirectStrategy = resolveDefaultRedirectStrategy(
+      redirect.type,
+      openMode,
+      browserResolution.target?.clientPlatform
+    );
     let callback: HostOAuthCallback | null = null;
     let tx: OAuthConnectionTransaction | null = null;
     try {
@@ -2178,7 +2199,6 @@ export function createCredentialConnectionCoordinator(
       await transitionOAuthTransaction(tx, "approved");
       const started = createOAuthAuthorizeRequest(oauthRequest, stateParam);
       callback?.expectState(started.state);
-      const openMode = request.browser ?? "external";
       if (
         (redirectStrategy === "client-loopback" || redirectStrategy === "app-scheme") &&
         openMode !== "external"
@@ -2188,11 +2208,6 @@ export function createCredentialConnectionCoordinator(
           `${redirectStrategy} OAuth requires an external browser`
         );
       }
-      const browserResolution = await resolveBrowserHandoffTarget(
-        ctx,
-        explicitHandoffTarget,
-        openMode
-      );
       const browserTarget = browserResolution.target;
       if (!browserTarget) {
         throw new OAuthConnectionError(
@@ -2245,6 +2260,10 @@ export function createCredentialConnectionCoordinator(
         await receiveOAuthCallback(tx, callbackResult);
       }
       const result = await abortable(tx.wait, signal);
+      // A dynamic client-loopback listener replaces port 0 immediately before
+      // opening the authorize URL. The authenticated callback records that exact
+      // bound URI so the token exchange uses the same redirect_uri.
+      oauthRequest.redirectUri = tx.redirectUri;
       await transitionOAuthTransaction(tx, "exchanging");
       const token = await exchangeOAuthCode(oauthRequest, result.code, started.codeVerifier);
       await transitionOAuthTransaction(tx, "validating_account");
@@ -2947,11 +2966,13 @@ export function createCredentialConnectionCoordinator(
       tx.reject(new OAuthConnectionError("state_mismatch"));
       return;
     }
-    if (!isExpectedRedirectCallback(tx, callback.url)) {
+    const callbackRedirectUri = expectedRedirectUriForCallback(tx, callback.url);
+    if (!callbackRedirectUri) {
       await transitionOAuthTransaction(tx, "failed", "redirect_mismatch");
       tx.reject(new OAuthConnectionError("redirect_mismatch"));
       return;
     }
+    tx.redirectUri = callbackRedirectUri;
     if (callback.error) {
       await transitionOAuthTransaction(tx, "cancelled", "approval_denied");
       tx.reject(new OAuthConnectionError("approval_denied", callback.error));
@@ -3252,17 +3273,30 @@ function respondOAuthCallback(res: http.ServerResponse, status: number, body: st
   res.end(body);
 }
 
-function isExpectedRedirectCallback(tx: { redirectUri: string }, callbackUrl: string): boolean {
+function expectedRedirectUriForCallback(
+  tx: Pick<OAuthConnectionTransaction, "redirectUri" | "redirectStrategy">,
+  callbackUrl: string
+): string | null {
   try {
     const expected = new URL(tx.redirectUri);
     const actual = new URL(callbackUrl);
-    return (
+    if (actual.username || actual.password || actual.hash) return null;
+    const sameLocation =
       actual.protocol === expected.protocol &&
-      actual.host === expected.host &&
-      actual.pathname === expected.pathname
-    );
+      actual.hostname === expected.hostname &&
+      actual.pathname === expected.pathname;
+    if (!sameLocation) return null;
+    if (tx.redirectStrategy === "client-loopback" && expected.port === "0") {
+      const port = Number(actual.port);
+      if (!Number.isInteger(port) || port < 1 || port > 65535) return null;
+    } else if (actual.port !== expected.port) {
+      return null;
+    }
+    actual.search = "";
+    actual.hash = "";
+    return actual.toString();
   } catch {
-    return false;
+    return null;
   }
 }
 

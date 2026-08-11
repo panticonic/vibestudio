@@ -522,7 +522,13 @@ export const OAuthRedirectStrategySchema = z
       .enum(["loopback", "public", "client-forwarded", "client-loopback", "app-scheme"])
       .optional(),
     host: z.string().optional(),
-    port: z.number().int().min(0).max(65535).optional(),
+    port: z
+      .number()
+      .int()
+      .min(0)
+      .max(65535)
+      .optional()
+      .describe("Loopback port; zero or omitted lets a client-loopback host bind a free port."),
     callbackPath: z.string().optional(),
     callbackUri: z.string().url().optional(),
     fallback: z.literal("dynamic-port").optional(),

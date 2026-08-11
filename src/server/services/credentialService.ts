@@ -138,6 +138,7 @@ export interface CredentialServiceDeps {
     getAuthorizingShell(principalId: string): {
       caller: { runtime: { id: string; kind: string } };
       connectionId: string;
+      clientPlatform?: "desktop" | "headless" | "mobile";
     } | null;
   };
   egressProxy?: Pick<EgressProxy, "forwardProxyFetch" | "forwardGitHttp">;

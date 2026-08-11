@@ -399,6 +399,7 @@ export interface OAuthAccountValidationSpec {
 export interface OAuthLoopbackRedirectStrategy {
   type?: "loopback" | "public" | "client-forwarded" | "client-loopback" | "app-scheme";
   host?: string;
+  /** For client-loopback, omitted/zero asks the trusted client to bind a free port. */
   port?: number;
   callbackPath?: string;
   callbackUri?: string;

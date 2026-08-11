@@ -70,11 +70,15 @@ function verifiedTestCaller(
   });
 }
 
-function authorizingShellLookup(connectionId = "owner-conn") {
+function authorizingShellLookup(
+  connectionId = "owner-conn",
+  clientPlatform?: "desktop" | "headless" | "mobile"
+) {
   return {
     getAuthorizingShell: vi.fn(() => ({
       caller: { runtime: { id: "shell:owner", kind: "shell" } },
       connectionId,
+      clientPlatform,
     })),
   };
 }
@@ -1332,7 +1336,7 @@ describe("credentialService", () => {
     );
   });
 
-  it("uses the hosted relay for default OAuth when no override is configured", async () => {
+  it("keeps mobile default OAuth on the hosted relay", async () => {
     delete process.env["VIBESTUDIO_RELAY_URL"];
     const store = new MemoryCredentialStore();
     const emit = vi.fn();
@@ -1340,6 +1344,7 @@ describe("credentialService", () => {
     const service = createCredentialService({
       credentialStore: store as never,
       eventService: targetedOpenEventService(emit) as never,
+      connectionLookup: authorizingShellLookup("mobile-owner", "mobile"),
       approvalQueue: approvingQueue("version") as never,
       relayOAuthRegistrar: { register },
     });
@@ -2581,6 +2586,86 @@ describe("credentialService", () => {
     );
 
     await expect(pending).resolves.toMatchObject({ label: "Example OAuth" });
+  });
+
+  it("defaults desktop-owned external OAuth to a dynamic native loopback", async () => {
+    const emit = vi.fn();
+    const eventService = targetedOpenEventService(emit);
+    const service = createCredentialService({
+      credentialStore: new MemoryCredentialStore() as never,
+      eventService: eventService as never,
+      connectionLookup: authorizingShellLookup("owner-conn", "desktop"),
+      approvalQueue: approvingQueue() as never,
+    });
+    const actualRedirectUri = "http://127.0.0.1:43123/";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        const body = init?.body as URLSearchParams;
+        expect(body.get("redirect_uri")).toBe(actualRedirectUri);
+        return new Response(JSON.stringify({ access_token: "token", expires_in: 3600 }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      })
+    );
+
+    const pending = service.handler(
+      { caller: verifiedTestCaller("worker:test", "worker") },
+      "connect",
+      [
+        {
+          spec: {
+            flow: {
+              type: "oauth2-auth-code-pkce",
+              authorizeUrl: "https://auth.example.test/oauth/authorize",
+              tokenUrl: "https://auth.example.test/oauth/token",
+              clientId: "client-1",
+            },
+            credential: {
+              label: "Desktop OAuth",
+              audience: [{ url: "https://api.example.test/", match: "origin" }],
+              injection: { type: "header", name: "Authorization", valueTemplate: "Bearer {token}" },
+            },
+          },
+          handoffTarget: { callerId: "panel-test", callerKind: "panel" },
+        },
+      ]
+    ) as Promise<StoredCredentialSummary>;
+
+    await vi.waitFor(() =>
+      expect(eventService.emitToConnection).toHaveBeenCalledWith(
+        "shell:owner",
+        "owner-conn",
+        "external-open:open",
+        expect.objectContaining({
+          oauthLoopback: expect.objectContaining({
+            redirectUri: "http://127.0.0.1:0/",
+            host: "127.0.0.1",
+            port: 0,
+            callbackPath: "/",
+          }),
+        })
+      )
+    );
+    const payload = emit.mock.calls[0]![1] as {
+      url: string;
+      oauthLoopback: { transactionId: string; state: string };
+    };
+    expect(new URL(payload.url).searchParams.get("redirect_uri")).toBe("http://127.0.0.1:0/");
+
+    await service.handler(
+      { caller: verifiedTestCaller("shell:owner", "shell") },
+      "forwardOAuthCallback",
+      [
+        {
+          transactionId: payload.oauthLoopback.transactionId,
+          url: `${actualRedirectUri}?code=code-1&state=${payload.oauthLoopback.state}`,
+        },
+      ]
+    );
+
+    await expect(pending).resolves.toMatchObject({ label: "Desktop OAuth" });
   });
 
   it("rejects client-loopback for OAuth1", async () => {
