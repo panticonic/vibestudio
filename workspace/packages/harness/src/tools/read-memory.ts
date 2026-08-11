@@ -19,19 +19,30 @@ const compact = (value: string, limit = 280): string => {
 const quoted = (value: string): string => JSON.stringify(compact(value));
 const root = (value: object): string => JSON.stringify(value);
 
-function lineAt(content: string, offset: number): number {
-  let line = 1;
-  for (let index = 0; index < Math.min(offset, content.length); index += 1) {
+function lineAt(
+  content: string,
+  offset: number,
+  contentStart: number,
+  contentStartLine: number
+): number {
+  let line = contentStartLine;
+  const localOffset = Math.max(0, offset - contentStart);
+  for (let index = 0; index < Math.min(localOffset, content.length); index += 1) {
     if (content.charCodeAt(index) === 10) line += 1;
   }
   return line;
 }
 
-function renderedRanges(content: string, episode: VcsReadMemoryEpisode): string {
+function renderedRanges(
+  content: string,
+  episode: VcsReadMemoryEpisode,
+  contentStart: number,
+  contentStartLine: number
+): string {
   return episode.ranges
     .map(({ start, end }) => {
-      const first = lineAt(content, start);
-      const last = lineAt(content, Math.max(start, end - 1));
+      const first = lineAt(content, start, contentStart, contentStartLine);
+      const last = lineAt(content, Math.max(start, end - 1), contentStart, contentStartLine);
       return first === last ? `${first}` : `${first}-${last}`;
     })
     .join(", ");
@@ -56,9 +67,11 @@ interface RenderableEpisode {
 function prepareEpisode(
   content: string,
   episode: VcsReadMemoryEpisode,
-  readingContextId: string
+  readingContextId: string,
+  contentStart: number,
+  contentStartLine: number
 ): RenderableEpisode {
-  const range = `● lines ${renderedRanges(content, episode)}`;
+  const range = `● lines ${renderedRanges(content, episode, contentStart, contentStartLine)}`;
   const work = `work unit ${root(episode.workUnit)}`;
   const change = `change ${root(episode.change)}`;
   const why = `${episode.intent.tier}: ${quoted(episode.intent.text)}`;
@@ -124,6 +137,8 @@ function historyText(entry: HistoryEntry): string {
 export function renderReadMemoryBlock(input: {
   label: string;
   content: string;
+  contentStart?: number;
+  contentStartLine?: number;
   readingContextId: string;
   startLine: number;
   endLine: number;
@@ -137,7 +152,15 @@ export function renderReadMemoryBlock(input: {
     `dig deeper · provenance({ target: … }) on any subject above · ` +
     `vcs.history with intents for how this file's purpose has drifted`;
   const episodes = input.result.episodes
-    .map((episode) => prepareEpisode(input.content, episode, input.readingContextId))
+    .map((episode) =>
+      prepareEpisode(
+        input.content,
+        episode,
+        input.readingContextId,
+        input.contentStart ?? 0,
+        input.contentStartLine ?? 1
+      )
+    )
     .sort(
       (left, right) =>
         salience(left.episode, input.readingContextId) -

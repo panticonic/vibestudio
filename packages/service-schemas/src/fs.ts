@@ -46,6 +46,44 @@ const fsReadEncodingSchema = z.preprocess(
       : value,
   z.string()
 );
+const readTextOptionsSchema = z.object({
+  offset: z.number().int().min(1).optional().describe("First line to return (1-indexed)."),
+  limit: z
+    .number()
+    .int()
+    .min(1)
+    .max(10_000)
+    .optional()
+    .describe("Maximum lines to return (default 2000; maximum 10000)."),
+  maxBytes: z
+    .number()
+    .int()
+    .min(1)
+    .max(1024 * 1024)
+    .optional()
+    .describe("Maximum UTF-8 bytes to return (default 50 KiB; maximum 1 MiB)."),
+});
+const readTextResultSchema = z.object({
+  text: z.string().describe("Selected text, bounded by line and byte limits."),
+  contentHash: z
+    .string()
+    .regex(/^[a-f0-9]{64}$/u)
+    .describe("SHA-256 of the complete file bytes."),
+  totalLines: z.number().int().min(1).describe("Total logical lines in the complete file."),
+  totalBytes: z.number().int().min(0).describe("Total bytes in the complete file."),
+  maxLines: z.number().int().min(1).describe("Applied line bound."),
+  maxBytes: z.number().int().min(1).describe("Applied UTF-8 byte bound."),
+  startLine: z.number().int().min(1).describe("Requested first line."),
+  endLine: z.number().int().min(0).describe("Last returned line; less than startLine when empty."),
+  start: z.number().int().min(0).describe("UTF-16 offset of returned text in the complete file."),
+  end: z.number().int().min(0).describe("Exclusive UTF-16 end offset in the complete file."),
+  truncated: z.boolean().describe("True when more lines remain after this result."),
+  truncatedBy: z.enum(["lines", "bytes"]).optional().describe("Bound that stopped the result."),
+  nextOffset: z.number().int().min(1).optional().describe("Line offset for the next read."),
+  firstLineExceedsLimit: z
+    .boolean()
+    .describe("True when the first requested line alone exceeds maxBytes."),
+});
 const voidSchema = z.void();
 const statSchema = z.object({
   isFile: z.boolean().describe("True if the entry is a regular file."),
@@ -190,6 +228,25 @@ export const fsMethods = defineServiceMethods({
       { args: ["/notes/todo.md", { encoding: "utf8" }] },
       { args: ["/assets/logo.png"] },
     ],
+  },
+  readText: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "fs.read",
+      rationale:
+        "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+    },
+    description:
+      "Read a bounded line range from a UTF-8 text file without transferring the complete file. Returns exact UTF-16 coordinates, total line count, continuation metadata, and a SHA-256 hash of the complete bytes. Managed files resolve through exact semantic authority; scratch files are streamed from disk.",
+    args: z.union([
+      z.tuple([z.string(), readTextOptionsSchema.optional()]),
+      z.tuple([z.string(), z.string(), readTextOptionsSchema.optional()]),
+    ]),
+    returns: readTextResultSchema,
+    access: READ_ACCESS,
+    examples: [{ args: ["/src/index.ts", { offset: 200, limit: 100, maxBytes: 51_200 }] }],
   },
   writeFile: {
     tier: {

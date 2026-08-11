@@ -42,9 +42,15 @@ const readLocationSchema = Type.Union([
 
 const readOptionsSchema = Type.Object({
   offset: Type.Optional(
-    Type.Number({ description: "Line number to start reading from (1-indexed)" })
+    Type.Integer({ minimum: 1, description: "Line number to start reading from (1-indexed)" })
   ),
-  limit: Type.Optional(Type.Number({ description: "Maximum number of lines to read" })),
+  limit: Type.Optional(
+    Type.Integer({
+      minimum: 1,
+      maximum: 10_000,
+      description: "Maximum number of lines to read (maximum: 10000)",
+    })
+  ),
 });
 const readSchema = Type.Intersect([readLocationSchema, readOptionsSchema]);
 export type ReadToolInput = Static<typeof readSchema>;
@@ -97,6 +103,22 @@ interface ImageResizeResult {
 interface ReadResult {
   content: (TextContent | ImageContent)[];
   details: ReadToolDetails;
+}
+interface FsReadTextResult {
+  text: string;
+  contentHash: string;
+  totalLines: number;
+  totalBytes: number;
+  maxLines: number;
+  maxBytes: number;
+  startLine: number;
+  endLine: number;
+  start: number;
+  end: number;
+  truncated: boolean;
+  truncatedBy?: "lines" | "bytes";
+  nextOffset?: number;
+  firstLineExceedsLimit: boolean;
 }
 interface ImageServiceApi {
   detectMimeType(bytes: Uint8Array): Promise<string | null>;
@@ -194,7 +216,10 @@ export function createReadTool(
 
   const attachReadMemory = async (
     result: ReadResult,
-    text: string,
+    lineMappingContent: string,
+    expectedContentHash: string,
+    lineMappingStart: number,
+    lineMappingStartLine: number,
     requestedPath: string,
     signal?: AbortSignal
   ): Promise<ReadResult> => {
@@ -213,7 +238,7 @@ export function createReadTool(
       const provenance = await provenanceDeps.vcs.readMemory({
         contextId: toolContextId(provenanceDeps.context),
         path: workspacePath,
-        expectedContentHash: sha256Hex(new TextEncoder().encode(text)),
+        expectedContentHash,
         range: { start: displayed.start, end: displayed.end },
         episodeLimit: 4,
         historyLimit: 3,
@@ -227,7 +252,9 @@ export function createReadTool(
       }
       const block = renderReadMemoryBlock({
         label: workspacePath,
-        content: text,
+        content: lineMappingContent,
+        contentStart: lineMappingStart,
+        contentStartLine: lineMappingStartLine,
         readingContextId: toolContextId(provenanceDeps.context),
         startLine: displayed.startLine,
         endLine: displayed.endLine,
@@ -283,6 +310,40 @@ export function createReadTool(
       // opaque extensionless temp paths, so those paths must be read as bytes
       // and magic-sniffed instead of being irreversibly decoded as UTF-8.
       const shouldSniffMedia = isLikelyImagePath(path) || hasNoFileExtension(path);
+      if (runtimeRpc && !shouldSniffMedia) {
+        try {
+          const bounded = await runtimeRpc.call<FsReadTextResult>(
+            "main",
+            "fs.readText",
+            [
+              absolutePath,
+              {
+                offset: offset ?? 1,
+                limit: limit ?? DEFAULT_MAX_LINES,
+                maxBytes: DEFAULT_MAX_BYTES,
+              },
+            ],
+            signal ? { signal } : undefined
+          );
+          const result = formatBoundedTextResult(bounded, path);
+          return attachReadMemory(
+            result,
+            bounded.text,
+            bounded.contentHash,
+            bounded.start,
+            bounded.startLine,
+            path,
+            signal
+          );
+        } catch (err) {
+          const recovered = await recoverReadFailure(fs, path, absolutePath, signal);
+          if (recovered) return recovered;
+          if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+            return missingResult(path, absolutePath);
+          }
+          throw err;
+        }
+      }
       let raw: string | Buffer;
       try {
         raw = await retryTransientRuntimeFs(
@@ -290,34 +351,8 @@ export function createReadTool(
           signal
         );
       } catch (err) {
-        // The common file path is intentionally one filesystem round trip.
-        // If it is a directory, recover with one typed listing instead of a
-        // stat + readdir + one stat per child sequence.
-        try {
-          const entries = await retryTransientRuntimeFs(
-            () => fs.readdir(absolutePath, { withFileTypes: true }),
-            signal
-          );
-          const shown = entries
-            .map((entry) => (entry.isDirectory() ? `${entry.name}/` : entry.name))
-            .sort()
-            .slice(0, 200);
-          const omitted = entries.length - shown.length;
-          return {
-            content: [
-              {
-                type: "text",
-                text:
-                  shown.join("\n") +
-                  (omitted > 0 ? `\n... ${omitted} more entries omitted` : ""),
-              },
-            ],
-            details: { path, engine: "runtime-fs", directory: true },
-          };
-        } catch {
-          // Preserve the original file-read failure below. The directory
-          // probe is only a successful alternate interpretation.
-        }
+        const recovered = await recoverReadFailure(fs, path, absolutePath, signal);
+        if (recovered) return recovered;
         if ((err as NodeJS.ErrnoException).code === "ENOENT") {
           return missingResult(path, absolutePath);
         }
@@ -359,11 +394,48 @@ export function createReadTool(
       return attachReadMemory(
         formatTextResult(textContent, path, offset, limit),
         textContent,
+        sha256Hex(new TextEncoder().encode(textContent)),
+        0,
+        1,
         path,
         signal
       );
     },
   };
+}
+
+async function recoverReadFailure(
+  fs: RuntimeFs,
+  displayPath: string,
+  absolutePath: string,
+  signal?: AbortSignal
+): Promise<ReadResult | null> {
+  // If the target is a directory, recover with one typed listing instead of a
+  // stat + readdir + one stat per child sequence. Other failures retain their
+  // original structured code; the probe never converts EACCES into ENOENT.
+  try {
+    const entries = await retryTransientRuntimeFs(
+      () => fs.readdir(absolutePath, { withFileTypes: true }),
+      signal
+    );
+    const shown = entries
+      .map((entry) => (entry.isDirectory() ? `${entry.name}/` : entry.name))
+      .sort()
+      .slice(0, 200);
+    const omitted = entries.length - shown.length;
+    return {
+      content: [
+        {
+          type: "text",
+          text: shown.join("\n") + (omitted > 0 ? `\n... ${omitted} more entries omitted` : ""),
+        },
+      ],
+      details: { path: displayPath, engine: "runtime-fs", directory: true },
+    };
+  } catch {
+    if (signal?.aborted) throw signal.reason ?? new Error("Operation aborted");
+    return null;
+  }
 }
 
 function normalizeReadLocation(input: { path?: unknown; target?: unknown }): string | null {
@@ -428,6 +500,72 @@ function hasSupportedImageMagic(bytes: Uint8Array): boolean {
     bytes[11] === 0x50;
   return png || jpeg || gif || webp;
 }
+
+function formatBoundedTextResult(bounded: FsReadTextResult, displayPath: string): ReadResult {
+  if (bounded.startLine > bounded.totalLines) {
+    return {
+      content: [
+        {
+          type: "text",
+          text:
+            `[Offset ${bounded.startLine} is beyond end of file (${bounded.totalLines} lines total). ` +
+            `The last valid offset is ${bounded.totalLines}.]`,
+        },
+      ],
+      details: { path: displayPath, engine: "runtime-fs" },
+    };
+  }
+  const outputLines =
+    bounded.endLine >= bounded.startLine ? bounded.endLine - bounded.startLine + 1 : 0;
+  const truncation: TruncationResult = {
+    content: bounded.text,
+    truncated: bounded.truncated,
+    truncatedBy: bounded.truncatedBy ?? null,
+    totalLines: bounded.totalLines,
+    totalBytes: bounded.totalBytes,
+    outputLines,
+    outputBytes: Buffer.byteLength(bounded.text, "utf8"),
+    lastLinePartial: false,
+    firstLineExceedsLimit: bounded.firstLineExceedsLimit,
+    maxLines: bounded.maxLines,
+    maxBytes: bounded.maxBytes,
+  };
+  if (bounded.firstLineExceedsLimit) {
+    return {
+      content: [
+        {
+          type: "text",
+          text: `[Line ${bounded.startLine} exceeds ${formatSize(bounded.maxBytes)} limit. Use offset=${bounded.nextOffset} to skip past it.]`,
+        },
+      ],
+      details: { path: displayPath, engine: "runtime-fs", truncation },
+    };
+  }
+  let text = bounded.text;
+  if (bounded.truncated) {
+    const byteNote =
+      bounded.truncatedBy === "bytes" ? ` (${formatSize(bounded.maxBytes)} limit)` : "";
+    text +=
+      `\n\n[Showing lines ${bounded.startLine}-${bounded.endLine} of ${bounded.totalLines}${byteNote}. ` +
+      `Use offset=${bounded.nextOffset} to continue.]`;
+  }
+  return {
+    content: [{ type: "text", text }],
+    details: {
+      path: displayPath,
+      engine: "runtime-fs",
+      ...(bounded.truncated ? { truncation } : {}),
+      displayedRange: {
+        coordinateKind: "utf16",
+        start: bounded.start,
+        end: bounded.end,
+        startLine: bounded.startLine,
+        endLine: bounded.endLine,
+      },
+    },
+  };
+}
+
 function formatTextResult(
   textContent: string,
   displayPath: string,

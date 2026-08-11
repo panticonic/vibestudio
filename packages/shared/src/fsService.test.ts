@@ -647,6 +647,67 @@ describe("FsService", () => {
     });
   });
 
+  describe("bounded text reads", () => {
+    it("streams only the requested line range with exact UTF-16 coordinates and continuation", async () => {
+      const ctx = makeWorkerCtx("do:src:class:key");
+      registerContext(ctx.caller.runtime.id, "do", "ctx-read-text");
+      const root = path.join(tmpRoot, "ctx-read-text");
+      mkdirSync(root, { recursive: true });
+      writeFileSync(path.join(root, "value.txt"), "one\n🙂two\nthree");
+
+      await expect(
+        service.handleCall(ctx, "readText", ["/value.txt", { offset: 2, limit: 1, maxBytes: 100 }])
+      ).resolves.toMatchObject({
+        text: "🙂two",
+        contentHash: expect.stringMatching(/^[a-f0-9]{64}$/u),
+        totalLines: 3,
+        totalBytes: Buffer.byteLength("one\n🙂two\nthree"),
+        startLine: 2,
+        endLine: 2,
+        start: 4,
+        end: 9,
+        truncated: true,
+        truncatedBy: "lines",
+        nextOffset: 3,
+        firstLineExceedsLimit: false,
+      });
+    });
+
+    it("does not return a partial UTF-8 line when the byte budget is too small", async () => {
+      const ctx = makeWorkerCtx("do:src:class:key");
+      registerContext(ctx.caller.runtime.id, "do", "ctx-read-text-long");
+      const root = path.join(tmpRoot, "ctx-read-text-long");
+      mkdirSync(root, { recursive: true });
+      writeFileSync(path.join(root, "value.txt"), "🙂🙂🙂\nnext");
+
+      await expect(
+        service.handleCall(ctx, "readText", ["/value.txt", { maxBytes: 5 }])
+      ).resolves.toMatchObject({
+        text: "",
+        startLine: 1,
+        endLine: 0,
+        truncated: true,
+        truncatedBy: "bytes",
+        nextOffset: 2,
+        firstLineExceedsLimit: true,
+      });
+    });
+
+    it("rejects an already-cancelled bounded read", async () => {
+      const base = makeWorkerCtx("do:src:class:key");
+      registerContext(base.caller.runtime.id, "do", "ctx-read-text-cancel");
+      const root = path.join(tmpRoot, "ctx-read-text-cancel");
+      mkdirSync(root, { recursive: true });
+      writeFileSync(path.join(root, "value.txt"), "text");
+      const controller = new AbortController();
+      controller.abort(new Error("read cancelled"));
+
+      await expect(
+        service.handleCall({ ...base, signal: controller.signal }, "readText", ["/value.txt"])
+      ).rejects.toThrow("read cancelled");
+    });
+  });
+
   // ─── mktemp ───────────────────────────────────────────────────────────────
   describe("mktemp", () => {
     it("creates .tmp/ and returns a unique path on each call", async () => {

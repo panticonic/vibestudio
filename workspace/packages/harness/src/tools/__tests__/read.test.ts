@@ -5,6 +5,32 @@ import { StubFs } from "./stub-fs.js";
 
 const CWD = "/work/ctx";
 
+function boundedText(text: string, offset = 1, limit = 2_000) {
+  const lines = text.split("\n");
+  const startIndex = offset - 1;
+  const selected = lines.slice(startIndex, startIndex + limit);
+  const prefix = lines.slice(0, startIndex).join("\n");
+  const start = startIndex === 0 ? 0 : prefix.length + 1;
+  const value = selected.join("\n");
+  const endLine = selected.length > 0 ? offset + selected.length - 1 : offset - 1;
+  const truncated = startIndex + selected.length < lines.length;
+  return {
+    text: value,
+    contentHash: "a".repeat(64),
+    totalLines: lines.length,
+    totalBytes: Buffer.byteLength(text),
+    maxLines: limit,
+    maxBytes: 50 * 1024,
+    startLine: offset,
+    endLine,
+    start,
+    end: start + value.length,
+    truncated,
+    ...(truncated ? { truncatedBy: "lines" as const, nextOffset: endLine + 1 } : {}),
+    firstLineExceedsLimit: false,
+  };
+}
+
 describe("createReadTool", () => {
   it("reads a small text file", async () => {
     const fs = new StubFs({ files: { [`${CWD}/hello.txt`]: "hello\nworld" } });
@@ -20,6 +46,7 @@ describe("createReadTool", () => {
     const fs = new StubFs({
       files: { ["/packages/example/src/value.ts"]: "first\nsecond\nthird" },
     });
+    const readFile = vi.spyOn(fs, "readFile");
     const readMemory = vi.fn(async () => ({
       status: "attached" as const,
       state: { kind: "event" as const, eventId: "event:current" },
@@ -57,7 +84,17 @@ describe("createReadTool", () => {
       history: [],
       truncated: false,
     }));
+    const rpc = {
+      call: vi.fn(async (_target: string, method: string) => {
+        if (method !== "fs.readText") throw new Error(`Unexpected RPC ${method}`);
+        return {
+          ...boundedText("first\nsecond\nthird", 2, 1),
+          contentHash: "b".repeat(64),
+        };
+      }),
+    };
     const tool = createReadTool("/", fs, {
+      rpc: rpc as never,
       provenance: {
         vcs: { readMemory } as never,
         context: { contextId: "context:test" },
@@ -73,7 +110,7 @@ describe("createReadTool", () => {
     expect(readMemory).toHaveBeenCalledWith({
       contextId: "context:test",
       path: "packages/example/src/value.ts",
-      expectedContentHash: expect.stringMatching(/^[a-f0-9]{64}$/u),
+      expectedContentHash: "b".repeat(64),
       range: { start: 6, end: 12 },
       episodeLimit: 4,
       historyLimit: 3,
@@ -104,6 +141,7 @@ describe("createReadTool", () => {
       },
       provenance: { status: "attached", fileId: "file:value" },
     });
+    expect(readFile).not.toHaveBeenCalled();
   });
 
   it("keeps managed file content visible when read-time memory is unavailable", async () => {
@@ -209,6 +247,13 @@ describe("createReadTool", () => {
           error.code = "ENOENT";
           throw error;
         }
+        if (method === "fs.readText") {
+          const error = new Error("ENOENT: guessed skill path is absent") as Error & {
+            code: string;
+          };
+          error.code = "ENOENT";
+          throw error;
+        }
         if (method === "workspace.listSkills") {
           return [
             {
@@ -288,13 +333,17 @@ describe("createReadTool", () => {
     expect(result.details).toMatchObject({ path: "small.txt", engine: "runtime-fs" });
   });
 
-  it("reads text through the scoped runtime filesystem even when context rpc is available", async () => {
+  it("reads a bounded text range through the host service when context rpc is available", async () => {
     const fs = new StubFs({ files: { [`${CWD}/big.txt`]: "line 1\nline 2\nline 3\nline 4" } });
     const readFile = vi.spyOn(fs, "readFile");
     const stat = vi.spyOn(fs, "stat");
     const access = vi.spyOn(fs, "access");
     const rpc = {
-      call: vi.fn().mockResolvedValue([]),
+      call: vi.fn().mockImplementation((_target, method) => {
+        if (method === "fs.readText")
+          return Promise.resolve(boundedText("line 1\nline 2\nline 3\nline 4", 3, 2));
+        return Promise.resolve([]);
+      }),
       stream: vi.fn(async () => new Response()),
     };
     const tool = createReadTool(CWD, fs, { rpc });
@@ -307,13 +356,19 @@ describe("createReadTool", () => {
 
     expect((result.content[0] as { text: string }).text).toBe("line 3\nline 4");
     expect(result.details).toMatchObject({ path: "big.txt", engine: "runtime-fs" });
-    expect(readFile).toHaveBeenCalledTimes(1);
+    expect(readFile).not.toHaveBeenCalled();
     expect(stat).not.toHaveBeenCalled();
     expect(access).not.toHaveBeenCalled();
     expect(rpc.call).not.toHaveBeenCalledWith(
       "main",
       "extensions.invoke",
       expect.arrayContaining(["@workspace-extensions/file-tools"])
+    );
+    expect(rpc.call).toHaveBeenCalledWith(
+      "main",
+      "fs.readText",
+      [`${CWD}/big.txt`, { offset: 3, limit: 2, maxBytes: 50 * 1024 }],
+      undefined
     );
   });
 
@@ -324,6 +379,7 @@ describe("createReadTool", () => {
     });
     const rpc = {
       call: vi.fn().mockImplementation((_target: string, method: string, args: unknown[]) => {
+        if (method === "fs.readText") return Promise.resolve(boundedText("approval guide"));
         if (
           method === "extensions.invoke" &&
           (args as unknown[])[0] === "@workspace-extensions/file-tools"

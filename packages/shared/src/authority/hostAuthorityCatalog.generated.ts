@@ -2884,6 +2884,18 @@ export const HOST_AUTHORITY_METHODS = {
     capability: null,
     presentation: null,
   },
+  "fs.readText": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "fs.read",
+      rationale:
+        "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+    },
+    capability: null,
+    presentation: null,
+  },
   "fs.realpath": {
     tier: {
       tier: "open",
@@ -6329,6 +6341,26 @@ export const HOST_AUTHORITY_METHODS = {
       residency: "supervision",
       family: "workspace-state.lifecycle",
       rationale: "Workspace-member panel-index read; no C1-C4 or G1-G5 rule applies",
+    },
+    capability: "workspace.runtime-state.inspect",
+    presentation: {
+      title: "Inspect running workspace services",
+      action: "inspect apps, panels, background tasks, and scheduled work that's currently running",
+      description: "Read the current structure and status of running workspace services",
+      group: "workspace",
+      authorityCategory: {
+        domain: "automation",
+        verb: "see",
+      },
+    },
+  },
+  "workspace-state.panel.sourceUsage": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "supervision",
+      family: "workspace-state.lifecycle",
+      rationale: "Workspace-member aggregate panel usage read; no C1-C4 or G1-G5 rule applies",
     },
     capability: "workspace.runtime-state.inspect",
     presentation: {

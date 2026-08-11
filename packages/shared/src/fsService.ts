@@ -12,7 +12,8 @@
 import * as fs from "fs/promises";
 import * as fsSync from "fs";
 import * as path from "path";
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
+import { StringDecoder } from "node:string_decoder";
 import { rgPath as bundledRipgrepPath } from "@vscode/ripgrep";
 import ignore, { type Ignore } from "ignore";
 import { compareUtf16CodeUnits } from "@vibestudio/content-addressing";
@@ -59,6 +60,7 @@ const CANONICAL_SOURCE_ROOT_BY_LOWER = new Map(
 );
 const DISK_READ_PATH_METHODS = new Set([
   "readFile",
+  "readText",
   "readdir",
   "stat",
   "lstat",
@@ -70,6 +72,7 @@ const DISK_READ_PATH_METHODS = new Set([
 ]);
 const AUTHORITY_PATH_METHODS = new Set([
   "readFile",
+  "readText",
   "writeFile",
   "appendFile",
   "readdir",
@@ -1062,6 +1065,32 @@ export interface GlobResult {
   nextCursor?: string;
 }
 
+export interface ReadTextOptions {
+  /** First line to return (1-indexed). */
+  offset?: number;
+  /** Maximum lines to return. */
+  limit?: number;
+  /** Maximum UTF-8 bytes to return. */
+  maxBytes?: number;
+}
+
+export interface ReadTextResult {
+  text: string;
+  contentHash: string;
+  totalLines: number;
+  totalBytes: number;
+  maxLines: number;
+  maxBytes: number;
+  startLine: number;
+  endLine: number;
+  start: number;
+  end: number;
+  truncated: boolean;
+  truncatedBy?: "lines" | "bytes";
+  nextOffset?: number;
+  firstLineExceedsLimit: boolean;
+}
+
 interface RawGrepMatch {
   /** Absolute file path. */
   file: string;
@@ -1069,6 +1098,164 @@ interface RawGrepMatch {
   line: string;
   before: string[];
   after: string[];
+}
+
+const READ_TEXT_DEFAULT_LINES = 2_000;
+const READ_TEXT_MAX_LINES = 10_000;
+const READ_TEXT_DEFAULT_BYTES = 50 * 1024;
+const READ_TEXT_MAX_BYTES = 1024 * 1024;
+
+function normalizedReadTextOptions(options: ReadTextOptions = {}): Required<ReadTextOptions> {
+  const offset = options.offset ?? 1;
+  const limit = options.limit ?? READ_TEXT_DEFAULT_LINES;
+  const maxBytes = options.maxBytes ?? READ_TEXT_DEFAULT_BYTES;
+  if (!Number.isInteger(offset) || offset < 1) {
+    throw new RangeError("readText offset must be a positive integer");
+  }
+  if (!Number.isInteger(limit) || limit < 1 || limit > READ_TEXT_MAX_LINES) {
+    throw new RangeError(`readText limit must be an integer from 1 to ${READ_TEXT_MAX_LINES}`);
+  }
+  if (!Number.isInteger(maxBytes) || maxBytes < 1 || maxBytes > READ_TEXT_MAX_BYTES) {
+    throw new RangeError(`readText maxBytes must be an integer from 1 to ${READ_TEXT_MAX_BYTES}`);
+  }
+  return { offset, limit, maxBytes };
+}
+
+class TextRangeAccumulator {
+  private lineNumber = 1;
+  private utf16Offset = 0;
+  private readonly selected: string[] = [];
+  private selectedBytes = 0;
+  private selectedStart = 0;
+  private selectedEnd = 0;
+  private stoppedBy: "lines" | "bytes" | undefined;
+  private firstLineExceedsLimit = false;
+  private currentLineParts: string[] = [];
+  private currentLineLength = 0;
+  private currentLineBytes = 0;
+
+  constructor(private readonly options: Required<ReadTextOptions>) {}
+
+  push(text: string): void {
+    let start = 0;
+    let newline = text.indexOf("\n");
+    while (newline !== -1) {
+      this.appendFragment(text.slice(start, newline));
+      this.finishLine(true);
+      start = newline + 1;
+      newline = text.indexOf("\n", start);
+    }
+    this.appendFragment(text.slice(start));
+  }
+
+  finish(contentHash: string, totalBytes: number): ReadTextResult {
+    // `String.prototype.split("\n")` has one final line even for empty input
+    // and one trailing empty line when the file ends in a newline.
+    this.finishLine(false);
+    const totalLines = this.lineNumber - 1;
+    const startLine = this.options.offset;
+    if (this.selected.length === 0 && startLine > totalLines) {
+      this.selectedStart = this.utf16Offset;
+      this.selectedEnd = this.utf16Offset;
+    }
+    const endLine = this.selected.length > 0 ? startLine + this.selected.length - 1 : startLine - 1;
+    const moreLines = endLine < totalLines;
+    return {
+      text: this.selected.join("\n"),
+      contentHash,
+      totalLines,
+      totalBytes,
+      maxLines: this.options.limit,
+      maxBytes: this.options.maxBytes,
+      startLine,
+      endLine,
+      start: this.selectedStart,
+      end: this.selectedEnd,
+      truncated: moreLines,
+      ...(moreLines && this.stoppedBy ? { truncatedBy: this.stoppedBy } : {}),
+      ...(moreLines ? { nextOffset: Math.max(startLine + 1, endLine + 1) } : {}),
+      firstLineExceedsLimit: this.firstLineExceedsLimit,
+    };
+  }
+
+  private appendFragment(fragment: string): void {
+    this.currentLineLength += fragment.length;
+    if (this.lineNumber < this.options.offset || this.stoppedBy) return;
+    if (this.selected.length >= this.options.limit) {
+      this.stoppedBy = "lines";
+      return;
+    }
+    this.currentLineBytes += Buffer.byteLength(fragment, "utf8");
+    const separatorBytes = this.selected.length > 0 ? 1 : 0;
+    if (this.selectedBytes + separatorBytes + this.currentLineBytes > this.options.maxBytes) {
+      this.stoppedBy = "bytes";
+      this.firstLineExceedsLimit = this.selected.length === 0;
+      if (this.selected.length === 0) this.selectedStart = this.utf16Offset;
+      this.currentLineParts = [];
+      return;
+    }
+    this.currentLineParts.push(fragment);
+  }
+
+  private finishLine(hadNewline: boolean): void {
+    const currentLine = this.lineNumber;
+    const currentStart = this.utf16Offset;
+    this.lineNumber += 1;
+    this.utf16Offset += this.currentLineLength + (hadNewline ? 1 : 0);
+    if (currentLine < this.options.offset || this.stoppedBy) {
+      this.resetCurrentLine();
+      return;
+    }
+    if (this.selected.length >= this.options.limit) {
+      this.stoppedBy = "lines";
+      this.resetCurrentLine();
+      return;
+    }
+    if (this.selected.length === 0) this.selectedStart = currentStart;
+    const line = this.currentLineParts.join("");
+    this.selected.push(line);
+    this.selectedBytes += this.currentLineBytes + (this.selected.length > 1 ? 1 : 0);
+    this.selectedEnd = currentStart + line.length;
+    this.resetCurrentLine();
+  }
+
+  private resetCurrentLine(): void {
+    this.currentLineParts = [];
+    this.currentLineLength = 0;
+    this.currentLineBytes = 0;
+  }
+}
+
+function readTextRangeFromBuffer(bytes: Buffer, options?: ReadTextOptions): ReadTextResult {
+  const accumulator = new TextRangeAccumulator(normalizedReadTextOptions(options));
+  accumulator.push(bytes.toString("utf8"));
+  return accumulator.finish(createHash("sha256").update(bytes).digest("hex"), bytes.length);
+}
+
+async function readTextRangeFromFile(
+  filePath: string,
+  options: ReadTextOptions | undefined,
+  signal?: AbortSignal
+): Promise<ReadTextResult> {
+  if (signal?.aborted) throw signal.reason ?? new Error("Operation aborted");
+  const accumulator = new TextRangeAccumulator(normalizedReadTextOptions(options));
+  const decoder = new StringDecoder("utf8");
+  const hash = createHash("sha256");
+  let totalBytes = 0;
+  const stream = fsSync.createReadStream(filePath);
+  try {
+    for await (const value of stream) {
+      if (signal?.aborted) throw signal.reason ?? new Error("Operation aborted");
+      const chunk = Buffer.from(value as Uint8Array);
+      totalBytes += chunk.length;
+      hash.update(chunk);
+      accumulator.push(decoder.write(chunk));
+    }
+    accumulator.push(decoder.end());
+    return accumulator.finish(hash.digest("hex"), totalBytes);
+  } finally {
+    stream.destroy();
+  }
 }
 
 let ripgrepPathOverride: string | null | undefined;
@@ -1953,6 +2140,22 @@ export class FsService {
           result: encoding ? bytes.toString(encoding) : encodeBinary(bytes),
         };
       }
+      case "readText": {
+        const userPath = args[0] as string;
+        const rel = await relOf(userPath);
+        if (!(await tracked(rel))) return { handled: false };
+        const content = await readWsFile(rel, true);
+        if (!content) {
+          throw codedError("ENOENT", `readText: managed file not found: ${userPath}`);
+        }
+        return {
+          handled: true,
+          result: readTextRangeFromBuffer(
+            contentToBuffer(content),
+            args[1] as ReadTextOptions | undefined
+          ),
+        };
+      }
       case "writeFile": {
         const rel = await relOf(args[0] as string);
         if (!(await tracked(rel))) return { handled: false };
@@ -2490,6 +2693,11 @@ export class FsService {
         }
         const buf = await fs.readFile(p);
         return encodeBinary(buf);
+      }
+
+      case "readText": {
+        const p = await resolveFsFilePath(scope, args[0] as string);
+        return readTextRangeFromFile(p, args[1] as ReadTextOptions | undefined, ctx.signal);
       }
 
       case "writeFile": {
