@@ -26,7 +26,6 @@ import {
   createPanel,
   getPanelTree,
   hasElectronDisplay,
-  isPanelContentReady,
   isPanelReady,
   launchTestApp,
   approvePendingWorkspaceCreationReview,
@@ -981,16 +980,19 @@ test.describe("Mobile Panels", () => {
       (await createPanel(testApp!.app, parentId, "about/help", {
         focus: false,
       }));
-    await expect
-      .poll(() => isPanelContentReady(testApp!.app, helpPanel.id).catch(() => false), {
-        timeout: 60_000,
-        intervals: [250, 500, 1000],
-      })
-      .toBe(true);
 
+    // A background panel has no native slot, so canonical presentation
+    // readiness begins only after selecting it. Its durable tree row is the
+    // precondition for exercising that selection.
     expect(await shellClickByLabels(testApp!.app, normalizeNavigationTreeOpenLabel())).toBe(true);
     await expect
       .poll(() => shellElementVisibleByLabels(testApp!.app, normalizeNavigationTreeCloseLabel()), {
+        timeout: 30_000,
+        intervals: [250, 500, 1000],
+      })
+      .toBe(true);
+    await expect
+      .poll(() => shellElementVisibleByLabel(testApp!.app, "Select panel Help"), {
         timeout: 30_000,
         intervals: [250, 500, 1000],
       })
