@@ -3355,8 +3355,8 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     deliveredContext?: ChannelAgenticContext
   ): Promise<void> {
     // Invalidate the cached participant roster on any presence change, in the one sink both the
-    // live stream and subscription-replay paths funnel through — so neither path serves a stale
-    // roster to shouldRespond / refreshRoster.
+    // live stream and subscription-replay paths funnel through, so neither path
+    // serves stale presence data to response policy or tool materialization.
     if (event.type === "presence") {
       this.participantCache.delete(channelId);
       this.localTools.delete(channelId);
@@ -3981,58 +3981,6 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       ...(description !== undefined ? { description } : {}),
       ...(parameters !== undefined ? { parameters } : {}),
     };
-  }
-
-  /** Roster changes enter the log as events (nondeterministic I/O → journal).
-   *  Returns true when a fresh snapshot was appended (roster actually changed).
-   *
-   *  Failures intentionally propagate: a responding turn must not advertise a
-   *  tool surface derived from unknown membership. Presence-only callers may
-   *  choose to log and retry on the next semantic delivery. */
-  private async refreshRoster(channelId: string): Promise<boolean> {
-    const participants = await this.getCachedParticipants(channelId);
-    const selfId = this.participantId();
-    const roster: RosterEntry[] = participants
-      .filter(
-        (participant) =>
-          participant.participantId !== selfId && participantIdFromRef(participant.ref) !== selfId
-      )
-      .map((participant) => ({
-        participantId: participant.participantId,
-        // The channel is the identity authority for roster rows. Preserve
-        // its sealed reference rather than reinterpreting mutable metadata.
-        ref: participant.ref,
-        handle:
-          typeof participant.metadata?.["handle"] === "string"
-            ? (participant.metadata["handle"] as string)
-            : undefined,
-        type:
-          typeof participant.metadata?.["type"] === "string"
-            ? (participant.metadata["type"] as string)
-            : undefined,
-        methods: Array.isArray(participant.metadata?.["methods"])
-          ? (
-              participant.metadata["methods"] as Array<{
-                name?: string;
-                description?: string;
-                parameters?: unknown;
-              }>
-            )
-              .filter((method) => typeof method?.name === "string")
-              .map((method) => this.boundedRosterMethod(method as { name: string } & typeof method))
-          : [],
-      }));
-    const fingerprint = JSON.stringify(roster);
-    if (this.getStateValue(`agent:roster:${channelId}`) === fingerprint) return false;
-    await this.driver.handleIncoming(channelId, {
-      type: "command",
-      command: { kind: "setRoster", roster: { participants: roster } },
-    });
-    this.setStateValue(`agent:roster:${channelId}`, fingerprint);
-    // Schema materialization is cached independently from the durable roster.
-    // Invalidate it only after the new snapshot has committed.
-    this.localTools.delete(channelId);
-    return true;
   }
 
   /** Commit the event-sequence roster projection carried by the mailbox row.

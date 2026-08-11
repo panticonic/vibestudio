@@ -86,7 +86,6 @@ export interface ChannelJoinResult {
 
 export class ChannelClient {
   private targetPromise: Promise<string> | null = null;
-  private resolvedTarget: string | null = null;
   constructor(
     private rpc: RpcCaller,
     private channelId: string,
@@ -99,7 +98,6 @@ export class ChannelClient {
         if (service.kind !== "durable-object" || !service.targetId) {
           throw new Error("Channel service must resolve to a Durable Object service");
         }
-        this.resolvedTarget = service.targetId;
         return service.targetId;
       });
     return this.targetPromise;

@@ -13,7 +13,7 @@ import {
   type ChannelCallEffect,
   type EffectDescriptor,
 } from "../effects.js";
-import type { StepOutput, StepPolicy } from "../step.js";
+import type { StepPolicy } from "../step.js";
 import type { AgentState, RosterEntry } from "../state.js";
 
 type AskUserParticipant = Pick<RosterEntry, "participantId" | "ref" | "handle">;

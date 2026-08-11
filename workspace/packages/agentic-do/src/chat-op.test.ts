@@ -12,7 +12,6 @@ import { createServer } from "node:http";
 import { describe, expect, it, vi } from "vitest";
 import { ledgerTest } from "../../../tests/helpers/ledgerTest.js";
 import { createTestDO } from "@workspace/runtime/worker/test-utils";
-import type { LifecyclePrepareInput, LifecycleResumeInput } from "@workspace/runtime/worker";
 import { ids } from "@workspace/agent-loop";
 import { logIdForChannel } from "@vibestudio/trajectory-identity";
 import { RemoteRpcError, rpc, type RpcClient } from "@vibestudio/rpc";
@@ -536,10 +535,6 @@ class TestVessel extends AgentVesselBase {
   }
 }
 
-class LifecycleReleaseProbe extends TestVessel {
-  protected override async ensurePromptArtifacts(): Promise<void> {}
-}
-
 class PromptEventProbe extends TestVessel {
   readonly handleIncomingSpy = vi.fn(async (_channelId: string, _incoming: unknown) => {
     this.operationLog.push("driver:handleIncoming");
@@ -575,84 +570,6 @@ class PromptEventProbe extends TestVessel {
 
   markEmptyRosterFresh(channelId: string): void {
     this.setStateValue(`agent:roster:${channelId}`, "[]");
-  }
-}
-
-class ReadyWakeProbe extends TestVessel {
-  readonly wakeSpy = vi.fn(async (_channelId: string) => {});
-
-  protected override async ensurePromptArtifacts(): Promise<void> {}
-
-  protected override get driver(): AgentLoopDriver {
-    return {
-      activateChannel: vi.fn(),
-      wake: this.wakeSpy,
-      abortChannel: vi.fn(async () => undefined),
-      deferredEvalRows: vi.fn(() => []),
-    } as unknown as AgentLoopDriver;
-  }
-}
-
-class LazyPromptProbe extends TestVessel {
-  readonly ensurePromptArtifactsSpy = vi.fn(async (_channelId: string) => {});
-  readonly wakeSpy = vi.fn(async (_channelId: string) => {});
-
-  protected override async ensurePromptArtifacts(channelId: string): Promise<void> {
-    await this.ensurePromptArtifactsSpy(channelId);
-  }
-
-  protected override get driver(): AgentLoopDriver {
-    return {
-      activateChannel: vi.fn(),
-      wake: this.wakeSpy,
-    } as unknown as AgentLoopDriver;
-  }
-}
-
-class LocalModelActivationProbe extends TestVessel {
-  entryAtActivation: string | null = null;
-  readonly localModelCalls: string[] = [];
-
-  protected override get rpc(): RpcClient {
-    const base = super.rpc;
-    return new Proxy(base, {
-      get: (target, property, receiver) => {
-        if (property === "call") {
-          return async (targetId: string, method: string, args: unknown[], options?: unknown) => {
-            if (
-              targetId === "main" &&
-              method === "extensions.invoke" &&
-              args[0] === "@workspace-extensions/local-models" &&
-              args[1] === "listModels"
-            ) {
-              this.localModelCalls.push("listModels");
-              return [
-                {
-                  slug: "lfm2.5-350m",
-                  displayName: "LFM2.5 350M",
-                  baseUrl: "http://127.0.0.1:33931/v1",
-                  contextWindow: 32_768,
-                  maxTokens: 32_768,
-                  toolsCapable: true,
-                },
-              ];
-            }
-            return target.call(targetId, method, args, options as never);
-          };
-        }
-        const value = Reflect.get(target, property, receiver) as unknown;
-        return typeof value === "function" ? value.bind(target) : value;
-      },
-    });
-  }
-
-  protected override get driver(): AgentLoopDriver {
-    return {
-      activateChannel: (channelId: string) => {
-        this.entryAtActivation = this.getStateValue(`agent:localModelEntry:${channelId}`);
-      },
-      wake: vi.fn(async () => {}),
-    } as unknown as AgentLoopDriver;
   }
 }
 

@@ -75,7 +75,7 @@ class LiveVessel extends AgentVesselBase {
 
   channelDelegate: ((method: string, args: unknown[]) => Promise<unknown>) | null = null;
 
-  protected override createChannelClient(channelId: string): ChannelClient {
+  protected override createChannelClient(_channelId: string): ChannelClient {
     const delegate = (method: string, args: unknown[]) => {
       if (!this.channelDelegate) throw new Error("channelDelegate not wired");
       return this.channelDelegate(method, args);
@@ -196,12 +196,6 @@ describe.runIf(RUN)("full agent turn over pubsub with real local models", () => 
 
       // ── the real vessel DO ─────────────────────────────────────────────
       const vessel = await createTestDO(LiveVessel, { __objectKey: "agent-live" });
-
-      const vesselAsDo = <T>(fn: () => Promise<T>): Promise<T> => {
-        vessel.instance.callerIdForTest = CHANNEL_TARGET;
-        vessel.instance.callerKindForTest = "do";
-        return fn();
-      };
 
       // Channel DO transport: GAD/blobstore ride the shared bridges. Structured
       // delivery itself is pumped below through the real claim/accept/settle

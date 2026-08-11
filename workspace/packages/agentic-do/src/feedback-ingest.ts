@@ -42,27 +42,24 @@ export class FeedbackIngest {
     `);
   }
 
-  /**
-   * Record a feedback payload. Returns the formatted diagnostic note when the
-   * occurrence is new (caller decides to steer or queue), or null when deduped.
-   */
-  ingest(channelId: string, payload: UiFeedbackPayload): string | null {
+  /** Record a feedback payload for the agent's next turn, unless deduplicated. */
+  ingest(channelId: string, payload: UiFeedbackPayload): void {
     const ts = this.now();
     this.sql.exec(`DELETE FROM feedback_seen WHERE created_at < ?`, ts - DEDUPE_TTL_MS);
     const seen = this.sql
       .exec(`SELECT 1 FROM feedback_seen WHERE occurrence_key = ?`, payload.occurrenceKey)
       .toArray();
-    if (seen.length > 0) return null;
+    if (seen.length > 0) return;
     this.sql.exec(
       `INSERT OR REPLACE INTO feedback_seen (occurrence_key, created_at) VALUES (?, ?)`,
       payload.occurrenceKey,
       ts
     );
-    return formatFeedbackNote(payload);
+    this.enqueue(channelId, formatFeedbackNote(payload));
   }
 
   /** Queue a note for the next turn on this channel (bounded). */
-  enqueue(channelId: string, note: string): void {
+  private enqueue(channelId: string, note: string): void {
     this.sql.exec(
       `INSERT INTO pending_feedback (channel_id, note, created_at) VALUES (?, ?, ?)`,
       channelId,
@@ -85,10 +82,7 @@ export class FeedbackIngest {
   /** Drain queued notes for a channel (consumed into the next turn input). */
   consume(channelId: string): string[] {
     const rows = this.sql
-      .exec(
-        `SELECT id, note FROM pending_feedback WHERE channel_id = ? ORDER BY id ASC`,
-        channelId
-      )
+      .exec(`SELECT id, note FROM pending_feedback WHERE channel_id = ? ORDER BY id ASC`, channelId)
       .toArray();
     if (rows.length === 0) return [];
     this.sql.exec(`DELETE FROM pending_feedback WHERE channel_id = ?`, channelId);
