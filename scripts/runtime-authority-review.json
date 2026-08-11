@@ -1,7 +1,15 @@
 {
   "version": 1,
-  "censusDigest": "sha256:33e429cca4a361ce2ba707082a9eee895df7c75e734983e29f2470be7b40bf5c",
+  "censusDigest": "sha256:177d43c2fdeff14c133ad41b80b32eaa99c52ea4f222d75a724577ab2dc88022",
   "decisions": {
+    "host:fs.readText": {
+      "review": "bounded-workspace-text-range-read",
+      "change": "Adds the existing workspace-local fs.read authority to a bounded UTF-8 text-range transport. The receiver retains semantic path admission for managed files and scratch-root containment for disk files, caps each response at 10,000 lines and 1 MiB, returns continuation coordinates plus a content hash, and grants no write or path-enumeration authority."
+    },
+    "host:workspace-state.panel.sourceUsage": {
+      "review": "bounded-aggregate-panel-source-usage-read",
+      "change": "Adds an open workspace-member read of at most 200 aggregate panel source usage rows for launcher ranking. The projection contains only source identity, access count, and last-access time; it exposes no panel contents, owner identity, slot state, or mutation path."
+    },
     "direct:workspace/workers/pubsub-channel/channel-do.ts:markMethodCallExecutionStarted": {
       "review": "participant-bound-current-provider-claim-observation",
       "change": "Adds an open code-principal write that records the execution boundary for one exact method call. The receiver derives caller identity from the runtime, requires it to equal the claimed provider participant, and updates only that participant's current claim generation once; it grants no call, result, or cross-participant authority."
@@ -417,6 +425,10 @@
     "direct:workspace/workers/pubsub-channel/channel-do.ts:durableWorkStatus": {
       "review": "host-only-channel-readiness-summary",
       "change": "Adds a bounded host read of channel work readiness and recovery time without exposing message payloads."
+    },
+    "direct:workspace/workers/pubsub-channel/channel-do.ts:getLineageHeads": {
+      "review": "bounded-root-lineage-head-read",
+      "change": "Adds an open read of at most 500 exact channel head sequences from the addressed lineage root. The receiver rejects reads from fork nodes, returns no message content, participant data, context state, or subscription identity, and performs no semantic mutation; code callers use it only to reconcile persisted fork unread cursors."
     },
     "direct:workspace/workers/pubsub-channel/channel-do.ts:join": {
       "review": "self-authenticated-finite-entity-membership-open",

@@ -53,7 +53,7 @@ describe("forkConversation()", () => {
 
     const out = await forkConversation(rpc, {
       channelId: "chan-1",
-      forkPointPubsubId: 42,
+      locus: { kind: "head" },
       reason: "deep-dive",
     });
 
@@ -66,7 +66,7 @@ describe("forkConversation()", () => {
     expect(forkCall?.targetId).toBe("do:workers/pubsub-channel:PubSubChannel:chan-1");
     expect(forkCall?.args[0]).toEqual({
       operationId: expect.any(String),
-      forkPointPubsubId: 42,
+      locus: { kind: "head" },
       reason: "deep-dive",
     });
     expect(forkCall?.options?.idempotencyKey).toBe(
@@ -84,21 +84,20 @@ describe("forkConversation()", () => {
       seededMessageId: "fork-seed:fork-2",
     });
 
-    const author = { kind: "user" as const, id: "u1", participantId: "u1" };
     await forkConversation(rpc, {
       channelId: "chan-1",
-      forkPointPubsubId: 7,
+      locus: { kind: "before-message", messageId: "msg-7" },
       reason: "edit",
       label: "My branch",
-      seed: { author, blocks: [{ type: "text", content: "hi" }] },
+      seed: { blocks: [{ type: "text", content: "hi" }] },
       include: ["do:workers/agent:AiChatWorker:a1"],
     });
 
     const forkCall = calls.find((c) => c.method === "fork");
     expect(forkCall?.args[0]).toEqual({
       operationId: expect.any(String),
-      forkPointPubsubId: 7,
-      seed: { author, blocks: [{ type: "text", content: "hi" }] },
+      locus: { kind: "before-message", messageId: "msg-7" },
+      seed: { blocks: [{ type: "text", content: "hi" }] },
       label: "My branch",
       reason: "edit",
       include: ["do:workers/agent:AiChatWorker:a1"],

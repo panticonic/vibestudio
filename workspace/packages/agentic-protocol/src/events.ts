@@ -697,6 +697,10 @@ export interface BranchPayload {
  */
 export interface ChannelForkedPayload {
   protocol: "agentic.trajectory.v1";
+  /** Channel that authored this lineage fact. Fork logs inherit their parent
+   * prefix, so reducers must scope the event to this parent instead of treating
+   * inherited sibling announcements as children of the fork. */
+  parentChannelId: string;
   forkId: string;
   forkedChannelId: string;
   forkedContextId: string;
@@ -706,18 +710,22 @@ export interface ChannelForkedPayload {
   /** "edit" | "branch" | "deep-dive" | free-form. */
   reason: string;
   actor: ParticipantRef;
+  /** Child channel head immediately after fork initialization/seed append. */
+  headSeq: number;
   /** Edit-forks: the replacement (seed) message id in the child channel. */
   seededMessageId?: string;
 }
 
 export interface ChannelForkRenamedPayload {
   protocol: "agentic.trajectory.v1";
+  parentChannelId: string;
   forkId: string;
   label: string;
 }
 
 export interface ChannelForkArchivedPayload {
   protocol: "agentic.trajectory.v1";
+  parentChannelId: string;
   forkId: string;
 }
 

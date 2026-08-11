@@ -40,7 +40,7 @@ import type {
   ServerLogEvent,
 } from "@workspace/pubsub";
 
-const PUBSUB_CHANNEL_SCHEMA_BASELINE = 119;
+const PUBSUB_CHANNEL_SCHEMA_BASELINE = 120;
 const STRUCTURED_DELIVERY_RETRY_MS = 1_000;
 const STRUCTURED_DELIVERY_MAX_RETRY_MS = 30_000;
 import type {
@@ -59,13 +59,10 @@ import type {
 import {
   AGENTIC_EVENT_PAYLOAD_KIND,
   AGENTIC_PROTOCOL_VERSION,
-  createInitialChannelViewState,
   participantRefFromMetadata,
   publicParticipantMetadata,
-  reduceChannelView,
   type AgenticEvent,
   type AppendIdempotency,
-  type ChannelEnvelope,
   type ForkProjection,
   type InvocationOutcome,
   type LogEnvelope,
@@ -135,7 +132,8 @@ const GAD_WORKSPACE_SERVICE_PROTOCOL = "vibestudio.gad.workspace.v1";
 /** Signal contentType for the ephemeral fork.head_changed lineage badge. */
 const FORK_HEAD_CHANGED_SIGNAL = "fork.head_changed";
 const FORK_OP_RECONCILE_MS = 5_000;
-type ChannelMaintenanceKind = "invite-index" | "call-deadline" | "fork-reconcile";
+const LINEAGE_HEAD_COALESCE_MS = 100;
+type ChannelMaintenanceKind = "invite-index" | "call-deadline" | "fork-reconcile" | "lineage-head";
 
 /** Ordered fork-op phases; a resume skips everything at or below the recorded
  * phase. `rollback-pending` remains retryable until owned context cleanup is
@@ -163,23 +161,40 @@ function doTarget(ref: DORef): string {
 /** The opening seed of an edit-/deep-dive fork. `blocks` are appended as a
  *  PRIMARY user message on the child channel by `appendSeed`. */
 interface ForkSeed {
-  author: ParticipantRef;
   blocks: MessageBlockInput[];
-  replaces?: { messageId: string; seq: number };
+  replaces?: { messageId: string };
 }
 
-/** Options for the durable `fork()` RPC. `include` scopes which forkable agents
+type ForkLocus =
+  | { kind: "head" }
+  | { kind: "after-message"; messageId: string }
+  | { kind: "before-message"; messageId: string };
+
+/** Request for the durable `fork()` RPC. `include` scopes which forkable agents
  *  are cloned (root-context entity scope → cloneContext.include); omit to clone
  *  every agent vessel in the roster. `exclude`/`replace` are REMOVED (C7). */
-interface ForkOpts {
+interface ForkRequest {
   /** Stable identity allocated once by the caller and retained by transport
    * retries. It is also the saga identity and clone target key. */
   operationId: string;
-  forkPointPubsubId: number;
+  locus: ForkLocus;
   seed?: ForkSeed;
   label?: string;
   reason: string;
   include?: string[];
+}
+
+type ResolvedForkSeed = Omit<ForkSeed, "replaces"> & {
+  author: ParticipantRef;
+  replaces?: { messageId: string; seq: number };
+};
+
+/** Fully resolved request retained in the fork journal. Numeric log positions
+ * are authority-derived once and never recomputed during crash recovery. */
+interface ForkOpts extends Omit<ForkRequest, "seed"> {
+  request: ForkRequest;
+  forkPointPubsubId: number;
+  seed?: ResolvedForkSeed;
 }
 
 /** Result of a fork — the fresh channel + context and the cloned agents, so the
@@ -208,6 +223,8 @@ type ChannelProvenance =
 /** Pending fork seed marker consumed by `appendSeed` for idempotent fork recovery. */
 interface ForkSeedMarker {
   forkId: string;
+  parentChannelId: string;
+  seed: ResolvedForkSeed;
 }
 
 /** Subset of `runtime.cloneContext`'s result the fork op consumes. */
@@ -364,6 +381,15 @@ export class PubSubChannel extends DurableObjectBase {
       controller: ReadableStreamDefaultController<Uint8Array>;
     }
   >();
+  private readonly lineageSubscriptionStreams = new Map<
+    string,
+    {
+      participantId: string;
+      deliveryId: string;
+      token: symbol;
+      controller: ReadableStreamDefaultController<Uint8Array>;
+    }
+  >();
 
   constructor(ctx: DurableObjectContext, env: unknown) {
     super(ctx, env);
@@ -468,7 +494,7 @@ export class PubSubChannel extends DurableObjectBase {
       CREATE TABLE IF NOT EXISTS channel_maintenance_queue (
         item_id TEXT PRIMARY KEY,
         kind TEXT NOT NULL
-          CHECK (kind IN ('invite-index', 'call-deadline', 'fork-reconcile')),
+          CHECK (kind IN ('invite-index', 'call-deadline', 'fork-reconcile', 'lineage-head')),
         target_id TEXT NOT NULL,
         idempotency_key TEXT NOT NULL,
         attempts INTEGER NOT NULL DEFAULT 0,
@@ -515,20 +541,79 @@ export class PubSubChannel extends DurableObjectBase {
         phase TEXT NOT NULL,
         forked_channel_id TEXT,
         forked_context_id TEXT,
+        result_json TEXT,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL
       )
     `);
     this.sql.exec(`CREATE INDEX IF NOT EXISTS idx_fork_ops_phase ON fork_ops(phase)`);
-    // Lineage subscribers (held on the ROOT channel of a fork tree). A
-    // signal-only roster — NO durable replay — that the head-advance hub fans
-    // `fork.head_changed` out to. Distinct from `participants` so it never
-    // pollutes the presence/roster projection.
+    // Incremental, rebuildable fork metadata projection. The unified log stays
+    // authoritative; these tables make fork locus resolution and roster reads
+    // proportional to new events / fork count instead of total conversation
+    // history. A cloned child prunes message/turn rows past its fork boundary
+    // and starts with an empty direct-child projection.
     this.sql.exec(`
-      CREATE TABLE IF NOT EXISTS lineage_subscribers (
-        id TEXT PRIMARY KEY,
-        metadata TEXT NOT NULL,
-        created_at INTEGER NOT NULL
+      CREATE TABLE IF NOT EXISTS fork_view_cursor (
+        singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+        folded_through_seq INTEGER NOT NULL
+      )
+    `);
+    this.sql.exec(
+      `INSERT OR IGNORE INTO fork_view_cursor (singleton, folded_through_seq) VALUES (1, 0)`
+    );
+    this.sql.exec(`
+      CREATE TABLE IF NOT EXISTS fork_message_loci (
+        message_id TEXT PRIMARY KEY,
+        first_seq INTEGER NOT NULL,
+        terminal_seq INTEGER,
+        turn_id TEXT,
+        actor_kind TEXT NOT NULL
+      )
+    `);
+    this.sql.exec(
+      `CREATE INDEX IF NOT EXISTS idx_fork_message_first ON fork_message_loci(first_seq)`
+    );
+    this.sql.exec(`
+      CREATE TABLE IF NOT EXISTS fork_turn_loci (
+        turn_id TEXT PRIMARY KEY,
+        opened_seq INTEGER NOT NULL
+      )
+    `);
+    this.sql.exec(`
+      CREATE TABLE IF NOT EXISTS fork_projection (
+        fork_id TEXT PRIMARY KEY,
+        parent_channel_id TEXT NOT NULL,
+        forked_channel_id TEXT NOT NULL UNIQUE,
+        forked_context_id TEXT NOT NULL,
+        fork_point_id INTEGER NOT NULL,
+        label TEXT NOT NULL,
+        reason TEXT NOT NULL,
+        actor_json TEXT NOT NULL,
+        created_at_seq INTEGER NOT NULL,
+        head_seq INTEGER NOT NULL,
+        archived INTEGER NOT NULL DEFAULT 0 CHECK (archived IN (0, 1))
+      )
+    `);
+    this.sql.exec(
+      `CREATE INDEX IF NOT EXISTS idx_fork_projection_created ON fork_projection(created_at_seq)`
+    );
+    // Every fork reports its latest durable head directly to the lineage root.
+    // The single-row outbox coalesces bursts without losing the latest seq;
+    // the root's table is the durable cross-session unread authority.
+    this.sql.exec(`
+      CREATE TABLE IF NOT EXISTS lineage_head_outbox (
+        singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+        head_seq INTEGER NOT NULL,
+        roster_changed INTEGER NOT NULL DEFAULT 0 CHECK (roster_changed IN (0, 1)),
+        next_attempt_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      )
+    `);
+    this.sql.exec(`
+      CREATE TABLE IF NOT EXISTS lineage_heads (
+        channel_id TEXT PRIMARY KEY,
+        head_seq INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
       )
     `);
     // Durable channel membership (WP7 §3). This is deliberately separate from
@@ -592,7 +677,12 @@ export class PubSubChannel extends DurableObjectBase {
       "channel_delivery_projection_cursor",
       "channel_maintenance_queue",
       "fork_ops",
-      "lineage_subscribers",
+      "fork_view_cursor",
+      "fork_message_loci",
+      "fork_turn_loci",
+      "fork_projection",
+      "lineage_head_outbox",
+      "lineage_heads",
       "channel_members",
       "invite_index_ops",
       "presence_last_seen",
@@ -726,6 +816,16 @@ export class PubSubChannel extends DurableObjectBase {
         Number(row["updated_at"])
       );
     }
+    for (const row of this.sql
+      .exec(`SELECT head_seq, updated_at FROM lineage_head_outbox WHERE next_attempt_at <= ?`, now)
+      .toArray()) {
+      insert(
+        `maintenance:lineage-head:${this.objectKey}`,
+        "lineage-head",
+        this.objectKey,
+        Number(row["updated_at"])
+      );
+    }
   }
 
   private hasReadyMaintenance(now: number): boolean {
@@ -770,6 +870,21 @@ export class PubSubChannel extends DurableObjectBase {
         )
         .toArray().length > 0;
     if (callDue) return true;
+    const lineageDue =
+      this.sql
+        .exec(
+          `SELECT 1 FROM lineage_head_outbox
+            WHERE next_attempt_at <= ?
+              AND NOT EXISTS (
+                SELECT 1 FROM channel_maintenance_queue
+                 WHERE item_id = ?
+              )
+            LIMIT 1`,
+          now,
+          `maintenance:lineage-head:${this.objectKey}`
+        )
+        .toArray().length > 0;
+    if (lineageDue) return true;
     return (
       this.sql
         .exec(
@@ -851,6 +966,8 @@ export class PubSubChannel extends DurableObjectBase {
       else if (op && op["phase"] !== "done" && op["phase"] !== "rolledback") {
         await this.runForkOp(targetId);
       }
+    } else if (kind === "lineage-head") {
+      await this.flushLineageHeadOutbox();
     } else {
       throw new Error(`executeChannelMaintenanceClaim: unknown kind ${kind}`);
     }
@@ -1697,7 +1814,16 @@ export class PubSubChannel extends DurableObjectBase {
     await this.deriveDeliveries(event, deliveryStartedAt);
     // Report the head advance up the fork lineage (debounced) so live badges on
     // the root fan out. Cheap: records a pending seq + arms the alarm.
-    this.noteLineageHeadAdvance(event.id);
+    const appendedKind =
+      input.type === AGENTIC_EVENT_PAYLOAD_KIND
+        ? (input.payload as { kind?: unknown } | null)?.kind
+        : undefined;
+    this.noteLineageHeadAdvance(
+      event.id,
+      appendedKind === "channel.forked" ||
+        appendedKind === "channel.fork_renamed" ||
+        appendedKind === "channel.fork_archived"
+    );
     return event;
   }
 
@@ -3697,7 +3823,12 @@ export class PubSubChannel extends DurableObjectBase {
       "pending_calls",
       "dedup_keys",
       "fork_ops",
-      "lineage_subscribers",
+      "fork_view_cursor",
+      "fork_message_loci",
+      "fork_turn_loci",
+      "fork_projection",
+      "lineage_head_outbox",
+      "lineage_heads",
       "channel_members",
       "invite_index_ops",
       "presence_last_seen",
@@ -4260,6 +4391,21 @@ export class PubSubChannel extends DurableObjectBase {
     return typeof oldest === "number" ? oldest + FORK_OP_RECONCILE_MS : null;
   }
 
+  private nextLineageHeadReportAt(): number | null {
+    const value = this.sql
+      .exec(
+        `SELECT next_attempt_at FROM lineage_head_outbox
+          WHERE singleton = 1
+            AND NOT EXISTS (
+              SELECT 1 FROM channel_maintenance_queue
+               WHERE item_id = ?
+            )`,
+        `maintenance:lineage-head:${this.objectKey}`
+      )
+      .toArray()[0]?.["next_attempt_at"];
+    return typeof value === "number" ? value : null;
+  }
+
   private nextAlarmSchedule(): DoAlarmSchedule | null {
     const now = Date.now();
     const sources = [
@@ -4269,6 +4415,7 @@ export class PubSubChannel extends DurableObjectBase {
       this.nextInviteIndexSyncAt(),
       this.calls.nextCallDeadlineAt(),
       this.nextForkOpReconcileAt(),
+      this.nextLineageHeadReportAt(),
       this.nextStructuredDeliveryRecoveryAt(),
       this.nextMaintenanceRecoveryAt(),
       this.nextDurableWorkReadyEdgeAt(),
@@ -4375,6 +4522,187 @@ export class PubSubChannel extends DurableObjectBase {
     this.setStateValue("taskRunId", args.runId);
   }
 
+  /** Fold only the agentic envelopes appended since the last local projection
+   * cursor. The GAD log remains authoritative; these rows are a rebuildable
+   * index for semantic fork loci and direct-child metadata. */
+  private async syncForkView(): Promise<void> {
+    const PAGE = 500;
+    let afterSeq = Number(
+      this.sql
+        .exec(`SELECT folded_through_seq FROM fork_view_cursor WHERE singleton = 1`)
+        .toArray()[0]?.["folded_through_seq"] ?? 0
+    );
+    for (;;) {
+      const envelopes = await this.channelLog.read({
+        afterSeq,
+        limit: PAGE,
+        payloadKind: AGENTIC_EVENT_PAYLOAD_KIND,
+      });
+      if (envelopes.length === 0) return;
+      this.ctx.storage.transactionSync(() => {
+        for (const envelope of envelopes) {
+          this.foldForkMetadataEnvelope(envelope);
+          afterSeq = envelope.seq;
+        }
+        this.sql.exec(
+          `UPDATE fork_view_cursor SET folded_through_seq = ? WHERE singleton = 1`,
+          afterSeq
+        );
+      });
+      if (envelopes.length < PAGE) return;
+    }
+  }
+
+  private foldForkMetadataEnvelope(envelope: LogEnvelope): void {
+    const event = envelope.payload as AgenticEvent | null;
+    if (!event || typeof event !== "object") return;
+    if (
+      event.kind === "message.started" ||
+      event.kind === "message.completed" ||
+      event.kind === "message.failed"
+    ) {
+      const messageId = event.causality?.messageId;
+      if (!messageId) return;
+      this.sql.exec(
+        `INSERT INTO fork_message_loci
+           (message_id, first_seq, terminal_seq, turn_id, actor_kind)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(message_id) DO UPDATE SET
+           first_seq = MIN(first_seq, excluded.first_seq),
+           terminal_seq = COALESCE(excluded.terminal_seq, terminal_seq),
+           turn_id = COALESCE(turn_id, excluded.turn_id)`,
+        String(messageId),
+        envelope.seq,
+        event.kind === "message.completed" || event.kind === "message.failed" ? envelope.seq : null,
+        event.turnId ? String(event.turnId) : null,
+        event.actor.kind
+      );
+      return;
+    }
+    if (event.kind === "turn.opened" && event.turnId) {
+      this.sql.exec(
+        `INSERT OR IGNORE INTO fork_turn_loci (turn_id, opened_seq) VALUES (?, ?)`,
+        String(event.turnId),
+        envelope.seq
+      );
+      return;
+    }
+    if (event.kind === "channel.forked") {
+      const payload = (event as AgenticEvent<"channel.forked">).payload;
+      if (payload.parentChannelId !== this.objectKey) return;
+      this.sql.exec(
+        `INSERT INTO fork_projection
+           (fork_id, parent_channel_id, forked_channel_id, forked_context_id,
+            fork_point_id, label, reason, actor_json, created_at_seq, head_seq, archived)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+         ON CONFLICT(fork_id) DO UPDATE SET
+           parent_channel_id = excluded.parent_channel_id,
+           forked_channel_id = excluded.forked_channel_id,
+           forked_context_id = excluded.forked_context_id,
+           fork_point_id = excluded.fork_point_id,
+           label = excluded.label,
+           reason = excluded.reason,
+           actor_json = excluded.actor_json,
+           created_at_seq = excluded.created_at_seq,
+           head_seq = MAX(head_seq, excluded.head_seq)`,
+        payload.forkId,
+        payload.parentChannelId,
+        payload.forkedChannelId,
+        payload.forkedContextId,
+        payload.forkPointId,
+        payload.label,
+        payload.reason,
+        JSON.stringify(payload.actor),
+        envelope.seq,
+        payload.headSeq
+      );
+      return;
+    }
+    if (event.kind === "channel.fork_renamed") {
+      const payload = (event as AgenticEvent<"channel.fork_renamed">).payload;
+      if (payload.parentChannelId !== this.objectKey) return;
+      this.sql.exec(
+        `UPDATE fork_projection SET label = ? WHERE fork_id = ?`,
+        payload.label,
+        payload.forkId
+      );
+      return;
+    }
+    if (event.kind === "channel.fork_archived") {
+      const payload = (event as AgenticEvent<"channel.fork_archived">).payload;
+      if (payload.parentChannelId !== this.objectKey) return;
+      this.sql.exec(`UPDATE fork_projection SET archived = 1 WHERE fork_id = ?`, payload.forkId);
+    }
+  }
+
+  /** Resolve a client-facing semantic locus to one authoritative log boundary.
+   * The resolved request is what the durable saga journals and reuses. */
+  private async resolveForkRequest(request: ForkRequest): Promise<ForkOpts> {
+    await this.syncForkView();
+    let forkPointPubsubId: number;
+    let replacementSeq: number | undefined;
+    if (request.locus.kind === "head") {
+      forkPointPubsubId = await this.channelLog.headSeq();
+    } else {
+      const rows = this.sql
+        .exec(
+          `SELECT first_seq, terminal_seq, turn_id FROM fork_message_loci WHERE message_id = ?`,
+          request.locus.messageId
+        )
+        .toArray();
+      const row = rows[0];
+      if (!row) throw new Error(`fork locus message ${request.locus.messageId} was not found`);
+      const firstSeq = Number(row["first_seq"]);
+      const terminalSeq =
+        row["terminal_seq"] === null || row["terminal_seq"] === undefined
+          ? undefined
+          : Number(row["terminal_seq"]);
+      replacementSeq = terminalSeq ?? firstSeq;
+      if (request.locus.kind === "after-message") {
+        if (terminalSeq === undefined) {
+          throw new Error(`cannot fork after unfinished message ${request.locus.messageId}`);
+        }
+        forkPointPubsubId = terminalSeq;
+      } else {
+        const turnId = row["turn_id"] as string | null;
+        const opened = turnId
+          ? this.sql
+              .exec(`SELECT opened_seq FROM fork_turn_loci WHERE turn_id = ?`, turnId)
+              .toArray()[0]?.["opened_seq"]
+          : undefined;
+        forkPointPubsubId = Math.max(0, Number(opened ?? firstSeq) - 1);
+      }
+    }
+    if (request.seed?.replaces && request.locus.kind !== "before-message") {
+      throw new Error("a replacement seed requires a before-message fork locus");
+    }
+    const locusMessageId = request.locus.kind === "head" ? undefined : request.locus.messageId;
+    if (request.seed?.replaces && request.seed.replaces.messageId !== locusMessageId) {
+      throw new Error("replacement seed and fork locus must identify the same message");
+    }
+    const { seed: requestedSeed, ...requestWithoutSeed } = request;
+    let seed: ResolvedForkSeed | undefined;
+    if (requestedSeed) {
+      const { replaces, ...seedWithoutReplacement } = requestedSeed;
+      seed = replaces
+        ? {
+            ...seedWithoutReplacement,
+            author: this.participantRef(this.rpcCallerId ?? "system"),
+            replaces: { messageId: replaces.messageId, seq: replacementSeq! },
+          }
+        : {
+            ...seedWithoutReplacement,
+            author: this.participantRef(this.rpcCallerId ?? "system"),
+          };
+    }
+    return {
+      ...requestWithoutSeed,
+      request,
+      forkPointPubsubId,
+      ...(seed ? { seed } : {}),
+    };
+  }
+
   private computeProvenance(): ChannelProvenance {
     const taskParent = this.getStateValue("taskParentChannelId");
     if (taskParent) {
@@ -4429,14 +4757,15 @@ export class PubSubChannel extends DurableObjectBase {
     tier: "open",
     sensitivity: "write",
   })
-  async fork(opts: ForkOpts): Promise<ForkResult> {
-    const forkId = opts.operationId;
+  async fork(request: ForkRequest): Promise<ForkResult> {
+    const forkId = request.operationId;
     if (typeof forkId !== "string" || forkId.length < 8) {
       throw new Error("fork requires a stable operationId");
     }
     const existing = this.getForkOpRow(forkId);
     if (existing) {
-      if (String(existing["opts"]) !== JSON.stringify(opts)) {
+      const recorded = JSON.parse(String(existing["opts"])) as ForkOpts;
+      if (canonicalJson(recorded.request) !== canonicalJson(request)) {
         throw new Error(`fork operation ${forkId} was reused with different input`);
       }
       if (existing["phase"] === "rollback-pending") {
@@ -4446,8 +4775,12 @@ export class PubSubChannel extends DurableObjectBase {
       if (existing["phase"] === "rolledback") {
         throw new Error(`fork operation ${forkId} previously failed and was rolled back`);
       }
+      if (existing["phase"] === "done" && typeof existing["result_json"] === "string") {
+        return JSON.parse(existing["result_json"] as string) as ForkResult;
+      }
       return this.runForkOp(forkId);
     }
+    const opts = await this.resolveForkRequest(request);
     const now = Date.now();
     // Journal FIRST — before any host/DO call — so a crash is always recoverable.
     this.sql.exec(
@@ -4455,7 +4788,7 @@ export class PubSubChannel extends DurableObjectBase {
          VALUES (?, ?, ?, 'journaled', ?, ?)`,
       forkId,
       opts.forkPointPubsubId,
-      JSON.stringify(opts),
+      canonicalJson(opts),
       now,
       now
     );
@@ -4637,7 +4970,7 @@ export class PubSubChannel extends DurableObjectBase {
       if (opts.seed) {
         seededMessageId = `fork-seed:${forkId}`;
         if (!forkPhaseReached(phase, "seeded")) {
-          await this.rpc.call(doTarget(forkedChannelRef), "appendSeed", [{ forkId }, opts.seed]);
+          await this.rpc.call(doTarget(forkedChannelRef), "appendSeed", [{ forkId }]);
         }
       }
       if (!forkPhaseReached(phase, "seeded")) this.setForkOpPhase(forkId, "seeded");
@@ -4654,7 +4987,20 @@ export class PubSubChannel extends DurableObjectBase {
         this.setForkOpPhase(forkId, "announced");
       }
 
-      this.setForkOpPhase(forkId, "done");
+      const result: ForkResult = {
+        forkId,
+        forkedChannelId,
+        forkedContextId,
+        clonedParticipants,
+        clonedAgents,
+        ...(seededMessageId ? { seededMessageId } : {}),
+      };
+      this.sql.exec(
+        `UPDATE fork_ops SET phase = 'done', result_json = ?, updated_at = ? WHERE fork_id = ?`,
+        canonicalJson(result),
+        Date.now(),
+        forkId
+      );
       console.info("[Channel] fork op done", {
         forkId,
         sourceChannelId: this.objectKey,
@@ -4663,14 +5009,7 @@ export class PubSubChannel extends DurableObjectBase {
         seededMessageId,
         clonedParticipants,
       });
-      return {
-        forkId,
-        forkedChannelId,
-        forkedContextId,
-        clonedParticipants,
-        clonedAgents,
-        ...(seededMessageId ? { seededMessageId } : {}),
-      };
+      return result;
     } catch (err) {
       console.error("[Channel] fork op failed; rolling back", {
         forkId,
@@ -4722,9 +5061,11 @@ export class PubSubChannel extends DurableObjectBase {
       payload: {
         protocol: AGENTIC_PROTOCOL_VERSION,
         forkId,
+        parentChannelId: this.objectKey,
         forkedChannelId: fork.forkedChannelId,
         forkedContextId: fork.forkedContextId,
         forkPointId: opts.forkPointPubsubId,
+        headSeq: opts.forkPointPubsubId + (opts.seed ? 1 : 0),
         label: opts.label ?? opts.reason,
         reason: opts.reason,
         actor,
@@ -4750,10 +5091,18 @@ export class PubSubChannel extends DurableObjectBase {
     sensitivity: "write",
   })
   async renameFork(forkId: string, label: string): Promise<void> {
+    await this.assertDirectFork(forkId);
+    const normalizedLabel = label.trim();
+    if (!normalizedLabel) throw new Error("renameFork requires a non-empty label");
     const event: AgenticEvent<"channel.fork_renamed"> = {
       kind: "channel.fork_renamed",
       actor: this.participantRef(this.rpcCallerId ?? "system"),
-      payload: { protocol: AGENTIC_PROTOCOL_VERSION, forkId, label },
+      payload: {
+        protocol: AGENTIC_PROTOCOL_VERSION,
+        parentChannelId: this.objectKey,
+        forkId,
+        label: normalizedLabel,
+      },
       createdAt: new Date().toISOString(),
     };
     const logged = await this.appendDurable({
@@ -4776,10 +5125,11 @@ export class PubSubChannel extends DurableObjectBase {
     sensitivity: "destructive",
   })
   async archiveFork(forkId: string): Promise<void> {
+    await this.assertDirectFork(forkId);
     const event: AgenticEvent<"channel.fork_archived"> = {
       kind: "channel.fork_archived",
       actor: this.participantRef(this.rpcCallerId ?? "system"),
-      payload: { protocol: AGENTIC_PROTOCOL_VERSION, forkId },
+      payload: { protocol: AGENTIC_PROTOCOL_VERSION, parentChannelId: this.objectKey, forkId },
       createdAt: new Date().toISOString(),
     };
     const logged = await this.appendDurable({
@@ -4790,14 +5140,20 @@ export class PubSubChannel extends DurableObjectBase {
     broadcast(this.broadcastDeps, logged, { kind: "log", phase: "live" }, "system");
   }
 
+  private async assertDirectFork(forkId: string): Promise<void> {
+    await this.syncForkView();
+    const exists =
+      this.sql.exec(`SELECT 1 FROM fork_projection WHERE fork_id = ?`, forkId).toArray().length > 0;
+    if (!exists)
+      throw new Error(`fork ${forkId} is not a direct child of channel ${this.objectKey}`);
+  }
+
   /**
    * List the DIRECT-CHILD forks rooted off THIS channel — folded from this
-   * channel's OWN durable log (`channel.forked` / `channel.fork_renamed` /
-   * `channel.fork_archived` envelopes) through the SAME reducer fold the client
-   * uses, so the projection can never drift from the UI's. Archived forks are
-   * returned too (the UI filters). A pure read — no writes. The fork switcher
-   * shows SIBLING forks by reading the PARENT channel's `listForks` (WS-8
-   * deferred this for lack of a cheap getForks RPC).
+   * channel's incremental log-derived projection. It folds only envelopes
+   * newer than the local cursor, then returns O(fork count) metadata plus the
+   * current durable head. Archived forks remain available to administrative
+   * callers; active UI surfaces filter them.
    */
   @rpc({
     principals: ["host", "code"],
@@ -4805,58 +5161,45 @@ export class PubSubChannel extends DurableObjectBase {
     tier: "open",
     sensitivity: "read",
   })
-  async listForks(): Promise<{ forks: ForkProjection[] }> {
-    const PAGE = 500;
-    let view = createInitialChannelViewState();
-    let afterSeq = 0;
-    for (;;) {
-      const envelopes = await this.channelLog.read({
-        afterSeq,
-        limit: PAGE,
-        payloadKind: AGENTIC_EVENT_PAYLOAD_KIND,
-      });
-      if (envelopes.length === 0) break;
-      for (const envelope of envelopes) {
-        afterSeq = envelope.seq;
-        const kind = (envelope.payload as AgenticEvent | null)?.kind;
-        if (
-          kind === "channel.forked" ||
-          kind === "channel.fork_renamed" ||
-          kind === "channel.fork_archived"
-        ) {
-          view = reduceChannelView(view, this.forkFoldEnvelope(envelope));
-        }
+  async listForks(): Promise<{ forks: ForkProjection[]; headSeq: number }> {
+    await this.syncForkView();
+    let forks = this.sql
+      .exec(`SELECT * FROM fork_projection ORDER BY created_at_seq ASC`)
+      .toArray()
+      .map(
+        (row) =>
+          ({
+            parentChannelId: String(row["parent_channel_id"]),
+            forkId: String(row["fork_id"]),
+            forkedChannelId: String(row["forked_channel_id"]),
+            forkedContextId: String(row["forked_context_id"]),
+            forkPointId: Number(row["fork_point_id"]),
+            label: String(row["label"]),
+            reason: String(row["reason"]),
+            actor: JSON.parse(String(row["actor_json"])) as ParticipantRef,
+            createdAtSeq: Number(row["created_at_seq"]),
+            headSeq: Number(row["head_seq"]),
+            archived: Number(row["archived"]) === 1,
+          }) satisfies ForkProjection
+      );
+    const channelIds = forks.map((fork) => fork.forkedChannelId);
+    if (channelIds.length > 0) {
+      const provenance = this.computeProvenance();
+      let heads: Record<string, number>;
+      if (provenance.kind === "fork") {
+        const rootRef = await this.resolveChannelRef(provenance.rootChannelId);
+        heads = await this.rpc.call<Record<string, number>>(doTarget(rootRef), "getLineageHeads", [
+          channelIds,
+        ]);
+      } else {
+        heads = await this.getLineageHeads(channelIds);
       }
-      if (envelopes.length < PAGE) break;
+      forks = forks.map((fork) => ({
+        ...fork,
+        headSeq: Math.max(fork.headSeq, heads[fork.forkedChannelId] ?? 0),
+      }));
     }
-    return { forks: view.forks };
-  }
-
-  /** Map a durable log envelope onto the `ChannelEnvelope` shape the reducer
-   *  fold consumes (fork payloads carry no blob-spilled fields, so the
-   *  non-hydrated `read()` payload is fed directly). */
-  private forkFoldEnvelope(envelope: LogEnvelope): ChannelEnvelope {
-    const annotations = envelope.annotations ?? {};
-    const contentClass = annotations["contentClass"];
-    const externalKeys = annotations["externalKeys"];
-    if (
-      (contentClass !== "internal" && contentClass !== "external") ||
-      !Array.isArray(externalKeys) ||
-      !externalKeys.every((key) => typeof key === "string")
-    ) {
-      throw new Error("Fork fold encountered a channel envelope without content provenance");
-    }
-    return {
-      envelopeId: String(envelope.envelopeId) as ChannelEnvelope["envelopeId"],
-      channelId: this.objectKey as ChannelEnvelope["channelId"],
-      seq: envelope.seq,
-      from: envelope.actor,
-      payload: envelope.payload,
-      payloadKind: AGENTIC_EVENT_PAYLOAD_KIND,
-      contentClass,
-      externalKeys,
-      publishedAt: envelope.appendedAt,
-    };
+    return { forks, headSeq: await this.channelLog.headSeq() };
   }
 
   // ── appendSeed — fork opening message ──────────────────────────────────────
@@ -4872,22 +5215,24 @@ export class PubSubChannel extends DurableObjectBase {
     tier: "open",
     sensitivity: "write",
   })
-  async appendSeed(
-    forkOpRef: { forkId: string },
-    envelope: ForkSeed
-  ): Promise<{ messageId: string; seq: number }> {
+  async appendSeed(forkOpRef: { forkId: string }): Promise<{ messageId: string; seq: number }> {
     const forkId = forkOpRef.forkId;
     const messageId = `fork-seed:${forkId}`;
-    // Idempotent: a re-drive after the message is durable returns it — even once
-    // the pending seed marker has been consumed.
-    const existing = await this.channelLog.getEventByEnvelopeId(messageId);
-    if (existing) return { messageId, seq: existing.id };
-
     const marker = this.readForkSeedMarker();
     if (!marker || marker.forkId !== forkId) {
       throw new Error(`appendSeed: no pending fork seed for fork ${forkId} on this channel`);
     }
+    const parentRef = await this.resolveChannelRef(marker.parentChannelId);
+    const caller = this.caller;
+    if (caller?.callerKind !== "do" || caller.callerId !== doTarget(parentRef)) {
+      throw new Error("appendSeed may only be called by the recorded parent channel");
+    }
+    // Authorize before returning an idempotent result: possession of a fork id
+    // is not authority to learn or complete another parent's seed operation.
+    const existing = await this.channelLog.getEventByEnvelopeId(messageId);
+    if (existing) return { messageId, seq: existing.id };
 
+    const envelope = marker.seed;
     const author = envelope.author;
     const seedEvent: AgenticEvent<"message.completed"> = {
       kind: "message.completed",
@@ -4919,7 +5264,6 @@ export class PubSubChannel extends DurableObjectBase {
       idempotency: "idempotent-by-id",
     });
     broadcast(this.broadcastDeps, logged, { kind: "log", phase: "live" }, logged.senderId);
-    this.clearForkSeedMarker();
     return { messageId, seq: logged.id };
   }
 
@@ -4931,10 +5275,6 @@ export class PubSubChannel extends DurableObjectBase {
     } catch {
       return null;
     }
-  }
-
-  private clearForkSeedMarker(): void {
-    this.deleteStateValue("forkSeedMarker");
   }
 
   // ── Fork support ────────────────────────────────────────────────────────
@@ -4966,7 +5306,7 @@ export class PubSubChannel extends DurableObjectBase {
     forkInit?: {
       forkId: string;
       rootChannelId: string;
-      seed?: ForkSeed;
+      seed?: ResolvedForkSeed;
       homeableTargets?: string[];
     }
   ): Promise<void> {
@@ -4987,14 +5327,35 @@ export class PubSubChannel extends DurableObjectBase {
       this.setStateValue("rootChannelId", forkInit.rootChannelId);
       this.setStateValue("forkId", forkInit.forkId);
       if (forkInit.seed) {
-        this.setStateValue("forkSeedMarker", JSON.stringify({ forkId: forkInit.forkId }));
+        this.setStateValue(
+          "forkSeedMarker",
+          JSON.stringify({
+            forkId: forkInit.forkId,
+            parentChannelId,
+            seed: forkInit.seed,
+          } satisfies ForkSeedMarker)
+        );
       }
     }
     await this.channelLog.forkFrom(parentChannelId, forkPointId);
     this.deliveryProjection.resetForFork(forkPointId);
-    // The child must NOT inherit the parent's fork journal or lineage roster.
+    // The child must NOT inherit the parent's fork journal or direct-child
+    // projection. Its semantic locus index retains only the inherited prefix.
     this.sql.exec(`DELETE FROM fork_ops`);
-    this.sql.exec(`DELETE FROM lineage_subscribers`);
+    this.sql.exec(`DELETE FROM fork_projection`);
+    this.sql.exec(`DELETE FROM lineage_head_outbox`);
+    this.sql.exec(`DELETE FROM lineage_heads`);
+    this.sql.exec(`DELETE FROM fork_message_loci WHERE first_seq > ?`, forkPointId);
+    this.sql.exec(
+      `UPDATE fork_message_loci SET terminal_seq = NULL
+       WHERE terminal_seq IS NOT NULL AND terminal_seq > ?`,
+      forkPointId
+    );
+    this.sql.exec(`DELETE FROM fork_turn_loci WHERE opened_seq > ?`, forkPointId);
+    this.sql.exec(
+      `UPDATE fork_view_cursor SET folded_through_seq = ? WHERE singleton = 1`,
+      forkPointId
+    );
     // A cloned operation was authored for the parent's object key. Membership
     // may be inherited, but its in-flight projection must never be replayed as
     // a new pending invite for the child channel.
@@ -5031,12 +5392,10 @@ export class PubSubChannel extends DurableObjectBase {
 
   // ── Lineage subscriptions + fork.head_changed hub ─────────────────────────
   //
-  // A NEW signal-only subscription MODE: unlike `subscribe` (always durable
-  // replay), `subscribeLineage` registers a lightweight roster that the root of
-  // a fork tree fans ephemeral `fork.head_changed` signals to. Each channel, on
-  // a durable head advance, reports up its `forkedFrom` chain (debounced) to the
-  // root; the root fans out to its lineage subscribers. Badges reconcile from
-  // durable state on open (§H) — a missed signal is not durable.
+  // The subscription RESPONSE is the live resource. There is no durable roster
+  // of dead clients: cancellation or DO eviction releases every stream. Heads,
+  // by contrast, are durable and coalesced through each fork's outbox directly
+  // to the root, so reconnecting clients can reconcile without replaying logs.
 
   @rpc({
     principals: ["code"],
@@ -5044,25 +5403,57 @@ export class PubSubChannel extends DurableObjectBase {
     tier: "open",
     sensitivity: "write",
   })
-  async subscribeLineage(
-    participantId: string,
-    metadata: Record<string, unknown> = {}
-  ): Promise<{ ok: true }> {
+  async subscribeLineage(participantId: string): Promise<Response> {
     if (!this.isAuthorizedParticipantCaller(participantId)) {
       const caller = this.caller;
       throw new Error(
         `Participant ${participantId} cannot subscribe to lineage by caller ${caller?.callerId ?? "unknown"}`
       );
     }
-    this.sql.exec(
-      `INSERT OR REPLACE INTO lineage_subscribers (id, metadata, created_at) VALUES (?, ?, ?)`,
-      participantId,
-      JSON.stringify(metadata),
-      Date.now()
+    const deliveryId = this.caller?.callerPanelId ?? this.caller?.callerId;
+    if (!deliveryId) throw new Error("subscribeLineage requires an authenticated delivery id");
+    const key = this.subscriptionStreamKey(participantId, deliveryId);
+    const token = Symbol(key);
+    const prior = this.lineageSubscriptionStreams.get(key);
+    if (prior) {
+      this.lineageSubscriptionStreams.delete(key);
+      try {
+        prior.controller.close();
+      } catch {
+        // Already terminal.
+      }
+    }
+    const body = new ReadableStream<Uint8Array>(
+      {
+        start: (controller) => {
+          this.lineageSubscriptionStreams.set(key, {
+            participantId,
+            deliveryId,
+            token,
+            controller,
+          });
+          enqueueChannelSubscriptionBytes(
+            controller,
+            encodeChannelSubscriptionRecord({
+              kind: "subscribed",
+              result: { ok: true, rootChannelId: this.objectKey },
+            })
+          );
+        },
+        cancel: () => {
+          const current = this.lineageSubscriptionStreams.get(key);
+          if (current?.token === token) this.lineageSubscriptionStreams.delete(key);
+        },
+      },
+      channelSubscriptionQueuingStrategy()
     );
-    return { ok: true };
+    return new Response(body, {
+      headers: { "Content-Type": "application/x-ndjson", "Cache-Control": "no-store" },
+    });
   }
 
+  /** Compatibility close for cooperative clients. Stream cancellation remains
+   * the ownership boundary and also releases this exact delivery generation. */
   @rpc({
     principals: ["code"],
     effect: { kind: "open" },
@@ -5071,53 +5462,155 @@ export class PubSubChannel extends DurableObjectBase {
   })
   async unsubscribeLineage(participantId: string): Promise<void> {
     this.assertParticipantCaller(participantId, "unsubscribeLineage");
-    this.sql.exec(`DELETE FROM lineage_subscribers WHERE id = ?`, participantId);
+    const deliveryId = this.caller?.callerPanelId ?? this.caller?.callerId;
+    if (!deliveryId) return;
+    const key = this.subscriptionStreamKey(participantId, deliveryId);
+    const stream = this.lineageSubscriptionStreams.get(key);
+    if (!stream) return;
+    this.lineageSubscriptionStreams.delete(key);
+    try {
+      stream.controller.close();
+    } catch {
+      // Already terminal.
+    }
   }
 
-  /** Relay point for a head advance reported up the chain from a descendant. */
+  /** Root endpoint for a coalesced head advance reported by the exact channel. */
   @rpc({
     principals: ["host", "code"],
     effect: { kind: "open" },
     tier: "open",
     sensitivity: "write",
   })
-  async reportLineageHead(report: { channelId: string; headSeq: number }): Promise<void> {
-    await this.relayLineageHead(report.channelId, report.headSeq);
+  async reportLineageHead(report: {
+    channelId: string;
+    headSeq: number;
+    rosterChanged?: boolean;
+  }): Promise<void> {
+    if (!Number.isSafeInteger(report.headSeq) || report.headSeq < 0) {
+      throw new Error("reportLineageHead requires a non-negative safe headSeq");
+    }
+    if (this.computeProvenance().kind === "fork") {
+      throw new Error("reportLineageHead must be sent directly to the lineage root");
+    }
+    const channelRef = await this.resolveChannelRef(report.channelId);
+    const caller = this.caller;
+    if (caller?.callerKind !== "do" || caller.callerId !== doTarget(channelRef)) {
+      throw new Error("reportLineageHead caller does not match the reported channel");
+    }
+    const reportedProvenance = await this.rpc.call<ChannelProvenance>(
+      doTarget(channelRef),
+      "getProvenance",
+      []
+    );
+    if (reportedProvenance.kind !== "fork" || reportedProvenance.rootChannelId !== this.objectKey) {
+      throw new Error("reported channel does not belong to this lineage root");
+    }
+    this.recordLineageHead(report.channelId, report.headSeq, report.rosterChanged === true);
   }
 
-  /** Fan a local durable head advance out as an event-driven best-effort signal. */
-  private noteLineageHeadAdvance(seq: number): void {
-    const relay = this.relayLineageHead(this.objectKey, seq);
-    if (this.ctx.waitUntil) this.ctx.waitUntil(relay);
-    else void relay;
+  @rpc({
+    principals: ["host", "code"],
+    effect: { kind: "open" },
+    tier: "open",
+    sensitivity: "read",
+  })
+  async getLineageHeads(channelIds: string[]): Promise<Record<string, number>> {
+    if (this.computeProvenance().kind === "fork") {
+      throw new Error("getLineageHeads must be read from the lineage root");
+    }
+    const unique = [...new Set(channelIds)];
+    if (unique.length > 500) throw new Error("getLineageHeads accepts at most 500 channels");
+    const heads: Record<string, number> = {};
+    for (const channelId of unique) {
+      const value = this.sql
+        .exec(`SELECT head_seq FROM lineage_heads WHERE channel_id = ?`, channelId)
+        .toArray()[0]?.["head_seq"];
+      if (typeof value === "number") heads[channelId] = value;
+    }
+    return heads;
   }
 
-  /** Root → fan out to lineage subscribers; otherwise forward up to the parent. */
-  private async relayLineageHead(originChannelId: string, headSeq: number): Promise<void> {
+  /** Coalesce a local durable head advance; roots can publish immediately. */
+  private noteLineageHeadAdvance(seq: number, rosterChanged = false): void {
     const provenance = this.computeProvenance();
-    if (provenance.kind === "fork") {
-      try {
-        const parentRef = await this.resolveChannelRef(provenance.forkedFrom);
-        await this.rpc.call(doTarget(parentRef), "reportLineageHead", [
-          { channelId: originChannelId, headSeq },
-        ]);
-      } catch (err) {
-        console.warn(`[Channel] lineage head forward to ${provenance.forkedFrom} failed:`, err);
-      }
+    if (provenance.kind !== "fork") {
+      this.recordLineageHead(this.objectKey, seq, rosterChanged);
       return;
     }
-    this.fanoutLineageHead(originChannelId, headSeq);
+    const now = Date.now();
+    this.sql.exec(
+      `INSERT INTO lineage_head_outbox
+         (singleton, head_seq, roster_changed, next_attempt_at, updated_at)
+       VALUES (1, ?, ?, ?, ?)
+       ON CONFLICT(singleton) DO UPDATE SET
+         head_seq = MAX(head_seq, excluded.head_seq),
+         roster_changed = MAX(roster_changed, excluded.roster_changed),
+         next_attempt_at = MIN(next_attempt_at, excluded.next_attempt_at),
+         updated_at = excluded.updated_at`,
+      seq,
+      rosterChanged ? 1 : 0,
+      now + LINEAGE_HEAD_COALESCE_MS,
+      now
+    );
   }
 
-  private fanoutLineageHead(originChannelId: string, headSeq: number): void {
-    const subs = this.sql.exec(`SELECT id FROM lineage_subscribers`).toArray();
-    if (subs.length === 0) return;
+  private async flushLineageHeadOutbox(): Promise<void> {
+    const row = this.sql
+      .exec(`SELECT head_seq, roster_changed FROM lineage_head_outbox WHERE singleton = 1`)
+      .toArray()[0];
+    if (!row) return;
+    const provenance = this.computeProvenance();
+    if (provenance.kind !== "fork") {
+      this.sql.exec(`DELETE FROM lineage_head_outbox WHERE singleton = 1`);
+      return;
+    }
+    const headSeq = Number(row["head_seq"]);
+    const rosterChanged = Number(row["roster_changed"]) === 1;
+    const rootRef = await this.resolveChannelRef(provenance.rootChannelId);
+    await this.rpc.call(doTarget(rootRef), "reportLineageHead", [
+      {
+        channelId: this.objectKey,
+        headSeq,
+        ...(rosterChanged ? { rosterChanged: true } : {}),
+      },
+    ]);
+    this.sql.exec(`DELETE FROM lineage_head_outbox WHERE singleton = 1 AND head_seq <= ?`, headSeq);
+  }
+
+  private recordLineageHead(originChannelId: string, headSeq: number, rosterChanged = false): void {
+    const prior = this.sql
+      .exec(`SELECT head_seq FROM lineage_heads WHERE channel_id = ?`, originChannelId)
+      .toArray()[0]?.["head_seq"];
+    if (typeof prior === "number" && prior >= headSeq) return;
+    this.sql.exec(
+      `INSERT INTO lineage_heads (channel_id, head_seq, updated_at) VALUES (?, ?, ?)
+       ON CONFLICT(channel_id) DO UPDATE SET
+         head_seq = MAX(head_seq, excluded.head_seq),
+         updated_at = excluded.updated_at`,
+      originChannelId,
+      headSeq,
+      Date.now()
+    );
+    this.fanoutLineageHead(originChannelId, headSeq, rosterChanged);
+  }
+
+  private fanoutLineageHead(
+    originChannelId: string,
+    headSeq: number,
+    rosterChanged: boolean
+  ): void {
+    if (this.lineageSubscriptionStreams.size === 0) return;
     const event = buildChannelEvent(
       0,
       `linsig_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
       "signal",
       JSON.stringify({
-        content: JSON.stringify({ channelId: originChannelId, headSeq }),
+        content: JSON.stringify({
+          channelId: originChannelId,
+          headSeq,
+          ...(rosterChanged ? { rosterChanged: true } : {}),
+        }),
         contentType: FORK_HEAD_CHANGED_SIGNAL,
       }),
       "system",
@@ -5125,9 +5618,19 @@ export class PubSubChannel extends DurableObjectBase {
       Date.now()
     );
     const signal = channelEventToRpcSignal(event);
-    for (const row of subs) {
-      const pid = (row as Record<string, unknown>)["id"] as string;
-      void this.deliverParticipantPayload(pid, { channelId: this.objectKey, message: signal });
+    const bytes = encodeChannelSubscriptionRecord({ kind: "message", payload: signal });
+    for (const [key, stream] of [...this.lineageSubscriptionStreams]) {
+      try {
+        if (enqueueChannelSubscriptionBytes(stream.controller, bytes) === "enqueued") continue;
+      } catch {
+        // Close below.
+      }
+      this.lineageSubscriptionStreams.delete(key);
+      try {
+        stream.controller.error(new Error("Lineage subscription buffer is full"));
+      } catch {
+        // Already terminal.
+      }
     }
   }
 

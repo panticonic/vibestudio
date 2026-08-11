@@ -539,6 +539,7 @@ const branchPayloadSchema = z
 const channelForkedPayloadSchema = z
   .object({
     protocol: protocolSchema,
+    parentChannelId: idSchema,
     forkId: idSchema,
     forkedChannelId: idSchema,
     forkedContextId: idSchema,
@@ -546,6 +547,7 @@ const channelForkedPayloadSchema = z
     label: z.string(),
     reason: z.string(),
     actor: participantRefSchema,
+    headSeq: z.number().int().nonnegative(),
     seededMessageId: idSchema.optional(),
   })
   .strict();
@@ -553,6 +555,7 @@ const channelForkedPayloadSchema = z
 const channelForkRenamedPayloadSchema = z
   .object({
     protocol: protocolSchema,
+    parentChannelId: idSchema,
     forkId: idSchema,
     label: z.string(),
   })
@@ -561,6 +564,7 @@ const channelForkRenamedPayloadSchema = z
 const channelForkArchivedPayloadSchema = z
   .object({
     protocol: protocolSchema,
+    parentChannelId: idSchema,
     forkId: idSchema,
   })
   .strict();

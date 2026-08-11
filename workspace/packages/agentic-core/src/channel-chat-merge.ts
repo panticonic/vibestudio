@@ -468,6 +468,7 @@ function projectedForkToChatMessage(
         ...(fork.actor.displayName ? { displayName: fork.actor.displayName } : {}),
       },
       createdAtSeq: fork.createdAtSeq,
+      headSeq: fork.headSeq,
       archived: fork.archived,
     },
     senderMetadata: {

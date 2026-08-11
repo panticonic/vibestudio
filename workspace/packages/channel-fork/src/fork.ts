@@ -9,7 +9,7 @@
  */
 
 import type { RpcCaller } from "@vibestudio/rpc";
-import type { MessageBlockInput, ParticipantRef } from "@workspace/agentic-protocol";
+import type { MessageBlockInput } from "@workspace/agentic-protocol";
 
 export interface DORef {
   source: string;
@@ -20,15 +20,20 @@ export interface DORef {
 /** The opening user message for an edit-/deep-dive fork, appended on the child
  *  channel by the DO's `appendSeed`. */
 export interface ForkSeed {
-  author: ParticipantRef;
   blocks: MessageBlockInput[];
   /** Edit-fork: the parent message this seed supersedes in the child channel. */
-  replaces?: { messageId: string; seq: number };
+  replaces?: { messageId: string };
 }
+
+export type ForkLocus =
+  | { kind: "head" }
+  | { kind: "after-message"; messageId: string }
+  | { kind: "before-message"; messageId: string };
 
 export interface ForkConversationOpts {
   channelId: string;
-  forkPointPubsubId: number;
+  /** Semantic boundary resolved by the channel against its authoritative log. */
+  locus: ForkLocus;
   seed?: ForkSeed;
   label?: string;
   reason: string;
@@ -78,7 +83,7 @@ export async function forkConversation(
     [
       {
         operationId,
-        forkPointPubsubId: opts.forkPointPubsubId,
+        locus: opts.locus,
         ...(opts.seed ? { seed: opts.seed } : {}),
         ...(opts.label !== undefined ? { label: opts.label } : {}),
         reason: opts.reason,

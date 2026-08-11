@@ -131,6 +131,7 @@ export interface ForkRowPayload {
   reason: string;
   actor: { kind: string; id: string; displayName?: string };
   createdAtSeq: number;
+  headSeq: number;
   archived: boolean;
 }
 

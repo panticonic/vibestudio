@@ -196,10 +196,12 @@ describe("chatMessagesFromChannelView", () => {
       actor: agent,
       payload: {
         protocol: AGENTIC_PROTOCOL_VERSION,
+        parentChannelId: "channel-1",
         forkId: "fork-1",
         forkedChannelId: "fork-1",
         forkedContextId: "ctx-fork",
         forkPointId: 10,
+        headSeq: 10,
         label: "Fork",
         reason: "fork",
         actor: agent,
@@ -217,6 +219,29 @@ describe("chatMessagesFromChannelView", () => {
       "fork:fork-1",
       "msg-2",
     ]);
+  });
+
+  it("does not project an inherited parent fork announcement as a child fork", () => {
+    const inherited: AgenticEvent<"channel.forked"> = {
+      kind: "channel.forked",
+      actor: agent,
+      payload: {
+        protocol: AGENTIC_PROTOCOL_VERSION,
+        parentChannelId: "parent-channel",
+        forkId: "sibling-fork",
+        forkedChannelId: "sibling-channel",
+        forkedContextId: "sibling-context",
+        forkPointId: 8,
+        headSeq: 8,
+        label: "Sibling",
+        reason: "fork",
+        actor: agent,
+      },
+      createdAt: "2026-05-20T12:00:03.000Z",
+    };
+    const state = reduceChannelView(createInitialChannelViewState(), envelope(inherited, 9));
+    expect(state.forks).toEqual([]);
+    expect(chatMessagesFromChannelView(state)).toEqual([]);
   });
 
   it("recovers docs_open name + args from a catalog-entry result when the tool name is lost", () => {

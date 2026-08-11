@@ -112,6 +112,7 @@ export interface ProjectedSystemNotice {
  * `channel.fork_archived` latch), NOT carried on the payload.
  */
 export interface ForkProjection {
+  parentChannelId: string;
   forkId: string;
   forkedChannelId: string;
   forkedContextId: string;
@@ -120,6 +121,7 @@ export interface ForkProjection {
   reason: string;
   actor: ParticipantRef;
   createdAtSeq: number;
+  headSeq: number;
   archived: boolean;
 }
 
@@ -547,12 +549,16 @@ export function reduceChannelView(
     // fork op appends by deterministic envelopeId, but a distinct replay path
     // could still re-present it); `createdAtSeq`/`archived` are synthesized here.
     const payload = event.payload as ChannelForkedPayload;
-    if (!next.forks.some((fork) => fork.forkId === payload.forkId)) {
+    if (
+      payload.parentChannelId === parsed.channelId &&
+      !next.forks.some((fork) => fork.forkId === payload.forkId)
+    ) {
       next = {
         ...next,
         forks: [
           ...next.forks,
           {
+            parentChannelId: payload.parentChannelId,
             forkId: payload.forkId,
             forkedChannelId: payload.forkedChannelId,
             forkedContextId: payload.forkedContextId,
@@ -561,6 +567,7 @@ export function reduceChannelView(
             reason: payload.reason,
             actor: payload.actor,
             createdAtSeq: parsed.seq,
+            headSeq: payload.headSeq,
             archived: false,
           },
         ],
@@ -568,6 +575,7 @@ export function reduceChannelView(
     }
   } else if (event.kind === "channel.fork_renamed") {
     const payload = event.payload as ChannelForkRenamedPayload;
+    if (payload.parentChannelId !== parsed.channelId) return next;
     next = {
       ...next,
       forks: next.forks.map((fork) =>
@@ -577,6 +585,7 @@ export function reduceChannelView(
   } else if (event.kind === "channel.fork_archived") {
     // One-way latch: archived can never flip back.
     const payload = event.payload as ChannelForkArchivedPayload;
+    if (payload.parentChannelId !== parsed.channelId) return next;
     next = {
       ...next,
       forks: next.forks.map((fork) =>

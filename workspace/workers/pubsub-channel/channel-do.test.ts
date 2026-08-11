@@ -2445,6 +2445,7 @@ describe("PubSubChannel", () => {
 
   it("listForks folds this channel's own log into its direct-child fork projection", async () => {
     const selfTarget = "do:workers/pubsub-channel:PubSubChannel:channel-lf-parent";
+    let cloneCalls = 0;
     const parent = await createGadBackedChannel({
       channelKey: "channel-lf-parent",
       rpcCall: (target, method, args) => {
@@ -2462,6 +2463,7 @@ describe("PubSubChannel", () => {
         }
         // Clone the (only) channel entity into a fresh context.
         if (target === "main" && method === "runtime.cloneContext") {
+          cloneCalls += 1;
           return {
             contextId: "ctx-lf-fork",
             entities: [
@@ -2490,17 +2492,18 @@ describe("PubSubChannel", () => {
       type: "panel",
     });
 
-    expect(await parent.instance.listForks()).toEqual({ forks: [] });
+    expect(await parent.instance.listForks()).toEqual({ forks: [], headSeq: 1 });
 
     const forkInput = {
       operationId: "fork-operation-1",
-      forkPointPubsubId: 1,
+      locus: { kind: "head" as const },
       reason: "deep dive",
       label: "My fork",
     };
     const result = await parent.instance.fork(forkInput);
     expect(result.forkedChannelId).toBe("channel-lf-child");
     await expect(parent.instance.fork(forkInput)).resolves.toEqual(result);
+    expect(cloneCalls).toBe(1);
 
     const { forks } = await parent.instance.listForks();
     expect(forks).toHaveLength(1);
@@ -2527,6 +2530,56 @@ describe("PubSubChannel", () => {
     });
   });
 
+  it("resolves semantic message loci without trusting client sequence arithmetic", async () => {
+    const { instance, sql } = await createGadBackedChannel({ channelKey: "channel-loci" });
+    sql.exec(`INSERT INTO fork_turn_loci (turn_id, opened_seq) VALUES ('turn-1', 20)`);
+    sql.exec(
+      `INSERT INTO fork_message_loci
+         (message_id, first_seq, terminal_seq, turn_id, actor_kind)
+       VALUES ('assistant-1', 21, 27, 'turn-1', 'agent'),
+              ('streaming-1', 30, NULL, 'turn-2', 'agent')`
+    );
+    const internal = instance as unknown as {
+      resolveForkRequest(request: Record<string, unknown>): Promise<{
+        forkPointPubsubId: number;
+        seed?: { replaces?: { messageId: string; seq: number } };
+      }>;
+    };
+
+    await expect(
+      internal.resolveForkRequest({
+        operationId: "semantic-before-1",
+        locus: { kind: "before-message", messageId: "assistant-1" },
+        reason: "edit",
+        seed: {
+          author: { kind: "user", id: "user-1" },
+          blocks: [{ type: "text", content: "revised" }],
+          replaces: { messageId: "assistant-1" },
+        },
+      })
+    ).resolves.toMatchObject({
+      forkPointPubsubId: 19,
+      seed: {
+        author: { kind: "system", id: "system" },
+        replaces: { messageId: "assistant-1", seq: 27 },
+      },
+    });
+    await expect(
+      internal.resolveForkRequest({
+        operationId: "semantic-after-1",
+        locus: { kind: "after-message", messageId: "assistant-1" },
+        reason: "fork",
+      })
+    ).resolves.toMatchObject({ forkPointPubsubId: 27 });
+    await expect(
+      internal.resolveForkRequest({
+        operationId: "semantic-unfinished-1",
+        locus: { kind: "after-message", messageId: "streaming-1" },
+        reason: "fork",
+      })
+    ).rejects.toThrow(/cannot fork after unfinished message streaming-1/);
+  });
+
   it("keeps failed fork cleanup retryable until context destruction succeeds", async () => {
     let destroyAttempts = 0;
     const { instance, sql } = await createGadBackedChannel({
@@ -2544,7 +2597,17 @@ describe("PubSubChannel", () => {
           forked_context_id, created_at, updated_at)
        VALUES (?, 1, ?, 'cloned', 'child-1', 'context-child-1', ?, ?)`,
       "fork-cleanup-1",
-      JSON.stringify({ operationId: "fork-cleanup-1", forkPointPubsubId: 1, reason: "test" }),
+      JSON.stringify({
+        operationId: "fork-cleanup-1",
+        locus: { kind: "head" },
+        request: {
+          operationId: "fork-cleanup-1",
+          locus: { kind: "head" },
+          reason: "test",
+        },
+        forkPointPubsubId: 1,
+        reason: "test",
+      }),
       now,
       now
     );
@@ -4487,6 +4550,90 @@ describe("PubSubChannel policy folds and cache amnesia (WS2)", () => {
   });
 });
 
+describe("PubSubChannel fork lineage delivery", () => {
+  it("owns live lineage subscriptions through their response stream", async () => {
+    const { instance } = await createGadBackedChannel({ channelKey: "lineage-root" });
+    setRpcCaller(instance, "panel:viewer", "panel");
+    const response = await instance.subscribeLineage("panel:viewer");
+    const reader = response.body!.getReader();
+    const ack = await reader.read();
+    expect(JSON.parse(new TextDecoder().decode(ack.value).trim())).toMatchObject({
+      kind: "subscribed",
+      result: { ok: true, rootChannelId: "lineage-root" },
+    });
+
+    const internal = instance as unknown as {
+      recordLineageHead(channelId: string, headSeq: number): void;
+      lineageSubscriptionStreams: Map<string, unknown>;
+    };
+    internal.recordLineageHead("lineage-child", 14);
+    const message = await reader.read();
+    expect(JSON.parse(new TextDecoder().decode(message.value).trim())).toMatchObject({
+      kind: "message",
+      payload: {
+        kind: "signal",
+        payload: {
+          contentType: "fork.head_changed",
+          content: JSON.stringify({ channelId: "lineage-child", headSeq: 14 }),
+        },
+      },
+    });
+    await reader.cancel();
+    expect(internal.lineageSubscriptionStreams.size).toBe(0);
+  });
+
+  it("coalesces descendant heads and reports directly to the lineage root", async () => {
+    const reports: Array<{ target: string; report: unknown }> = [];
+    const parent = await createGadBackedChannel({ channelKey: "lineage-mid" });
+    setRpcCaller(parent.instance, "panel:owner", "panel");
+    await parent.instance.subscribe("panel:owner", {
+      contextId: "lineage-parent-context",
+      name: "Owner",
+      type: "panel",
+    });
+    const child = await createGadBackedChannel({
+      channelKey: "lineage-leaf",
+      gad: parent.gad,
+      rpcCall: (target, method, args) => {
+        if (
+          target === "main" &&
+          method === "workers.resolveService" &&
+          args[0] === "vibestudio.channel.v1"
+        ) {
+          return {
+            source: "workers/pubsub-channel",
+            className: "PubSubChannel",
+            objectKey: args[1] as string,
+          };
+        }
+        if (method === "reportLineageHead") {
+          reports.push({ target, report: args[0] });
+          return null;
+        }
+        return undefined;
+      },
+    });
+    await child.instance.postClone("lineage-mid", 1, "lineage-context", {
+      forkId: "lineage-fork-1",
+      rootChannelId: "lineage-root",
+    });
+    const internal = child.instance as unknown as {
+      noteLineageHeadAdvance(headSeq: number, rosterChanged?: boolean): void;
+      flushLineageHeadOutbox(): Promise<void>;
+    };
+    internal.noteLineageHeadAdvance(11);
+    internal.noteLineageHeadAdvance(15, true);
+    await internal.flushLineageHeadOutbox();
+
+    expect(reports).toEqual([
+      {
+        target: "do:workers/pubsub-channel:PubSubChannel:lineage-root",
+        report: { channelId: "lineage-leaf", headSeq: 15, rosterChanged: true },
+      },
+    ]);
+  });
+});
+
 // appendSeed is fork plumbing: it consumes the child channel's pending fork seed
 // marker, appends the opening message once, and is idempotent on crash re-drive.
 describe("PubSubChannel appendSeed fork plumbing", () => {
@@ -4521,7 +4668,24 @@ describe("PubSubChannel appendSeed fork plumbing", () => {
       type: "panel",
     });
     await parent.instance.publish("panel:user", AGENTIC_EVENT_PAYLOAD_KIND, agenticEvent());
-    const child = await createGadBackedChannel({ channelKey: "channel-child", gad: parent.gad });
+    const child = await createGadBackedChannel({
+      channelKey: "channel-child",
+      gad: parent.gad,
+      rpcCall: (target, method, args) => {
+        if (
+          target === "main" &&
+          method === "workers.resolveService" &&
+          args[0] === "vibestudio.channel.v1"
+        ) {
+          return {
+            source: "workers/pubsub-channel",
+            className: "PubSubChannel",
+            objectKey: args[1] as string,
+          };
+        }
+        return undefined;
+      },
+    });
     await child.instance.postClone("channel-parent", 2, "ctx-forked", {
       forkId: "fork-1",
       rootChannelId: "channel-parent",
@@ -4539,9 +4703,9 @@ describe("PubSubChannel appendSeed fork plumbing", () => {
 
   it("appends the fork seed once and is idempotent on re-drive", async () => {
     const { child } = await forkedChild();
-    setRpcCaller(child.instance, "channel-parent", "do");
+    setRpcCaller(child.instance, "do:workers/pubsub-channel:PubSubChannel:channel-parent", "do");
 
-    const res = await child.instance.appendSeed({ forkId: "fork-1" }, forkSeed());
+    const res = await child.instance.appendSeed({ forkId: "fork-1" });
     expect(res.messageId).toBe("fork-seed:fork-1");
 
     const tail = await tailAfterFork(child);
@@ -4559,7 +4723,7 @@ describe("PubSubChannel appendSeed fork plumbing", () => {
     expect(seed.actor.participantId ?? seed.actor.id).toBe("panel:user");
 
     // Re-drive (crash-resume) returns the SAME durable message; no duplicate.
-    const again = await child.instance.appendSeed({ forkId: "fork-1" }, forkSeed());
+    const again = await child.instance.appendSeed({ forkId: "fork-1" });
     expect(again).toEqual(res);
     expect(
       (await tailAfterFork(child)).filter((e) => e.type === AGENTIC_EVENT_PAYLOAD_KIND)
@@ -4568,9 +4732,9 @@ describe("PubSubChannel appendSeed fork plumbing", () => {
 
   it("rejects a call with no pending fork seed marker", async () => {
     const { child } = await forkedChild({ withSeed: false });
-    setRpcCaller(child.instance, "channel-parent", "do");
+    setRpcCaller(child.instance, "do:workers/pubsub-channel:PubSubChannel:channel-parent", "do");
 
-    await expect(child.instance.appendSeed({ forkId: "fork-1" }, forkSeed())).rejects.toThrow(
+    await expect(child.instance.appendSeed({ forkId: "fork-1" })).rejects.toThrow(
       /no pending fork seed for fork fork-1/
     );
     expect(await tailAfterFork(child)).toHaveLength(0);
@@ -4578,33 +4742,24 @@ describe("PubSubChannel appendSeed fork plumbing", () => {
 
   it("rejects a forkId that does not match the pending seed marker", async () => {
     const { child } = await forkedChild();
-    setRpcCaller(child.instance, "channel-parent", "do");
+    setRpcCaller(child.instance, "do:workers/pubsub-channel:PubSubChannel:channel-parent", "do");
 
-    await expect(child.instance.appendSeed({ forkId: "fork-EVIL" }, forkSeed())).rejects.toThrow(
+    await expect(child.instance.appendSeed({ forkId: "fork-EVIL" })).rejects.toThrow(
       /no pending fork seed for fork fork-EVIL/
     );
     expect(await tailAfterFork(child)).toHaveLength(0);
   });
 
-  it("uses the supplied caller and author without parent/author special-casing", async () => {
+  it("rejects a different channel even when it knows the pending fork id", async () => {
     const { child } = await forkedChild();
-    setRpcCaller(child.instance, "channel-attacker", "do");
-    const alternate = forkSeed({
-      kind: "user",
-      id: "panel:victim",
-      participantId: "panel:victim",
-    });
-
-    const res = await child.instance.appendSeed({ forkId: "fork-1" }, alternate);
-    expect(res.messageId).toBe("fork-seed:fork-1");
-    const tail = await tailAfterFork(child);
-    const seed = tail.find((e) => e.type === AGENTIC_EVENT_PAYLOAD_KIND)!.payload as {
-      actor: { participantId?: string; id: string };
-    };
-    expect(seed.actor.participantId ?? seed.actor.id).toBe("panel:victim");
+    setRpcCaller(child.instance, "do:workers/pubsub-channel:PubSubChannel:channel-attacker", "do");
+    await expect(child.instance.appendSeed({ forkId: "fork-1" })).rejects.toThrow(
+      /recorded parent channel/
+    );
+    expect(await tailAfterFork(child)).toHaveLength(0);
   });
 
-  it("admits attested channel caller principals at the relay gate", async () => {
+  it("keeps relay attestation separate from appendSeed's exact-parent check", async () => {
     const { instance } = await createGadBackedChannel();
     const gate = instance as unknown as {
       inboundCallerDenial(
@@ -4618,28 +4773,27 @@ describe("PubSubChannel appendSeed fork plumbing", () => {
         authorityAcceptedAt: number
       ): string | null;
     };
-    for (const kind of ["panel", "worker", "server", "do", "shell"]) {
-      expect(
-        gate.inboundCallerDenial(
-          "appendSeed",
-          [],
-          {
-            callerId: `${kind}:x`,
+    const denialFor = (kind: "panel" | "worker" | "server" | "do" | "shell") =>
+      gate.inboundCallerDenial(
+        "appendSeed",
+        [],
+        {
+          callerId: `${kind}:x`,
+          callerKind: kind,
+          authorization: createTestDirectAuthority({
             callerKind: kind,
-            authorization: createTestDirectAuthority({
-              callerKind: kind as "panel" | "worker" | "server" | "do" | "shell",
-              method: "appendSeed",
-              effect: { kind: "open" },
-              capability: "workspace-service:channel",
-              targetCapability: "workspace-service:channel",
-              targetPrincipals: ["host", "user", "code"],
-              objectKey: "channel-1",
-            }),
-          },
-          Date.now()
-        ),
-        kind
-      ).toBeNull();
+            method: "appendSeed",
+            effect: { kind: "open" },
+            capability: "workspace-service:channel",
+            targetCapability: "workspace-service:channel",
+            targetPrincipals: ["host", "user", "code"],
+            objectKey: "channel-1",
+          }),
+        },
+        Date.now()
+      );
+    for (const kind of ["do", "worker", "panel", "shell", "server"] as const) {
+      expect(denialFor(kind)).toBeNull();
     }
   });
 });

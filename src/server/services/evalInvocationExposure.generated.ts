@@ -3782,6 +3782,20 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     },
   },
   {
+    id: "direct:workspace/workers/pubsub-channel/channel-do.ts:getLineageHeads",
+    rpcPlane: "workspace-do",
+    capability: "rpc:getLineageHeads",
+    authorityPrincipals: ["code", "host"],
+    owner: "workspace/workers/pubsub-channel/channel-do.ts",
+    source: "workers/pubsub-channel",
+    method: "getLineageHeads",
+    sensitivity: "read",
+    resourceDerivation: {
+      kind: "direct-target",
+      owner: "workspace/workers/pubsub-channel/channel-do.ts",
+    },
+  },
+  {
     id: "direct:workspace/workers/pubsub-channel/channel-do.ts:getMessageSender",
     rpcPlane: "workspace-do",
     capability: "rpc:getMessageSender",
@@ -8724,6 +8738,19 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     },
   },
   {
+    id: "host:fs.readText",
+    rpcPlane: "host-service",
+    capability: "service:fs.readText",
+    authorityPrincipals: ["code", "host", "user"],
+    owner: "fs",
+    method: "readText",
+    sensitivity: "read",
+    resourceDerivation: {
+      kind: "literal",
+      key: "service:fs.readText",
+    },
+  },
+  {
     id: "host:fs.realpath",
     rpcPlane: "host-service",
     capability: "service:fs.realpath",
@@ -11989,6 +12016,19 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     },
   },
   {
+    id: "host:workspace-state.panel.sourceUsage",
+    rpcPlane: "host-service",
+    capability: "service:workspace-state.panel.sourceUsage",
+    authorityPrincipals: ["user", "code", "host"],
+    owner: "workspace-state",
+    method: "panel.sourceUsage",
+    sensitivity: "read",
+    resourceDerivation: {
+      kind: "literal",
+      key: "service:workspace-state.panel.sourceUsage",
+    },
+  },
+  {
     id: "host:workspace-state.panel.updateTitle",
     rpcPlane: "host-service",
     capability: "service:workspace-state.panel.updateTitle",
@@ -13219,6 +13259,10 @@ export const EVAL_SERVER_HOST_METHODS = [
   },
   {
     service: "fs",
+    method: "readText",
+  },
+  {
+    service: "fs",
     method: "realpath",
   },
   {
@@ -13903,6 +13947,10 @@ export const EVAL_SERVER_HOST_METHODS = [
   },
   {
     service: "workspace-state",
+    method: "panel.sourceUsage",
+  },
+  {
+    service: "workspace-state",
     method: "panel.updateTitle",
   },
   {
@@ -14291,6 +14339,7 @@ export const EVAL_INVOCATION_EXPOSURE_CAPABILITIES = [
   "rpc:getDebugState",
   "rpc:getDefaultModel",
   "rpc:getEnvelope",
+  "rpc:getLineageHeads",
   "rpc:getMessageSender",
   "rpc:getMessageType",
   "rpc:getMessageTypes",
@@ -14534,6 +14583,7 @@ export const EVAL_INVOCATION_EXPOSURE_CAPABILITIES = [
   "service:fs.mktemp",
   "service:fs.open",
   "service:fs.readFile",
+  "service:fs.readText",
   "service:fs.readdir",
   "service:fs.readlink",
   "service:fs.realpath",
@@ -14749,6 +14799,7 @@ export const EVAL_INVOCATION_EXPOSURE_CAPABILITIES = [
   "service:workspace-state.panel.index",
   "service:workspace-state.panel.rebuildIndex",
   "service:workspace-state.panel.search",
+  "service:workspace-state.panel.sourceUsage",
   "service:workspace-state.panel.updateTitle",
   "service:workspace-state.panelTree.detail",
   "service:workspace-state.panelTree.page",

@@ -11556,6 +11556,48 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
+      "id": "direct:workspace/workers/pubsub-channel/channel-do.ts:getLineageHeads",
+      "rpcPlane": "workspace-do",
+      "owner": "workspace/workers/pubsub-channel/channel-do.ts",
+      "source": "workers/pubsub-channel",
+      "method": "getLineageHeads",
+      "resourceDerivation": {
+        "kind": "direct-target",
+        "owner": "workspace/workers/pubsub-channel/channel-do.ts"
+      },
+      "authorityPrincipals": [
+        "code",
+        "host"
+      ],
+      "sensitivity": "read",
+      "tier": "open",
+      "capability": "rpc:getLineageHeads",
+      "authenticatedFacts": [
+        "session",
+        "acting-user-relay",
+        "runtime-entity",
+        "exact-code-artifact",
+        "owner-chain",
+        "agent-binding",
+        "audience-bound-delegation"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared direct-RPC scenarios retain their current behavior",
+        "denied": "missing attested facts or requirement failure is EACCES"
+      },
+      "predicates": [
+        "live-owner-service-relationship",
+        "exact-resource-scope",
+        "next-dispatch-revocation"
+      ],
+      "r3aRequirement": "anyOf(capability(host,rpc:getLineageHeads),allOf(capability(code,rpc:getLineageHeads),workspace-member))",
+      "r3b": {
+        "review": "bounded-root-lineage-head-read",
+        "change": "Adds an open read of at most 500 exact channel head sequences from the addressed lineage root. The receiver rejects reads from fork nodes, returns no message content, participant data, context state, or subscription identity, and performs no semantic mutation; code callers use it only to reconcile persisted fork unread cursors."
+      },
+      "parityAssertion": "generated-census:direct-authority"
+    },
+    {
       "id": "direct:workspace/workers/pubsub-channel/channel-do.ts:getMessageSender",
       "rpcPlane": "workspace-do",
       "owner": "workspace/workers/pubsub-channel/channel-do.ts",
@@ -27965,6 +28007,52 @@
       "parityAssertion": "generated-census:host-authority"
     },
     {
+      "id": "host:fs.readText",
+      "rpcPlane": "host-service",
+      "owner": "fs",
+      "method": "readText",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "fs.read",
+      "reviewRationale": "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:fs.readText"
+      },
+      "authorityPrincipals": [
+        "code",
+        "host",
+        "user"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:fs.readText),allOf(capability(user,service:fs.readText),workspace-member),allOf(capability(code,service:fs.readText),workspace-member))",
+      "r3b": {
+        "review": "bounded-workspace-text-range-read",
+        "change": "Adds the existing workspace-local fs.read authority to a bounded UTF-8 text-range transport. The receiver retains semantic path admission for managed files and scratch-root containment for disk files, caps each response at 10,000 lines and 1 MiB, returns continuation coordinates plus a content hash, and grants no write or path-enumeration authority."
+      },
+      "capability": "service:fs.readText",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
       "id": "host:fs.realpath",
       "rpcPlane": "host-service",
       "owner": "fs",
@@ -39475,6 +39563,52 @@
         "change": null
       },
       "capability": "service:workspace-state.panel.search",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:workspace-state.panel.sourceUsage",
+      "rpcPlane": "host-service",
+      "owner": "workspace-state",
+      "method": "panel.sourceUsage",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "supervision",
+      "mechanismFamily": "workspace-state.lifecycle",
+      "reviewRationale": "Workspace-member aggregate panel usage read; no C1-C4 or G1-G5 rule applies",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:workspace-state.panel.sourceUsage"
+      },
+      "authorityPrincipals": [
+        "user",
+        "code",
+        "host"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:workspace-state.panel.sourceUsage),allOf(capability(user,service:workspace-state.panel.sourceUsage),workspace-member),allOf(capability(code,service:workspace-state.panel.sourceUsage),workspace-member))",
+      "r3b": {
+        "review": "bounded-aggregate-panel-source-usage-read",
+        "change": "Adds an open workspace-member read of at most 200 aggregate panel source usage rows for launcher ranking. The projection contains only source identity, access count, and last-access time; it exposes no panel contents, owner identity, slot state, or mutation path."
+      },
+      "capability": "service:workspace-state.panel.sourceUsage",
       "parityAssertion": "generated-census:host-authority"
     },
     {
