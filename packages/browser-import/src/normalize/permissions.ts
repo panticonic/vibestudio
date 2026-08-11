@@ -1,5 +1,3 @@
-import type { ImportedPermission } from "../types.js";
-
 /**
  * Map Chromium content setting values to our setting enum.
  */

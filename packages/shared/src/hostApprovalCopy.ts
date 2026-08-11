@@ -535,7 +535,7 @@ export const HOST_APPROVAL_COPY = {
       summary: `Saves ${credential} for use with ${audience}. Secrets are stored encrypted and only sent where they're needed.`,
     }),
     secretInputFallback: "Needs a secret for a one-time action. The value isn't saved.",
-    deviceSignIn: (credential: string, code: string, origin: string) => ({
+    deviceSignIn: (credential: string, origin: string) => ({
       title: `Sign in to ${credential}`,
       summary: `Go to ${origin} and enter the code below to finish connecting ${credential}.`,
     }),
@@ -545,7 +545,6 @@ export const HOST_APPROVAL_COPY = {
       "This can affect files and running work in a different part of your project.",
     forcePush: (
       remote: string,
-      credential: string,
       overwrites:
         | {
             relationship: "related" | "unrelated";

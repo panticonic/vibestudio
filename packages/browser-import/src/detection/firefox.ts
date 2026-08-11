@@ -114,14 +114,3 @@ function parseProfilesIni(content: string, baseDir: string): DetectedProfile[] {
 
   return profiles;
 }
-
-/**
- * Try to read the Firefox version from application.ini in the install directory.
- */
-export function detectFirefoxVersion(dataDir: string): string | undefined {
-  // application.ini is typically in the install directory, not the profile dir.
-  // On Linux it's in /usr/lib/firefox/ or similar. We don't reliably know
-  // the install path from the profile path, so we skip this for now.
-  // Version detection can be enhanced later.
-  return undefined;
-}

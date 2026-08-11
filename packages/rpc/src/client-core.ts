@@ -1,7 +1,6 @@
 import type {
   AuthenticatedCaller,
   CallerKind,
-  EnvelopeRpcTransport,
   EventMap,
   MethodMap,
   RpcCallOptions,

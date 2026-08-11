@@ -48,7 +48,6 @@ import { createSignalingClient } from "./webrtcSignalingClient.js";
 import type {
   PeerConnectionProvider,
   RtcCandidateType,
-  RtcIceServer,
   WebRtcPairing,
 } from "./webrtcPeer.js";
 import type { SignalingClient } from "./webrtcSignaling.js";

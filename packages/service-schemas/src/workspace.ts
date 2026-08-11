@@ -14,7 +14,6 @@ import {
   fixedPreparedAuthorityRequirement,
 } from "@vibestudio/shared/typedServiceClient";
 import { requirementForPrincipals } from "@vibestudio/shared/authorization";
-import { JsonObjectSchema, JsonValueSchema } from "@vibestudio/shared/wireValues";
 import { WorkspaceConfigSchema } from "@vibestudio/workspace-contracts/workspaceConfigSchema";
 import type { WorkspaceNode } from "@vibestudio/shared/types";
 
@@ -165,14 +164,6 @@ export const WorkspaceFindUnitForPathResultSchema = z
   })
   .nullable();
 export type WorkspaceFindUnitForPathResult = z.infer<typeof WorkspaceFindUnitForPathResultSchema>;
-
-/** Options accepted by `units.logs`. */
-const UnitLogsOptionsSchema = z.object({
-  since: z.number().optional(),
-  sinceSeq: z.number().optional(),
-  level: z.enum(["debug", "info", "warn", "error"]).optional(),
-  limit: z.number().int().positive().max(1000).optional(),
-});
 
 // ─── Method table ─────────────────────────────────────────────────────────────
 

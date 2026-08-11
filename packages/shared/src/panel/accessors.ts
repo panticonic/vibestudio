@@ -7,7 +7,6 @@ import type {
   Panel,
   PanelNavigationState,
   PanelSnapshot,
-  PackageManifest,
   StateArgsValue,
 } from "../types.js";
 
@@ -82,13 +81,6 @@ export function getPanelEnv(
  */
 export function getPanelContextId(panel: Pick<Panel, "id" | "snapshot" | "history">): string {
   return getCurrentSnapshot(panel).contextId;
-}
-
-/**
- * Get whether a panel should inject host theme variables.
- */
-export function getInjectHostThemeVariables(panel: Panel, manifest?: PackageManifest): boolean {
-  return manifest?.injectHostThemeVariables !== false;
 }
 
 /**

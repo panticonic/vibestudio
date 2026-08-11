@@ -5,28 +5,12 @@
  * panel service and Electron PanelOrchestrator. No class, no state.
  */
 
-import * as path from "path";
-import type { Panel, PanelArtifacts } from "./types.js";
-import { createSnapshot } from "./panel/accessors.js";
 import { normalizeRelativePanelPath } from "./pathUtils.js";
 import type { PanelEntityId, PanelSlotId } from "./panel/ids.js";
 
 // =============================================================================
 // Types
 // =============================================================================
-
-/** DTO returned by panel slot create/navigate operations. */
-export interface PanelCreateResult {
-  panelId: string;
-  contextId: string;
-  source: string;
-  title: string;
-  url?: string;
-  stateArgs: Record<string, unknown>;
-  options: Record<string, unknown>;
-  autoArchiveWhenEmpty?: boolean;
-  privileged?: boolean;
-}
 
 export interface BuildBootstrapConfigOpts {
   entityId: PanelEntityId;
@@ -170,40 +154,6 @@ export function buildPanelEnv(opts: BuildPanelEnvOpts): Record<string, string> {
     ...opts.baseEnv,
     __VIBESTUDIO_SOURCE_REPO: opts.sourceRepo,
     __VIBESTUDIO_GATEWAY_CONFIG: gatewayConfig,
-  };
-}
-
-/**
- * Convert a server PanelCreateResult DTO into a full Panel object
- * for the in-memory registry.
- */
-export function buildPanelFromResult(result: PanelCreateResult, parentId: string | null): Panel {
-  const isBrowser = result.source.startsWith("browser:");
-
-  const initialSnapshot = createSnapshot(
-    result.source,
-    result.contextId,
-    result.options,
-    result.stateArgs
-  );
-
-  if (result.autoArchiveWhenEmpty) {
-    initialSnapshot.autoArchiveWhenEmpty = true;
-  }
-  if (result.privileged) {
-    initialSnapshot.privileged = true;
-  }
-
-  const artifacts: PanelArtifacts = isBrowser
-    ? { buildState: "ready", htmlPath: result.url }
-    : { buildState: "building", buildProgress: "Starting build..." };
-
-  return {
-    id: result.panelId,
-    title: result.title,
-    children: [],
-    snapshot: initialSnapshot,
-    artifacts,
   };
 }
 

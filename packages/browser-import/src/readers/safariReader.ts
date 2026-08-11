@@ -1,7 +1,6 @@
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
-import type { Database } from "./sqlJsReader.js";
 import { openReadonlySqlite } from "./sqlJsReader.js";
 import bplist from "bplist-parser";
 import type {
@@ -544,7 +543,7 @@ export class SafariReader implements BrowserDataReader {
     }
   }
 
-  async readSettings(profilePath: string): Promise<ImportedSettings> {
+  async readSettings(_profilePath: string): Promise<ImportedSettings> {
     // Safari preferences are in ~/Library/Preferences/com.apple.Safari.plist
     const prefsPath = path.join(os.homedir(), "Library", "Preferences", "com.apple.Safari.plist");
 

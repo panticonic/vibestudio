@@ -1,7 +1,7 @@
 import * as fs from "fs";
 import type { DetectedBrowser } from "../types.js";
 import { BROWSER_PATHS, getBrowserDataDirs, packagingLabel } from "./paths.js";
-import { detectFirefoxProfiles, detectFirefoxVersion } from "./firefox.js";
+import { detectFirefoxProfiles } from "./firefox.js";
 import { detectChromiumProfiles, detectChromiumVersion } from "./chromium.js";
 import { detectSafari } from "./safari.js";
 
@@ -46,10 +46,7 @@ export function detectBrowsers(): DetectedBrowser[] {
             ? detectFirefoxProfiles(dataDir)
             : detectChromiumProfiles(dataDir);
         if (profiles.length === 0) continue;
-        const version =
-          entry.family === "firefox"
-            ? detectFirefoxVersion(dataDir)
-            : detectChromiumVersion(dataDir);
+        const version = entry.family === "chromium" ? detectChromiumVersion(dataDir) : undefined;
 
         found.push({
           name: entry.name,
