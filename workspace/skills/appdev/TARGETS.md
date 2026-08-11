@@ -66,7 +66,7 @@ Manifest:
       "target": "react-native",
       "renderer": "App.tsx",
       "rnComponentName": "Vibestudio",
-      "rnHostAbi": "rn-host-2",
+      "rnHostAbi": "rn-host-3",
       "capabilities": ["notifications", "open-external"]
     }
   }

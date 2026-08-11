@@ -122,7 +122,7 @@ If provider identity is missing, activation fails closed.
 ## Native ABI
 
 `rnHostAbi` is the contract between the workspace app bundle and the shipped
-native host. Current value: `rn-host-2`. Bump it when the workspace app requires
+native host. Current value: `rn-host-3`. Bump it when the workspace app requires
 native modules or bootstrap behavior that older native hosts do not provide.
 
 Do not silently load an app bundle with an ABI mismatch. The native host should

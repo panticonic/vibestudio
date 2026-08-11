@@ -16,7 +16,7 @@ bundle artifacts served to native hosts.
   "primary"`, `integrity`, content type, encoding, and URL.
 - The server bootstrap manifest must include `rnHostAbi`, app/build identity,
   capabilities, artifact set integrity, and provider identity.
-- Current native-host ABI is `rn-host-2`. Bump it only when the native host
+- Current native-host ABI is `rn-host-3`. Bump it only when the native host
   contract changes, and update the workspace app manifest and skills together.
 
 ## Failure Modes
