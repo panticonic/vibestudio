@@ -10,13 +10,11 @@ import {
   deleteAndUnregisterWorkspace,
   deleteUnregisteredWorkspace,
   initWorkspace,
-  loadCentralConfig,
   loadWorkspaceConfig,
   recoverStagedWorkspaceDeletions,
   resolveOrCreateWorkspace,
   resolveDeclaredApps,
   resolveDeclaredExtensions,
-  saveCentralConfig,
 } from "./loader.js";
 import { currentContextProjectionsPath } from "./contextProjections.js";
 import { CentralDataManager } from "@vibestudio/shared/centralData";

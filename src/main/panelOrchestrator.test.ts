@@ -212,7 +212,7 @@ function createOrchestrator(
     });
     return next;
   };
-  const handleServerCall = async (service: string, method: string, args?: unknown[]) => {
+  const handleServerCall = async (_service: string, method: string, args?: unknown[]) => {
     if (method === "registerClient") return undefined;
     if (method === "acquire" || method === "takeOver") {
       const [runtimeEntityId, request] = (args ?? []) as [

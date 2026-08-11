@@ -41,17 +41,6 @@ function panelCtx(callerId: string): ServiceContext {
   };
 }
 
-function _workerCtx(callerId: string): ServiceContext {
-  return {
-    caller: createVerifiedCaller(callerId, "worker", {
-      callerId,
-      callerKind: "worker",
-      repoPath: TARGET.source,
-      effectiveVersion: "ev-test",
-    }),
-  };
-}
-
 const TARGET: WebhookTarget = {
   source: "workers/github",
   className: "GithubDO",

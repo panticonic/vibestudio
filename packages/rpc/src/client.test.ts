@@ -81,7 +81,7 @@ describe("createRpcClient", () => {
       callerKind: "panel",
       transport: inProcessTransport("caller", network),
     });
-    const endpoint = createRpcClient({
+    createRpcClient({
       selfId: "panel:nav-target",
       callerKind: "panel",
       transport: inProcessTransport("panel:nav-target", network),
