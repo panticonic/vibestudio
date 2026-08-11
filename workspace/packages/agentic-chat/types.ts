@@ -223,6 +223,9 @@ export interface DeferredAgentState {
   /** The host found no configured model for the first agent. Its queued first
    *  message must wait for an explicit model/provider choice. */
   modelSelectionRequired: boolean;
+  /** Model/provider discovery has not resolved yet. The queued message is
+   * waiting on preflight, not on an agent that has already been launched. */
+  modelDiscoveryPending: boolean;
   /** Confirm the current draft and start the agent for the queued message. */
   startQueued: () => void;
   /** Retry a failed launch (re-issues the spawn). */

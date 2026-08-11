@@ -87,6 +87,7 @@ const DEFAULT_HANDLE = "ai-chat";
 const CHANNEL_SERVICE_PROTOCOL = "vibestudio.channel.v1";
 const AGENT_SUBSCRIPTION_RETRY_DELAY_MS = 1_000;
 const AGENT_SUBSCRIPTION_MAX_ATTEMPTS = 60;
+const MODEL_SETTINGS_DISCOVERY_TIMEOUT_MS = 15_000;
 
 /** Response shape from workers.listSources */
 interface WorkerSourceEntry {
@@ -276,6 +277,11 @@ export default function ChatPanel() {
         ? "selection-required"
         : "ready"
     );
+    console.info("[ChatPanel] model settings ready", {
+      defaultModel: settings.defaultModel,
+      defaultModelSource: settings.defaultModelSource,
+      defaultAvailability: defaultEntry?.availability.state ?? "missing",
+    });
   }, []);
 
   const loadModelSettings = useCallback(
@@ -287,13 +293,25 @@ export default function ChatPanel() {
         return modelSettingsRequestRef.current;
       }
 
+      const controller = new AbortController();
+      const timeout = window.setTimeout(() => {
+        controller.abort(
+          new Error(
+            `Model settings did not become ready within ${MODEL_SETTINGS_DISCOVERY_TIMEOUT_MS}ms`
+          )
+        );
+      }, MODEL_SETTINGS_DISCOVERY_TIMEOUT_MS);
       const request: Promise<ModelSettingsSnapshot> = getModelSettingsService()
-        .call<ModelSettingsSnapshot>("getSettings")
+        .callWithOptions<ModelSettingsSnapshot>("getSettings", [], {
+          signal: controller.signal,
+          timeoutMs: MODEL_SETTINGS_DISCOVERY_TIMEOUT_MS,
+        })
         .then((settings) => {
           applyModelSettings(settings);
           return settings;
         })
         .finally(() => {
+          window.clearTimeout(timeout);
           if (modelSettingsRequestRef.current === request) {
             modelSettingsRequestRef.current = null;
           }
@@ -631,30 +649,70 @@ export default function ChatPanel() {
   // service DOs (pubsub-channel, semantic control plane, fork, …).
   const [availableAgents, setAvailableAgents] = useState<AvailableAgent[]>([]);
   useEffect(() => {
-    rpc
-      .call<WorkerSourceEntry[]>("main", "workers.listSources", [])
-      .then((sources) => {
-        const agents: AvailableAgent[] = [];
-        for (const source of sources) {
-          if (!source.agent) continue;
-          for (const cls of source.classes) {
-            agents.push({
-              id: source.source,
-              className: cls.className,
-              name: source.agent.displayName ?? source.title ?? source.name,
-              description: source.agent.description,
-              icon: source.icon,
-              defaultConfig: source.agent.defaultConfig,
-              proposedHandle: source.name.split("-")[0] ?? source.name,
+    let disposed = false;
+    let retryTimer: number | null = null;
+    let retryAttempt = 0;
+
+    const retry = () => {
+      if (disposed) return;
+      if (retryTimer !== null) window.clearTimeout(retryTimer);
+      const delayMs = Math.min(30_000, 2_000 * 2 ** Math.min(retryAttempt, 4));
+      retryAttempt += 1;
+      retryTimer = window.setTimeout(loadAvailableAgents, delayMs);
+    };
+
+    function loadAvailableAgents() {
+      void rpc
+        .call<WorkerSourceEntry[]>("main", "workers.listSources", [])
+        .then((sources) => {
+          if (disposed) return;
+          const agents: AvailableAgent[] = [];
+          for (const source of sources) {
+            if (!source.agent) continue;
+            for (const cls of source.classes) {
+              agents.push({
+                id: source.source,
+                className: cls.className,
+                name: source.agent.displayName ?? source.title ?? source.name,
+                description: source.agent.description,
+                icon: source.icon,
+                defaultConfig: source.agent.defaultConfig,
+                proposedHandle: source.name.split("-")[0] ?? source.name,
+              });
+            }
+          }
+          setAvailableAgents(agents);
+
+          // Workspace units are admitted and built asynchronously during a
+          // cold bootstrap. An empty successful catalog is therefore a
+          // provisional snapshot, not a terminal result. Keep observing it
+          // until at least one launchable agent becomes available so queued
+          // opening prompts can drain without reloading the panel.
+          if (agents.length === 0) {
+            retry();
+          } else {
+            retryAttempt = 0;
+            console.info("[ChatPanel] agent source catalog ready", {
+              sourceCount: sources.length,
+              agentCount: agents.length,
             });
           }
-        }
-        setAvailableAgents(agents);
-      })
-      .catch((err) => {
-        console.warn("[ChatPanel] Failed to load worker sources:", err);
-      });
-  }, []);
+        })
+        .catch((err) => {
+          if (disposed) return;
+          if (!isReviewPending(err)) {
+            console.warn("[ChatPanel] Failed to load worker sources; retrying:", err);
+          }
+          retry();
+        });
+    }
+
+    loadAvailableAgents();
+    return () => {
+      disposed = true;
+      if (retryTimer !== null) window.clearTimeout(retryTimer);
+    };
+  }, [connectionRetrySignal]);
 
   // Availability (connected/startable/needs-setup) now arrives on every
   // catalog entry from the model-settings worker — one shared source for all
@@ -680,17 +738,22 @@ export default function ChatPanel() {
       .catch((err) => {
         if (disposed) return;
         if (isReviewPending(err)) {
+          console.info("[ChatPanel] model settings waiting for workspace review");
           // The review event is the fast path. This quiet reconciliation retry
           // covers a panel that mounted after the event or briefly lost its
           // event watch, without producing a retry/log storm.
-          modelSettingsRecoveryRef.current = true;
-          retryTimer = window.setTimeout(() => {
-            retryTimer = null;
-            if (!disposed) setModelSettingsRetrySignal((signal) => signal + 1);
-          }, 5_000);
-          return;
+        } else {
+          console.warn("[ChatPanel] Failed to load model settings; retrying:", err);
         }
-        console.warn("[ChatPanel] Failed to load model settings:", err);
+        // Cold workspace services and the mobile pipe can become available in
+        // either order. A failed discovery is not a terminal empty catalog:
+        // keep one bounded retry timer until the authoritative snapshot either
+        // resolves ready or exposes explicit setup.
+        modelSettingsRecoveryRef.current = true;
+        retryTimer = window.setTimeout(() => {
+          retryTimer = null;
+          if (!disposed) setModelSettingsRetrySignal((signal) => signal + 1);
+        }, 5_000);
       });
 
     return () => {

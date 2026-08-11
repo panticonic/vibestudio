@@ -1,10 +1,11 @@
 import { Badge, Box, Card, Flex, Heading, Text } from "@radix-ui/themes";
-import { HomeIcon, LockClosedIcon } from "@radix-ui/react-icons";
+import { CheckCircledIcon, HomeIcon, LockClosedIcon } from "@radix-ui/react-icons";
 
 /**
  * First-run narrative card (design §9, item 9). Shown as the empty-transcript
- * state of a brand-new chat: it explains, once and unobtrusively, that this
- * workspace can use a connected provider. It disappears the
+ * state of a brand-new, model-ready chat. Model discovery and explicit setup
+ * have their own surfaces, so this card must never imply setup is still needed.
+ * It disappears the
  * moment the first message lands, so it never competes with real content.
  */
 export function FirstRunCard() {
@@ -17,23 +18,22 @@ export function FirstRunCard() {
             <Heading size="4">Chat runs on your terms</Heading>
           </Flex>
           <Text size="2" color="gray">
-            Connect a model provider from the model picker to get started. Your first message waits
-            for your choice; Vibestudio will not silently download a model or attribute an
-            onboarding prompt to you.
+            Your workspace is ready. Send a message and Vibestudio will start its configured agent
+            for this conversation.
           </Text>
           <Box>
             <Flex direction="column" gap="2">
               <Feature
-                icon={<HomeIcon width="14" height="14" />}
+                icon={<CheckCircledIcon width="14" height="14" />}
                 color="green"
-                title="Choose a provider"
-                body="Use the model picker to connect OpenAI, Anthropic, or another configured provider. If a request cannot run, the chat shows a connection card."
+                title="Ready when you are"
+                body="Your first message starts the agent automatically. There is no separate setup or launch step."
               />
               <Feature
                 icon={<LockClosedIcon width="14" height="14" />}
                 color="blue"
                 title="Your credentials stay protected"
-                body="Keys stay in Vibestudio's credential store. You can switch providers and models from the model picker at any time."
+                body="Provider credentials stay in Vibestudio's credential store. You can switch models from the model picker at any time."
               />
             </Flex>
           </Box>

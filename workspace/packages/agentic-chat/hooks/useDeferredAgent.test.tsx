@@ -457,6 +457,7 @@ describe("useDeferredAgent", () => {
 
     await waitFor(() => expect(result.current.deferredAgent?.queued).toHaveLength(1));
     expect(m.onAddAgent).not.toHaveBeenCalled();
+    expect(result.current.deferredAgent?.modelDiscoveryPending).toBe(true);
 
     rerender(
       makeParams(m, {
@@ -465,6 +466,7 @@ describe("useDeferredAgent", () => {
       })
     );
     await waitFor(() => expect(m.onAddAgent).toHaveBeenCalledTimes(1));
+    expect(result.current.deferredAgent?.modelDiscoveryPending).toBe(false);
   });
 
   it("launches an initialPrompt with the effective panel model when the catalog loads first", async () => {

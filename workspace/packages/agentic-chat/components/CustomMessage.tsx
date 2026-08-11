@@ -1,5 +1,15 @@
 import React, { Suspense, useCallback, useEffect, useMemo, useState } from "react";
-import { Badge, Box, Button, Callout, DropdownMenu, Flex, IconButton, Spinner, Text } from "@radix-ui/themes";
+import {
+  Badge,
+  Box,
+  Button,
+  Callout,
+  DropdownMenu,
+  Flex,
+  IconButton,
+  Spinner,
+  Text,
+} from "@radix-ui/themes";
 import { DotsHorizontalIcon, ExclamationTriangleIcon, ReloadIcon } from "@radix-ui/react-icons";
 import { EventErrorBoundary } from "@workspace/tool-ui/components/EventErrorBoundary";
 import { SurfaceFrame } from "@workspace/tool-ui/components/SurfaceFrame";
@@ -24,7 +34,10 @@ interface ReadyCustomRenderProps extends CustomRenderProps {
   expanded: boolean;
 }
 
-function useFoldedState(payload: CustomMessageCardPayload, entry?: MessageTypeComponentEntry): unknown {
+function useFoldedState(
+  payload: CustomMessageCardPayload,
+  entry?: MessageTypeComponentEntry
+): unknown {
   return useMemo(() => {
     if (entry?.status !== "ready") return payload.initialState;
     return foldCustomMessageState(payload.initialState, payload.updates, entry.module.reduce);
@@ -145,24 +158,27 @@ const LOADING_STAGE_LABELS: Record<string, string> = {
   compiling: "Compiling renderer",
 };
 
-function CustomRenderer({
-  payload,
-  entry,
-  expanded,
-  chat,
-}: ReadyCustomRenderProps) {
+function CustomRenderer({ payload, entry, expanded, chat }: ReadyCustomRenderProps) {
   const state = useFoldedState(payload, entry);
   // Validate folded state against the registered JSON Schema before handing it
   // to the component. The same document was enforced at agent emission time;
   // a failure here means the fold (custom reduce) diverged — report it.
   const validationErrors = useMemo(
-    () => validateCustomState(entry.definition.cleared ? undefined : entry.definition.stateSchema, state),
-    [entry, state],
+    () =>
+      validateCustomState(
+        entry.definition.cleared ? undefined : entry.definition.stateSchema,
+        state
+      ),
+    [entry, state]
   );
   if (validationErrors) {
     return (
       <>
-        <CustomMessageValidationError typeId={payload.typeId} errors={validationErrors} compact={!expanded} />
+        <CustomMessageValidationError
+          typeId={payload.typeId}
+          errors={validationErrors}
+          compact={!expanded}
+        />
         {expanded && (
           <UiFeedbackReporter
             chat={chat}
@@ -179,7 +195,11 @@ function CustomRenderer({
   // default component handles both states via `expanded`.
   const Component = (!expanded && entry.module.Pill) || entry.module.default;
   if (!Component) {
-    return <Text size="1" color="blue" weight="medium">{payload.typeId}</Text>;
+    return (
+      <Text size="1" color="blue" weight="medium">
+        {payload.typeId}
+      </Text>
+    );
   }
   return (
     <Component
@@ -208,8 +228,12 @@ export const CustomPill = React.memo(function CustomPill({
   if (payload.failed) {
     return (
       <Flex align="center" gap="1" style={pillStyle("red")} title={payload.error?.message}>
-        <Badge color="red" size="1">Failed</Badge>
-        <Text size="1" color="red" weight="medium">{payload.typeId}</Text>
+        <Badge color="red" size="1">
+          Failed
+        </Badge>
+        <Text size="1" color="red" weight="medium">
+          {payload.typeId}
+        </Text>
       </Flex>
     );
   }
@@ -227,7 +251,9 @@ export const CustomPill = React.memo(function CustomPill({
         aria-expanded={expanded}
       >
         <Spinner size="1" />
-        <Text size="1" color="gray" weight="medium">{payload.typeId}</Text>
+        <Text size="1" color="gray" weight="medium">
+          {payload.typeId}
+        </Text>
       </Flex>
     );
   }
@@ -243,7 +269,9 @@ export const CustomPill = React.memo(function CustomPill({
         role="button"
         aria-expanded={expanded}
       >
-        <Text size="1" color="red" weight="medium">{payload.typeId}</Text>
+        <Text size="1" color="red" weight="medium">
+          {payload.typeId}
+        </Text>
         {entry.retry && (
           <Button
             size="1"
@@ -280,21 +308,11 @@ export const CustomPill = React.memo(function CustomPill({
       <EventErrorBoundary
         resetKey={resetKey}
         renderFallback={(error) => (
-          <CustomMessageErrorFallback
-            error={error}
-            payload={payload}
-            chat={chat}
-            compact
-          />
+          <CustomMessageErrorFallback error={error} payload={payload} chat={chat} compact />
         )}
       >
         <Suspense fallback={<Spinner size="1" />}>
-          <CustomRenderer
-            payload={payload}
-            entry={entry}
-            expanded={expanded}
-            chat={chat}
-          />
+          <CustomRenderer payload={payload} entry={entry} expanded={expanded} chat={chat} />
         </Suspense>
       </EventErrorBoundary>
     </Flex>
@@ -332,12 +350,7 @@ export const ExpandedCustom = React.memo(function ExpandedCustom({
   const Component = entry.module.default;
   const resetKey = customResetKey(payload, entry, expanded);
   return (
-    <ReadyCustomCard
-      payload={payload}
-      entry={entry}
-      onCollapse={onCollapse}
-      resetKey={resetKey}
-    >
+    <ReadyCustomCard payload={payload} entry={entry} onCollapse={onCollapse} resetKey={resetKey}>
       <Box>
         <EventErrorBoundary
           resetKey={resetKey}
@@ -346,12 +359,7 @@ export const ExpandedCustom = React.memo(function ExpandedCustom({
           )}
         >
           <Suspense fallback={<Spinner size="1" />}>
-            <CustomRenderer
-              payload={payload}
-              entry={entry}
-              expanded={expanded}
-              chat={chat}
-            />
+            <CustomRenderer payload={payload} entry={entry} expanded={expanded} chat={chat} />
           </Suspense>
         </EventErrorBoundary>
       </Box>
@@ -396,7 +404,10 @@ function ReadyCustomCard({
       {inspectOpen && (
         <Flex direction="column" gap="1" mb="2">
           <MetaRow label="message" value={payload.messageId} />
-          <MetaRow label="owner" value={payload.by ? `${payload.by.kind}:${payload.by.id}` : "unknown"} />
+          <MetaRow
+            label="owner"
+            value={payload.by ? `${payload.by.kind}:${payload.by.id}` : "unknown"}
+          />
           <MetaRow label="cacheKey" value={entry.cacheKey} />
           {!entry.definition.cleared && entry.definition.source && (
             <MetaRow
@@ -408,7 +419,9 @@ function ReadyCustomCard({
               }
             />
           )}
-          <Text size="1" color="gray" weight="medium" mt="1">Update history</Text>
+          <Text size="1" color="gray" weight="medium" mt="1">
+            Update history
+          </Text>
           <CustomUpdateHistory payload={payload} reducer={entry.module.reduce} />
         </Flex>
       )}
@@ -434,15 +447,25 @@ function CustomFailedCard({
       className="message-card"
       title={payload.typeId}
       tone="red"
-      badge={<Badge color="red" size="1">Failed</Badge>}
+      badge={
+        <Badge color="red" size="1">
+          Failed
+        </Badge>
+      }
       actions={<CardActionsMenu payload={payload} entry={entry} />}
     >
       <Callout.Root color="red" size="1">
-        <Callout.Icon><ExclamationTriangleIcon /></Callout.Icon>
+        <Callout.Icon>
+          <ExclamationTriangleIcon />
+        </Callout.Icon>
         <Text as="div" size="2" className="rt-CalloutText">
           <Flex direction="column" gap="1">
-            <Text size="1" weight="medium">{payload.typeId} failed</Text>
-            <Text size="1" color="red">{payload.error?.message ?? "The agent reported a failure for this card."}</Text>
+            <Text size="1" weight="medium">
+              {payload.typeId} failed
+            </Text>
+            <Text size="1" color="red">
+              {payload.error?.message ?? "The agent reported a failure for this card."}
+            </Text>
           </Flex>
         </Text>
       </Callout.Root>
@@ -488,8 +511,7 @@ function CustomDiagnosticCard({
   const startedAt = entry?.status === "loading" ? entry.startedAt : undefined;
   const elapsed = useElapsedSeconds(startedAt);
   const stalled = loading && stage !== undefined && (elapsed ?? 0) >= LOAD_STALL_FEEDBACK_SECONDS;
-  const errorMessage =
-    overrideMessage ?? (entry?.status === "error" ? entry.message : undefined);
+  const errorMessage = overrideMessage ?? (entry?.status === "error" ? entry.message : undefined);
   const retry = entry?.status === "error" ? entry.retry : undefined;
   const definition = entry && "definition" in entry ? entry.definition : undefined;
   const color = loading ? "gray" : "red";
@@ -542,7 +564,11 @@ function CustomDiagnosticCard({
             {elapsed !== null ? ` — ${elapsed}s in this stage` : ""}
           </Text>
         )}
-        {errorMessage && <Text size="1" color="red">{errorMessage}</Text>}
+        {errorMessage && (
+          <Text size="1" color="red">
+            {errorMessage}
+          </Text>
+        )}
         <Text
           size="1"
           color="gray"
@@ -556,8 +582,14 @@ function CustomDiagnosticCard({
         {detailsOpen && (
           <Flex direction="column" gap="1">
             <MetaRow label="message" value={payload.messageId} />
-            <MetaRow label="owner" value={payload.by ? `${payload.by.kind}:${payload.by.id}` : "unknown"} />
-            <MetaRow label="updates" value={`${payload.updates.length} (lastSeq ${payload.lastSeq})`} />
+            <MetaRow
+              label="owner"
+              value={payload.by ? `${payload.by.kind}:${payload.by.id}` : "unknown"}
+            />
+            <MetaRow
+              label="updates"
+              value={`${payload.updates.length} (lastSeq ${payload.lastSeq})`}
+            />
             {definition && !definition.cleared && definition.source && (
               <MetaRow
                 label="source"
@@ -573,7 +605,9 @@ function CustomDiagnosticCard({
             {definition?.imports && (
               <MetaRow label="imports" value={Object.keys(definition.imports).join(", ")} />
             )}
-            <Text size="1" color="gray" weight="medium" mt="1">Update history</Text>
+            <Text size="1" color="gray" weight="medium" mt="1">
+              Update history
+            </Text>
             <CustomUpdateHistory payload={payload} />
           </Flex>
         )}
@@ -659,8 +693,13 @@ function CustomUpdateHistory({
 function MetaRow({ label, value }: { label: string; value: string }) {
   return (
     <Flex gap="2" align="center">
-      <Text size="1" color="gray" style={{ minWidth: 72 }}>{label}</Text>
-      <Text size="1" style={{ fontFamily: "var(--code-font-family, monospace)", wordBreak: "break-all" }}>
+      <Text size="1" color="gray" style={{ minWidth: 72 }}>
+        {label}
+      </Text>
+      <Text
+        size="1"
+        style={{ fontFamily: "var(--code-font-family, monospace)", wordBreak: "break-all" }}
+      >
         {value}
       </Text>
     </Flex>
@@ -708,7 +747,17 @@ function UiFeedbackReporter({
       actor: { kind: "panel", id: "chat" },
       payload: {
         protocol: AGENTIC_PROTOCOL_VERSION,
-        target: { kind: payload.by.kind as never, id: payload.by.id },
+        target: {
+          kind: payload.by.kind as never,
+          id: payload.by.id,
+          participantId: payload.by.participantId ?? payload.by.id,
+        },
+        to: [
+          {
+            kind: "participant",
+            participantId: payload.by.participantId ?? payload.by.id,
+          },
+        ],
         category,
         refs: { messageId: payload.messageId as never, typeId: payload.typeId },
         error: {
@@ -723,11 +772,13 @@ function UiFeedbackReporter({
     };
     void (async () => {
       try {
-        await (publish as (kind: string, payload: unknown, options?: { idempotencyKey?: string }) => Promise<unknown>)(
-          AGENTIC_EVENT_PAYLOAD_KIND,
-          event,
-          { idempotencyKey: `ui-feedback:${occurrenceKey}` },
-        );
+        await (
+          publish as (
+            kind: string,
+            payload: unknown,
+            options?: { idempotencyKey?: string }
+          ) => Promise<unknown>
+        )(AGENTIC_EVENT_PAYLOAD_KIND, event, { idempotencyKey: `ui-feedback:${occurrenceKey}` });
         if (!cancelled) onDelivery?.("sent");
       } catch (publishError) {
         console.warn("Failed to publish ui.feedback diagnostic", publishError);
@@ -771,19 +822,29 @@ function CustomMessageErrorFallback({
     return (
       <Flex align="center" gap="1" title={error.message}>
         {reporter}
-        <Badge color="red" size="1">Error</Badge>
-        <Text size="1" color="red" weight="medium">{payload.typeId}</Text>
+        <Badge color="red" size="1">
+          Error
+        </Badge>
+        <Text size="1" color="red" weight="medium">
+          {payload.typeId}
+        </Text>
       </Flex>
     );
   }
   return (
     <Callout.Root color="red" size="1">
       {reporter}
-      <Callout.Icon><ExclamationTriangleIcon /></Callout.Icon>
+      <Callout.Icon>
+        <ExclamationTriangleIcon />
+      </Callout.Icon>
       <Text as="div" size="2" className="rt-CalloutText">
         <Flex direction="column" gap="1">
-          <Text size="1" weight="medium">Custom message error: {payload.typeId}</Text>
-          <Text size="1" color="red">{error.message || "Unknown error"}</Text>
+          <Text size="1" weight="medium">
+            Custom message error: {payload.typeId}
+          </Text>
+          <Text size="1" color="red">
+            {error.message || "Unknown error"}
+          </Text>
           <Text size="1" color="gray">
             {delivery === "sent"
               ? "Reported to the owning agent."
@@ -809,19 +870,29 @@ function CustomMessageValidationError({
   if (compact) {
     return (
       <Flex align="center" gap="1" title={errors.join("; ")}>
-        <Badge color="amber" size="1">Invalid</Badge>
-        <Text size="1" color="amber" weight="medium">{typeId}</Text>
+        <Badge color="amber" size="1">
+          Invalid
+        </Badge>
+        <Text size="1" color="amber" weight="medium">
+          {typeId}
+        </Text>
       </Flex>
     );
   }
   return (
     <Callout.Root color="amber" size="1">
-      <Callout.Icon><ExclamationTriangleIcon /></Callout.Icon>
+      <Callout.Icon>
+        <ExclamationTriangleIcon />
+      </Callout.Icon>
       <Text as="div" size="2" className="rt-CalloutText">
         <Flex direction="column" gap="1">
-          <Text size="1" weight="medium">Invalid {typeId} state</Text>
+          <Text size="1" weight="medium">
+            Invalid {typeId} state
+          </Text>
           {errors.map((message, index) => (
-            <Text key={index} size="1" color="amber">{message}</Text>
+            <Text key={index} size="1" color="amber">
+              {message}
+            </Text>
           ))}
         </Flex>
       </Text>
@@ -832,12 +903,15 @@ function CustomMessageValidationError({
 function customResetKey(
   payload: CustomMessageCardPayload,
   entry: Extract<MessageTypeComponentEntry, { status: "ready" }>,
-  expanded: boolean,
+  expanded: boolean
 ): string {
   return `${entry.cacheKey}:${payload.messageId}:${payload.lastSeq}:${expanded ? "expanded" : "collapsed"}`;
 }
 
-function pillStyle(color: "blue" | "gray" | "red", clickable = color !== "gray"): React.CSSProperties {
+function pillStyle(
+  color: "blue" | "gray" | "red",
+  clickable = color !== "gray"
+): React.CSSProperties {
   return {
     cursor: clickable ? "pointer" : "default",
     userSelect: "none",

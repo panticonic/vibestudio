@@ -25,6 +25,7 @@ export function PendingDeliveryQueue() {
     launching,
     launchFailed,
     modelSelectionRequired,
+    modelDiscoveryPending,
     retryLaunch,
     cancelQueued,
     draft,
@@ -56,6 +57,13 @@ export function PendingDeliveryQueue() {
                 <ExclamationTriangleIcon style={{ color: "var(--red-9)", flexShrink: 0 }} />
                 <Text size="1" color="red" weight="medium" truncate>
                   Couldn't start your agent — these send once it's running.
+                </Text>
+              </>
+            ) : modelDiscoveryPending ? (
+              <>
+                <Spinner size="1" />
+                <Text size="1" color="gray" weight="medium" truncate>
+                  Preparing model settings — your message will stay queued.
                 </Text>
               </>
             ) : awaitingModelChoice ? (

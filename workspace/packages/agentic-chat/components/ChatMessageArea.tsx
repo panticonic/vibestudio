@@ -12,9 +12,13 @@ import { pendingReviewNotice } from "@vibestudio/shared/authority/reviewPending"
 
 export interface ChatMessageAreaProps {
   /** Override default message card rendering */
-  renderMessage?: (...args: Parameters<NonNullable<import("./MessageList").MessageListProps["renderMessage"]>>) => ReactNode;
+  renderMessage?: (
+    ...args: Parameters<NonNullable<import("./MessageList").MessageListProps["renderMessage"]>>
+  ) => ReactNode;
   /** Override default inline group rendering */
-  renderInlineGroup?: (...args: Parameters<NonNullable<import("./MessageList").MessageListProps["renderInlineGroup"]>>) => ReactNode;
+  renderInlineGroup?: (
+    ...args: Parameters<NonNullable<import("./MessageList").MessageListProps["renderInlineGroup"]>>
+  ) => ReactNode;
 }
 
 /**
@@ -45,11 +49,14 @@ export function ChatMessageArea({ renderMessage, renderInlineGroup }: ChatMessag
   } = useChatContext();
   const { setReplyTo } = useChatInputActions();
 
-  const mdxActions = useMemo(() => ({
-    publishMessage: async (content: string) => {
-      await chat.send(content);
-    },
-  }), [chat]);
+  const mdxActions = useMemo(
+    () => ({
+      publishMessage: async (content: string) => {
+        await chat.send(content);
+      },
+    }),
+    [chat]
+  );
 
   // Hide exactly the active-outbox set (messages live in the queue OR the
   // transcript, never both — so a fresh send doesn't flash here and then bounce
@@ -78,28 +85,80 @@ export function ChatMessageArea({ renderMessage, renderInlineGroup }: ChatMessag
     const pending = pendingReviewNotice(connectionError?.cause ?? connectionError);
     if (pending) {
       return (
-        <Flex role="status" aria-live="polite" align="center" justify="center" gap="2" direction="column" style={{ height: "100%", padding: 16, textAlign: "center" }}>
-          <Text size="2" weight="medium">Waiting for workspace review</Text>
-          <Text color="gray" size="2">{pending.message}</Text>
+        <Flex
+          role="status"
+          aria-live="polite"
+          align="center"
+          justify="center"
+          gap="2"
+          direction="column"
+          style={{ height: "100%", padding: 16, textAlign: "center" }}
+        >
+          <Text size="2" weight="medium">
+            Waiting for workspace review
+          </Text>
+          <Text color="gray" size="2">
+            {pending.message}
+          </Text>
         </Flex>
       );
     }
     if (deferredAgent?.launching) {
       return (
-        <Flex role="status" aria-live="polite" align="center" justify="center" style={{ height: "100%" }}>
+        <Flex
+          role="status"
+          aria-live="polite"
+          align="center"
+          justify="center"
+          style={{ height: "100%" }}
+        >
           <Text color="gray" size="2">
             Preparing your agent…
           </Text>
         </Flex>
       );
     }
-    return connected ? <FirstRunCard /> : (
-      <Flex role="status" aria-live="polite" align="center" justify="center" gap="2" style={{ height: "100%" }}>
+    if (deferredAgent?.modelDiscoveryPending && deferredAgent.queued.length > 0) {
+      return (
+        <Flex
+          role="status"
+          aria-live="polite"
+          align="center"
+          justify="center"
+          gap="2"
+          style={{ height: "100%" }}
+        >
+          <Spinner size="1" />
+          <Text color="gray" size="2">
+            Preparing model settings…
+          </Text>
+        </Flex>
+      );
+    }
+    return connected ? (
+      <FirstRunCard />
+    ) : (
+      <Flex
+        role="status"
+        aria-live="polite"
+        align="center"
+        justify="center"
+        gap="2"
+        style={{ height: "100%" }}
+      >
         <Spinner size="1" />
-        <Text color="gray" size="2">Loading conversation…</Text>
+        <Text color="gray" size="2">
+          Loading conversation…
+        </Text>
       </Flex>
     );
-  }, [connectionError, deferredAgent?.launching, connected]);
+  }, [
+    connectionError,
+    deferredAgent?.launching,
+    deferredAgent?.modelDiscoveryPending,
+    deferredAgent?.queued.length,
+    connected,
+  ]);
 
   // Before the first agent exists, the message canvas hosts the inline setup
   // (armed config) instead of an empty transcript.

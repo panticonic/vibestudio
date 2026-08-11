@@ -180,6 +180,7 @@ export function useDeferredAgent(params: UseDeferredAgentParams): {
   const agentComing = pendingAgents.size > 0 || armed;
   const modelSelectionRequired =
     firstAgentModelPreflight === "selection-required" || explicitModelChoiceActive;
+  const modelDiscoveryPending = firstAgentModelPreflight === "checking";
   // Show the inline config card only for a genuinely brand-new chat: no agent
   // present or coming, no history, and none ever seen. An injected initial
   // prompt normally drives the first message itself, except when the host says
@@ -622,6 +623,7 @@ export function useDeferredAgent(params: UseDeferredAgentParams): {
       launching,
       launchFailed,
       modelSelectionRequired,
+      modelDiscoveryPending,
       startQueued,
       retryLaunch,
       draft,
@@ -638,6 +640,7 @@ export function useDeferredAgent(params: UseDeferredAgentParams): {
     launching,
     launchFailed,
     modelSelectionRequired,
+    modelDiscoveryPending,
     startQueued,
     retryLaunch,
     draft,

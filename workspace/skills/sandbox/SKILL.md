@@ -1,6 +1,6 @@
 ---
 name: sandbox
-description: Execute code in the sandbox — the server-side eval tool, eval-private db, inline UI components, feedback forms, browser automation, and runtime APIs such as fs, git, workers, webhooks, credentials, and GAD.
+description: Execute code in the sandbox — the server-side eval tool, eval-private db, inline UI and action-bar components, custom chat message types, feedback forms, browser automation, and runtime APIs such as fs, git, workers, webhooks, credentials, and GAD.
 ---
 
 # Sandbox Execution Skill
