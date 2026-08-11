@@ -20,7 +20,7 @@ export interface WebViewEntry {
   runtimeEntityId: PanelEntityId | null;
   url: string;
   managed: boolean;
-  panelInit: unknown | null;
+  panelInit: unknown;
   lastActive: number;
 }
 

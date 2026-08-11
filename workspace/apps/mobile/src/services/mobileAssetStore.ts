@@ -40,10 +40,9 @@ export interface NativeMobileAssetStoreHost {
   assetStoreClear(): Promise<void>;
 }
 
-interface PopulationResult {
-  asset: MobileStoredAsset | null;
-  error: unknown | null;
-}
+type PopulationResult =
+  | { kind: "complete"; asset: MobileStoredAsset | null }
+  | { kind: "failed"; error: unknown };
 
 export type MobileAssetAcquisition =
   | { kind: "hit"; asset: MobileStoredAsset }
@@ -80,7 +79,7 @@ export class MobileAssetStore {
       const existing = this.inflight.get(key);
       if (existing) {
         const result = await existing;
-        if (result.error !== null) throw result.error;
+        if (result.kind === "failed") throw result.error;
         if (result.asset) return { kind: "hit", asset: result.asset };
         continue;
       }
@@ -106,17 +105,17 @@ export class MobileAssetStore {
           await this.track(this.nativeHost.assetStoreLookup(this.namespace, key))
         );
         if (hit) {
-          finish({ asset: hit, error: null });
+          finish({ kind: "complete", asset: hit });
           return { kind: "hit", asset: hit };
         }
       } catch (error) {
-        finish({ asset: null, error });
+        finish({ kind: "failed", error });
         throw error;
       }
       return {
         kind: "owner",
-        complete: (asset) => finish({ asset, error: null }),
-        fail: (error) => finish({ asset: null, error }),
+        complete: (asset) => finish({ kind: "complete", asset }),
+        fail: (error) => finish({ kind: "failed", error }),
       };
     }
   }

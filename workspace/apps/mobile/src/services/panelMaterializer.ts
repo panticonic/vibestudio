@@ -9,7 +9,7 @@ export interface MobileMaterializedPanel {
   runtimeEntityId: PanelEntityId;
   url: string;
   managed: boolean;
-  panelInit: unknown | null;
+  panelInit: unknown;
 }
 
 export interface MobilePanelMaterializationDeps {
@@ -77,13 +77,16 @@ export async function materializeMobilePanel(
   const snapshot = getCurrentSnapshot(opts.panel);
   const managed = !snapshot.source.startsWith("browser:");
   const connectionId = `mobile-${opts.panelId}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
-  const leaseClient = opts.leaseMode === "takeOver" ? opts.takeOverLease : opts.acquireLease;
+  const acquireLease = (runtimeEntityId: PanelEntityId) =>
+    opts.leaseMode === "takeOver"
+      ? opts.takeOverLease(opts.panelId, runtimeEntityId, { connectionId })
+      : opts.acquireLease(opts.panelId, runtimeEntityId, { connectionId });
   if (managed && !/^[0-9a-f]{64}$/.test(opts.panel.buildKey ?? "")) {
     if (!opts.panel.runtimeEntityId) {
       throw new Error(`Panel ${opts.panelId} did not provide a reserved runtime entity id`);
     }
     const runtimeEntityId = asPanelEntityId(opts.panel.runtimeEntityId);
-    const lease = await leaseClient(opts.panelId, runtimeEntityId, { connectionId });
+    const lease = await acquireLease(runtimeEntityId);
     if (!lease.acquired) {
       throw new Error(formatPanelRuntimeLeaseDeniedMessage(opts.panelId, lease.lease));
     }
@@ -111,9 +114,7 @@ export async function materializeMobilePanel(
       `Panel ${opts.panelId} changed runtime identity while it was being materialized`
     );
   }
-  const lease = await leaseClient(opts.panelId, runtimeEntityId, {
-    connectionId,
-  });
+  const lease = await acquireLease(runtimeEntityId);
   if (!lease.acquired) {
     throw new Error(formatPanelRuntimeLeaseDeniedMessage(opts.panelId, lease.lease));
   }

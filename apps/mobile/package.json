@@ -9,7 +9,7 @@
     "start": "react-native start",
     "pod-install": "cd ios && pod install",
     "clean": "react-native clean",
-    "lint": "../../node_modules/oxlint/bin/oxlint ../../workspace/apps/mobile",
+    "lint": "cd ../.. && oxlint workspace/apps/mobile",
     "type-check": "../../node_modules/typescript/bin/tsc --noEmit",
     "test": "jest"
   },
