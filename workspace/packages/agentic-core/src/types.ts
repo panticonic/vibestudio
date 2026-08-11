@@ -135,8 +135,10 @@ export interface AgenticChatActions {
   ) => Promise<void>;
   /**
    * The host minted this channel for the current panel mount, so an empty
-   * transcript is already authoritative and provisional activation need not
-   * wait for replay to settle.
+   * transcript is already authoritative, the opening prompt belongs to this
+   * mount, and provisional activation need not wait for replay to settle.
+   * False on rematerialization: durable opening-prompt state must not be
+   * interpreted as a new delivery or a request for another first agent.
    */
   firstAgentChannelIsNew?: boolean;
   /**

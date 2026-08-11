@@ -79,6 +79,7 @@ function makeParams(m: Mocks, over: Partial<Params> = {}): Params {
     availableAgents: [AGENT],
     modelCatalog: null,
     defaultModelRef: null,
+    firstAgentChannelIsNew: true,
     channelName: "chat-test",
     messages: [],
     replaySettled: true,
@@ -310,16 +311,91 @@ describe("useDeferredAgent", () => {
   it("routes an initialPrompt through the same queue once connected", async () => {
     const m = freshMocks();
     const { result, rerender } = renderHook((p: Params) => useDeferredAgent(p), {
-      initialProps: makeParams(m, { initialPrompt: "do the thing", replaySettled: false }),
+      initialProps: makeParams(m, {
+        initialPrompt: "do the thing",
+        replaySettled: false,
+        firstAgentChannelIsNew: true,
+      }),
     });
     // Replay not settled yet → nothing queued; setup card suppressed by the prompt.
     expect(result.current.deferredAgent?.queued.length ?? 0).toBe(0);
     expect(result.current.deferredAgent?.setupActive ?? false).toBe(false);
 
     // Replay settles → the prompt enqueues and spawns one agent.
-    rerender(makeParams(m, { initialPrompt: "do the thing", replaySettled: true }));
+    rerender(
+      makeParams(m, {
+        initialPrompt: "do the thing",
+        replaySettled: true,
+        firstAgentChannelIsNew: true,
+      })
+    );
     await waitFor(() => expect(m.onAddAgent).toHaveBeenCalledTimes(1));
     expect(result.current.deferredAgent?.queued.map((q) => q.text)).toEqual(["do the thing"]);
+  });
+
+  it("does not replay an opening prompt or launch an agent when an existing panel remounts", async () => {
+    const m = freshMocks();
+    const failedInstalledAgent = new Map([
+      [
+        "ai-chat",
+        {
+          agentId: AGENT.id,
+          status: "error" as const,
+          error: { message: "Existing agent is still rehydrating" },
+        },
+      ],
+    ]);
+    const { result } = renderHook((p: Params) => useDeferredAgent(p), {
+      initialProps: makeParams(m, {
+        initialPrompt: "help me get onboarded",
+        replaySettled: true,
+        messages: [],
+        pendingAgents: failedInstalledAgent,
+        firstAgentChannelIsNew: false,
+      }),
+    });
+
+    await act(async () => Promise.resolve());
+
+    expect(result.current.deferredAgent).toBeUndefined();
+    expect(m.onAddAgent).not.toHaveBeenCalled();
+    expect(m.publishText).not.toHaveBeenCalled();
+  });
+
+  it("delivers a forced prompt to an existing agent without launching another one", async () => {
+    const m = freshMocks();
+    const recoveringAgent = new Map([
+      ["ai-chat", { agentId: AGENT.id, status: "starting" as const }],
+    ]);
+    const existingChannel = {
+      initialPrompt: "continue on the fork",
+      forceInitialPrompt: true,
+      firstAgentChannelIsNew: false,
+    };
+    const { result, rerender } = renderHook((p: Params) => useDeferredAgent(p), {
+      initialProps: makeParams(m, {
+        ...existingChannel,
+        pendingAgents: recoveringAgent,
+      }),
+    });
+
+    await waitFor(() => expect(result.current.deferredAgent?.queued).toHaveLength(1));
+    expect(m.onAddAgent).not.toHaveBeenCalled();
+
+    rerender(
+      makeParams(m, {
+        ...existingChannel,
+        participants: agentRoster,
+        messages: [{ id: "prior", senderId: "u", content: "prior turn" } as never],
+      })
+    );
+
+    await waitFor(() => expect(m.publishText).toHaveBeenCalledTimes(1));
+    expect(m.publishText).toHaveBeenCalledWith(
+      "continue on the fork",
+      expect.objectContaining({ idempotencyKey: "initial-prompt:chat-test" })
+    );
+    expect(m.onAddAgent).not.toHaveBeenCalled();
   });
 
   it("holds an initialPrompt for explicit model selection before launching", async () => {

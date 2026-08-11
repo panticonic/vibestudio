@@ -574,6 +574,19 @@ export function useDeferredAgent(params: UseDeferredAgentParams): {
   useEffect(() => {
     if (!canDefer) return;
     if (initialPromptEnqueuedRef.current || !replaySettled) return;
+    // An opening prompt belongs to the creation of a channel, not to the
+    // lifetime of this React surface. Panel state is durable across unloads,
+    // while this hook's refs are not: treating a remount as another opening
+    // used to queue the prompt again and arm a second first-agent launch during
+    // the roster/rehydration window. The host's channel-creation fact is the
+    // authoritative one-shot boundary. `forceInitialPrompt` remains the
+    // explicit path for adding a prompt to an already-existing channel (for
+    // example a fork), but it waits for that channel's agent and never turns
+    // the remount into a first-agent launch.
+    if (!firstAgentChannelIsNew && !forceInitialPrompt) {
+      initialPromptEnqueuedRef.current = true;
+      return;
+    }
     if (
       !shouldAutoSendInitialPrompt({
         prompt: initialPrompt,
@@ -597,12 +610,20 @@ export function useDeferredAgent(params: UseDeferredAgentParams): {
         idempotencyKey: `initial-prompt:${channelName}`,
       },
     ]);
-    // Arm a spawn for a brand-new chat. Forks/reopens already have an agent
-    // rehydrating (pendingAgents) — the driver's guard skips spawning there and
-    // the flush simply delivers to it on join.
-    if (!stateRef.current.agentPresent && firstAgentModelPreflight === "ready") {
+    // Arm a spawn only for the mount that created the channel. A forced prompt
+    // on an existing channel may queue for its rehydrating agent, but must not
+    // reinterpret a transiently empty roster as a request for a new one.
+    if (
+      firstAgentChannelIsNew &&
+      !stateRef.current.agentPresent &&
+      firstAgentModelPreflight === "ready"
+    ) {
       setArmed(true);
-    } else if (!stateRef.current.agentPresent && firstAgentModelPreflight === "checking") {
+    } else if (
+      firstAgentChannelIsNew &&
+      !stateRef.current.agentPresent &&
+      firstAgentModelPreflight === "checking"
+    ) {
       waitingForModelDiscoveryRef.current = true;
     }
   }, [
@@ -613,6 +634,7 @@ export function useDeferredAgent(params: UseDeferredAgentParams): {
     forceInitialPrompt,
     channelName,
     firstAgentModelPreflight,
+    firstAgentChannelIsNew,
   ]);
 
   const deferredAgent = useMemo<DeferredAgentState | undefined>(() => {
