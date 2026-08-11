@@ -3810,26 +3810,6 @@ export class WorkspaceDO extends DurableObjectBase {
     }
   }
 
-  private entityRetireInTransaction(id: string): EntityRecord | null {
-    const row = this.readEntityRow(id);
-    if (!row) return null;
-    if (row.status === "retired") {
-      return this.rowToEntity(row);
-    }
-    const now = Date.now();
-    this.sql.exec(
-      `UPDATE entities SET status = 'retired', retired_at = ?, cleanup_complete = 0 WHERE id = ?`,
-      now,
-      id
-    );
-    return this.rowToEntity({
-      ...row,
-      status: "retired",
-      retired_at: now,
-      cleanup_complete: 0,
-    });
-  }
-
   private readEntityRow(id: string): DbEntityRow | null {
     const row = this.sql.exec(`SELECT * FROM entities WHERE id = ?`, id).toArray()[0] as unknown as
       | DbEntityRow

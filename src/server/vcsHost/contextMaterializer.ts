@@ -1,11 +1,7 @@
 import * as fsp from "node:fs/promises";
 import * as path from "node:path";
 
-import {
-  canonicalJson,
-  compareUtf16CodeUnits,
-  type WorktreeHashFile,
-} from "@vibestudio/content-addressing";
+import { canonicalJson, compareUtf16CodeUnits } from "@vibestudio/content-addressing";
 import {
   contextBinding,
   CONTEXT_BINDING_FILE,
@@ -649,71 +645,6 @@ export class ContextMaterializer {
       }
     }
     return (await mirrorWorktreeTree(this.deps.blobsDir, [...files.values()])).stateHash;
-  }
-
-  private async planRepositoryFiles(
-    repository: Extract<WorkspaceMaterializationRepository, { presence: "present" }>
-  ): Promise<WorktreeHashFile[]> {
-    if (repository.source.kind === "snapshot") {
-      return repository.source.files
-        .map((file) => ({
-          path: file.path,
-          contentHash: file.contentHash,
-          mode: this.treeMode(file.mode),
-        }))
-        .sort((left, right) => compareUtf16CodeUnits(left.path, right.path));
-    }
-
-    const basis =
-      repository.source.kind === "content-root"
-        ? repository.source.contentRoot
-        : repository.source.basisContentRoot;
-    const listing = await collectExactTreeListing(this.deps.blobsDir, basis);
-    if (!listing) {
-      throw new Error(`materialization basis is missing for ${repository.repositoryId}: ${basis}`);
-    }
-    const files = new Map<string, WorktreeHashFile>(
-      listing
-        .filter(
-          (entry): entry is Extract<(typeof listing)[number], { kind: "file" }> =>
-            entry.kind === "file"
-        )
-        .map((file) => [
-          file.path,
-          { path: file.path, contentHash: file.contentHash, mode: file.mode },
-        ])
-    );
-    if (repository.source.kind === "delta") {
-      for (const change of repository.source.changes) {
-        const current = files.get(change.path);
-        const expected = change.expected
-          ? {
-              path: change.path,
-              contentHash: change.expected.contentHash,
-              mode: this.treeMode(change.expected.mode),
-            }
-          : undefined;
-        if (
-          (expected === undefined && current !== undefined) ||
-          (expected !== undefined &&
-            (current === undefined ||
-              current.contentHash !== expected.contentHash ||
-              current.mode !== expected.mode))
-        ) {
-          throw new Error(`materialization basis changed at ${repository.repoPath}/${change.path}`);
-        }
-        if (change.result) {
-          files.set(change.path, {
-            path: change.path,
-            contentHash: change.result.contentHash,
-            mode: this.treeMode(change.result.mode),
-          });
-        } else {
-          files.delete(change.path);
-        }
-      }
-    }
-    return [...files.values()].sort((left, right) => compareUtf16CodeUnits(left.path, right.path));
   }
 
   private treeMode(mode: number): number {

@@ -1287,12 +1287,6 @@ export class PanelPresentationController {
     });
   }
 
-  private unloadPanelIfPresent(panelId: string, transition: "unload" | "lease-transfer"): void {
-    if (!this.deps.registry.getPanel(panelId)) return;
-    this.unloadPanel(panelId, transition);
-    this.deps.registry.notifyPanelTreeUpdate(panelId);
-  }
-
   private updateWorkspacePanelArtifacts(
     panelId: string,
     snapshot: PanelSnapshot,
@@ -1383,10 +1377,4 @@ export class PanelPresentationController {
     this.deps.cdpHost.registerTarget?.(panelId, contents.id);
   }
 
-  private pruneRemovedPanelLocally(panelId: string): void {
-    this.stateArgsPushUnsubs.get(panelId)?.();
-    this.stateArgsPushUnsubs.delete(panelId);
-    this.explicitTitlePanelIds.delete(panelId);
-    this.releaseLocalPanelRuntime(panelId, "close");
-  }
 }
