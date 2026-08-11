@@ -743,7 +743,11 @@ export class PanelView implements PanelViewLike {
     updatePanelNavigationState(panel, state);
 
     if (state.pageTitle !== undefined) {
-      void this.panelOrchestrator.updatePanelTitle(panelId, state.pageTitle).catch(() => {});
+      void this.panelOrchestrator
+        .updatePanelTitle(panelId, state.pageTitle)
+        .catch((error: unknown) =>
+          console.warn(`[PanelView] Failed to persist title for panel ${panelId}:`, error)
+        );
     }
     this.panelRegistry.notifyPanelTreeUpdate(panelId);
   }

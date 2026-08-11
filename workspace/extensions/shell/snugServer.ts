@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { chmod, mkdir, rm, stat, unlink, writeFile } from "node:fs/promises";
+import { mkdir, rm, stat, unlink, writeFile } from "node:fs/promises";
 import { createServer, type Server, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -28,11 +28,17 @@ export class SnugServer {
   private binDir?: string;
   private readonly platform: NodeJS.Platform;
   private readonly pending = new Map<string, { server: Server; socketPath: string }>();
-  private readonly sessions = new Map<string, { token: string; server: Server; socketPath: string }>();
+  private readonly sessions = new Map<
+    string,
+    { token: string; server: Server; socketPath: string }
+  >();
   private readonly tokens = new Map<string, string>();
   private readonly notificationBuckets = new Map<string, { startedAt: number; count: number }>();
 
-  constructor(private readonly ops: SnugSessionOps, opts: SnugServerOptions = {}) {
+  constructor(
+    private readonly ops: SnugSessionOps,
+    opts: SnugServerOptions = {}
+  ) {
     this.platform = opts.platform ?? process.platform;
   }
 
@@ -42,7 +48,6 @@ export class SnugServer {
     this.dir = path.join(tmpdir(), `snug-${randomBytes(16).toString("hex")}`);
     this.binDir = path.join(this.dir, "bin");
     await mkdir(this.binDir, { recursive: true, mode: 0o700 });
-    await chmod(this.dir, 0o700).catch(() => {});
     await assertPrivateDir(this.dir, this.platform);
     await this.writeCli();
   }
@@ -52,9 +57,7 @@ export class SnugServer {
     const token = randomBytes(24).toString("hex");
     const socketPath = path.join(this.dir, `${randomBytes(16).toString("hex")}.sock`);
     const server = createServer((socket) => this.handleSocket(socket, token));
-    server.listen(socketPath, () => {
-      void chmod(socketPath, 0o600).catch(() => {});
-    });
+    server.listen(socketPath);
     this.pending.set(token, { server, socketPath });
     return {
       token,
@@ -92,7 +95,8 @@ export class SnugServer {
   }
 
   async dispose(): Promise<void> {
-    for (const session of this.sessions.values()) closeAndUnlink(session.server, session.socketPath);
+    for (const session of this.sessions.values())
+      closeAndUnlink(session.server, session.socketPath);
     for (const pending of this.pending.values()) closeAndUnlink(pending.server, pending.socketPath);
     this.sessions.clear();
     this.pending.clear();
@@ -150,7 +154,6 @@ connect();
 `;
     const target = path.join(this.binDir!, "snug");
     await writeFile(target, script, { mode: 0o700 });
-    await chmod(target, 0o700).catch(() => {});
   }
 
   private handleSocket(socket: Socket, socketToken: string): void {
@@ -165,12 +168,25 @@ connect();
     });
   }
 
-  private async handleRequest(line: string, socketToken: string): Promise<{ ok: true; stdout?: string } | { ok: false; error: string }> {
+  private async handleRequest(
+    line: string,
+    socketToken: string
+  ): Promise<{ ok: true; stdout?: string } | { ok: false; error: string }> {
     try {
-      const req = JSON.parse(line) as { proto: number; version?: string; pid?: number; argv: string[] };
+      const req = JSON.parse(line) as {
+        proto: number;
+        version?: string;
+        pid?: number;
+        argv: string[];
+      };
       if (req.proto !== 1) return { ok: false, error: "unsupported snug protocol" };
-      if (req.version !== SNUG_CLI_VERSION) return { ok: false, error: `incompatible snug client: expected ${SNUG_CLI_VERSION}, got ${req.version ?? "unknown"}` };
-      if (typeof req.pid !== "number" || !Number.isInteger(req.pid) || req.pid <= 0) return { ok: false, error: "invalid snug client" };
+      if (req.version !== SNUG_CLI_VERSION)
+        return {
+          ok: false,
+          error: `incompatible snug client: expected ${SNUG_CLI_VERSION}, got ${req.version ?? "unknown"}`,
+        };
+      if (typeof req.pid !== "number" || !Number.isInteger(req.pid) || req.pid <= 0)
+        return { ok: false, error: "invalid snug client" };
       const sessionId = this.tokens.get(socketToken);
       if (!sessionId) return { ok: false, error: "invalid snug session" };
       const ownerCallerId = this.ops.ownerOf(sessionId);
@@ -181,13 +197,23 @@ connect();
     }
   }
 
-  private async dispatch(sessionId: string, ownerCallerId: string, argv: string[]): Promise<{ ok: true; stdout?: string } | { ok: false; error: string }> {
+  private async dispatch(
+    sessionId: string,
+    ownerCallerId: string,
+    argv: string[]
+  ): Promise<{ ok: true; stdout?: string } | { ok: false; error: string }> {
     const [cmd, ...rest] = argv;
-    if (cmd === "ls") return { ok: true, stdout: `${JSON.stringify(this.ops.list(ownerCallerId), null, 2)}\n` };
+    if (cmd === "ls")
+      return { ok: true, stdout: `${JSON.stringify(this.ops.list(ownerCallerId), null, 2)}\n` };
     if (cmd === "badge") {
       const parsed = parseBadgeArgs(rest);
       if (!parsed.text || parsed.text === "clear") this.ops.deleteMeta(sessionId, "badge");
-      else this.ops.setMeta(sessionId, "badge", parsed.color ? { text: parsed.text, color: parsed.color } : { text: parsed.text });
+      else
+        this.ops.setMeta(
+          sessionId,
+          "badge",
+          parsed.color ? { text: parsed.text, color: parsed.color } : { text: parsed.text }
+        );
       return { ok: true };
     }
     if (cmd === "label") {
@@ -202,7 +228,10 @@ connect();
     return { ok: false, error: `unknown snug command: ${cmd ?? ""}` };
   }
 
-  private meta(sessionId: string, argv: string[]): { ok: true; stdout?: string } | { ok: false; error: string } {
+  private meta(
+    sessionId: string,
+    argv: string[]
+  ): { ok: true; stdout?: string } | { ok: false; error: string } {
     const [op, key, ...rest] = argv;
     if (!key) return { ok: false, error: "meta requires a key" };
     if (isReservedMetaKey(key)) return { ok: false, error: `reserved snug metadata key: ${key}` };
@@ -210,7 +239,8 @@ connect();
       this.ops.setMeta(sessionId, key, parseValue(rest.join(" ")));
       return { ok: true };
     }
-    if (op === "get") return { ok: true, stdout: `${JSON.stringify(this.ops.getMeta(sessionId, key))}\n` };
+    if (op === "get")
+      return { ok: true, stdout: `${JSON.stringify(this.ops.getMeta(sessionId, key))}\n` };
     if (op === "delete") {
       this.ops.deleteMeta(sessionId, key);
       return { ok: true };
@@ -229,7 +259,10 @@ connect();
     return { ok: true };
   }
 
-  private notify(sessionId: string, argv: string[]): { ok: true; stdout?: string } | { ok: false; error: string } {
+  private notify(
+    sessionId: string,
+    argv: string[]
+  ): { ok: true; stdout?: string } | { ok: false; error: string } {
     const parsed = parseNotifyArgs(argv);
     if (!this.consumeNotificationQuota(sessionId)) {
       return { ok: false, error: "snug notify rate limit exceeded" };
@@ -249,17 +282,24 @@ connect();
     return true;
   }
 
-  private async split(sessionId: string, argv: string[]): Promise<{ ok: true; stdout?: string } | { ok: false; error: string }> {
+  private async split(
+    sessionId: string,
+    argv: string[]
+  ): Promise<{ ok: true; stdout?: string } | { ok: false; error: string }> {
     const directionArg = argv[0];
     const commandIndex = argv.indexOf("--command");
     const command = commandIndex >= 0 ? argv.slice(commandIndex + 1).join(" ") : undefined;
-    const direction = directionArg === "down" ? "column" : directionArg === "right" ? "row" : undefined;
+    const direction =
+      directionArg === "down" ? "column" : directionArg === "right" ? "row" : undefined;
     if (!direction) return { ok: false, error: "split requires right or down" };
     const sessionIdOut = await this.ops.openSplit(sessionId, direction, command || undefined);
     return { ok: true, stdout: `${sessionIdOut}\n` };
   }
 
-  private async open(sessionId: string, argv: string[]): Promise<{ ok: true } | { ok: false; error: string }> {
+  private async open(
+    sessionId: string,
+    argv: string[]
+  ): Promise<{ ok: true } | { ok: false; error: string }> {
     const urlIndex = argv.indexOf("--url");
     const url = urlIndex >= 0 ? argv[urlIndex + 1] : undefined;
     if (!url) return { ok: false, error: "open requires --url" };
@@ -284,7 +324,11 @@ function osc(sev: string, title: string, msg: string): string {
   return `\x1b]1337;snug;${params.toString().replace(/&/g, ";")}\x07`;
 }
 
-function parseNotifyArgs(argv: string[]): { severity: NotificationSeverityName; title: string; message: string } {
+function parseNotifyArgs(argv: string[]): {
+  severity: NotificationSeverityName;
+  title: string;
+  message: string;
+} {
   let severity = "info";
   let title = "";
   const message: string[] = [];
@@ -308,7 +352,13 @@ function parseNotifyArgs(argv: string[]): { severity: NotificationSeverityName; 
 type NotificationSeverityName = "info" | "done" | "waiting" | "approval" | "failure";
 
 function isNotificationSeverityName(value: string): value is NotificationSeverityName {
-  return value === "info" || value === "done" || value === "waiting" || value === "approval" || value === "failure";
+  return (
+    value === "info" ||
+    value === "done" ||
+    value === "waiting" ||
+    value === "approval" ||
+    value === "failure"
+  );
 }
 
 function parseValue(value: string): unknown {
@@ -338,10 +388,32 @@ function parseBadgeArgs(argv: string[]): { text: string; color?: string } {
 }
 
 const badgeColorNames = new Set([
-  "gray", "gold", "bronze", "brown", "yellow", "amber", "orange", "tomato",
-  "red", "ruby", "crimson", "pink", "plum", "purple", "violet", "iris",
-  "indigo", "blue", "cyan", "teal", "jade", "green", "grass", "lime",
-  "mint", "sky",
+  "gray",
+  "gold",
+  "bronze",
+  "brown",
+  "yellow",
+  "amber",
+  "orange",
+  "tomato",
+  "red",
+  "ruby",
+  "crimson",
+  "pink",
+  "plum",
+  "purple",
+  "violet",
+  "iris",
+  "indigo",
+  "blue",
+  "cyan",
+  "teal",
+  "jade",
+  "green",
+  "grass",
+  "lime",
+  "mint",
+  "sky",
 ]);
 
 function isBadgeColorName(value: string): boolean {

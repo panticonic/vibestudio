@@ -410,7 +410,7 @@ function VibestudioMobileHostBootstrap() {
         connection = await pairViaWebRtc(connect.pairing);
         smokePhase("embedded-workspace-selected");
         if (connect.rawUrl) {
-          await markConnectLinkConsumed(connect.rawUrl).catch(() => {});
+          await markConnectLinkConsumed(connect.rawUrl);
         }
         setPendingConnect(null);
         await retryAfterConnectionLoss(() => runLaunchGate(connection), {

@@ -425,7 +425,9 @@ export class StateTransitionTrigger extends EventEmitter {
             buildKey,
             status: "ok",
           })
-          .catch(() => {});
+          .catch((error: unknown) =>
+            console.warn(`[StateTrigger] Failed to record successful build ${name}:`, error)
+          );
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         const diagnostics = diagnosticsFromError(error, this.workspaceRoot);
@@ -442,7 +444,9 @@ export class StateTransitionTrigger extends EventEmitter {
             error: message,
             diagnostics,
           })
-          .catch(() => {});
+          .catch((recordError: unknown) =>
+            console.warn(`[StateTrigger] Failed to record failed build ${name}:`, recordError)
+          );
       }
     }
   }

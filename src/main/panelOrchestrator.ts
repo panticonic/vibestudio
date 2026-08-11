@@ -767,7 +767,11 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
 
     // Persist focus to the server fire-and-forget: it's pure bookkeeping and
     // must not add an RPC round trip before an already-loaded view is shown.
-    void this.shellCore.notifyFocused(asPanelSlotId(targetPanelId)).catch(() => {});
+    void this.shellCore
+      .notifyFocused(asPanelSlotId(targetPanelId))
+      .catch((error: unknown) =>
+        console.warn(`[PanelOrchestrator] Failed to persist focus for ${targetPanelId}:`, error)
+      );
 
     const view = this.getPanelView();
     if (view?.hasView(targetPanelId)) {
@@ -1224,7 +1228,11 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
   }
 
   persistFocusedPath(panelId: string): void {
-    void this.shellCore.notifyFocused(asPanelSlotId(panelId)).catch(() => {});
+    void this.shellCore
+      .notifyFocused(asPanelSlotId(panelId))
+      .catch((error: unknown) =>
+        console.warn(`[PanelOrchestrator] Failed to persist focus for ${panelId}:`, error)
+      );
   }
 
   // =========================================================================
