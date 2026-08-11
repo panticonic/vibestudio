@@ -28,8 +28,7 @@ describe("runNpmInstall", () => {
     });
 
     try {
-      // Keep the legacy numeric options form covered for existing callers.
-      await runNpmInstall(fixture.installDir, 5_000);
+      await runNpmInstall(fixture.installDir);
     } finally {
       restoreEnv();
     }
