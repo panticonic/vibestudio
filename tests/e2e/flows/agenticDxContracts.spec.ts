@@ -64,7 +64,7 @@ test.describe("agentic DX contracts", () => {
             "runtime module load",
             () => globalThis.__vibestudioRequireAsync__("@workspace/runtime"),
           );
-          const entries = await bounded("fs.readdir", () => fs.readdir("panels"));
+          const entries = await fs.readdir("panels");
           const diagnostic = await bounded("gad.diagnoseInvocation", () => gad.diagnoseInvocation({
             trajectoryId: "electron-diagnostic-missing",
             branchId: "main",
@@ -158,8 +158,8 @@ test.describe("agentic DX contracts", () => {
             () => globalThis.__vibestudioRequireAsync__("@workspace/runtime"),
           );
           const handle = await bounded(
-            "hello-svelte open",
-            () => openPanel("panels/hello-svelte"),
+            "about panel open",
+            () => openPanel("about/about"),
           );
           try {
             const observation = await bounded("panel observation", () => handle.observe());
@@ -205,7 +205,7 @@ test.describe("agentic DX contracts", () => {
               },
             };
           } finally {
-            await bounded("hello-svelte close", () => handle.close());
+            await bounded("about panel close", () => handle.close());
           }
         })()`
       );
@@ -230,7 +230,7 @@ test.describe("agentic DX contracts", () => {
       expect(result.console.errorCount).toBe(0);
       expect(result.console.dropped).toBeTruthy();
       expect(result.observation).toMatchObject({
-        source: "panels/hello-svelte",
+        source: "about/about",
         phase: "ready",
         runtimeEntityId: expect.any(String),
         buildKey: expect.any(String),
