@@ -175,7 +175,11 @@ export function createBaseRuntime(deps: BaseRuntimeDeps) {
     for (const unsub of themeUnsubscribers) unsub();
     for (const unsub of focusUnsubscribers) unsub();
     for (const unsub of paletteUnsubscribers) unsub();
-    void rpc.emit("shell", "runtime:palette-contribution", { commands: [] }).catch(() => {});
+    void rpc
+      .emit("shell", "runtime:palette-contribution", { commands: [] })
+      .catch((error: unknown) =>
+        console.warn("[runtime] Failed to clear palette contributions during teardown:", error)
+      );
     focusUnsubscribers.length = 0;
     themeListeners.clear();
     themeConfigListeners.clear();
@@ -230,10 +234,18 @@ export function createBaseRuntime(deps: BaseRuntimeDeps) {
     },
     onFocus,
     registerPaletteCommands: (commands: PaletteCommand[]) => {
-      void rpc.emit("shell", "runtime:palette-contribution", { commands }).catch(() => {});
+      void rpc
+        .emit("shell", "runtime:palette-contribution", { commands })
+        .catch((error: unknown) =>
+          console.warn("[runtime] Failed to register palette contributions:", error)
+        );
     },
     unregisterPaletteCommands: () => {
-      void rpc.emit("shell", "runtime:palette-contribution", { commands: [] }).catch(() => {});
+      void rpc
+        .emit("shell", "runtime:palette-contribution", { commands: [] })
+        .catch((error: unknown) =>
+          console.warn("[runtime] Failed to unregister palette contributions:", error)
+        );
     },
     onPaletteRun: (callback: (commandId: string) => void) => {
       paletteRunCallbacks.add(callback);

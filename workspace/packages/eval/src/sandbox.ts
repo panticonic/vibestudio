@@ -1658,9 +1658,14 @@ export async function executeSandbox(
       ? await runtimeModule.journal.with(journal, runUserCode)
       : await runUserCode();
     throwIfAborted(signal);
-    const panelJournalFooter = journal
-      ? await renderPanelJournalFooter(journal).catch(() => undefined)
-      : undefined;
+    let panelJournalFooter: string | undefined;
+    if (journal) {
+      try {
+        panelJournalFooter = await renderPanelJournalFooter(journal);
+      } catch (error) {
+        capture.proxy.warn("[eval] Failed to render the panel journal footer:", error);
+      }
+    }
     return {
       success: true,
       consoleOutput: formatConsoleOutput(capture.getEntries()),

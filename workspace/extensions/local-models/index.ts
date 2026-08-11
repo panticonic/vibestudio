@@ -412,8 +412,9 @@ export async function activate(ctx: Ctx) {
     try {
       const raw = await fs.readFile(path.join(rootDir, "hardware.json"), "utf8");
       return JSON.parse(raw) as HardwareProfile;
-    } catch {
-      return null;
+    } catch (error) {
+      if (isNodeErrorWithCode(error, "ENOENT")) return null;
+      throw error;
     }
   }
 
@@ -427,9 +428,13 @@ export async function activate(ctx: Ctx) {
     }
     const probed = await profiler.probe();
     profile = probed;
-    await fs
-      .writeFile(path.join(rootDir, "hardware.json"), JSON.stringify(probed, null, 2))
-      .catch(() => {});
+    try {
+      await fs.writeFile(path.join(rootDir, "hardware.json"), JSON.stringify(probed, null, 2));
+    } catch (error) {
+      log("hardware profile cache write failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
     return probed;
   }
 
@@ -604,7 +609,7 @@ export async function activate(ctx: Ctx) {
     }
 
     const run = (async () => {
-      const record = await library.get(slug).catch(() => null);
+      const record = await library.get(slug);
       const recentBenchmark = record?.benchmark ?? null;
       if (opts.force !== true && hasRecentBenchmark(record) && recentBenchmark) {
         return { tokensPerSec: recentBenchmark.tokensPerSec };

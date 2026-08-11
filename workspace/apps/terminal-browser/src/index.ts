@@ -102,10 +102,13 @@ export async function main(): Promise<void> {
     (service, method, args) => rpc.call("main", `${service}.${method}`, args)
   );
 
-  const workspace = (await workspaceClient.getInfo().catch(() => null)) as {
+  const workspace = (await workspaceClient.getInfo()) as {
     config?: { id?: string };
-  } | null;
-  const workspaceId = workspace?.config?.id ?? "default";
+  };
+  const workspaceId = workspace.config?.id;
+  if (!workspaceId) {
+    throw new Error("Workspace discovery did not return an authoritative workspace ID");
+  }
 
   const sessions = new SessionManager({
     rpc,

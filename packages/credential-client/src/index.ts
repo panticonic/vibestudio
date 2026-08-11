@@ -285,15 +285,11 @@ export async function proxyFetch(
     signal: init?.signal ?? undefined,
   });
   if (!response.url) {
-    try {
-      Object.defineProperty(response, "url", {
-        value: requestedUrl,
-        writable: false,
-        configurable: true,
-      });
-    } catch {
-      // Best-effort compatibility with locked Response implementations.
-    }
+    Object.defineProperty(response, "url", {
+      value: requestedUrl,
+      writable: false,
+      configurable: true,
+    });
   }
   return response;
 }
