@@ -2902,7 +2902,13 @@ export class EvalDO extends DurableObjectBase {
       // Recoverable large output: the harness windows console/error/return for
       // the model, losing the tail. Keep one bounded spill per output kind in
       // stable slots that small follow-up inspectors do not overwrite.
-      this.spillLargeOutput(scopeManager.current, consoleText, result.error, result.returnValue);
+      this.spillLargeOutput(
+        scopeManager.current,
+        consoleText,
+        result.error,
+        result.returnValue,
+        result.errorData
+      );
       return {
         success: result.success,
         console: consoleText,
@@ -2941,13 +2947,13 @@ export class EvalDO extends DurableObjectBase {
       ...(result.failureKind ? { failureKind: result.failureKind } : {}),
       ...(result.failureCode ? { failureCode: result.failureCode } : {}),
       ...(result.errorData !== undefined
-        ? { errorData: this.compactReturnValue(result.errorData) }
+        ? { errorData: this.compactReturnValue(result.errorData, "$lastLargeErrorData") }
         : {}),
       ...(result.scopeKeys ? { scopeKeys: result.scopeKeys.slice(0, 500) } : {}),
       ...(result.kernel ? { kernel: result.kernel } : {}),
     };
     if (result.returnValue !== undefined) {
-      compact.returnValue = this.compactReturnValue(result.returnValue);
+      compact.returnValue = this.compactReturnValue(result.returnValue, "$lastLargeReturn");
     }
 
     let encoded = JSON.stringify(compact);
@@ -2972,27 +2978,27 @@ export class EvalDO extends DurableObjectBase {
     return {
       success: result.success,
       console:
-        "[eval] Result exceeded the EvalDO storage limit. Large console/error/return data may be available in scope.$lastLargeConsole, scope.$lastLargeError, and scope.$lastLargeReturn.",
+        "[eval] Result exceeded the EvalDO storage limit. Large console/error/error-data/return data may be available in scope.$lastLargeConsole, scope.$lastLargeError, scope.$lastLargeErrorData, and scope.$lastLargeReturn.",
       ...(result.error ? { error: this.windowText(result.error, 10_000, "$lastLargeError") } : {}),
       ...(result.failureKind ? { failureKind: result.failureKind } : {}),
       ...(result.failureCode ? { failureCode: result.failureCode } : {}),
       ...(result.errorData !== undefined
-        ? { errorData: this.compactReturnValue(result.errorData) }
+        ? { errorData: this.compactReturnValue(result.errorData, "$lastLargeErrorData") }
         : {}),
       ...(result.scopeKeys ? { scopeKeys: result.scopeKeys.slice(0, 100) } : {}),
       ...(result.kernel ? { kernel: result.kernel } : {}),
     };
   }
 
-  private compactReturnValue(returnValue: unknown): unknown {
+  private compactReturnValue(returnValue: unknown, scopeKey: string): unknown {
     const text = this.stringifyForResult(returnValue);
     if (text.length <= EVAL_RESULT_RETURN_PREVIEW_CHARS) return returnValue;
     return {
       truncated: true,
       reason: "eval return value exceeded result transport/storage limit",
       originalChars: text.length,
-      scopeKey: "$lastLargeReturn",
-      preview: this.windowText(text, EVAL_RESULT_RETURN_PREVIEW_CHARS, "$lastLargeReturn"),
+      scopeKey,
+      preview: this.windowText(text, EVAL_RESULT_RETURN_PREVIEW_CHARS, scopeKey),
     };
   }
 
@@ -3027,7 +3033,8 @@ export class EvalDO extends DurableObjectBase {
     scope: Record<string, unknown>,
     console: string,
     error: string | undefined,
-    returnValue: unknown
+    returnValue: unknown,
+    errorData?: unknown
   ): void {
     const MAX = 1_000_000; // hard cap so the persisted scope can't balloon
     const stashLarge = (key: string, text: string | undefined, threshold: number): void => {
@@ -3039,6 +3046,13 @@ export class EvalDO extends DurableObjectBase {
     };
     stashLarge("$lastLargeConsole", console, RESULT_CONSOLE_MAX_CHARS);
     stashLarge("$lastLargeError", error, RESULT_ERROR_MAX_CHARS);
+    if (errorData !== undefined) {
+      stashLarge(
+        "$lastLargeErrorData",
+        this.stringifyForResult(errorData),
+        EVAL_RESULT_RETURN_PREVIEW_CHARS
+      );
+    }
     if (returnValue === undefined) {
       Reflect.deleteProperty(scope, "$lastReturn");
       return;

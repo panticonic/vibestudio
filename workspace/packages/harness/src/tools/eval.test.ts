@@ -226,13 +226,16 @@ describe("formatEvalResult (shared by the eval tool's execute + the agent's defe
     expect(text).toContain("[scope] keys: x, y (2 total)");
     // The untruncated result is preserved on `details` for the harness.
     expect(out.details).toBe(result);
+    expect(out.isError).toBe(false);
   });
 
   it("formats a failure: error line, no return value", () => {
-    const text = textOf(formatEvalResult({ success: false, console: "", error: "boom" }));
+    const out = formatEvalResult({ success: false, console: "", error: "boom" });
+    const text = textOf(out);
     expect(text).toContain("[eval] Error: boom");
     expect(text).not.toContain("[eval] Return value");
     expect(text).toContain("[scope] (empty)");
+    expect(out.isError).toBe(true);
   });
 
   it("renders structured failure data and preserves it on tool details", () => {
@@ -267,18 +270,18 @@ describe("formatEvalResult (shared by the eval tool's execute + the agent's defe
     expect(text).not.toContain("[eval] Return value");
   });
 
-  it("windows oversized console with a recovery notice pointing at $lastConsole", () => {
+  it("windows oversized console with its stable recovery slot", () => {
     const big = "a".repeat(150_000);
     const text = textOf(formatEvalResult({ success: true, console: big }));
     expect(text.length).toBeLessThan(big.length); // truncated
     expect(text).toContain("truncated");
-    expect(text).toContain("scope.$lastConsole");
+    expect(text).toContain("scope.$lastLargeConsole");
   });
 
-  it("windows an oversized return value pointing at $lastReturn", () => {
+  it("windows an oversized return value with its stable recovery slot", () => {
     const big = "b".repeat(150_000);
     const text = textOf(formatEvalResult({ success: true, console: "", returnValue: big }));
-    expect(text).toContain("scope.$lastReturn");
+    expect(text).toContain("scope.$lastLargeReturn");
     expect(text).toContain("truncated");
   });
 

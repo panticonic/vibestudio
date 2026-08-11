@@ -1180,6 +1180,24 @@ describe("EvalDO cancellation + forced recovery", () => {
     expect(scope["$lastLargeReturn"]).toBe(savedReturn);
   });
 
+  it("retains oversized structured failure data in its advertised recovery slot", async () => {
+    const { instance } = await createTestDO(EvalDO);
+    const scope: Record<string, unknown> = {};
+    const errorData = { diagnostics: "d".repeat(60_000) };
+
+    priv<
+      (
+        scope: Record<string, unknown>,
+        console: string,
+        error: string | undefined,
+        value: unknown,
+        errorData?: unknown
+      ) => void
+    >(instance, "spillLargeOutput").call(instance, scope, "", undefined, undefined, errorData);
+
+    expect(scope["$lastLargeErrorData"]).toBe(JSON.stringify(errorData, null, 2));
+  });
+
   it("cancel(runId): an in-flight run wedged on an outbound call unwinds once cancelled", async () => {
     const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
     const { instance, sql } = await createTestDO(EvalDO);

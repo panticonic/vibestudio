@@ -227,16 +227,18 @@ export function formatEvalResult(result: EvalRunResult): AgentToolResult<EvalRun
       `[eval] Failure data:\n${clampText(
         safeStringify(result.errorData),
         MAX_RETURN_CHARS,
-        "$lastReturn"
+        "$lastLargeErrorData"
       )}`
     );
   }
   if (result.console) {
-    parts.push(`[eval] Console:\n${clampText(result.console, MAX_CONSOLE_CHARS, "$lastConsole")}`);
+    parts.push(
+      `[eval] Console:\n${clampText(result.console, MAX_CONSOLE_CHARS, "$lastLargeConsole")}`
+    );
   }
   if (result.success && result.returnValue !== undefined) {
     parts.push(
-      `[eval] Return value:\n${clampText(safeStringify(result.returnValue), MAX_RETURN_CHARS, "$lastReturn")}`
+      `[eval] Return value:\n${clampText(safeStringify(result.returnValue), MAX_RETURN_CHARS, "$lastLargeReturn")}`
     );
   }
   const keys = result.scopeKeys ?? [];
@@ -246,6 +248,7 @@ export function formatEvalResult(result: EvalRunResult): AgentToolResult<EvalRun
   return {
     content: [{ type: "text", text: parts.join("\n") || "[eval] (no output)" }],
     details: result,
+    isError: !result.success,
   } as AgentToolResult<EvalRunResult>;
 }
 
@@ -258,7 +261,7 @@ export function createEvalTool(
     name: "eval",
     label: "eval",
     description:
-      'Execute TypeScript/JS in your persistent notebook sandbox (a per-agent EvalDO, not the visible panel). The live heap—including objects with methods, module singletons, and client handles—is retained for 30 minutes after the latest cell. Calls have no implicit wall deadline. Omit timeoutMs for ordinary work and lifecycle calls; never add a generic 120000/300000 safety timeout. A whole-cell deadline cancels the notebook operation and hides which nested wait stalled. Bound a specific wait with that API’s AbortSignal/timeout instead, and reserve eval timeoutMs for deliberately non-settling code or an explicit end-to-end deadline. Split intentionally bounded workflows when useful and keep live working objects in `scope`; store stable IDs and exact serializable data there for recovery, or durable records in `db`. An unavoidable process restart is reported explicitly as `[kernel] Restarted` with exact restored/lost scope keys—reacquire lost handles from stable IDs before continuing. Set reset:true to clear scope/db atomically before this call; never call eval.reset from inside the running eval. The live runtime is self-describing: call `await help()` to list bindings or `await help("workers")` (and the analogous binding name) before guessing an API or return shape. Call workspace services via `rpc`/`services`; `chat.channelId` is only the channel where this agent is responding; for visible panel perspective use `parent`/`getParent()` and `panelTree` plus target panel stateArgs. `return` sends a bounded value back; console output is captured. Very large console/return payloads are windowed with recovery pointers to `scope.$lastConsole` / `scope.$lastReturn`, so prefer compact summaries and store large artifacts in scope/blobstore.',
+      'Execute TypeScript/JS in your persistent notebook sandbox (a per-agent EvalDO, not the visible panel). The live heap—including objects with methods, module singletons, and client handles—is retained for 30 minutes after the latest cell. Calls have no implicit wall deadline. Omit timeoutMs for ordinary work and lifecycle calls; never add a generic 120000/300000 safety timeout. A whole-cell deadline cancels the notebook operation and hides which nested wait stalled. Bound a specific wait with that API’s AbortSignal/timeout instead, and reserve eval timeoutMs for deliberately non-settling code or an explicit end-to-end deadline. Split intentionally bounded workflows when useful and keep live working objects in `scope`; store stable IDs and exact serializable data there for recovery, or durable records in `db`. An unavoidable process restart is reported explicitly as `[kernel] Restarted` with exact restored/lost scope keys—reacquire lost handles from stable IDs before continuing. Set reset:true to clear scope/db atomically before this call; never call eval.reset from inside the running eval. The live runtime is self-describing: call `await help()` to list bindings or `await help("workers")` (and the analogous binding name) before guessing an API or return shape. Call workspace services via `rpc`/`services`; `chat.channelId` is only the channel where this agent is responding; for visible panel perspective use `parent`/`getParent()` and `panelTree` plus target panel stateArgs. `return` sends a bounded value back; console output is captured. Very large console, error-data, and return payloads are windowed with stable recovery pointers to `scope.$lastLargeConsole`, `scope.$lastLargeErrorData`, and `scope.$lastLargeReturn`, so prefer compact summaries and store large artifacts in scope/blobstore.',
     parameters: evalToolParameters,
     execute: async (toolCallId, params): Promise<AgentToolResult<EvalRunResult>> => {
       // Some model transports materialize an optional string as "". Treat an
