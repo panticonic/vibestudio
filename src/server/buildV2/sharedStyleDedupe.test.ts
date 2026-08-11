@@ -4,9 +4,8 @@ import { createSharedStyleDedupePlugin } from "./sharedStyleDedupe.js";
 
 describe("createSharedStyleDedupePlugin", () => {
   it("empties covered imports outside the adapter-owned shared entry", () => {
-    const resolves: Array<
-      (args: Pick<OnResolveArgs, "path" | "importer" | "kind">) => unknown
-    > = [];
+    const resolves: Array<(args: Pick<OnResolveArgs, "path" | "importer" | "kind">) => unknown> =
+      [];
     const loads: Array<() => unknown> = [];
     const plugin = createSharedStyleDedupePlugin([
       "@radix-ui/themes/styles.css",

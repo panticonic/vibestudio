@@ -44,9 +44,7 @@ function lockYaml(
       Object.keys(repositories).map((repoPath) => [
         repoPath,
         {
-          contributions: [
-            { nodeId, subtreeDigest: `v1-sha256:${"d".repeat(64)}` as const },
-          ],
+          contributions: [{ nodeId, subtreeDigest: `v1-sha256:${"d".repeat(64)}` as const }],
         },
       ])
     ),

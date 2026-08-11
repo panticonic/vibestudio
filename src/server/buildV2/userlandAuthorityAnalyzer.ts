@@ -697,7 +697,10 @@ export function analyzeWorkspaceServiceCalls(
           ".vibestudio-authority-executable",
           String(index).padStart(6, "0")
         );
-        service.updateFile(path.resolve(input.sourceRoot, relativePath, "module.js"), module.source);
+        service.updateFile(
+          path.resolve(input.sourceRoot, relativePath, "module.js"),
+          module.source
+        );
         return {
           name: module.package.kind === "external" ? module.package.name : "external-module",
           relativePath,

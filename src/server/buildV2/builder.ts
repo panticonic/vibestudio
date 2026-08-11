@@ -2232,9 +2232,7 @@ async function buildPanel(
 
   // Build plugins: resolve plugin uses materialized source paths.
   const plugins: esbuild.Plugin[] = [
-    ...(sharedStyleEntryPath
-      ? [createSharedStyleDedupePlugin(sharedStyles)]
-      : []),
+    ...(sharedStyleEntryPath ? [createSharedStyleDedupePlugin(sharedStyles)] : []),
     ...(node.kind === "app" ? [createAppRuntimeShimPlugin()] : []),
     createWorkspaceResolvePlugin(graph, workspaceRoot, sourceRoot),
     createTsExtensionPlugin(sourceRoot),

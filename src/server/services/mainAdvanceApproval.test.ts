@@ -563,17 +563,12 @@ describe("createMainAdvanceApprovalGate", () => {
         overrides: {},
         nodes: input.nodes,
         repositories: Object.fromEntries(
-          Object.entries(input.repositories).map(
-            ([repoPath, nodeId]) =>
-              [
-                repoPath,
-                {
-                  contributions: [
-                    { nodeId, subtreeDigest: `v1-sha256:${"c".repeat(64)}` as const },
-                  ],
-                },
-              ]
-          )
+          Object.entries(input.repositories).map(([repoPath, nodeId]) => [
+            repoPath,
+            {
+              contributions: [{ nodeId, subtreeDigest: `v1-sha256:${"c".repeat(64)}` as const }],
+            },
+          ])
         ),
         verification: "verified" as const,
       };
