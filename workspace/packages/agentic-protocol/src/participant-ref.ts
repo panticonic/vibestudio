@@ -10,7 +10,6 @@ import type {
   MessageTypeRegisteredPayload,
   ParticipantKind,
   ParticipantRef,
-  ParticipantSelector,
 } from "./events.js";
 import { PARTICIPANT_KINDS } from "./events.js";
 

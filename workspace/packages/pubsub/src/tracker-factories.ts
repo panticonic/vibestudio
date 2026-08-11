@@ -10,7 +10,6 @@ import {
   CONTENT_TYPE_ACTION,
 } from "./content-types.js";
 import type {
-  TrackerClient,
   ActionData,
   ThinkingTrackerState,
   ThinkingTrackerOptions,
@@ -185,4 +184,3 @@ export function createActionTracker(options: ActionTrackerOptions): ActionTracke
     },
   };
 }
-

@@ -10,7 +10,7 @@
  */
 
 import type { RpcCaller } from "@vibestudio/rpc";
-import type { gitInteropMethods, GitInteropClient } from "@vibestudio/service-schemas/gitInterop";
+import type { GitInteropClient } from "@vibestudio/service-schemas/gitInterop";
 import { GIT_INTEROP_METHOD_NAMES } from "@vibestudio/service-schemas/clients/generated/runtimeClientMethods";
 import { createLazyTypedServiceClient } from "@vibestudio/shared/lazyTypedServiceClient";
 

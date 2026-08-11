@@ -28,15 +28,6 @@ export const DEFAULT_SAFE_TOOL_NAMES = new Set([
   "suspend_turn",
 ]);
 
-function invocationStartedItems(output: StepOutput): Array<{
-  item: AppendItem;
-  payload: Record<string, unknown>;
-}> {
-  return output.append
-    .filter((item) => item.payloadKind === "invocation.started")
-    .map((item) => ({ item, payload: item.payload as Record<string, unknown> }));
-}
-
 /** channel-tools: route roster participant methods over the channel transport. */
 export function channelToolsPolicy(): StepPolicy {
   return {

@@ -2,7 +2,6 @@ import React, { useCallback, useMemo, useState } from "react";
 import { Box, Button, Flex, IconButton, ScrollArea, Text } from "@radix-ui/themes";
 import { ChevronDownIcon, ChevronUpIcon, LightningBoltIcon } from "@radix-ui/react-icons";
 import { useIsMobile, useTouchDevice } from "@workspace/react/responsive";
-import { isClientParticipantType } from "@workspace/pubsub";
 import { useChatContext } from "../context/ChatContext";
 import { OutboxItem, type OutboxLane } from "./OutboxItem";
 import type { ChatMessage } from "../types";

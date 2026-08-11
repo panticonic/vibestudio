@@ -6,7 +6,6 @@
  */
 
 import {
-  AGENTIC_EVENT_PAYLOAD_KIND,
   AGENTIC_PROTOCOL_VERSION,
   type AgenticEvent,
   type ParticipantRef,
@@ -281,7 +280,7 @@ function readAckEffect(
   channelId: string,
   sourceMessageId: string,
   turnId: string,
-  ctx: StepContext
+  _ctx: StepContext
 ): RecordReceiptEffect {
   return {
     effectId: `read:${sourceMessageId}:${turnId}`,

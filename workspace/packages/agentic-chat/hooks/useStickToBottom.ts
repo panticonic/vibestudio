@@ -42,10 +42,6 @@ function createCallbackRef<T>(): CallbackRef<T> {
   return ref;
 }
 
-function distanceFromBottom(element: HTMLElement): number {
-  return element.scrollHeight - element.scrollTop - element.clientHeight;
-}
-
 export interface ScrollSample {
   scrollTop: number;
   scrollHeight: number;

@@ -1,7 +1,6 @@
 import { vi } from "vitest";
 import { createTestDO } from "@workspace/runtime/worker/test-utils";
 import {
-  AGENTIC_EVENT_PAYLOAD_KIND,
   AGENTIC_PROTOCOL_VERSION,
   brandId,
   encodeChannelPayloadStoredValues,

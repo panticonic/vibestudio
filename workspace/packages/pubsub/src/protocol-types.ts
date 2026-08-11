@@ -504,9 +504,7 @@ export type MethodDefinitionLike = MethodDefinition | JsonSchemaMethodDefinition
 /**
  * Options for connecting to an agentic messaging channel.
  */
-export interface AgenticConnectOptions<
-  T extends AgenticParticipantMetadata = AgenticParticipantMetadata,
-> {
+export interface AgenticConnectOptions {
   /** Pubsub server URL */
   serverUrl: string;
   /** Authentication token */
