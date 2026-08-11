@@ -39,9 +39,6 @@ export type WorkspaceRepoCreationScope =
   | { kind: "created-repository"; section: WorkspaceRepoSection }
   | { kind: "buildable-panel-with-derived"; section: "panels" };
 
-/** Compatibility name used by TestCase.workspaceRepoFixture. */
-export type WorkspaceRepoFixtureSpec = WorkspaceRepoCreationScope;
-
 export interface WorkspaceRepoFixturePort {
   vcs: FixtureVcs;
   blobstore: FixtureBlobstore;
@@ -68,7 +65,7 @@ type WorkspaceRepoFixtureStateBase = {
 };
 
 export type WorkspaceRepoFixtureState =
-  | (Extract<WorkspaceRepoFixtureSpec, { kind: "created-repository" }> &
+  | (Extract<WorkspaceRepoCreationScope, { kind: "created-repository" }> &
       WorkspaceRepoFixtureStateBase & {
         repoName: null;
         repositoryId: null;
@@ -77,7 +74,7 @@ export type WorkspaceRepoFixtureState =
         importWorkUnitId: null;
         importChangeIds: [];
       })
-  | (Exclude<WorkspaceRepoFixtureSpec, { kind: "created-repository" }> &
+  | (Exclude<WorkspaceRepoCreationScope, { kind: "created-repository" }> &
       WorkspaceRepoFixtureStateBase & {
         repoName: string;
         repositoryId: string;
@@ -130,7 +127,7 @@ export class WorkspaceRepoFixtureLifecycle {
     private readonly port: WorkspaceRepoFixturePort,
     private readonly testName: string,
     private readonly repoName: string | null,
-    private readonly fixture: WorkspaceRepoFixtureSpec
+    private readonly fixture: WorkspaceRepoCreationScope
   ) {}
 
   get taskContextId(): string | null {
@@ -864,7 +861,7 @@ export class WorkspaceRepoFixtureLifecycle {
 
 function repositorySeedFiles(
   repoName: string,
-  fixture: WorkspaceRepoFixtureSpec
+  fixture: WorkspaceRepoCreationScope
 ): Array<{ path: string; content: string }> {
   if (fixture.kind === "created-repository") return [];
   if (fixture.kind === "content") {

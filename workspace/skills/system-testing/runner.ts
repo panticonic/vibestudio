@@ -14,7 +14,7 @@ import { systemTestFailure } from "./structured-error.js";
 import {
   WorkspaceRepoFixtureLifecycle,
   type WorkspaceRepoFixtureCleanup,
-  type WorkspaceRepoFixtureSpec,
+  type WorkspaceRepoCreationScope,
   type WorkspaceRepoFixtureState,
 } from "./workspace-repo-fixture.js";
 import type { AgentExecutionTestPolicySpec } from "@vibestudio/shared/authority/testPolicy";
@@ -121,7 +121,7 @@ export interface SelfDevelopmentRepository {
 }
 
 function fixturePublicationAuthority(
-  fixture: (WorkspaceRepoFixtureSpec & { repoName: string | null }) | null
+  fixture: (WorkspaceRepoCreationScope & { repoName: string | null }) | null
 ): AgentExecutionTestPolicySpec["authority"] {
   if (!fixture) return [];
   return [
@@ -180,7 +180,7 @@ export class HeadlessRunner {
   };
   private readonly testName: string | null;
   private readonly workspaceRepoFixture:
-    | (WorkspaceRepoFixtureSpec & { repoName: string | null })
+    | (WorkspaceRepoCreationScope & { repoName: string | null })
     | null;
   private readonly workspaceRepoFixtureLifecycle: WorkspaceRepoFixtureLifecycle | null;
   private readonly testAuthorityPolicy: AgentExecutionTestPolicySpec | null;
@@ -273,7 +273,7 @@ export class HeadlessRunner {
   forTest(
     testName: string,
     opts?: {
-      workspaceRepoFixture?: WorkspaceRepoFixtureSpec;
+      workspaceRepoFixture?: WorkspaceRepoCreationScope;
       authorityPolicy?: TestAuthorityPolicy;
     }
   ): HeadlessRunner {

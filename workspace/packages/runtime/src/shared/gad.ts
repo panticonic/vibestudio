@@ -7,7 +7,6 @@ import type {
 import { createGadServiceClient } from "@vibestudio/shared/workspaceServiceRpc";
 import { type ServiceCallFn, type TypedServiceClient } from "@vibestudio/shared/typedServiceClient";
 import { createLazyTypedServiceClient } from "@vibestudio/shared/lazyTypedServiceClient";
-import type { blobstoreMethods } from "@vibestudio/service-schemas/blobstore";
 import {
   type gadMethods,
   type gadWireMethods,

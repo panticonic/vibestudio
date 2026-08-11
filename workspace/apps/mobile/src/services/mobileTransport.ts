@@ -134,10 +134,13 @@ export class MobileRpcClient implements Pick<
         remove();
         resolve();
       });
-      timeout = setTimeout(() => {
-        remove();
-        reject(new Error("The secure workspace connection did not recover in time"));
-      }, Math.max(1, timeoutMs));
+      timeout = setTimeout(
+        () => {
+          remove();
+          reject(new Error("The secure workspace connection did not recover in time"));
+        },
+        Math.max(1, timeoutMs)
+      );
     });
   }
 
@@ -306,15 +309,9 @@ export class MobileRpcClient implements Pick<
       throw new Error("No stored WebRTC shell credential — re-pair this device");
     }
     smokePhase("workspace-webrtc-connect-start", {
-      phase: stored.schemaVersion === 3 ? "legacy-migration" : stored.phase,
-      room:
-        stored.schemaVersion === 3 || stored.phase === "routed"
-          ? stored.workspacePairing.room
-          : stored.controlPairing.room,
-      ice:
-        stored.schemaVersion === 3 || stored.phase === "routed"
-          ? stored.workspacePairing.ice
-          : stored.controlPairing.ice,
+      phase: stored.phase,
+      room: stored.phase === "routed" ? stored.workspacePairing.room : stored.controlPairing.room,
+      ice: stored.phase === "routed" ? stored.workspacePairing.ice : stored.controlPairing.ice,
     });
     const connection = await reconnectMobileSession(stored, (kind) => this.emitRecovery(kind));
     if (this.activeConnectToken !== token) {

@@ -1,4 +1,4 @@
-import { afterEach, describe, it, expect, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, it, expect, vi } from "vitest";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -56,6 +56,24 @@ import { fixedPreparedAuthoritySelection } from "@vibestudio/shared/serviceDefin
 import { RPC_WEBSOCKET_ADMISSION_PATH } from "@vibestudio/rpc/protocol/rpcWebSocketAdmission";
 import { WsUploadBodies } from "./rpcServer/wsUploadBodies.js";
 import { bytesToBase64 } from "@vibestudio/rpc";
+
+const originalAppRoot = process.env["VIBESTUDIO_APP_ROOT"];
+const testProductAppRoot = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-rpc-product-root-"));
+
+beforeAll(() => {
+  fs.mkdirSync(path.join(testProductAppRoot, "dist"));
+  fs.writeFileSync(
+    path.join(testProductAppRoot, "dist", "host-build-fingerprint.json"),
+    JSON.stringify({ fingerprint: "ab".repeat(32) })
+  );
+  process.env["VIBESTUDIO_APP_ROOT"] = testProductAppRoot;
+});
+
+afterAll(() => {
+  if (originalAppRoot === undefined) delete process.env["VIBESTUDIO_APP_ROOT"];
+  else process.env["VIBESTUDIO_APP_ROOT"] = originalAppRoot;
+  fs.rmSync(testProductAppRoot, { recursive: true, force: true });
+});
 
 describe("RPC WebSocket admission resolution deadline", () => {
   afterEach(() => vi.useRealTimers());

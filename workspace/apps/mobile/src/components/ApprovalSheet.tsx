@@ -1168,6 +1168,8 @@ function ApprovalDetails({
   onToggle: () => void;
 }) {
   const colors = useAtomValue(themeColorsAtom);
+  const breadcrumbSummary = requesterBreadcrumbSummary(approval);
+  const requesterEvalSummary = evalSummary(approval);
   return (
     <View style={styles.detailsBlock}>
       <Pressable
@@ -1196,16 +1198,11 @@ function ApprovalDetails({
             secondary={approval.callerId}
             secondarySelectable
           />
-          {requesterBreadcrumbSummary(approval) ? (
-            <DetailRow
-              icon={Workflow}
-              label="Chain"
-              value={requesterBreadcrumbSummary(approval)!}
-              code
-            />
+          {breadcrumbSummary ? (
+            <DetailRow icon={Workflow} label="Chain" value={breadcrumbSummary} code />
           ) : null}
-          {evalSummary(approval) ? (
-            <DetailRow icon={Settings2} label="Eval" value={evalSummary(approval)!} code />
+          {requesterEvalSummary ? (
+            <DetailRow icon={Settings2} label="Eval" value={requesterEvalSummary} code />
           ) : null}
           {approval.requester ? (
             <DetailRow
@@ -2013,7 +2010,9 @@ function compactMobileDiffRows(rows: readonly DiffRow[]): MobileDiffDisplayRow[]
   let index = 0;
   while (index < rows.length) {
     if (keep.has(index)) {
-      result.push(rows[index]!);
+      const row = rows[index];
+      if (!row) throw new Error(`Diff row ${index} is missing`);
+      result.push(row);
       index += 1;
       continue;
     }

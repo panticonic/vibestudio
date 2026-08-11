@@ -503,25 +503,16 @@ function isReusableExternalDepsCache(cacheDir: string): boolean {
 
   try {
     const raw = fs.readFileSync(sentinelPath, "utf8");
-    let receipt: ExternalDepsReceipt;
-    try {
-      const parsed = JSON.parse(raw) as Partial<ExternalDepsReceipt>;
-      if (
-        parsed.version !== EXTERNAL_DEPS_RECEIPT_VERSION ||
-        typeof parsed.lockDigest !== "string" ||
-        typeof parsed.packageCount !== "number" ||
-        parsed.packageCount <= 0
-      ) {
-        throw new Error("legacy receipt");
-      }
-      receipt = parsed as ExternalDepsReceipt;
-    } catch {
-      // Upgrade healthy timestamp-only sentinels in place. Invalid legacy
-      // entries are rejected and reinstalled by the caller.
-      receipt = createExternalDepsReceipt(cacheDir);
-      writeExternalDepsReceipt(cacheDir, receipt);
-      sentinelStat = fs.statSync(sentinelPath);
+    const parsed = JSON.parse(raw) as Partial<ExternalDepsReceipt>;
+    if (
+      parsed.version !== EXTERNAL_DEPS_RECEIPT_VERSION ||
+      typeof parsed.lockDigest !== "string" ||
+      typeof parsed.packageCount !== "number" ||
+      parsed.packageCount <= 0
+    ) {
+      throw new Error("External dependency cache has no current receipt");
     }
+    const receipt = parsed as ExternalDepsReceipt;
 
     const lockBytes = fs.readFileSync(path.join(cacheDir, "node_modules", ".package-lock.json"));
     if (sha256(lockBytes) !== receipt.lockDigest) return false;
@@ -622,9 +613,8 @@ async function ensureDepsInstalledOnce(
   const sentinelPath = path.join(cacheDir, ".ready");
   const nodeModulesDir = path.join(cacheDir, "node_modules");
 
-  // A marker is evidence only when its validated receipt still matches the
-  // immutable installed tree. Timestamp-only legacy markers are upgraded on
-  // first use; partial trees are discarded and rebuilt.
+  // A marker is evidence only when its current validated receipt still matches
+  // the immutable installed tree. Invalid or partial trees are rebuilt.
   if (fs.existsSync(sentinelPath)) {
     if (isReusableExternalDepsCache(cacheDir)) return nodeModulesDir;
     try {

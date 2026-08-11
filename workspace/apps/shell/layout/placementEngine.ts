@@ -411,7 +411,6 @@ function insertColumnAfter(
   next: PanelLayout,
   columnIndex: number,
   panelId: string,
-  env: LayoutEnv,
   hint?: PanelPlacementHint
 ): PanelLayout {
   const preferred = hint?.preferredWidth ?? PREFERRED_COLUMN_WIDTH;
@@ -477,7 +476,7 @@ function applyHintedPlacement(
 
   // 2d: side (default, and split-below fallthrough) — beside if it fits, else replace (D4).
   if (horizontalFits(next, panelId, env, hint)) {
-    return insertColumnAfter(next, anchor.columnIndex, panelId, env, hint);
+    return insertColumnAfter(next, anchor.columnIndex, panelId, hint);
   }
   setPanePanel(anchor.pane, panelId, hint);
   next.focusedPaneId = anchor.pane.id;
@@ -498,7 +497,7 @@ function applyOpenBeside(
   }
   const anchor = findPane(next, anchorPaneId);
   if (!anchor) return applyShowPanel(next, panelId, "navigate-event", env);
-  return insertColumnAfter(next, anchor.columnIndex, panelId, env);
+  return insertColumnAfter(next, anchor.columnIndex, panelId);
 }
 
 /** Move an existing pane as one state transition, preserving its position id. */

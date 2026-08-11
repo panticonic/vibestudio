@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import { useState } from "react";
 import { Box, Code, Flex, Text } from "@radix-ui/themes";
 import { ExpandableChevron } from "./Chevron";
 

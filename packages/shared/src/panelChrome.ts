@@ -718,7 +718,7 @@ function looksLikeHostname(value: string): boolean {
   }
   if (value === "localhost") return true;
   if (/^\d{1,3}(?:\.\d{1,3}){3}(?::\d+)?$/.test(value)) return true;
-  return /^[a-z0-9-]+(?:\.[a-z0-9-]+)+(?:\:\d+)?$/i.test(value);
+  return /^[a-z0-9-]+(?:\.[a-z0-9-]+)+(?::\d+)?$/i.test(value);
 }
 
 function readOptionalNumber(value: unknown): number | undefined {

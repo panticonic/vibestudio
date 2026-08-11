@@ -26,7 +26,7 @@ function readyHostReport() {
   };
 }
 
-function detail(slotId: string, entityId = "panel:nav-new", source = "panels/new") {
+function detail(entityId = "panel:nav-new", source = "panels/new") {
   return {
     slot: { parent_slot_id: null, current_entity_title: "New" },
     currentHistory: {
@@ -149,7 +149,7 @@ function runtimeHarness(
           } as T;
         }
         case "workspace-state.panelTree.detail":
-          return detail(String(args[0]), currentEntityId, currentSource) as T;
+          return detail(currentEntityId, currentSource) as T;
         case "panelRuntime.ensureSlot":
           ensureSlotCalls += 1;
           if (options.recoverStoppedRoute && ensureSlotCalls > 1) {

@@ -1068,7 +1068,11 @@ async function handleCredentialSessionCaptureRequest(
       return captureResult;
     } finally {
       // Always close the panel on exit (success, timeout, or user close)
-      await panelOrchestrator.closePanel(panel.id).catch(() => {});
+      await panelOrchestrator
+        .closePanel(panel.id)
+        .catch((error: unknown) =>
+          console.warn(`[App] Failed to close captured panel ${panel.id}:`, error)
+        );
     }
   } catch (err) {
     return { error: err instanceof Error ? err.message : String(err) };
@@ -2485,7 +2489,11 @@ app.on("ready", async () => {
       panelLogFlushTimer = null;
       const batch = panelLogQueue.splice(0, panelLogQueue.length);
       if (batch.length === 0) return;
-      void panelLogClient.append(batch).catch(() => {});
+      void panelLogClient
+        .append(batch)
+        .catch((error: unknown) =>
+          console.warn("[App] Failed to persist panel diagnostics:", error)
+        );
     };
     const forwardPanelDiagnostic = (
       panelId: string,
@@ -3524,7 +3532,11 @@ app.on("activate", () => {
   }
   const focusedPanelId = panelRegistry?.getFocusedPanelId();
   if (focusedPanelId) {
-    void shellCore?.panelManager.notifyFocused(asPanelSlotId(focusedPanelId)).catch(() => {});
+    void shellCore?.panelManager
+      .notifyFocused(asPanelSlotId(focusedPanelId))
+      .catch((error: unknown) =>
+        console.warn(`[App] Failed to restore focus for panel ${focusedPanelId}:`, error)
+      );
   }
 });
 

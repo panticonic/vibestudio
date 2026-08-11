@@ -106,7 +106,6 @@ interface BrowserFaviconObserverLike {
 export class PanelView implements PanelViewLike {
   private viewManager: ViewManager;
   private readonly panelRegistry: PanelRegistry;
-  private readonly serverInfo: ServerInfoLike;
   private readonly cdpHost: CdpHostLike;
   private readonly panelOrchestrator: PanelOrchestratorLike;
   private readonly managedHosts: readonly string[];
@@ -143,10 +142,6 @@ export class PanelView implements PanelViewLike {
     { domReady?: () => void; didFinishLoad?: () => void }
   >();
 
-  private get gatewayPort() {
-    return this.serverInfo.gatewayPort;
-  }
-
   constructor(deps: {
     viewManager: ViewManager;
     panelRegistry: PanelRegistry;
@@ -170,7 +165,6 @@ export class PanelView implements PanelViewLike {
   }) {
     this.viewManager = deps.viewManager;
     this.panelRegistry = deps.panelRegistry;
-    this.serverInfo = deps.serverInfo;
     this.cdpHost = deps.cdpHost;
     this.panelOrchestrator = deps.panelOrchestrator;
     this.managedHosts = this.buildManagedHosts(deps.serverInfo);
@@ -749,7 +743,11 @@ export class PanelView implements PanelViewLike {
     updatePanelNavigationState(panel, state);
 
     if (state.pageTitle !== undefined) {
-      void this.panelOrchestrator.updatePanelTitle(panelId, state.pageTitle).catch(() => {});
+      void this.panelOrchestrator
+        .updatePanelTitle(panelId, state.pageTitle)
+        .catch((error: unknown) =>
+          console.warn(`[PanelView] Failed to persist title for panel ${panelId}:`, error)
+        );
     }
     this.panelRegistry.notifyPanelTreeUpdate(panelId);
   }

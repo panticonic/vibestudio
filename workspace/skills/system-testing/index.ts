@@ -36,7 +36,7 @@ export type {
   SystemTestFailure,
   SystemTestJsonValue,
   ToolFailureSummary,
-  WorkspaceRepoFixtureSpec,
+  WorkspaceRepoCreationScope,
 } from "./types.js";
 export type { SessionSnapshot } from "@workspace/agentic-session";
 

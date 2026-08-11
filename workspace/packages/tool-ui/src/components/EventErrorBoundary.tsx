@@ -60,7 +60,13 @@ const ASYNC_EVENT_ATTRIBUTION_WINDOW_MS = 5_000;
 const registeredBoundaries = new Map<EventErrorBoundary, HTMLDivElement>();
 
 let globalListenersInstalled = false;
-let boundaryCount = 0;
+
+function activateBoundary(boundary: EventErrorBoundary): void {
+  activeBoundary = boundary;
+  queueMicrotask(() => {
+    if (activeBoundary === boundary) activeBoundary = null;
+  });
+}
 
 function installGlobalListeners() {
   if (globalListenersInstalled) return;
@@ -166,7 +172,6 @@ export class EventErrorBoundary extends Component<
   // ── Lifecycle — manage the global listeners and boundary registry ────────
 
   componentDidMount(): void {
-    boundaryCount++;
     installGlobalListeners();
     if (this.containerRef.current) {
       registeredBoundaries.set(this, this.containerRef.current);
@@ -183,7 +188,6 @@ export class EventErrorBoundary extends Component<
   }
 
   componentWillUnmount(): void {
-    boundaryCount--;
     registeredBoundaries.delete(this);
     if (activeBoundary === this) activeBoundary = null;
   }
@@ -200,14 +204,11 @@ export class EventErrorBoundary extends Component<
   /** Capture-phase handler — marks this boundary as the active target and
    *  records the event target for async-rejection attribution. */
   private trackEvent = (e: SyntheticEvent): void => {
-    activeBoundary = this;
+    activateBoundary(this);
     if (e.target instanceof Element) {
       lastEventTarget = e.target;
       lastEventTime = Date.now();
     }
-    queueMicrotask(() => {
-      if (activeBoundary === this) activeBoundary = null;
-    });
   };
 
   // ── Render ───────────────────────────────────────────────────────────────

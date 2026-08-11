@@ -10,7 +10,6 @@ import type {
   RosterUpdate,
   ParticipantMetadata,
   Participant,
-  Attachment,
   ChannelConfig,
   ChannelReplayEnvelope,
   ChannelReplayAfterRequest,

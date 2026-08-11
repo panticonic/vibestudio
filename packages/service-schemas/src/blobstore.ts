@@ -5,6 +5,7 @@
  */
 
 import { z } from "zod";
+import { base64ToBytes, bytesToBase64 } from "@vibestudio/rpc";
 import type {
   ServiceAuthorityPolicy,
   MethodAccessDescriptor,
@@ -44,7 +45,7 @@ export const DigestSchema = z.string().regex(DIGEST_RE);
 export const Base64Schema = z.string().refine((value) => {
   try {
     return (
-      Buffer.from(value, "base64").toString("base64").replace(/=+$/u, "") ===
+      bytesToBase64(base64ToBytes(value)).replace(/=+$/u, "") ===
       value.replace(/=+$/u, "")
     );
   } catch {

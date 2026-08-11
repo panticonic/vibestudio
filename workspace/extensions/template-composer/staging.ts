@@ -19,7 +19,6 @@ import type {
   TemplateCompositionPlan,
   TemplateOperationInspection,
   TemplateOperationPorts,
-  TemplateRepositoryContribution,
 } from "@workspace/template-composer";
 import type { ExtensionContextLike } from "./context.js";
 import { mapConcurrent } from "./concurrency.js";

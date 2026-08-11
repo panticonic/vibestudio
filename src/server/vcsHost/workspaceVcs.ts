@@ -64,11 +64,8 @@ import type {
 } from "../services/protectedRefStore.js";
 import type { BuildRecord, WorkspaceStateSource } from "../buildV2/stateTrigger.js";
 import type { BuildSourceProvider } from "../buildV2/buildSource.js";
-import {
-  discoverPackageGraph,
-  type GraphNode,
-  type PackageGraph,
-} from "../buildV2/packageGraph.js";
+import { type GraphNode, type PackageGraph } from "../buildV2/packageGraph.js";
+import { discoverPackageGraphAtTree } from "../buildV2/packageGraphTree.js";
 import { joinRepoPrefix, normalizeRepositoryPath } from "./paths.js";
 import { ContentProjectionStore } from "./contentProjectionStore.js";
 import { DiskProjector } from "./diskProjector.js";
@@ -1591,8 +1588,8 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   }
 
   async discoverGraph(stateHash: string): Promise<PackageGraph> {
-    const root = await this.materializeStateForGraphDiscovery(stateHash);
-    return discoverPackageGraph(root);
+    await this.contentProjection.ensureStateMirrored(stateHash);
+    return discoverPackageGraphAtTree(this.deps.blobsDir, stateHash, this.deps.workspaceRoot);
   }
 
   /**

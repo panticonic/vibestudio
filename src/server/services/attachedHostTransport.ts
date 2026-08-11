@@ -321,7 +321,6 @@ export function attachedHostHttpRoutes(endpoint: AttachedHostEndpoint): ServiceR
 }
 
 export function attachedHostParentHttpRoutes(
-  endpoint: AttachedHostEndpoint,
   presenter: Pick<AttachedHostApprovalPresenter, "present">
 ): ServiceRouteDecl[] {
   return [

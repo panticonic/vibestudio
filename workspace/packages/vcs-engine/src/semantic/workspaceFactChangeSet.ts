@@ -40,7 +40,6 @@ export function workspaceRepositoryStateIdentity(
 export function authenticateWorkspaceRepositoryMember(
   member: WorkspaceRepositoryMember
 ): WorkspaceRepositoryMember {
-  const { repositoryStateId: _identity, ...payload } = member;
   if (
     !member.repositoryId ||
     repositoryStateId(member) !== member.repositoryStateId ||

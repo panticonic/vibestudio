@@ -333,7 +333,7 @@ describe("EvalDO cancellation + forced recovery", () => {
   });
 
   it("releases the inter-cell kernel hold during planned lifecycle shutdown", async () => {
-    const { instance, sql } = await createTestDO(EvalDO);
+    const { instance } = await createTestDO(EvalDO);
     const lifecycleCall = vi.fn(() => Promise.resolve(undefined));
     Object.defineProperty(instance, "rpc", {
       value: { call: lifecycleCall },

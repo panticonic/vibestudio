@@ -336,7 +336,6 @@ class BrowserCookieProjection {
   private browserChangeTimer: ReturnType<typeof setTimeout> | null = null;
   private periodicTimer: ReturnType<typeof setInterval> | null = null;
   private operation: Promise<void> = Promise.resolve();
-  private persistence: Promise<void> = Promise.resolve();
   private readonly operationQueue = new Map<string, Promise<unknown>>();
   private readonly persistenceQueue = new Map<string, Promise<unknown>>();
 
@@ -653,16 +652,14 @@ class BrowserCookieProjection {
       await fs.writeFile(temporary, payload, { mode: 0o600 });
       await fs.rename(temporary, this.deps.outboxPath);
     });
-    this.persistence = write.then(
-      () => undefined,
-      (error) => {
-        this.lastError = `Cookie outbox persistence failed: ${messageOf(error)}`;
-        this.converged = false;
-        log.warn(this.lastError);
-        return undefined;
-      }
-    );
-    await write;
+    try {
+      await write;
+    } catch (error) {
+      this.lastError = `Cookie outbox persistence failed: ${messageOf(error)}`;
+      this.converged = false;
+      log.warn(this.lastError);
+      throw error;
+    }
   }
 }
 

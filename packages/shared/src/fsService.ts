@@ -1781,7 +1781,7 @@ export class FsService {
   async readManagedFiles(
     ctx: ServiceContext,
     patterns: readonly string[],
-    options: { explicitContextId: string } | undefined = undefined
+    options?: { explicitContextId: string }
   ): Promise<Array<{ path: string; content: string }>> {
     if (
       patterns.length === 0 ||

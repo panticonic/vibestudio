@@ -2470,7 +2470,7 @@ describe("SemanticWorkspace snapshot import", () => {
   }, 30_000);
 
   it("inspects and exactly pages every change adjacency phase within the deployment SQL limit", async () => {
-    const { initial, restart, sql, store } = await authorityFixture();
+    const { initial, restart, sql } = await authorityFixture();
     const ingress: SemanticDispatchRequest["ingress"] = {
       causalParent: {
         kind: "trajectory-invocation",

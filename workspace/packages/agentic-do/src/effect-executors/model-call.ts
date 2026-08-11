@@ -775,10 +775,6 @@ const SLOW_MODEL_CALL_WARN_INTERVAL_MS = 30_000;
  *  bytes (~a few times per second at typical stream rates). */
 const TOOLCALL_PROGRESS_EMIT_BYTES = 2_048;
 
-function formatKb(bytes: number): string {
-  return `${(bytes / 1024).toFixed(1)} KB`;
-}
-
 /** Best-effort tool name from a stream event's `partial` message (the last
  *  toolCall content block carries the name once the provider has parsed it). */
 function toolCallNameFromEvent(event: Record<string, unknown>): string | null {

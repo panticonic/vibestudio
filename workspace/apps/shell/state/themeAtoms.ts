@@ -35,7 +35,7 @@ export const effectiveThemeAtom = atom<"light" | "dark">((get) => {
  * Action atom to set the theme mode.
  * Also persists the preference to localStorage.
  */
-export const setThemeModeAtom = atom(null, (get, set, mode: ThemeMode) => {
+export const setThemeModeAtom = atom(null, (_get, set, mode: ThemeMode) => {
   set(themeModeAtom, mode);
 
   // Persist to localStorage
@@ -51,7 +51,7 @@ export const setThemeModeAtom = atom(null, (get, set, mode: ThemeMode) => {
 /**
  * Load theme preference from localStorage on app startup.
  */
-export const loadThemePreferenceAtom = atom(null, (get, set) => {
+export const loadThemePreferenceAtom = atom(null, (_get, set) => {
   if (typeof window === "undefined") {
     return;
   }
@@ -87,7 +87,7 @@ export const setThemeConfigAtom = atom(null, (get, set, patch: Partial<ThemeConf
 });
 
 /** Load the persisted theme identity on startup. */
-export const loadThemeConfigAtom = atom(null, (get, set) => {
+export const loadThemeConfigAtom = atom(null, (_get, set) => {
   if (typeof window === "undefined") return;
   try {
     const saved = localStorage.getItem("theme-config");

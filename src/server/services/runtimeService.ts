@@ -1609,16 +1609,13 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
    * fully own (every active entity launched by you — e.g. a context you just cloned);
    * gated (severe) when destroying another agent or panel's existing context.
    */
-  /**
-   * Tear down ONE context: retire its entities, reclaim each DO's storage, drop
-   * its edge rows + VCS state + folder. `gate` is true only for the destroy
-   * ROOT — lifecycle descendants reached via cascade are owned by construction.
-   */
-  async function destroyOneContext(contextId: string): Promise<void> {
-    const entities = (await store.listActive()).filter((e) => e.contextId === contextId);
-    const retirement = await retireContextRecords(entities);
-    const failures: unknown[] = [...retirement.cleanupFailures];
-    for (const rec of retirement.retired) {
+  /** Reclaim one already-retired context's storage and semantic substrate. */
+  async function cleanRetiredContext(
+    contextId: string,
+    retired: EntityRecord[]
+  ): Promise<unknown[]> {
+    const failures: unknown[] = [];
+    for (const rec of retired) {
       // DO storage is NOT reclaimed by retire (kept for re-attach) — a full context
       // destroy is the one path that deletes it.
       if (rec.kind === "do" && rec.className) {
@@ -1646,38 +1643,62 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
         failures.push(new Error(`Failed to remove ${label} for ${contextId}`, { cause }));
       }
     }
-    if (failures.length > 0) {
-      throw new AggregateError(
-        failures,
-        aggregateFailureMessage(`Context cleanup failed for ${contextId}`, failures)
-      );
-    }
+    return failures;
   }
 
   /**
-   * Tear a whole context down. `recursive` (the default when lifecycle children
-   * exist) does a POST-ORDER teardown of the LIFECYCLE subtree only — subagent
-   * worlds die with their owner (§B7). Lineage (fork) edges are NEVER crossed:
-   * destroying a conversation never destroys its forks. `recursive:false`
-   * destroys only this context (any lifecycle children are left for the TTL sweep).
+   * Tear a whole context down. Lifecycle preparation is parent-first across the
+   * complete subtree while every peer remains reachable: a parent agent must be
+   * able to fence and settle its live subagents before their contexts disappear.
+   * Only after every entity accepts release do we retire them as one unit and
+   * reclaim contexts post-order. Lineage (fork) edges are NEVER crossed.
+   * `recursive:false` destroys only this context (any lifecycle children are left
+   * for the TTL sweep).
    */
   async function destroyContext(args: { contextId: string; recursive?: boolean }): Promise<void> {
     const recursive = args.recursive ?? true;
     const seen = new Set<string>();
-    const teardown = async (contextId: string): Promise<void> => {
+    const contexts: string[] = [];
+    const collect = async (contextId: string): Promise<void> => {
       if (seen.has(contextId)) return;
       seen.add(contextId);
+      contexts.push(contextId);
       if (recursive) {
         const children = await store.listContextEdgesByOwner({
           ownerContextId: contextId,
           kind: "lifecycle",
         });
-        // Post-order: leaves first, then the parent.
-        for (const child of children) await teardown(child.contextId);
+        for (const child of children) await collect(child.contextId);
       }
-      await destroyOneContext(contextId);
     };
-    await teardown(args.contextId);
+    await collect(args.contextId);
+
+    const contextOrder = new Map(contexts.map((contextId, index) => [contextId, index]));
+    const entities = (await store.listActive())
+      .filter((entity) => contextOrder.has(entity.contextId))
+      .sort(
+        (left, right) => contextOrder.get(left.contextId)! - contextOrder.get(right.contextId)!
+      );
+    const retirement = await retireContextRecords(entities);
+    const failures: unknown[] = [...retirement.cleanupFailures];
+    const retiredByContext = new Map<string, EntityRecord[]>();
+    for (const record of retirement.retired) {
+      const records = retiredByContext.get(record.contextId) ?? [];
+      records.push(record);
+      retiredByContext.set(record.contextId, records);
+    }
+
+    for (const contextId of [...contexts].reverse()) {
+      failures.push(
+        ...(await cleanRetiredContext(contextId, retiredByContext.get(contextId) ?? []))
+      );
+    }
+    if (failures.length > 0) {
+      throw new AggregateError(
+        failures,
+        aggregateFailureMessage(`Context cleanup failed for ${args.contextId}`, failures)
+      );
+    }
   }
 
   /**
@@ -2041,7 +2062,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
         await deps.faultAbortAgentVessel(ctx.caller, target);
         return { aborted: true as const };
       },
-      retireEntity: async (ctx, [{ id, removeContext }]) => {
+      retireEntity: async (_ctx, [{ id, removeContext }]) => {
         await retireEntity(id, removeContext);
       },
       recoverExecution: (ctx, [input]) => recoverExecution(ctx.caller, input),
@@ -2058,7 +2079,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
           },
           cloneArgs
         ),
-      destroyContext: async (ctx, [{ contextId, recursive }]) => {
+      destroyContext: async (_ctx, [{ contextId, recursive }]) => {
         await destroyContext({ contextId, recursive });
       },
       forkSemanticContext: (_ctx, [input]) => forkSemanticContext(input),

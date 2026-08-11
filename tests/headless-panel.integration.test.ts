@@ -21,6 +21,7 @@ import {
 import { webSocketAuthProtocol } from "@vibestudio/rpc/protocol/webSocketAuthProtocol";
 import type { PendingUnitInstallReviewApproval } from "@vibestudio/shared/approvals";
 import { defaultAcceptance } from "@vibestudio/shared/authority/unitInstallReview";
+import type { PanelSlotObservation } from "@vibestudio/shared/panel/observation";
 import type { WsClientMessage, WsServerMessage } from "@vibestudio/shared/ws/protocol";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -48,27 +49,6 @@ interface BrowserPanelHandle {
   title: string;
   kind: "browser" | "workspace";
   runtimeEntityId: string;
-}
-
-interface RuntimeSlotObservation {
-  lease: {
-    runtimeEntityId: string;
-  } | null;
-  observation: {
-    view: {
-      url: string;
-      loading: boolean;
-    };
-    boot:
-      | { kind: "unavailable" }
-      | {
-          kind: "observed";
-          observation: {
-            phase: "loading" | "booting" | "ready" | "failed";
-            message?: string;
-          };
-        };
-  } | null;
 }
 
 interface CdpEndpoint {
@@ -543,20 +523,22 @@ async function waitForPanelReady(
 ): Promise<void> {
   const deadline = Date.now() + 90_000;
   for (;;) {
-    const runtime = await connection.rpc.call<RuntimeSlotObservation>(
+    const runtime = await connection.rpc.call<PanelSlotObservation>(
       "main",
       "panelRuntime.observeSlot",
       [panelId]
     );
-    const exactObservation =
-      runtime.lease?.runtimeEntityId === runtimeEntityId ? runtime.observation : null;
-    if (exactObservation?.view.loading === false && exactObservation.view.url === expectedUrl) {
+    const exactAttempt =
+      runtime.attempt?.runtimeEntityId === runtimeEntityId ? runtime.attempt : null;
+    if (
+      exactAttempt?.phase === "ready" &&
+      runtime.route.reachable &&
+      runtime.route.view?.loading === false &&
+      runtime.route.view.url === expectedUrl
+    ) {
       return;
     }
-    if (
-      exactObservation?.boot.kind === "observed" &&
-      exactObservation.boot.observation.phase === "failed"
-    ) {
+    if (exactAttempt?.phase === "failed") {
       const leases = await connection.rpc.call("main", "panelRuntime.getSnapshot", []);
       const hostLogs = await shellConnection!.rpc.call("main", "serverLog.query", [
         { contains: "HeadlessHost", limit: 100 },

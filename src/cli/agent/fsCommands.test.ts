@@ -353,7 +353,8 @@ describe("vibestudio fs commands", () => {
   it("glob passes the optional search path", async () => {
     writeCredentials(tmpDir);
     writeSession(tmpDir);
-    const { rpcBodies } = stubServer(() => ["/src/a.ts"]);
+    const page = { files: ["/src/a.ts"], truncated: false };
+    const { rpcBodies } = stubServer(() => page);
 
     const { main } = await import("../client.js");
     await expect(main(["fs", "glob", "**/*.ts", "/src", "--json"])).resolves.toBe(0);
@@ -361,7 +362,7 @@ describe("vibestudio fs commands", () => {
     expect(rpcBodies).toEqual([
       { method: "fs.glob", args: ["ctx_1", "**/*.ts", { path: "/src" }] },
     ]);
-    expect(jsonOutput()).toEqual(["/src/a.ts"]);
+    expect(jsonOutput()).toEqual(page);
   });
 
   it("maps failures to the exit-code conventions", async () => {

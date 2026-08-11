@@ -106,6 +106,22 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
+function setupScope(
+  options: {
+    catalog?: readonly OnboardingCapabilityDefinition[];
+    snapshot?: SetupCapabilitySnapshot[];
+    templates?: OptionalTemplateSnapshot[];
+  } = {}
+): Record<string, unknown> {
+  return {
+    onboardingSetupOverview: {
+      catalog: options.catalog ?? catalog,
+      snapshot: options.snapshot ?? snapshots,
+      ...(options.templates ? { templates: options.templates, templatesLoaded: true } : {}),
+    },
+  };
+}
+
 beforeEach(() => {
   loaders.capabilities.mockReset();
   loaders.capabilities.mockResolvedValue({ catalog, snapshot: snapshots });
@@ -122,7 +138,7 @@ describe("SetupHub", () => {
   it("separates setup state from ready-now capabilities", async () => {
     const view = render(
       <Theme>
-        <SetupHub props={{ catalog, snapshot: snapshots }} chat={{ send: vi.fn() }} />
+        <SetupHub scope={setupScope()} chat={{ send: vi.fn() }} />
       </Theme>
     );
     expect(view.getByText("Google Workspace")).toBeTruthy();
@@ -148,7 +164,7 @@ describe("SetupHub", () => {
     loaders.capabilities.mockResolvedValue({ catalog, snapshot: unavailableMobile });
     const view = render(
       <Theme>
-        <SetupHub props={{ catalog, snapshot: unavailableMobile }} chat={{ send: vi.fn() }} />
+        <SetupHub scope={setupScope({ snapshot: unavailableMobile })} chat={{ send: vi.fn() }} />
       </Theme>
     );
 
@@ -161,7 +177,7 @@ describe("SetupHub", () => {
     const send = vi.fn(async () => undefined);
     const view = render(
       <Theme>
-        <SetupHub props={{ catalog, snapshot: snapshots }} chat={{ send }} />
+        <SetupHub scope={setupScope()} chat={{ send }} />
       </Theme>
     );
 
@@ -187,7 +203,6 @@ describe("SetupHub", () => {
     const view = render(
       <Theme>
         <SetupHub
-          props={{}}
           chat={{ send: vi.fn() }}
           scope={scope}
           scopes={{ save }}
@@ -200,7 +215,6 @@ describe("SetupHub", () => {
     view.rerender(
       <Theme>
         <SetupHub
-          props={{}}
           chat={{ send: vi.fn() }}
           scope={scope}
           scopes={{ save }}
@@ -243,7 +257,6 @@ describe("SetupHub", () => {
     const view = render(
       <Theme>
         <SetupHub
-          props={{}}
           chat={{ send: vi.fn() }}
           scope={scope}
           inlineUi={{ id: "onboarding-setup-overview", renderedAt: "before-install" }}
@@ -255,7 +268,6 @@ describe("SetupHub", () => {
     view.rerender(
       <Theme>
         <SetupHub
-          props={{}}
           chat={{ send: vi.fn() }}
           scope={scope}
           inlineUi={{ id: "onboarding-setup-overview", renderedAt: "after-install" }}
@@ -272,7 +284,7 @@ describe("SetupHub", () => {
   it("explains templates and contacts the registry only after an explicit load", async () => {
     const view = render(
       <Theme>
-        <SetupHub props={{ catalog, snapshot: snapshots }} chat={{ send: vi.fn() }} />
+        <SetupHub scope={setupScope()} chat={{ send: vi.fn() }} />
       </Theme>
     );
 
@@ -292,7 +304,7 @@ describe("SetupHub", () => {
     loaders.templates.mockReturnValue(templateLoad.promise);
     const view = render(
       <Theme>
-        <SetupHub props={{ catalog, snapshot: snapshots }} chat={{ send: vi.fn() }} />
+        <SetupHub scope={setupScope()} chat={{ send: vi.fn() }} />
       </Theme>
     );
 
@@ -315,7 +327,7 @@ describe("SetupHub", () => {
     const send = vi.fn(async () => undefined);
     const view = render(
       <Theme>
-        <SetupHub props={{ catalog, snapshot: snapshots, templates }} chat={{ send }} />
+        <SetupHub scope={setupScope({ templates })} chat={{ send }} />
       </Theme>
     );
 

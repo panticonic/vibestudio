@@ -1,4 +1,3 @@
-import React from "react";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import { Theme } from "@radix-ui/themes";

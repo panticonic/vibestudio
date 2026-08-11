@@ -7,7 +7,7 @@ import {
   usePanelTheme,
   usePanelThemeConfig,
 } from "@workspace/react";
-import { rpc, panel, notifications, runtime, workspace, callMain } from "@workspace/runtime";
+import { rpc, panel, notifications, runtime, callMain } from "@workspace/runtime";
 import type { RuntimeSupervisionDescription } from "@vibestudio/service-schemas/runtime";
 import { isReviewPending } from "@vibestudio/shared/authority/reviewPending";
 

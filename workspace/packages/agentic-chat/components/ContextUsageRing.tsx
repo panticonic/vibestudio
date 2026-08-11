@@ -50,7 +50,7 @@ export function ContextUsageRing({
   isActive = false,
   executionMode,
 }: ContextUsageRingProps) {
-  const { percent, color, circumference, strokeDashoffset, tooltipText, hasPercent } = useMemo(() => {
+  const { color, circumference, strokeDashoffset, tooltipText } = useMemo(() => {
     const hasPercent = usage?.usagePercent !== undefined;
     const percent = usage?.usagePercent ?? 0;
     const radius = (size - strokeWidth) / 2;
@@ -68,8 +68,15 @@ export function ContextUsageRing({
       ? `Context: ${percent}% used (${formatTokens(usedTokens)} / ${formatTokens(maxTokens)} tokens)${modeLabel}`
       : `Context: ${formatTokens(usedTokens)} tokens used${modeLabel}`;
 
-    return { percent, color, circumference, strokeDashoffset, tooltipText, hasPercent };
-  }, [usage?.usagePercent, usage?.session?.inputTokens, usage?.maxContextTokens, size, strokeWidth, executionMode]);
+    return { color, circumference, strokeDashoffset, tooltipText };
+  }, [
+    usage?.usagePercent,
+    usage?.session?.inputTokens,
+    usage?.maxContextTokens,
+    size,
+    strokeWidth,
+    executionMode,
+  ]);
 
   // Don't render if no usage data
   if (!usage || (usage.usagePercent === undefined && !usage.session?.inputTokens)) {

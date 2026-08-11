@@ -114,7 +114,7 @@ describe("mobile stored shell credential", () => {
     expect(parseStoredMobileConnection(JSON.stringify([]))).toBeNull();
   });
 
-  it("recognizes only strict schema-v3 records as private migration input", () => {
+  it("rejects retired schema-v3 records", () => {
     const legacy = {
       schemaVersion: 3,
       deviceId: DEVICE_ID,
@@ -136,7 +136,7 @@ describe("mobile stored shell credential", () => {
       ).workspacePairing,
       pairedAt: 123,
     };
-    expect(parseStoredMobileConnection(JSON.stringify(legacy))).toEqual(legacy);
+    expect(parseStoredMobileConnection(JSON.stringify(legacy))).toBeNull();
     expect(parseStoredMobileConnection(JSON.stringify({ ...legacy, phase: "routed" }))).toBeNull();
   });
 

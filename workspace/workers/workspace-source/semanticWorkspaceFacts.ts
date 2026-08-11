@@ -15,7 +15,6 @@ import {
   persistentRadixRoute,
   persistentRadixUtf16PrefixRoute,
   validateWorkspaceFactChangeSet,
-  workspaceFactRadixRoot,
   workspaceFactFileEntryAt,
   workspaceFactRepositoryAtPath,
   workspaceFactRepositoryEntryAt,

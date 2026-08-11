@@ -10,7 +10,7 @@
  *    the deterministic suites should run inside the standard staged agentic
  *    workflow.
  */
-import { runSuites, summarize, type SuiteRunResult } from "@workspace/testkit";
+import { runSuites, type SuiteRunResult } from "@workspace/testkit";
 import { allSuites } from "@workspace/testkit/suites";
 import type { Suite } from "@workspace/testkit";
 import type { TestCase, TestSuiteResult } from "./types.js";

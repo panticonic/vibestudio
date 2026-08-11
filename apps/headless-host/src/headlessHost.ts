@@ -94,7 +94,7 @@ export class HeadlessHost implements PanelHost {
     this.config.lifecycle?.onRegistered?.();
     this.events = new EventsClient(connection.rpc);
     this.stopLeaseEvents = this.events.on("panel:runtimeLeaseChanged", (payload) => {
-      void this.handleRuntimeLeaseChanged(payload as PanelRuntimeLeaseChangedEvent);
+      this.handleRuntimeLeaseChanged(payload as PanelRuntimeLeaseChangedEvent);
     });
     await this.events.subscribe("panel:runtimeLeaseChanged");
     connection.onResubscribe(async () => {

@@ -205,7 +205,7 @@ export const MessageCard = React.memo(function MessageCard({
   }, [onInterrupt, msg.id, msg.senderId]);
 
   const handleCopy = useCallback(() => {
-    void onCopy(msg.id, msg.content);
+    onCopy(msg.id, msg.content);
   }, [onCopy, msg.id, msg.content]);
   const handleClearCopied = useCallback(() => {
     onClearCopied(msg.id);

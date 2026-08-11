@@ -1658,9 +1658,14 @@ export async function executeSandbox(
       ? await runtimeModule.journal.with(journal, runUserCode)
       : await runUserCode();
     throwIfAborted(signal);
-    const panelJournalFooter = journal
-      ? await renderPanelJournalFooter(runtimeModule, journal).catch(() => undefined)
-      : undefined;
+    let panelJournalFooter: string | undefined;
+    if (journal) {
+      try {
+        panelJournalFooter = await renderPanelJournalFooter(journal);
+      } catch (error) {
+        capture.proxy.warn("[eval] Failed to render the panel journal footer:", error);
+      }
+    }
     return {
       success: true,
       consoleOutput: formatConsoleOutput(capture.getEntries()),
@@ -1721,10 +1726,7 @@ function createRuntimeJournal(runtimeModule: any): any | null {
   return new runtimeModule.journal.Journal();
 }
 
-async function renderPanelJournalFooter(
-  runtimeModule: any,
-  journal: any
-): Promise<string | undefined> {
+async function renderPanelJournalFooter(journal: any): Promise<string | undefined> {
   const entries = Array.isArray(journal?.entries) ? journal.entries : [];
   if (entries.length === 0) return undefined;
   const operations = entries.map((entry: any) => {

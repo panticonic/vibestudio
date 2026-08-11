@@ -1,4 +1,4 @@
-import React, { useMemo } from "react";
+import { useMemo } from "react";
 import { Box, Flex, Text } from "@radix-ui/themes";
 import { isStoredValueRef, type StoredValueRef } from "@workspace/agentic-protocol";
 import type { ChatSandboxValue } from "@workspace/agentic-core";

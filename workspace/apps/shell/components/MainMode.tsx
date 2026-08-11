@@ -51,7 +51,9 @@ export default function MainMode() {
     const markNotReady = () => {
       void view
         .setHostedShellReady({ ready: false, rendererInstanceId: nativeSlotRendererInstanceId })
-        .catch(() => {});
+        .catch((error: unknown) =>
+          console.warn("[MainMode] Failed to release hosted shell readiness:", error)
+        );
     };
     window.addEventListener("pagehide", markNotReady);
     window.addEventListener("beforeunload", markNotReady);

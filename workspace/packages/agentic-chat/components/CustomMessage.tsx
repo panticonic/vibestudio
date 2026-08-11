@@ -347,7 +347,6 @@ export const ExpandedCustom = React.memo(function ExpandedCustom({
       />
     );
   }
-  const Component = entry.module.default;
   const resetKey = customResetKey(payload, entry, expanded);
   return (
     <ReadyCustomCard payload={payload} entry={entry} onCollapse={onCollapse} resetKey={resetKey}>

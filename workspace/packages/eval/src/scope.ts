@@ -81,34 +81,33 @@ export class ScopeManager {
   // -------------------------------------------------------------------------
 
   private createProxy(): Record<string, unknown> {
-    const mgr = this;
     return new Proxy({} as Record<string, unknown>, {
-      get: (_target, prop: string) => mgr.backing.get(prop),
+      get: (_target, prop: string) => this.backing.get(prop),
       set: (_target, prop: string, value) => {
-        mgr.backing.set(prop, value);
-        mgr.dirty = true;
-        if (!mgr.evalInProgress) {
-          mgr.notifyChangeListeners();
+        this.backing.set(prop, value);
+        this.dirty = true;
+        if (!this.evalInProgress) {
+          this.notifyChangeListeners();
         }
         return true;
       },
       deleteProperty: (_target, prop: string) => {
-        mgr.backing.delete(prop);
-        mgr.dirty = true;
-        if (!mgr.evalInProgress) {
-          mgr.notifyChangeListeners();
+        this.backing.delete(prop);
+        this.dirty = true;
+        if (!this.evalInProgress) {
+          this.notifyChangeListeners();
         }
         return true;
       },
-      has: (_target, prop: string) => mgr.backing.has(prop),
-      ownKeys: () => Array.from(mgr.backing.keys()),
+      has: (_target, prop: string) => this.backing.has(prop),
+      ownKeys: () => Array.from(this.backing.keys()),
       getOwnPropertyDescriptor: (_target, prop: string) => {
-        if (!mgr.backing.has(prop)) return undefined;
+        if (!this.backing.has(prop)) return undefined;
         return {
           configurable: true,
           enumerable: true,
           writable: true,
-          value: mgr.backing.get(prop),
+          value: this.backing.get(prop),
         };
       },
     });
@@ -130,15 +129,15 @@ export class ScopeManager {
 
   /** The scopes API (pre-injected as `scopes` binding) */
   get api(): ScopesApi {
-    const mgr = this;
+    const readCurrentId = () => this.currentScopeId;
     return {
       get currentId() {
-        return mgr.currentScopeId;
+        return readCurrentId();
       },
-      push: () => mgr.push(),
-      get: (id: string) => mgr.getScope(id),
-      list: () => mgr.listScopes(),
-      save: () => mgr.persist(),
+      push: () => this.push(),
+      get: (id: string) => this.getScope(id),
+      list: () => this.listScopes(),
+      save: () => this.persist(),
     };
   }
 

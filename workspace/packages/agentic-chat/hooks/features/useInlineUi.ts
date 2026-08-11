@@ -112,7 +112,7 @@ export function useInlineUi({
     setInlineUiComponents((prevComponents) => {
       const next = new Map(prevComponents);
       let removedCount = 0;
-      for (const [id, component] of prevComponents) {
+      for (const [id] of prevComponents) {
         if (!referencedUiIds.has(id)) {
           next.delete(id);
           removedCount++;

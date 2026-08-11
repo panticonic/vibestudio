@@ -2318,7 +2318,7 @@ async function main() {
   const { RouteRegistry } = await import("./routeRegistry.js");
   const routeRegistry = new RouteRegistry();
   routeRegistry.registerHttpServiceRoutes(
-    attachedHostParentHttpRoutes(attachedHostParentEndpoint, attachedHostApprovalPresenter)
+    attachedHostParentHttpRoutes(attachedHostApprovalPresenter)
   );
   if (attachedHostChildEndpoint) {
     routeRegistry.registerHttpServiceRoutes(attachedHostHttpRoutes(attachedHostChildEndpoint));
@@ -5638,7 +5638,7 @@ async function main() {
     },
     bootstrapStateHash: bootstrapSnapshot.stateHash,
     publishBootstrapEntity: async (
-      manager,
+      _manager,
       {
         targetId,
         source,

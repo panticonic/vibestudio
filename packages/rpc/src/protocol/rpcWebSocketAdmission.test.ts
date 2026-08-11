@@ -60,7 +60,7 @@ describe("RPC WebSocket admission protocol", () => {
 
   it("normalizes an empty optional label to an absent header", async () => {
     const fetchMock = vi.fn(
-      async (_url: string, init?: RequestInit) =>
+      async (_url: string, _init?: RequestInit) =>
         new Response(JSON.stringify({ ok: true, grant: "grant", expiresAt: 1234 }), {
           status: 201,
           headers: { "Content-Type": "application/json" },

@@ -32,6 +32,7 @@
 
 import TcpSocket from "react-native-tcp-socket";
 import { Buffer } from "buffer";
+import type { ReadableStream } from "node:stream/web";
 import {
   FORWARD_REQUEST_HEADERS,
   STRIP_RESPONSE_HEADERS,
@@ -79,7 +80,8 @@ async function readPersistedPort(): Promise<number | null> {
     const raw = await storage.getItem(PERSISTED_PORT_KEY);
     const port = raw ? Number.parseInt(raw, 10) : NaN;
     return Number.isInteger(port) && port > 0 && port < 65536 ? port : null;
-  } catch {
+  } catch (error) {
+    console.warn("[panel-facade] Failed to read the persisted port:", error);
     return null;
   }
 }
@@ -88,8 +90,8 @@ async function writePersistedPort(port: number): Promise<void> {
   const storage = getNativeAppStorage();
   try {
     await storage.setItem(PERSISTED_PORT_KEY, String(port));
-  } catch {
-    // best-effort
+  } catch (error) {
+    console.warn(`[panel-facade] Failed to persist port ${port}:`, error);
   }
 }
 
@@ -100,7 +102,7 @@ export interface MobileFetchedResponse {
   contentType: string;
   replayHeaders: Record<string, string>;
   cacheable: boolean;
-  body: ReadableStream<Uint8Array> | null;
+  body: ReadableStream<Uint8Array>;
 }
 
 /**
@@ -336,7 +338,7 @@ async function handleRequest(
     }
     try {
       const response = await fetcher();
-      if (!response.cacheable || !response.body) {
+      if (!response.cacheable) {
         tier = "no-store";
         acquisition.complete(null);
         await streamPassthrough(socket, response, markHeadSent, countTransferred);
@@ -596,11 +598,6 @@ export async function streamPassthrough(
     )
   );
   onHeadSent();
-  if (!response.body) {
-    await writeToSocket(socket, "0\r\n\r\n");
-    socket.end();
-    return;
-  }
   const reader = response.body.getReader();
   try {
     for (;;) {

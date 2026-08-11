@@ -3,7 +3,7 @@ import {
   type TestCase,
   type TestExecutionResult,
   type TestResult,
-  type WorkspaceRepoFixtureSpec,
+  type WorkspaceRepoCreationScope,
 } from "../types.js";
 import { findLastAgentMessage, getToolCalls, noIncompleteInvocations } from "./_helpers.js";
 
@@ -61,7 +61,7 @@ function appliedDocsProbe(
   task: string,
   guidance: RegExp,
   finalClaims: RegExp[],
-  options?: { workspaceRepoFixture?: WorkspaceRepoFixtureSpec; actionEvidence?: RegExp[] }
+  options?: { workspaceRepoFixture?: WorkspaceRepoCreationScope; actionEvidence?: RegExp[] }
 ): TestCase {
   return {
     name,

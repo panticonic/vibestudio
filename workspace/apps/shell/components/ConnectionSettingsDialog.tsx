@@ -190,7 +190,7 @@ export function ConnectionSettingsDialog({ open, onOpenChange }: Props) {
               <Text as="label" size="2" weight="medium">
                 Pairing link
               </Text>
-              <Button size="1" variant="soft" disabled={busy} onClick={() => void onPasteLink()}>
+              <Button size="1" variant="soft" disabled={busy} onClick={onPasteLink}>
                 Paste link
               </Button>
             </Flex>

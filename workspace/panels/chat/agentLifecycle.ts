@@ -1,11 +1,11 @@
 /** Panel adapter for the runtime-neutral agent launch/lifecycle primitives. */
 import { rpc } from "@workspace/runtime";
 import { waitForApprovalResolution } from "@workspace/pubsub";
+import { launchAgentIntoChannel } from "@workspace/agentic-core/agent-launch";
 import {
-  launchAgentIntoChannel,
   withWorkspaceReviewRetry,
   type WorkspaceReviewWaiter,
-} from "@workspace/agentic-core";
+} from "@workspace/agentic-core/provisional-agent-lifecycle";
 
 export const waitForPanelReview: WorkspaceReviewWaiter = (approvalId) =>
   waitForApprovalResolution(rpc, approvalId);

@@ -13,7 +13,7 @@ import {
   type ChannelCallEffect,
   type EffectDescriptor,
 } from "../effects.js";
-import type { StepOutput, StepPolicy } from "../step.js";
+import type { StepPolicy } from "../step.js";
 import type { AgentState, RosterEntry } from "../state.js";
 
 type AskUserParticipant = Pick<RosterEntry, "participantId" | "ref" | "handle">;
@@ -27,15 +27,6 @@ export const DEFAULT_SAFE_TOOL_NAMES = new Set([
   "set_title",
   "suspend_turn",
 ]);
-
-function invocationStartedItems(output: StepOutput): Array<{
-  item: AppendItem;
-  payload: Record<string, unknown>;
-}> {
-  return output.append
-    .filter((item) => item.payloadKind === "invocation.started")
-    .map((item) => ({ item, payload: item.payload as Record<string, unknown> }));
-}
 
 /** channel-tools: route roster participant methods over the channel transport. */
 export function channelToolsPolicy(): StepPolicy {

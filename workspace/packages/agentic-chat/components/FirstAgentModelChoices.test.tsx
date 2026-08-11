@@ -1,6 +1,5 @@
 // @vitest-environment jsdom
 
-import React from "react";
 import { render, screen } from "@testing-library/react";
 import { Theme } from "@radix-ui/themes";
 import { describe, expect, it, vi } from "vitest";

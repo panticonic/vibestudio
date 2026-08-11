@@ -5,8 +5,6 @@ import { ledgerTest } from "../../tests/helpers/ledgerTest.js";
 import {
   AGENTIC_EVENT_PAYLOAD_KIND,
   AGENTIC_PROTOCOL_VERSION,
-  invocationAbandonedPayload,
-  invocationCompletedPayload,
   type AgenticEvent,
   type BlockId,
 } from "@workspace/agentic-protocol";
@@ -324,7 +322,7 @@ describe("PubSubChannel", () => {
 
   ledgerTest("channel.locked.exact-admission", async () => {
     const workerId = "do:workers/system-agent:SystemAgentWorker:user-alice";
-    const { instance, sql } = await createGadBackedChannel({
+    const { instance } = await createGadBackedChannel({
       rpcCall: (target, method, args) => {
         if (target === "main" && method === "workspace-state.entity.resolveActive") {
           return { id: args[0], kind: "do" };

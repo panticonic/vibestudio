@@ -348,7 +348,7 @@ export const MovePanelRequestSchema = z.object({
   afterPanelId: z.string().nullable().optional(),
 });
 
-export const PanelRuntimeLeaseSchema = z.object({
+const panelRuntimeLeaseSchema = z.object({
   slotId: PanelSlotIdSchema,
   runtimeEntityId: PanelEntityIdSchema,
   clientSessionId: z.string(),
@@ -363,14 +363,11 @@ export const PanelRuntimeLeaseSchema = z.object({
   expiresAt: z.number().optional(),
 });
 
-type Assert<T extends true> = T;
-type _PanelRuntimeLeaseSchemaMatchesContract = Assert<
-  z.output<typeof PanelRuntimeLeaseSchema> extends PanelRuntimeLease
-    ? PanelRuntimeLease extends z.output<typeof PanelRuntimeLeaseSchema>
-      ? true
-      : false
-    : false
->;
+export const PanelRuntimeLeaseSchema: z.ZodType<
+  PanelRuntimeLease,
+  z.ZodTypeDef,
+  z.input<typeof panelRuntimeLeaseSchema>
+> = panelRuntimeLeaseSchema;
 
 const PanelViewFailureSchema: z.ZodType<PanelViewFailure> = z.object({
   code: z.literal("navigation_failed"),

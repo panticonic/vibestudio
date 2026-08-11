@@ -15,19 +15,25 @@ export type ApprovalDecision = ApprovalDecisionId;
 export type ApprovalConfigFieldType = "text" | "secret";
 export type ApprovalDetailFormat = "plain" | "markdown" | "code" | "tree";
 
-const CONTROL_CHARS = /[\u0000-\u001F\u007F]/;
 // Multi-line fields (summary, detail values) legitimately carry "\n" for
 // markdown code blocks; every other control character stays rejected.
-const CONTROL_CHARS_EXCEPT_NEWLINE = /[\u0000-\u0009\u000B-\u001F\u007F]/;
 const ZERO_WIDTH_CHARS = /[\u200B-\u200F]/g;
+
+function containsDisallowedControlCharacter(value: string, multiline: boolean): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code === 0x7f || (code <= 0x1f && !(multiline && code === 0x0a))) return true;
+  }
+  return false;
+}
+
 export function approvalCleanString(
   label: string,
   opts: { min?: number; max: number; pattern?: RegExp; multiline?: boolean }
 ): z.ZodType<string> {
-  const controlChars = opts.multiline ? CONTROL_CHARS_EXCEPT_NEWLINE : CONTROL_CHARS;
   let schema: z.ZodType<string> = z
     .string()
-    .refine((value) => !controlChars.test(value), {
+    .refine((value) => !containsDisallowedControlCharacter(value, opts.multiline === true), {
       message: `${label} contains control characters`,
     })
     .transform((value) => value.replace(ZERO_WIDTH_CHARS, ""));

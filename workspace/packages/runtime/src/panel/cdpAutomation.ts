@@ -34,80 +34,32 @@ function isCdpClientModule(value: unknown): value is CdpClientModule {
 async function loadCdpClient(
   loadModule?: (id: string) => unknown | Promise<unknown>
 ): Promise<CdpClientModule> {
-  const loadErrors: string[] = [];
-  const rememberLoadError = (source: string, error: unknown) => {
-    const message = error instanceof Error ? error.message : String(error);
-    loadErrors.push(`${source}: ${message}`);
-  };
   if (loadModule) {
     try {
       const loaded = await loadModule(CDP_CLIENT_MODULE);
       if (isCdpClientModule(loaded)) return loaded;
       throw new Error("module does not expose BrowserImpl.connect");
     } catch (error) {
-      rememberLoadError("host module loader", error);
       // A closure-held loader is the hosted runtime's authority-bearing module
-      // path. Falling through would both hide its failure and try loaders that
-      // belong to another runtime (including forbidden Function construction
-      // in workerd).
-      throw new Error(`Unable to load ${CDP_CLIENT_MODULE} for CDP automation. ${loadErrors[0]}`, {
+      // path. Falling through would hide its failure behind another runtime.
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`Unable to load ${CDP_CLIENT_MODULE} for CDP automation. ${message}`, {
         cause: error,
       });
     }
   }
-  const runtimeRequire = (globalThis as Record<string, unknown>)["__vibestudioRequire__"] as
-    | ((id: string) => unknown)
-    | undefined;
-  if (runtimeRequire) {
-    try {
-      const loaded = runtimeRequire(CDP_CLIENT_MODULE);
-      if (isCdpClientModule(loaded)) return loaded;
-    } catch (error) {
-      rememberLoadError("__vibestudioRequire__", error);
-      // Panels can lazily import npm packages via __vibestudioRequireAsync__ below.
-      // Workers only have the sync module map, so a missing map entry should
-      // fall through to the clearest environment-specific loader/error.
-    }
-  }
-  const runtimeLoadImport = (globalThis as Record<string, unknown>)["__vibestudioLoadImport__"] as
-    | ((id: string, ref?: string) => Promise<unknown>)
-    | undefined;
-  if (runtimeLoadImport) {
-    try {
-      const loaded = await runtimeLoadImport(CDP_CLIENT_MODULE, "latest");
-      if (isCdpClientModule(loaded)) return loaded;
-    } catch (error) {
-      rememberLoadError("__vibestudioLoadImport__", error);
-      // Try the panel loader next, then native dynamic import outside the hosted runtime.
-    }
-  }
-  const runtimeRequireAsync = (globalThis as Record<string, unknown>)[
-    "__vibestudioRequireAsync__"
-  ] as ((id: string) => Promise<unknown>) | undefined;
-  if (runtimeRequireAsync) {
-    try {
-      const loaded = await runtimeRequireAsync(CDP_CLIENT_MODULE);
-      if (isCdpClientModule(loaded)) return loaded;
-    } catch (error) {
-      rememberLoadError("__vibestudioRequireAsync__", error);
-      // Fall through to dynamic import for non-runtime test/node environments.
-    }
-  }
   try {
-    const dynamicImport = new Function("id", "return import(id)") as (
-      id: string
-    ) => Promise<CdpClientModule>;
-    const loaded = await dynamicImport(CDP_CLIENT_MODULE);
+    const loaded: unknown = await import("@workspace/cdp-client");
     if (isCdpClientModule(loaded)) return loaded;
+    throw new Error("module does not expose BrowserImpl.connect");
   } catch (error) {
-    rememberLoadError("dynamic import", error);
-    // Throw the clearer message below.
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `Unable to load ${CDP_CLIENT_MODULE} for CDP automation. ${message}. ` +
+        `Call handle.cdp.page() only from contexts that expose @workspace/cdp-client.`,
+      { cause: error }
+    );
   }
-  throw new Error(
-    `Unable to load ${CDP_CLIENT_MODULE} for CDP automation. ` +
-      `Call handle.cdp.page() only from contexts that expose @workspace/cdp-client.` +
-      (loadErrors.length ? ` Load errors: ${loadErrors.join("; ")}` : "")
-  );
 }
 
 export function createCdpAutomation(

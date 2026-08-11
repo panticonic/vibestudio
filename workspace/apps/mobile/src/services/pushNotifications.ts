@@ -351,7 +351,11 @@ export async function registerForPushNotifications(
   const notifee = loadedNotifee?.notifee ?? null;
   const authStatus = await messaging.requestPermission();
   if (notifee?.requestPermission) {
-    await notifee.requestPermission().catch(() => undefined);
+    try {
+      await notifee.requestPermission();
+    } catch (error) {
+      console.warn("[PushNotifications] Local notification permission request failed:", error);
+    }
   }
   if (!isAuthorizedStatus(authStatus)) {
     await maybeShowDeniedToast(callbacks);
@@ -407,7 +411,12 @@ export async function registerForPushNotifications(
       if (approvalId) void handleDeepLink(approvalId, callbacks);
     })
   );
-  const initialNotification = await messaging.getInitialNotification().catch(() => null);
+  let initialNotification: Awaited<ReturnType<typeof messaging.getInitialNotification>> = null;
+  try {
+    initialNotification = await messaging.getInitialNotification();
+  } catch (error) {
+    console.warn("[PushNotifications] Failed to read the launch notification:", error);
+  }
   if (initialNotification?.data?.["approvalId"]) {
     await handleDeepLink(initialNotification.data["approvalId"], callbacks);
   }

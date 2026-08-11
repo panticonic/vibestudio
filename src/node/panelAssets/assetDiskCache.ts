@@ -94,7 +94,6 @@ interface IndexEntry {
 }
 
 export class AssetDiskCache {
-  private readonly dir: string;
   private readonly blobsDir: string;
   private readonly metadataDir: string;
   private readonly indexPath: string;
@@ -108,7 +107,6 @@ export class AssetDiskCache {
   private ready = false;
 
   constructor(opts: { dir: string; maxBytes?: number }) {
-    this.dir = opts.dir;
     this.blobsDir = path.join(opts.dir, "blobs");
     this.metadataDir = path.join(opts.dir, "metadata");
     this.indexPath = path.join(opts.dir, "index.json");

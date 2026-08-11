@@ -228,7 +228,6 @@ export async function authorityDiagnosticsForProgram(input: {
   };
   const addEffect = (
     fact: WorkspaceServiceCallFact,
-    service: ExactResolvedService,
     effect: Omit<RequiredAuthorityEffect, "origin" | "packageName">
   ): void => {
     effects.push({
@@ -365,7 +364,7 @@ export async function authorityDiagnosticsForProgram(input: {
             `The workspace service '${service.binding.name}' requires a bounded Durable Object object key for static authority analysis.`
           );
         }
-        addEffect(fact, service, {
+        addEffect(fact, {
           capability: `workspace-service:${service.binding.name}`,
           tier: "gated",
           operation: "service-resolution",
@@ -413,7 +412,7 @@ export async function authorityDiagnosticsForProgram(input: {
       }
 
       const admission = operationResource(service, fact.objectKeys);
-      addEffect(fact, service, {
+      addEffect(fact, {
         capability: `workspace-service:${service.binding.name}`,
         tier: "gated",
         operation: "service-invocation",
@@ -503,7 +502,7 @@ export async function authorityDiagnosticsForProgram(input: {
             );
           }
         }
-        addEffect(fact, service, {
+        addEffect(fact, {
           capability: methodAuthority.canonicalCapability,
           tier: methodAuthority.tier,
           operation: "method-effect",

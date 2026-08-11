@@ -1,5 +1,9 @@
 import type { CallerKind as RpcCallerKind } from "@vibestudio/rpc";
 
+type PrincipalKindRegistry = {
+  [Kind in RpcCallerKind]: { callerKind: Kind; codeIdentity: boolean };
+};
+
 export const PRINCIPAL_KIND_REGISTRY = {
   panel: {
     callerKind: "panel",
@@ -33,7 +37,7 @@ export const PRINCIPAL_KIND_REGISTRY = {
     callerKind: "agent",
     codeIdentity: false,
   },
-} as const;
+} as const satisfies PrincipalKindRegistry;
 
 export type PrincipalKind = keyof typeof PRINCIPAL_KIND_REGISTRY;
 
@@ -45,14 +49,6 @@ export type PrincipalKind = keyof typeof PRINCIPAL_KIND_REGISTRY;
  * sync — adding/removing a kind in either place fails the build.
  */
 export type CallerKind = RpcCallerKind;
-
-// Union the registry actually produces (kept internal, only for the guard).
-type RegistryCallerKind = (typeof PRINCIPAL_KIND_REGISTRY)[PrincipalKind]["callerKind"];
-
-// Parity guard: the registry must cover exactly the canonical rpc CallerKind.
-type Assert<Cond extends true> = Cond;
-type _registryCoversRpc = Assert<RpcCallerKind extends RegistryCallerKind ? true : never>;
-type _rpcCoversRegistry = Assert<RegistryCallerKind extends RpcCallerKind ? true : never>;
 
 export type CodeIdentityCallerKind = {
   [Kind in PrincipalKind]: (typeof PRINCIPAL_KIND_REGISTRY)[Kind]["codeIdentity"] extends true

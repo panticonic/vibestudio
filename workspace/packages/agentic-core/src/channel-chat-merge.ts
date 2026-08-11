@@ -49,11 +49,6 @@ type StoredValueRefPreview = { preview?: string };
 
 export function chatMessagesFromChannelView(state: ChannelViewState): ChatMessage[] {
   assertNoStoredValueRefs(state, "chat message projection input");
-  const closedTurnIds = new Set(
-    Object.values(state.turns)
-      .filter((turn) => turn.status === "closed")
-      .map((turn) => turn.turnId as string)
-  );
   const messages = Object.values(state.messages).flatMap((message) =>
     projectedMessageToChatMessages(
       message,

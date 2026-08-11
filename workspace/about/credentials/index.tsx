@@ -37,7 +37,6 @@ import {
   buildPanelLink,
   panel,
   panelTree,
-  rpc,
   FORM_FILL_TYPES,
   type CredentialAccessGrantSummary,
   type CredentialAccessSubjectSummary,

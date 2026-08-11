@@ -442,7 +442,9 @@ export function PanelTreeProvider({ children }: { children: ReactNode }) {
               )
             );
           })
-          .catch(() => {});
+          .catch((error: unknown) =>
+            console.warn("[PanelTree] Failed to refresh changed presentations:", error)
+          );
       },
       [mergePresentations]
     )
@@ -666,7 +668,9 @@ export function useFullPanel(panelId: string | null): {
     void panel
       .getPresentation(panelId)
       .then((presentation) => applyPresentation(presentation, request))
-      .catch(() => {});
+      .catch((error: unknown) =>
+        console.warn(`[PanelTree] Failed to refresh presentation ${panelId}:`, error)
+      );
   }, [applyPresentation, panelId]);
   useDirectShellEvent(
     "panel-presentation-changed",
@@ -706,7 +710,8 @@ export function useFullPanel(panelId: string | null): {
       .then((presentation) => {
         if (!cancelled) applyPresentation(presentation, request);
       })
-      .catch(() => {
+      .catch((error: unknown) => {
+        console.warn(`[PanelTree] Failed to load presentation ${panelId}:`, error);
         if (!cancelled) setLoading(false);
       });
     return () => {
@@ -804,7 +809,11 @@ export function useDescendantSiblingGroups(
     return path.join("\0");
   })();
   useEffect(() => {
-    if (panelId) void loadSelectionPath(panelId, maxDepth).catch(() => {});
+    if (panelId) {
+      void loadSelectionPath(panelId, maxDepth).catch((error: unknown) =>
+        console.warn(`[PanelTree] Failed to load selection path ${panelId}:`, error)
+      );
+    }
   }, [loadSelectionPath, maxDepth, panelId, selectionPathKey]);
 
   const groups: DescendantSiblingGroup[] = [];

@@ -82,7 +82,10 @@ describe("inline UI container responsiveness", () => {
   it("keeps the onboarding overview inside a phone-width card", () => {
     render(
       <NarrowInlineUi>
-        <SetupHub props={{ snapshot: snapshots }} chat={{ send: vi.fn() }} />
+        <SetupHub
+          scope={{ onboardingSetupOverview: { catalog: [], snapshot: snapshots } }}
+          chat={{ send: vi.fn() }}
+        />
       </NarrowInlineUi>
     );
 

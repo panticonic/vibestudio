@@ -401,7 +401,7 @@ function unavailable(receipt: SelfDevelopmentReceipt, reason: string): void {
 
 async function orchestrate(
   scenario: string,
-  context: TestOrchestrationContext,
+  _context: TestOrchestrationContext,
   run: (receipt: SelfDevelopmentReceipt) => Promise<void>
 ): Promise<TestExecutionResult> {
   const startedAt = Date.now();

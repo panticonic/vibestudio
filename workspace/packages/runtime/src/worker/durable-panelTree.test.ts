@@ -44,25 +44,6 @@ function respond(init: RequestInit | undefined, result: unknown) {
   );
 }
 
-function readyObservation(panelId: string, source = "panels/a") {
-  const entityKey = panelId.replace(/^panel:tree\//, "");
-  return {
-    panelId,
-    title: "Panel A",
-    source,
-    kind: "workspace",
-    parentId: null,
-    contextId: "ctx",
-    requestedRef: "main",
-    runtimeEntityId: `panel:nav-${entityKey}-current-entity`,
-    attemptId: `panel:nav-${entityKey}-current-entity@build-a`,
-    effectiveVersion: "ev-a",
-    buildKey: "build-a",
-    phase: "ready",
-    updatedAt: 1,
-  };
-}
-
 function workspaceDetailFor(panelId: string, source = "panels/a") {
   const entityKey = panelId.replace(/^panel:tree\//, "");
   return {

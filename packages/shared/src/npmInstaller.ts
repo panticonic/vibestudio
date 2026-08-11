@@ -82,15 +82,7 @@ export async function runNpmInstall(
 
   const installWithCache = async (installCacheDir: string): Promise<void> => {
     fs.mkdirSync(installCacheDir, { recursive: true });
-    const args = [
-      npmCli,
-      "install",
-      "--no-audit",
-      "--no-fund",
-      "--legacy-peer-deps",
-      "--cache",
-      installCacheDir,
-    ];
+    const args = [npmCli, "install", "--no-audit", "--no-fund", "--cache", installCacheDir];
     if (ignoreScripts) args.push("--ignore-scripts");
     await new Promise<void>((resolve, reject) => {
       let timedOut = false;

@@ -14,7 +14,6 @@
 
 import {
   AGENTIC_EVENT_PAYLOAD_KIND,
-  AGENTIC_PROTOCOL_VERSION,
   type AgenticEvent,
   type AppendIdempotency,
   type InvocationOutcome,
@@ -535,10 +534,10 @@ export class CallTransport {
     this.recordObservedHead(callEvent.id);
     this.deps.broadcastLive(callEvent, callerPid);
 
-    return () => this.dispatchCallStart(pendingRow, callerPid);
+    return () => this.dispatchCallStart(pendingRow);
   }
 
-  private async dispatchCallStart(pendingRow: PendingCallRow, callerPid: string): Promise<void> {
+  private async dispatchCallStart(pendingRow: PendingCallRow): Promise<void> {
     // 5. dispatch
     const transport = this.deps.participantTransport(pendingRow.targetId);
     if (transport === null) {
@@ -1042,7 +1041,7 @@ export class CallTransport {
         // Agent vessels execute method calls only through the structured
         // onMethodCall boundary. Their subscription response owns membership
         // but intentionally is not a second semantic delivery path.
-        await this.dispatchCallStart(row, row.callerId);
+        await this.dispatchCallStart(row);
       } else if (transport === "resident-session") {
         await this.deps.redeliverDurableEvent(participantId, row.invocationId);
       } else {

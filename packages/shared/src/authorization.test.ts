@@ -10,7 +10,6 @@ import {
   scopeCovers,
   type AuthorizationContext,
   type AuthorityGrant,
-  type Principal,
 } from "./authorization.js";
 
 const RESOURCE = "workspace:ws-1/repo:projects/vibestudio";

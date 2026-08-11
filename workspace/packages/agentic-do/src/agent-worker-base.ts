@@ -11,14 +11,12 @@ import { createRpcFs } from "@workspace/runtime/worker/rpc-fs";
 import type { AgentTool } from "@workspace/pi-core";
 import type { ParticipantDescriptor } from "@workspace/harness";
 import type { AgentTurnContextPolicy, ThinkingLevel } from "@workspace/agent-loop";
-import { ids } from "@workspace/agent-loop";
 import { channelTrajectoryFor } from "@vibestudio/trajectory-identity";
 import type { RpcClient } from "@vibestudio/rpc";
 import type { VcsCommitResult } from "@vibestudio/service-schemas/vcs";
 import { SUPPORTED_IMAGE_TYPES } from "@workspace/pubsub";
 import {
   AgentVesselBase,
-  subagentRunHandle,
   type AgentPromptResources,
   type AgentToolExecutionContext,
   type ApprovalLevel,

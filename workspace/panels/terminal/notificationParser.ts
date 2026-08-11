@@ -7,7 +7,10 @@ export interface ParsedNotification {
   source: "osc" | "snug";
 }
 
-const oscPattern = /\x1b\](9;([^\x07]*)|99;(?:[^;\x07]*;)*([^\x07]*)|777;notify;([^;\x07]*);([^\x07]*)|1337;snug;([^\x07]*))\x07/g;
+/* oxlint-disable eslint/no-control-regex -- ESC and BEL are the OSC wire delimiters. */
+const oscPattern =
+  /\x1b\](9;([^\x07]*)|99;(?:[^;\x07]*;)*([^\x07]*)|777;notify;([^;\x07]*);([^\x07]*)|1337;snug;([^\x07]*))\x07/g;
+/* oxlint-enable eslint/no-control-regex */
 
 export class NotificationStreamParser {
   private buffer = "";
@@ -43,7 +46,13 @@ export function parseNotifications(data: string): ParsedNotification[] {
   for (const match of data.matchAll(oscPattern)) {
     if (match[2]) out.push(classify({ message: stripMarker(match[2]) }, match[2]));
     else if (match[3]) out.push(classify({ message: stripMarker(match[3]) }, match[3]));
-    else if (match[4] || match[5]) out.push(classify({ title: match[4], message: stripMarker(match[5] ?? match[4] ?? "") }, `${match[4] ?? ""} ${match[5] ?? ""}`));
+    else if (match[4] || match[5])
+      out.push(
+        classify(
+          { title: match[4], message: stripMarker(match[5] ?? match[4] ?? "") },
+          `${match[4] ?? ""} ${match[5] ?? ""}`
+        )
+      );
     else if (match[6]) out.push(parseSnugOsc(match[6]));
   }
   return out;
@@ -57,15 +66,28 @@ function parseSnugOsc(payload: string): ParsedNotification {
   return { severity, title, message, source: "snug" };
 }
 
-function classify(notification: Omit<ParsedNotification, "severity" | "source">, raw: string): ParsedNotification {
+function classify(
+  notification: Omit<ParsedNotification, "severity" | "source">,
+  raw: string
+): ParsedNotification {
   return { ...notification, source: "osc", severity: parseSeverity(raw) ?? keywordSeverity(raw) };
 }
 
 function parseSeverity(value: string | null | undefined): NotificationSeverity | undefined {
   const normalized = value?.toLowerCase();
   if (!normalized) return undefined;
-  if (normalized.includes("[approval]") || normalized.includes("sev=approval") || normalized === "approval") return "approval";
-  if (normalized.includes("[error]") || normalized.includes("sev=failure") || normalized === "failure") return "failure";
+  if (
+    normalized.includes("[approval]") ||
+    normalized.includes("sev=approval") ||
+    normalized === "approval"
+  )
+    return "approval";
+  if (
+    normalized.includes("[error]") ||
+    normalized.includes("sev=failure") ||
+    normalized === "failure"
+  )
+    return "failure";
   if (normalized.includes("sev=waiting") || normalized === "waiting") return "waiting";
   if (normalized.includes("sev=done") || normalized === "done") return "done";
   if (normalized.includes("sev=info") || normalized === "info") return "info";

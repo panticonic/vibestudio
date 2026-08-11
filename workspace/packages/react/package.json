@@ -5,6 +5,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./auto-mount": "./src/autoMount.ts",
+    "./hooks": "./src/hooks.ts",
     "./responsive": "./src/responsive.ts",
     "./theme": "./src/theme.ts"
   },

@@ -2,7 +2,7 @@ import type { ChatMessage } from "@workspace/agentic-core";
 import type { HeadlessSession, SessionSnapshot } from "@workspace/agentic-session";
 import type { HeadlessRunner } from "./runner.js";
 import type { SystemTestFailure, SystemTestJsonValue } from "./structured-error.js";
-import type { WorkspaceRepoFixtureSpec } from "./workspace-repo-fixture.js";
+import type { WorkspaceRepoCreationScope } from "./workspace-repo-fixture.js";
 import type { AgentExecutionTestPolicySpec } from "@vibestudio/shared/authority/testPolicy";
 
 export type {
@@ -10,50 +10,47 @@ export type {
   SystemTestFailure,
   SystemTestJsonValue,
 } from "./structured-error.js";
-export type {
-  WorkspaceRepoCreationScope,
-  WorkspaceRepoFixtureSpec,
-} from "./workspace-repo-fixture.js";
+export type { WorkspaceRepoCreationScope } from "./workspace-repo-fixture.js";
 
 export const CONTENT_WORKSPACE_REPO_FIXTURE = {
   kind: "content",
   section: "projects",
-} as const satisfies WorkspaceRepoFixtureSpec;
+} as const satisfies WorkspaceRepoCreationScope;
 
 export const BUILDABLE_PACKAGE_WORKSPACE_REPO_FIXTURE = {
   kind: "buildable-package",
   section: "packages",
-} as const satisfies WorkspaceRepoFixtureSpec;
+} as const satisfies WorkspaceRepoCreationScope;
 
 export const BUILDABLE_WORKER_WORKSPACE_REPO_FIXTURE = {
   kind: "buildable-worker",
   section: "workers",
-} as const satisfies WorkspaceRepoFixtureSpec;
+} as const satisfies WorkspaceRepoCreationScope;
 
 export const BUILDABLE_REGULAR_WORKER_WORKSPACE_REPO_FIXTURE = {
   kind: "buildable-regular-worker",
   section: "workers",
-} as const satisfies WorkspaceRepoFixtureSpec;
+} as const satisfies WorkspaceRepoCreationScope;
 
 export const CREATED_PANEL_WORKSPACE_REPO_FIXTURE = {
   kind: "created-repository",
   section: "panels",
-} as const satisfies WorkspaceRepoFixtureSpec;
+} as const satisfies WorkspaceRepoCreationScope;
 
 export const CREATED_PACKAGE_WORKSPACE_REPO_FIXTURE = {
   kind: "created-repository",
   section: "packages",
-} as const satisfies WorkspaceRepoFixtureSpec;
+} as const satisfies WorkspaceRepoCreationScope;
 
 export const CREATED_WORKER_WORKSPACE_REPO_FIXTURE = {
   kind: "created-repository",
   section: "workers",
-} as const satisfies WorkspaceRepoFixtureSpec;
+} as const satisfies WorkspaceRepoCreationScope;
 
 export const BUILDABLE_PANEL_WITH_DERIVED_WORKSPACE_REPO_FIXTURE = {
   kind: "buildable-panel-with-derived",
   section: "panels",
-} as const satisfies WorkspaceRepoFixtureSpec;
+} as const satisfies WorkspaceRepoCreationScope;
 
 export interface ToolFailureSummary {
   id?: string;
@@ -103,7 +100,7 @@ export interface AgentTrajectoryReview {
 
 export interface TestAuthorityPolicyContext {
   testName: string;
-  workspaceRepoFixture: (WorkspaceRepoFixtureSpec & { repoName: string | null }) | null;
+  workspaceRepoFixture: (WorkspaceRepoCreationScope & { repoName: string | null }) | null;
 }
 
 export type TestAuthorityPolicy =
@@ -155,7 +152,7 @@ export interface TestCase {
    * serialize while disjoint tests remain concurrent.
    * This keeps fixture mechanics out of the user-like prompt.
    */
-  workspaceRepoFixture?: WorkspaceRepoFixtureSpec;
+  workspaceRepoFixture?: WorkspaceRepoCreationScope;
   /**
    * Optional custom orchestration for tests that need multiple independent
    * headless agents, ordered phases, or other harness-level setup that a single

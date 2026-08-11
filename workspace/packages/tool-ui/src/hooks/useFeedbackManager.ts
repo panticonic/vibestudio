@@ -4,7 +4,7 @@
  */
 
 import { useReducer, useEffect, useCallback } from "react";
-import type { ActiveFeedback, FeedbackResult } from "../types";
+import type { ActiveFeedback } from "../types";
 
 /**
  * Feedback reducer manages active feedback UI components and their lifecycle.

@@ -24,9 +24,7 @@ describe("terminal exact state", () => {
           lastSeenAt: 34,
         },
       },
-      scratchBuffers: [
-        { bufferId: "scratch-1", text: "echo hi", createdAt: 1, updatedAt: 2 },
-      ],
+      scratchBuffers: [{ bufferId: "scratch-1", text: "echo hi", createdAt: 1, updatedAt: 2 }],
       scratchActiveBufferId: "scratch-1",
     };
 
@@ -38,30 +36,22 @@ describe("terminal exact state", () => {
     expect(loadTerminalState(current)).toEqual({ ...current, scratchOpen: false });
   });
 
-  it("starts empty panels and migrates known legacy state", () => {
+  it("starts empty panels", () => {
     expect(loadTerminalState({})).toEqual(defaultTerminalState());
-    expect(
-      loadTerminalState({
-        schemaVersion: 2,
-        panelTitle: " Legacy terminal ",
-        fontSize: 15,
-      })
-    ).toMatchObject({
-      panelTitle: "Legacy terminal",
-      fontSize: 15,
-      schemaVersion: TERMINAL_STATE_SCHEMA_VERSION,
-    });
+  });
+
+  it.each([false, 0, "", []])("rejects non-object persisted state", (state) => {
+    expect(() => loadTerminalState(state)).toThrow(/schema version/);
   });
 
   it.each([
     { ...defaultTerminalState(), schemaVersion: TERMINAL_STATE_SCHEMA_VERSION + 1 },
+    { ...defaultTerminalState(), schemaVersion: TERMINAL_STATE_SCHEMA_VERSION - 1 },
     { ...defaultTerminalState(), fontSize: Number.NaN },
     { ...defaultTerminalState(), panelTitle: "  rewritten  " },
     { ...defaultTerminalState(), unexpected: "stale" },
     { ...defaultTerminalState(), scratchActiveBufferId: "missing" },
   ])("rejects non-current, malformed, or rewritten state", (state) => {
-    expect(() => loadTerminalState(state)).toThrow(
-      /current exact schema|schema version/
-    );
+    expect(() => loadTerminalState(state)).toThrow(/current exact schema|schema version/);
   });
 });

@@ -348,7 +348,6 @@ function parseGraphImport(
 
 function createWorkspaceResolvePlugin(
   graph: PackageGraph,
-  workspaceRoot: string,
   sourceRoot: string,
   conditions: readonly string[] = PANEL_CONDITIONS,
   externalSpecifiers: readonly string[] = []
@@ -591,7 +590,6 @@ function hasFileWithExtension(dir: string, extensions: Set<string>): boolean {
 function explainExtensionDep(
   name: string,
   mode: ExtensionDependencyMode,
-  external: boolean,
   format: ClassifiedExtensionDep["format"],
   reasons: string[]
 ): string {
@@ -658,7 +656,7 @@ export function classifyExtensionDeps(
         external,
         format,
         reasons,
-        explanation: explainExtensionDep(name, mode, external, format, reasons),
+        explanation: explainExtensionDep(name, mode, format, reasons),
       };
     });
 }
@@ -1249,7 +1247,6 @@ export function injectHtmlTransforms(
 
 function generatePanelHtml(
   title: string,
-  relativePath: string,
   templateHtmlPath: string | null,
   adapter: FrameworkAdapter,
   options: {
@@ -2046,7 +2043,6 @@ function executableModulesFromMetafile(
   metafile: esbuild.Metafile | undefined,
   outdir: string,
   sourceRoot: string,
-  workspaceRoot: string,
   node: GraphNode,
   graph: PackageGraph
 ): import("./buildStore.js").ExecutableModuleInput[] {
@@ -2234,7 +2230,7 @@ async function buildPanel(
   const plugins: esbuild.Plugin[] = [
     ...(sharedStyleEntryPath ? [createSharedStyleDedupePlugin(sharedStyles)] : []),
     ...(node.kind === "app" ? [createAppRuntimeShimPlugin()] : []),
-    createWorkspaceResolvePlugin(graph, workspaceRoot, sourceRoot),
+    createWorkspaceResolvePlugin(graph, sourceRoot),
     createTsExtensionPlugin(sourceRoot),
     createFsShimPlugin({ runtimeBacked: node.kind !== "app", resolveDir }),
     createPathShimPlugin(resolveDir),
@@ -2440,7 +2436,7 @@ async function buildPanel(
 
     // Generate HTML using template or adapter fallback
     const title = extractedManifest.title ?? node.name;
-    const html = generatePanelHtml(title, node.relativePath, resolved.htmlPath, adapter, {
+    const html = generatePanelHtml(title, resolved.htmlPath, adapter, {
       hasCss: !!css,
       externals: manifestExternals,
       usePanelLoader: node.kind !== "app",
@@ -2471,7 +2467,6 @@ async function buildPanel(
         metafile,
         outdir,
         sourceRoot,
-        workspaceRoot,
         node,
         graph
       ),
@@ -2945,7 +2940,7 @@ async function buildWorker(
     // Terminal (Ink) workers: intercept yoga-layout / signal-exit / terminal-size
     // BEFORE the workspace resolver so these aliases win. No-op for other workers.
     ...(terminalWorker ? [createTerminalWorkerAliasPlugin(resolveDir)] : []),
-    createWorkspaceResolvePlugin(graph, workspaceRoot, sourceRoot, WORKER_CONDITIONS),
+    createWorkspaceResolvePlugin(graph, sourceRoot, WORKER_CONDITIONS),
     createTsExtensionPlugin(sourceRoot),
     createWorkerBufferShimPlugin(resolveDir),
     // CommonJS dependencies such as isomorphic-git use require("crypto").
@@ -3006,7 +3001,6 @@ async function buildWorker(
       buildResult.metafile,
       outdir,
       sourceRoot,
-      workspaceRoot,
       node,
       graph
     );
@@ -3216,7 +3210,7 @@ async function buildTerminalApp(
       conditions: ["node", "import"],
       external: [...WORKER_NODE_BUILTIN_EXTERNALS],
       plugins: [
-        createWorkspaceResolvePlugin(graph, workspaceRoot, sourceRoot),
+        createWorkspaceResolvePlugin(graph, sourceRoot),
         createTsExtensionPlugin(sourceRoot),
       ],
       nodePaths,
@@ -3447,7 +3441,7 @@ async function buildExtension(
   );
 
   const plugins: esbuild.Plugin[] = [
-    createWorkspaceResolvePlugin(graph, workspaceRoot, sourceRoot, EXTENSION_CONDITIONS),
+    createWorkspaceResolvePlugin(graph, sourceRoot, EXTENSION_CONDITIONS),
     createTsExtensionPlugin(sourceRoot),
   ];
   const cjsShimPlugin = createExtensionCjsShimPlugin(outdir, classifiedDeps);
@@ -3873,7 +3867,7 @@ async function buildLibraryBundle(
         // too: esbuild's `external` option alone is bypassed because this plugin's
         // onResolve handles `@workspace/*` first. The host (EvalDO) provides those
         // externals at runtime via its module map.
-        createWorkspaceResolvePlugin(graph, workspaceRoot, sourceRoot, conditions, externals),
+        createWorkspaceResolvePlugin(graph, sourceRoot, conditions, externals),
         createTsExtensionPlugin(sourceRoot),
         createFsShimPlugin({ runtimeBacked: true, resolveDir: env.resolveDir }),
         createPathShimPlugin(env.resolveDir),

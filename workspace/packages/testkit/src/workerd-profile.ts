@@ -70,15 +70,18 @@ export async function profileWorkerd(
       await connection.send("Profiler.setSamplingInterval", { interval: opts.samplingIntervalUs });
     }
     await connection.send("Profiler.start");
+    let savedProfile: ProfileRef | undefined;
     try {
       await run();
     } finally {
       const result = (await connection.send("Profiler.stop")) as { profile: V8Profile };
-      return await saveProfile(
+      savedProfile = await saveProfile(
         cpuProfileRef(`workerd:${label}`, startedAt, result.profile),
         JSON.stringify(result.profile)
       );
     }
+    if (!savedProfile) throw new Error("Workerd CPU profile was not saved");
+    return savedProfile;
   } finally {
     connection.close();
   }
