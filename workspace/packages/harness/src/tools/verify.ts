@@ -57,6 +57,11 @@ interface TestRunResult {
 
 export type VerifyToolDetails =
   | {
+      operation: "build" | "test";
+      target: string;
+      status: "running";
+    }
+  | {
       operation: "build";
       target: string;
       status: UnitBuildReportWire["status"];
@@ -87,9 +92,23 @@ export function createVerifyTool(
     description:
       'Build or test one workspace unit against this conversation\'s exact semantic working state. Use { operation:"build", target } for compiler/bundler diagnostics and { operation:"test", target, file?, testName? } for Vitest. This is the supported code-verification boundary: it materializes the exact context, preserves execution authority and approvals, returns structured bounded evidence, and never treats zero discovered tests as success. Do not emulate it with a shell command or generic eval wrapper.',
     parameters: verifySchema,
-    execute: async (_toolCallId, input, signal): Promise<AgentToolResult<VerifyToolDetails>> => {
+    execute: async (
+      _toolCallId,
+      input,
+      signal,
+      onUpdate
+    ): Promise<AgentToolResult<VerifyToolDetails>> => {
       if (signal?.aborted) throw signal.reason ?? new Error("Operation aborted");
       const command = input as VerifyToolInput;
+      onUpdate?.({
+        content: [
+          {
+            type: "text",
+            text: `${command.operation === "build" ? "Building" : "Testing"} ${command.target}…`,
+          },
+        ],
+        details: { operation: command.operation, target: command.target, status: "running" },
+      });
       if (command.operation === "build") {
         const report = await callMain<UnitBuildReportWire>(
           "build.getBuildReport",

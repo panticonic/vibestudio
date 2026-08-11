@@ -72,7 +72,7 @@ function clamp(text: string, max: number): string {
 }
 
 export function createDocsSearchTool(
-  callMain: <T>(method: string, args: unknown[]) => Promise<T>
+  callMain: <T>(method: string, args: unknown[], signal?: AbortSignal) => Promise<T>
 ): AgentTool<typeof searchSchema> {
   return {
     name: "docs_search",
@@ -81,12 +81,14 @@ export function createDocsSearchTool(
     description:
       'Agent tool only (not an eval global/export). Call as docs_search({ query: "keywords", surface?, limit? }). Search the capability catalog — host services, runtime APIs, and live workspace services — by keyword. Returns compact hits filtered to what you may call; use docs_open({ id: "<result-id>" }) for the full contract before starting eval.',
     parameters: searchSchema,
-    execute: async (_toolCallId, params): Promise<AgentToolResult<CatalogHit[]>> => {
+    execute: async (_toolCallId, params, signal): Promise<AgentToolResult<CatalogHit[]>> => {
+      if (signal?.aborted) throw signal.reason ?? new Error("Operation aborted");
       const limit = Math.min(params.limit ?? 20, 100);
-      const serverHits = await callMain<CatalogHit[]>("docs.search", [
-        params.query,
-        { surface: params.surface, limit },
-      ]);
+      const serverHits = await callMain<CatalogHit[]>(
+        "docs.search",
+        [params.query, { surface: params.surface, limit }],
+        signal
+      );
       const hits = serverHits.slice(0, limit);
       if (hits.length === 0) {
         return {
@@ -368,7 +370,7 @@ export function renderEntry(entry: CatalogEntry): string {
 }
 
 export function createDocsOpenTool(
-  callMain: <T>(method: string, args: unknown[]) => Promise<T>
+  callMain: <T>(method: string, args: unknown[], signal?: AbortSignal) => Promise<T>
 ): AgentTool<typeof openSchema> {
   return {
     name: "docs_open",
@@ -377,8 +379,9 @@ export function createDocsOpenTool(
     description:
       'Agent tool only (not an eval global/export). Call exactly as docs_open({ id: "<catalog-id>" }). Open one result from docs_search before starting eval: source signature or typed schema, access rules, examples, and live workspace-provider identity.',
     parameters: openSchema,
-    execute: async (_toolCallId, params): Promise<AgentToolResult<CatalogEntry | null>> => {
-      const entry = await callMain<CatalogEntry | null>("docs.describe", [params.id]);
+    execute: async (_toolCallId, params, signal): Promise<AgentToolResult<CatalogEntry | null>> => {
+      if (signal?.aborted) throw signal.reason ?? new Error("Operation aborted");
+      const entry = await callMain<CatalogEntry | null>("docs.describe", [params.id], signal);
       if (!entry) {
         return {
           content: [

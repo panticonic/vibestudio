@@ -251,9 +251,8 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
     return contextPolicy;
   }
 
-  /** The six workerd-clean file tools over the agent's context folder
-   *  (fs RPC scopes paths to the caller's context). Without them, agents
-   *  whose prompts say `read(".../SKILL.md")` can only flail. */
+  /** Workerd-clean authoring, discovery, and verification tools over the
+   *  agent's exact semantic context. */
   protected override async getLoopTools(
     channelId: string,
     execution?: AgentToolExecutionContext
@@ -340,11 +339,11 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
       ),
       // Capability discovery: search/open the caller-aware catalog (services
       // and runtime APIs) with typed schemas + access rules.
-      createDocsSearchTool(<T>(method: string, methodArgs: unknown[]) =>
-        toolRpc.call<T>("main", method, methodArgs)
+      createDocsSearchTool(<T>(method: string, methodArgs: unknown[], signal?: AbortSignal) =>
+        toolRpc.call<T>("main", method, methodArgs, { signal })
       ),
-      createDocsOpenTool(<T>(method: string, methodArgs: unknown[]) =>
-        toolRpc.call<T>("main", method, methodArgs)
+      createDocsOpenTool(<T>(method: string, methodArgs: unknown[], signal?: AbortSignal) =>
+        toolRpc.call<T>("main", method, methodArgs, { signal })
       ),
       createWorkspaceServiceTool(vcs, mutationContext, {
         validateConfig: (content) =>

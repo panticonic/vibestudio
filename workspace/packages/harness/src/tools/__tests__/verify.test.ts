@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import type { UnitBuildReportWire } from "@vibestudio/service-schemas/build";
 import { createVerifyTool } from "../verify.js";
 
 function rpcResult<T>(value: T) {
@@ -38,6 +39,37 @@ describe("context-exact verify tool", () => {
     );
     expect(result.isError).toBe(false);
     expect(result.details).toMatchObject({ operation: "build", status: "ok" });
+  });
+
+  it("publishes an immediate running update before waiting for verification", async () => {
+    let release!: (value: UnitBuildReportWire) => void;
+    const pending = new Promise<UnitBuildReportWire>((resolve) => {
+      release = resolve;
+    });
+    const callMain = async <T>(): Promise<T> => (await pending) as T;
+    const updates: unknown[] = [];
+    const execution = createVerifyTool(callMain, () => "context-7").execute(
+      "call-progress",
+      { operation: "build", target: "packages/example" },
+      undefined,
+      (update) => updates.push(update)
+    );
+
+    expect(updates).toEqual([
+      {
+        content: [{ type: "text", text: "Building packages/example…" }],
+        details: { operation: "build", target: "packages/example", status: "running" },
+      },
+    ]);
+
+    release({
+      repoPath: "packages/example",
+      kind: "package",
+      status: "ok",
+      diagnostics: [],
+      builds: [],
+    });
+    await expect(execution).resolves.toMatchObject({ isError: false });
   });
 
   it("keeps structured build diagnostics while marking a failed build as an error", async () => {

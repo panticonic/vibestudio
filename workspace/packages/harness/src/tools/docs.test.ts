@@ -15,6 +15,21 @@ describe("docs_search", () => {
       { method: "docs.search", args: ["runtime", { surface: undefined, limit: 100 }] },
     ]);
   });
+
+  it("forwards cancellation to catalog discovery", async () => {
+    const observed: Array<AbortSignal | undefined> = [];
+    const tool = createDocsSearchTool(
+      async <T>(_method: string, _args: unknown[], signal?: AbortSignal) => {
+        observed.push(signal);
+        return [] as T;
+      }
+    );
+    const controller = new AbortController();
+
+    await tool.execute("call-signal", { query: "runtime" }, controller.signal);
+
+    expect(observed).toEqual([controller.signal]);
+  });
 });
 
 describe("renderEntry (readable docs_open text)", () => {
