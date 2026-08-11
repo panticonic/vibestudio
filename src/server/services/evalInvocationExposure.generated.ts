@@ -5322,6 +5322,20 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     },
   },
   {
+    id: "direct:workspace/workers/workspace-source/GadWorkspaceDO.ts:resolveTrajectoryForkPoint",
+    rpcPlane: "workspace-do",
+    capability: "workspace.graph.read",
+    authorityPrincipals: ["code", "host", "user"],
+    owner: "workspace/workers/workspace-source/GadWorkspaceDO.ts",
+    source: "workers/workspace-source",
+    method: "resolveTrajectoryForkPoint",
+    sensitivity: "read",
+    resourceDerivation: {
+      kind: "direct-target",
+      owner: "workspace/workers/workspace-source/GadWorkspaceDO.ts",
+    },
+  },
+  {
     id: "direct:workspace/workers/workspace-source/GadWorkspaceDO.ts:setMemoryIndexMarker",
     rpcPlane: "workspace-do",
     capability: "workspace.graph.write",

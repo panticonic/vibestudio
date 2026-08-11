@@ -3249,6 +3249,23 @@ describe("lineage queries over causality edges (§3.15)", () => {
       },
     });
 
+    await expect(
+      call("resolveTrajectoryForkPoint", {
+        trajectoryId: "traj-1",
+        branchId: "main",
+        channelId: "channel-1",
+        channelSeq: 1,
+      })
+    ).resolves.toEqual({ seq: 1 });
+    await expect(
+      call("resolveTrajectoryForkPoint", {
+        trajectoryId: "traj-1",
+        branchId: "main",
+        channelId: "channel-1",
+        channelSeq: 0,
+      })
+    ).resolves.toEqual({ seq: 0 });
+
     const turnPublications = await call<any[]>("listPublishedEnvelopesForTrajectory", {
       branchId: "main",
       turnId: "turn-1",

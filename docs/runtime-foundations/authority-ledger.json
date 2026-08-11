@@ -16264,6 +16264,50 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
+      "id": "direct:workspace/workers/workspace-source/GadWorkspaceDO.ts:resolveTrajectoryForkPoint",
+      "rpcPlane": "workspace-do",
+      "owner": "workspace/workers/workspace-source/GadWorkspaceDO.ts",
+      "source": "workers/workspace-source",
+      "method": "resolveTrajectoryForkPoint",
+      "resourceDerivation": {
+        "kind": "direct-target",
+        "owner": "workspace/workers/workspace-source/GadWorkspaceDO.ts"
+      },
+      "authorityPrincipals": [
+        "code",
+        "host",
+        "user"
+      ],
+      "sensitivity": "read",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "capability": "workspace.graph.read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user-relay",
+        "runtime-entity",
+        "exact-code-artifact",
+        "owner-chain",
+        "agent-binding",
+        "audience-bound-attestation"
+      ],
+      "currentOutcomes": {
+        "allowed": "schema-declared direct-RPC requirement satisfied",
+        "denied": "missing attested facts or requirement failure is EACCES"
+      },
+      "predicates": [
+        "live-owner-service-relationship",
+        "exact-resource-scope",
+        "next-dispatch-revocation"
+      ],
+      "r3aRequirement": "schema-open",
+      "r3b": {
+        "review": "bounded-channel-trajectory-fork-coordinate-read",
+        "change": "Adds an open, read-only aggregate that resolves one trajectory sequence from exact trajectory, branch, channel, and channel-sequence coordinates. It returns only a non-negative sequence number, exposes no generic SQL or payload content, and performs no mutation."
+      },
+      "parityAssertion": "generated-census:direct-authority"
+    },
+    {
       "id": "direct:workspace/workers/workspace-source/GadWorkspaceDO.ts:setMemoryIndexMarker",
       "rpcPlane": "workspace-do",
       "owner": "workspace/workers/workspace-source/GadWorkspaceDO.ts",

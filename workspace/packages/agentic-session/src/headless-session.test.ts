@@ -438,7 +438,7 @@ describe("HeadlessSession", () => {
     ]);
   });
 
-  it("records isolated context cleanup failure without creating a second cleanup owner", async () => {
+  it("reports isolated context cleanup failure without creating a second cleanup owner", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const session = HeadlessSession.create({ config: createConfig() });
     const calls: Array<{ target: string; method: string }> = [];
@@ -453,7 +453,7 @@ describe("HeadlessSession", () => {
       return undefined;
     });
 
-    await session.close();
+    await expect(session.close()).rejects.toThrow(/Headless session cleanup failed in 1 phase/);
 
     expect(session.snapshot().cleanupErrors).toEqual([
       expect.objectContaining({
@@ -543,7 +543,7 @@ describe("HeadlessSession", () => {
     expect(session.snapshot().cleanupErrors).toEqual([]);
   });
 
-  it("records cleanup errors from headless agent teardown", async () => {
+  it("reports every cleanup error after attempting the full headless agent teardown", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const session = HeadlessSession.create({
       config: createConfig(),
@@ -557,7 +557,12 @@ describe("HeadlessSession", () => {
       return undefined;
     });
 
-    await session.close();
+    const cleanupError = await session.close().catch((error: unknown) => error);
+    expect(cleanupError).toBeInstanceOf(AggregateError);
+    expect((cleanupError as AggregateError).errors).toEqual([
+      expect.objectContaining({ message: "unsubscribe failed" }),
+      expect.objectContaining({ message: "retire failed" }),
+    ]);
 
     expect(session.snapshot().cleanupErrors).toEqual([
       expect.objectContaining({ phase: "unsubscribeHeadlessAgent", message: "unsubscribe failed" }),

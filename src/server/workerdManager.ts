@@ -15,7 +15,7 @@ import * as fs from "fs";
 import { createRequire } from "module";
 import * as path from "path";
 import * as os from "os";
-import { DatabaseSync } from "node:sqlite";
+import { backup, DatabaseSync } from "node:sqlite";
 import { stateLayout } from "./stateLayout.js";
 import { pathToFileURL } from "url";
 import type { TokenManager } from "@vibestudio/shared/tokenManager";
@@ -221,7 +221,7 @@ export interface DurableObjectStorageBackup {
 
 interface DurableObjectMaintenanceRow {
   operationId: string;
-  kind: "reset" | "restore";
+  kind: "reset" | "restore" | "destroy";
   targetId: string;
   source: string;
   className: string;
@@ -633,7 +633,7 @@ export class WorkerdManager {
       PRAGMA journal_mode = WAL;
       CREATE TABLE IF NOT EXISTS do_maintenance (
         operation_id TEXT PRIMARY KEY,
-        kind TEXT NOT NULL CHECK (kind IN ('reset', 'restore')),
+        kind TEXT NOT NULL CHECK (kind IN ('reset', 'restore', 'destroy')),
         target_id TEXT NOT NULL,
         source TEXT NOT NULL,
         class_name TEXT NOT NULL,
@@ -648,6 +648,35 @@ export class WorkerdManager {
       CREATE UNIQUE INDEX IF NOT EXISTS do_maintenance_one_open_target
         ON do_maintenance(target_id) WHERE status = 'open';
     `);
+    const maintenanceSchema = this.doMaintenanceDb
+      .prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'do_maintenance'`)
+      .get() as { sql?: string } | undefined;
+    if (!maintenanceSchema?.sql?.includes("'destroy'")) {
+      this.doMaintenanceDb.exec(`
+        BEGIN IMMEDIATE;
+        DROP INDEX IF EXISTS do_maintenance_one_open_target;
+        ALTER TABLE do_maintenance RENAME TO do_maintenance_v1;
+        CREATE TABLE do_maintenance (
+          operation_id TEXT PRIMARY KEY,
+          kind TEXT NOT NULL CHECK (kind IN ('reset', 'restore', 'destroy')),
+          target_id TEXT NOT NULL,
+          source TEXT NOT NULL,
+          class_name TEXT NOT NULL,
+          object_key TEXT NOT NULL,
+          intent TEXT NOT NULL,
+          backup_operation_id TEXT,
+          step TEXT NOT NULL,
+          status TEXT NOT NULL CHECK (status IN ('open', 'complete')),
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL
+        );
+        INSERT INTO do_maintenance SELECT * FROM do_maintenance_v1;
+        DROP TABLE do_maintenance_v1;
+        CREATE UNIQUE INDEX do_maintenance_one_open_target
+          ON do_maintenance(target_id) WHERE status = 'open';
+        COMMIT;
+      `);
+    }
     this.doSchemaDescriptorDb = new DatabaseSync(layout.durableObjectSchemaDescriptorsDb);
     this.doSchemaDescriptorDb.exec(`
       PRAGMA journal_mode = WAL;
@@ -4025,7 +4054,7 @@ export class WorkerdManager {
         const row = raw as Record<string, unknown>;
         return {
           operationId: String(row["operation_id"]),
-          kind: row["kind"] as "reset" | "restore",
+          kind: row["kind"] as "reset" | "restore" | "destroy",
           targetId: String(row["target_id"]),
           source: String(row["source"]),
           className: String(row["class_name"]),
@@ -4210,6 +4239,13 @@ export class WorkerdManager {
         row.step = "retired";
       }
       if (row.step === "retired") {
+        if (row.kind === "destroy") {
+          await this.destroyDurableObjectStorageFiles(ref);
+          this.updateDurableObjectMaintenance(row.operationId, "replaced");
+          row.step = "replaced";
+        }
+      }
+      if (row.step === "retired") {
         await this.copyDurableObjectStorageToBackup(
           ref,
           row.operationId,
@@ -4253,18 +4289,30 @@ export class WorkerdManager {
   }
 
   private async startDurableObjectMaintenance(input: {
-    kind: "reset" | "restore";
+    kind: "reset" | "restore" | "destroy";
     ref: DORef;
     intent: string;
     backupOperationId?: string;
+    journalOnly?: boolean;
   }): Promise<string> {
     await this.doMaintenanceRecovery;
     if (!input.intent.trim()) throw new Error("Durable Object storage maintenance requires intent");
     const targetId = this.durableObjectTargetId(input.ref);
     const previous = this.doMaintenanceChains.get(targetId);
-    if (previous) await previous.catch(() => undefined);
+    if (previous) await previous;
     const open = this.readOpenDurableObjectMaintenance().find((row) => row.targetId === targetId);
     if (open) {
+      if (input.journalOnly) {
+        if (
+          open.kind === input.kind &&
+          open.backupOperationId === (input.backupOperationId ?? null)
+        ) {
+          return open.operationId;
+        }
+        throw new Error(
+          `Durable Object storage maintenance ${open.operationId} is already open for ${targetId}`
+        );
+      }
       await this.resumeDurableObjectMaintenance(open);
       if (
         open.kind === input.kind &&
@@ -4304,14 +4352,19 @@ export class WorkerdManager {
         createdAt,
         createdAt
       );
-    const run = this.resumeDurableObjectMaintenance(row).finally(() => {
+    if (input.journalOnly) {
+      await this.fenceDurableObjectMaintenance(row);
+      return operationId;
+    }
+    const execute = () =>
+      this.resumeDurableObjectMaintenance(row).then(async () => {
+        if (input.kind !== "destroy") await this.sweepDurableObjectBackups(input.ref, 5);
+      });
+    const run = execute().finally(() => {
       if (this.doMaintenanceChains.get(targetId) === run) this.doMaintenanceChains.delete(targetId);
     });
     this.doMaintenanceChains.set(targetId, run);
     await run;
-    await this.sweepDurableObjectBackups(input.ref, 5).catch((error) => {
-      log.warn(`Failed to sweep Durable Object storage backups for ${targetId}`, error);
-    });
     return operationId;
   }
 
@@ -4383,13 +4436,26 @@ export class WorkerdManager {
    * Userland DOs run as facets of the static UniversalDO host: each host object
    * owns one facet whose storage is the set of files prefixed by the host's id
    * hash (`<hash>.sqlite`, `<hash>.1.sqlite`, `<hash>.facets`, + WAL/SHM). The
-   * facet name is constant, so the layout is portable across host objects —
-   * cloning copies every `<srcHash>.*` file to `<tgtHash>.*` (WAL/SHM included
-   * for a consistent snapshot).
+   * facet name is constant, so the layout is portable across host objects.
+   *
+   * The ordinary path fences and retires the source facet before copying its
+   * released files. When the verified runtime caller is the source object
+   * itself, retiring it would deadlock the call that requested the clone. That
+   * exact actor is already serialized and paused on the host RPC, so the
+   * cooperative path uses SQLite's online backup API for each database and
+   * copies the stable facet descriptor without retiring the caller.
    */
-  async cloneDO(ref: DORef, newObjectKey: string): Promise<DORef> {
+  async cloneDO(
+    ref: DORef,
+    newObjectKey: string,
+    options: { cooperativelyPaused?: boolean } = {}
+  ): Promise<DORef> {
     if (isInternalDOSource(ref.source)) {
       throw new Error(`cloneDO is not supported for internal DO source "${ref.source}"`);
+    }
+    if (options.cooperativelyPaused) {
+      await this.cloneCooperativelyPausedDOStorage(ref, newObjectKey);
+      return { source: ref.source, className: ref.className, objectKey: newObjectKey };
     }
     const targetId = this.durableObjectTargetId(ref);
     const sealOwnerId = `clone:${crypto.randomUUID()}`;
@@ -4429,6 +4495,65 @@ export class WorkerdManager {
     }
   }
 
+  private async cloneCooperativelyPausedDOStorage(ref: DORef, newObjectKey: string): Promise<void> {
+    const dir = this.universalDoStorageDir();
+    const srcHash = this.universalHostHash(ref);
+    const tgtHash = this.universalHostHash({ ...ref, objectKey: newObjectKey });
+    const files = await fs.promises.readdir(dir);
+
+    // A deterministic clone target is immutable at creation time. Once any
+    // target storage exists, a retry must preserve it rather than overwrite a
+    // clone that may already have advanced independently.
+    if (files.some((file) => file.startsWith(`${tgtHash}.`))) return;
+
+    const sourceDatabases = files.filter(
+      (file) => file.startsWith(`${srcHash}.`) && file.endsWith(".sqlite")
+    );
+    const facetDescriptor = `${srcHash}.facets`;
+    if (sourceDatabases.length === 0 || !files.includes(facetDescriptor)) {
+      throw new Error(
+        `Source DO storage not found: ${ref.className}/${ref.objectKey} ` +
+          `(incomplete facet storage for host ${srcHash} under ${dir})`
+      );
+    }
+
+    const createdTargets: string[] = [];
+    try {
+      for (const file of sourceDatabases) {
+        const sourcePath = path.join(dir, file);
+        const targetFile = `${tgtHash}${file.slice(srcHash.length)}`;
+        const targetPath = path.join(dir, targetFile);
+        createdTargets.push(targetPath);
+        const database = new DatabaseSync(sourcePath, { readOnly: true });
+        try {
+          await backup(database, targetPath);
+        } finally {
+          database.close();
+        }
+      }
+      const targetDescriptor = path.join(dir, `${tgtHash}.facets`);
+      createdTargets.push(targetDescriptor);
+      await fs.promises.copyFile(path.join(dir, facetDescriptor), targetDescriptor);
+    } catch (cause) {
+      const cleanupFailures: Error[] = [];
+      for (const target of createdTargets.reverse()) {
+        try {
+          await fs.promises.unlink(target);
+        } catch (cleanupCause) {
+          const error = cleanupCause as NodeJS.ErrnoException;
+          if (error.code !== "ENOENT") cleanupFailures.push(error);
+        }
+      }
+      if (cleanupFailures.length > 0) {
+        throw new AggregateError(
+          [cause, ...cleanupFailures],
+          `Cooperative clone of ${this.durableObjectTargetId(ref)} failed and cleanup was incomplete`
+        );
+      }
+      throw cause;
+    }
+  }
+
   /**
    * Destroy a userland DO's facet storage — every file prefixed by the host id
    * hash (main + facet + index + WAL/SHM). Used to clean up orphaned clones on
@@ -4439,6 +4564,26 @@ export class WorkerdManager {
       throw new Error(`destroyDO is not supported for internal DO source "${ref.source}"`);
     }
     await this.destroyDurableObjectStorageFiles(ref);
+  }
+
+  /** Reclaim storage after the runtime registry has retired an entity.
+   * Userland facets are already quiesced by retirement and are removed before
+   * this call resolves. Internal objects share one workerd process: their
+   * logical deletion is durably journaled here, then physical collection runs
+   * only after that process has stopped (orderly shutdown or startup recovery).
+   * Context teardown must never restart every unrelated DO to collect one
+   * retired EvalDO. */
+  async destroyRetiredDOStorage(ref: DORef): Promise<void> {
+    if (!isInternalDOSource(ref.source)) {
+      await this.destroyDO(ref);
+      return;
+    }
+    await this.startDurableObjectMaintenance({
+      kind: "destroy",
+      ref,
+      intent: `reclaim storage for retired ${ref.className}/${ref.objectKey}`,
+      journalOnly: true,
+    });
   }
 
   /** Delete one exact object's storage files. Maintenance-path primitive:
@@ -4464,12 +4609,33 @@ export class WorkerdManager {
 
   async shutdown(): Promise<void> {
     this.shuttingDown = true;
-    await this.doMaintenanceRecovery;
-    await Promise.all([...this.doMaintenanceChains.values()]);
-    await this.activeTransition?.promise.catch((error) => {
-      log.warn("in-flight workerd restart failed while shutdown was taking ownership:", error);
-    });
-    await this.stopWorkerd("shutdown");
+    const failures: unknown[] = [];
+    const attempt = async (operation: () => Promise<unknown>): Promise<void> => {
+      try {
+        await operation();
+      } catch (error) {
+        failures.push(error);
+      }
+    };
+    await attempt(() => this.doMaintenanceRecovery);
+    const maintenanceResults = await Promise.allSettled([...this.doMaintenanceChains.values()]);
+    for (const result of maintenanceResults) {
+      if (result.status === "rejected") failures.push(result.reason);
+    }
+    if (this.activeTransition) await attempt(() => this.activeTransition!.promise);
+    await attempt(() => this.stopWorkerd("shutdown"));
+
+    // Internal-object destruction is a tombstone while the shared process is
+    // live. Once shutdown owns a stopped process, collect every tombstone and
+    // retain all failures rather than abandoning the rest of the sweep.
+    if (!(this.process && this.process.exitCode === null)) {
+      const pendingDestructions = this.readOpenDurableObjectMaintenance().filter(
+        (row) => row.kind === "destroy"
+      );
+      for (const row of pendingDestructions) {
+        await attempt(() => this.resumeDurableObjectMaintenance(row));
+      }
+    }
 
     // Cleanup all instances
     for (const [, instance] of this.instances) {
@@ -4488,14 +4654,20 @@ export class WorkerdManager {
     // Clean up config dir
     try {
       fs.rmSync(this.configDir, { recursive: true, force: true });
-    } catch {
-      // Ignore
+    } catch (error) {
+      failures.push(error);
     }
 
     this.doMaintenanceDb.close();
     this.doSchemaDescriptorDb.close();
 
     log.info("WorkerdManager shut down");
+    if (failures.length > 0) {
+      throw new AggregateError(
+        failures,
+        `WorkerdManager shutdown failed in ${failures.length} phase(s)`
+      );
+    }
   }
 
   /**

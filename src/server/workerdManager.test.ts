@@ -423,6 +423,42 @@ describe("WorkerdManager", () => {
     await mgr.shutdown();
   });
 
+  it("tombstones retired internal storage without restarting live peers and collects it at shutdown", async () => {
+    const mgr = new WorkerdManager(createMockDeps());
+    const ref = {
+      source: "vibestudio/internal",
+      className: "EvalDO",
+      objectKey: "retired-eval",
+    };
+    const internals = mgr as unknown as {
+      quiesceDurableObjectStorage(target: typeof ref): Promise<void>;
+      destroyDurableObjectStorageFiles(target: typeof ref): Promise<void>;
+      readOpenDurableObjectMaintenance(): Array<{
+        kind: string;
+        source: string;
+        className: string;
+        objectKey: string;
+      }>;
+    };
+    const quiesce = vi.fn(async () => undefined);
+    const destroy = vi.fn(async () => undefined);
+    internals.quiesceDurableObjectStorage = quiesce;
+    internals.destroyDurableObjectStorageFiles = destroy;
+
+    await mgr.destroyRetiredDOStorage(ref);
+
+    expect(quiesce).not.toHaveBeenCalled();
+    expect(destroy).not.toHaveBeenCalled();
+    expect(internals.readOpenDurableObjectMaintenance()).toContainEqual(
+      expect.objectContaining({ kind: "destroy", ...ref })
+    );
+
+    await mgr.shutdown();
+
+    expect(quiesce).toHaveBeenCalledOnce();
+    expect(destroy).toHaveBeenCalledOnce();
+  });
+
   it("binds the required process-owned egress secret", () => {
     const mgr = new WorkerdManager(createMockDeps({ egressSecret: "owned-by-bootstrap" }));
 

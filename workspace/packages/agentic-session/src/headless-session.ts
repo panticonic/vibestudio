@@ -251,6 +251,7 @@ export class HeadlessSession {
   private _participants: Record<string, Participant<ChatParticipantMetadata>> = {};
   private _debugEvents: Array<AgentDebugPayload & { ts: number }> = [];
   private _cleanupErrors: SessionCleanupError[] = [];
+  private _cleanupFailureCauses: unknown[] = [];
   private _cleanupState: SessionCleanupState = {
     phase: "idle",
     phaseStartedAt: Date.now(),
@@ -470,7 +471,13 @@ export class HeadlessSession {
         props: z.record(z.unknown()).optional(),
       }),
       execute: async (args: unknown) => {
-        const { id: requestedId, code, path, imports, props } = args as {
+        const {
+          id: requestedId,
+          code,
+          path,
+          imports,
+          props,
+        } = args as {
           id?: string;
           code?: string;
           path?: string;
@@ -808,6 +815,7 @@ export class HeadlessSession {
     const message = error instanceof Error ? error.message : String(error);
     console.warn(`[HeadlessSession] ${phase} failed:`, error);
     this._cleanupErrors.push({ phase, message, at: Date.now() });
+    this._cleanupFailureCauses.push(error);
   }
 
   async dispose(): Promise<void> {
@@ -842,6 +850,7 @@ export class HeadlessSession {
   private async closeOnce(options?: {
     onPhase?: (state: SessionCleanupState) => void;
   }): Promise<void> {
+    const firstCleanupFailure = this._cleanupFailureCauses.length;
     const entityId = this._agentEntityId;
     const targetId = this._agentTargetId;
     const contextId = this._agentContextId;
@@ -887,7 +896,7 @@ export class HeadlessSession {
     if (targetId && this._client && this._modelExecutionEvidence === undefined) {
       this.setCleanupPhase("capturing-model-evidence", options?.onPhase);
       await this.captureModelExecutionEvidence().catch((error) => {
-        console.warn("[HeadlessSession] model execution evidence capture failed:", error);
+        this.recordCleanupError("captureModelExecutionEvidence", error);
       });
     }
     this._agentEntityId = null;
@@ -901,6 +910,13 @@ export class HeadlessSession {
     );
     await cleanupRemote();
     this.setCleanupPhase("complete", options?.onPhase);
+    const failures = this._cleanupFailureCauses.slice(firstCleanupFailure);
+    if (failures.length > 0) {
+      throw new AggregateError(
+        failures,
+        `Headless session cleanup failed in ${failures.length} phase(s)`
+      );
+    }
   }
 
   async [Symbol.asyncDispose](): Promise<void> {

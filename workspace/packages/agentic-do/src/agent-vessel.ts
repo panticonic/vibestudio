@@ -126,10 +126,7 @@ import {
   installUrlBoundModelFetchProxy,
 } from "./model-fetch-proxy.js";
 import { modelTransportRuntimeEvidence } from "./effect-executors/index.js";
-import {
-  assertAgentToolParametersSchema,
-  prepareAgentToolArguments,
-} from "./tool-arguments.js";
+import { assertAgentToolParametersSchema, prepareAgentToolArguments } from "./tool-arguments.js";
 
 export interface AgentToolExecutionContext {
   readonly invocationId: string;
@@ -5791,27 +5788,13 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     channelId: string,
     channelSeq: number
   ): Promise<number> {
-    const fork = await this.callGad<{ rows: Array<Record<string, unknown>> }>(
-      "rawSql",
-      `SELECT MAX(o.seq) AS seq
-       FROM log_events ch
-       JOIN log_events o
-         ON o.log_id = ch.origin_log_id
-        AND o.head = ch.origin_head
-        AND o.envelope_id = ch.origin_envelope_id
-       WHERE ch.log_id = ?
-         AND ch.seq <= ?
-         AND ch.origin_log_id = ?
-         AND ch.origin_head = ?`,
-      [channelId, channelSeq, trajectoryLogId, trajectoryLogId]
-    );
-    const seq = fork?.rows?.[0]?.["seq"];
-    if (seq == null) return 0;
-    const parsed = Number(seq);
-    if (!Number.isFinite(parsed)) {
-      throw new Error(`Invalid trajectory fork sequence for ${trajectoryLogId}: ${String(seq)}`);
-    }
-    return parsed;
+    const fork = await this.callGad<{ seq: number }>("resolveTrajectoryForkPoint", {
+      trajectoryId: trajectoryLogId,
+      branchId: trajectoryLogId,
+      channelId,
+      channelSeq,
+    });
+    return fork.seq;
   }
 
   /**

@@ -60,7 +60,7 @@ function createDeps() {
         ...TEST_WORKSPACE_SERVICE_PRESENTATION,
         protocols: ["example.panel-store.v1"],
         authority: { principals: ["code"] },
-        durableObject: { className: "ExampleStoreDO" },
+        durableObject: { className: "ExampleStoreDO", context: "creator" },
       },
       {
         source: "workers/stateless-api",
@@ -121,6 +121,11 @@ function createDeps() {
         })),
     },
     workspaceDecls,
+    getCallerContextId: (callerId: string) => {
+      if (callerId === ownedPanelCtx.caller.runtime.id) return "ctx-panel-owned";
+      if (callerId.startsWith("do:")) return "ctx-do-caller";
+      return null;
+    },
   };
 }
 
@@ -868,6 +873,30 @@ describe("workerService workspace service resolution", () => {
     };
     expect(activateDurableObject).toHaveBeenNthCalledWith(1, expectedActivation);
     expect(activateDurableObject).toHaveBeenNthCalledWith(2, expectedActivation);
+  });
+
+  it("places creator-context factory services in the first resolver's context", async () => {
+    const deps = createDeps();
+    const activateDurableObject = vi.fn(async () => {});
+    const dispatcher = createTestServiceDispatcher();
+    dispatcher.registerService(
+      createWorkerService({ ...(deps as object), activateDurableObject } as never)
+    );
+    dispatcher.markInitialized();
+
+    await dispatcher.dispatch(ownedPanelCtx, "workers", "resolveService", [
+      "example.panel-store.v1",
+      "conversation-1",
+    ]);
+
+    expect(activateDurableObject).toHaveBeenCalledWith({
+      source: "workers/example-store",
+      className: "ExampleStoreDO",
+      objectKey: "conversation-1",
+      contextId: "ctx-panel-owned",
+      contextPolicy: "initial",
+      buildRef: "main",
+    });
   });
 
   it("resolves the system-owned model-settings singleton without reattributing ownership", async () => {

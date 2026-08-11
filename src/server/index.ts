@@ -64,7 +64,7 @@ import { HOST_APPROVAL_COPY } from "@vibestudio/shared/hostApprovalCopy";
 import type { WorkspaceCreationReviewState } from "@vibestudio/service-schemas/shellApproval";
 import { templateGitTransportUrl } from "@vibestudio/workspace/templateCoordinates";
 import { productBuiltinDirectAuthority } from "./services/productBuiltinDirectAuthority.js";
-import { callerControlsLifecycleContext } from "./services/lifecycleContextControl.js";
+import { callerControlsContextTransition } from "./services/lifecycleContextControl.js";
 import { startEventLoopResponsivenessMonitor } from "../eventLoopResponsiveness.js";
 
 // __filename is available natively in CJS and via the esbuild banner shim in ESM.
@@ -2312,6 +2312,7 @@ async function main() {
   const lifecycleContextStore: import("./services/lifecycleContextControl.js").LifecycleContextControlStore =
     {
       listContextEdgesByOwner: (input) => getEntityStore().listContextEdgesByOwner(input),
+      listContextEdgesByChild: (contextId) => getEntityStore().listContextEdgesByChild(contextId),
       resolveRecord: (id) => getEntityStore().resolveRecord(id),
     };
 
@@ -3981,11 +3982,23 @@ async function main() {
             // Server-internal DO-storage primitives for cloneContext/destroyContext.
             // cloneDO/destroyDO are NOT exposed to userland — only the runtime
             // service (here) drives them, behind the context-boundary gate.
-            cloneDurableStorage: async ({ source, className, fromKey, toKey }) => {
-              await workerdManager.cloneDO({ source, className, objectKey: fromKey }, toKey);
+            cloneDurableStorage: async ({
+              source,
+              className,
+              fromKey,
+              toKey,
+              cooperativelyPaused,
+            }) => {
+              await workerdManager.cloneDO({ source, className, objectKey: fromKey }, toKey, {
+                cooperativelyPaused,
+              });
             },
             destroyDurableStorage: async ({ source, className, key }) => {
-              await workerdManager.destroyDO({ source, className, objectKey: key });
+              await workerdManager.destroyRetiredDOStorage({
+                source,
+                className,
+                objectKey: key,
+              });
             },
             releaseEntity: async (record, input) => {
               if (record.kind !== "do") return { status: "ready" };
@@ -4004,11 +4017,10 @@ async function main() {
                 "prepare",
                 input
               );
-              if (released.status === "ready" && input.mode === "retire") {
-                await sealAndDrainDurableObjectRelays(record.id, `runtime-retire:${record.id}`);
-              }
               return released;
             },
+            sealAndDrainEntityRelays: (entityId) =>
+              sealAndDrainDurableObjectRelays(entityId, `runtime-retire:${entityId}`),
             releaseEntityRelaySeal: (entityId) =>
               releaseDurableObjectRelaySeal(entityId, `runtime-retire:${entityId}`),
             onRetire: async (record) => {
@@ -4506,7 +4518,7 @@ async function main() {
               resolveEntityContext: (entityId) => entityCache.resolveContext(entityId),
               isEntityControlledBy,
               controlsLifecycleContext: (callerId, originContextId, targetContextId) =>
-                callerControlsLifecycleContext(
+                callerControlsContextTransition(
                   lifecycleContextStore,
                   callerId,
                   originContextId,
@@ -5320,6 +5332,7 @@ async function main() {
       className: string;
       objectKey: string;
       contextId?: string;
+      contextPolicy?: "exact" | "initial";
       buildRef?: string;
     }
   ): Promise<void> => {
@@ -5348,7 +5361,7 @@ async function main() {
     };
     const active = entityCache.resolveActive(targetId);
     if (active?.activeBuildKey && active.activeExecutionDigest && active.activeAuthority) {
-      if (ref.contextId && active.contextId !== ref.contextId) {
+      if (ref.contextId && ref.contextPolicy !== "initial" && active.contextId !== ref.contextId) {
         throw new Error(
           `Durable Object ${targetId} is already active in context ${active.contextId}; cannot resolve it from context ${ref.contextId}`
         );
@@ -5363,7 +5376,11 @@ async function main() {
       targetId
     )) as EntityRecord | null;
     if (existing?.status === "active") {
-      if (ref.contextId && existing.contextId !== ref.contextId) {
+      if (
+        ref.contextId &&
+        ref.contextPolicy !== "initial" &&
+        existing.contextId !== ref.contextId
+      ) {
         throw new Error(
           `Durable Object ${targetId} is already registered in context ${existing.contextId}; cannot resolve it from context ${ref.contextId}`
         );
@@ -5429,12 +5446,20 @@ async function main() {
             const sessionId = ctx.caller.agentBinding?.channelId ?? ctx.caller.runtime.id;
             reviewedClosureRegistry.assertUserlandServiceExposure({ sessionId, ...service });
           },
-          activateDurableObject: ({ source, className, objectKey, contextId, buildRef }) => {
+          activateDurableObject: ({
+            source,
+            className,
+            objectKey,
+            contextId,
+            contextPolicy,
+            buildRef,
+          }) => {
             return activateDurableObjectEntity(doDispatch, workerdManagerInst, {
               source,
               className,
               objectKey,
               ...(contextId ? { contextId } : {}),
+              ...(contextPolicy ? { contextPolicy } : {}),
               ...(buildRef ? { buildRef } : {}),
             });
           },

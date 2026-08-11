@@ -112,6 +112,9 @@ interface BuildDepsOptions {
   }) => Promise<Record<string, unknown>>;
   onRetire?: NonNullable<Parameters<typeof createRuntimeService>[0]["hooks"]>["onRetire"];
   releaseEntity?: NonNullable<Parameters<typeof createRuntimeService>[0]["hooks"]>["releaseEntity"];
+  sealAndDrainEntityRelays?: Parameters<
+    typeof createRuntimeService
+  >[0]["hooks"]["sealAndDrainEntityRelays"];
   releaseEntityRelaySeal?: Parameters<
     typeof createRuntimeService
   >[0]["hooks"]["releaseEntityRelaySeal"];
@@ -270,6 +273,7 @@ async function buildDeps(opts: BuildDepsOptions = {}) {
       }) as RuntimeEntityHooks["prepare"],
       onRetire,
       releaseEntity,
+      sealAndDrainEntityRelays: opts.sealAndDrainEntityRelays,
       releaseEntityRelaySeal: opts.releaseEntityRelaySeal,
       cloneDurableStorage,
       destroyDurableStorage,
@@ -2014,7 +2018,7 @@ describe("runtimeService.retireEntity", () => {
     expect(onRetire).not.toHaveBeenCalled();
   });
 
-  it("leaves cleanup_complete=0 when the hook throws", async () => {
+  it("reports hook cleanup failure and leaves cleanup_complete=0 for retry", async () => {
     const onRetire = vi.fn(async () => {
       throw new Error("hook fail");
     });
@@ -2023,7 +2027,9 @@ describe("runtimeService.retireEntity", () => {
       doCreateSpec({ contextId: "ctx-x" }),
     ])) as { id: string };
 
-    await service.handler({ caller: serverCaller }, "retireEntity", [{ id: handle.id }]);
+    await expect(
+      service.handler({ caller: serverCaller }, "retireEntity", [{ id: handle.id }])
+    ).rejects.toThrow(/Runtime entity cleanup failed.*hook fail/su);
     const rec = instance.entityResolve(handle.id);
     expect(rec?.status).toBe("retired");
     expect(rec?.cleanupComplete).toBe(false);
@@ -2756,6 +2762,30 @@ describe("runtimeService.cloneContext", () => {
     expect(cloneDurableStorage).toHaveBeenCalledTimes(1);
   });
 
+  it("marks only the verified source caller for a cooperative storage snapshot", async () => {
+    const { service, cloneDurableStorage } = await buildDeps();
+    const { ch } = await seedConversation(service, "ctx-self-clone");
+    const caller = createVerifiedCaller(ch.id, "do", {
+      callerId: ch.id,
+      callerKind: "do",
+      repoPath: "workers/pubsub-channel",
+      effectiveVersion: "v1",
+    });
+
+    await service.handler({ caller }, "cloneContext", [
+      { sourceContextId: "ctx-self-clone", include: [ch.id], targetKey: "fork:self" },
+    ]);
+
+    expect(cloneDurableStorage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source: "workers/pubsub-channel",
+        className: "PubSubChannel",
+        fromKey: "ch-1",
+        cooperativelyPaused: true,
+      })
+    );
+  });
+
   it("parents the clones to the caller", async () => {
     const { service, instance } = await buildDeps();
     await seedConversation(service, "ctx-parent");
@@ -2768,6 +2798,41 @@ describe("runtimeService.cloneContext", () => {
     for (const e of result.entities) {
       expect(instance.entityResolve(e.newId)?.parentId).toBe(caller.runtime.id);
     }
+  });
+
+  it("records the verified initiating panel as the fork-lineage owner", async () => {
+    const { service } = await buildDeps();
+    const panel = (await service.handler({ caller: serverCaller }, "createEntity", [
+      {
+        kind: "panel",
+        execution: { surface: "code", source: "panels/chat" },
+        key: "fork-owner-panel",
+        contextId: "ctx-panel-fork",
+      },
+    ])) as { id: string };
+    const { ch } = await seedConversation(service, "ctx-panel-fork");
+    const channelCaller = createVerifiedCaller(ch.id, "do", {
+      callerId: ch.id,
+      callerKind: "do",
+      repoPath: "workers/pubsub-channel",
+      effectiveVersion: "v1",
+    });
+    const initiatingPanel = panelCaller(panel.id, "ctx-panel-fork");
+
+    const result = (await service.handler(
+      { caller: channelCaller, authorizingCaller: initiatingPanel },
+      "cloneContext",
+      [{ sourceContextId: "ctx-panel-fork", targetKey: "panel-owned-fork" }]
+    )) as CloneResult;
+
+    const lineage = (await service.handler({ caller: serverCaller }, "listOwnedContexts", [
+      { contextId: "ctx-panel-fork", kind: "lineage" },
+    ])) as OwnedContexts;
+    expect(lineage.contexts).toContainEqual({
+      contextId: result.contextId,
+      kind: "lineage",
+      ownerEntityId: panel.id,
+    });
   });
 
   it("throws when the source context has no clonable entities", async () => {
@@ -3185,6 +3250,62 @@ describe("runtimeService.destroyContext", () => {
     expect(destroyDurableStorage).toHaveBeenCalledTimes(2);
     expect(dropContext).toHaveBeenCalledWith("ctx-dead");
     expect(contextFolders.removeContext).toHaveBeenCalledWith("ctx-dead");
+  });
+
+  it("releases every context peer before sealing or retiring any of them", async () => {
+    const order: string[] = [];
+    const releaseEntity = vi.fn(async (record: EntityRecord) => {
+      order.push(`release:${record.id}`);
+      return { status: "ready" as const };
+    });
+    const sealAndDrainEntityRelays = vi.fn(async (id: string) => {
+      order.push(`seal:${id}`);
+    });
+    const onRetire = vi.fn(async (record: EntityRecord) => {
+      order.push(`cleanup:${record.id}`);
+    });
+    const { service } = await buildDeps({
+      releaseEntity,
+      sealAndDrainEntityRelays,
+      onRetire,
+    });
+    await seedConversation(service, "ctx-dependent-peers");
+
+    await service.handler({ caller: serverCaller }, "destroyContext", [
+      { contextId: "ctx-dependent-peers" },
+    ]);
+
+    const lastRelease = Math.max(
+      ...order.map((entry, index) => (entry.startsWith("release:") ? index : -1))
+    );
+    const firstSeal = order.findIndex((entry) => entry.startsWith("seal:"));
+    const firstCleanup = order.findIndex((entry) => entry.startsWith("cleanup:"));
+    expect(lastRelease).toBeGreaterThanOrEqual(0);
+    expect(firstSeal).toBeGreaterThan(lastRelease);
+    expect(firstCleanup).toBeGreaterThan(firstSeal);
+  });
+
+  it("reports cleanup failures after attempting every context cleanup boundary", async () => {
+    const destroyDurableStorage = vi.fn(async () => {
+      throw new Error("storage cleanup unavailable");
+    });
+    const dropContext = vi.fn(async () => {
+      throw new Error("semantic cleanup unavailable");
+    });
+    const { service, contextFolders } = await buildDeps({
+      destroyDurableStorage,
+      semanticContexts: { dropContext },
+    });
+    await seedDO(service, "ctx-cleanup-errors", "cleanup-agent");
+
+    await expect(
+      service.handler({ caller: serverCaller }, "destroyContext", [
+        { contextId: "ctx-cleanup-errors" },
+      ])
+    ).rejects.toThrow(/Context cleanup failed for ctx-cleanup-errors/);
+    expect(destroyDurableStorage).toHaveBeenCalledOnce();
+    expect(dropContext).toHaveBeenCalledWith("ctx-cleanup-errors");
+    expect(contextFolders.removeContext).toHaveBeenCalledWith("ctx-cleanup-errors");
   });
 
   it("is free to destroy a context you fully own (every entity parented to you)", async () => {

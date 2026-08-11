@@ -260,7 +260,12 @@ const WorkspaceServiceSchema = z.union([
           binding: z.enum(["consent", "declared"]).optional(),
         })
         .strict(),
-      durableObject: z.object({ className: z.string() }).strict(),
+      durableObject: z
+        .object({
+          className: z.string(),
+          context: z.literal("creator").optional(),
+        })
+        .strict(),
     })
     .strict(),
   z

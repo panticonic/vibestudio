@@ -59,7 +59,7 @@ import {
   type ContextBoundaryAction,
   type ContextBoundaryDeps,
 } from "./contextBoundary.js";
-import { callerControlsLifecycleContext } from "./lifecycleContextControl.js";
+import { callerControlsContextTransition } from "./lifecycleContextControl.js";
 import {
   parseUnitAuthorityManifest,
   type UnitAuthorityManifest,
@@ -107,6 +107,12 @@ export interface RuntimeEntityHooks {
     className: string;
     fromKey: string;
     toKey: string;
+    /**
+     * True only when the verified clone caller is this exact source object.
+     * Its actor turn is serialized and paused on the host call, so storage can
+     * be snapshotted online without trying to retire the caller mid-invocation.
+     */
+    cooperativelyPaused?: boolean;
   }) => Promise<void>;
 
   destroyDurableStorage?: (args: {
@@ -313,6 +319,22 @@ export interface RuntimeServiceDeps {
   unitSupervisor: UnitSupervisor;
 }
 
+function describeFailure(cause: unknown): string {
+  if (cause instanceof AggregateError) {
+    const nested = cause.errors.map(describeFailure).join("; ");
+    return nested ? `${cause.message} (${nested})` : cause.message;
+  }
+  if (cause instanceof Error) {
+    const nested = cause.cause === undefined ? "" : ` (${describeFailure(cause.cause)})`;
+    return `${cause.message}${nested}`;
+  }
+  return String(cause);
+}
+
+function aggregateFailureMessage(summary: string, failures: unknown[]): string {
+  return `${summary}: ${failures.map(describeFailure).join("; ")}`;
+}
+
 /**
  * Deterministic context id from an idempotency `targetKey` (§A3 crash-test): a
  * pure function of the key so a re-invoked (crashed) clone/subagent-create
@@ -456,7 +478,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
     originContextId: string | null,
     targetContextId: string
   ): Promise<boolean> {
-    return callerControlsLifecycleContext(
+    return callerControlsContextTransition(
       store,
       caller.runtime.id,
       originContextId,
@@ -1043,20 +1065,11 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
     return serializeByKey(retirementChains, id, async () => {
       const current = await store.resolveRecord(id);
       if (!current || current.status === "retired") return null;
-      if (current.status === "active") {
-        const released = await deps.hooks.releaseEntity(current, {
-          epoch: `retire:${randomUUID()}`,
-          mode: "retire",
-          reason: "entity_retire",
-          deadlineMs: 0,
-        });
-        if (released.status === "failed") {
-          throw new Error(`Entity ${id} refused terminal lifecycle release`);
-        }
-      }
+      await prepareRecordForRetirement(current);
 
       let record: EntityRecord | null;
       try {
+        await deps.hooks.sealAndDrainEntityRelays?.(id);
         record = await store.retire(id);
       } finally {
         // On success, the cache is already inactive before the seal is
@@ -1068,11 +1081,93 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
       try {
         await deps.hooks.onRetire(record);
         await store.cleanupComplete(id);
-      } catch {
-        // Leave cleanup_complete=0; cleanupReaper will retry.
+      } catch (cause) {
+        // The durable row intentionally remains cleanup_complete=0 so the
+        // cleanup reaper can retry, but the initiating operation must retain
+        // the failure instead of reporting a false success.
+        throw new Error(`Runtime entity cleanup failed for ${id}: ${describeFailure(cause)}`, {
+          cause,
+        });
       }
       return record;
     });
+  }
+
+  async function prepareRecordForRetirement(record: EntityRecord): Promise<void> {
+    if (record.status !== "active") return;
+    const released = await deps.hooks.releaseEntity(record, {
+      epoch: `retire:${randomUUID()}`,
+      mode: "retire",
+      reason: "entity_retire",
+      deadlineMs: 0,
+    });
+    if (released.status === "failed") {
+      throw new Error(`Entity ${record.id} refused terminal lifecycle release`);
+    }
+  }
+
+  function withRetirementLocks<T>(ids: string[], operation: () => Promise<T>): Promise<T> {
+    const ordered = [...new Set(ids)].sort();
+    const acquire = (index: number): Promise<T> =>
+      index >= ordered.length
+        ? operation()
+        : serializeByKey(retirementChains, ordered[index]!, () => acquire(index + 1));
+    return acquire(0);
+  }
+
+  /**
+   * Retire a mutually-dependent context as one lifecycle unit. Every entity
+   * first releases its peer-facing resources while all peers remain reachable;
+   * only then are relays sealed and durable rows retired. This is what lets an
+   * agent leave its channel during context teardown without service resolution
+   * racing a channel that was retired earlier in list order.
+   */
+  async function retireContextRecords(
+    records: EntityRecord[]
+  ): Promise<{ retired: EntityRecord[]; cleanupFailures: unknown[] }> {
+    return withRetirementLocks(
+      records.map((record) => record.id),
+      async () => {
+        const current = (
+          await Promise.all(records.map((record) => store.resolveRecord(record.id)))
+        ).filter((record): record is EntityRecord =>
+          Boolean(record && record.status !== "retired")
+        );
+        for (const record of current) await prepareRecordForRetirement(record);
+
+        const sealed: string[] = [];
+        const retired: EntityRecord[] = [];
+        try {
+          for (const record of current) {
+            await deps.hooks.sealAndDrainEntityRelays?.(record.id);
+            sealed.push(record.id);
+          }
+          for (const record of current) {
+            const result = await store.retire(record.id);
+            if (result) retired.push(result);
+          }
+        } finally {
+          for (const id of sealed.reverse()) deps.hooks.releaseEntityRelaySeal?.(id);
+        }
+
+        const cleanupFailures: unknown[] = [];
+        for (const record of retired) {
+          try {
+            await deps.hooks.onRetire(record);
+            await store.cleanupComplete(record.id);
+            await deps.revokeAgentCredentials?.(record.id);
+          } catch (cause) {
+            cleanupFailures.push(
+              new Error(
+                `Runtime entity cleanup failed for ${record.id}: ${describeFailure(cause)}`,
+                { cause }
+              )
+            );
+          }
+        }
+        return { retired, cleanupFailures };
+      }
+    );
   }
 
   async function retireEntity(id: string, removeContext?: boolean): Promise<void> {
@@ -1085,7 +1180,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
     if (removeContext) {
       const live = await store.listActive();
       if (!live.some((e) => e.contextId === record.contextId)) {
-        await deps.semanticContexts.dropContext(record.contextId).catch(() => undefined);
+        await deps.semanticContexts.dropContext(record.contextId);
         await deps.contextFolders.removeContext(record.contextId);
       }
     }
@@ -1283,7 +1378,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
    * context is free; cloning a foreign existing one prompts.
    */
   async function cloneContext(
-    caller: VerifiedCaller,
+    actors: RuntimeCreationActors,
     args: {
       sourceContextId: string;
       include?: string[];
@@ -1291,6 +1386,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
       targetKey?: string;
     }
   ): Promise<CloneContextResult> {
+    const caller = actors.lifecycleCaller;
     const { sourceContextId, targetKey } = args;
     const recursive = args.recursive === true;
     // `include` scopes the ROOT context only; recursive descendants clone in full.
@@ -1397,6 +1493,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
               className,
               fromKey: src.key,
               toKey: newKey,
+              ...(src.id === caller.runtime.id ? { cooperativelyPaused: true } : {}),
             });
             clonedStorage.push({ source: src.source.repoPath, className, key: newKey });
           }
@@ -1434,10 +1531,14 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
         });
       }
       // Record the top-level fork's LINEAGE edge (provenance to the source root).
+      const initiatingEntity = await store.resolveRecord(actors.initiatingCaller.runtime.id);
       await store.recordContextEdge({
         contextId: newContextIdOf.get(sourceContextId) as string,
         ownerContextId: sourceContextId,
         kind: "lineage",
+        ...(initiatingEntity?.contextId === sourceContextId
+          ? { ownerEntityId: initiatingEntity.id }
+          : {}),
       });
       // Runtime context topology and execution-policy topology must advance
       // together. A cloned context created inside a system test inherits the
@@ -1450,15 +1551,37 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
         });
       }
     } catch (err) {
-      // Best-effort rollback: retire clones, delete cloned storage, drop every
-      // context created in this call (edges + VCS + folder).
-      for (const h of created) await retireRecord(h.id).catch(() => undefined);
-      for (const s of clonedStorage)
-        await deps.hooks.destroyDurableStorage?.(s).catch(() => undefined);
+      // Roll back every completed clone step, but retain every cleanup failure
+      // alongside the initiating error. A failed rollback is material state,
+      // not a reason to report only the first exception.
+      const rollbackFailures: unknown[] = [];
+      const retainFailure = async (operation: () => Promise<unknown>): Promise<void> => {
+        try {
+          await operation();
+        } catch (cause) {
+          rollbackFailures.push(cause);
+        }
+      };
+      for (const h of created) await retainFailure(() => retireRecord(h.id));
+      const destroyClonedStorage = deps.hooks.destroyDurableStorage;
+      for (const s of clonedStorage) {
+        if (destroyClonedStorage) {
+          await retainFailure(() => destroyClonedStorage(s));
+        }
+      }
       for (const c of createdContexts) {
-        await store.deleteContextEdges(c).catch(() => undefined);
-        await deps.semanticContexts.dropContext(c).catch(() => undefined);
-        await deps.contextFolders.removeContext(c).catch(() => undefined);
+        await retainFailure(() => store.deleteContextEdges(c));
+        await retainFailure(() => deps.semanticContexts.dropContext(c));
+        await retainFailure(() => deps.contextFolders.removeContext(c));
+      }
+      if (rollbackFailures.length > 0) {
+        throw new AggregateError(
+          [err, ...rollbackFailures],
+          aggregateFailureMessage(
+            `cloneContext failed and ${rollbackFailures.length} rollback operation(s) also failed`,
+            [err, ...rollbackFailures]
+          )
+        );
       }
       throw err instanceof Error ? err : new Error(String(err));
     }
@@ -1493,25 +1616,42 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
    */
   async function destroyOneContext(contextId: string): Promise<void> {
     const entities = (await store.listActive()).filter((e) => e.contextId === contextId);
-    for (const e of entities) {
-      const rec = await retireRecord(e.id);
+    const retirement = await retireContextRecords(entities);
+    const failures: unknown[] = [...retirement.cleanupFailures];
+    for (const rec of retirement.retired) {
       // DO storage is NOT reclaimed by retire (kept for re-attach) — a full context
       // destroy is the one path that deletes it.
-      if (rec && rec.kind === "do" && rec.className) {
-        await deps.hooks
-          .destroyDurableStorage?.({
+      if (rec.kind === "do" && rec.className) {
+        try {
+          await deps.hooks.destroyDurableStorage?.({
             source: rec.source.repoPath,
             className: rec.className,
             key: rec.key,
-          })
-          .catch(() => undefined);
+          });
+        } catch (cause) {
+          failures.push(new Error(`Durable storage cleanup failed for ${rec.id}`, { cause }));
+        }
       }
     }
     // Drop this context's own inbound edges so the registry doesn't accumulate
     // danglers, then the VCS state + folder.
-    await store.deleteContextEdges(contextId).catch(() => undefined);
-    await deps.semanticContexts.dropContext(contextId).catch(() => undefined);
-    await deps.contextFolders.removeContext(contextId).catch(() => undefined);
+    for (const [label, cleanup] of [
+      ["context edges", () => store.deleteContextEdges(contextId)],
+      ["semantic context", () => deps.semanticContexts.dropContext(contextId)],
+      ["context folder", () => deps.contextFolders.removeContext(contextId)],
+    ] as const) {
+      try {
+        await cleanup();
+      } catch (cause) {
+        failures.push(new Error(`Failed to remove ${label} for ${contextId}`, { cause }));
+      }
+    }
+    if (failures.length > 0) {
+      throw new AggregateError(
+        failures,
+        aggregateFailureMessage(`Context cleanup failed for ${contextId}`, failures)
+      );
+    }
   }
 
   /**
@@ -1910,7 +2050,14 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
       listContexts: (_ctx, [input]) => listContexts(input?.prefix),
       createContext: (ctx, [{ contextId, testPolicy }]) =>
         createContext(ctx, { contextId, testPolicy }),
-      cloneContext: (ctx, [cloneArgs]) => cloneContext(ctx.caller, cloneArgs),
+      cloneContext: (ctx, [cloneArgs]) =>
+        cloneContext(
+          {
+            lifecycleCaller: ctx.caller,
+            initiatingCaller: verifiedInitiator(ctx),
+          },
+          cloneArgs
+        ),
       destroyContext: async (ctx, [{ contextId, recursive }]) => {
         await destroyContext({ contextId, recursive });
       },

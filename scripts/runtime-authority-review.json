@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "censusDigest": "sha256:f64d14774520442716db0ebac85609f6991fbe6dcd8c7b360e3fb22092c828da",
+  "censusDigest": "sha256:049e5f3d0c35d01549d0c98e51983fd1c9e27c187a1fec44fcb053b77088c426",
   "decisions": {
     "host:fs.readBytes": {
       "review": "bounded-workspace-binary-range-read",
@@ -313,6 +313,10 @@
     "direct:workspace/workers/workspace-source/GadWorkspaceDO.ts:diagnoseInvocation": {
       "review": "bounded-read-only-causal-diagnostics",
       "change": "Adds an open, read-only exact-coordinate projection over existing trajectory, semantic command, effect-intent, and receipt authorities; every collection is bounded and reports truncation, and the method performs no mutation."
+    },
+    "direct:workspace/workers/workspace-source/GadWorkspaceDO.ts:resolveTrajectoryForkPoint": {
+      "review": "bounded-channel-trajectory-fork-coordinate-read",
+      "change": "Adds an open, read-only aggregate that resolves one trajectory sequence from exact trajectory, branch, channel, and channel-sequence coordinates. It returns only a non-negative sequence number, exposes no generic SQL or payload content, and performs no mutation."
     },
     "direct:workspace/workers/workspace-source/GadWorkspaceDO.ts:adoptDurableWorkWorker": {
       "review": "host-only-publication-worker-fencing",

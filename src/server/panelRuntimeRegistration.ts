@@ -27,7 +27,7 @@ import type { AppCapability } from "@vibestudio/shared/unitManifest";
 import type { ContextIngestionRecorder } from "./services/contextIntegrityStore.js";
 import type { PanelTreeInvalidation } from "@vibestudio/shared/panel/treeIndex";
 import {
-  callerControlsLifecycleContext,
+  callerControlsContextTransition,
   type LifecycleContextControlStore,
 } from "./services/lifecycleContextControl.js";
 
@@ -322,7 +322,7 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
       originContextId: string | null,
       targetContextId: string
     ) =>
-      callerControlsLifecycleContext(
+      callerControlsContextTransition(
         deps.lifecycleContextStore,
         callerId,
         originContextId,

@@ -4,7 +4,7 @@ import type { AppHost } from "../appHost.js";
 import type { ContextBoundaryDeps } from "./contextBoundary.js";
 import type { PanelAccessPermissionDeps } from "./panelAccessPermission.js";
 import {
-  callerControlsLifecycleContext,
+  callerControlsContextTransition,
   type LifecycleContextControlStore,
 } from "./lifecycleContextControl.js";
 
@@ -34,7 +34,7 @@ export function createPanelAccessPermissionDeps(input: {
       originContextId: string | null,
       targetContextId: string
     ) =>
-      callerControlsLifecycleContext(
+      callerControlsContextTransition(
         input.lifecycleContextStore,
         callerId,
         originContextId,

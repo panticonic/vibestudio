@@ -544,6 +544,33 @@ export default { fetch() { return new Response("v2"); } };`;
     await manager.destroyDO(cloned);
   }, 30_000);
 
+  it("online-clones a cooperatively paused source without draining its active relay", async () => {
+    active = await createHarness({ "workers/counter": doBuild("workers/counter", "ev-1") });
+    const { manager, dispatch } = active;
+
+    await manager.ensureDOClass("workers/counter", "CounterDO");
+    const src = { source: "workers/counter", className: "CounterDO", objectKey: "self" };
+    await dispatch(src, "incr");
+    await dispatch(src, "incr");
+
+    const finishSourceCall = beginDurableObjectRelay(
+      `do:${src.source}:${src.className}:${src.objectKey}`
+    );
+    let cloned: typeof src | null = null;
+    try {
+      cloned = await manager.cloneDO(src, "self-fork", { cooperativelyPaused: true });
+    } finally {
+      finishSourceCall();
+    }
+    if (!cloned) throw new Error("cooperative clone did not return a target");
+
+    expect(await dispatch(cloned, "get")).toMatchObject({ count: 2, key: "self-fork" });
+    await dispatch(cloned, "incr");
+    expect(await dispatch(cloned, "get")).toMatchObject({ count: 3 });
+    expect(await dispatch(src, "get")).toMatchObject({ count: 2 });
+    await manager.destroyDO(cloned);
+  }, 30_000);
+
   it("backs up, resets, lists, and restores one exact facet storage target", async () => {
     active = await createHarness({ "workers/counter": doBuild("workers/counter", "ev-1") });
     const { manager, dispatch } = active;

@@ -115,6 +115,7 @@ export function createWorkerService(deps: {
     className: string;
     objectKey: string;
     contextId?: string;
+    contextPolicy?: "exact" | "initial";
     buildRef?: string;
   }) => Promise<void>;
   resetDurableObjectStorage?: (
@@ -475,7 +476,14 @@ export function createWorkerService(deps: {
         const service = scoped.service;
         if (service.kind === "durable-object") {
           const singleton = scoped.decls.singletons.find(service.source, service.className);
-          const contextId = singleton?.contextId ?? scoped.contextId;
+          const creatorContextId =
+            service.context === "creator"
+              ? deps.getCallerContextId?.(ctx.caller.runtime.id)
+              : undefined;
+          if (service.context === "creator" && !creatorContextId) {
+            throw new Error(`Workspace service ${service.name} requires a creator runtime context`);
+          }
+          const contextId = singleton?.contextId ?? creatorContextId ?? scoped.contextId;
           const buildRef = singleton?.contextId
             ? undefined
             : (scoped.buildRef ?? (scoped.scope === "main" ? "main" : undefined));
@@ -484,6 +492,7 @@ export function createWorkerService(deps: {
             className: service.className,
             objectKey: service.objectKey,
             ...(contextId ? { contextId } : {}),
+            ...(service.context === "creator" ? { contextPolicy: "initial" as const } : {}),
             ...(buildRef ? { buildRef } : {}),
           });
         }

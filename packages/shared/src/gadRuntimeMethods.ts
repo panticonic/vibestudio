@@ -24,6 +24,7 @@ export const GAD_RUNTIME_METHOD_NAMES = [
   "getMessageType",
   "getChannelEnvelope",
   "getTrajectoryForEnvelope",
+  "resolveTrajectoryForkPoint",
   "listPublishedEnvelopesForTrajectory",
   "getEnvelopesForTrajectory",
   "getPublishedArtifactsForTurn",

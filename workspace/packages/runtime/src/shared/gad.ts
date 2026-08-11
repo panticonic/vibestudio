@@ -100,6 +100,7 @@ export function createGadClient(rpc: RpcCaller): GadClient {
       call<EnvelopeLineage | null>("getTrajectoryForEnvelope", input).then((value) =>
         value ? hydrateLineage(value) : null
       ),
+    resolveTrajectoryForkPoint: (input) => call("resolveTrajectoryForkPoint", input),
     listPublishedEnvelopesForTrajectory: async (input) =>
       Promise.all(
         (await call<EnvelopeLineage[]>("listPublishedEnvelopesForTrajectory", input)).map(

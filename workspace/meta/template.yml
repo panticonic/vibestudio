@@ -121,6 +121,7 @@ services:
         - mission
     durableObject:
       className: PubSubChannel
+      context: creator
   - source: workers/model-settings
     name: models
     title: AI model settings

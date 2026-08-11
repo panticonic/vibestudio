@@ -70,3 +70,31 @@ describe("workspace Git upstream contract", () => {
     ).toBe(false);
   });
 });
+
+describe("workspace Durable Object service context", () => {
+  it("accepts creator-context factory services and rejects unknown placement modes", () => {
+    const service = {
+      source: "workers/pubsub-channel",
+      name: "channel",
+      action: "send messages",
+      presentation: { domain: "sharing", verb: "act", substanceKind: "send" },
+      authority: { principals: ["user"] },
+    } as const;
+    expect(
+      WorkspaceConfigSchema.parse({
+        ...BASE,
+        services: [
+          { ...service, durableObject: { className: "PubSubChannel", context: "creator" } },
+        ],
+      }).services?.[0]
+    ).toMatchObject({ durableObject: { context: "creator" } });
+    expect(
+      WorkspaceConfigSchema.safeParse({
+        ...BASE,
+        services: [
+          { ...service, durableObject: { className: "PubSubChannel", context: "caller" } },
+        ],
+      }).success
+    ).toBe(false);
+  });
+});

@@ -314,7 +314,14 @@ export type WorkspaceServiceDecl = {
     binding?: "consent" | "declared";
   };
 } & (
-  | { durableObject: { className: string }; worker?: never }
+  | {
+      durableObject: {
+        className: string;
+        /** Place a newly created factory object in its first resolver's runtime context. */
+        context?: "creator";
+      };
+      worker?: never;
+    }
   | { worker: { routePath: string }; durableObject?: never }
 );
 

@@ -4712,6 +4712,36 @@ export class GadWorkspaceDO extends DurableObjectBase {
   }
 
   @schemaRpc()
+  resolveTrajectoryForkPoint(input: {
+    trajectoryId: string;
+    branchId: string;
+    channelId: string;
+    channelSeq: number;
+  }): { seq: number } {
+    this.ensureReady();
+    const row = this.sql
+      .exec(
+        `SELECT MAX(origin.seq) AS seq
+           FROM log_events AS channel
+           JOIN log_events AS origin
+             ON origin.log_id = channel.origin_log_id
+            AND origin.head = channel.origin_head
+            AND origin.envelope_id = channel.origin_envelope_id
+          WHERE channel.log_id = ?
+            AND channel.seq <= ?
+            AND channel.origin_log_id = ?
+            AND channel.origin_head = ?`,
+        input.channelId,
+        input.channelSeq,
+        input.trajectoryId,
+        input.branchId
+      )
+      .one() as JsonRecord;
+    const seq = row["seq"];
+    return { seq: seq == null ? 0 : asNumber(seq) };
+  }
+
+  @schemaRpc()
   listPublishedEnvelopesForTrajectory(input: {
     trajectoryId?: string | null;
     branchId?: string | null;

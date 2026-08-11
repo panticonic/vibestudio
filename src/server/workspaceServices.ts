@@ -30,6 +30,7 @@ export interface WorkspaceServiceResolution {
 export interface DurableObjectServiceResolution extends WorkspaceServiceResolution {
   kind: "durable-object";
   className: string;
+  context?: "creator";
   objectKey: string;
   targetId: string;
 }
@@ -79,6 +80,12 @@ function buildResolution(
   if (service.durableObject) {
     const className = service.durableObject.className;
     const singletonKey = singletons.find(source, className)?.key ?? null;
+    if (singletonKey !== null && service.durableObject.context === "creator") {
+      throw new Error(
+        `Workspace service "${service.name}" declares creator-context placement but is backed by ` +
+          `singleton ${JSON.stringify(singletonKey)}; creator-context services must be factories.`
+      );
+    }
     if (singletonKey !== null && overrideObjectKey !== null && overrideObjectKey !== singletonKey) {
       throw new Error(
         `Workspace service "${service.name}" is the singleton ${JSON.stringify(singletonKey)}; ` +
@@ -104,6 +111,7 @@ function buildResolution(
       source,
       authority,
       className,
+      ...(service.durableObject.context ? { context: service.durableObject.context } : {}),
       objectKey: resolvedObjectKey,
       targetId: `do:${source}:${className}:${resolvedObjectKey}`,
     };

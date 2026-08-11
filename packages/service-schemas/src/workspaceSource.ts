@@ -890,6 +890,22 @@ export const gadMethods = defineServiceMethods({
     returns: EnvelopeLineageSchema.nullable(),
     access: readAccess,
   },
+  resolveTrajectoryForkPoint: {
+    description:
+      "Resolve the last private trajectory sequence published at or before a channel fork point.",
+    args: z.tuple([
+      z
+        .object({
+          trajectoryId: z.string(),
+          branchId: z.string(),
+          channelId: z.string(),
+          channelSeq: z.number().int().nonnegative(),
+        })
+        .strict(),
+    ]),
+    returns: z.object({ seq: z.number().int().nonnegative() }).strict(),
+    access: readAccess,
+  },
   listPublishedEnvelopesForTrajectory: {
     description: "List published envelope lineage matching trajectory selectors.",
     args: z.tuple([
@@ -1124,9 +1140,9 @@ const semanticHostReadSchema = z.discriminatedUnion("kind", [
 const semanticHostReadAcknowledgementSchema = z
   .object({
     request: semanticMergeContentHostReadSchema,
-    files: z.array(
-      z.object({ contentHash: z.string().min(1), text: z.string() }).strict()
-    ).max(1_500),
+    files: z
+      .array(z.object({ contentHash: z.string().min(1), text: z.string() }).strict())
+      .max(1_500),
   })
   .strict();
 
@@ -2060,6 +2076,7 @@ const GAD_AUTHORITY_GROUPS: readonly GadAuthorityGroup[] = [
       "listMessageTypes",
       "getMessageType",
       "getTrajectoryForEnvelope",
+      "resolveTrajectoryForkPoint",
       "listPublishedEnvelopesForTrajectory",
       "getEnvelopesForTrajectory",
       "getPublishedArtifactsForTurn",

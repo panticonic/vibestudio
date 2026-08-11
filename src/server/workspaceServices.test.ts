@@ -11,7 +11,7 @@ const TEST_WORKSPACE_SERVICE_PRESENTATION = {
   presentation: { domain: "automation" as const, verb: "act" as const },
 };
 
-function makeDecls(opts: { withSingleton?: boolean }): WorkspaceDeclarations {
+function makeDecls(opts: { withSingleton?: boolean; context?: "creator" }): WorkspaceDeclarations {
   const singletons = new SingletonRegistry(
     opts.withSingleton
       ? [{ source: "workers/example-store", className: "ExampleStoreDO", key: "default" }]
@@ -26,7 +26,7 @@ function makeDecls(opts: { withSingleton?: boolean }): WorkspaceDeclarations {
         ...TEST_WORKSPACE_SERVICE_PRESENTATION,
         protocols: ["example.store.v1"],
         authority: { principals: ["code", "user", "host"] },
-        durableObject: { className: "ExampleStoreDO" },
+        durableObject: { className: "ExampleStoreDO", context: opts.context },
       },
     ],
     routes: [],
@@ -61,6 +61,22 @@ describe("resolveWorkspaceService — factory vs singleton DO services", () => {
       objectKey: "chat-1",
       targetId: "do:workers/example-store:ExampleStoreDO:chat-1",
     });
+  });
+
+  it("preserves creator-context placement on a factory resolution", () => {
+    const decls = makeDecls({ context: "creator" });
+    expect(resolveWorkspaceService(decls, "example.store.v1", "chat-1")).toMatchObject({
+      kind: "durable-object",
+      context: "creator",
+      objectKey: "chat-1",
+    });
+  });
+
+  it("rejects creator-context placement on singleton services", () => {
+    const decls = makeDecls({ withSingleton: true, context: "creator" });
+    expect(() => resolveWorkspaceService(decls, "example.store.v1")).toThrow(
+      /creator-context services must be factories/i
+    );
   });
 
   it("throws when resolving a factory service without an objectKey", () => {

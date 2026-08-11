@@ -2234,6 +2234,57 @@
       "nullable": true
     }
   },
+  "resolveTrajectoryForkPoint": {
+    "description": "Resolve the last private trajectory sequence published at or before a channel fork point.",
+    "access": {
+      "sensitivity": "read"
+    },
+    "argsSchema": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1,
+      "items": [
+        {
+          "type": "object",
+          "properties": {
+            "trajectoryId": {
+              "type": "string"
+            },
+            "branchId": {
+              "type": "string"
+            },
+            "channelId": {
+              "type": "string"
+            },
+            "channelSeq": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "trajectoryId",
+            "branchId",
+            "channelId",
+            "channelSeq"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "returnsSchema": {
+      "type": "object",
+      "properties": {
+        "seq": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "seq"
+      ],
+      "additionalProperties": false
+    }
+  },
   "listPublishedEnvelopesForTrajectory": {
     "description": "List published envelope lineage matching trajectory selectors.",
     "access": {
