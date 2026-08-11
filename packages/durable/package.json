@@ -16,11 +16,11 @@
   },
   "dependencies": {
     "@vibestudio/rpc": "workspace:*",
-    "@vibestudio/shared": "workspace:*"
+    "@vibestudio/shared": "workspace:*",
+    "sql.js": "^1.14.0"
   },
   "devDependencies": {
     "@types/sql.js": "^1.4.11",
-    "sql.js": "^1.14.0",
     "typescript": "7.0.2"
   }
 }

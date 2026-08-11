@@ -18,6 +18,7 @@
     "./development/recipes": "./src/development/recipes.ts"
   },
   "dependencies": {
+    "@vibestudio/browser-data": "workspace:*",
     "@vibestudio/content-addressing": "workspace:*",
     "@vibestudio/durable": "workspace:*",
     "@vibestudio/rpc": "workspace:*",
@@ -26,5 +27,8 @@
     "@vibestudio/trajectory-identity": "workspace:*",
     "@vibestudio/workspace-contracts": "workspace:*",
     "sql.js": "^1.14.0"
+  },
+  "devDependencies": {
+    "zod": "^3.24.1"
   }
 }

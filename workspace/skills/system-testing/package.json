@@ -33,12 +33,16 @@
   },
   "dependencies": {
     "@vibestudio/content-addressing": "workspace:*",
+    "@vibestudio/service-schemas": "workspace:*",
+    "@vibestudio/shared": "workspace:*",
     "@vibestudio/shell-core": "workspace:*",
+    "@vibestudio/trajectory-identity": "workspace:*",
     "@workspace/agentic-session": "workspace:*",
     "@workspace/agentic-core": "workspace:*",
     "@workspace/agentic-protocol": "workspace:*",
     "@workspace/runtime": "workspace:*",
     "@workspace/testkit": "workspace:*",
-    "@workspace-skills/vibestudio-vcs": "workspace:*"
+    "@workspace-skills/vibestudio-vcs": "workspace:*",
+    "zod": "^3.24.1"
   }
 }

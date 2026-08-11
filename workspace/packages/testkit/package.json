@@ -21,6 +21,7 @@
     "./profiling": "./src/profile-core.ts"
   },
   "dependencies": {
+    "@vibestudio/service-schemas": "workspace:*",
     "@workspace/runtime": "workspace:*",
     "@workspace/cdp-client": "workspace:*"
   }

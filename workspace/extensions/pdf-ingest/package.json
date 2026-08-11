@@ -61,5 +61,8 @@
     "@tesseract.js-data/eng": "^1.0.0",
     "pdfjs-dist": "^6.1.200",
     "tesseract.js": "^7.0.0"
+  },
+  "devDependencies": {
+    "@vibestudio/extension": "workspace:*"
   }
 }

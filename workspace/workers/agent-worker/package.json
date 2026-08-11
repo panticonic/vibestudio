@@ -225,6 +225,7 @@
     "zod": "^3.24.0"
   },
   "devDependencies": {
+    "@vibestudio/rpc": "workspace:*",
     "@workspace/agentic-protocol": "workspace:*",
     "vitest": "^3.2.2"
   }

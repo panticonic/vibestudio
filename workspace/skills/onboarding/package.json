@@ -24,7 +24,9 @@
     "./templates": "./templates.ts"
   },
   "dependencies": {
+    "@vibestudio/browser-data": "workspace:*",
     "@vibestudio/service-schemas": "workspace:*",
+    "@vibestudio/shared": "workspace:*",
     "@workspace/model-catalog": "workspace:*",
     "@workspace/runtime": "workspace:*",
     "@workspace/template-registry": "workspace:*",

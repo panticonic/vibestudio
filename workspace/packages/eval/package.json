@@ -17,6 +17,9 @@
     "acorn": "^8.17.0",
     "sucrase": "^3.35.0"
   },
+  "peerDependencies": {
+    "react": "^19.0.0"
+  },
   "devDependencies": {
     "typescript": "7.0.2",
     "vitest": "^3.2.4"

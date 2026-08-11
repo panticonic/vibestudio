@@ -154,5 +154,8 @@
       ]
     }
   },
-  "dependencies": {}
+  "dependencies": {},
+  "devDependencies": {
+    "@vibestudio/extension": "workspace:*"
+  }
 }
