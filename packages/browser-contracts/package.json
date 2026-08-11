@@ -1,0 +1,15 @@
+{
+  "name": "@vibestudio/browser-contracts",
+  "version": "0.1.0",
+  "type": "module",
+  "vibestudio": {
+    "buildProfile": "source-only"
+  },
+  "exports": {
+    ".": "./src/index.ts",
+    "./import": "./src/import.ts"
+  },
+  "dependencies": {
+    "zod": "^3.24.1"
+  }
+}

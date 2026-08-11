@@ -17,6 +17,7 @@
     "test": "cd ../.. && vitest run packages/service-schemas/src"
   },
   "dependencies": {
+    "@vibestudio/browser-contracts": "workspace:*",
     "@vibestudio/content-addressing": "workspace:*",
     "@vibestudio/credential-client": "workspace:*",
     "@vibestudio/identity": "workspace:*",

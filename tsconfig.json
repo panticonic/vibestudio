@@ -20,6 +20,8 @@
     "moduleResolution": "bundler",
     "types": ["node", "vitest/globals"],
     "paths": {
+      "@vibestudio/browser-contracts": ["./packages/browser-contracts/src/index.ts"],
+      "@vibestudio/browser-contracts/*": ["./packages/browser-contracts/src/*"],
       "@vibestudio/browser-data": ["./packages/browser-data/src/index.ts"],
       "@vibestudio/browser-data/client": ["./packages/browser-data/src/client.ts"],
       "@vibestudio/browser-data/form-fill-types": ["./packages/browser-data/src/formFillTypes.ts"],

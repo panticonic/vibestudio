@@ -5511,8 +5511,6 @@ async function main() {
       copy: (input, causalParent, integrity) =>
         callSemantic("vcsCopy", input, causalParent, integrity),
       status: (input) => callSemantic("vcsStatus", input),
-      inspect: (input) => callSemantic("vcsInspect", input),
-      neighbors: (input) => callSemantic("vcsNeighbors", input),
       resolveRepository: (input) => callSemantic("vcsResolveRepository", input),
       readFile: (input) => callSemantic("vcsReadFile", input),
       listDirectory: (input) => callSemantic("vcsListDirectory", input),

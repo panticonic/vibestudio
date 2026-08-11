@@ -1,30 +1,13 @@
 import { z } from "zod";
 import type { BrowserCookiePartitionKey } from "./cookies.js";
+import { BrowserNameSchema, type BrowserName } from "@vibestudio/browser-contracts/import";
+export {
+  BROWSER_NAMES,
+  BrowserNameSchema,
+  type BrowserName,
+} from "@vibestudio/browser-contracts/import";
 
 // ---- Browser Detection ----
-
-export const BROWSER_NAMES = [
-  "firefox",
-  "zen",
-  "chrome",
-  "chrome-beta",
-  "chrome-dev",
-  "chrome-canary",
-  "chromium",
-  "edge",
-  "edge-beta",
-  "edge-dev",
-  "brave",
-  "vivaldi",
-  "opera",
-  "opera-gx",
-  "arc",
-  "safari",
-] as const;
-
-export type BrowserName = (typeof BROWSER_NAMES)[number];
-
-export const BrowserNameSchema = z.enum(BROWSER_NAMES);
 
 export const BROWSER_FAMILIES = ["firefox", "chromium", "safari"] as const;
 export type BrowserFamily = (typeof BROWSER_FAMILIES)[number];

@@ -102,43 +102,6 @@ function makeProjectedReadBridge(root: string): FsVcsBridge {
         integrating: [],
       };
     },
-    neighbors: async ({ root: requestedState }) => {
-      if (requestedState.kind !== "event" && requestedState.kind !== "application") {
-        throw new Error("expected state root");
-      }
-      return {
-        root: requestedState,
-        edges: repoPaths.map((repoPath) => ({
-          kind: "contains-repository" as const,
-          from: requestedState,
-          to: {
-            kind: "repository" as const,
-            state: requestedState,
-            repositoryId: `repository:${repoPath}`,
-          },
-        })),
-        nextCursor: null,
-      };
-    },
-    inspect: async ({ node }) => {
-      if (node.kind !== "repository") throw new Error("expected repository inspection");
-      const repoPath = repoPathOf(node.repositoryId);
-      return {
-        root: node,
-        node: {
-          kind: "repository" as const,
-          state: node.state,
-          value: {
-            kind: "present" as const,
-            repositoryId: node.repositoryId,
-            repoPath,
-            manifestId: `manifest:${repoPath}`,
-          },
-        },
-        edges: [],
-        hasMoreEdges: false,
-      };
-    },
     resolveRepository: async ({ state: requestedState, repoPath }) =>
       repoPaths.includes(repoPath)
         ? {
@@ -298,43 +261,6 @@ function makeCanonicalSemanticBridge(
       },
       integrating: [],
     }),
-    neighbors: async ({ root }) => {
-      if (root.kind !== "event" && root.kind !== "application") {
-        throw new Error("expected state root");
-      }
-      return {
-        root,
-        edges: repositoryPaths.map((repoPath) => ({
-          kind: "contains-repository" as const,
-          from: root,
-          to: {
-            kind: "repository" as const,
-            state: root,
-            repositoryId: `repository:${repoPath}`,
-          },
-        })),
-        nextCursor: null,
-      };
-    },
-    inspect: async ({ node }) => {
-      if (node.kind !== "repository") throw new Error("expected repository inspection");
-      const repoPath = repoPathOf(node.repositoryId);
-      return {
-        root: node,
-        node: {
-          kind: "repository" as const,
-          state: node.state,
-          value: {
-            kind: "present" as const,
-            repositoryId: node.repositoryId,
-            repoPath,
-            manifestId: `manifest:${repoPath}`,
-          },
-        },
-        edges: [],
-        hasMoreEdges: false,
-      };
-    },
     resolveRepository: async ({ state, repoPath }) =>
       repositoryPaths.includes(repoPath)
         ? { state, repositoryId: `repository:${repoPath}`, repoPath }
@@ -469,9 +395,6 @@ function makeCanonicalSemanticBridge(
     },
     edit: async (input) => {
       for (const change of input.changes) {
-        if (change.kind === "repository-create") {
-          throw new Error("repository creation is outside this filesystem fixture");
-        }
         const repoPath = repoPathOf(change.repositoryId);
         if (change.kind === "file-create") {
           files.set(keyFor(input.contextId, repoPath, change.path), change.content);
@@ -1685,8 +1608,6 @@ describe("FsService", () => {
           activeCalls -= 1;
         }
       };
-      const inspect = bridge.inspect.bind(bridge);
-      bridge.inspect = (input) => track(() => inspect(input));
       const listFiles = bridge.listFiles.bind(bridge);
       const listedPrefixes: Array<string | undefined> = [];
       bridge.listFiles = (input) => {

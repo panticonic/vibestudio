@@ -31,27 +31,133 @@ import {
   type RepoPath,
 } from "./runtime/entitySpec.js";
 import { WORKSPACE_SOURCE_DIRS } from "@vibestudio/workspace-contracts/sourceDirs";
-import type {
-  VcsCopyInput,
-  VcsEditInput,
-  VcsInspectInput,
-  VcsInspectResult,
-  VcsListDirectoryInput,
-  VcsListDirectoryResult,
-  VcsListFilesInput,
-  VcsListFilesResult,
-  VcsMoveInput,
-  VcsNeighborsInput,
-  VcsNeighborsResult,
-  VcsReadFileInput,
-  VcsReadFileResult,
-  VcsResolveRepositoryInput,
-  VcsResolveRepositoryResult,
-  VcsStateNodeRef,
-  VcsStatusInput,
-  VcsStatusResult,
-  VcsWorkingMutationResult,
-} from "@vibestudio/service-schemas/vcs";
+
+/**
+ * Narrow semantic-VCS port required by FsService. The service depends on this
+ * structural capability, not on the host RPC schema package that happens to
+ * implement it. This keeps the shared foundation below service-schemas.
+ */
+type VcsStateNodeRef =
+  | { kind: "event"; eventId: string }
+  | { kind: "application"; applicationId: string };
+type VcsMutationEnvelope = {
+  commandId: string;
+  contextId: string;
+  expectedWorkingHead: VcsStateNodeRef;
+  intentSummary?: string;
+};
+type VcsEditChange =
+  | {
+      kind: "text-edit";
+      repositoryId: string;
+      fileId: string;
+      edits: Array<{ start: number; end: number; text: string }>;
+    }
+  | { kind: "binary-replace"; repositoryId: string; fileId: string; base64: string; mode?: number }
+  | {
+      kind: "file-create";
+      repositoryId: string;
+      path: string;
+      content: { kind: "text"; text: string } | { kind: "bytes"; base64: string };
+      mode: number;
+    }
+  | { kind: "file-delete"; repositoryId: string; fileId: string }
+  | { kind: "file-mode"; repositoryId: string; fileId: string; mode: number };
+type VcsEditInput = VcsMutationEnvelope & { changes: VcsEditChange[] };
+type VcsMoveInput = VcsMutationEnvelope & {
+  moves: Array<{
+    kind: "file";
+    repositoryId: string;
+    fileId: string;
+    destinationRepositoryId: string;
+    destinationPath: string;
+  }>;
+};
+type VcsCopyInput = VcsMutationEnvelope & {
+  copies: Array<{
+    source: { state: VcsStateNodeRef; repositoryId: string; fileId: string };
+    destination: { repositoryId: string; path: string };
+  }>;
+};
+type VcsStatusInput = { contextId: string };
+type VcsStatusResult = { workingHead: VcsStateNodeRef };
+type VcsResolveRepositoryInput = { state: VcsStateNodeRef; repoPath: string };
+type VcsResolveRepositoryResult = {
+  state: VcsStateNodeRef;
+  repositoryId: string;
+  repoPath: string;
+} | null;
+type VcsReadFileInput = {
+  state: VcsStateNodeRef;
+  repositoryId: string;
+  file: { kind: "id"; fileId: string } | { kind: "path"; path: string };
+};
+type VcsReadFileResult = {
+  repositoryId: string;
+  fileId: string;
+  repoPath: string;
+  path: string;
+  contentHash: string;
+  authoredChangeId: string;
+  authoredByWorkUnitId: string;
+  contentClass: "internal" | "external";
+  externalKeys: string[];
+  mode: number;
+  content: { kind: "text"; text: string } | { kind: "bytes"; base64: string };
+} | null;
+type VcsListDirectoryInput = {
+  state: VcsStateNodeRef;
+  path: string;
+  cursor?: string;
+  limit: number;
+};
+type VcsVisibleDirectoryEntry = {
+  name: string;
+  path: string;
+  kind: "file" | "directory";
+  identity: string;
+  repositoryId: string | null;
+  repositoryRoot: boolean;
+  fileId: string | null;
+  lineage: {
+    authoredChangeId: string | null;
+    authoredByWorkUnitId: string;
+    contentClass: "internal" | "external";
+    externalKeys: string[];
+  };
+};
+type VcsListDirectoryResult = {
+  state: VcsStateNodeRef;
+  path: string;
+  entries: VcsVisibleDirectoryEntry[];
+  nextCursor: string | null;
+} | null;
+type VcsListFilesInput = {
+  state: VcsStateNodeRef;
+  repositoryId: string;
+  prefix?: string;
+  cursor?: string;
+  limit: number;
+};
+type VcsFileListEntry = {
+  fileId: string;
+  path: string;
+  contentHash: string;
+  authoredChangeId: string;
+  authoredByWorkUnitId: string;
+  contentClass: "internal" | "external";
+  externalKeys: string[];
+  mode: number;
+  contentKind: "text" | "bytes";
+  byteLength: number;
+  coordinateExtent: number;
+};
+type VcsListFilesResult = {
+  state: VcsStateNodeRef;
+  repositoryId: string;
+  files: VcsFileListEntry[];
+  nextCursor: string | null;
+};
 
 const log = createDevLogger("FsService");
 const WORKSPACE_SOURCE_ROOTS = new Set<string>(WORKSPACE_SOURCE_DIRS);
@@ -546,20 +652,18 @@ export interface FsVcsBridge {
     input: VcsEditInput,
     causalParent: RpcCausalParent | null,
     contextIntegrity: FsVcsMutationIntegrity
-  ): Promise<VcsWorkingMutationResult>;
+  ): Promise<unknown>;
   move(
     input: VcsMoveInput,
     causalParent: RpcCausalParent | null,
     contextIntegrity: FsVcsMutationIntegrity
-  ): Promise<VcsWorkingMutationResult>;
+  ): Promise<unknown>;
   copy(
     input: VcsCopyInput,
     causalParent: RpcCausalParent | null,
     contextIntegrity: FsVcsMutationIntegrity
-  ): Promise<VcsWorkingMutationResult>;
+  ): Promise<unknown>;
   status(input: VcsStatusInput): Promise<VcsStatusResult>;
-  inspect(input: VcsInspectInput): Promise<VcsInspectResult>;
-  neighbors(input: VcsNeighborsInput): Promise<VcsNeighborsResult>;
   resolveRepository(input: VcsResolveRepositoryInput): Promise<VcsResolveRepositoryResult>;
   readFile(input: VcsReadFileInput): Promise<VcsReadFileResult>;
   listDirectory(input: VcsListDirectoryInput): Promise<VcsListDirectoryResult>;

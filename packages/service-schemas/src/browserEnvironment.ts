@@ -9,7 +9,7 @@ import {
   BrowserImportSourceSchema,
   ImportCategoryProgressSchema,
   ImportHostSummarySchema,
-} from "@vibestudio/browser-data";
+} from "@vibestudio/browser-contracts/import";
 import { requirementForPrincipals } from "@vibestudio/shared/authorization";
 
 export const BROWSER_ENVIRONMENT_BROKER_AUTHORITY_PREFIX = "browserEnvironment.broker";

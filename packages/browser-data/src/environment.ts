@@ -8,8 +8,36 @@ export {
 } from "./formFillTypes.js";
 import type { BrowserCookiePartitionKey } from "./cookies.js";
 import { FAVICON_MIME_TYPES, type FaviconMimeType } from "./favicon.js";
-import { BrowserNameSchema } from "./types.js";
-import type { BrowserName } from "./types.js";
+import {
+  BROWSER_IMPORT_DATA_TYPES,
+  BrowserImportDataTypeSchema,
+  BrowserImportSourceSchema,
+  IMPORT_HOST_PLATFORMS,
+  IMPORT_SOURCE_STATUSES,
+  ImportCategoryProgressSchema,
+  ImportHostSummarySchema,
+  type BrowserImportDataType,
+  type BrowserImportSource,
+  type ImportCategoryProgress,
+  type ImportHostPlatform,
+  type ImportHostSummary,
+  type ImportSourceStatus,
+} from "@vibestudio/browser-contracts/import";
+export {
+  BROWSER_IMPORT_DATA_TYPES,
+  BrowserImportDataTypeSchema,
+  BrowserImportSourceSchema,
+  IMPORT_HOST_PLATFORMS,
+  IMPORT_SOURCE_STATUSES,
+  ImportCategoryProgressSchema,
+  ImportHostSummarySchema,
+  type BrowserImportDataType,
+  type BrowserImportSource,
+  type ImportCategoryProgress,
+  type ImportHostPlatform,
+  type ImportHostSummary,
+  type ImportSourceStatus,
+} from "@vibestudio/browser-contracts/import";
 
 export interface BrowserEnvironmentIdentity {
   workspaceId: string;
@@ -22,71 +50,6 @@ export const BrowserEnvironmentIdentitySchema = z
     workspaceId: z.string().min(1),
     ownerUserId: z.string().min(1),
     environmentKey: z.string().min(1),
-  })
-  .strict();
-
-export const BROWSER_IMPORT_DATA_TYPES = [
-  "bookmarks",
-  "history",
-  "cookies",
-  "passwords",
-  "formFill",
-  "searchEngines",
-  "favicons",
-] as const;
-
-export type BrowserImportDataType = (typeof BROWSER_IMPORT_DATA_TYPES)[number];
-export const BrowserImportDataTypeSchema = z.enum(BROWSER_IMPORT_DATA_TYPES);
-
-export const IMPORT_HOST_PLATFORMS = ["darwin", "linux", "win32"] as const;
-export type ImportHostPlatform = (typeof IMPORT_HOST_PLATFORMS)[number];
-
-export interface ImportHostSummary {
-  hostId: string;
-  displayName: string;
-  platform: ImportHostPlatform;
-  location: "desktop" | "server";
-  connected: boolean;
-}
-
-export const ImportHostSummarySchema = z
-  .object({
-    hostId: z.string().min(1),
-    displayName: z.string().min(1).max(200),
-    platform: z.enum(IMPORT_HOST_PLATFORMS),
-    location: z.enum(["desktop", "server"]),
-    connected: z.boolean(),
-  })
-  .strict();
-
-export const IMPORT_SOURCE_STATUSES = ["readable", "blocked", "unsupported"] as const;
-export type ImportSourceStatus = (typeof IMPORT_SOURCE_STATUSES)[number];
-
-/**
- * A provider-minted browser source. Profiles and filesystem paths stay inside
- * the trusted provider and are never represented in this contract.
- */
-export interface BrowserImportSource {
-  sourceId: string;
-  browser: BrowserName;
-  displayName: string;
-  status: ImportSourceStatus;
-  localDataSetCount: number;
-  supportedDataTypes: BrowserImportDataType[];
-  lastActivityAt?: number;
-  warnings: string[];
-}
-
-export const BrowserImportSourceSchema = z
-  .object({
-    sourceId: z.string().min(1).max(512),
-    browser: BrowserNameSchema,
-    displayName: z.string().min(1).max(200),
-    status: z.enum(IMPORT_SOURCE_STATUSES),
-    localDataSetCount: z.number().int().nonnegative(),
-    supportedDataTypes: z.array(BrowserImportDataTypeSchema),
-    lastActivityAt: z.number().finite().optional(),
-    warnings: z.array(z.string().max(2_000)),
   })
   .strict();
 
@@ -106,15 +69,6 @@ export const IMPORT_JOB_PHASES = [
 ] as const;
 export type ImportJobPhase = (typeof IMPORT_JOB_PHASES)[number];
 
-export interface ImportCategoryProgress {
-  dataType: BrowserImportDataType;
-  itemsProcessed: number;
-  totalItems?: number;
-  stored: number;
-  skipped: number;
-  errors: number;
-}
-
 export interface ImportJobSnapshot {
   jobId: string;
   hostId: string;
@@ -131,17 +85,6 @@ export interface ImportJobSnapshot {
   error?: string;
   resumable: boolean;
 }
-
-export const ImportCategoryProgressSchema = z
-  .object({
-    dataType: BrowserImportDataTypeSchema,
-    itemsProcessed: z.number().int().nonnegative(),
-    totalItems: z.number().int().nonnegative().optional(),
-    stored: z.number().int().nonnegative(),
-    skipped: z.number().int().nonnegative(),
-    errors: z.number().int().nonnegative(),
-  })
-  .strict();
 
 export const ImportJobSnapshotSchema = z
   .object({
