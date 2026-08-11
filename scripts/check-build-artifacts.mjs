@@ -23,7 +23,12 @@ const contracts = [
     path: "dist/server-electron.cjs",
     runtime: "Electron utilityProcess",
     format: "cjs",
-    mustContain: ['"use strict"', 'import("esbuild-svelte")', 'require("node-pty")'],
+    mustContain: [
+      '"use strict"',
+      'import("esbuild-svelte")',
+      'require("node-pty")',
+      'require("@vscode/ripgrep")',
+    ],
     forbidden: [
       {
         pattern: "throw Error('Dynamic require of \"",
@@ -33,6 +38,11 @@ const contracts = [
         pattern: "node_modules/node-pty/lib/unixTerminal.js",
         reason:
           "node-pty must stay external so its loader resolves pty.node relative to the installed package.",
+      },
+      {
+        pattern: "node_modules/@vscode/ripgrep/lib/index.js",
+        reason:
+          "@vscode/ripgrep must stay external so import.meta.url resolves its installed platform binary.",
       },
     ],
   },
@@ -47,6 +57,10 @@ const contracts = [
         pattern: "node_modules/node-pty/lib/unixTerminal.js",
         reason:
           "node-pty must stay external so its loader resolves pty.node relative to the installed package.",
+      },
+      {
+        pattern: "node_modules/@vscode/ripgrep/lib/index.js",
+        reason: "@vscode/ripgrep must stay external so it resolves its installed platform binary.",
       },
     ],
   },

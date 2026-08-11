@@ -164,6 +164,10 @@ const serverElectronConfig = {
     "esbuild",
     "esbuild-svelte",
     "node-datachannel",
+    // Resolves its platform binary relative to the installed package through
+    // import.meta.url. Bundling that ESM module into this CJS artifact erases
+    // the URL and makes every workspace child fail during module evaluation.
+    "@vscode/ripgrep",
     // Native addon loaders must resolve relative to their installed package;
     // bundling their JavaScript moves that base to dist/ and strands pty.node.
     "node-pty",
@@ -252,6 +256,8 @@ const serverConfig = {
   external: [
     "esbuild",
     "esbuild-svelte",
+    // Preserve package-relative resolution of the platform-specific rg binary.
+    "@vscode/ripgrep",
     // Keep the native loader beside node-pty's build/prebuild directories.
     "node-pty",
     "@vibestudio/extension-host",
