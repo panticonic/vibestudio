@@ -94,7 +94,7 @@
     }
   },
   "types": {
-    "PendingTemplateOperation": "{ operationId, state: pending|applied|local-changes|waiting-for-credential|conflict|error, review?: { operationId, contextId, approvalGranted, items: [{ repoPath, sourceDeltaId }] }, repair?: { contextId, mainEventId?, failures: [{ unit, message }] }, contribution?: { branch, url? }, blocker?, affectedParts }",
+    "PendingTemplateOperation": "{ operationId, state: pending|applied|local-changes|waiting-for-credential|conflict|error, review?: { operationId, contextId, approvalGranted, items: [{ repoPath, sourceDeltaId }] }, repair?: { contextId, mainEventId?, failures: [{ unit, message }] }, contribution?: { branch, url? }, publicationEventId?, contextIntegration?: { state: integrated|needs-merge|unavailable, contextId }, blocker?, affectedParts }",
     "TemplateStatusRow": "{ nodeId, alias, url, ref, commit, direct, state: current|update-available|local-changes|reviewing|waiting-for-credential|conflict|error, verification: verified|deferred, review?, suggestions: [{ section: trust|providers, value }], blocker?, contributedParts, pendingReviews, error? }",
     "TemplateAuthoringInspection": "{ request, mainEventId, selectableParts, requestedParts, includedParts, requiredParts, dependencyParts, overlapParts, manifest, manifestDigest, fingerprint }",
     "TemplatePublication": "{ operationId, destination: { provider, owner, name }, created, remoteUrl, webUrl, templateUrl, ref, commit, snapshot, parts }",

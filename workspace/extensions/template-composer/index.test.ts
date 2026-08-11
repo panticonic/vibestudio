@@ -13,6 +13,7 @@ import {
   bootstrapNeedsAdoption,
   cancelTemplateOperation,
   loadTemplateCatalog,
+  integrateTemplatePublicationIntoCallerContext,
   mergeAcceptedTemplateSuggestion,
   operationReviewForTemplate,
   selectedTemplateName,
@@ -75,6 +76,75 @@ function approvedRecord(): TemplateOperationRecord {
 }
 
 describe("template composer operation resumption", () => {
+  it("integrates an unambiguous publication into the invoking conversation context", async () => {
+    const call = vi.fn(async (_target: string, method: string) => {
+      if (method === "vcs.status") {
+        return {
+          mainRelation: "behind",
+          mainEventId: "event:published",
+          workingHead: { kind: "event", eventId: "event:before" },
+        };
+      }
+      if (method === "vcs.compare") {
+        return { resolution: { complete: true, concluded: false } };
+      }
+      if (method === "vcs.merge") {
+        return { resolution: { complete: true, concluded: true } };
+      }
+      throw new Error(`Unexpected ${method}`);
+    });
+    const ctx = {
+      invocation: {
+        current: () => ({
+          caller: { callerKind: "do", callerId: "eval", contextId: "ctx:onboarding" },
+        }),
+      },
+      rpc: { call },
+      log: {},
+    } as unknown as import("./context.js").ExtensionContextLike;
+
+    await expect(
+      integrateTemplatePublicationIntoCallerContext(ctx, "install-google", "event:published")
+    ).resolves.toEqual({ state: "integrated", contextId: "ctx:onboarding" });
+    expect(call).toHaveBeenCalledWith("main", "vcs.merge", {
+      commandId: expect.stringMatching(/^install-google:integrate-caller:[a-f0-9]{32}$/),
+      contextId: "ctx:onboarding",
+      expectedWorkingHead: { kind: "event", eventId: "event:before" },
+      source: { kind: "event", eventId: "event:published" },
+      intentSummary: "Bring the installed template into this conversation",
+    });
+  });
+
+  it("leaves ambiguous caller overlap to the ordinary agentic merge workflow", async () => {
+    const call = vi.fn(async (_target: string, method: string) => {
+      if (method === "vcs.status") {
+        return {
+          mainRelation: "behind",
+          mainEventId: "event:published",
+          workingHead: { kind: "application", applicationId: "application:local" },
+        };
+      }
+      if (method === "vcs.compare") {
+        return { resolution: { complete: false, concluded: false } };
+      }
+      throw new Error(`Unexpected ${method}`);
+    });
+    const ctx = {
+      invocation: {
+        current: () => ({
+          caller: { callerKind: "do", callerId: "eval", contextId: "ctx:working" },
+        }),
+      },
+      rpc: { call },
+      log: {},
+    } as unknown as import("./context.js").ExtensionContextLike;
+
+    await expect(
+      integrateTemplatePublicationIntoCallerContext(ctx, "install-google", "event:published")
+    ).resolves.toEqual({ state: "needs-merge", contextId: "ctx:working" });
+    expect(call).not.toHaveBeenCalledWith("main", "vcs.merge", expect.anything());
+  });
+
   it("names a direct add after its selected root rather than a sorted dependency", () => {
     const basePin = { ...oldPin, url: "git+https://example.test/base.git" };
     const selectedPin = { ...refreshedPin, url: "git+https://example.test/google.git" };

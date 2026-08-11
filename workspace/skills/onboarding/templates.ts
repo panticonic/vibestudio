@@ -19,7 +19,8 @@ export interface OptionalTemplateSnapshot {
 
 export interface OptionalTemplateSnapshotDependencies {
   status?: () => Promise<TemplateStatusRow[]>;
-  catalog?: () => Promise<TemplateCatalogSnapshot | null>;
+  catalog?: (options?: { refresh?: boolean }) => Promise<TemplateCatalogSnapshot | null>;
+  refreshCatalog?: boolean;
   now?: () => Date;
 }
 
@@ -30,11 +31,15 @@ async function composerStatus(): Promise<TemplateStatusRow[]> {
   >;
 }
 
-async function composerCatalog(): Promise<TemplateCatalogSnapshot | null> {
+async function composerCatalog(
+  options: { refresh?: boolean } = {}
+): Promise<TemplateCatalogSnapshot | null> {
   const { extensions } = await import("@workspace/runtime");
-  return extensions.invoke("@workspace-extensions/template-composer", "catalog", [
-    { refresh: true },
-  ]) as Promise<TemplateCatalogSnapshot>;
+  return extensions.invoke(
+    "@workspace-extensions/template-composer",
+    "catalog",
+    options.refresh ? [{ refresh: true }] : []
+  ) as Promise<TemplateCatalogSnapshot | null>;
 }
 
 export async function composeOptionalTemplateSnapshot(
@@ -52,7 +57,9 @@ export async function loadOptionalTemplateSnapshot(
   dependencies: OptionalTemplateSnapshotDependencies = {}
 ): Promise<OptionalTemplateSnapshot[]> {
   const observedAt = (dependencies.now?.() ?? new Date()).toISOString();
-  const catalog = await (dependencies.catalog ?? composerCatalog)();
+  const catalog = await (dependencies.catalog ?? composerCatalog)({
+    refresh: dependencies.refreshCatalog ?? true,
+  });
   if (!catalog) return [];
   let installedUrls: ReadonlySet<string> | undefined;
   try {

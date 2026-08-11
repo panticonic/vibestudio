@@ -209,6 +209,63 @@ describe("SetupHub", () => {
     expect(save).toHaveBeenCalled();
   });
 
+  it("refreshes installed owners and cached template status after an external add", async () => {
+    const baseCatalog = onboardingCatalog;
+    const baseSnapshots = snapshots.filter(
+      (snapshot) => snapshot.id !== "connection.google-workspace"
+    );
+    const googleTemplate: OptionalTemplateSnapshot = {
+      id: "template.google-workspace",
+      title: "Google Workspace",
+      description: "Connect Google Workspace.",
+      state: "available",
+      summary: "Available to review and add.",
+      observedAt,
+      selection: { ...selection, catalogId: "google-workspace" },
+    };
+    loaders.capabilities
+      .mockResolvedValueOnce({ catalog: baseCatalog, snapshot: baseSnapshots })
+      .mockResolvedValueOnce({ catalog, snapshot: snapshots });
+    loaders.templates
+      .mockResolvedValueOnce([googleTemplate])
+      .mockResolvedValueOnce([{ ...googleTemplate, state: "installed" }]);
+    const scope: Record<string, unknown> = {
+      onboardingSetupOverview: {
+        catalog: baseCatalog,
+        snapshot: baseSnapshots,
+        templates: [googleTemplate],
+        templatesLoaded: true,
+      },
+    };
+    const view = render(
+      <Theme>
+        <SetupHub
+          props={{}}
+          chat={{ send: vi.fn() }}
+          scope={scope}
+          inlineUi={{ id: "onboarding-setup-overview", renderedAt: "before-install" }}
+        />
+      </Theme>
+    );
+
+    await waitFor(() => expect(loaders.templates).toHaveBeenCalledTimes(1));
+    view.rerender(
+      <Theme>
+        <SetupHub
+          props={{}}
+          chat={{ send: vi.fn() }}
+          scope={scope}
+          inlineUi={{ id: "onboarding-setup-overview", renderedAt: "after-install" }}
+        />
+      </Theme>
+    );
+
+    await waitFor(() => expect(loaders.templates).toHaveBeenCalledTimes(2));
+    expect(loaders.templates).toHaveBeenLastCalledWith({ refreshCatalog: false });
+    expect(view.getByText("Installed")).toBeTruthy();
+    expect(view.getByRole("button", { name: "Check connection" })).toBeTruthy();
+  });
+
   it("explains templates and contacts the registry only after an explicit load", async () => {
     const view = render(
       <Theme>

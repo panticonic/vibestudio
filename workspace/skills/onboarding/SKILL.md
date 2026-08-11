@@ -95,6 +95,15 @@ render revision tells the mounted component to refresh capability state. Never
 put credential material, browser samples, device IDs, pairing links, profile
 paths, or private topology in inline props or panel scope.
 
+Do not claim that the refreshed card contains a particular row, status, or
+action: the component reads owner state asynchronously after it renders. Report
+only the completed operation, render the card, and let the card be the
+authoritative observation. For template operations, first honor Composer's
+`contextIntegration`: `integrated` is ready to refresh; `needs-merge` requires
+the ordinary agentic VCS merge in the returned context; `unavailable` means the
+installation succeeded on protected main but this conversation cannot yet
+claim to observe it.
+
 ## Templates
 
 Onboarding shows recommended outcomes from the current verified template

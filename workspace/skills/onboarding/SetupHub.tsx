@@ -237,6 +237,7 @@ export default function SetupHub({ props = {}, chat, scope, scopes, inlineUi }: 
   const [error, setError] = useState<string | null>(null);
   const capabilityRequest = useRef(0);
   const templateRequest = useRef(0);
+  const templatesLoadedRef = useRef(templatesLoaded);
   const byId = new Map(snapshots.map((snapshot) => [snapshot.id, snapshot]));
   const definitions = catalog.filter((entry) => byId.has(entry.id));
   const ready = catalog.filter((entry) => entry.role === "ready-capability");
@@ -281,30 +282,40 @@ export default function SetupHub({ props = {}, chat, scope, scopes, inlineUi }: 
     [saveCache]
   );
 
-  const loadTemplates = useCallback(async () => {
-    const request = ++templateRequest.current;
-    setLoadingTemplates(true);
-    setError(null);
-    try {
-      const templates = await loadOptionalTemplateSnapshot();
-      if (request !== templateRequest.current) return;
-      setTemplateSnapshots(templates);
-      setTemplatesLoaded(true);
-      await saveCache({ templates, templatesLoaded: true });
-    } catch {
-      if (request === templateRequest.current) {
-        setError("Couldn't load optional templates. Try again.");
+  const loadTemplates = useCallback(
+    async (refreshCatalog = true) => {
+      const request = ++templateRequest.current;
+      setLoadingTemplates(true);
+      setError(null);
+      try {
+        const templates = await loadOptionalTemplateSnapshot({ refreshCatalog });
+        if (request !== templateRequest.current) return;
+        setTemplateSnapshots(templates);
+        setTemplatesLoaded(true);
+        await saveCache({ templates, templatesLoaded: true });
+      } catch {
+        if (request === templateRequest.current) {
+          setError("Couldn't load optional templates. Try again.");
+        }
+      } finally {
+        if (request === templateRequest.current) setLoadingTemplates(false);
       }
-    } finally {
-      if (request === templateRequest.current) setLoadingTemplates(false);
-    }
-  }, [saveCache]);
+    },
+    [saveCache]
+  );
+
+  useEffect(() => {
+    templatesLoadedRef.current = templatesLoaded;
+  }, [templatesLoaded]);
 
   // Mounting always refreshes owner state. Re-rendering the stable inline UI
   // changes renderedAt, which is the agent's explicit external refresh signal.
+  // Once the user has loaded the registry, refresh its local installation
+  // projection too without contacting the moving registry again.
   useEffect(() => {
     void refreshCapabilities();
-  }, [inlineUi?.renderedAt, refreshCapabilities]);
+    if (templatesLoadedRef.current) void loadTemplates(false);
+  }, [inlineUi?.renderedAt, loadTemplates, refreshCapabilities]);
 
   async function sendInteraction(definition: OnboardingCapabilityDefinition, action: SetupAction) {
     if (action === "check") {
@@ -507,7 +518,7 @@ export default function SetupHub({ props = {}, chat, scope, scopes, inlineUi }: 
             size="1"
             variant="soft"
             disabled={loadingTemplates || pending !== null}
-            onClick={() => void loadTemplates()}
+            onClick={() => void loadTemplates(true)}
           >
             <BusyReloadIcon busy={loadingTemplates} />
             {loadingTemplates

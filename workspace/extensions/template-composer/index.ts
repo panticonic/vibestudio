@@ -11,12 +11,17 @@ import type {
   TemplateLocator,
   TemplatePublication,
 } from "@vibestudio/service-schemas/templates";
+import type {
+  VcsCompareResult,
+  VcsMergeResult,
+  VcsStatusResult,
+} from "@vibestudio/service-schemas/vcs";
 import { templateLocatorSchema } from "@vibestudio/service-schemas/templates";
 import {
   WorkspaceConfigTopLayerSchema,
   WorkspaceTemplatePinSchema,
 } from "@vibestudio/workspace-contracts/workspaceConfigSchema";
-import { canonicalJson } from "@vibestudio/content-addressing";
+import { canonicalJson, sha256HexSyncText } from "@vibestudio/content-addressing";
 import {
   canonicalTemplateNodeId,
   normalizeTemplateGitUrl,
@@ -81,6 +86,67 @@ interface Environment {
   catalog?: TemplateCatalogSnapshot;
 }
 
+export interface TemplateCallerContextIntegration {
+  state: "integrated" | "needs-merge" | "unavailable";
+  contextId: string;
+}
+
+function invokingContextId(ctx: ExtensionContextLike): string | undefined {
+  const invocation = ctx.invocation.current();
+  return invocation?.chainCaller?.contextId ?? invocation?.caller.contextId;
+}
+
+/**
+ * Make a successful protected-main publication visible to the context that
+ * requested it. Composer may mechanically apply only an already-accounted or
+ * unambiguous merge. Genuine overlap remains untouched for the ordinary
+ * agentic VCS workflow.
+ */
+export async function integrateTemplatePublicationIntoCallerContext(
+  ctx: ExtensionContextLike,
+  operationId: string,
+  publicationEventId: string
+): Promise<TemplateCallerContextIntegration | undefined> {
+  const contextId = invokingContextId(ctx);
+  if (!contextId || contextId.startsWith(OPERATION_CONTEXT_PREFIX)) return undefined;
+  try {
+    const status = await ctx.rpc.call<VcsStatusResult>("main", "vcs.status", { contextId });
+    if (status.mainRelation === "at" && status.mainEventId === publicationEventId) {
+      return { state: "integrated", contextId };
+    }
+    const source = { kind: "event" as const, eventId: publicationEventId };
+    const compared = await ctx.rpc.call<VcsCompareResult>("main", "vcs.compare", {
+      target: status.workingHead,
+      source,
+      limit: 1,
+    });
+    if (compared.resolution.concluded) return { state: "integrated", contextId };
+    if (!compared.resolution.complete) return { state: "needs-merge", contextId };
+    const integrationDigest = sha256HexSyncText(
+      canonicalJson({ contextId, publicationEventId, workingHead: status.workingHead })
+    ).slice(0, 32);
+    const merged = await ctx.rpc.call<VcsMergeResult>("main", "vcs.merge", {
+      commandId: `${operationId}:integrate-caller:${integrationDigest}`,
+      contextId,
+      expectedWorkingHead: status.workingHead,
+      source,
+      intentSummary: "Bring the installed template into this conversation",
+    });
+    return {
+      state:
+        merged.resolution.complete && merged.resolution.concluded ? "integrated" : "needs-merge",
+      contextId,
+    };
+  } catch (error) {
+    ctx.log.warn?.("Template publication could not be integrated into its caller context", {
+      operationId,
+      contextId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return { state: "unavailable", contextId };
+  }
+}
+
 async function operationRecordForMutation(
   ctx: ExtensionContextLike,
   env: Environment,
@@ -106,10 +172,16 @@ async function completedOperationResult(
   if (status.mainRelation !== "at" && status.mainRelation !== "behind") {
     return null;
   }
+  const contextIntegration = await integrateTemplatePublicationIntoCallerContext(
+    ctx,
+    record.operationId,
+    status.mainEventId
+  );
   return {
     operationId: record.operationId,
     state: "applied" as const,
     publicationEventId: status.mainEventId,
+    ...(contextIntegration ? { contextIntegration } : {}),
     affectedParts: record.affectedParts,
   };
 }
@@ -698,10 +770,16 @@ async function applyInspection(
       env.observation.mainEventId,
       ports
     );
+    const contextIntegration = await integrateTemplatePublicationIntoCallerContext(
+      ctx,
+      operationId,
+      published.mainEventId
+    );
     return {
       ...parts,
       state: "applied" as const,
       publicationEventId: published.mainEventId,
+      ...(contextIntegration ? { contextIntegration } : {}),
     };
   } catch (error) {
     const buildFailure = protectedMainBuildFailure(error);
@@ -844,11 +922,17 @@ async function resumePreparedOperation(
       },
     };
   }
+  const contextIntegration = await integrateTemplatePublicationIntoCallerContext(
+    ctx,
+    record.operationId,
+    published.mainEventId
+  );
   return {
     operationId: record.operationId,
     state: "applied" as const,
     affectedParts: record.affectedParts,
     publicationEventId: published.mainEventId,
+    ...(contextIntegration ? { contextIntegration } : {}),
   };
 }
 

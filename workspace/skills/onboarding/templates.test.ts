@@ -74,6 +74,27 @@ describe("optional onboarding templates", () => {
     ]);
   });
 
+  it("rechecks installation against the cached catalog after an overview rerender", async () => {
+    runtime.invoke.mockImplementation(async (_extension, method) => {
+      if (method === "catalog") return catalog();
+      if (method === "status") {
+        return [{ url: "git+https://example.test/examples.git" }];
+      }
+      throw new Error(`unexpected method ${method}`);
+    });
+
+    const snapshot = await loadOptionalTemplateSnapshot({ refreshCatalog: false });
+
+    expect(runtime.invoke).toHaveBeenCalledWith(
+      "@workspace-extensions/template-composer",
+      "catalog",
+      []
+    );
+    expect(snapshot).toEqual([
+      expect.objectContaining({ id: "template.examples", state: "installed" }),
+    ]);
+  });
+
   it("projects recommended registry entries and their installed state", async () => {
     const status = vi.fn(async () => [{ url: "git+https://example.test/examples.git" }] as never);
     const readCatalog = vi.fn(async () => catalog());

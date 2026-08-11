@@ -64,7 +64,12 @@ initPanels:
         After setup, repair, reconnect, success, failure, cancellation, or
         another relevant external change, render `SetupHub.tsx` again with the
         same stable ID and no snapshot props. This bumps the card and signals it
-        to refresh. Provider secrets are collected only
+        to refresh. Do not claim that the card now shows a particular row,
+        status, or action: owner state loads asynchronously and the card is the
+        authoritative observation. For an applied template operation, honor
+        its `contextIntegration` before re-rendering; resolve `needs-merge`
+        through ordinary VCS and never describe `unavailable` as refreshed.
+        Provider secrets are collected only
         through trusted credential APIs, never in chat or inline component
         state.
 

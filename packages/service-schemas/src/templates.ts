@@ -168,6 +168,16 @@ export const templateOperationSchema = z
       .strict()
       .optional(),
     publicationEventId: z.string().optional(),
+    /** Whether the protected-main publication is already visible in the
+     * semantic context that invoked Composer. Ambiguous overlap remains an
+     * ordinary agent-resolved VCS merge instead of being applied mechanically. */
+    contextIntegration: z
+      .object({
+        state: z.enum(["integrated", "needs-merge", "unavailable"]),
+        contextId: z.string().trim().min(1),
+      })
+      .strict()
+      .optional(),
     affectedParts: z.array(z.string()),
   })
   .strict();

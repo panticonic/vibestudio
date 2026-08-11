@@ -89,6 +89,12 @@ registrySnapshot?, refreshCatalog? }`. Pass registry coordinates supplied by
    approval before publishing. After `applied`, request fresh status and
    render a fresh observation. Do not alter an old catalog card to pretend it
    updated.
+   An applied result may include `contextIntegration`. When it is `integrated`,
+   the invoking conversation can immediately observe the publication. When it
+   is `needs-merge`, merge the exact `publicationEventId` into the returned
+   `contextId` with the ordinary agentic VCS workflow before claiming the new
+   units are available. When it is `unavailable`, report that protected main
+   was updated but do not claim the invoking context or its UI has refreshed.
    If the user abandons the operation, invoke `cancel` with its `operationId`;
    this discards the complete isolated operation context.
    If the canonical protected-main validation fails, use its structured
