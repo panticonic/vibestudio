@@ -40,6 +40,10 @@ export function prepareAgentToolArguments(tool: AgentTool, raw: unknown): unknow
     );
   }
   if (Kind in tool.parameters) {
+    const selectedErrors = findSelectedUnionErrors(tool.parameters, raw);
+    if (selectedErrors.length > 0) {
+      throw invalidToolArguments(tool.name, selectedErrors.slice(0, 3).join("; "));
+    }
     const schema = specializeDiscriminatedUnions(tool.parameters, raw);
     const errors = [...Value.Errors(schema as never, raw)].slice(0, 3);
     if (errors.length === 0) return raw;
@@ -71,9 +75,9 @@ function findDiscriminatorMismatch(
   value: unknown,
   path = ""
 ): { path: string; expected: unknown[]; actual: unknown } | null {
-  if (!isRecord(schema) || !isRecord(value)) return null;
+  if (!isRecord(schema)) return null;
   const alternatives = Array.isArray(schema["anyOf"]) ? schema["anyOf"] : null;
-  if (alternatives) {
+  if (alternatives && isRecord(value)) {
     const discriminators = new Map<string, unknown[]>();
     for (const candidate of alternatives) {
       for (const [key, property] of requiredLiteralDiscriminators(candidate)) {
@@ -91,12 +95,53 @@ function findDiscriminatorMismatch(
     if (matching.length === 1) return findDiscriminatorMismatch(matching[0], value, path);
   }
   const properties = isRecord(schema["properties"]) ? schema["properties"] : null;
-  if (!properties) return null;
-  for (const [key, child] of Object.entries(properties)) {
-    const mismatch = findDiscriminatorMismatch(child, value[key], `${path}/${key}`);
-    if (mismatch) return mismatch;
+  if (properties && isRecord(value)) {
+    for (const [key, child] of Object.entries(properties)) {
+      const mismatch = findDiscriminatorMismatch(child, value[key], `${path}/${key}`);
+      if (mismatch) return mismatch;
+    }
+  }
+  if (isRecord(schema["items"]) && Array.isArray(value)) {
+    for (const [index, item] of value.entries()) {
+      const mismatch = findDiscriminatorMismatch(schema["items"], item, `${path}/${index}`);
+      if (mismatch) return mismatch;
+    }
   }
   return null;
+}
+
+/** Validate the exact union branch selected inside nested objects and arrays
+ * before TypeBox formats the enclosing schema. Without this pass, an invalid
+ * array element is reported against the union's first branch even when its
+ * literal discriminator selected a later branch unambiguously. */
+function findSelectedUnionErrors(schema: unknown, value: unknown, path = ""): string[] {
+  if (!isRecord(schema)) return [];
+  const alternatives = Array.isArray(schema["anyOf"]) ? schema["anyOf"] : null;
+  if (alternatives && isRecord(value)) {
+    const matching = alternatives.filter((candidate) => branchMatches(candidate, value));
+    if (matching.length === 1) {
+      const selected = matching[0];
+      const nested = findSelectedUnionErrors(selected, value, path);
+      if (nested.length > 0) return nested;
+      return [...Value.Errors(selected as never, value)].map(
+        (error) => `${path}${error.path || "/"}: ${error.message}`
+      );
+    }
+  }
+  const properties = isRecord(schema["properties"]) ? schema["properties"] : null;
+  if (properties && isRecord(value)) {
+    for (const [key, child] of Object.entries(properties)) {
+      const errors = findSelectedUnionErrors(child, value[key], `${path}/${key}`);
+      if (errors.length > 0) return errors;
+    }
+  }
+  if (isRecord(schema["items"]) && Array.isArray(value)) {
+    for (const [index, item] of value.entries()) {
+      const errors = findSelectedUnionErrors(schema["items"], item, `${path}/${index}`);
+      if (errors.length > 0) return errors;
+    }
+  }
+  return [];
 }
 
 /** Select the schema branch named by literal discriminator fields before
