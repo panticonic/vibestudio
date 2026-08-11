@@ -55,10 +55,16 @@ export function createRuntime(deps: RuntimeDeps) {
     },
   });
   const initialBoot = globalThis.__vibestudioPanelBoot;
-  if (initialBoot) bootReporter.publish(initialBoot);
+  if (initialBoot) {
+    shell?.reportPanelBoot?.(initialBoot);
+    bootReporter.publish(initialBoot);
+  }
   const onPanelBoot = (event: Event): void => {
     const boot = (event as CustomEvent<PanelBootObservation>).detail;
-    if (boot) bootReporter.publish(boot);
+    if (boot) {
+      shell?.reportPanelBoot?.(boot);
+      bootReporter.publish(boot);
+    }
   };
   globalThis.addEventListener?.("vibestudio:panel-boot", onPanelBoot);
 
