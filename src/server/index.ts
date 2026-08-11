@@ -1583,14 +1583,22 @@ async function main() {
       return;
     }
     const { stateHash } = await workspaceVcs.ensureFresh();
-    const lockText = await readWorkspaceFileAtState(stateHash, "meta/templates.lock.yml");
-    if (!lockText) return;
-    const [{ default: YAML }, { assertTemplateLockIntegrityForRead }] = await Promise.all([
+    const stateText = await readWorkspaceFileAtState(stateHash, "meta/templates.state.yml");
+    if (!stateText) return;
+    const [{ default: YAML }, { parseTemplateState }] = await Promise.all([
       import("yaml"),
-      import("@vibestudio/workspace/templateLock"),
+      import("@vibestudio/workspace/templateState"),
     ]);
-    const lock = assertTemplateLockIntegrityForRead(YAML.parse(lockText) as unknown);
-    const pull = baseTemplatePullForRelease(release, lock);
+    let pull: ReturnType<typeof baseTemplatePullForRelease>;
+    try {
+      pull = baseTemplatePullForRelease(
+        release,
+        parseTemplateState(YAML.parse(stateText) as unknown)
+      );
+    } catch (error) {
+      console.warn("[Templates] Ignoring malformed relationship state for base update", error);
+      return;
+    }
     if (!pull) return;
     const host = container.get<import("@vibestudio/extension-host").ExtensionHost>("extensionHost");
     const result = await host.invoke(
@@ -1606,18 +1614,18 @@ async function main() {
   };
   {
     // Origin is the axis every unit review is organized on, and it is the one
-    // fact nothing under review may assert about itself — so it is derived here,
-    // from the template lock and the creation descriptor the server reads
-    // itself, and handed to every review request site.
+    // relationship context every review should present consistently. It is
+    // derived here from current template state, the admission record, and the
+    // creation descriptor, then handed to every review request site.
     const { UnitOriginResolver } = await import("./services/unitOriginResolver.js");
     unitOriginResolver = new UnitOriginResolver({
       readWorkspaceFile: async (filePath) => {
         const { stateHash } = await workspaceVcs.ensureFresh();
         return readWorkspaceFileAtState(stateHash, filePath);
       },
-      // What was true when a part was admitted, for a repository the live lock
+      // What was true when a part was admitted, for a repository the live state
       // no longer claims. Removing a template severs a relationship and deletes
-      // nothing (§U2): without this the lock's disappearance would silently
+      // nothing (§U2): without this the state's disappearance would silently
       // re-attribute every one of that template's parts to whatever answers
       // next — for most workspaces, to the host's own build.
       recordedSourceFor: (repoPath) => unitAdmissionStore.recordedSourceFor(repoPath),
@@ -2800,13 +2808,12 @@ async function main() {
         recurringMetaChangeProvider,
       ],
       resolveUnitOrigins,
-      // The one input that lets the gate tell a template install from an edit,
-      // and it is read here rather than asserted anywhere: the committed lock
-      // the workspace has, and the one the publication would leave behind
-      // (§5.3, §13.9). The gate verifies both fingerprints itself.
-      readTemplateLock: async (stateHash) => {
+      // Descriptive relationship state lets the gate attribute newly arriving
+      // units to the template operation that staged them. It is not an
+      // integrity boundary; protected-main validation and VCS remain canonical.
+      readTemplateState: async (stateHash) => {
         const at = stateHash ?? (await workspaceVcs.ensureFresh()).stateHash;
-        return readWorkspaceFileAtState(at, "meta/templates.lock.yml");
+        return readWorkspaceFileAtState(at, "meta/templates.state.yml");
       },
       admittedOriginKeys: () => unitAdmissionStore.admittedOriginKeys(),
       reportInstallLandingByToken: (landingToken, report) =>
@@ -6850,7 +6857,7 @@ async function main() {
         // question is asked exactly once, on one surface.
         // One resolver answers for every surface, so the creation review and
         // the launch gate can never disagree about where the same unit came
-        // from. It reads the template lock and the creation descriptor rather
+        // from. It reads template relationship state and the creation descriptor rather
         // than assuming this workspace's root owns everything in it.
         const origins = await resolveUnitOrigins(
           creationReview.units.map((unit) => unit.source.repo)

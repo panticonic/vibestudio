@@ -94,9 +94,6 @@ export const templateStatusRowSchema = z
     state: templateLifecycleStateSchema,
     contributedParts: z.number().int().nonnegative(),
     pendingReviews: z.number().int().nonnegative(),
-    /** The copied lock/fragments are usable locally; a deferred check only
-     * means no remote reacquisition has happened in this host session. */
-    verification: z.enum(["verified", "deferred"]),
     review: templateReviewSchema.optional(),
     suggestions: z.array(
       z

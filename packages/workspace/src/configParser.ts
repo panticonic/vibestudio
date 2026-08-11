@@ -30,7 +30,7 @@ export interface WorkspaceConfigReader {
 /**
  * Read the single runtime manifest published at one immutable workspace state.
  *
- * Template declarations, locks, and fragments are userland composition state.
+ * Template declarations, relationship state, and layers are userland composition state.
  * The host deliberately neither discovers nor interprets them; the userland
  * composer publishes their flattened result to WORKSPACE_CONFIG_PATH.
  */

@@ -21,7 +21,7 @@
     "./singletonRegistry": "./src/singletonRegistry.ts",
     "./startup": "./src/startup.ts",
     "./templateCoordinates": "./src/templateCoordinates.ts",
-    "./templateLock": "./src/templateLock.ts"
+    "./templateState": "./src/templateState.ts"
   },
   "scripts": {
     "test": "cd ../.. && vitest run packages/workspace/src"

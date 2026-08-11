@@ -277,11 +277,11 @@ function resolveAuthoringDependencies(
     })
   );
   if (!dependencies.length) return { dependencies: [], dependencyParts: [] };
-  if (!observation.lock) return { dependencies, dependencyParts: [] };
+  if (!observation.state) return { dependencies, dependencyParts: [] };
 
-  const nodesById = new Map(observation.lock.nodes.map((node) => [node.nodeId, node]));
+  const nodesById = new Map(observation.state.nodes.map((node) => [node.nodeId, node]));
   const nodesByUrl = new Map(
-    observation.lock.nodes.map((node) => [normalizeTemplateGitUrl(node.pin.url), node])
+    observation.state.nodes.map((node) => [normalizeTemplateGitUrl(node.pin.url), node])
   );
   const inheritedNodeIds = new Set<string>();
   const include = (nodeId: string) => {
@@ -297,7 +297,7 @@ function resolveAuthoringDependencies(
   }
   return {
     dependencies,
-    dependencyParts: Object.entries(observation.lock.repositories)
+    dependencyParts: Object.entries(observation.state.repositories)
       .filter(([, repository]) =>
         repository.contributions.some(({ nodeId }) => inheritedNodeIds.has(nodeId))
       )
@@ -365,7 +365,7 @@ export async function inspectTemplateAuthoring(
   const selectableParts = [
     ...new Set([
       ...observation.localRepoPaths,
-      ...Object.keys(observation.lock?.repositories ?? {}),
+      ...Object.keys(observation.state?.repositories ?? {}),
     ]),
   ]
     .filter((repoPath) => repoPath !== META_REPOSITORY)
@@ -472,18 +472,20 @@ export async function listTemplateAuthoringParts(
   const repoPaths = [
     ...new Set([
       ...observation.localRepoPaths,
-      ...Object.keys(observation.lock?.repositories ?? {}),
+      ...Object.keys(observation.state?.repositories ?? {}),
     ]),
   ]
     .filter((repoPath) => repoPath !== META_REPOSITORY)
     .map(normalizeWorkspaceRepoPath)
     .sort(compareUtf16CodeUnits);
-  const aliases = new Map((observation.lock?.nodes ?? []).map((node) => [node.nodeId, node.alias]));
-  const urls = new Map((observation.lock?.nodes ?? []).map((node) => [node.nodeId, node.pin.url]));
+  const aliases = new Map(
+    (observation.state?.nodes ?? []).map((node) => [node.nodeId, node.alias])
+  );
+  const urls = new Map((observation.state?.nodes ?? []).map((node) => [node.nodeId, node.pin.url]));
   return Promise.all(
     repoPaths.map(async (repoPath) => {
       const metadata = await packageMetadata(ctx, observation, repoPath);
-      const contributions = observation.lock?.repositories?.[repoPath]?.contributions ?? [];
+      const contributions = observation.state?.repositories?.[repoPath]?.contributions ?? [];
       const templateAliases = contributions
         .map(({ nodeId }) => aliases.get(nodeId))
         .filter((alias): alias is string => alias !== undefined);

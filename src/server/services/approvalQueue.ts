@@ -736,7 +736,7 @@ export function createApprovalQueue(deps: {
    * Where a part was originally installed from, when that is a different fact
    * from where it comes from now (§U2, §7.7).
    *
-   * Derived server-side from the template lock and the admission ledger — never
+   * Derived server-side from template relationship state and the admission ledger — never
    * asserted by anything under review — and asked here so every review surface
    * shows it without each request site having to carry it. Absent in tests and
    * in hosts with no workspace: a part then simply states no history, which is

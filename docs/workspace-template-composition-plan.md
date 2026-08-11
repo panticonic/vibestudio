@@ -7,6 +7,15 @@ templates may overlap, and added, updated, or removed contributions are merged
 through ordinary semantic VCS deltas. Build/type failures retain the operation
 context for agent repair and `resume` rebuilds that context.
 
+> **2026-08-11 state cutover:** every lock, fingerprint, fragment-integrity,
+> and mismatch-rejection rule below is also superseded. Current workspace
+> content is authoritative. `meta/templates.state.yml` records relationships,
+> installed source selections, and merge baselines only; template layer files
+> are mutable workspace files. Exact snapshot checks and fingerprints exist
+> only inside the new or updated operation being reviewed. Persistent template
+> metadata can lose attribution or update convenience when malformed, but it
+> cannot reject workspace drift or block publication.
+
 > **Canonical architecture:** the official-repositories plan supersedes every
 > host-owned lifecycle, service, journal, catalog, and filesystem-template
 > statement below—not only the manifest paths. Template resolution and

@@ -9,7 +9,7 @@ import {
 } from "@vibestudio/workspace/baseTemplateRelease";
 import { normalizeTemplateGitUrl } from "@vibestudio/workspace/templateCoordinates";
 import type {
-  WorkspaceTemplateLock,
+  WorkspaceTemplateState,
   WorkspaceTemplatePin,
 } from "@vibestudio/workspace-contracts/types";
 
@@ -47,11 +47,13 @@ function samePin(left: WorkspaceTemplatePin, right: WorkspaceTemplatePin): boole
  */
 export function baseTemplatePullForRelease(
   release: ParsedBaseTemplateRelease,
-  lock: WorkspaceTemplateLock | null
+  state: WorkspaceTemplateState | null
 ): BaseTemplateReleasePull | null {
-  if (!lock) return null;
+  if (!state) return null;
   const releaseUrl = normalizeTemplateGitUrl(release.baseTemplate.url);
-  const installed = lock.nodes.find((node) => normalizeTemplateGitUrl(node.pin.url) === releaseUrl);
+  const installed = state.nodes.find(
+    (node) => normalizeTemplateGitUrl(node.pin.url) === releaseUrl
+  );
   if (!installed || samePin(installed.pin, release.baseTemplate)) return null;
   const digest = sha256HexSyncText(
     canonicalJson({ protocol: "host-base-template-release-v1", pin: release.baseTemplate })

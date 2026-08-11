@@ -37,7 +37,7 @@ Upstreams describe ongoing tracking only.
 Userland acquisition still freezes and verifies immutable coordinates before
 import. Each imported repository enters the semantic system as an exact
 external snapshot and produces an unpublished candidate. The caller explicitly
-reviews and integrates that candidate. Template locks retain exact coordinates
+reviews and integrates that candidate. Template state retains source coordinates
 and subtree digests for reproducible composition.
 
 The sole initialization exception is the exact root pin supplied at workspace

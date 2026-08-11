@@ -144,7 +144,7 @@ export interface WorkspaceTemplatesConfig {
   use: WorkspaceTemplateDeclaration[];
   /** Exact root-level resolution overrides keyed by normalized template URL. */
   overrides?: Record<string, WorkspaceTemplatePin>;
-  /** Presentation/promotion registry source; never part of an installed template lock. */
+  /** Presentation/promotion registry source; never part of installed relationship state. */
   registry?: WorkspaceTemplateRegistryDeclaration;
   /** Exact bootstrap root already adopted into the ordinary template graph. */
   bootstrapAdopted?: WorkspaceTemplatePin;
@@ -169,13 +169,12 @@ export interface WorkspaceTemplatePresentation {
   description?: string;
 }
 
-export interface WorkspaceTemplateLockNode {
+export interface WorkspaceTemplateStateNode {
   nodeId: string;
   alias: string;
   pin: WorkspaceTemplatePin;
   /** Direct parent node ids. Parents precede children in `nodes`. */
   parents: string[];
-  fragmentDigest: `v1-sha256:${string}`;
   /**
    * What this template says it is called and what it says it does — sanitized,
    * self-asserted, and unverified. It may head a card as a title; it is never
@@ -189,27 +188,29 @@ export interface WorkspaceTemplateLockNode {
   };
 }
 
-export interface WorkspaceTemplateLockContribution {
+export interface WorkspaceTemplateStateContribution {
   nodeId: string;
   subtreeDigest: `v1-sha256:${string}`;
 }
 
-export interface WorkspaceTemplateLockRepository {
+export interface WorkspaceTemplateStateRepository {
   /** Every template layer contributing changes to this repository. */
-  contributions: WorkspaceTemplateLockContribution[];
+  contributions: WorkspaceTemplateStateContribution[];
 }
 
-/** Checked projection committed in `meta/templates.lock.yml`. */
-export interface WorkspaceTemplateLock {
+/**
+ * Descriptive installed-template relationships committed in
+ * `meta/templates.state.yml`. This is merge context, never an integrity or
+ * admission boundary: the current workspace remains authoritative.
+ */
+export interface WorkspaceTemplateState {
   version: 1;
-  fingerprint: `v1-sha256:${string}`;
-  /** Normalized URL-only roots from the top layer that generated this closure. */
+  /** Normalized URL-only roots from the workspace-authored layer. */
   roots: WorkspaceTemplateDeclaration[];
-  /** Normalized top-layer pin overrides that generated this closure. */
+  /** Normalized workspace-authored source selections. */
   overrides: Record<string, WorkspaceTemplatePin>;
-  nodes: WorkspaceTemplateLockNode[];
-  repositories: Record<string, WorkspaceTemplateLockRepository>;
-  verification: "verified" | "deferred";
+  nodes: WorkspaceTemplateStateNode[];
+  repositories: Record<string, WorkspaceTemplateStateRepository>;
 }
 
 /** Host-owned bootstrap intent for a workspace created from an external root. */

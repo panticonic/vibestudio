@@ -13,13 +13,12 @@ import type { UnitChangeApprovalProvider } from "@vibestudio/unit-host";
 import { EMPTY_STATE_HASH } from "@vibestudio/content-addressing";
 import { mirrorWorktreeTree, putBytes } from "./blobstoreService.js";
 import YAML from "yaml";
-import { templateLockFingerprint } from "@vibestudio/workspace/templateLock";
 import {
   canonicalTemplateNodeId,
   normalizeTemplateGitUrl,
   templateAliasFromUrl,
 } from "@vibestudio/workspace/templateCoordinates";
-import type { WorkspaceTemplateLock } from "@vibestudio/workspace-contracts/types";
+import type { WorkspaceTemplateState } from "@vibestudio/workspace-contracts/types";
 import {
   createMainAdvanceApprovalGate,
   createMainRefAdvanceGate,
@@ -30,7 +29,7 @@ import {
   type SemanticAdvanceApprovalCandidate,
 } from "./mainAdvanceApproval.js";
 
-type TemplateLockNode = WorkspaceTemplateLock["nodes"][number];
+type TemplateStateNode = WorkspaceTemplateState["nodes"][number];
 
 const roots: string[] = [];
 
@@ -517,10 +516,9 @@ describe("createMainAdvanceApprovalGate", () => {
   /**
    * Template operations (§5.3, §5.4, §7.2, §7.3, §13.9).
    *
-   * Every case here drives the gate with locks alone. Nothing in the candidate,
-   * the caller, or the provider says "this is a template install" — that is the
-   * point: the framing is earned by what the publication does to the committed
-   * template closure, and by nothing a caller can write down.
+   * Every case here drives the presentation with relationship state alone.
+   * That state may select template-specific framing, while the independently
+   * derived changed units and permission review remain authoritative.
    */
   describe("template operations", () => {
     const NEWS_URL = "git+https://github.com/panticonic/news";
@@ -532,7 +530,7 @@ describe("createMainAdvanceApprovalGate", () => {
       commit: string;
       parents?: string[];
       presentation?: { name?: string; description?: string };
-    }): TemplateLockNode {
+    }): TemplateStateNode {
       return {
         nodeId: canonicalTemplateNodeId(input.url, input.commit),
         alias: templateAliasFromUrl(input.url),
@@ -543,18 +541,17 @@ describe("createMainAdvanceApprovalGate", () => {
           snapshot: `v1-sha256:${"a".repeat(64)}`,
         },
         parents: input.parents ?? [],
-        fragmentDigest: `v1-sha256:${"b".repeat(64)}`,
         ...(input.presentation ? { presentation: input.presentation } : {}),
         suggestions: {},
       };
     }
 
-    /** A lock exactly as the composer commits one: fingerprint over its closure. */
-    function lockYaml(input: {
-      nodes: TemplateLockNode[];
+    /** The relationship state the composer commits alongside the workspace. */
+    function stateYaml(input: {
+      nodes: TemplateStateNode[];
       repositories: Record<string, string>;
     }): string {
-      const body: Omit<WorkspaceTemplateLock, "fingerprint"> = {
+      const state: WorkspaceTemplateState = {
         version: 1 as const,
         roots: input.nodes
           .filter((candidate) => candidate.parents.length === 0)
@@ -570,9 +567,8 @@ describe("createMainAdvanceApprovalGate", () => {
             },
           ])
         ),
-        verification: "verified" as const,
       };
-      return YAML.stringify({ ...body, fingerprint: templateLockFingerprint(body) });
+      return YAML.stringify(state);
     }
 
     const newsNode = node({ url: NEWS_URL, ref: "v1.2.0", commit: "1".repeat(40) });
@@ -590,7 +586,7 @@ describe("createMainAdvanceApprovalGate", () => {
       };
     }
 
-    /** The gate with a workspace lock (`null`) and a candidate lock. */
+    /** The gate with current (`null`) and candidate workspace template state. */
     function templateGate(input: {
       current: string | null;
       next: string | null;
@@ -611,7 +607,7 @@ describe("createMainAdvanceApprovalGate", () => {
       const gate = createMainAdvanceApprovalGate({
         ...deps,
         getProviders: () => [provider],
-        readTemplateLock: async (stateHash) => (stateHash === null ? input.current : input.next),
+        readTemplateState: async (stateHash) => (stateHash === null ? input.current : input.next),
         admittedOriginKeys: () => new Set<string>(),
       });
       return { deps, provider, gate };
@@ -629,10 +625,10 @@ describe("createMainAdvanceApprovalGate", () => {
       return effect.challenge;
     }
 
-    it("recognizes an install from the lock the publication would leave behind", async () => {
+    it("recognizes an install from the state the publication would leave behind", async () => {
       const { deps, gate } = templateGate({
         current: null,
-        next: lockYaml({
+        next: stateYaml({
           nodes: [newsNode],
           repositories: {
             "panels/news": newsNode.nodeId,
@@ -656,7 +652,7 @@ describe("createMainAdvanceApprovalGate", () => {
         title: "news",
         purpose: "",
         origin: expect.objectContaining({
-          // The lock's normalized identity URL, never abbreviated away — the
+          // The state's normalized identity URL, never abbreviated away — the
           // same string `UnitOriginResolver` gives every other surface.
           url: "git+https://github.com/panticonic/news",
           originKey: "github.com/panticonic",
@@ -694,7 +690,7 @@ describe("createMainAdvanceApprovalGate", () => {
       it("heads the card with the template's own name and sentence", async () => {
         const { deps, gate } = templateGate({
           current: null,
-          next: lockYaml({
+          next: stateYaml({
             nodes: [namedNews],
             repositories: { "panels/news": namedNews.nodeId },
           }),
@@ -715,7 +711,7 @@ describe("createMainAdvanceApprovalGate", () => {
       it("keeps the URL as identity while the name rides along as a claim", async () => {
         const { deps, gate } = templateGate({
           current: null,
-          next: lockYaml({
+          next: stateYaml({
             nodes: [namedNews],
             repositories: { "panels/news": namedNews.nodeId },
           }),
@@ -753,7 +749,7 @@ describe("createMainAdvanceApprovalGate", () => {
         });
         const { deps, gate } = templateGate({
           current: null,
-          next: lockYaml({
+          next: stateYaml({
             nodes: [impostor],
             repositories: { "panels/news": impostor.nodeId },
           }),
@@ -795,7 +791,7 @@ describe("createMainAdvanceApprovalGate", () => {
         });
         const { deps, gate } = templateGate({
           current: null,
-          next: lockYaml({
+          next: stateYaml({
             nodes: [hostileNode],
             repositories: { "panels/news": hostileNode.nodeId },
           }),
@@ -818,7 +814,7 @@ describe("createMainAdvanceApprovalGate", () => {
     it("puts a fix to a part the template does not own in the repair section", async () => {
       const { deps, gate } = templateGate({
         current: null,
-        next: lockYaml({
+        next: stateYaml({
           nodes: [newsNode],
           repositories: { "panels/news": newsNode.nodeId },
         }),
@@ -831,7 +827,7 @@ describe("createMainAdvanceApprovalGate", () => {
       });
 
       await gate.approve(
-        candidate({ repoPaths: ["meta"], changedPaths: ["meta/templates.lock.yml"] })
+        candidate({ repoPaths: ["meta"], changedPaths: ["meta/templates.state.yml"] })
       );
 
       const review = reviewOf(deps).installReview!;
@@ -846,11 +842,11 @@ describe("createMainAdvanceApprovalGate", () => {
     it("presents an update differentially, with both human refs and no commit", async () => {
       const previousRequests = new Map<string, readonly []>([["panels/news", []]]);
       const { deps, gate } = templateGate({
-        current: lockYaml({
+        current: stateYaml({
           nodes: [newsNode],
           repositories: { "panels/news": newsNode.nodeId },
         }),
-        next: lockYaml({
+        next: stateYaml({
           nodes: [newsNodeUpdated],
           repositories: { "panels/news": newsNodeUpdated.nodeId },
         }),
@@ -878,11 +874,11 @@ describe("createMainAdvanceApprovalGate", () => {
 
     it("gives an effective-version-only update one line instead of no card at all", async () => {
       const { deps, provider, gate } = templateGate({
-        current: lockYaml({
+        current: stateYaml({
           nodes: [newsNode],
           repositories: { "panels/news": newsNode.nodeId },
         }),
-        next: lockYaml({
+        next: stateYaml({
           nodes: [newsNodeUpdated],
           repositories: { "panels/news": newsNodeUpdated.nodeId },
         }),
@@ -906,7 +902,7 @@ describe("createMainAdvanceApprovalGate", () => {
 
     it("recognizes a removal from the root the publication drops", async () => {
       const { deps, gate } = templateGate({
-        current: lockYaml({
+        current: stateYaml({
           nodes: [newsNode],
           repositories: { "panels/news": newsNode.nodeId },
         }),
@@ -914,7 +910,7 @@ describe("createMainAdvanceApprovalGate", () => {
       });
 
       await gate.approve(
-        candidate({ repoPaths: ["meta"], changedPaths: ["meta/templates.lock.yml"] })
+        candidate({ repoPaths: ["meta"], changedPaths: ["meta/templates.state.yml"] })
       );
 
       const review = reviewOf(deps).installReview!;
@@ -932,7 +928,7 @@ describe("createMainAdvanceApprovalGate", () => {
       // would be the workspace telling the user their parts are going away in
       // exactly the operation whose copy promises they are not.
       const { deps, gate } = templateGate({
-        current: lockYaml({
+        current: stateYaml({
           nodes: [newsNode],
           repositories: {
             "panels/news": newsNode.nodeId,
@@ -943,7 +939,7 @@ describe("createMainAdvanceApprovalGate", () => {
       });
 
       await gate.approve(
-        candidate({ repoPaths: ["meta"], changedPaths: ["meta/templates.lock.yml"] })
+        candidate({ repoPaths: ["meta"], changedPaths: ["meta/templates.state.yml"] })
       );
 
       expect(deps.authorizeEffect).toHaveBeenCalledTimes(1);
@@ -959,14 +955,14 @@ describe("createMainAdvanceApprovalGate", () => {
     });
 
     it("leaves an ordinary publication on the part-changed card", async () => {
-      const lock = lockYaml({
+      const state = stateYaml({
         nodes: [newsNode],
         repositories: { "panels/news": newsNode.nodeId },
       });
       const { deps, gate } = templateGate({
-        current: lock,
+        current: state,
         // Same closure on both sides: nothing about template relationships moved.
-        next: lock,
+        next: state,
         units: [templateUnit("panels/news", "@workspace/news")],
       });
 
@@ -980,18 +976,14 @@ describe("createMainAdvanceApprovalGate", () => {
       expect(review.sections).toBeUndefined();
     });
 
-    it("refuses install framing to a publication whose lock does not verify", async () => {
-      // §13.9: an ordinary publication cannot claim to be a template install to
-      // borrow its framing. Here the caller IS the composer, the candidate lock
-      // says a whole template arrived, and the only thing wrong with it is that
-      // its fingerprint does not cover its own contents.
-      const forged = YAML.parse(
-        lockYaml({ nodes: [newsNode], repositories: { "panels/news": newsNode.nodeId } })
-      ) as { nodes: TemplateLockNode[] };
-      forged.nodes[0]!.pin.ref = "v9.9.9";
+    it("uses structurally valid candidate state as descriptive install framing", async () => {
+      const edited = YAML.parse(
+        stateYaml({ nodes: [newsNode], repositories: { "panels/news": newsNode.nodeId } })
+      ) as { nodes: TemplateStateNode[] };
+      edited.nodes[0]!.pin.ref = "v9.9.9";
       const { deps, gate } = templateGate({
         current: null,
-        next: YAML.stringify(forged),
+        next: YAML.stringify(edited),
         units: [templateUnit("panels/news", "@workspace/news")],
       });
 
@@ -1004,15 +996,15 @@ describe("createMainAdvanceApprovalGate", () => {
       );
 
       const review = reviewOf(deps).installReview!;
-      expect(review.mode).toBe("part-changed");
-      expect(review.template).toBeUndefined();
+      expect(review.mode).toBe("install");
+      expect(review.template?.toVersion).toBe("v9.9.9");
     });
 
     it("names no single template when a publication moves two of them", async () => {
       const otherNode = node({ url: OTHER_URL, ref: "v0.3.0", commit: "3".repeat(40) });
       const { deps, gate } = templateGate({
         current: null,
-        next: lockYaml({
+        next: stateYaml({
           nodes: [newsNode, otherNode],
           repositories: {
             "panels/news": newsNode.nodeId,
@@ -1023,7 +1015,7 @@ describe("createMainAdvanceApprovalGate", () => {
       });
 
       await gate.approve(
-        candidate({ repoPaths: ["meta"], changedPaths: ["meta/templates.lock.yml"] })
+        candidate({ repoPaths: ["meta"], changedPaths: ["meta/templates.state.yml"] })
       );
 
       expect(reviewOf(deps).installReview!.mode).toBe("part-changed");
@@ -1032,7 +1024,7 @@ describe("createMainAdvanceApprovalGate", () => {
     it("discards the whole operation, repairs included, when the decision is no", async () => {
       const { deps, provider, gate } = templateGate({
         current: null,
-        next: lockYaml({
+        next: stateYaml({
           nodes: [newsNode],
           repositories: { "panels/news": newsNode.nodeId },
         }),
@@ -1358,7 +1350,7 @@ describe("createMainRefAdvanceGate (the reshaped batch approval gate)", () => {
     const blobsDir = path.join(tempStatePath(), "blobs");
     const { gate, approvals, deletions } = refGateDeps(blobsDir);
     const before = await stageTree(blobsDir, [
-      { path: "templates.lock.yml", body: "version: 1\n" },
+      { path: "templates.state.yml", body: "version: 1\n" },
       { path: "templates/t-abc.yml", body: "systemEpoch: 1\n" },
     ]);
     const after = await stageTree(blobsDir, [{ path: "vibestudio.yml", body: "id: w\n" }]);

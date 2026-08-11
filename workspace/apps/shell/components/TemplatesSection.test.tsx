@@ -33,7 +33,6 @@ const row = {
   state: "current" as const,
   contributedParts: 2,
   pendingReviews: 0,
-  verification: "verified" as const,
   suggestions: [],
 };
 

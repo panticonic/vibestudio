@@ -129,9 +129,11 @@ ordinary VCS delta base. Never use adoption merely to avoid a difficult add
 merge; the lineage assertion must be true and explicit.
 
 Once committed, an unchanged installed node is complete dependency evidence.
-Composition reuses its exact lock entry, generated fragment, and contribution
-ledger without reacquiring that upstream. A transitive add therefore acquires
-the new template but does not require access to an already-installed Base.
+Composition reuses its installed source selection, mutable current-workspace
+layer, and descriptive contribution state without reacquiring that upstream. A
+transitive add therefore acquires the new template but does not require access
+to an already-installed Base. Local edits to that layer are ordinary workspace
+edits and never fail an integrity comparison.
 
 ## Update a template
 

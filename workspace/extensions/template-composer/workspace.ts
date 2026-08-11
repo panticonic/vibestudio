@@ -17,9 +17,9 @@ import {
 import type {
   WorkspaceConfig,
   WorkspaceCreationDescriptor,
-  WorkspaceTemplateLock,
+  WorkspaceTemplateState,
 } from "@vibestudio/workspace-contracts/types";
-import { assertTemplateLockIntegrityForRead } from "@vibestudio/workspace/templateLock";
+import { parseTemplateState } from "@vibestudio/workspace/templateState";
 import {
   WORKSPACE_COMPOSITION_SOURCE_PATH,
   composeWorkspaceConfig,
@@ -32,7 +32,7 @@ import type { ExtensionContextLike } from "./context.js";
 export const OBSERVATION_CONTEXT = "template-composer-observation";
 export const META_REPOSITORY = "meta";
 export const TOP_CONFIG_PATH = "vibestudio.yml";
-export const LOCK_PATH = "templates.lock.yml";
+export const STATE_PATH = "templates.state.yml";
 export const COMPOSITION_SOURCE_PATH = WORKSPACE_COMPOSITION_SOURCE_PATH.slice("meta/".length);
 
 export interface SemanticWorkspaceObservation extends TemplateWorkspaceObservation {
@@ -195,10 +195,17 @@ export async function observeWorkspace(
     id: info.id,
   });
   const { id: _runtimeId, ...runtimeTop } = parsedRuntime;
-  const lockFile = await readFile(ctx, mainState, metaRepository.repositoryId, LOCK_PATH);
-  const lock: WorkspaceTemplateLock | undefined = lockFile
-    ? assertTemplateLockIntegrityForRead(YAML.parse(textContent(lockFile)) as unknown)
-    : undefined;
+  const stateFile = await readFile(ctx, mainState, metaRepository.repositoryId, STATE_PATH);
+  let state: WorkspaceTemplateState | undefined;
+  if (stateFile) {
+    try {
+      state = parseTemplateState(YAML.parse(textContent(stateFile)) as unknown);
+    } catch {
+      // Relationship state is advisory. Invalid metadata cannot veto the valid,
+      // resolved workspace configuration that the host is already running.
+      state = undefined;
+    }
+  }
   const sourceFile = await readFile(
     ctx,
     mainState,
@@ -209,37 +216,40 @@ export async function observeWorkspace(
     ? WorkspaceConfigTopLayerSchema.parse(YAML.parse(textContent(sourceFile)) as unknown)
     : undefined;
   let top: ReturnType<typeof WorkspaceConfigTopLayerSchema.parse>;
-  const installedFragments: Record<string, string> = {};
-  if (lock) {
-    if (!storedSource) {
-      throw new Error(
-        `Workspace template lock exists without ${WORKSPACE_COMPOSITION_SOURCE_PATH}`
-      );
-    }
+  const installedLayers: Record<string, string> = {};
+  if (state && storedSource) {
     const ancestors = new Map<string, Set<string>>();
     const layers = [];
-    for (const node of lock.nodes) {
+    for (const node of state.nodes) {
       const inherited = new Set<string>();
       for (const parent of node.parents) {
         inherited.add(parent);
         for (const ancestor of ancestors.get(parent) ?? []) inherited.add(ancestor);
       }
       ancestors.set(node.nodeId, inherited);
-      const fragmentFile = await readFile(
+      const layerFile = await readFile(
         ctx,
         mainState,
         metaRepository.repositoryId,
         `templates/${node.nodeId}.yml`
       );
-      if (!fragmentFile) {
-        throw new Error(`Workspace is missing generated template fragment ${node.nodeId}`);
+      let layerText = layerFile ? textContent(layerFile) : "{}\n";
+      let config: ReturnType<typeof parseWorkspaceConfigFragment>;
+      try {
+        config = parseWorkspaceConfigFragment(layerText, node.nodeId);
+      } catch {
+        // A deleted or malformed layer means the current resolved config wins.
+        // Model that node as an empty mutable layer so resolution can continue
+        // without reacquiring or restoring its historical upstream contents.
+        layerText = "{}\n";
+        config = parseWorkspaceConfigFragment(layerText, node.nodeId);
       }
-      installedFragments[node.nodeId] = textContent(fragmentFile);
+      installedLayers[node.nodeId] = layerText;
       layers.push({
         nodeId: node.nodeId,
         alias: node.alias,
         ancestors: [...inherited],
-        config: parseWorkspaceConfigFragment(textContent(fragmentFile), node.nodeId),
+        config,
       });
     }
     const prior = composeWorkspaceConfig(storedSource, layers, info.id);
@@ -251,18 +261,21 @@ export async function observeWorkspace(
     );
   } else {
     const descriptor = await readBootstrapDescriptor(info.statePath);
-    const templates = storedSource?.templates ?? { use: [] };
-    top = descriptor
-      ? bootstrapWorkspaceSource(runtimeTop, templates)
-      : WorkspaceConfigTopLayerSchema.parse({ ...runtimeTop, templates });
+    const templates =
+      storedSource?.templates ??
+      (state ? { use: state.roots, overrides: state.overrides } : { use: [] });
+    top =
+      descriptor && !state
+        ? bootstrapWorkspaceSource(runtimeTop, templates)
+        : WorkspaceConfigTopLayerSchema.parse({ ...runtimeTop, templates });
   }
   const localRepoPaths = await repositoryPaths(ctx, mainState);
   return {
     workspaceId: info.id,
     runtimeTop,
     roots: top.templates?.use ?? [],
-    ...(lock ? { lock } : {}),
-    ...(lock ? { installedFragments } : {}),
+    ...(state ? { state } : {}),
+    ...(state ? { installedLayers } : {}),
     localRepoPaths,
     overrides: top.templates?.overrides,
     expectedSystemEpoch: top.systemEpoch,

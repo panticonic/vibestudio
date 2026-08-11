@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { templateRelationshipActions, templateStatePresentation, templateVersion } from "./presentation.js";
+import {
+  templateRelationshipActions,
+  templateStatePresentation,
+  templateVersion,
+} from "./presentation.js";
 import {
   filterTemplateCatalog,
   isTemplateHttpUrl,
@@ -8,21 +12,31 @@ import {
 
 describe("template settings presentation", () => {
   it("uses the panel state names from the template UX", () => {
-    expect(templateStatePresentation({ state: "reviewing", pendingReviews: 2, verification: "verified" } as never)).toEqual({
+    expect(templateStatePresentation({ state: "reviewing", pendingReviews: 2 } as never)).toEqual({
       label: "Reviewing changes — 2 to review",
       color: "blue",
     });
-    expect(templateStatePresentation({ state: "error", pendingReviews: 0, verification: "verified" } as never)).toEqual({
+    expect(templateStatePresentation({ state: "error", pendingReviews: 0 } as never)).toEqual({
       label: "Needs attention",
       color: "red",
     });
     expect(templateVersion("refs/tags/v4")).toBe("v4");
-    expect(templateStatePresentation({ state: "current", pendingReviews: 0, verification: "deferred" } as never)).toEqual({
-      label: "Available offline",
-      color: "gray",
+    expect(templateStatePresentation({ state: "current", pendingReviews: 0 } as never)).toEqual({
+      label: "Up to date",
+      color: "green",
     });
-    expect(templateRelationshipActions(true)).toEqual({ check: true, update: true, remove: true, suggest: true });
-    expect(templateRelationshipActions(false)).toEqual({ check: false, update: false, remove: false, suggest: false });
+    expect(templateRelationshipActions(true)).toEqual({
+      check: true,
+      update: true,
+      remove: true,
+      suggest: true,
+    });
+    expect(templateRelationshipActions(false)).toEqual({
+      check: false,
+      update: false,
+      remove: false,
+      suggest: false,
+    });
   });
 });
 

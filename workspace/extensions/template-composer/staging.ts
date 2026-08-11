@@ -12,7 +12,6 @@ import type {
 } from "@vibestudio/service-schemas/vcs";
 import type { WorkspaceTemplatePin } from "@vibestudio/workspace-contracts/types";
 import type { TemplateAuthoringInspection } from "@vibestudio/service-schemas/templates";
-import { assertTemplateLockIntegrityForRead } from "@vibestudio/workspace/templateLock";
 import { composeWorkspaceConfig } from "@vibestudio/workspace/configComposition";
 import { normalizeTemplateGitUrl } from "@vibestudio/workspace/templateCoordinates";
 import type {
@@ -26,7 +25,7 @@ import { mapConcurrent } from "./concurrency.js";
 import { acquireTemplateSnapshot } from "./source.js";
 import { semanticRepositoryDigest } from "./semanticRepository.js";
 import {
-  LOCK_PATH,
+  STATE_PATH,
   COMPOSITION_SOURCE_PATH,
   META_REPOSITORY,
   TOP_CONFIG_PATH,
@@ -115,6 +114,18 @@ function text(file: NonNullable<VcsReadFileResult>): string {
   return file.content.kind === "text"
     ? file.content.text
     : Buffer.from(file.content.base64, "base64").toString("utf8");
+}
+
+async function operationIntentFileExists(
+  ctx: ExtensionContextLike,
+  contextId: string
+): Promise<boolean> {
+  const current = await status(ctx, contextId);
+  const meta = await resolveRepository(ctx, current.workingHead, META_REPOSITORY);
+  if (!meta) return false;
+  return Boolean(
+    await readFile(ctx, current.workingHead, meta.repositoryId, operationRecordPath())
+  );
 }
 
 async function status(ctx: ExtensionContextLike, contextId: string): Promise<VcsStatusResult> {
@@ -374,26 +385,6 @@ function pinForContribution(plan: TemplateCompositionPlan, nodeId: string): Work
   return node.pin;
 }
 
-async function alreadyStaged(
-  ctx: ExtensionContextLike,
-  contextId: string,
-  fingerprint: string
-): Promise<boolean> {
-  const current = await status(ctx, contextId);
-  const meta = await resolveRepository(ctx, current.workingHead, META_REPOSITORY);
-  if (!meta) return false;
-  const lock = await readFile(ctx, current.workingHead, meta.repositoryId, LOCK_PATH);
-  if (!lock) return false;
-  try {
-    return (
-      assertTemplateLockIntegrityForRead(YAML.parse(text(lock)) as unknown).fingerprint ===
-      fingerprint
-    );
-  } catch {
-    return false;
-  }
-}
-
 function subtreeFiles(
   files: readonly {
     path: string;
@@ -467,15 +458,13 @@ function nextContributionSides(
 }
 
 function previousContributionSides(
-  previous: NonNullable<SemanticWorkspaceObservation["lock"]>,
+  previous: NonNullable<SemanticWorkspaceObservation["state"]>,
   repoPath: string
 ): Map<string, PreviousContributionSide> {
   const result = new Map<string, PreviousContributionSide>();
   for (const contribution of previous.repositories[repoPath]?.contributions ?? []) {
     const node = previous.nodes.find((candidate) => candidate.nodeId === contribution.nodeId);
-    if (!node) {
-      throw new Error(`Previous template lock is missing node ${contribution.nodeId}`);
-    }
+    if (!node) continue;
     result.set(normalizeTemplateGitUrl(node.pin.url), {
       nodeId: node.nodeId,
       alias: node.alias,
@@ -495,16 +484,12 @@ async function materializePreviousContribution(
 ): Promise<ContributionSide> {
   const snapshot = await acquire(ctx, statePath, side.pin, side.nodeId);
   const files = subtreeFiles(snapshot.files, side.subdir);
-  if (
-    semanticRepositoryDigest(files.map((file) => ({ ...file, byteLength: file.size }))) !==
-    side.subtreeDigest
-  ) {
-    throw new Error(
-      `Previous template contribution ${side.alias} for ${side.subdir} is inconsistent`
-    );
-  }
+  const subtreeDigest = semanticRepositoryDigest(
+    files.map((file) => ({ ...file, byteLength: file.size }))
+  );
   return {
     ...side,
+    subtreeDigest,
     files: files.map(({ path, contentHash, mode }) => ({ path, contentHash, mode })),
   };
 }
@@ -514,7 +499,7 @@ export async function mergeTemplateContributions(
   statePath: string,
   contextId: string,
   plan: TemplateCompositionPlan,
-  previous: SemanticWorkspaceObservation["lock"],
+  previous: SemanticWorkspaceObservation["state"],
   record?: TemplateOperationRecord
 ): Promise<string[]> {
   const items: TemplateReviewItem[] = [];
@@ -794,7 +779,7 @@ async function stageMeta(
       artifactPath.startsWith("meta/") ? artifactPath.slice("meta/".length) : artifactPath
     )
   );
-  if (inspection.plan.lock === null) removals.add(LOCK_PATH);
+  if (inspection.plan.state === null) removals.add(STATE_PATH);
   removals.add(operationRecordPath());
   const changes: unknown[] = [];
   for (const [filePath, desiredText] of desired) {
@@ -869,11 +854,17 @@ export function createTemplateOperationPorts(
       return { contextId };
     },
     async stageComposition(contextId, inspection) {
-      if (await alreadyStaged(ctx, contextId, inspection.plan.fingerprint)) {
+      if (record?.preparedAffectedRepoPaths) {
+        return { affectedRepoPaths: record.preparedAffectedRepoPaths };
+      }
+      if (record && !(await operationIntentFileExists(ctx, contextId))) {
+        // Metadata staging removes the temporary intent file in the same commit
+        // as the completed composition. Its absence is the operation-scoped
+        // crash receipt; no persistent template metadata is asked to prove it.
         return {
           affectedRepoPaths: [
             ...new Set([
-              ...Object.keys(observation.lock?.repositories ?? {}),
+              ...Object.keys(observation.state?.repositories ?? {}),
               ...Object.keys(inspection.plan.repositories),
             ]),
           ].sort(),
@@ -891,7 +882,7 @@ export function createTemplateOperationPorts(
               statePath,
               contextId,
               inspection.plan,
-              observation.lock,
+              observation.state,
               record
             );
       await stageMeta(ctx, contextId, observation, inspection);

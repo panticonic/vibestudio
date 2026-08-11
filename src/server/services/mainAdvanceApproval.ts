@@ -24,12 +24,12 @@ import {
   templateOrigin,
 } from "@vibestudio/shared/authority/reviewedUnitParts";
 import { HOST_APPROVAL_COPY } from "@vibestudio/shared/hostApprovalCopy";
-import { assertTemplateLockIntegrityForRead } from "@vibestudio/workspace/templateLock";
+import { parseTemplateState } from "@vibestudio/workspace/templateState";
 import {
   normalizeTemplateGitUrl,
   templateGitTransportUrl,
 } from "@vibestudio/workspace/templateCoordinates";
-import type { WorkspaceTemplateLock } from "@vibestudio/workspace-contracts/types";
+import type { WorkspaceTemplateState } from "@vibestudio/workspace-contracts/types";
 import { sanitizeTemplateDisplayText } from "@vibestudio/workspace-contracts/workspaceConfigSchema";
 import { compareUtf16CodeUnits, EMPTY_STATE_HASH } from "@vibestudio/content-addressing";
 import { countLines, countLineDiff } from "@vibestudio/shared/lineDiff";
@@ -564,10 +564,10 @@ export interface SemanticAdvanceApprovalCandidate {
   via?: string;
 }
 
-const TEMPLATE_LOCK_PATH = "meta/templates.lock.yml";
+const TEMPLATE_STATE_PATH = "meta/templates.state.yml";
 // A heading and a single line under it. Same bounds the manifest schema applies
-// on the way in, restated here because this side must hold even if a lock was
-// written by an older composer that had looser ones.
+// on the way in, restated here because display text is always sanitized where
+// it crosses into the host-owned review surface.
 const TEMPLATE_NAME_MAX = 60;
 const TEMPLATE_PURPOSE_MAX = 200;
 
@@ -587,49 +587,28 @@ export type InstallReviewPresentation = NonNullable<
 export interface TemplateOperationRecognition {
   mode: "install" | "update" | "remove";
   template: InstallReviewTemplate;
-  /** Where each repository the lock claims came from, at the state being published. */
+  /** Where each repository the state claims came from, at the state being published. */
   origins: ReadonlyMap<string, InstallReviewOrigin>;
   /** Repositories touched by contributions from the closure this operation moves. */
   contributedRepoPaths: ReadonlySet<string>;
 }
 
 /**
- * Recognize a template operation from the two locks, and from nothing else.
- *
- * §13.9 requires both directions to fail at the server boundary: a template
- * operation cannot be disguised as an ordinary publication to get the generic
- * card, and an ordinary publication cannot claim to be a template install to
- * borrow its framing. A flag on the request — or the composer's own operation
- * record, which is userland state written by the extension that wants the
- * framing — answers neither, because both are assertions by the party under
- * review.
- *
- * `meta/templates.lock.yml` is different. It is the workspace's committed
- * projection of its template closure, its fingerprint covers every node, pin,
- * and repository contribution entry, and `assertTemplateLockIntegrityForRead`
- * additionally re-derives each node id from its own pin and each alias from its
- * own URL. Diffing the lock the workspace has against the lock the publication
- * would install is therefore not a claim about the operation — it IS the
- * operation, stated in the only terms that survive verification: which template
- * roots this publication adds, re-pins, or drops. A publication that changes no
- * root changes no template relationship, and gets the ordinary part-changed
- * review no matter who published it or what it says about itself.
- *
- * A lock that fails integrity is not evidence of anything, so it recognizes
- * nothing and the publication falls back to the generic review. Failing that
- * way round matters: the risk being defended against is a forged lock buying
- * install framing, never a real one losing it.
+ * Recognize a template operation from the relationship delta. This state is
+ * descriptive UX context, not authority: protected-main validation still
+ * derives every changed unit and permission independently. Malformed state
+ * merely loses template-specific framing and falls back to the generic review.
  */
 export function recognizeTemplateOperation(input: {
-  /** The lock the workspace currently has, or null when it composes nothing. */
-  currentLock: WorkspaceTemplateLock | null;
-  /** The lock at the state being published. */
-  candidateLock: WorkspaceTemplateLock | null;
+  /** The state the workspace currently has, or null when it composes nothing. */
+  currentState: WorkspaceTemplateState | null;
+  /** The state at the state being published. */
+  candidateState: WorkspaceTemplateState | null;
   /** Sources the user has already run code from, for first encounter. */
   admittedOriginKeys: ReadonlySet<string>;
 }): TemplateOperationRecognition | null {
-  const current = rootNodes(input.currentLock);
-  const candidate = rootNodes(input.candidateLock);
+  const current = rootNodes(input.currentState);
+  const candidate = rootNodes(input.candidateState);
   const moved: Array<{
     mode: TemplateOperationRecognition["mode"];
     url: string;
@@ -651,7 +630,7 @@ export function recognizeTemplateOperation(input: {
   if (moved.length !== 1) return null;
   const operation = moved[0]!;
 
-  const lock = operation.mode === "remove" ? input.currentLock : input.candidateLock;
+  const state = operation.mode === "remove" ? input.currentState : input.candidateState;
   const rootNode = (operation.mode === "remove" ? current : candidate).get(operation.url)!;
   const fromVersion = current.get(operation.url)?.pin.ref ?? null;
   const toVersion = candidate.get(operation.url)?.pin.ref ?? null;
@@ -659,7 +638,7 @@ export function recognizeTemplateOperation(input: {
   // A root's closure is the root plus everything it depends on. A repository
   // belongs to the operation when any node in that closure contributes to it;
   // no template exclusively owns the resulting workspace repository.
-  const nodesById = new Map((lock?.nodes ?? []).map((node) => [node.nodeId, node]));
+  const nodesById = new Map((state?.nodes ?? []).map((node) => [node.nodeId, node]));
   const closure = new Set<string>();
   const pending = [rootNode.nodeId];
   while (pending.length > 0) {
@@ -671,7 +650,7 @@ export function recognizeTemplateOperation(input: {
 
   const origins = new Map<string, InstallReviewOrigin>();
   const contributedRepoPaths = new Set<string>();
-  for (const [repoPath, repository] of Object.entries(lock?.repositories ?? {})) {
+  for (const [repoPath, repository] of Object.entries(state?.repositories ?? {})) {
     const contributors = repository.contributions
       .map(({ nodeId }) => nodesById.get(nodeId))
       .filter((node): node is NonNullable<typeof node> => node !== undefined);
@@ -699,9 +678,8 @@ export function recognizeTemplateOperation(input: {
   }
 
   // What the template says it is called and what it says it does, re-sanitized
-  // at the point of use. The lock's fingerprint proves these bytes are the ones
-  // the composer wrote; it proves nothing about whether the template authored
-  // them hostile, and this is the last place before they reach a person.
+  // at the point of use. Relationship state is workspace-owned and descriptive;
+  // this is the last boundary before self-authored text reaches a person.
   const selfName = sanitizeTemplateDisplayText(rootNode.presentation?.name, TEMPLATE_NAME_MAX);
   const selfPurpose = sanitizeTemplateDisplayText(
     rootNode.presentation?.description,
@@ -737,17 +715,17 @@ export function recognizeTemplateOperation(input: {
   };
 }
 
-/** The declared roots of a lock, keyed by normalized URL, with their nodes. */
+/** The declared roots of a state, keyed by normalized URL, with their nodes. */
 function rootNodes(
-  lock: WorkspaceTemplateLock | null
-): ReadonlyMap<string, WorkspaceTemplateLock["nodes"][number]> {
-  const roots = new Map<string, WorkspaceTemplateLock["nodes"][number]>();
-  if (!lock) return roots;
-  for (const root of lock.roots) {
+  state: WorkspaceTemplateState | null
+): ReadonlyMap<string, WorkspaceTemplateState["nodes"][number]> {
+  const roots = new Map<string, WorkspaceTemplateState["nodes"][number]>();
+  if (!state) return roots;
+  for (const root of state.roots) {
     const url = normalizeTemplateGitUrl(root.url);
-    const node = lock.nodes.find((candidate) => normalizeTemplateGitUrl(candidate.pin.url) === url);
-    // Integrity already refuses a root without a node; skipping is belt to that
-    // brace rather than a case that can reach here.
+    const node = state.nodes.find(
+      (candidate) => normalizeTemplateGitUrl(candidate.pin.url) === url
+    );
     if (node) roots.set(url, node);
   }
   return roots;
@@ -756,7 +734,7 @@ function rootNodes(
 /**
  * The human name of a template, derived from its URL and only from its URL.
  *
- * Same derivation the lock's alias uses, minus the content-addressed suffix
+ * Same derivation the state's alias uses, minus the content-addressed suffix
  * that makes an alias collision-proof and a heading unreadable.
  */
 function templateTitleFromUrl(url: string): string {
@@ -814,14 +792,13 @@ export function createMainAdvanceApprovalGate(deps: {
     repoPaths: readonly string[]
   ) => Promise<ReadonlyMap<string, InstallReviewOrigin>>;
   /**
-   * `meta/templates.lock.yml` at an exact composed workspace state, and at the
+   * `meta/templates.state.yml` at an exact composed workspace state, and at the
    * live workspace when `stateHash` is null.
    *
-   * This is the whole input to recognizing a template operation, and it is
-   * deliberately a raw read: the gate parses and integrity-checks the bytes
-   * itself rather than being handed someone's interpretation of them.
+   * This is display context for recognizing a relationship change. The gate
+   * parses it itself; it never uses it to decide which code or permissions land.
    */
-  readTemplateLock?: (stateHash: string | null) => Promise<string | null>;
+  readTemplateState?: (stateHash: string | null) => Promise<string | null>;
   /** Sources the user has already run code from, for first encounter. */
   admittedOriginKeys?: () => ReadonlySet<string>;
   reportInstallLandingByToken?: (
@@ -834,17 +811,17 @@ export function createMainAdvanceApprovalGate(deps: {
   // view, so it is computed once and reused for the whole batch.
   let recognized: { stateHash: string; result: TemplateOperationRecognition | null } | null = null;
   const recognizeFor = async (stateHash: string): Promise<TemplateOperationRecognition | null> => {
-    if (!deps.readTemplateLock) return null;
+    if (!deps.readTemplateState) return null;
     if (recognized?.stateHash === stateHash) return recognized.result;
     let result: TemplateOperationRecognition | null = null;
     try {
       const [currentText, candidateText] = await Promise.all([
-        deps.readTemplateLock(null),
-        deps.readTemplateLock(stateHash),
+        deps.readTemplateState(null),
+        deps.readTemplateState(stateHash),
       ]);
       result = recognizeTemplateOperation({
-        currentLock: verifiedTemplateLock(currentText, "the workspace"),
-        candidateLock: verifiedTemplateLock(candidateText, "this publication"),
+        currentState: parsedTemplateState(currentText, "the workspace"),
+        candidateState: parsedTemplateState(candidateText, "this publication"),
         admittedOriginKeys: deps.admittedOriginKeys?.() ?? new Set<string>(),
       });
     } catch (error) {
@@ -1056,10 +1033,10 @@ export function createMainAdvanceApprovalGate(deps: {
 
       const repoPaths = units.map((unit) => unit.source.repo);
       const origins = new Map(await (deps.resolveUnitOrigins?.(repoPaths) ?? []));
-      // The resolver answers from the lock the workspace HAS. A template
+      // The resolver answers from the state the workspace HAS. A template
       // arriving now is not in it, so every part it lands would print as the
       // workspace's own code — the one claim this system must never make by
-      // accident. The candidate lock is the same evidence one state later, so
+      // accident. The candidate state is the same evidence one state later, so
       // it wins wherever it claims a repository.
       for (const [repoPath, origin] of template?.origins ?? []) origins.set(repoPath, origin);
       // Inside a template publication every changed unit is one of two things:
@@ -1363,22 +1340,18 @@ async function authorizeProtectedPublication(
 }
 
 /**
- * A lock nobody has verified is not evidence. Parse it, check its fingerprint
- * and its internal derivations, and treat any failure as "there is no lock
- * here" — the answer that can only ever cost a publication its template
- * framing, never grant one framing it did not earn.
+ * Malformed relationship state loses template-specific framing. It does not
+ * block publication and cannot change the independently derived unit review.
  */
-function verifiedTemplateLock(
+function parsedTemplateState(
   content: string | null,
   source: string
-): WorkspaceTemplateLock | null {
+): WorkspaceTemplateState | null {
   if (content === null) return null;
   try {
-    return assertTemplateLockIntegrityForRead(YAML.parse(content) as unknown);
+    return parseTemplateState(YAML.parse(content) as unknown);
   } catch (error) {
-    console.warn(
-      `[Units] ${TEMPLATE_LOCK_PATH} in ${source} failed integrity checks: ${message(error)}`
-    );
+    console.warn(`[Units] Could not parse ${TEMPLATE_STATE_PATH} in ${source}: ${message(error)}`);
     return null;
   }
 }

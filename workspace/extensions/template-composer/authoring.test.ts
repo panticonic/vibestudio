@@ -54,7 +54,7 @@ describe("template authoring inspection", () => {
       context(packages) as never,
       {
         localRepoPaths: new Set(["extensions/demo", "packages/shared"]),
-        lock: {
+        state: {
           nodes: [{ nodeId: "t-base", alias: "base", pin: base, parents: [] }],
           repositories: {
             "packages/base-runtime": {
@@ -119,7 +119,7 @@ describe("template authoring inspection", () => {
       }) as never,
       {
         localRepoPaths: new Set(["extensions/demo"]),
-        lock: {
+        state: {
           nodes: [
             { nodeId: "t-base", alias: "base", pin: base, parents: [] },
             { nodeId: "t-feature", alias: "feature", pin: feature, parents: ["t-base"] },
@@ -154,7 +154,7 @@ describe("template authoring inspection", () => {
     const base = pin("base", "e");
     const observation = {
       localRepoPaths: new Set(["packages/base-runtime"]),
-      lock: {
+      state: {
         nodes: [{ nodeId: "t-base", alias: "base", pin: base, parents: [] }],
         repositories: {
           "packages/base-runtime": {
@@ -195,7 +195,7 @@ describe("template authoring inspection", () => {
       context({}) as never,
       {
         localRepoPaths: new Set(),
-        lock: {
+        state: {
           nodes: [{ nodeId: "t-base", alias: "base", pin: base }],
           repositories: {
             "packages/base-runtime": {

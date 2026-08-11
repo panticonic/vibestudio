@@ -6,7 +6,7 @@ import {
   unresolvedOrigin,
 } from "@vibestudio/shared/authority/reviewedUnitParts";
 import type { InstallReviewOrigin } from "@vibestudio/shared/authority/unitInstallReview";
-import { assertTemplateLockIntegrityForRead } from "@vibestudio/workspace/templateLock";
+import { parseTemplateState } from "@vibestudio/workspace/templateState";
 import { sanitizeTemplateDisplayText } from "@vibestudio/workspace-contracts/workspaceConfigSchema";
 import type { UnitSourceOrigin } from "./unitAdmissionStore.js";
 
@@ -14,23 +14,23 @@ import type { UnitSourceOrigin } from "./unitAdmissionStore.js";
  * Where a unit's bytes came from (docs/template-install-unit-approval-ux-plan.md
  * §7.6.3).
  *
- * The gate's organizing axis is origin, and origin is the one fact in this
- * system nobody asserts about themselves — so it may only ever be derived from
- * workspace state the server reads itself. Two records answer it, in this order:
+ * The gate's organizing axis is origin. Current relationship state supplies
+ * present-tense attribution; the host-written admission record preserves the
+ * historical answer after that relationship ends.
  *
- *   `meta/templates.lock.yml` records every template contribution. When exactly
+ *   `meta/templates.state.yml` records every template contribution. When exactly
  *     one template contributes to a repository, its URL and human ref are a
  *     useful coarse origin. Multiple contributors deliberately produce no
  *     single-template origin; file-level VCS provenance is the honest source.
- *   the source recorded when the unit was admitted, for a repository the lock no
+ *   the source recorded when the unit was admitted, for a repository the state no
  *     longer claims but whose merged content remains. Without this step the
- *     lock's disappearance would silently
+ *     state's disappearance would silently
  *     re-attribute every one of them to whatever answers next — for most
  *     workspaces, to the host's own build — so a part would go from
  *     `Originally installed from News 1.2.0` to `Part of Vibestudio` purely
  *     because the user ended a relationship.
  *   the workspace creation descriptor names the root this workspace was built
- *     from, when it was built from someone else's code. Anything the lock does
+ *     from, when it was built from someone else's code. Anything the state does
  *     not claim came in with that root.
  *
  * A repository can inherit the root origin only when its path is also proven to
@@ -42,7 +42,7 @@ import type { UnitSourceOrigin } from "./unitAdmissionStore.js";
  * Versions here are the human ref (`v2.1`), never the commit: no commit id or
  * content digest reaches a review surface at any disclosure level.
  */
-const TEMPLATE_LOCK_PATH = "meta/templates.lock.yml";
+const TEMPLATE_STATE_PATH = "meta/templates.state.yml";
 /** Same bound the manifest schema applies; restated where the string is read. */
 const TEMPLATE_NAME_MAX = 60;
 
@@ -51,12 +51,11 @@ export interface UnitOriginResolverDeps {
   readWorkspaceFile(filePath: string): Promise<string | null>;
   /**
    * The source recorded alongside this repository's admission, for a repository
-   * no live lock claims.
+   * no live state claims.
    *
    * A durable answer to a question the workspace's current composition can no
    * longer answer. It is a record the server wrote itself at the moment of a
-   * decision, never a claim by anything under review, so it carries the same
-   * weight as the lock and simply outlives it.
+   * decision and simply outlives descriptive relationship state.
    */
   recordedSourceFor?(repoPath: string): RecordedUnitSource | null;
   /** The pin this workspace was created from, when it was not our own base. */
@@ -129,29 +128,29 @@ export class UnitOriginResolver {
   async refresh(): Promise<void> {
     let content: string | null = null;
     try {
-      content = await this.deps.readWorkspaceFile(TEMPLATE_LOCK_PATH);
+      content = await this.deps.readWorkspaceFile(TEMPLATE_STATE_PATH);
     } catch (error) {
       this.soleContributions = new Map();
       this.overlappingContributions = new Set();
       this.contributionsLoaded = false;
-      this.warn(`Could not read ${TEMPLATE_LOCK_PATH}: ${message(error)}`);
+      this.warn(`Could not read ${TEMPLATE_STATE_PATH}: ${message(error)}`);
       return;
     }
     if (content === null) {
       // No composition. Bootstrap membership still decides which repositories
-      // came with the root; absence from a lock proves nothing by itself.
+      // came with the root; absence from a state proves nothing by itself.
       this.soleContributions = new Map();
       this.overlappingContributions = new Set();
       this.contributionsLoaded = true;
       return;
     }
     try {
-      const lock = assertTemplateLockIntegrityForRead(YAML.parse(content) as unknown);
-      const nodesById = new Map(lock.nodes.map((node) => [node.nodeId, node] as const));
-      const rootUrls = new Set(lock.roots.map((root) => root.url));
+      const state = parseTemplateState(YAML.parse(content) as unknown);
+      const nodesById = new Map(state.nodes.map((node) => [node.nodeId, node] as const));
+      const rootUrls = new Set(state.roots.map((root) => root.url));
       const soleContributions = new Map<string, SoleTemplateContribution>();
       const overlappingContributions = new Set<string>();
-      for (const [repoPath, repository] of Object.entries(lock.repositories)) {
+      for (const [repoPath, repository] of Object.entries(state.repositories)) {
         if (repository.contributions.length !== 1) {
           overlappingContributions.add(repoPath);
           continue;
@@ -162,9 +161,8 @@ export class UnitOriginResolver {
         soleContributions.set(repoPath, {
           url: pin.url,
           ref: pin.ref ?? null,
-          // Re-sanitized here for the same reason the gate re-sanitizes it: the
-          // fingerprint proves who wrote these bytes, not that what a template
-          // said about itself is fit to print.
+          // Relationship state is descriptive and workspace-owned, so
+          // self-authored display text is always sanitized at the host boundary.
           selfName: sanitizeTemplateDisplayText(node.presentation?.name, TEMPLATE_NAME_MAX) ?? null,
           isWorkspaceRoot: rootUrls.has(pin.url),
         });
@@ -173,14 +171,12 @@ export class UnitOriginResolver {
       this.overlappingContributions = overlappingContributions;
       this.contributionsLoaded = true;
     } catch (error) {
-      // A lock we cannot verify is not evidence of anything. Clear the last
-      // snapshot instead of retaining stale attribution, and make the review say
-      // the source is unavailable — never let an old template claim survive a
-      // failed read as if it described the current workspace.
+      // Malformed descriptive state cannot supply attribution. Clear the last
+      // snapshot instead of retaining stale display data.
       this.soleContributions = new Map();
       this.overlappingContributions = new Set();
       this.contributionsLoaded = false;
-      this.warn(`${TEMPLATE_LOCK_PATH} failed integrity checks: ${message(error)}`);
+      this.warn(`Could not parse ${TEMPLATE_STATE_PATH}: ${message(error)}`);
     }
   }
 
@@ -200,7 +196,7 @@ export class UnitOriginResolver {
       originKey: origin.originKey,
       url: origin.url,
       // Carried into the record, not left to be looked up later: after a
-      // removal the lock that holds the name and the ref is gone, and a URL on
+      // removal the state that holds the name and the ref is gone, and a URL on
       // its own cannot say `News 1.2.0` (§U2, §7.7).
       version: origin.version,
       ...(origin.selfName ? { selfName: origin.selfName } : {}),

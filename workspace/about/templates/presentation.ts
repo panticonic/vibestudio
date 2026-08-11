@@ -18,9 +18,6 @@ export function templateStatePresentation(row: TemplateStatusRow): {
   label: string;
   color: "green" | "blue" | "orange" | "red" | "gray";
 } {
-  if (row.verification === "deferred") {
-    return { label: "Available offline", color: "gray" };
-  }
   switch (row.state) {
     case "current":
       return { label: "Up to date", color: "green" };

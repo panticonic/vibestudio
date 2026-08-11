@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import type { WorkspaceTemplateLock } from "@vibestudio/workspace-contracts/types";
+import type { WorkspaceTemplateState } from "@vibestudio/workspace-contracts/types";
 import { baseTemplatePullForRelease, readBaseTemplateRelease } from "./baseTemplateRelease.js";
 
 const created: string[] = [];
@@ -22,10 +22,9 @@ const releasePin = {
   snapshot: `v1-sha256:${"d".repeat(64)}` as const,
 };
 
-function lock(pin = currentPin): WorkspaceTemplateLock {
+function state(pin = currentPin): WorkspaceTemplateState {
   return {
     version: 1,
-    fingerprint: `v1-sha256:${"e".repeat(64)}`,
     roots: [{ url: pin.url }],
     overrides: {},
     nodes: [
@@ -34,12 +33,10 @@ function lock(pin = currentPin): WorkspaceTemplateLock {
         alias: "base-stable",
         pin,
         parents: [],
-        fragmentDigest: `v1-sha256:${"f".repeat(64)}`,
         suggestions: {},
       },
     ],
     repositories: {},
-    verification: "verified",
   };
 }
 
@@ -62,8 +59,8 @@ describe("host base-template release", () => {
       systemNotes: [],
       parsedSystemNotes: [],
     };
-    const first = baseTemplatePullForRelease(release, lock());
-    const second = baseTemplatePullForRelease(release, lock());
+    const first = baseTemplatePullForRelease(release, state());
+    const second = baseTemplatePullForRelease(release, state());
     expect(first).toEqual(second);
     expect(first).toMatchObject({ alias: "base-stable", pin: releasePin });
     expect(first?.commandId).toMatch(/^host-base-template-release:[0-9a-f]{32}$/u);
@@ -78,7 +75,7 @@ describe("host base-template release", () => {
           systemNotes: [],
           parsedSystemNotes: [],
         },
-        lock(releasePin)
+        state(releasePin)
       )
     ).toBeNull();
   });

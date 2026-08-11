@@ -211,6 +211,43 @@ describe("template composer staging", () => {
     } satisfies Partial<TemplateOperationMainAdvanced>);
   });
 
+  it("uses the removed intent file as the operation-scoped staging receipt", async () => {
+    const call = vi.fn(async (_target: string, method: string) => {
+      if (method === "vcs.status") {
+        return { committed: BASE, workingHead: BASE, clean: true };
+      }
+      if (method === "vcs.resolveRepository") {
+        return { repositoryId: "repository:meta", repoPath: "meta" };
+      }
+      if (method === "vcs.readFile") return null;
+      throw new Error(`unexpected RPC ${method}`);
+    });
+    const record = {
+      version: 1 as const,
+      operationId: "add-news",
+      kind: "add" as const,
+      fingerprint: `v1-sha256:${"a".repeat(64)}`,
+      intent: { kind: "add" },
+      pins: [],
+      affectedParts: ["panels/news"],
+    };
+    const ports = createTemplateOperationPorts(
+      { rpc: { call } } as never,
+      "/state",
+      {
+        state: { repositories: { "packages/runtime": {} } },
+      } as never,
+      record
+    );
+
+    await expect(
+      ports.stageComposition("template-composer-operation-add-news", {
+        plan: { repositories: { "panels/news": {} } },
+      } as never)
+    ).resolves.toEqual({ affectedRepoPaths: ["packages/runtime", "panels/news"] });
+    expect(call).not.toHaveBeenCalledWith("main", "vcs.registerExternalDelta", expect.anything());
+  });
+
   it("returns an actionable stale-main error when main advances before publication", async () => {
     const call = vi.fn(async (_target: string, method: string) => {
       if (method === "vcs.status") {
@@ -291,7 +328,7 @@ describe("template composer staging", () => {
         localRepoPaths: ["packages/runtime"],
         artifacts: [],
         removedArtifactPaths: [],
-        lock: {} as never,
+        state: {} as never,
       },
     } as never);
 

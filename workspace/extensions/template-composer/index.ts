@@ -351,11 +351,11 @@ async function ensureBootstrapAdoption(
 }
 
 export function bootstrapNeedsAdoption(
-  observation: Pick<SemanticWorkspaceObservation, "roots" | "lock" | "top">
+  observation: Pick<SemanticWorkspaceObservation, "roots" | "state" | "top">
 ): boolean {
   return (
     observation.roots.length === 0 &&
-    !observation.lock &&
+    !observation.state &&
     !observation.top.templates?.bootstrapAdopted
   );
 }
@@ -375,12 +375,14 @@ async function pinForLocator(
     );
   }
   if ("alias" in locator) {
-    const node = env.observation.lock?.nodes.find((candidate) => candidate.alias === locator.alias);
+    const node = env.observation.state?.nodes.find(
+      (candidate) => candidate.alias === locator.alias
+    );
     if (!node) throw new Error(`Unknown installed template alias: ${locator.alias}`);
     return node.pin;
   }
   const url = normalizeTemplateGitUrl(locator.url);
-  const installed = env.observation.lock?.nodes.find(
+  const installed = env.observation.state?.nodes.find(
     (candidate) => normalizeTemplateGitUrl(candidate.pin.url) === url
   );
   if (installed) return installed.pin;
@@ -461,7 +463,7 @@ async function inspectLocator(
   );
   return inspectionResult(
     preview.inspection,
-    env.observation.lock,
+    env.observation.state,
     env.observation.top.templates?.suggestionDecisions,
     pin
   );
@@ -478,7 +480,7 @@ async function adoptionAwareInput(
   const ordinary = sourcePortsForEnvironment(ctx, env);
   if (
     env.observation.roots.length > 0 ||
-    env.observation.lock ||
+    env.observation.state ||
     env.observation.top.templates?.bootstrapAdopted
   ) {
     return { workspace: env.observation, sources: ordinary, descriptor: null };
@@ -529,7 +531,7 @@ async function adoptionAwareInput(
 
 function inspectionResult(
   inspection: TemplateOperationInspection,
-  previous?: SemanticWorkspaceObservation["lock"],
+  previous?: SemanticWorkspaceObservation["state"],
   suggestionDecisions:
     | Record<string, { digest: `v1-sha256:${string}`; decision: "accepted" | "declined" }>
     | undefined = undefined,
@@ -574,7 +576,7 @@ export function selectedTemplateName(inspection: ReturnType<typeof inspectionRes
 
 function affectedTemplateParts(
   inspection: TemplateOperationInspection,
-  previous?: SemanticWorkspaceObservation["lock"]
+  previous?: SemanticWorkspaceObservation["state"]
 ): string[] {
   const previousUrls = new Map(
     (previous?.nodes ?? []).map((node) => [node.nodeId, normalizeTemplateGitUrl(node.pin.url)])
@@ -723,7 +725,7 @@ async function inspectAdopt(
 function operationParts(
   operationId: string,
   inspection: TemplateOperationInspection,
-  previous?: SemanticWorkspaceObservation["lock"]
+  previous?: SemanticWorkspaceObservation["state"]
 ) {
   const affectedParts = affectedTemplateParts(inspection, previous);
   const migrationFacets = migrationFacetsForRepoPaths(affectedParts);
@@ -788,7 +790,7 @@ async function applyInspection(
   inspection: TemplateOperationInspection,
   intent: unknown
 ) {
-  const parts = operationParts(operationId, inspection, env.observation.lock);
+  const parts = operationParts(operationId, inspection, env.observation.state);
   const existing = await readTemplateOperationRecord(ctx, operationId);
   const operation = await ensureTemplateOperationIntent({
     operationId,
@@ -1078,12 +1080,12 @@ export async function activate(ctx: ExtensionContextLike) {
       const observation = await observeWorkspace(ctx);
       const projected = templateStatus(
         observation.roots,
-        observation.lock,
+        observation.state,
         observation.top.templates?.suggestionDecisions
       );
       const active = await activeTemplateOperations(ctx, observation.mainEventId);
       return Promise.all(
-        (observation.lock?.nodes ?? []).map(async (node) => {
+        (observation.state?.nodes ?? []).map(async (node) => {
           const pending = operationReviewForTemplate(active, node);
           const reviews = pending?.record.reviews ?? [];
           const missingCredential = await missingTemplateCredential(ctx, {
@@ -1104,12 +1106,11 @@ export async function activate(ctx: ExtensionContextLike) {
               : reviews.length
                 ? ("reviewing" as const)
                 : ("current" as const),
-            contributedParts: Object.values(observation.lock?.repositories ?? {}).filter(
+            contributedParts: Object.values(observation.state?.repositories ?? {}).filter(
               (repository) =>
                 repository.contributions.some((contribution) => contribution.nodeId === node.nodeId)
             ).length,
             pendingReviews: reviews.length,
-            verification: observation.lock?.verification ?? "deferred",
             ...(missingCredential
               ? {
                   blocker: {
@@ -1290,7 +1291,7 @@ export async function activate(ctx: ExtensionContextLike) {
 
     async check(options: { alias?: string } = {}) {
       const env = await environment(ctx, { requireCatalog: true });
-      return (env.observation.lock?.nodes ?? [])
+      return (env.observation.state?.nodes ?? [])
         .filter((node) => !options.alias || node.alias === options.alias)
         .flatMap((node) => {
           const entry = env.catalog!.entries.find(
@@ -1625,7 +1626,9 @@ export async function activate(ctx: ExtensionContextLike) {
       if (!record && !requestedPin && !env.catalog) {
         env = await environment(ctx, { requireCatalog: true });
       }
-      const node = env.observation.lock?.nodes.find((candidate) => candidate.alias === input.alias);
+      const node = env.observation.state?.nodes.find(
+        (candidate) => candidate.alias === input.alias
+      );
       if (!node) throw new Error(`Unknown installed template alias: ${input.alias}`);
       if (
         requestedPin &&
@@ -1692,7 +1695,9 @@ export async function activate(ctx: ExtensionContextLike) {
       const record = await operationRecordForMutation(ctx, env, input.commandId);
       const completed = await completedOperationResult(ctx, record);
       if (completed) return completed;
-      const node = env.observation.lock?.nodes.find((candidate) => candidate.alias === input.alias);
+      const node = env.observation.state?.nodes.find(
+        (candidate) => candidate.alias === input.alias
+      );
       if (!node) throw new Error(`Unknown installed template alias: ${input.alias}`);
       if (
         !env.observation.roots.some(
@@ -1782,9 +1787,9 @@ export async function activate(ctx: ExtensionContextLike) {
 
     async suggest(input: { commandId: string; alias: string; parts?: string[] }) {
       const observation = await observeWorkspace(ctx);
-      const node = observation.lock?.nodes.find((candidate) => candidate.alias === input.alias);
+      const node = observation.state?.nodes.find((candidate) => candidate.alias === input.alias);
       if (!node) throw new Error(`Unknown installed template alias: ${input.alias}`);
-      const contributed = Object.entries(observation.lock?.repositories ?? {})
+      const contributed = Object.entries(observation.state?.repositories ?? {})
         .filter(([, repository]) =>
           repository.contributions.some((contribution) => contribution.nodeId === node.nodeId)
         )

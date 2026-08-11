@@ -460,7 +460,7 @@ export const WorkspaceConfigTopLayerSchema = WorkspaceConfigManifestShape.extend
    * It is accepted here and NOT in the sanitized fragment, because it is not
    * configuration: nothing about how the workspace runs depends on it, and
    * inheriting it would let a dependency rename the workspace that composed it.
-   * The resolver lifts it into the lock node instead, where it stays attached to
+   * The resolver lifts it into the template state node instead, where it stays attached to
    * the one pin that asserted it.
    */
   template: WorkspaceTemplatePresentationSchema.optional(),
@@ -495,22 +495,17 @@ export const WorkspaceConfigFragmentSchema = WorkspaceConfigManifestShape.omit({
   })
   .strict();
 
-const WorkspaceTemplateLockNodeSchema = z
+const WorkspaceTemplateStateNodeSchema = z
   .object({
     nodeId: z.string().regex(/^t-[0-9a-f]+$/),
     alias: z.string().trim().min(1),
     pin: WorkspaceTemplatePinSchema,
     parents: z.array(z.string().regex(/^t-[0-9a-f]+$/)),
-    fragmentDigest: z.string().regex(/^v1-sha256:[0-9a-f]{64}$/i),
     /**
      * The node's self-given name and sentence, already sanitized.
      *
-     * It lives in the lock rather than in the fragment because the lock is the
-     * only template record the server reads and integrity-checks for itself, and
-     * a heading the server cannot verify the provenance of is a heading it must
-     * not print. Re-sanitized on read all the same: the lock's fingerprint
-     * proves nobody edited these bytes after the composer wrote them, which is a
-     * different claim from the template not having authored them hostile.
+     * It lives in relationship state rather than in the fragment so status and
+     * provenance surfaces do not need to reinterpret runtime configuration.
      */
     presentation: z
       .object({
@@ -540,14 +535,13 @@ const WorkspaceTemplateLockNodeSchema = z
   })
   .strict();
 
-export const WorkspaceTemplateLockSchema = z
+export const WorkspaceTemplateStateSchema = z
   .object({
     version: z.literal(1),
-    fingerprint: z.string().regex(/^v1-sha256:[0-9a-f]{64}$/i),
-    /** The normalized top-layer declaration this generated lock realizes. */
+    /** The normalized workspace-authored relationship declaration. */
     roots: z.array(WorkspaceTemplateDeclarationSchema),
     overrides: z.record(WorkspaceTemplatePinSchema),
-    nodes: z.array(WorkspaceTemplateLockNodeSchema),
+    nodes: z.array(WorkspaceTemplateStateNodeSchema),
     repositories: z.record(
       z
         .object({
@@ -562,7 +556,6 @@ export const WorkspaceTemplateLockSchema = z
         })
         .strict()
     ),
-    verification: z.enum(["verified", "deferred"]),
   })
   .strict();
 

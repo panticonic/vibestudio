@@ -13,8 +13,8 @@ const destination = path.join(root, "build-resources", "base-template-release.js
 const { WorkspaceConfigTopLayerSchema } = await import(
   path.join(root, "packages/workspace-contracts/src/workspaceConfigSchema.ts")
 );
-const { assertTemplateLockIntegrityForRead } = await import(
-  path.join(root, "packages/workspace/src/templateLock.ts")
+const { parseTemplateState } = await import(
+  path.join(root, "packages/workspace/src/templateState.ts")
 );
 const { normalizeTemplateGitUrl } = await import(
   path.join(root, "packages/workspace/src/templateCoordinates.ts")
@@ -22,7 +22,7 @@ const { normalizeTemplateGitUrl } = await import(
 const { parseBaseTemplateReleaseArtifact } = await import(
   path.join(root, "packages/workspace/src/baseTemplateRelease.ts")
 );
-const { canonicalSnapshotDigest, compareUtf16CodeUnits, sha256Hex } = await import(
+const { compareUtf16CodeUnits } = await import(
   path.join(root, "packages/content-addressing/src/index.ts")
 );
 
@@ -36,15 +36,16 @@ if (roots.length !== 1) {
   );
 }
 const baseUrl = normalizeTemplateGitUrl(roots[0].url);
-const lock = assertTemplateLockIntegrityForRead(
-  YAML.parse(fs.readFileSync(path.join(workspaceRoot, "meta/templates.lock.yml"), "utf8"))
+const state = parseTemplateState(
+  YAML.parse(fs.readFileSync(path.join(workspaceRoot, "meta/templates.state.yml"), "utf8"))
 );
-const node = lock.nodes.find((candidate) => normalizeTemplateGitUrl(candidate.pin.url) === baseUrl);
-if (!node) throw new Error(`The template lock does not contain release base ${baseUrl}`);
+const node = state.nodes.find(
+  (candidate) => normalizeTemplateGitUrl(candidate.pin.url) === baseUrl
+);
+if (!node) throw new Error(`Template relationship state does not contain release base ${baseUrl}`);
 
 const systemRoot = path.join(workspaceRoot, "migrations", "system");
 const systemNotes = [];
-const systemFiles = [];
 function collectSystemFacet(directory) {
   if (!fs.existsSync(directory)) return;
   for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
@@ -56,13 +57,6 @@ function collectSystemFacet(directory) {
     if (!entry.isFile()) throw new Error(`Unsupported system migration entry ${absolute}`);
     const bytes = fs.readFileSync(absolute);
     const relativePath = path.relative(systemRoot, absolute).split(path.sep).join("/");
-    const stat = fs.statSync(absolute);
-    systemFiles.push({
-      path: relativePath,
-      mode: stat.mode & 0o111 ? 0o100755 : 0o100644,
-      size: bytes.byteLength,
-      contentHash: sha256Hex(bytes),
-    });
     if (entry.name.endsWith(".md")) {
       const notePath = path.relative(workspaceRoot, absolute).split(path.sep).join("/");
       systemNotes.push({ path: notePath, markdown: bytes.toString("utf8") });
@@ -70,24 +64,7 @@ function collectSystemFacet(directory) {
   }
 }
 collectSystemFacet(systemRoot);
-systemFiles.sort((left, right) => compareUtf16CodeUnits(left.path, right.path));
 systemNotes.sort((left, right) => compareUtf16CodeUnits(left.path, right.path));
-
-const systemContribution = lock.repositories["migrations/system"]?.contributions ?? [];
-if (systemFiles.length === 0 && systemContribution.length > 0) {
-  throw new Error("The template lock records migrations/system but the release workspace does not");
-}
-if (systemFiles.length > 0) {
-  if (systemContribution.length !== 1 || systemContribution[0].nodeId !== node.nodeId) {
-    throw new Error("migrations/system must be contributed only by the release base template");
-  }
-  const observedDigest = canonicalSnapshotDigest(systemFiles);
-  if (systemContribution[0].subtreeDigest !== observedDigest) {
-    throw new Error(
-      `migrations/system does not match the pinned base contribution: expected ${systemContribution[0].subtreeDigest}, observed ${observedDigest}`
-    );
-  }
-}
 
 const artifact = {
   version: 1,

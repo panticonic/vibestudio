@@ -22,8 +22,8 @@ import {
 import type {
   WorkspaceTemplatePresentation,
   WorkspaceTemplateDeclaration,
-  WorkspaceTemplateLock,
-  WorkspaceTemplateLockNode,
+  WorkspaceTemplateState,
+  WorkspaceTemplateStateNode,
   WorkspaceTemplatePin,
 } from "@vibestudio/workspace-contracts/types";
 import {
@@ -33,15 +33,15 @@ import {
   templateAliasFromUrl,
 } from "@vibestudio/workspace/templateCoordinates";
 import {
-  assertTemplateLockIntegrityForRead,
-  normalizeTemplateLockDeclaration,
-  templateLockFingerprint,
+  normalizeTemplateStateDeclaration,
   templateSuggestionDigest,
-} from "@vibestudio/workspace/templateLock";
+} from "@vibestudio/workspace/templateState";
 import { parseMigrationNote } from "@vibestudio/workspace/migrationNotes";
 
 const TEMPLATE_FRAGMENT_DIR = "meta/templates";
-const TEMPLATE_LOCK_PATH = "meta/templates.lock.yml";
+const TEMPLATE_STATE_PATH = "meta/templates.state.yml";
+/** Removed opportunistically; never read as an input or authority. */
+const OBSOLETE_TEMPLATE_LOCK_PATH = "meta/templates.lock.yml";
 type ParsedTopLayer = ReturnType<typeof WorkspaceConfigTopLayerSchema.parse>;
 export type TemplateManifestFragment = ReturnType<typeof WorkspaceConfigFragmentSchema.parse>;
 
@@ -85,7 +85,7 @@ export class TemplateCredentialConflictError extends TemplateResolutionError {
 export interface TemplateSourcePorts {
   /**
    * Resolve the registry's exact promoted coordinate. Called at most once for
-   * a URL, and never called for a URL already present in the lock or overrides.
+   * a URL, and never called for a URL already present in the state or overrides.
    */
   resolvePromoted(declaration: WorkspaceTemplateDeclaration): Promise<WorkspaceTemplatePin>;
   /** Acquire and verify one exact snapshot. Blob/CAS storage lives behind this port. */
@@ -100,7 +100,6 @@ export interface ResolvedTemplateNode {
   parents: string[];
   fragment: TemplateManifestFragment;
   fragmentYaml: string;
-  fragmentDigest: CanonicalSnapshotDigest;
   /** Sanitized self-given name and sentence, when the manifest offered any. */
   presentation?: WorkspaceTemplatePresentation;
   excludedSuggestions: {
@@ -138,7 +137,7 @@ export interface TemplateCompositionPlan {
   nodes: ResolvedTemplateNode[];
   repositories: Record<string, TemplateRepositoryComposition>;
   localRepoPaths: string[];
-  lock: WorkspaceTemplateLock | null;
+  state: WorkspaceTemplateState | null;
   artifacts: TemplateGeneratedArtifact[];
   /** Previously generated files that must be removed in this composition. */
   removedArtifactPaths: string[];
@@ -149,11 +148,10 @@ export interface ResolveTemplateCompositionInput {
   /** Exact, deliberate source replacements keyed by normalized URL. */
   pinOverrides?: Readonly<Record<string, WorkspaceTemplatePin>>;
   localRepoPaths?: ReadonlySet<string>;
-  previousLock?: WorkspaceTemplateLock;
-  /** Generated fragments committed beside the previous lock. Unchanged exact
-   * nodes are resolved from this installed evidence without reacquiring their
-   * upstream repositories. */
-  installedFragments?: Readonly<Record<string, string>>;
+  previousState?: WorkspaceTemplateState;
+  /** Current workspace layers committed beside the previous state. Unchanged
+   * nodes use these mutable layers without reacquiring their upstream sources. */
+  installedLayers?: Readonly<Record<string, string>>;
   expectedSystemEpoch: number;
   ports: TemplateSourcePorts;
 }
@@ -166,7 +164,6 @@ interface ParsedTemplateManifest {
   dependencies: WorkspaceTemplateDeclaration[];
   fragment: TemplateManifestFragment;
   fragmentYaml: string;
-  fragmentDigest: CanonicalSnapshotDigest;
   presentation?: WorkspaceTemplatePresentation;
   excludedSuggestions: ResolvedTemplateNode["excludedSuggestions"];
 }
@@ -178,11 +175,7 @@ function canonicalYaml(value: unknown): string {
   });
 }
 
-function digestBytes(bytes: Uint8Array): CanonicalSnapshotDigest {
-  return `v1-sha256:${sha256Hex(bytes)}`;
-}
-
-export { templateSuggestionDigest } from "@vibestudio/workspace/templateLock";
+export { templateSuggestionDigest } from "@vibestudio/workspace/templateState";
 
 function normalizeDeclaration(value: WorkspaceTemplateDeclaration): WorkspaceTemplateDeclaration {
   const declaration = WorkspaceTemplateDeclarationSchema.parse(value);
@@ -202,7 +195,7 @@ function sanitizeTemplateManifest(top: ParsedTopLayer): TemplateManifestFragment
     providers: _providers,
     // Self-description is presentation, not configuration: it identifies the
     // node that asserted it and must not be inherited by whatever composes it.
-    // It travels in the lock node instead (see `presentation` below).
+    // It travels in the state node instead (see `presentation` below).
     template: _template,
     git,
     ...accepted
@@ -265,12 +258,11 @@ function parseTemplateManifest(
     const fragmentYaml = canonicalYaml(fragment);
     return {
       dependencies: (top.templates?.use ?? []).map(normalizeDeclaration),
-      // Already sanitized by the manifest schema; carried verbatim so the lock
+      // Already sanitized by the manifest schema; carried verbatim so the state
       // holds exactly what a reader may print and nothing that needs repairing.
       ...(top.template === undefined ? {} : { presentation: top.template }),
       fragment,
       fragmentYaml,
-      fragmentDigest: digestBytes(new TextEncoder().encode(fragmentYaml)),
       excludedSuggestions: {
         ...(top.trust === undefined ? {} : { trust: top.trust }),
         ...(top.providers === undefined ? {} : { providers: top.providers }),
@@ -420,8 +412,9 @@ function normalizedOverrides(
 
 /**
  * Resolve and slice a complete template closure without mutating workspace
- * state. Unchanged installed nodes come from committed lock/fragment evidence;
- * every remaining external effect is behind `TemplateSourcePorts`.
+ * state. Existing layers are ordinary current-workspace input; new or updated
+ * sources are acquired behind `TemplateSourcePorts` and bound to this one
+ * operation's review fingerprint.
  */
 export async function resolveTemplateComposition(
   input: ResolveTemplateCompositionInput
@@ -433,23 +426,23 @@ export async function resolveTemplateComposition(
     );
   }
 
-  const declaration = normalizeTemplateLockDeclaration({
+  const declaration = normalizeTemplateStateDeclaration({
     use: [...input.roots],
     overrides: input.pinOverrides,
   });
   const rootsByUrl = new Map(declaration.roots.map((root) => [root.url, root]));
   const overrides = normalizedOverrides(declaration.overrides);
   const usedOverrides = new Set<string>();
-  const previousLock = input.previousLock
-    ? assertTemplateLockIntegrityForRead(input.previousLock)
-    : undefined;
-  const lockedByUrl = new Map(
-    (previousLock?.nodes ?? []).map((node) => [normalizeTemplateGitUrl(node.pin.url), node.pin])
+  const previousState = input.previousState;
+  const installedByUrl = new Map(
+    (previousState?.nodes ?? []).map((node) => [normalizeTemplateGitUrl(node.pin.url), node.pin])
   );
-  const lockedNodeByUrl = new Map(
-    (previousLock?.nodes ?? []).map((node) => [normalizeTemplateGitUrl(node.pin.url), node])
+  const installedNodeByUrl = new Map(
+    (previousState?.nodes ?? []).map((node) => [normalizeTemplateGitUrl(node.pin.url), node])
   );
-  const lockedNodeById = new Map((previousLock?.nodes ?? []).map((node) => [node.nodeId, node]));
+  const installedNodeById = new Map(
+    (previousState?.nodes ?? []).map((node) => [node.nodeId, node])
+  );
   const selectedPins = new Map<string, WorkspaceTemplatePin>();
   const declaredCredentials = new Map<string, string | undefined>();
   const nodes = new Map<string, MutableNode>();
@@ -476,8 +469,8 @@ export async function resolveTemplateComposition(
     if (selected) return selected;
 
     const override = overrides.get(dependency.url);
-    const locked = lockedByUrl.get(dependency.url);
-    const resolved = override ?? locked ?? (await input.ports.resolvePromoted(dependency));
+    const installed = installedByUrl.get(dependency.url);
+    const resolved = override ?? installed ?? (await input.ports.resolvePromoted(dependency));
     if (override) usedOverrides.add(dependency.url);
     const pin = normalizePin({
       ...resolved,
@@ -518,21 +511,14 @@ export async function resolveTemplateComposition(
     const alias = templateAliasFromUrl(pin.url);
     visiting.push(dependency.url);
     try {
-      const lockedNode = lockedNodeByUrl.get(dependency.url);
-      const installedFragmentYaml = input.installedFragments?.[nodeId];
+      const installedNode = installedNodeByUrl.get(dependency.url);
+      const installedFragmentYaml = input.installedLayers?.[nodeId];
       if (
-        lockedNode?.nodeId === nodeId &&
-        lockedNode.pin.commit === pin.commit &&
-        lockedNode.pin.snapshot === pin.snapshot &&
+        installedNode?.nodeId === nodeId &&
+        installedNode.pin.commit === pin.commit &&
+        installedNode.pin.snapshot === pin.snapshot &&
         installedFragmentYaml !== undefined
       ) {
-        const fragmentDigest = digestBytes(new TextEncoder().encode(installedFragmentYaml));
-        if (fragmentDigest !== lockedNode.fragmentDigest) {
-          throw new TemplateResolutionError(
-            "template-installed-fragment-integrity",
-            `Installed fragment for ${dependency.url} does not match its committed lock evidence`
-          );
-        }
         const fragment = WorkspaceConfigFragmentSchema.parse(
           YAML.parse(installedFragmentYaml) as unknown
         );
@@ -544,35 +530,29 @@ export async function resolveTemplateComposition(
         }
         const node: MutableNode = {
           nodeId,
-          alias: lockedNode.alias,
+          alias: installedNode.alias,
           pin,
           parents: [],
           fragment,
           fragmentYaml: installedFragmentYaml,
-          fragmentDigest,
-          ...(lockedNode.presentation === undefined
+          ...(installedNode.presentation === undefined
             ? {}
-            : { presentation: lockedNode.presentation }),
+            : { presentation: installedNode.presentation }),
           excludedSuggestions: {
-            ...(lockedNode.suggestions.trust === undefined
+            ...(installedNode.suggestions.trust === undefined
               ? {}
-              : { trust: lockedNode.suggestions.trust.value }),
-            ...(lockedNode.suggestions.providers === undefined
+              : { trust: installedNode.suggestions.trust.value }),
+            ...(installedNode.suggestions.providers === undefined
               ? {}
-              : { providers: lockedNode.suggestions.providers.value }),
+              : { providers: installedNode.suggestions.providers.value }),
           },
         };
         nodes.set(nodeId, node);
         nodeByUrl.set(dependency.url, nodeId);
         const parents: string[] = [];
-        for (const parentId of [...lockedNode.parents].sort(compareUtf16CodeUnits)) {
-          const parent = lockedNodeById.get(parentId);
-          if (!parent) {
-            throw new TemplateResolutionError(
-              "template-graph-integrity",
-              `Installed template ${lockedNode.alias} is missing parent ${parentId}`
-            );
-          }
+        for (const parentId of [...installedNode.parents].sort(compareUtf16CodeUnits)) {
+          const parent = installedNodeById.get(parentId);
+          if (!parent) continue;
           parents.push(
             await visit(
               {
@@ -602,7 +582,6 @@ export async function resolveTemplateComposition(
         snapshot,
         fragment: parsed.fragment,
         fragmentYaml: parsed.fragmentYaml,
-        fragmentDigest: parsed.fragmentDigest,
         ...(parsed.presentation === undefined ? {} : { presentation: parsed.presentation }),
         excludedSuggestions: parsed.excludedSuggestions,
       };
@@ -641,7 +620,7 @@ export async function resolveTemplateComposition(
   const claims = new Map<string, Map<string, TemplateRepositoryContribution>>();
   for (const node of ordered) {
     if (!node.snapshot) {
-      for (const [repoPath, repository] of Object.entries(previousLock?.repositories ?? {})) {
+      for (const [repoPath, repository] of Object.entries(previousState?.repositories ?? {})) {
         const previous = repository.contributions.find(
           (contribution) => contribution.nodeId === node.nodeId
         );
@@ -683,12 +662,11 @@ export async function resolveTemplateComposition(
       ])
   );
 
-  const lockNodes: WorkspaceTemplateLockNode[] = ordered.map((node) => ({
+  const stateNodes: WorkspaceTemplateStateNode[] = ordered.map((node) => ({
     nodeId: node.nodeId,
     alias: node.alias,
     pin: node.pin,
     parents: node.parents,
-    fragmentDigest: node.fragmentDigest,
     ...(node.presentation === undefined ? {} : { presentation: node.presentation }),
     suggestions: Object.fromEntries(
       (["trust", "providers"] as const).flatMap((section) => {
@@ -699,7 +677,7 @@ export async function resolveTemplateComposition(
       })
     ),
   }));
-  const lockRepositories = Object.fromEntries(
+  const stateRepositories = Object.fromEntries(
     Object.entries(repositories)
       .sort(([left], [right]) => compareUtf16CodeUnits(left, right))
       .map(([repoPath, composition]) => [
@@ -712,27 +690,22 @@ export async function resolveTemplateComposition(
         },
       ])
   );
-  const lockWithoutFingerprint: Omit<WorkspaceTemplateLock, "fingerprint"> = {
+  const state: WorkspaceTemplateState = {
     version: 1,
     roots: declaration.roots,
     overrides: declaration.overrides,
-    nodes: lockNodes,
-    repositories: lockRepositories,
-    verification: "verified",
-  };
-  const lock: WorkspaceTemplateLock = {
-    ...lockWithoutFingerprint,
-    fingerprint: templateLockFingerprint(lockWithoutFingerprint),
+    nodes: stateNodes,
+    repositories: stateRepositories,
   };
   const fingerprint: CanonicalSnapshotDigest = `v1-sha256:${sha256HexSyncText(
     canonicalJson({
       protocol: "vibestudio-template-composition-v1",
       roots: [...new Set(rootNodeIds)].sort(compareUtf16CodeUnits),
-      lock: {
-        roots: lock.roots,
-        overrides: lock.overrides,
-        nodes: lock.nodes,
-        repositories: lock.repositories,
+      state: {
+        roots: state.roots,
+        overrides: state.overrides,
+        nodes: state.nodes,
+        repositories: state.repositories,
       },
     })
   )}`;
@@ -743,13 +716,15 @@ export async function resolveTemplateComposition(
     ...resolvedNodes.map((node) =>
       artifact(`${TEMPLATE_FRAGMENT_DIR}/${node.nodeId}.yml`, node.fragmentYaml)
     ),
-    artifact(TEMPLATE_LOCK_PATH, canonicalYaml(lock)),
+    artifact(TEMPLATE_STATE_PATH, canonicalYaml(state)),
   ].sort((left, right) => compareUtf16CodeUnits(left.path, right.path));
   const currentNodeIds = new Set(resolvedNodes.map((node) => node.nodeId));
-  const removedArtifactPaths = (previousLock?.nodes ?? [])
-    .filter((node) => !currentNodeIds.has(node.nodeId))
-    .map((node) => `${TEMPLATE_FRAGMENT_DIR}/${node.nodeId}.yml`)
-    .sort(compareUtf16CodeUnits);
+  const removedArtifactPaths = [
+    ...(previousState?.nodes ?? [])
+      .filter((node) => !currentNodeIds.has(node.nodeId))
+      .map((node) => `${TEMPLATE_FRAGMENT_DIR}/${node.nodeId}.yml`),
+    OBSOLETE_TEMPLATE_LOCK_PATH,
+  ].sort(compareUtf16CodeUnits);
 
   return {
     version: 1,
@@ -758,7 +733,7 @@ export async function resolveTemplateComposition(
     nodes: resolvedNodes,
     repositories,
     localRepoPaths: [...localPaths].sort(compareUtf16CodeUnits),
-    lock,
+    state,
     artifacts,
     removedArtifactPaths,
   };
@@ -766,24 +741,24 @@ export async function resolveTemplateComposition(
 
 /** The canonical result of removing the final direct root. */
 export function emptyTemplateComposition(
-  previousLock: WorkspaceTemplateLock | null | undefined,
+  previousState: WorkspaceTemplateState | null | undefined,
   localRepoPaths: ReadonlySet<string> = new Set()
 ): TemplateCompositionPlan {
-  const checked = previousLock ? assertTemplateLockIntegrityForRead(previousLock) : null;
   return {
     version: 1,
     fingerprint: `v1-sha256:${sha256HexSyncText(
-      canonicalJson({ protocol: "vibestudio-template-composition-v1", roots: [], lock: null })
+      canonicalJson({ protocol: "vibestudio-template-composition-v1", roots: [], state: null })
     )}`,
     rootNodeIds: [],
     nodes: [],
     repositories: {},
     localRepoPaths: [...normalizedPaths(localRepoPaths)].sort(compareUtf16CodeUnits),
-    lock: null,
+    state: null,
     artifacts: [],
     removedArtifactPaths: [
-      ...(checked?.nodes ?? []).map((node) => `${TEMPLATE_FRAGMENT_DIR}/${node.nodeId}.yml`),
-      TEMPLATE_LOCK_PATH,
+      ...(previousState?.nodes ?? []).map((node) => `${TEMPLATE_FRAGMENT_DIR}/${node.nodeId}.yml`),
+      TEMPLATE_STATE_PATH,
+      OBSOLETE_TEMPLATE_LOCK_PATH,
     ].sort(compareUtf16CodeUnits),
   };
 }

@@ -143,7 +143,7 @@ describe("D1 template declarations", () => {
 });
 
 describe("resolveTemplateComposition", () => {
-  it("keeps every already-locked URL exact and resolves only a newly added URL", async () => {
+  it("keeps installed sources exact, accepts edited layers, and resolves only a new URL", async () => {
     const base = pin(baseUrl, "a");
     const news = pin(newsUrl, "b");
     const browser = pin(browserUrl, "c");
@@ -168,23 +168,30 @@ describe("resolveTemplateComposition", () => {
       templateUrl: newsUrl,
       workspace: {
         roots: [{ url: newsUrl }],
-        lock: initial.lock!,
+        state: initial.state!,
         localRepoPaths: new Set(["packages/runtime", "panels/news"]),
         expectedSystemEpoch: epoch,
       },
       sources: ports([], snapshots),
     });
-    expect(removed.plan.lock).toBeNull();
+    expect(removed.plan.state).toBeNull();
+    expect(removed.plan.removedArtifactPaths).toContain("meta/templates.state.yml");
     expect(removed.plan.removedArtifactPaths).toContain("meta/templates.lock.yml");
     expect(removed.plan.repositories).toEqual({});
 
+    const installedLayers = Object.fromEntries(
+      initial.nodes.map((node) => [node.nodeId, node.fragmentYaml])
+    );
+    const installedBase = initial.nodes.find(
+      (node) => node.pin.url === normalizeTemplateGitUrl(baseUrl)
+    )!;
+    installedLayers[installedBase.nodeId] =
+      `${installedBase.fragmentYaml}defaultRepo: packages/local\n`;
     const addPorts = ports([browser], snapshots);
     const added = await resolveTemplateComposition({
       roots: [{ url: newsUrl }, { url: browserUrl }],
-      previousLock: initial.lock!,
-      installedFragments: Object.fromEntries(
-        initial.nodes.map((node) => [node.nodeId, node.fragmentYaml])
-      ),
+      previousState: initial.state!,
+      installedLayers,
       localRepoPaths: new Set(["packages/runtime", "panels/news"]),
       expectedSystemEpoch: epoch,
       ports: addPorts,
@@ -203,11 +210,15 @@ describe("resolveTemplateComposition", () => {
       added.nodes.find((node) => node.pin.url === normalizeTemplateGitUrl(baseUrl))?.pin.commit
     ).toBe(base.commit);
     expect(
+      added.nodes.find((node) => node.pin.url === normalizeTemplateGitUrl(baseUrl))?.fragment
+        .defaultRepo
+    ).toBe("packages/local");
+    expect(
       added.nodes.find((node) => node.pin.url === normalizeTemplateGitUrl(newsUrl))?.pin.commit
     ).toBe(news.commit);
   });
 
-  it("carries what a template calls itself into the lock, and out of the fragment", async () => {
+  it("carries what a template calls itself into the state, and out of the fragment", async () => {
     // The name is the only text a template gets to assert about itself, and it
     // belongs to the pin that asserted it — not to the configuration a
     // dependent inherits, which is why the fragment must not carry it.
@@ -229,7 +240,7 @@ describe("resolveTemplateComposition", () => {
       ),
     });
 
-    expect(plan.lock!.nodes[0]!.presentation).toEqual({
+    expect(plan.state!.nodes[0]!.presentation).toEqual({
       name: "News",
       description: "Read and discuss personalized news briefings.",
     });
@@ -252,7 +263,7 @@ describe("resolveTemplateComposition", () => {
     });
 
     expect(plan.repositories["packages/runtime"]!.contributions).toHaveLength(2);
-    expect(plan.lock!.repositories["packages/runtime"]!.contributions).toEqual(
+    expect(plan.state!.repositories["packages/runtime"]!.contributions).toEqual(
       plan.repositories["packages/runtime"]!.contributions.map(({ nodeId, subtreeDigest }) => ({
         nodeId,
         subtreeDigest,
@@ -349,7 +360,7 @@ describe("resolveTemplateComposition", () => {
     });
 
     // Nothing partial survives: a repaired hostile string is still its author's.
-    expect(plan.lock!.nodes[0]!.presentation).toBeUndefined();
+    expect(plan.state!.nodes[0]!.presentation).toBeUndefined();
   });
 
   it("derives one stable alias from the URL even when a URL is both root and dependency", async () => {
@@ -394,7 +405,7 @@ describe("resolveTemplateComposition", () => {
     const updated = await resolveTemplateComposition({
       roots: [{ url: newsUrl }],
       pinOverrides: { [newsUrl]: newsV2 },
-      previousLock: initial.lock!,
+      previousState: initial.state!,
       expectedSystemEpoch: epoch,
       ports: noNetwork,
     });

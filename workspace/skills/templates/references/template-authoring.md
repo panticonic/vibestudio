@@ -107,8 +107,9 @@ and installation, not chosen during authoring.
   remote URLs, branches, logical credential names, and upstreams that resolve
   against the final composed remote map.
 - Parent templates belong in `templates.use` and name only their Git URL and,
-  when needed, a logical credential. Exact commits and verified snapshots live
-  in the generated workspace lock.
+  when needed, a logical credential. Installed source selections live in the
+  workspace's descriptive template state; exact publication coordinates remain
+  bound to the operation that reviews them.
 - Do not put workspace identity, concrete credential IDs or material, or
   author identity in a fragment. Those belong to the workspace owner.
 - `providers` and `trust` declarations MAY appear in a fragment, and for

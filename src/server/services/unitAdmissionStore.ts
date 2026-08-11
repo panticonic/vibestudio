@@ -243,11 +243,11 @@ export class UnitAdmissionStore {
   /**
    * The source recorded for a repository, latest admission first (§U2).
    *
-   * The durable half of origin resolution. The live template lock answers where
+   * The durable half of origin resolution. Live template state answers where
    * a part comes from while a template still owns it; this answers afterwards,
    * from the record the server wrote itself at the moment of the decision. It is
    * never a claim by anything under review, so it carries the same weight as the
-   * lock and simply outlives it.
+   * relationship state and simply outlives it.
    *
    * Keyed by repo path rather than by exact identity because the question it
    * answers is about the part, not about one of its versions: a part updated
@@ -331,7 +331,7 @@ export class UnitAdmissionStore {
           ? {
               sourceOriginKey: source.originKey,
               sourceUrl: source.url,
-              // Written now or never. A removed template takes its lock entry —
+              // Written now or never. A removed template takes its state entry —
               // and with it its name and its ref — out of the workspace, so the
               // only way `Originally installed from News 1.2.0` can still be
               // said afterwards is that it was recorded while it was true.

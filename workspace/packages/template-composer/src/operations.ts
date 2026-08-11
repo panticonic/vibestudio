@@ -1,7 +1,7 @@
 import type {
   WorkspaceCreationDescriptor,
   WorkspaceTemplateDeclaration,
-  WorkspaceTemplateLock,
+  WorkspaceTemplateState,
   WorkspaceTemplatePin,
   WorkspaceTemplatesConfig,
 } from "@vibestudio/workspace-contracts/types";
@@ -21,8 +21,8 @@ export interface TemplateCatalogSelection {
 
 export interface TemplateWorkspaceObservation {
   roots: readonly WorkspaceTemplateDeclaration[];
-  lock?: WorkspaceTemplateLock;
-  installedFragments?: Readonly<Record<string, string>>;
+  state?: WorkspaceTemplateState;
+  installedLayers?: Readonly<Record<string, string>>;
   localRepoPaths: ReadonlySet<string>;
   overrides?: Readonly<Record<string, WorkspaceTemplatePin>>;
   expectedSystemEpoch: number;
@@ -71,10 +71,10 @@ export interface InspectBootstrapAdoptionInput {
   kind: "adopt-bootstrap";
   /**
    * Read from `state/workspace-creation/v1.json`. Bootstrap imported this exact
-   * tree but intentionally produced no template declaration or lock.
+   * tree but intentionally produced no template declaration or state.
    */
   descriptor: WorkspaceCreationDescriptor;
-  workspace: Omit<TemplateWorkspaceObservation, "roots" | "lock">;
+  workspace: Omit<TemplateWorkspaceObservation, "roots" | "state">;
   sources: TemplateSourcePorts;
 }
 
@@ -95,12 +95,12 @@ export interface TemplateOperationInspection {
 }
 
 function reachablePreviousUrls(
-  lock: WorkspaceTemplateLock,
+  state: WorkspaceTemplateState,
   roots: readonly WorkspaceTemplateDeclaration[]
 ): Set<string> {
-  const nodeById = new Map(lock.nodes.map((node) => [node.nodeId, node]));
+  const nodeById = new Map(state.nodes.map((node) => [node.nodeId, node]));
   const nodeByUrl = new Map(
-    lock.nodes.map((node) => [normalizeTemplateGitUrl(node.pin.url), node])
+    state.nodes.map((node) => [normalizeTemplateGitUrl(node.pin.url), node])
   );
   const pending = roots
     .map((root) => nodeByUrl.get(normalizeTemplateGitUrl(root.url))?.nodeId)
@@ -142,8 +142,8 @@ export async function inspectTemplateOperation(
       kind: input.kind,
       plan,
       nextTemplates: {
-        use: plan.lock!.roots,
-        overrides: plan.lock!.overrides,
+        use: plan.state!.roots,
+        overrides: plan.state!.overrides,
       },
     };
   }
@@ -166,8 +166,8 @@ export async function inspectTemplateOperation(
           )
         : [...input.workspace.roots];
   const reachableUrls =
-    input.kind === "remove" && input.workspace.lock
-      ? reachablePreviousUrls(input.workspace.lock, roots)
+    input.kind === "remove" && input.workspace.state
+      ? reachablePreviousUrls(input.workspace.state, roots)
       : undefined;
   const retainedOverrides = Object.fromEntries(
     Object.entries(input.workspace.overrides ?? {}).filter(
@@ -180,13 +180,13 @@ export async function inspectTemplateOperation(
       : retainedOverrides;
   const plan =
     roots.length === 0
-      ? emptyTemplateComposition(input.workspace.lock, input.workspace.localRepoPaths)
+      ? emptyTemplateComposition(input.workspace.state, input.workspace.localRepoPaths)
       : await resolveTemplateComposition({
           roots,
           pinOverrides,
           localRepoPaths: input.workspace.localRepoPaths,
-          previousLock: input.workspace.lock,
-          installedFragments: input.workspace.installedFragments,
+          previousState: input.workspace.state,
+          installedLayers: input.workspace.installedLayers,
           expectedSystemEpoch: input.workspace.expectedSystemEpoch,
           ports: input.sources,
         });
@@ -194,11 +194,11 @@ export async function inspectTemplateOperation(
     kind: input.kind,
     plan,
     nextTemplates:
-      plan.lock === null
+      plan.state === null
         ? null
         : {
-            use: plan.lock.roots,
-            overrides: plan.lock.overrides,
+            use: plan.state.roots,
+            overrides: plan.state.overrides,
           },
     ...(input.kind === "add" && input.selection ? { selection: input.selection } : {}),
   };
@@ -274,11 +274,7 @@ export async function applyTemplateOperation(
   try {
     ({ contextId } = await input.ports.openContext(input.operationId));
     const prepared = await stageInContext(contextId, input.inspection, input.ports);
-    return await publishPreparedTemplateOperation(
-      prepared,
-      input.expectedMainEventId,
-      input.ports
-    );
+    return await publishPreparedTemplateOperation(prepared, input.expectedMainEventId, input.ports);
   } catch (error) {
     if (contextId) await input.ports.discard(contextId);
     throw error;
@@ -300,15 +296,15 @@ export interface TemplateStatus {
   }>;
 }
 
-/** Status is a pure local projection of the committed declaration and lock. */
+/** Status is a pure local projection of the committed declaration and state. */
 export function templateStatus(
   roots: readonly WorkspaceTemplateDeclaration[],
-  lock: WorkspaceTemplateLock | undefined,
+  state: WorkspaceTemplateState | undefined,
   suggestionDecisions?: Readonly<
     Record<string, { digest: `v1-sha256:${string}`; decision: "accepted" | "declined" }>
   >
 ): TemplateStatus {
-  const nodes = lock?.nodes ?? [];
+  const nodes = state?.nodes ?? [];
   return {
     roots: roots.map((root) => {
       const url = normalizeTemplateGitUrl(root.url);

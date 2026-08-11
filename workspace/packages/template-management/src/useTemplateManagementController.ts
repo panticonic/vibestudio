@@ -76,12 +76,11 @@ export function useTemplateManagementController(
         let candidates: Array<{ alias: string }> = [];
         try {
           candidates = await client.check();
-          // Check may re-anchor copied template pins for this host session.
           // Render the resulting local observation, never the pre-check snapshot.
           displayedRows = await client.status();
         } catch {
-          // Remote update discovery is optional. The copied relationships stay
-          // usable and retain their truthful deferred-verification state.
+          // Remote update discovery is optional. Installed relationships and
+          // current workspace content remain usable without it.
         }
         // A newer refresh owns the projection now. Its result is the relevant
         // observation for every concurrently completed mutation, so an older

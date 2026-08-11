@@ -20,7 +20,6 @@ const deferredRow = {
   state: "reviewing",
   contributedParts: 1,
   pendingReviews: 1,
-  verification: "deferred",
   review: {
     operationId,
     contextId: "ctx:pull",
@@ -75,11 +74,10 @@ describe("useTemplateManagementController", () => {
   });
 
   it("renders the post-check observation and projects attached operations only on their row", async () => {
-    const verifiedRow = { ...deferredRow, verification: "verified" as const };
     const status = vi
       .fn<TemplateLifecycleClient["status"]>()
       .mockResolvedValueOnce([deferredRow])
-      .mockResolvedValueOnce([verifiedRow]);
+      .mockResolvedValueOnce([deferredRow]);
     const unattached = {
       ...attachedOperation,
       operationId: "add-news",
@@ -98,7 +96,7 @@ describe("useTemplateManagementController", () => {
     await act(async () => void (await view.result.current.refresh()));
 
     expect(status).toHaveBeenCalledTimes(2);
-    expect(view.result.current.rows[0]?.verification).toBe("verified");
+    expect(view.result.current.rows[0]?.state).toBe("reviewing");
     expect(view.result.current.operations.map((operation) => operation.operationId)).toEqual([
       "add-news",
     ]);

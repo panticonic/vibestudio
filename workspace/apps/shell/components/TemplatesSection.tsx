@@ -22,7 +22,6 @@ function message(error: unknown): string {
 }
 
 function stateLabel(row: TemplateStatusRow): string {
-  if (row.verification === "deferred") return "Available offline";
   switch (row.state) {
     case "current":
       return "Up to date";

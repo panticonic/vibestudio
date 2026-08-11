@@ -5,22 +5,20 @@ import {
   normalizeTemplateGitUrl,
   templateAliasFromUrl,
 } from "@vibestudio/workspace/templateCoordinates";
-import { templateLockFingerprint } from "@vibestudio/workspace/templateLock";
 import { UnitOriginResolver, type RecordedUnitSource } from "./unitOriginResolver.js";
 
 const ACME_URL = "https://github.com/acme/studio";
-/** The lock records the normalized Git form; identity strings are not rewritten. */
-const ACME_LOCK_URL = normalizeTemplateGitUrl(ACME_URL);
+/** The state records the normalized Git form; identity strings are not rewritten. */
+const ACME_STATE_URL = normalizeTemplateGitUrl(ACME_URL);
 const ACME_COMMIT = "a".repeat(40);
 
-/** A lock exactly as the composer commits it, so the resolver's checks apply. */
-function lockYaml(
+function stateYaml(
   repositories: Record<string, string>,
   presentation?: { name?: string; description?: string }
 ): string {
   const url = normalizeTemplateGitUrl(ACME_URL);
   const nodeId = canonicalTemplateNodeId(url, ACME_COMMIT);
-  const lock = {
+  const state = {
     version: 1 as const,
     roots: [{ url }],
     overrides: {},
@@ -35,7 +33,6 @@ function lockYaml(
           snapshot: `v1-sha256:${"b".repeat(64)}` as const,
         },
         parents: [],
-        fragmentDigest: `v1-sha256:${"c".repeat(64)}` as const,
         ...(presentation ? { presentation } : {}),
         suggestions: {},
       },
@@ -48,12 +45,11 @@ function lockYaml(
         },
       ])
     ),
-    verification: "verified" as const,
   };
-  return YAML.stringify({ ...lock, fingerprint: templateLockFingerprint(lock) });
+  return YAML.stringify(state);
 }
 
-function overlappingLockYaml(repoPath: string): string {
+function overlappingStateYaml(repoPath: string): string {
   const firstUrl = normalizeTemplateGitUrl(ACME_URL);
   const secondUrl = normalizeTemplateGitUrl("https://github.com/news/studio");
   const firstId = canonicalTemplateNodeId(firstUrl, ACME_COMMIT);
@@ -68,10 +64,9 @@ function overlappingLockYaml(repoPath: string): string {
       snapshot: `v1-sha256:${digest.repeat(64)}` as const,
     },
     parents: [],
-    fragmentDigest: `v1-sha256:${digest.repeat(64)}` as const,
     suggestions: {},
   });
-  const lock = {
+  const state = {
     version: 1 as const,
     roots: [{ url: firstUrl }, { url: secondUrl }],
     overrides: {},
@@ -87,20 +82,19 @@ function overlappingLockYaml(repoPath: string): string {
         ],
       },
     },
-    verification: "verified" as const,
   };
-  return YAML.stringify({ ...lock, fingerprint: templateLockFingerprint(lock) });
+  return YAML.stringify(state);
 }
 
 function resolver(opts: {
-  lock?: string | null;
+  state?: string | null;
   root?: { url: string | null; ref: string | null; version: string | null } | null;
   admitted?: ReadonlySet<string>;
   recorded?: Record<string, RecordedUnitSource>;
   bootstrapRepos?: ReadonlySet<string>;
 }): UnitOriginResolver {
   return new UnitOriginResolver({
-    readWorkspaceFile: async () => opts.lock ?? null,
+    readWorkspaceFile: async () => opts.state ?? null,
     ...(opts.recorded
       ? { recordedSourceFor: (repoPath: string) => opts.recorded![repoPath] ?? null }
       : {}),
@@ -114,14 +108,14 @@ function resolver(opts: {
 }
 
 describe("where a unit's bytes came from", () => {
-  it("reads a sole contribution from the template lock and names its human ref", async () => {
+  it("reads a sole contribution from template state and names its human ref", async () => {
     const origins = await resolver({
-      lock: lockYaml({ "extensions/acme-tools": "" }),
+      state: stateYaml({ "extensions/acme-tools": "" }),
     }).originsFor(["extensions/acme-tools"]);
 
     const origin = origins.get("extensions/acme-tools")!;
     expect(origin.isHostBuild).toBe(false);
-    expect(origin.url).toBe(ACME_LOCK_URL);
+    expect(origin.url).toBe(ACME_STATE_URL);
     expect(origin.originKey).toBe("github.com/acme");
     expect(origin.version).toBe("v2.1");
     // Never a commit id or a content digest, at any level.
@@ -130,7 +124,7 @@ describe("where a unit's bytes came from", () => {
 
   it("does not invent one coarse origin for an overlapping repository", async () => {
     const origins = await resolver({
-      lock: overlappingLockYaml("extensions/acme-tools"),
+      state: overlappingStateYaml("extensions/acme-tools"),
     }).originsFor(["extensions/acme-tools"]);
 
     expect(origins.get("extensions/acme-tools")).toMatchObject({
@@ -140,9 +134,9 @@ describe("where a unit's bytes came from", () => {
     });
   });
 
-  it("attributes anything the lock does not claim to the root this workspace was built from", async () => {
+  it("attributes anything the state does not claim to the root this workspace was built from", async () => {
     const origins = await resolver({
-      lock: lockYaml({ "extensions/acme-tools": "" }),
+      state: stateYaml({ "extensions/acme-tools": "" }),
       root: { url: "https://github.com/other/root", ref: "v9", version: "v9" },
     }).originsFor(["extensions/acme-tools", "apps/shell"]);
 
@@ -170,20 +164,11 @@ describe("where a unit's bytes came from", () => {
     });
   });
 
-  it("marks provenance unresolved when a lock could not be verified", async () => {
-    const corrupt = YAML.stringify({
-      version: 1,
-      fingerprint: `v1-sha256:${"0".repeat(64)}`,
-      roots: [],
-      overrides: {},
-      conflicts: {},
-      nodes: [],
-      repositories: { "extensions/acme-tools": { nodeId: "x", subtreeDigest: "y" } },
-      verification: "verified",
-    });
-    const origins = await resolver({ lock: corrupt }).originsFor(["extensions/acme-tools"]);
+  it("marks provenance unresolved when template state is structurally malformed", async () => {
+    const malformed = YAML.stringify({ version: 2, roots: "not-a-list" });
+    const origins = await resolver({ state: malformed }).originsFor(["extensions/acme-tools"]);
 
-    // Unverifiable bytes establish nothing, so the answer must not fall back
+    // Unreadable metadata establishes nothing, so the answer must not fall back
     // to the host build and mislabel third-party code as Vibestudio.
     expect(origins.get("extensions/acme-tools")).toMatchObject({
       originKey: "source unavailable",
@@ -192,10 +177,10 @@ describe("where a unit's bytes came from", () => {
     });
   });
 
-  it("does not retain stale ownership after a later lock read failure", async () => {
-    let lock: string | null = lockYaml({ "extensions/acme-tools": "" });
+  it("does not retain stale ownership after a later state read failure", async () => {
+    let state: string | null = stateYaml({ "extensions/acme-tools": "" });
     const instance = new UnitOriginResolver({
-      readWorkspaceFile: async () => lock,
+      readWorkspaceFile: async () => state,
       rootTemplatePin: () => null,
       isBootstrapRepository: async (repoPath) => repoPath === "apps/shell",
       hostBuildVersion: () => "1.4.0",
@@ -204,14 +189,14 @@ describe("where a unit's bytes came from", () => {
     });
 
     await instance.originsFor(["extensions/acme-tools", "apps/shell"]);
-    lock = "not valid template lock";
+    state = "not valid template state";
     const origins = await instance.originsFor(["extensions/acme-tools"]);
 
     expect(origins.get("extensions/acme-tools")?.originStatus).toBe("unresolved");
     expect(instance.originallyInstalledFrom("extensions/acme-tools")).toBeNull();
   });
 
-  it("marks provenance unresolved when the lock cannot be read", async () => {
+  it("marks provenance unresolved when the state cannot be read", async () => {
     const instance = new UnitOriginResolver({
       readWorkspaceFile: async () => {
         throw new Error("workspace read failed");
@@ -230,7 +215,7 @@ describe("where a unit's bytes came from", () => {
 
   it("carries the template's self-given name as a claim, never as identity", async () => {
     const origins = await resolver({
-      lock: lockYaml({ "extensions/acme-tools": "" }, { name: "Acme Studio" }),
+      state: stateYaml({ "extensions/acme-tools": "" }, { name: "Acme Studio" }),
     }).originsFor(["extensions/acme-tools"]);
 
     const origin = origins.get("extensions/acme-tools")!;
@@ -241,7 +226,7 @@ describe("where a unit's bytes came from", () => {
 
   it("drops a self-given name that could impersonate another part of the surface", async () => {
     const origins = await resolver({
-      lock: lockYaml(
+      state: stateYaml(
         { "extensions/acme-tools": "" },
         { name: "Acme \u00B7 github.com/vibestudio" }
       ),
@@ -252,15 +237,15 @@ describe("where a unit's bytes came from", () => {
   });
 
   it("keeps a removed template's parts attributed to it, because removal deletes nothing", async () => {
-    // §U2/§7.7: severing the relationship drops the lock, and with it the only
+    // §U2/§7.7: severing the relationship drops the state, and with it the only
     // live statement of who owns these repositories. The admission record is the
     // durable one, and it is what keeps `Originally installed from Acme Studio
     // v2.1` true for a part that is now the user's to manage.
     const origins = await resolver({
-      lock: null,
+      state: null,
       recorded: {
         "extensions/acme-tools": {
-          url: ACME_LOCK_URL,
+          url: ACME_STATE_URL,
           version: "v2.1",
           selfName: "Acme Studio",
         },
@@ -268,7 +253,7 @@ describe("where a unit's bytes came from", () => {
     }).originsFor(["extensions/acme-tools", "apps/shell"]);
 
     expect(origins.get("extensions/acme-tools")).toMatchObject({
-      url: ACME_LOCK_URL,
+      url: ACME_STATE_URL,
       originKey: "github.com/acme",
       version: "v2.1",
       selfName: "Acme Studio",
@@ -279,9 +264,9 @@ describe("where a unit's bytes came from", () => {
     expect(origins.get("apps/shell")!.isHostBuild).toBe(true);
   });
 
-  it("prefers a live lock over the recorded source, so a re-install re-attributes", async () => {
+  it("prefers a live state over the recorded source, so a re-install re-attributes", async () => {
     const origins = await resolver({
-      lock: lockYaml({ "extensions/acme-tools": "" }),
+      state: stateYaml({ "extensions/acme-tools": "" }),
       recorded: {
         "extensions/acme-tools": { url: "https://github.com/stale/source", version: "v0.1" },
       },
@@ -291,29 +276,29 @@ describe("where a unit's bytes came from", () => {
   });
 
   it("marks a first encounter only for a source the user has not run before", async () => {
-    const lock = lockYaml({ "extensions/acme-tools": "" });
-    const unfamiliar = await resolver({ lock }).originsFor(["extensions/acme-tools"]);
+    const state = stateYaml({ "extensions/acme-tools": "" });
+    const unfamiliar = await resolver({ state }).originsFor(["extensions/acme-tools"]);
     expect(unfamiliar.get("extensions/acme-tools")!.firstEncounter).toBe(true);
 
     const familiar = await resolver({
-      lock,
+      state,
       admitted: new Set(["github.com/acme"]),
     }).originsFor(["extensions/acme-tools"]);
     expect(familiar.get("extensions/acme-tools")!.firstEncounter).toBe(false);
   });
 
   it("answers the admission store from what the review already resolved", async () => {
-    const instance = resolver({ lock: lockYaml({ "extensions/acme-tools": "" }) });
+    const instance = resolver({ state: stateYaml({ "extensions/acme-tools": "" }) });
     // Nothing has been resolved yet, so nothing is claimed.
     expect(instance.recordedOriginFor("extensions/acme-tools")).toBeNull();
 
     await instance.originsFor(["extensions/acme-tools", "apps/shell"]);
 
-    // The ref and the name ride along, because after a removal the lock that
+    // The ref and the name ride along, because after a removal the state that
     // holds them is gone and the record is the only place they can be read.
     expect(instance.recordedOriginFor("extensions/acme-tools")).toEqual({
       originKey: "github.com/acme",
-      url: ACME_LOCK_URL,
+      url: ACME_STATE_URL,
       version: "v2.1",
       isWorkspaceRoot: true,
     });
@@ -327,13 +312,13 @@ describe("where a unit's bytes came from", () => {
 
   it("records the owning template's self-given name, so a removal can still print it", async () => {
     const instance = resolver({
-      lock: lockYaml({ "extensions/acme-tools": "" }, { name: "News" }),
+      state: stateYaml({ "extensions/acme-tools": "" }, { name: "News" }),
     });
     await instance.originsFor(["extensions/acme-tools"]);
 
     expect(instance.recordedOriginFor("extensions/acme-tools")).toEqual({
       originKey: "github.com/acme",
-      url: ACME_LOCK_URL,
+      url: ACME_STATE_URL,
       version: "v2.1",
       selfName: "News",
       isWorkspaceRoot: true,
@@ -344,9 +329,9 @@ describe("where a unit's bytes came from", () => {
 describe("where a part was originally installed from", () => {
   it("says nothing while a live template still owns the repository", async () => {
     const instance = resolver({
-      lock: lockYaml({ "extensions/acme-tools": "" }, { name: "News" }),
+      state: stateYaml({ "extensions/acme-tools": "" }, { name: "News" }),
       recorded: {
-        "extensions/acme-tools": { url: ACME_LOCK_URL, version: "v1.2.0", selfName: "News" },
+        "extensions/acme-tools": { url: ACME_STATE_URL, version: "v1.2.0", selfName: "News" },
       },
     });
     await instance.refresh();
@@ -357,14 +342,14 @@ describe("where a part was originally installed from", () => {
   });
 
   it("keeps a removed template's parts attributed to it, by name and version", async () => {
-    // The lock no longer claims the repository: the template was removed, which
+    // The state no longer claims the repository: the template was removed, which
     // severs the relationship and deletes nothing (§U2).
     const instance = resolver({
-      lock: lockYaml({ "apps/shell": "" }),
+      state: stateYaml({ "apps/shell": "" }),
       recorded: {
         // The ref exactly as it was recorded — rendered verbatim, never
         // reformatted, and never a commit.
-        "extensions/acme-tools": { url: ACME_LOCK_URL, version: "1.2.0", selfName: "News" },
+        "extensions/acme-tools": { url: ACME_STATE_URL, version: "1.2.0", selfName: "News" },
       },
     });
     await instance.refresh();
@@ -378,8 +363,8 @@ describe("where a part was originally installed from", () => {
 
   it("falls back to the URL stem when a template never named itself", async () => {
     const instance = resolver({
-      lock: lockYaml({ "apps/shell": "" }),
-      recorded: { "extensions/acme-tools": { url: ACME_LOCK_URL, version: "v1.2.0" } },
+      state: stateYaml({ "apps/shell": "" }),
+      recorded: { "extensions/acme-tools": { url: ACME_STATE_URL, version: "v1.2.0" } },
     });
     await instance.refresh();
 
@@ -387,7 +372,7 @@ describe("where a part was originally installed from", () => {
   });
 
   it("says nothing for a part with no recorded source", async () => {
-    const instance = resolver({ lock: lockYaml({ "apps/shell": "" }) });
+    const instance = resolver({ state: stateYaml({ "apps/shell": "" }) });
     await instance.refresh();
 
     expect(instance.originallyInstalledFrom("extensions/acme-tools")).toBeNull();

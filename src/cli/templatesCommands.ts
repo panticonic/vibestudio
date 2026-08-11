@@ -315,21 +315,19 @@ function renderStatus(rows: TemplateStatusRow[]): void {
   }
   for (const row of rows) {
     const state =
-      row.verification === "deferred"
-        ? "available offline — check for updates when connected"
-        : row.state === "current"
-          ? "up to date"
-          : row.state === "update-available"
-            ? "update available"
-            : row.state === "reviewing"
-              ? `reviewing changes${row.pendingReviews ? ` — ${row.pendingReviews} to review` : ""}`
-              : row.state === "local-changes"
-                ? "local changes"
-                : row.state === "waiting-for-credential"
-                  ? "connect an account to finish"
-                  : row.state === "conflict"
-                    ? "needs a choice"
-                    : "needs attention";
+      row.state === "current"
+        ? "up to date"
+        : row.state === "update-available"
+          ? "update available"
+          : row.state === "reviewing"
+            ? `reviewing changes${row.pendingReviews ? ` — ${row.pendingReviews} to review` : ""}`
+            : row.state === "local-changes"
+              ? "local changes"
+              : row.state === "waiting-for-credential"
+                ? "connect an account to finish"
+                : row.state === "conflict"
+                  ? "needs a choice"
+                  : "needs attention";
     console.log(`  ${row.alias} template  ${version(row.ref)}  ${state}`);
     if (row.review?.items.length) {
       if (!row.review.approvalGranted) {

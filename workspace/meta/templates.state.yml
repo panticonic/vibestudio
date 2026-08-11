@@ -1,7 +1,5 @@
-fingerprint: v1-sha256:1da79006ae347d8aee795a1f2843677db20b2799768554638587f13a2fabd8e4
 nodes:
   - alias: base-bc5f8206992a
-    fragmentDigest: v1-sha256:347b3133cb7364eb6cbf5fbc3d865efa71ccd415e0d8b66200c3d00f8a6634cc
     nodeId: t-899f070e8551
     parents: []
     pin:
@@ -470,5 +468,4 @@ repositories:
         subtreeDigest: v1-sha256:b63d5877387d4815ec910e88910dd2d7e844476336788a064085ee6a1fd620a1
 roots:
   - url: git+https://github.com/panticonic/vibestudio-workspace-base.git
-verification: verified
 version: 1

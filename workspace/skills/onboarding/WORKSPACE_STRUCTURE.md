@@ -158,8 +158,8 @@ the Vibestudio host does not contain a fallback copy of workspace source.
    with explicit repository and file identities.
 3. It builds and activates the base manifest, including the manifest-declared
    `gad.workspace` source provider.
-4. The template composer adopts the byte-identical base on first run and
-   publishes the composition lock. Optional templates then use the same
+4. The template composer adopts the base lineage on first run and publishes
+   descriptive relationship state. Optional templates then use the same
    inspect, build, approval, and protected-publication path.
 
 A fresh development or system-test instance performs this same base acquisition

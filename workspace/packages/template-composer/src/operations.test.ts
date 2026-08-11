@@ -1,10 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { TemplateCompositionPlan } from "./resolver.js";
-import type { WorkspaceTemplateLock } from "@vibestudio/workspace-contracts/types";
-import {
-  assertTemplateLockIntegrityForRead,
-  templateLockFingerprint,
-} from "@vibestudio/workspace/templateLock";
+import type { WorkspaceTemplateState } from "@vibestudio/workspace-contracts/types";
 import {
   applyTemplateOperation,
   inspectTemplateOperation,
@@ -21,24 +17,23 @@ const exactRoot = {
 };
 
 describe("template operations", () => {
-  it("projects exact unresolved suggestions from the local lock only", () => {
+  it("projects exact unresolved suggestions from the local state only", () => {
     const digest = `v1-sha256:${"b".repeat(64)}` as const;
-    const lock = {
+    const state = {
       nodes: [
         {
           nodeId: "t-base",
           alias: "base",
           pin: exactRoot,
           parents: [],
-          fragmentDigest: `v1-sha256:${"c".repeat(64)}`,
           suggestions: {
             trust: { digest, value: { chromeApps: ["apps/base"] } },
           },
         },
       ],
-    } as unknown as WorkspaceTemplateLock;
+    } as unknown as WorkspaceTemplateState;
 
-    expect(templateStatus([{ url: exactRoot.url }], lock).excludedSuggestions).toEqual([
+    expect(templateStatus([{ url: exactRoot.url }], state).excludedSuggestions).toEqual([
       {
         nodeId: "t-base",
         alias: "base",
@@ -46,7 +41,7 @@ describe("template operations", () => {
       },
     ]);
     expect(
-      templateStatus([{ url: exactRoot.url }], lock, {
+      templateStatus([{ url: exactRoot.url }], state, {
         "t-base:trust": { digest, decision: "declined" },
       }).excludedSuggestions
     ).toEqual([]);
@@ -74,7 +69,7 @@ describe("template operations", () => {
         nodes: [],
         repositories: {},
         localRepoPaths: ["panels/chat"],
-        lock: null,
+        state: null,
       },
     });
   });
@@ -118,19 +113,12 @@ describe("template operations", () => {
     });
 
     expect(resolvePromoted).not.toHaveBeenCalled();
-    expect(inspection.plan.lock?.roots).toEqual([
+    expect(inspection.plan.state?.roots).toEqual([
       { url: "git+https://github.com/vibestudio/workspace-base.git" },
     ]);
-    expect(inspection.plan.lock?.nodes[0]?.suggestions.trust).toMatchObject({
+    expect(inspection.plan.state?.nodes[0]?.suggestions.trust).toMatchObject({
       value: { chromeApps: ["apps/base"] },
     });
-    const corrupt = structuredClone(inspection.plan.lock!);
-    corrupt.nodes[0]!.suggestions.trust!.value = { chromeApps: ["apps/other"] };
-    const { fingerprint: _fingerprint, ...withoutFingerprint } = corrupt;
-    corrupt.fingerprint = templateLockFingerprint(withoutFingerprint);
-    expect(() => assertTemplateLockIntegrityForRead(corrupt)).toThrow(
-      "invalid trust suggestion evidence"
-    );
     expect(inspection.plan.repositories["packages/runtime"]).toBeDefined();
   });
 

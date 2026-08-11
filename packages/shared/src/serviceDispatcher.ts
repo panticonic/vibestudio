@@ -592,7 +592,7 @@ export interface AuthorityChallengePresentation {
      * part holds what it holds does not evaporate because the relationship
      * ended. Only ever present for parts whose two answers disagree.
      *
-     * Optional here because the gate derives it itself from the template lock
+     * Optional here because the gate derives it itself from template relationship state
      * and the admission ledger when a presenter does not; a presenter that has
      * already resolved it says so rather than making the gate resolve twice.
      */

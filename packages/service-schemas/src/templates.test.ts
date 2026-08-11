@@ -97,7 +97,6 @@ describe("template recovery contracts", () => {
         state: "waiting-for-credential",
         contributedParts: 1,
         pendingReviews: 1,
-        verification: "deferred",
         suggestions: [],
         blocker,
         error: blocker.message,
