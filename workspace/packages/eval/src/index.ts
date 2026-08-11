@@ -23,16 +23,8 @@ export {
 export type { ConsoleCapture, ConsoleEntry } from "./consoleCapture.js";
 
 // Async tracking (unified API for panels and workers)
-export {
-  getAsyncTracking,
-  hasAsyncTracking,
-  getAsyncTrackingOrFallback,
-  createFallbackAsyncTracking,
-} from "./asyncTracking.js";
-export type {
-  TrackingContext,
-  AsyncTrackingAPI,
-} from "./asyncTracking.js";
+export { getAsyncTracking } from "./asyncTracking.js";
+export type { TrackingContext, AsyncTrackingAPI } from "./asyncTracking.js";
 
 // Unified sandbox execution engine
 export {

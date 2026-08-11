@@ -2,7 +2,7 @@ import vm from "node:vm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { tameRealmCodegen } from "@vibestudio/shared/evalConfinement";
 import { executeSandbox } from "./sandbox";
-import { createFallbackAsyncTracking } from "./asyncTracking";
+import type { AsyncTrackingAPI } from "./asyncTracking";
 
 describe("executeSandbox", () => {
   let originalModuleMap: unknown;
@@ -79,8 +79,19 @@ describe("executeSandbox", () => {
   });
 
   it("settles a rejected top-level result without waiting on unrelated tracked work", async () => {
-    const tracking = createFallbackAsyncTracking();
-    tracking.waitAll = () => new Promise<void>(() => undefined);
+    const context = { id: 1, promises: new Set<Promise<unknown>>(), pauseCount: 0 };
+    const tracking: AsyncTrackingAPI = {
+      start: () => context,
+      enter: () => undefined,
+      exit: () => undefined,
+      stop: () => undefined,
+      pause: () => undefined,
+      resume: () => undefined,
+      ignore: <T>(value: T) => value,
+      waitAll: () => new Promise<void>(() => undefined),
+      pending: () => 0,
+      activeContexts: () => [context.id],
+    };
     (globalThis as Record<string, unknown>)["__vibestudioAsyncTracking__"] = tracking;
 
     await expect(
