@@ -531,9 +531,10 @@ async function adoptionAwareInput(
 function inspectionResult(
   inspection: TemplateOperationInspection,
   previous?: SemanticWorkspaceObservation["state"],
-  suggestionDecisions:
-    | Record<string, { digest: `v1-sha256:${string}`; decision: "accepted" | "declined" }>
-    | undefined = undefined,
+  suggestionDecisions?: Record<
+    string,
+    { digest: `v1-sha256:${string}`; decision: "accepted" | "declined" }
+  >,
   pin?: WorkspaceTemplatePin
 ) {
   return {

@@ -190,7 +190,7 @@ interface ConnectWaiter {
   reject: (error: unknown) => void;
 }
 
-type AnyTimer = ReturnType<typeof setTimeout> | ReturnType<typeof setInterval>;
+type AnyTimer = ReturnType<typeof setTimeout>;
 
 /** Timers must never hold the Node event loop open for an idle pipe. */
 function unrefTimer(timer: AnyTimer): void {
@@ -247,7 +247,10 @@ export function createWebRtcAnswererPipe(options: WebRtcAnswererOptions): WebRtc
 
   // --- codecs / handlers ----------------------------------------------------
   const controlCodec = createControlCodec();
-  const outboundBulkStats = new Map<number, { dataFrames: number; dataBytes: number; messages: number }>();
+  const outboundBulkStats = new Map<
+    number,
+    { dataFrames: number; dataBytes: number; messages: number }
+  >();
   let controlHandler: ((data: Uint8Array) => void) | null = null;
   let bulkFrameHandler:
     | ((streamId: number, type: StreamFrameType, payload: Uint8Array) => void)

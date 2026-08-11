@@ -224,7 +224,8 @@ export function MigrateTab(props: { selection: ImportSourceSelection; now: numbe
                     onToggle={() =>
                       setTypes((current) => {
                         const next = new Set(current);
-                        next.has(item.key) ? next.delete(item.key) : next.add(item.key);
+                        if (next.has(item.key)) next.delete(item.key);
+                        else next.add(item.key);
                         return next;
                       })
                     }
@@ -464,9 +465,8 @@ function BreakdownCard(props: { breakdowns: readonly ImportCategoryBreakdown[] }
                   onClick={() =>
                     setExpanded((current) => {
                       const next = new Set(current);
-                      next.has(breakdown.dataType)
-                        ? next.delete(breakdown.dataType)
-                        : next.add(breakdown.dataType);
+                      if (next.has(breakdown.dataType)) next.delete(breakdown.dataType);
+                      else next.add(breakdown.dataType);
                       return next;
                     })
                   }
@@ -815,7 +815,10 @@ function OpenTabs(props: { selection: ImportSourceSelection }) {
   const setMany = (ids: string[], on: boolean) =>
     setSelected((current) => {
       const next = new Set(current);
-      for (const id of ids) on ? next.add(id) : next.delete(id);
+      for (const id of ids) {
+        if (on) next.add(id);
+        else next.delete(id);
+      }
       return next;
     });
 
@@ -992,9 +995,8 @@ function OpenTabs(props: { selection: ImportSourceSelection }) {
                 onToggleCollapsed={() =>
                   setCollapsedWindows((current) => {
                     const next = new Set(current);
-                    next.has(window.windowId)
-                      ? next.delete(window.windowId)
-                      : next.add(window.windowId);
+                    if (next.has(window.windowId)) next.delete(window.windowId);
+                    else next.add(window.windowId);
                     return next;
                   })
                 }

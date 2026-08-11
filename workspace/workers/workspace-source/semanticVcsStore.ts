@@ -54,7 +54,6 @@ export type SemanticVcsErrorCode =
   | "CoupledGroupIncomplete"
   | "IntegrationIncomplete"
   | "CommandIdReuse"
-  | "DestinationOccupied"
   | "IntegrityFailure"
   | "ScopeTooLarge";
 

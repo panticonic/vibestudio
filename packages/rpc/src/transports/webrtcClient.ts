@@ -210,7 +210,7 @@ function normalizeFingerprint(fp: string): string {
   return fp.replace(/[:\s]/g, "").toUpperCase();
 }
 
-type AnyTimer = ReturnType<typeof setTimeout> | ReturnType<typeof setInterval>;
+type AnyTimer = ReturnType<typeof setTimeout>;
 
 /** Timers must never hold the Node event loop open for an idle transport. */
 function unrefTimer(timer: AnyTimer): void {

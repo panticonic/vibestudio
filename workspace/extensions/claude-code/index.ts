@@ -609,21 +609,16 @@ export async function activate(ctx: ExtensionContext) {
       profileDir: materialized.profileDir,
       contextDirectory: contextFolder,
     });
-    let child: ChildProcess;
-    try {
-      child = spawn(confined.command, confined.args, {
-        cwd: contextFolder,
-        env: claudeContainedSpawnEnvironment({
-          profileDir: materialized.profileDir,
-          launchEnv: materialized.env,
-          confinementEnv: confined.env,
-        }),
-        stdio: ["ignore", "pipe", "pipe"],
-        detached: true,
-      });
-    } catch (failure) {
-      throw failure;
-    }
+    const child: ChildProcess = spawn(confined.command, confined.args, {
+      cwd: contextFolder,
+      env: claudeContainedSpawnEnvironment({
+        profileDir: materialized.profileDir,
+        launchEnv: materialized.env,
+        confinementEnv: confined.env,
+      }),
+      stdio: ["ignore", "pipe", "pipe"],
+      detached: true,
+    });
     const owner = OwnedProcessGroup.create(child);
     if (!owner.identity) {
       const failure = error(

@@ -442,7 +442,9 @@ function parsePackages(value: unknown, label: string): readonly string[] | undef
   ) {
     throw new Error(`${label}.packages must be a non-empty package-name array`);
   }
-  const packages = [...new Set(value)].sort();
+  const packages = [...new Set(value)].sort((left, right) =>
+    left < right ? -1 : left > right ? 1 : 0
+  );
   if (packages.length !== value.length) throw new Error(`${label}.packages contains duplicates`);
   return Object.freeze(packages);
 }

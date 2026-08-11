@@ -106,9 +106,7 @@ export class CardManager {
         created_at INTEGER NOT NULL
       )
     `);
-    sql.exec(
-      `CREATE INDEX IF NOT EXISTS idx_custom_cards_message ON custom_cards(message_id)`
-    );
+    sql.exec(`CREATE INDEX IF NOT EXISTS idx_custom_cards_message ON custom_cards(message_id)`);
   }
 
   /** Invalidate the cached definition when a type is (re)registered. */
@@ -230,22 +228,20 @@ export class CardManager {
   // ── internals ────────────────────────────────────────────────────────────
 
   private handleFor(row: CardRow, pubsubId?: number): CustomMessageHandle {
-    const manager = this;
     return {
       messageId: row.messageId,
       typeId: row.typeId,
       channelId: row.channelId,
       pubsubId,
-      async update(state: unknown): Promise<number | undefined> {
-        const info = await manager.requireType(row.channelId, row.typeId);
+      update: async (state: unknown): Promise<number | undefined> => {
+        const info = await this.requireType(row.channelId, row.typeId);
         // Types with a UI reducer treat updates as patches and validate against
         // updateSchema; plain types replace state and validate against stateSchema.
-        manager.validate(info, info.updateSchema ?? info.stateSchema, state);
-        return manager.publishUpdate(row, state);
+        this.validate(info, info.updateSchema ?? info.stateSchema, state);
+        return this.publishUpdate(row, state);
       },
-      async fail(error: { message: string; details?: unknown }): Promise<number | undefined> {
-        return manager.publishUpdate(row, undefined, { status: "failed", error });
-      },
+      fail: async (error: { message: string; details?: unknown }): Promise<number | undefined> =>
+        this.publishUpdate(row, undefined, { status: "failed", error }),
     };
   }
 
@@ -289,10 +285,7 @@ export class CardManager {
   }
 
   private bumpSeq(naturalKey: string): number {
-    this.deps.sql.exec(
-      `UPDATE custom_cards SET seq = seq + 1 WHERE natural_key = ?`,
-      naturalKey
-    );
+    this.deps.sql.exec(`UPDATE custom_cards SET seq = seq + 1 WHERE natural_key = ?`, naturalKey);
     const rows = this.deps.sql
       .exec(`SELECT seq FROM custom_cards WHERE natural_key = ?`, naturalKey)
       .toArray();
@@ -332,7 +325,10 @@ export class CardManager {
       const path = issue.path.length ? `${issue.path.join(".")}: ` : "";
       return `${path}${issue.message}`;
     });
-    throw new CardValidationError(info.typeId, issues.length ? issues : ["schema validation failed"]);
+    throw new CardValidationError(
+      info.typeId,
+      issues.length ? issues : ["schema validation failed"]
+    );
   }
 
   private findByKey(fullKey: string): CardRow | null {
