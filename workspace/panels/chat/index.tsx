@@ -19,7 +19,8 @@ import {
 import { EventsClient } from "@vibestudio/service-schemas/clients/eventsClient";
 import { SHELL_APPROVAL_PENDING_CHANGED_EVENT } from "@vibestudio/shell-core/approvalState";
 import { recoveryCoordinator } from "@workspace/runtime/internal/diagnostics";
-import { usePanelTheme, usePanelThemeConfig, useStateArgs } from "@workspace/react";
+import { useStateArgs } from "@workspace/react/hooks";
+import { usePanelTheme, usePanelThemeConfig } from "@workspace/react/theme";
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button, Callout, Flex, Spinner, Text, Theme } from "@radix-ui/themes";
 import { ErrorBoundary } from "@workspace/agentic-chat/error-boundary";
@@ -31,7 +32,8 @@ import type {
 } from "@workspace/agentic-chat/types";
 import "@workspace/ui/foundation.css";
 import "@workspace/ui/themes/vibestudio.css";
-import { createPanelSandboxConfig, unsubscribeAgentFromChannel } from "@workspace/agentic-core";
+import { unsubscribeAgentFromChannel } from "@workspace/agentic-core/agent-launch";
+import { createPanelSandboxConfig } from "@workspace/agentic-core/sandbox-factory";
 import type {
   AvailableAgent,
   ModelCatalog,
