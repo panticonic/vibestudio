@@ -1453,6 +1453,49 @@ export type TreePathEntry =
   | { kind: "dir"; treeHash: string }
   | { kind: "file"; contentHash: string; mode: number };
 
+export type TreeDirectoryEntry =
+  | { name: string; kind: "dir"; treeHash: string }
+  | { name: string; kind: "file"; contentHash: string; mode: number };
+
+/**
+ * Read only the immediate entries of one immutable tree directory. This is the
+ * bounded metadata primitive for callers such as package-graph discovery that
+ * need directory markers but must not recursively enumerate or materialize
+ * unrelated source content. Null means the root/path is absent or names a
+ * file; a missing or corrupt interior tree remains a hard integrity failure.
+ */
+export async function readTreeDirectory(
+  blobsDir: string,
+  ref: string,
+  directoryPath = ""
+): Promise<TreeDirectoryEntry[] | null> {
+  const segments = splitTreePath(directoryPath);
+  const rootHash = await resolveTreeRef(blobsDir, ref);
+  if (!rootHash) return null;
+  let entries = await readTreeNode(blobsDir, rootHash);
+  if (!entries) {
+    if (STATE_HASH_RE.test(ref)) throw missingTreeObjectError(rootHash);
+    return null;
+  }
+  for (const segment of segments) {
+    const entry = entries.find((candidate) => candidate.name === segment);
+    if (!entry || entry.kind === "file") return null;
+    const child = await readTreeNode(blobsDir, entry.childHash);
+    if (!child) throw missingTreeObjectError(entry.childHash);
+    entries = child;
+  }
+  return entries.map((entry) =>
+    entry.kind === "dir"
+      ? { name: entry.name, kind: "dir", treeHash: entry.childHash }
+      : {
+          name: entry.name,
+          kind: "file",
+          contentHash: entry.contentHash,
+          mode: entry.mode,
+        }
+  );
+}
+
 /**
  * Resolve a tree-relative path to its content address: a directory resolves
  * to its `manifest:` tree hash, a file to its `{contentHash, mode}`, and the

@@ -32,6 +32,7 @@ import {
   putBytes,
   putTree,
   readFileAtTree,
+  readTreeDirectory,
   resolveTreePath,
   type TreeListEntry,
 } from "./blobstoreService.js";
@@ -1005,6 +1006,19 @@ describe("blobstoreService", () => {
       await expect(readFileAtTree(blobsDir, rootTree, "src/missing.ts")).resolves.toBeNull();
       await expect(readFileAtTree(blobsDir, rootTree, "README.md/extra")).resolves.toBeNull();
       await expect(readFileAtTree(blobsDir, rootTree, "src/../README.md")).rejects.toThrow(
+        /Invalid tree entry name/
+      );
+    });
+
+    it("readTreeDirectory returns only immediate strict tree entries", async () => {
+      const { rootTree, stateHash, digests, subtrees } = await seedFixtureTree();
+      await expect(readTreeDirectory(blobsDir, stateHash, "src")).resolves.toEqual([
+        { name: "a.ts", kind: "file", contentHash: digests.a, mode: 33188 },
+        { name: "lib", kind: "dir", treeHash: subtrees.lib },
+      ]);
+      await expect(readTreeDirectory(blobsDir, rootTree, "src/a.ts")).resolves.toBeNull();
+      await expect(readTreeDirectory(blobsDir, rootTree, "missing")).resolves.toBeNull();
+      await expect(readTreeDirectory(blobsDir, rootTree, "src/../bin")).rejects.toThrow(
         /Invalid tree entry name/
       );
     });
