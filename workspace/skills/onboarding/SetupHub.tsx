@@ -11,12 +11,6 @@ import type { SetupCapabilitySnapshot } from "./snapshot";
 import { loadOptionalTemplateSnapshot, type OptionalTemplateSnapshot } from "./templates";
 
 interface SetupHubProps {
-  props: {
-    /** Legacy seeds remain accepted for transcript compatibility. */
-    snapshot?: SetupCapabilitySnapshot[];
-    templates?: OptionalTemplateSnapshot[];
-    catalog?: readonly OnboardingCapabilityDefinition[];
-  };
   chat: {
     send: (content: string, options?: { metadata?: Record<string, unknown> }) => Promise<unknown>;
   };
@@ -219,20 +213,16 @@ function SetupRow({
   );
 }
 
-export default function SetupHub({ props = {}, chat, scope, scopes, inlineUi }: SetupHubProps) {
+export default function SetupHub({ chat, scope, scopes, inlineUi }: SetupHubProps) {
   const cached = readCache(scope);
-  const [snapshots, setSnapshots] = useState<SetupCapabilitySnapshot[]>(
-    props.snapshot ?? cached?.snapshot ?? []
-  );
+  const [snapshots, setSnapshots] = useState<SetupCapabilitySnapshot[]>(cached?.snapshot ?? []);
   const [templateSnapshots, setTemplateSnapshots] = useState<OptionalTemplateSnapshot[]>(
-    props.templates ?? cached?.templates ?? []
+    cached?.templates ?? []
   );
   const [catalog, setCatalog] = useState<readonly OnboardingCapabilityDefinition[]>(
-    props.catalog ?? cached?.catalog ?? []
+    cached?.catalog ?? []
   );
-  const [templatesLoaded, setTemplatesLoaded] = useState(
-    props.templates !== undefined || cached?.templatesLoaded === true
-  );
+  const [templatesLoaded, setTemplatesLoaded] = useState(cached?.templatesLoaded === true);
   const [loadingCapabilities, setLoadingCapabilities] = useState(false);
   const [loadingTemplates, setLoadingTemplates] = useState(false);
   const [pending, setPending] = useState<string | null>(null);
@@ -252,9 +242,10 @@ export default function SetupHub({ props = {}, chat, scope, scopes, inlineUi }: 
         const current = readCache(scope) ?? { catalog: [], snapshot: [] };
         scope[CACHE_KEY] = { ...current, ...update } satisfies SetupHubCache;
         await scopes?.save?.();
-      } catch {
+      } catch (error) {
         // Live owner data remains useful when browser-local cache persistence
         // is temporarily unavailable.
+        console.warn("[SetupHub] Failed to persist the onboarding cache:", error);
       }
     },
     [scope, scopes]
