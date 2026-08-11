@@ -27,10 +27,9 @@ const IDENTIFIER_REGEX = /^[a-zA-Z0-9][a-zA-Z0-9._@+=:-]{0,127}$/;
 
 // Access descriptors shared across the credentials method groups. The
 // service-level `policy` on the registration is the enforced caller gate; these
-// descriptors carry the
-// doc/safety metadata (sensitivity, approval gates) the capability catalog
-// reads. `approval` entries declare the human-approval gates the handler may
-// open at runtime; the dispatcher guard still performs the actual prompting.
+// descriptors carry the doc/safety metadata (sensitivity, approval gates) the
+// capability catalog reads. `approval` entries declare human interactions the
+// handler may open at runtime; they do not add a dispatcher-level gate.
 
 /** Pure read: lists/queries that touch no persistent state (authorization
  *  checks only). */
@@ -1152,11 +1151,12 @@ export const credentialsMethods = defineServiceMethods({
   configureClient: {
     capability: "account-providers.configure",
     tier: {
-      tier: "gated",
+      tier: "open",
       session: "family",
       residency: "secret",
       family: "credentials.control",
-      rationale: "G2: credential mediation; §2 default {code, session} family",
+      rationale:
+        "The method is itself a host-owned protected-input prompt; only the user's explicit form submission stores configuration",
     },
     presentation: {
       title: "Configure an account provider",
@@ -1193,11 +1193,12 @@ export const credentialsMethods = defineServiceMethods({
   requestCredentialInput: {
     capability: "accounts.connect",
     tier: {
-      tier: "gated",
+      tier: "open",
       session: "family",
       residency: "secret",
       family: "credentials.control",
-      rationale: "G2: credential mediation; §2 default {code, session} family",
+      rationale:
+        "The method is itself a host-owned protected-input prompt; only the user's explicit form submission stores a credential",
     },
     presentation: {
       title: "Ask for account details",

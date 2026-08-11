@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "censusDigest": "sha256:049e5f3d0c35d01549d0c98e51983fd1c9e27c187a1fec44fcb053b77088c426",
+  "censusDigest": "sha256:4a63ee30d58721d471d4557d0eefaf484927f5cd2b30512cc82d4447e1b14262",
   "decisions": {
     "host:fs.readBytes": {
       "review": "bounded-workspace-binary-range-read",
@@ -37,6 +37,14 @@
     "host:panelRuntime.getAttempt": {
       "review": "exact-panel-attempt-resolution-read",
       "change": "Adds an open, read-only resolution of one opaque attempt reference. The receiver returns bounded lifecycle identity and state without panel mutation or authority acquisition."
+    },
+    "host:credentials.configureClient": {
+      "review": "host-owned-client-configuration-input",
+      "change": "Opens only the launcher for an exact host-owned client-configuration form, removing the generic authority prompt that previously preceded it. The caller cannot provide or observe protected values: configuration is persisted only after the authenticated user explicitly submits the pending form, while denial performs no mutation."
+    },
+    "host:credentials.requestCredentialInput": {
+      "review": "host-owned-credential-input",
+      "change": "Opens only the launcher for an exact host-owned credential-entry form, removing the generic authority prompt that previously preceded it. Secret material originates in the protected form and is never returned to the caller; storage occurs only after the authenticated user explicitly submits that pending request, while denial performs no mutation."
     },
     "host:credentials.resolveCredential": {
       "review": "handler-owned-exact-credential-use-approval",

@@ -522,4 +522,11 @@ describe("service schema contracts", () => {
       );
     }
   });
+
+  it("uses the protected input form as the sole credential-entry consent boundary", () => {
+    for (const method of ["configureClient", "requestCredentialInput"] as const) {
+      expect(credentialsMethods[method].tier.tier).toBe("open");
+      expect(credentialsMethods[method].access?.approval).toHaveLength(1);
+    }
+  });
 });

@@ -1742,11 +1742,12 @@ export const HOST_AUTHORITY_METHODS = {
   },
   "credentials.configureClient": {
     tier: {
-      tier: "gated",
+      tier: "open",
       session: "family",
       residency: "secret",
       family: "credentials.control",
-      rationale: "G2: credential mediation; §2 default {code, session} family",
+      rationale:
+        "The method is itself a host-owned protected-input prompt; only the user's explicit form submission stores configuration",
     },
     capability: "account-providers.configure",
     presentation: {
@@ -1891,11 +1892,12 @@ export const HOST_AUTHORITY_METHODS = {
   },
   "credentials.requestCredentialInput": {
     tier: {
-      tier: "gated",
+      tier: "open",
       session: "family",
       residency: "secret",
       family: "credentials.control",
-      rationale: "G2: credential mediation; §2 default {code, session} family",
+      rationale:
+        "The method is itself a host-owned protected-input prompt; only the user's explicit form submission stores a credential",
     },
     capability: "accounts.connect",
     presentation: {

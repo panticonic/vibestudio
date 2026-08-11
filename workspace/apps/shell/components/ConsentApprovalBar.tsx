@@ -105,7 +105,11 @@ export function ConsentApprovalBar() {
   const [minimized, setMinimized] = useState(false);
   const [browseIndex, setBrowseIndex] = useState(0);
   const [attentionSeq, setAttentionSeq] = useState(0);
-  const [keyboardFocusRequested, setKeyboardFocusRequested] = useState(false);
+  const currentApprovalIdRef = useRef<string | null>(null);
+  const [keyboardFocusRequest, setKeyboardFocusRequest] = useState<{
+    approvalId: string;
+    sequence: number;
+  } | null>(null);
   // Diff-review (P3.5): host-served blob cache, keyed by content hash, fetched
   // lazily on the overlay surface's behalf (the surface has no RPC).
   const [blobResults, setBlobResults] = useState<Record<string, BlobResult>>({});
@@ -149,7 +153,13 @@ export function ConsentApprovalBar() {
     useCallback(() => {
       reviewingQueuedRef.current = true;
       setMinimized(false);
-      setKeyboardFocusRequested(true);
+      const approvalId = currentApprovalIdRef.current;
+      if (approvalId) {
+        setKeyboardFocusRequest((previous) => ({
+          approvalId,
+          sequence: (previous?.sequence ?? 0) + 1,
+        }));
+      }
     }, [])
   );
 
@@ -208,6 +218,7 @@ export function ConsentApprovalBar() {
     [pendingAccess]
   );
   const current = orderedPending[browseIndex] ?? orderedPending[0] ?? null;
+  currentApprovalIdRef.current = current?.approvalId ?? null;
   const queueLength = orderedPending.length;
   const canPrev = queueLength > 1 && browseIndex > 0;
   const canNext = queueLength > 1 && browseIndex < queueLength - 1;
@@ -571,6 +582,12 @@ export function ConsentApprovalBar() {
     current?.kind === "client-config" ||
     current?.kind === "credential-input" ||
     current?.kind === "device-code";
+  const focusRequest =
+    current && keyboardFocusRequest?.approvalId === current.approvalId
+      ? `explicit:${current.approvalId}:${keyboardFocusRequest.sequence}`
+      : current && needsFocus
+        ? `initial:${current.approvalId}`
+        : undefined;
 
   const theme = useMemo<OverlayThemeInfo>(
     () => ({
@@ -639,7 +656,7 @@ export function ConsentApprovalBar() {
           surface: "approval-card",
           open: true,
           bounds: anchorBounds,
-          focus: needsFocus || keyboardFocusRequested,
+          focusRequest,
           theme,
           props: overlayProps,
         }
@@ -724,6 +741,10 @@ export function ConsentApprovalBar() {
         onExpand={() => {
           reviewingQueuedRef.current = true;
           reviewContinuationCallerIdRef.current = current.callerId;
+          setKeyboardFocusRequest((previous) => ({
+            approvalId: current.approvalId,
+            sequence: (previous?.sequence ?? 0) + 1,
+          }));
           setMinimized(false);
         }}
       />

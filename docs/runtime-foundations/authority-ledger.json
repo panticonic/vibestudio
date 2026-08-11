@@ -23934,11 +23934,11 @@
       "rpcPlane": "host-service",
       "owner": "credentials",
       "method": "configureClient",
-      "tier": "gated",
+      "tier": "open",
       "sessionAdmission": "family",
       "residency": "secret",
       "mechanismFamily": "credentials.control",
-      "reviewRationale": "G2: credential mediation; §2 default {code, session} family",
+      "reviewRationale": "The method is itself a host-owned protected-input prompt; only the user's explicit form submission stores configuration",
       "resourceDerivation": {
         "kind": "literal",
         "key": "service:credentials.configureClient"
@@ -23969,8 +23969,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:credentials.configureClient),allOf(capability(user,service:credentials.configureClient),workspace-member),allOf(capability(code,service:credentials.configureClient),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "host-owned-client-configuration-input",
+        "change": "Opens only the launcher for an exact host-owned client-configuration form, removing the generic authority prompt that previously preceded it. The caller cannot provide or observe protected values: configuration is persisted only after the authenticated user explicitly submits the pending form, while denial performs no mutation."
       },
       "capability": "service:credentials.configureClient",
       "parityAssertion": "generated-census:host-authority"
@@ -24352,11 +24352,11 @@
       "rpcPlane": "host-service",
       "owner": "credentials",
       "method": "requestCredentialInput",
-      "tier": "gated",
+      "tier": "open",
       "sessionAdmission": "family",
       "residency": "secret",
       "mechanismFamily": "credentials.control",
-      "reviewRationale": "G2: credential mediation; §2 default {code, session} family",
+      "reviewRationale": "The method is itself a host-owned protected-input prompt; only the user's explicit form submission stores a credential",
       "resourceDerivation": {
         "kind": "literal",
         "key": "service:credentials.requestCredentialInput"
@@ -24387,8 +24387,8 @@
       ],
       "r3aRequirement": "anyOf(capability(host,service:credentials.requestCredentialInput),allOf(capability(user,service:credentials.requestCredentialInput),workspace-member),allOf(capability(code,service:credentials.requestCredentialInput),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "host-owned-credential-input",
+        "change": "Opens only the launcher for an exact host-owned credential-entry form, removing the generic authority prompt that previously preceded it. Secret material originates in the protected form and is never returned to the caller; storage occurs only after the authenticated user explicitly submits that pending request, while denial performs no mutation."
       },
       "capability": "service:credentials.requestCredentialInput",
       "parityAssertion": "generated-census:host-authority"

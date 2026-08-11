@@ -24,7 +24,12 @@ export interface ShellContentOverlayOptions {
   bounds: ContentOverlayBounds;
   props: unknown;
   theme: OverlayThemeInfo;
-  focus?: boolean;
+  /**
+   * Opaque identity for a one-shot focus request. Keeping this stable while
+   * props refresh prevents a visible overlay from repeatedly taking focus;
+   * changing it deliberately requests focus again.
+   */
+  focusRequest?: string;
 }
 
 export function useShellContentOverlay(
@@ -32,6 +37,7 @@ export function useShellContentOverlay(
   onIntent?: (payload: unknown) => void
 ): void {
   const shownRef = useRef(false);
+  const consumedFocusRequestRef = useRef<string | undefined>(undefined);
   const onIntentRef = useRef(onIntent);
   onIntentRef.current = onIntent;
 
@@ -43,7 +49,7 @@ export function useShellContentOverlay(
   const bounds = options?.bounds;
   const props = options?.props;
   const theme = options?.theme;
-  const focus = options?.focus;
+  const focusRequest = options?.focusRequest;
   useEffect(() => {
     if (!open || !surface || !bounds || !theme) {
       if (shownRef.current) {
@@ -52,12 +58,15 @@ export function useShellContentOverlay(
       }
       return;
     }
+    const shouldFocus =
+      focusRequest !== undefined && focusRequest !== consumedFocusRequestRef.current;
+    if (shouldFocus) consumedFocusRequestRef.current = focusRequest;
     const payload = {
       surface,
       bounds,
       props,
       theme,
-      focus,
+      focus: shouldFocus,
     };
     if (!shownRef.current) {
       shownRef.current = true;
@@ -65,7 +74,17 @@ export function useShellContentOverlay(
       return;
     }
     void view.updateContentOverlay(payload);
-  }, [bounds?.height, bounds?.width, bounds?.x, bounds?.y, focus, open, props, surface, theme]);
+  }, [
+    bounds?.height,
+    bounds?.width,
+    bounds?.x,
+    bounds?.y,
+    focusRequest,
+    open,
+    props,
+    surface,
+    theme,
+  ]);
 
   // Ensure the overlay is torn down if the owner unmounts while open.
   useEffect(
@@ -74,6 +93,7 @@ export function useShellContentOverlay(
         shownRef.current = false;
         void view.hideContentOverlay();
       }
+      consumedFocusRequestRef.current = undefined;
     },
     []
   );
