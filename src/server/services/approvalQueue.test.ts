@@ -65,6 +65,7 @@ describe("approvalQueue", () => {
 
     queue.updatePreparation!(dedupKey, {
       label: "Building workspace projects",
+      detail: "2 finished; 3 still running in parallel.",
       completed: 2,
       total: 5,
     });
@@ -75,6 +76,7 @@ describe("approvalQueue", () => {
           state: "preparing",
           progress: expect.objectContaining({
             label: "Building workspace projects",
+            detail: "2 finished; 3 still running in parallel.",
             completed: 2,
             total: 5,
           }),

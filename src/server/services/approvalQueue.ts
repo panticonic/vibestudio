@@ -34,6 +34,7 @@ import type {
   ApprovalRequesterIdentity,
   DiffReviewEntry,
   PendingApproval,
+  ApprovalPreparationProgress,
   PendingCapabilityApproval,
   PendingBrowserPermissionApproval,
   PendingCredentialApproval,
@@ -591,10 +592,7 @@ function preparationDiagnostics(error: unknown): string[] {
 
 export interface ApprovalQueue {
   beginPreparation?(req: CapabilityApprovalQueueRequest & { dedupKey: string }): string;
-  updatePreparation?(
-    dedupKey: string,
-    progress: { label: string; completed?: number; total?: number }
-  ): void;
+  updatePreparation?(dedupKey: string, progress: ApprovalPreparationProgress): void;
   failPreparation?(dedupKey: string, error: unknown): void;
   discardPreparation?(dedupKey: string): void;
   request(req: UnitInstallReviewQueueRequest): Promise<UnitInstallReviewQueueDecision>;

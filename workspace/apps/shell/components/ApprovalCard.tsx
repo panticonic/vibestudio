@@ -412,30 +412,37 @@ export function ApprovalCard({
               <ApprovalMarkdown source={copy.summary} tone="muted" compact />
             </Box>
             {lifecycleState !== "ready" ? (
-              <Flex align="center" gap="2">
-                {lifecycleState === "preparing" ? (
-                  <ReloadIcon
-                    aria-hidden
-                    style={{ animation: "app-tree-spin 0.7s linear infinite" }}
-                  />
+              <Flex direction="column" gap="1">
+                <Flex align="center" gap="2">
+                  {lifecycleState === "preparing" ? (
+                    <ReloadIcon
+                      aria-hidden
+                      style={{ animation: "app-tree-spin 0.7s linear infinite" }}
+                    />
+                  ) : null}
+                  <Text
+                    size="1"
+                    color={lifecycleState === "failed" ? "red" : "gray"}
+                    role="status"
+                    aria-live="polite"
+                  >
+                    {lifecycleState === "preparing"
+                      ? `${approval.lifecycle?.progress?.label ?? "Checking builds, schemas, and authority"}${
+                          approval.lifecycle?.progress?.total !== undefined
+                            ? ` (${approval.lifecycle.progress.completed ?? 0} of ${approval.lifecycle.progress.total})`
+                            : ""
+                        }… ${Math.max(0, Math.floor((lifecycleNow - approval.requestedAt) / 1_000))}s elapsed`
+                      : (approval.lifecycle?.diagnostics?.[0] ??
+                        (lifecycleState === "cancelled"
+                          ? "Publication was cancelled."
+                          : "Workspace validation failed."))}
+                  </Text>
+                </Flex>
+                {lifecycleState === "preparing" && approval.lifecycle?.progress?.detail ? (
+                  <Text size="1" color="gray">
+                    {approval.lifecycle.progress.detail}
+                  </Text>
                 ) : null}
-                <Text
-                  size="1"
-                  color={lifecycleState === "failed" ? "red" : "gray"}
-                  role="status"
-                  aria-live="polite"
-                >
-                  {lifecycleState === "preparing"
-                    ? `${approval.lifecycle?.progress?.label ?? "Checking builds, schemas, and authority"}${
-                        approval.lifecycle?.progress?.total !== undefined
-                          ? ` (${approval.lifecycle.progress.completed ?? 0} of ${approval.lifecycle.progress.total})`
-                          : ""
-                      }… ${Math.max(0, Math.floor((lifecycleNow - approval.requestedAt) / 1_000))}s elapsed`
-                    : (approval.lifecycle?.diagnostics?.[0] ??
-                      (lifecycleState === "cancelled"
-                        ? "Publication was cancelled."
-                        : "Workspace validation failed."))}
-                </Text>
               </Flex>
             ) : null}
 

@@ -221,6 +221,7 @@ describe("ApprovalCard", () => {
           state: "preparing",
           progress: {
             label: "Building and type-checking workspace projects",
+            detail: "2 finished; 4 still running in parallel.",
             completed: 2,
             total: 6,
             updatedAt: Date.now(),
@@ -233,6 +234,7 @@ describe("ApprovalCard", () => {
       /^Building and type-checking workspace projects \(2 of 6\)… \d+s elapsed$/
     );
     expect(screen.getByRole("status").previousElementSibling?.tagName).toBe("svg");
+    expect(screen.getByText("2 finished; 4 still running in parallel.")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Allow once" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Allow for now" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Trust this version" })).toBeNull();

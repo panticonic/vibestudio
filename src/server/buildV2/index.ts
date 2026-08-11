@@ -284,6 +284,11 @@ export interface PreparedBuildGc {
   }): Promise<BuildRetentionReport>;
 }
 
+export interface BuildReportProgress {
+  readonly repoPath: string;
+  readonly phase: "bundling" | "typechecking";
+}
+
 export interface BuildSystemV2 {
   /**
    * Get build result for a panel/worker/extension/library.
@@ -417,7 +422,11 @@ export interface BuildSystemV2 {
    * publication) and return its `UnitBuildReport` with structured diagnostics.
    * Does not publish content.
    */
-  getBuildReport(unitName: string, stateHash?: string): Promise<UnitBuildReport>;
+  getBuildReport(
+    unitName: string,
+    stateHash?: string,
+    onProgress?: (progress: BuildReportProgress) => void
+  ): Promise<UnitBuildReport>;
 
   /** Most recent structured build diagnostics for a unit, if any were captured. */
   getUnitDiagnostics(unitName: string): BuildDiagnostic[] | null;
@@ -1422,7 +1431,10 @@ export async function initBuildSystemV2(
     ev: string,
     graphAtView: PackageGraph,
     viewStateHash: string,
-    spec: { target: "runtime" } | { target: "library:panel" | "library:worker"; exportPath: string }
+    spec:
+      | { target: "runtime" }
+      | { target: "library:panel" | "library:worker"; exportPath: string },
+    onProgress?: (progress: BuildReportProgress) => void
   ): Promise<{ target: UnitBuildTarget; reusable: boolean }> => {
     const libraryTarget: LibraryBuildTarget | null =
       spec.target === "library:panel"
@@ -1445,6 +1457,7 @@ export async function initBuildSystemV2(
     let built: BuildResult | null = null;
     let reusable = true;
     try {
+      onProgress?.({ repoPath: node.relativePath, phase: "bundling" });
       built = await buildUnit(node, ev, graphAtView, workspaceRoot, viewStateHash, options);
     } catch (error) {
       buildError = error;
@@ -1459,6 +1472,7 @@ export async function initBuildSystemV2(
     // The same source root gives esbuild failure paths workspace coordinates
     // instead of cache/temp checkout paths.
     try {
+      onProgress?.({ repoPath: node.relativePath, phase: "typechecking" });
       const { sourceRoot } = await getBuildSourceProvider().materializeForBuild(
         internalDeps,
         viewStateHash,
@@ -1597,7 +1611,8 @@ export async function initBuildSystemV2(
   const buildUnitReport = async (
     node: GraphNode,
     view: GraphView,
-    viewStateHash: string
+    viewStateHash: string,
+    onProgress?: (progress: BuildReportProgress) => void
   ): Promise<{ report: UnitBuildReport; reusable: boolean }> => {
     const ev = view.evMap[node.name];
     const base: Omit<UnitBuildReport, "status" | "diagnostics" | "builds"> = {
@@ -1625,13 +1640,20 @@ export async function initBuildSystemV2(
       for (const target of targets) {
         for (const exportPath of exports) {
           outcomes.push(
-            await buildOneTarget(node, ev, view.graph, viewStateHash, { target, exportPath })
+            await buildOneTarget(
+              node,
+              ev,
+              view.graph,
+              viewStateHash,
+              { target, exportPath },
+              onProgress
+            )
           );
         }
       }
     } else {
       outcomes.push(
-        await buildOneTarget(node, ev, view.graph, viewStateHash, { target: "runtime" })
+        await buildOneTarget(node, ev, view.graph, viewStateHash, { target: "runtime" }, onProgress)
       );
     }
 
@@ -1652,6 +1674,10 @@ export async function initBuildSystemV2(
   const MAX_BUILD_REPORTS = 256;
   const buildReportCache = new Map<string, UnitBuildReport>();
   const buildReportFlights = new Map<string, Promise<UnitBuildReport>>();
+  const buildReportProgressListeners = new Map<
+    string,
+    Set<(progress: BuildReportProgress) => void>
+  >();
   const reportCacheKey = (viewStateHash: string, unitName: string): string =>
     `${viewStateHash}\0${unitName}`;
   const cacheBuildReport = (key: string, report: UnitBuildReport): UnitBuildReport => {
@@ -2283,7 +2309,11 @@ export async function initBuildSystemV2(
       return changes;
     },
 
-    async getBuildReport(unitName: string, stateHash?: string): Promise<UnitBuildReport> {
+    async getBuildReport(
+      unitName: string,
+      stateHash?: string,
+      onProgress?: (progress: BuildReportProgress) => void
+    ): Promise<UnitBuildReport> {
       const ref = validateBuildRef(stateHash);
       let view: GraphView;
       let viewStateHash: string;
@@ -2331,12 +2361,38 @@ export async function initBuildSystemV2(
         return cached;
       }
       const pending = buildReportFlights.get(cacheKey);
-      if (pending) return pending;
+      if (pending) {
+        if (!onProgress) return pending;
+        let listeners = buildReportProgressListeners.get(cacheKey);
+        if (!listeners) {
+          listeners = new Set();
+          buildReportProgressListeners.set(cacheKey, listeners);
+        }
+        listeners.add(onProgress);
+        return pending.finally(() => listeners?.delete(onProgress));
+      }
 
-      const flight = buildUnitReport(node, view, viewStateHash)
+      if (onProgress) {
+        buildReportProgressListeners.set(cacheKey, new Set([onProgress]));
+      }
+      const emitProgress = (progress: BuildReportProgress): void => {
+        for (const listener of buildReportProgressListeners.get(cacheKey) ?? []) {
+          try {
+            listener(progress);
+          } catch (error) {
+            console.warn(
+              `[BuildV2] Build report progress listener failed for ${node.name}:`,
+              error instanceof Error ? error.message : String(error)
+            );
+          }
+        }
+      };
+
+      const flight = buildUnitReport(node, view, viewStateHash, emitProgress)
         .then(({ report, reusable }) => (reusable ? cacheBuildReport(cacheKey, report) : report))
         .finally(() => {
           buildReportFlights.delete(cacheKey);
+          buildReportProgressListeners.delete(cacheKey);
         });
       buildReportFlights.set(cacheKey, flight);
       return flight;

@@ -1,6 +1,11 @@
 import YAML from "yaml";
 import type { UnitChangeApprovalProvider } from "@vibestudio/unit-host";
-import type { DiffReviewEntry, DiffReviewFile, ReviewedUnit } from "@vibestudio/shared/approvals";
+import type {
+  ApprovalPreparationProgress,
+  DiffReviewEntry,
+  DiffReviewFile,
+  ReviewedUnit,
+} from "@vibestudio/shared/approvals";
 import type {
   HostAuthorityEffect,
   AuthorityChallengePresentation,
@@ -131,13 +136,10 @@ export function createMainRefAdvanceGate(deps: {
     stateHash: string,
     changedPaths: readonly string[],
     signal?: AbortSignal,
-    reportProgress?: (progress: { label: string; completed?: number; total?: number }) => void
+    reportProgress?: (progress: ApprovalPreparationProgress) => void
   ): Promise<void>;
   beginCandidateReview?(candidate: MainAdvanceApprovalCandidate): void;
-  updateCandidateReview?(
-    publicationId: string,
-    progress: { label: string; completed?: number; total?: number }
-  ): void;
+  updateCandidateReview?(publicationId: string, progress: ApprovalPreparationProgress): void;
   failCandidateReview?(publicationId: string, error: unknown): void;
   discardCandidateReview?(publicationId: string): void;
   /** Host-computed dependents of a repo being DELETED (repos whose build unit
@@ -198,7 +200,7 @@ export function createMainRefAdvanceGate(deps: {
     }
     try {
       const changedRepoPaths = batch.entries.map((entry) => entry.repoPath);
-      const reportProgress = (progress: { label: string; completed?: number; total?: number }) =>
+      const reportProgress = (progress: ApprovalPreparationProgress) =>
         deps.updateCandidateReview?.(batch.publication.publicationId, progress);
       if (context.signal) {
         await deps.validateCandidateWorkspaceState?.(

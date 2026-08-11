@@ -2830,8 +2830,7 @@ async function main() {
           ...(candidate.signal ? { signal: candidate.signal } : {}),
           attention: "interrupt",
           title: "Preparing workspace update…",
-          description:
-            "Checking builds, schemas, and authority before this review can be accepted.",
+          description: "Building and type-checking the candidate workspace before it can be saved.",
           resource: {
             type: "vcs-head",
             label: "Head",
@@ -2850,7 +2849,10 @@ async function main() {
       discardCandidateReview: (publicationId) =>
         approvalQueue.discardPreparation?.(`workspace-publication:${publicationId}`),
       validateCandidateWorkspaceState: async (stateHash, changedPaths, signal, reportProgress) => {
-        reportProgress?.({ label: "Finding affected workspace projects" });
+        reportProgress?.({
+          label: "Finding affected workspace projects",
+          detail: "Tracing changed projects and the workspace code that depends on them.",
+        });
         const candidateConfig = await loadWorkspaceConfigFromState(stateHash);
         const candidateDecls = buildWorkspaceDeclarations(candidateConfig);
         const buildSystem = assertPresent(buildSystemInstance);
@@ -2884,20 +2886,56 @@ async function main() {
             }
           }
           let completedBuilds = 0;
+          const activeBuildPhases = new Map<string, "bundling" | "typechecking">();
+          let lastBuildDetail: string | undefined;
+          const reportBuildActivity = (): void => {
+            const bundling = [...activeBuildPhases.values()].filter(
+              (phase) => phase === "bundling"
+            ).length;
+            const typechecking = [...activeBuildPhases.values()].filter(
+              (phase) => phase === "typechecking"
+            ).length;
+            const waiting = Math.max(
+              0,
+              unitNames.length - completedBuilds - activeBuildPhases.size
+            );
+            const parts = [
+              bundling > 0 ? `${bundling} bundling` : undefined,
+              typechecking > 0 ? `${typechecking} type-checking` : undefined,
+              waiting > 0 ? `${waiting} waiting to start` : undefined,
+              completedBuilds > 0 ? `${completedBuilds} finished` : undefined,
+            ].filter((part): part is string => part !== undefined);
+            const detail =
+              completedBuilds === unitNames.length
+                ? "All affected project checks finished."
+                : `Projects run in parallel: ${parts.join("; ")}.`;
+            if (detail === lastBuildDetail) return;
+            lastBuildDetail = detail;
+            reportProgress?.({
+              label: "Building and type-checking workspace projects",
+              detail,
+              completed: completedBuilds,
+              total: unitNames.length,
+            });
+          };
           reportProgress?.({
             label: "Building and type-checking workspace projects",
+            detail:
+              unitNames.length === 0
+                ? "No buildable workspace projects were affected."
+                : `Verifying ${unitNames.length} affected ${unitNames.length === 1 ? "project" : "projects"} in parallel. A first cold verification can take a few minutes.`,
             completed: completedBuilds,
             total: unitNames.length,
           });
           const reports = await Promise.all(
             unitNames.map(async (unitName) => {
-              const report = await buildSystem.getBuildReport(unitName, stateHash);
-              completedBuilds += 1;
-              reportProgress?.({
-                label: "Building and type-checking workspace projects",
-                completed: completedBuilds,
-                total: unitNames.length,
+              const report = await buildSystem.getBuildReport(unitName, stateHash, ({ phase }) => {
+                activeBuildPhases.set(unitName, phase);
+                reportBuildActivity();
               });
+              activeBuildPhases.delete(unitName);
+              completedBuilds += 1;
+              reportBuildActivity();
               return report;
             })
           );
@@ -2927,7 +2965,10 @@ async function main() {
             throw new Error("Durable Object schema publication gate is not ready");
           }
           if (manager) {
-            reportProgress?.({ label: "Checking workspace data compatibility" });
+            reportProgress?.({
+              label: "Checking workspace data compatibility",
+              detail: `Verifying ${schemaReports.length} worker ${schemaReports.length === 1 ? "schema" : "schemas"} against existing workspace data.`,
+            });
             const probeResults = (
               await Promise.all(
                 schemaReports.flatMap((report) => {

@@ -260,6 +260,20 @@ describe("BuildSystemV2 — explicit build reports", () => {
     expect(typecheckCalls).toBe(1);
   });
 
+  it("reports the real build phases without changing the build result", async () => {
+    env = await loadWithMocks();
+    const phases: string[] = [];
+
+    const report = await env.buildSystem.getBuildReport(
+      "@workspace-panels/app",
+      CANDIDATE_VIEW,
+      ({ repoPath, phase }) => phases.push(`${repoPath}:${phase}`)
+    );
+
+    expect(report.status).toBe("ok");
+    expect(phases).toEqual(["panels/app:bundling", "panels/app:typechecking"]);
+  });
+
   it("does not retain reports produced by transient validation failures", async () => {
     let attempt = 0;
     typecheckDiagnostics = () => {

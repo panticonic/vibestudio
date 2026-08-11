@@ -268,12 +268,7 @@ export interface PendingApprovalBase {
   lifecycle?: {
     state: "preparing" | "ready" | "failed" | "cancelled";
     diagnostics?: readonly string[];
-    progress?: {
-      label: string;
-      completed?: number;
-      total?: number;
-      updatedAt: number;
-    };
+    progress?: ApprovalPreparationProgress & { updatedAt: number };
   };
   /** Whether shell chrome should open this request immediately or keep it in the waiting pill. */
   attention?: "interrupt" | "queue";
@@ -297,6 +292,15 @@ export interface PendingApprovalBase {
    * only — the approval card fetches the trusted blobs lazily by hash.
    */
   diffReview?: DiffReviewEntry[];
+}
+
+/** Human-readable progress for work that must finish before a decision is actionable. */
+export interface ApprovalPreparationProgress {
+  label: string;
+  /** Additional explanation or the latest completed work; never raw internal identifiers. */
+  detail?: string;
+  completed?: number;
+  total?: number;
 }
 
 export interface PendingCredentialApproval extends PendingApprovalBase {

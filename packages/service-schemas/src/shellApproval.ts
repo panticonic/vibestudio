@@ -178,6 +178,7 @@ const pendingApprovalBaseShape = {
       progress: z
         .object({
           label: z.string(),
+          detail: z.string().optional(),
           completed: z.number().int().nonnegative().optional(),
           total: z.number().int().nonnegative().optional(),
           updatedAt: z.number(),
