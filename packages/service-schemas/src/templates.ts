@@ -47,6 +47,26 @@ export const templateMigrationSchema = z
   .object({
     /** Template-owned note facets carried by this exact incoming change. */
     facets: z.array(z.string().trim().min(1)).min(1),
+    /** Current living notes from the exact incoming releases, for honest
+     * presentation. Verification still happens by reading them in-context. */
+    notes: z.array(
+      z
+        .object({
+          path: z.string().trim().min(1),
+          title: z.string().trim().min(1),
+          degradedOk: z.boolean(),
+        })
+        .strict()
+    ),
+  })
+  .strict();
+
+export const templateOperationInitiatorSchema = z.enum(["user", "host-release"]);
+
+export const templateOperationTargetSchema = z
+  .object({
+    alias: z.string().trim().min(1),
+    ref: z.string().trim().min(1).optional(),
   })
   .strict();
 
@@ -142,6 +162,8 @@ export const templateInspectionSchema = z
 export const templateOperationSchema = z
   .object({
     operationId: z.string(),
+    initiator: templateOperationInitiatorSchema,
+    target: templateOperationTargetSchema.optional(),
     state: z.enum([
       "pending",
       "applied",
@@ -474,15 +496,16 @@ export const templatesMethods = defineServiceMethods({
   },
   pull: {
     description:
-      "Resolve a tracked template's promoted release, merge its ordinary VCS deltas, and request one atomic protected-main review.",
+      "Resolve a tracked template's promoted release, merge its ordinary VCS deltas, and request one atomic protected-main review. Only the authenticated host may supply an exact shipped-release pin.",
     args: z.tuple([
       z
         .object({
           commandId,
           alias: z.string().trim().min(1),
           toRef: z.string().trim().min(1).optional(),
-          /** Host releases pass the exact base-template pin shipped with the
-           * host. Composer still verifies, stages, and gates it normally. */
+          /** The authenticated host may pass the exact base-template pin
+           * shipped with its release. Composer still verifies, stages, and
+           * gates it normally; other callers are rejected. */
           pin: WorkspaceTemplatePinSchema.optional(),
         })
         .strict(),
@@ -544,7 +567,7 @@ export const templatesMethods = defineServiceMethods({
   },
   operations: {
     description:
-      "Discover only pending or reviewing semantic template operation contexts and their exact stored review handles.",
+      "Discover retained pending, reviewing, or repairing semantic template operations with their initiator, human target, living migration-note summaries, and exact stored context handles.",
     args: z.tuple([]),
     returns: z.array(
       z
@@ -560,6 +583,8 @@ export const templatesMethods = defineServiceMethods({
             "publish-authoring",
           ]),
           contextId: z.string(),
+          initiator: templateOperationInitiatorSchema,
+          target: templateOperationTargetSchema.optional(),
           state: z.enum(["pending", "reviewing", "repairing"]),
           fingerprint: digest,
           migration: templateMigrationSchema.optional(),
@@ -592,7 +617,7 @@ export const templatesMethods = defineServiceMethods({
   },
   cancel: {
     description:
-      "Discard one in-flight semantic template operation context by operation id. A repeated cancellation is idempotent.",
+      "Discard one user-initiated semantic template operation context by operation id. Host-release operations cannot be cancelled; a repeated eligible cancellation is idempotent.",
     args: z.tuple([
       z
         .object({

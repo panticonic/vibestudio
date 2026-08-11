@@ -19,6 +19,9 @@ versioned script chain.
 - Was the exact release installed and migrated on a representative workspace
   fork with local or overlapping changes? Were the transcript and verification
   evidence reviewed before promotion?
+- Did **Continue upgrade** open the operation's retained repair context, name
+  the Templates skill, and present the target release and incoming note titles
+  without exposing internal operation or context identifiers?
 
 ## Host release
 
@@ -33,6 +36,11 @@ versioned script chain.
 - Does the base-template pin correspond to the base release that was rehearsed,
   and does the rehearsal show the host-initiated pull entering the normal
   reviewing/repairing Composer flow?
+- If startup initiation is forced to fail once, does the existing notification
+  surface explain that retry is automatic, does the bounded retry succeed, and
+  does success dismiss the failure without creating another migration queue?
+- Is the host-release operation visibly required and non-cancellable while a
+  user-initiated template operation remains safely cancellable?
 - If normal userland startup or Composer is intentionally affected, has the
   manual rescue runbook been rehearsed on a disposable fork?
 

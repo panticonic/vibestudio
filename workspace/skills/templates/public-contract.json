@@ -59,7 +59,7 @@
     },
     "pull": {
       "tier": "write; exact protected-main review",
-      "arguments": ["{ commandId, alias, toRef?, pin? (host release only) }"],
+      "arguments": ["{ commandId, alias, toRef?, pin? (authenticated host release only) }"],
       "returns": "PendingTemplateOperation"
     },
     "remove": {
@@ -88,20 +88,22 @@
       "returns": "PendingTemplateOperation"
     },
     "cancel": {
-      "tier": "approval",
-      "arguments": ["{ operationId }"],
+      "tier": "write; user-initiated operations only",
+      "arguments": [
+        "{ operationId } (host-release operations are retained and cannot be cancelled)"
+      ],
       "returns": "{ operationId, state: cancelled }"
     }
   },
   "types": {
-    "PendingTemplateOperation": "{ operationId, state: pending|applied|local-changes|waiting-for-credential|conflict|repairing|error, migration?: { facets }, review?: { operationId, contextId, approvalGranted, items: [{ repoPath, sourceDeltaId }] }, repair?: { contextId, mainEventId?, failures: [{ unit, message }] }, contribution?: { branch, url? }, publicationEventId?, contextIntegration?: { state: integrated|needs-merge|unavailable, contextId }, blocker?, affectedParts }",
+    "PendingTemplateOperation": "{ operationId, initiator: user|host-release, target?: { alias, ref? }, state: pending|applied|local-changes|waiting-for-credential|conflict|repairing|error, migration?: { facets, notes: [{ path, title, degradedOk }] }, review?: { operationId, contextId, approvalGranted, items: [{ repoPath, sourceDeltaId }] }, repair?: { contextId, mainEventId?, failures: [{ unit, message }] }, contribution?: { branch, url? }, publicationEventId?, contextIntegration?: { state: integrated|needs-merge|unavailable, contextId }, blocker?, affectedParts }",
     "TemplateStatusRow": "{ nodeId, alias, url, ref, commit, direct, state: current|update-available|local-changes|reviewing|waiting-for-credential|conflict|error, review?, suggestions: [{ section: trust|providers, value }], blocker?, contributedParts, pendingReviews, error? }",
     "TemplateAuthoringInspection": "{ request, mainEventId, selectableParts, requestedParts, includedParts, requiredParts, dependencyParts, overlapParts, manifest, manifestDigest, fingerprint }",
     "TemplatePublication": "{ operationId, destination: { provider, owner, name }, created, remoteUrl, webUrl, templateUrl, ref, commit, snapshot, parts }",
     "TemplateRegistryContribution": "{ operationId, outcome: pushed|already-at-remote|nothing-to-suggest, registryUrl, baseCommit, branch, headCommit, revision, entry }",
     "TemplateInspection": "{ pin: { url, credential?, ref, commit, snapshot }, fingerprint, roots, templates, affectedParts, excludedSuggestions: [{ alias, section, value }] }",
     "TemplateSuggestionDecision": "{ operationId, state: accepted|declined, section, publicationEventId? }",
-    "ResumableTemplateOperation": "{ operationId, kind: add|adopt|pull|remove|recompose|adopt-bootstrap|publish-authoring, contextId, state: pending|reviewing|repairing, fingerprint, migration?: { facets }, review?, repair? }",
+    "ResumableTemplateOperation": "{ operationId, kind: add|adopt|pull|remove|recompose|adopt-bootstrap|publish-authoring, contextId, initiator: user|host-release, target?: { alias, ref? }, state: pending|reviewing|repairing, fingerprint, migration?: { facets, notes: [{ path, title, degradedOk }] }, review?, repair? }",
     "TemplateCatalogSnapshot": "{ version: 1, revision, systemEpoch, entries: [{ id, name, description, tags, recommended, url, promoted: { ref, commit, snapshot } }], source: verified|cache, stale, verifiedAt, refreshError? }"
   },
   "invariants": [
@@ -114,6 +116,7 @@
     "the installed source selection is the update cursor for every already-resolved URL; catalog selections and unseen dependencies resolve from the reviewed registry revision, while direct URLs use inspect's independently discovered exact pin",
     "pending review items are opened through normal VCS compare/merge using their context and delta ids; approval record identifiers are host-internal",
     "an incoming change affecting migrations/<facet> is retained in the same repair context until an agent reads and verifies the living contract notes; no applied-note ledger exists",
+    "an exact pin on pull is accepted only from the authenticated direct host caller; its operation is marked host-release and cannot be cancelled or silently discarded",
     "protected main owns the only build, typecheck, schema, and authority gate; failures retain the staged context and structured diagnostics for agentic repair",
     "when protected main advances during review, the operation returns the new main event and retained context so an agent can merge main semantically and resume instead of discarding the plan",
     "catalog rendering is cache-only; network refresh occurs only through catalog({ refresh: true })",

@@ -312,6 +312,13 @@ describe("resolveTemplateComposition", () => {
         expect.objectContaining({ path: "repair.mjs" }),
       ])
     );
+    expect(plan.nodes[0]?.migrationNotes).toEqual([
+      {
+        path: "migrations/news/current-contract.md",
+        title: "Current contract",
+        degradedOk: true,
+      },
+    ]);
   });
 
   it("rejects malformed markdown notes before they enter a workspace", async () => {

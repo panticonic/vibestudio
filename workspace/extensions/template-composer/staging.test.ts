@@ -91,6 +91,7 @@ describe("template composer staging", () => {
       version: 1 as const,
       operationId: "repair-news",
       kind: "pull" as const,
+      initiator: "user" as const,
       fingerprint: `v1-sha256:${"a".repeat(64)}`,
       intent: { kind: "pull" },
       pins: [],
@@ -117,6 +118,7 @@ describe("template composer staging", () => {
       version: 1 as const,
       operationId: "repair-news",
       kind: "pull" as const,
+      initiator: "user" as const,
       fingerprint: `v1-sha256:${"a".repeat(64)}`,
       intent: { kind: "pull" },
       pins: [],
@@ -149,6 +151,7 @@ describe("template composer staging", () => {
       version: 1 as const,
       operationId: "repair-news",
       kind: "pull" as const,
+      initiator: "user" as const,
       fingerprint: `v1-sha256:${"a".repeat(64)}`,
       intent: { kind: "pull", alias: "news" },
       pins: [],
@@ -226,6 +229,7 @@ describe("template composer staging", () => {
       version: 1 as const,
       operationId: "add-news",
       kind: "add" as const,
+      initiator: "user" as const,
       fingerprint: `v1-sha256:${"a".repeat(64)}`,
       intent: { kind: "add" },
       pins: [],
@@ -346,6 +350,7 @@ describe("template composer staging", () => {
   it("surfaces an overlapping contribution as an ordinary VCS review delta", async () => {
     let imported = false;
     let reviewComplete = false;
+    const importedBasis = { kind: "event", eventId: "event-import-runtime" } as const;
     const call = vi.fn(async (_target: string, method: string, input: Record<string, unknown>) => {
       if (method === "vcs.status") {
         return { committed: BASE, workingHead: BASE, clean: true };
@@ -420,13 +425,14 @@ describe("template composer staging", () => {
       name: "TemplateReviewRequired",
       contextId: "operation-overlay",
       items: [{ repoPath: "packages/runtime", sourceDeltaId: "delta:overlay" }],
-      deltaBasis: BASE,
+      deltaBasis: importedBasis,
     } satisfies Partial<TemplateReviewRequired>);
     expect(call).toHaveBeenCalledWith(
       "main",
       "vcs.registerExternalDelta",
       expect.objectContaining({
         repoPath: "packages/runtime",
+        expectedWorkingHead: importedBasis,
         oldFiles: [],
         newFiles: [expect.objectContaining({ path: "index.ts" })],
       })
@@ -446,7 +452,7 @@ describe("template composer staging", () => {
         undefined,
         {
           reviews: [{ repoPath: "packages/runtime", sourceDeltaId: "delta:overlay" }],
-          deltaBasis: BASE,
+          deltaBasis: importedBasis,
         } as never
       )
     ).resolves.toEqual(["packages/runtime"]);

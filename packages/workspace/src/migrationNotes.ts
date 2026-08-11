@@ -11,6 +11,12 @@ export interface MigrationNote {
   markdown: string;
 }
 
+export interface MigrationNoteSummary {
+  path: string;
+  title: string;
+  degradedOk: boolean;
+}
+
 const NOTE_PATH = /^migrations\/([^/]+)\/(.+\.md)$/u;
 
 function noteError(path: string, message: string): Error {
@@ -69,6 +75,17 @@ export function parseMigrationNote(path: string, markdown: string): MigrationNot
     verify: fields["verify"].trim(),
     body,
     markdown,
+  };
+}
+
+/** Human presentation derived only from a validated living note. */
+export function summarizeMigrationNote(note: MigrationNote): MigrationNoteSummary {
+  const heading = /^#\s+(.+)$/mu.exec(note.body)?.[1]?.trim();
+  const fallback = note.path.split("/").at(-1)?.replace(/\.md$/u, "") ?? note.path;
+  return {
+    path: note.path,
+    title: heading || fallback,
+    degradedOk: note.degradedOk,
   };
 }
 

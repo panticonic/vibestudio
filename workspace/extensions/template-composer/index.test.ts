@@ -11,13 +11,16 @@ import { createPinnedTemplateSourcePorts } from "./source.js";
 import { affectedRepositoryPaths, type TemplateOperationRecord } from "./staging.js";
 import {
   bootstrapNeedsAdoption,
+  assertTemplateOperationCancellable,
   cancelTemplateOperation,
   loadTemplateCatalog,
   integrateTemplatePublicationIntoCallerContext,
   mergeAcceptedTemplateSuggestion,
+  migrationForTemplateOperation,
   operationReviewForTemplate,
   preparedMigrationHold,
   selectedTemplateName,
+  templatePullInitiator,
 } from "./index.js";
 import { bootstrapWorkspaceSource, projectBootstrapRuntimeToSource } from "./workspace.js";
 
@@ -52,6 +55,7 @@ function inspection(): TemplateOperationInspection {
           fragment: { systemEpoch: 57 },
           fragmentYaml: "{}\n",
           excludedSuggestions: {},
+          migrationNotes: [],
         },
       ],
       repositories: {},
@@ -68,6 +72,7 @@ function approvedRecord(): TemplateOperationRecord {
     version: 1,
     operationId: "pull-1",
     kind: "pull",
+    initiator: "user",
     fingerprint: inspection().plan.fingerprint,
     intent: { kind: "pull", target: oldPin },
     pins: [oldPin],
@@ -202,6 +207,16 @@ describe("template composer operation resumption", () => {
     expect(destroy).not.toHaveBeenCalled();
   });
 
+  it("keeps a host release migration visible instead of cancelling its exact target", () => {
+    expect(() =>
+      assertTemplateOperationCancellable({
+        ...approvedRecord(),
+        initiator: "host-release",
+      })
+    ).toThrow("cannot be cancelled");
+    expect(() => assertTemplateOperationCancellable(approvedRecord())).not.toThrow();
+  });
+
   it("does not report cancellation when publication wins the protected-main race", async () => {
     let applied = false;
     const destroy = vi.fn();
@@ -262,8 +277,8 @@ describe("template composer operation resumption", () => {
         inspection: inspection(),
         intent: { kind: "pull", target: oldPin },
         existing: approvedRecord(),
+        initiator: "user",
         affectedParts: [],
-        migrationFacets: [],
         persist,
       })
     ).resolves.toMatchObject({ resumed: true });
@@ -277,21 +292,44 @@ describe("template composer operation resumption", () => {
       inspection: inspection(),
       intent: { kind: "pull", target: oldPin },
       existing: null,
+      initiator: "host-release",
       affectedParts: ["migrations/system", "packages/runtime"],
-      migrationFacets: ["system"],
+      migration: {
+        facets: ["system"],
+        notes: [
+          {
+            path: "migrations/system/current-contract.md",
+            title: "Current contract",
+            degradedOk: false,
+          },
+        ],
+      },
       persist,
     });
 
     expect(result.record).toMatchObject({
       affectedParts: ["migrations/system", "packages/runtime"],
-      migrationFacets: ["system"],
+      initiator: "host-release",
+      migration: { facets: ["system"] },
     });
     expect(persist).toHaveBeenCalledWith(result.record);
   });
 
   it("retains a staged migration instead of allowing automatic publication", () => {
     const hold = preparedMigrationHold(
-      { ...approvedRecord(), migrationFacets: ["system"] },
+      {
+        ...approvedRecord(),
+        migration: {
+          facets: ["system"],
+          notes: [
+            {
+              path: "migrations/system/current-contract.md",
+              title: "Current contract",
+              degradedOk: false,
+            },
+          ],
+        },
+      },
       {
         contextId: "template-composer-operation-system",
         affectedRepoPaths: ["migrations/system", "packages/runtime"],
@@ -301,19 +339,104 @@ describe("template composer operation resumption", () => {
     expect(hold).toMatchObject({
       record: {
         preparedAffectedRepoPaths: ["migrations/system", "packages/runtime"],
-        migrationFacets: ["system"],
+        migration: { facets: ["system"] },
       },
       repair: {
         contextId: "template-composer-operation-system",
         failures: [{ unit: "migrations/system" }],
       },
     });
+    expect(hold?.record.reviews).toBeUndefined();
+    expect(hold?.record.deltaBasis).toBeUndefined();
     expect(
       preparedMigrationHold(approvedRecord(), {
         contextId: "template-composer-operation-ordinary",
         affectedRepoPaths: ["packages/runtime"],
       })
     ).toBeUndefined();
+  });
+
+  it("projects incoming note summaries only for affected migration facets", () => {
+    const migrationInspection: TemplateOperationInspection = {
+      ...inspection(),
+      plan: {
+        ...inspection().plan,
+        localRepoPaths: ["packages/runtime"],
+        nodes: [
+          {
+            ...inspection().plan.nodes[0]!,
+            pin: refreshedPin,
+            migrationNotes: [
+              {
+                path: "migrations/system/runtime-contract.md",
+                title: "Runtime contract",
+                degradedOk: false,
+              },
+            ],
+          },
+        ],
+        repositories: {
+          "packages/runtime": {
+            repoPath: "packages/runtime",
+            contributions: [],
+          },
+          "migrations/system": {
+            repoPath: "migrations/system",
+            contributions: [],
+          },
+        },
+      },
+    };
+    const affectedParts = ["migrations/system", "packages/runtime"];
+    const migration = migrationForTemplateOperation(migrationInspection, affectedParts);
+    expect(migration).toEqual({
+      facets: ["system"],
+      notes: [
+        {
+          path: "migrations/system/runtime-contract.md",
+          title: "Runtime contract",
+          degradedOk: false,
+        },
+      ],
+    });
+    expect(
+      migrationForTemplateOperation(
+        {
+          ...migrationInspection,
+          plan: {
+            ...migrationInspection.plan,
+            nodes: migrationInspection.plan.nodes.map((node) => ({
+              ...node,
+              migrationNotes: [],
+            })),
+          },
+        },
+        affectedParts
+      )
+    ).toBeUndefined();
+  });
+
+  it("derives exact host pulls only from the authenticated server caller", () => {
+    expect(
+      templatePullInitiator(
+        {
+          invocation: {
+            current: () => ({ caller: { callerKind: "server", callerId: "server" } }),
+          },
+        },
+        true
+      )
+    ).toBe("host-release");
+    expect(() =>
+      templatePullInitiator(
+        {
+          invocation: {
+            current: () => ({ caller: { callerKind: "do", callerId: "agent" } }),
+          },
+        },
+        true
+      )
+    ).toThrow("reserved for the host release handshake");
   });
 
   it("keeps every exact in-flight pin when the registry refreshes", async () => {

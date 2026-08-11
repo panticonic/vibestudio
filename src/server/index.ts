@@ -1574,13 +1574,15 @@ async function main() {
     if (!file || file.content.kind !== "text") return null;
     return file.content.text;
   };
+  let baseTemplateReleasePullCoordinator:
+    | import("./baseTemplateRelease.js").BaseTemplateReleasePullCoordinator
+    | null = null;
   const initiateShippedBaseTemplatePull = async (): Promise<void> => {
     const { baseTemplatePullForRelease, readBaseTemplateRelease } =
       await import("./baseTemplateRelease.js");
     const release = readBaseTemplateRelease(appRoot);
     if (!release) {
-      console.warn("[Templates] This host build has no base-template release artifact");
-      return;
+      throw new Error("This host build has no base-template release artifact");
     }
     const { stateHash } = await workspaceVcs.ensureFresh();
     const stateText = await readWorkspaceFileAtState(stateHash, "meta/templates.state.yml");
@@ -1589,16 +1591,10 @@ async function main() {
       import("yaml"),
       import("@vibestudio/workspace/templateState"),
     ]);
-    let pull: ReturnType<typeof baseTemplatePullForRelease>;
-    try {
-      pull = baseTemplatePullForRelease(
-        release,
-        parseTemplateState(YAML.parse(stateText) as unknown)
-      );
-    } catch (error) {
-      console.warn("[Templates] Ignoring malformed relationship state for base update", error);
-      return;
-    }
+    const pull: ReturnType<typeof baseTemplatePullForRelease> = baseTemplatePullForRelease(
+      release,
+      parseTemplateState(YAML.parse(stateText) as unknown)
+    );
     if (!pull) return;
     const host = container.get<import("@vibestudio/extension-host").ExtensionHost>("extensionHost");
     const result = await host.invoke(
@@ -7025,15 +7021,36 @@ async function main() {
       // publishPending starts the queue entries synchronously; its promise is the
       // later human decision/application and therefore remains detached.
       await Promise.resolve(startupExtensionStaging);
-      // The host release unit moves independently of userland. Schedule its
-      // exact base pull before startup approvals are exposed; Composer records
-      // the durable intent and owns all subsequent review/repair/publication.
-      void initiateShippedBaseTemplatePull().catch((err: unknown) =>
-        console.warn(
-          "[Templates] Failed to open the shipped base-template release operation:",
-          err instanceof Error ? err.message : String(err)
-        )
-      );
+      // The host release unit moves independently of userland. Retry only until
+      // Composer records the canonical durable operation; from there Composer
+      // owns every review, repair, and publication transition.
+      const { startBaseTemplateReleasePullCoordinator } = await import("./baseTemplateRelease.js");
+      baseTemplateReleasePullCoordinator = startBaseTemplateReleasePullCoordinator({
+        attempt: initiateShippedBaseTemplatePull,
+        reportFailure: (error, retryInMs) => {
+          const message = error instanceof Error ? error.message : String(error);
+          console.warn("[Templates] Failed to open the shipped base-template release operation", {
+            error: message,
+            retryInMs,
+          });
+          eventService.emit("notification:show", {
+            id: "host-base-template-release-initiation-failed",
+            type: "error",
+            title: "Workspace update could not start",
+            message: "Vibestudio will keep retrying the required base workspace update.",
+            ttl: 0,
+            details: [
+              { label: "Failure", value: message },
+              { label: "Retry", value: `in ${Math.ceil(retryInMs / 1_000)} seconds` },
+            ],
+          });
+        },
+        reportReady: () => {
+          eventService.emit("notification:dismiss", {
+            id: "host-base-template-release-initiation-failed",
+          });
+        },
+      });
       void unitInstallReviewCoordinator
         .publishPending("startup")
         .catch((err: unknown) => console.warn("[Units] Failed to publish startup approvals:", err));
@@ -7182,6 +7199,8 @@ async function main() {
     }, 8000);
 
     cleanupReaper.stop();
+    baseTemplateReleasePullCoordinator?.stop();
+    baseTemplateReleasePullCoordinator = null;
 
     // Stop scheduling admission before asking activations to release. A
     // scheduler-owned __alarm may be awaiting a long model/tool effect; cancel

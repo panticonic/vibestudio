@@ -12,6 +12,7 @@ import type {
 } from "@vibestudio/service-schemas/vcs";
 import type { WorkspaceTemplatePin } from "@vibestudio/workspace-contracts/types";
 import type { TemplateAuthoringInspection } from "@vibestudio/service-schemas/templates";
+import type { MigrationNoteSummary } from "@vibestudio/workspace/migrationNotes";
 import { composeWorkspaceConfig } from "@vibestudio/workspace/configComposition";
 import { normalizeTemplateGitUrl } from "@vibestudio/workspace/templateCoordinates";
 import type {
@@ -71,13 +72,14 @@ export interface TemplateOperationRecord {
   version: 1;
   operationId: string;
   kind: TemplateOperationInspection["kind"] | "publish-authoring";
+  initiator: "user" | "host-release";
   fingerprint: string;
   intent: unknown;
   pins: WorkspaceTemplatePin[];
   affectedParts: string[];
-  /** Note facets carried by the incoming delta. Presence retains this ordinary
-   * operation for contract-first agentic repair before publication. */
-  migrationFacets?: string[];
+  /** Current notes carried by the exact incoming delta. Presence retains this
+   * ordinary operation for contract-first agentic repair before publication. */
+  migration?: { facets: string[]; notes: MigrationNoteSummary[] };
   authoringInspection?: TemplateAuthoringInspection;
   authoringPublication?: import("@vibestudio/service-schemas/templates").TemplatePublication;
   reviews?: TemplateReviewItem[];
@@ -533,7 +535,6 @@ export async function mergeTemplateContributions(
   } else {
     const initial = await status(ctx, contextId);
     let stagingHead = initial.workingHead;
-    deltaBasis ??= initial.committed;
     const repositories = new Map(
       await mapConcurrent(
         repoPaths,
@@ -542,8 +543,7 @@ export async function mergeTemplateContributions(
           [repoPath, await resolveRepository(ctx, initial.workingHead, repoPath)] as const
       )
     );
-    for (const repoPath of repoPaths) {
-      let repository = repositories.get(repoPath) ?? null;
+    const staging = repoPaths.map((repoPath) => {
       const next = nextContributionSides(plan, repoPath);
       const prior = previous
         ? previousContributionSides(previous, repoPath)
@@ -559,14 +559,27 @@ export async function mergeTemplateContributions(
           oldSide.subtreeDigest === newSide.subtreeDigest
         );
       });
+      return {
+        repoPath,
+        repository: repositories.get(repoPath) ?? null,
+        next,
+        prior,
+        changedUrls,
+      };
+    });
 
-      if (!repository && next.size > 0) {
+    // Imports are context mutations, while external deltas must all be
+    // registered against one exact basis. Complete every seed import first so
+    // repository ordering can never invalidate a delta registered earlier in
+    // the same operation.
+    for (const item of staging) {
+      if (!item.repository && item.next.size > 0) {
         // An absent repository is current workspace state. Seed it only from a
         // genuinely new contribution; unchanged lineage must never resurrect an
         // upstream repository that the workspace has deleted.
-        const seed = changedUrls
-          .filter((url) => !prior.has(url))
-          .map((url) => [url, next.get(url)!] as const)
+        const seed = item.changedUrls
+          .filter((url) => !item.prior.has(url))
+          .map((url) => [url, item.next.get(url)!] as const)
           .find(([, contribution]) => contribution.files.length > 0);
         if (seed) {
           const [url, first] = seed;
@@ -574,28 +587,34 @@ export async function mergeTemplateContributions(
             "main",
             "vcs.importSnapshot",
             {
-              commandId: `${contextId}:import:${repoPath}`,
+              commandId: `${contextId}:import:${item.repoPath}`,
               contextId,
               expectedWorkingHead: stagingHead,
-              intentSummary: `Import ${repoPath} contribution from ${first.alias}`,
+              intentSummary: `Import ${item.repoPath} contribution from ${first.alias}`,
               source: gitContributionSource(first),
-              repositories: [{ repoPath, files: first.files }],
-              message: `Import ${repoPath} contribution from ${first.alias}`,
+              repositories: [{ repoPath: item.repoPath, files: first.files }],
+              message: `Import ${item.repoPath} contribution from ${first.alias}`,
             }
           );
           const repositoryId = imported.importedRepositoryIds[0];
           if (!repositoryId) {
-            throw new Error(`Template import did not return a repository identity for ${repoPath}`);
+            throw new Error(
+              `Template import did not return a repository identity for ${item.repoPath}`
+            );
           }
           stagingHead = { kind: "event", eventId: imported.eventId };
-          repository = { state: stagingHead, repositoryId, repoPath };
-          next.delete(url);
+          item.repository = { state: stagingHead, repositoryId, repoPath: item.repoPath };
+          item.next.delete(url);
           // The imported snapshot is already the complete next side for this
           // contribution. Do not subsequently apply its old→new delta to itself.
-          prior.delete(url);
-          changed.push(repoPath);
+          item.prior.delete(url);
+          changed.push(item.repoPath);
         }
       }
+    }
+
+    deltaBasis ??= stagingHead;
+    for (const { repoPath, repository, next, prior, changedUrls } of staging) {
       if (!repository) continue;
       for (const url of changedUrls) {
         const previousSide = prior.get(url);

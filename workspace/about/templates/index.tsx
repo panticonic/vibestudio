@@ -18,8 +18,14 @@ import {
 } from "@vibestudio/service-schemas/templates";
 import { vcsMethods } from "@vibestudio/service-schemas/vcs";
 import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
-import { credentials, extensions, rpc } from "@workspace/runtime";
-import { createTemplateManagementClient } from "@workspace/template-management";
+import { credentials, extensions, openPanel, rpc } from "@workspace/runtime";
+import {
+  createTemplateManagementClient,
+  templateMigrationPrompt,
+  templateOperationStage,
+  templateOperationTitle,
+  type TemplatePendingOperation,
+} from "@workspace/template-management";
 import {
   TemplateAddButton,
   useTemplateManagementController,
@@ -376,6 +382,23 @@ function TemplatesPage() {
     });
   };
 
+  const continueMigration = async (operation: TemplatePendingOperation) => {
+    if (!operation.migration) return;
+    await controller.execute({
+      key: `operation:${operation.operationId}`,
+      task: () =>
+        openPanel("panels/chat", {
+          parentId: null,
+          focus: true,
+          contextId: operation.contextId,
+          title: `Upgrade ${templateOperationTitle(operation)}`,
+          stateArgs: { initialPrompt: templateMigrationPrompt(operation) },
+        }),
+      success: () => `Opened the ${templateOperationTitle(operation)} upgrade session.`,
+      failure: () => "Couldn't open the upgrade session. Nothing was changed.",
+    });
+  };
+
   return (
     <AboutThemeRoot>
       <AboutPage
@@ -403,26 +426,41 @@ function TemplatesPage() {
                         <Box>
                           <Flex align="center" gap="2">
                             <Text as="div" weight="medium">
-                              {operation.kind} template operation
+                              {operation.migration
+                                ? templateOperationTitle(operation)
+                                : `${operation.kind} template operation`}
                             </Text>
                             {operation.migration ? (
                               <Badge color="amber" variant="soft">
-                                Upgrading workspace
+                                {templateOperationStage(operation)}
                               </Badge>
                             ) : null}
                           </Flex>
-                          <Text as="div" size="1" color="gray">
-                            {operation.operationId}
-                          </Text>
                           {operation.migration ? (
                             <Text as="div" size="1" color="orange">
-                              Continue with an agent: read and verify the incoming{" "}
-                              {operation.migration.facets.join(", ")} contract notes before
-                              resuming.
+                              {operation.migration.notes.length || "Incoming"} contract{" "}
+                              {operation.migration.notes.length === 1 ? "note needs" : "notes need"}{" "}
+                              agent repair and verification before this update can finish.
                             </Text>
                           ) : null}
+                          {operation.migration?.notes.map((note) => (
+                            <Text key={note.path} as="div" size="1" color="gray">
+                              {note.title}
+                              {!note.degradedOk ? " · workspace may be incompatible" : ""}
+                            </Text>
+                          ))}
                         </Box>
                         <Flex gap="1">
+                          {operation.migration ? (
+                            <Button
+                              size="1"
+                              variant="soft"
+                              disabled={controller.isBusy(`operation:${operation.operationId}`)}
+                              onClick={() => void continueMigration(operation)}
+                            >
+                              Continue upgrade
+                            </Button>
+                          ) : null}
                           {!operation.review && !operation.migration ? (
                             <Button
                               size="1"
@@ -433,15 +471,17 @@ function TemplatesPage() {
                               Resume
                             </Button>
                           ) : null}
-                          <Button
-                            size="1"
-                            variant="soft"
-                            color="red"
-                            disabled={controller.isBusy(`operation:${operation.operationId}`)}
-                            onClick={() => void cancel(operation.operationId)}
-                          >
-                            Cancel
-                          </Button>
+                          {operation.initiator !== "host-release" ? (
+                            <Button
+                              size="1"
+                              variant="soft"
+                              color="red"
+                              disabled={controller.isBusy(`operation:${operation.operationId}`)}
+                              onClick={() => void cancel(operation.operationId)}
+                            >
+                              Cancel
+                            </Button>
+                          ) : null}
                         </Flex>
                       </Flex>
                       {operation.review ? (

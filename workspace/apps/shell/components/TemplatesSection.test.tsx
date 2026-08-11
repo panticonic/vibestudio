@@ -18,6 +18,7 @@ const clients = vi.hoisted(() => ({
     decideSuggestion: vi.fn(),
   },
   credentials: { requestCredentialInput: vi.fn() },
+  panel: { createPanel: vi.fn() },
   vcs: { compareDelta: vi.fn(), integrateDelta: vi.fn() },
 }));
 
@@ -63,6 +64,7 @@ describe("TemplatesSection mutation refresh", () => {
       stale: false,
     });
     clients.templates.check.mockResolvedValue([]);
+    clients.panel.createPanel.mockResolvedValue({ id: "upgrade-chat" });
   });
 
   afterEach(cleanup);
@@ -97,5 +99,42 @@ describe("TemplatesSection mutation refresh", () => {
 
     expect(await view.findByText("No committed template relationships yet.")).toBeTruthy();
     expect(clients.templates.operations).toHaveBeenCalledTimes(2);
+  });
+
+  it("opens a host migration in its retained context without offering cancellation", async () => {
+    clients.templates.operations.mockResolvedValue([
+      {
+        operationId: "host-release-v2",
+        kind: "pull",
+        contextId: "template-operation-v2",
+        initiator: "host-release",
+        target: { alias: "workspace-base", ref: "refs/tags/v2" },
+        state: "repairing",
+        fingerprint: `v1-sha256:${"a".repeat(64)}`,
+        migration: {
+          facets: ["system"],
+          notes: [
+            {
+              path: "migrations/system/runtime.md",
+              title: "Runtime contract",
+              degradedOk: false,
+            },
+          ],
+        },
+        repair: { contextId: "template-operation-v2", failures: [] },
+      },
+    ]);
+    const view = draw();
+
+    fireEvent.click(await view.findByRole("button", { name: "Continue upgrade" }));
+    await waitFor(() => expect(clients.panel.createPanel).toHaveBeenCalledTimes(1));
+    expect(clients.panel.createPanel).toHaveBeenCalledWith(
+      "panels/chat",
+      expect.objectContaining({
+        contextId: "template-operation-v2",
+        stateArgs: { initialPrompt: expect.stringContaining("Use the Templates skill") },
+      })
+    );
+    expect(view.queryByRole("button", { name: "Discard" })).toBeNull();
   });
 });

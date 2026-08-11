@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { migrationFacetsForRepoPaths, parseMigrationNote } from "./migrationNotes.js";
+import {
+  migrationFacetsForRepoPaths,
+  parseMigrationNote,
+  summarizeMigrationNote,
+} from "./migrationNotes.js";
 
 const note = `---
 degraded-ok: false
@@ -14,11 +18,17 @@ Ensure the workspace uses the current service shape.
 
 describe("migration notes", () => {
   it("parses the small contract without assigning a note identity", () => {
-    expect(parseMigrationNote("migrations/system/service-shape.md", note)).toMatchObject({
+    const parsed = parseMigrationNote("migrations/system/service-shape.md", note);
+    expect(parsed).toMatchObject({
       facet: "system",
       degradedOk: false,
       verify: "pnpm type-check",
       body: expect.stringContaining("Current contract"),
+    });
+    expect(summarizeMigrationNote(parsed)).toEqual({
+      path: "migrations/system/service-shape.md",
+      title: "Current contract",
+      degradedOk: false,
     });
   });
 

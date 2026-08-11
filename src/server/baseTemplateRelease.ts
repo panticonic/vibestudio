@@ -64,3 +64,65 @@ export function baseTemplatePullForRelease(
     pin: release.baseTemplate,
   };
 }
+
+export interface BaseTemplateReleasePullCoordinator {
+  stop(): void;
+}
+
+export interface BaseTemplateReleasePullCoordinatorOptions {
+  attempt(): Promise<void>;
+  reportFailure(error: unknown, retryInMs: number): void;
+  reportReady(): void;
+  retryDelaysMs?: readonly number[];
+  schedule?(callback: () => void, delayMs: number): () => void;
+}
+
+const DEFAULT_RELEASE_PULL_RETRY_DELAYS_MS = [5_000, 15_000, 60_000] as const;
+
+/**
+ * Process-local retry only until Composer has recorded the canonical durable
+ * operation. This is lifecycle reliability, not a second migration queue.
+ */
+export function startBaseTemplateReleasePullCoordinator(
+  options: BaseTemplateReleasePullCoordinatorOptions
+): BaseTemplateReleasePullCoordinator {
+  const delays = options.retryDelaysMs?.length
+    ? [...options.retryDelaysMs]
+    : [...DEFAULT_RELEASE_PULL_RETRY_DELAYS_MS];
+  const schedule =
+    options.schedule ??
+    ((callback: () => void, delayMs: number) => {
+      const timer = setTimeout(callback, delayMs);
+      timer.unref();
+      return () => clearTimeout(timer);
+    });
+  let stopped = false;
+  let failureCount = 0;
+  let cancelScheduled: (() => void) | null = null;
+
+  const run = async (): Promise<void> => {
+    if (stopped) return;
+    cancelScheduled = null;
+    try {
+      await options.attempt();
+      if (stopped) return;
+      failureCount = 0;
+      options.reportReady();
+    } catch (error) {
+      if (stopped) return;
+      const retryInMs = delays[Math.min(failureCount, delays.length - 1)]!;
+      failureCount += 1;
+      options.reportFailure(error, retryInMs);
+      cancelScheduled = schedule(() => void run(), retryInMs);
+    }
+  };
+
+  void run();
+  return {
+    stop() {
+      stopped = true;
+      cancelScheduled?.();
+      cancelScheduled = null;
+    },
+  };
+}

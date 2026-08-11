@@ -1,9 +1,13 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WorkspaceTemplateState } from "@vibestudio/workspace-contracts/types";
-import { baseTemplatePullForRelease, readBaseTemplateRelease } from "./baseTemplateRelease.js";
+import {
+  baseTemplatePullForRelease,
+  readBaseTemplateRelease,
+  startBaseTemplateReleasePullCoordinator,
+} from "./baseTemplateRelease.js";
 
 const created: string[] = [];
 afterEach(() => {
@@ -78,5 +82,50 @@ describe("host base-template release", () => {
         state(releasePin)
       )
     ).toBeNull();
+  });
+});
+
+describe("base-template release pull coordinator", () => {
+  it("reports and retries initiation failures until the durable operation opens", async () => {
+    const callbacks: Array<() => void> = [];
+    const attempt = vi
+      .fn<() => Promise<void>>()
+      .mockRejectedValueOnce(new Error("Composer is starting"))
+      .mockResolvedValueOnce(undefined);
+    const reportFailure = vi.fn();
+    const reportReady = vi.fn();
+    const coordinator = startBaseTemplateReleasePullCoordinator({
+      attempt,
+      reportFailure,
+      reportReady,
+      retryDelaysMs: [10],
+      schedule: (callback) => {
+        callbacks.push(callback);
+        return () => undefined;
+      },
+    });
+
+    await vi.waitFor(() => expect(reportFailure).toHaveBeenCalledWith(expect.any(Error), 10));
+    callbacks.shift()?.();
+    await vi.waitFor(() => expect(reportReady).toHaveBeenCalledTimes(1));
+    expect(attempt).toHaveBeenCalledTimes(2);
+    coordinator.stop();
+  });
+
+  it("cancels a scheduled retry during shutdown", async () => {
+    const cancel = vi.fn();
+    const reportFailure = vi.fn();
+    const coordinator = startBaseTemplateReleasePullCoordinator({
+      attempt: async () => {
+        throw new Error("offline");
+      },
+      reportFailure,
+      reportReady: vi.fn(),
+      retryDelaysMs: [10],
+      schedule: () => cancel,
+    });
+    await vi.waitFor(() => expect(reportFailure).toHaveBeenCalledTimes(1));
+    coordinator.stop();
+    expect(cancel).toHaveBeenCalledTimes(1);
   });
 });
