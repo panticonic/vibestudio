@@ -1617,6 +1617,7 @@ test.describe("Desktop Startup Approvals", () => {
       launchTimeout: 240_000,
     });
     await reachHostedShellAndDrainStartupApprovals(testApp);
+    await approveInitialChatServiceApprovals(testApp);
 
     let networkApproval: PendingApproval | undefined;
     try {
