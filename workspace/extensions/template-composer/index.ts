@@ -16,7 +16,6 @@ import type {
   VcsMergeResult,
   VcsStatusResult,
 } from "@vibestudio/service-schemas/vcs";
-import { templateLocatorSchema } from "@vibestudio/service-schemas/templates";
 import {
   WorkspaceConfigTopLayerSchema,
   WorkspaceTemplatePinSchema,

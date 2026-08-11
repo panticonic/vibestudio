@@ -126,14 +126,12 @@ type MissionRunRecord = {
 let missionsTargetPromise: Promise<string> | null = null;
 
 function callMissions<T>(method: string, args: unknown[]): Promise<T> {
-  missionsTargetPromise ??= workers
-    .resolveService("vibestudio.missions.v1")
-    .then((service) => {
-      if (service.kind !== "durable-object") {
-        throw new Error("The missions service must be a durable object");
-      }
-      return service.targetId;
-    });
+  missionsTargetPromise ??= workers.resolveService("vibestudio.missions.v1").then((service) => {
+    if (service.kind !== "durable-object") {
+      throw new Error("The missions service must be a durable object");
+    }
+    return service.targetId;
+  });
   return missionsTargetPromise.then((targetId) => rpc.call<T>(targetId, method, args));
 }
 type BuildUnitCatalogEntry = {
@@ -819,9 +817,9 @@ function PermissionsPage() {
   const [units, setUnits] = useState<BuildUnitCatalogEntry[]>([]);
   const [decisions, setDecisions] = useState<GovernanceDecision[]>([]);
   const [missionRuns, setMissionRuns] = useState<Record<string, MissionRunRecord[]>>({});
-  const [view, setView] = useState<"catalog" | "agents" | "domains" | "missions" | "recent">(
-    "catalog"
-  );
+  const [view, setView] = useState<
+    "catalog" | "saved" | "agents" | "domains" | "missions" | "recent"
+  >("catalog");
   const [domain, setDomain] = useState<DomainId>("sharing");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -1027,10 +1025,11 @@ function PermissionsPage() {
               aria-label="Permission view"
               value={view}
               onValueChange={(value) =>
-                setView(value as "catalog" | "agents" | "domains" | "missions" | "recent")
+                setView(value as "catalog" | "saved" | "agents" | "domains" | "missions" | "recent")
               }
             >
               <SegmentedControl.Item value="catalog">Catalog</SegmentedControl.Item>
+              <SegmentedControl.Item value="saved">Saved</SegmentedControl.Item>
               <SegmentedControl.Item value="agents">Agents</SegmentedControl.Item>
               <SegmentedControl.Item value="domains">By area</SegmentedControl.Item>
               <SegmentedControl.Item value="missions">Missions</SegmentedControl.Item>
@@ -1152,6 +1151,23 @@ function PermissionsPage() {
               </Flex>
             ) : null}
           </>
+        ) : view === "saved" ? (
+          grants.length > 0 ? (
+            grants.map((grant) => (
+              <GrantCard
+                key={grant.id}
+                grant={grant}
+                revoking={revokingId === grant.id}
+                onRevoke={() => void revoke(grant)}
+              />
+            ))
+          ) : (
+            <Card size="2">
+              <Text size="2" color="gray">
+                No lasting permissions have been saved.
+              </Text>
+            </Card>
+          )
         ) : view === "agents" ? (
           profiles.map((profile) => (
             <ProfileCard

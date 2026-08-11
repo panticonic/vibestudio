@@ -10,7 +10,6 @@ import {
   RemoteBrowserImportProvider,
   type BrowserCookieInput,
   type BrowserEnvironmentIdentity,
-  type BrowserImportDataType,
   type BrowserImportSelection,
   type BrowserImportStore,
   type ImportBatch,

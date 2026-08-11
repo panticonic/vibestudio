@@ -11,7 +11,6 @@ declare module "@vibestudio/extension" {
 }
 
 const defaultPackage = "app.vibestudio.mobile.internal";
-const defaultActivity = "app.vibestudio.mobile.MainActivity";
 
 class MobileDebugError extends Error {
   constructor(
@@ -352,25 +351,6 @@ async function listAdbDevices(): Promise<
       const state = stateRaw === "device" || stateRaw === "unauthorized" ? stateRaw : "offline";
       return { serial: serial!, state, ...(model ? { model } : {}) };
     });
-}
-
-function isDesktopLocalHost(host: string): boolean {
-  const lower = host.toLowerCase();
-  return (
-    lower === "localhost" ||
-    lower === "0.0.0.0" ||
-    /^127\./.test(lower) ||
-    lower === "::1" ||
-    lower === "[::1]"
-  );
-}
-
-// Loopback only — private-LAN / Tailscale / .local cleartext trust is
-// decommissioned (the data plane is WebRTC; local is loopback). 10.0.2.2 is the
-// Android emulator's host loopback alias.
-function isLoopbackOrEmulatorHost(host: string): boolean {
-  const lower = host.toLowerCase();
-  return isDesktopLocalHost(lower) || lower === "10.0.2.2";
 }
 
 function pickDevice(devices: Array<{ serial: string; state: string }>, requested?: string) {

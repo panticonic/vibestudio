@@ -181,7 +181,6 @@ export async function observeWorkspace(
   const mainState = { kind: "event" as const, eventId: status.mainEventId };
   const info = await ctx.workspace.getInfo();
   if (!info.config) throw new Error("Workspace info did not expose its resolved configuration");
-  const config = info.config as WorkspaceConfig;
   const metaRepository = await ctx.rpc.call<VcsResolveRepositoryResult>(
     "main",
     "vcs.resolveRepository",

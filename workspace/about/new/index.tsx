@@ -1,6 +1,6 @@
 /** One keyboard-first launcher for panels, browser destinations, and Agentic Chat. */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { CSSProperties, ReactNode } from "react";
+import type { ReactNode } from "react";
 import { Box, Button, Callout, Flex, Spinner, Text } from "@radix-ui/themes";
 import {
   ClockIcon,
