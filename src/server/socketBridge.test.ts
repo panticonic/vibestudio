@@ -1,9 +1,22 @@
 import { PassThrough } from "node:stream";
 import { describe, expect, it } from "vitest";
 
-import { bridgeDuplexSockets } from "./socketBridge.js";
+import { bridgeDuplexSockets, consumeSocketErrorsUntilClose } from "./socketBridge.js";
 
 describe("bridgeDuplexSockets", () => {
+  it("owns late raw-socket errors until the socket closes", async () => {
+    const socket = new PassThrough();
+    const release = consumeSocketErrorsUntilClose(socket);
+
+    expect(() => socket.emit("error", Object.assign(new Error("read ECONNRESET")))).not.toThrow();
+    expect(socket.listenerCount("error")).toBe(1);
+
+    socket.destroy();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(socket.listenerCount("error")).toBe(0);
+    release();
+  });
+
   it("consumes post-bridge upstream socket errors and tears down the client", () => {
     const clientSocket = new PassThrough();
     const upstreamSocket = new PassThrough();

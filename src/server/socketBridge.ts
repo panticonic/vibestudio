@@ -13,6 +13,26 @@ export interface SocketBridgeOptions {
 }
 
 /**
+ * Own the EventEmitter error channel for the full lifetime of a raw socket.
+ * Protocol-specific listeners may come and go while an upgraded connection is
+ * negotiated or bridged; this guard prevents a reset in those handoff windows
+ * from becoming an uncaught process-level error.
+ */
+export function consumeSocketErrorsUntilClose(socket: Duplex): () => void {
+  const consumeError = () => undefined;
+  let released = false;
+  const release = () => {
+    if (released) return;
+    released = true;
+    socket.off("error", consumeError);
+    socket.off("close", release);
+  };
+  socket.on("error", consumeError);
+  socket.once("close", release);
+  return release;
+}
+
+/**
  * Bidirectionally pipe two already-negotiated sockets and consume all socket
  * errors so a late TLS/TCP failure tears down only this bridge, not the process.
  */

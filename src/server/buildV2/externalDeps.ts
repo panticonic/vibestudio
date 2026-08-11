@@ -5,7 +5,7 @@
  * dependencies from the unit itself and every internal package it transitively
  * depends on. The union is hashed and installed into a shared cache.
  *
- * {userData}/external-deps/{hash}/
+ * {sharedDerivedData}/external-deps/{hash}/
  *   ├── node_modules/
  *   └── .ready   ← sentinel marking completed installation
  */
@@ -13,7 +13,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import * as crypto from "crypto";
-import { getCentralDataPath } from "@vibestudio/env-paths";
+import { getSharedDerivedDataPath } from "@vibestudio/env-paths";
 import { NpmResolutionError, runNpmInstall } from "@vibestudio/shared/npmInstaller";
 import type { PackageGraph, GraphNode } from "./packageGraph.js";
 import { assertPresent } from "../../lintHelpers";
@@ -316,11 +316,11 @@ function readWorkspacePatchedDependencyNames(root = process.cwd()): string[] {
 }
 
 function getExternalDepsBaseDir(): string {
-  return path.join(getCentralDataPath(), "external-deps");
+  return path.join(getSharedDerivedDataPath(), "external-deps");
 }
 
 function getExtensionRuntimeDepsBaseDir(): string {
-  return path.join(getCentralDataPath(), "extension-runtime-deps");
+  return path.join(getSharedDerivedDataPath(), "extension-runtime-deps");
 }
 
 function isFileSystemErrorCode(error: unknown, codes: readonly string[]): boolean {

@@ -54,7 +54,7 @@ import { connect as netConnect, isIP } from "node:net";
 import type { ResolvedCodeIdentity } from "./principalIdentity.js";
 import { testPolicyAllowsGatedInvocation } from "./authorityRuntime.js";
 import { resolveCredentialByLabel } from "./credentialSelection.js";
-import { bridgeDuplexSockets } from "../socketBridge.js";
+import { bridgeDuplexSockets, consumeSocketErrorsUntilClose } from "../socketBridge.js";
 import { CDP_INTERNAL_GRANT_HEADER } from "@vibestudio/shared/cdpGrants";
 
 const HOP_BY_HOP_REQUEST_HEADERS = new Set([
@@ -2071,6 +2071,15 @@ export class EgressProxy {
     head: Buffer,
     caller: VerifiedCaller | null
   ): Promise<void> {
+    // An HTTP upgrade hands ownership of the raw downstream socket to this
+    // proxy. Request/bridge listeners are intentionally short-lived, but the
+    // socket can still report a late reset after a non-101 response has been
+    // pipelined or after the bridge has observed both closes. Keep one
+    // lifetime error sink until close so such a transport event tears down
+    // only this connection instead of becoming an unhandled EventEmitter
+    // error that terminates the workspace server.
+    consumeSocketErrorsUntilClose(socket);
+
     const resolvedTargetUrl = this.resolveTargetUrl(req);
     let metadata: { targetUrl: URL; headerPairs: Array<[string, string]> } | null = null;
     try {

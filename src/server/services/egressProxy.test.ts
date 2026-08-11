@@ -11,6 +11,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { WebSocketServer } from "ws";
+import type { Dispatcher } from "undici";
 
 import type {
   AuditEntry,
@@ -2158,7 +2159,12 @@ describe("EgressProxy", () => {
   });
 
   it("owns the dispatcher used by long-running Git HTTP requests", async () => {
-    const fetchMock = vi.fn(async () => new Response(new Uint8Array(), { status: 200 }));
+    const fetchMock = vi.fn<
+      (
+        input: RequestInfo | URL,
+        init?: RequestInit & { dispatcher?: Dispatcher }
+      ) => Promise<Response>
+    >(async () => new Response(new Uint8Array(), { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
     const proxy = createProxy(undefined, new MemoryAuditLog(), {
       authorizeInternalRequest: vi.fn(async () => ({})),

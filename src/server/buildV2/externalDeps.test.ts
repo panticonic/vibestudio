@@ -12,7 +12,8 @@ const { testExtDepsRoot } = vi.hoisted(() => ({
 
 vi.mock("@vibestudio/env-paths", () => ({
   getUserDataPath: vi.fn().mockReturnValue("/tmp/test-extdeps"),
-  getCentralDataPath: vi.fn().mockReturnValue(testExtDepsRoot),
+  getCentralDataPath: vi.fn().mockReturnValue("/tmp/test-extdeps-instance"),
+  getSharedDerivedDataPath: vi.fn().mockReturnValue(testExtDepsRoot),
 }));
 
 vi.mock("@vibestudio/shared/npmInstaller", async (importOriginal) => ({
@@ -335,6 +336,15 @@ describe("collectTransitiveExternalDeps", () => {
 });
 
 describe("ensureExternalDeps", () => {
+  it("stores validated dependency artifacts in the shared derived cache", async () => {
+    fs.rmSync(testExtDepsRoot, { recursive: true, force: true });
+
+    const nodeModulesDir = await ensureExternalDeps({ leftpad: "1.0.0" });
+
+    expect(nodeModulesDir.startsWith(path.join(testExtDepsRoot, "external-deps"))).toBe(true);
+    expect(nodeModulesDir.startsWith("/tmp/test-extdeps-instance")).toBe(false);
+  });
+
   it("exposes npm registry misses as caller-correctable package resolution errors", async () => {
     vi.mocked(runNpmInstall).mockRejectedValueOnce(
       new NpmResolutionError("package-not-found", new Error("npm E404"))
