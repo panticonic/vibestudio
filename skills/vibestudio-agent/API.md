@@ -600,7 +600,7 @@ Authority principals: `code`, `host`, `user`
 | `workspace.setConfigField` | Write an arbitrary field into the workspace config (meta/vibestudio.yml); approval-gated for userland. |
 | `workspace.applyPreparedConfig` | Atomically apply a complete validated workspace configuration only when its base digest, result digest, and changed-path scope match. |
 | `workspace.getAgentsMd` | Read the workspace-level meta/AGENTS.md, returning an empty string if it is absent. |
-| `workspace.listSkills` | List repo-embedded workspace skills with name, description, repo path, and SKILL.md path parsed from each repo's top-level SKILL.md frontmatter. Context-bound runtimes use their verified ambient context; contextless host clients must provide an explicit contextId. |
+| `workspace.listSkills` | List repo-embedded workspace skills with identity, paths, and optional onboarding declarations parsed from each repo's top-level SKILL.md frontmatter. Context-bound runtimes use their verified ambient context; contextless host clients must provide an explicit contextId. |
 | `workspace.readSkill` | Return raw SKILL.md contents for a canonical workspace repo path (`skills/code-review`, `packages/foo`, `workers/bar`, or `meta`). Path traversal is rejected. Context-bound runtimes use their verified ambient context; contextless host clients must provide an explicit contextId. |
 | `workspace.sourceTree` | Return the workspace source tree, annotating units, launchables, and skills. |
 | `workspace.ensureContextFolder` | Materialize a context's working folder on the server host (idempotent) and return its absolute path. Used by launch orchestrators (e.g. the shell extension) to place context-scoped terminal sessions inside a real VCS-branched working tree. |
@@ -639,6 +639,7 @@ Authority principals: `code`, `host`, `user`
 | `workspace-state.slot.closeCleanupPage` | Read one bounded page of durable post-close runtime cleanup work. |
 | `workspace-state.slot.closeCleanupAck` | Acknowledge successfully completed post-close cleanup items. |
 | `workspace-state.panel.search` | FTS5 search over panel entities. |
+| `workspace-state.panel.sourceUsage` | Durable source-level panel launch frequency for launcher ranking. |
 | `workspace-state.panel.index` | Upsert a panel's search-metadata row. |
 | `workspace-state.panel.updateTitle` | Update the searchable title for a panel entity. |
 | `workspace-state.panel.incrementAccess` | Bump the access counter for a panel entity. |
