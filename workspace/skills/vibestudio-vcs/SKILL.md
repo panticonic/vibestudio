@@ -5,7 +5,7 @@ description: Operate Vibestudio's semantic workspace VCS for managed authoring, 
 
 # Vibestudio semantic VCS
 
-Managed workspace state is semantic history, not a Git worktree. Use the agent-facing `edit`, `write`, `move_file`, and `copy_file` tools for ordinary authoring. Use the compact `vcs` tool for status, provenance, compare, merge, revert, commit, discard, blame, and push.
+Managed workspace state is semantic history, not a Git worktree. Use the agent-facing `apply_patch` tool for atomic multi-file text/binary writes, exact replacements, deletes, and mode changes; use `edit` or `write` for a single simple text change and `move_file`/`copy_file` for identity-preserving transfers. Use the compact `vcs` tool for status, provenance, compare, merge, revert, commit, discard, blame, and push.
 
 ## Non-negotiable rules
 
@@ -21,7 +21,7 @@ Managed workspace state is semantic history, not a Git worktree. Use the agent-f
 
 1. Run `vcs({ operation: "status" })` when you need to orient to the current chain. Agent-facing mutations derive and bind the exact live `workingHead`; a separate status preflight is not required for every call.
 2. Inspect or read the smallest relevant surface. Managed reads may include a bounded memory attachment with intent and causality.
-3. Author with `edit`, `write`, `move_file`, or `copy_file`. Give `intent` only when it adds purpose beyond the request.
+3. Author coherent multi-file changes with `apply_patch`; use `edit` or `write` for one simple text file and `move_file`/`copy_file` for transfers. Give `intent` only when it adds purpose beyond the request.
 4. To inspect everything currently changed in this context, including uncommitted applications, use the local comparison directly. It resolves the complete working head as source and protected main as target; no status or history preflight is needed:
 
    ```js

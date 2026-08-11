@@ -1,5 +1,6 @@
 /**
- * Workerd-clean port of pi-coding-agent's six file tools.
+ * Workerd-clean agent tools for semantic authoring, discovery, verification,
+ * runtime operations, and capability lookup.
  *
  * Each tool is exposed as a `createXxxTool(cwd, fs[, deps])` factory that
  * returns an `AgentTool` ready to be added to an `AgentSession`'s tool list.
@@ -82,6 +83,9 @@ export type {
   WorkspaceServiceToolDetails,
   WorkspaceServiceToolDeps,
 } from "./workspace-service.js";
+
+export { createVerifyTool, verifySchema } from "./verify.js";
+export type { VerifyToolInput, VerifyToolDetails } from "./verify.js";
 
 // Pure helpers
 export { resolveToCwd, expandPath } from "./path-utils.js";

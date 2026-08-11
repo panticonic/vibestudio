@@ -277,6 +277,7 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
       createDocsSearchTool,
       createDocsOpenTool,
       createWorkspaceServiceTool,
+      createVerifyTool,
       createWebTools,
       createToolVcs,
     } = await import("@workspace/harness/standard-tools");
@@ -349,6 +350,11 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
         validateConfig: (content) =>
           toolRpc.call("main", "workspace.validateConfig", [content]).then(() => undefined),
       }),
+      createVerifyTool(
+        <T>(method: string, methodArgs: unknown[], signal?: AbortSignal) =>
+          toolRpc.call<T>("main", method, methodArgs, { signal }),
+        contextId
+      ),
       createSuspendTurnTool({
         guard: async ({ reason }) => {
           if (reason !== "waiting_for_background") return { suspend: true };

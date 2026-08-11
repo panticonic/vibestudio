@@ -19,8 +19,9 @@ Every `vcs` method accepts its documented request object directly. Do not wrap
 that object in an argument array or use `rpc.call("main", "vcs.*", ...)` when
 the runtime client is available; that lower-level transport adds no capability
 and makes argument mistakes harder to diagnose. In an ordinary chat turn,
-prefer the compact `vcs` tool (including its commit operation) plus the focused
-`write`, `edit`, `move_file`, and `copy_file` tools described by the parent skill.
+prefer the compact `vcs` tool (including its commit operation) plus `apply_patch`
+for coherent multi-file changes and the focused `write`, `edit`, `move_file`,
+and `copy_file` tools described by the parent skill.
 
 ## Discover identities before changing them
 
@@ -69,9 +70,11 @@ historical reads at an explicitly selected state still use `vcs.readFile`.
 
 ## Author one coherent local step
 
-Use focused `write` and `edit` tools for ordinary text work. They compile to
-the same semantic edit operation. Use `vcs.edit` when batching exact text,
-binary, repository creation, file creation, delete, or mode changes matters.
+Use `apply_patch` when batching exact text replacements, whole text/binary
+writes, deletes, or mode changes into one atomic work unit. Use focused `write`
+and `edit` tools for a single ordinary text file. They compile to the same
+semantic edit operation. Use direct `vcs.edit` when repository creation or a
+lower-level stable-identity batch is required.
 The focused `edit` tool treats unchanged oldText/newText surroundings as match
 anchors: only actual differing UTF-16 ranges become authored edits, so a
 neighboring unchanged line retains its existing provenance.

@@ -2,16 +2,36 @@ import { Validator, type Schema } from "@cfworker/json-schema";
 import { Kind } from "@sinclair/typebox";
 import { Value } from "@sinclair/typebox/value";
 import type { AgentTool } from "@workspace/pi-core";
+import { draft7MetaSchema } from "@workspace/pubsub";
 
 const validators = new WeakMap<object, Validator>();
+const validSchemas = new WeakSet<object>();
+const schemaValidator = new Validator(draft7MetaSchema, "7", false);
+
+/** Fail before provider dispatch when a local tool advertises malformed JSON
+ * Schema. Execution-time argument validation is too late: strict providers
+ * reject the entire tool roster before the model can produce a call. */
+export function assertAgentToolParametersSchema(toolName: string, parameters: unknown): void {
+  if (!isRecord(parameters)) {
+    throw new Error(`Tool ${toolName} parameters must be a JSON Schema object`);
+  }
+  if (validSchemas.has(parameters)) return;
+  const validation = schemaValidator.validate(parameters);
+  if (!validation.valid) {
+    const detail = validation.errors
+      .slice(0, 3)
+      .map((error) => `${error.instanceLocation || "schema"}: ${error.error}`)
+      .join("; ");
+    throw new Error(`Tool ${toolName} advertises invalid JSON Schema: ${detail}`);
+  }
+  validSchemas.add(parameters);
+}
 
 /** Enforce the tool's advertised schema at the durable execution boundary.
  * Model providers may emit malformed tool calls; no local tool may rely on
  * provider-side validation for safety. */
 export function prepareAgentToolArguments(tool: AgentTool, raw: unknown): unknown {
-  if (!isRecord(tool.parameters)) {
-    throw invalidToolArguments(tool.name, "the tool has no valid JSON Schema object");
-  }
+  assertAgentToolParametersSchema(tool.name, tool.parameters);
   const mismatch = findDiscriminatorMismatch(tool.parameters, raw);
   if (mismatch) {
     throw invalidToolArguments(

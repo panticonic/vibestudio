@@ -126,7 +126,10 @@ import {
   installUrlBoundModelFetchProxy,
 } from "./model-fetch-proxy.js";
 import { modelTransportRuntimeEvidence } from "./effect-executors/index.js";
-import { prepareAgentToolArguments } from "./tool-arguments.js";
+import {
+  assertAgentToolParametersSchema,
+  prepareAgentToolArguments,
+} from "./tool-arguments.js";
 
 export interface AgentToolExecutionContext {
   readonly invocationId: string;
@@ -1763,8 +1766,8 @@ export abstract class AgentVesselBase extends DurableObjectBase {
             });
             return {
               result: { protocolContent: result.content, details: result.details },
-              isError: false,
-              ...(result.terminate === true ? { terminate: true } : {}),
+              isError: result.isError === true,
+              ...(result.isError !== true && result.terminate === true ? { terminate: true } : {}),
             };
           } catch (err) {
             if (executionAdmitted && resolvedTool?.cancellationMode === "settle") {
@@ -2266,11 +2269,14 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     );
     const schemas: Array<{ name: string; description?: string; parameters?: unknown }> = [
       ...registry.values(),
-    ].map((tool) => ({
-      name: tool.name,
-      description: tool.description,
-      parameters: tool.parameters,
-    }));
+    ].map((tool) => {
+      assertAgentToolParametersSchema(tool.name, tool.parameters);
+      return {
+        name: tool.name,
+        description: tool.description,
+        parameters: tool.parameters,
+      };
+    });
     const executionModes = Object.fromEntries(
       [...registry.values()].map((tool) => [
         tool.name,
@@ -2305,16 +2311,18 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       for (const method of participant.methods) {
         if (seenTools.has(method.name)) continue;
         seenTools.add(method.name);
+        const parameters = method.parameters ?? {
+          type: "object",
+          properties: {},
+          additionalProperties: true,
+        };
+        assertAgentToolParametersSchema(method.name, parameters);
         schemas.push({
           name: method.name,
           description:
             method.description ??
             `Channel method on @${participant.handle ?? participant.participantId}`,
-          parameters: method.parameters ?? {
-            type: "object",
-            properties: {},
-            additionalProperties: true,
-          },
+          parameters,
         });
       }
     }

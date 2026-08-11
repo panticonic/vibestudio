@@ -22,6 +22,7 @@ export {
   createDocsSearchTool,
   createDocsOpenTool,
   createWorkspaceServiceTool,
+  createVerifyTool,
   createToolVcs,
 } from "./tools/index.js";
 export { createWebTools } from "./web/index.js";

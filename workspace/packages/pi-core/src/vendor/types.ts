@@ -358,6 +358,8 @@ export interface AgentToolResult<T> {
 	content: (TextContent | ImageContent)[];
 	/** Arbitrary structured details for logs or UI rendering. */
 	details: T;
+	/** True when execution completed authoritatively but its domain result is a failure. */
+	isError?: boolean;
 	/** Usage from the final tool execution itself, if available. Not used for main LLM context accounting. */
 	usage?: Usage;
 	/** Names of tools introduced by this result and available from this transcript point onward. */
@@ -381,7 +383,8 @@ export type AgentToolUpdateCallback<T = any> = (partialResult: AgentToolResult<T
 export interface AgentTool<TParameters extends TSchema = TSchema, TDetails = any> extends Tool<TParameters> {
 	/** Human-readable label for UI display. */
 	label: string;
-	/** Execute the tool call. Throw on failure instead of encoding errors in `content`. */
+	/** Execute the tool call. Return `isError` for an authoritative structured domain failure;
+	 * throw when execution itself cannot produce an authoritative result. */
 	execute: (
 		toolCallId: string,
 		params: Static<TParameters>,

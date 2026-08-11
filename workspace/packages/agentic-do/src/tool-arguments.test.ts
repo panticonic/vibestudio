@@ -1,7 +1,7 @@
 import { Type } from "@sinclair/typebox";
 import { describe, expect, it, vi } from "vitest";
 import type { AgentTool } from "@workspace/pi-core";
-import { prepareAgentToolArguments } from "./tool-arguments.js";
+import { assertAgentToolParametersSchema, prepareAgentToolArguments } from "./tool-arguments.js";
 
 function tool(): AgentTool {
   return {
@@ -13,6 +13,15 @@ function tool(): AgentTool {
 }
 
 describe("prepareAgentToolArguments", () => {
+  it("rejects malformed schemas before they reach a model provider", () => {
+    expect(() => assertAgentToolParametersSchema("broken", { type: "wat" })).toThrow(
+      /invalid JSON Schema/u
+    );
+    expect(() => assertAgentToolParametersSchema("missing", undefined)).toThrow(
+      /JSON Schema object/u
+    );
+  });
+
   it("returns arguments that satisfy the advertised schema", () => {
     const input = { operation: "status" };
     expect(prepareAgentToolArguments(tool(), input)).toBe(input);
