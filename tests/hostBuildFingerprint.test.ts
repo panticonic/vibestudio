@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -16,6 +17,9 @@ function fixture(): string {
   fs.mkdirSync(path.join(cwd, "src"), { recursive: true });
   fs.writeFileSync(path.join(cwd, "src", "entry.ts"), "export const value = 1;\n");
   fs.mkdirSync(path.join(cwd, "dist"), { recursive: true });
+  fs.writeFileSync(path.join(cwd, ".gitignore"), "dist/\n.wrangler/\n*.tsbuildinfo\n");
+  execFileSync("git", ["init", "--quiet"], { cwd });
+  execFileSync("git", ["add", ".gitignore", "src/entry.ts"], { cwd });
   return cwd;
 }
 

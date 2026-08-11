@@ -1,18 +1,14 @@
 import { createHash } from "node:crypto";
+import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
 export const HOST_BUILD_FINGERPRINT_PATH = "dist/host-build-fingerprint.json";
 
-const INPUT_ROOTS = [
-  "apps",
-  "build-resources",
-  "packages",
-  "skills/vibestudio-agent",
-  "src",
-];
+const INPUT_ROOTS = ["apps", "build-resources", "packages", "skills/vibestudio-agent", "src"];
 
 const INPUT_FILES = [
+  ".gitignore",
   "build.mjs",
   "electron-builder.yml",
   "package.json",
@@ -30,37 +26,27 @@ const INPUT_FILES = [
   "tsconfig.workers.json",
 ];
 
-const IGNORED_DIRECTORIES = new Set([
-  ".git",
-  ".turbo",
-  ".wrangler",
-  "coverage",
-  "dist",
-  "node_modules",
-  "test-results",
-]);
-
-function collectFiles(rootPath, files) {
-  if (!fs.existsSync(rootPath)) {
-    return;
-  }
-  const stat = fs.lstatSync(rootPath);
-  if (stat.isSymbolicLink() || stat.isFile()) {
-    // TypeScript's incremental state is a derived build cache. Package builds
-    // may update it even when source is byte-for-byte unchanged, so including
-    // it would make a successful host build invalidate its own fingerprint.
-    if (rootPath.endsWith(".tsbuildinfo")) return;
-    files.push(rootPath);
-    return;
-  }
-  if (!stat.isDirectory()) {
-    return;
-  }
-  for (const entry of fs.readdirSync(rootPath, { withFileTypes: true })) {
-    if (entry.isDirectory() && IGNORED_DIRECTORIES.has(entry.name)) {
-      continue;
-    }
-    collectFiles(path.join(rootPath, entry.name), files);
+function collectFiles(cwd) {
+  try {
+    return execFileSync(
+      "git",
+      [
+        "ls-files",
+        "--cached",
+        "--others",
+        "--exclude-standard",
+        "-z",
+        "--",
+        ...INPUT_ROOTS,
+        ...INPUT_FILES,
+      ],
+      { cwd, encoding: "utf8" }
+    )
+      .split("\0")
+      .filter((filePath) => filePath && !filePath.endsWith(".tsbuildinfo"))
+      .sort((left, right) => left.localeCompare(right));
+  } catch (error) {
+    throw new Error(`Host builds require a Git source checkout at ${cwd}`, { cause: error });
   }
 }
 
@@ -68,23 +54,27 @@ export function computeHostBuildFingerprint({
   cwd = process.cwd(),
   mode = process.env.NODE_ENV === "development" ? "development" : "production",
 } = {}) {
-  const files = [];
-  for (const input of [...INPUT_ROOTS, ...INPUT_FILES]) {
-    collectFiles(path.resolve(cwd, input), files);
-  }
-  files.sort((left, right) => left.localeCompare(right));
+  const files = collectFiles(cwd);
 
   const hash = createHash("sha256");
   hash.update(`mode\0${mode}\0`);
-  for (const filePath of files) {
-    const relativePath = path.relative(cwd, filePath).split(path.sep).join("/");
+  for (const relativePath of files) {
+    const filePath = path.resolve(cwd, relativePath);
     hash.update(relativePath);
     hash.update("\0");
-    const stat = fs.lstatSync(filePath);
-    if (stat.isSymbolicLink()) {
-      hash.update(`link:${fs.readlinkSync(filePath)}`);
-    } else {
-      hash.update(fs.readFileSync(filePath));
+    try {
+      const stat = fs.lstatSync(filePath);
+      if (stat.isSymbolicLink()) {
+        hash.update(`link:${fs.readlinkSync(filePath)}`);
+      } else {
+        hash.update(fs.readFileSync(filePath));
+      }
+    } catch (error) {
+      if (error?.code !== "ENOENT") throw error;
+      // `git ls-files --cached` retains tracked deletions. Hash an explicit
+      // tombstone so a stable deletion has a stable fingerprint and a file
+      // removed during the build still changes the completed snapshot.
+      hash.update("missing");
     }
     hash.update("\0");
   }

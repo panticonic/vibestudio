@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -23,6 +24,9 @@ function fixture(): string {
   mkdirSync(join(directory, "dist"), { recursive: true });
   writeFileSync(join(directory, "src", "index.ts"), "export const value = 1;\n");
   writeFileSync(join(directory, "package.json"), "{}\n");
+  writeFileSync(join(directory, ".gitignore"), "dist/\n*.tsbuildinfo\n");
+  execFileSync("git", ["init", "--quiet"], { cwd: directory });
+  execFileSync("git", ["add", ".gitignore", "package.json", "src/index.ts"], { cwd: directory });
   return directory;
 }
 
@@ -54,6 +58,27 @@ describe("host build fingerprint", () => {
         computeHostBuildFingerprint({ cwd, mode: "development" }),
         computeHostBuildFingerprint({ cwd, mode: "production" })
       )
+    ).toBe(false);
+  });
+
+  it("includes untracked source while excluding ignored outputs under source roots", () => {
+    const cwd = fixture();
+    mkdirSync(join(cwd, "apps", "mobile", "android", "app", "build"), { recursive: true });
+    writeFileSync(join(cwd, "apps", "mobile", ".gitignore"), "android/app/build/\n");
+    execFileSync("git", ["add", "apps/mobile/.gitignore"], { cwd });
+    const before = computeHostBuildFingerprint({ cwd, mode: "development" });
+
+    writeFileSync(
+      join(cwd, "apps", "mobile", "android", "app", "build", "generated.apk"),
+      "generated output\n"
+    );
+    expect(
+      sameHostBuildFingerprint(before, computeHostBuildFingerprint({ cwd, mode: "development" }))
+    ).toBe(true);
+
+    writeFileSync(join(cwd, "apps", "mobile", "new-source.ts"), "export const added = true;\n");
+    expect(
+      sameHostBuildFingerprint(before, computeHostBuildFingerprint({ cwd, mode: "development" }))
     ).toBe(false);
   });
 
