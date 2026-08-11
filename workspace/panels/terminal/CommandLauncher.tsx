@@ -2,11 +2,8 @@ import { Badge, Flex, Kbd, Text } from "@radix-ui/themes";
 import { LightningBoltIcon } from "@radix-ui/react-icons";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTouchDevice } from "@workspace/react/responsive";
-import { CommandPalette, type CommandItem } from "@workspace/ui";
-import {
-  commandTargetForEnter,
-  type CommandRunTarget,
-} from "./commandLauncherModel.js";
+import { CommandPalette, type CommandItem } from "@workspace/ui/command";
+import { commandTargetForEnter, type CommandRunTarget } from "./commandLauncherModel.js";
 import { loadCommandSuggestions, type CommandSuggestion } from "./commandSources.js";
 
 /**
@@ -62,9 +59,21 @@ export function CommandLauncher(props: {
         trailing: ({ active }) =>
           canChooseRunTarget(suggestion) && (active || touch) ? (
             <Flex gap="1" flexShrink="0">
-              <TargetChip label="Here" color="gray" onPick={() => void accept(suggestion, "here")} />
-              <TargetChip label="Right" color="blue" onPick={() => void accept(suggestion, "splitRight")} />
-              <TargetChip label="Down" color="amber" onPick={() => void accept(suggestion, "splitDown")} />
+              <TargetChip
+                label="Here"
+                color="gray"
+                onPick={() => void accept(suggestion, "here")}
+              />
+              <TargetChip
+                label="Right"
+                color="blue"
+                onPick={() => void accept(suggestion, "splitRight")}
+              />
+              <TargetChip
+                label="Down"
+                color="amber"
+                onPick={() => void accept(suggestion, "splitDown")}
+              />
             </Flex>
           ) : (
             <Badge
@@ -117,7 +126,10 @@ export function CommandLauncher(props: {
 }
 
 /** Adapt the palette's modifier snapshot to the keyboard-event shape the model helpers expect. */
-function asKeyEvent(modifiers: { mod: boolean; shift: boolean }): Pick<KeyboardEvent, "ctrlKey" | "metaKey" | "shiftKey"> {
+function asKeyEvent(modifiers: {
+  mod: boolean;
+  shift: boolean;
+}): Pick<KeyboardEvent, "ctrlKey" | "metaKey" | "shiftKey"> {
   return { ctrlKey: modifiers.mod, metaKey: false, shiftKey: modifiers.shift };
 }
 

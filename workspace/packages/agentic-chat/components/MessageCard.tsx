@@ -708,6 +708,8 @@ export const MessageCard = React.memo(function MessageCard({
   return (
     <Box
       id={`message-${msg.id}`}
+      data-part="message"
+      data-message-role={isClient ? "player" : "agent"}
       data-message-tier={msg.tier ?? "primary"}
       className={classNames(
         "message-row",

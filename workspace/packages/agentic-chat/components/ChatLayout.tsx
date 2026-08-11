@@ -36,6 +36,7 @@ export const ChatLayout = React.memo(function ChatLayout() {
     <>
       <Flex
         className="agentic-chat-root"
+        data-part="chat-root"
         direction="column"
         style={{
           height: "100%",
@@ -43,9 +44,9 @@ export const ChatLayout = React.memo(function ChatLayout() {
           width: "100%",
           boxSizing: "border-box",
           overflow: "hidden",
-          gap: "var(--chat-root-gap)",
+          gap: "var(--agentic-root-gap)",
           padding:
-            "max(var(--chat-root-padding), env(safe-area-inset-top, 0)) max(var(--chat-root-padding), env(safe-area-inset-right, 0)) max(var(--chat-root-padding), env(safe-area-inset-bottom, 0)) max(var(--chat-root-padding), env(safe-area-inset-left, 0))",
+            "max(var(--agentic-root-padding), env(safe-area-inset-top, 0)) max(var(--agentic-root-padding), env(safe-area-inset-right, 0)) max(var(--agentic-root-padding), env(safe-area-inset-bottom, 0)) max(var(--agentic-root-padding), env(safe-area-inset-left, 0))",
         }}
       >
         <ChatHeader />

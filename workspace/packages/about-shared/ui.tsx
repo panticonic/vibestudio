@@ -6,10 +6,11 @@
  */
 import type { ReactNode } from "react";
 import "@radix-ui/themes/styles.css";
-import "@workspace/ui/tokens.css";
+import "@workspace/ui/foundation.css";
+import "@workspace/ui/themes/vibestudio.css";
 import { Theme, Flex, Box, Heading, Text, Card } from "@radix-ui/themes";
 import { VibestudioLogo } from "@workspace/ui/brand";
-import { useAppTheme } from "@workspace/ui/panel";
+import { usePanelThemeConfig } from "@workspace/react/theme";
 import { useIsMobile } from "@workspace/react/responsive";
 import { usePanelTheme } from "@workspace/react/theme";
 
@@ -19,7 +20,7 @@ export const BRAND_GRADIENT = "var(--brand-gradient)";
 /** Theme wrapper shared by all about panels. */
 export function AboutThemeRoot({ children }: { children: ReactNode }) {
   const theme = usePanelTheme();
-  const appTheme = useAppTheme();
+  const appTheme = usePanelThemeConfig();
   return (
     <Theme appearance={theme} {...appTheme}>
       {children}

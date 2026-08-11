@@ -11,7 +11,7 @@
  * the shared `DiffViewer` consumes.
  */
 import { useCallback, useEffect, useRef } from "react";
-import type { DiffContentFetcher, DiffReviewEntry } from "@workspace/ui";
+import type { DiffContentFetcher, DiffReviewEntry } from "@workspace/ui/diff";
 import { ApprovalCard } from "../components/ApprovalCard";
 import {
   resolveCallerInfo,

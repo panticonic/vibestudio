@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useSetAtom } from "jotai";
 import { Kbd, Flex, Text } from "@radix-ui/themes";
-import { CommandPalette, type CommandItem } from "@workspace/ui";
+import { CommandPalette, type CommandItem } from "@workspace/ui/command";
 import { setThemeModeAtom, setThemeConfigAtom } from "../state/themeAtoms";
 import { workspaceChooserDialogOpenAtom } from "../state/appModeAtoms";
 import { notification, panel, palette } from "../shell/client";

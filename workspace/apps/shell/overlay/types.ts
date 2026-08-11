@@ -10,6 +10,7 @@
  */
 
 import type { ComponentType } from "react";
+import type { ThemeConfig } from "@vibestudio/shared/theme";
 
 /** Keys of the registered overlay surfaces (see ./registry). */
 export type OverlaySurfaceKey = "approval-card";
@@ -29,16 +30,11 @@ export type OverlaySurfaceComponent = ComponentType<OverlaySurfaceComponentProps
  * Theme identity forwarded to the surface so it matches the chrome's
  * appearance. The overlay document is a separate WebContents, so it can't read
  * the chrome's Radix <Theme> — the chrome serializes it here instead. Mirrors
- * the subset of `@workspace/ui` AppTheme that Radix <Theme> consumes.
+ * the subset of the shared ThemeConfig that Radix <Theme> consumes.
  */
-export interface OverlayThemeInfo {
+export type OverlayThemeInfo = Partial<ThemeConfig> & {
   appearance: "light" | "dark";
-  accentColor?: string;
-  grayColor?: string;
-  panelBackground?: "solid" | "translucent";
-  radius?: "none" | "small" | "medium" | "large" | "full";
-  scaling?: "90%" | "95%" | "100%" | "105%" | "110%";
-}
+};
 
 /** Message pushed main → surface to (re)render it. */
 export interface OverlayRenderMessage {

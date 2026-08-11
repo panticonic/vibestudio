@@ -27,7 +27,7 @@ import {
   PlusIcon,
 } from "@radix-ui/react-icons";
 import { Badge, Box, Button, Flex, IconButton, Text, Tooltip } from "@radix-ui/themes";
-import { VibestudioLogo } from "@workspace/ui";
+import { VibestudioLogo } from "@workspace/ui/brand";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { useVirtualizer } from "@tanstack/react-virtual";

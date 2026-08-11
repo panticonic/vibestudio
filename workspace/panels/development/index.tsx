@@ -40,7 +40,8 @@ import {
   permissionsMethods,
   type SavedPermissionGrant,
 } from "@vibestudio/service-schemas/permissions";
-import "@workspace/ui/tokens.css";
+import "@workspace/ui/foundation.css";
+import "@workspace/ui/themes/vibestudio.css";
 import {
   activeDevelopmentGrants,
   adoptedRepositoryId,
@@ -57,10 +58,7 @@ import {
   VIBESTUDIO_PROJECT,
 } from "./model.js";
 
-const developmentReceiver = createDurableObjectServiceClient(
-  rpc,
-  "vibestudio.development.v1"
-);
+const developmentReceiver = createDurableObjectServiceClient(rpc, "vibestudio.development.v1");
 const development = createTypedServiceClient(
   "development",
   developmentBuiltinMethods,
@@ -205,13 +203,14 @@ export default function DevelopmentPanel() {
     setLoading(true);
     setError(null);
     try {
-      const [nextSessions, nextRuns, nextGrants, nextNativeTools, nextClientExecutors] = await Promise.all([
-        development.listSessions({ limit: PAGE_LIMIT }),
-        development.list({ limit: PAGE_LIMIT }),
-        permissions.list(),
-        development.listNativeTools(),
-        development.listClientExecutors(),
-      ]);
+      const [nextSessions, nextRuns, nextGrants, nextNativeTools, nextClientExecutors] =
+        await Promise.all([
+          development.listSessions({ limit: PAGE_LIMIT }),
+          development.list({ limit: PAGE_LIMIT }),
+          permissions.list(),
+          development.listNativeTools(),
+          development.listClientExecutors(),
+        ]);
       setSessions(nextSessions.sessions);
       setRuns(nextRuns.runs);
       setGrants(nextGrants);

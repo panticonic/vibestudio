@@ -1,4 +1,5 @@
 import { build } from "esbuild";
+import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 
 const FORBIDDEN_EAGER_INPUTS = [
@@ -30,8 +31,11 @@ function staticInputs(
 
 describe("panel runtime startup boundary", () => {
   it("keeps host-only implementations and deferred validators out of every panel startup", async () => {
+    const repositoryRoot = new URL("../../../../../", import.meta.url).pathname;
+    const entryPoint = new URL("./index.ts", import.meta.url).pathname;
     const result = await build({
-      entryPoints: [new URL("./index.ts", import.meta.url).pathname],
+      absWorkingDir: repositoryRoot,
+      entryPoints: [entryPoint],
       bundle: true,
       splitting: true,
       write: false,
@@ -43,9 +47,12 @@ describe("panel runtime startup boundary", () => {
       conditions: ["vibestudio-panel", "browser", "import", "default"],
       external: ["fs", "path", "crypto", "node:*"],
     });
-    const entry = Object.keys(result.metafile!.inputs).find((input) =>
-      input.endsWith("workspace/packages/runtime/src/panel/index.ts")
-    );
+    const entry = Object.values(result.metafile!.outputs)
+      .map((output) => output.entryPoint)
+      .find(
+        (candidate) =>
+          candidate !== undefined && path.resolve(repositoryRoot, candidate) === entryPoint
+      );
     expect(entry).toBeDefined();
     const eager = [...staticInputs(result.metafile!.inputs, entry!)];
     for (const forbidden of FORBIDDEN_EAGER_INPUTS) {

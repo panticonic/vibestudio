@@ -12,6 +12,13 @@ import type { GatewayConfig } from "../shared/globals.js";
 import { createMainCaller } from "../shared/mainRpc.js";
 import type { PaletteCommand, RuntimeFs, ThemeAppearance, ThemeConfig } from "../types.js";
 import { DEFAULT_THEME_CONFIG } from "../types.js";
+import {
+  isThemeAccentColor,
+  isThemeGrayColor,
+  isThemePanelBackground,
+  isThemeRadius,
+  isThemeScaling,
+} from "@vibestudio/shared/theme";
 
 export interface BaseRuntimeDeps {
   selfId: string;
@@ -68,15 +75,16 @@ export function createBaseRuntime(deps: BaseRuntimeDeps) {
     const config = (payload as { config?: unknown } | null)?.config;
     if (!config || typeof config !== "object") return null;
     const c = config as Record<string, unknown>;
-    if (typeof c["accentColor"] !== "string" || typeof c["grayColor"] !== "string") return null;
     return {
-      accentColor: c["accentColor"],
-      grayColor: c["grayColor"],
-      radius: (c["radius"] as ThemeConfig["radius"]) ?? DEFAULT_THEME_CONFIG.radius,
-      scaling: (c["scaling"] as ThemeConfig["scaling"]) ?? DEFAULT_THEME_CONFIG.scaling,
-      panelBackground:
-        (c["panelBackground"] as ThemeConfig["panelBackground"]) ??
-        DEFAULT_THEME_CONFIG.panelBackground,
+      accentColor: isThemeAccentColor(c["accentColor"])
+        ? c["accentColor"]
+        : DEFAULT_THEME_CONFIG.accentColor,
+      grayColor: isThemeGrayColor(c["grayColor"]) ? c["grayColor"] : DEFAULT_THEME_CONFIG.grayColor,
+      radius: isThemeRadius(c["radius"]) ? c["radius"] : DEFAULT_THEME_CONFIG.radius,
+      scaling: isThemeScaling(c["scaling"]) ? c["scaling"] : DEFAULT_THEME_CONFIG.scaling,
+      panelBackground: isThemePanelBackground(c["panelBackground"])
+        ? c["panelBackground"]
+        : DEFAULT_THEME_CONFIG.panelBackground,
     };
   };
 

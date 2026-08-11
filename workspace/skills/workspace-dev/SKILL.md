@@ -206,7 +206,7 @@ All panels and apps must respect the host theme and work on mobile viewports:
 1. **Use the passed-down theme** — call `usePanelTheme()` from `@workspace/react`
    to get the live `"dark"` | `"light"` appearance and subscribe to changes.
    For Radix-based panels, `autoMount` wires this automatically through
-   `useAppTheme()`. Do not hardcode a color scheme or ignore the host theme.
+   `usePanelThemeConfig()`. Do not hardcode a color scheme or ignore the host theme.
 2. **Mobile-friendly layout** — use responsive CSS (flexbox/grid, relative
    units, `max-width: 100%` on media, vertical stacking at narrow widths).
    Panels render on desktop, tablet, and mobile hosts. Test that the UI is

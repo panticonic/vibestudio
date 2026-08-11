@@ -9,7 +9,7 @@ describe("createSharedStyleDedupePlugin", () => {
     const loads: Array<() => unknown> = [];
     const plugin = createSharedStyleDedupePlugin([
       "@radix-ui/themes/styles.css",
-      "@workspace/ui/tokens.css",
+      "@workspace/ui/foundation.css",
     ]);
     const build = {
       onResolve(

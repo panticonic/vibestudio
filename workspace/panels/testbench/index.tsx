@@ -33,10 +33,10 @@ import { rpc } from "@workspace/runtime";
 // arg-spreading wrapper over the portable `rpc.expose`, kept local to the panel.
 const expose = (method: string, handler: (...args: any[]) => unknown | Promise<unknown>) =>
   rpc.expose(method, (request) => handler(...request.args));
-import { usePanelTheme, usePaletteCommands } from "@workspace/react";
-import { PanelChrome, Stack } from "@workspace/ui";
-import { useAppTheme } from "@workspace/ui/panel";
-import "@workspace/ui/tokens.css";
+import { usePanelTheme, usePaletteCommands, usePanelThemeConfig } from "@workspace/react";
+import { PanelChrome, Stack } from "@workspace/ui/layout";
+import "@workspace/ui/foundation.css";
+import "@workspace/ui/themes/vibestudio.css";
 import {
   flameTreeFromProfile,
   listProfiles,
@@ -377,7 +377,7 @@ function ProfilesTab() {
 
 function App() {
   const theme = usePanelTheme();
-  const appTheme = useAppTheme();
+  const appTheme = usePanelThemeConfig();
   const [activeTab, setActiveTab] = useState("suites");
   const [runAllNonce, setRunAllNonce] = useState(0);
 

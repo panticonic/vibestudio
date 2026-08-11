@@ -1,6 +1,6 @@
 import { useCallback, useEffect } from "react";
 import { useAtomValue, useSetAtom } from "jotai";
-import { AppDialog } from "@workspace/ui";
+import { AppDialog } from "@workspace/ui/overlay";
 
 import {
   connectionSettingsDialogOpenAtom,

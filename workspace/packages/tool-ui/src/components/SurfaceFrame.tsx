@@ -93,14 +93,17 @@ export function SurfaceFrame({
     toggleExpanded();
   }, [onHeaderClick, toggleExpanded]);
 
-  const handlePointerDown = useCallback((event: ReactPointerEvent) => {
-    if (!resizable) return;
-    event.preventDefault();
-    (event.target as HTMLElement).setPointerCapture(event.pointerId);
-    setIsDragging(true);
-    dragStartY.current = event.clientY;
-    dragStartHeight.current = cardRef.current?.offsetHeight ?? 200;
-  }, [resizable]);
+  const handlePointerDown = useCallback(
+    (event: ReactPointerEvent) => {
+      if (!resizable) return;
+      event.preventDefault();
+      (event.target as HTMLElement).setPointerCapture(event.pointerId);
+      setIsDragging(true);
+      dragStartY.current = event.clientY;
+      dragStartHeight.current = cardRef.current?.offsetHeight ?? 200;
+    },
+    [resizable]
+  );
 
   useEffect(() => {
     if (!isDragging) return;
@@ -140,6 +143,8 @@ export function SurfaceFrame({
     <Card
       ref={cardRef}
       className={className}
+      data-part="tool-surface"
+      data-tone={tone}
       variant="surface"
       size="1"
       style={{
@@ -153,12 +158,13 @@ export function SurfaceFrame({
           : {}),
         flexShrink: 0,
         overflow: "hidden",
-        border: `1px solid var(--${tone}-a4)`,
-        background: `var(--${tone}-a2)`,
+        border: `1px solid var(--tool-surface-border, var(--${tone}-a4))`,
+        background: `var(--tool-surface-background, var(--${tone}-a2))`,
       }}
     >
       {resizable && (
         <Box
+          data-part="tool-surface-resize-handle"
           onPointerDown={handlePointerDown}
           style={{
             height: 14,
@@ -166,18 +172,23 @@ export function SurfaceFrame({
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
-            background: isDragging ? "var(--gray-5)" : "var(--gray-4)",
-            borderBottom: "1px solid var(--gray-5)",
+            background: isDragging
+              ? "var(--tool-surface-handle-active, var(--gray-5))"
+              : "var(--tool-surface-handle, var(--gray-4))",
+            borderBottom: "1px solid var(--tool-surface-handle-border, var(--gray-5))",
             flexShrink: 0,
             userSelect: "none",
             touchAction: "none",
           }}
         >
-          <DragHandleHorizontalIcon style={{ color: "var(--gray-9)", width: 16, height: 16 }} />
+          <DragHandleHorizontalIcon
+            style={{ color: "var(--tool-surface-muted, var(--gray-9))", width: 16, height: 16 }}
+          />
         </Box>
       )}
 
       <Flex
+        data-part="tool-surface-header"
         align="center"
         gap="2"
         px="2"
@@ -191,20 +202,35 @@ export function SurfaceFrame({
         style={{
           cursor: headerInteractive ? "pointer" : undefined,
           userSelect: headerInteractive ? "none" : undefined,
-          borderBottom: isExpanded ? "1px solid var(--gray-a4)" : "none",
+          borderBottom: isExpanded
+            ? "1px solid var(--tool-surface-header-border, var(--gray-a4))"
+            : "none",
         }}
       >
         {icon && (
-          <Text color={tone} style={{ display: "flex", alignItems: "center", flexShrink: 0 }}>
+          <Text
+            style={{
+              display: "flex",
+              alignItems: "center",
+              flexShrink: 0,
+              color: `var(--tool-surface-accent, var(--${tone}-11))`,
+            }}
+          >
             {icon}
           </Text>
         )}
         <Flex direction="column" gap="0" style={{ minWidth: 0, flex: 1 }}>
-          <Text size="1" color={tone} weight="medium" truncate>
+          <Text
+            data-part="tool-surface-title"
+            size="1"
+            weight="medium"
+            truncate
+            style={{ color: `var(--tool-surface-accent, var(--${tone}-11))` }}
+          >
             {title}
           </Text>
           {subtitle && (
-            <Text size="1" color="gray" truncate>
+            <Text size="1" truncate style={{ color: "var(--tool-surface-muted, var(--gray-11))" }}>
               {subtitle}
             </Text>
           )}
@@ -246,7 +272,13 @@ export function SurfaceFrame({
       </Flex>
 
       {isExpanded && (
-        <Box px={bodyPadding} py={bodyPadding} flexGrow="1" style={{ minHeight: 0, overflow: "auto" }}>
+        <Box
+          data-part="tool-surface-body"
+          px={bodyPadding}
+          py={bodyPadding}
+          flexGrow="1"
+          style={{ minHeight: 0, overflow: "auto" }}
+        >
           {onError ? (
             <EventErrorBoundary onError={onError}>{children}</EventErrorBoundary>
           ) : (

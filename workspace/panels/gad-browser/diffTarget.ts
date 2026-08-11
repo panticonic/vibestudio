@@ -10,7 +10,7 @@
  * state-arg, build the compare entry, resolve states → branches, and drive the
  * focus filter; they are unit-tested in isolation.
  */
-import type { DiffChangedFile, DiffFileKind, DiffReviewEntry } from "@workspace/ui";
+import type { DiffChangedFile, DiffFileKind, DiffReviewEntry } from "@workspace/ui/diff";
 
 /**
  * One changed file of the diff-review entry, carried alongside the focused file

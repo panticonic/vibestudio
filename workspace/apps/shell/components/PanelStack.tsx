@@ -2,7 +2,7 @@ import { memo, useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useSetAtom } from "jotai";
 import { Cross2Icon } from "@radix-ui/react-icons";
 import { Box, Button, Card, Flex, IconButton, Spinner, Text, TextField } from "@radix-ui/themes";
-import { VibestudioLogo } from "@workspace/ui";
+import { VibestudioLogo } from "@workspace/ui/brand";
 import { useIsMobile } from "@workspace/react/responsive";
 
 import type { LazyTitleNavigationData, LazyStatusNavigationData } from "./navigationTypes";

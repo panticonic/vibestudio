@@ -736,6 +736,7 @@ export const MessageList = React.memo(function MessageList({
   return (
     <Box
       className="message-list-card"
+      data-part="message-list"
       flexGrow="1"
       overflow="hidden"
       style={{ minHeight: 0, position: "relative" }}
@@ -755,7 +756,7 @@ export const MessageList = React.memo(function MessageList({
         <div
           ref={contentRef}
           className="message-list-content"
-          style={{ padding: "var(--message-list-padding)" }}
+          style={{ padding: "var(--agentic-message-list-padding)" }}
         >
           {/* Load earlier messages button */}
           {visibleGroupedItems.length < groupedItems.length ? (

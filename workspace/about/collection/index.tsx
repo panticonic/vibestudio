@@ -46,7 +46,8 @@ import {
 } from "@workspace/collection-orchestration";
 import "@radix-ui/themes/styles.css";
 import "@workspace/agentic-chat/styles.css";
-import "@workspace/ui/tokens.css";
+import "@workspace/ui/foundation.css";
+import "@workspace/ui/themes/vibestudio.css";
 import { withMemberNote, type CollectionStateArgs } from "./collection";
 import "./style.css";
 

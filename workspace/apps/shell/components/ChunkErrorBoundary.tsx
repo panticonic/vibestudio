@@ -1,6 +1,6 @@
 import { Component, type ReactNode, type ErrorInfo } from "react";
 import { Flex, Text, Button } from "@radix-ui/themes";
-import { Surface, Stack } from "@workspace/ui";
+import { Surface, Stack } from "@workspace/ui/layout";
 
 interface Props {
   children: ReactNode;

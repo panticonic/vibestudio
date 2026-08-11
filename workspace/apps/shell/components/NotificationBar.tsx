@@ -42,7 +42,7 @@ const DEFAULT_TTLS: Record<NotificationPayload["type"], number> = {
   consent: 0,
 };
 
-// Map onto the unified semantic-intent tokens (tokens.css) so notifications,
+// Map onto the unified semantic-intent tokens (foundation.css) so notifications,
 // the approval bar, and chat all speak ONE color vocabulary in both themes.
 const TYPE_BG: Record<NotificationPayload["type"], string> = {
   info: "var(--intent-info-surface)",

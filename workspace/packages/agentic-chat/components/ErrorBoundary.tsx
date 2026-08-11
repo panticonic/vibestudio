@@ -42,7 +42,8 @@ interface ErrorBoundaryState {
   debugChatError: string | null;
 }
 
-const TRANSIENT_IMPORT_ERROR_RE = /failed to fetch dynamically imported module|error loading dynamically imported module|loading chunk \d+ failed|importing a module script failed/i;
+const TRANSIENT_IMPORT_ERROR_RE =
+  /failed to fetch dynamically imported module|error loading dynamically imported module|loading chunk \d+ failed|importing a module script failed/i;
 const AUTO_RELOAD_STORAGE_KEY = "__vibestudioTransientImportReload";
 const AUTO_RELOAD_WINDOW_MS = 30_000;
 
@@ -72,10 +73,13 @@ function shouldAutoReloadForTransientImport(): boolean {
         return false;
       }
     }
-    window.sessionStorage.setItem(AUTO_RELOAD_STORAGE_KEY, JSON.stringify({
-      href: window.location.href,
-      at: now,
-    }));
+    window.sessionStorage.setItem(
+      AUTO_RELOAD_STORAGE_KEY,
+      JSON.stringify({
+        href: window.location.href,
+        at: now,
+      })
+    );
     return true;
   } catch {
     return false;
@@ -179,8 +183,8 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
             alignItems: "center",
             justifyContent: "center",
             height: "100%",
-            backgroundColor: "var(--background, #1a1a1a)",
-            color: "var(--foreground, #e0e0e0)",
+            backgroundColor: "var(--agentic-surface, var(--surface-panel))",
+            color: "var(--agentic-text, var(--gray-12))",
             fontFamily: "system-ui, -apple-system, sans-serif",
           }}
         >
@@ -190,7 +194,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
               textAlign: "center",
             }}
           >
-            <h2 style={{ color: "var(--error, #f44336)", marginBottom: "16px" }}>
+            <h2 style={{ color: "var(--intent-error-text, var(--red-11))", marginBottom: "16px" }}>
               Something went wrong
             </h2>
             <p style={{ marginBottom: "16px", opacity: 0.8 }}>
@@ -202,22 +206,20 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
               style={{
                 marginBottom: "16px",
                 textAlign: "left",
-                backgroundColor: "var(--surface, #2a2a2a)",
+                backgroundColor: "var(--agentic-surface-card, var(--surface-card))",
                 padding: "12px",
                 borderRadius: "8px",
                 fontSize: "12px",
               }}
             >
-              <summary style={{ cursor: "pointer", marginBottom: "8px" }}>
-                Error details
-              </summary>
+              <summary style={{ cursor: "pointer", marginBottom: "8px" }}>Error details</summary>
               <pre
                 style={{
                   overflow: "auto",
                   whiteSpace: "pre-wrap",
                   wordBreak: "break-word",
                   margin: 0,
-                  color: "var(--error, #f44336)",
+                  color: "var(--intent-error-text, var(--red-11))",
                 }}
               >
                 {this.state.error?.toString()}
@@ -247,12 +249,14 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
             >
               {diagnosticLauncherAvailable && (
                 <button
-                  onClick={() => { void this.handleDebugWithAgent(); }}
+                  onClick={() => {
+                    void this.handleDebugWithAgent();
+                  }}
                   disabled={this.state.debugChatOpening}
                   style={{
                     padding: "8px 16px",
-                    backgroundColor: "var(--primary, #4a9eff)",
-                    color: "white",
+                    backgroundColor: "var(--agentic-player-accent, var(--accent-9))",
+                    color: "var(--accent-contrast)",
                     border: "none",
                     borderRadius: "6px",
                     cursor: this.state.debugChatOpening ? "default" : "pointer",
@@ -271,9 +275,9 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
                 onClick={this.handleRetry}
                 style={{
                   padding: "8px 16px",
-                  backgroundColor: "var(--surface, #3a3a3a)",
-                  color: "var(--foreground, #e0e0e0)",
-                  border: "1px solid var(--border, #444)",
+                  backgroundColor: "var(--agentic-surface-card, var(--surface-card))",
+                  color: "var(--agentic-text, var(--gray-12))",
+                  border: "1px solid var(--agentic-border, var(--surface-border))",
                   borderRadius: "6px",
                   cursor: "pointer",
                   fontSize: "14px",
@@ -285,9 +289,9 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
                 onClick={() => window.location.reload()}
                 style={{
                   padding: "8px 16px",
-                  backgroundColor: "var(--surface, #3a3a3a)",
-                  color: "var(--foreground, #e0e0e0)",
-                  border: "1px solid var(--border, #444)",
+                  backgroundColor: "var(--agentic-surface-card, var(--surface-card))",
+                  color: "var(--agentic-text, var(--gray-12))",
+                  border: "1px solid var(--agentic-border, var(--surface-border))",
                   borderRadius: "6px",
                   cursor: "pointer",
                   fontSize: "14px",
@@ -300,7 +304,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
               <p
                 style={{
                   margin: "12px 0 0",
-                  color: "var(--error, #f44336)",
+                  color: "var(--intent-error-text, var(--red-11))",
                   fontSize: "12px",
                   overflowWrap: "anywhere",
                 }}

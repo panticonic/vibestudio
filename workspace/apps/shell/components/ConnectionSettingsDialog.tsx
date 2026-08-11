@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Button, Dialog, Flex, Text, TextField, Callout, Box, Separator } from "@radix-ui/themes";
 import { ExclamationTriangleIcon } from "@radix-ui/react-icons";
-import { AppDialog } from "@workspace/ui";
+import { AppDialog } from "@workspace/ui/overlay";
 import {
   createConnectDeepLink,
   parseConnectLink,

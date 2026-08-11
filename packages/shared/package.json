@@ -105,6 +105,7 @@
     "./stateArgsValidator": "./src/stateArgsValidator.ts",
     "./stateArgs": "./src/stateArgs.ts",
     "./tokenManager": "./src/tokenManager.ts",
+    "./theme": "./src/theme.ts",
     "./typedServiceClient": "./src/typedServiceClient.ts",
     "./unitAuthorityInference": "./src/unitAuthorityInference.mjs",
     "./types": "./src/types.ts",
@@ -139,7 +140,10 @@
     "@vibestudio/types": "workspace:*",
     "@vibestudio/workspace-contracts": "workspace:*",
     "@vscode/ripgrep": "1.18.0",
+    "ajv": "^8.17.1",
     "ignore": "7.0.5",
+    "tldts": "^7.0.19",
+    "typescript": "7.0.2",
     "zod": "^3.24.1"
   },
   "devDependencies": {

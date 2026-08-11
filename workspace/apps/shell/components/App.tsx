@@ -1,7 +1,7 @@
 import { useEffect, useCallback, useState, lazy, Suspense } from "react";
 import { useSetAtom } from "jotai";
 import { Theme, Flex, Spinner, Text } from "@radix-ui/themes";
-import { VibestudioLogo, type AppTheme } from "@workspace/ui";
+import { VibestudioLogo } from "@workspace/ui/brand";
 
 import { workspaceChooserDialogOpenAtom, activeWorkspaceNameAtom } from "../state/appModeAtoms";
 import {
@@ -118,7 +118,7 @@ export function App() {
   useShellEvent("navigate-about", handleNavigateAbout);
 
   return (
-    <Theme appearance={effectiveTheme} {...(themeConfig as AppTheme)} className="app-shell-theme">
+    <Theme appearance={effectiveTheme} {...themeConfig} className="app-shell-theme">
       <AppCommandPalette />
       <ChunkErrorBoundary
         onRetry={() => {

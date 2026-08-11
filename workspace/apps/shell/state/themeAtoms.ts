@@ -1,16 +1,11 @@
 import { atom } from "jotai";
-import { APP_THEME } from "@workspace/ui";
+import { ThemeConfigSchema } from "@vibestudio/shared/panelContracts";
+import type { ThemeConfig } from "@vibestudio/shared/theme";
+import { APP_THEME } from "@workspace/ui/theme";
 
 export type ThemeMode = "light" | "dark" | "system";
 
-/** The live, user-editable theme identity (mirrors @vibestudio/shared ThemeConfig). */
-export type ThemeConfigValue = {
-  accentColor: string;
-  grayColor: string;
-  radius: "none" | "small" | "medium" | "large" | "full";
-  scaling: "90%" | "95%" | "100%" | "105%" | "110%";
-  panelBackground: "solid" | "translucent";
-};
+export type ThemeConfigValue = ThemeConfig;
 
 /**
  * The user's theme preference (light, dark, or system).
@@ -97,10 +92,8 @@ export const loadThemeConfigAtom = atom(null, (get, set) => {
   try {
     const saved = localStorage.getItem("theme-config");
     if (!saved) return;
-    const parsed = JSON.parse(saved) as Partial<ThemeConfigValue>;
-    if (parsed && typeof parsed === "object") {
-      set(themeConfigAtom, { ...APP_THEME, ...parsed });
-    }
+    const parsed = ThemeConfigSchema.safeParse({ ...APP_THEME, ...JSON.parse(saved) });
+    if (parsed.success) set(themeConfigAtom, parsed.data);
   } catch (error) {
     console.error("Failed to load theme identity:", error);
   }

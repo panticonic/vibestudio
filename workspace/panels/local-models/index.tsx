@@ -43,8 +43,7 @@ import {
   TrashIcon,
   UpdateIcon,
 } from "@radix-ui/react-icons";
-import { usePanelTheme, useStateArgs } from "@workspace/react";
-import { useAppTheme } from "@workspace/ui/panel";
+import { usePanelTheme, usePanelThemeConfig, useStateArgs } from "@workspace/react";
 import { extensions } from "@workspace/runtime";
 
 const EXTENSION = "@workspace-extensions/local-models";
@@ -229,7 +228,7 @@ function serverBadge(state: ServerState) {
 
 export default function LocalModelsPanel() {
   const theme = usePanelTheme();
-  const appTheme = useAppTheme();
+  const appTheme = usePanelThemeConfig();
   const [status, setStatus] = useState<LocalModelsStatus | null>(null);
   const [models, setModels] = useState<LocalModelEntry[]>([]);
   const [catalog, setCatalog] = useState<CuratedModel[]>([]);

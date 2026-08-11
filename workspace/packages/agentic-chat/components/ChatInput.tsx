@@ -530,6 +530,7 @@ export function ChatInput() {
       {/* Input */}
       <Card
         className="chat-surface-card chat-input-card"
+        data-part="chat-composer"
         size="1"
         variant="surface"
         style={{ flexShrink: 0 }}

@@ -12,7 +12,8 @@ import {
   Text,
 } from "@radix-ui/themes";
 import { ExclamationTriangleIcon, PlusIcon, TrashIcon } from "@radix-ui/react-icons";
-import { Surface, VibestudioLogo } from "@workspace/ui";
+import { VibestudioLogo } from "@workspace/ui/brand";
+import { Surface } from "@workspace/ui/layout";
 
 import {
   recentWorkspacesAtom,

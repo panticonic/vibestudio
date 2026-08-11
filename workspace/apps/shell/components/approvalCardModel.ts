@@ -12,7 +12,7 @@ import {
   getApprovalRiskTone,
   type ApprovalCallerPresentation,
 } from "@vibestudio/shared/approvalCopy";
-import type { DiffChangedFile, DiffReviewEntry } from "@workspace/ui";
+import type { DiffChangedFile, DiffReviewEntry } from "@workspace/ui/diff";
 
 export type CallerInfo = ApprovalCallerPresentation;
 

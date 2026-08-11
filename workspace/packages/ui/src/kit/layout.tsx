@@ -2,11 +2,11 @@
  * Layout primitives for the shared app-wide UI kit.
  *
  * These wrap Radix `Flex`/`Box` with the app's spacing rhythm and the
- * surface/elevation tokens from `tokens.css`, so every panel frames its content
+ * surface/elevation tokens from `foundation.css`, so every panel frames its content
  * the same way instead of re-deriving chrome. Import the tokens once at the
  * app/panel root:
  *
- *   import "@workspace/ui/tokens.css";
+ *   import "@workspace/ui/foundation.css";
  */
 import type { CSSProperties, ReactNode } from "react";
 import { Box, Flex } from "@radix-ui/themes";

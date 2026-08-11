@@ -14,7 +14,6 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import { Theme } from "@radix-ui/themes";
-import type { AppTheme } from "@workspace/ui";
 import { getContentOverlayBridge } from "./overlayBridge";
 import { getOverlaySurface } from "./registry";
 import type { OverlayRenderMessage } from "./types";
@@ -114,8 +113,8 @@ export function OverlaySurfaceHost() {
     <Theme
       appearance={theme.appearance}
       hasBackground={false}
-      {...(theme.accentColor ? { accentColor: theme.accentColor as AppTheme["accentColor"] } : {})}
-      {...(theme.grayColor ? { grayColor: theme.grayColor as AppTheme["grayColor"] } : {})}
+      {...(theme.accentColor ? { accentColor: theme.accentColor } : {})}
+      {...(theme.grayColor ? { grayColor: theme.grayColor } : {})}
       {...(theme.panelBackground ? { panelBackground: theme.panelBackground } : {})}
       {...(theme.radius ? { radius: theme.radius } : {})}
       {...(theme.scaling ? { scaling: theme.scaling } : {})}

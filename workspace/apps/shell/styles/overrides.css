@@ -28,9 +28,9 @@ body,
 
 /* ============================================================================
    Shell surfaces. These override the shared `--surface-*` tokens (defined in
-   tokens.css) but are SHELL-SCOPED: this file is loaded only by the shell
+   foundation.css) but are SHELL-SCOPED: this file is loaded only by the shell
    bundle — the main window AND the transparent approval overlay, both Radix
-   themes. Panels render in their own webContents that load tokens.css but never
+   themes. Panels render in their own webContents that load foundation.css but never
    this file, so panel surfaces keep the original tokens. Re-tinting
    `--surface-*` here (rather than swapping `grayColor`) is what keeps the
    recolour on the chrome and off the panels.
@@ -149,7 +149,7 @@ body,
      That lane is the whole horizontal inset the tree pays, so it has to equal
      the sidebar's 4px gutter or the rows come out visibly narrower than the
      filter field and footer button. Its width is the scrollbar's width, which
-     tokens.css derives from `--scrollbar-size` — so narrowing that variable
+     foundation.css derives from `--scrollbar-size` — so narrowing that variable
      here narrows the lane, no override of the scrollbar rules themselves. */
   scrollbar-gutter: stable both-edges;
   /* Thumb fills the lane: at 4px a transparent inset would leave nothing. */
@@ -216,7 +216,7 @@ body,
   outline-offset: -1px;
 }
 
-/* (Reduced-motion handling is centralized in tokens.css — one global block
+/* (Reduced-motion handling is centralized in foundation.css — one global block
    collapses all animation/transition to instant; no per-rule overrides here.) */
 
 /* Responsive file overview panels: stack vertically on narrow viewports */
@@ -348,7 +348,7 @@ body,
 
 /* The card floats free of the window, so its scrollers sit closer to the eye
    than in-app ones — carry the shared shape at a slightly stronger tone.
-   (The slim scrollbar itself is global, in tokens.css.) */
+   (The slim scrollbar itself is global, in foundation.css.) */
 .approval-card {
   --scrollbar-thumb: color-mix(in srgb, var(--gray-10) 55%, transparent);
 }
@@ -649,7 +649,7 @@ html[data-overlay-dragging] * {
 }
 
 /* (Approval motion is collapsed by the centralized reduced-motion block in
-   tokens.css — no local override needed.) */
+   foundation.css — no local override needed.) */
 
 .approval-caller-chip {
   display: inline-flex;

@@ -12,7 +12,7 @@ import {
   TextField,
 } from "@radix-ui/themes";
 import { ExclamationTriangleIcon } from "@radix-ui/react-icons";
-import { AppDialog } from "@workspace/ui";
+import { AppDialog } from "@workspace/ui/overlay";
 
 import {
   wizardDialogOpenAtom,
