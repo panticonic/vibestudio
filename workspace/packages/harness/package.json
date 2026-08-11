@@ -28,6 +28,7 @@
     "@workspace/agentic-protocol": "workspace:*",
     "diff": "^7.0.0",
     "linkedom": "^0.18.5",
+    "ignore": "7.0.5",
     "unpdf": "^1.6.2",
     "yaml": "^2.8.1"
   },

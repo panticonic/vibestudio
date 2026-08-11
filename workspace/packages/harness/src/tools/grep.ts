@@ -20,7 +20,7 @@ import type { AgentTool } from "@workspace/pi-core";
 import path from "node:path";
 import { Buffer } from "node:buffer";
 import type { RpcCaller } from "@vibestudio/rpc";
-import type { RuntimeFs, Dirent } from "./runtime-fs.js";
+import type { RuntimeFs } from "./runtime-fs.js";
 import { resolveToCwd } from "./path-utils.js";
 import {
   DEFAULT_MAX_BYTES,
@@ -30,6 +30,7 @@ import {
   truncateLine,
   type TruncationResult,
 } from "./truncate.js";
+import { walkSearchFiles } from "./search-walk.js";
 
 // ---------------------------------------------------------------------------
 // RE2 loader — preferred linear-time matcher. Falls back to `RegExp` when
@@ -97,13 +98,6 @@ function warnFallbackOnce(): void {
   );
 }
 
-function isInvalidRegexError(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
-  return /invalid regular expression|regex parse error|unclosed group|unterminated group/iu.test(
-    message
-  );
-}
-
 /** Exposed for `find.ts` so it can apply the same RE2 / fallback policy. */
 export function isRe2Available(): boolean {
   return RE2 !== null;
@@ -159,10 +153,21 @@ const grepSchema = Type.Object({
     })
   ),
   context: Type.Optional(
-    Type.Number({ description: "Number of lines to show before and after each match (default: 0)" })
+    Type.Integer({
+      minimum: 0,
+      maximum: 10,
+      description: "Number of lines to show before and after each match (default: 0; maximum: 10)",
+    })
   ),
   limit: Type.Optional(
-    Type.Number({ description: "Maximum number of matches to return (default: 100)" })
+    Type.Integer({
+      minimum: 1,
+      maximum: 1000,
+      description: "Maximum number of matches to return (default: 100; maximum: 1000)",
+    })
+  ),
+  includeIgnored: Type.Optional(
+    Type.Boolean({ description: "Include files excluded by .gitignore/.ignore (default: false)" })
   ),
 });
 
@@ -177,7 +182,6 @@ export interface GrepToolDetails {
   filesScanned?: number;
   engine?: "ripgrep" | "fs-service" | "runtime-fs";
   missingSearchPath?: string;
-  patternFallback?: "recallKeywords" | "literal";
   extensionFallback?: string;
 }
 
@@ -188,20 +192,6 @@ export interface GrepToolDeps {
 const DEFAULT_LIMIT = 100;
 const READ_CONCURRENCY = 8;
 const PROGRESS_EVERY_FILES = 250;
-
-// Directories we never want to descend into. Mirrors fd/rg's defaults plus
-// the JS toolchain's heavy hitters; the workerd port has no .gitignore
-// support so we hard-code the obvious offenders.
-const SKIP_DIRS = new Set([
-  ".git",
-  "node_modules",
-  ".svelte-kit",
-  ".next",
-  "dist",
-  "build",
-  ".cache",
-  ".turbo",
-]);
 
 export function createGrepTool(
   cwd: string,
@@ -215,15 +205,17 @@ export function createGrepTool(
     description: `Search file contents. Literal search is the default and should be used for code snippets, identifiers, paths, and punctuation; set literal=false only for intentional valid regex. Returns matching lines with file paths and line numbers. Output is truncated to ${DEFAULT_LIMIT} matches or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first). Long lines are truncated to ${GREP_MAX_LINE_LENGTH} chars.`,
     parameters: grepSchema,
     execute: async (_toolCallId, input, signal, onUpdate) => {
-      const raw = input as GrepToolInput & { recallKeywords?: string | string[] };
-      const recall = Array.isArray(raw.recallKeywords)
-        ? raw.recallKeywords.find((value) => typeof value === "string" && value.trim())
-        : raw.recallKeywords?.trim().split(/\s+/u).find(Boolean);
-      const pattern = typeof raw.pattern === "string" ? raw.pattern : recall;
-      const { path: searchDir, glob, ignoreCase, literal, context, limit } = raw;
-      let literalSearch = literal !== false;
-      let patternFallback: GrepToolDetails["patternFallback"] =
-        typeof raw.pattern === "string" ? undefined : recall ? "recallKeywords" : undefined;
+      const {
+        pattern,
+        path: searchDir,
+        glob,
+        ignoreCase,
+        literal,
+        context,
+        limit,
+        includeIgnored,
+      } = input;
+      const literalSearch = literal !== false;
       if (typeof pattern !== "string") {
         return {
           content: [
@@ -243,64 +235,89 @@ export function createGrepTool(
       // file-by-file walker. It uses the same filesystem contract as injected
       // `fs`, but can use native search without a second extension lifecycle.
       if (deps?.rpc) {
-        try {
-          let serviceLiteral = literalSearch;
-          if (!serviceLiteral) {
-            try {
-              buildRegex(pattern, { literal: false, ignoreCase: !!ignoreCase });
-            } catch (error) {
-              if (!isInvalidRegexError(error)) throw error;
-              serviceLiteral = true;
-              patternFallback = "literal";
-            }
-          }
-          const servicePattern = serviceLiteral ? escapeRegex(pattern) : pattern;
-          const result = await deps.rpc.call<{
-            matches: Array<{
-              file: string;
-              lineNumber: number;
-              line: string;
-              before: string[];
-              after: string[];
-            }>;
-            matchCount: number;
-            truncated: boolean;
-          }>("main", "fs.grep", [
+        if (!literalSearch) {
+          buildRegex(pattern, { literal: false, ignoreCase: !!ignoreCase });
+        }
+        const searchPath = resolveToCwd(searchDir || ".", cwd);
+        const servicePattern = literalSearch ? escapeRegex(pattern) : pattern;
+        const result = await deps.rpc.call<{
+          matches: Array<{
+            file: string;
+            lineNumber: number;
+            line: string;
+            before: string[];
+            after: string[];
+          }>;
+          matchCount: number;
+          truncated: boolean;
+        }>(
+          "main",
+          "fs.grep",
+          [
             servicePattern,
             {
-              path: searchDir || ".",
+              path: searchPath,
               ...(glob ? { glob } : {}),
               caseInsensitive: !!ignoreCase,
-              contextLines: context && context > 0 ? context : 0,
-              maxMatches: Math.max(1, limit ?? DEFAULT_LIMIT),
+              contextLines: context ?? 0,
+              maxMatches: limit ?? DEFAULT_LIMIT,
+              ...(includeIgnored ? { includeIgnored: true } : {}),
             },
-          ]);
-          const lines: string[] = [];
-          for (const match of result.matches) {
-            const beforeStart = match.lineNumber - match.before.length;
-            match.before.forEach((line, index) =>
-              lines.push(`${match.file}-${beforeStart + index}- ${truncateLine(line).text}`)
-            );
-            lines.push(`${match.file}:${match.lineNumber}: ${truncateLine(match.line).text}`);
-            match.after.forEach((line, index) =>
-              lines.push(
-                `${match.file}-${match.lineNumber + index + 1}- ${truncateLine(line).text}`
-              )
-            );
-          }
-          const text = lines.length > 0 ? lines.join("\n") : "No matches found";
-          return {
-            content: [{ type: "text", text }],
-            details: {
-              engine: "fs-service",
-              ...(patternFallback ? { patternFallback } : {}),
-              ...(result.truncated ? { matchLimitReached: result.matchCount } : {}),
-            },
-          };
-        } catch {
-          // Older hosts or callers without fs.grep permission retain the
-          // workerd-native fallback below.
+          ],
+          signal ? { signal } : undefined
+        );
+        let linesTruncated = false;
+        const formatServicePath = (file: string): string => {
+          if (!path.isAbsolute(file)) return file.replace(/\\/gu, "/");
+          const relative = path.relative(searchPath, file);
+          return relative && !relative.startsWith("..")
+            ? relative.replace(/\\/gu, "/")
+            : path.basename(file);
+        };
+        const truncateServiceLine = (line: string): string => {
+          const value = truncateLine(line);
+          if (value.wasTruncated) linesTruncated = true;
+          return value.text;
+        };
+        const lines: string[] = [];
+        for (const match of result.matches) {
+          const displayPath = formatServicePath(match.file);
+          const beforeStart = match.lineNumber - match.before.length;
+          match.before.forEach((line, index) =>
+            lines.push(`${displayPath}-${beforeStart + index}- ${truncateServiceLine(line)}`)
+          );
+          lines.push(`${displayPath}:${match.lineNumber}: ${truncateServiceLine(match.line)}`);
+          match.after.forEach((line, index) =>
+            lines.push(
+              `${displayPath}-${match.lineNumber + index + 1}- ${truncateServiceLine(line)}`
+            )
+          );
         }
+        if (lines.length === 0) {
+          return { content: [{ type: "text", text: "No matches found" }], details: undefined };
+        }
+        const truncation = truncateHead(lines.join("\n"), { maxLines: Number.MAX_SAFE_INTEGER });
+        let text = truncation.content;
+        const details: GrepToolDetails = { engine: "fs-service" };
+        const notices: string[] = [];
+        if (result.truncated) {
+          notices.push(
+            `${limit ?? DEFAULT_LIMIT} matches limit reached. Refine the pattern or path`
+          );
+          details.matchLimitReached = limit ?? DEFAULT_LIMIT;
+        }
+        if (truncation.truncated) {
+          notices.push(`${formatSize(DEFAULT_MAX_BYTES)} output limit reached`);
+          details.truncation = truncation;
+        }
+        if (linesTruncated) {
+          notices.push(
+            `Some lines truncated to ${GREP_MAX_LINE_LENGTH} chars; use read for full lines`
+          );
+          details.linesTruncated = true;
+        }
+        if (notices.length > 0) text += `\n\n[${notices.join(". ")}]`;
+        return { content: [{ type: "text", text }], details };
       }
 
       const searchPath = resolveToCwd(searchDir || ".", cwd);
@@ -312,7 +329,8 @@ export function createGrepTool(
       try {
         const stat = await fs.stat(searchPath);
         isDirectory = stat.isDirectory();
-      } catch {
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException | null)?.code !== "ENOENT") throw error;
         const hint = /\s/.test((searchDir || "").trim())
           ? " The `path` argument accepts one directory or file, not a space-separated list. Run separate grep calls for multiple roots, or search from `.` with a narrower `glob`."
           : "";
@@ -327,20 +345,11 @@ export function createGrepTool(
           details: {
             engine: "runtime-fs",
             missingSearchPath: displayPath,
-            ...(patternFallback ? { patternFallback } : {}),
           },
         };
       }
 
-      let regex: RegexLike;
-      try {
-        regex = buildRegex(pattern, { literal: literalSearch, ignoreCase: !!ignoreCase });
-      } catch (error) {
-        if (literalSearch || !isInvalidRegexError(error)) throw error;
-        literalSearch = true;
-        patternFallback = "literal";
-        regex = buildRegex(pattern, { literal: true, ignoreCase: !!ignoreCase });
-      }
+      const regex = buildRegex(pattern, { literal: literalSearch, ignoreCase: !!ignoreCase });
       const globRegex = glob ? globToRegex(glob) : null;
 
       const formatPath = (filePath: string): string => {
@@ -364,7 +373,9 @@ export function createGrepTool(
       // workspace into the read phase.
       const files: string[] = [];
       if (isDirectory) {
-        await walk(fs, searchPath, files, signal, shouldSearchFile);
+        for await (const file of walkSearchFiles(fs, searchPath, { includeIgnored, signal })) {
+          if (shouldSearchFile(file)) files.push(file);
+        }
       } else {
         if (shouldSearchFile(searchPath)) files.push(searchPath);
       }
@@ -383,8 +394,9 @@ export function createGrepTool(
         let raw: string | Buffer;
         try {
           raw = await fs.readFile(filePath);
-        } catch {
-          return [];
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException | null)?.code === "ENOENT") return [];
+          throw error;
         }
         filesScanned++;
         if (onUpdate && filesScanned >= nextProgressAt) {
@@ -451,12 +463,7 @@ export function createGrepTool(
       if (matchCount === 0) {
         return {
           content: [{ type: "text", text: "No matches found" }],
-          details: patternFallback
-            ? {
-                engine: "runtime-fs" as const,
-                patternFallback,
-              }
-            : undefined,
+          details: undefined,
         };
       }
 
@@ -464,7 +471,6 @@ export function createGrepTool(
       const truncation = truncateHead(rawOutput, { maxLines: Number.MAX_SAFE_INTEGER });
       let output = truncation.content;
       const details: GrepToolDetails = { engine: "runtime-fs" };
-      if (patternFallback) details.patternFallback = patternFallback;
       const notices: string[] = [];
 
       if (matchLimitReached) {
@@ -598,31 +604,4 @@ export function globToRegex(glob: string): RegExp {
   }
   re += "$";
   return new RegExp(re);
-}
-
-/** Recursive directory walk that skips heavy directories and respects abort. */
-async function walk(
-  fs: RuntimeFs,
-  dir: string,
-  out: string[],
-  signal: AbortSignal | undefined,
-  shouldIncludeFile: (filePath: string) => boolean
-): Promise<void> {
-  if (signal?.aborted) return;
-  let entries: Dirent[];
-  try {
-    entries = (await fs.readdir(dir, { withFileTypes: true })) as Dirent[];
-  } catch {
-    return;
-  }
-  for (const entry of entries) {
-    if (signal?.aborted) return;
-    const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      if (SKIP_DIRS.has(entry.name)) continue;
-      await walk(fs, full, out, signal, shouldIncludeFile);
-    } else if (entry.isFile() && shouldIncludeFile(full)) {
-      out.push(full);
-    }
-  }
 }

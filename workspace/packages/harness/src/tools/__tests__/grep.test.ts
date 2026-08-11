@@ -56,16 +56,15 @@ describe("createGrepTool", () => {
     expect(text).toContain("a.ts:1");
   });
 
-  it("falls back to literal search when an explicitly requested regex is invalid", async () => {
+  it("rejects an invalid explicitly requested regex", async () => {
     const fs = new StubFs({ files: { [`${CWD}/a.ts`]: "open();" } });
     const tool = createGrepTool(CWD, fs);
-    const result = await tool.execute("call-1", { pattern: "open(", literal: false });
-
-    expect((result.content[0] as { text: string }).text).toContain("a.ts:1");
-    expect(result.details).toMatchObject({ patternFallback: "literal" });
+    await expect(tool.execute("call-1", { pattern: "open(", literal: false })).rejects.toThrow(
+      /regular expression|unterminated/iu
+    );
   });
 
-  it("uses the first recall keyword as a compatibility fallback for a missing pattern", async () => {
+  it("does not reinterpret unrelated arguments as a missing pattern", async () => {
     const fs = new StubFs({ files: { [`${CWD}/a.ts`]: "readFile(path);" } });
     const tool = createGrepTool(CWD, fs);
     const result = await tool.execute("call-1", {
@@ -73,8 +72,7 @@ describe("createGrepTool", () => {
       recallKeywords: "readFile bytes base64",
     } as never);
 
-    expect((result.content[0] as { text: string }).text).toContain("a.ts:1");
-    expect(result.details).toMatchObject({ patternFallback: "recallKeywords" });
+    expect((result.content[0] as { text: string }).text).toContain("No grep pattern supplied");
   });
 
   it("uses the host fs service before walking files", async () => {
@@ -143,6 +141,38 @@ describe("createGrepTool", () => {
     );
   });
 
+  it("propagates host failures instead of reporting a false empty search", async () => {
+    const rpc = {
+      call: vi.fn().mockRejectedValue(Object.assign(new Error("denied"), { code: "EACCES" })),
+    };
+    const tool = createGrepTool(CWD, new StubFs({ files: {} }), { rpc: rpc as never });
+
+    await expect(tool.execute("call-1", { pattern: "needle" })).rejects.toMatchObject({
+      code: "EACCES",
+    });
+  });
+
+  it("passes cancellation and bounded search options to the host", async () => {
+    const rpc = {
+      call: vi.fn().mockResolvedValue({ matches: [], matchCount: 0, truncated: false }),
+    };
+    const tool = createGrepTool(CWD, new StubFs({ files: {} }), { rpc: rpc as never });
+    const controller = new AbortController();
+
+    await tool.execute(
+      "call-1",
+      { pattern: "needle", limit: 7, context: 2, includeIgnored: true },
+      controller.signal
+    );
+
+    expect(rpc.call).toHaveBeenCalledWith(
+      "main",
+      "fs.grep",
+      ["needle", expect.objectContaining({ maxMatches: 7, contextLines: 2, includeIgnored: true })],
+      { signal: controller.signal }
+    );
+  });
+
   it("returns 'No matches found' when nothing matches", async () => {
     const fs = new StubFs({ files: { [`${CWD}/a.ts`]: "abc" } });
     const tool = createGrepTool(CWD, fs);
@@ -189,7 +219,26 @@ describe("createGrepTool", () => {
     });
     const tool = createGrepTool(CWD, fs);
     await tool.execute("call-1", { pattern: "match", glob: "*.ts" });
-    expect(fs.readPaths).toEqual([`${CWD}/a.ts`]);
+    expect(fs.readPaths.filter((file) => !/\.(?:gitignore|ignore)$/u.test(file))).toEqual([
+      `${CWD}/a.ts`,
+    ]);
+  });
+
+  it("respects ignore files in the RuntimeFs backend", async () => {
+    const fs = new StubFs({
+      files: {
+        [`${CWD}/.gitignore`]: "ignored.ts\n",
+        [`${CWD}/ignored.ts`]: "needle",
+        [`${CWD}/visible.ts`]: "needle",
+      },
+    });
+    const tool = createGrepTool(CWD, fs);
+
+    const normal = await tool.execute("call-1", { pattern: "needle" });
+    expect((normal.content[0] as { text: string }).text).toContain("visible.ts");
+    expect((normal.content[0] as { text: string }).text).not.toContain("ignored.ts:1");
+    const complete = await tool.execute("call-2", { pattern: "needle", includeIgnored: true });
+    expect((complete.content[0] as { text: string }).text).toContain("ignored.ts:1");
   });
 
   it("emits progress updates during large searches", async () => {

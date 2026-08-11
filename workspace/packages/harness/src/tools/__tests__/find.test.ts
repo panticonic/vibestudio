@@ -60,11 +60,37 @@ describe("createFindTool", () => {
     expect(text).toContain(".hidden");
   });
 
+  it("respects nested ignore files and can include ignored files explicitly", async () => {
+    const fs = new StubFs({
+      files: {
+        [`${CWD}/.gitignore`]: "ignored.ts\n",
+        [`${CWD}/ignored.ts`]: "x",
+        [`${CWD}/visible.ts`]: "x",
+        [`${CWD}/nested/.ignore`]: "local.ts\n",
+        [`${CWD}/nested/local.ts`]: "x",
+      },
+    });
+    const tool = createFindTool(CWD, fs);
+
+    const normal = await tool.execute("call-1", { pattern: "**/*.ts" });
+    expect((normal.content[0] as { text: string }).text).toBe("visible.ts");
+    const complete = await tool.execute("call-2", {
+      pattern: "**/*.ts",
+      includeIgnored: true,
+    });
+    expect((complete.content[0] as { text: string }).text).toBe(
+      "ignored.ts\nnested/local.ts\nvisible.ts"
+    );
+  });
+
   it("uses the context-scoped host glob when RPC is available", async () => {
     const fs = new StubFs({ files: { [`${CWD}/src/a.ts`]: "x" } });
     const stat = vi.spyOn(fs, "stat");
     const rpc = {
-      call: vi.fn().mockResolvedValue([`${CWD}/src/a.ts`]),
+      call: vi.fn().mockResolvedValue({
+        files: [`${CWD}/src/a.ts`],
+        truncated: false,
+      }),
       stream: vi.fn(async () => new Response()),
     };
     const tool = createFindTool(CWD, fs, { rpc });
@@ -75,7 +101,7 @@ describe("createFindTool", () => {
     expect(rpc.call).toHaveBeenCalledWith(
       "main",
       "fs.glob",
-      ["**/*.ts", { path: CWD }],
+      ["**/*.ts", { path: CWD, limit: 10 }],
       undefined
     );
     expect(stat).not.toHaveBeenCalled();
@@ -84,9 +110,11 @@ describe("createFindTool", () => {
   it("bounds host glob results without issuing per-directory RPC calls", async () => {
     const fs = new StubFs({ files: { [`${CWD}/src/a.ts`]: "x" } });
     const rpc = {
-      call: vi
-        .fn()
-        .mockResolvedValue([`${CWD}/src/a.ts`, `${CWD}/src/b.ts`, `${CWD}/src/c.ts`]),
+      call: vi.fn().mockResolvedValue({
+        files: [`${CWD}/src/a.ts`, `${CWD}/src/b.ts`],
+        truncated: true,
+        nextCursor: `${CWD}/src/b.ts`,
+      }),
     };
     const tool = createFindTool(CWD, fs, { rpc: rpc as never });
 
@@ -96,9 +124,21 @@ describe("createFindTool", () => {
     expect((result.content[0] as { text: string }).text).toContain("src/b.ts");
     expect((result.content[0] as { text: string }).text).not.toContain("src/c.ts");
     expect(result.details).toMatchObject({
-      engine: "runtime-fs",
+      engine: "fs-service",
       resultLimitReached: 2,
+      nextCursor: "src/b.ts",
     });
     expect(rpc.call).toHaveBeenCalledTimes(1);
+  });
+
+  it("propagates host authorization and infrastructure failures", async () => {
+    const rpc = {
+      call: vi.fn().mockRejectedValue(Object.assign(new Error("denied"), { code: "EACCES" })),
+    };
+    const tool = createFindTool(CWD, new StubFs({ files: {} }), { rpc: rpc as never });
+
+    await expect(tool.execute("call-1", { pattern: "*.ts" })).rejects.toMatchObject({
+      code: "EACCES",
+    });
   });
 });

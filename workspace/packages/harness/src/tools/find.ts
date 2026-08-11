@@ -14,10 +14,11 @@ import type { AgentTool } from "@workspace/pi-core";
 import type { TextContent, ImageContent } from "@earendil-works/pi-ai";
 import type { RpcCaller } from "@vibestudio/rpc";
 import path from "node:path";
-import type { RuntimeFs, Dirent } from "./runtime-fs.js";
+import type { RuntimeFs } from "./runtime-fs.js";
 import { resolveToCwd } from "./path-utils.js";
 import { DEFAULT_MAX_BYTES, formatSize, truncateHead, type TruncationResult } from "./truncate.js";
 import { globToRegex } from "./grep.js";
+import { walkSearchFiles } from "./search-walk.js";
 
 const findSchema = Type.Object({
   pattern: Type.Optional(
@@ -28,7 +29,21 @@ const findSchema = Type.Object({
   path: Type.Optional(
     Type.String({ description: "Directory to search in (default: current directory)" })
   ),
-  limit: Type.Optional(Type.Number({ description: "Maximum number of results (default: 1000)" })),
+  limit: Type.Optional(
+    Type.Integer({
+      minimum: 1,
+      maximum: 10_000,
+      description: "Maximum number of results (default: 1000; maximum: 10000)",
+    })
+  ),
+  cursor: Type.Optional(
+    Type.String({
+      description: "Resume strictly after this exact relative path from a previous bounded result",
+    })
+  ),
+  includeIgnored: Type.Optional(
+    Type.Boolean({ description: "Include files excluded by .gitignore/.ignore (default: false)" })
+  ),
 });
 
 export type FindToolInput = Static<typeof findSchema>;
@@ -38,7 +53,8 @@ export interface FindToolDetails {
   content?: string;
   truncation?: TruncationResult;
   resultLimitReached?: number;
-  engine?: "ripgrep" | "runtime-fs";
+  engine?: "fs-service" | "runtime-fs";
+  nextCursor?: string;
   missingSearchPath?: string;
   extensionFallback?: string;
 }
@@ -48,17 +64,6 @@ export interface FindToolDeps {
 }
 
 const DEFAULT_LIMIT = 1000;
-
-const SKIP_DIRS = new Set([
-  ".git",
-  "node_modules",
-  ".svelte-kit",
-  ".next",
-  "dist",
-  "build",
-  ".cache",
-  ".turbo",
-]);
 
 export function createFindTool(
   cwd: string,
@@ -72,7 +77,7 @@ export function createFindTool(
     description: `Search for files by glob pattern. Returns matching file paths relative to the search directory. Output is truncated to ${DEFAULT_LIMIT} results or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first).`,
     parameters: findSchema,
     execute: async (_toolCallId, input, signal, _onUpdate) => {
-      const { pattern, path: searchDir, limit } = input;
+      const { pattern, path: searchDir, limit, cursor, includeIgnored } = input;
       if (typeof pattern !== "string") {
         return {
           content: [
@@ -92,19 +97,28 @@ export function createFindTool(
       const effectiveLimit = limit ?? DEFAULT_LIMIT;
 
       if (deps?.rpc) {
-        let found: string[];
+        let page: { files: string[]; truncated: boolean; nextCursor?: string };
         try {
-          found = await deps.rpc.call<string[]>(
+          page = await deps.rpc.call<{
+            files: string[];
+            truncated: boolean;
+            nextCursor?: string;
+          }>(
             "main",
             "fs.glob",
-            [pattern, { path: searchPath }],
+            [
+              pattern,
+              {
+                path: searchPath,
+                limit: effectiveLimit,
+                ...(cursor ? { after: path.resolve(searchPath, cursor) } : {}),
+                ...(includeIgnored ? { includeIgnored: true } : {}),
+              },
+            ],
             signal ? { signal } : undefined
           );
         } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          if ((error as NodeJS.ErrnoException | null)?.code !== "ENOENT" && !/\bENOENT\b/u.test(message)) {
-            throw error;
-          }
+          if ((error as NodeJS.ErrnoException | null)?.code !== "ENOENT") throw error;
           const displayPath = searchDir || ".";
           return {
             content: [
@@ -113,21 +127,21 @@ export function createFindTool(
                 text: `No files found matching pattern (search path does not exist: ${displayPath})`,
               },
             ],
-            details: { engine: "runtime-fs", missingSearchPath: displayPath },
+            details: { engine: "fs-service", missingSearchPath: displayPath },
           };
         }
-        const resultLimitReached = found.length > effectiveLimit;
-        const matches = found
-          .slice(0, effectiveLimit)
-          .map((file) => path.relative(searchPath, file).replace(/\\/g, "/"));
-        return renderMatches(matches, effectiveLimit, resultLimitReached);
+        const matches = page.files.map((file) =>
+          path.relative(searchPath, file).replace(/\\/g, "/")
+        );
+        return renderMatches(matches, effectiveLimit, page.truncated, "fs-service");
       }
 
       // The in-memory fallback needs an explicit root probe; the host glob
       // service already combines this with its traversal in one RPC above.
       try {
         await fs.stat(searchPath);
-      } catch {
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException | null)?.code !== "ENOENT") throw error;
         const displayPath = searchDir || ".";
         return {
           content: [
@@ -148,54 +162,33 @@ export function createFindTool(
       const basenameRegex = pattern.includes("/") ? null : regex;
       const matches: string[] = [];
       let resultLimitReached = false;
+      let cursorSeen = cursor === undefined;
 
-      const walk = async (dir: string): Promise<void> => {
-        if (signal?.aborted) {
-          throw new Error("Operation aborted");
-        }
-        if (resultLimitReached) return;
-        let entries: Dirent[];
-        try {
-          entries = (await fs.readdir(dir, { withFileTypes: true })) as Dirent[];
-        } catch {
-          return;
-        }
-        for (const entry of entries) {
-          if (signal?.aborted) throw new Error("Operation aborted");
-          if (resultLimitReached) return;
-          const full = path.join(dir, entry.name);
-          const rel = path.relative(searchPath, full).replace(/\\/g, "/");
-          if (entry.isDirectory()) {
-            if (SKIP_DIRS.has(entry.name)) continue;
-            // Test the directory itself against the glob too — it lets users find
-            // directories like `**/__tests__`.
-            if (
-              regex.test(rel + "/") ||
-              basenameRegex?.test(entry.name) ||
-              basenameRegex?.test(entry.name + "/")
-            ) {
-              matches.push(rel + "/");
-              if (matches.length >= effectiveLimit) {
-                resultLimitReached = true;
-                return;
-              }
-            }
-            await walk(full);
-          } else if (entry.isFile()) {
-            if (regex.test(rel) || basenameRegex?.test(entry.name)) {
-              matches.push(rel);
-              if (matches.length >= effectiveLimit) {
-                resultLimitReached = true;
-                return;
-              }
-            }
+      for await (const full of walkSearchFiles(fs, searchPath, { includeIgnored, signal })) {
+        const rel = path.relative(searchPath, full).replace(/\\/g, "/");
+        const basename = path.basename(full);
+        if (regex.test(rel) || basenameRegex?.test(basename)) {
+          if (!cursorSeen) {
+            cursorSeen = rel === cursor;
+            continue;
+          }
+          matches.push(rel);
+          if (matches.length > effectiveLimit) {
+            resultLimitReached = true;
+            break;
           }
         }
-      };
+      }
+      if (!cursorSeen) {
+        throw new Error(`Find cursor is no longer present: ${cursor}`);
+      }
 
-      await walk(searchPath);
-
-      return renderMatches(matches, effectiveLimit, resultLimitReached);
+      return renderMatches(
+        matches.slice(0, effectiveLimit),
+        effectiveLimit,
+        resultLimitReached,
+        "runtime-fs"
+      );
     },
   };
 }
@@ -203,7 +196,8 @@ export function createFindTool(
 function renderMatches(
   matches: string[],
   effectiveLimit: number,
-  resultLimitReached: boolean
+  resultLimitReached: boolean,
+  engine: "fs-service" | "runtime-fs"
 ): {
   content: (TextContent | ImageContent)[];
   details: FindToolDetails | undefined;
@@ -218,18 +212,20 @@ function renderMatches(
   const rawOutput = matches.join("\n");
   const truncation = truncateHead(rawOutput, { maxLines: Number.MAX_SAFE_INTEGER });
   let resultOutput = truncation.content;
-  const details: FindToolDetails = { engine: "runtime-fs" };
+  const details: FindToolDetails = { engine };
   const notices: string[] = [];
 
   if (resultLimitReached) {
-    notices.push(
-      `${effectiveLimit} results limit reached. Use limit=${effectiveLimit * 2} for more, or refine pattern`
-    );
     details.resultLimitReached = effectiveLimit;
   }
   if (truncation.truncated) {
     notices.push(`${formatSize(DEFAULT_MAX_BYTES)} limit reached`);
     details.truncation = truncation;
+  } else if (resultLimitReached) {
+    details.nextCursor = matches.at(-1);
+    notices.push(
+      `${effectiveLimit} results limit reached. Continue with cursor=${JSON.stringify(details.nextCursor)}, or refine the pattern`
+    );
   }
   if (notices.length > 0) {
     resultOutput += `\n\n[${notices.join(". ")}]`;

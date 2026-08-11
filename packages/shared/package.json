@@ -138,6 +138,8 @@
     "@vibestudio/typecheck": "workspace:*",
     "@vibestudio/types": "workspace:*",
     "@vibestudio/workspace-contracts": "workspace:*",
+    "@vscode/ripgrep": "1.18.0",
+    "ignore": "7.0.5",
     "zod": "^3.24.1"
   },
   "devDependencies": {

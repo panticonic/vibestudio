@@ -76,12 +76,24 @@ const grepOptionsSchema = z.object({
   caseInsensitive: z.boolean().optional().describe("Match case-insensitively (default false)."),
   contextLines: z
     .number()
+    .int()
+    .min(0)
+    .max(10)
     .optional()
-    .describe("Lines of surrounding context before/after each match (clamped to 10)."),
+    .describe("Lines of surrounding context before/after each match (0-10)."),
   maxMatches: z
     .number()
+    .int()
+    .min(1)
+    .max(1000)
     .optional()
-    .describe("Stop after this many matches (default 200, hard cap 1000)."),
+    .describe("Stop after this many matches (default 200; maximum 1000)."),
+  includeIgnored: z
+    .boolean()
+    .optional()
+    .describe(
+      "Include files excluded by .gitignore/.ignore; internal .git/.gad and node_modules remain excluded."
+    ),
 });
 const grepResultSchema = z.object({
   matches: z
@@ -103,6 +115,31 @@ const globOptionsSchema = z.object({
     .string()
     .optional()
     .describe("Directory to search, relative to the context root (default '/')."),
+  limit: z
+    .number()
+    .int()
+    .min(1)
+    .max(10_000)
+    .optional()
+    .describe("Maximum files to return (default 1000; maximum 10000)."),
+  after: z
+    .string()
+    .optional()
+    .describe("Resume strictly after this exact path from a previous bounded result."),
+  includeIgnored: z
+    .boolean()
+    .optional()
+    .describe(
+      "Include files excluded by .gitignore/.ignore; internal .git/.gad and node_modules remain excluded."
+    ),
+});
+const globResultSchema = z.object({
+  files: z.array(z.string()).describe("Matching context-root-relative file paths."),
+  truncated: z.boolean().describe("True when more matching files remain after this page."),
+  nextCursor: z
+    .string()
+    .optional()
+    .describe("Exact path to pass as `after` to retrieve the next page."),
 });
 const readdirOptionsSchema = z.object({
   withFileTypes: z
@@ -519,7 +556,7 @@ export const fsMethods = defineServiceMethods({
         "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
     },
     description:
-      "Search file contents under the context root for a regex pattern (the first argument), returning matching lines with optional context; uses ripgrep when available with a pure-JS fallback, skipping .git, node_modules, symlinks, and binary files.",
+      "Search file contents under the context root with the bundled ripgrep engine for a regex pattern (the first argument), returning bounded matching lines in deterministic path/line order with optional context. Respects .gitignore/.ignore by default and always skips .git, .gad, node_modules, symlinks, and binary files.",
     args: z.union([
       z.tuple([z.string(), grepOptionsSchema.optional()]),
       z.tuple([z.string(), z.string(), grepOptionsSchema.optional()]),
@@ -538,12 +575,12 @@ export const fsMethods = defineServiceMethods({
         "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
     },
     description:
-      "Find files whose path matches a glob pattern (the first argument) under the context root, returned newest-first by mtime; skips .git, node_modules, and symlinks.",
+      "Find regular files whose path matches a glob pattern (the first argument) under the context root, returned in deterministic lexical traversal order. Results are bounded and resumable. Respects .gitignore/.ignore by default and always skips .git, .gad, node_modules, and symlinks.",
     args: z.union([
       z.tuple([z.string(), globOptionsSchema.optional()]),
       z.tuple([z.string(), z.string(), globOptionsSchema.optional()]),
     ]),
-    returns: z.array(z.string()),
+    returns: globResultSchema,
     access: READ_ACCESS,
     examples: [{ args: ["**/*.test.ts"] }],
   },

@@ -13,6 +13,8 @@ import * as fs from "fs/promises";
 import * as fsSync from "fs";
 import * as path from "path";
 import { randomBytes } from "node:crypto";
+import { rgPath as bundledRipgrepPath } from "@vscode/ripgrep";
+import ignore, { type Ignore } from "ignore";
 import { compareUtf16CodeUnits } from "@vibestudio/content-addressing";
 import type { FileHandle as NodeFileHandle } from "fs/promises";
 import type { ServiceContext } from "./serviceDispatcher.js";
@@ -1024,11 +1026,19 @@ export interface GrepOptions {
   contextLines?: number;
   /** Stop after this many matches (default 200, hard cap 1000). */
   maxMatches?: number;
+  /** Include files normally excluded by .gitignore/.ignore. */
+  includeIgnored?: boolean;
 }
 
 export interface GlobOptions {
   /** Directory to search, relative to the context root. */
   path?: string;
+  /** Stop after this many files (default 1000, hard cap 10000). */
+  limit?: number;
+  /** Resume strictly after this exact path from a previous bounded result. */
+  after?: string;
+  /** Include files normally excluded by .gitignore/.ignore. */
+  includeIgnored?: boolean;
 }
 
 export interface GrepMatch {
@@ -1045,41 +1055,27 @@ export interface GrepResult {
   truncated: boolean;
 }
 
+export interface GlobResult {
+  files: string[];
+  truncated: boolean;
+  /** Exact display path to pass as `after` for the next page. */
+  nextCursor?: string;
+}
+
 interface RawGrepMatch {
   /** Absolute file path. */
   file: string;
   lineNumber: number;
   line: string;
+  before: string[];
+  after: string[];
 }
 
-let cachedRipgrepPath: string | null | undefined;
-
-/** Locate `rg` on PATH (cached). Exported test hook: `_resetRipgrepCache`. */
-function findRipgrep(): string | null {
-  if (cachedRipgrepPath !== undefined) return cachedRipgrepPath;
-  const names = process.platform === "win32" ? ["rg.exe", "rg"] : ["rg"];
-  for (const dir of (process.env["PATH"] ?? "").split(path.delimiter)) {
-    if (!dir) continue;
-    for (const name of names) {
-      const candidate = path.join(dir, name);
-      try {
-        fsSync.accessSync(candidate, fsSync.constants.X_OK);
-        if (fsSync.statSync(candidate).isFile()) {
-          cachedRipgrepPath = candidate;
-          return candidate;
-        }
-      } catch {
-        // keep looking
-      }
-    }
-  }
-  cachedRipgrepPath = null;
-  return null;
-}
+let ripgrepPathOverride: string | null | undefined;
 
 /** Test hook: force re-detection of ripgrep (and optionally disable it). */
 export function _setRipgrepPathForTests(value: string | null | undefined): void {
-  cachedRipgrepPath = value;
+  ripgrepPathOverride = value;
 }
 
 /**
@@ -1145,37 +1141,71 @@ function matchesGlob(relPath: string, pattern: string): boolean {
   return new RegExp(`^${globSource(pattern)}$`).test(subject);
 }
 
-/** Recursively yield files under `dir`, skipping VCS/deps dirs and symlinks. */
-async function* walkFiles(dir: string): AsyncGenerator<string> {
-  let entries: fsSync.Dirent[];
-  try {
-    entries = await fs.readdir(dir, { withFileTypes: true });
-  } catch {
-    return;
+function prefixIgnorePattern(line: string, prefix: string): string | null {
+  const trimmed = line.trim();
+  if (!trimmed || (trimmed.startsWith("#") && !trimmed.startsWith("\\#"))) return null;
+  let pattern = line;
+  let negated = false;
+  if (pattern.startsWith("!")) {
+    negated = true;
+    pattern = pattern.slice(1);
+  } else if (pattern.startsWith("\\!")) {
+    pattern = pattern.slice(1);
   }
-  for (const entry of entries) {
-    const abs = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      if (SEARCH_SKIP_DIRS.has(entry.name)) continue;
-      yield* walkFiles(abs);
-    } else if (entry.isFile()) {
-      yield abs;
+  if (pattern.startsWith("/")) pattern = pattern.slice(1);
+  const prefixed = prefix ? `${prefix}${pattern}` : pattern;
+  return negated ? `!${prefixed}` : prefixed;
+}
+
+async function addSearchIgnoreRules(matcher: Ignore, dir: string, root: string): Promise<void> {
+  const relativeDir = path.relative(root, dir).split(path.sep).join("/");
+  const prefix = relativeDir ? `${relativeDir}/` : "";
+  for (const filename of [".gitignore", ".ignore"]) {
+    try {
+      const rules = (await fs.readFile(path.join(dir, filename), "utf8"))
+        .split(/\r?\n/u)
+        .map((line) => prefixIgnorePattern(line, prefix))
+        .filter((line): line is string => line !== null);
+      if (rules.length > 0) matcher.add(rules);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }
-    // Symlinks (and other special entries) are intentionally skipped: they
-    // could point outside the sandbox.
   }
 }
 
-/** Heuristic binary check: NUL byte in the first 8 KiB. */
-async function isBinaryFile(filePath: string): Promise<boolean> {
-  const handle = await fs.open(filePath, "r");
-  try {
-    const buf = Buffer.alloc(8192);
-    const { bytesRead } = await handle.read(buf, 0, buf.length, 0);
-    return buf.subarray(0, bytesRead).includes(0);
-  } finally {
-    await handle.close();
+/** Deterministic bounded-search traversal with one canonical ignore policy. */
+async function* walkFiles(
+  root: string,
+  options: { includeIgnored?: boolean; signal?: AbortSignal } = {}
+): AsyncGenerator<string> {
+  const matcher = ignore().add([".git/", ".gad/", "node_modules/"]);
+  async function* visit(dir: string): AsyncGenerator<string> {
+    if (options.signal?.aborted) throw options.signal.reason ?? new Error("Operation aborted");
+    if (!options.includeIgnored) await addSearchIgnoreRules(matcher, dir, root);
+    let entries: fsSync.Dirent[];
+    try {
+      entries = await fs.readdir(dir, { withFileTypes: true });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+      throw error;
+    }
+    entries.sort((left, right) => compareUtf16CodeUnits(left.name, right.name));
+    for (const entry of entries) {
+      if (options.signal?.aborted) throw options.signal.reason ?? new Error("Operation aborted");
+      const abs = path.join(dir, entry.name);
+      const rel = path.relative(root, abs).split(path.sep).join("/");
+      if (entry.isDirectory()) {
+        if (SEARCH_SKIP_DIRS.has(entry.name)) continue;
+        if (!options.includeIgnored && matcher.ignores(`${rel}/`)) continue;
+        yield* visit(abs);
+      } else if (entry.isFile()) {
+        if (!options.includeIgnored && matcher.ignores(rel)) continue;
+        yield abs;
+      }
+      // Symlinks and special entries are never followed across the authority boundary.
+    }
   }
+  yield* visit(root);
 }
 
 /** Run ripgrep and collect up to `limit` raw matches. */
@@ -1183,20 +1213,28 @@ async function grepWithRipgrep(
   rgPath: string,
   searchRoot: string,
   pattern: string,
-  opts: { caseInsensitive: boolean; glob?: string },
-  limit: number
+  opts: { caseInsensitive: boolean; glob?: string; includeIgnored: boolean },
+  limit: number,
+  contextLines: number,
+  signal?: AbortSignal
 ): Promise<{ raw: RawGrepMatch[]; truncated: boolean }> {
   const { spawn } = await import("node:child_process");
   const rgArgs = [
     "--json",
-    "--no-ignore",
+    "--sort",
+    "path",
     "--hidden",
     "--no-messages",
+    "--no-require-git",
     "--glob",
     "!**/.git/**",
     "--glob",
     "!**/node_modules/**",
+    "--glob",
+    "!**/.gad/**",
   ];
+  if (opts.includeIgnored) rgArgs.push("--no-ignore");
+  if (contextLines > 0) rgArgs.push("--context", String(contextLines));
   if (opts.caseInsensitive) rgArgs.push("--ignore-case");
   if (opts.glob) rgArgs.push("--glob", opts.glob);
   rgArgs.push("--regexp", pattern, "--", searchRoot);
@@ -1208,13 +1246,20 @@ async function grepWithRipgrep(
     let stderr = "";
     let buffered = "";
     let settled = false;
-
+    const contextByFile = new Map<string, Map<number, string>>();
     const finish = (err?: Error) => {
       if (settled) return;
       settled = true;
+      signal?.removeEventListener("abort", abort);
       if (err) rejectPromise(err);
       else resolvePromise({ raw, truncated });
     };
+    const abort = () => {
+      child.kill();
+      finish(signal?.reason instanceof Error ? signal.reason : new Error("Operation aborted"));
+    };
+    if (signal?.aborted) abort();
+    else signal?.addEventListener("abort", abort, { once: true });
 
     child.stderr.on("data", (chunk: Buffer) => {
       stderr += chunk.toString("utf8");
@@ -1232,20 +1277,34 @@ async function grepWithRipgrep(
         } catch {
           continue;
         }
-        if (event.type !== "match") continue;
+        if (event.type !== "match" && event.type !== "context") continue;
         const file = event.data?.path?.text;
         const text = event.data?.lines?.text;
         const lineNumber = event.data?.line_number;
         // Skip non-UTF8 payloads (rg reports them as base64 `bytes`).
         if (typeof file !== "string" || typeof text !== "string") continue;
         if (typeof lineNumber !== "number") continue;
+        if (event.type === "context") {
+          const lines = contextByFile.get(file) ?? new Map<number, string>();
+          lines.set(lineNumber, text.replace(/\r?\n$/u, ""));
+          contextByFile.set(file, lines);
+          continue;
+        }
         if (raw.length >= limit) {
           truncated = true;
           child.kill();
-          finish();
           return;
         }
-        raw.push({ file, lineNumber, line: text.replace(/\r?\n$/, "") });
+        const lines = contextByFile.get(file) ?? new Map<number, string>();
+        lines.set(lineNumber, text.replace(/\r?\n$/u, ""));
+        contextByFile.set(file, lines);
+        raw.push({
+          file,
+          lineNumber,
+          line: text.replace(/\r?\n$/u, ""),
+          before: [],
+          after: [],
+        });
       }
     });
     child.on("error", (err) => finish(err));
@@ -1255,63 +1314,21 @@ async function grepWithRipgrep(
         finish(new Error(`ripgrep failed: ${stderr.trim() || `exit code ${code}`}`));
         return;
       }
+      for (const match of raw) {
+        const lines = contextByFile.get(match.file);
+        if (!lines) continue;
+        for (let line = match.lineNumber - contextLines; line < match.lineNumber; line += 1) {
+          const value = lines.get(line);
+          if (value !== undefined) match.before.push(value);
+        }
+        for (let line = match.lineNumber + 1; line <= match.lineNumber + contextLines; line += 1) {
+          const value = lines.get(line);
+          if (value !== undefined) match.after.push(value);
+        }
+      }
       finish();
     });
   });
-}
-
-/** Pure-JS streaming grep fallback (no ripgrep on PATH). */
-async function grepWithJs(
-  searchRoot: string,
-  regex: RegExp,
-  globFilter: string | undefined,
-  limit: number
-): Promise<{ raw: RawGrepMatch[]; truncated: boolean }> {
-  const { createInterface } = await import("node:readline");
-  const raw: RawGrepMatch[] = [];
-  let truncated = false;
-
-  const rootStat = await fs.stat(searchRoot);
-  const files = rootStat.isFile() ? singleton(searchRoot) : walkFiles(searchRoot);
-
-  outer: for await (const file of files) {
-    if (globFilter) {
-      const rel =
-        searchRoot === file
-          ? path.basename(file)
-          : path.relative(searchRoot, file).split(path.sep).join("/");
-      if (!matchesGlob(rel, globFilter)) continue;
-    }
-    try {
-      if (await isBinaryFile(file)) continue;
-    } catch {
-      continue;
-    }
-    const stream = fsSync.createReadStream(file, { encoding: "utf8" });
-    const rl = createInterface({ input: stream, crlfDelay: Infinity });
-    let lineNumber = 0;
-    try {
-      for await (const line of rl) {
-        lineNumber += 1;
-        if (!regex.test(line)) continue;
-        if (raw.length >= limit) {
-          truncated = true;
-          break outer;
-        }
-        raw.push({ file, lineNumber, line });
-      }
-    } catch {
-      // Unreadable file mid-stream: skip the rest of it.
-    } finally {
-      rl.close();
-      stream.destroy();
-    }
-  }
-  return { raw, truncated };
-}
-
-async function* singleton<T>(value: T): AsyncGenerator<T> {
-  yield value;
 }
 
 // ---------------------------------------------------------------------------
@@ -2537,7 +2554,8 @@ export class FsService {
         const result = await this.grep(
           scope,
           args[0] as string,
-          args[1] as GrepOptions | undefined
+          args[1] as GrepOptions | undefined,
+          ctx.signal
         );
         const ingestion = await this.ingestionForProjectedPaths(
           bridge,
@@ -2555,13 +2573,14 @@ export class FsService {
         const result = await this.glob(
           scope,
           args[0] as string,
-          args[1] as GlobOptions | undefined
+          args[1] as GlobOptions | undefined,
+          ctx.signal
         );
         const ingestion = await this.ingestionForProjectedPaths(
           bridge,
           scope,
           ctx,
-          result.map((file) =>
+          result.files.map((file) =>
             scope.unrestricted ? file : path.join(scope.root, file.replace(/^\/+/, ""))
           )
         );
@@ -2828,64 +2847,54 @@ export class FsService {
   }
 
   /**
-   * Search file contents under the context root. Uses a ripgrep subprocess
-   * when `rg` is on PATH, with a streaming pure-JS fallback. Skips `.git`,
-   * `node_modules`, symlinks, and binary files.
+   * Search file contents under the context root with the bundled ripgrep
+   * engine. Skips internal/dependency trees, symlinks, and binary files.
    */
   private async grep(
     scope: FsCallScope,
     pattern: string,
-    opts: GrepOptions = {}
+    opts: GrepOptions = {},
+    signal?: AbortSignal
   ): Promise<GrepResult> {
     if (typeof pattern !== "string" || pattern.length === 0) {
       throw new Error("grep pattern must be a non-empty string");
     }
     const caseInsensitive = opts.caseInsensitive ?? false;
-    // Validate the pattern eagerly (also used by the JS fallback and shared
-    // with ripgrep's regex dialect for everyday patterns).
-    const regex = new RegExp(pattern, caseInsensitive ? "i" : "");
-    const contextLines = Math.min(
-      GREP_MAX_CONTEXT_LINES,
-      Math.max(0, Math.floor(opts.contextLines ?? 0))
-    );
-    const maxMatches = Math.min(
-      GREP_HARD_MAX_MATCHES,
-      Math.max(1, Math.floor(opts.maxMatches ?? GREP_DEFAULT_MAX_MATCHES))
-    );
+    const contextLines = opts.contextLines ?? 0;
+    if (
+      !Number.isInteger(contextLines) ||
+      contextLines < 0 ||
+      contextLines > GREP_MAX_CONTEXT_LINES
+    ) {
+      throw new RangeError(
+        `grep contextLines must be an integer from 0 to ${GREP_MAX_CONTEXT_LINES}`
+      );
+    }
+    const maxMatches = opts.maxMatches ?? GREP_DEFAULT_MAX_MATCHES;
+    if (!Number.isInteger(maxMatches) || maxMatches < 1 || maxMatches > GREP_HARD_MAX_MATCHES) {
+      throw new RangeError(`grep maxMatches must be an integer from 1 to ${GREP_HARD_MAX_MATCHES}`);
+    }
     const searchRoot = await resolveFsFilePath(scope, opts.path ?? "/");
 
-    const rgPath = findRipgrep();
-    const { raw, truncated } = rgPath
-      ? await grepWithRipgrep(
-          rgPath,
-          searchRoot,
-          pattern,
-          { caseInsensitive, glob: opts.glob },
-          maxMatches
-        )
-      : await grepWithJs(searchRoot, regex, opts.glob, maxMatches);
-
-    // Attach context lines by re-reading matched files (bounded by maxMatches).
-    const fileLines = new Map<string, string[]>();
-    if (contextLines > 0) {
-      for (const file of new Set(raw.map((m) => m.file))) {
-        try {
-          fileLines.set(file, (await fs.readFile(file, "utf8")).split(/\r?\n/));
-        } catch {
-          // File vanished between search and context read; emit without context.
-        }
-      }
-    }
+    const rgPath = ripgrepPathOverride === undefined ? bundledRipgrepPath : ripgrepPathOverride;
+    if (!rgPath) throw new Error("The bundled ripgrep search engine is unavailable");
+    const { raw, truncated } = await grepWithRipgrep(
+      rgPath,
+      searchRoot,
+      pattern,
+      { caseInsensitive, glob: opts.glob, includeIgnored: opts.includeIgnored === true },
+      maxMatches,
+      contextLines,
+      signal
+    );
 
     const matches: GrepMatch[] = raw.map((m) => {
-      const lines = fileLines.get(m.file);
-      const idx = m.lineNumber - 1;
       return {
         file: this.toDisplayPath(scope, m.file),
         lineNumber: m.lineNumber,
         line: m.line,
-        before: lines ? lines.slice(Math.max(0, idx - contextLines), idx) : [],
-        after: lines ? lines.slice(idx + 1, idx + 1 + contextLines) : [],
+        before: m.before,
+        after: m.after,
       };
     });
 
@@ -2893,30 +2902,51 @@ export class FsService {
   }
 
   /**
-   * Find files matching a glob pattern under the context root, sorted by
-   * mtime descending. Skips `.git`, `node_modules`, and symlinks.
+   * Find files matching a glob pattern under the context root in stable
+   * lexical traversal order. Skips internal/dependency trees and symlinks.
    */
   private async glob(
     scope: FsCallScope,
     pattern: string,
-    opts: GlobOptions = {}
-  ): Promise<string[]> {
+    opts: GlobOptions = {},
+    signal?: AbortSignal
+  ): Promise<GlobResult> {
     if (typeof pattern !== "string" || pattern.length === 0) {
       throw new Error("glob pattern must be a non-empty string");
     }
     const searchRoot = await resolveFsPath(scope, opts.path ?? "/");
-    const matched: Array<{ file: string; mtimeMs: number }> = [];
-    for await (const file of walkFiles(searchRoot)) {
+    const limit = opts.limit ?? 1_000;
+    if (!Number.isInteger(limit) || limit < 1 || limit > 10_000) {
+      throw new RangeError("glob limit must be an integer from 1 to 10000");
+    }
+    const matched: string[] = [];
+    let cursorSeen = opts.after === undefined;
+    for await (const file of walkFiles(searchRoot, {
+      includeIgnored: opts.includeIgnored,
+      signal,
+    })) {
       const rel = path.relative(searchRoot, file).split(path.sep).join("/");
       if (!matchesGlob(rel, pattern)) continue;
-      try {
-        matched.push({ file, mtimeMs: (await fs.lstat(file)).mtimeMs });
-      } catch {
-        // File vanished mid-walk.
+      const display = this.toDisplayPath(scope, file);
+      if (!cursorSeen) {
+        cursorSeen = display === opts.after;
+        continue;
       }
+      matched.push(display);
+      if (matched.length > limit) break;
     }
-    matched.sort((a, b) => b.mtimeMs - a.mtimeMs);
-    return matched.map((m) => this.toDisplayPath(scope, m.file));
+    if (!cursorSeen) {
+      throw Object.assign(new Error(`Glob cursor is no longer present: ${opts.after}`), {
+        code: "InvalidCursor",
+      });
+    }
+    const truncated = matched.length > limit;
+    const files = truncated ? matched.slice(0, limit) : matched;
+    return {
+      files,
+      truncated,
+      ...(truncated ? { nextCursor: files.at(-1) } : {}),
+    };
   }
 }
 

@@ -251,6 +251,7 @@ async function grep(inv: ParsedInvocation): Promise<number> {
       caseInsensitive?: boolean;
       contextLines?: number;
       maxMatches?: number;
+      includeIgnored?: boolean;
     } = {};
     if (inv.positionals[1]) options.path = inv.positionals[1];
     if (typeof inv.flags["glob"] === "string") options.glob = inv.flags["glob"];
@@ -261,6 +262,7 @@ async function grep(inv: ParsedInvocation): Promise<number> {
     if (typeof inv.flags["max"] === "string") {
       options.maxMatches = positiveInt(inv.flags["max"], "--max");
     }
+    if (inv.flags["include-ignored"] === true) options.includeIgnored = true;
     const { client, contextId } = resolveSessionScope(inv);
     const fsClient = typedClient("fs", fsMethods, client);
     const result = await fsClient.grep(contextId, pattern, options);
@@ -280,15 +282,30 @@ async function glob(inv: ParsedInvocation): Promise<number> {
   const json = jsonMode(inv.flags["json"] === true);
   try {
     const pattern = requirePositional(inv, 0, "PATTERN");
-    const options: { path?: string } = {};
+    const options: {
+      path?: string;
+      limit?: number;
+      after?: string;
+      includeIgnored?: boolean;
+    } = {};
     if (inv.positionals[1]) options.path = inv.positionals[1];
+    if (typeof inv.flags["limit"] === "string") {
+      options.limit = positiveInt(inv.flags["limit"], "--limit");
+    }
+    if (typeof inv.flags["after"] === "string") options.after = inv.flags["after"];
+    if (inv.flags["include-ignored"] === true) options.includeIgnored = true;
     const { client, contextId } = resolveSessionScope(inv);
     const fsClient = typedClient("fs", fsMethods, client);
-    const files = await fsClient.glob(contextId, pattern, options);
-    printResult(files, {
+    const page = await fsClient.glob(contextId, pattern, options);
+    printResult(page, {
       json,
       human: () => {
-        for (const file of files) console.log(file);
+        for (const file of page.files) console.log(file);
+        if (page.nextCursor) {
+          console.error(
+            `More results available; continue with --after ${JSON.stringify(page.nextCursor)}`
+          );
+        }
       },
     });
     return 0;
@@ -414,6 +431,11 @@ export const fsCommands: CliCommand[] = [
         description: "Context lines around matches",
       },
       { name: "max", takesValue: true, description: "Stop after N matches" },
+      {
+        name: "include-ignored",
+        takesValue: false,
+        description: "Include files excluded by .gitignore/.ignore",
+      },
       ...SCOPE_FLAGS,
       JSON_FLAG,
     ],
@@ -422,9 +444,19 @@ export const fsCommands: CliCommand[] = [
   {
     group: "fs",
     name: "glob",
-    summary: "Find files by glob pattern (mtime-sorted)",
-    usage: "vibestudio fs glob PATTERN [PATH]",
-    flags: [...SCOPE_FLAGS, JSON_FLAG],
+    summary: "Find files by glob pattern (stable lexical order)",
+    usage: "vibestudio fs glob PATTERN [PATH] [--limit N] [--after PATH]",
+    flags: [
+      { name: "limit", takesValue: true, description: "Return at most N files" },
+      { name: "after", takesValue: true, description: "Continue after an exact prior path" },
+      {
+        name: "include-ignored",
+        takesValue: false,
+        description: "Include files excluded by .gitignore/.ignore",
+      },
+      ...SCOPE_FLAGS,
+      JSON_FLAG,
+    ],
     run: glob,
   },
 ];

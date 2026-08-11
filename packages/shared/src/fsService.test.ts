@@ -33,6 +33,7 @@ import {
   FsService,
   _setRipgrepPathForTests,
   type GrepResult,
+  type GlobResult,
   type FsVcsBridge,
   type FsVcsContent,
   type FsVcsEditOp,
@@ -1107,10 +1108,7 @@ describe("FsService", () => {
       _setRipgrepPathForTests(undefined);
     });
 
-    for (const [mode, rgOverride] of [
-      ["js fallback", null],
-      ["auto-detected backend", undefined],
-    ] as const) {
+    for (const [mode, rgOverride] of [["bundled ripgrep", undefined]] as const) {
       describe(mode, () => {
         function withBackend(): void {
           _setRipgrepPathForTests(rgOverride);
@@ -1181,8 +1179,56 @@ describe("FsService", () => {
           ])) as GrepResult;
           expect(result.matches.map((m) => m.file)).toEqual(["/src/beta.md"]);
         });
+
+        it("respects ignore files unless includeIgnored is explicit", async () => {
+          const ctx = makeWorkerCtx("do:src:class:key");
+          registerContext(ctx.caller.runtime.id, "do", "ctx-grep-ignore");
+          const root = path.join(tmpRoot, "ctx-grep-ignore");
+          mkdirSync(root, { recursive: true });
+          writeFileSync(path.join(root, ".gitignore"), "ignored.txt\n");
+          writeFileSync(path.join(root, "ignored.txt"), "needle\n");
+          writeFileSync(path.join(root, "visible.txt"), "needle\n");
+          withBackend();
+
+          const normal = (await service.handleCall(ctx, "grep", ["needle"])) as GrepResult;
+          expect(normal.matches.map((match) => match.file)).toEqual(["/visible.txt"]);
+          const complete = (await service.handleCall(ctx, "grep", [
+            "needle",
+            { includeIgnored: true },
+          ])) as GrepResult;
+          expect(complete.matches.map((match) => match.file)).toEqual([
+            "/ignored.txt",
+            "/visible.txt",
+          ]);
+        });
       });
     }
+
+    it("propagates cancellation to the ripgrep subprocess", async () => {
+      const base = makeWorkerCtx("do:src:class:key");
+      registerContext(base.caller.runtime.id, "do", "ctx-grep-cancel");
+      const root = path.join(tmpRoot, "ctx-grep-cancel");
+      mkdirSync(root, { recursive: true });
+      writeFileSync(path.join(root, "large.txt"), "needle\n".repeat(10_000));
+      const controller = new AbortController();
+      controller.abort(new Error("cancelled by caller"));
+
+      await expect(
+        service.handleCall({ ...base, signal: controller.signal }, "grep", ["needle"])
+      ).rejects.toThrow("cancelled by caller");
+    });
+
+    it("rejects non-integral or out-of-range bounds", async () => {
+      const ctx = makeWorkerCtx("do:src:class:key");
+      registerContext(ctx.caller.runtime.id, "do", "ctx-grep-bounds");
+      mkdirSync(path.join(tmpRoot, "ctx-grep-bounds"), { recursive: true });
+      await expect(
+        service.handleCall(ctx, "grep", ["needle", { contextLines: 1.5 }])
+      ).rejects.toThrow(/integer from 0 to 10/u);
+      await expect(service.handleCall(ctx, "grep", ["needle", { maxMatches: 0 }])).rejects.toThrow(
+        /integer from 1 to 1000/u
+      );
+    });
 
     it("rejects paths escaping the sandbox", async () => {
       const ctx = makeWorkerCtx("do:src:class:key");
@@ -1206,7 +1252,7 @@ describe("FsService", () => {
   });
 
   describe("glob", () => {
-    it("returns matching files sorted by mtime desc, skipping internal and dependency trees", async () => {
+    it("returns matching files in stable lexical order, skipping internal and dependency trees", async () => {
       const ctx = makeWorkerCtx("do:src:class:key");
       registerContext(ctx.caller.runtime.id, "do", "ctx-glob");
       const root = path.join(tmpRoot, "ctx-glob");
@@ -1222,8 +1268,11 @@ describe("FsService", () => {
       utimesSync(path.join(root, "src", "old.ts"), now - 100, now - 100);
       utimesSync(path.join(root, "src", "deep", "newer.ts"), now, now);
 
-      const result = (await service.handleCall(ctx, "glob", ["**/*.ts"])) as string[];
-      expect(result).toEqual(["/src/deep/newer.ts", "/src/old.ts"]);
+      const result = (await service.handleCall(ctx, "glob", ["**/*.ts"])) as GlobResult;
+      expect(result).toEqual({
+        files: ["/src/deep/newer.ts", "/src/old.ts"],
+        truncated: false,
+      });
     });
 
     it("scopes the search to options.path", async () => {
@@ -1235,8 +1284,11 @@ describe("FsService", () => {
       writeFileSync(path.join(root, "a", "in.txt"), "");
       writeFileSync(path.join(root, "b", "out.txt"), "");
 
-      const result = (await service.handleCall(ctx, "glob", ["*.txt", { path: "/a" }])) as string[];
-      expect(result).toEqual(["/a/in.txt"]);
+      const result = (await service.handleCall(ctx, "glob", [
+        "*.txt",
+        { path: "/a" },
+      ])) as GlobResult;
+      expect(result.files).toEqual(["/a/in.txt"]);
     });
 
     it("matches slash-free patterns against basenames anywhere in the tree", async () => {
@@ -1246,8 +1298,48 @@ describe("FsService", () => {
       mkdirSync(path.join(root, "nested"), { recursive: true });
       writeFileSync(path.join(root, "nested", "match.spec.ts"), "");
 
-      const result = (await service.handleCall(ctx, "glob", ["*.spec.ts"])) as string[];
-      expect(result).toEqual(["/nested/match.spec.ts"]);
+      const result = (await service.handleCall(ctx, "glob", ["*.spec.ts"])) as GlobResult;
+      expect(result.files).toEqual(["/nested/match.spec.ts"]);
+    });
+
+    it("respects ignore files by default and can deliberately include ignored files", async () => {
+      const ctx = makeWorkerCtx("do:src:class:key");
+      registerContext(ctx.caller.runtime.id, "do", "ctx-glob-ignore");
+      const root = path.join(tmpRoot, "ctx-glob-ignore");
+      mkdirSync(path.join(root, "nested"), { recursive: true });
+      writeFileSync(path.join(root, ".gitignore"), "ignored.ts\n");
+      writeFileSync(path.join(root, "visible.ts"), "");
+      writeFileSync(path.join(root, "ignored.ts"), "");
+      writeFileSync(path.join(root, "nested", ".ignore"), "local.ts\n");
+      writeFileSync(path.join(root, "nested", "local.ts"), "");
+
+      const normal = (await service.handleCall(ctx, "glob", ["**/*.ts"])) as GlobResult;
+      expect(normal.files).toEqual(["/visible.ts"]);
+      const complete = (await service.handleCall(ctx, "glob", [
+        "**/*.ts",
+        { includeIgnored: true },
+      ])) as GlobResult;
+      expect(complete.files).toEqual(["/ignored.ts", "/nested/local.ts", "/visible.ts"]);
+    });
+
+    it("returns bounded resumable pages without duplicates", async () => {
+      const ctx = makeWorkerCtx("do:src:class:key");
+      registerContext(ctx.caller.runtime.id, "do", "ctx-glob-pages");
+      const root = path.join(tmpRoot, "ctx-glob-pages");
+      mkdirSync(root, { recursive: true });
+      for (const name of ["a.ts", "b.ts", "c.ts"]) writeFileSync(path.join(root, name), "");
+
+      const first = (await service.handleCall(ctx, "glob", ["*.ts", { limit: 2 }])) as GlobResult;
+      expect(first).toEqual({
+        files: ["/a.ts", "/b.ts"],
+        truncated: true,
+        nextCursor: "/b.ts",
+      });
+      const second = (await service.handleCall(ctx, "glob", [
+        "*.ts",
+        { limit: 2, after: first.nextCursor },
+      ])) as GlobResult;
+      expect(second).toEqual({ files: ["/c.ts"], truncated: false });
     });
   });
 
@@ -1627,7 +1719,7 @@ describe("FsService", () => {
       mkdirSync(projectedRoot, { recursive: true });
       writeFileSync(path.join(projectedRoot, "match.txt"), "needle in semantic content\n");
       writeFileSync(path.join(projectedRoot, "other.txt"), "other semantic content\n");
-      _setRipgrepPathForTests(null);
+      _setRipgrepPathForTests(undefined);
 
       await expect(svc.handleCall(agent, "readdir", ["/packages/lib"])).resolves.toEqual([
         "match.txt",
@@ -1651,7 +1743,7 @@ describe("FsService", () => {
 
       await expect(
         svc.handleCall(agent, "glob", ["match.*", { path: "/packages/lib" }])
-      ).resolves.toEqual(["/packages/lib/match.txt"]);
+      ).resolves.toEqual({ files: ["/packages/lib/match.txt"], truncated: false });
       expect(observed.filter((entry) => entry.via === "fs-glob")).toEqual([
         expect.objectContaining({ key: expect.stringContaining("match.txt@") }),
       ]);

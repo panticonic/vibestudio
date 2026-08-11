@@ -855,6 +855,12 @@ importers:
       '@vibestudio/workspace-contracts':
         specifier: workspace:*
         version: link:../workspace-contracts
+      '@vscode/ripgrep':
+        specifier: 1.18.0
+        version: 1.18.0
+      ignore:
+        specifier: 7.0.5
+        version: 7.0.5
       zod:
         specifier: ^3.24.1
         version: 3.25.76
@@ -1912,6 +1918,9 @@ importers:
       diff:
         specifier: ^7.0.0
         version: 7.0.0
+      ignore:
+        specifier: 7.0.5
+        version: 7.0.5
       linkedom:
         specifier: ^0.18.5
         version: 0.18.13
