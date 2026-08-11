@@ -1,11 +1,18 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { SERVER_ESM_BANNER } from "./build-artifact-contracts.mjs";
+import { NODE_ESM_COMPAT_BANNER, SERVER_ESM_BANNER } from "./build-artifact-contracts.mjs";
 
 const repoRoot = path.resolve(new URL("..", import.meta.url).pathname);
 
 const contracts = [
+  {
+    path: "dist/cli/client.mjs",
+    runtime: "standalone Node CLI",
+    format: "esm",
+    mustContain: [NODE_ESM_COMPAT_BANNER],
+  },
   {
     path: "dist/main.cjs",
     runtime: "Electron main",
@@ -160,6 +167,14 @@ const importSmokes = [
   },
 ];
 
+const executableSmokes = [
+  {
+    path: "dist/cli/client.mjs",
+    args: ["--help"],
+    mustContain: "Usage:",
+  },
+];
+
 function readArtifact(relativePath) {
   const absolutePath = path.join(repoRoot, relativePath);
   if (!fs.existsSync(absolutePath)) {
@@ -201,12 +216,31 @@ async function runImportSmoke(smoke) {
   }
 }
 
+function runExecutableSmoke(smoke) {
+  const result = spawnSync(process.execPath, [path.join(repoRoot, smoke.path), ...smoke.args], {
+    cwd: repoRoot,
+    encoding: "utf8",
+  });
+  if (result.status !== 0) {
+    throw new Error(
+      `${smoke.path} failed its executable smoke (exit ${result.status}):\n${result.stderr || result.stdout}`
+    );
+  }
+  if (!result.stdout.includes(smoke.mustContain)) {
+    throw new Error(`${smoke.path} executable smoke did not print: ${smoke.mustContain}`);
+  }
+}
+
 for (const contract of contracts) {
   checkContract(contract);
 }
 
 for (const smoke of importSmokes) {
   await runImportSmoke(smoke);
+}
+
+for (const smoke of executableSmokes) {
+  runExecutableSmoke(smoke);
 }
 
 if (process.env.NODE_ENV === "production") {
@@ -219,5 +253,5 @@ if (process.env.NODE_ENV === "production") {
 }
 
 console.log(
-  `[build-artifacts] ${contracts.length} contracts checked, ${importSmokes.length} import smokes passed.`
+  `[build-artifacts] ${contracts.length} contracts checked, ${importSmokes.length} import smokes and ${executableSmokes.length} executable smokes passed.`
 );
