@@ -508,4 +508,44 @@ describe("useChannelMessages", () => {
       );
     });
   });
+
+  it("keeps an early assistant delta after the user message while message.started catches up", async () => {
+    let latest: UseChannelMessagesResult | undefined;
+    const stream = createEventStream();
+    const client = createClient([], { events: vi.fn(() => stream.iterator) });
+
+    render(
+      <Probe
+        client={client}
+        onValue={(value) => {
+          latest = value;
+        }}
+      />
+    );
+
+    await act(async () => {
+      stream.push(
+        livePubsubAgenticEvent(
+          1,
+          messageCompleted("initial-prompt", "Help me get onboarded", "2026-05-21T08:00:00.000Z")
+        ) as IncomingEvent
+      );
+      stream.push({
+        delivery: "signal",
+        type: "signal",
+        contentType: AGENTIC_EVENT_PAYLOAD_KIND,
+        content: JSON.stringify(
+          messageDelta("assistant-stream", "Welcome", "2026-05-21T08:00:01.000Z")
+        ),
+        ts: Date.parse("2026-05-21T08:00:01.000Z"),
+      } as IncomingEvent);
+    });
+
+    await waitFor(() => {
+      expect(latest!.messages.map((message) => message.id)).toEqual([
+        "initial-prompt",
+        "assistant-stream",
+      ]);
+    });
+  });
 });

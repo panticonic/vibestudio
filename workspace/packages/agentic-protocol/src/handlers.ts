@@ -416,6 +416,10 @@ export function applyMessageEvent(
         turnId: existing.turnId ?? event.turnId,
         blocks: upsertContentBlock(existing.blocks, blockId, type, text, replace),
         status: "streaming",
+        // Signals can overtake the durable message.started envelope. Anchor a
+        // provisional stream at its first observed delta so transcript order
+        // is stable until the authoritative lifecycle event arrives.
+        startedAt: existing.startedAt ?? event.createdAt,
         updatedAt: event.createdAt,
         ...(seq !== undefined ? { lastContentSeq: seq } : {}),
       },

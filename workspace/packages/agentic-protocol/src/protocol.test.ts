@@ -889,6 +889,26 @@ describe("@workspace/agentic-protocol reducers", () => {
     expect(messageDisplayText(state.messages["msg-replace"]?.blocks)).toBe("hello world");
   });
 
+  it("anchors a stream that is first observed through a delta", () => {
+    const delta: AgenticEvent<"message.delta"> = {
+      kind: "message.delta",
+      actor: agent,
+      turnId: brandId<TurnId>("turn-early-delta"),
+      causality: { messageId: brandId<MessageId>("msg-early-delta") },
+      payload: {
+        protocol: AGENTIC_PROTOCOL_VERSION,
+        blockId: brandId<BlockId>("msg-early-delta:block:0"),
+        type: "text",
+        text: "Streaming",
+      },
+      createdAt: "2026-05-20T12:00:01.000Z",
+    };
+
+    const state = reduceChannelView(createInitialChannelViewState(), envelope(delta, 1));
+
+    expect(state.messages["msg-early-delta"]?.startedAt).toBe(delta.createdAt);
+  });
+
   it("preserves message blocks and updates streamed blocks", () => {
     const started: AgenticEvent<"message.started"> = {
       kind: "message.started",
