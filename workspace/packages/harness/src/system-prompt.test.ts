@@ -9,6 +9,18 @@ describe("composeSystemPrompt", () => {
     expect(VIBESTUDIO_BASE_SYSTEM_PROMPT).toContain("documented live runtime/service APIs");
   });
 
+  it("routes ordinary managed file work through the focused authoring boundary", () => {
+    expect(VIBESTUDIO_BASE_SYSTEM_PROMPT).toContain(
+      "Use the focused file tools for ordinary discovery, reading, and authoring"
+    );
+    expect(VIBESTUDIO_BASE_SYSTEM_PROMPT).toContain(
+      "`apply_patch` for a coherent multi-file change, whole binary write"
+    );
+    expect(VIBESTUDIO_BASE_SYSTEM_PROMPT).toContain(
+      "Do not emulate managed file authoring through generic `eval`"
+    );
+  });
+
   it("appends Vibestudio, workspace, skills, and channel prompts by default", () => {
     const prompt = composeSystemPrompt({
       workspacePrompt: "WORKSPACE",

@@ -361,11 +361,6 @@ describe("eval authority lifecycle validators", () => {
 describe("filesystem semantic validators", () => {
   const cases = [
     ["read-write-text", "fs.writeFile(); fs.readFile();", { written: "alpha", read: "alpha" }],
-    [
-      "read-write-binary",
-      "fs.writeFile(); fs.readFile();",
-      { written: [1, 2, 3], read: [1, 2, 3] },
-    ],
     ["append-file", "fs.writeFile(); fs.appendFile(); fs.readFile();", "first\nsecond"],
     ["directory-ops", "fs.mkdir(); fs.readdir();", ["one.txt", "two.txt"]],
     ["file-stats", "fs.writeFile(); fs.stat();", { size: 5, mtimeMs: 123 }],
@@ -431,6 +426,49 @@ describe("filesystem semantic validators", () => {
         ])
       ).passed
     ).toBe(true);
+  });
+
+  it("accepts an atomic binary write joined to an exact bounded base64 read", () => {
+    const validator = scenario(filesystemTests, "read-write-binary");
+    const path = "projects/system-test-binary/asset.bin";
+    expect(
+      validator.validate(
+        directExecution("The exact bytes 00 ff 01 fe survived.", [
+          {
+            name: "apply_patch",
+            arguments: {
+              operations: [{ kind: "write_binary", path, base64: "AP8B/g==" }],
+            },
+            result: { details: { status: "applied", paths: [path] } },
+          },
+          {
+            name: "read",
+            arguments: { path, encoding: "base64", byteOffset: 0, byteLimit: 4 },
+            result: {
+              protocolContent: [
+                {
+                  type: "text",
+                  text: JSON.stringify({
+                    path,
+                    encoding: "base64",
+                    contentHash: "a".repeat(64),
+                    range: { start: 0, end: 4, totalBytes: 4 },
+                    base64: "AP8B/g==",
+                  }),
+                },
+              ],
+              details: {
+                encoding: "base64",
+                contentHash: "a".repeat(64),
+                byteRange: { start: 0, end: 4, totalBytes: 4 },
+              },
+            },
+          },
+        ])
+      ).passed
+    ).toBe(true);
+    expect(validator.validation).toBe("harness");
+    expect(validator.workspaceRepoFixture).toEqual({ kind: "content", section: "projects" });
   });
 
   it("accepts focused nested writes and a structured listing as directory evidence", () => {

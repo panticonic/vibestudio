@@ -1,6 +1,11 @@
-import type { TestCase } from "../types.js";
+import { BUILDABLE_PACKAGE_WORKSPACE_REPO_FIXTURE, type TestCase } from "../types.js";
 import { PANEL_AUTOMATION_RESOURCE } from "../panel-authority.js";
-import { findLastAgentMessage, getToolCalls, noIncompleteInvocations } from "./_helpers.js";
+import {
+  failedToolCalls,
+  findLastAgentMessage,
+  getToolCalls,
+  noIncompleteInvocations,
+} from "./_helpers.js";
 
 function semanticEval(
   result: Parameters<typeof noIncompleteInvocations>[0],
@@ -90,6 +95,112 @@ function runtimeVcsIsUsable(result: Parameters<typeof findLastAgentMessage>[0]) 
     return {
       passed: false,
       reason: "Final response did not semantically report the observed VCS capability",
+    };
+  }
+  return noIncompleteInvocations(result);
+}
+
+function scopedTestVerification(result: Parameters<typeof findLastAgentMessage>[0]) {
+  const verification = getToolCalls(result).find(
+    (call) =>
+      call.name === "verify" &&
+      call.execution?.status === "complete" &&
+      call.execution.isError !== true &&
+      call.arguments?.["operation"] === "test" &&
+      call.arguments?.["target"] === "extensions/test-runner" &&
+      call.arguments?.["file"] === "index.test.ts"
+  );
+  const evidence = JSON.stringify(verification?.execution?.result ?? null);
+  if (
+    !verification ||
+    !/"status":"passed"/u.test(evidence) ||
+    !/"passed":[1-9]\d*/u.test(evidence) ||
+    !/"failed":0/u.test(evidence) ||
+    !/"total":[1-9]\d*/u.test(evidence) ||
+    !/"contextId":"[^"]+"/u.test(evidence)
+  ) {
+    return {
+      passed: false,
+      reason: "First-class verification did not return a passing scoped test report",
+    };
+  }
+  const failed = failedToolCalls(result);
+  if (failed.length > 0) {
+    return {
+      passed: false,
+      reason: `Expected no failed tools, got ${failed.map((call) => call.name).join(", ")}`,
+    };
+  }
+  return noIncompleteInvocations(result);
+}
+
+function atomicPatchBuildVerification(result: Parameters<typeof findLastAgentMessage>[0]) {
+  const patch = getToolCalls(result).find((call) => {
+    if (
+      call.name !== "apply_patch" ||
+      call.execution?.status !== "complete" ||
+      call.execution.isError === true
+    ) {
+      return false;
+    }
+    const operations = call.arguments?.["operations"];
+    if (!Array.isArray(operations) || operations.length !== 2) return false;
+    const records = operations.filter((operation): operation is Record<string, unknown> =>
+      Boolean(operation && typeof operation === "object" && !Array.isArray(operation))
+    );
+    const source = records.find(
+      (operation) =>
+        operation["kind"] === "replace" &&
+        typeof operation["path"] === "string" &&
+        operation["path"].endsWith("/src/index.ts") &&
+        JSON.stringify(operation["replacements"] ?? []).includes("atomic-system-test")
+    );
+    const readme = records.find(
+      (operation) =>
+        operation["kind"] === "write" &&
+        typeof operation["path"] === "string" &&
+        operation["path"].endsWith("/README.md") &&
+        typeof operation["content"] === "string" &&
+        operation["content"].includes("atomic-system-test")
+    );
+    if (records.length !== 2) return false;
+    const repoOf = (operation: Record<string, unknown> | undefined) =>
+      typeof operation?.["path"] === "string"
+        ? operation["path"].split("/").slice(0, 2).join("/")
+        : null;
+    return Boolean(source && readme && repoOf(source) === repoOf(readme));
+  });
+  const operations = patch?.arguments?.["operations"];
+  const sourcePath = Array.isArray(operations)
+    ? operations
+        .map((operation) =>
+          operation && typeof operation === "object" && !Array.isArray(operation)
+            ? (operation as Record<string, unknown>)["path"]
+            : undefined
+        )
+        .find((path): path is string => typeof path === "string" && path.endsWith("/src/index.ts"))
+    : undefined;
+  const repoPath = sourcePath?.split("/").slice(0, 2).join("/");
+  const verification = getToolCalls(result).find(
+    (call) =>
+      call.name === "verify" &&
+      call.execution?.status === "complete" &&
+      call.execution.isError !== true &&
+      call.arguments?.["operation"] === "build" &&
+      call.arguments?.["target"] === repoPath &&
+      /"status":"ok"/u.test(JSON.stringify(call.execution.result ?? null))
+  );
+  if (!patch || !repoPath || !verification) {
+    return {
+      passed: false,
+      reason: "One atomic two-file patch was not joined to a successful build of the same fixture",
+    };
+  }
+  const failed = failedToolCalls(result);
+  if (failed.length > 0) {
+    return {
+      passed: false,
+      reason: `Expected no failed tools, got ${failed.map((call) => call.name).join(", ")}`,
     };
   }
   return noIncompleteInvocations(result);
@@ -222,21 +333,18 @@ export const agenticRuntimeTests: TestCase[] = [
     },
     prompt:
       "Run extensions/test-runner/index.test.ts using the workspace's supported scoped test-running capability, without shelling out. Summarize how many tests passed and failed and identify the execution context.",
-    validate: (result) =>
-      semanticEval(
-        result,
-        [
-          /@workspace-extensions\/test-runner/u,
-          /\btarget\s*:\s*["']extensions\/test-runner["']/u,
-          /\bfileFilter\s*:\s*["']index\.test\.ts["']/u,
-        ],
-        [/pass/iu, /fail/iu, /context/iu],
-        [
-          /"passed"\s*:\s*[1-9]\d*/u,
-          /"failed"\s*:\s*0/u,
-          /"total"\s*:\s*[1-9]\d*/u,
-          /"contextId"\s*:\s*"[^"]+"/u,
-        ]
-      ),
+    validation: "harness",
+    validate: scopedTestVerification,
+  },
+  {
+    name: "atomic-multifile-patch-build",
+    description:
+      "Agent applies one coherent multi-file patch and builds that exact workspace state",
+    category: "agentic-runtime",
+    workspaceRepoFixture: BUILDABLE_PACKAGE_WORKSPACE_REPO_FIXTURE,
+    prompt:
+      'In the disposable package, change the exported fixtureValue to "atomic-system-test" and add a README that explains that value. Treat both file edits as one coherent workspace change, then verify that the package still builds. Do not publish it.',
+    validation: "harness",
+    validate: atomicPatchBuildVerification,
   },
 ];

@@ -1,4 +1,4 @@
-import type { TestCase } from "../types.js";
+import { CONTENT_WORKSPACE_REPO_FIXTURE, type TestCase } from "../types.js";
 import {
   completedToolNames,
   findLastAgentMessage,
@@ -144,14 +144,16 @@ export const smokeTests: TestCase[] = [
     description:
       "Agent writes a note, rediscovers it through content search, and verifies the exact content",
     category: "smoke",
+    workspaceRepoFixture: CONTENT_WORKSPACE_REPO_FIXTURE,
     prompt:
-      "Leave a small temporary workspace note containing the distinctive text agentic-file-tools-smoke, then verify that you can rediscover and read the exact note by searching the workspace. Tell me what you observed.",
+      "In the disposable project, leave a small note containing the distinctive text agentic-file-tools-smoke, then verify that you can rediscover and read the exact note by searching the workspace. Tell me what you observed. Do not publish it.",
+    validation: "harness",
     validate: (result) => {
       const msg = findLastAgentMessage(result);
       if (!msg.trim()) return { passed: false, reason: "No agent response received" };
       const calls = getToolCalls(result);
       const completed = completedToolNames(result);
-      const missing = ["write", "grep"].filter((name) => !completed.has(name));
+      const missing = ["grep"].filter((name) => !completed.has(name));
       if (missing.length > 0) {
         return {
           passed: false,
@@ -165,7 +167,7 @@ export const smokeTests: TestCase[] = [
           reason: `Expected no pending/error tool calls, got: ${incomplete.map((c) => `${c.name}:${c.execution?.status ?? "unknown"}`).join(", ")}`,
         };
       }
-      const write = calls.find(
+      const directWrite = calls.find(
         (call) =>
           call.name === "write" &&
           call.execution?.status === "complete" &&
@@ -174,7 +176,32 @@ export const smokeTests: TestCase[] = [
           typeof call.arguments?.["content"] === "string" &&
           call.arguments["content"].includes("agentic-file-tools-smoke")
       );
-      const path = write?.arguments?.["path"];
+      const patchWrite = calls
+        .filter(
+          (call) =>
+            call.name === "apply_patch" &&
+            call.execution?.status === "complete" &&
+            call.execution.isError !== true
+        )
+        .flatMap((call) =>
+          Array.isArray(call.arguments?.["operations"])
+            ? (call.arguments["operations"] as unknown[])
+            : []
+        )
+        .find((operation): operation is Record<string, unknown> =>
+          Boolean(
+            operation &&
+            typeof operation === "object" &&
+            !Array.isArray(operation) &&
+            (operation as Record<string, unknown>)["kind"] === "write" &&
+            typeof (operation as Record<string, unknown>)["path"] === "string" &&
+            typeof (operation as Record<string, unknown>)["content"] === "string" &&
+            String((operation as Record<string, unknown>)["content"]).includes(
+              "agentic-file-tools-smoke"
+            )
+          )
+        );
+      const path = directWrite?.arguments?.["path"] ?? patchWrite?.["path"];
       const grep = calls.find((call) => {
         if (
           call.name !== "grep" ||
@@ -195,7 +222,7 @@ export const smokeTests: TestCase[] = [
       // line establishes both persistence and content. A subsequent read is
       // equally valid, but is not a mandatory ritual when it repeats those
       // bytes.
-      const hasEvidence = Boolean(write && grep);
+      const hasEvidence = Boolean((directWrite || patchWrite) && grep);
       return {
         passed: hasEvidence,
         reason: hasEvidence

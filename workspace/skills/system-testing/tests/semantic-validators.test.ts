@@ -522,7 +522,7 @@ describe("semantic system-test validators", () => {
     ).toEqual({ passed: true, reason: undefined });
   });
 
-  it("accepts the structured scoped test-runner request and passing result", () => {
+  it("accepts a first-class scoped test verification and passing result", () => {
     const test = agenticRuntimeTests.find(
       (candidate) => candidate.name === "workspace-test-runner-extension"
     )!;
@@ -530,25 +530,74 @@ describe("semantic system-test validators", () => {
       test.validate(
         execution("Passed 12 tests, failed 0, in context ctx-1.", [
           {
-            name: "eval",
+            name: "verify",
             arguments: {
-              code: [
-                'import { extensions } from "@workspace/runtime";',
-                'return extensions.invoke("@workspace-extensions/test-runner", "run", [{',
-                '  target: "extensions/test-runner",',
-                '  fileFilter: "index.test.ts",',
-                "}]);",
-              ].join("\n"),
+              operation: "test",
+              target: "extensions/test-runner",
+              file: "index.test.ts",
             },
             execution: {
               status: "complete",
               isError: false,
-              result: { passed: 12, failed: 0, total: 12, contextId: "ctx-1" },
+              result: {
+                details: {
+                  operation: "test",
+                  status: "passed",
+                  report: { passed: 12, failed: 0, total: 12, contextId: "ctx-1" },
+                },
+              },
             },
           },
         ])
       )
     ).toEqual({ passed: true, reason: undefined });
+    expect(test.validation).toBe("harness");
+  });
+
+  it("requires one atomic multi-file patch followed by a build of the same fixture", () => {
+    const test = agenticRuntimeTests.find(
+      (candidate) => candidate.name === "atomic-multifile-patch-build"
+    )!;
+    const repo = "packages/system-test-atomic";
+    expect(
+      test.validate(
+        execution("The coherent change builds successfully.", [
+          {
+            name: "apply_patch",
+            arguments: {
+              operations: [
+                {
+                  kind: "replace",
+                  path: `${repo}/src/index.ts`,
+                  replacements: [{ oldText: "baseline", newText: "atomic-system-test" }],
+                },
+                {
+                  kind: "write",
+                  path: `${repo}/README.md`,
+                  content: "fixtureValue is atomic-system-test",
+                },
+              ],
+            },
+            execution: {
+              status: "complete",
+              isError: false,
+              result: { details: { status: "applied" } },
+            },
+          },
+          {
+            name: "verify",
+            arguments: { operation: "build", target: repo },
+            execution: {
+              status: "complete",
+              isError: false,
+              result: { details: { operation: "build", status: "ok" } },
+            },
+          },
+        ])
+      )
+    ).toEqual({ passed: true, reason: undefined });
+    expect(test.validation).toBe("harness");
+    expect(test.workspaceRepoFixture).toEqual({ kind: "buildable-package", section: "packages" });
   });
 
   it("pregrants only the test-runner provider capability for the scenario", () => {

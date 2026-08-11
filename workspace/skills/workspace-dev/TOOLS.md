@@ -580,35 +580,29 @@ checking a different context.
 
 #### @workspace-extensions/test-runner.run
 
-Run Vitest tests for a workspace unit from inside the workspace runtime. The
-extension infers the current eval/agent context and runs tests against that
-context folder. Test execution goes through the approval service because tests
-are code execution; the user can allow once, allow for the session, trust the
-current code version, or deny.
+Agents run Vitest tests through the first-class verification boundary. It
+materializes the exact conversation context and preserves authority, progress,
+cancellation, and bounded structured evidence. Test execution goes through the
+approval service because tests are code execution.
 
 ```
-eval({ code: `
-  const result = await services.extensions.invoke(
-    "@workspace-extensions/test-runner",
-    "run",
-    [{ target: "packages/my-lib" }],
-  ).catch((error) => ({
-    error: String(error),
-  }));
-  console.log(result);
-`
-})
+verify({ operation: "test", target: "packages/my-lib" })
 ```
 
 For a single file or test name:
 
 ```
-await services.extensions.invoke("@workspace-extensions/test-runner", "run", [{
+verify({
+  operation: "test",
   target: "packages/my-lib",
-  fileFilter: "src/index.test.ts",
-  testName: "handles empty input",
-}]);
+  file: "src/index.test.ts",
+  testName: "handles empty input"
+})
 ```
+
+A failed run or zero discovered tests is an explicit error result with its
+structured report intact. Do not replace this boundary with generic `eval`, a
+shell command, or direct `extensions.invoke` plumbing.
 
 ### Browser Data
 

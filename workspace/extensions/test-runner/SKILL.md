@@ -1,32 +1,29 @@
 ---
 name: workspace-test-runner
-description: Run Vitest tests for workspace panels, packages, workers, or extensions through the supported @workspace-extensions/test-runner runtime extension. Use when asked to run workspace unit tests without shell commands.
+description: Run Vitest tests for workspace panels, packages, workers, or extensions through the first-class verify tool. Use when asked to run workspace unit tests without shell commands.
 ---
 
 # Workspace Test Runner
 
-Run tests from server-side `eval` through the canonical extension name. Do not
-guess from an `extensions.list()` display label; list entries use canonical
-package names such as `@workspace-extensions/test-runner`.
+Use the first-class verification boundary. It preserves the conversation's
+exact semantic context, execution authority, cancellation, progress, and
+bounded structured results:
 
 ```ts
-import { extensions } from "@workspace/runtime";
-
-const result = await extensions.invoke("@workspace-extensions/test-runner", "run", [
-  {
-    target: "extensions/test-runner",
-    fileFilter: "index.test.ts",
-  },
-]);
-
-return result;
+verify({
+  operation: "test",
+  target: "extensions/test-runner",
+  file: "index.test.ts",
+});
 ```
 
-`target` is a workspace repo path. `fileFilter` is relative to that target and
-may select one file; `testName` optionally selects matching tests. The extension
-infers the caller's current context. Its structured result contains `summary`,
-`passed`, `failed`, `total`, `contextId`, `target`, `pattern`, and per-file
-`details`.
+`target` is a workspace repository path. `file` is relative to that target and
+may select one file; `testName` optionally selects matching tests. The returned
+details include a bounded report with `summary`, `passed`, `failed`, `total`,
+`contextId`, `target`, `pattern`, and per-file results. A failing test run or
+zero discovered tests is an explicit tool error with the report preserved for
+diagnosis.
 
 Tests execute code and therefore go through the approval service. Surface a
-denial as a denial; do not fall back to shell commands.
+denial as a denial. Do not bypass `verify` with a shell command, generic `eval`,
+or a direct extension invocation.

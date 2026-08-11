@@ -1,11 +1,20 @@
-import type { TestCase, TestExecutionResult } from "../types.js";
+import {
+  CONTENT_WORKSPACE_REPO_FIXTURE,
+  type TestCase,
+  type TestExecutionResult,
+} from "../types.js";
 import {
   completedScenarioEvidence,
   requireCodeOperations,
   walkArrays,
   walkRecords,
 } from "./_scenario-evidence.js";
-import type { InvocationCardPayloadLike } from "./_helpers.js";
+import {
+  failedToolCalls,
+  getToolCalls,
+  incompleteToolCalls,
+  type InvocationCardPayloadLike,
+} from "./_helpers.js";
 
 const FOCUSED_FS_TOOL_OPERATIONS: Readonly<Record<string, readonly string[]>> = {
   write: ["fs.writeFile"],
@@ -48,13 +57,6 @@ function duplicateNonEmptyString(values: readonly unknown[]): boolean {
     seen.add(value);
     return false;
   });
-}
-
-function duplicateNonEmptyArray(values: readonly unknown[]): boolean {
-  const arrays = walkArrays(values).filter((value) => value.length > 0);
-  return arrays.some((value, index) =>
-    arrays.slice(index + 1).some((candidate) => JSON.stringify(value) === JSON.stringify(candidate))
-  );
 }
 
 function structuredInvocationEvidence(values: readonly unknown[]): unknown[] {
@@ -120,6 +122,81 @@ function checkedFs(
   return prove(values) ? { passed: true, reason: undefined } : { passed: false, reason };
 }
 
+const BINARY_ROUND_TRIP_BASE64 = "AP8B/g==";
+
+function focusedBinaryRoundTrip(result: TestExecutionResult) {
+  const calls = getToolCalls(result);
+  const patch = calls.find((call) => {
+    if (
+      call.name !== "apply_patch" ||
+      call.execution?.status !== "complete" ||
+      call.execution.isError === true
+    ) {
+      return false;
+    }
+    const operations = call.arguments?.["operations"];
+    return (
+      Array.isArray(operations) &&
+      operations.some(
+        (operation) =>
+          operation &&
+          typeof operation === "object" &&
+          !Array.isArray(operation) &&
+          (operation as Record<string, unknown>)["kind"] === "write_binary" &&
+          (operation as Record<string, unknown>)["base64"] === BINARY_ROUND_TRIP_BASE64 &&
+          typeof (operation as Record<string, unknown>)["path"] === "string" &&
+          String((operation as Record<string, unknown>)["path"]).endsWith("/asset.bin")
+      )
+    );
+  });
+  const binaryPath = Array.isArray(patch?.arguments?.["operations"])
+    ? patch.arguments["operations"]
+        .map((operation) =>
+          operation && typeof operation === "object" && !Array.isArray(operation)
+            ? (operation as Record<string, unknown>)
+            : null
+        )
+        .find((operation) => operation?.["kind"] === "write_binary")?.["path"]
+    : undefined;
+  const read = calls.find(
+    (call) =>
+      call.name === "read" &&
+      call.execution?.status === "complete" &&
+      call.execution.isError !== true &&
+      call.arguments?.["path"] === binaryPath &&
+      call.arguments?.["encoding"] === "base64" &&
+      call.arguments?.["byteOffset"] === 0 &&
+      typeof call.arguments?.["byteLimit"] === "number" &&
+      call.arguments["byteLimit"] >= 4
+  );
+  const evidence = JSON.stringify(read?.execution?.result ?? null);
+  const exactRead =
+    evidence.includes(BINARY_ROUND_TRIP_BASE64) &&
+    /"contentHash":"[0-9a-f]{64}"/u.test(evidence) &&
+    /"(?:range|byteRange)":\{"start":0,"end":4,"totalBytes":4/u.test(evidence);
+  if (!patch || typeof binaryPath !== "string" || !read || !exactRead) {
+    return {
+      passed: false,
+      reason:
+        "Focused binary write/read calls did not preserve the exact four bytes and bounded range",
+    };
+  }
+  const failed = failedToolCalls(result);
+  if (failed.length > 0) {
+    return {
+      passed: false,
+      reason: `Expected no failed tools, got ${failed.map((call) => call.name).join(", ")}`,
+    };
+  }
+  const incomplete = incompleteToolCalls(result);
+  return incomplete.length === 0
+    ? { passed: true, reason: undefined }
+    : {
+        passed: false,
+        reason: `Expected no incomplete tools, got ${incomplete.map((call) => call.name).join(", ")}`,
+      };
+}
+
 export const filesystemTests: TestCase[] = [
   {
     name: "read-write-text",
@@ -137,16 +214,13 @@ export const filesystemTests: TestCase[] = [
   },
   {
     name: "read-write-binary",
-    description: "Write binary data and decode it back",
+    description: "Write arbitrary bytes atomically and read them back through bounded base64",
     category: "filesystem",
-    prompt: "Round-trip a small binary payload through a temporary file and explain what survived.",
-    validate: (result) =>
-      checkedFs(
-        result,
-        [["fs.writeFile", "fs.readFile"]],
-        (values) => duplicateNonEmptyString(values) || duplicateNonEmptyArray(values),
-        "The completed file operations did not expose a matching binary payload"
-      ),
+    workspaceRepoFixture: CONTENT_WORKSPACE_REPO_FIXTURE,
+    prompt:
+      "In the disposable project, add asset.bin containing exactly the four bytes 00 ff 01 fe. Read it back losslessly through a bounded file read and explain what survived. Do not publish it.",
+    validation: "harness",
+    validate: focusedBinaryRoundTrip,
   },
   {
     name: "append-file",
