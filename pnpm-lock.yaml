@@ -1739,6 +1739,9 @@ importers:
 
   workspace/packages/agentic-do:
     dependencies:
+      '@cfworker/json-schema':
+        specifier: ^4.1.1
+        version: 4.1.1
       '@earendil-works/pi-ai':
         specifier: 0.82.0
         version: 0.82.0(patch_hash=41b4580bff599c99bb9cc0848c4d997430e92e257eca1c850835d0a36fd28830)(@modelcontextprotocol/sdk@1.25.3(@cfworker/json-schema@4.1.1)(hono@4.11.7)(zod@3.25.76))(ws@8.21.1)(zod@3.25.76)

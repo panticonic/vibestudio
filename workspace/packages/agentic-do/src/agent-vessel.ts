@@ -1477,6 +1477,31 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     return this._gadClient.call<T>(method, ...args);
   }
 
+  /** Resolve the exact durable command coordinate used by mutation replay.
+   * Missing commands are ordinary for read-only tools; every other inspection
+   * failure stays exceptional so uncertainty can never authorize a duplicate. */
+  private async completedMutationEvidence(
+    commandId: string
+  ): Promise<{ commandId: string; command: unknown } | null> {
+    try {
+      const inspected = await createSubagentVcsClient(this.rpc).inspect({
+        node: { kind: "command", commandId },
+        edgeLimit: 1,
+      });
+      return inspected.node.kind === "command" && inspected.node.value.status === "complete"
+        ? { commandId, command: inspected.node }
+        : null;
+    } catch (error) {
+      const code =
+        typeof error === "object" && error !== null
+          ? ((error as { code?: unknown }).code ??
+            (error as { errorData?: { code?: unknown } }).errorData?.code)
+          : undefined;
+      if (code === "InvalidReference") return null;
+      throw error;
+    }
+  }
+
   private executorDeps(): ExecutorDeps {
     this.ensureIdentity();
     const ref = this.identity.ref;
@@ -1639,6 +1664,8 @@ export abstract class AgentVesselBase extends DurableObjectBase {
               invocationId,
             }),
           }) satisfies AgentToolExecutionContext;
+          let resolvedTool: AgentTool | undefined;
+          let executionAdmitted = false;
           try {
             // The `eval` tool DEFERS: the agent can't hold a connection for a multi-minute run.
             // eval.start receives this verified parent scope and delegates it to the EvalDO.
@@ -1650,8 +1677,8 @@ export abstract class AgentVesselBase extends DurableObjectBase {
               return await this.runDeferredSpawn(channelId, invocationId, args);
             }
             const registry = await this.toolRegistry(channelId, execution);
-            const agentTool = registry.get(tool);
-            if (!agentTool) {
+            resolvedTool = registry.get(tool);
+            if (!resolvedTool) {
               const failure = agentToolFailureFromUnknown(
                 Object.assign(new Error(`unknown tool: ${tool}`), { code: "tool_not_found" }),
                 {
@@ -1670,8 +1697,9 @@ export abstract class AgentVesselBase extends DurableObjectBase {
                 failure,
               };
             }
-            const params = prepareAgentToolArguments(agentTool, args);
-            const result = await executeLocalTool(agentTool, {
+            const params = prepareAgentToolArguments(resolvedTool, args);
+            executionAdmitted = true;
+            const result = await executeLocalTool(resolvedTool, {
               invocationId,
               params,
               parentSignal: signal,
@@ -1683,6 +1711,24 @@ export abstract class AgentVesselBase extends DurableObjectBase {
               ...(result.terminate === true ? { terminate: true } : {}),
             };
           } catch (err) {
+            if (executionAdmitted && resolvedTool?.cancellationMode === "settle") {
+              const evidence = await this.completedMutationEvidence(execution.commandId);
+              if (evidence) {
+                return {
+                  result: {
+                    protocolContent: [
+                      {
+                        type: "text",
+                        text: `Recovered completed workspace mutation ${evidence.commandId}; its result raced with cancellation or transport failure.`,
+                      },
+                    ],
+                    details: { replayed: true, evidence },
+                  },
+                  summary: "Recovered a completed workspace mutation",
+                  isError: false,
+                };
+              }
+            }
             const failure = agentToolFailureFromUnknown(err, {
               operation: `tool.${tool}`,
               stage: signal.aborted ? "cancel" : "execute",
@@ -1711,27 +1757,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
             head: state.head,
             invocationId,
           });
-          try {
-            const inspected = await createSubagentVcsClient(this.rpc).inspect({
-              node: { kind: "command", commandId },
-              edgeLimit: 1,
-            });
-            return inspected.node.kind === "command" && inspected.node.value.status === "complete"
-              ? { commandId, command: inspected.node }
-              : null;
-          } catch (error) {
-            const code =
-              typeof error === "object" && error !== null
-                ? ((error as { code?: unknown }).code ??
-                  (error as { errorData?: { code?: unknown } }).errorData?.code)
-                : undefined;
-            // Read-only tools never create a semantic command. An absent command
-            // is therefore the ordinary "not applied" case; every other failure
-            // must preserve the claim so infrastructure trouble cannot authorize
-            // a duplicate mutation.
-            if (code === "InvalidReference") return null;
-            throw error;
-          }
+          return this.completedMutationEvidence(commandId);
         },
       },
       http: {

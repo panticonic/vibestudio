@@ -9,6 +9,7 @@
     "./agent-worker-base": "./src/agent-worker-base.ts"
   },
   "dependencies": {
+    "@cfworker/json-schema": "^4.1.1",
     "@earendil-works/pi-ai": "^0.82.0",
     "@sinclair/typebox": "^0.27.8",
     "@vibestudio/content-addressing": "workspace:*",

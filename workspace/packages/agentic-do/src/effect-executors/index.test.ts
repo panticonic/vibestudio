@@ -77,4 +77,38 @@ describe("localToolExecutor", () => {
       },
     });
   });
+
+  it("returns executor failures in the canonical tool-result envelope", async () => {
+    const outcome = await localToolExecutor.execute({
+      descriptor: {
+        kind: "local_tool",
+        effectId: "effect-failed",
+        channelId: "channel-1",
+        invocationId: "invocation-failed",
+        tool: "read",
+        args: {},
+      } as never,
+      state: {} as never,
+      signal: new AbortController().signal,
+      deps: {
+        localTools: {
+          alreadyApplied: async () => null,
+          run: async () => {
+            throw Object.assign(new Error("host read failed"), { code: "host_unavailable" });
+          },
+        },
+      } as never,
+      onEphemeral: () => undefined,
+    });
+
+    expect(outcome).toMatchObject({
+      kind: "tool",
+      isError: true,
+      terminalReasonCode: "host_unavailable",
+      result: {
+        protocolContent: [{ type: "text", text: expect.stringContaining("host read failed") }],
+        details: { failure: { code: "host_unavailable" } },
+      },
+    });
+  });
 });

@@ -100,7 +100,7 @@ describe("prepareAgentToolArguments", () => {
     ).toThrow("/status: Expected 'conflict'");
   });
 
-  it("leaves plain JSON-schema tools to their own executor validation", () => {
+  it("validates plain JSON-schema tools at the same execution boundary", () => {
     const plain = {
       ...tool(),
       parameters: {
@@ -110,5 +110,7 @@ describe("prepareAgentToolArguments", () => {
       },
     } as unknown as AgentTool;
     expect(prepareAgentToolArguments(plain, { query: "history" })).toEqual({ query: "history" });
+    expect(() => prepareAgentToolArguments(plain, {})).toThrow(/query/u);
+    expect(() => prepareAgentToolArguments(plain, { query: 42 })).toThrow(/string/u);
   });
 });

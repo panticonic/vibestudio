@@ -1,4 +1,8 @@
-import { CREDENTIAL_CONNECT_PAYLOAD_KIND } from "@workspace/agentic-protocol";
+import {
+  CREDENTIAL_CONNECT_PAYLOAD_KIND,
+  agentToolFailureFromUnknown,
+  renderAgentToolFailure,
+} from "@workspace/agentic-protocol";
 /**
  * Effect executors (WS1 §2.4) — the impure edge of the event-sourced harness.
  *
@@ -124,13 +128,22 @@ export const localToolExecutor: EffectExecutor<LocalToolEffect> = {
         ...(turnControl ? { turnControl } : {}),
       } satisfies EffectOutcome;
     } catch (err) {
-      const terminalReasonCode = errorCode(err);
+      const failure = agentToolFailureFromUnknown(err, {
+        operation: `tool.${descriptor.tool}`,
+        stage: signal.aborted ? "cancel" : "execute",
+        causal: { invocationId: descriptor.invocationId },
+        ...(signal.aborted ? { kind: "cancelled" as const } : {}),
+      });
       return {
         kind: "tool",
-        result: err instanceof Error ? err.message : String(err),
+        result: {
+          protocolContent: [{ type: "text", text: renderAgentToolFailure(failure) }],
+          details: { failure },
+        },
         isError: true,
-        reason: err instanceof Error ? err.message : String(err),
-        ...(terminalReasonCode ? { terminalReasonCode } : {}),
+        reason: failure.message,
+        terminalReasonCode: failure.code,
+        failure,
       } satisfies EffectOutcome;
     }
   },
@@ -146,12 +159,6 @@ export const promptArtifactsExecutor: EffectExecutor<PromptArtifactsEffect> = {
     return { kind: "prompt-artifacts", patch } satisfies EffectOutcome;
   },
 };
-
-function errorCode(error: unknown): string | undefined {
-  if (!error || typeof error !== "object") return undefined;
-  const code = (error as { code?: unknown }).code;
-  return typeof code === "string" && code.length > 0 ? code : undefined;
-}
 
 /** channel_call (§2.4.3): journaled call through the channel DO; the result
  *  arrives via the channel's terminal delivery → deliverEffectOutcome. */

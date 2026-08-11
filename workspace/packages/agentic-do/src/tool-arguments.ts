@@ -1,12 +1,17 @@
+import { Validator, type Schema } from "@cfworker/json-schema";
 import { Kind } from "@sinclair/typebox";
 import { Value } from "@sinclair/typebox/value";
 import type { AgentTool } from "@workspace/pi-core";
+
+const validators = new WeakMap<object, Validator>();
 
 /** Enforce the tool's advertised schema at the durable execution boundary.
  * Model providers may emit malformed tool calls; no local tool may rely on
  * provider-side validation for safety. */
 export function prepareAgentToolArguments(tool: AgentTool, raw: unknown): unknown {
-  if (!isRecord(tool.parameters) || !(Kind in tool.parameters)) return raw;
+  if (!isRecord(tool.parameters)) {
+    throw invalidToolArguments(tool.name, "the tool has no valid JSON Schema object");
+  }
   const mismatch = findDiscriminatorMismatch(tool.parameters, raw);
   if (mismatch) {
     throw invalidToolArguments(
@@ -14,10 +19,24 @@ export function prepareAgentToolArguments(tool: AgentTool, raw: unknown): unknow
       `${mismatch.path}: Expected one of ${mismatch.expected.map((value) => JSON.stringify(value)).join(", ")}; received ${JSON.stringify(mismatch.actual)}`
     );
   }
-  const schema = specializeDiscriminatedUnions(tool.parameters, raw);
-  const errors = [...Value.Errors(schema as never, raw)].slice(0, 3);
-  if (errors.length === 0) return raw;
-  const detail = errors.map((error) => `${error.path || "/"}: ${error.message}`).join("; ");
+  if (Kind in tool.parameters) {
+    const schema = specializeDiscriminatedUnions(tool.parameters, raw);
+    const errors = [...Value.Errors(schema as never, raw)].slice(0, 3);
+    if (errors.length === 0) return raw;
+    const detail = errors.map((error) => `${error.path || "/"}: ${error.message}`).join("; ");
+    throw invalidToolArguments(tool.name, detail);
+  }
+  let validator = validators.get(tool.parameters);
+  if (!validator) {
+    validator = new Validator(tool.parameters as Schema, "7", false);
+    validators.set(tool.parameters, validator);
+  }
+  const validation = validator.validate(raw);
+  if (validation.valid) return raw;
+  const detail = validation.errors
+    .slice(0, 3)
+    .map((error) => `${error.instanceLocation || "#"}: ${error.error}`)
+    .join("; ");
   throw invalidToolArguments(tool.name, detail);
 }
 
