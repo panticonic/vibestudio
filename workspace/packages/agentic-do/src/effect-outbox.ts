@@ -108,10 +108,10 @@ export function maxAttempts(descriptor: EffectDescriptor): number {
       // deterministic failure still settles visibly after a bounded retry.
       return 3;
     case "model_call":
-      // Reviewed provider backpressure remains pending until it succeeds or
-      // the owning turn is cancelled. Opaque transport failures are bounded
-      // by AgentLoopDriver because only the classified outcome identifies
-      // them; they must not leave an interactive turn typing forever.
+      // A retry-classified provider failure is explicitly non-terminal. Keep
+      // the journaled request pending until it succeeds or the owning turn is
+      // cancelled; an arbitrary attempt budget turns a temporary network
+      // partition into permanent loss of an otherwise untouched turn.
       return Number.POSITIVE_INFINITY;
     case "local_tool":
       // A settle boundary may have committed before its transport reported an
@@ -384,7 +384,11 @@ export class EffectOutbox {
     return this.get(branchId, effectId);
   }
 
-  claimReady(input: { workerId: string; now: number; limit: number }): OutboxRow[] {
+  claimReady(input: {
+    workerId: string;
+    now: number;
+    limit: number;
+  }): OutboxRow[] {
     const candidates = this.due(input.now);
     const dueKeys = new Set(candidates.map((row) => `${row.branchId}\u0000${row.effectId}`));
     const unresolved = this.all();

@@ -1513,12 +1513,11 @@ export class AgentLoopDriver {
           })
         );
         if (failure.recoverable && failure.retryAfterMs !== undefined) {
-          const terminal = await this.retryEffect(row, {
+          await this.retryEffect(row, {
             reason: failure.reason,
             retryAfterMs: failure.retryAfterMs,
             code: failure.code,
           });
-          if (terminal) await this.applyOutcome(row, terminal);
           return;
         }
         if (
@@ -1685,9 +1684,8 @@ export class AgentLoopDriver {
     let loop = await this.loopForBranch(row.branchId, row.channelId);
     if (!loop) return;
     if (outcome.kind === "retry") {
-      const terminal = await this.retryEffect(row, outcome);
-      if (!terminal) return;
-      outcome = terminal;
+      await this.retryEffect(row, outcome);
+      return;
     }
     if (outcome.kind === "model-suspended") {
       await this.suspendOnCredential(loop, row, outcome);
@@ -1810,40 +1808,18 @@ export class AgentLoopDriver {
   private async retryEffect(
     row: OutboxRow,
     outcome: { reason: string; retryAfterMs?: number; code?: string }
-  ): Promise<EffectOutcome | null> {
+  ): Promise<void> {
     const updated = this.outbox.recordFailure(
       row.branchId,
       row.effectId,
       this.deps.now(),
       outcome.retryAfterMs
     );
-    // Explicit provider backpressure has its own reviewed delay/reset policy.
-    // An unclassified transport failure does not: retry it once for a transient
-    // disconnect, then settle visibly instead of leaving an interactive turn
-    // in a permanent typing state.
-    const attemptLimit =
-      outcome.code === "unknown_retryable" ? 2 : maxAttempts(updated?.descriptor ?? row.descriptor);
-    if (updated && updated.attempts >= attemptLimit) {
-      if (updated.descriptor.kind === "model_call" && outcome.code === "unknown_retryable") {
-        return {
-          kind: "model",
-          blocks: [],
-          stopReason: "error",
-          errorReason: outcome.reason,
-          recoverable: false,
-          failure: {
-            code: "unknown_retryable",
-            reason: outcome.reason,
-            recoverable: false,
-          },
-        };
-      }
-      throw new Error(
-        `retry outcome exhausted without a terminal mapping for ${updated.descriptor.kind}`
-      );
+    if (updated && updated.attempts >= maxAttempts(updated.descriptor)) {
+      await this.settleExhaustedEffect(updated, outcome.reason);
+      return;
     }
     this.scheduleEarliest();
-    return null;
   }
 
   private emitEphemeral(loop: LoopInstance, emit: EphemeralEmit): void {
