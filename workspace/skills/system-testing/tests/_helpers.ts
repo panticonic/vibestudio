@@ -267,6 +267,26 @@ export function getToolCalls(result: TestExecutionResult): InvocationCardPayload
   return calls;
 }
 
+/** A skill may be opened through the generated docs catalog or read from its
+ * canonical workspace path. Both surfaces resolve the same skill source and
+ * are valid evidence that the agent followed catalog routing. */
+export function hasLoadedSkill(result: TestExecutionResult, skillName: string): boolean {
+  const normalized = skillName.trim().toLowerCase();
+  if (!normalized) return false;
+  return getToolCalls(result).some((call) => {
+    if (call.execution?.status !== "complete" || call.execution.isError === true) return false;
+    if (call.name === "docs_open") {
+      return String(call.arguments?.["id"] ?? "").toLowerCase() === normalized;
+    }
+    return (
+      call.name === "read" &&
+      JSON.stringify(call.arguments ?? {})
+        .toLowerCase()
+        .includes(`skills/${normalized}/skill.md`)
+    );
+  });
+}
+
 /**
  * A screenshot call only proves that bytes were produced.  Visual inspection
  * requires the agent to send the captured artifact through the documented

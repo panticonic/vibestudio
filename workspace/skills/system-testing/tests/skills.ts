@@ -3,6 +3,7 @@ import type { TestCase, TestExecutionResult, TestOrchestrationContext } from "..
 import {
   findLastAgentMessage,
   getToolCalls,
+  hasLoadedSkill,
   noIncompleteInvocations,
   successfulEvalCode,
   successfulEvalReturnValues,
@@ -15,14 +16,7 @@ function skillChoiceChecked(
   finalClaim: RegExp,
   options?: { allowEmbeddedGuidance?: boolean }
 ) {
-  const loaded = getToolCalls(result).some(
-    (call) =>
-      call.execution?.status === "complete" &&
-      call.execution.isError !== true &&
-      JSON.stringify(call.arguments ?? {})
-        .toLowerCase()
-        .includes(`skills/${skillName.toLowerCase()}/`)
-  );
+  const loaded = hasLoadedSkill(result, skillName);
   if (!finalClaim.test(findLastAgentMessage(result))) {
     return {
       passed: false,
@@ -30,7 +24,7 @@ function skillChoiceChecked(
     };
   }
   if (!loaded && !options?.allowEmbeddedGuidance) {
-    return { passed: false, reason: `No completed read loaded the ${skillName} skill` };
+    return { passed: false, reason: `No completed skill load opened ${skillName}` };
   }
   return noIncompleteInvocations(result);
 }
@@ -98,8 +92,7 @@ function apiIntegrationChecked(result: Parameters<typeof noIncompleteInvocations
   const exposedCredentialData = walkRecords(values).some((record) =>
     Object.entries(record).some(
       ([key, value]) =>
-        /(token|secret|password|credentialId|accessKey|material|stack)/iu.test(key) &&
-        value != null
+        /(token|secret|password|credentialId|accessKey|material|stack)/iu.test(key) && value != null
     )
   );
   if (!safeMissingOutcome || exposedCredentialData) {
@@ -121,9 +114,7 @@ async function waitForRunningChild(
 ): Promise<{ invocationId: string; tool: string | null }> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
-    const spawn = [...session.snapshot().tasks]
-      .reverse()
-      .find((task) => task.type === "subagent");
+    const spawn = [...session.snapshot().tasks].reverse().find((task) => task.type === "subagent");
     if (spawn && (spawn.status === "started" || spawn.status === "running")) {
       return { invocationId: spawn.id, tool: null };
     }

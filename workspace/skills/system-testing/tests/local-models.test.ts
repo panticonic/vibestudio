@@ -128,6 +128,7 @@ describe("local model skill evidence", () => {
   const model = "local:lfm2.5-2.6b";
 
   function validExecution(options?: {
+    loadRoute?: "read" | "docs";
     readStatus?: "complete" | "error";
     readPath?: string;
     final?: string;
@@ -147,9 +148,11 @@ describe("local model skill evidence", () => {
           content: "",
           invocation: {
             id: "read-skill",
-            name: "read",
+            name: options?.loadRoute === "docs" ? "docs_open" : "read",
             arguments: {
-              path: options?.readPath ?? "skills/server-logs/SKILL.md",
+              ...(options?.loadRoute === "docs"
+                ? { id: "server-logs" }
+                : { path: options?.readPath ?? "skills/server-logs/SKILL.md" }),
             },
             execution: {
               status: readStatus,
@@ -187,6 +190,10 @@ describe("local model skill evidence", () => {
     expect(skillTest.orchestrate).toBeTypeOf("function");
     expect(skillTest.validation).toBe("agent-evidence");
     expect(skillTest.validate(validExecution())).toEqual({ passed: true, reason: undefined });
+    expect(skillTest.validate(validExecution({ loadRoute: "docs" }))).toEqual({
+      passed: true,
+      reason: undefined,
+    });
   });
 
   it("rejects hosted execution or a supervisor standing in for the model subject", () => {

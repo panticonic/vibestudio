@@ -8,6 +8,7 @@ import type { HeadlessSession } from "@workspace/agentic-session";
 import {
   findLastAgentMessage,
   getToolCalls,
+  hasLoadedSkill,
   noIncompleteInvocations,
   successfulEvalCode,
 } from "./_helpers.js";
@@ -223,13 +224,7 @@ function requireLocalSkillUse(result: TestExecutionResult) {
       reason: "The bundled local model was not the direct, successfully prepared test subject",
     };
   }
-  const loadedSkill = getToolCalls(result).some(
-    (call) =>
-      call.name === "read" &&
-      call.execution?.status === "complete" &&
-      call.execution.isError !== true &&
-      strings(call.arguments).some((value) => /skills\/server-logs\/SKILL\.md\b/u.test(value))
-  );
+  const loadedSkill = hasLoadedSkill(result, "server-logs");
   if (!loadedSkill) {
     return {
       passed: false,
