@@ -31,7 +31,10 @@ import { HostLaunchClient } from "@vibestudio/service-schemas/clients/hostLaunch
 import type { PanelReadinessSnapshot, TestApi } from "../../src/main/testApi.js";
 import type { MainProcessErrorRecord } from "../../src/main/mainProcessErrorLedger.js";
 import type { PanelInitializationFailure } from "../../src/main/panelInitializationFailure.js";
-import { isAutomationContextReplacement } from "./automationContext.js";
+import {
+  isAutomationContextReplacement,
+  retryAutomationContextReplacement,
+} from "./automationContext.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -1226,17 +1229,11 @@ async function retryTestApiEvaluation<T>(evaluate: () => Promise<T>): Promise<T>
   let lastError: unknown;
   for (let attempt = 0; attempt < 10; attempt += 1) {
     try {
-      return await evaluate();
+      return await retryAutomationContextReplacement(evaluate);
     } catch (error) {
       lastError = error;
       const message = error instanceof Error ? error.message : String(error);
-      if (
-        !/Execution context was destroyed|Test API not available|most likely because of a navigation/i.test(
-          message
-        )
-      ) {
-        throw error;
-      }
+      if (!/Test API not available/i.test(message)) throw error;
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
   }
