@@ -413,7 +413,9 @@ function validateUnifiedFileAuthoring(result: TestExecutionResult) {
 }
 
 const SCREENSHOT_PROMPT =
-  "Open a tiny disposable browser view, capture its rendered pixels to a scratch file with no filename extension, read that file as an image, and report the visible heading. Clean up the view when finished.";
+  "Open a tiny disposable browser view, capture its rendered pixels to a scratch file with no filename extension, read that file as an image, and report the visible heading.";
+const PANEL_REBUILD_PROMPT =
+  "Create and publish a small isolated counter panel, build and open it, and exercise one increment through a semantic interaction assertion. Then make a visible source improvement, rebuild the same panel, refresh the existing generation-fenced automation session, and prove another increment on the replacement runtime without replaying an uncertain click.";
 
 export const developerErgonomicsTests: TestCase[] = [
   {
@@ -468,8 +470,13 @@ export const developerErgonomicsTests: TestCase[] = [
     workspaceRepoFixture: CREATED_PANEL_WORKSPACE_REPO_FIXTURE,
     authorityPolicy: panelControlAuthorityPolicy("inspect-rebuilt-generation"),
     resources: [PANEL_AUTOMATION_RESOURCE],
-    prompt:
-      "Create and publish a small isolated counter panel, build and open it, and exercise one increment through a semantic interaction assertion. Then make a visible source improvement, rebuild the same panel, refresh the existing generation-fenced automation session, and prove another increment on the replacement runtime without replaying an uncertain click.",
+    prompt: PANEL_REBUILD_PROMPT,
+    orchestrate: (context) =>
+      orchestratePanelGoal(
+        context,
+        PANEL_REBUILD_PROMPT,
+        "rebuild and interact with one panel runtime"
+      ),
     validate: validatePanelGenerationRecovery,
   },
   {

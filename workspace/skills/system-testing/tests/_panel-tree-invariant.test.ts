@@ -11,6 +11,7 @@ import type { TestOrchestrationContext } from "../types.js";
 import { PANEL_AUTOMATION_RESOURCE } from "../panel-authority.js";
 import { agenticRuntimeTests } from "./agentic-runtime.js";
 import { cdpGadDiagnosticTests } from "./cdp-gad-diagnostics.js";
+import { developerErgonomicsTests } from "./developer-ergonomics.js";
 import { panelTests } from "./panels.js";
 import { projectLifecycleTests } from "./project-lifecycle.js";
 
@@ -254,9 +255,10 @@ describe("panel-tree invariant", () => {
       ...cdpGadDiagnosticTests,
       ...agenticRuntimeTests,
       ...projectLifecycleTests,
+      ...developerErgonomicsTests,
     ].filter((test) => test.resources?.includes(PANEL_AUTOMATION_RESOURCE));
 
-    expect(cases).toHaveLength(15);
+    expect(cases).toHaveLength(17);
     for (const test of cases) {
       expect(test.prompt).not.toMatch(/\b(?:archive|close|clean\s*up|cleanup)\b/iu);
       if (test.category !== "project-lifecycle" && test.name !== "panel-list-sources") {
