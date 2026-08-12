@@ -6,8 +6,39 @@ import { buildTests } from "./build.js";
 
 const npmTest = buildTests.find((test) => test.name === "build-npm-package")!;
 const performanceTest = buildTests.find((test) => test.name === "build-performance-profile")!;
+const optimizationTest = buildTests.find((test) => test.name === "panel-performance-optimize")!;
 
 describe("build performance validation", () => {
+  it("gates the vague optimization task on before/after and saved-state evidence", () => {
+    const result = execution([
+      performanceEvalInvocation({ firstRun: { elapsedMs: 20 } }),
+      performanceEvalInvocation({ firstRun: { elapsedMs: 5 } }),
+      completedInvocation(
+        "verify",
+        { operation: "build", target: "panels/example" },
+        {
+          operation: "build",
+          status: "ok",
+        }
+      ),
+      completedInvocation("vcs", { operation: "commit" }, { operation: "commit" }),
+      completedInvocation(
+        "vcs",
+        { operation: "status" },
+        {
+          operation: "status",
+          result: { clean: true },
+        }
+      ),
+      finalAgentMessage("The panel now has the same visible output with less bundle waste."),
+    ]);
+
+    expect(optimizationTest.validation).toBe("agent-evidence");
+    expect(optimizationTest.validate(result)).toEqual({ passed: true, reason: undefined });
+    result.messages.splice(2, 1);
+    expect(optimizationTest.validate(result)).toMatchObject({ passed: false });
+  });
+
   it("accepts a bounded exact-build profile with verified cache evidence", () => {
     const result = execution([
       performanceEvalInvocation({
@@ -151,6 +182,32 @@ function performanceEvalInvocation(returnValue: unknown): ChatMessage {
         terminalOutcome: "success",
         isError: false,
         result: { details: { returnValue } },
+      },
+    }),
+  };
+}
+
+function completedInvocation(
+  name: string,
+  arguments_: Record<string, unknown>,
+  details: Record<string, unknown>
+): ChatMessage {
+  return {
+    id: `${name}-${JSON.stringify(arguments_)}`,
+    kind: "message",
+    senderId: "agent",
+    senderMetadata: { type: "agent" },
+    complete: true,
+    contentType: "invocation",
+    content: JSON.stringify({
+      id: `${name}-${JSON.stringify(arguments_)}`,
+      name,
+      arguments: arguments_,
+      execution: {
+        status: "complete",
+        terminalOutcome: "success",
+        isError: false,
+        result: { details },
       },
     }),
   };

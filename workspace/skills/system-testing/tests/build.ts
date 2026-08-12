@@ -91,6 +91,53 @@ function validateBuildPerformanceProfile(result: TestExecutionResult) {
       };
 }
 
+function callDetails(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const details = (value as Record<string, unknown>)["details"];
+  return details && typeof details === "object" && !Array.isArray(details)
+    ? (details as Record<string, unknown>)
+    : null;
+}
+
+function validatePanelPerformanceRepair(result: TestExecutionResult) {
+  const base = completedScenarioEvidence(result, ["eval", "verify", "vcs"]);
+  if (!base.passed) return base;
+  const completed = base.evidence.calls.filter(
+    (call) => call.execution?.status === "complete" && call.execution.isError !== true
+  );
+  const profiles = completed.filter(
+    (call) =>
+      call.name === "eval" &&
+      /\b(?:profileBuild|getPerformanceProfile)\b/u.test(String(call.arguments?.["code"] ?? ""))
+  );
+  const buildVerified = completed.some((call) => {
+    if (call.name !== "verify" || call.arguments?.["operation"] !== "build") return false;
+    const details = callDetails(call.execution?.result);
+    return details?.["operation"] === "build" && details["status"] === "ok";
+  });
+  const committed = completed.some(
+    (call) => call.name === "vcs" && call.arguments?.["operation"] === "commit"
+  );
+  const clean = completed.some((call) => {
+    if (call.name !== "vcs" || call.arguments?.["operation"] !== "status") return false;
+    const status = callDetails(call.execution?.result)?.["result"];
+    return Boolean(
+      status &&
+      typeof status === "object" &&
+      !Array.isArray(status) &&
+      (status as Record<string, unknown>)["clean"] === true
+    );
+  });
+  if (profiles.length < 2 || !buildVerified || !committed || !clean) {
+    return {
+      passed: false,
+      reason:
+        "The trajectory did not prove before/after profiling, a successful final build, a committed repair, and a clean task state",
+    };
+  }
+  return { passed: true, reason: undefined };
+}
+
 function validateNpmImport(result: TestExecutionResult) {
   const base = completedScenarioEvidence(result);
   if (!base.passed) return base;
@@ -151,7 +198,8 @@ export const buildTests: TestCase[] = [
     workspaceRepoFixture: OPTIMIZABLE_PANEL_WORKSPACE_REPO_FIXTURE,
     prompt:
       "The disposable panel is much larger than its tiny UI warrants. Please investigate and fix it without changing what it displays.",
-    validate: () => ({ passed: true }),
+    validation: "agent-evidence",
+    validate: validatePanelPerformanceRepair,
   },
   {
     name: "build-performance-profile",
