@@ -113,8 +113,11 @@ merge. It does not prevent an old builtin from accepting writes, and a
 migration note has no applied ledger or cross-store commit record. Therefore a
 host/Base pair cannot safely copy data and delete the builtin in one release.
 
-The durable cutover is an **offline, per-workspace startup hold**. The hold is
-small and deterministic; semantic migration remains agentic.
+The durable cutover is an **offline, per-workspace startup hold**. It is
+triggered only by a structured `ownerCutovers` declaration in the host's exact
+Base release artifact, never by a pin difference or prose note. The hold is
+small, deterministic, and non-dismissible because it is a write fence;
+semantic migration remains agentic.
 
 ### Divide deterministic safety from semantic judgment
 
@@ -135,6 +138,36 @@ The existing Composer migration session and its agent own the semantic work:
 - run domain-specific conformance checks; and
 - explain or escalate data that cannot be mapped honestly.
 
+### Maintenance admission, not normal startup
+
+The host preflight enters maintenance before normal epoch/API admission when
+the workspace needs the shipped Base to cross a repairable epoch or when a
+declared owner cutover lacks a route receipt. Configuration handling is split
+into structural parsing and runtime admission: maintenance may inspect an
+old-epoch workspace without activating it, and normal admission still rejects
+that epoch until migration commits the target state. Unsupported downgrades or
+source epochs fail exactly before product traffic.
+
+Host Tier 0 exposes only pre-admission semantic
+snapshot/materialization/import/publish I/O; it does not interpret workspace
+semantics. Composer and the migration agent run as a restricted maintenance
+closure built from exact workspace/Base source through ordinary Build V2 and
+endowed only with semantic VCS and cutover-scoped effects. The host embeds no
+copy. The closure starts no workspace apps, panels, unrelated extensions, or
+routable product services. This is the normal Composer operation behind a host
+lifecycle gate, not a second resolver or migration path.
+
+If the workspace-owned harness cannot start, the external rescue harness may
+repair semantic source and publish that repair through the existing exact
+snapshot path. It then hands back to the same pending operation. Its deliberate
+lack of host RPC means it cannot read protected source storage, install target
+storage, or commit a route.
+
+A normally admissible same-epoch semantic hold may retain the migration plan's
+dismissal policy. An epoch-crossing maintenance hold cannot admit incompatible
+source, and an owner-cutover hold additionally cannot release its write fence
+until route commit.
+
 There is no generic migration DSL, per-record-family host schema registry, or
 host algorithm for deciding whether two semantic datasets are equivalent. A
 cutover supplies a simple idempotent importer and a verifier appropriate to
@@ -143,31 +176,61 @@ adoption. For non-secret product data, it may be Base-owned code exercised by
 the migration session. Protected plaintext is transformed only by sealed host
 code; it is never exposed to the agent merely to make the framework uniform.
 
+### The cutover-scoped data envelope
+
+The migration session receives one bounded operation envelope rather than a
+general storage-migration service:
+
+- an immutable read-only source export produced by the sealed old-owner
+  adapter;
+- an empty private target staging area;
+- contained Base-owned importer/verifier execution over those paths;
+- host verification and exact-target installation of the staged result; and
+- no ordinary route to either owner while the envelope is open.
+
+The current same-target userland backup/restore surface is not this mechanism:
+it excludes internal owners and cannot install one owner's backup as another
+target. Protected vault data uses a cutover-specific sealed host transform;
+non-secret transformations and semantic verification remain agent-authored.
+
 Counts, digests, reference checks, and product probes are verifier evidence,
 not fields hard-coded into a universal host protocol. The host needs only a
-minimal receipt containing:
+minimal receipt containing three deliberately separate facts:
 
 - cutover and workspace identity;
 - immutable source snapshot identity;
-- exact target owner and Base/code identity;
+- distribution provenance: the exact Base release that carried the target and
+  migration intent;
+- activated-build evidence: the exact effective build initially migrated and
+  verified;
+- stable route identity: service protocol, provider principal, object identity,
+  and reviewed authority contract;
 - an opaque digest of the successful verifier evidence; and
 - the committed route/version.
 
 This is not an applied-notes ledger. It is the authority fact that selects the
-one callable owner. The source snapshot remains available for diagnosis or a
-new repair attempt, but it is never a post-commit product fallback.
+one callable owner. Only the stable route selects future traffic. The Base and
+activated-build identities remain audit evidence, so conforming userland code
+can evolve without another host transaction. The source snapshot remains
+available for diagnosis or a new repair attempt, but it is never a post-commit
+product fallback.
 
 ### Cutover sequence
 
-1. A host release identifies its exact target Base release and opens the normal
-   durable Composer operation before product startup.
-2. Startup holds the workspace and snapshots/fences the old owner. The old
-   product route is not started while the hold is active.
+1. Startup reads the host artifact and route receipts before normal config
+   admission. A missing declared receipt enters maintenance and fences the
+   workspace generation.
+2. Maintenance snapshots the old owner, then opens the normal durable Composer
+   operation for the exact target Base. The old product route is not started.
 3. The ordinary migration agent brings the actual workspace to the target
-   contract and runs the cutover importer and verifier against the snapshot.
-4. On successful evidence, the host commits the owner/route receipt and admits
-   normal traffic to the new owner only.
-5. A later retirement release deletes the builtin catalog, product class, DO
+   contract. Build V2 proves that the effective workspace—not merely the Base
+   release—contains the declared stable provider, and the semantic update
+   carries the target epoch.
+4. The contained importer/verifier transforms the immutable source into staged
+   target output; the host installs the verified output.
+5. On successful evidence, the host commits the owner/route receipt, tears down
+   maintenance, and runs normal epoch/API admission once.
+6. A later retirement release deletes the builtin catalog, product class, DO
    export, and product authority. A bounded offline snapshot reader may remain
    only while a supported skipped upgrade still needs it.
 
@@ -178,9 +241,10 @@ must never assume that a workspace observed an intermediate release.
 
 ### First proofs
 
-1. Use phone provisioning to prove exact Base distribution, required-route
-   gating, fresh/reconciled workspace behavior, and catalog deletion without a
-   data transfer.
+1. First separate builtin contract availability from provider selection and
+   make resolution consult committed routes. Then use phone provisioning to
+   prove exact Base distribution, required-route gating, fresh/reconciled
+   workspace behavior, and catalog deletion without a data transfer.
 2. Before moving workspace state, missions, or browser data, prove the offline
    hold/snapshot/commit envelope on the smallest low-value durable builtin or a
    faithful storage fixture, including crash injection at every step.
@@ -195,6 +259,10 @@ must never assume that a workspace observed an intermediate release.
   fails before product startup with an exact unsupported-source diagnostic.
 - No resolver gives a builtin implicit precedence over a committed workspace
   route.
+- Base inspection proves the target route in the exact release, and maintenance
+  Build V2 proves the effective locally authoritative provider before commit.
+- A locally deleted or incompatible target remains pending; template lineage
+  never silently resurrects it.
 - Base source is never copied into the host artifact or seeded by host code.
 - The host contains no semantic migration planner or record-family framework.
 
@@ -611,9 +679,10 @@ pagination, retry policy, and repair presentation remain userland facts.
 The dependency order is:
 
 ```text
-Foundation 0: durable-owner cutover
-  |-- stateless Base route proof
-  `-- durable transfer crash proof
+External-Base exact root + structured owner-cutover declarations
+  `--> Foundation 0: durable-owner cutover
+         |-- stateless Base route proof
+         `-- durable transfer crash proof
 
 Workstream A0: desired/observed client-host envelope + harness
   `-- A1: Electron PanelManager relocation
@@ -625,29 +694,41 @@ Foundation 0 durable proof
   |-- C: missions closure split
   `-- D: browser vault/product split
 
+External-Base self-development needs
+  `--> early F: Base-owned pair workflow over narrow native effects
+
 B authority-boundary patterns + Foundation 0
-  `-- F: development workflow re-evaluation
+  `--> finish F against the proven generic execution ledger
 ```
 
 Recommended landing order:
 
-1. Implement the offline upgrade gate, receipt-backed route commit, and skipped
+1. Land the external-Base exact-source boundary, root/pointer contracts,
+   provided-route evidence, and structured owner-cutover declarations.
+2. Implement maintenance admission, the cutover data envelope,
+   receipt-backed route commit, route-aware provider resolution, and skipped
    upgrade behavior.
-2. Prove the Base route with stateless phone provisioning, then prove a durable
+3. Prove the Base route with stateless phone provisioning, then prove a durable
    transfer with crash injection.
-3. Land A0's minimal desired/observed protocol envelope, generation fencing,
+4. Move pair selection/workflow/retries/presentation to Base and retain only
+   sealed exact effects plus generic execution receipts in the host; complete
+   this minimal F slice before external-Base self-development grows.
+5. Externalize Base and delete the in-tree `workspace/` after its explicit
+   development and build consumers are replaced. Later Base work lands in its
+   external repository; deletion does not wait for A-E.
+6. Land A0's minimal desired/observed protocol envelope, generation fencing,
    and adapter conformance harness.
-4. Relocate Electron `PanelManager` and all three local-state owners in A1.
-5. Finish mobile, headless, event, and preload consolidation in A2.
-6. Split workspace state around its authority-bearing history spine.
-7. Land mechanical closure rendering and immutable activation, then move
+7. Relocate Electron `PanelManager` and all three local-state owners in A1.
+8. Finish mobile, headless, event, and preload consolidation in A2.
+9. Split workspace state around its authority-bearing history spine.
+10. Land mechanical closure rendering and immutable activation, then move
    missions.
-8. Split browser vault and browser product data.
-9. Thin pre-app recovery surfaces.
-10. Re-evaluate development workflow after the generic migration and execution
-    receipt patterns have proven themselves.
+11. Split browser vault and browser product data.
+12. Thin pre-app recovery surfaces.
+13. Finish any remaining Development-domain extraction after the generic
+    migration and execution receipt patterns have proven themselves.
 
-Steps 6–8 may be designed in parallel after their prerequisites, but each
+Steps 9–11 may be designed in parallel after their prerequisites, but each
 durable owner cutover uses the same offline primitive. They must not invent
 service-specific fallback routes or new migration channels.
 
