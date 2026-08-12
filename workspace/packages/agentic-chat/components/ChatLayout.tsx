@@ -16,7 +16,7 @@ import "../styles.css";
 
 export interface ChatLayoutProps extends Pick<
   ChatMessageAreaProps,
-  "renderMessage" | "renderInlineGroup" | "renderInvocation"
+  "renderMessage" | "renderInlineGroup" | "renderInvocation" | "renderEmptyState"
 > {
   /** Resolved browser-owned capabilities to mount in the stock layout. */
   features: ResolvedAgenticChatFeatures;
@@ -47,6 +47,7 @@ export const ChatLayout = React.memo(function ChatLayout({
   renderMessage,
   renderInlineGroup,
   renderInvocation,
+  renderEmptyState,
   features,
   composerPlaceholder,
 }: ChatLayoutProps) {
@@ -75,6 +76,7 @@ export const ChatLayout = React.memo(function ChatLayout({
           renderMessage={renderMessage}
           renderInlineGroup={renderInlineGroup}
           renderInvocation={renderInvocation}
+          renderEmptyState={renderEmptyState}
           features={features}
         />
         {features.feedback ? <LazyChatFeedbackArea /> : null}

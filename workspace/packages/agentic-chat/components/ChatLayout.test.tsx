@@ -15,6 +15,7 @@ vi.mock("./ChatMessageArea", () => ({
     renderMessage?: unknown;
     renderInlineGroup?: unknown;
     renderInvocation?: unknown;
+    renderEmptyState?: unknown;
     features: { inlineUi: boolean };
   }) => (
     <div
@@ -23,6 +24,7 @@ vi.mock("./ChatMessageArea", () => ({
       data-render-message={String(props.renderMessage !== undefined)}
       data-render-inline-group={String(props.renderInlineGroup !== undefined)}
       data-render-invocation={String(props.renderInvocation !== undefined)}
+      data-render-empty-state={String(props.renderEmptyState !== undefined)}
     />
   ),
 }));
@@ -65,12 +67,14 @@ describe("ChatLayout sizing", () => {
     const renderMessage = vi.fn();
     const renderInlineGroup = vi.fn();
     const renderInvocation = vi.fn();
+    const renderEmptyState = vi.fn();
     const { getByTestId, queryByTestId } = render(
       <ChatLayout
         features={{ feedback: false, inlineUi: false, actionBar: false, clientEval: false }}
         renderMessage={renderMessage}
         renderInlineGroup={renderInlineGroup}
         renderInvocation={renderInvocation}
+        renderEmptyState={renderEmptyState}
         composerPlaceholder="Issue a bridge directive…"
       />
     );
@@ -83,6 +87,7 @@ describe("ChatLayout sizing", () => {
         renderMessage: "true",
         renderInlineGroup: "true",
         renderInvocation: "true",
+        renderEmptyState: "true",
       }),
     });
     expect(getByTestId("composer").dataset["placeholder"]).toBe("Issue a bridge directive…");

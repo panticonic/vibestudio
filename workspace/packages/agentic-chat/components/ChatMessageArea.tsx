@@ -22,6 +22,8 @@ export interface ChatMessageAreaProps {
   ) => ReactNode;
   /** Override individual invocation rendering while retaining the stock group. */
   renderInvocation?: import("./InlineGroup").InvocationRenderer;
+  /** Replace, wrap, or elide the empty transcript using its complete stock renderer. */
+  renderEmptyState?: (defaultContent: ReactNode) => ReactNode;
   /** Resolved browser-owned features for the stock transcript. */
   features: ResolvedAgenticChatFeatures;
 }
@@ -34,6 +36,7 @@ export function ChatMessageArea({
   renderMessage,
   renderInlineGroup,
   renderInvocation,
+  renderEmptyState,
   features,
 }: ChatMessageAreaProps) {
   const {
@@ -96,7 +99,7 @@ export function ChatMessageArea({
   // card (item 9) — gating on `connected` avoids flashing it mid-replay for an
   // existing conversation. MessageList only mounts this when there are zero
   // items, so it self-hides the moment the first message lands.
-  const emptyState = useMemo<ReactNode>(() => {
+  const defaultEmptyState = useMemo<ReactNode>(() => {
     const pending = pendingReviewNotice(connectionError?.cause ?? connectionError);
     if (pending) {
       return (
@@ -174,6 +177,7 @@ export function ChatMessageArea({
     deferredAgent?.queued.length,
     connected,
   ]);
+  const emptyState = renderEmptyState ? renderEmptyState(defaultEmptyState) : defaultEmptyState;
 
   // Before the first agent exists, the message canvas hosts the inline setup
   // (armed config) instead of an empty transcript.
