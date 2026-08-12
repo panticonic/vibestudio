@@ -1,9 +1,10 @@
-import { useDroppable } from "@dnd-kit/core";
-import { Box, Flex } from "@radix-ui/themes";
+import { useState } from "react";
+import { Cross2Icon } from "@radix-ui/react-icons";
+import { Box, Flex, IconButton, Tooltip } from "@radix-ui/themes";
+import { useTouchDevice } from "@workspace/react/responsive";
 
 import { PaneContent } from "./PaneContent";
-import { paneDropId } from "../layout/dropTargets";
-import { PANE_DROP_HANDLE_HEIGHT, type LayoutPane } from "../layout/types";
+import { PANE_ACTION_RAIL_HEIGHT, PANE_FOCUS_RAIL_HEIGHT, type LayoutPane } from "../layout/types";
 
 interface PaneViewProps {
   pane: LayoutPane;
@@ -19,28 +20,20 @@ interface PaneViewProps {
   unresponsive: boolean;
   onDismissUnresponsive: (panelId: string) => void;
   onFocusPane: (paneId: string) => void;
+  onClosePane?: (paneId: string) => void;
 }
 
 /**
- * One pane: a native-view content state machine with only a six-pixel shell
- * rail above it. The rail preserves an unobscured tree-drop target (D9)
- * without duplicating the titlebar for every vertically stacked pane. Actions
- * for the focused pane live in the global titlebar, outside native-view bounds.
+ * One pane: a native-view content state machine with a transparent hover strip
+ * above it. Multi-pane controls live in one centered capsule instead of drawing
+ * a toolbar across the pane.
  *
- * The rail also has to carry focus. A pane's outline is drawn on shell DOM, but
- * the native view composites above it and sits flush to the left, right and
- * bottom edges, so only the top strip is ever actually visible — which is why
- * this doubles as the focus indicator. It says so in neutral greys rather than
- * a brand wash: a saturated slab across the top of every pane fights whatever
- * page is rendering below it. The accent is spent only while a drag is over the
- * rail, where it has to read instantly.
+ * Native panel views composite above ordinary shell DOM, so this reserved strip
+ * is the only reliable place for pane-local controls. It remains visually empty
+ * until interaction instead of masquerading as a persistent toolbar.
  *
- * Only the drop target needs the full six pixels; the *mark* does not. Painting
- * the whole strip made every pane look capped by a stray scrollbar, so the rail
- * itself stays transparent and a short centred grip carries the state instead —
- * grown and darkened when focused, the way a handle is meant to read. Drag-over
- * is the one case that still washes the entire strip, because at that moment
- * the question being answered is "how big is the target", not "which pane".
+ * The strip is completely invisible at rest. Hover, keyboard focus, or a touch
+ * pointer reveals the centered grip and its pane-local close action together.
  */
 export function PaneView({
   pane,
@@ -51,13 +44,14 @@ export function PaneView({
   unresponsive,
   onDismissUnresponsive,
   onFocusPane,
+  onClosePane,
 }: PaneViewProps) {
-  // Native WebContentsViews always composite above renderer DOM. Keep the drop
-  // target in reserved shell chrome rather than attempting a hover overlay.
-  const { setNodeRef: setDropRef, isOver: isDropOver } = useDroppable({
-    id: paneDropId(pane.id),
-  });
+  const isTouch = useTouchDevice();
+  const [railHovered, setRailHovered] = useState(false);
+  const [railFocusWithin, setRailFocusWithin] = useState(false);
   const markFocused = focused && showPaneFocus;
+  const railHeight = onClosePane ? PANE_ACTION_RAIL_HEIGHT : PANE_FOCUS_RAIL_HEIGHT;
+  const controlsExpanded = Boolean(onClosePane) && (railHovered || railFocusWithin || isTouch);
 
   return (
     <Flex
@@ -67,11 +61,6 @@ export function PaneView({
         flex: `${pane.heightFr} 1 0`,
         minHeight: 0,
         minWidth: 0,
-        // Frame hairline (D7/§6). Kept to one neutral pixel in both states: the
-        // native view hides all but the top edge, where a heavier ring would
-        // only thicken the rail below into a band.
-        outline: markFocused ? "1px solid var(--gray-a7)" : "1px solid var(--gray-a4)",
-        outlineOffset: -1,
         // Square, deliberately. A radius here only ever reached the top two
         // corners: the top strip is shell DOM and gets clipped, while the rest
         // of the pane is a natively composited view that `overflow: hidden`
@@ -84,45 +73,92 @@ export function PaneView({
       }}
     >
       <Box
-        ref={setDropRef}
-        onPointerDown={() => onFocusPane(pane.id)}
-        role="button"
-        tabIndex={0}
-        aria-label="Focus pane; drop a panel here to replace its contents"
-        title="Drop a panel here"
-        onKeyDown={(event) => {
-          if (event.key === "Enter" || event.key === " ") {
-            event.preventDefault();
-            onFocusPane(pane.id);
+        onPointerEnter={() => setRailHovered(true)}
+        onPointerLeave={() => setRailHovered(false)}
+        onFocusCapture={() => setRailFocusWithin(true)}
+        onBlurCapture={(event) => {
+          if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+            setRailFocusWithin(false);
           }
         }}
         style={{
-          height: PANE_DROP_HANDLE_HEIGHT,
+          height: railHeight,
           flexShrink: 0,
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          backgroundColor: isDropOver ? "var(--accent-8)" : "transparent",
-          cursor: "default",
-          transition: "background-color 120ms ease-out",
+          position: "relative",
+          backgroundColor: "transparent",
         }}
       >
-        <Box
+        <Flex
+          align="center"
           style={{
-            // Three of the rail's five pixels, leaving a pixel of air above and
-            // below so the grip reads as sitting in the strip rather than
-            // filling it. Any shorter and the radius has nothing to round.
-            height: 3,
-            width: markFocused ? 40 : 24,
+            position: "absolute",
+            left: "50%",
+            top: 0,
+            transform: "translateX(-50%)",
+            width: 72,
+            height: "100%",
+            border: "1px solid var(--gray-a6)",
             borderRadius: 999,
-            backgroundColor: isDropOver
-              ? "var(--accent-1)"
-              : markFocused
-                ? "var(--gray-a8)"
-                : "var(--gray-a5)",
-            transition: "width 120ms ease-out, background-color 120ms ease-out",
+            backgroundColor: "var(--gray-a4)",
+            opacity: controlsExpanded ? 1 : 0,
+            overflow: "hidden",
+            transition: "opacity 90ms ease-out",
           }}
-        />
+        >
+          <button
+            type="button"
+            aria-label="Focus pane"
+            title="Focus pane"
+            onClick={() => onFocusPane(pane.id)}
+            style={{
+              width: 46,
+              height: "100%",
+              flexShrink: 0,
+              padding: 0,
+              border: 0,
+              background: "transparent",
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            <span
+              style={{
+                height: 3,
+                width: 28,
+                borderRadius: 999,
+                backgroundColor: markFocused ? "var(--gray-a10)" : "var(--gray-a8)",
+              }}
+            />
+          </button>
+          {onClosePane && (
+            <Tooltip content="Close pane — panel stays in the tree">
+              <IconButton
+                size="1"
+                variant="ghost"
+                color="gray"
+                radius="full"
+                aria-label="Close pane"
+                data-pane-close={pane.id}
+                tabIndex={controlsExpanded ? 0 : -1}
+                onPointerDown={(event) => event.stopPropagation()}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onClosePane(pane.id);
+                }}
+                style={{
+                  width: 24,
+                  height: "100%",
+                  flexShrink: 0,
+                  padding: 0,
+                }}
+              >
+                <Cross2Icon width={12} height={12} />
+              </IconButton>
+            </Tooltip>
+          )}
+        </Flex>
       </Box>
       <Flex direction="column" style={{ flex: "1 1 0", minHeight: 0, minWidth: 0 }}>
         <PaneContent

@@ -404,30 +404,23 @@ export const PanelStack = memo(function PanelStack({
     )
   );
 
-  // Tree→layout drops (W5, D8): pane-handle drop shows the panel in exactly
-  // that pane; gutter drop opens it in a new column at that position.
-  const layoutRefForDrop = useRef(layout);
-  layoutRefForDrop.current = layout;
+  // Tree→viewport drops are explicit presentation commands. Full width
+  // isolates the panel; left/right place it beside the currently focused pane.
   useEffect(() => {
     const handleLayoutDrop = (event: Event) => {
       const detail = (event as CustomEvent<LayoutDropDetail>).detail;
-      if (!detail?.panelId) return;
-      const target = detail.target;
-      if (target.kind === "pane") {
-        dispatch({ type: "place-in-pane", panelId: detail.panelId, paneId: target.paneId });
-        return;
-      }
-      const column = layoutRefForDrop.current.columns.find(
-        (candidate) => candidate.id === target.columnId
-      );
-      const anchorPane = column?.panes[0];
-      if (anchorPane) {
-        dispatch({ type: "open-beside", panelId: detail.panelId, anchorPaneId: anchorPane.id });
-      }
+      const anchorPaneId = layout.focusedPaneId;
+      if (!detail?.panelId || !anchorPaneId) return;
+      dispatch({
+        type: "place-from-tree",
+        panelId: detail.panelId,
+        anchorPaneId,
+        position: detail.target.position,
+      });
     };
     window.addEventListener(LAYOUT_DROP_EVENT, handleLayoutDrop);
     return () => window.removeEventListener(LAYOUT_DROP_EVENT, handleLayoutDrop);
-  }, [dispatch]);
+  }, [dispatch, layout.focusedPaneId]);
 
   // Native focus feedback (§5.2): when a native view gains focus by a route the
   // shell didn't initiate, follow it with layout focus.
@@ -1214,15 +1207,10 @@ export const PanelStack = memo(function PanelStack({
     },
     [closePane, createChildInPane, dispatch, layout.focusedPaneId]
   );
-  // Parked columns are off-screen, so they don't count toward "is there another
-  // pane to fall back to" — only the resident ones do.
-  const visiblePaneCount = useMemo(() => {
-    const resident = new Set(residentColumnIds);
-    return layout.columns.reduce(
-      (total, column) => (resident.has(column.id) ? total + column.panes.length : total),
-      0
-    );
-  }, [layout.columns, residentColumnIds]);
+  const layoutPaneCount = useMemo(
+    () => layout.columns.reduce((total, column) => total + column.panes.length, 0),
+    [layout.columns]
+  );
   const paneChromeState = useMemo<FocusedPaneChromeState | null>(() => {
     const paneId = layout.focusedPaneId;
     const location = paneId ? findPane(layout, paneId) : null;
@@ -1237,9 +1225,9 @@ export const PanelStack = memo(function PanelStack({
           title: child.title,
         })) ?? [],
       selectedChildPanelId: focusedTreePanel?.selectedChildId ?? null,
-      visiblePaneCount,
+      layoutPaneCount,
     };
-  }, [layout, panelMap, visiblePaneCount]);
+  }, [layout, layoutPaneCount, panelMap]);
   useEffect(() => {
     onPaneChromeStateChange?.(paneChromeState);
   }, [onPaneChromeStateChange, paneChromeState]);
@@ -1525,13 +1513,11 @@ export const PanelStack = memo(function PanelStack({
                 <ColumnRow
                   layout={layout}
                   residentColumnIds={residentColumnIds}
-                  parkedLeft={parkedLeft}
-                  parkedRight={parkedRight}
                   layoutEpoch={layoutEpoch}
                   unresponsivePanels={unresponsivePanels}
                   onDismissUnresponsive={dismissUnresponsive}
                   onFocusPane={focusPane}
-                  onFocusColumn={focusColumn}
+                  onClosePane={closePane}
                   onResizeColumns={resizeColumns}
                   onResizePanes={resizePanes}
                   onTransitionSettled={bumpLayoutEpoch}

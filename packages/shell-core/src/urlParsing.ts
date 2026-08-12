@@ -177,6 +177,7 @@ export function parsePanelUrl(
   if (
     placementDisposition !== undefined &&
     placementDisposition !== "side" &&
+    placementDisposition !== "side-if-room" &&
     placementDisposition !== "replace" &&
     placementDisposition !== "split-below"
   ) {

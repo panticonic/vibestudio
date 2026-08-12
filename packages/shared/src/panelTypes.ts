@@ -7,7 +7,7 @@ export type { ChildSpec } from "@vibestudio/types";
 
 import type { PackageManifest, PanelPlacementHint } from "./types.js";
 
-const PLACEMENT_DISPOSITIONS = new Set(["side", "replace", "split-below"]);
+const PLACEMENT_DISPOSITIONS = new Set(["side", "side-if-room", "replace", "split-below"]);
 
 /**
  * Validate and normalize a manifest/call-site `placement` block. Returns a
@@ -25,7 +25,7 @@ export function sanitizePlacementHint(value: unknown): PanelPlacementHint | unde
   if (raw["disposition"] !== undefined) {
     if (typeof raw["disposition"] !== "string" || !PLACEMENT_DISPOSITIONS.has(raw["disposition"])) {
       throw new Error(
-        `vibestudio.placement.disposition must be one of "side" | "replace" | "split-below", got ${JSON.stringify(raw["disposition"])}`
+        `vibestudio.placement.disposition must be one of "side" | "side-if-room" | "replace" | "split-below", got ${JSON.stringify(raw["disposition"])}`
       );
     }
     hint.disposition = raw["disposition"] as PanelPlacementHint["disposition"];

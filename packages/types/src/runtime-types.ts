@@ -12,7 +12,7 @@
  */
 export interface PanelPlacementHint {
   /** How the panel wants to be placed relative to its parent. Default "side". */
-  disposition?: "side" | "replace" | "split-below";
+  disposition?: "side" | "side-if-room" | "replace" | "split-below";
   /** Preferred column width in px. */
   preferredWidth?: number;
   /** Minimum column width in px. */

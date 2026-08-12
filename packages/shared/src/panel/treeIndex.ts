@@ -27,7 +27,7 @@ export interface PanelTreeNode {
 }
 
 export interface PanelTreePlacementHint {
-  disposition?: "side" | "replace" | "split-below";
+  disposition?: "side" | "side-if-room" | "replace" | "split-below";
   preferredWidth?: number;
   minWidth?: number;
 }

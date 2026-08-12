@@ -6,7 +6,6 @@ import {
   COLUMN_DIVIDER_WIDTH,
   MIN_COLUMN_WIDTH,
   MIN_PANE_HEIGHT,
-  PARKED_EDGE_TAB_WIDTH,
   PREFERRED_COLUMN_WIDTH,
   mintColumnId,
   mintPaneId,
@@ -36,9 +35,14 @@ export type LayoutAction =
       hint: PanelPlacementHint;
     }
   | { type: "open-beside"; panelId: string; anchorPaneId: string }
+  | {
+      type: "place-from-tree";
+      panelId: string;
+      anchorPaneId: string;
+      position: "left" | "full" | "right";
+    }
   | { type: "move-pane-to-new-column"; paneId: string }
   | { type: "split-below"; panelId: string; anchorPaneId: string }
-  | { type: "place-in-pane"; panelId: string; paneId: string } // explicit drop on a pane handle (D8)
   | { type: "close-pane"; paneId: string }
   | { type: "tree-reconcile"; removed: Array<{ panelId: string; fallbackCandidates: string[] }> }
   | { type: "focus-pane"; paneId: string }
@@ -175,6 +179,22 @@ function newColumn(panelId: string, widthFr = 1): LayoutColumn {
   return { id: mintColumnId(), widthFr, panes: [newPane(panelId)] };
 }
 
+function isolatePanel(next: PanelLayout, panelId: string): PanelLayout {
+  const existing = paneForPanel(next, panelId);
+  const pane = existing?.pane ?? newPane(panelId);
+  pane.heightFr = 1;
+  return normalizeLayout({
+    columns: [
+      {
+        id: existing?.column.id ?? mintColumnId(),
+        widthFr: 1,
+        panes: [pane],
+      },
+    ],
+    focusedPaneId: pane.id,
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Viewport residency (§3.1 / D10) — parking is derived, never stored.
 
@@ -198,8 +218,6 @@ export function computeViewport(
     let width =
       (cumulativeMinWidths[candidateEnd + 1] ?? 0) - (cumulativeMinWidths[candidateStart] ?? 0);
     width += Math.max(0, candidateEnd - candidateStart) * COLUMN_DIVIDER_WIDTH;
-    if (candidateStart > 0) width += PARKED_EDGE_TAB_WIDTH;
-    if (candidateEnd < columns.length - 1) width += PARKED_EDGE_TAB_WIDTH;
     return width;
   };
 
@@ -324,12 +342,18 @@ export function applyLayoutAction(
       );
     case "open-beside":
       return applyOpenBeside(cloneLayout(layout), action.panelId, action.anchorPaneId, env);
+    case "place-from-tree":
+      return applyTreeViewportPlacement(
+        cloneLayout(layout),
+        action.panelId,
+        action.anchorPaneId,
+        action.position,
+        env
+      );
     case "move-pane-to-new-column":
       return applyMovePaneToNewColumn(layout, action.paneId);
     case "split-below":
       return applySplitBelow(cloneLayout(layout), action.panelId, action.anchorPaneId, env);
-    case "place-in-pane":
-      return applyPlaceInPane(cloneLayout(layout), action.panelId, action.paneId);
     case "close-pane":
       return applyClosePane(cloneLayout(layout), action.paneId, env);
     case "tree-reconcile":
@@ -396,6 +420,21 @@ function verticalFits(column: LayoutColumn, env: LayoutEnv): boolean {
   return canSplitColumnVertically(column, env.viewportHeight, env.paneChromeHeight);
 }
 
+function sideFitsComfortably(
+  anchor: PaneLocation,
+  panelId: string,
+  hint: PanelPlacementHint | undefined,
+  env: LayoutEnv
+): boolean {
+  const anchorWidth = Math.max(columnMinWidth(anchor.column, env), PREFERRED_COLUMN_WIDTH);
+  const panelWidth = Math.max(
+    env.minWidthOf(panelId),
+    hint?.minWidth ?? 0,
+    hint?.preferredWidth ?? PREFERRED_COLUMN_WIDTH
+  );
+  return anchorWidth + panelWidth + COLUMN_DIVIDER_WIDTH <= env.viewportWidth;
+}
+
 function insertColumnAfter(
   next: PanelLayout,
   columnIndex: number,
@@ -454,10 +493,16 @@ function applyHintedPlacement(
     return next;
   }
 
-  // Visual placements fall back to the focused pane when their semantic parent
-  // is hidden, preserving an explicit beside/below request from a tree menu.
   if (!anchor) return applyShowPanel(next, panelId, "navigate-event", env);
 
+  if (disposition === "side-if-room") {
+    return sideFitsComfortably(anchor, panelId, hint, env)
+      ? insertColumnAfter(next, anchor.columnIndex, panelId, hint)
+      : isolatePanel(next, panelId);
+  }
+
+  // Visual placements fall back to the focused pane when their semantic parent
+  // is hidden, preserving an explicit beside/below request from a tree menu.
   // 2c: split-below — only if the column has vertical room; else fall through.
   if (disposition === "split-below" && verticalFits(anchor.column, env)) {
     return insertPaneBelow(next, anchor, panelId, hint);
@@ -484,6 +529,48 @@ function applyOpenBeside(
   const anchor = findPane(next, anchorPaneId);
   if (!anchor) return applyShowPanel(next, panelId, "navigate-event", env);
   return insertColumnAfter(next, anchor.columnIndex, panelId);
+}
+
+/** Direct tree drop: isolate full-width, or move/open beside the focused pane. */
+function applyTreeViewportPlacement(
+  next: PanelLayout,
+  panelId: string,
+  anchorPaneId: string,
+  position: "left" | "full" | "right",
+  env: LayoutEnv
+): PanelLayout {
+  const existing = paneForPanel(next, panelId);
+  if (position === "full") {
+    return isolatePanel(next, panelId);
+  }
+
+  if (existing?.pane.id === anchorPaneId) {
+    next.focusedPaneId = anchorPaneId;
+    return next;
+  }
+
+  let pane: LayoutPane;
+  if (existing) {
+    pane = existing.pane;
+    existing.column.panes.splice(existing.paneIndex, 1);
+    if (existing.column.panes.length === 0) {
+      next.columns.splice(existing.columnIndex, 1);
+    }
+  } else {
+    pane = newPane(panelId);
+  }
+  pane.heightFr = 1;
+
+  const anchor = findPane(next, anchorPaneId);
+  if (!anchor) return applyShowPanel(next, panelId, "navigate-event", env);
+  const column: LayoutColumn = {
+    id: mintColumnId(),
+    widthFr: anchor.column.widthFr,
+    panes: [pane],
+  };
+  next.columns.splice(anchor.columnIndex + (position === "right" ? 1 : 0), 0, column);
+  next.focusedPaneId = pane.id;
+  return normalizeLayout(next);
 }
 
 /** Move an existing pane as one state transition, preserving its position id. */
@@ -526,21 +613,6 @@ function applySplitBelow(
     return applyOpenBeside(next, panelId, anchorPaneId, env);
   }
   return insertPaneBelow(next, anchor, panelId);
-}
-
-/** Explicit drop on a pane handle: show the panel in exactly that pane (D8/D3). */
-function applyPlaceInPane(next: PanelLayout, panelId: string, paneId: string): PanelLayout {
-  const target = findPane(next, paneId);
-  if (!target) return next;
-  const existing = paneForPanel(next, panelId);
-  if (existing) {
-    // Already visible elsewhere: focus its pane, never duplicate (D3).
-    next.focusedPaneId = existing.pane.id;
-    return next;
-  }
-  setPanePanel(target.pane, panelId);
-  next.focusedPaneId = target.pane.id;
-  return next;
 }
 
 /** Rule 4: close-pane — layout-only removal with fr redistribution and last-pane reseed. */

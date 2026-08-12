@@ -13,12 +13,8 @@ export interface FocusedPaneChromeState {
   panelId: string;
   children: PaneChildOption[];
   selectedChildPanelId: string | null;
-  /**
-   * Panes currently on screen, across every resident column. Chrome uses this to
-   * decide whether closing a pane is meaningful: at one, there is nothing to
-   * close back to, so the affordance stays hidden.
-   */
-  visiblePaneCount: number;
+  /** All logical panes, including panes in columns currently parked off-screen. */
+  layoutPaneCount: number;
 }
 
 export function preferredPaneChild(state: FocusedPaneChromeState): PaneChildOption | null {

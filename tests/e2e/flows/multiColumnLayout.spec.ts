@@ -7,10 +7,12 @@
  *      the default 1200px desktop width (two simultaneous native surfaces).
  *   2. Divider drags settle with each native slot's bounds matching its DOM
  *      surface box within 1 px (measured through the main-process test API).
- *   3. Window shrink parks a column (edge tab, slot cleared); clicking the edge
- *      tab pages it back in and the slot rebinds with live content.
+ *   3. Window shrink makes a column non-resident without rendering edge-tab
+ *      slivers; selecting it from the tree rebinds its live content.
  *   4. Closing a pane via its header ✕ never archives the panel.
- *   5. Dividers respond to arrow keys; Ctrl/Cmd+Alt+arrows move the pane focus
+ *   5. Tree dragging exposes left/full/right placement and applies the chosen
+ *      viewport presentation through real pointer input.
+ *   6. Dividers respond to arrow keys; Ctrl/Cmd+Alt+arrows move the pane focus
  *      ring.
  *
  * The hosted shell renders in its own WebContentsView, so all DOM interaction
@@ -225,6 +227,98 @@ async function sendShellMouseDrag(
       await sleep(30);
     },
     { wcId, from, to, steps }
+  );
+}
+
+async function dragTreePanelToViewport(
+  app: ElectronApplication,
+  wcId: number,
+  title: string,
+  position: "left" | "full" | "right"
+): Promise<void> {
+  await app.evaluate(
+    async ({ webContents }, args) => {
+      const contents = webContents.fromId(args.wcId);
+      if (!contents || contents.isDestroyed()) throw new Error("Shell WebContents gone");
+      const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+      const rowLabel = JSON.stringify(`Select panel ${args.title}`);
+      const rowCenter = (await contents.executeJavaScript(
+        `(() => {
+           const rows = Array.from(document.querySelectorAll('[data-panel-tree-row="true"]'));
+           const row = rows.find((node) =>
+             (node.getAttribute('aria-label') ?? '') === ${rowLabel});
+           if (!row) return null;
+           const rect = row.getBoundingClientRect();
+           return { x: Math.round(rect.left + rect.width / 2), y: Math.round(rect.top + rect.height / 2) };
+         })()`,
+        true
+      )) as { x: number; y: number } | null;
+      if (!rowCenter) throw new Error(`Tree row not found: ${args.title}`);
+
+      contents.focus();
+      contents.sendInputEvent({
+        type: "mouseDown",
+        x: rowCenter.x,
+        y: rowCenter.y,
+        button: "left",
+        clickCount: 1,
+      });
+      contents.sendInputEvent({
+        type: "mouseMove",
+        x: rowCenter.x + 12,
+        y: rowCenter.y,
+        button: "left",
+        buttons: 1,
+      });
+
+      let target: { x: number; y: number; width: number; overlayWidth: number } | null = null;
+      for (let attempt = 0; attempt < 30 && !target; attempt++) {
+        await sleep(25);
+        target = (await contents.executeJavaScript(
+          `(() => {
+             const node = document.querySelector('[data-layout-drop-position=${JSON.stringify(args.position)}]');
+             const overlay = document.querySelector('[data-layout-drop-overlay="true"]');
+             if (!node || !overlay) return null;
+             const rect = node.getBoundingClientRect();
+             return {
+               x: Math.round(rect.left + rect.width / 2),
+               y: Math.round(rect.top + rect.height / 2),
+               width: rect.width,
+               overlayWidth: overlay.getBoundingClientRect().width,
+             };
+           })()`,
+          true
+        )) as { x: number; y: number; width: number; overlayWidth: number } | null;
+      }
+      if (!target) throw new Error("Viewport placement overlay did not appear");
+      const expectedCoverage = args.position === "full" ? 1 : 0.5;
+      const actualCoverage = target.width / target.overlayWidth;
+      if (Math.abs(actualCoverage - expectedCoverage) > 0.03) {
+        throw new Error(
+          `Unexpected ${args.position} preview coverage: ${actualCoverage.toFixed(2)}`
+        );
+      }
+
+      for (let step = 1; step <= 10; step++) {
+        contents.sendInputEvent({
+          type: "mouseMove",
+          x: Math.round(rowCenter.x + ((target.x - rowCenter.x) * step) / 10),
+          y: Math.round(rowCenter.y + ((target.y - rowCenter.y) * step) / 10),
+          button: "left",
+          buttons: 1,
+        });
+        await sleep(16);
+      }
+      await sleep(50);
+      contents.sendInputEvent({
+        type: "mouseUp",
+        x: target.x,
+        y: target.y,
+        button: "left",
+        clickCount: 1,
+      });
+    },
+    { wcId, title, position }
   );
 }
 
@@ -463,8 +557,8 @@ test.describe("Multi-column panel layout", () => {
         expect(await shellErrorOverlayCount(app, wcId)).toBe(0);
       });
 
-      // ---- Scenario 3: park via window shrink, un-park via edge tab ------
-      await test.step("window shrink parks a column and clears its slot; edge tab rebinds it", async () => {
+      // ---- Scenario 3: hide non-resident columns without slivers ----------
+      await test.step("window shrink hides a column without a sliver; tree selection rebinds it", async () => {
         await setWindowSize(app, 780, 900); // only one actual column minimum fits
 
         let parkedPanelId = "";
@@ -474,7 +568,7 @@ test.describe("Multi-column panel layout", () => {
               getNativePanelSlotDebugInfo(app),
               shellEval<boolean>(app, wcId, `Boolean(document.querySelector('[data-edge-tabs]'))`),
             ]);
-            if (!hasEdgeTabs || slots.length !== 1) return false;
+            if (hasEdgeTabs || slots.length !== 1) return false;
             const residentPanelId = slots[0]!.panelId;
             parkedPanelId = residentPanelId === panel1 ? panel2 : panel1;
             return true;
@@ -485,15 +579,21 @@ test.describe("Multi-column panel layout", () => {
         const parkedReadinessBefore = await getPanelReadiness(app, parkedPanelId);
         expect(parkedReadinessBefore.nativeSlotBound).toBe(false);
 
-        // Click the edge tab to page the parked column back in.
+        // Select the hidden presentation through the ordinary panel tree.
+        const parkedTitle = (await getPanelTree(app)).find(
+          (panel) => panel.id === parkedPanelId
+        )?.title;
+        expect(parkedTitle).toBeTruthy();
         expect(
           await shellEval<boolean>(
             app,
             wcId,
             `(() => {
-               const tab = document.querySelector('[data-edge-tabs] [role="button"]');
-               if (!tab) return false;
-               tab.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+               const label = ${JSON.stringify(`Select panel ${parkedTitle}`)};
+               const row = Array.from(document.querySelectorAll('[data-panel-tree-row="true"]'))
+                 .find((node) => node.getAttribute('aria-label') === label);
+               if (!(row instanceof HTMLElement)) return false;
+               row.click();
                return true;
              })()`
           )
@@ -525,55 +625,78 @@ test.describe("Multi-column panel layout", () => {
       });
 
       // ---- Scenario 4: close-pane never archives ------------------------
-      await test.step("closing a pane from its breadcrumb ✕ keeps the panel in the tree", async () => {
+      await test.step("closing a pane from its local rail keeps the panel in the tree", async () => {
         const surfaces = await getSurfaceRects(app, wcId);
         const secondSurface = surfaces.find((surface) => surface.panelId === panel2);
         expect(secondSurface).toBeDefined();
 
-        // Focus that pane first: the close-pane ✕ rides on the focused panel's
-        // own breadcrumb item, and only while a second pane would survive it.
+        // Every pane exposes its own close action while another logical pane
+        // would survive; no focus round-trip through the global titlebar.
         expect(
           await shellEval<boolean>(
             app,
             wcId,
             `(() => {
                const frame = document.querySelector('[data-pane-id=${JSON.stringify(secondSurface!.paneId)}]');
-               const handle = frame?.querySelector('[role="button"]');
-               if (!(handle instanceof HTMLElement)) return false;
-               handle.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true }));
+               const button = frame?.querySelector('button[aria-label="Close pane"]');
+               if (!(button instanceof HTMLElement)) return false;
+               button.click();
                return true;
              })()`
           )
         ).toBe(true);
 
         await expect
-          .poll(
-            async () =>
-              await shellEval<boolean>(
-                app,
-                wcId,
-                `(() => {
-                   const item = document.querySelector('[data-breadcrumb-id=${JSON.stringify(panel2)}]');
-                   const button = item?.querySelector('button[aria-label="Close pane"]');
-                   if (!(button instanceof HTMLElement)) return false;
-                   button.click();
-                   return true;
-                 })()`
-              ),
-            POLL
-          )
-          .toBe(true);
-
-        await expect
           .poll(async () => (await getNativePanelSlotDebugInfo(app)).length, POLL)
           .toBe(1);
-        // The panel is still in the tree — the ✕ is layout-only, never archive.
+        expect(
+          await shellEval<number>(
+            app,
+            wcId,
+            `document.querySelectorAll('button[aria-label="Close pane"]').length`
+          )
+        ).toBe(0);
+        // The panel is still in the tree — pane close is layout-only, never archive.
         const tree = await getPanelTree(app);
         expect(tree.some((panel) => panel.id === panel2)).toBe(true);
         expect(await shellErrorOverlayCount(app, wcId)).toBe(0);
       });
 
-      // ---- Scenario 5: keyboard operation --------------------------------
+      // ---- Scenario 5: tree drag placement overlay ------------------------
+      await test.step("tree drag previews half/full viewport coverage and applies placement", async () => {
+        const tree = await getPanelTree(app);
+        const panel2Title = tree.find((panel) => panel.id === panel2)?.title;
+        expect(panel2Title).toBeTruthy();
+
+        await dragTreePanelToViewport(app, wcId, panel2Title!, "full");
+        await expect
+          .poll(async () => {
+            const surfaces = await getSurfaceRects(app, wcId);
+            return (
+              surfaces.length === 1 &&
+              surfaces[0]?.panelId === panel2 &&
+              (await surfacesMatchNativeBounds(app, wcId))
+            );
+          }, POLL)
+          .toBe(true);
+
+        const panel1Title = tree.find((panel) => panel.id === panel1)?.title;
+        expect(panel1Title).toBeTruthy();
+        await dragTreePanelToViewport(app, wcId, panel1Title!, "left");
+        await expect
+          .poll(async () => {
+            const surfaces = (await getSurfaceRects(app, wcId)).sort(
+              (left, right) => left.rect.x - right.rect.x
+            );
+            return (
+              surfaces.map((surface) => surface.panelId).join(",") === `${panel1},${panel2}` &&
+              (await surfacesMatchNativeBounds(app, wcId))
+            );
+          }, POLL)
+          .toBe(true);
+      });
+
+      // ---- Scenario 6: keyboard operation --------------------------------
       await test.step("dividers respond to arrow keys and Ctrl+Alt+arrows move the focus ring", async () => {
         // Re-open the second panel beside the first for a two-column layout.
         await expect
@@ -625,6 +748,14 @@ test.describe("Multi-column panel layout", () => {
           (slot) => slot.focused
         );
         expect(focusedSlotBefore).toBeDefined();
+        const slotsByPosition = (await getNativePanelSlotDebugInfo(app)).sort(
+          (left, right) => left.bounds.x - right.bounds.x
+        );
+        const focusedIndex = slotsByPosition.findIndex(
+          (slot) => slot.nativeSlotId === focusedSlotBefore!.nativeSlotId
+        );
+        const firstDirection = focusedIndex > 0 ? "ArrowLeft" : "ArrowRight";
+        const returnDirection = firstDirection === "ArrowLeft" ? "ArrowRight" : "ArrowLeft";
         const moveFocus = (key: string) =>
           shellEval<boolean>(
             app,
@@ -633,8 +764,7 @@ test.describe("Multi-column panel layout", () => {
                key: ${JSON.stringify(key)}, ctrlKey: true, altKey: true, bubbles: true, cancelable: true,
              })), true)`
           );
-        // The just-opened column is focused and rightmost, so move LEFT first.
-        await moveFocus("ArrowLeft");
+        await moveFocus(firstDirection);
         let focusedAfterFirstMove = "";
         await expect
           .poll(async () => {
@@ -644,7 +774,7 @@ test.describe("Multi-column panel layout", () => {
             return focused.nativeSlotId !== focusedSlotBefore!.nativeSlotId;
           }, POLL)
           .toBe(true);
-        await moveFocus("ArrowRight");
+        await moveFocus(returnDirection);
         await expect
           .poll(async () => {
             const focused = (await getNativePanelSlotDebugInfo(app)).find((slot) => slot.focused);

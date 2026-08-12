@@ -142,11 +142,10 @@ export function TitleBar({
     }
   };
 
-  // The focused pane is closable only when something else stays on screen —
-  // closing the last visible pane would leave an empty viewport. The affordance
-  // rides on that panel's own breadcrumb item rather than a detached button.
+  // The focused pane is closable only when another logical pane survives.
+  // Parked panes count: resizing the window must not change layout semantics.
   const closablePanePanelId =
-    paneChromeState && paneChromeState.visiblePaneCount > 1 ? paneChromeState.panelId : null;
+    paneChromeState && paneChromeState.layoutPaneCount > 1 ? paneChromeState.panelId : null;
   const handleClosePane = useCallback(
     () => onPaneChromeCommand?.({ type: "close-pane" }),
     [onPaneChromeCommand]

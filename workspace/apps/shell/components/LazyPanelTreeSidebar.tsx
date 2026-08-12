@@ -23,6 +23,7 @@ import {
   Cross2Icon,
   CubeIcon,
   DrawingPinFilledIcon,
+  FileMinusIcon,
   MagnifyingGlassIcon,
   PlusIcon,
 } from "@radix-ui/react-icons";
@@ -432,7 +433,7 @@ const SortableTreeItem = memo(
         if (
           panel.childCount > 0 &&
           !window.confirm(
-            `Close “${panel.title}” and its ${panel.childCount} child panel${panel.childCount === 1 ? "" : "s"}?`
+            `Archive “${panel.title}” and its ${panel.childCount} child panel${panel.childCount === 1 ? "" : "s"}?`
           )
         ) {
           return;
@@ -618,7 +619,8 @@ const SortableTreeItem = memo(
                 size="1"
                 variant="ghost"
                 color="gray"
-                aria-label="Close panel"
+                aria-label="Archive panel"
+                title="Archive panel"
                 onClick={handleArchive}
                 className="app-tree-action app-tree-action-danger"
                 style={{
@@ -628,7 +630,7 @@ const SortableTreeItem = memo(
                   margin: 0,
                 }}
               >
-                <Cross2Icon width={12} height={12} />
+                <FileMinusIcon width={12} height={12} />
               </IconButton>
             </>
           )}

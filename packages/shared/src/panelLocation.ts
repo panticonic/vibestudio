@@ -120,10 +120,11 @@ export function validatePanelLocation(location: PanelLocation): void {
     if (
       disposition !== undefined &&
       disposition !== "side" &&
+      disposition !== "side-if-room" &&
       disposition !== "replace" &&
       disposition !== "split-below"
     ) {
-      throw new Error("Panel placement must be side, replace, or split-below");
+      throw new Error("Panel placement must be side, side-if-room, replace, or split-below");
     }
     for (const [label, value] of [
       ["preferredWidth", preferredWidth],
@@ -287,6 +288,7 @@ export function parsePanelLocationLink(raw: string): ParsedPanelLocationLink {
   if (
     placementValue !== undefined &&
     placementValue !== "side" &&
+    placementValue !== "side-if-room" &&
     placementValue !== "replace" &&
     placementValue !== "split-below"
   ) {

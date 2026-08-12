@@ -2418,7 +2418,7 @@ export class WorkspaceDO extends DurableObjectBase {
   }
 
   private panelTreePlacementHint(optionsJson: string | null): {
-    disposition?: "side" | "replace" | "split-below";
+    disposition?: "side" | "side-if-room" | "replace" | "split-below";
     preferredWidth?: number;
     minWidth?: number;
   } | null {
@@ -2429,6 +2429,7 @@ export class WorkspaceDO extends DurableObjectBase {
       const raw = value.placement as Record<string, unknown>;
       const disposition =
         raw["disposition"] === "side" ||
+        raw["disposition"] === "side-if-room" ||
         raw["disposition"] === "replace" ||
         raw["disposition"] === "split-below"
           ? raw["disposition"]

@@ -51,7 +51,7 @@ export const panelRuntimeSurface: RuntimeSurface = {
       CREATE_PANEL_SLOT_SIGNATURE
     ),
     openPanel: valueEntry(
-      'Create a panel and return its handle after the exact attempt is application boot-ready, with no fixed readiness deadline. Pass options.signal for caller-owned cancellation and operationId for retry-stable exact redelivery; source, contextId, parentId, and ref are also part of that identity. Do not combine operationId with slug. It defaults under the caller and focused; use parentId:null for a root or focus:false to suppress presentation. options.placement accepts "side" (default), "replace", or "split-below". ' +
+      'Create a panel and return its handle after the exact attempt is application boot-ready, with no fixed readiness deadline. Pass options.signal for caller-owned cancellation and operationId for retry-stable exact redelivery; source, contextId, parentId, and ref are also part of that identity. Do not combine operationId with slug. It defaults under the caller and focused; use parentId:null for a root or focus:false to suppress presentation. options.placement accepts "side" (default), "side-if-room", "replace", or "split-below". ' +
         PANEL_HANDLE_AUTOMATION_GUIDE,
       OPEN_PANEL_SIGNATURE
     ),
@@ -67,7 +67,7 @@ export const panelRuntimeSurface: RuntimeSurface = {
     z: valueEntry("Zod export."),
     defineContract: valueEntry(),
     buildPanelLink: valueEntry(
-      "Build a managed panel URL; options.disposition controls tree placement and options.placement supplies visual side/replace/split-below hints."
+      "Build a managed panel URL; options.disposition controls tree placement and options.placement supplies visual side/side-if-room/replace/split-below hints."
     ),
     buildPanelDeepLink: valueEntry(
       "Build a canonical panel deep link with optional tree disposition and visual placement hints."

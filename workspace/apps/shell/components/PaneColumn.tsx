@@ -16,6 +16,7 @@ interface PaneColumnProps {
   unresponsivePanels: Set<string>;
   onDismissUnresponsive: (panelId: string) => void;
   onFocusPane: (paneId: string) => void;
+  onClosePane?: (paneId: string) => void;
   onResizePanes: (columnId: string, paneFrs: number[]) => void;
 }
 
@@ -30,6 +31,7 @@ export function PaneColumn({
   unresponsivePanels,
   onDismissUnresponsive,
   onFocusPane,
+  onClosePane,
   onResizePanes,
 }: PaneColumnProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -118,6 +120,7 @@ export function PaneColumn({
             unresponsive={unresponsivePanels.has(pane.panelId)}
             onDismissUnresponsive={onDismissUnresponsive}
             onFocusPane={onFocusPane}
+            onClosePane={onClosePane}
           />
         </Fragment>
       ))}

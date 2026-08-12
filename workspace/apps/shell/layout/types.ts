@@ -26,7 +26,7 @@ export interface LayoutPane {
 // Local copy of the placement hint (§3.2) until the shared type lands in
 // @vibestudio/types / PackageManifest plumbing (W4).
 export interface PanelPlacementHint {
-  disposition?: "side" | "replace" | "split-below"; // default "side"
+  disposition?: "side" | "side-if-room" | "replace" | "split-below"; // default "side"
   preferredWidth?: number; // px, default PREFERRED_COLUMN_WIDTH
   minWidth?: number; // px, default MIN_COLUMN_WIDTH
 }
@@ -43,13 +43,14 @@ export const MIN_COLUMN_WIDTH = 460;
 export const PREFERRED_COLUMN_WIDTH = 560;
 export const MIN_PANE_HEIGHT = 160;
 export const COLUMN_DIVIDER_WIDTH = 7;
-/** Reserved shell chrome above each native pane; kept thin for drop targeting. */
-export const PANE_DROP_HANDLE_HEIGHT = 5;
+/** Quiet focus rail used when there is no other pane to close. */
+export const PANE_FOCUS_RAIL_HEIGHT = 5;
+/** Compact action rail used while the layout contains multiple panes. */
+export const PANE_ACTION_RAIL_HEIGHT = 14;
 /** A horizontal pane divider uses the same hit-target thickness as column dividers. */
 export const PANE_DIVIDER_HEIGHT = COLUMN_DIVIDER_WIDTH;
 /** Per-pane vertical overhead used by the placement engine's fit calculation. */
-export const PANE_VERTICAL_CHROME_HEIGHT = PANE_DROP_HANDLE_HEIGHT + PANE_DIVIDER_HEIGHT;
-export const PARKED_EDGE_TAB_WIDTH = 32;
+export const PANE_VERTICAL_CHROME_HEIGHT = PANE_ACTION_RAIL_HEIGHT + PANE_DIVIDER_HEIGHT;
 
 function mintId(prefix: string): string {
   return `${prefix}-${crypto.randomUUID().slice(0, 8)}`;

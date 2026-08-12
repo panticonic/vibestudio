@@ -16,6 +16,13 @@ export function panelCreatedLayoutAction(
       ...(created.placement ? { hint: created.placement } : {}),
     };
   }
+  if (created.placement) {
+    return {
+      type: "present-panel",
+      panelId: created.panelId,
+      hint: created.placement,
+    };
+  }
   return { type: "show-panel", panelId: created.panelId, origin: "navigate-event" };
 }
 

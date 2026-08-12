@@ -14,7 +14,7 @@ import {
 } from "@vibestudio/shared/panelContracts";
 
 export const PanelPlacementHintSchema = z.object({
-  disposition: z.enum(["side", "replace", "split-below"]).optional(),
+  disposition: z.enum(["side", "side-if-room", "replace", "split-below"]).optional(),
   preferredWidth: z.number().positive().optional(),
   minWidth: z.number().positive().optional(),
 });

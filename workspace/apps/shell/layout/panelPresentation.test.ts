@@ -123,4 +123,19 @@ describe("panelCreatedLayoutAction", () => {
       })
     ).toBeNull();
   });
+
+  it("honors an explicit placement hint for a focused root panel", () => {
+    expect(
+      panelCreatedLayoutAction({
+        panelId: "panel-new",
+        parentId: null,
+        focus: true,
+        placement: { disposition: "side-if-room" },
+      })
+    ).toEqual({
+      type: "present-panel",
+      panelId: "panel-new",
+      hint: { disposition: "side-if-room" },
+    });
+  });
 });

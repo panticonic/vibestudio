@@ -1,16 +1,11 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { useDroppable } from "@dnd-kit/core";
-import { Box, Flex, Text } from "@radix-ui/themes";
+import { Box, Flex } from "@radix-ui/themes";
 
-import {
-  MIN_COLUMN_WIDTH,
-  PARKED_EDGE_TAB_WIDTH,
-  type LayoutColumn,
-  type PanelLayout,
-} from "../layout/types";
+import { MIN_COLUMN_WIDTH, type LayoutColumn, type PanelLayout } from "../layout/types";
 import { usePanelTree } from "../shell/hooks/PanelTreeContext";
 import { usePanelDndDrag } from "../shell/hooks/PanelDndContext";
-import { gutterDropId } from "../layout/dropTargets";
+import { viewportDropId, type ViewportDropPosition } from "../layout/dropTargets";
 import { PaneColumn } from "./PaneColumn";
 import { ResizableDivider } from "./ResizableDivider";
 import { minWidthOfPanel } from "../layout/treeEnv";
@@ -18,13 +13,11 @@ import { minWidthOfPanel } from "../layout/treeEnv";
 interface ColumnRowProps {
   layout: PanelLayout;
   residentColumnIds: string[];
-  parkedLeft: string[];
-  parkedRight: string[];
   layoutEpoch: number;
   unresponsivePanels: Set<string>;
   onDismissUnresponsive: (panelId: string) => void;
   onFocusPane: (paneId: string) => void;
-  onFocusColumn: (columnId: string) => void;
+  onClosePane: (paneId: string) => void;
   onResizeColumns: (columnFrs: number[]) => void;
   onResizePanes: (columnId: string, paneFrs: number[]) => void;
   /** Called when a residency transition settles, to force a surface resync (§5.4). */
@@ -33,112 +26,59 @@ interface ColumnRowProps {
 
 const COLUMN_TRANSITION_MS = 150;
 
-/**
- * Vertical drop strip after a column, shown only while a tree drag is live
- * (D9: drop zones live in the gaps). Dropping opens the dragged panel in a
- * new column at this position.
- */
-function GutterDropZone({ columnId }: { columnId: string }) {
-  const { setNodeRef, isOver } = useDroppable({ id: gutterDropId(columnId) });
+const DROP_POSITIONS: ViewportDropPosition[] = ["left", "full", "right"];
+
+function ViewportDropZone({ position }: { position: ViewportDropPosition }) {
+  const { setNodeRef, isOver } = useDroppable({ id: viewportDropId(position) });
+  const coverage =
+    position === "full"
+      ? { inset: 4 }
+      : position === "left"
+        ? { left: 4, top: 4, bottom: 4, width: "calc(50% - 6px)" }
+        : { right: 4, top: 4, bottom: 4, width: "calc(50% - 6px)" };
   return (
     <Box
       ref={setNodeRef}
-      data-gutter-drop={columnId}
+      data-layout-drop-position={position}
+      role="button"
+      aria-label={position === "full" ? "Use full viewport" : `Place panel on the ${position}`}
       style={{
-        width: 18,
-        flexShrink: 0,
-        alignSelf: "stretch",
-        display: "flex",
-        justifyContent: "center",
-        padding: "8px 0",
+        position: "absolute",
+        ...coverage,
+        pointerEvents: "none",
+        borderRadius: "var(--radius-3)",
+        border: `1px solid ${isOver ? "var(--gray-a8)" : "transparent"}`,
+        backgroundColor: isOver ? "var(--gray-a4)" : "transparent",
+        boxShadow: isOver ? "inset 0 0 0 1px var(--gray-a3)" : "none",
+        transition: "background-color 80ms ease-out, border-color 80ms ease-out",
+      }}
+    />
+  );
+}
+
+function ViewportDropOverlay() {
+  return (
+    <Box
+      data-layout-drop-overlay="true"
+      style={{
+        position: "absolute",
+        inset: 0,
+        zIndex: 10,
+        pointerEvents: "none",
+        backgroundColor: "transparent",
       }}
     >
-      <Box
-        style={{
-          width: 4,
-          alignSelf: "stretch",
-          borderRadius: 2,
-          backgroundColor: isOver ? "var(--accent-8)" : "var(--gray-a5)",
-          transition: "background-color 120ms ease-out",
-        }}
-      />
+      {DROP_POSITIONS.map((position) => (
+        <ViewportDropZone key={position} position={position} />
+      ))}
     </Box>
   );
 }
 
-function EdgeTabStrip({
-  side,
-  columns,
-  layout,
-  panelTitle,
-  onFocusColumn,
-}: {
-  side: "left" | "right";
-  columns: string[];
-  layout: PanelLayout;
-  panelTitle: (panelId: string) => string;
-  onFocusColumn: (columnId: string) => void;
-}) {
-  if (columns.length === 0) return null;
-  return (
-    <Flex
-      direction="column"
-      gap="1"
-      p="1"
-      style={{
-        width: PARKED_EDGE_TAB_WIDTH,
-        flexShrink: 0,
-        alignSelf: "stretch",
-        overflow: "hidden",
-      }}
-      data-edge-tabs={side}
-    >
-      {columns.map((columnId) => {
-        const column = layout.columns.find((candidate) => candidate.id === columnId);
-        const firstPanelId = column?.panes[0]?.panelId;
-        const title = firstPanelId ? panelTitle(firstPanelId) : "";
-        return (
-          <Box
-            key={columnId}
-            role="button"
-            tabIndex={0}
-            title={title}
-            onClick={() => onFocusColumn(columnId)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter" || event.key === " ") onFocusColumn(columnId);
-            }}
-            style={{
-              flex: "1 1 0",
-              minHeight: 48,
-              maxHeight: 160,
-              borderRadius: "var(--radius-2)",
-              backgroundColor: "var(--gray-a3)",
-              cursor: "pointer",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              overflow: "hidden",
-            }}
-          >
-            <Text
-              size="1"
-              color="gray"
-              truncate
-              style={{ writingMode: "vertical-rl", maxHeight: "100%" }}
-            >
-              {title}
-            </Text>
-          </Box>
-        );
-      })}
-    </Flex>
-  );
-}
-
 /**
- * Flex row of the viewport-resident columns interleaved with dividers, plus
- * edge-tab strips for parked columns (D10). Never CSS-scrolls native surfaces;
- * paging is a layout-state change. During a residency/column-count transition,
+ * Flex row of the viewport-resident columns interleaved with dividers. Columns
+ * that do not fit stay available through the panel tree without consuming a
+ * sliver of viewport space. During a residency/column-count transition,
  * surfaces are briefly non-resident (slots cleared) so live native views never
  * translate (§6); the settle callback bumps the layout epoch as the commit
  * point.
@@ -146,13 +86,11 @@ function EdgeTabStrip({
 export function ColumnRow({
   layout,
   residentColumnIds,
-  parkedLeft,
-  parkedRight,
   layoutEpoch,
   unresponsivePanels,
   onDismissUnresponsive,
   onFocusPane,
-  onFocusColumn,
+  onClosePane,
   onResizeColumns,
   onResizePanes,
   onTransitionSettled,
@@ -161,6 +99,7 @@ export function ColumnRow({
   const { activeId: treeDragActiveId } = usePanelDndDrag();
   const residentSet = useMemo(() => new Set(residentColumnIds), [residentColumnIds]);
   const residentColumns = layout.columns.filter((column) => residentSet.has(column.id));
+  const layoutPaneCount = layout.columns.reduce((total, column) => total + column.panes.length, 0);
   // With a single pane on screen there is nothing for a focus rail to
   // distinguish it from, so it would be decoration on every panel.
   const showPaneFocus =
@@ -253,57 +192,47 @@ export function ColumnRow({
     );
   };
 
-  const panelTitle = (panelId: string) => panelMap.get(panelId)?.title ?? panelId;
-
   return (
-    <Flex ref={rowRef} gap="0" style={{ flex: "1 1 0", minHeight: 0, minWidth: 0 }}>
-      <EdgeTabStrip
-        side="left"
-        columns={parkedLeft}
-        layout={layout}
-        panelTitle={panelTitle}
-        onFocusColumn={onFocusColumn}
-      />
-      {residentColumns.map((column, index) => (
-        <Fragment key={column.id}>
-          {index > 0 && (
-            <ResizableDivider
-              orientation="vertical"
-              label={`Resize columns ${index} and ${index + 1}`}
-              valueNow={(frs.slice(0, index).reduce((sum, fr) => sum + fr, 0) / totalFr) * 100}
-              onDragStart={prepareDrag}
-              onDrag={(deltaPx) => dragBetween(index - 1, deltaPx)}
-              onDragEnd={commit}
-              onKeyboardStep={(deltaPx) => {
-                prepareDrag();
-                dragBetween(index - 1, deltaPx);
-                commit();
-              }}
-              onReset={() => onResizeColumns(layout.columns.map(() => 1))}
+    <Flex
+      direction="column"
+      style={{ flex: "1 1 0", minHeight: 0, minWidth: 0, position: "relative" }}
+    >
+      {treeDragActiveId !== null && <ViewportDropOverlay />}
+      <Flex ref={rowRef} gap="0" style={{ flex: "1 1 0", minHeight: 0, minWidth: 0 }}>
+        {residentColumns.map((column, index) => (
+          <Fragment key={column.id}>
+            {index > 0 && (
+              <ResizableDivider
+                orientation="vertical"
+                label={`Resize columns ${index} and ${index + 1}`}
+                valueNow={(frs.slice(0, index).reduce((sum, fr) => sum + fr, 0) / totalFr) * 100}
+                onDragStart={prepareDrag}
+                onDrag={(deltaPx) => dragBetween(index - 1, deltaPx)}
+                onDragEnd={commit}
+                onKeyboardStep={(deltaPx) => {
+                  prepareDrag();
+                  dragBetween(index - 1, deltaPx);
+                  commit();
+                }}
+                onReset={() => onResizeColumns(layout.columns.map(() => 1))}
+              />
+            )}
+            <PaneColumn
+              column={{ ...column, widthFr: frs[index] } as LayoutColumn}
+              minWidth={columnMinWidths[index] ?? MIN_COLUMN_WIDTH}
+              focusedPaneId={layout.focusedPaneId}
+              showPaneFocus={showPaneFocus}
+              resident={!transitioning && treeDragActiveId === null}
+              layoutEpoch={layoutEpoch}
+              unresponsivePanels={unresponsivePanels}
+              onDismissUnresponsive={onDismissUnresponsive}
+              onFocusPane={onFocusPane}
+              onClosePane={layoutPaneCount > 1 ? onClosePane : undefined}
+              onResizePanes={onResizePanes}
             />
-          )}
-          <PaneColumn
-            column={{ ...column, widthFr: frs[index] } as LayoutColumn}
-            minWidth={columnMinWidths[index] ?? MIN_COLUMN_WIDTH}
-            focusedPaneId={layout.focusedPaneId}
-            showPaneFocus={showPaneFocus}
-            resident={!transitioning}
-            layoutEpoch={layoutEpoch}
-            unresponsivePanels={unresponsivePanels}
-            onDismissUnresponsive={onDismissUnresponsive}
-            onFocusPane={onFocusPane}
-            onResizePanes={onResizePanes}
-          />
-          {treeDragActiveId !== null && <GutterDropZone columnId={column.id} />}
-        </Fragment>
-      ))}
-      <EdgeTabStrip
-        side="right"
-        columns={parkedRight}
-        layout={layout}
-        panelTitle={panelTitle}
-        onFocusColumn={onFocusColumn}
-      />
+          </Fragment>
+        ))}
+      </Flex>
     </Flex>
   );
 }

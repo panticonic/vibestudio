@@ -391,7 +391,15 @@ export const panel = {
   archive: (panelId: string) => workspaceStateClient.slot.close(panelId),
   createAboutPanel: async (page: string) => {
     const createOptions =
-      page === "new" ? { slug: `new-${crypto.randomUUID().slice(0, 8)}`, focus: true } : undefined;
+      page === "new"
+        ? {
+            slug: `new-${crypto.randomUUID().slice(0, 8)}`,
+            focus: true,
+            placement: {
+              disposition: "side-if-room" as const,
+            },
+          }
+        : undefined;
     const result = await viewClient.createPanel(null, `about/${page}`, createOptions);
     return { ...result, kind: "workspace" as const };
   },
