@@ -127,7 +127,20 @@ describe("context-exact verify tool", () => {
     expect(result.details).toMatchObject({
       operation: "build",
       report: { diagnostics: [{ source: "tsc", severity: "error" }] },
+      failure: {
+        protocol: "agent-tool-failure.v1",
+        code: "build_verification_failed",
+        kind: "domain",
+        message: "Build failed for panels/editor with 1 diagnostic.",
+        operation: "tool.verify",
+        recovery: { action: "repair-source" },
+      },
     });
+    const failure = (result.details as { failure?: Record<string, unknown> }).failure;
+    expect(failure).not.toHaveProperty("data");
+    expect(failure).not.toHaveProperty("report");
+    expect(failure).not.toHaveProperty("receipt");
+    expect(JSON.stringify(result)).not.toContain("[object Object]");
   });
 
   it("bounds the one canonical diagnostic array and remaps target references", async () => {
@@ -223,7 +236,16 @@ describe("context-exact verify tool", () => {
     });
 
     expect(result.isError).toBe(true);
-    expect(result.details).toMatchObject({ operation: "test", status: "no-tests" });
+    expect(result.details).toMatchObject({
+      operation: "test",
+      status: "no-tests",
+      failure: {
+        code: "no_tests_discovered",
+        kind: "domain",
+        retry: { policy: "correct-input" },
+        recovery: { action: "correct-request" },
+      },
+    });
     expect(result.content[0]).toMatchObject({
       type: "text",
       text: expect.stringContaining("verification did not pass"),

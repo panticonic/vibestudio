@@ -3,6 +3,7 @@ import { Type } from "@sinclair/typebox";
 import type { AgentTool, AgentToolResult } from "@workspace/pi-core";
 import type { UnitBuildReportWire } from "@vibestudio/service-schemas/build";
 import { sha256Hex } from "@vibestudio/content-addressing";
+import type { AgentToolFailure } from "@workspace/agentic-protocol";
 import { encodeUtf8 } from "./portable-bytes.js";
 
 const buildVerificationSchema = Type.Object(
@@ -71,6 +72,7 @@ export type VerifyToolDetails =
       receipt: BuildVerificationReceipt;
       truncatedDiagnostics: number;
       truncatedDiagnosticText: number;
+      failure?: AgentToolFailure;
     }
   | {
       operation: "test";
@@ -79,6 +81,7 @@ export type VerifyToolDetails =
       report: TestRunResult;
       truncatedFiles: number;
       truncatedErrors: number;
+      failure?: AgentToolFailure;
     };
 
 export interface BuildVerificationReceipt {
@@ -144,6 +147,17 @@ export function createVerifyTool(
         const bounded = boundBuildReport(report);
         const failed = report.status !== "ok";
         const receipt = buildVerificationReceipt(command.target, exactContextId, report, bounded);
+        const failure = failed
+          ? verificationFailure({
+              code: "build_verification_failed",
+              message: `Build failed for ${command.target} with ${report.diagnostics.length} ${report.diagnostics.length === 1 ? "diagnostic" : "diagnostics"}.`,
+              recovery: {
+                action: "repair-source",
+                instruction:
+                  "Inspect details.report.diagnostics, repair the source or dependency declarations, then rerun verify once.",
+              },
+            })
+          : undefined;
         return {
           content: [{ type: "text", text: renderBuild(command.target, bounded.report) }],
           details: {
@@ -154,6 +168,7 @@ export function createVerifyTool(
             receipt,
             truncatedDiagnostics: bounded.truncatedDiagnostics,
             truncatedDiagnosticText: bounded.truncatedDiagnosticText,
+            ...(failure ? { failure } : {}),
           },
           isError: failed,
         };
@@ -177,6 +192,29 @@ export function createVerifyTool(
       );
       const bounded = boundTestReport(report);
       const status = report.total === 0 ? "no-tests" : report.failed > 0 ? "failed" : "passed";
+      const failure =
+        status === "failed"
+          ? verificationFailure({
+              code: "test_verification_failed",
+              message: `Tests failed for ${command.target}: ${report.failed} of ${report.total} failed.`,
+              recovery: {
+                action: "repair-source",
+                instruction:
+                  "Inspect details.report.details, repair the failing source or tests, then rerun verify once.",
+              },
+            })
+          : status === "no-tests"
+            ? verificationFailure({
+                code: "no_tests_discovered",
+                message: `No tests were discovered for ${command.target}.`,
+                retryPolicy: "correct-input",
+                recovery: {
+                  action: "correct-request",
+                  instruction:
+                    "Inspect the unit's test files and correct target, file, or testName before retrying.",
+                },
+              })
+            : undefined;
       return {
         content: [{ type: "text", text: renderTests(command.target, bounded.report, status) }],
         details: {
@@ -186,10 +224,33 @@ export function createVerifyTool(
           report: bounded.report,
           truncatedFiles: bounded.truncatedFiles,
           truncatedErrors: bounded.truncatedErrors,
+          ...(failure ? { failure } : {}),
         },
         isError: status !== "passed",
       };
     },
+  };
+}
+
+function verificationFailure(input: {
+  code: string;
+  message: string;
+  retryPolicy?: AgentToolFailure["retry"]["policy"];
+  recovery: NonNullable<AgentToolFailure["recovery"]>;
+}): AgentToolFailure {
+  return {
+    protocol: "agent-tool-failure.v1",
+    code: input.code,
+    kind: "domain",
+    message: input.message,
+    operation: "tool.verify",
+    stage: "execute",
+    retry: {
+      policy: input.retryPolicy ?? "none",
+      commandIdPolicy: "not-applicable",
+    },
+    recovery: input.recovery,
+    causes: [{ role: "primary", code: input.code, message: input.message }],
   };
 }
 

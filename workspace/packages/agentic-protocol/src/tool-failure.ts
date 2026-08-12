@@ -8,6 +8,7 @@ export const AGENT_TOOL_FAILURE_KINDS = [
   "conflict",
   "authority",
   "external-effect",
+  "domain",
   "integrity",
   "infrastructure",
   "cancelled",
