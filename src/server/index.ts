@@ -2640,58 +2640,26 @@ async function main() {
     },
   });
 
-  // Prepare the manifest-declared eval engine + runtime prewarm. The returned
-  // starter runs only after host readiness so optional compiles cannot starve
-  // the VCS store DO that is on the critical startup path.
-  // first interactive `eval.start` doesn't pay the cold esbuild compiles (the bulk
-  // of the EvalDO cold start). The units come from meta/vibestudio.yml
-  // (`providers.evalEngine` / `providers.evalRuntime`) — no declaration means
-  // eval is disabled, so there is nothing to warm (logged once). Fire-and-forget:
-  // `buildUnit` caches + coalesces, so the EvalDO's identical getBuild later hits
-  // the warm cache (or awaits this in-flight build). Externals `[]` matches a
-  // fresh isolate's first builds. cdp-client is intentionally NOT pre-warmed —
-  // it's lazily built only when an eval actually references CDP.
+  // Prepare a bounded post-ready build queue. The shell's New Panel launcher
+  // goes first; lower-priority eval libraries follow sequentially so they do
+  // not saturate the build lane during the first interactive panel open.
+  // cdp-client remains lazy because eval only needs it for explicit CDP work.
   container.registerManaged({
-    name: "evalEnginePrewarm",
+    name: "postReadyBuildWarmup",
     dependencies: ["buildSystem"],
     async start(resolve) {
       const buildSystem = assertPresent(
         resolve<import("./buildV2/index.js").BuildSystemV2>("buildSystem")
       );
-      const engineSource = workspaceConfig.providers?.evalEngine?.source?.trim();
-      const runtimeSource = workspaceConfig.providers?.evalRuntime?.source?.trim();
-      if (!engineSource || !runtimeSource) {
-        console.warn(
-          "[eval] meta/vibestudio.yml declares no `providers.evalEngine`/`providers.evalRuntime` — eval is disabled (pre-warm skipped)"
-        );
-        return () => undefined;
-      }
-      const prewarm = (specifier: string): void => {
-        void buildSystem
-          .getBuild(specifier, undefined, {
-            library: true,
-            externals: [],
-            libraryTarget: "worker",
-          })
-          .then(() => console.log(`[eval] pre-warmed ${specifier} bundle`))
-          .catch((err) =>
-            console.warn(
-              `[eval] ${specifier} pre-warm failed (first eval will cold-build): ${
-                err instanceof Error ? err.message : String(err)
-              }`
-            )
-          );
-      };
-      let started = false;
-      return () => {
-        if (started) return;
-        started = true;
-        prewarm(engineSource);
-        // The EvalDO loads these three runtime subpaths (see ensureRuntimeSupport).
-        prewarm(`${runtimeSource}/hosted`);
-        prewarm(`${runtimeSource}/panel-runtime`);
-        prewarm(`${runtimeSource}/portable`);
-      };
+      const { createPostReadyBuildWarmup } = await import("./services/postReadyBuildWarmup.js");
+      return createPostReadyBuildWarmup({
+        buildSystem,
+        evalEngineSource: workspaceConfig.providers?.evalEngine?.source,
+        evalRuntimeSource: workspaceConfig.providers?.evalRuntime?.source,
+      });
+    },
+    async stop(instance: import("./services/postReadyBuildWarmup.js").PostReadyBuildWarmup) {
+      instance.cancel();
     },
   });
 
@@ -7212,11 +7180,11 @@ async function main() {
     }
   }
 
-  // Eval libraries are additionally warmed for persistent workspaces. Apps and
-  // extensions continue to activate their own dependency graphs on demand.
-  if (!workspaceIsEphemeral) {
-    container.get<() => void>("evalEnginePrewarm")();
-  }
+  // Every workspace warms the shell-critical launcher. Persistent workspaces
+  // then warm eval libraries; everything else remains demand-driven.
+  void container
+    .get<import("./services/postReadyBuildWarmup.js").PostReadyBuildWarmup>("postReadyBuildWarmup")
+    .start({ includeEvalLibraries: !workspaceIsEphemeral });
 
   // ===========================================================================
   // Graceful shutdown — container.stopAll() handles everything
