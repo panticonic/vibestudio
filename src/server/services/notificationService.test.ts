@@ -114,4 +114,49 @@ describe("server notification service", () => {
     );
     expect(eventService.emit).not.toHaveBeenCalled();
   });
+
+  it("lets background code address a transient notification to its recorded owner", async () => {
+    const eventService = {
+      emit: vi.fn(),
+      emitToUser: vi.fn(() => true),
+    };
+    const service = createNotificationService({ eventService: eventService as never }).definition;
+    const caller = createVerifiedCaller("do:vibestudio/internal:MissionsDO:workspace", "do");
+
+    const id = await service.handler({ caller }, "showToUser", [
+      "usr_alice",
+      {
+        type: "info",
+        title: "Running Daily summary",
+        ttl: 6_000,
+        actions: [
+          {
+            id: "view-automation",
+            label: "View automation",
+            command: {
+              type: "panel.open",
+              source: "about/automations",
+              stateArgs: { missionId: "msn_daily" },
+            },
+          },
+        ],
+      },
+    ]);
+
+    expect(eventService.emitToUser).toHaveBeenCalledWith("usr_alice", "notification:show", {
+      id,
+      type: "info",
+      title: "Running Daily summary",
+      ttl: 6_000,
+      actions: [
+        expect.objectContaining({
+          command: expect.objectContaining({
+            type: "panel.open",
+            stateArgs: { missionId: "msn_daily" },
+          }),
+        }),
+      ],
+    });
+    expect(eventService.emit).not.toHaveBeenCalled();
+  });
 });

@@ -587,6 +587,29 @@ html[data-overlay-dragging] * {
   }
 }
 
+/* Transient shell notices share the compact top-chrome band, but unlike an
+   outstanding approval they enter once and never pulse for attention. */
+.shell-notification-strip {
+  animation: shell-notification-strip-in var(--motion-base) var(--ease-decelerate);
+}
+
+@keyframes shell-notification-strip-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .shell-notification-strip {
+    animation: none;
+  }
+}
+
 .approval-pill-icon {
   width: 26px;
   height: 26px;

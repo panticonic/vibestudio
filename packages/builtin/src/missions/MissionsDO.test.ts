@@ -498,6 +498,13 @@ describe("MissionsDO", () => {
       { query: "BILLING" }
     );
     expect(search.items.map((item) => item.automation.name)).toEqual(["Billing digest"]);
+
+    const deepLinked = await callAs<{
+      stats: { total: number };
+      items: Array<{ automation: MissionRecord }>;
+    }>(alice, "overview", { missionId: records[0]!.missionId });
+    expect(deepLinked.stats.total).toBe(4);
+    expect(deepLinked.items.map((item) => item.automation.name)).toEqual(["Archive cleanup"]);
   });
 
   it("runs calendar automations to natural completion and preserves editable history", async () => {
@@ -509,6 +516,7 @@ describe("MissionsDO", () => {
       if (target === "main" && method === "reviewedClosure.suspend") return undefined;
       if (target === "main" && method === "reviewedClosure.bindSession") return undefined;
       if (target === "main" && method === "reviewedClosure.finishSession") return undefined;
+      if (target === "main" && method === "notification.showToUser") return "notif-run-started";
       if (target === "main" && method === "runtime.createEntity") {
         return { id: "rollout-worker", targetId: "do:rollout", contextId: undefined };
       }
@@ -552,6 +560,26 @@ describe("MissionsDO", () => {
       status: "succeeded",
       completionResponse: "The rollout reached 100% and passed its health checks.",
     });
+    expect(rpcCall).toHaveBeenCalledWith("main", "notification.showToUser", [
+      "alice",
+      expect.objectContaining({
+        type: "info",
+        title: "Running Rollout watcher",
+        message: "Run #1 is being processed.",
+        ttl: 6_000,
+        actions: [
+          expect.objectContaining({
+            id: "view-automation",
+            label: "View automation",
+            command: expect.objectContaining({
+              type: "panel.open",
+              source: "about/automations",
+              stateArgs: { missionId: draft.missionId },
+            }),
+          }),
+        ],
+      }),
+    ]);
     const completed = await callAs<MissionRecord>(alice, "get", draft.missionId);
     expect(completed).toMatchObject({
       state: "completed",
@@ -574,12 +602,115 @@ describe("MissionsDO", () => {
     expect(revised.completionResponse).toBeUndefined();
   });
 
+  it("shows one transient notice only when a scheduled run is admitted", async () => {
+    vi.useFakeTimers();
+    try {
+      const now = Date.UTC(2026, 7, 12, 12);
+      vi.setSystemTime(now);
+      const { instance, callAs, sql } = await missions();
+      const alice = { callerId: "panel:alice", callerKind: "panel" as const, userId: "alice" };
+      const rpcCall = vi.fn(async (target: string, method: string) => {
+        if (target === "main" && method.startsWith("workspace-state.alarm")) return undefined;
+        if (target === "main" && method.startsWith("reviewedClosure.")) return undefined;
+        if (target === "main" && method === "notification.showToUser") return "notif-scheduled";
+        if (target === "main" && method === "runtime.createEntity") {
+          return { id: "rollout-worker", targetId: "do:rollout" };
+        }
+        if (target === "do:rollout" && method === "check") return "Rollout remains healthy";
+        throw new Error(`Unexpected RPC ${target}.${method}`);
+      });
+      Object.defineProperty(instance, "rpc", {
+        value: { call: rpcCall },
+        configurable: true,
+      });
+      const scheduled = methodCharter();
+      scheduled.trigger = { kind: "schedule", everyMs: 60_000 };
+      const draft = await callAs<MissionRecord>(alice, "createDraft", {
+        name: "Minute watcher",
+        charter: scheduled,
+        permissions: [],
+      });
+      await callAs(alice, "requestReview", draft.missionId);
+
+      expect(rpcCall).not.toHaveBeenCalledWith(
+        "main",
+        "notification.showToUser",
+        expect.anything()
+      );
+      vi.setSystemTime(now + 60_000);
+      await instance.alarm();
+
+      expect(
+        rpcCall.mock.calls.filter(
+          ([target, method]) => target === "main" && method === "notification.showToUser"
+        )
+      ).toEqual([
+        [
+          "main",
+          "notification.showToUser",
+          [
+            "alice",
+            {
+              type: "info",
+              title: "Running Minute watcher",
+              message: "Scheduled wake-up #1 is being processed.",
+              ttl: 6_000,
+              actions: [
+                {
+                  id: "view-automation",
+                  label: "View automation",
+                  variant: "soft",
+                  command: {
+                    type: "panel.open",
+                    source: "about/automations",
+                    stateArgs: { missionId: draft.missionId },
+                  },
+                },
+              ],
+            },
+          ],
+        ],
+      ]);
+      await expect(callAs<MissionRecord>(alice, "get", draft.missionId)).resolves.toMatchObject({
+        state: "active",
+        runCount: 1,
+      });
+
+      sql.exec(
+        `INSERT INTO mission_runs
+         (run_id,mission_id,closure_digest,mission_revision,trigger_kind,status,started_at,run_number)
+         VALUES ('already-running',?, ?,1,'scheduled','running',?,2)`,
+        draft.missionId,
+        "b".repeat(64),
+        now + 90_000
+      );
+      sql.exec(
+        "UPDATE missions SET next_run_at=? WHERE mission_id=?",
+        now + 120_000,
+        draft.missionId
+      );
+      vi.setSystemTime(now + 120_000);
+      await instance.alarm();
+      expect(
+        rpcCall.mock.calls.filter(
+          ([target, method]) => target === "main" && method === "notification.showToUser"
+        )
+      ).toHaveLength(1);
+      await expect(callAs<MissionRecord>(alice, "get", draft.missionId)).resolves.toMatchObject({
+        runCount: 1,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("completes after the configured maximum even when the terminal run fails", async () => {
     const { instance, callAs } = await missions();
     const alice = { callerId: "panel:alice", callerKind: "panel" as const, userId: "alice" };
     const rpcCall = vi.fn(async (target: string, method: string) => {
       if (target === "main" && method.startsWith("workspace-state.alarm")) return undefined;
       if (target === "main" && method.startsWith("reviewedClosure.")) return undefined;
+      if (target === "main" && method === "notification.showToUser") return "notif-run-started";
       if (target === "main" && method === "runtime.createEntity") {
         return { id: "rollout-worker", targetId: "do:rollout" };
       }

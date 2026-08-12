@@ -34,6 +34,7 @@ const OVERVIEW_RUN_LIMIT = 5;
 const ATTENTION_WINDOW_MS = 24 * 60 * 60 * 1_000;
 const ATTENTION_LIMIT = 8;
 const DEFAULT_OVERVIEW_LIMIT = 30;
+const RUN_STARTED_NOTIFICATION_TTL_MS = 6_000;
 
 type OverviewFilter = "all" | "attention" | "active" | "paused" | "completed" | "drafts";
 interface OverviewCursor {
@@ -410,6 +411,7 @@ export class MissionsDO extends DurableObjectBase {
     cursor?: OverviewCursor;
     filter?: OverviewFilter;
     query?: string;
+    missionId?: string;
   }): {
     generatedAt: number;
     stats: {
@@ -438,6 +440,10 @@ export class MissionsDO extends DurableObjectBase {
     const cutoff = generatedAt - ATTENTION_WINDOW_MS;
     const conditions = ["(seeded=1 OR owner_user_id=?)"];
     const bindings: unknown[] = [userId];
+    if (options.missionId) {
+      conditions.push("mission_id=?");
+      bindings.push(options.missionId);
+    }
     if (query) {
       conditions.push(
         "(instr(lower(name),?)>0 OR instr(lower(json_extract(charter_json,'$.summary')),?)>0)"
@@ -1056,6 +1062,7 @@ export class MissionsDO extends DurableObjectBase {
       );
       if (trigger === "scheduled") this.advanceSchedule(mission, now, runNumber);
     });
+    this.scheduleRunStartedNotification(mission, trigger, runNumber);
     try {
       if (mission.charter.execution.kind === "method") {
         await this.executeMethod(mission, runId, subject, closureDigest);
@@ -1066,6 +1073,47 @@ export class MissionsDO extends DurableObjectBase {
       await this.failStartingRun(runId, error);
     }
     return this.requireRun(runId);
+  }
+
+  private scheduleRunStartedNotification(
+    mission: MissionRecord,
+    trigger: "manual" | "scheduled",
+    runNumber: number
+  ): void {
+    const pending = (async () => {
+      try {
+        await this.rpc.call("main", "notification.showToUser", [
+          mission.owner.userId,
+          {
+            type: "info",
+            title: `Running ${mission.name}`,
+            message:
+              trigger === "scheduled"
+                ? `Scheduled wake-up #${runNumber} is being processed.`
+                : `Run #${runNumber} is being processed.`,
+            ttl: RUN_STARTED_NOTIFICATION_TTL_MS,
+            actions: [
+              {
+                id: "view-automation",
+                label: "View automation",
+                variant: "soft",
+                command: {
+                  type: "panel.open",
+                  source: "about/automations",
+                  stateArgs: { missionId: mission.missionId },
+                },
+              },
+            ],
+          },
+        ]);
+      } catch (error) {
+        console.warn(
+          `[MissionsDO] Could not show the transient run notice for ${mission.missionId}:`,
+          error
+        );
+      }
+    })();
+    this.ctx.waitUntil?.(pending);
   }
 
   private async executeMethod(

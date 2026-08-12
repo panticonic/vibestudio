@@ -105,6 +105,11 @@ export interface NotificationAction {
     | { type: "desktop.copyNpmUpdateCommand" }
     | { type: "browser.downloadOpen"; downloadId: string }
     | { type: "browser.downloadReveal"; downloadId: string }
+    | {
+        type: "panel.open";
+        source: string;
+        stateArgs?: Record<string, unknown>;
+      }
     | { type: "panel.focus"; panelId: string };
   invoke?: {
     kind: "extension";

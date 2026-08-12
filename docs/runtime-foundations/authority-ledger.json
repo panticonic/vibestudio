@@ -29752,6 +29752,51 @@
       "parityAssertion": "generated-census:host-authority"
     },
     {
+      "id": "host:notification.showToUser",
+      "rpcPlane": "host-service",
+      "owner": "notification",
+      "method": "showToUser",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "notification.control",
+      "reviewRationale": "Code-owned background work addresses a transient notice to its recorded owner",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:notification.showToUser"
+      },
+      "authorityPrincipals": [
+        "code",
+        "host"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:notification.showToUser),allOf(capability(code,service:notification.showToUser),workspace-member))",
+      "r3b": {
+        "review": "code-owned-addressed-transient-notification",
+        "change": "Adds a code-and-host-only transient notification effect for durable background work whose authenticated user is recorded in receiver-owned state rather than present on the alarm dispatch. The notification remains attributed to the verified runtime caller, is delivered only to the exact addressed account's live sessions, and grants no inbox mutation, navigation, or user action without an explicit click in trusted shell chrome."
+      },
+      "capability": "service:notification.showToUser",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
       "id": "host:notification.signalUserInbox",
       "rpcPlane": "host-service",
       "owner": "notification",

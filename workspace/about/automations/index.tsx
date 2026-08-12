@@ -33,7 +33,7 @@ import {
   RocketIcon,
   TrashIcon,
 } from "@radix-ui/react-icons";
-import { openPanel, rpc, workers } from "@workspace/runtime";
+import { openPanel, panel, rpc, workers } from "@workspace/runtime";
 import {
   AutomationActivity,
   AutomationParametersEditor,
@@ -705,6 +705,7 @@ function AutomationCard({
   onAction,
   onEdited,
   onLoadMore,
+  deepLinked,
 }: {
   item: OverviewItem;
   runs: RunRecord[];
@@ -714,6 +715,7 @@ function AutomationCard({
   onAction(action: "requestReview" | "runNow" | "pause" | "resume" | "retire"): void;
   onEdited(): void;
   onLoadMore(): void;
+  deepLinked?: boolean;
 }) {
   const automation = item.automation;
   const execution = automation.charter.execution;
@@ -725,7 +727,8 @@ function AutomationCard({
       id={`automation-${automation.missionId}`}
       size="3"
       style={{
-        borderColor: hasProblem ? "var(--amber-a7)" : undefined,
+        borderColor: deepLinked ? "var(--accent-a8)" : hasProblem ? "var(--amber-a7)" : undefined,
+        boxShadow: deepLinked ? "0 0 0 1px var(--accent-a5)" : undefined,
         scrollMargin: 24,
       }}
     >
@@ -918,7 +921,7 @@ function AutomationCard({
         ) : null}
 
         <Disclosure
-          initiallyOpen={item.activeRuns > 0 || item.failedRunsSince > 0}
+          initiallyOpen={deepLinked || item.activeRuns > 0 || item.failedRunsSince > 0}
           summary={
             <>
               Run history <Text color="gray">({item.totalRuns})</Text>
@@ -959,6 +962,10 @@ function AutomationCard({
 }
 
 function AutomationsPage() {
+  const initialMissionId = panel.stateArgs.get<{ missionId?: unknown }>().missionId;
+  const [deepLinkedMissionId, setDeepLinkedMissionId] = useState<string | null>(
+    typeof initialMissionId === "string" && initialMissionId ? initialMissionId : null
+  );
   const [overview, setOverview] = useState<Overview | null>(null);
   const [olderRuns, setOlderRuns] = useState<Record<string, RunRecord[]>>({});
   const [exhausted, setExhausted] = useState<Set<string>>(() => new Set());
@@ -991,6 +998,7 @@ function AutomationsPage() {
             limit: 30,
             filter,
             ...(debouncedQuery ? { query: debouncedQuery } : {}),
+            ...(deepLinkedMissionId ? { missionId: deepLinkedMissionId } : {}),
             ...(cursor ? { cursor } : {}),
           },
         ]);
@@ -1013,7 +1021,7 @@ function AutomationsPage() {
         }
       }
     },
-    [debouncedQuery, filter]
+    [debouncedQuery, deepLinkedMissionId, filter]
   );
 
   useEffect(() => {
@@ -1157,6 +1165,25 @@ function AutomationsPage() {
         </Callout.Root>
       ) : null}
 
+      {deepLinkedMissionId ? (
+        <Callout.Root color="blue" size="1">
+          <Callout.Icon>
+            <LightningBoltIcon />
+          </Callout.Icon>
+          <Callout.Text>Showing the automation selected from its processing notice.</Callout.Text>
+          <Button
+            size="1"
+            variant="soft"
+            onClick={() => {
+              setDeepLinkedMissionId(null);
+              void panel.stateArgs.set({ missionId: null });
+            }}
+          >
+            View all automations
+          </Button>
+        </Callout.Root>
+      ) : null}
+
       {overview?.attention.length ? (
         <Card size="3" style={{ background: "var(--red-a2)", borderColor: "var(--red-a6)" }}>
           <Flex align="center" gap="2" mb="1">
@@ -1279,6 +1306,7 @@ function AutomationsPage() {
                 onAction={(method) => void action(item.automation, method)}
                 onEdited={() => void load(true)}
                 onLoadMore={() => void loadMore(item)}
+                deepLinked={id === deepLinkedMissionId}
               />
             );
           })

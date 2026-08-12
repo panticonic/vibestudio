@@ -10,6 +10,7 @@ const shellClient = vi.hoisted(() => ({
   rollback: vi.fn(() => Promise.resolve()),
   restart: vi.fn(() => Promise.resolve()),
   recoverExecution: vi.fn(() => Promise.resolve()),
+  createPanel: vi.fn(() => Promise.resolve({ id: "automations" })),
   show: vi.fn(() => Promise.resolve("notif")),
   reportAction: vi.fn(() => Promise.resolve()),
   dismiss: vi.fn(() => Promise.resolve()),
@@ -28,6 +29,9 @@ vi.mock("../shell/client", () => ({
     rollback: shellClient.rollback,
     restart: shellClient.restart,
     recoverExecution: shellClient.recoverExecution,
+  },
+  panel: {
+    createPanel: shellClient.createPanel,
   },
 }));
 
@@ -82,6 +86,7 @@ describe("NotificationBar", () => {
     shellClient.rollback.mockClear();
     shellClient.restart.mockClear();
     shellClient.recoverExecution.mockClear();
+    shellClient.createPanel.mockClear();
     shellClient.show.mockClear();
     shellClient.reportAction.mockClear();
     shellClient.dismiss.mockClear();
@@ -98,6 +103,59 @@ describe("NotificationBar", () => {
     });
 
     expect(screen.getByText("Account notification")).toBeTruthy();
+    expect(document.querySelector(".shell-notification-strip")).toBeTruthy();
+  });
+
+  it("auto-dismisses a transient processing notice at its explicit TTL", async () => {
+    vi.useFakeTimers();
+    try {
+      renderBar();
+      emitDirectShellEvent("notification:show", {
+        id: "mission-processing",
+        type: "info",
+        title: "Running Daily summary",
+        message: "Scheduled wake-up #4 is being processed.",
+        ttl: 6_000,
+      });
+
+      expect(screen.getByText("Running Daily summary")).toBeTruthy();
+      await act(async () => vi.advanceTimersByTimeAsync(5_999));
+      expect(screen.getByText("Running Daily summary")).toBeTruthy();
+      await act(async () => vi.advanceTimersByTimeAsync(1));
+      expect(screen.queryByText("Running Daily summary")).toBeNull();
+      expect(shellClient.reportAction).toHaveBeenCalledWith("mission-processing", "dismiss");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("opens a notification's exact automation deep link", async () => {
+    renderBar();
+    emitDirectShellEvent("notification:show", {
+      id: "mission-processing",
+      type: "info",
+      title: "Running Daily summary",
+      ttl: 6_000,
+      actions: [
+        {
+          id: "view-automation",
+          label: "View automation",
+          command: {
+            type: "panel.open",
+            source: "about/automations",
+            stateArgs: { missionId: "msn_daily" },
+          },
+        },
+      ],
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "View automation" }));
+    await waitFor(() =>
+      expect(shellClient.createPanel).toHaveBeenCalledWith("about/automations", {
+        focus: true,
+        stateArgs: { missionId: "msn_daily" },
+      })
+    );
   });
 
   it("expands bounded diagnostic details and all recorded errors", () => {

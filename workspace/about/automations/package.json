@@ -9,6 +9,18 @@
     "description": "Supervise schedules, runs, conversations, results, and errors",
     "hiddenInLauncher": false,
     "autoArchiveWhenEmpty": true,
+    "stateArgs": {
+      "type": "object",
+      "properties": {
+        "missionId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
     "authority": {
       "provides": [],
       "requests": [

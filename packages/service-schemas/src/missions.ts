@@ -188,6 +188,7 @@ const missionOverviewOptionsSchema = z
     cursor: missionOverviewCursorSchema.optional(),
     filter: z.enum(["all", "attention", "active", "paused", "completed", "drafts"]).optional(),
     query: z.string().max(200).optional(),
+    missionId: z.string().min(1).optional(),
   })
   .strict();
 

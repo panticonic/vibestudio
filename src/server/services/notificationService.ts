@@ -67,6 +67,26 @@ export function createNotificationService(deps: { eventService: EventService }):
     return `notif-${caller.runtime.kind}-${callerDigest}-${randomUUID()}`;
   };
 
+  const showForCaller = (
+    caller: VerifiedCaller,
+    opts: Omit<NotificationPayload, "id" | "sourcePanelId" | "iconDataUrl">,
+    targetUserId?: string
+  ): string => {
+    const id = callerNotificationId(caller);
+    const payload: NotificationPayload = {
+      ...opts,
+      id,
+      ...(caller.runtime.kind === "panel" ? { sourcePanelId: caller.runtime.id } : {}),
+    };
+    notificationOwners.set(id, {
+      kind: "caller",
+      runtimeKey: callerRuntimeKey(caller),
+      ...(targetUserId ? { targetUserId } : {}),
+    });
+    emit("notification:show", payload, targetUserId);
+    return id;
+  };
+
   const assertCallerOwns = (id: string, caller: VerifiedCaller): void => {
     const owner = notificationOwners.get(id);
     if (owner?.kind !== "caller" || owner.runtimeKey !== callerRuntimeKey(caller)) {
@@ -115,20 +135,9 @@ export function createNotificationService(deps: { eventService: EventService }):
     handler: defineServiceHandler("notification", notificationMethods, {
       show: (ctx, [opts]) => {
         const targetUserId = ctx.caller.subject?.userId;
-        const id = callerNotificationId(ctx.caller);
-        const payload: NotificationPayload = {
-          ...opts,
-          id,
-          ...(ctx.caller.runtime.kind === "panel" ? { sourcePanelId: ctx.caller.runtime.id } : {}),
-        };
-        notificationOwners.set(id, {
-          kind: "caller",
-          runtimeKey: callerRuntimeKey(ctx.caller),
-          ...(targetUserId ? { targetUserId } : {}),
-        });
-        emit("notification:show", payload, targetUserId);
-        return id;
+        return showForCaller(ctx.caller, opts, targetUserId);
       },
+      showToUser: (ctx, [userId, opts]) => showForCaller(ctx.caller, opts, userId),
       dismiss: (ctx, [id]) => {
         assertCallerOwns(id, ctx.caller);
         internal.dismiss(id, ctx.caller.subject?.userId);

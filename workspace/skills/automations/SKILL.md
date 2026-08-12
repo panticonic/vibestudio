@@ -174,6 +174,13 @@ wait more than one hour between wake-ups, its chat inspector warns that later
 runs may consume additional input tokens to restore context after the provider
 cache TTL expires. Fresh-conversation automations do not show this warning.
 
+When an admitted run begins processing, the shell briefly slides in a compact
+notice naming the automation and run number. It dismisses itself after six
+seconds; dormant schedules and overlap skips do not produce a notice. Its **View
+automation** action deep-links to the exact automation with run history already
+expanded. Durable run history and errors remain in chat and the Automations
+overview after that transient cue is gone.
+
 For an exact small script, keep the code inline and let it run as the selected
 agent in that conversation:
 

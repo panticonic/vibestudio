@@ -63,6 +63,13 @@ export const NotificationActionSchema = z.object({
       z.object({ type: z.literal("desktop.copyNpmUpdateCommand") }),
       z.object({ type: z.literal("browser.downloadOpen"), downloadId: z.string() }),
       z.object({ type: z.literal("browser.downloadReveal"), downloadId: z.string() }),
+      z
+        .object({
+          type: z.literal("panel.open"),
+          source: z.string().min(1),
+          stateArgs: z.record(z.unknown()).optional(),
+        })
+        .strict(),
       z.object({ type: z.literal("panel.focus"), panelId: z.string() }),
     ])
     .optional()
@@ -139,6 +146,22 @@ export const notificationMethods = defineServiceMethods({
     returns: z.string(),
     access: WRITE_ACCESS,
     examples: [{ args: [{ type: "info", title: "Hello", message: "World" }] }],
+  },
+  showToUser: {
+    agentFacing: false,
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "notification.control",
+      rationale: "Code-owned background work addresses a transient notice to its recorded owner",
+    },
+    description:
+      "Code/host-only: show an addressed shell notification for one host-verified user account.",
+    args: z.tuple([z.string().min(1), NotificationShowRequestSchema]),
+    returns: z.string(),
+    authority: { principals: ["code", "host"] },
+    access: WRITE_ACCESS,
   },
   dismiss: {
     tier: {

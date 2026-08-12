@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "censusDigest": "sha256:3f143f1241c99274e8074715b2e761f7ebafef32fcae481633cccc50fe5857ee",
+  "censusDigest": "sha256:7d0961bfc366424c95f5dac7545a6da36e0b056a3e2db1e999f7fce5c06051b2",
   "decisions": {
     "host:view.getBrowserPageIdentity": {
       "review": "exact-native-browser-page-identity-read",
@@ -65,6 +65,10 @@
     "host:remoteCred.getCurrent": {
       "review": "trusted-chrome-secret-free-connection-status",
       "change": "Opens the secret-free remote connection status projection to its existing authenticated principals. App callers remain restricted by the handler to authorized workspace chrome carrying panel-hosting; no pairing material, refresh token, credential value, or connection mutation is exposed."
+    },
+    "host:notification.showToUser": {
+      "review": "code-owned-addressed-transient-notification",
+      "change": "Adds a code-and-host-only transient notification effect for durable background work whose authenticated user is recorded in receiver-owned state rather than present on the alarm dispatch. The notification remains attributed to the verified runtime caller, is delivered only to the exact addressed account's live sessions, and grants no inbox mutation, navigation, or user action without an explicit click in trusted shell chrome."
     },
     "host:runtime.recoverExecution": {
       "review": "interactive-chrome-exact-execution-recovery",

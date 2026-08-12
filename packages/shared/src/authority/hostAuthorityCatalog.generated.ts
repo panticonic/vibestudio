@@ -3557,6 +3557,17 @@ export const HOST_AUTHORITY_METHODS = {
     capability: null,
     presentation: null,
   },
+  "notification.showToUser": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "notification.control",
+      rationale: "Code-owned background work addresses a transient notice to its recorded owner",
+    },
+    capability: null,
+    presentation: null,
+  },
   "notification.signalUserInbox": {
     tier: {
       tier: "open",

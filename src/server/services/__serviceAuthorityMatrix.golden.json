@@ -4660,6 +4660,26 @@
         "capability": null,
         "presentation": null
       },
+      "showToUser": {
+        "authority": {
+          "principals": [
+            "code",
+            "host"
+          ]
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "notification.control",
+          "rationale": "Code-owned background work addresses a transient notice to its recorded owner"
+        },
+        "capability": null,
+        "presentation": null
+      },
       "signalUserInbox": {
         "authority": {
           "principals": [

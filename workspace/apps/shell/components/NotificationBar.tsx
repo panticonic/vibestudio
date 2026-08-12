@@ -216,6 +216,11 @@ export function NotificationBar() {
           await browserEnvironment.openDownload(action.command.downloadId);
         } else if (action.command?.type === "browser.downloadReveal") {
           await browserEnvironment.revealDownload(action.command.downloadId);
+        } else if (action.command?.type === "panel.open") {
+          await panel.createPanel(action.command.source, {
+            focus: true,
+            stateArgs: action.command.stateArgs,
+          });
         } else if (action.command?.type === "panel.focus") {
           await panel.focus(action.command.panelId);
         }
@@ -291,6 +296,7 @@ export function NotificationBar() {
   return (
     <div ref={barRef} data-shell-top-chrome="notification-bar">
       <ToastNotification
+        key={current.id}
         notification={current}
         queuedNotifications={queuedNotifications}
         expanded={expanded}
@@ -329,6 +335,7 @@ function ToastNotification({
 
   return (
     <Flex
+      className="shell-notification-strip"
       direction="column"
       style={{
         backgroundColor: TYPE_BG[notification.type],
