@@ -48,6 +48,38 @@ const LOCAL_MODEL_PREFILL_POLL_MS = 1000;
 // turn and its authority session forever.
 const DEFAULT_CODEX_TRANSPORT_IDLE_TIMEOUT_MS = 60_000;
 
+class ModelProgressIdleTimeoutError extends Error {
+  constructor(timeoutMs: number) {
+    super(`Model stream made no semantic progress for ${timeoutMs}ms`);
+    this.name = "ModelProgressIdleTimeoutError";
+  }
+}
+
+async function nextModelStreamEvent<T>(
+  iterator: AsyncIterator<T>,
+  timeoutMs: number | undefined,
+  abort: (reason: Error) => void
+): Promise<IteratorResult<T>> {
+  const pending = iterator.next();
+  if (timeoutMs === undefined || timeoutMs <= 0) return pending;
+
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      pending,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => {
+          const error = new ModelProgressIdleTimeoutError(timeoutMs);
+          abort(error);
+          reject(error);
+        }, timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
 type PiReplayMetadata = {
   textSignature?: string;
   thinkingSignature?: string;
@@ -1143,6 +1175,10 @@ async function executeModelCall(
   const invalidateProviderSession = () => closeOpenAICodexWebSocketSessions(providerSessionId);
   // Terminal release also clears fallback/debug state for this per-turn key.
   const releaseProviderSession = () => releaseOpenAICodexWebSocketSession(providerSessionId);
+  const codexTransportIdleTimeoutMs =
+    effectiveSpec.api === "openai-codex-responses"
+      ? (modelSpec.streamIdleTimeoutMs ?? DEFAULT_CODEX_TRANSPORT_IDLE_TIMEOUT_MS)
+      : undefined;
   const attemptId = crypto.randomUUID();
   const startedAt = new Date().toISOString();
   onModelExecutionAttempt?.({
@@ -1181,10 +1217,6 @@ async function executeModelCall(
     // aborted signal. Never let retired channel work reach network or
     // credential authority after crossing the driver cancellation fence.
     throwIfAborted();
-    const codexTransportIdleTimeoutMs =
-      effectiveSpec.api === "openai-codex-responses"
-        ? (modelSpec.streamIdleTimeoutMs ?? DEFAULT_CODEX_TRANSPORT_IDLE_TIMEOUT_MS)
-        : undefined;
     eventStream = stream(effectiveSpec as never, context, {
       apiKey: credentials.apiKey,
       // We call pi-ai's raw stream surface to retain provider-native
@@ -1236,7 +1268,14 @@ async function executeModelCall(
       Symbol.asyncIterator
     ]();
     for (;;) {
-      const next = await iterator.next();
+      // Raw transport activity (including SSE keepalives) proves only that a
+      // socket is alive. Require provider-semantic events as a second,
+      // renewable liveness lease so a stream cannot hold an interactive turn
+      // open forever while producing no model progress.
+      const next = await nextModelStreamEvent(iterator, codexTransportIdleTimeoutMs, (reason) => {
+        streamAbort.abort(reason);
+        void iterator.return?.().catch(() => {});
+      });
       if (next.done) break;
       const event = next.value;
       // Direct progress update (not `trace` — per-event tracing would spam):

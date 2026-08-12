@@ -547,6 +547,61 @@ describe("modelCallExecutor", () => {
     );
   });
 
+  it("bounds a Codex stream that stays transport-active without semantic progress", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    let returnCalled = false;
+    mocks.stream.mockImplementation(() => ({
+      [Symbol.asyncIterator]() {
+        let emittedStart = false;
+        return {
+          next: async () => {
+            if (!emittedStart) {
+              emittedStart = true;
+              return { done: false, value: { type: "start" } };
+            }
+            return await new Promise<IteratorResult<Record<string, unknown>>>(() => {});
+          },
+          return: async () => {
+            returnCalled = true;
+            return { done: true, value: undefined };
+          },
+        };
+      },
+      result: async () => ({ content: [], stopReason: "stop" }),
+    }));
+    const codexSpec = {
+      ...modelSpec,
+      api: "openai-codex-responses",
+      provider: "openai-codex",
+      baseUrl: "https://chatgpt.com/backend-api",
+      streamIdleTimeoutMs: 15,
+    };
+
+    await expect(
+      modelCallExecutor.execute({
+        descriptor: descriptor({
+          provider: "openai-codex",
+          model: "gpt-5.3-codex-spark",
+          modelSpec: codexSpec as never,
+        }),
+        state: initialAgentState({ channelId: "channel-1", config }),
+        signal: new AbortController().signal,
+        deps: deps(),
+        onEphemeral: () => {},
+      })
+    ).resolves.toMatchObject({
+      kind: "retry",
+      code: "unknown_retryable",
+      reason: "Model stream made no semantic progress for 15ms",
+    });
+    expect(returnCalled).toBe(true);
+    expect(mocks.closeOpenAICodexWebSocketSessions).toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith(
+      "[model-call] stream failed:",
+      expect.stringContaining("ModelProgressIdleTimeoutError")
+    );
+  });
+
   it("parks interactive URL-bound auth stream failures behind credential reconnect", async () => {
     vi.spyOn(console, "warn").mockImplementation(() => {});
     const authError = Object.assign(
