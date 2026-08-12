@@ -1,10 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { Context, Model } from "@earendil-works/pi-ai";
+import type { Context, Model } from "@workspace/pi-ai";
 import {
   getOpenAICodexWebSocketDebugStats,
   releaseOpenAICodexWebSocketSession,
   stream,
-} from "@earendil-works/pi-ai/api/openai-codex-responses";
+} from "@workspace/pi-ai/api/openai-codex-responses";
 
 const model = {
   id: "gpt-5.3-codex-spark",

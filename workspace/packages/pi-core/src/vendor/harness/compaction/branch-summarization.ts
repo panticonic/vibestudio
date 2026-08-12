@@ -1,5 +1,5 @@
 // @ts-nocheck — vendored from @earendil-works/pi-agent-core v0.82.0; see PROVENANCE.md and vendor.sh
-import { contentText, type Model, type Models, type RetryCallbacks, type RetryPolicy } from "@earendil-works/pi-ai";
+import { contentText, type Model, type Models, type RetryCallbacks, type RetryPolicy } from "@workspace/pi-ai";
 
 import type { AgentMessage } from "../../types.js";
 import {

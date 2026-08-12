@@ -52,9 +52,9 @@ Examples:
 - Google Vertex flagship: `google-vertex:gemini-3.1-pro`
 
 When editing `agent-config.ts`, prefer the provider's current flagship. If you
-do not know what that is, check the provider's announcements page; pi-ai's
-catalog (`@earendil-works/pi-ai`'s `models.generated.d.ts`) is the source of
-truth for ids wired into the runtime.
+do not know what that is, check the provider's announcements page; the catalog
+exposed through `@workspace/pi-ai/providers/all` is the source of truth for ids
+wired into the runtime.
 
 The enabled thinking levels accepted by the harness are `minimal`, `low`,
 `medium`, `high`, `xhigh`, and `max`. The configuration UI only shows

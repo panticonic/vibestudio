@@ -1,5 +1,5 @@
 // @ts-nocheck — vendored from @earendil-works/pi-agent-core v0.82.0; see PROVENANCE.md and vendor.sh
-import { uuidv7 } from "@earendil-works/pi-ai";
+import { uuidv7 } from "@workspace/pi-ai";
 import {
 	type FileError,
 	type Result,

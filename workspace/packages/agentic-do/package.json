@@ -10,7 +10,6 @@
   },
   "dependencies": {
     "@cfworker/json-schema": "^4.1.1",
-    "@earendil-works/pi-ai": "^0.82.0",
     "@sinclair/typebox": "^0.27.8",
     "@vibestudio/content-addressing": "workspace:*",
     "@vibestudio/rpc": "workspace:*",
@@ -21,6 +20,7 @@
     "@workspace/harness": "workspace:*",
     "@workspace/model-catalog": "workspace:*",
     "@workspace/pi-core": "workspace:*",
+    "@workspace/pi-ai": "workspace:*",
     "@workspace/pubsub": "workspace:*",
     "@vibestudio/service-schemas": "workspace:*",
     "@vibestudio/shared": "workspace:*",
@@ -28,10 +28,5 @@
   },
   "devDependencies": {
     "@panticonic/builtin": "workspace:*"
-  },
-  "overrides": {
-    "@anthropic-ai/sdk": "0.97.1",
-    "@aws-sdk/client-bedrock-runtime": "3.1039.0",
-    "@mistralai/mistralai": "2.2.1"
   }
 }

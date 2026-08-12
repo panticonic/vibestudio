@@ -26,6 +26,7 @@ but the explicit tool-contract tightening are mechanical:
    type declarations consumers see.
 
 Vendored (under `src/vendor/`):
+
 - `types` — top-level agent types (AgentMessage, AgentTool, AgentEvent, ThinkingLevel, …)
 - `harness/types` — Result, errors, SessionStorage/SessionRepo/SessionTreeEntry, Skill, PromptTemplate, ExecutionEnv, harness event/option types
 - `harness/compaction/*` — pure compaction + branch summarization
@@ -35,12 +36,14 @@ Vendored (under `src/vendor/`):
 - `harness/utils/{shell-output,truncate}`
 
 Intentionally excluded (replaced by `@workspace/agent-loop`):
+
 - `agent.ts` (Agent), `agent-loop.ts` (the in-memory await chain)
 - `harness/agent-harness.ts` (AgentHarness phase/queue machine)
 - Jsonl/file-backed session repos
 - the extension/hook-bus runtime, `proxy.ts`, `node.ts`
 
 `@earendil-works/pi-ai` remains an external dependency at the matching `0.82.0`
-release. Vibestudio's workerd transport-liveness changes are maintained separately
-as the package-manager patch declared in the root and workspace manifests; they are
-not mixed into this vendored agent-core subset.
+release. `@workspace/pi-ai` owns that integration surface and its Build V2
+dependency-resolution patch; the host package manager has no `pi-ai` dependency
+or patch knowledge. The workerd transport-liveness changes are not mixed into
+this vendored agent-core subset.

@@ -1,5 +1,5 @@
 // @ts-nocheck — vendored from @earendil-works/pi-agent-core v0.82.0; see PROVENANCE.md and vendor.sh
-import type { ImageContent, Message, TextContent } from "@earendil-works/pi-ai";
+import type { ImageContent, Message, TextContent } from "@workspace/pi-ai";
 import type { AgentMessage } from "../types.js";
 
 export const COMPACTION_SUMMARY_PREFIX = `The conversation history before this point was compacted into the following summary:

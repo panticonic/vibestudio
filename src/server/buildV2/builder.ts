@@ -58,9 +58,12 @@ import {
 import { computeBuildKey } from "./effectiveVersion.js";
 import {
   collectTransitiveDependencyOverrides,
+  collectTransitiveDependencyPatches,
   collectTransitiveExternalDeps,
+  dependencyPatchesForExternalRoots,
   ensureExternalDeps,
   ensureExtensionRuntimeDeps,
+  type ExternalDependencyPatch,
 } from "./externalDeps.js";
 import { collectTransitiveInternalDeps, getBuildSourceProvider } from "./buildSource.js";
 import { assertUnitIconSize, declaredUnitIconPath } from "./unitIcon.js";
@@ -1856,6 +1859,7 @@ interface BuildEnv {
   nodeModulesDir: string | null;
   externalDeps: Record<string, string>;
   dependencyOverrides: Record<string, string>;
+  dependencyPatches: ExternalDependencyPatch[];
   resolveDir: string;
   cleanup: () => void;
 }
@@ -1885,7 +1889,10 @@ async function prepareBuildEnv(
     workspaceRoot,
     _appNodeModules
   );
-  const nodeModulesDir = await ensureExternalDeps(externalDeps, dependencyOverrides);
+  const dependencyPatches = collectTransitiveDependencyPatches(node, graph, sourceRoot);
+  const nodeModulesDir = await ensureExternalDeps(externalDeps, dependencyOverrides, {
+    patches: dependencyPatches,
+  });
   const nodePaths = nodeModulesDir ? [nodeModulesDir] : [];
 
   // App's node_modules for @vibestudio/* packages (workspace:* deps).
@@ -1903,6 +1910,7 @@ async function prepareBuildEnv(
     nodeModulesDir,
     externalDeps,
     dependencyOverrides,
+    dependencyPatches,
     resolveDir,
     cleanup: () => {
       try {
@@ -2511,12 +2519,10 @@ function conditionsForLibraryTarget(target: LibraryBuildTarget): readonly string
 
 /**
  * Node built-ins that workerd does NOT provide via `nodejs_compat` and must
- * be stubbed out of worker bundles. The SDK dependencies of
- * `@earendil-works/pi-ai` (aws-sdk credential providers, undici, proxy-agent,
- * etc.) import these modules at module scope but only call them inside
- * code paths (e.g. file-based SSO credential loaders) that the Vibestudio
- * agent worker never reaches. Stubbing to an empty / throwing module keeps
- * the bundle valid; an attempted use at runtime throws a clear error.
+ * be stubbed out of worker bundles. Registry dependencies can import these at
+ * module scope even when the relevant optional path is never invoked. Stubbing
+ * to a throwing module keeps such bundles loadable while making any actual use
+ * fail clearly at runtime.
  */
 const WORKERD_UNAVAILABLE_NODE_MODULES: ReadonlySet<string> = new Set([
   "child_process",
@@ -2792,10 +2798,8 @@ async function extractYogaWasm(resolveDir: string): Promise<Buffer> {
 
 /**
  * Node built-in modules that must stay external in the worker bundle so that
- * workerd's `nodejs_compat` compat flag satisfies them at runtime. These are
- * pulled in transitively by `@earendil-works/pi-agent-core` /
- * `@earendil-works/pi-ai` (and their SDK dependencies: openai, anthropic,
- * google/genai, undici, proxy-agent, aws-sdk credential providers, etc.).
+ * workerd's `nodejs_compat` compat flag satisfies them at runtime. Registry
+ * dependency closures commonly pull these in through SDKs and transports.
  *
  * Filesystem modules are included in this list too — the code paths that
  * actually call `fs.readFile` from inside aws-sdk / openai SDKs are ones
@@ -2969,10 +2973,9 @@ async function buildWorker(
       metafile: true,
       logLevel: "warning",
       conditions: [...WORKER_CONDITIONS],
-      // Fall back to the `main` field for packages that ship without
-      // `exports` or `module` (e.g. `@earendil-works/pi-agent-core`,
-      // `@earendil-works/pi-ai`). Without this, esbuild refuses to resolve
-      // a `main`-only package in "neutral" platform mode.
+      // Fall back to the `main` field for registry packages that ship without
+      // `exports` or `module`. Without this, esbuild refuses to resolve a
+      // `main`-only package in "neutral" platform mode.
       mainFields: ["module", "main"],
       // Node built-ins that workerd's nodejs_compat flag provides at
       // runtime stay external. Modules workerd does NOT implement
@@ -3426,6 +3429,10 @@ async function buildExtension(
     dependencyMode
   );
   const { classifiedDeps, runtimeExternalDeps } = dependencyDiagnostics;
+  const runtimeDependencyPatches = dependencyPatchesForExternalRoots(
+    env.dependencyPatches,
+    runtimeExternalDeps
+  );
   const dedupePackages = normalizeManifestSpecList(
     extractedManifest["dedupeModules"] as string[] | undefined
   );
@@ -3475,7 +3482,8 @@ async function buildExtension(
 
     const runtimeDeps = await ensureExtensionRuntimeDeps(
       runtimeExternalDeps,
-      env.dependencyOverrides
+      env.dependencyOverrides,
+      runtimeDependencyPatches
     );
     if (runtimeDeps.nodeModulesDir) {
       linkExtensionRuntimeDeps(outdir, runtimeDeps.nodeModulesDir, node.name);
@@ -3513,6 +3521,7 @@ async function buildExtension(
           dependencyMode,
           externalDeps: runtimeExternalDeps,
           dependencyOverrides: env.dependencyOverrides,
+          dependencyPatches: runtimeDependencyPatches,
           classifiedDeps,
         },
         builtAt: new Date().toISOString(),
@@ -3541,6 +3550,7 @@ async function buildExtension(
           dependencyMode,
           externalDeps: runtimeExternalDeps,
           dependencyOverrides: env.dependencyOverrides,
+          dependencyPatches: runtimeDependencyPatches,
           classifiedDeps,
           smokeTest: { mode: "child-process", passed: true },
         },
@@ -3736,7 +3746,8 @@ async function refreshCachedExtensionRuntimeDeps(result: BuildResult): Promise<v
 
   const runtimeDeps = await ensureExtensionRuntimeDeps(
     deps,
-    extensionDetails?.dependencyOverrides ?? {}
+    extensionDetails?.dependencyOverrides ?? {},
+    extensionDetails?.dependencyPatches ?? []
   );
   if (runtimeDeps.nodeModulesDir) {
     linkExtensionRuntimeDeps(result.dir, runtimeDeps.nodeModulesDir, result.metadata.name);

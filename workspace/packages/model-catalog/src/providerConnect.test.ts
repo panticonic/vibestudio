@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { getBuiltinModels } from "@earendil-works/pi-ai/providers/all";
+import { getBuiltinModels } from "@workspace/pi-ai/providers/all";
 import { ConnectCredentialParamsSchema } from "@vibestudio/service-schemas/credentials";
 import {
   listProviderConnectPresets,

@@ -44,16 +44,16 @@ import {
 const AGENT_THINKING_LEVELS = new Set<string>(["minimal", "low", "medium", "high", "xhigh", "max"]);
 
 type PiAiModule = {
-  getModels: typeof import("@earendil-works/pi-ai/providers/all").getBuiltinModels;
-  getProviders: typeof import("@earendil-works/pi-ai/providers/all").getBuiltinProviders;
-  getSupportedThinkingLevels: typeof import("@earendil-works/pi-ai").getSupportedThinkingLevels;
+  getModels: typeof import("@workspace/pi-ai/providers/all").getBuiltinModels;
+  getProviders: typeof import("@workspace/pi-ai/providers/all").getBuiltinProviders;
+  getSupportedThinkingLevels: typeof import("@workspace/pi-ai").getSupportedThinkingLevels;
 };
 
 async function loadPiAi(): Promise<PiAiModule> {
   const [{ getSupportedThinkingLevels }, { getBuiltinModels, getBuiltinProviders }] =
     await Promise.all([
-      import("@earendil-works/pi-ai"),
-      import("@earendil-works/pi-ai/providers/all"),
+      import("@workspace/pi-ai"),
+      import("@workspace/pi-ai/providers/all"),
     ]);
   return {
     getModels: getBuiltinModels,

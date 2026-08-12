@@ -192,6 +192,33 @@ describe("PackageGraph", () => {
 });
 
 describe("discoverPackageGraph extension units", () => {
+  it("reads dependency policy only from the Build V2 manifest", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-dependency-policy-"));
+    try {
+      const packageDir = path.join(root, "packages", "adapter");
+      fs.mkdirSync(packageDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(packageDir, "package.json"),
+        JSON.stringify({
+          name: "@workspace/adapter",
+          overrides: { ignored: "1.0.0" },
+          pnpm: { overrides: { "also-ignored": "1.0.0" } },
+          vibestudio: {
+            dependencyResolution: {
+              overrides: { accepted: "2.0.0" },
+            },
+          },
+        })
+      );
+
+      expect(discoverPackageGraph(root).get("@workspace/adapter").dependencyOverrides).toEqual({
+        accepted: "2.0.0",
+      });
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("rejects per-dependency refs for internal workspace packages", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-dep-ref-"));
     try {

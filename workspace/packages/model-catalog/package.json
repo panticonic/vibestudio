@@ -16,6 +16,7 @@
     "@vibestudio/shared": "workspace:*"
   },
   "devDependencies": {
+    "@workspace/pi-ai": "workspace:*",
     "vitest": "^3.2.4"
   }
 }

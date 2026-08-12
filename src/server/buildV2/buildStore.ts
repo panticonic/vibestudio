@@ -132,6 +132,15 @@ export type BuildMetadataDetails =
       dependencyMode?: "auto" | "bundle" | "external";
       externalDeps?: Record<string, string>;
       dependencyOverrides?: Record<string, string>;
+      dependencyPatches?: Array<{
+        selector: string;
+        packageName: string;
+        version: string;
+        owner: string;
+        roots: string[];
+        content: string;
+        digest: string;
+      }>;
       classifiedDeps?: Array<{
         name: string;
         version: string;

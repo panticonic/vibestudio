@@ -34,7 +34,7 @@ export interface GraphNode {
   kind: "package" | "panel" | "worker" | "extension" | "app" | "template";
   /** All dependencies from package.json (name → version) */
   dependencies: Record<string, string>;
-  /** Simple package-manager overrides from package.json overrides / pnpm.overrides. */
+  /** Build V2 dependency overrides declared by this unit. */
   dependencyOverrides: Record<string, string>;
   /** Resolved internal dependency names */
   internalDeps: string[];
@@ -182,8 +182,6 @@ interface PackageJson {
   peerDependencies?: Record<string, string>;
   devDependencies?: Record<string, string>;
   vibestudio?: PackageManifest;
-  overrides?: unknown;
-  pnpm?: { overrides?: unknown };
   exports?: Record<string, unknown>;
   main?: string;
 }
@@ -214,11 +212,8 @@ function normalizeSimpleOverrides(value: unknown): Record<string, string> {
   return result;
 }
 
-function packageManagerOverrides(pkg: PackageJson): Record<string, string> {
-  return {
-    ...normalizeSimpleOverrides(pkg.overrides),
-    ...normalizeSimpleOverrides(pkg.pnpm?.overrides),
-  };
+function buildDependencyOverrides(pkg: PackageJson): Record<string, string> {
+  return normalizeSimpleOverrides(pkg.vibestudio?.dependencyResolution?.overrides);
 }
 
 function readPackageJson(dir: string): PackageJson | null {
@@ -262,7 +257,7 @@ function packageNodeFromJson(
     ...(typeof pkg.version === "string" ? { packageVersion: pkg.version } : {}),
     kind,
     dependencies: allDeps,
-    dependencyOverrides: packageManagerOverrides(pkg),
+    dependencyOverrides: buildDependencyOverrides(pkg),
     internalDeps,
     ...(partialNode.dependencyErrors ? { dependencyErrors: partialNode.dependencyErrors } : {}),
     ...(pkg.exports ? { exports: declaredExportSubpaths(pkg.exports) } : {}),

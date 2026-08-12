@@ -49,7 +49,7 @@ export type {
 export * from "./vendor/harness/session/session.js";
 export * from "./vendor/harness/session/memory-repo.js";
 export * from "./vendor/harness/session/repo-utils.js";
-export { uuidv7 } from "@earendil-works/pi-ai";
+export { uuidv7 } from "@workspace/pi-ai";
 
 // Message constructors (compaction/branch-summary/custom messages)
 export * from "./vendor/harness/messages.js";

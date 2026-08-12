@@ -15,7 +15,7 @@ import {
   getBuiltinModel as getModel,
   getBuiltinModels as getModels,
   getBuiltinProviders as getProviders,
-} from "@earendil-works/pi-ai/providers/all";
+} from "@workspace/pi-ai/providers/all";
 import type { AgentModelSpec, ModelAuthMode } from "@workspace/agent-loop";
 import {
   LOCAL_FALLBACK_MODEL,

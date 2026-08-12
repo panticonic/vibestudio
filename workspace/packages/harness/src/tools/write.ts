@@ -7,7 +7,7 @@
 
 import { Type, type Static } from "@sinclair/typebox";
 import type { AgentTool } from "@workspace/pi-core";
-import type { TextContent, ImageContent } from "@earendil-works/pi-ai";
+import type { TextContent, ImageContent } from "@workspace/pi-ai";
 import type { VcsWorkingMutationResult } from "@vibestudio/service-schemas/vcs";
 import {
   canonicalizeWorkspaceFilePath,

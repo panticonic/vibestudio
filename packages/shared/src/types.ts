@@ -28,6 +28,13 @@ export type { PanelPlacementHint };
  * optional in the type.
  */
 export interface PackageManifest {
+  /** Build V2-owned external dependency resolution policy for this unit's closure. */
+  dependencyResolution?: {
+    /** npm-compatible dependency overrides applied only while building consumers of this unit. */
+    overrides?: Record<string, string>;
+    /** Exact package@version selectors mapped to owner-relative patches and direct roots. */
+    patches?: Record<string, { path: string; roots: string[] }>;
+  };
   /** Authority requests sealed into this executable unit's build. */
   authority?: UnitAuthorityManifest;
   /** Human-readable display name shared by all workspace unit kinds. */

@@ -143,6 +143,16 @@
       "@workspace/integrations/providers": ["./packages/integrations/src/providers.ts"],
       "@workspace/integrations/remoteProviders": ["./packages/integrations/src/remoteProviders.ts"],
       "@workspace/model-catalog/*": ["./packages/model-catalog/src/*.ts"],
+      "@workspace/pi-ai": ["./packages/pi-ai/src/index.ts"],
+      "@workspace/pi-ai/compat": ["./packages/pi-ai/src/compat.ts"],
+      "@workspace/pi-ai/providers/all": ["./packages/pi-ai/src/providers-all.ts"],
+      "@workspace/pi-ai/api/mistral-conversations": [
+        "./packages/pi-ai/src/api/mistral-conversations.ts"
+      ],
+      "@workspace/pi-ai/api/openai-codex-responses": [
+        "./packages/pi-ai/src/api/openai-codex-responses.ts"
+      ],
+      "@workspace/pi-ai/api/simple-options": ["./packages/pi-ai/src/api/simple-options.ts"],
       "@workspace/channel-fork": ["./packages/channel-fork/src/index.ts"],
       "@workspace/pubsub": ["./packages/pubsub/src/index.ts"],
       "@workspace/react": ["./packages/react/src/index.ts"],

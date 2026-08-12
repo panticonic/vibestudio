@@ -9,7 +9,7 @@
  */
 import { Type, type Static } from "@sinclair/typebox";
 import type { AgentTool } from "@workspace/pi-core";
-import type { TextContent, ImageContent } from "@earendil-works/pi-ai";
+import type { TextContent, ImageContent } from "@workspace/pi-ai";
 import { Buffer } from "node:buffer";
 import type { RuntimeFs } from "./runtime-fs.js";
 import type { RpcCaller } from "@vibestudio/rpc";

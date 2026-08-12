@@ -94,18 +94,13 @@
     }
   },
   "dependencies": {
-    "@earendil-works/pi-ai": "^0.82.0",
     "@vibestudio/credential-client": "workspace:*",
     "@workspace/model-catalog": "workspace:*",
+    "@workspace/pi-ai": "workspace:*",
     "@workspace/runtime": "workspace:*"
   },
   "devDependencies": {
     "@vibestudio/shared": "workspace:*",
     "vitest": "^3.2.2"
-  },
-  "overrides": {
-    "@anthropic-ai/sdk": "0.97.1",
-    "@aws-sdk/client-bedrock-runtime": "3.1039.0",
-    "@mistralai/mistralai": "2.2.1"
   }
 }

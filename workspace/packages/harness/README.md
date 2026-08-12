@@ -2,12 +2,13 @@
 
 In-process Pi runtime for the Vibestudio agent worker DO.
 
-This package wraps `@earendil-works/pi-agent-core` + `@earendil-works/pi-ai`
-("Pi") for use inside Vibestudio's agentic Durable Objects. It provides:
+This package wraps the vendored `@earendil-works/pi-agent-core` subset through
+`@workspace/pi-core` and consumes `pi-ai` through the workspace-owned
+`@workspace/pi-ai` integration boundary. It provides:
 
 - **`PiRunner`** — Worker DO companion class that owns one Pi `Agent`
   per channel. Constructs tools via the workerd-compatible RuntimeFs bridge,
-  loads system prompt and skills via workspace.* RPC, registers the
+  loads system prompt and skills via workspace.\* RPC, registers the
   three Vibestudio extension factories, bridges API keys via
   `setRuntimeApiKey`, and exposes `runTurn` / `steer` / `interrupt` / `fork`
   / `getStateSnapshot`.
@@ -45,11 +46,9 @@ import {
   DEFAULT_SAFE_TOOL_NAMES,
   type ApprovalLevel,
   type ApprovalGateDeps,
-
   createChannelToolsExtension,
   type ChannelToolMethod,
   type ChannelToolsDeps,
-
   createAskUserExtension,
   type AskUserParams,
   type AskUserQuestion,
@@ -76,7 +75,9 @@ import {
    ```typescript
    export function createMyExtension(deps: MyDeps): ExtensionFactory {
      return (pi) => {
-       pi.on("tool_call", async (event) => { /* ... */ });
+       pi.on("tool_call", async (event) => {
+         /* ... */
+       });
      };
    }
    ```

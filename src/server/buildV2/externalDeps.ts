@@ -13,6 +13,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import * as crypto from "crypto";
+import { applyPatch, parsePatch } from "diff";
 import { getSharedDerivedDataPath } from "@vibestudio/env-paths";
 import { NpmResolutionError, runNpmInstall } from "@vibestudio/shared/npmInstaller";
 import type { PackageGraph, GraphNode } from "./packageGraph.js";
@@ -30,15 +31,9 @@ export function collectTransitiveExternalDeps(
   unit: GraphNode,
   graph: PackageGraph,
   workspaceRoot?: string,
-  packageRoots: string[] = [],
-  appRoot?: string
+  packageRoots: string[] = []
 ): Record<string, string> {
   const externals: Record<string, string> = {};
-  const appProvidedPackages = new Set([
-    ...readWorkspacePatchedDependencyNames(),
-    ...readWorkspacePatchedDependencyNames(process.env["VIBESTUDIO_APP_ROOT"]),
-    ...readWorkspacePatchedDependencyNames(appRoot),
-  ]);
   const visited = new Set<string>();
   const visitedPackageJson = new Set<string>();
 
@@ -47,10 +42,6 @@ export function collectTransitiveExternalDeps(
     // install or the package graph. Their own npm deps are collected by walking
     // the package.json when available.
     if (version.startsWith("workspace:")) return;
-    // The external-deps cache is installed with npm, so it cannot apply pnpm
-    // patches. Let patched app dependencies resolve from the app node_modules
-    // instead of shadowing them with unpatched registry installs.
-    if (appProvidedPackages.has(name)) return;
     // External dependency — take higher version if conflict
     mergeExternalDependencySpecs(externals, { [name]: version });
   }
@@ -96,11 +87,23 @@ export function collectTransitiveDependencyOverrides(
   packageRoots: string[] = []
 ): Record<string, string> {
   const overrides: Record<string, string> = {};
+  const owners = new Map<string, string>();
   const visited = new Set<string>();
   const visitedPackageJson = new Set<string>();
 
-  function record(source: Record<string, string>) {
-    Object.assign(overrides, source);
+  function record(source: Record<string, string>, owner: string) {
+    for (const [selector, version] of Object.entries(source)) {
+      const existingVersion = overrides[selector];
+      const existingOwner = owners.get(selector);
+      if (existingVersion && existingVersion !== version && existingOwner) {
+        throw new Error(
+          `Dependency override ${selector} conflicts between ${existingOwner} (${existingVersion}) ` +
+            `and ${owner} (${version})`
+        );
+      }
+      overrides[selector] = version;
+      owners.set(selector, owner);
+    }
   }
 
   function walkDeps(dependencies: Record<string, string>, options: { walkWorkspaceDeps: boolean }) {
@@ -126,19 +129,193 @@ export function collectTransitiveDependencyOverrides(
   ) {
     if (visitedPackageJson.has(packageJsonPath)) return;
     visitedPackageJson.add(packageJsonPath);
-    record(dependencyOverrides);
+    record(dependencyOverrides, packageJsonPath);
     walkDeps(dependencies, { walkWorkspaceDeps: false });
   }
 
   function walkNode(node: GraphNode) {
     if (visited.has(node.name)) return;
     visited.add(node.name);
-    record(node.dependencyOverrides);
+    record(node.dependencyOverrides, node.name);
     walkDeps(node.dependencies, { walkWorkspaceDeps: true });
   }
 
   walkNode(unit);
   return overrides;
+}
+
+export interface ExternalDependencyPatch {
+  selector: string;
+  packageName: string;
+  version: string;
+  owner: string;
+  roots: string[];
+  content: string;
+  digest: string;
+}
+
+/**
+ * Collect owner-declared dependency patches from the same immutable source
+ * projection that will be compiled. Patches are build inputs, not ambient host
+ * package-manager state.
+ */
+export function collectTransitiveDependencyPatches(
+  unit: GraphNode,
+  graph: PackageGraph,
+  sourceRoot: string
+): ExternalDependencyPatch[] {
+  const patches = new Map<string, ExternalDependencyPatch>();
+  const visited = new Set<string>();
+  const closure: GraphNode[] = [];
+
+  function walkNode(node: GraphNode): void {
+    if (visited.has(node.name)) return;
+    visited.add(node.name);
+    closure.push(node);
+
+    const ownerRoot = path.resolve(sourceRoot, ...node.relativePath.split("/"));
+    for (const [selector, declaration] of Object.entries(
+      dependencyPatchDeclarations(node, graph)
+    )) {
+      const { packageName, version } = parsePatchedDependencySelector(selector);
+      const relativePatchPath = declaration.path;
+      const patchPath = path.resolve(ownerRoot, relativePatchPath);
+      if (!patchPath.startsWith(`${ownerRoot}${path.sep}`)) {
+        throw new Error(
+          `Dependency patch ${JSON.stringify(relativePatchPath)} escapes owner ${node.name}`
+        );
+      }
+      if (!fs.existsSync(patchPath) || !fs.statSync(patchPath).isFile()) {
+        throw new Error(`Dependency patch for ${selector} does not exist: ${relativePatchPath}`);
+      }
+      const realOwnerRoot = fs.realpathSync(ownerRoot);
+      const realPatchPath = fs.realpathSync(patchPath);
+      if (!realPatchPath.startsWith(`${realOwnerRoot}${path.sep}`)) {
+        throw new Error(
+          `Dependency patch ${JSON.stringify(relativePatchPath)} escapes owner ${node.name}`
+        );
+      }
+      const content = fs.readFileSync(realPatchPath, "utf8");
+      const patch: ExternalDependencyPatch = {
+        selector,
+        packageName,
+        version,
+        owner: node.name,
+        roots: declaration.roots,
+        content,
+        digest: sha256(content),
+      };
+      const existing = patches.get(selector);
+      if (existing && existing.owner !== node.name) {
+        throw new Error(
+          `Dependency patch ${selector} has multiple owners: ${existing.owner} and ${node.name}`
+        );
+      }
+      patches.set(selector, patch);
+    }
+
+    for (const dependency of node.internalDeps) {
+      const child = graph.tryGet(dependency);
+      if (child) walkNode(child);
+    }
+  }
+
+  walkNode(unit);
+  for (const patch of patches.values()) {
+    for (const consumer of closure) {
+      if (consumer.name === patch.owner) continue;
+      if (Object.prototype.hasOwnProperty.call(consumer.dependencies, patch.packageName)) {
+        throw new Error(
+          `${consumer.name} directly depends on patched external ${patch.packageName}; ` +
+            `depend on its patch owner ${patch.owner} instead`
+        );
+      }
+      if (
+        Object.keys(consumer.dependencyOverrides).some(
+          (selector) =>
+            selector === patch.packageName || selector.startsWith(`${patch.packageName}@`)
+        )
+      ) {
+        throw new Error(
+          `${consumer.name} overrides patched external ${patch.packageName}; ` +
+            `the dependency policy belongs to ${patch.owner}`
+        );
+      }
+    }
+  }
+  return [...patches.values()].sort((left, right) => left.selector.localeCompare(right.selector));
+}
+
+function dependencyPatchDeclarations(
+  node: GraphNode,
+  graph: PackageGraph
+): Record<string, { path: string; roots: string[] }> {
+  const value = node.manifest.dependencyResolution?.patches as unknown;
+  if (value === undefined) return {};
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`${node.name} dependencyResolution.patches must be an object`);
+  }
+  const declarations: Record<string, { path: string; roots: string[] }> = {};
+  for (const [selector, rawDeclaration] of Object.entries(value as Record<string, unknown>)) {
+    if (!rawDeclaration || typeof rawDeclaration !== "object" || Array.isArray(rawDeclaration)) {
+      throw new Error(`${node.name} dependency patch ${selector} must declare path and roots`);
+    }
+    const declaration = rawDeclaration as Record<string, unknown>;
+    if (Object.keys(declaration).sort().join(",") !== "path,roots") {
+      throw new Error(`${node.name} dependency patch ${selector} must contain only path and roots`);
+    }
+    const patchPath = declaration["path"];
+    const roots = declaration["roots"];
+    if (typeof patchPath !== "string" || patchPath.length === 0) {
+      throw new Error(`${node.name} dependency patch ${selector} must name a relative file path`);
+    }
+    if (
+      !Array.isArray(roots) ||
+      roots.length === 0 ||
+      roots.some((root) => typeof root !== "string" || root.length === 0) ||
+      new Set(roots).size !== roots.length
+    ) {
+      throw new Error(
+        `${node.name} dependency patch ${selector} must name unique dependency roots`
+      );
+    }
+    for (const root of roots as string[]) {
+      const specifier = node.dependencies[root];
+      if (!specifier || specifier.startsWith("workspace:") || graph.isInternal(root)) {
+        throw new Error(
+          `${node.name} dependency patch ${selector} root ${root} must be its direct external dependency`
+        );
+      }
+    }
+    declarations[selector] = {
+      path: patchPath,
+      roots: (roots as string[]).slice().sort((left, right) => left.localeCompare(right)),
+    };
+  }
+  return declarations;
+}
+
+function parsePatchedDependencySelector(selector: string): {
+  packageName: string;
+  version: string;
+} {
+  const separator = selector.lastIndexOf("@");
+  if (separator <= 0 || separator === selector.length - 1) {
+    throw new Error(
+      `Invalid patched dependency selector ${JSON.stringify(selector)}; expected package@exact-version`
+    );
+  }
+  const packageName = selector.slice(0, separator);
+  const version = selector.slice(separator + 1);
+  if (
+    !/^(@[a-z0-9\-~][a-z0-9\-._~]*\/)?[a-z0-9\-~][a-z0-9\-._~]*$/u.test(packageName) ||
+    !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/u.test(version)
+  ) {
+    throw new Error(
+      `Invalid patched dependency selector ${JSON.stringify(selector)}; expected package@exact-version`
+    );
+  }
+  return { packageName, version };
 }
 
 function readWorkspacePackageJson(
@@ -161,14 +338,15 @@ function readWorkspacePackageJson(
         name?: string;
         dependencies?: Record<string, string>;
         peerDependencies?: Record<string, string>;
-        overrides?: unknown;
-        pnpm?: { overrides?: unknown };
+        vibestudio?: { dependencyResolution?: { overrides?: unknown } };
       };
       if (pkg.name !== packageName) continue;
       return {
         path: pkgJsonPath,
         dependencies: { ...pkg.peerDependencies, ...pkg.dependencies },
-        dependencyOverrides: normalizeSimpleOverrides(pkg.overrides, pkg.pnpm?.overrides),
+        dependencyOverrides: normalizeSimpleOverrides(
+          pkg.vibestudio?.dependencyResolution?.overrides
+        ),
       };
     } catch {
       continue;
@@ -186,14 +364,15 @@ function readWorkspacePackageJson(
           name?: string;
           dependencies?: Record<string, string>;
           peerDependencies?: Record<string, string>;
-          overrides?: unknown;
-          pnpm?: { overrides?: unknown };
+          vibestudio?: { dependencyResolution?: { overrides?: unknown } };
         };
         if (pkg.name !== packageName) continue;
         return {
           path: pkgJsonPath,
           dependencies: { ...pkg.peerDependencies, ...pkg.dependencies },
-          dependencyOverrides: normalizeSimpleOverrides(pkg.overrides, pkg.pnpm?.overrides),
+          dependencyOverrides: normalizeSimpleOverrides(
+            pkg.vibestudio?.dependencyResolution?.overrides
+          ),
         };
       } catch {
         continue;
@@ -285,50 +464,69 @@ export function mergeExternalDependencySpecs(
 // Cached Installation
 // ---------------------------------------------------------------------------
 
-function hashDeps(deps: Record<string, string>, overrides: Record<string, string> = {}): string {
+function hashDeps(
+  deps: Record<string, string>,
+  overrides: Record<string, string> = {},
+  patches: readonly ExternalDependencyPatch[] = []
+): string {
   const entries = Object.entries(deps).sort(([a], [b]) => a.localeCompare(b));
   const overrideEntries = Object.entries(overrides).sort(([a], [b]) => a.localeCompare(b));
+  const patchEntries = patches
+    .map(
+      ({ selector, digest, roots }) =>
+        [selector, digest, [...roots].sort((left, right) => left.localeCompare(right))] as const
+    )
+    .sort(([left], [right]) => left.localeCompare(right));
   const hash = crypto.createHash("sha256");
-  hash.update(JSON.stringify({ deps: entries, overrides: overrideEntries }));
+  hash.update(JSON.stringify({ deps: entries, overrides: overrideEntries, patches: patchEntries }));
   return hash.digest("hex").slice(0, 16);
 }
 
-function readWorkspaceNpmOverrides(appRoot?: string): Record<string, string> {
-  const pkgPath = path.join(
-    appRoot ?? process.env["VIBESTUDIO_APP_ROOT"] ?? process.cwd(),
-    "package.json"
-  );
-  if (!fs.existsSync(pkgPath)) return {};
-
-  try {
-    const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf-8")) as {
-      overrides?: unknown;
-      pnpm?: { overrides?: unknown };
-    };
-    return {
-      ...normalizeSimpleOverrides(pkg.overrides, pkg.pnpm?.overrides),
-    };
-  } catch {
-    return {};
+function validateDependencyPatches(
+  patches: readonly ExternalDependencyPatch[]
+): ExternalDependencyPatch[] {
+  const validated = new Map<string, ExternalDependencyPatch>();
+  for (const patch of patches) {
+    const identity = parsePatchedDependencySelector(patch.selector);
+    if (identity.packageName !== patch.packageName || identity.version !== patch.version) {
+      throw new Error(`Dependency patch ${patch.selector} has inconsistent package identity`);
+    }
+    if (sha256(patch.content) !== patch.digest) {
+      throw new Error(`Dependency patch ${patch.selector} does not match its content digest`);
+    }
+    if (
+      !Array.isArray(patch.roots) ||
+      patch.roots.length === 0 ||
+      patch.roots.some((root) => typeof root !== "string" || root.length === 0) ||
+      new Set(patch.roots).size !== patch.roots.length
+    ) {
+      throw new Error(`Dependency patch ${patch.selector} has invalid dependency roots`);
+    }
+    if (validated.has(patch.selector)) {
+      throw new Error(`Dependency patch ${patch.selector} is declared more than once`);
+    }
+    validated.set(patch.selector, patch);
   }
+  return [...validated.values()].sort((left, right) => left.selector.localeCompare(right.selector));
 }
 
-function readWorkspacePatchedDependencyNames(root = process.cwd()): string[] {
-  if (!root) return [];
-  const pkgPath = path.join(root, "package.json");
-  if (!fs.existsSync(pkgPath)) return [];
+export function dependencyPatchesForExternalRoots(
+  patches: readonly ExternalDependencyPatch[],
+  dependencies: Readonly<Record<string, string>>
+): ExternalDependencyPatch[] {
+  return patches.filter((patch) => patch.roots.some((root) => dependencies[root] !== undefined));
+}
 
-  try {
-    const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf-8")) as {
-      pnpm?: { patchedDependencies?: unknown };
-    };
-    const patchedDependencies = pkg.pnpm?.patchedDependencies;
-    if (!patchedDependencies || typeof patchedDependencies !== "object") return [];
-    return Object.keys(patchedDependencies as Record<string, unknown>).map((specifier) =>
-      specifier.replace(/@\d.*$/, "")
-    );
-  } catch {
-    return [];
+function assertDependencyPatchRootsPresent(
+  patches: readonly ExternalDependencyPatch[],
+  dependencies: Readonly<Record<string, string>>
+): void {
+  for (const patch of patches) {
+    if (!patch.roots.some((root) => dependencies[root] !== undefined)) {
+      throw new Error(
+        `Dependency patch ${patch.selector} has no declared root in this dependency environment`
+      );
+    }
   }
 }
 
@@ -397,10 +595,10 @@ function applyDirectDependencyOverrides(
 }
 
 /**
- * Returns the direct dependency selected by an npm/pnpm simple override, if
- * any.  Package-manager override keys can be either `name` or `name@major`
+ * Returns the direct dependency selected by a simple Build V2 override, if
+ * any. Override keys can be either `name` or `name@major`
  * (including scoped names such as `@scope/name@major`).  The latter is what
- * lets the root pin vulnerable transitive majors independently.
+ * lets a unit pin vulnerable transitive majors independently.
  */
 function directDependencyOverrideTarget(
   selector: string,
@@ -430,12 +628,18 @@ function warnCleanupFailure(pathName: string, error: unknown): void {
   );
 }
 
-const EXTERNAL_DEPS_RECEIPT_VERSION = 1;
+const EXTERNAL_DEPS_RECEIPT_VERSION = 2;
+
+interface PatchedFileReceipt {
+  path: string;
+  digest: string | null;
+}
 
 interface ExternalDepsReceipt {
   version: typeof EXTERNAL_DEPS_RECEIPT_VERSION;
   lockDigest: string;
   packageCount: number;
+  patchedFiles: PatchedFileReceipt[];
 }
 
 const validatedCacheReceipts = new Map<string, { mtimeMs: number; size: number }>();
@@ -450,7 +654,10 @@ function sha256(value: string | Buffer): string {
  * root lock, which may include platform-skipped optionals). Every registry
  * package must retain its integrity identity and matching package metadata.
  */
-function createExternalDepsReceipt(cacheDir: string): ExternalDepsReceipt {
+function createExternalDepsReceipt(
+  cacheDir: string,
+  patchedFiles: PatchedFileReceipt[]
+): ExternalDepsReceipt {
   const nodeModulesDir = path.join(cacheDir, "node_modules");
   const lockPath = path.join(nodeModulesDir, ".package-lock.json");
   const lockBytes = fs.readFileSync(lockPath);
@@ -492,6 +699,7 @@ function createExternalDepsReceipt(cacheDir: string): ExternalDepsReceipt {
     version: EXTERNAL_DEPS_RECEIPT_VERSION,
     lockDigest: sha256(lockBytes),
     packageCount,
+    patchedFiles,
   };
 }
 
@@ -525,7 +733,8 @@ function isReusableExternalDepsCache(cacheDir: string): boolean {
       parsed.version !== EXTERNAL_DEPS_RECEIPT_VERSION ||
       typeof parsed.lockDigest !== "string" ||
       typeof parsed.packageCount !== "number" ||
-      parsed.packageCount <= 0
+      parsed.packageCount <= 0 ||
+      !Array.isArray(parsed.patchedFiles)
     ) {
       throw new Error("External dependency cache has no current receipt");
     }
@@ -533,6 +742,22 @@ function isReusableExternalDepsCache(cacheDir: string): boolean {
 
     const lockBytes = fs.readFileSync(path.join(cacheDir, "node_modules", ".package-lock.json"));
     if (sha256(lockBytes) !== receipt.lockDigest) return false;
+    for (const patchedFile of receipt.patchedFiles) {
+      if (
+        !patchedFile ||
+        typeof patchedFile.path !== "string" ||
+        (typeof patchedFile.digest !== "string" && patchedFile.digest !== null)
+      ) {
+        return false;
+      }
+      const target = path.resolve(cacheDir, ...patchedFile.path.split("/"));
+      if (!target.startsWith(`${path.resolve(cacheDir)}${path.sep}`)) return false;
+      if (patchedFile.digest === null) {
+        if (fs.existsSync(target)) return false;
+      } else if (!fs.existsSync(target) || sha256(fs.readFileSync(target)) !== patchedFile.digest) {
+        return false;
+      }
+    }
     validatedCacheReceipts.set(cacheDir, {
       mtimeMs: sentinelStat.mtimeMs,
       size: sentinelStat.size,
@@ -553,27 +778,33 @@ function isReusableExternalDepsCache(cacheDir: string): boolean {
 export async function ensureExternalDeps(
   deps: Record<string, string>,
   dependencyOverrides: Record<string, string> = {},
-  options: { appRoot?: string } = {}
+  options: { patches?: readonly ExternalDependencyPatch[] } = {}
 ): Promise<string> {
-  const overrides = { ...readWorkspaceNpmOverrides(options.appRoot), ...dependencyOverrides };
+  const overrides = { ...dependencyOverrides };
+  const patches = validateDependencyPatches(options.patches ?? []);
+  assertDependencyPatchRootsPresent(patches, deps);
   return ensureDepsInstalled(deps, {
     baseDir: getExternalDepsBaseDir(),
-    key: hashDeps(deps, overrides),
+    key: hashDeps(deps, overrides, patches),
     ignoreScripts: true,
     overrides,
+    patches,
   });
 }
 
 export async function ensureExtensionRuntimeDeps(
   deps: Record<string, string>,
-  dependencyOverrides: Record<string, string> = {}
+  dependencyOverrides: Record<string, string> = {},
+  patches: readonly ExternalDependencyPatch[] = []
 ): Promise<{ key: string | null; nodeModulesDir: string }> {
+  const validatedPatches = validateDependencyPatches(patches);
+  assertDependencyPatchRootsPresent(validatedPatches, deps);
   if (Object.keys(deps).length === 0) {
     return { key: null, nodeModulesDir: "" };
   }
-  const overrides = { ...readWorkspaceNpmOverrides(), ...dependencyOverrides };
+  const overrides = { ...dependencyOverrides };
   const key = [
-    hashDeps(deps, overrides),
+    hashDeps(deps, overrides, validatedPatches),
     process.platform,
     process.arch,
     `abi${process.versions.modules ?? "unknown"}`,
@@ -583,6 +814,7 @@ export async function ensureExtensionRuntimeDeps(
     key,
     ignoreScripts: false,
     overrides,
+    patches: validatedPatches,
   });
   return { key, nodeModulesDir };
 }
@@ -592,6 +824,7 @@ type EnsureDepsOptions = {
   key: string;
   ignoreScripts: boolean;
   overrides?: Record<string, string>;
+  patches?: readonly ExternalDependencyPatch[];
 };
 
 // Builds for several panels commonly converge on the same dependency graph.
@@ -663,9 +896,11 @@ async function ensureDepsInstalledOnce(
   try {
     await runNpmInstall(tmpDir, { ignoreScripts: options.ignoreScripts });
 
+    const patchedFiles = applyExternalDependencyPatches(tmpDir, options.patches ?? []);
+
     // Validate npm's installed package identities before making the cache
     // visible, then publish the receipt atomically with the directory rename.
-    writeExternalDepsReceipt(tmpDir, createExternalDepsReceipt(tmpDir));
+    writeExternalDepsReceipt(tmpDir, createExternalDepsReceipt(tmpDir, patchedFiles));
 
     // Race-safe promotion: try rename, handle concurrent winner
     try {
@@ -732,4 +967,118 @@ async function ensureDepsInstalledOnce(
       `Failed to install external dependencies: ${error instanceof Error ? error.message : String(error)}`
     );
   }
+}
+
+function applyExternalDependencyPatches(
+  installRoot: string,
+  patches: readonly ExternalDependencyPatch[]
+): PatchedFileReceipt[] {
+  const receipts = new Map<string, PatchedFileReceipt>();
+  for (const patch of patches) {
+    const packageRoots = matchingInstalledPackageRoots(installRoot, patch);
+    if (packageRoots.length === 0) {
+      throw new Error(
+        `Dependency patch ${patch.selector} from ${patch.owner} matched no installed package`
+      );
+    }
+    const filePatches = parsePatch(patch.content);
+    if (filePatches.length === 0) {
+      throw new Error(`Dependency patch ${patch.selector} contains no file changes`);
+    }
+
+    for (const packageRoot of packageRoots) {
+      for (const filePatch of filePatches) {
+        const oldName = normalizedPatchFileName(filePatch.oldFileName);
+        const newName = normalizedPatchFileName(filePatch.newFileName);
+        if (!oldName && !newName) {
+          throw new Error(`Dependency patch ${patch.selector} has no target path`);
+        }
+        const oldTarget = oldName ? resolveSafePatchTarget(packageRoot, oldName) : null;
+        const newTarget = newName ? resolveSafePatchTarget(packageRoot, newName) : null;
+
+        const original = oldTarget ? fs.readFileSync(oldTarget, "utf8") : "";
+        const updated = applyPatch(original, filePatch);
+        if (updated === false) {
+          throw new Error(
+            `Dependency patch ${patch.selector} failed for ${newName ?? oldName ?? "unknown file"}`
+          );
+        }
+        if (oldTarget && oldTarget !== newTarget) {
+          fs.rmSync(oldTarget);
+          recordPatchedFile(receipts, installRoot, oldTarget, null);
+        }
+        if (newTarget) {
+          fs.mkdirSync(path.dirname(newTarget), { recursive: true });
+          fs.writeFileSync(newTarget, updated, "utf8");
+          recordPatchedFile(receipts, installRoot, newTarget, sha256(updated));
+        }
+      }
+    }
+  }
+  return [...receipts.values()].sort((left, right) => left.path.localeCompare(right.path));
+}
+
+function recordPatchedFile(
+  receipts: Map<string, PatchedFileReceipt>,
+  installRoot: string,
+  target: string,
+  digest: string | null
+): void {
+  const receiptPath = path.relative(installRoot, target).split(path.sep).join("/");
+  receipts.set(receiptPath, { path: receiptPath, digest });
+}
+
+function resolveSafePatchTarget(packageRoot: string, relativePath: string): string {
+  const target = path.resolve(packageRoot, ...relativePath.split("/"));
+  if (!target.startsWith(`${packageRoot}${path.sep}`)) {
+    throw new Error(`Dependency patch target escapes its package: ${relativePath}`);
+  }
+
+  let cursor = packageRoot;
+  for (const segment of relativePath.split("/")) {
+    cursor = path.join(cursor, segment);
+    if (!fs.existsSync(cursor)) continue;
+    if (fs.lstatSync(cursor).isSymbolicLink()) {
+      throw new Error(`Dependency patch target traverses a symbolic link: ${relativePath}`);
+    }
+  }
+  return target;
+}
+
+function matchingInstalledPackageRoots(
+  installRoot: string,
+  patch: ExternalDependencyPatch
+): string[] {
+  const lockPath = path.join(installRoot, "node_modules", ".package-lock.json");
+  const lock = JSON.parse(fs.readFileSync(lockPath, "utf8")) as {
+    packages?: Record<string, { version?: unknown; link?: unknown }>;
+  };
+  const matches: string[] = [];
+  for (const [location, record] of Object.entries(lock.packages ?? {})) {
+    if (!location.startsWith("node_modules/") || record.link === true) continue;
+    if (record.version !== patch.version) continue;
+    const packageRoot = path.resolve(installRoot, ...location.split("/"));
+    if (!packageRoot.startsWith(`${path.resolve(installRoot)}${path.sep}`)) {
+      throw new Error(`Installed dependency path escapes its cache: ${location}`);
+    }
+    const manifestPath = path.join(packageRoot, "package.json");
+    if (!fs.existsSync(manifestPath)) continue;
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8")) as {
+      name?: unknown;
+      version?: unknown;
+    };
+    if (manifest.name === patch.packageName && manifest.version === patch.version) {
+      matches.push(packageRoot);
+    }
+  }
+  return matches.sort();
+}
+
+function normalizedPatchFileName(value: string | undefined): string | null {
+  if (!value || value === "/dev/null") return null;
+  const normalized = value.replace(/\\/gu, "/").replace(/^(?:a|b)\//u, "");
+  if (!normalized || path.posix.isAbsolute(normalized) || normalized.split("/").includes("..")) {
+    throw new Error(`Unsafe dependency patch path: ${JSON.stringify(value)}`);
+  }
+  return normalized;
 }

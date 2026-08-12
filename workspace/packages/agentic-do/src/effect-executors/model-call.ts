@@ -1,18 +1,18 @@
 /**
- * model_call executor (WS1 §2.4.1) — drives @earendil-works/pi-ai `stream`
+ * model_call executor (WS1 §2.4.1) — drives @workspace/pi-ai `stream`
  * directly. The prompt is re-derived purely from the log (entries through
  * contextThroughSeq) + blobstore hashes — nothing closure-bound. Streaming
  * deltas ride the channel's ephemeral signal mode; the durable terminal is
  * `message.completed` with authoritative blocks.
  */
 
-import { stream } from "@earendil-works/pi-ai/compat";
+import { stream } from "@workspace/pi-ai/compat";
 import {
   closeOpenAICodexWebSocketSessions,
   releaseOpenAICodexWebSocketSession,
-} from "@earendil-works/pi-ai/api/openai-codex-responses";
-import { clampMaxTokensToContext } from "@earendil-works/pi-ai/api/simple-options";
-import type { Context, Message } from "@earendil-works/pi-ai";
+} from "@workspace/pi-ai/api/openai-codex-responses";
+import { clampMaxTokensToContext } from "@workspace/pi-ai/api/simple-options";
+import type { Context, Message } from "@workspace/pi-ai";
 import {
   buildModelContext,
   classifyModelFailure,

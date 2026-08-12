@@ -1,5 +1,5 @@
 // @ts-nocheck — vendored from @earendil-works/pi-agent-core v0.82.0; see PROVENANCE.md and vendor.sh
-import type { ImageContent, TextContent, Usage } from "@earendil-works/pi-ai";
+import type { ImageContent, TextContent, Usage } from "@workspace/pi-ai";
 import type { AgentMessage } from "../../types.js";
 import { createBranchSummaryMessage, createCompactionSummaryMessage, createCustomMessage } from "../messages.js";
 import type {

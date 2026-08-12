@@ -2,9 +2,11 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import {
   collectTransitiveDependencyOverrides,
+  collectTransitiveDependencyPatches,
   collectTransitiveExternalDeps,
   ensureExternalDeps,
   mergeExternalDependencySpecs,
+  type ExternalDependencyPatch,
 } from "../../src/server/buildV2/externalDeps.js";
 import {
   discoverPackageGraph,
@@ -17,6 +19,7 @@ export interface UserlandDependencyProjection {
   units: readonly GraphNode[];
   dependencies: Readonly<Record<string, string>>;
   dependencyOverrides: Readonly<Record<string, string>>;
+  dependencyPatches: ReadonlyArray<ExternalDependencyPatch>;
   nodeModulesDir: string;
 }
 
@@ -55,23 +58,51 @@ export async function prepareUserlandDependencyProjection(
     .filter((unit) => unit.kind !== "template" && !excluded.has(unit.relativePath));
   const dependencies: Record<string, string> = {};
   const dependencyOverrides: Record<string, string> = {};
+  const dependencyPatches = new Map<string, ExternalDependencyPatch>();
 
   for (const unit of units) {
     mergeExternalDependencySpecs(
       dependencies,
-      collectTransitiveExternalDeps(unit, graph, workspaceRoot, appNodeModules, appRoot)
+      collectTransitiveExternalDeps(unit, graph, workspaceRoot, appNodeModules)
     );
-    Object.assign(
-      dependencyOverrides,
+    for (const [selector, version] of Object.entries(
       collectTransitiveDependencyOverrides(unit, graph, workspaceRoot, appNodeModules)
-    );
+    )) {
+      const existing = dependencyOverrides[selector];
+      if (existing && existing !== version) {
+        throw new Error(
+          `Userland validation projection cannot combine dependency override ${selector}: ` +
+            `${existing} conflicts with ${version} from ${unit.name}`
+        );
+      }
+      dependencyOverrides[selector] = version;
+    }
+    for (const patch of collectTransitiveDependencyPatches(unit, graph, workspaceRoot)) {
+      const existing = dependencyPatches.get(patch.selector);
+      if (existing && existing.owner !== patch.owner) {
+        throw new Error(
+          `Dependency patch ${patch.selector} has multiple owners: ${existing.owner} and ${patch.owner}`
+        );
+      }
+      dependencyPatches.set(patch.selector, patch);
+    }
     if (options.includeDevelopmentDependencies) {
       mergeExternalDependencySpecs(dependencies, readExternalDevelopmentDependencies(unit, graph));
     }
   }
 
-  const nodeModulesDir = await ensureExternalDeps(dependencies, dependencyOverrides, { appRoot });
-  return { graph, units, dependencies, dependencyOverrides, nodeModulesDir };
+  const patches = [...dependencyPatches.values()].sort((left, right) =>
+    left.selector.localeCompare(right.selector)
+  );
+  const nodeModulesDir = await ensureExternalDeps(dependencies, dependencyOverrides, { patches });
+  return {
+    graph,
+    units,
+    dependencies,
+    dependencyOverrides,
+    dependencyPatches: patches,
+    nodeModulesDir,
+  };
 }
 
 function readExternalDevelopmentDependencies(

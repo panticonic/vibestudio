@@ -20,16 +20,16 @@ const mocks = vi.hoisted(() => ({
   stream: vi.fn(),
 }));
 
-vi.mock("@earendil-works/pi-ai", () => ({
+vi.mock("@workspace/pi-ai", () => ({
   clampThinkingLevel: mocks.clampThinkingLevel,
   getModel: mocks.getModel,
 }));
 
-vi.mock("@earendil-works/pi-ai/compat", () => ({
+vi.mock("@workspace/pi-ai/compat", () => ({
   stream: mocks.stream,
 }));
 
-vi.mock("@earendil-works/pi-ai/api/openai-codex-responses", () => ({
+vi.mock("@workspace/pi-ai/api/openai-codex-responses", () => ({
   closeOpenAICodexWebSocketSessions: mocks.closeOpenAICodexWebSocketSessions,
   releaseOpenAICodexWebSocketSession: mocks.releaseOpenAICodexWebSocketSession,
 }));

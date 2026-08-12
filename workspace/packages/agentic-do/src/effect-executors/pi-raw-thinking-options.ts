@@ -5,7 +5,7 @@ import {
   type Model,
   type ProviderStreamOptions,
   type ThinkingBudgets,
-} from "@earendil-works/pi-ai";
+} from "@workspace/pi-ai";
 import type { ThinkingLevel as AgentThinkingLevel } from "@workspace/agent-loop";
 
 export type RawThinkingModel = Omit<

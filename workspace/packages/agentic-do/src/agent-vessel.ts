@@ -5583,7 +5583,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     const providerId = model.includes(":") ? model.slice(0, model.indexOf(":")) : "anthropic";
     const modelId = model.includes(":") ? model.slice(model.indexOf(":") + 1) : model;
     try {
-      const { getBuiltinModel: getModel } = await import("@earendil-works/pi-ai/providers/all");
+      const { getBuiltinModel: getModel } = await import("@workspace/pi-ai/providers/all");
       const registryModel = getModel(providerId as never, modelId as never) as
         | { baseUrl?: string }
         | undefined;
