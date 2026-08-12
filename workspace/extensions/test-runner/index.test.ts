@@ -90,7 +90,7 @@ describe("@workspace-extensions/test-runner", () => {
     expect(ctx.fs.ensureMaterialized).toHaveBeenCalledWith("packages/tool");
     expect(mockStartVitest).toHaveBeenCalledWith(
       "test",
-      [path.join(target, "**/*.test.{ts,tsx}")],
+      [target],
       expect.objectContaining({
         root: path.join(workspace.contextProjections, "ctx-1"),
       })

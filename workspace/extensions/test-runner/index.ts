@@ -115,7 +115,11 @@ function testPatternFor(targetPath: string, fileFilter?: string): string {
   if (stat.isFile()) return targetPath;
   if (!stat.isDirectory()) throw new Error(`Target must be a file or directory: ${targetPath}`);
   if (fileFilter) return resolveWithin(targetPath, fileFilter);
-  return path.join(targetPath, "**/*.test.{ts,tsx}");
+  // Select the unit and let Vitest own test-file discovery. Repeating Vitest's
+  // include rules here drifted from its actual semantics: in particular, the
+  // recursive glob missed a unit-root index.test.ts and excluded valid spec,
+  // JavaScript, MTS, and CTS tests.
+  return targetPath;
 }
 
 function ensurePanelSetupFile(): string {
