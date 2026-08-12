@@ -1,9 +1,9 @@
-import { Buffer } from "buffer";
 import { describe, expect, it, vi } from "vitest";
+import { base64ToBytes, bytesToBase64 } from "@vibestudio/rpc";
 import { createRpcFs } from "./rpcFs.js";
 
-function decode(env: unknown): Buffer {
-  return Buffer.from((env as { data: string }).data, "base64");
+function decode(env: unknown): Uint8Array {
+  return base64ToBytes((env as { data: string }).data);
 }
 
 function mockRpc() {
@@ -24,9 +24,7 @@ describe("createRpcFs transport lifetime", () => {
   it("does not impose an implicit deadline on a filesystem operation", async () => {
     let resolve!: (value: { size: number }) => void;
     const rpc = {
-      call: vi.fn().mockImplementation(
-        () => new Promise<{ size: number }>((r) => (resolve = r))
-      ),
+      call: vi.fn().mockImplementation(() => new Promise<{ size: number }>((r) => (resolve = r))),
     };
     const fs = createRpcFs(rpc as never);
     const pending = fs.stat("slow-but-valid");
@@ -69,10 +67,24 @@ describe("createRpcFs transport lifetime", () => {
 });
 
 describe("createRpcFs binary file writes", () => {
+  it("returns portable bytes without relying on a Buffer global", async () => {
+    const rpc = {
+      call: vi.fn(async () => ({ __bin: true, data: bytesToBase64(new Uint8Array([0, 1, 255])) })),
+    };
+    const priorBuffer = globalThis.Buffer;
+    try {
+      Object.defineProperty(globalThis, "Buffer", { configurable: true, value: undefined });
+      const fs = createRpcFs(rpc as never);
+      await expect(fs.readFile("/f.bin")).resolves.toEqual(new Uint8Array([0, 1, 255]));
+    } finally {
+      Object.defineProperty(globalThis, "Buffer", { configurable: true, value: priorBuffer });
+    }
+  });
+
   it("passes existing binary envelopes through without double encoding", async () => {
     const { rpc, calls } = mockRpc();
     const fs = createRpcFs(rpc as never);
-    const envelope = { __bin: true as const, data: Buffer.from([0, 1, 255]).toString("base64") };
+    const envelope = { __bin: true as const, data: bytesToBase64(new Uint8Array([0, 1, 255])) };
 
     await fs.writeFile("/f.bin", envelope);
 
@@ -107,12 +119,10 @@ describe("createRpcFs temporary paths", () => {
 
     await expect(fs.mkdtemp("probe")).resolves.toBe("/.tmp/probe-123");
     expect(rpc.call).toHaveBeenNthCalledWith(1, "main", "fs.mktemp", ["probe"]);
-    expect(rpc.call).toHaveBeenNthCalledWith(
-      2,
-      "main",
-      "fs.mkdir",
-      ["/.tmp/probe-123", { recursive: true }]
-    );
+    expect(rpc.call).toHaveBeenNthCalledWith(2, "main", "fs.mkdir", [
+      "/.tmp/probe-123",
+      { recursive: true },
+    ]);
   });
 });
 
@@ -123,15 +133,8 @@ describe("createRpcFs directory listings", () => {
     };
     const fs = createRpcFs(rpc as never);
 
-    await expect(fs.readdir("/", { recursive: true })).resolves.toEqual([
-      "src",
-      "src/index.ts",
-    ]);
-    expect(rpc.call).toHaveBeenCalledWith(
-      "main",
-      "fs.readdir",
-      ["/", { recursive: true }]
-    );
+    await expect(fs.readdir("/", { recursive: true })).resolves.toEqual(["src", "src/index.ts"]);
+    expect(rpc.call).toHaveBeenCalledWith("main", "fs.readdir", ["/", { recursive: true }]);
   });
 });
 
@@ -144,9 +147,9 @@ describe("createRpcFs FileHandle.write (Node-parity)", () => {
     const res = await fh.write("héllo", 12); // write(string, position)
 
     const w = calls.find((c) => c.method === "fs.handleWrite")!;
-    expect(decode(w.args[1]).toString("utf-8")).toBe("héllo"); // encoded, not `buffer.subarray`-crashed
+    expect(new TextDecoder().decode(decode(w.args[1]))).toBe("héllo"); // encoded, not `buffer.subarray`-crashed
     expect(w.args[2]).toBe(12); // 2nd arg is POSITION for the string overload
-    expect(res.bytesWritten).toBe(Buffer.from("héllo", "utf-8").length);
+    expect(res.bytesWritten).toBe(new TextEncoder().encode("héllo").length);
   });
 
   it("still writes a Uint8Array slice with offset/length/position", async () => {

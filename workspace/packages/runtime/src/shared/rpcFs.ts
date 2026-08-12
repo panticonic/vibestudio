@@ -6,7 +6,7 @@
  *
  * Shared between panels and workers — no Node.js or browser-specific dependencies.
  */
-import { bytesToBase64, type RpcClient } from "@vibestudio/rpc";
+import { base64ToBytes, bytesToBase64, type RpcClient } from "@vibestudio/rpc";
 import type {
   RuntimeFs,
   FileStats,
@@ -30,9 +30,8 @@ function isBinaryEnvelope(v: unknown): v is BinaryEnvelope {
 function encodeBinary(buf: Uint8Array): BinaryEnvelope {
   return { __bin: true, data: bytesToBase64(buf) };
 }
-async function decodeBinary(envelope: BinaryEnvelope): Promise<Buffer> {
-  const { Buffer } = await import("buffer");
-  return Buffer.from(envelope.data, "base64");
+function decodeBinary(envelope: BinaryEnvelope): Uint8Array {
+  return base64ToBytes(envelope.data);
 }
 function toUint8Array(data: RuntimeBinaryData): Uint8Array {
   if (data instanceof ArrayBuffer) return new Uint8Array(data);
@@ -141,10 +140,10 @@ export function createRpcFs(rpc: Pick<RpcClient, "call">, options: RpcFsOptions 
       await call<string | undefined>("mkdir", path, { recursive: true });
       return path;
     },
-    async readFile(path: string, encoding?: BufferEncoding): Promise<string | Buffer> {
+    async readFile(path: string, encoding?: BufferEncoding): Promise<string | Uint8Array> {
       const result = await call<string | BinaryEnvelope>("readFile", path, encoding);
       if (isBinaryEnvelope(result)) {
-        return await decodeBinary(result);
+        return decodeBinary(result);
       }
       return result as string;
     },
@@ -231,7 +230,7 @@ export function createRpcFs(rpc: Pick<RpcClient, "call">, options: RpcFsOptions 
             bytesRead: number;
             buffer: BinaryEnvelope;
           }>("handleRead", handleId, length, position);
-          const decoded = await decodeBinary(result.buffer);
+          const decoded = decodeBinary(result.buffer);
           buffer.set(decoded, offset);
           return { bytesRead: result.bytesRead, buffer };
         },

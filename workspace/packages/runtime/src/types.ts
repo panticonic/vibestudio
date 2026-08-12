@@ -1,5 +1,3 @@
-import type { Buffer } from "buffer";
-
 export { DEFAULT_THEME_CONFIG } from "@vibestudio/shared/theme";
 export type { ThemeConfig } from "@vibestudio/shared/theme";
 export type { HostCommand } from "@vibestudio/shared/hostCommands";
@@ -117,7 +115,7 @@ export interface RuntimeFs {
   mktemp(prefix?: string): Promise<string>;
   /** Create and return a unique context-local directory under `/.tmp`. */
   mkdtemp(prefix?: string): Promise<string>;
-  readFile(path: string, encoding?: BufferEncoding): Promise<string | Buffer>;
+  readFile(path: string, encoding?: BufferEncoding): Promise<string | Uint8Array>;
   writeFile(path: string, data: string | RuntimeBinaryData): Promise<void>;
   readdir(path: string): Promise<string[]>;
   readdir(path: string, options: { withFileTypes: true }): Promise<Dirent[]>;
