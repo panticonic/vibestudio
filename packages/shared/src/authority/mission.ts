@@ -24,6 +24,16 @@ export interface MissionToolExposure {
   declaredOrigins: readonly string[];
 }
 
+export type MissionAgentAction =
+  | { kind: "prompt"; text: string }
+  | {
+      kind: "eval";
+      code: string;
+      syntax?: "javascript" | "typescript" | "jsx" | "tsx";
+      timeoutMs?: number;
+      reset?: boolean;
+    };
+
 export type MissionExecution =
   | {
       kind: "method";
@@ -34,7 +44,7 @@ export type MissionExecution =
   | {
       kind: "agent";
       target: MissionTarget;
-      prompt: string;
+      action: MissionAgentAction;
       conversation: { mode: "continue"; channelId: string; contextId: string } | { mode: "fresh" };
       toolExposure: MissionToolExposure;
       declaredLineageClasses: readonly (
@@ -78,6 +88,8 @@ export interface MissionRecord {
   revisionDigest: string;
   createdAt: number;
   updatedAt: number;
+  /** First time a human activated this automation. Draft creation is not activation. */
+  activatedAt?: number;
   seeded?: boolean;
   permissions: readonly MissionPermission[];
   standingRestrictions: readonly MissionStandingRestriction[];
@@ -181,8 +193,19 @@ function validateTarget(target: MissionTarget): void {
 }
 
 function validateAgentExecution(execution: Extract<MissionExecution, { kind: "agent" }>): void {
-  if (!execution.prompt.trim()) {
-    throw new Error("Agent automation requires prompt text");
+  if (execution.action.kind === "prompt" && !execution.action.text.trim()) {
+    throw new Error("Prompt automation requires prompt text");
+  }
+  if (execution.action.kind === "eval") {
+    if (!execution.action.code.trim()) {
+      throw new Error("Eval automation requires inline code");
+    }
+    if (
+      execution.action.timeoutMs !== undefined &&
+      (!Number.isSafeInteger(execution.action.timeoutMs) || execution.action.timeoutMs <= 0)
+    ) {
+      throw new Error("Eval automation timeoutMs must be a positive integer");
+    }
   }
   if (
     execution.conversation.mode === "continue" &&

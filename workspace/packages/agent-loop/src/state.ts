@@ -145,8 +145,21 @@ export interface AgentTurnContextPolicy {
 
 export interface AgentTurnMetadata {
   origin?: "agent-initiated" | "scheduled";
-  /** Durable automation ledger row completed by this exact turn. */
-  automationRunId?: string;
+  /** Durable reviewed automation provenance for this exact tick. */
+  automation?: {
+    missionId: string;
+    runId: string;
+    name: string;
+    revision: number;
+    action: "prompt" | "eval" | "method";
+    trigger: "manual" | "scheduled";
+    startedAt: number;
+    createdAt: number;
+    activatedAt?: number;
+    schedule: { everyMs: number; anchorAt?: number; jitterMs?: number } | null;
+  };
+  /** Model-free turns close after their directly journaled invocation settles. */
+  completion?: "after-invocation";
   contextPolicy?: AgentTurnContextPolicy;
   delivery?: "none" | "channel" | "last-contact";
   ackToken?: string;

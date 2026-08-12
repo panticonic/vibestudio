@@ -45,6 +45,9 @@ function execution(
 const automationTest = unitDiagnosticsTests.find(
   (candidate) => candidate.name === "automation-overview-readonly"
 )!;
+const automationDraftTest = unitDiagnosticsTests.find(
+  (candidate) => candidate.name === "automation-inline-eval-draft"
+)!;
 
 describe("automation overview system test validator", () => {
   const readCode =
@@ -116,6 +119,58 @@ describe("automation overview system test validator", () => {
     ).toMatchObject({
       passed: false,
       reason: "Automation inspection eval did not return the exact bounded overview counts",
+    });
+  });
+});
+
+describe("automation inline eval system test validator", () => {
+  const draft = {
+    name: "Daily project pulse",
+    state: "draft",
+    permissions: [],
+    charter: {
+      trigger: { kind: "schedule", everyMs: 86_400_000 },
+      execution: {
+        kind: "agent",
+        target: {
+          source: "workers/agent-worker",
+          className: "AiChatWorker",
+          objectKey: "daily-project-pulse",
+        },
+        action: {
+          kind: "eval",
+          code: "const status = await services.vcs.status({ contextId: ctx.contextId }); await chat.publish('project.pulse', status); return status;",
+        },
+        conversation: { mode: "fresh" },
+        toolExposure: { services: ["vcs.status"], evalNetwork: "none" },
+      },
+    },
+  };
+
+  it("accepts a returned inert draft with the requested exact lightweight behavior", () => {
+    expect(
+      automationDraftTest.validate(
+        execution(
+          "return rpc.call(missions.targetId, 'proposeDraft', [input]);",
+          draft,
+          "The inert draft is waiting in Automations for your review."
+        )
+      )
+    ).toEqual({ passed: true });
+  });
+
+  it("rejects activating the draft from the agent path", () => {
+    expect(
+      automationDraftTest.validate(
+        execution(
+          "const draft = await rpc.call(missions.targetId, 'proposeDraft', [input]); await rpc.call(missions.targetId, 'requestReview', [draft.missionId]); return draft;",
+          draft,
+          "The draft is waiting for review."
+        )
+      )
+    ).toMatchObject({
+      passed: false,
+      reason: "The automation draft scenario attempted to activate or run the automation",
     });
   });
 });

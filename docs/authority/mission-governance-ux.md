@@ -5,7 +5,7 @@ Status: implemented architecture and product contract (2026-08-12)
 The product calls these records **Automations**. The authority subsystem keeps
 the internal `mission` name because each automation is a reviewed,
 content-addressed mission closure. There is one system for periodic scripts and
-periodic agent prompts: `MissionsDO` owns schedules, lifecycle, reviewed
+periodic agent work: `MissionsDO` owns schedules, lifecycle, reviewed
 closures, alarms, and the run ledger.
 
 ## Product model
@@ -13,8 +13,9 @@ closures, alarms, and the run ledger.
 An automation combines four decisions:
 
 1. **Exact code** — one harness unit at one effective version.
-2. **Execution** — a Durable Object method, or a prompt sent through the
-   ordinary agent turn loop.
+2. **Execution** — a Durable Object method, or an agent action: a prompt sent
+   through the ordinary turn loop or exact inline code journaled and run in the
+   agent's channel-bound EvalDO without a model call.
 3. **Trigger** — manual or an explicit interval with optional epoch anchor and
    jitter.
 4. **Authority boundary** — agent service exposure, network reach, expected
@@ -30,6 +31,12 @@ The exact charter, permission rows, and restrictions produce a closure digest.
 Display name, owner, lifecycle state, and timestamps do not. Editing behavior
 lapses the reviewed closure and moves the record to `needs-reapproval`.
 
+The v2-to-v3 migration is deliberately one-way. It rewrites the former
+agent-only `prompt` field into the shared `action: { kind: "prompt" }` model,
+preserves the old record in revision history, and converts any formerly armed
+record into an inert revision that requires review. There is no runtime legacy
+reader and no old schedule is silently continued under a newly shaped closure.
+
 ## Lifecycle and review
 
 ```text
@@ -41,9 +48,9 @@ draft ──review──▶ active ──edit──▶ needs-reapproval ──re
 ```
 
 Agents call `proposeDraft`; this grants nothing, schedules nothing, and cannot
-open the review decision for the user. User/code surfaces may create or edit
-drafts. `requestReview` activates the exact reviewed closure. A schedule is
-armed only after activation.
+open the review decision for the user. Agent sessions may edit and control
+reviewed automations through the ordinary gated service surface, but
+`requestReview` remains human-only. A schedule is armed only after activation.
 
 Pause suspends the reviewed closure and disarms the next occurrence without
 discarding history or cadence origin. Resume reactivates the unchanged closure
@@ -79,19 +86,25 @@ Every manual or scheduled trigger creates a durable run record with:
 - agent channel/context coordinates where applicable;
 - bounded terminal message or error.
 
-Method results are summarized after the method returns. Agent runs carry the
-run id in turn metadata; the exact terminal turn closes the ledger record and
-stores its final assistant message. Conversation content is not copied into the
-ledger beyond that bounded summary.
+Method results are summarized after the method returns. Agent runs carry a
+bounded immutable automation/tick snapshot in turn metadata. The exact terminal
+turn closes the ledger record and stores its final assistant message or eval
+result. Conversation content is not copied into the ledger beyond that bounded
+summary.
 
 Historical reads are deliberately bounded. `overview` returns all visible
 definitions, at most five recent runs per definition, aggregate total/active/
 recent-failure counts, and at most eight failures from the last 24 hours.
-`listRuns` provides cursor pagination for older history.
+`listRuns` provides cursor pagination for older history; `getRun` addresses one
+tick directly for a chat-history inspector.
 
-## Automations panel
+## Shared supervision UI
 
-The panel is a supervision surface, not a draft prototype:
+The Automations panel and the scheduled-activity pill in chat share the same
+definition/tick inspector and controls. Collapsed chat pills render entirely
+from durable turn metadata and issue no RPCs; opening one lazily reads exactly
+one definition and one run. The dashboard remains a supervision surface, not a
+draft prototype:
 
 - top-level counts distinguish active definitions, live runs, failures in the
   last 24 hours, and inert definitions waiting for review;
@@ -102,6 +115,8 @@ The panel is a supervision surface, not a draft prototype:
   reviewed authority, lifecycle controls, and paged run history;
 - run rows show trigger, duration, final message or error, and a direct link to
   the exact conversation;
+- both surfaces show cadence and first activation, exact tick provenance, and
+  edit plus stop/resume controls; edits stop execution and require review;
 - retirement requires confirmation and explains what remains available;
 - empty, loading, no-match, error, running, and healthy states all have explicit
   copy and accessible live status;
@@ -115,8 +130,10 @@ network details, and full prompts live under an explicit developer disclosure.
 
 - `MissionsDO` is the sole alarm and schedule owner for automations.
 - There is one run ledger and one terminalization path.
-- Agent prompts use `AgentVesselBase.runAutomationTurn`; there is no heartbeat
-  loop, synthetic channel publication, or special model-call path.
+- Agent prompts use `AgentVesselBase.runAutomationTurn`; exact inline scripts
+  use `runAutomationEval`, which journals one ordinary eval invocation through
+  the same agent loop and EvalDO. There is no heartbeat loop, alternate PubSub
+  identity, scheduler-owned eval engine, or special model-call path.
 - A draft is inert and cannot grant or execute anything.
 - A behavior change requires a new reviewed closure.
 - Run/conversation coordinates are durable and directly navigable.

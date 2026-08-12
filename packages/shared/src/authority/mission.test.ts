@@ -17,7 +17,7 @@ const charter = (): MissionCharter => ({
       className: "SystemAgent",
       objectKey: "backup",
     },
-    prompt: "Back up the project",
+    action: { kind: "prompt", text: "Back up the project" },
     conversation: { mode: "fresh" },
     toolExposure: {
       services: ["logs.query", "notification.*"],
@@ -44,7 +44,10 @@ describe("automation closure", () => {
     expect(
       closure({
         ...current,
-        execution: { ...execution, prompt: "Back up and verify the project" },
+        execution: {
+          ...execution,
+          action: { kind: "prompt", text: "Back up and verify the project" },
+        },
       })
     ).not.toBe(first);
   });

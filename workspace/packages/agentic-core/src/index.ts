@@ -115,6 +115,8 @@ export type {
   InlineUiCardPayload,
   ActionBarPayload,
   ApprovalCardPayload,
+  AutomationActivityPayload,
+  AutomationActivitySnapshot,
   ForkRowPayload,
   CustomMessageCardPayload,
   CustomMessageDisplayMode,

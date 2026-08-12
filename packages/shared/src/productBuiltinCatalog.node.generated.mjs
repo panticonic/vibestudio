@@ -7043,6 +7043,27 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
           }
         }
       },
+      "getRun": {
+        "capability": "missions.read",
+        "tier": "open",
+        "session": "family",
+        "sensitivity": "read",
+        "principals": [
+          "user",
+          "code",
+          "session",
+          "mission",
+          "host"
+        ],
+        "presentation": null,
+        "effect": {
+          "kind": "host-capability",
+          "capability": "missions.read",
+          "resource": {
+            "kind": "receiver-object"
+          }
+        }
+      },
       "proposeDraft": {
         "capability": "missions.edit",
         "tier": "open",
@@ -7094,11 +7115,12 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
       "edit": {
         "capability": "missions.edit",
         "tier": "gated",
-        "session": "codeOnly",
+        "session": "family",
         "sensitivity": "write",
         "principals": [
           "user",
           "code",
+          "session",
           "host"
         ],
         "presentation": {
@@ -7141,11 +7163,12 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
       "runNow": {
         "capability": "missions.run",
         "tier": "gated",
-        "session": "codeOnly",
+        "session": "family",
         "sensitivity": "write",
         "principals": [
           "user",
           "code",
+          "session",
           "host"
         ],
         "presentation": {
@@ -7169,11 +7192,12 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
       "pause": {
         "capability": "missions.pause",
         "tier": "gated",
-        "session": "codeOnly",
+        "session": "family",
         "sensitivity": "write",
         "principals": [
           "user",
           "code",
+          "session",
           "host"
         ],
         "presentation": {
@@ -7197,11 +7221,12 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
       "resume": {
         "capability": "missions.pause",
         "tier": "gated",
-        "session": "codeOnly",
+        "session": "family",
         "sensitivity": "write",
         "principals": [
           "user",
           "code",
+          "session",
           "host"
         ],
         "presentation": {
@@ -7225,11 +7250,12 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
       "retire": {
         "capability": "missions.retire",
         "tier": "critical",
-        "session": "codeOnly",
+        "session": "family",
         "sensitivity": "destructive",
         "principals": [
           "user",
           "code",
+          "session",
           "host"
         ],
         "presentation": {
@@ -7446,6 +7472,27 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
           }
         }
       },
+      "getRun": {
+        "capability": "missions.read",
+        "tier": "open",
+        "session": "family",
+        "sensitivity": "read",
+        "principals": [
+          "user",
+          "code",
+          "session",
+          "mission",
+          "host"
+        ],
+        "presentation": null,
+        "effect": {
+          "kind": "host-capability",
+          "capability": "missions.read",
+          "resource": {
+            "kind": "receiver-object"
+          }
+        }
+      },
       "proposeDraft": {
         "capability": "missions.edit",
         "tier": "open",
@@ -7497,11 +7544,12 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
       "edit": {
         "capability": "missions.edit",
         "tier": "gated",
-        "session": "codeOnly",
+        "session": "family",
         "sensitivity": "write",
         "principals": [
           "user",
           "code",
+          "session",
           "host"
         ],
         "presentation": {
@@ -7544,11 +7592,12 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
       "runNow": {
         "capability": "missions.run",
         "tier": "gated",
-        "session": "codeOnly",
+        "session": "family",
         "sensitivity": "write",
         "principals": [
           "user",
           "code",
+          "session",
           "host"
         ],
         "presentation": {
@@ -7572,11 +7621,12 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
       "pause": {
         "capability": "missions.pause",
         "tier": "gated",
-        "session": "codeOnly",
+        "session": "family",
         "sensitivity": "write",
         "principals": [
           "user",
           "code",
+          "session",
           "host"
         ],
         "presentation": {
@@ -7600,11 +7650,12 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
       "resume": {
         "capability": "missions.pause",
         "tier": "gated",
-        "session": "codeOnly",
+        "session": "family",
         "sensitivity": "write",
         "principals": [
           "user",
           "code",
+          "session",
           "host"
         ],
         "presentation": {
@@ -7628,11 +7679,12 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
       "retire": {
         "capability": "missions.retire",
         "tier": "critical",
-        "session": "codeOnly",
+        "session": "family",
         "sensitivity": "destructive",
         "principals": [
           "user",
           "code",
+          "session",
           "host"
         ],
         "presentation": {

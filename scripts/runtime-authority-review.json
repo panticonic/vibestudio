@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "censusDigest": "sha256:7c6adff2cf1d28edba335552b2a1a6845851048c395a53d021921e8ddd5a294c",
+  "censusDigest": "sha256:3f143f1241c99274e8074715b2e761f7ebafef32fcae481633cccc50fe5857ee",
   "decisions": {
     "host:view.getBrowserPageIdentity": {
       "review": "exact-native-browser-page-identity-read",
@@ -169,6 +169,34 @@
     "host:hubControl.routeWorkspace": {
       "review": "read-only-exact-workspace-routing",
       "change": "Narrows exact workspace route discovery from write sensitivity to read sensitivity. The method returns only the selected child's reach and performs no registration or lifecycle mutation."
+    },
+    "direct:packages/builtin/src/missions/MissionsDO.ts:getRun": {
+      "review": "owner-scoped-exact-automation-tick-read",
+      "change": "Adds an open read of one exact automation run for authenticated users and their agents. MissionsDO derives the caller's owner scope, returns only a bounded ledger record with status, conversation coordinates, final message or error, and exposes no eval source, credentials, authority mutation, or cross-owner run discovery."
+    },
+    "direct:packages/builtin/src/missions/MissionsDO.ts:edit": {
+      "review": "agent-requestable-inert-automation-revision",
+      "change": "Allows an authenticated agent session to request edits through the existing gated missions.edit decision. The receiver resolves the owner-scoped mission, suspends its reviewed closure, increments and digests the complete charter and authority revision, clears scheduling, and leaves the result inert until a human reviews the exact new closure."
+    },
+    "direct:packages/builtin/src/missions/MissionsDO.ts:runNow": {
+      "review": "agent-requestable-reviewed-automation-run",
+      "change": "Allows an authenticated agent session to request one manual tick through the existing gated missions.run decision. The receiver accepts only an active mission with a digest-consistent reviewed closure, binds one non-overlapping run session to that exact subject, and does not let the caller replace the charter, target, code, prompt, or standing authority."
+    },
+    "direct:packages/builtin/src/missions/MissionsDO.ts:pause": {
+      "review": "agent-requestable-reviewed-automation-suspension",
+      "change": "Allows an authenticated agent session to request pause through the existing gated missions.pause decision. The receiver requires the caller's active owner-scoped mission, suspends its exact reviewed-closure subject, and clears its next scheduled tick without editing or replacing the reviewed charter."
+    },
+    "direct:packages/builtin/src/missions/MissionsDO.ts:resume": {
+      "review": "agent-requestable-unchanged-automation-resume",
+      "change": "Allows an authenticated agent session to request resume through the existing gated missions.pause decision. The receiver admits only a paused owner-scoped mission whose recomputed complete closure digest still equals the reviewed digest, reactivates that same closure, and derives the next tick from its reviewed cadence."
+    },
+    "direct:packages/builtin/src/missions/MissionsDO.ts:retire": {
+      "review": "agent-requestable-confirmed-automation-retirement",
+      "change": "Allows an authenticated agent session to request permanent retirement through the critical missions.retire decision, which retains fresh user confirmation. The receiver retires the exact reviewed-closure subject when present, marks only the owner-scoped mission retired, and clears future scheduling without deleting its run ledger or conversation history."
+    },
+    "direct:workspace/packages/agentic-do/src/agent-vessel.ts:runAutomationEval": {
+      "review": "reviewed-model-free-agent-eval-ingress",
+      "change": "Adds the code-and-host orchestration ingress that journals one exact automation eval as an ordinary visible tool invocation in the addressed AgentDO. The caller must reach that exact runtime target; execution uses only the agent's existing EvalDO, identity, tool exposure, and pregranted authority, while durable mission provenance and the recorded executor bind terminal settlement to the originating run."
     },
     "direct:packages/builtin/src/eval-engine/EvalDO.ts:appendAuthorityEvent": {
       "review": "host-only-eval-authority-event-ingress",

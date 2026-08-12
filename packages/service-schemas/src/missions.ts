@@ -31,6 +31,23 @@ const missionToolExposureSchema = z
     declaredOrigins: z.array(z.string().max(2_048)).max(64),
   })
   .strict();
+const missionAgentActionSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("prompt"), text: z.string().min(1).max(24_000) }).strict(),
+  z
+    .object({
+      kind: z.literal("eval"),
+      code: z.string().min(1).max(96_000),
+      syntax: z.enum(["javascript", "typescript", "jsx", "tsx"]).optional(),
+      timeoutMs: z
+        .number()
+        .int()
+        .positive()
+        .max(24 * 60 * 60 * 1_000)
+        .optional(),
+      reset: z.boolean().optional(),
+    })
+    .strict(),
+]);
 const missionExecutionSchema = z.discriminatedUnion("kind", [
   z
     .object({
@@ -44,7 +61,7 @@ const missionExecutionSchema = z.discriminatedUnion("kind", [
     .object({
       kind: z.literal("agent"),
       target: missionTargetSchema,
-      prompt: z.string().min(1).max(24_000),
+      action: missionAgentActionSchema,
       conversation: z.discriminatedUnion("mode", [
         z
           .object({
@@ -106,6 +123,7 @@ export const missionRecordSchema = z
     revisionDigest: hex64,
     createdAt: z.number().int().nonnegative(),
     updatedAt: z.number().int().nonnegative(),
+    activatedAt: z.number().int().nonnegative().optional(),
     seeded: z.boolean().optional(),
     permissions: z.array(missionPermissionSchema),
     standingRestrictions: z.array(missionStandingRestrictionSchema),
@@ -211,6 +229,9 @@ const READERS: ServiceAuthorityPolicy = {
   principals: ["user", "code", "session", "mission", "host"],
 };
 const USER_CODE_HOST: ServiceAuthorityPolicy = { principals: ["user", "code", "host"] };
+const USER_SESSION_CODE_HOST: ServiceAuthorityPolicy = {
+  principals: ["user", "code", "session", "host"],
+};
 const AGENT_PROPOSAL: ServiceAuthorityPolicy = {
   principals: ["user", "code", "session", "mission"],
 };
@@ -287,6 +308,22 @@ export const missionsMethods = defineServiceMethods({
     authority: READERS,
     access: { sensitivity: "read" },
   },
+  getRun: {
+    capability: "missions.read",
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "identity",
+      family: "mission.read",
+      rationale: "Authenticated users and their agents inspect one exact automation tick",
+    },
+    description: "Read one exact automation run with its conversation, result, and error.",
+    args: z.tuple([z.string()]),
+    returns: missionRunRecordSchema.nullable(),
+    authority: READERS,
+    access: { sensitivity: "read" },
+    agentFacing: true,
+  },
   proposeDraft: {
     capability: "missions.edit",
     tier: {
@@ -331,7 +368,7 @@ export const missionsMethods = defineServiceMethods({
     capability: "missions.edit",
     tier: {
       tier: "gated",
-      session: "codeOnly",
+      session: "family",
       residency: "identity",
       family: "mission.mutate",
       rationale: "Automation edits lapse the reviewed closure",
@@ -356,9 +393,9 @@ export const missionsMethods = defineServiceMethods({
         .strict(),
     ]),
     returns: missionRecordSchema,
-    authority: USER_CODE_HOST,
+    authority: USER_SESSION_CODE_HOST,
     access: { sensitivity: "write" },
-    agentFacing: false,
+    agentFacing: true,
   },
   requestReview: {
     capability: "missions.review",
@@ -380,7 +417,7 @@ export const missionsMethods = defineServiceMethods({
     capability: "missions.run",
     tier: {
       tier: "gated",
-      session: "codeOnly",
+      session: "family",
       residency: "grant-authority",
       family: "mission.control",
       rationale: "A manual run executes the already reviewed closure",
@@ -395,9 +432,9 @@ export const missionsMethods = defineServiceMethods({
     description: "Start one manual run of an active automation.",
     args: z.tuple([z.string()]),
     returns: missionRunRecordSchema,
-    authority: USER_CODE_HOST,
+    authority: USER_SESSION_CODE_HOST,
     access: { sensitivity: "write" },
-    agentFacing: false,
+    agentFacing: true,
   },
   pause: lifecycleMethod("Pause", "pause", "missions.pause"),
   resume: lifecycleMethod("Resume", "resume", "missions.pause"),
@@ -405,7 +442,7 @@ export const missionsMethods = defineServiceMethods({
     capability: "missions.retire",
     tier: {
       tier: "critical",
-      session: "codeOnly",
+      session: "family",
       residency: "grant-authority",
       family: "mission.retire",
       rationale: "Retirement permanently ends the automation identity",
@@ -420,9 +457,9 @@ export const missionsMethods = defineServiceMethods({
     description: "Retire an automation permanently.",
     args: z.tuple([z.string()]),
     returns: missionRecordSchema,
-    authority: USER_CODE_HOST,
+    authority: USER_SESSION_CODE_HOST,
     access: { sensitivity: "destructive" },
-    agentFacing: false,
+    agentFacing: true,
   },
   finishRun: {
     capability: "missions.run",
@@ -481,10 +518,10 @@ function lifecycleMethod(title: string, action: string, capability: string) {
     capability,
     tier: {
       tier: "gated" as const,
-      session: "codeOnly" as const,
+      session: "family" as const,
       residency: "grant-authority" as const,
       family: "mission.control",
-      rationale: `${title} is a human automation governance action`,
+      rationale: `${title} changes scheduling state without changing the reviewed closure`,
     },
     presentation: {
       title: `${title} an automation`,
@@ -496,8 +533,8 @@ function lifecycleMethod(title: string, action: string, capability: string) {
     description: `${title} an automation without changing its reviewed charter.`,
     args: z.tuple([z.string()]),
     returns: missionRecordSchema,
-    authority: USER_CODE_HOST,
+    authority: USER_SESSION_CODE_HOST,
     access: { sensitivity: "write" as const },
-    agentFacing: false,
+    agentFacing: true,
   };
 }

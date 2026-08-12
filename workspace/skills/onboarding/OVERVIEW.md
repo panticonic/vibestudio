@@ -67,25 +67,29 @@ The chat panel hosts an AI agent that can:
 - **Tune its own model defaults** — the host chat agent's provider, effort, approval, and chattiness are configurable
 - **Import browser data** — cookies, passwords, bookmarks, history
 - **Automate browsers** via Playwright-style CDP automation (`handle.cdp.page()`)
-- **Schedule recurring work** — run a reviewed worker method or agent prompt on
-  a cadence, then inspect durable history, linked conversations, final messages,
-  and errors in Automations
+- **Schedule recurring work** — run a reviewed worker method, exact inline eval,
+  or agent prompt on a cadence, then inspect and control every durable tick from
+  its chat-history pill or Automations
 - **Use private eval SQLite for scratch work**, call DO-backed app databases,
   call AI models, manage workers
 
 ### Automations
 
-Automations are reviewed recurring tasks. A deterministic script runs as a
-method on an exact Durable Object build; agent work sends a prompt through the
-ordinary turn loop, either in a fresh conversation for every run or in one
-specific continuing conversation. Agents can prepare inert drafts, but only the
-user activates them after reviewing the exact target, schedule, reach, and
-standing authority.
+Automations are reviewed recurring tasks. A reusable deterministic job runs as
+a method on an exact Durable Object build. A smaller exact script can run inline
+in an existing agent's channel-bound EvalDO without publishing a new worker;
+agent work can instead send a prompt through the ordinary turn loop. Both agent
+actions use either a fresh conversation for every run or one specific
+continuing conversation. Agents can prepare and edit inert drafts and control
+reviewed runs, but only the user activates a revision after reviewing the exact
+target, schedule, reach, and standing authority.
 
 The **Automations** panel is both the review and supervision surface. It
 highlights active runs, drafts awaiting review, and recent failures; provides
 search, filters, and paged run history; shows each run's final message or error;
-and links agent runs to their exact conversations.
+and links agent runs to their exact conversations. The same definition/tick
+inspector appears on first-class scheduled-activity pills in chat history, with
+lazy detail loading plus edit and stop/resume controls.
 
 ### Workers (Workerd)
 

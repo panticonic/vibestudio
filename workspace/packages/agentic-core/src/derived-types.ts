@@ -197,6 +197,28 @@ export interface DiagnosticNotice {
   retryAfterMs?: number;
 }
 
+export interface AutomationActivitySnapshot {
+  missionId: string;
+  runId: string;
+  name: string;
+  revision: number;
+  action: "prompt" | "eval" | "method";
+  trigger: "manual" | "scheduled";
+  startedAt: number;
+  createdAt: number;
+  activatedAt?: number;
+  schedule: { everyMs: number; anchorAt?: number; jitterMs?: number } | null;
+}
+
+export interface AutomationActivityPayload {
+  snapshot: AutomationActivitySnapshot;
+  status: "running" | "succeeded" | "failed" | "skipped";
+  openedAt: string;
+  closedAt?: string;
+  summary?: string;
+  reason?: string;
+}
+
 // ===========================================================================
 // ChatMessage (derived from Pi AgentMessage for component rendering)
 // ===========================================================================
@@ -256,6 +278,8 @@ export interface ChatMessage {
   credentialRequest?: CredentialRequestCardPayload;
   lifecycle?: LifecycleNotice;
   diagnostic?: DiagnosticNotice;
+  /** First-class reviewed automation tick projected from durable turn metadata. */
+  automation?: AutomationActivityPayload;
   /**
    * Per-recipient delivery state for this message, resolved against the
    * intended-recipient snapshot plus the received/read ack maps. Present when

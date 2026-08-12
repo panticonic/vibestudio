@@ -13,6 +13,7 @@
 import type {
   ActionBarPayload,
   ApprovalCardPayload,
+  AutomationActivitySnapshot,
   ChatMessage,
   CustomMessageCardPayload,
   DiagnosticNotice,
@@ -85,6 +86,7 @@ export function chatMessagesFromChannelView(state: ChannelViewState): ChatMessag
   // the agent emits a message bubble. It sorts to the bottom (by turn.updatedAt), beneath the stream.
   const turns = Object.values(state.turns).flatMap(projectedTurnToTypingMessage);
   const waitingTurns = Object.values(state.turns).flatMap(projectedWaitingTurnMessage);
+  const automationTurns = Object.values(state.turns).flatMap(projectedAutomationTurnMessage);
   const silentClosedTurns = Object.values(state.turns).flatMap((turn) =>
     projectedClosedTurnWithoutResponseMessage(turn, {
       hasAssistantMessage:
@@ -159,6 +161,7 @@ export function chatMessagesFromChannelView(state: ChannelViewState): ChatMessag
     ...approvals,
     ...turns,
     ...waitingTurns,
+    ...automationTurns,
     ...silentClosedTurns,
     ...inlineUi,
     ...custom,
@@ -285,6 +288,64 @@ function projectedTurnToTypingMessage(turn: ProjectedTurn): ChatMessage[] {
       sortTime: Date.parse(turn.updatedAt ?? turn.openedAt) || 0,
     } as ChatMessage & { sortTime: number },
   ];
+}
+
+function projectedAutomationTurnMessage(turn: ProjectedTurn): ChatMessage[] {
+  const automation = automationSnapshot(turn.metadata?.["automation"]);
+  if (!automation) return [];
+  const failed =
+    turn.status === "closed" && Boolean(turn.reason && turn.reason !== "tool_terminated");
+  return [
+    {
+      id: `automation:${automation.runId}`,
+      senderId: turn.actor.id,
+      content: automation.name,
+      contentType: "automation",
+      kind: "system",
+      complete: turn.status === "closed",
+      automation: {
+        snapshot: automation,
+        status: turn.status === "closed" ? (failed ? "failed" : "succeeded") : "running",
+        openedAt: turn.openedAt,
+        ...(turn.closedAt ? { closedAt: turn.closedAt } : {}),
+        ...(turn.summary ? { summary: turn.summary } : {}),
+        ...(turn.reason ? { reason: turn.reason } : {}),
+      },
+      senderMetadata: {
+        name: turn.actor.displayName ?? turn.actor.id,
+        type: turn.actor.kind,
+        handle: turn.actor.id,
+      },
+      sortTime: Date.parse(turn.openedAt) || 0,
+    } as ChatMessage & { sortTime: number },
+  ];
+}
+
+function automationSnapshot(value: unknown): AutomationActivitySnapshot | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const candidate = value as Partial<AutomationActivitySnapshot>;
+  if (
+    typeof candidate.missionId !== "string" ||
+    typeof candidate.runId !== "string" ||
+    typeof candidate.name !== "string" ||
+    typeof candidate.revision !== "number" ||
+    (candidate.action !== "prompt" &&
+      candidate.action !== "eval" &&
+      candidate.action !== "method") ||
+    (candidate.trigger !== "manual" && candidate.trigger !== "scheduled") ||
+    typeof candidate.startedAt !== "number" ||
+    typeof candidate.createdAt !== "number"
+  ) {
+    return null;
+  }
+  if (
+    candidate.schedule !== null &&
+    (typeof candidate.schedule !== "object" ||
+      typeof (candidate.schedule as { everyMs?: unknown }).everyMs !== "number")
+  ) {
+    return null;
+  }
+  return candidate as AutomationActivitySnapshot;
 }
 
 /**

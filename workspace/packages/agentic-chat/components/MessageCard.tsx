@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Badge,
   Box,
@@ -33,6 +33,7 @@ import { AgentDisconnectedMessage } from "./AgentDisconnectedMessage";
 import { CustomMessageCard } from "./CustomMessage";
 import { AckBadge } from "./AckBadge";
 import ModelCredentialRequiredCard from "./ModelCredentialRequiredCard";
+import { AutomationActivity, createAutomationUiClient } from "./AutomationActivity";
 import type {
   BrowserHandoffCaller,
   ChannelParticipantId,
@@ -228,6 +229,14 @@ export const MessageCard = React.memo(function MessageCard({
   const [longContentExpanded, setLongContentExpanded] = useState(false);
   const inputActions = useOptionalChatInputActions();
   const messageActions = useOptionalChatMessageActions();
+  const automationClient = useMemo(() => {
+    if (msg.contentType !== "automation" || !msg.automation) return null;
+    const bridge = chat["rpc"] as
+      | { call?: (target: string, method: string, args: unknown[]) => Promise<unknown> }
+      | undefined;
+    if (typeof bridge?.call !== "function") return null;
+    return createAutomationUiClient(bridge as { call: NonNullable<typeof bridge.call> });
+  }, [chat, msg.automation, msg.contentType]);
   const callMethod = chatCallMethod(chat);
   const sendFromChat = chatSend(chat);
   const providerLevelModelFailure =
@@ -443,6 +452,14 @@ export const MessageCard = React.memo(function MessageCard({
   }
 
   // Handle system messages (e.g., agent disconnection notifications)
+  if (msg.contentType === "automation" && msg.automation && automationClient) {
+    return (
+      <Box key={key} className="message-row message-row-system">
+        <AutomationActivity activity={msg.automation} client={automationClient} />
+      </Box>
+    );
+  }
+
   if (msg.kind === "system" && msg.disconnectedAgent) {
     return (
       <Box key={key} className="message-row message-row-system">

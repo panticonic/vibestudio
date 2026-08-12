@@ -44,7 +44,11 @@ invent a fallback.
 
 **Schedule recurring work** is a ready-now conversation route owned by
 [Automations](../automations/SKILL.md). Read that returned skill, clarify only
-the details needed to choose a method or agent run, and propose an inert draft.
+the details needed to choose a worker method, exact inline agent eval, or agent
+prompt, and propose an inert draft. Small recurring scripts can use the built-in
+agent/EvalDO path without publishing a new codebase. Agents can later edit,
+run, pause, resume, or retire reviewed automations when the user asks; activation
+of a new revision remains a human review action.
 Do not open an empty supervision panel in place of helping, and do not imply the
 draft is scheduled before the user reviews it in Automations.
 

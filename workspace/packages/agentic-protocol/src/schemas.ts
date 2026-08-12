@@ -574,6 +574,7 @@ const turnPayloadSchema = z
     protocol: protocolSchema,
     summary: z.string().optional(),
     reason: z.enum(TURN_REASON_CODES).optional(),
+    metadata: z.record(z.string(), z.unknown()).optional(),
   })
   .strict();
 

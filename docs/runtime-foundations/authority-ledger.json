@@ -4506,11 +4506,12 @@
       "authorityPrincipals": [
         "code",
         "host",
+        "session",
         "user"
       ],
       "sensitivity": "write",
       "tier": "gated",
-      "sessionAdmission": "codeOnly",
+      "sessionAdmission": "family",
       "capability": "missions.edit",
       "authenticatedFacts": [
         "session",
@@ -4532,8 +4533,8 @@
       ],
       "r3aRequirement": "catalog-schema",
       "r3b": {
-        "review": "schema-authority",
-        "change": null
+        "review": "agent-requestable-inert-automation-revision",
+        "change": "Allows an authenticated agent session to request edits through the existing gated missions.edit decision. The receiver resolves the owner-scoped mission, suspends its reviewed closure, increments and digests the complete charter and authority revision, clears scheduling, and leaves the result inert until a human reviews the exact new closure."
       },
       "parityAssertion": "generated-census:direct-authority"
     },
@@ -4623,6 +4624,52 @@
       "r3b": {
         "review": "schema-authority",
         "change": null
+      },
+      "parityAssertion": "generated-census:direct-authority"
+    },
+    {
+      "id": "direct:packages/builtin/src/missions/MissionsDO.ts:getRun",
+      "rpcPlane": "workspace-do",
+      "owner": "packages/builtin/src/missions/MissionsDO.ts",
+      "source": "vibestudio/internal",
+      "method": "getRun",
+      "resourceDerivation": {
+        "kind": "direct-target",
+        "owner": "packages/builtin/src/missions/MissionsDO.ts"
+      },
+      "authorityPrincipals": [
+        "code",
+        "host",
+        "mission",
+        "session",
+        "user"
+      ],
+      "sensitivity": "read",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "capability": "missions.read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user-relay",
+        "runtime-entity",
+        "exact-code-artifact",
+        "owner-chain",
+        "agent-binding",
+        "audience-bound-attestation"
+      ],
+      "currentOutcomes": {
+        "allowed": "schema-declared direct-RPC requirement satisfied",
+        "denied": "missing attested facts or requirement failure is EACCES"
+      },
+      "predicates": [
+        "live-owner-service-relationship",
+        "exact-resource-scope",
+        "next-dispatch-revocation"
+      ],
+      "r3aRequirement": "catalog-schema",
+      "r3b": {
+        "review": "owner-scoped-exact-automation-tick-read",
+        "change": "Adds an open read of one exact automation run for authenticated users and their agents. MissionsDO derives the caller's owner scope, returns only a bounded ledger record with status, conversation coordinates, final message or error, and exposes no eval source, credentials, authority mutation, or cross-owner run discovery."
       },
       "parityAssertion": "generated-census:direct-authority"
     },
@@ -4777,11 +4824,12 @@
       "authorityPrincipals": [
         "code",
         "host",
+        "session",
         "user"
       ],
       "sensitivity": "write",
       "tier": "gated",
-      "sessionAdmission": "codeOnly",
+      "sessionAdmission": "family",
       "capability": "missions.pause",
       "authenticatedFacts": [
         "session",
@@ -4803,8 +4851,8 @@
       ],
       "r3aRequirement": "catalog-schema",
       "r3b": {
-        "review": "schema-authority",
-        "change": null
+        "review": "agent-requestable-reviewed-automation-suspension",
+        "change": "Allows an authenticated agent session to request pause through the existing gated missions.pause decision. The receiver requires the caller's active owner-scoped mission, suspends its exact reviewed-closure subject, and clears its next scheduled tick without editing or replacing the reviewed charter."
       },
       "parityAssertion": "generated-census:direct-authority"
     },
@@ -4952,11 +5000,12 @@
       "authorityPrincipals": [
         "code",
         "host",
+        "session",
         "user"
       ],
       "sensitivity": "write",
       "tier": "gated",
-      "sessionAdmission": "codeOnly",
+      "sessionAdmission": "family",
       "capability": "missions.pause",
       "authenticatedFacts": [
         "session",
@@ -4978,8 +5027,8 @@
       ],
       "r3aRequirement": "catalog-schema",
       "r3b": {
-        "review": "schema-authority",
-        "change": null
+        "review": "agent-requestable-unchanged-automation-resume",
+        "change": "Allows an authenticated agent session to request resume through the existing gated missions.pause decision. The receiver admits only a paused owner-scoped mission whose recomputed complete closure digest still equals the reviewed digest, reactivates that same closure, and derives the next tick from its reviewed cadence."
       },
       "parityAssertion": "generated-census:direct-authority"
     },
@@ -4996,11 +5045,12 @@
       "authorityPrincipals": [
         "code",
         "host",
+        "session",
         "user"
       ],
       "sensitivity": "destructive",
       "tier": "critical",
-      "sessionAdmission": "codeOnly",
+      "sessionAdmission": "family",
       "capability": "missions.retire",
       "authenticatedFacts": [
         "session",
@@ -5022,8 +5072,8 @@
       ],
       "r3aRequirement": "catalog-schema",
       "r3b": {
-        "review": "schema-authority",
-        "change": null
+        "review": "agent-requestable-confirmed-automation-retirement",
+        "change": "Allows an authenticated agent session to request permanent retirement through the critical missions.retire decision, which retains fresh user confirmation. The receiver retires the exact reviewed-closure subject when present, marks only the owner-scoped mission retired, and clears future scheduling without deleting its run ledger or conversation history."
       },
       "parityAssertion": "generated-census:direct-authority"
     },
@@ -5040,11 +5090,12 @@
       "authorityPrincipals": [
         "code",
         "host",
+        "session",
         "user"
       ],
       "sensitivity": "write",
       "tier": "gated",
-      "sessionAdmission": "codeOnly",
+      "sessionAdmission": "family",
       "capability": "missions.run",
       "authenticatedFacts": [
         "session",
@@ -5066,8 +5117,8 @@
       ],
       "r3aRequirement": "catalog-schema",
       "r3b": {
-        "review": "schema-authority",
-        "change": null
+        "review": "agent-requestable-reviewed-automation-run",
+        "change": "Allows an authenticated agent session to request one manual tick through the existing gated missions.run decision. The receiver accepts only an active mission with a digest-consistent reviewed closure, binds one non-overlapping run session to that exact subject, and does not let the caller replace the charter, target, code, prompt, or standing authority."
       },
       "parityAssertion": "generated-census:direct-authority"
     },
@@ -9094,6 +9145,48 @@
       "r3b": {
         "review": "unchanged-parity",
         "change": null
+      },
+      "parityAssertion": "generated-census:direct-authority"
+    },
+    {
+      "id": "direct:workspace/packages/agentic-do/src/agent-vessel.ts:runAutomationEval",
+      "rpcPlane": "workspace-do",
+      "owner": "workspace/packages/agentic-do/src/agent-vessel.ts",
+      "source": "packages/agentic-do",
+      "method": "runAutomationEval",
+      "resourceDerivation": {
+        "kind": "direct-target",
+        "owner": "workspace/packages/agentic-do/src/agent-vessel.ts"
+      },
+      "authorityPrincipals": [
+        "code",
+        "host"
+      ],
+      "sensitivity": "write",
+      "tier": "open",
+      "capability": "rpc:runAutomationEval",
+      "authenticatedFacts": [
+        "session",
+        "acting-user-relay",
+        "runtime-entity",
+        "exact-code-artifact",
+        "owner-chain",
+        "agent-binding",
+        "audience-bound-delegation"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared direct-RPC scenarios retain their current behavior",
+        "denied": "missing attested facts or requirement failure is EACCES"
+      },
+      "predicates": [
+        "live-owner-service-relationship",
+        "exact-resource-scope",
+        "next-dispatch-revocation"
+      ],
+      "r3aRequirement": "anyOf(capability(host,rpc:runAutomationEval),allOf(capability(code,rpc:runAutomationEval),workspace-member))",
+      "r3b": {
+        "review": "reviewed-model-free-agent-eval-ingress",
+        "change": "Adds the code-and-host orchestration ingress that journals one exact automation eval as an ordinary visible tool invocation in the addressed AgentDO. The caller must reach that exact runtime target; execution uses only the agent's existing EvalDO, identity, tool exposure, and pregranted authority, while durable mission provenance and the recorded executor bind terminal settlement to the originating run."
       },
       "parityAssertion": "generated-census:direct-authority"
     },

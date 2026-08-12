@@ -455,6 +455,13 @@ export function reduceChannelView(
       const existing = existingTurn;
       const summary = "summary" in event.payload ? event.payload.summary : existing?.summary;
       const reason = "reason" in event.payload ? event.payload.reason : existing?.reason;
+      const metadata =
+        "metadata" in event.payload &&
+        event.payload.metadata &&
+        typeof event.payload.metadata === "object" &&
+        !Array.isArray(event.payload.metadata)
+          ? (event.payload.metadata as Record<string, unknown>)
+          : existing?.metadata;
       next = {
         ...next,
         turns: {
@@ -474,6 +481,7 @@ export function reduceChannelView(
             lastSeq: parsed.seq,
             ...(summary ? { summary } : {}),
             ...(reason ? { reason } : {}),
+            ...(metadata ? { metadata } : {}),
           },
         },
       };

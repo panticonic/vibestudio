@@ -284,7 +284,7 @@ export const onboardingCatalog: readonly OnboardingCapabilityDefinition[] = [
   {
     id: "capability.automations",
     title: "Schedule recurring work",
-    summary: "Run reviewed scripts or agent prompts on a schedule and supervise every run.",
+    summary: "Run reviewed inline evals, worker methods, or agent prompts and inspect every tick.",
     category: "ready-now",
     role: "ready-capability",
     scope: "workspace",
@@ -294,6 +294,7 @@ export const onboardingCatalog: readonly OnboardingCapabilityDefinition[] = [
     visibility: "primary",
     examples: [
       "Run a reporting script every morning",
+      "Run exact eval code as this agent without publishing a worker",
       "Ask a fresh agent to review project changes each week",
       "Revisit one ongoing agent conversation on a schedule",
     ],

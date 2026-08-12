@@ -14,7 +14,7 @@ function charter(overrides: Partial<MissionToolExposure> = {}): MissionCharter {
     execution: {
       kind: "agent",
       target: { source: "workers/agent", className: "Agent", objectKey: "agent" },
-      prompt: "task",
+      action: { kind: "prompt", text: "task" },
       conversation: { mode: "fresh" },
       toolExposure: {
         services: ["docs.*", "runtime.describe"],

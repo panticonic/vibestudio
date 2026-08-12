@@ -307,6 +307,73 @@ function deferred<T>() {
 }
 
 describe("AgentLoopDriver", () => {
+  it("journals a model-free automation eval as one visible invocation and closes from its result", async () => {
+    const closed: Parameters<NonNullable<DriverDeps["onTurnClosed"]>>[0][] = [];
+    const observed: EffectDescriptor[] = [];
+    const harness = await makeHarness({
+      script: {
+        model: [],
+        tool: [{ kind: "tool", result: "eval completed", isError: false }],
+      },
+      onTurnClosed: (input) => {
+        closed.push(input);
+      },
+      executorOverride: (descriptor) => {
+        observed.push(descriptor);
+        return null;
+      },
+    });
+
+    await harness.driver.handleIncoming(CHANNEL, {
+      type: "command",
+      command: {
+        kind: "invoke",
+        channelId: CHANNEL,
+        source: { envelopeId: "automation:run-eval" },
+        tool: "eval",
+        args: { code: "return 42", authority: { approvals: "pregranted-only" } },
+        metadata: {
+          origin: "scheduled",
+          completion: "after-invocation",
+          automation: {
+            missionId: "mission-eval",
+            runId: "run-eval",
+            name: "Daily check",
+            revision: 1,
+            action: "eval",
+            trigger: "scheduled",
+            startedAt: 10,
+            createdAt: 1,
+            schedule: { everyMs: 86_400_000 },
+          },
+        },
+      },
+    });
+    await settle(harness.driver);
+
+    expect(observed.map((descriptor) => descriptor.kind)).toEqual(["local_tool"]);
+    expect(observed[0]).toMatchObject({
+      kind: "local_tool",
+      tool: "eval",
+      args: { code: "return 42", authority: { approvals: "pregranted-only" } },
+    });
+    expect(await logKinds(harness.gad)).toEqual([
+      "turn.opened",
+      "message.completed",
+      "invocation.started",
+      "invocation.completed",
+      "turn.closed",
+    ]);
+    expect(closed).toEqual([
+      expect.objectContaining({
+        summary: "eval completed",
+        metadata: expect.objectContaining({
+          automation: expect.objectContaining({ runId: "run-eval", action: "eval" }),
+        }),
+      }),
+    ]);
+  });
+
   it("reports only the exact automation turn's final assistant message", async () => {
     const closed: Parameters<NonNullable<DriverDeps["onTurnClosed"]>>[0][] = [];
     let attempt = 0;
@@ -332,7 +399,17 @@ describe("AgentLoopDriver", () => {
       CHANNEL,
       promptIncoming("automation-one", "first", {
         origin: "scheduled",
-        automationRunId: "run-one",
+        automation: {
+          missionId: "mission-one",
+          runId: "run-one",
+          name: "One",
+          revision: 1,
+          action: "prompt",
+          trigger: "scheduled",
+          startedAt: 1,
+          createdAt: 1,
+          schedule: { everyMs: 60_000 },
+        },
       })
     );
     await settle(harness.driver);
@@ -340,18 +417,32 @@ describe("AgentLoopDriver", () => {
       CHANNEL,
       promptIncoming("automation-two", "second", {
         origin: "scheduled",
-        automationRunId: "run-two",
+        automation: {
+          missionId: "mission-two",
+          runId: "run-two",
+          name: "Two",
+          revision: 1,
+          action: "prompt",
+          trigger: "scheduled",
+          startedAt: 2,
+          createdAt: 1,
+          schedule: { everyMs: 60_000 },
+        },
       })
     );
     await settle(harness.driver);
 
     expect(closed).toEqual([
       expect.objectContaining({
-        metadata: expect.objectContaining({ automationRunId: "run-one" }),
+        metadata: expect.objectContaining({
+          automation: expect.objectContaining({ runId: "run-one" }),
+        }),
         finalMessage: "first run complete",
       }),
       expect.objectContaining({
-        metadata: expect.objectContaining({ automationRunId: "run-two" }),
+        metadata: expect.objectContaining({
+          automation: expect.objectContaining({ runId: "run-two" }),
+        }),
         reason: "work_failed",
       }),
     ]);

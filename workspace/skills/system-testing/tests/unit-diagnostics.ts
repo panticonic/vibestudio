@@ -85,6 +85,65 @@ function isExactAutomationCounts(value: unknown): boolean {
   );
 }
 
+function automationInlineEvalDraftChecked(result: Parameters<typeof noIncompleteInvocations>[0]) {
+  const draft = successfulEvalReturnValues(result).find(isDailyProjectPulseDraft);
+  if (!draft) {
+    return {
+      passed: false,
+      reason: "No successful eval returned the requested inert inline-eval automation draft",
+    };
+  }
+  const code = successfulEvalCode(result);
+  if (/\b(?:requestReview|runNow)\b/u.test(code)) {
+    return {
+      passed: false,
+      reason: "The automation draft scenario attempted to activate or run the automation",
+    };
+  }
+  const final = findLastAgentMessage(result);
+  if (!/review/iu.test(final) || !/(?:draft|inert|waiting)/iu.test(final)) {
+    return {
+      passed: false,
+      reason: "Final response did not explain that the automation remains inert pending review",
+    };
+  }
+  return noIncompleteInvocations(result);
+}
+
+function isDailyProjectPulseDraft(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  const charter = record["charter"];
+  if (!charter || typeof charter !== "object" || Array.isArray(charter)) return false;
+  const charterRecord = charter as Record<string, unknown>;
+  const trigger = charterRecord["trigger"] as Record<string, unknown> | undefined;
+  const execution = charterRecord["execution"] as Record<string, unknown> | undefined;
+  const target = execution?.["target"] as Record<string, unknown> | undefined;
+  const action = execution?.["action"] as Record<string, unknown> | undefined;
+  const conversation = execution?.["conversation"] as Record<string, unknown> | undefined;
+  const exposure = execution?.["toolExposure"] as Record<string, unknown> | undefined;
+  const source = action?.["code"];
+  return (
+    record["name"] === "Daily project pulse" &&
+    record["state"] === "draft" &&
+    trigger?.["kind"] === "schedule" &&
+    trigger["everyMs"] === 86_400_000 &&
+    execution?.["kind"] === "agent" &&
+    target?.["source"] === "workers/agent-worker" &&
+    target["className"] === "AiChatWorker" &&
+    action?.["kind"] === "eval" &&
+    typeof source === "string" &&
+    /services\.vcs\.status/u.test(source) &&
+    /chat\.publish/u.test(source) &&
+    conversation?.["mode"] === "fresh" &&
+    exposure?.["evalNetwork"] === "none" &&
+    Array.isArray(exposure["services"]) &&
+    exposure["services"].includes("vcs.status") &&
+    Array.isArray(record["permissions"]) &&
+    record["permissions"].length === 0
+  );
+}
+
 export const unitDiagnosticsTests: TestCase[] = [
   {
     name: "unit-list-inspect",
@@ -146,5 +205,28 @@ export const unitDiagnosticsTests: TestCase[] = [
       ],
     },
     validate: automationInspectionChecked,
+  },
+  {
+    name: "automation-inline-eval-draft",
+    description: "Agent proposes a reviewed recurring inline eval without publishing a worker",
+    category: "unit-diagnostics",
+    prompt:
+      "Please set up a daily automation named ‘Daily project pulse’. It should use a lightweight inline script—not a new code project or a model call—to inspect current project status and publish a concise status event into that run's conversation. Keep it offline, isolate each run in a fresh conversation, and leave it waiting for me to review rather than activating or running it.",
+    authorityPolicy: {
+      authority: [
+        {
+          ruleId: "propose-automation-draft",
+          capability: { kind: "exact", key: "workspace-service:missions" },
+          resource: {
+            kind: "prefix",
+            prefix: "do:vibestudio/internal:MissionsDO:",
+          },
+          tier: "gated",
+          decision: "once",
+        },
+      ],
+    },
+    validation: "agent-evidence",
+    validate: automationInlineEvalDraftChecked,
   },
 ];

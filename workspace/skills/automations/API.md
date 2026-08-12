@@ -25,7 +25,15 @@ type Charter = {
     | {
         kind: "agent";
         target: { source: string; className: string; objectKey: string };
-        prompt: string;
+        action:
+          | { kind: "prompt"; text: string }
+          | {
+              kind: "eval";
+              code: string;
+              syntax?: "javascript" | "typescript" | "jsx" | "tsx";
+              timeoutMs?: number;
+              reset?: boolean;
+            };
         conversation:
           | { mode: "fresh" }
           | { mode: "continue"; channelId: string; contextId: string };
@@ -50,9 +58,19 @@ type Charter = {
 ```
 
 The harness unit must equal the execution target source. Every behavior-bearing
-field participates in the reviewed closure digest. For a periodic script, the
-script's entry point is the method target above; arbitrary shell commands and
-source snippets are not stored in the charter.
+field participates in the reviewed closure digest. `agent/eval` stores exact
+inline EvalDO source in that closure and is the happy path for a small script
+that should run as an existing agent/channel participant. It deliberately does
+not accept a mutable context-file path or npm import map. Use ambient runtime
+bindings and automatically resolved workspace APIs; move a multi-file or
+dependency-heavy job into a reviewed method worker.
+
+The eval action is model-free. AgentDO journals `message.completed` with the
+tool call, `invocation.started`, the terminal eval result, and `turn.closed` in
+the ordinary channel trajectory. EvalDO receives `approvals:
+"pregranted-only"`; the run cannot stall on an unattended approval card. Code
+may use ambient `chat` to publish typed/custom messages with the agent's
+identity. The mission service remains the only schedule and run-ledger owner.
 
 ## Methods
 
@@ -62,6 +80,7 @@ source snippets are not stored in the charter.
 | `list`          | none                                                    | all visible definitions                                    | definition tooling                          |
 | `get`           | `missionId`                                             | definition or `null`                                       | addressed inspection                        |
 | `listRuns`      | `missionId`, `{ limit?, cursor? }`                      | `{ items, nextCursor? }`                                   | paged historical ledger                     |
+| `getRun`        | `runId`                                                 | exact run or `null`                                        | chat tick inspection                        |
 | `proposeDraft`  | `{ name, charter, permissions, standingRestrictions? }` | inert draft                                                | agent proposals                             |
 | `createDraft`   | same as `proposeDraft`                                  | inert draft                                                | trusted user/code tooling                   |
 | `edit`          | `missionId`, changed fields                             | new inert revision                                         | behavior changes                            |
@@ -79,6 +98,11 @@ summaries on the server. Pass its exact `nextCursor` to fetch another page.
 
 `listRuns` defaults to 20 and accepts at most 100. Pass the exact
 `nextCursor` returned by the preceding page.
+
+Ordinary agent sessions can discover and call `edit`, `runNow`, `pause`,
+`resume`, and `retire` through the live service catalog, subject to their normal
+gated/critical authority. `requestReview` is intentionally not agent-facing;
+only a human review surface may activate a draft or edited revision.
 
 ## Run record
 
@@ -103,3 +127,9 @@ returns or throws. Stored final messages and errors are bounded; full agent
 detail remains in the linked conversation. `channelId` and `contextId` are the
 canonical deep-link identity for that conversation; do not derive a link from
 names or run order.
+
+Mission records also include `activatedAt` after first human activation. Chat
+turn metadata carries a bounded immutable tick snapshot—mission/run ids, name,
+revision, action, trigger, schedule, creation/activation times—so collapsed
+history pills render without network reads. Opening a pill lazily calls `get`
+and `getRun` for current controls and full bounded details.

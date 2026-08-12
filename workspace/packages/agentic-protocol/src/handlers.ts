@@ -177,6 +177,7 @@ export interface ProjectedTurn {
   updatedAt?: string;
   summary?: string;
   reason?: string;
+  metadata?: Record<string, unknown>;
   /** Highest envelope seq applied to this turn's status — the monotonicity guard
    *  that stops an out-of-order/replayed event from resurrecting a closed turn. */
   lastSeq?: number;

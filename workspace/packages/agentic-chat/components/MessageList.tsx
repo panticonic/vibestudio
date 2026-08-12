@@ -66,6 +66,7 @@ function messageSignature(msg: ChatMessage): string {
     msg.retracted ? "1" : "0",
     msg.revision ?? "",
     msg.editedAt ?? "",
+    msg.automation ? JSON.stringify(msg.automation) : "",
     customUpdatedAt,
   ].join("\u001f");
 }

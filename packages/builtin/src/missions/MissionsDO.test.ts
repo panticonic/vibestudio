@@ -1,11 +1,80 @@
 import { describe, expect, it } from "vitest";
-import { DURABLE_OBJECT_FRAMEWORK_RPC_METHODS } from "@vibestudio/durable";
+import { createHash } from "node:crypto";
+import {
+  DURABLE_OBJECT_FRAMEWORK_RPC_METHODS,
+  DurableObjectBase,
+  type DurableObjectContext,
+} from "@vibestudio/durable";
 import { createTestDO } from "@vibestudio/durable/test-utils";
 import { rpcExposedMethodNames } from "@vibestudio/rpc";
 import { missionsMethods } from "@vibestudio/service-schemas/missions";
 import type { MissionCharter, MissionRecord } from "@vibestudio/shared/authority/mission";
 import type { ReviewedExecutionClosureBody } from "@vibestudio/shared/authority/reviewedExecutionClosure";
+import { canonicalJson } from "@vibestudio/shared/canonicalJson";
 import { MissionsDO } from "./MissionsDO.js";
+
+class LegacyMissionsV2DO extends DurableObjectBase {
+  static override schemaVersion = 2;
+
+  protected override schemaProductionBaseline() {
+    return { version: 2, name: "automations-v2" } as const;
+  }
+
+  constructor(ctx: DurableObjectContext, env: unknown) {
+    super(ctx, env);
+  }
+
+  protected createTables(): void {
+    this.sql.exec(`CREATE TABLE missions (
+      mission_id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      revision INTEGER NOT NULL CHECK (revision > 0),
+      charter_json TEXT NOT NULL,
+      permissions_json TEXT NOT NULL,
+      standing_restrictions_json TEXT NOT NULL,
+      owner_user_id TEXT NOT NULL,
+      owner_device_id TEXT NOT NULL,
+      state TEXT NOT NULL CHECK (state IN ('draft','active','needs-reapproval','paused','retired')),
+      revision_digest TEXT NOT NULL,
+      active_closure_digest TEXT,
+      seeded INTEGER NOT NULL CHECK (seeded IN (0,1)),
+      schedule_origin_at INTEGER,
+      next_run_at INTEGER,
+      last_run_at INTEGER,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    )`);
+    this.sql.exec(`CREATE TABLE mission_revisions (
+      mission_id TEXT NOT NULL,
+      revision INTEGER NOT NULL,
+      record_json TEXT NOT NULL,
+      recorded_at INTEGER NOT NULL,
+      PRIMARY KEY (mission_id, revision)
+    )`);
+    this.sql.exec(`CREATE TABLE mission_runs (
+      run_id TEXT PRIMARY KEY,
+      mission_id TEXT NOT NULL,
+      closure_digest TEXT NOT NULL,
+      trigger_kind TEXT NOT NULL CHECK (trigger_kind IN ('manual','scheduled')),
+      status TEXT NOT NULL CHECK (status IN ('starting','running','succeeded','failed','skipped')),
+      started_at INTEGER NOT NULL,
+      finished_at INTEGER,
+      session_id TEXT,
+      channel_id TEXT,
+      context_id TEXT,
+      executor_id TEXT,
+      final_message TEXT,
+      error TEXT
+    )`);
+    this.sql.exec(
+      `CREATE INDEX mission_runs_by_mission ON mission_runs(mission_id, started_at DESC)`
+    );
+  }
+
+  protected override requiredTables(): readonly string[] {
+    return ["missions", "mission_revisions", "mission_runs"];
+  }
+}
 
 const charter = (): MissionCharter => ({
   summary: "Prepare a daily summary",
@@ -13,7 +82,7 @@ const charter = (): MissionCharter => ({
   execution: {
     kind: "agent",
     target: { source: "workers/summary", className: "SummaryAgent", objectKey: "daily" },
-    prompt: "Prepare a daily summary",
+    action: { kind: "prompt", text: "Prepare a daily summary" },
     conversation: { mode: "fresh" },
     toolExposure: {
       services: ["docs.read"],
@@ -36,6 +105,93 @@ async function missions() {
 }
 
 describe("MissionsDO", () => {
+  it("migrates v2 automation history forward without resetting it", async () => {
+    const legacy = await createTestDO(LegacyMissionsV2DO);
+    const currentCharter = charter();
+    if (
+      currentCharter.execution.kind !== "agent" ||
+      currentCharter.execution.action.kind !== "prompt"
+    ) {
+      throw new Error("Expected prompt charter fixture");
+    }
+    const legacyCharter = {
+      ...currentCharter,
+      execution: {
+        kind: "agent",
+        target: currentCharter.execution.target,
+        prompt: currentCharter.execution.action.text,
+        conversation: currentCharter.execution.conversation,
+        toolExposure: currentCharter.execution.toolExposure,
+        declaredLineageClasses: currentCharter.execution.declaredLineageClasses,
+      },
+    };
+    const legacyDigest = createHash("sha256")
+      .update("automation-closure-v3\0", "utf8")
+      .update(
+        canonicalJson({ charter: legacyCharter, permissions: [], standingRestrictions: [] }),
+        "utf8"
+      )
+      .digest("hex");
+    legacy.sql.exec(
+      `INSERT INTO missions
+       (mission_id,name,revision,charter_json,permissions_json,standing_restrictions_json,
+        owner_user_id,owner_device_id,state,revision_digest,active_closure_digest,seeded,
+        schedule_origin_at,next_run_at,last_run_at,created_at,updated_at)
+       VALUES ('kept','Existing automation',1,?,'[]','[]','alice','panel:alice','active',?,?,0,1,2,NULL,1,1)`,
+      canonicalJson(legacyCharter),
+      legacyDigest,
+      legacyDigest
+    );
+
+    const migrated = await createTestDO(
+      MissionsDO,
+      {
+        WORKER_SOURCE: "vibestudio/internal",
+        WORKER_CLASS_NAME: "MissionsDO",
+        __objectKey: "workspace",
+      },
+      { db: legacy.db }
+    );
+
+    expect(
+      migrated.sql
+        .exec(`PRAGMA table_info(missions)`)
+        .toArray()
+        .map((column) => column["name"])
+    ).toContain("activated_at");
+    await expect(
+      migrated.callAs<MissionRecord>(
+        { callerId: "panel:alice", callerKind: "panel", userId: "alice" },
+        "get",
+        "kept"
+      )
+    ).resolves.toMatchObject({
+      name: "Existing automation",
+      revision: 2,
+      state: "needs-reapproval",
+      charter: { execution: { action: { kind: "prompt", text: "Prepare a daily summary" } } },
+    });
+    expect(
+      migrated.sql.exec(`SELECT next_run_at FROM missions WHERE mission_id='kept'`).one()
+    ).toEqual({
+      next_run_at: null,
+    });
+    expect(
+      migrated.sql.exec(`SELECT active_closure_digest FROM missions WHERE mission_id='kept'`).one()
+    ).toEqual({ active_closure_digest: legacyDigest });
+    expect(
+      migrated.sql
+        .exec(`SELECT revision,record_json FROM mission_revisions WHERE mission_id='kept'`)
+        .one()
+    ).toMatchObject({
+      revision: 1,
+      record_json: expect.stringContaining('"prompt":"Prepare a daily summary"'),
+    });
+    expect(
+      migrated.sql.exec(`SELECT version, name FROM _vibestudio_schema_migrations`).toArray()
+    ).toEqual([{ version: 3, name: "automation-actions-and-activation" }]);
+  });
+
   it("exposes exactly the typed builtin contract", async () => {
     const { instance } = await missions();
     const productMethods = [...rpcExposedMethodNames(instance)].filter(
@@ -173,6 +329,13 @@ describe("MissionsDO", () => {
         run: expect.objectContaining({ runId: "run-1", error: "provider unavailable" }),
       }),
     ]);
+    await expect(callAs(alice, "getRun", "run-1")).resolves.toMatchObject({
+      runId: "run-1",
+      missionId: created.missionId,
+      status: "failed",
+      error: "provider unavailable",
+    });
+    await expect(callAs(alice, "getRun", "missing-run")).resolves.toBeNull();
 
     const first = await callAs<{
       items: Array<{ runId: string; startedAt: number }>;

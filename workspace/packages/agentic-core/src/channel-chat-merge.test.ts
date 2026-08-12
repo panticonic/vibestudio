@@ -2164,6 +2164,60 @@ describe("chatMessagesFromChannelView", () => {
     ).toBe(false);
   });
 
+  it("projects scheduled automation provenance into a durable inspectable history row", () => {
+    const automation = {
+      missionId: "mission-daily",
+      runId: "run-42",
+      name: "Daily check",
+      revision: 3,
+      action: "eval" as const,
+      trigger: "scheduled" as const,
+      startedAt: Date.parse("2026-05-20T12:00:00.000Z"),
+      createdAt: Date.parse("2026-05-01T09:00:00.000Z"),
+      activatedAt: Date.parse("2026-05-02T09:00:00.000Z"),
+      schedule: { everyMs: 86_400_000 },
+    };
+    const opened: AgenticEvent<"turn.opened"> = {
+      kind: "turn.opened",
+      actor: agent,
+      turnId: brandId<TurnId>("turn-automation"),
+      payload: {
+        protocol: AGENTIC_PROTOCOL_VERSION,
+        metadata: { origin: "scheduled", automation },
+      },
+      createdAt: "2026-05-20T12:00:00.000Z",
+    };
+    const closed: AgenticEvent<"turn.closed"> = {
+      kind: "turn.closed",
+      actor: agent,
+      turnId: brandId<TurnId>("turn-automation"),
+      payload: {
+        protocol: AGENTIC_PROTOCOL_VERSION,
+        summary: "42 checks passed",
+        metadata: { origin: "scheduled", automation },
+      },
+      createdAt: "2026-05-20T12:00:03.000Z",
+    };
+
+    const state = [opened, closed]
+      .map((event, index) => envelope(event, index + 1))
+      .reduce(reduceChannelView, createInitialChannelViewState());
+
+    expect(chatMessagesFromChannelView(state)).toContainEqual(
+      expect.objectContaining({
+        id: "automation:run-42",
+        contentType: "automation",
+        automation: {
+          snapshot: automation,
+          status: "succeeded",
+          openedAt: "2026-05-20T12:00:00.000Z",
+          closedAt: "2026-05-20T12:00:03.000Z",
+          summary: "42 checks passed",
+        },
+      })
+    );
+  });
+
   it("orders open turn typing by the latest event in that turn", () => {
     const opened: AgenticEvent<"turn.opened"> = {
       kind: "turn.opened",

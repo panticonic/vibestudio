@@ -7,6 +7,7 @@ import {
   Callout,
   Card,
   Code,
+  Dialog,
   Flex,
   Grid,
   Heading,
@@ -26,78 +27,31 @@ import {
   LightningBoltIcon,
   MagnifyingGlassIcon,
   PauseIcon,
+  Pencil2Icon,
   PlayIcon,
   ReloadIcon,
   RocketIcon,
   TrashIcon,
 } from "@radix-ui/react-icons";
 import { openPanel, rpc, workers } from "@workspace/runtime";
+import {
+  AutomationActivity,
+  AutomationParametersEditor,
+  createAutomationUiClient,
+  type AutomationUiClient,
+} from "@workspace/agentic-chat";
+import type {
+  MissionPermission,
+  MissionRecord,
+  MissionRunRecord,
+} from "@vibestudio/shared/authority/mission";
 import { AboutPage, AboutThemeRoot } from "../../packages/about-shared/ui";
 
-type AutomationState = "draft" | "active" | "needs-reapproval" | "paused" | "retired";
-type RunStatus = "starting" | "running" | "succeeded" | "failed" | "skipped";
 type Filter = "all" | "attention" | "active" | "paused" | "drafts";
-type Target = { source: string; className: string; objectKey: string };
-type ResourceScope =
-  | { kind: "exact"; key: string }
-  | { kind: "prefix"; prefix: string }
-  | { kind: "any" };
-type Permission = { capability: string; resource: ResourceScope; tier: "gated" | "critical" };
-type StandingRestriction = { capability: string; resourceKey: string };
-type UserlandService = {
-  name: string;
-  provider: string;
-  providerEv: string;
-  upgradePolicy: "pinned" | "follow-head";
-};
-type AutomationRecord = {
-  missionId: string;
-  name: string;
-  revision: number;
-  revisionDigest: string;
-  state: AutomationState;
-  nextRunAt?: number;
-  lastRunAt?: number;
-  permissions: Permission[];
-  standingRestrictions: StandingRestriction[];
-  charter: {
-    summary: string;
-    harness: { unit: string; ev: string };
-    execution:
-      | { kind: "method"; target: Target; method: string; args: unknown[] }
-      | {
-          kind: "agent";
-          target: Target;
-          prompt: string;
-          conversation:
-            | { mode: "fresh" }
-            | { mode: "continue"; channelId: string; contextId: string };
-          toolExposure: {
-            services: string[];
-            userlandServices: UserlandService[];
-            workspaceServiceDiscovery: "bound" | "live-declarations";
-            evalNetwork: "none" | "declared-origins" | "unrestricted";
-            declaredOrigins: string[];
-          };
-          declaredLineageClasses: Array<"none" | "web" | "email" | "channel-external" | "external">;
-        };
-    trigger:
-      | { kind: "manual" }
-      | { kind: "schedule"; everyMs: number; anchorAt?: number; jitterMs?: number };
-  };
-};
-type RunRecord = {
-  runId: string;
-  missionId: string;
-  trigger: "manual" | "scheduled";
-  status: RunStatus;
-  startedAt: number;
-  finishedAt?: number;
-  channelId?: string;
-  contextId?: string;
-  finalMessage?: string;
-  error?: string;
-};
+type AutomationRecord = MissionRecord;
+type RunRecord = MissionRunRecord;
+type AutomationState = MissionRecord["state"];
+type RunStatus = MissionRunRecord["status"];
 type OverviewItem = {
   automation: AutomationRecord;
   recentRuns: RunRecord[];
@@ -140,6 +94,15 @@ function callAutomations<T>(method: string, args: unknown[]): Promise<T> {
   return targetPromise.then((target) => rpc.call<T>(target, method, args));
 }
 
+const automationUiClient: AutomationUiClient = createAutomationUiClient(rpc, (run) => {
+  if (!run.channelId || !run.contextId) return;
+  void openPanel("panels/chat", {
+    focus: true,
+    contextId: run.contextId,
+    stateArgs: { channelName: run.channelId },
+  });
+});
+
 function absoluteTime(value: number): string {
   return new Intl.DateTimeFormat(undefined, {
     dateStyle: "medium",
@@ -168,16 +131,6 @@ function duration(ms: number): string {
   return `${Math.round(ms / 1_000)}s`;
 }
 
-function runDuration(run: RunRecord): string | null {
-  if (run.finishedAt === undefined) return null;
-  const elapsed = Math.max(0, run.finishedAt - run.startedAt);
-  if (elapsed < 1_000) return "<1s";
-  if (elapsed < 60_000) return `${Math.round(elapsed / 1_000)}s`;
-  const minutes = Math.floor(elapsed / 60_000);
-  const seconds = Math.round((elapsed % 60_000) / 1_000);
-  return `${minutes}m ${seconds}s`;
-}
-
 function stateLabel(state: AutomationState): string {
   if (state === "needs-reapproval") return "Needs review";
   if (state === "draft") return "Draft";
@@ -190,14 +143,6 @@ function statusLabel(status: RunStatus): string {
   if (status === "succeeded") return "Succeeded";
   if (status === "failed") return "Failed";
   return "Skipped";
-}
-
-function statusColor(status: RunStatus): "green" | "red" | "amber" | "blue" | "gray" {
-  if (status === "succeeded") return "green";
-  if (status === "failed") return "red";
-  if (status === "skipped") return "amber";
-  if (status === "running") return "blue";
-  return "gray";
 }
 
 function mergeRuns(primary: RunRecord[], extra: RunRecord[]): RunRecord[] {
@@ -214,7 +159,7 @@ function mergeOverviewItems(primary: OverviewItem[], extra: OverviewItem[]): Ove
   return [...byId.values()];
 }
 
-function resourceDescription(resource: ResourceScope): string {
+function resourceDescription(resource: MissionPermission["resource"]): string {
   if (resource.kind === "exact") return resource.key;
   if (resource.kind === "prefix") return `${resource.prefix}…`;
   return "Any resource";
@@ -293,8 +238,45 @@ function ConversationButton({ run }: { run: RunRecord }) {
   );
 }
 
-function RunRow({ run }: { run: RunRecord }) {
-  const elapsed = runDuration(run);
+function activityFor(automation: AutomationRecord, run: RunRecord) {
+  const execution = automation.charter.execution;
+  const trigger = automation.charter.trigger;
+  return {
+    snapshot: {
+      missionId: automation.missionId,
+      runId: run.runId,
+      name: automation.name,
+      revision: automation.revision,
+      action: execution.kind === "method" ? ("method" as const) : execution.action.kind,
+      trigger: run.trigger,
+      startedAt: run.startedAt,
+      createdAt: automation.createdAt,
+      ...(automation.activatedAt === undefined ? {} : { activatedAt: automation.activatedAt }),
+      schedule:
+        trigger.kind === "schedule"
+          ? {
+              everyMs: trigger.everyMs,
+              ...(trigger.anchorAt === undefined ? {} : { anchorAt: trigger.anchorAt }),
+              ...(trigger.jitterMs === undefined ? {} : { jitterMs: trigger.jitterMs }),
+            }
+          : null,
+    },
+    status:
+      run.status === "succeeded"
+        ? ("succeeded" as const)
+        : run.status === "failed"
+          ? ("failed" as const)
+          : run.status === "skipped"
+            ? ("skipped" as const)
+            : ("running" as const),
+    openedAt: new Date(run.startedAt).toISOString(),
+    ...(run.finishedAt === undefined ? {} : { closedAt: new Date(run.finishedAt).toISOString() }),
+    ...(run.finalMessage ? { summary: run.finalMessage } : run.error ? { summary: run.error } : {}),
+    ...(run.error ? { reason: "work_failed" } : {}),
+  };
+}
+
+function RunRow({ run, automation }: { run: RunRecord; automation: AutomationRecord }) {
   return (
     <Box
       py="3"
@@ -302,19 +284,14 @@ function RunRow({ run }: { run: RunRecord }) {
       aria-label={`${statusLabel(run.status)} run from ${absoluteTime(run.startedAt)}`}
     >
       <Flex direction="column" gap="2">
-        <Flex justify="between" align="center" gap="3" wrap="wrap">
-          <Flex align="center" gap="2" wrap="wrap">
-            <Badge color={statusColor(run.status)} variant="soft">
-              {statusLabel(run.status)}
-            </Badge>
-            <Tooltip content={absoluteTime(run.startedAt)}>
-              <Text size="2">{relativeTime(run.startedAt)}</Text>
-            </Tooltip>
-            <Text size="1" color="gray">
-              {run.trigger === "scheduled" ? "Scheduled" : "Run now"}
-              {elapsed ? ` · ${elapsed}` : ""}
-            </Text>
-          </Flex>
+        <AutomationActivity
+          activity={activityFor(automation, run)}
+          automation={automation}
+          run={run}
+          client={automationUiClient}
+          display="row"
+        />
+        <Flex justify="end">
           <ConversationButton run={run} />
         </Flex>
         {run.error ? (
@@ -400,9 +377,10 @@ function executionDescription(automation: AutomationRecord): string {
   if (execution.kind === "method") {
     return `${execution.target.className}.${execution.method}`;
   }
+  const action = execution.action.kind === "eval" ? "Exact eval" : "Agent prompt";
   return execution.conversation.mode === "fresh"
-    ? "Agent · new conversation each run"
-    : "Agent · continues one conversation";
+    ? `${action} · new conversation each run`
+    : `${action} · continues one conversation`;
 }
 
 function scheduleDescription(automation: AutomationRecord): string {
@@ -568,7 +546,7 @@ function DefinitionDetails({ automation }: { automation: AutomationRecord }) {
           ) : null}
           <Box>
             <Text as="div" size="1" color="gray" mb="1">
-              Exact prompt
+              {execution.action.kind === "eval" ? "Exact eval code" : "Exact prompt"}
             </Text>
             <Box
               p="3"
@@ -582,7 +560,7 @@ function DefinitionDetails({ automation }: { automation: AutomationRecord }) {
               }}
             >
               <Text as="div" size="2">
-                {execution.prompt}
+                {execution.action.kind === "eval" ? execution.action.code : execution.action.text}
               </Text>
             </Box>
           </Box>
@@ -636,6 +614,42 @@ function DefinitionDetails({ automation }: { automation: AutomationRecord }) {
   );
 }
 
+function AutomationEditorButton({
+  automation,
+  disabled,
+  onSaved,
+}: {
+  automation: AutomationRecord;
+  disabled: boolean;
+  onSaved(): void;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <Dialog.Root open={open} onOpenChange={setOpen}>
+      <Dialog.Trigger>
+        <Button variant="soft" disabled={disabled}>
+          <Pencil2Icon /> Edit parameters
+        </Button>
+      </Dialog.Trigger>
+      <Dialog.Content maxWidth="760px" aria-describedby={undefined}>
+        <Dialog.Title>Edit {automation.name}</Dialog.Title>
+        <Dialog.Description size="2" color="gray" mb="4">
+          Change the action or cadence as a new reviewable revision.
+        </Dialog.Description>
+        <AutomationParametersEditor
+          automation={automation}
+          client={automationUiClient}
+          onSaved={() => {
+            setOpen(false);
+            onSaved();
+          }}
+          onCancel={() => setOpen(false)}
+        />
+      </Dialog.Content>
+    </Dialog.Root>
+  );
+}
+
 function AutomationCard({
   item,
   runs,
@@ -643,6 +657,7 @@ function AutomationCard({
   loadingMore,
   canLoadMore,
   onAction,
+  onEdited,
   onLoadMore,
 }: {
   item: OverviewItem;
@@ -651,6 +666,7 @@ function AutomationCard({
   loadingMore: boolean;
   canLoadMore: boolean;
   onAction(action: "requestReview" | "runNow" | "pause" | "resume" | "retire"): void;
+  onEdited(): void;
   onLoadMore(): void;
 }) {
   const automation = item.automation;
@@ -697,6 +713,9 @@ function AutomationCard({
             </Text>
           </Box>
           <Flex gap="2" wrap="wrap" align="center">
+            {automation.state !== "retired" ? (
+              <AutomationEditorButton automation={automation} disabled={busy} onSaved={onEdited} />
+            ) : null}
             {automation.state === "draft" || automation.state === "needs-reapproval" ? (
               <Button
                 disabled={busy}
@@ -713,16 +732,18 @@ function AutomationCard({
                   {busyAction === "runNow" ? <Spinner size="1" /> : <PlayIcon />}
                   Run now
                 </Button>
-                <Tooltip content="Stop scheduled runs without changing the reviewed automation">
-                  <IconButton
-                    variant="soft"
-                    disabled={busy}
-                    onClick={() => onAction("pause")}
-                    aria-label={`Pause ${automation.name}`}
-                  >
-                    {busyAction === "pause" ? <Spinner size="1" /> : <PauseIcon />}
-                  </IconButton>
-                </Tooltip>
+                <Button
+                  color="red"
+                  variant="soft"
+                  disabled={busy}
+                  onClick={() => onAction("pause")}
+                  aria-label={`Stop recurring calls for ${automation.name}`}
+                >
+                  {busyAction === "pause" ? <Spinner size="1" /> : <PauseIcon />}
+                  {automation.charter.trigger.kind === "schedule"
+                    ? "Stop recurring calls"
+                    : "Pause automation"}
+                </Button>
               </>
             ) : null}
             {automation.state === "paused" ? (
@@ -818,7 +839,7 @@ function AutomationCard({
         >
           <Box mt="2">
             {runs.length > 0 ? (
-              runs.map((run) => <RunRow key={run.runId} run={run} />)
+              runs.map((run) => <RunRow key={run.runId} run={run} automation={automation} />)
             ) : (
               <Box py="3">
                 <Text as="div" size="2" color="gray">
@@ -1165,6 +1186,7 @@ function AutomationsPage() {
                 loadingMore={loadingMoreId === id}
                 canLoadMore={!exhausted.has(id) && runs.length < item.totalRuns}
                 onAction={(method) => void action(item.automation, method)}
+                onEdited={() => void load(true)}
                 onLoadMore={() => void loadMore(item)}
               />
             );

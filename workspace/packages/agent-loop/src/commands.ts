@@ -57,6 +57,15 @@ export type Command =
       agentHops?: number;
       metadata?: AgentTurnMetadata;
     }
+  | {
+      /** Journal and execute one exact local tool call without a model request. */
+      kind: "invoke";
+      channelId: string;
+      source: { envelopeId: string };
+      tool: string;
+      args: unknown;
+      metadata?: AgentTurnMetadata;
+    }
   | { kind: "interrupt"; flushDeferred?: boolean }
   | { kind: "abort"; reason?: string }
   | { kind: "edit"; sourceMessageId: string; blocks: MessageBlockInput[]; by: ParticipantRef }

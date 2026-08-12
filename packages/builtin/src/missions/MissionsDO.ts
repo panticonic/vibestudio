@@ -1,4 +1,10 @@
-import { DurableObjectBase, schemaRpc, type DurableObjectContext } from "@vibestudio/durable";
+import {
+  DurableObjectBase,
+  schemaRpc,
+  type DurableObjectContext,
+  type DurableObjectSchemaMigration,
+} from "@vibestudio/durable";
+import { createHash } from "node:crypto";
 import { missionsMethods } from "@vibestudio/service-schemas/missions";
 import type {
   MissionCharter,
@@ -51,6 +57,7 @@ interface MissionRow {
   last_run_at: number | null;
   created_at: number;
   updated_at: number;
+  activated_at: number | null;
 }
 
 interface RunRow {
@@ -70,9 +77,124 @@ interface RunRow {
 }
 
 export class MissionsDO extends DurableObjectBase {
-  static override schemaVersion = 2;
+  static override schemaVersion = 3;
   protected override schemaProductionBaseline() {
     return { version: 2, name: "automations-v2" } as const;
+  }
+  protected override schemaMigrations(): readonly DurableObjectSchemaMigration[] {
+    return [
+      {
+        version: 3,
+        name: "automation-actions-and-activation",
+        validateSource: (sql) => {
+          const columns = sql
+            .exec(`PRAGMA table_info(missions)`)
+            .toArray()
+            .map((column) => String(column["name"]));
+          const expected = [
+            "mission_id",
+            "name",
+            "revision",
+            "charter_json",
+            "permissions_json",
+            "standing_restrictions_json",
+            "owner_user_id",
+            "owner_device_id",
+            "state",
+            "revision_digest",
+            "active_closure_digest",
+            "seeded",
+            "schedule_origin_at",
+            "next_run_at",
+            "last_run_at",
+            "created_at",
+            "updated_at",
+          ];
+          if (JSON.stringify(columns) !== JSON.stringify(expected)) {
+            throw new Error(`MissionsDO v2 source schema is unknown: ${JSON.stringify(columns)}`);
+          }
+        },
+        migrate: (sql) => {
+          sql.exec(`ALTER TABLE missions ADD COLUMN activated_at INTEGER`);
+          const rows = sql
+            .exec(
+              `SELECT mission_id,name,revision,charter_json,permissions_json,
+                      standing_restrictions_json,owner_user_id,owner_device_id,state,
+                      revision_digest,seeded,schedule_origin_at,next_run_at,last_run_at,
+                      created_at,updated_at
+                 FROM missions`
+            )
+            .toArray();
+          for (const row of rows) {
+            const charter = JSON.parse(String(row["charter_json"])) as Record<string, unknown>;
+            const execution = charter["execution"] as Record<string, unknown> | undefined;
+            if (execution?.["kind"] !== "agent" || "action" in execution) continue;
+            const prompt = execution["prompt"];
+            if (typeof prompt !== "string" || !prompt.trim()) {
+              throw new Error(`Automation ${String(row["mission_id"])} has an unknown v2 action`);
+            }
+            const permissions = JSON.parse(String(row["permissions_json"])) as MissionPermission[];
+            const restrictions = JSON.parse(
+              String(row["standing_restrictions_json"])
+            ) as MissionStandingRestriction[];
+            const oldDigest = legacyPromptClosureDigest(charter, permissions, restrictions);
+            if (oldDigest !== String(row["revision_digest"])) {
+              throw new Error(
+                `Automation ${String(row["mission_id"])} has an invalid v2 revision digest`
+              );
+            }
+            const { prompt: _prompt, ...executionWithoutPrompt } = execution;
+            const nextCharter = {
+              ...charter,
+              execution: {
+                ...executionWithoutPrompt,
+                action: { kind: "prompt", text: prompt },
+              },
+            } as MissionCharter;
+            const revision = Number(row["revision"]);
+            const state = String(row["state"]) as MissionState;
+            const previousRecord = {
+              missionId: String(row["mission_id"]),
+              name: String(row["name"]),
+              revision,
+              charter,
+              owner: {
+                userId: String(row["owner_user_id"]),
+                deviceId: String(row["owner_device_id"]),
+              },
+              state,
+              revisionDigest: oldDigest,
+              createdAt: Number(row["created_at"]),
+              updatedAt: Number(row["updated_at"]),
+              ...(Number(row["seeded"]) === 1 ? { seeded: true } : {}),
+              permissions,
+              standingRestrictions: restrictions,
+              ...(row["next_run_at"] == null ? {} : { nextRunAt: Number(row["next_run_at"]) }),
+              ...(row["last_run_at"] == null ? {} : { lastRunAt: Number(row["last_run_at"]) }),
+            };
+            sql.exec(
+              `INSERT INTO mission_revisions (mission_id,revision,record_json,recorded_at)
+               VALUES (?,?,?,?)`,
+              previousRecord.missionId,
+              revision,
+              canonicalJson(previousRecord),
+              previousRecord.updatedAt
+            );
+            sql.exec(
+              `UPDATE missions
+                  SET revision=?,charter_json=?,state=?,revision_digest=?,
+                      schedule_origin_at=NULL,next_run_at=NULL
+                WHERE mission_id=?`,
+              revision + 1,
+              canonicalJson(nextCharter),
+              state === "draft" || state === "retired" ? state : "needs-reapproval",
+              missionClosureDigest(nextCharter, permissions, restrictions),
+              previousRecord.missionId
+            );
+          }
+        },
+      },
+    ];
   }
   static override rpcMethods = missionsMethods;
 
@@ -98,7 +220,8 @@ export class MissionsDO extends DurableObjectBase {
       next_run_at INTEGER,
       last_run_at INTEGER,
       created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL
+      updated_at INTEGER NOT NULL,
+      activated_at INTEGER
     )`);
     this.sql.exec(`CREATE TABLE mission_revisions (
       mission_id TEXT NOT NULL,
@@ -403,6 +526,14 @@ export class MissionsDO extends DurableObjectBase {
   }
 
   @schemaRpc()
+  getRun(runId: string): MissionRunRecord | null {
+    const row = this.getRunRow(runId);
+    if (!row) return null;
+    this.requireMission(row.mission_id);
+    return this.rowToRun(row);
+  }
+
+  @schemaRpc()
   proposeDraft(input: {
     name: string;
     charter: MissionCharter;
@@ -442,8 +573,8 @@ export class MissionsDO extends DurableObjectBase {
       `INSERT INTO missions
        (mission_id,name,revision,charter_json,permissions_json,standing_restrictions_json,
         owner_user_id,owner_device_id,state,revision_digest,active_closure_digest,seeded,
-        schedule_origin_at,next_run_at,last_run_at,created_at,updated_at)
-       VALUES (?,?,1,?,?,?,?,?,'draft',?,NULL,0,NULL,NULL,NULL,?,?)`,
+        schedule_origin_at,next_run_at,last_run_at,created_at,updated_at,activated_at)
+       VALUES (?,?,1,?,?,?,?,?,'draft',?,NULL,0,NULL,NULL,NULL,?,?,NULL)`,
       missionId,
       input.name,
       canonicalJson(input.charter),
@@ -532,6 +663,8 @@ export class MissionsDO extends DurableObjectBase {
       throw denied("Only an inert automation revision can be reviewed");
     }
     const { body, closureDigest } = this.compileClosure(mission);
+    const staleSubject = this.activeSubject(mission);
+    if (staleSubject) await this.rpc.call("main", "reviewedClosure.suspend", [staleSubject]);
     await this.rpc.call("main", "reviewedClosure.activate", [
       {
         body,
@@ -553,11 +686,12 @@ export class MissionsDO extends DurableObjectBase {
     const scheduleOriginAt = scheduleOrigin(mission.charter, now);
     const nextRunAt = initialNextRunAt(mission.charter, now, scheduleOriginAt);
     this.sql.exec(
-      `UPDATE missions SET state='active',active_closure_digest=?,schedule_origin_at=?,next_run_at=?,updated_at=?
+      `UPDATE missions SET state='active',active_closure_digest=?,schedule_origin_at=?,next_run_at=?,updated_at=?,activated_at=COALESCE(activated_at,?)
        WHERE mission_id=?`,
       closureDigest,
       scheduleOriginAt,
       nextRunAt,
+      now,
       now,
       missionId
     );
@@ -838,9 +972,25 @@ export class MissionsDO extends DurableObjectBase {
       contextId,
       executorId: targetId,
     });
-    await this.rpc.call(targetId, "runAutomationTurn", [
-      { channelId, runId, prompt: execution.prompt },
-    ]);
+    const activity = automationActivity(mission, this.requireRun(runId));
+    if (execution.action.kind === "prompt") {
+      await this.rpc.call(targetId, "runAutomationTurn", [
+        { channelId, prompt: execution.action.text, automation: activity },
+      ]);
+    } else {
+      await this.rpc.call(targetId, "runAutomationEval", [
+        {
+          channelId,
+          automation: activity,
+          eval: {
+            code: execution.action.code,
+            ...(execution.action.syntax ? { syntax: execution.action.syntax } : {}),
+            ...(execution.action.timeoutMs ? { timeoutMs: execution.action.timeoutMs } : {}),
+            ...(execution.action.reset === true ? { reset: true } : {}),
+          },
+        },
+      ]);
+    }
   }
 
   private async activateTarget(
@@ -1090,6 +1240,7 @@ export class MissionsDO extends DurableObjectBase {
       revisionDigest,
       createdAt: Number(row.created_at),
       updatedAt: Number(row.updated_at),
+      ...(row.activated_at == null ? {} : { activatedAt: Number(row.activated_at) }),
       ...(row.seeded === 1 ? { seeded: true } : {}),
       permissions,
       standingRestrictions,
@@ -1146,10 +1297,45 @@ function withJitter(value: number, jitterMs = 0): number {
   return value + (jitterMs > 0 ? Math.floor(Math.random() * jitterMs) : 0);
 }
 
+function legacyPromptClosureDigest(
+  charter: Record<string, unknown>,
+  permissions: readonly MissionPermission[],
+  standingRestrictions: readonly MissionStandingRestriction[]
+): string {
+  return createHash("sha256")
+    .update("automation-closure-v3\0", "utf8")
+    .update(canonicalJson({ charter, permissions, standingRestrictions }), "utf8")
+    .digest("hex");
+}
+
 function executionLabel(execution: MissionExecution): string {
-  return execution.kind === "agent"
-    ? `Prompt ${execution.target.className}`
-    : `${execution.target.className}.${execution.method}`;
+  if (execution.kind === "method") return `${execution.target.className}.${execution.method}`;
+  return `${execution.action.kind === "eval" ? "Eval in" : "Prompt"} ${execution.target.className}`;
+}
+
+function automationActivity(mission: MissionRecord, run: MissionRunRecord) {
+  const trigger = mission.charter.trigger;
+  const action =
+    mission.charter.execution.kind === "agent" ? mission.charter.execution.action.kind : "method";
+  return {
+    missionId: mission.missionId,
+    runId: run.runId,
+    name: mission.name,
+    revision: mission.revision,
+    action,
+    trigger: run.trigger,
+    startedAt: run.startedAt,
+    createdAt: mission.createdAt,
+    ...(mission.activatedAt === undefined ? {} : { activatedAt: mission.activatedAt }),
+    schedule:
+      trigger.kind === "schedule"
+        ? {
+            everyMs: trigger.everyMs,
+            ...(trigger.anchorAt === undefined ? {} : { anchorAt: trigger.anchorAt }),
+            ...(trigger.jitterMs === undefined ? {} : { jitterMs: trigger.jitterMs }),
+          }
+        : null,
+  };
 }
 
 function triggerLabel(charter: MissionCharter): string {

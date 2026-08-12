@@ -1078,6 +1078,13 @@ export class AgentLoopDriver {
   }
 
   private async runStep(loop: LoopInstance, incoming: Incoming, retries: number): Promise<void> {
+    if (
+      incoming.type === "command" &&
+      incoming.command.kind === "invoke" &&
+      (await this.ingestCommandAlreadyJournaled(loop, incoming))
+    ) {
+      return;
+    }
     let semanticIncoming = incoming;
     if (incoming.type === "event-appended" && containsStoredValueRef(incoming.envelope.payload)) {
       semanticIncoming = {
@@ -1197,8 +1204,23 @@ export class AgentLoopDriver {
     incoming: Incoming
   ): Promise<boolean> {
     if (incoming.type !== "command") return false;
-    if (incoming.command.kind !== "prompt" && incoming.command.kind !== "steer") return false;
-    const envelopeId = ids.recvUserMessage(loop.channelId, incoming.command.source.envelopeId);
+    if (
+      incoming.command.kind !== "prompt" &&
+      incoming.command.kind !== "steer" &&
+      incoming.command.kind !== "invoke"
+    ) {
+      return false;
+    }
+    const envelopeId =
+      incoming.command.kind === "invoke"
+        ? ids.turnOpened(
+            ids.turnId(
+              loop.channelId,
+              incoming.command.source.envelopeId,
+              this.selfRef(loop.channelId).id
+            )
+          )
+        : ids.recvUserMessage(loop.channelId, incoming.command.source.envelopeId);
     const existing = await this.deps.gad.call<LogEnvelope | null>("getLogEvent", {
       logId: loop.logId,
       head: loop.head,

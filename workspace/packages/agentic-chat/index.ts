@@ -107,6 +107,17 @@ export type { AckBadgeProps, ReceiptState, ReceiptAggregate } from "./components
 export { ChatDirtyRepoWarnings } from "./components/ChatDirtyRepoWarnings";
 export { ChatDebugConsole } from "./components/ChatDebugConsole";
 export { ChatActionBar } from "./components/ChatActionBar";
+export {
+  AutomationActivity,
+  AutomationParametersEditor,
+  createAutomationUiClient,
+  formatAutomationInterval,
+} from "./components/AutomationActivity";
+export type {
+  AutomationActivityProps,
+  AutomationUiClient,
+  AutomationUiRpc,
+} from "./components/AutomationActivity";
 
 // --- Primitive components ---
 export { MessageList } from "./components/MessageList";

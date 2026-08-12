@@ -1157,6 +1157,40 @@ function alreadyIngested(state: AgentState, recvEnvelopeId: string): boolean {
 
 function commandStep(state: AgentState, command: Command, ctx: StepContext): StepOutput {
   switch (command.kind) {
+    case "invoke": {
+      if (state.openTurn) {
+        throw new Error("Cannot start a direct invocation while another turn is open");
+      }
+      const turnId = ids.turnId(state.channelId, command.source.envelopeId, ctx.selfRef.id);
+      const messageId = ids.messageId(turnId, 0);
+      const invocationId = `direct:${turnId}:${command.tool}`;
+      const opened = turnOpenedItem(turnId, command.metadata);
+      const message: AppendItem = {
+        envelopeId: ids.messageTerminal(messageId),
+        payloadKind: "message.completed",
+        payload: {
+          protocol: AGENTIC_PROTOCOL_VERSION,
+          role: "assistant",
+          blocks: [
+            {
+              type: "toolCall",
+              id: invocationId,
+              name: command.tool,
+              arguments: command.args,
+            },
+          ],
+          outcome: "tool_calls_only",
+          tier: "secondary",
+        },
+        causality: { messageId: messageId as never, turnId },
+        publish: true,
+      };
+      // The ordinary message.completed cascade owns invocation.started and
+      // effect dispatch. Direct turns only bypass the model call; they do not
+      // create a second tool lifecycle.
+      return { append: [opened, message], effects: [] };
+    }
+
     case "prompt-failed": {
       const recvEnvelopeId = ids.recvUserMessage(command.channelId, command.source.envelopeId);
       if (alreadyIngested(state, recvEnvelopeId)) return EMPTY;
@@ -1593,6 +1627,18 @@ function eventStep(state: AgentState, envelope: LogEnvelope, ctx: StepContext): 
     if (Object.keys(state.pendingInvocations).length > 0) return EMPTY; // not last yet
     if (Object.keys(state.pendingApprovals).length > 0) return EMPTY;
     if (Object.keys(state.pendingCredentialWaits).length > 0) return EMPTY;
+    if (turn.metadata?.completion === "after-invocation") {
+      const succeeded = kind === "invocation.completed";
+      return {
+        append: [
+          turnClosedItem(turn, {
+            ...(succeeded ? {} : { reason: "work_failed" }),
+            summary: directInvocationSummary(kind, payload),
+          }),
+        ],
+        effects: [],
+      };
+    }
     if (kind === "invocation.completed") {
       const suspension = suspendTurnFromInvocationPayload(payload);
       if (suspension) {
@@ -1809,6 +1855,23 @@ function eventStep(state: AgentState, envelope: LogEnvelope, ctx: StepContext): 
   }
 
   return EMPTY;
+}
+
+function directInvocationSummary(kind: string, payload: Record<string, unknown>): string {
+  const value =
+    kind === "invocation.completed"
+      ? payload["result"]
+      : (payload["reason"] ?? payload["error"] ?? "Direct invocation failed");
+  let text: string;
+  if (typeof value === "string") text = value;
+  else {
+    try {
+      text = JSON.stringify(value) ?? String(value);
+    } catch {
+      text = String(value);
+    }
+  }
+  return text.length <= 24_000 ? text : `${text.slice(0, 24_000)}\n…`;
 }
 
 function effectFailedStep(

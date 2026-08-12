@@ -1,0 +1,192 @@
+// @vitest-environment jsdom
+
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { Theme } from "@radix-ui/themes";
+import { describe, expect, it, vi } from "vitest";
+import type { MissionRecord, MissionRunRecord } from "@vibestudio/shared/authority/mission";
+import {
+  AutomationActivity,
+  createAutomationUiClient,
+  type AutomationUiClient,
+} from "./AutomationActivity.js";
+
+const automation: MissionRecord = {
+  missionId: "mission-daily",
+  name: "Daily check",
+  revision: 2,
+  charter: {
+    summary: "Check the project every morning.",
+    harness: { unit: "workers/agent-worker", ev: "a".repeat(64) },
+    execution: {
+      kind: "agent",
+      target: {
+        source: "workers/agent-worker",
+        className: "AiChatWorker",
+        objectKey: "daily-check",
+      },
+      action: { kind: "prompt", text: "Check the project." },
+      conversation: { mode: "fresh" },
+      toolExposure: {
+        services: [],
+        userlandServices: [],
+        workspaceServiceDiscovery: "bound",
+        evalNetwork: "none",
+        declaredOrigins: [],
+      },
+      declaredLineageClasses: ["none"],
+    },
+    trigger: { kind: "schedule", everyMs: 86_400_000 },
+  },
+  owner: { userId: "alice", deviceId: "panel:alice" },
+  state: "active",
+  revisionDigest: "b".repeat(64),
+  createdAt: 1_700_000_000_000,
+  updatedAt: 1_700_000_000_000,
+  activatedAt: 1_700_000_000_000,
+  permissions: [],
+  standingRestrictions: [],
+};
+
+const run: MissionRunRecord = {
+  runId: "run-42",
+  missionId: automation.missionId,
+  closureDigest: "c".repeat(64),
+  trigger: "scheduled",
+  status: "succeeded",
+  startedAt: 1_700_100_000_000,
+  finishedAt: 1_700_100_002_000,
+  finalMessage: "Everything looks good.",
+};
+
+function client(): AutomationUiClient & {
+  get: ReturnType<typeof vi.fn>;
+  getRun: ReturnType<typeof vi.fn>;
+  edit: ReturnType<typeof vi.fn>;
+  pause: ReturnType<typeof vi.fn>;
+} {
+  return {
+    get: vi.fn(async () => automation),
+    getRun: vi.fn(async () => run),
+    edit: vi.fn(async () => ({ ...automation, state: "needs-reapproval" as const })),
+    requestReview: vi.fn(async () => automation),
+    pause: vi.fn(async () => ({ ...automation, state: "paused" as const })),
+    resume: vi.fn(async () => automation),
+    runNow: vi.fn(async () => run),
+  };
+}
+
+describe("AutomationActivity", () => {
+  it("shares service resolution and its client cache across history pills", async () => {
+    const call = vi.fn(async (_target: string, method: string) => {
+      if (method === "workers.resolveService") {
+        return { kind: "durable-object", targetId: "do:missions" };
+      }
+      if (method === "get") return automation;
+      if (method === "getRun") return run;
+      throw new Error(`Unexpected method ${method}`);
+    });
+    const rpc = { call };
+    const first = createAutomationUiClient(rpc);
+    const second = createAutomationUiClient(rpc);
+
+    expect(second).toBe(first);
+    await Promise.all([first.get(automation.missionId), second.getRun(run.runId)]);
+    expect(
+      call.mock.calls.filter(([, method]) => method === "workers.resolveService")
+    ).toHaveLength(1);
+  });
+
+  it("keeps history pills zero-fetch, then lazily loads exact tick controls", async () => {
+    const api = client();
+    render(
+      <Theme>
+        <AutomationActivity
+          activity={{
+            snapshot: {
+              missionId: automation.missionId,
+              runId: run.runId,
+              name: automation.name,
+              revision: automation.revision,
+              action: "prompt",
+              trigger: "scheduled",
+              startedAt: run.startedAt,
+              createdAt: automation.createdAt,
+              activatedAt: automation.activatedAt,
+              schedule: { everyMs: 86_400_000 },
+            },
+            status: "succeeded",
+            openedAt: new Date(run.startedAt).toISOString(),
+            closedAt: new Date(run.finishedAt!).toISOString(),
+          }}
+          client={api}
+        />
+      </Theme>
+    );
+
+    expect(screen.getByText(/Every 1 day/)).toBeTruthy();
+    expect(api.get).not.toHaveBeenCalled();
+    expect(api.getRun).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: /Inspect automation tick Daily check/ }));
+    await screen.findByText("Everything looks good.");
+    expect(api.get).toHaveBeenCalledWith(automation.missionId);
+    expect(api.getRun).toHaveBeenCalledWith(run.runId);
+
+    fireEvent.click(screen.getByRole("button", { name: "Stop recurring calls" }));
+    await waitFor(() => expect(api.pause).toHaveBeenCalledWith(automation.missionId));
+    expect(await screen.findByRole("button", { name: "Resume" })).toBeTruthy();
+  });
+
+  it("edits the exact action parameters as an inert new revision", async () => {
+    const api = client();
+    render(
+      <Theme>
+        <AutomationActivity
+          activity={{
+            snapshot: {
+              missionId: automation.missionId,
+              runId: run.runId,
+              name: automation.name,
+              revision: automation.revision,
+              action: "prompt",
+              trigger: "scheduled",
+              startedAt: run.startedAt,
+              createdAt: automation.createdAt,
+              activatedAt: automation.activatedAt,
+              schedule: { everyMs: 86_400_000 },
+            },
+            status: "succeeded",
+            openedAt: new Date(run.startedAt).toISOString(),
+            closedAt: new Date(run.finishedAt!).toISOString(),
+          }}
+          automation={automation}
+          run={run}
+          client={api}
+        />
+      </Theme>
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /Inspect automation tick Daily check/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "Edit parameters" }));
+    fireEvent.change(screen.getByLabelText("Prompt text"), {
+      target: { value: "Check the project and summarize blockers." },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save as new revision" }));
+
+    await waitFor(() =>
+      expect(api.edit).toHaveBeenCalledWith(
+        automation.missionId,
+        expect.objectContaining({
+          charter: expect.objectContaining({
+            execution: expect.objectContaining({
+              action: {
+                kind: "prompt",
+                text: "Check the project and summarize blockers.",
+              },
+            }),
+          }),
+        })
+      )
+    );
+  });
+});

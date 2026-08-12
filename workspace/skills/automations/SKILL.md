@@ -19,22 +19,26 @@ An automation draft is inert. An agent may propose one with `proposeDraft`, but
 only the user can review its exact code, schedule, reach, and standing authority
 in the **Automations** panel. Never imply that a proposal is already scheduled.
 
-Read [API.md](API.md) before authoring a draft. Use one of two execution forms:
+Read [API.md](API.md) before authoring a draft. Use one of two execution forms,
+with two first-class actions on the agent form:
 
 - **Method** runs one RPC method on an exact Durable Object build. Package a
   periodic script as a narrow exported method and use this form for deterministic
   jobs that do not need an agent conversation.
 - **Agent** sends a prompt through the ordinary agent turn loop. It can continue
   one existing conversation or create an isolated agent, context, and
-  conversation for each run.
+  conversation for each run. Its reviewed action is either a normal model
+  `prompt` or exact inline `eval` code executed without a model call. Eval is the
+  light-weight script path: it uses the selected agent's channel-bound EvalDO,
+  so it needs no newly published worker.
 
 Typical choices are:
 
-| User intent                                                  | Execution | Conversation                     |
-| ------------------------------------------------------------ | --------- | -------------------------------- |
-| “Refresh these figures every hour.”                          | Method    | None                             |
-| “Review project changes every Friday.”                       | Agent     | Fresh run each time              |
-| “Revisit the open risks in this conversation every morning.” | Agent     | Continue this exact conversation |
+| User intent                                                  | Execution                                                       | Conversation                     |
+| ------------------------------------------------------------ | --------------------------------------------------------------- | -------------------------------- |
+| “Refresh these figures every hour.”                          | Agent eval for a small inline job; method for a reusable worker | Fresh or continuing              |
+| “Review project changes every Friday.”                       | Agent                                                           | Fresh run each time              |
+| “Revisit the open risks in this conversation every morning.” | Agent                                                           | Continue this exact conversation |
 
 ## Turn an intent into a reviewable draft
 
@@ -42,7 +46,9 @@ Typical choices are:
    cadence and timezone, and—only for agent work—whether runs should be fresh or
    continue one exact conversation. Prefer an explicit recommendation over a
    questionnaire.
-2. Reuse an existing suitable worker or agent target. If none exists, use
+2. Reuse an existing suitable worker or agent target. A small exact script can
+   target an existing agent with the `eval` action and does not require a new
+   worker. If no suitable agent/worker exists, use
    [Workspace development](../workspace-dev/SKILL.md) to create and verify one.
    Do not put meaningful task code inside the scheduler.
 3. Resolve the target's exact effective version, then call `proposeDraft` with
@@ -112,7 +118,10 @@ execution: {
     className: "ResearchAgent",
     objectKey: "weekly-research",
   },
-  prompt: "Review this week's project changes and finish with the three most important risks.",
+  action: {
+    kind: "prompt",
+    text: "Review this week's project changes and finish with the three most important risks.",
+  },
   conversation: { mode: "fresh" },
   toolExposure: {
     services: ["build.listUnits", "vcs.status"],
@@ -136,7 +145,7 @@ execution: {
     className: "ResearchAgent",
     objectKey: "project-researcher",
   },
-  prompt: "Revisit the open risks and report what changed.",
+  action: { kind: "prompt", text: "Revisit the open risks and report what changed." },
   conversation: {
     mode: "continue",
     channelId: "project-research",
@@ -152,6 +161,49 @@ execution: {
   declaredLineageClasses: ["none"],
 }
 ```
+
+For an exact small script, keep the code inline and let it run as the selected
+agent in that conversation:
+
+```ts
+execution: {
+  kind: "agent",
+  target: {
+    source: "workers/agent-worker",
+    className: "AiChatWorker",
+    objectKey: "project-health",
+  },
+  action: {
+    kind: "eval",
+    code: `
+      const status = await services.vcs.status({ contextId: ctx.contextId });
+      const result = { workingHead: status.workingHead, checkedAt: Date.now() };
+      await chat.publish("project.health.checked", result, {
+        idempotencyKey: "health:" + result.checkedAt,
+      });
+      return result;
+    `,
+    syntax: "typescript",
+    timeoutMs: 30_000,
+  },
+  conversation: { mode: "fresh" },
+  toolExposure: {
+    services: ["vcs.status"],
+    userlandServices: [],
+    workspaceServiceDiscovery: "bound",
+    evalNetwork: "none",
+    declaredOrigins: [],
+  },
+  declaredLineageClasses: ["none"],
+}
+```
+
+Scheduled eval is not an alternate sandbox or message path. The agent loop
+journals the exact source as a normal `eval` tool invocation, EvalDO executes
+it with `approvals: "pregranted-only"` under the reviewed mission closure, and
+the invocation result closes the exact run. Ambient `chat` can publish typed or
+custom channel messages with the agent's identity. Do not use `chat.send` for
+status: it is user-intent ingress and can begin another agent turn.
 
 Use `fresh` when runs should be independent, easily audited, and unaffected by
 old conversation state. Use `continue` when accumulated conversation context is
@@ -212,14 +264,22 @@ server-side `filter` and `query` options instead of fetching every definition.
 Use `listRuns` with its returned cursor for older history; never fetch an
 unbounded ledger or poll every automation.
 
-The **Automations** panel is the supervision surface. Its overview calls out
+The **Automations** panel and each scheduled tick's chat-history pill share the
+same supervision surface. The overview calls out
 running work, drafts awaiting review, and failures from the last 24 hours.
 Search and server-side filters keep large collections responsive. Each
 definition exposes bounded recent runs and paged history; each run shows its
 terminal message or error and links to the exact conversation when it has one.
-The panel auto-refreshes only while a run is active. `starting` and `running`
+Opening a history pill lazily loads only that definition and tick, showing the
+cadence, first activation, exact revision, duration, result/error, and reviewed
+execution. It also offers edit, stop/resume, review, and run-now controls.
+Collapsed transcript pills perform no service reads. The panel auto-refreshes
+only while a run is active. `starting` and `running`
 are live states; `succeeded`, `failed`, and `skipped` are terminal.
 
-Use `runNow`, `pause`, `resume`, and `retire` only when the user explicitly asks
-for that lifecycle action. Retirement is terminal. Editing any behavior-bearing
-field lapses the reviewed closure and returns the automation to review.
+Agents can use the agent-facing `edit`, `runNow`, `pause`, `resume`, and
+`retire` methods when the user explicitly asks for that lifecycle action.
+`requestReview` remains human-only: an agent may prepare the exact revision,
+but the user activates it from the shared inspector or Automations panel.
+Retirement is terminal. Editing any behavior-bearing field stops the schedule,
+lapses the reviewed closure, and returns the automation to review.

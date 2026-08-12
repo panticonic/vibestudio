@@ -6043,6 +6043,21 @@ export const PRODUCT_BUILTIN_CATALOG = [
           },
         },
       },
+      getRun: {
+        capability: "missions.read",
+        tier: "open",
+        session: "family",
+        sensitivity: "read",
+        principals: ["user", "code", "session", "mission", "host"],
+        presentation: null,
+        effect: {
+          kind: "host-capability",
+          capability: "missions.read",
+          resource: {
+            kind: "receiver-object",
+          },
+        },
+      },
       proposeDraft: {
         capability: "missions.edit",
         tier: "open",
@@ -6085,9 +6100,9 @@ export const PRODUCT_BUILTIN_CATALOG = [
       edit: {
         capability: "missions.edit",
         tier: "gated",
-        session: "codeOnly",
+        session: "family",
         sensitivity: "write",
-        principals: ["user", "code", "host"],
+        principals: ["user", "code", "session", "host"],
         presentation: {
           title: "Change an automation",
           action: "change an automation",
@@ -6124,9 +6139,9 @@ export const PRODUCT_BUILTIN_CATALOG = [
       runNow: {
         capability: "missions.run",
         tier: "gated",
-        session: "codeOnly",
+        session: "family",
         sensitivity: "write",
-        principals: ["user", "code", "host"],
+        principals: ["user", "code", "session", "host"],
         presentation: {
           title: "Run an automation now",
           action: "run an automation now",
@@ -6148,9 +6163,9 @@ export const PRODUCT_BUILTIN_CATALOG = [
       pause: {
         capability: "missions.pause",
         tier: "gated",
-        session: "codeOnly",
+        session: "family",
         sensitivity: "write",
-        principals: ["user", "code", "host"],
+        principals: ["user", "code", "session", "host"],
         presentation: {
           title: "Pause an automation",
           action: "pause an automation",
@@ -6172,9 +6187,9 @@ export const PRODUCT_BUILTIN_CATALOG = [
       resume: {
         capability: "missions.pause",
         tier: "gated",
-        session: "codeOnly",
+        session: "family",
         sensitivity: "write",
-        principals: ["user", "code", "host"],
+        principals: ["user", "code", "session", "host"],
         presentation: {
           title: "Resume an automation",
           action: "resume an automation",
@@ -6196,9 +6211,9 @@ export const PRODUCT_BUILTIN_CATALOG = [
       retire: {
         capability: "missions.retire",
         tier: "critical",
-        session: "codeOnly",
+        session: "family",
         sensitivity: "destructive",
-        principals: ["user", "code", "host"],
+        principals: ["user", "code", "session", "host"],
         presentation: {
           title: "Remove an automation",
           action: "remove an automation",
@@ -6373,6 +6388,21 @@ export const PRODUCT_BUILTIN_CATALOG = [
           },
         },
       },
+      getRun: {
+        capability: "missions.read",
+        tier: "open",
+        session: "family",
+        sensitivity: "read",
+        principals: ["user", "code", "session", "mission", "host"],
+        presentation: null,
+        effect: {
+          kind: "host-capability",
+          capability: "missions.read",
+          resource: {
+            kind: "receiver-object",
+          },
+        },
+      },
       proposeDraft: {
         capability: "missions.edit",
         tier: "open",
@@ -6415,9 +6445,9 @@ export const PRODUCT_BUILTIN_CATALOG = [
       edit: {
         capability: "missions.edit",
         tier: "gated",
-        session: "codeOnly",
+        session: "family",
         sensitivity: "write",
-        principals: ["user", "code", "host"],
+        principals: ["user", "code", "session", "host"],
         presentation: {
           title: "Change an automation",
           action: "change an automation",
@@ -6454,9 +6484,9 @@ export const PRODUCT_BUILTIN_CATALOG = [
       runNow: {
         capability: "missions.run",
         tier: "gated",
-        session: "codeOnly",
+        session: "family",
         sensitivity: "write",
-        principals: ["user", "code", "host"],
+        principals: ["user", "code", "session", "host"],
         presentation: {
           title: "Run an automation now",
           action: "run an automation now",
@@ -6478,9 +6508,9 @@ export const PRODUCT_BUILTIN_CATALOG = [
       pause: {
         capability: "missions.pause",
         tier: "gated",
-        session: "codeOnly",
+        session: "family",
         sensitivity: "write",
-        principals: ["user", "code", "host"],
+        principals: ["user", "code", "session", "host"],
         presentation: {
           title: "Pause an automation",
           action: "pause an automation",
@@ -6502,9 +6532,9 @@ export const PRODUCT_BUILTIN_CATALOG = [
       resume: {
         capability: "missions.pause",
         tier: "gated",
-        session: "codeOnly",
+        session: "family",
         sensitivity: "write",
-        principals: ["user", "code", "host"],
+        principals: ["user", "code", "session", "host"],
         presentation: {
           title: "Resume an automation",
           action: "resume an automation",
@@ -6526,9 +6556,9 @@ export const PRODUCT_BUILTIN_CATALOG = [
       retire: {
         capability: "missions.retire",
         tier: "critical",
-        session: "codeOnly",
+        session: "family",
         sensitivity: "destructive",
-        principals: ["user", "code", "host"],
+        principals: ["user", "code", "session", "host"],
         presentation: {
           title: "Remove an automation",
           action: "remove an automation",

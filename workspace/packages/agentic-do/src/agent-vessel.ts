@@ -581,7 +581,6 @@ export interface AgentAlarmSource {
 
 export interface AgentInitiatedTurnOptions extends AgentTurnMetadata {
   steeringId?: string;
-  mode?: "auto" | "sequential";
 }
 
 interface ChannelDeliveryInput {
@@ -1442,7 +1441,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     summary?: string;
     finalMessage?: string;
   }): Promise<void> {
-    const runId = input.metadata.automationRunId;
+    const runId = input.metadata.automation?.runId;
     if (!runId) return;
     const service = await this.rpc.call<{
       kind: "durable-object" | "worker";
@@ -1456,7 +1455,11 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       {
         runId,
         outcome: failed ? "failed" : "succeeded",
-        ...(input.finalMessage ? { finalMessage: input.finalMessage } : {}),
+        ...(input.finalMessage
+          ? { finalMessage: input.finalMessage }
+          : !failed && input.summary
+            ? { finalMessage: input.summary }
+            : {}),
         ...(failed ? { error: input.summary ?? input.reason ?? "Automation turn failed" } : {}),
       },
     ]);
@@ -2641,26 +2644,77 @@ export abstract class AgentVesselBase extends DurableObjectBase {
   })
   async runAutomationTurn(input: {
     channelId: string;
-    runId: string;
     prompt: string;
+    automation: NonNullable<AgentTurnMetadata["automation"]>;
   }): Promise<void> {
     if (!this.subscriptions.listChannelIds().includes(input.channelId)) {
       throw new Error(`Automation channel ${input.channelId} is not subscribed`);
     }
-    if (!input.runId || !input.prompt.trim()) {
-      throw new Error("Automation turn requires a run id and prompt");
+    if (!input.automation.runId || !input.prompt.trim()) {
+      throw new Error("Automation turn requires provenance and prompt text");
     }
     await this.submitAgentInitiatedTurn(
       input.channelId,
       { content: input.prompt },
       {
-        mode: "sequential",
-        steeringId: `automation:${input.runId}`,
+        steeringId: `automation:${input.automation.runId}`,
         origin: "scheduled",
-        automationRunId: input.runId,
+        automation: input.automation,
         delivery: "channel",
+        deliverAfterTurn: true,
       }
     );
+  }
+
+  /**
+   * Canonical model-free automation ingress. The exact reviewed source is
+   * journaled as an ordinary eval invocation and runs in this agent/channel's
+   * EvalDO, so ambient `chat` publishes with this agent's durable identity.
+   */
+  @rpc({
+    principals: ["host", "code"],
+    effect: { kind: "open" },
+    tier: "open",
+    sensitivity: "write",
+  })
+  async runAutomationEval(input: {
+    channelId: string;
+    automation: NonNullable<AgentTurnMetadata["automation"]>;
+    eval: {
+      code: string;
+      syntax?: "javascript" | "typescript" | "jsx" | "tsx";
+      timeoutMs?: number;
+      reset?: boolean;
+    };
+  }): Promise<void> {
+    if (!this.subscriptions.listChannelIds().includes(input.channelId)) {
+      throw new Error(`Automation channel ${input.channelId} is not subscribed`);
+    }
+    if (!input.automation.runId || !input.eval.code.trim()) {
+      throw new Error("Automation eval requires provenance and inline code");
+    }
+    await this.driver.handleIncoming(input.channelId, {
+      type: "command",
+      command: {
+        kind: "invoke",
+        channelId: input.channelId,
+        source: { envelopeId: `automation:${input.automation.runId}` },
+        tool: "eval",
+        args: {
+          code: input.eval.code,
+          ...(input.eval.syntax ? { syntax: input.eval.syntax } : {}),
+          ...(input.eval.timeoutMs ? { timeoutMs: input.eval.timeoutMs } : {}),
+          ...(input.eval.reset === true ? { reset: true } : {}),
+          authority: { approvals: "pregranted-only" },
+        },
+        metadata: {
+          origin: "scheduled",
+          automation: input.automation,
+          completion: "after-invocation",
+          delivery: "channel",
+        },
+      },
+    });
   }
 
   private async ingestSubscriptionReplay(
@@ -5611,20 +5665,17 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     input: { content: string },
     opts?: AgentInitiatedTurnOptions
   ): Promise<void> {
+    const { steeringId, ...turnMetadata } = opts ?? {};
     const metadata: AgentTurnMetadata = {
-      origin: opts?.origin ?? "agent-initiated",
-      ...(opts?.automationRunId ? { automationRunId: opts.automationRunId } : {}),
-      ...(opts?.contextPolicy ? { contextPolicy: opts.contextPolicy } : {}),
-      ...(opts?.delivery ? { delivery: opts.delivery } : {}),
-      ...(opts?.ackToken ? { ackToken: opts.ackToken } : {}),
-      ...(opts?.silentOk !== undefined ? { silentOk: opts.silentOk } : {}),
+      ...turnMetadata,
+      origin: turnMetadata.origin ?? "agent-initiated",
     };
     await this.driver.handleIncoming(channelId, {
       type: "command",
       command: {
         kind: "prompt",
         channelId,
-        source: { envelopeId: opts?.steeringId ?? `agent-init:${Date.now()}` },
+        source: { envelopeId: steeringId ?? `agent-init:${Date.now()}` },
         content: input.content,
         senderRef: { kind: "system", id: metadata.origin ?? "agent-initiated" },
         metadata,

@@ -677,6 +677,7 @@ export interface TurnPayload {
   protocol: "agentic.trajectory.v1";
   summary?: string;
   reason?: TurnReasonCode;
+  metadata?: Record<string, unknown>;
 }
 
 export interface BranchPayload {

@@ -613,6 +613,77 @@ async function expectedEvalCaller(): Promise<string> {
   return `do:vibestudio/internal:EvalDO:${key}`;
 }
 
+describe("AgentVesselBase automation ingress", () => {
+  const automation = {
+    missionId: "mission-health",
+    runId: "run-health",
+    name: "Project health",
+    revision: 2,
+    action: "eval" as const,
+    trigger: "scheduled" as const,
+    startedAt: 1_786_400_000_000,
+    createdAt: 1_786_000_000_000,
+    activatedAt: 1_786_100_000_000,
+    schedule: { everyMs: 3_600_000 },
+  };
+
+  it("journals scheduled eval source as a direct pregranted eval invocation", async () => {
+    const vessel = await makePromptProbe();
+
+    await vessel.runAutomationEval({
+      channelId: CHANNEL,
+      automation,
+      eval: { code: "return await chat.getParticipants()", timeoutMs: 30_000 },
+    });
+
+    expect(vessel.handleIncomingSpy).toHaveBeenCalledWith(CHANNEL, {
+      type: "command",
+      command: {
+        kind: "invoke",
+        channelId: CHANNEL,
+        source: { envelopeId: "automation:run-health" },
+        tool: "eval",
+        args: {
+          code: "return await chat.getParticipants()",
+          timeoutMs: 30_000,
+          authority: { approvals: "pregranted-only" },
+        },
+        metadata: {
+          origin: "scheduled",
+          automation,
+          completion: "after-invocation",
+          delivery: "channel",
+        },
+      },
+    });
+  });
+
+  it("carries the same durable automation provenance into prompt turns", async () => {
+    const vessel = await makePromptProbe();
+    const promptAutomation = { ...automation, action: "prompt" as const };
+
+    await vessel.runAutomationTurn({
+      channelId: CHANNEL,
+      automation: promptAutomation,
+      prompt: "Review the open risks.",
+    });
+
+    expect(vessel.handleIncomingSpy).toHaveBeenCalledWith(
+      CHANNEL,
+      expect.objectContaining({
+        command: expect.objectContaining({
+          kind: "prompt",
+          source: { envelopeId: "automation:run-health" },
+          metadata: expect.objectContaining({
+            automation: promptAutomation,
+            deliverAfterTurn: true,
+          }),
+        }),
+      })
+    );
+  });
+});
+
 describe("AgentVesselBase finite channel delivery", () => {
   it("returns the retained outcome after a response-loss retry", async () => {
     const vessel = await makePromptProbe();
