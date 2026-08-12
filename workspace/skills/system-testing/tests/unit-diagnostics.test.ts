@@ -129,7 +129,13 @@ describe("automation inline eval system test validator", () => {
     state: "draft",
     permissions: [],
     charter: {
-      trigger: { kind: "schedule", everyMs: 86_400_000 },
+      trigger: {
+        kind: "cron",
+        expression: "5 5 * * THU",
+        timezone: "America/New_York",
+        untilAt: Date.UTC(2027, 0, 1, 5),
+        maxRuns: 12,
+      },
       execution: {
         kind: "agent",
         target: {
@@ -139,7 +145,7 @@ describe("automation inline eval system test validator", () => {
         },
         action: {
           kind: "eval",
-          code: "const status = await services.vcs.status({ contextId: ctx.contextId }); await chat.publish('project.pulse', status); return status;",
+          code: "const status = await services.vcs.status({ contextId: ctx.contextId }); await chat.publish('project.pulse', status); return status.clean ? { protocol: 'automation-completion.v1', response: 'The project is clean.' } : status;",
         },
         conversation: { mode: "fresh" },
         toolExposure: { services: ["vcs.status"], evalNetwork: "none" },
@@ -153,6 +159,18 @@ describe("automation inline eval system test validator", () => {
         execution(
           "return rpc.call(missions.targetId, 'proposeDraft', [input]);",
           draft,
+          "The inert draft is waiting in Automations for your review."
+        )
+      )
+    ).toEqual({ passed: true });
+  });
+
+  it("accepts an eval result that includes the inert draft with a concise proposal summary", () => {
+    expect(
+      automationDraftTest.validate(
+        execution(
+          "return { missionId: draft.missionId, name: draft.name, draft };",
+          { missionId: "msn_daily-project-pulse", name: draft.name, draft },
           "The inert draft is waiting in Automations for your review."
         )
       )

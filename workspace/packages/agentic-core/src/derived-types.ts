@@ -207,7 +207,25 @@ export interface AutomationActivitySnapshot {
   startedAt: number;
   createdAt: number;
   activatedAt?: number;
-  schedule: { everyMs: number; anchorAt?: number; jitterMs?: number } | null;
+  runNumber?: number;
+  schedule:
+    | {
+        /** Missing only on historical interval snapshots written before calendar schedules. */
+        kind?: "interval";
+        everyMs: number;
+        anchorAt?: number;
+        jitterMs?: number;
+        untilAt?: number;
+        maxRuns?: number;
+      }
+    | {
+        kind: "cron";
+        expression: string;
+        timezone: string;
+        untilAt?: number;
+        maxRuns?: number;
+      }
+    | null;
 }
 
 export interface AutomationActivityPayload {

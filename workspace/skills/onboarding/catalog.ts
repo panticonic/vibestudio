@@ -284,7 +284,8 @@ export const onboardingCatalog: readonly OnboardingCapabilityDefinition[] = [
   {
     id: "capability.automations",
     title: "Schedule recurring work",
-    summary: "Run reviewed inline evals, worker methods, or agent prompts and inspect every tick.",
+    summary:
+      "Run reviewed evals, methods, or prompts on intervals or timezone-aware calendars, with finite goals and inspectable ticks.",
     category: "ready-now",
     role: "ready-capability",
     scope: "workspace",

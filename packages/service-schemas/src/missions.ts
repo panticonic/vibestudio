@@ -94,6 +94,17 @@ export const missionCharterSchema = z
           everyMs: z.number().int().min(60_000),
           anchorAt: z.number().int().nonnegative().optional(),
           jitterMs: z.number().int().nonnegative().optional(),
+          untilAt: z.number().int().nonnegative().optional(),
+          maxRuns: z.number().int().positive().optional(),
+        })
+        .strict(),
+      z
+        .object({
+          kind: z.literal("cron"),
+          expression: z.string().min(1).max(512),
+          timezone: z.string().min(1).max(128),
+          untilAt: z.number().int().nonnegative().optional(),
+          maxRuns: z.number().int().positive().optional(),
         })
         .strict(),
     ]),
@@ -119,11 +130,15 @@ export const missionRecordSchema = z
     revision: z.number().int().positive(),
     charter: missionCharterSchema,
     owner: z.object({ userId: z.string().min(1), deviceId: z.string().min(1) }).strict(),
-    state: z.enum(["draft", "active", "needs-reapproval", "paused", "retired"]),
+    state: z.enum(["draft", "active", "needs-reapproval", "paused", "completed", "retired"]),
     revisionDigest: hex64,
     createdAt: z.number().int().nonnegative(),
     updatedAt: z.number().int().nonnegative(),
     activatedAt: z.number().int().nonnegative().optional(),
+    runCount: z.number().int().nonnegative(),
+    completedAt: z.number().int().nonnegative().optional(),
+    completionReason: z.enum(["until", "max-runs", "response"]).optional(),
+    completionResponse: z.string().optional(),
     seeded: z.boolean().optional(),
     permissions: z.array(missionPermissionSchema),
     standingRestrictions: z.array(missionStandingRestrictionSchema),
@@ -137,15 +152,18 @@ export const missionRunRecordSchema = z
     runId: z.string().min(1),
     missionId: z.string().min(1),
     closureDigest: hex64,
+    revision: z.number().int().positive(),
     trigger: z.enum(["manual", "scheduled"]),
     status: z.enum(["starting", "running", "succeeded", "failed", "skipped"]),
     startedAt: z.number().int().nonnegative(),
+    runNumber: z.number().int().positive().optional(),
     finishedAt: z.number().int().nonnegative().optional(),
     sessionId: z.string().min(1).optional(),
     channelId: z.string().min(1).optional(),
     contextId: z.string().min(1).optional(),
     executorId: z.string().min(1).optional(),
     finalMessage: z.string().optional(),
+    completionResponse: z.string().optional(),
     error: z.string().optional(),
   })
   .strict();
@@ -168,7 +186,7 @@ const missionOverviewOptionsSchema = z
   .object({
     limit: z.number().int().min(1).max(50).optional(),
     cursor: missionOverviewCursorSchema.optional(),
-    filter: z.enum(["all", "attention", "active", "paused", "drafts"]).optional(),
+    filter: z.enum(["all", "attention", "active", "paused", "completed", "drafts"]).optional(),
     query: z.string().max(200).optional(),
   })
   .strict();
@@ -190,6 +208,7 @@ const missionOverviewSchema = z
         running: z.number().int().nonnegative(),
         failedLast24Hours: z.number().int().nonnegative(),
         awaitingReview: z.number().int().nonnegative(),
+        completed: z.number().int().nonnegative(),
       })
       .strict(),
     items: z.array(
@@ -477,6 +496,7 @@ export const missionsMethods = defineServiceMethods({
           runId: z.string().min(1),
           outcome: z.enum(["succeeded", "failed"]),
           finalMessage: z.string().optional(),
+          completionResponse: z.string().optional(),
           error: z.string().optional(),
         })
         .strict(),

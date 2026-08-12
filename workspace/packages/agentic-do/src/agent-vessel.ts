@@ -87,6 +87,10 @@ import {
   type SubagentIdentity,
 } from "@workspace/agentic-core/subagent-prompt";
 import type { DoAlarmSchedule } from "@vibestudio/shared/doDispatcher";
+import {
+  MISSION_COMPLETION_PROTOCOL,
+  missionCompletionResponse,
+} from "@vibestudio/shared/authority/mission";
 import type {
   ClaimRequest,
   ClaimSettlement,
@@ -1220,12 +1224,24 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     signal?: AbortSignal
   ): string | undefined | Promise<string | undefined> {
     const subagent = this.subagentIdentity();
+    const automation = (
+      this.driver as AgentLoopDriver & {
+        peekLoadedLoop?: AgentLoopDriver["peekLoadedLoop"];
+      }
+    ).peekLoadedLoop?.(channelId)?.state.openTurn?.metadata?.automation;
+    const automationPrompt = automation
+      ? "You are executing one reviewed automation tick. If this tick establishes that the recurring goal is naturally finished and no future tick is needed, call complete_automation exactly once with a concise completion response. Otherwise finish normally so the schedule continues. Do not call complete_automation merely because this individual tick succeeded."
+      : "";
+    const immediate = this.immediatePrompt(channelId);
     // Closed receipts already carry their frozen integration snapshot; only
     // open runs have a live projection worth an RPC round-trip per model call.
     const openRuns = this.subagentRuns
       .listAll()
       .filter((run) => run.parentChannelId === channelId && run.parentContextId);
-    if (openRuns.length === 0) return this.immediatePrompt(channelId);
+    if (openRuns.length === 0) {
+      const parts = [immediate, automationPrompt].filter(Boolean);
+      return parts.length > 0 ? parts.join("\n\n") : undefined;
+    }
     return (async () => {
       const contextIds = [...new Set(openRuns.map((run) => run.parentContextId!))];
       const vcs = createSubagentVcsClient(this.rpc);
@@ -1239,7 +1255,11 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       }
       const parentStatusByContext = new Map(statuses);
       const supervised = this.supervisedSubagentRuntimePrompt(channelId, parentStatusByContext);
-      const parts = [subagent ? subagentRuntimePrompt(subagent) : "", supervised].filter(Boolean);
+      const parts = [
+        automationPrompt,
+        subagent ? subagentRuntimePrompt(subagent) : "",
+        supervised,
+      ].filter(Boolean);
       return parts.length > 0 ? parts.join("\n\n") : undefined;
     })();
   }
@@ -1469,18 +1489,33 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       throw new Error("The automation ledger must resolve to a Durable Object");
     }
     const failed = Boolean(input.reason && input.reason !== "tool_terminated");
+    const completionKey = automationCompletionStateKey(runId);
+    const recordedCompletion = automationCompletionForTurn(
+      this.getStateValue(completionKey),
+      input.channelId,
+      input.turnId
+    );
+    const evalCompletion =
+      !failed && input.metadata.automation?.action === "eval"
+        ? automationCompletionFromEvalSummary(input.summary)
+        : null;
+    const completionResponse = recordedCompletion?.response ?? evalCompletion?.response;
     await this.rpc.call(service.targetId, "finishRun", [
       {
         runId,
         outcome: failed ? "failed" : "succeeded",
         ...(input.finalMessage
           ? { finalMessage: input.finalMessage }
-          : !failed && input.summary
-            ? { finalMessage: input.summary }
-            : {}),
+          : !failed && completionResponse
+            ? { finalMessage: completionResponse }
+            : !failed && input.summary
+              ? { finalMessage: input.summary }
+              : {}),
+        ...(!failed && completionResponse ? { completionResponse } : {}),
         ...(failed ? { error: input.summary ?? input.reason ?? "Automation turn failed" } : {}),
       },
     ]);
+    if (recordedCompletion) this.deleteStateValue(completionKey);
   }
 
   protected registerAgentAlarmSource(source: AgentAlarmSource): void {
@@ -2449,6 +2484,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       if (this.includeMemoryRecallTool()) {
         registry.set("memory_recall", this.createMemoryRecallTool());
       }
+      registry.set("complete_automation", this.createAutomationCompletionTool(channelId));
       for (const tool of await this.getLoopTools(channelId, execution)) {
         registry.set(tool.name, tool);
       }
@@ -2460,12 +2496,60 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       if (this.includeMemoryRecallTool()) {
         registry.set("memory_recall", this.createMemoryRecallTool());
       }
+      registry.set("complete_automation", this.createAutomationCompletionTool(channelId));
       for (const tool of await this.getLoopTools(channelId)) {
         registry.set(tool.name, tool);
       }
       this.localTools.set(channelId, registry);
     }
     return registry;
+  }
+
+  private createAutomationCompletionTool(channelId: string): AgentTool {
+    return {
+      name: "complete_automation",
+      label: "complete_automation",
+      description:
+        "Complete the current recurring automation and prevent future ticks. This is available only inside a scheduled automation turn. Call it when the automation's natural goal is finished; the response is retained in the run and automation history.",
+      parameters: {
+        type: "object",
+        properties: {
+          response: {
+            type: "string",
+            description:
+              "Concise final explanation of what completed and why no more ticks are needed.",
+          },
+        },
+        required: ["response"],
+        additionalProperties: false,
+      } as never,
+      execute: async (_toolCallId, params) => {
+        const response = String((params as { response?: unknown }).response ?? "").trim();
+        if (!response) throw new Error("complete_automation requires a completion response");
+        if (response.length > 24_000) {
+          throw new Error("complete_automation response exceeds 24000 characters");
+        }
+        const turn = this.driver.peekLoadedLoop(channelId)?.state.openTurn;
+        const automation = turn?.metadata?.automation;
+        if (!turn || !automation) {
+          throw new Error("complete_automation is only available during an automation turn");
+        }
+        this.setStateValue(
+          automationCompletionStateKey(automation.runId),
+          JSON.stringify({ channelId, turnId: turn.turnId, response })
+        );
+        return {
+          content: [
+            {
+              type: "text",
+              text: "Automation completion recorded; no future ticks will be scheduled.",
+            },
+          ],
+          details: { protocol: MISSION_COMPLETION_PROTOCOL, response },
+          terminate: true,
+        } as AgentToolResult<Record<string, unknown>>;
+      },
+    } as AgentTool;
   }
 
   /**
@@ -7996,5 +8080,49 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       next.respondFrom = from as string[];
     }
     return this.updateSettings(next);
+  }
+}
+
+function automationCompletionStateKey(runId: string): string {
+  return `automation:completion:${runId}`;
+}
+
+function automationCompletionForTurn(
+  value: string | null,
+  channelId: string,
+  turnId: string
+): { response: string } | null {
+  if (!value) return null;
+  try {
+    const candidate = JSON.parse(value) as {
+      channelId?: unknown;
+      turnId?: unknown;
+      response?: unknown;
+    };
+    return candidate.channelId === channelId &&
+      candidate.turnId === turnId &&
+      typeof candidate.response === "string" &&
+      candidate.response.trim()
+      ? { response: candidate.response.trim() }
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function automationCompletionFromEvalSummary(
+  summary: string | undefined
+): { response: string } | null {
+  if (!summary) return null;
+  try {
+    const value = JSON.parse(summary) as unknown;
+    const direct = missionCompletionResponse(value);
+    if (direct) return direct;
+    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+    const details = (value as { details?: unknown }).details;
+    if (!details || typeof details !== "object" || Array.isArray(details)) return null;
+    return missionCompletionResponse((details as { returnValue?: unknown }).returnValue);
+  } catch {
+    return null;
   }
 }

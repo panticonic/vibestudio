@@ -47,7 +47,7 @@ import type {
 } from "@vibestudio/shared/authority/mission";
 import { AboutPage, AboutThemeRoot } from "../../packages/about-shared/ui";
 
-type Filter = "all" | "attention" | "active" | "paused" | "drafts";
+type Filter = "all" | "attention" | "active" | "paused" | "completed" | "drafts";
 type AutomationRecord = MissionRecord;
 type RunRecord = MissionRunRecord;
 type AutomationState = MissionRecord["state"];
@@ -67,6 +67,7 @@ type Overview = {
     running: number;
     failedLast24Hours: number;
     awaitingReview: number;
+    completed: number;
   };
   items: OverviewItem[];
   nextCursor?: OverviewCursor;
@@ -246,20 +247,32 @@ function activityFor(automation: AutomationRecord, run: RunRecord) {
       missionId: automation.missionId,
       runId: run.runId,
       name: automation.name,
-      revision: automation.revision,
+      revision: run.revision,
       action: execution.kind === "method" ? ("method" as const) : execution.action.kind,
       trigger: run.trigger,
       startedAt: run.startedAt,
       createdAt: automation.createdAt,
       ...(automation.activatedAt === undefined ? {} : { activatedAt: automation.activatedAt }),
+      ...(run.runNumber === undefined ? {} : { runNumber: run.runNumber }),
       schedule:
         trigger.kind === "schedule"
           ? {
+              kind: "interval" as const,
               everyMs: trigger.everyMs,
               ...(trigger.anchorAt === undefined ? {} : { anchorAt: trigger.anchorAt }),
               ...(trigger.jitterMs === undefined ? {} : { jitterMs: trigger.jitterMs }),
+              ...(trigger.untilAt === undefined ? {} : { untilAt: trigger.untilAt }),
+              ...(trigger.maxRuns === undefined ? {} : { maxRuns: trigger.maxRuns }),
             }
-          : null,
+          : trigger.kind === "cron"
+            ? {
+                kind: "cron" as const,
+                expression: trigger.expression,
+                timezone: trigger.timezone,
+                ...(trigger.untilAt === undefined ? {} : { untilAt: trigger.untilAt }),
+                ...(trigger.maxRuns === undefined ? {} : { maxRuns: trigger.maxRuns }),
+              }
+            : null,
     },
     status:
       run.status === "succeeded"
@@ -302,7 +315,25 @@ function RunRow({ run, automation }: { run: RunRecord; automation: AutomationRec
             <Callout.Text style={{ overflowWrap: "anywhere" }}>{run.error}</Callout.Text>
           </Callout.Root>
         ) : null}
-        {run.finalMessage ? (
+        {run.completionResponse ? (
+          <Callout.Root color="green" size="1">
+            <Callout.Icon>
+              <CheckCircledIcon />
+            </Callout.Icon>
+            <Callout.Text>
+              <Text as="span" weight="medium" style={{ display: "block" }}>
+                Natural completion response
+              </Text>
+              <Text
+                as="span"
+                style={{ display: "block", whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}
+              >
+                {run.completionResponse}
+              </Text>
+            </Callout.Text>
+          </Callout.Root>
+        ) : null}
+        {run.finalMessage && run.finalMessage !== run.completionResponse ? (
           <details>
             <summary style={{ cursor: "pointer", color: "var(--gray-11)", fontSize: 13 }}>
               Final message
@@ -386,7 +417,9 @@ function executionDescription(automation: AutomationRecord): string {
 function scheduleDescription(automation: AutomationRecord): string {
   const trigger = automation.charter.trigger;
   if (trigger.kind === "manual") return "Manual only";
-  return `Every ${duration(trigger.everyMs)}`;
+  return trigger.kind === "schedule"
+    ? `Every ${duration(trigger.everyMs)}`
+    : `${trigger.expression} · ${trigger.timezone}`;
 }
 
 function ScheduleDetails({ automation }: { automation: AutomationRecord }) {
@@ -394,12 +427,12 @@ function ScheduleDetails({ automation }: { automation: AutomationRecord }) {
   if (trigger.kind === "manual") return null;
   return (
     <Flex direction="column" mt="1">
-      {trigger.anchorAt !== undefined ? (
+      {trigger.kind === "schedule" && trigger.anchorAt !== undefined ? (
         <Text size="1" color="gray" title={absoluteTime(trigger.anchorAt)}>
           Aligned to {absoluteTime(trigger.anchorAt)}
         </Text>
       ) : null}
-      {trigger.jitterMs ? (
+      {trigger.kind === "schedule" && trigger.jitterMs ? (
         <Text size="1" color="gray">
           Up to {duration(trigger.jitterMs)} jitter
         </Text>
@@ -409,6 +442,20 @@ function ScheduleDetails({ automation }: { automation: AutomationRecord }) {
           Next {relativeTime(automation.nextRunAt)}
         </Text>
       ) : null}
+      {trigger.untilAt !== undefined ? (
+        <Text size="1" color="gray" title={absoluteTime(trigger.untilAt)}>
+          Stops {absoluteTime(trigger.untilAt)}
+        </Text>
+      ) : null}
+      {trigger.maxRuns !== undefined ? (
+        <Text size="1" color="gray">
+          {automation.runCount} of {trigger.maxRuns} runs admitted
+        </Text>
+      ) : (
+        <Text size="1" color="gray">
+          {automation.runCount} run{automation.runCount === 1 ? "" : "s"} admitted
+        </Text>
+      )}
     </Flex>
   );
 }
@@ -692,11 +739,13 @@ function AutomationCard({
                 color={
                   automation.state === "active"
                     ? "green"
-                    : automation.state === "needs-reapproval"
-                      ? "amber"
-                      : automation.state === "paused"
-                        ? "blue"
-                        : "gray"
+                    : automation.state === "completed"
+                      ? "violet"
+                      : automation.state === "needs-reapproval"
+                        ? "amber"
+                        : automation.state === "paused"
+                          ? "blue"
+                          : "gray"
                 }
                 variant="soft"
               >
@@ -740,7 +789,7 @@ function AutomationCard({
                   aria-label={`Stop recurring calls for ${automation.name}`}
                 >
                   {busyAction === "pause" ? <Spinner size="1" /> : <PauseIcon />}
-                  {automation.charter.trigger.kind === "schedule"
+                  {automation.charter.trigger.kind !== "manual"
                     ? "Stop recurring calls"
                     : "Pause automation"}
                 </Button>
@@ -828,6 +877,38 @@ function AutomationCard({
             ) : null}
           </Box>
         </Grid>
+
+        {automation.state === "completed" ? (
+          <Callout.Root color="green" size="1">
+            <Callout.Icon>
+              <CheckCircledIcon />
+            </Callout.Icon>
+            <Callout.Text>
+              <Text as="span" weight="medium" style={{ display: "block" }}>
+                Completed
+                {automation.completedAt === undefined
+                  ? ""
+                  : ` ${absoluteTime(automation.completedAt)}`}
+              </Text>
+              <Text as="span" style={{ display: "block" }}>
+                {automation.completionReason === "response"
+                  ? "The automation reported that its recurring goal was finished."
+                  : automation.completionReason === "max-runs"
+                    ? "The configured maximum run count was reached."
+                    : "The configured end time was reached."}
+              </Text>
+              {automation.completionResponse ? (
+                <Text
+                  as="span"
+                  mt="1"
+                  style={{ display: "block", whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}
+                >
+                  {automation.completionResponse}
+                </Text>
+              ) : null}
+            </Callout.Text>
+          </Callout.Root>
+        ) : null}
 
         <Disclosure
           initiallyOpen={item.activeRuns > 0 || item.failedRunsSince > 0}
@@ -998,6 +1079,7 @@ function AutomationsPage() {
     running: 0,
     failedLast24Hours: 0,
     awaitingReview: 0,
+    completed: 0,
   };
 
   return (
@@ -1027,7 +1109,7 @@ function AutomationsPage() {
         </Flex>
       }
     >
-      <Grid columns={{ initial: "2", sm: "4" }} gap="3">
+      <Grid columns={{ initial: "2", sm: "5" }} gap="3">
         <MetricCard
           label="Active"
           value={counts.active}
@@ -1051,6 +1133,7 @@ function AutomationsPage() {
           value={counts.awaitingReview}
           detail="inert until approved"
         />
+        <MetricCard label="Completed" value={counts.completed} detail="ended naturally" />
       </Grid>
 
       {error ? (
@@ -1110,6 +1193,7 @@ function AutomationsPage() {
             <SegmentedControl.Item value="attention">Attention</SegmentedControl.Item>
             <SegmentedControl.Item value="active">Active</SegmentedControl.Item>
             <SegmentedControl.Item value="paused">Paused</SegmentedControl.Item>
+            <SegmentedControl.Item value="completed">Completed</SegmentedControl.Item>
             <SegmentedControl.Item value="drafts">Drafts</SegmentedControl.Item>
           </SegmentedControl.Root>
         </Box>

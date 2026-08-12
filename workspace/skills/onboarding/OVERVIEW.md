@@ -68,8 +68,9 @@ The chat panel hosts an AI agent that can:
 - **Import browser data** — cookies, passwords, bookmarks, history
 - **Automate browsers** via Playwright-style CDP automation (`handle.cdp.page()`)
 - **Schedule recurring work** — run a reviewed worker method, exact inline eval,
-  or agent prompt on a cadence, then inspect and control every durable tick from
-  its chat-history pill or Automations
+  or agent prompt on an interval or timezone-aware cron calendar, optionally
+  ending at a time, run limit, or natural completion response; inspect and
+  control every durable tick from its chat-history pill or Automations
 - **Use private eval SQLite for scratch work**, call DO-backed app databases,
   call AI models, manage workers
 
@@ -82,14 +83,18 @@ agent work can instead send a prompt through the ordinary turn loop. Both agent
 actions use either a fresh conversation for every run or one specific
 continuing conversation. Agents can prepare and edit inert drafts and control
 reviewed runs, but only the user activates a revision after reviewing the exact
-target, schedule, reach, and standing authority.
+target, schedule, end policy, reach, and standing authority. Schedules can use
+elapsed intervals or five-field cron in a reviewed IANA timezone. They can end
+at a time, after a maximum number of admitted runs, or when a prompt, eval, or
+method returns an explicit natural-completion response.
 
 The **Automations** panel is both the review and supervision surface. It
-highlights active runs, drafts awaiting review, and recent failures; provides
-search, filters, and paged run history; shows each run's final message or error;
-and links agent runs to their exact conversations. The same definition/tick
-inspector appears on first-class scheduled-activity pills in chat history, with
-lazy detail loading plus edit and stop/resume controls.
+highlights active runs, completed definitions, drafts awaiting review, and
+recent failures; provides search, filters, and paged run history; shows each
+run's completion response, final message, or error; and links agent runs to
+their exact conversations. The same definition/tick inspector appears on
+first-class scheduled-activity pills in chat history, with lazy detail loading
+plus edit and stop/resume controls.
 
 ### Workers (Workerd)
 

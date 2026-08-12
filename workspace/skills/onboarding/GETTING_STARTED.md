@@ -67,10 +67,11 @@ Ready-now choices begin work directly. For example, a PDF choice asks for the
 document or starts an ingestion task; it never creates a PDF setup flow.
 Likewise, **Schedule recurring work** begins the Automations owner workflow: it
 chooses a deterministic method, a model-free inline eval in an existing agent,
-or an agent prompt; resolves the exact target; and proposes a reviewable draft.
-The user approves it and later inspects/controls runs from either the shared
-chat-history tick inspector or the Automations panel; opening the panel alone
-does not complete the request.
+or an agent prompt; selects an interval or timezone-aware cron cadence plus any
+time/run/natural-completion boundary; resolves the exact target; and proposes a
+reviewable draft. The user approves it and later inspects/controls runs from
+either the shared chat-history tick inspector or the Automations panel; opening
+the panel alone does not complete the request.
 Channel and project configuration is disclosed only when the user chooses that
 channel or project goal.
 

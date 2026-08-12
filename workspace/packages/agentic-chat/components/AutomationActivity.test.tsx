@@ -43,6 +43,7 @@ const automation: MissionRecord = {
   createdAt: 1_700_000_000_000,
   updatedAt: 1_700_000_000_000,
   activatedAt: 1_700_000_000_000,
+  runCount: 1,
   permissions: [],
   standingRestrictions: [],
 };
@@ -51,9 +52,11 @@ const run: MissionRunRecord = {
   runId: "run-42",
   missionId: automation.missionId,
   closureDigest: "c".repeat(64),
+  revision: 2,
   trigger: "scheduled",
   status: "succeeded",
   startedAt: 1_700_100_000_000,
+  runNumber: 1,
   finishedAt: 1_700_100_002_000,
   finalMessage: "Everything looks good.",
 };
@@ -112,7 +115,7 @@ describe("AutomationActivity", () => {
               startedAt: run.startedAt,
               createdAt: automation.createdAt,
               activatedAt: automation.activatedAt,
-              schedule: { everyMs: 86_400_000 },
+              schedule: { kind: "interval", everyMs: 86_400_000 },
             },
             status: "succeeded",
             openedAt: new Date(run.startedAt).toISOString(),
@@ -153,7 +156,7 @@ describe("AutomationActivity", () => {
               startedAt: run.startedAt,
               createdAt: automation.createdAt,
               activatedAt: automation.activatedAt,
-              schedule: { everyMs: 86_400_000 },
+              schedule: { kind: "interval", everyMs: 86_400_000 },
             },
             status: "succeeded",
             openedAt: new Date(run.startedAt).toISOString(),
@@ -188,5 +191,136 @@ describe("AutomationActivity", () => {
         })
       )
     );
+  });
+
+  it("displays and edits calendar cadence, timezone, and finite-run controls together", async () => {
+    const calendarAutomation: MissionRecord = {
+      ...automation,
+      runCount: 4,
+      charter: {
+        ...automation.charter,
+        trigger: {
+          kind: "cron",
+          expression: "5 5 * * THU",
+          timezone: "America/New_York",
+          untilAt: Date.parse("2099-10-01T00:00:00.000Z"),
+          maxRuns: 8,
+        },
+      },
+    };
+    const api = client();
+    render(
+      <Theme>
+        <AutomationActivity
+          activity={{
+            snapshot: {
+              missionId: calendarAutomation.missionId,
+              runId: run.runId,
+              name: calendarAutomation.name,
+              revision: calendarAutomation.revision,
+              action: "prompt",
+              trigger: "scheduled",
+              startedAt: run.startedAt,
+              createdAt: calendarAutomation.createdAt,
+              activatedAt: calendarAutomation.activatedAt,
+              runNumber: 4,
+              schedule: {
+                kind: "cron",
+                expression: "5 5 * * THU",
+                timezone: "America/New_York",
+                untilAt: Date.parse("2099-10-01T00:00:00.000Z"),
+                maxRuns: 8,
+              },
+            },
+            status: "succeeded",
+            openedAt: new Date(run.startedAt).toISOString(),
+            closedAt: new Date(run.finishedAt!).toISOString(),
+          }}
+          automation={calendarAutomation}
+          run={{ ...run, runNumber: 4 }}
+          client={api}
+        />
+      </Theme>
+    );
+
+    expect(screen.getByText(/5 5 \* \* THU · America\/New_York/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /Inspect automation tick Daily check/ }));
+    expect(await screen.findByText("4 runs of 8")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Edit parameters" }));
+    expect((screen.getByLabelText("Cron expression") as HTMLInputElement).value).toBe(
+      "5 5 * * THU"
+    );
+    expect((screen.getByLabelText("Cron timezone") as HTMLInputElement).value).toBe(
+      "America/New_York"
+    );
+    fireEvent.change(screen.getByLabelText("Cron expression"), {
+      target: { value: "35 7 * * MON-FRI" },
+    });
+    fireEvent.change(screen.getByLabelText("Maximum runs"), { target: { value: "12" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save as new revision" }));
+
+    await waitFor(() =>
+      expect(api.edit).toHaveBeenCalledWith(
+        calendarAutomation.missionId,
+        expect.objectContaining({
+          charter: expect.objectContaining({
+            trigger: expect.objectContaining({
+              kind: "cron",
+              expression: "35 7 * * MON-FRI",
+              timezone: "America/New_York",
+              maxRuns: 12,
+              untilAt: expect.any(Number),
+            }),
+          }),
+        })
+      )
+    );
+  });
+
+  it("highlights the natural completion response in the automation and tick history", async () => {
+    const completed: MissionRecord = {
+      ...automation,
+      state: "completed",
+      completedAt: 1_700_100_002_000,
+      completionReason: "response",
+      completionResponse: "The monitored rollout is healthy everywhere.",
+    };
+    const completedRun: MissionRunRecord = {
+      ...run,
+      completionResponse: "The monitored rollout is healthy everywhere.",
+    };
+    render(
+      <Theme>
+        <AutomationActivity
+          activity={{
+            snapshot: {
+              missionId: completed.missionId,
+              runId: completedRun.runId,
+              name: completed.name,
+              revision: completed.revision,
+              action: "prompt",
+              trigger: "scheduled",
+              startedAt: completedRun.startedAt,
+              createdAt: completed.createdAt,
+              activatedAt: completed.activatedAt,
+              runNumber: 1,
+              schedule: { kind: "interval", everyMs: 86_400_000 },
+            },
+            status: "succeeded",
+            openedAt: new Date(completedRun.startedAt).toISOString(),
+            closedAt: new Date(completedRun.finishedAt!).toISOString(),
+          }}
+          automation={completed}
+          run={completedRun}
+          client={client()}
+        />
+      </Theme>
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /Inspect automation tick Daily check/ }));
+    expect(await screen.findByText("Automation completed", { exact: false })).toBeTruthy();
+    expect(screen.getByText("Natural completion response")).toBeTruthy();
+    expect(screen.getByText("The monitored rollout is healthy everywhere.")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Run now" })).toBeNull();
   });
 });

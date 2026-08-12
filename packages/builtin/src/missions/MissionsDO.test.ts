@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createHash } from "node:crypto";
 import {
   DURABLE_OBJECT_FRAMEWORK_RPC_METHODS,
@@ -8,7 +8,11 @@ import {
 import { createTestDO } from "@vibestudio/durable/test-utils";
 import { rpcExposedMethodNames } from "@vibestudio/rpc";
 import { missionsMethods } from "@vibestudio/service-schemas/missions";
-import type { MissionCharter, MissionRecord } from "@vibestudio/shared/authority/mission";
+import type {
+  MissionCharter,
+  MissionRecord,
+  MissionRunRecord,
+} from "@vibestudio/shared/authority/mission";
 import type { ReviewedExecutionClosureBody } from "@vibestudio/shared/authority/reviewedExecutionClosure";
 import { canonicalJson } from "@vibestudio/shared/canonicalJson";
 import { MissionsDO } from "./MissionsDO.js";
@@ -96,6 +100,23 @@ const charter = (): MissionCharter => ({
   trigger: { kind: "manual" },
 });
 
+const methodCharter = (resultLimit?: number): MissionCharter => ({
+  summary: "Check whether the rollout is complete",
+  harness: { unit: "workers/rollout", ev: "d".repeat(64) },
+  execution: {
+    kind: "method",
+    target: { source: "workers/rollout", className: "RolloutWorker", objectKey: "primary" },
+    method: "check",
+    args: [],
+  },
+  trigger: {
+    kind: "cron",
+    expression: "5 5 * * THU",
+    timezone: "America/New_York",
+    ...(resultLimit === undefined ? {} : { maxRuns: resultLimit }),
+  },
+});
+
 async function missions() {
   return createTestDO(MissionsDO, {
     WORKER_SOURCE: "vibestudio/internal",
@@ -142,6 +163,12 @@ describe("MissionsDO", () => {
       legacyDigest,
       legacyDigest
     );
+    legacy.sql.exec(
+      `INSERT INTO mission_runs
+       (run_id,mission_id,closure_digest,trigger_kind,status,started_at,finished_at,final_message)
+       VALUES ('legacy-run','kept',?,'scheduled','succeeded',1,2,'done')`,
+      legacyDigest
+    );
 
     const migrated = await createTestDO(
       MissionsDO,
@@ -158,7 +185,15 @@ describe("MissionsDO", () => {
         .exec(`PRAGMA table_info(missions)`)
         .toArray()
         .map((column) => column["name"])
-    ).toContain("activated_at");
+    ).toEqual(
+      expect.arrayContaining([
+        "activated_at",
+        "run_count",
+        "completed_at",
+        "completion_reason",
+        "completion_response",
+      ])
+    );
     await expect(
       migrated.callAs<MissionRecord>(
         { callerId: "panel:alice", callerKind: "panel", userId: "alice" },
@@ -169,6 +204,7 @@ describe("MissionsDO", () => {
       name: "Existing automation",
       revision: 2,
       state: "needs-reapproval",
+      runCount: 1,
       charter: { execution: { action: { kind: "prompt", text: "Prepare a daily summary" } } },
     });
     expect(
@@ -189,7 +225,17 @@ describe("MissionsDO", () => {
     });
     expect(
       migrated.sql.exec(`SELECT version, name FROM _vibestudio_schema_migrations`).toArray()
-    ).toEqual([{ version: 3, name: "automation-actions-and-activation" }]);
+    ).toEqual([
+      { version: 3, name: "automation-actions-and-activation" },
+      { version: 4, name: "automation-termination-and-calendar-schedules" },
+    ]);
+    await expect(
+      migrated.callAs(
+        { callerId: "panel:alice", callerKind: "panel", userId: "alice" },
+        "getRun",
+        "legacy-run"
+      )
+    ).resolves.toMatchObject({ revision: 1, runNumber: 1, finalMessage: "done" });
   });
 
   it("exposes exactly the typed builtin contract", async () => {
@@ -275,14 +321,16 @@ describe("MissionsDO", () => {
       const status = index === 0 ? "running" : index === 1 ? "failed" : "succeeded";
       sql.exec(
         `INSERT INTO mission_runs
-         (run_id,mission_id,closure_digest,trigger_kind,status,started_at,finished_at,final_message,error)
-         VALUES (?,?,?,?,?,?,?,?,?)`,
+         (run_id,mission_id,closure_digest,mission_revision,trigger_kind,status,started_at,run_number,finished_at,final_message,error)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
         `run-${index}`,
         created.missionId,
         "b".repeat(64),
+        created.revision,
         index % 2 === 0 ? "scheduled" : "manual",
         status,
         now - index * 1_000,
+        index + 1,
         status === "running" ? null : now - index * 1_000 + 250,
         status === "succeeded" ? `result ${index}` : null,
         status === "failed" ? "provider unavailable" : null
@@ -296,6 +344,7 @@ describe("MissionsDO", () => {
         running: number;
         failedLast24Hours: number;
         awaitingReview: number;
+        completed: number;
       };
       items: Array<{
         automation: MissionRecord;
@@ -312,6 +361,7 @@ describe("MissionsDO", () => {
       running: 1,
       failedLast24Hours: 1,
       awaitingReview: 1,
+      completed: 0,
     });
     expect(overview.items).toEqual([
       expect.objectContaining({
@@ -417,5 +467,163 @@ describe("MissionsDO", () => {
       { query: "BILLING" }
     );
     expect(search.items.map((item) => item.automation.name)).toEqual(["Billing digest"]);
+  });
+
+  it("runs calendar automations to natural completion and preserves editable history", async () => {
+    const { instance, callAs } = await missions();
+    const alice = { callerId: "panel:alice", callerKind: "panel" as const, userId: "alice" };
+    const rpcCall = vi.fn(async (target: string, method: string) => {
+      if (target === "main" && method.startsWith("workspace-state.alarm")) return undefined;
+      if (target === "main" && method === "reviewedClosure.activate") return undefined;
+      if (target === "main" && method === "reviewedClosure.suspend") return undefined;
+      if (target === "main" && method === "reviewedClosure.bindSession") return undefined;
+      if (target === "main" && method === "reviewedClosure.finishSession") return undefined;
+      if (target === "main" && method === "runtime.createEntity") {
+        return { id: "rollout-worker", targetId: "do:rollout", contextId: undefined };
+      }
+      if (target === "do:rollout" && method === "check") {
+        return {
+          protocol: "automation-completion.v1",
+          response: "The rollout reached 100% and passed its health checks.",
+        };
+      }
+      throw new Error(`Unexpected RPC ${target}.${method}`);
+    });
+    Object.defineProperty(instance, "rpc", {
+      value: { call: rpcCall },
+      configurable: true,
+    });
+    const draft = await callAs<MissionRecord>(alice, "createDraft", {
+      name: "Rollout watcher",
+      charter: methodCharter(10),
+      permissions: [],
+    });
+    const active = await callAs<MissionRecord>(alice, "requestReview", draft.missionId);
+
+    expect(active).toMatchObject({
+      state: "active",
+      runCount: 0,
+      charter: {
+        trigger: {
+          kind: "cron",
+          expression: "5 5 * * THU",
+          timezone: "America/New_York",
+          maxRuns: 10,
+        },
+      },
+    });
+    expect(active.nextRunAt).toBeGreaterThan(Date.now());
+
+    const run = await callAs<MissionRunRecord>(alice, "runNow", draft.missionId);
+    expect(run).toMatchObject({
+      revision: 1,
+      runNumber: 1,
+      status: "succeeded",
+      completionResponse: "The rollout reached 100% and passed its health checks.",
+    });
+    const completed = await callAs<MissionRecord>(alice, "get", draft.missionId);
+    expect(completed).toMatchObject({
+      state: "completed",
+      runCount: 1,
+      completionReason: "response",
+      completionResponse: "The rollout reached 100% and passed its health checks.",
+    });
+    expect(completed.nextRunAt).toBeUndefined();
+
+    const revised = await callAs<MissionRecord>(alice, "edit", draft.missionId, {
+      charter: methodCharter(3),
+    });
+    expect(revised).toMatchObject({
+      state: "needs-reapproval",
+      revision: 2,
+      runCount: 1,
+    });
+    expect(revised.completedAt).toBeUndefined();
+    expect(revised.completionReason).toBeUndefined();
+    expect(revised.completionResponse).toBeUndefined();
+  });
+
+  it("completes after the configured maximum even when the terminal run fails", async () => {
+    const { instance, callAs } = await missions();
+    const alice = { callerId: "panel:alice", callerKind: "panel" as const, userId: "alice" };
+    const rpcCall = vi.fn(async (target: string, method: string) => {
+      if (target === "main" && method.startsWith("workspace-state.alarm")) return undefined;
+      if (target === "main" && method.startsWith("reviewedClosure.")) return undefined;
+      if (target === "main" && method === "runtime.createEntity") {
+        return { id: "rollout-worker", targetId: "do:rollout" };
+      }
+      if (target === "do:rollout" && method === "check") throw new Error("health check failed");
+      throw new Error(`Unexpected RPC ${target}.${method}`);
+    });
+    Object.defineProperty(instance, "rpc", {
+      value: { call: rpcCall },
+      configurable: true,
+    });
+    const draft = await callAs<MissionRecord>(alice, "createDraft", {
+      name: "Bounded rollout watcher",
+      charter: methodCharter(1),
+      permissions: [],
+    });
+    await callAs(alice, "requestReview", draft.missionId);
+    const run = await callAs<MissionRunRecord>(alice, "runNow", draft.missionId);
+
+    expect(run).toMatchObject({ status: "failed", runNumber: 1, error: "health check failed" });
+    await expect(callAs<MissionRecord>(alice, "get", draft.missionId)).resolves.toMatchObject({
+      state: "completed",
+      runCount: 1,
+      completionReason: "max-runs",
+    });
+  });
+
+  it("ends at the reviewed until boundary without starting another run", async () => {
+    vi.useFakeTimers();
+    try {
+      const now = Date.UTC(2026, 7, 12, 12);
+      vi.setSystemTime(now);
+      const { instance, callAs } = await missions();
+      const alice = { callerId: "panel:alice", callerKind: "panel" as const, userId: "alice" };
+      const rpcCall = vi.fn(async (target: string, method: string) => {
+        if (target === "main" && method.startsWith("workspace-state.alarm")) return undefined;
+        if (
+          target === "main" &&
+          (method === "reviewedClosure.activate" || method === "reviewedClosure.suspend")
+        )
+          return undefined;
+        throw new Error(`Unexpected RPC ${target}.${method}`);
+      });
+      Object.defineProperty(instance, "rpc", {
+        value: { call: rpcCall },
+        configurable: true,
+      });
+      const scheduled = charter();
+      scheduled.trigger = {
+        kind: "schedule",
+        everyMs: 60_000,
+        untilAt: now + 90_000,
+      };
+      const draft = await callAs<MissionRecord>(alice, "createDraft", {
+        name: "Short-lived watcher",
+        charter: scheduled,
+        permissions: [],
+      });
+      await callAs(alice, "requestReview", draft.missionId);
+
+      vi.setSystemTime(now + 90_000);
+      await instance.alarm();
+
+      await expect(callAs<MissionRecord>(alice, "get", draft.missionId)).resolves.toMatchObject({
+        state: "completed",
+        runCount: 0,
+        completedAt: now + 90_000,
+        completionReason: "until",
+      });
+      expect(rpcCall).not.toHaveBeenCalledWith(
+        expect.anything(),
+        "runtime.createEntity",
+        expect.anything()
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

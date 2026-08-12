@@ -12,7 +12,7 @@ import { createServer } from "node:http";
 import { describe, expect, it, vi } from "vitest";
 import { ledgerTest } from "../../../tests/helpers/ledgerTest.js";
 import { createTestDO } from "@workspace/runtime/worker/test-utils";
-import { ids } from "@workspace/agent-loop";
+import { ids, type AgentTurnMetadata } from "@workspace/agent-loop";
 import { logIdForChannel } from "@vibestudio/trajectory-identity";
 import { RemoteRpcError, rpc, type RpcClient } from "@vibestudio/rpc";
 import {
@@ -573,6 +573,57 @@ class PromptEventProbe extends TestVessel {
   }
 }
 
+class AutomationCompletionProbe extends PromptEventProbe {
+  private openAutomationTurn: { turnId: string; metadata: AgentTurnMetadata } | null = null;
+
+  setAutomationTurnForTest(automation: NonNullable<AgentTurnMetadata["automation"]>): void {
+    this.openAutomationTurn = {
+      turnId: "turn-automation",
+      metadata: { origin: "scheduled", automation },
+    };
+  }
+
+  protected override get driver(): AgentLoopDriver {
+    const openTurn = this.openAutomationTurn;
+    return {
+      activateChannel: vi.fn(),
+      handleIncoming: this.handleIncomingSpy,
+      peekLoadedLoop: vi.fn(() =>
+        openTurn ? { state: { openTurn } } : { state: { openTurn: null } }
+      ),
+    } as unknown as AgentLoopDriver;
+  }
+
+  async completeAutomationForTest(response: string): Promise<unknown> {
+    const tool = (
+      this as unknown as {
+        createAutomationCompletionTool(channelId: string): {
+          execute(callId: string, input: { response: string }): Promise<unknown>;
+        };
+      }
+    ).createAutomationCompletionTool(CHANNEL);
+    return tool.execute("complete-call", { response });
+  }
+
+  preparedAutomationPromptForTest(): Promise<string | undefined> | string | undefined {
+    return this.prepareImmediatePrompt(CHANNEL);
+  }
+
+  async closeAutomationTurnForTest(input: {
+    automation: NonNullable<AgentTurnMetadata["automation"]>;
+    summary?: string;
+    reason?: string;
+  }): Promise<void> {
+    await this.onTurnClosed({
+      channelId: CHANNEL,
+      turnId: "turn-automation",
+      metadata: { origin: "scheduled", automation: input.automation },
+      ...(input.summary === undefined ? {} : { summary: input.summary }),
+      ...(input.reason === undefined ? {} : { reason: input.reason }),
+    });
+  }
+}
+
 async function makeVessel(): Promise<TestVessel> {
   const { instance } = await createTestDO(TestVessel, TEST_AGENT_ENV);
   // Register a subscription row so the card path has a participant id, without
@@ -624,7 +675,7 @@ describe("AgentVesselBase automation ingress", () => {
     startedAt: 1_786_400_000_000,
     createdAt: 1_786_000_000_000,
     activatedAt: 1_786_100_000_000,
-    schedule: { everyMs: 3_600_000 },
+    schedule: { kind: "interval" as const, everyMs: 3_600_000 },
   };
 
   it("journals scheduled eval source as a direct pregranted eval invocation", async () => {
@@ -681,6 +732,82 @@ describe("AgentVesselBase automation ingress", () => {
         }),
       })
     );
+  });
+
+  it("records prompt completion as a first-class terminal automation response", async () => {
+    const { instance: vessel } = await createTestDO(AutomationCompletionProbe, TEST_AGENT_ENV);
+    await vessel.registerSubscriptionForTest(CHANNEL);
+    const promptAutomation = { ...automation, action: "prompt" as const };
+    vessel.setAutomationTurnForTest(promptAutomation);
+    const rpcCall = vi.fn(async (target: string, method: string) => {
+      if (target === "main" && method === "workers.resolveService") {
+        return { kind: "durable-object", targetId: "do:missions" };
+      }
+      if (target === "do:missions" && method === "finishRun") return undefined;
+      throw new Error(`Unexpected RPC ${target}.${method}`);
+    });
+    Object.defineProperty(vessel, "rpc", {
+      value: { call: rpcCall },
+      configurable: true,
+    });
+
+    expect(await vessel.preparedAutomationPromptForTest()).toContain(
+      "call complete_automation exactly once"
+    );
+    await expect(
+      vessel.completeAutomationForTest("All rollout targets are healthy.")
+    ).resolves.toMatchObject({ terminate: true });
+    await vessel.closeAutomationTurnForTest({
+      automation: promptAutomation,
+      reason: "tool_terminated",
+    });
+
+    expect(rpcCall).toHaveBeenCalledWith("do:missions", "finishRun", [
+      {
+        runId: automation.runId,
+        outcome: "succeeded",
+        finalMessage: "All rollout targets are healthy.",
+        completionResponse: "All rollout targets are healthy.",
+      },
+    ]);
+  });
+
+  it("recognizes the same completion protocol returned by a scheduled eval", async () => {
+    const { instance: vessel } = await createTestDO(AutomationCompletionProbe, TEST_AGENT_ENV);
+    await vessel.registerSubscriptionForTest(CHANNEL);
+    vessel.setAutomationTurnForTest(automation);
+    const rpcCall = vi.fn(async (target: string, method: string) => {
+      if (target === "main" && method === "workers.resolveService") {
+        return { kind: "durable-object", targetId: "do:missions" };
+      }
+      if (target === "do:missions" && method === "finishRun") return undefined;
+      throw new Error(`Unexpected RPC ${target}.${method}`);
+    });
+    Object.defineProperty(vessel, "rpc", {
+      value: { call: rpcCall },
+      configurable: true,
+    });
+    await vessel.closeAutomationTurnForTest({
+      automation,
+      summary: JSON.stringify({
+        protocolContent: [],
+        details: {
+          returnValue: {
+            protocol: "automation-completion.v1",
+            response: "No pending migrations remain.",
+          },
+        },
+      }),
+    });
+
+    expect(rpcCall).toHaveBeenCalledWith("do:missions", "finishRun", [
+      {
+        runId: automation.runId,
+        outcome: "succeeded",
+        finalMessage: "No pending migrations remain.",
+        completionResponse: "No pending migrations remain.",
+      },
+    ]);
   });
 });
 

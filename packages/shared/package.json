@@ -142,6 +142,7 @@
     "@vibestudio/workspace-contracts": "workspace:*",
     "@vscode/ripgrep": "1.18.0",
     "ajv": "^8.17.1",
+    "croner": "10.0.1",
     "ignore": "7.0.5",
     "tldts": "^7.0.19",
     "typescript": "7.0.2",

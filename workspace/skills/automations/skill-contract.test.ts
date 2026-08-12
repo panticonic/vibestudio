@@ -25,7 +25,7 @@ describe("Automations skill contract", () => {
 
     expect(skill).toContain("failures from the last 24 hours");
     expect(skill).toContain("paged history");
-    expect(skill).toContain("terminal message or error");
+    expect(skill).toContain("completion response or result/error");
     expect(skill).toContain("links to the exact conversation");
     expect(api).toContain("canonical deep-link identity for that conversation");
     expect(skill).toContain("chat-history pill");
@@ -34,5 +34,20 @@ describe("Automations skill contract", () => {
       "Agents can use the agent-facing `edit`, `runNow`, `pause`, `resume`, and"
     );
     expect(api).toContain("`requestReview` is intentionally not agent-facing");
+  });
+
+  it("documents interval, calendar, finite, and natural-completion schedules", () => {
+    const skill = compact("SKILL.md");
+    const api = compact("API.md");
+
+    expect(skill).toContain('kind: "schedule"');
+    expect(skill).toContain('kind: "cron"');
+    expect(skill).toContain('expression: "5 5 * * THU"');
+    expect(skill).toContain('timezone: "America/New_York"');
+    expect(skill).toContain("no run begins at or after");
+    expect(skill).toContain("failed runs count, while visible overlap skips do not");
+    expect(skill).toContain("`complete_automation` tool");
+    expect(api).toContain('protocol: "automation-completion.v1"');
+    expect(api).toContain("transitions the definition to `completed`");
   });
 });

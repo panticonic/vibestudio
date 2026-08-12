@@ -113,6 +113,7 @@ function automationInlineEvalDraftChecked(result: Parameters<typeof noIncomplete
 function isDailyProjectPulseDraft(value: unknown): boolean {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const record = value as Record<string, unknown>;
+  if (record["draft"] !== undefined) return isDailyProjectPulseDraft(record["draft"]);
   const charter = record["charter"];
   if (!charter || typeof charter !== "object" || Array.isArray(charter)) return false;
   const charterRecord = charter as Record<string, unknown>;
@@ -126,8 +127,11 @@ function isDailyProjectPulseDraft(value: unknown): boolean {
   return (
     record["name"] === "Daily project pulse" &&
     record["state"] === "draft" &&
-    trigger?.["kind"] === "schedule" &&
-    trigger["everyMs"] === 86_400_000 &&
+    trigger?.["kind"] === "cron" &&
+    trigger["expression"] === "5 5 * * THU" &&
+    trigger["timezone"] === "America/New_York" &&
+    trigger["untilAt"] === Date.UTC(2027, 0, 1, 5) &&
+    trigger["maxRuns"] === 12 &&
     execution?.["kind"] === "agent" &&
     target?.["source"] === "workers/agent-worker" &&
     target["className"] === "AiChatWorker" &&
@@ -135,6 +139,7 @@ function isDailyProjectPulseDraft(value: unknown): boolean {
     typeof source === "string" &&
     /services\.vcs\.status/u.test(source) &&
     /chat\.publish/u.test(source) &&
+    /automation-completion\.v1/u.test(source) &&
     conversation?.["mode"] === "fresh" &&
     exposure?.["evalNetwork"] === "none" &&
     Array.isArray(exposure["services"]) &&
@@ -208,10 +213,10 @@ export const unitDiagnosticsTests: TestCase[] = [
   },
   {
     name: "automation-inline-eval-draft",
-    description: "Agent proposes a reviewed recurring inline eval without publishing a worker",
+    description: "Agent proposes a finite timezone-aware calendar eval without publishing a worker",
     category: "unit-diagnostics",
     prompt:
-      "Please set up a daily automation named ‘Daily project pulse’. It should use a lightweight inline script—not a new code project or a model call—to inspect current project status and publish a concise status event into that run's conversation. Keep it offline, isolate each run in a fresh conversation, and leave it waiting for me to review rather than activating or running it.",
+      "Please set up an automation named ‘Daily project pulse’ for every Thursday at 5:05 a.m. America/New_York time. Stop it at midnight New York time when 2027 begins or after 12 admitted runs, whichever happens first. It should use a lightweight inline script—not a new code project or a model call—to inspect current project status and publish a concise status event into that run's conversation. When the status proves the recurring goal is finished, have the eval return the documented automation completion response. Keep it offline, isolate each run in a fresh conversation, and leave it waiting for me to review rather than activating or running it.",
     authorityPolicy: {
       authority: [
         {

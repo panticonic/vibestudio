@@ -46,9 +46,11 @@ invent a fallback.
 [Automations](../automations/SKILL.md). Read that returned skill, clarify only
 the details needed to choose a worker method, exact inline agent eval, or agent
 prompt, and propose an inert draft. Small recurring scripts can use the built-in
-agent/EvalDO path without publishing a new codebase. Agents can later edit,
-run, pause, resume, or retire reviewed automations when the user asks; activation
-of a new revision remains a human review action.
+agent/EvalDO path without publishing a new codebase. Choose either an elapsed
+interval or a cron calendar in an explicit timezone, and capture optional end
+time, maximum-run, and natural-completion behavior. Agents can later edit, run,
+pause, resume, or retire reviewed automations when the user asks; activation of
+a new revision remains a human review action.
 Do not open an empty supervision panel in place of helping, and do not imply the
 draft is scheduled before the user reviews it in Automations.
 

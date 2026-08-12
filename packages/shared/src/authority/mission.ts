@@ -1,9 +1,25 @@
 import { createHash } from "node:crypto";
+import { Cron } from "croner";
 import type { ResourceScope } from "@vibestudio/rpc";
 import { canonicalJson } from "../canonicalJson.js";
 import { normalizeWorkspaceRepoPath } from "../runtime/entitySpec.js";
 
-export type MissionState = "draft" | "active" | "needs-reapproval" | "paused" | "retired";
+export type MissionState =
+  | "draft"
+  | "active"
+  | "needs-reapproval"
+  | "paused"
+  | "completed"
+  | "retired";
+
+export type MissionCompletionReason = "until" | "max-runs" | "response";
+
+export const MISSION_COMPLETION_PROTOCOL = "automation-completion.v1" as const;
+
+export interface MissionCompletionResponse {
+  protocol: typeof MISSION_COMPLETION_PROTOCOL;
+  response: string;
+}
 
 export interface MissionTarget {
   source: string;
@@ -56,20 +72,28 @@ export type MissionExecution =
       )[];
     };
 
-/**
- * One schedule representation for both people and code. `anchorAt` is an epoch
- * millisecond alignment point: the next occurrence is the first
- * `anchorAt + n * everyMs` strictly after now. Omitting it makes activation
- * the cadence origin. This avoids cron's implicit host timezone and DST rules.
- */
+/** Shared termination rules for interval and timezone-aware calendar schedules. */
+interface MissionTerminationPolicy {
+  /** No new run starts at or after this epoch-millisecond boundary. */
+  untilAt?: number;
+  /** Maximum admitted executions. Failed runs count; overlap skips do not. */
+  maxRuns?: number;
+}
+
 export type MissionTrigger =
   | { kind: "manual" }
-  | {
+  | ({
       kind: "schedule";
       everyMs: number;
       anchorAt?: number;
       jitterMs?: number;
-    };
+    } & MissionTerminationPolicy)
+  | ({
+      /** Five-field Vixie cron expression evaluated in one IANA timezone. */
+      kind: "cron";
+      expression: string;
+      timezone: string;
+    } & MissionTerminationPolicy);
 
 export interface MissionCharter {
   summary: string;
@@ -90,6 +114,10 @@ export interface MissionRecord {
   updatedAt: number;
   /** First time a human activated this automation. Draft creation is not activation. */
   activatedAt?: number;
+  runCount: number;
+  completedAt?: number;
+  completionReason?: MissionCompletionReason;
+  completionResponse?: string;
   seeded?: boolean;
   permissions: readonly MissionPermission[];
   standingRestrictions: readonly MissionStandingRestriction[];
@@ -114,15 +142,18 @@ export interface MissionRunRecord {
   runId: string;
   missionId: string;
   closureDigest: string;
+  revision: number;
   trigger: "manual" | "scheduled";
   status: MissionRunStatus;
   startedAt: number;
+  runNumber?: number;
   finishedAt?: number;
   sessionId?: string;
   channelId?: string;
   contextId?: string;
   executorId?: string;
   finalMessage?: string;
+  completionResponse?: string;
   error?: string;
 }
 
@@ -175,6 +206,25 @@ export function validateMissionCharter(charter: MissionCharter): void {
         charter.trigger.jitterMs >= charter.trigger.everyMs)
     ) {
       throw new Error("Automation schedule jitterMs must be smaller than everyMs");
+    }
+  }
+  if (charter.trigger.kind === "cron") {
+    validateCronExpression(charter.trigger.expression);
+    validateTimeZone(charter.trigger.timezone);
+    cronNextRunAt(charter.trigger, Date.UTC(2024, 0, 1));
+  }
+  if (charter.trigger.kind !== "manual") {
+    if (
+      charter.trigger.untilAt !== undefined &&
+      (!Number.isSafeInteger(charter.trigger.untilAt) || charter.trigger.untilAt < 0)
+    ) {
+      throw new Error("Automation untilAt must be a non-negative epoch millisecond");
+    }
+    if (
+      charter.trigger.maxRuns !== undefined &&
+      (!Number.isSafeInteger(charter.trigger.maxRuns) || charter.trigger.maxRuns < 1)
+    ) {
+      throw new Error("Automation maxRuns must be a positive integer");
     }
   }
 }
@@ -263,14 +313,78 @@ function validateAgentExecution(execution: Extract<MissionExecution, { kind: "ag
 
 /** First scheduled occurrence strictly after `now`. */
 export function missionNextRunAt(
-  trigger: Extract<MissionTrigger, { kind: "schedule" }>,
+  trigger: Exclude<MissionTrigger, { kind: "manual" }>,
   now: number,
   cadenceOrigin = now
 ): number {
+  if (trigger.kind === "cron") return cronNextRunAt(trigger, now);
   const anchorAt = trigger.anchorAt ?? cadenceOrigin;
   if (anchorAt > now) return anchorAt;
   const elapsed = now - anchorAt;
   return anchorAt + (Math.floor(elapsed / trigger.everyMs) + 1) * trigger.everyMs;
+}
+
+export function missionCompletionResponse(value: unknown): MissionCompletionResponse | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const candidate = value as { protocol?: unknown; response?: unknown };
+  if (
+    candidate.protocol !== MISSION_COMPLETION_PROTOCOL ||
+    typeof candidate.response !== "string" ||
+    !candidate.response.trim()
+  ) {
+    return null;
+  }
+  return { protocol: MISSION_COMPLETION_PROTOCOL, response: candidate.response.trim() };
+}
+
+function validateCronExpression(expression: string): void {
+  const trimmed = expression.trim();
+  const nickname = /^@(yearly|annually|monthly|weekly|daily|midnight|hourly)$/iu.test(trimmed);
+  if (!nickname && trimmed.split(/\s+/u).length !== 5) {
+    throw new Error(
+      "Automation cron expression must use the five-field minute/hour/day/month/weekday format"
+    );
+  }
+  const canonical = nickname
+    ? trimmed.toLowerCase()
+    : trimmed.split(/\s+/u).join(" ").toUpperCase();
+  if (expression !== canonical) {
+    throw new Error(`Automation cron expression must be canonical: ${canonical}`);
+  }
+}
+
+function validateTimeZone(timezone: string): void {
+  try {
+    const canonical = new Intl.DateTimeFormat("en-US", { timeZone: timezone }).resolvedOptions()
+      .timeZone;
+    if (canonical !== timezone) {
+      throw new Error(`use canonical IANA timezone ${canonical}`);
+    }
+  } catch (error) {
+    throw new Error(
+      `Automation cron timezone must be a canonical IANA timezone: ${
+        error instanceof Error ? error.message : String(error)
+      }`
+    );
+  }
+}
+
+function cronNextRunAt(trigger: Extract<MissionTrigger, { kind: "cron" }>, now: number): number {
+  let next: Date | null;
+  try {
+    next = new Cron(trigger.expression, {
+      timezone: trigger.timezone,
+      paused: true,
+    }).nextRun(new Date(now));
+  } catch (error) {
+    throw new Error(
+      `Invalid automation cron schedule: ${error instanceof Error ? error.message : String(error)}`
+    );
+  }
+  if (!next || !Number.isSafeInteger(next.getTime())) {
+    throw new Error("Automation cron schedule has no future occurrence");
+  }
+  return next.getTime();
 }
 
 /**

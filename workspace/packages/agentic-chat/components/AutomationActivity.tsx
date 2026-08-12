@@ -167,14 +167,37 @@ export function formatAutomationInterval(value: number): string {
 }
 
 function scheduleSummary(snapshot: AutomationActivitySnapshot): string {
-  return snapshot.schedule
-    ? `Every ${formatAutomationInterval(snapshot.schedule.everyMs)}`
-    : "Manual";
+  if (!snapshot.schedule) return "Manual";
+  if (snapshot.schedule.kind === "cron") {
+    return `${snapshot.schedule.expression} · ${snapshot.schedule.timezone}`;
+  }
+  return `Every ${formatAutomationInterval(snapshot.schedule.everyMs)}`;
+}
+
+function terminationSummary(trigger: MissionCharter["trigger"]): string {
+  if (trigger.kind === "manual") return "No automatic end";
+  const parts = [
+    ...(trigger.untilAt === undefined ? [] : [`until ${formatAbsolute(trigger.untilAt)}`]),
+    ...(trigger.maxRuns === undefined
+      ? []
+      : [`after ${trigger.maxRuns} run${trigger.maxRuns === 1 ? "" : "s"}`]),
+  ];
+  return parts.length > 0 ? parts.join(" or ") : "Runs until stopped or completed";
+}
+
+function localDateTimeInput(value?: number): string {
+  if (value === undefined) return "";
+  const date = new Date(value);
+  return new Date(value - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
+}
+
+function localTimeZone(): string {
+  return Intl.DateTimeFormat().resolvedOptions().timeZone || "device time";
 }
 
 function activityStatus(activity: AutomationActivityPayload) {
   if (activity.status === "succeeded") {
-    return { label: "Completed", color: "green" as const, icon: <CheckCircledIcon /> };
+    return { label: "Succeeded", color: "green" as const, icon: <CheckCircledIcon /> };
   }
   if (activity.status === "failed") {
     return { label: "Failed", color: "red" as const, icon: <CrossCircledIcon /> };
@@ -194,7 +217,7 @@ function durationLabel(startedAt: number, finishedAt?: number): string {
 }
 
 function editableInterval(trigger: MissionCharter["trigger"]): { amount: string; unit: string } {
-  if (trigger.kind === "manual") return { amount: "1", unit: "day" };
+  if (trigger.kind !== "schedule") return { amount: "1", unit: "day" };
   if (trigger.everyMs % 86_400_000 === 0)
     return { amount: String(trigger.everyMs / 86_400_000), unit: "day" };
   if (trigger.everyMs % 3_600_000 === 0)
@@ -220,11 +243,30 @@ export function AutomationParametersEditor({
   onCancel(): void;
 }) {
   const initialInterval = editableInterval(automation.charter.trigger);
+  const initialTrigger = automation.charter.trigger;
   const [name, setName] = useState(automation.name);
   const [summary, setSummary] = useState(automation.charter.summary);
-  const [scheduled, setScheduled] = useState(automation.charter.trigger.kind === "schedule");
+  const [scheduleKind, setScheduleKind] = useState<"manual" | "interval" | "cron">(
+    initialTrigger.kind === "schedule" ? "interval" : initialTrigger.kind
+  );
   const [amount, setAmount] = useState(initialInterval.amount);
   const [unit, setUnit] = useState(initialInterval.unit);
+  const [cronExpression, setCronExpression] = useState(
+    initialTrigger.kind === "cron" ? initialTrigger.expression : "5 5 * * THU"
+  );
+  const [timezone, setTimezone] = useState(
+    initialTrigger.kind === "cron"
+      ? initialTrigger.timezone
+      : Intl.DateTimeFormat().resolvedOptions().timeZone
+  );
+  const [until, setUntil] = useState(
+    initialTrigger.kind === "manual" ? "" : localDateTimeInput(initialTrigger.untilAt)
+  );
+  const [maxRuns, setMaxRuns] = useState(
+    initialTrigger.kind === "manual" || initialTrigger.maxRuns === undefined
+      ? ""
+      : String(initialTrigger.maxRuns)
+  );
   const [payload, setPayload] = useState(() => {
     const execution = automation.charter.execution;
     if (execution.kind === "method") return JSON.stringify(execution.args, null, 2);
@@ -241,8 +283,27 @@ export function AutomationParametersEditor({
       setError("Name, purpose, and action are required.");
       return;
     }
-    if (scheduled && (!Number.isFinite(everyMs) || everyMs < 60_000)) {
+    if (scheduleKind === "interval" && (!Number.isFinite(everyMs) || everyMs < 60_000)) {
       setError("Recurring schedules must run no more often than once per minute.");
+      return;
+    }
+    if (scheduleKind === "cron" && (!cronExpression.trim() || !timezone.trim())) {
+      setError("Cron expression and IANA timezone are required.");
+      return;
+    }
+    const untilAt = until ? new Date(until).getTime() : undefined;
+    if (until && (!Number.isSafeInteger(untilAt) || untilAt! <= Date.now())) {
+      setError("The end time must be a valid future date and time.");
+      return;
+    }
+    const parsedMaxRuns = maxRuns ? Number(maxRuns) : undefined;
+    if (
+      parsedMaxRuns !== undefined &&
+      (!Number.isSafeInteger(parsedMaxRuns) ||
+        parsedMaxRuns < 1 ||
+        parsedMaxRuns <= automation.runCount)
+    ) {
+      setError(`Maximum runs must be greater than the ${automation.runCount} already admitted.`);
       return;
     }
     let nextExecution: MissionCharter["execution"];
@@ -268,20 +329,31 @@ export function AutomationParametersEditor({
         ...automation.charter,
         summary: summary.trim(),
         execution: nextExecution,
-        trigger: scheduled
-          ? {
-              kind: "schedule",
-              everyMs,
-              ...(previous.kind === "schedule" && previous.anchorAt !== undefined
-                ? { anchorAt: previous.anchorAt }
-                : {}),
-              ...(previous.kind === "schedule" &&
-              previous.jitterMs !== undefined &&
-              previous.jitterMs < everyMs
-                ? { jitterMs: previous.jitterMs }
-                : {}),
-            }
-          : { kind: "manual" },
+        trigger:
+          scheduleKind === "interval"
+            ? {
+                kind: "schedule",
+                everyMs,
+                ...(previous.kind === "schedule" && previous.anchorAt !== undefined
+                  ? { anchorAt: previous.anchorAt }
+                  : {}),
+                ...(previous.kind === "schedule" &&
+                previous.jitterMs !== undefined &&
+                previous.jitterMs < everyMs
+                  ? { jitterMs: previous.jitterMs }
+                  : {}),
+                ...(untilAt === undefined ? {} : { untilAt }),
+                ...(parsedMaxRuns === undefined ? {} : { maxRuns: parsedMaxRuns }),
+              }
+            : scheduleKind === "cron"
+              ? {
+                  kind: "cron",
+                  expression: cronExpression.trim(),
+                  timezone: timezone.trim(),
+                  ...(untilAt === undefined ? {} : { untilAt }),
+                  ...(parsedMaxRuns === undefined ? {} : { maxRuns: parsedMaxRuns }),
+                }
+              : { kind: "manual" },
       };
       onSaved(await client.edit(automation.missionId, { name: name.trim(), charter }));
     } catch (cause) {
@@ -289,7 +361,22 @@ export function AutomationParametersEditor({
     } finally {
       setSaving(false);
     }
-  }, [amount, automation, client, execution, name, onSaved, payload, scheduled, summary, unit]);
+  }, [
+    amount,
+    automation,
+    client,
+    cronExpression,
+    execution,
+    maxRuns,
+    name,
+    onSaved,
+    payload,
+    scheduleKind,
+    summary,
+    timezone,
+    unit,
+    until,
+  ]);
 
   return (
     <Flex direction="column" gap="3">
@@ -308,36 +395,105 @@ export function AutomationParametersEditor({
           onChange={(event) => setName(event.target.value)}
           placeholder="Automation name"
         />
-        <Flex gap="2" align="center">
-          <Select.Root
-            value={scheduled ? "scheduled" : "manual"}
-            onValueChange={(value) => setScheduled(value === "scheduled")}
-          >
-            <Select.Trigger style={{ flex: 1 }} />
-            <Select.Content>
-              <Select.Item value="scheduled">Recurring</Select.Item>
-              <Select.Item value="manual">Manual only</Select.Item>
-            </Select.Content>
-          </Select.Root>
-          {scheduled ? (
-            <>
-              <TextField.Root
-                value={amount}
-                onChange={(event) => setAmount(event.target.value)}
-                style={{ width: 72 }}
-              />
-              <Select.Root value={unit} onValueChange={setUnit}>
-                <Select.Trigger />
-                <Select.Content>
-                  <Select.Item value="minute">minutes</Select.Item>
-                  <Select.Item value="hour">hours</Select.Item>
-                  <Select.Item value="day">days</Select.Item>
-                </Select.Content>
-              </Select.Root>
-            </>
-          ) : null}
-        </Flex>
+        <Select.Root
+          value={scheduleKind}
+          onValueChange={(value) => setScheduleKind(value as typeof scheduleKind)}
+        >
+          <Select.Trigger style={{ flex: 1 }} />
+          <Select.Content>
+            <Select.Item value="interval">Recurring interval</Select.Item>
+            <Select.Item value="cron">Calendar / cron</Select.Item>
+            <Select.Item value="manual">Manual only</Select.Item>
+          </Select.Content>
+        </Select.Root>
       </Grid>
+      {scheduleKind === "interval" ? (
+        <Box>
+          <Text as="div" size="1" color="gray" mb="1">
+            Repeat every
+          </Text>
+          <Flex gap="2" align="center">
+            <TextField.Root
+              aria-label="Interval amount"
+              value={amount}
+              onChange={(event) => setAmount(event.target.value)}
+              style={{ width: 96 }}
+            />
+            <Select.Root value={unit} onValueChange={setUnit}>
+              <Select.Trigger />
+              <Select.Content>
+                <Select.Item value="minute">minutes</Select.Item>
+                <Select.Item value="hour">hours</Select.Item>
+                <Select.Item value="day">days</Select.Item>
+              </Select.Content>
+            </Select.Root>
+          </Flex>
+        </Box>
+      ) : null}
+      {scheduleKind === "cron" ? (
+        <Grid columns={{ initial: "1", sm: "2" }} gap="3">
+          <Box>
+            <Text as="div" size="1" color="gray" mb="1">
+              Cron expression · minute hour day month weekday
+            </Text>
+            <TextField.Root
+              aria-label="Cron expression"
+              value={cronExpression}
+              onChange={(event) => setCronExpression(event.target.value)}
+              placeholder="5 5 * * THU"
+            />
+            <Text as="div" size="1" color="gray" mt="1">
+              Example: 5 5 * * THU means Thursdays at 5:05 a.m.
+            </Text>
+          </Box>
+          <Box>
+            <Text as="div" size="1" color="gray" mb="1">
+              IANA timezone
+            </Text>
+            <TextField.Root
+              aria-label="Cron timezone"
+              value={timezone}
+              onChange={(event) => setTimezone(event.target.value)}
+              placeholder="America/New_York"
+            />
+            <Text as="div" size="1" color="gray" mt="1">
+              Wall-clock time stays correct through daylight-saving changes.
+            </Text>
+          </Box>
+        </Grid>
+      ) : null}
+      {scheduleKind !== "manual" ? (
+        <Grid columns={{ initial: "1", sm: "2" }} gap="3">
+          <Box>
+            <Text as="div" size="1" color="gray" mb="1">
+              Stop at · optional · {localTimeZone()}
+            </Text>
+            <TextField.Root
+              type="datetime-local"
+              aria-label="Automation end time"
+              value={until}
+              onChange={(event) => setUntil(event.target.value)}
+            />
+          </Box>
+          <Box>
+            <Text as="div" size="1" color="gray" mb="1">
+              Maximum total runs · optional
+            </Text>
+            <TextField.Root
+              type="number"
+              min={automation.runCount + 1}
+              step={1}
+              aria-label="Maximum runs"
+              value={maxRuns}
+              onChange={(event) => setMaxRuns(event.target.value)}
+              placeholder="No limit"
+            />
+            <Text as="div" size="1" color="gray" mt="1">
+              {automation.runCount} admitted so far; failed runs count, overlap skips do not.
+            </Text>
+          </Box>
+        </Grid>
+      ) : null}
       <TextArea
         aria-label="Automation purpose"
         value={summary}
@@ -494,7 +650,7 @@ function Inspector({
               onClick={() => void action("pause")}
             >
               <PauseIcon />
-              {current.charter.trigger.kind === "schedule"
+              {current.charter.trigger.kind !== "manual"
                 ? "Stop recurring calls"
                 : "Pause automation"}
             </Button>
@@ -536,8 +692,15 @@ function Inspector({
           <Text size="2" weight="medium">
             {current.charter.trigger.kind === "schedule"
               ? `Every ${formatAutomationInterval(current.charter.trigger.everyMs)}`
-              : "Manual only"}
+              : current.charter.trigger.kind === "cron"
+                ? current.charter.trigger.expression
+                : "Manual only"}
           </Text>
+          {current.charter.trigger.kind === "cron" ? (
+            <Text as="div" size="1" color="gray">
+              {current.charter.trigger.timezone}
+            </Text>
+          ) : null}
         </Box>
         <Box>
           <Text as="div" size="1" color="gray">
@@ -553,13 +716,67 @@ function Inspector({
         </Box>
         <Box>
           <Text as="div" size="1" color="gray">
-            Revision
+            Progress
           </Text>
           <Text size="2" weight="medium">
-            r{current.revision} · {current.state}
+            {current.runCount} run{current.runCount === 1 ? "" : "s"}
+            {current.charter.trigger.kind !== "manual" &&
+            current.charter.trigger.maxRuns !== undefined
+              ? ` of ${current.charter.trigger.maxRuns}`
+              : ""}
           </Text>
         </Box>
       </Grid>
+      {current.charter.trigger.kind !== "manual" ? (
+        <Grid columns={{ initial: "1", sm: "2" }} gap="3">
+          <Box>
+            <Text as="div" size="1" color="gray">
+              End policy
+            </Text>
+            <Text size="2" weight="medium">
+              {terminationSummary(current.charter.trigger)}
+            </Text>
+          </Box>
+          <Box>
+            <Text as="div" size="1" color="gray">
+              Revision
+            </Text>
+            <Text size="2" weight="medium">
+              r{current.revision} · {current.state}
+            </Text>
+          </Box>
+        </Grid>
+      ) : null}
+      {current.state === "completed" ? (
+        <Callout.Root color="green" size="1">
+          <Callout.Icon>
+            <CheckCircledIcon />
+          </Callout.Icon>
+          <Callout.Text>
+            <Text as="span" weight="medium" style={{ display: "block" }}>
+              Automation completed
+              {current.completedAt === undefined ? "" : ` ${formatAbsolute(current.completedAt)}`}
+            </Text>
+            <Text as="span" style={{ display: "block" }}>
+              {current.completionReason === "response"
+                ? "The automation reported that its recurring goal was finished."
+                : current.completionReason === "max-runs"
+                  ? "It reached its maximum run count."
+                  : "It reached its configured end time."}
+            </Text>
+            {current.completionResponse &&
+            current.completionResponse !== run?.completionResponse ? (
+              <Text
+                as="span"
+                mt="1"
+                style={{ display: "block", whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}
+              >
+                {current.completionResponse}
+              </Text>
+            ) : null}
+          </Callout.Text>
+        </Callout.Root>
+      ) : null}
       <Separator size="4" />
       <Box>
         <Flex align="center" gap="2" mb="2">
@@ -593,6 +810,9 @@ function Inspector({
             </Text>
             <Text size="2">
               {activity.snapshot.trigger === "scheduled" ? "Scheduled tick" : "Run now"}
+              {(run?.runNumber ?? activity.snapshot.runNumber) === undefined
+                ? ""
+                : ` · #${run?.runNumber ?? activity.snapshot.runNumber}`}
             </Text>
           </Box>
         </Grid>
@@ -604,7 +824,26 @@ function Inspector({
             <Callout.Text>{run?.error ?? activity.summary}</Callout.Text>
           </Callout.Root>
         ) : null}
-        {run?.finalMessage || (activity.status === "succeeded" && activity.summary) ? (
+        {run?.completionResponse ? (
+          <Callout.Root color="green" size="1" mt="3">
+            <Callout.Icon>
+              <CheckCircledIcon />
+            </Callout.Icon>
+            <Callout.Text>
+              <Text as="span" weight="medium" style={{ display: "block" }}>
+                Natural completion response
+              </Text>
+              <Text
+                as="span"
+                style={{ display: "block", whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}
+              >
+                {run.completionResponse}
+              </Text>
+            </Callout.Text>
+          </Callout.Root>
+        ) : null}
+        {(run?.finalMessage && run.finalMessage !== run.completionResponse) ||
+        (activity.status === "succeeded" && activity.summary && !run?.completionResponse) ? (
           <Box
             mt="3"
             p="3"
@@ -617,7 +856,11 @@ function Inspector({
               overflow: "auto",
             }}
           >
-            <Text size="2">{run?.finalMessage ?? activity.summary}</Text>
+            <Text size="2">
+              {run?.finalMessage && run.finalMessage !== run.completionResponse
+                ? run.finalMessage
+                : activity.summary}
+            </Text>
           </Box>
         ) : null}
         {run && client.openConversation && run.channelId && run.contextId ? (

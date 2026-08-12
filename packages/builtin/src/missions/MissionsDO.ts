@@ -8,6 +8,7 @@ import { createHash } from "node:crypto";
 import { missionsMethods } from "@vibestudio/service-schemas/missions";
 import type {
   MissionCharter,
+  MissionCompletionReason,
   MissionExecution,
   MissionPermission,
   MissionRecord,
@@ -16,6 +17,7 @@ import type {
   MissionState,
 } from "@vibestudio/shared/authority/mission";
 import { missionClosureDigest, missionNextRunAt } from "@vibestudio/shared/authority/mission";
+import { missionCompletionResponse } from "@vibestudio/shared/authority/mission";
 import {
   compileMissionExposure,
   reviewedExecutionClosureDigest,
@@ -33,7 +35,7 @@ const ATTENTION_WINDOW_MS = 24 * 60 * 60 * 1_000;
 const ATTENTION_LIMIT = 8;
 const DEFAULT_OVERVIEW_LIMIT = 30;
 
-type OverviewFilter = "all" | "attention" | "active" | "paused" | "drafts";
+type OverviewFilter = "all" | "attention" | "active" | "paused" | "completed" | "drafts";
 interface OverviewCursor {
   updatedAt: number;
   missionId: string;
@@ -58,26 +60,33 @@ interface MissionRow {
   created_at: number;
   updated_at: number;
   activated_at: number | null;
+  run_count: number;
+  completed_at: number | null;
+  completion_reason: MissionCompletionReason | null;
+  completion_response: string | null;
 }
 
 interface RunRow {
   run_id: string;
   mission_id: string;
   closure_digest: string;
+  mission_revision: number;
   trigger_kind: "manual" | "scheduled";
   status: MissionRunRecord["status"];
   started_at: number;
+  run_number: number | null;
   finished_at: number | null;
   session_id: string | null;
   channel_id: string | null;
   context_id: string | null;
   executor_id: string | null;
   final_message: string | null;
+  completion_response: string | null;
   error: string | null;
 }
 
 export class MissionsDO extends DurableObjectBase {
-  static override schemaVersion = 3;
+  static override schemaVersion = 4;
   protected override schemaProductionBaseline() {
     return { version: 2, name: "automations-v2" } as const;
   }
@@ -194,6 +203,98 @@ export class MissionsDO extends DurableObjectBase {
           }
         },
       },
+      {
+        version: 4,
+        name: "automation-termination-and-calendar-schedules",
+        validateSource: (sql) => {
+          assertColumns(sql, "missions", [
+            "mission_id",
+            "name",
+            "revision",
+            "charter_json",
+            "permissions_json",
+            "standing_restrictions_json",
+            "owner_user_id",
+            "owner_device_id",
+            "state",
+            "revision_digest",
+            "active_closure_digest",
+            "seeded",
+            "schedule_origin_at",
+            "next_run_at",
+            "last_run_at",
+            "created_at",
+            "updated_at",
+            "activated_at",
+          ]);
+          assertColumns(sql, "mission_runs", [
+            "run_id",
+            "mission_id",
+            "closure_digest",
+            "trigger_kind",
+            "status",
+            "started_at",
+            "finished_at",
+            "session_id",
+            "channel_id",
+            "context_id",
+            "executor_id",
+            "final_message",
+            "error",
+          ]);
+        },
+        migrate: (sql) => {
+          sql.exec(missionRunsTableSql("mission_runs_v4"));
+          sql.exec(`WITH numbered AS (
+              SELECT r.*,
+                ROW_NUMBER() OVER (
+                  PARTITION BY r.mission_id ORDER BY r.started_at,r.run_id
+                ) AS ordinal
+              FROM mission_runs r WHERE r.status!='skipped'
+            )
+            INSERT INTO mission_runs_v4 (
+              run_id,mission_id,closure_digest,mission_revision,trigger_kind,status,
+              started_at,run_number,finished_at,session_id,channel_id,context_id,
+              executor_id,final_message,completion_response,error
+            )
+            SELECT r.run_id,r.mission_id,r.closure_digest,
+              COALESCE(
+                (SELECT CAST(json_extract(mr.record_json,'$.revision') AS INTEGER)
+                   FROM mission_revisions mr
+                  WHERE mr.mission_id=r.mission_id
+                    AND json_extract(mr.record_json,'$.revisionDigest')=r.closure_digest
+                  ORDER BY mr.revision DESC LIMIT 1),
+                (SELECT m.revision FROM missions m WHERE m.mission_id=r.mission_id)
+              ),
+              r.trigger_kind,r.status,r.started_at,n.ordinal,r.finished_at,r.session_id,
+              r.channel_id,r.context_id,r.executor_id,r.final_message,NULL,r.error
+            FROM mission_runs r
+            LEFT JOIN numbered n ON n.run_id=r.run_id`);
+          sql.exec(`DROP TABLE mission_runs`);
+          sql.exec(`ALTER TABLE mission_runs_v4 RENAME TO mission_runs`);
+          sql.exec(
+            `CREATE INDEX mission_runs_by_mission ON mission_runs(mission_id, started_at DESC)`
+          );
+          sql.exec(missionsTableSql("missions_v4"));
+          sql.exec(`INSERT INTO missions_v4 (
+              mission_id,name,revision,charter_json,permissions_json,
+              standing_restrictions_json,owner_user_id,owner_device_id,state,
+              revision_digest,active_closure_digest,seeded,schedule_origin_at,
+              next_run_at,last_run_at,created_at,updated_at,activated_at,run_count,
+              completed_at,completion_reason,completion_response
+            )
+            SELECT m.mission_id,m.name,m.revision,m.charter_json,m.permissions_json,
+              m.standing_restrictions_json,m.owner_user_id,m.owner_device_id,m.state,
+              m.revision_digest,m.active_closure_digest,m.seeded,m.schedule_origin_at,
+              m.next_run_at,m.last_run_at,m.created_at,m.updated_at,m.activated_at,
+              (SELECT COUNT(*) FROM mission_runs r
+                WHERE r.mission_id=m.mission_id AND r.status!='skipped'),
+              NULL,NULL,NULL
+            FROM missions m`);
+          sql.exec(`DROP TABLE missions`);
+          sql.exec(`ALTER TABLE missions_v4 RENAME TO missions`);
+        },
+      },
     ];
   }
   static override rpcMethods = missionsMethods;
@@ -203,26 +304,7 @@ export class MissionsDO extends DurableObjectBase {
   }
 
   protected createTables(): void {
-    this.sql.exec(`CREATE TABLE missions (
-      mission_id TEXT PRIMARY KEY,
-      name TEXT NOT NULL,
-      revision INTEGER NOT NULL CHECK (revision > 0),
-      charter_json TEXT NOT NULL,
-      permissions_json TEXT NOT NULL,
-      standing_restrictions_json TEXT NOT NULL,
-      owner_user_id TEXT NOT NULL,
-      owner_device_id TEXT NOT NULL,
-      state TEXT NOT NULL CHECK (state IN ('draft','active','needs-reapproval','paused','retired')),
-      revision_digest TEXT NOT NULL,
-      active_closure_digest TEXT,
-      seeded INTEGER NOT NULL CHECK (seeded IN (0,1)),
-      schedule_origin_at INTEGER,
-      next_run_at INTEGER,
-      last_run_at INTEGER,
-      created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL,
-      activated_at INTEGER
-    )`);
+    this.sql.exec(missionsTableSql("missions"));
     this.sql.exec(`CREATE TABLE mission_revisions (
       mission_id TEXT NOT NULL,
       revision INTEGER NOT NULL,
@@ -230,21 +312,7 @@ export class MissionsDO extends DurableObjectBase {
       recorded_at INTEGER NOT NULL,
       PRIMARY KEY (mission_id, revision)
     )`);
-    this.sql.exec(`CREATE TABLE mission_runs (
-      run_id TEXT PRIMARY KEY,
-      mission_id TEXT NOT NULL,
-      closure_digest TEXT NOT NULL,
-      trigger_kind TEXT NOT NULL CHECK (trigger_kind IN ('manual','scheduled')),
-      status TEXT NOT NULL CHECK (status IN ('starting','running','succeeded','failed','skipped')),
-      started_at INTEGER NOT NULL,
-      finished_at INTEGER,
-      session_id TEXT,
-      channel_id TEXT,
-      context_id TEXT,
-      executor_id TEXT,
-      final_message TEXT,
-      error TEXT
-    )`);
+    this.sql.exec(missionRunsTableSql("mission_runs"));
     this.sql.exec(
       `CREATE INDEX mission_runs_by_mission ON mission_runs(mission_id, started_at DESC)`
     );
@@ -269,15 +337,36 @@ export class MissionsDO extends DurableObjectBase {
     const due = this.sql
       .exec(
         `SELECT mission_id FROM missions
-         WHERE state='active' AND next_run_at IS NOT NULL AND next_run_at<=?
-         ORDER BY next_run_at,mission_id`,
+         WHERE state='active' AND (
+           (next_run_at IS NOT NULL AND next_run_at<=?) OR
+           (json_extract(charter_json,'$.trigger.untilAt') IS NOT NULL AND
+            CAST(json_extract(charter_json,'$.trigger.untilAt') AS INTEGER)<=?)
+         )
+         ORDER BY COALESCE(next_run_at,
+           CAST(json_extract(charter_json,'$.trigger.untilAt') AS INTEGER)),mission_id`,
+        now,
         now
       )
       .toArray();
     for (const row of due) {
       const mission = this.requireMission(String(row["mission_id"]), true);
-      this.advanceSchedule(mission, now);
-      await this.startExecution(mission, "scheduled");
+      const completion = this.completionBeforeRun(mission, now);
+      if (completion) {
+        if (this.hasActiveRun(mission.missionId)) {
+          this.sql.exec(
+            "UPDATE missions SET next_run_at=NULL,updated_at=? WHERE mission_id=?",
+            now,
+            mission.missionId
+          );
+        } else {
+          await this.suspendForCompletion(mission);
+          this.markCompleted(mission.missionId, completion, now);
+        }
+        continue;
+      }
+      if (mission.nextRunAt !== undefined && mission.nextRunAt <= now) {
+        await this.startExecution(mission, "scheduled");
+      }
     }
     const next = this.nextWakeAt();
     return next === null ? null : { wakeAt: next };
@@ -297,6 +386,7 @@ export class MissionsDO extends DurableObjectBase {
       running: number;
       failedLast24Hours: number;
       awaitingReview: number;
+      completed: number;
     };
     items: Array<{
       automation: MissionRecord;
@@ -324,6 +414,7 @@ export class MissionsDO extends DurableObjectBase {
     }
     if (filter === "active") conditions.push("state='active'");
     if (filter === "paused") conditions.push("state='paused'");
+    if (filter === "completed") conditions.push("state='completed'");
     if (filter === "drafts") conditions.push("state IN ('draft','needs-reapproval')");
     if (filter === "attention") {
       conditions.push(
@@ -387,6 +478,7 @@ export class MissionsDO extends DurableObjectBase {
       .exec(
         `SELECT COUNT(*) AS total,
            SUM(CASE WHEN state='active' THEN 1 ELSE 0 END) AS active,
+           SUM(CASE WHEN state='completed' THEN 1 ELSE 0 END) AS completed,
            SUM(CASE WHEN state IN ('draft','needs-reapproval') THEN 1 ELSE 0 END) AS awaiting_review
          FROM missions WHERE seeded=1 OR owner_user_id=?`,
         userId
@@ -445,6 +537,7 @@ export class MissionsDO extends DurableObjectBase {
         running: Number(runStats?.["running"] ?? 0),
         failedLast24Hours: Number(runStats?.["failed"] ?? 0),
         awaitingReview: Number(definitionStats?.["awaiting_review"] ?? 0),
+        completed: Number(definitionStats?.["completed"] ?? 0),
       },
       items: missionRows.map((row) => ({
         automation: this.rowToMission(row),
@@ -573,8 +666,9 @@ export class MissionsDO extends DurableObjectBase {
       `INSERT INTO missions
        (mission_id,name,revision,charter_json,permissions_json,standing_restrictions_json,
         owner_user_id,owner_device_id,state,revision_digest,active_closure_digest,seeded,
-        schedule_origin_at,next_run_at,last_run_at,created_at,updated_at,activated_at)
-       VALUES (?,?,1,?,?,?,?,?,'draft',?,NULL,0,NULL,NULL,NULL,?,?,NULL)`,
+        schedule_origin_at,next_run_at,last_run_at,created_at,updated_at,activated_at,
+        run_count,completed_at,completion_reason,completion_response)
+       VALUES (?,?,1,?,?,?,?,?,'draft',?,NULL,0,NULL,NULL,NULL,?,?,NULL,0,NULL,NULL,NULL)`,
       missionId,
       input.name,
       canonicalJson(input.charter),
@@ -642,7 +736,8 @@ export class MissionsDO extends DurableObjectBase {
     this.sql.exec(
       `UPDATE missions SET name=?,revision=?,charter_json=?,permissions_json=?,
        standing_restrictions_json=?,state=?,revision_digest=?,active_closure_digest=NULL,
-       schedule_origin_at=NULL,next_run_at=NULL,updated_at=? WHERE mission_id=?`,
+       schedule_origin_at=NULL,next_run_at=NULL,updated_at=?,completed_at=NULL,
+       completion_reason=NULL,completion_response=NULL WHERE mission_id=?`,
       next.name,
       next.revision,
       canonicalJson(next.charter),
@@ -662,6 +757,8 @@ export class MissionsDO extends DurableObjectBase {
     if (mission.state !== "draft" && mission.state !== "needs-reapproval") {
       throw denied("Only an inert automation revision can be reviewed");
     }
+    const now = Date.now();
+    this.assertCanActivate(mission, now);
     const { body, closureDigest } = this.compileClosure(mission);
     const staleSubject = this.activeSubject(mission);
     if (staleSubject) await this.rpc.call("main", "reviewedClosure.suspend", [staleSubject]);
@@ -682,11 +779,10 @@ export class MissionsDO extends DurableObjectBase {
         },
       },
     ]);
-    const now = Date.now();
     const scheduleOriginAt = scheduleOrigin(mission.charter, now);
     const nextRunAt = initialNextRunAt(mission.charter, now, scheduleOriginAt);
     this.sql.exec(
-      `UPDATE missions SET state='active',active_closure_digest=?,schedule_origin_at=?,next_run_at=?,updated_at=?,activated_at=COALESCE(activated_at,?)
+      `UPDATE missions SET state='active',active_closure_digest=?,schedule_origin_at=?,next_run_at=?,updated_at=?,activated_at=COALESCE(activated_at,?),completed_at=NULL,completion_reason=NULL,completion_response=NULL
        WHERE mission_id=?`,
       closureDigest,
       scheduleOriginAt,
@@ -726,6 +822,12 @@ export class MissionsDO extends DurableObjectBase {
     if (closureDigest !== this.getRow(missionId)?.active_closure_digest) {
       throw denied("Automation must be reviewed again before it can resume");
     }
+    const now = Date.now();
+    const completion = this.completionBeforeRun(mission, now);
+    if (completion) {
+      this.markCompleted(missionId, completion, now);
+      return this.requireMission(missionId);
+    }
     await this.rpc.call("main", "reviewedClosure.activate", [
       {
         body,
@@ -737,7 +839,6 @@ export class MissionsDO extends DurableObjectBase {
         },
       },
     ]);
-    const now = Date.now();
     const row = this.getRow(missionId);
     const scheduleOriginAt = row?.schedule_origin_at ?? scheduleOrigin(mission.charter, now);
     this.sql.exec(
@@ -768,6 +869,7 @@ export class MissionsDO extends DurableObjectBase {
     runId: string;
     outcome: "succeeded" | "failed";
     finalMessage?: string;
+    completionResponse?: string;
     error?: string;
   }): Promise<void> {
     const row = this.getRunRow(input.runId);
@@ -779,15 +881,11 @@ export class MissionsDO extends DurableObjectBase {
     if (row.session_id) {
       await this.rpc.call("main", "reviewedClosure.finishSession", [{ sessionId: row.session_id }]);
     }
-    this.sql.exec(
-      `UPDATE mission_runs SET status=?,finished_at=?,final_message=?,error=?
-       WHERE run_id=? AND status IN ('starting','running')`,
-      input.outcome,
-      Date.now(),
-      bounded(input.finalMessage),
-      bounded(input.error),
-      input.runId
-    );
+    await this.terminalizeRun(row, input.outcome, {
+      finalMessage: input.finalMessage,
+      completionResponse: input.completionResponse,
+      error: input.error,
+    });
   }
 
   @schemaRpc()
@@ -832,7 +930,8 @@ export class MissionsDO extends DurableObjectBase {
     );
     this.sql.exec(
       `UPDATE missions SET revision=?,permissions_json=?,state='needs-reapproval',
-       revision_digest=?,active_closure_digest=NULL,next_run_at=NULL,updated_at=?
+       revision_digest=?,active_closure_digest=NULL,next_run_at=NULL,updated_at=?,
+       completed_at=NULL,completion_reason=NULL,completion_response=NULL
        WHERE mission_id=?`,
       revision,
       canonicalJson(nextPermissions),
@@ -847,49 +946,58 @@ export class MissionsDO extends DurableObjectBase {
     mission: MissionRecord,
     trigger: "manual" | "scheduled"
   ): Promise<MissionRunRecord> {
+    const now = Date.now();
+    const completion = this.completionBeforeRun(mission, now);
+    if (completion) {
+      await this.suspendForCompletion(mission);
+      this.markCompleted(mission.missionId, completion, now);
+      throw denied(`Automation has completed (${completion.reason})`);
+    }
     const subject = this.requireActiveSubject(mission);
     const closureDigest = this.getRow(mission.missionId)?.active_closure_digest;
     if (!closureDigest) throw denied("Automation has no active reviewed closure");
-    const now = Date.now();
-    const active = this.sql
-      .exec(
-        `SELECT run_id FROM mission_runs
-         WHERE mission_id=? AND status IN ('starting','running') LIMIT 1`,
-        mission.missionId
-      )
-      .toArray()[0];
+    const active = this.activeRunRow(mission.missionId);
     const runId = `run_${crypto.randomUUID().replaceAll("-", "")}`;
     if (active) {
       this.sql.exec(
         `INSERT INTO mission_runs
-         (run_id,mission_id,closure_digest,trigger_kind,status,started_at,finished_at,error)
-         VALUES (?,?,?,?, 'skipped',?,?,?)`,
+         (run_id,mission_id,closure_digest,mission_revision,trigger_kind,status,started_at,finished_at,error)
+         VALUES (?,?,?,?,?, 'skipped',?,?,?)`,
         runId,
         mission.missionId,
         closureDigest,
+        mission.revision,
         trigger,
         now,
         now,
         `Previous run ${String(active["run_id"])} is still active`
       );
+      if (trigger === "scheduled") this.advanceSchedule(mission, now, mission.runCount);
       return this.requireRun(runId);
     }
-    this.sql.exec(
-      `INSERT INTO mission_runs
-       (run_id,mission_id,closure_digest,trigger_kind,status,started_at)
-       VALUES (?,?,?,?, 'starting',?)`,
-      runId,
-      mission.missionId,
-      closureDigest,
-      trigger,
-      now
-    );
-    this.sql.exec(
-      "UPDATE missions SET last_run_at=?,updated_at=? WHERE mission_id=?",
-      now,
-      now,
-      mission.missionId
-    );
+    const runNumber = mission.runCount + 1;
+    this.ctx.storage.transactionSync(() => {
+      this.sql.exec(
+        `INSERT INTO mission_runs
+         (run_id,mission_id,closure_digest,mission_revision,trigger_kind,status,started_at,run_number)
+         VALUES (?,?,?,?,?, 'starting',?,?)`,
+        runId,
+        mission.missionId,
+        closureDigest,
+        mission.revision,
+        trigger,
+        now,
+        runNumber
+      );
+      this.sql.exec(
+        "UPDATE missions SET last_run_at=?,updated_at=?,run_count=? WHERE mission_id=?",
+        now,
+        now,
+        runNumber,
+        mission.missionId
+      );
+      if (trigger === "scheduled") this.advanceSchedule(mission, now, runNumber);
+    });
     try {
       if (mission.charter.execution.kind === "method") {
         await this.executeMethod(mission, runId, subject, closureDigest);
@@ -919,7 +1027,15 @@ export class MissionsDO extends DurableObjectBase {
     });
     try {
       const result = await this.rpc.call(handle.targetId, execution.method, [...execution.args]);
-      await this.finishOwnedRun(runId, sessionId, "succeeded", resultSummary(result));
+      const completion = missionCompletionResponse(result);
+      await this.finishOwnedRun(
+        runId,
+        sessionId,
+        "succeeded",
+        completion?.response ?? resultSummary(result),
+        undefined,
+        completion?.response
+      );
     } catch (error) {
       await this.finishOwnedRun(runId, sessionId, "failed", undefined, describeError(error));
     }
@@ -1081,17 +1197,13 @@ export class MissionsDO extends DurableObjectBase {
     sessionId: string,
     status: "succeeded" | "failed",
     finalMessage?: string,
-    error?: string
+    error?: string,
+    completionResponse?: string
   ): Promise<void> {
     await this.rpc.call("main", "reviewedClosure.finishSession", [{ sessionId }]);
-    this.sql.exec(
-      `UPDATE mission_runs SET status=?,finished_at=?,final_message=?,error=? WHERE run_id=?`,
-      status,
-      Date.now(),
-      bounded(finalMessage),
-      bounded(error),
-      runId
-    );
+    const row = this.getRunRow(runId);
+    if (!row) throw notFound(`Unknown automation run ${runId}`);
+    await this.terminalizeRun(row, status, { finalMessage, completionResponse, error });
   }
 
   private async failStartingRun(runId: string, error: unknown): Promise<void> {
@@ -1102,26 +1214,56 @@ export class MissionsDO extends DurableObjectBase {
     if (row.session_id) {
       await this.rpc.call("main", "reviewedClosure.finishSession", [{ sessionId: row.session_id }]);
     }
-    this.sql.exec(
-      `UPDATE mission_runs SET status='failed',finished_at=?,error=? WHERE run_id=?`,
-      Date.now(),
-      bounded(describeError(error)),
-      runId
-    );
+    await this.terminalizeRun(row, "failed", { error: describeError(error) });
   }
 
-  private advanceSchedule(mission: MissionRecord, now: number): void {
-    if (mission.charter.trigger.kind !== "schedule") return;
+  private async terminalizeRun(
+    row: RunRow,
+    status: "succeeded" | "failed",
+    input: { finalMessage?: string; completionResponse?: string; error?: string }
+  ): Promise<void> {
+    const now = Date.now();
+    const mission = this.requireMission(row.mission_id, true);
+    const completion =
+      row.mission_revision === mission.revision &&
+      (mission.state === "active" || mission.state === "paused")
+        ? this.completionAfterRun(mission, now, input.completionResponse)
+        : null;
+    if (completion) await this.suspendForCompletion(mission);
+    this.ctx.storage.transactionSync(() => {
+      this.sql.exec(
+        `UPDATE mission_runs SET status=?,finished_at=?,final_message=?,completion_response=?,error=?
+         WHERE run_id=? AND status IN ('starting','running')`,
+        status,
+        now,
+        bounded(input.finalMessage) ?? null,
+        bounded(input.completionResponse) ?? null,
+        bounded(input.error) ?? null,
+        row.run_id
+      );
+      if (completion) this.markCompleted(mission.missionId, completion, now);
+    });
+  }
+
+  private advanceSchedule(mission: MissionRecord, now: number, runCount: number): void {
+    const trigger = mission.charter.trigger;
+    if (trigger.kind === "manual") return;
     const origin = this.getRow(mission.missionId)?.schedule_origin_at;
-    if (origin == null) throw new Error(`Automation ${mission.missionId} has no schedule origin`);
-    const next = withJitter(
-      missionNextRunAt(mission.charter.trigger, now, Number(origin)),
-      mission.charter.trigger.jitterMs
-    );
+    if (trigger.kind === "schedule" && origin == null) {
+      throw new Error(`Automation ${mission.missionId} has no schedule origin`);
+    }
+    const candidate =
+      trigger.kind === "schedule"
+        ? withJitter(missionNextRunAt(trigger, now, Number(origin)), trigger.jitterMs)
+        : missionNextRunAt(trigger, now);
+    const next =
+      (trigger.maxRuns !== undefined && runCount >= trigger.maxRuns) ||
+      (trigger.untilAt !== undefined && candidate >= trigger.untilAt)
+        ? null
+        : candidate;
     this.sql.exec(
-      "UPDATE missions SET next_run_at=?,last_run_at=?,updated_at=? WHERE mission_id=?",
+      "UPDATE missions SET next_run_at=?,updated_at=? WHERE mission_id=?",
       next,
-      now,
       now,
       mission.missionId
     );
@@ -1130,11 +1272,103 @@ export class MissionsDO extends DurableObjectBase {
   private nextWakeAt(): number | null {
     const value = this.sql
       .exec(
-        `SELECT MIN(next_run_at) AS wake FROM missions
-         WHERE state='active' AND next_run_at IS NOT NULL`
+        `SELECT MIN(wake_at) AS wake FROM (
+           SELECT next_run_at AS wake_at FROM missions
+            WHERE state='active' AND next_run_at IS NOT NULL
+           UNION ALL
+           SELECT CAST(json_extract(charter_json,'$.trigger.untilAt') AS INTEGER) AS wake_at
+             FROM missions
+            WHERE state='active' AND json_extract(charter_json,'$.trigger.untilAt') IS NOT NULL
+              AND NOT EXISTS (
+                SELECT 1 FROM mission_runs r
+                 WHERE r.mission_id=missions.mission_id
+                   AND r.status IN ('starting','running')
+              )
+         )`
       )
       .one()["wake"];
     return value == null ? null : Number(value);
+  }
+
+  private activeRunRow(missionId: string): RunRow | null {
+    const row = this.sql
+      .exec(
+        `SELECT * FROM mission_runs
+         WHERE mission_id=? AND status IN ('starting','running') LIMIT 1`,
+        missionId
+      )
+      .toArray()[0];
+    return row ? (row as unknown as RunRow) : null;
+  }
+
+  private hasActiveRun(missionId: string): boolean {
+    return this.activeRunRow(missionId) !== null;
+  }
+
+  private completionBeforeRun(
+    mission: MissionRecord,
+    now: number
+  ): { reason: Exclude<MissionCompletionReason, "response"> } | null {
+    const trigger = mission.charter.trigger;
+    if (trigger.kind === "manual") return null;
+    if (trigger.maxRuns !== undefined && mission.runCount >= trigger.maxRuns) {
+      return { reason: "max-runs" };
+    }
+    if (trigger.untilAt !== undefined && now >= trigger.untilAt) {
+      return { reason: "until" };
+    }
+    return null;
+  }
+
+  private completionAfterRun(
+    mission: MissionRecord,
+    now: number,
+    response?: string
+  ): { reason: MissionCompletionReason; response?: string } | null {
+    const normalized = response?.trim();
+    if (normalized) return { reason: "response", response: normalized };
+    return this.completionBeforeRun(mission, now);
+  }
+
+  private markCompleted(
+    missionId: string,
+    completion: { reason: MissionCompletionReason; response?: string },
+    now: number
+  ): void {
+    this.sql.exec(
+      `UPDATE missions
+          SET state='completed',next_run_at=NULL,updated_at=?,completed_at=?,
+              completion_reason=?,completion_response=?
+        WHERE mission_id=? AND state IN ('active','paused')`,
+      now,
+      now,
+      completion.reason,
+      bounded(completion.response) ?? null,
+      missionId
+    );
+  }
+
+  private async suspendForCompletion(mission: MissionRecord): Promise<void> {
+    const subject = this.activeSubject(mission);
+    if (subject) await this.rpc.call("main", "reviewedClosure.suspend", [subject]);
+  }
+
+  private assertCanActivate(mission: MissionRecord, now: number): void {
+    const completion = this.completionBeforeRun(mission, now);
+    if (completion) {
+      throw denied(
+        completion.reason === "until"
+          ? "Automation end time has already passed"
+          : "Automation has already reached its maximum run count"
+      );
+    }
+    const trigger = mission.charter.trigger;
+    if (trigger.kind === "manual" || trigger.untilAt === undefined) return;
+    const origin = scheduleOrigin(mission.charter, now);
+    const next = initialNextRunAt(mission.charter, now, origin);
+    if (next === null || next >= trigger.untilAt) {
+      throw denied("Automation has no scheduled occurrence before its end time");
+    }
   }
 
   private compileClosure(mission: MissionRecord): {
@@ -1241,6 +1475,10 @@ export class MissionsDO extends DurableObjectBase {
       createdAt: Number(row.created_at),
       updatedAt: Number(row.updated_at),
       ...(row.activated_at == null ? {} : { activatedAt: Number(row.activated_at) }),
+      runCount: Number(row.run_count),
+      ...(row.completed_at == null ? {} : { completedAt: Number(row.completed_at) }),
+      ...(row.completion_reason == null ? {} : { completionReason: row.completion_reason }),
+      ...(row.completion_response == null ? {} : { completionResponse: row.completion_response }),
       ...(row.seeded === 1 ? { seeded: true } : {}),
       permissions,
       standingRestrictions,
@@ -1254,15 +1492,18 @@ export class MissionsDO extends DurableObjectBase {
       runId: row.run_id,
       missionId: row.mission_id,
       closureDigest: row.closure_digest,
+      revision: Number(row.mission_revision),
       trigger: row.trigger_kind,
       status: row.status,
       startedAt: Number(row.started_at),
+      ...(row.run_number == null ? {} : { runNumber: Number(row.run_number) }),
       ...(row.finished_at == null ? {} : { finishedAt: Number(row.finished_at) }),
       ...(row.session_id ? { sessionId: row.session_id } : {}),
       ...(row.channel_id ? { channelId: row.channel_id } : {}),
       ...(row.context_id ? { contextId: row.context_id } : {}),
       ...(row.executor_id ? { executorId: row.executor_id } : {}),
       ...(row.final_message ? { finalMessage: row.final_message } : {}),
+      ...(row.completion_response ? { completionResponse: row.completion_response } : {}),
       ...(row.error ? { error: row.error } : {}),
     };
   }
@@ -1279,6 +1520,72 @@ export class MissionsDO extends DurableObjectBase {
   }
 }
 
+function missionsTableSql(name: "missions" | "missions_v4"): string {
+  return `CREATE TABLE ${name} (
+    mission_id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    revision INTEGER NOT NULL CHECK (revision > 0),
+    charter_json TEXT NOT NULL,
+    permissions_json TEXT NOT NULL,
+    standing_restrictions_json TEXT NOT NULL,
+    owner_user_id TEXT NOT NULL,
+    owner_device_id TEXT NOT NULL,
+    state TEXT NOT NULL CHECK (state IN (
+      'draft','active','needs-reapproval','paused','completed','retired'
+    )),
+    revision_digest TEXT NOT NULL,
+    active_closure_digest TEXT,
+    seeded INTEGER NOT NULL CHECK (seeded IN (0,1)),
+    schedule_origin_at INTEGER,
+    next_run_at INTEGER,
+    last_run_at INTEGER,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    activated_at INTEGER,
+    run_count INTEGER NOT NULL DEFAULT 0 CHECK (run_count >= 0),
+    completed_at INTEGER,
+    completion_reason TEXT CHECK (
+      completion_reason IS NULL OR completion_reason IN ('until','max-runs','response')
+    ),
+    completion_response TEXT
+  )`;
+}
+
+function missionRunsTableSql(name: "mission_runs" | "mission_runs_v4"): string {
+  return `CREATE TABLE ${name} (
+    run_id TEXT PRIMARY KEY,
+    mission_id TEXT NOT NULL,
+    closure_digest TEXT NOT NULL,
+    mission_revision INTEGER NOT NULL,
+    trigger_kind TEXT NOT NULL CHECK (trigger_kind IN ('manual','scheduled')),
+    status TEXT NOT NULL CHECK (status IN ('starting','running','succeeded','failed','skipped')),
+    started_at INTEGER NOT NULL,
+    run_number INTEGER,
+    finished_at INTEGER,
+    session_id TEXT,
+    channel_id TEXT,
+    context_id TEXT,
+    executor_id TEXT,
+    final_message TEXT,
+    completion_response TEXT,
+    error TEXT
+  )`;
+}
+
+function assertColumns(
+  sql: { exec(query: string): { toArray(): Array<Record<string, unknown>> } },
+  table: string,
+  expected: readonly string[]
+): void {
+  const columns = sql
+    .exec(`PRAGMA table_info(${table})`)
+    .toArray()
+    .map((column) => String(column["name"]));
+  if (JSON.stringify(columns) !== JSON.stringify(expected)) {
+    throw new Error(`MissionsDO source table ${table} is unknown: ${JSON.stringify(columns)}`);
+  }
+}
+
 function scheduleOrigin(charter: MissionCharter, now: number): number | null {
   return charter.trigger.kind === "schedule" ? (charter.trigger.anchorAt ?? now) : null;
 }
@@ -1288,8 +1595,9 @@ function initialNextRunAt(
   now: number,
   origin: number | null
 ): number | null {
-  if (charter.trigger.kind !== "schedule") return null;
-  if (origin == null) throw new Error("Scheduled automation requires a cadence origin");
+  if (charter.trigger.kind === "manual") return null;
+  if (charter.trigger.kind === "cron") return missionNextRunAt(charter.trigger, now);
+  if (origin == null) throw new Error("Interval automation requires a cadence origin");
   return withJitter(missionNextRunAt(charter.trigger, now, origin), charter.trigger.jitterMs);
 }
 
@@ -1327,23 +1635,36 @@ function automationActivity(mission: MissionRecord, run: MissionRunRecord) {
     startedAt: run.startedAt,
     createdAt: mission.createdAt,
     ...(mission.activatedAt === undefined ? {} : { activatedAt: mission.activatedAt }),
+    ...(run.runNumber === undefined ? {} : { runNumber: run.runNumber }),
     schedule:
       trigger.kind === "schedule"
         ? {
+            kind: "interval" as const,
             everyMs: trigger.everyMs,
             ...(trigger.anchorAt === undefined ? {} : { anchorAt: trigger.anchorAt }),
             ...(trigger.jitterMs === undefined ? {} : { jitterMs: trigger.jitterMs }),
+            ...(trigger.untilAt === undefined ? {} : { untilAt: trigger.untilAt }),
+            ...(trigger.maxRuns === undefined ? {} : { maxRuns: trigger.maxRuns }),
           }
-        : null,
+        : trigger.kind === "cron"
+          ? {
+              kind: "cron" as const,
+              expression: trigger.expression,
+              timezone: trigger.timezone,
+              ...(trigger.untilAt === undefined ? {} : { untilAt: trigger.untilAt }),
+              ...(trigger.maxRuns === undefined ? {} : { maxRuns: trigger.maxRuns }),
+            }
+          : null,
   };
 }
 
 function triggerLabel(charter: MissionCharter): string {
-  return charter.trigger.kind === "manual"
-    ? "Manual"
-    : `Every ${charter.trigger.everyMs} ms${
-        charter.trigger.anchorAt === undefined ? "" : ` from ${charter.trigger.anchorAt}`
-      }`;
+  const trigger = charter.trigger;
+  if (trigger.kind === "manual") return "Manual";
+  if (trigger.kind === "cron") return `${trigger.expression} in ${trigger.timezone}`;
+  return `Every ${trigger.everyMs} ms${
+    trigger.anchorAt === undefined ? "" : ` from ${trigger.anchorAt}`
+  }`;
 }
 
 function assertExecutionPermissions(

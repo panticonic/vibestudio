@@ -2175,7 +2175,14 @@ describe("chatMessagesFromChannelView", () => {
       startedAt: Date.parse("2026-05-20T12:00:00.000Z"),
       createdAt: Date.parse("2026-05-01T09:00:00.000Z"),
       activatedAt: Date.parse("2026-05-02T09:00:00.000Z"),
-      schedule: { everyMs: 86_400_000 },
+      runNumber: 7,
+      schedule: {
+        kind: "cron" as const,
+        expression: "5 5 * * THU",
+        timezone: "America/New_York",
+        untilAt: Date.parse("2027-01-01T05:00:00.000Z"),
+        maxRuns: 12,
+      },
     };
     const opened: AgenticEvent<"turn.opened"> = {
       kind: "turn.opened",

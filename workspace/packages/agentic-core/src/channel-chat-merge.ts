@@ -338,13 +338,22 @@ function automationSnapshot(value: unknown): AutomationActivitySnapshot | null {
   ) {
     return null;
   }
-  if (
-    candidate.schedule !== null &&
-    (typeof candidate.schedule !== "object" ||
-      typeof (candidate.schedule as { everyMs?: unknown }).everyMs !== "number")
-  ) {
-    return null;
+  if (candidate.schedule !== null) {
+    if (typeof candidate.schedule !== "object") return null;
+    const schedule = candidate.schedule as Record<string, unknown>;
+    if (schedule["kind"] === "cron") {
+      if (typeof schedule["expression"] !== "string" || typeof schedule["timezone"] !== "string") {
+        return null;
+      }
+    } else if (schedule["kind"] !== undefined && schedule["kind"] !== "interval") {
+      return null;
+    } else if (typeof schedule["everyMs"] !== "number") {
+      return null;
+    }
+    if (schedule["untilAt"] !== undefined && typeof schedule["untilAt"] !== "number") return null;
+    if (schedule["maxRuns"] !== undefined && typeof schedule["maxRuns"] !== "number") return null;
   }
+  if (candidate.runNumber !== undefined && typeof candidate.runNumber !== "number") return null;
   return candidate as AutomationActivitySnapshot;
 }
 

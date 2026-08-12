@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   missionAllowsService,
   missionClosureDigest,
+  missionCompletionResponse,
   missionNextRunAt,
   type MissionCharter,
 } from "./mission.js";
@@ -108,5 +109,64 @@ describe("automation closure", () => {
     expect(missionNextRunAt(trigger, 499)).toBe(500);
     expect(missionNextRunAt(trigger, 500)).toBe(1_500);
     expect(missionNextRunAt(trigger, 4_999)).toBe(5_500);
+  });
+
+  it("computes five-field calendar schedules in their reviewed IANA timezone", () => {
+    const thursdayMorning = {
+      kind: "cron",
+      expression: "5 5 * * THU",
+      timezone: "America/New_York",
+    } as const;
+
+    expect(missionNextRunAt(thursdayMorning, Date.UTC(2026, 2, 5, 10, 4, 59))).toBe(
+      Date.UTC(2026, 2, 5, 10, 5)
+    );
+    // New York changes to daylight time before the following Thursday.
+    expect(missionNextRunAt(thursdayMorning, Date.UTC(2026, 2, 5, 10, 5))).toBe(
+      Date.UTC(2026, 2, 12, 9, 5)
+    );
+  });
+
+  it("rejects ambiguous calendar contracts and invalid termination policies", () => {
+    expect(() =>
+      closure({
+        ...charter(),
+        trigger: { kind: "cron", expression: "0 5 * * * *", timezone: "America/New_York" },
+      })
+    ).toThrow(/five-field/);
+    expect(() =>
+      closure({
+        ...charter(),
+        trigger: { kind: "cron", expression: "5 5 * * THU", timezone: "US/Eastern" },
+      })
+    ).toThrow(/canonical IANA timezone/);
+    expect(() =>
+      closure({
+        ...charter(),
+        trigger: { kind: "cron", expression: " 5 5 * * Thu ", timezone: "America/New_York" },
+      })
+    ).toThrow(/must be canonical: 5 5 \* \* THU/);
+    expect(() =>
+      closure({
+        ...charter(),
+        trigger: { kind: "schedule", everyMs: 60_000, maxRuns: 0 },
+      })
+    ).toThrow(/positive integer/);
+  });
+
+  it("recognizes only an explicit, non-empty natural completion response", () => {
+    expect(
+      missionCompletionResponse({
+        protocol: "automation-completion.v1",
+        response: "  The migration is complete.  ",
+      })
+    ).toEqual({
+      protocol: "automation-completion.v1",
+      response: "The migration is complete.",
+    });
+    expect(missionCompletionResponse({ response: "done" })).toBeNull();
+    expect(
+      missionCompletionResponse({ protocol: "automation-completion.v1", response: "   " })
+    ).toBeNull();
   });
 });

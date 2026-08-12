@@ -156,7 +156,25 @@ export interface AgentTurnMetadata {
     startedAt: number;
     createdAt: number;
     activatedAt?: number;
-    schedule: { everyMs: number; anchorAt?: number; jitterMs?: number } | null;
+    runNumber?: number;
+    schedule:
+      | {
+          /** Missing only on durable turn snapshots written before calendar schedules. */
+          kind?: "interval";
+          everyMs: number;
+          anchorAt?: number;
+          jitterMs?: number;
+          untilAt?: number;
+          maxRuns?: number;
+        }
+      | {
+          kind: "cron";
+          expression: string;
+          timezone: string;
+          untilAt?: number;
+          maxRuns?: number;
+        }
+      | null;
   };
   /** Model-free turns close after their directly journaled invocation settles. */
   completion?: "after-invocation";
