@@ -2,6 +2,13 @@ import { describe, expect, it, vi } from "vitest";
 import { localToolExecutor } from "./index.js";
 
 describe("localToolExecutor", () => {
+  const blobstore = {
+    getText: vi.fn(),
+    putText: vi.fn(async (value: string) => ({
+      digest: "a".repeat(64),
+      size: new TextEncoder().encode(value).byteLength,
+    })),
+  };
   it("preserves a local tool termination request as durable turn control", async () => {
     const outcome = await localToolExecutor.execute({
       descriptor: {
@@ -15,6 +22,7 @@ describe("localToolExecutor", () => {
       state: {} as never,
       signal: new AbortController().signal,
       deps: {
+        blobstore,
         localTools: {
           alreadyApplied: async () => null,
           run: async () => ({
@@ -48,6 +56,7 @@ describe("localToolExecutor", () => {
       state: {} as never,
       signal: new AbortController().signal,
       deps: {
+        blobstore,
         localTools: {
           alreadyApplied: async () => ({
             commandId: "command-replayed",
@@ -91,6 +100,7 @@ describe("localToolExecutor", () => {
       state: {} as never,
       signal: new AbortController().signal,
       deps: {
+        blobstore,
         localTools: {
           alreadyApplied: async () => null,
           run: async () => {
@@ -110,5 +120,86 @@ describe("localToolExecutor", () => {
         details: { failure: { code: "host_unavailable" } },
       },
     });
+  });
+
+  it("normalizes returned domain failures instead of only thrown failures", async () => {
+    const outcome = await localToolExecutor.execute({
+      descriptor: {
+        kind: "local_tool",
+        effectId: "effect-domain-failed",
+        channelId: "channel-1",
+        invocationId: "invocation-domain-failed",
+        tool: "verify",
+        args: {},
+      } as never,
+      state: {} as never,
+      signal: new AbortController().signal,
+      deps: {
+        blobstore,
+        localTools: {
+          alreadyApplied: async () => null,
+          run: async () => ({
+            result: {
+              protocolContent: [{ type: "text", text: "build failed" }],
+              details: { errorData: { code: "build_failed", remediation: "Repair source." } },
+            },
+            isError: true,
+          }),
+        },
+      } as never,
+      onEphemeral: () => undefined,
+    });
+
+    expect(outcome).toMatchObject({
+      kind: "tool",
+      isError: true,
+      terminalReasonCode: "build_failed",
+      failure: { code: "build_failed", recovery: { instruction: "Repair source." } },
+      result: { details: { failure: { code: "build_failed" } } },
+    });
+  });
+
+  it("stores oversized results behind a typed artifact resource", async () => {
+    blobstore.putText.mockClear();
+    const outcome = await localToolExecutor.execute({
+      descriptor: {
+        kind: "local_tool",
+        effectId: "effect-large",
+        channelId: "channel-1",
+        invocationId: "invocation-large",
+        tool: "diagnostics",
+        args: {},
+      } as never,
+      state: {} as never,
+      signal: new AbortController().signal,
+      deps: {
+        blobstore,
+        localTools: {
+          alreadyApplied: async () => null,
+          run: async () => ({
+            result: {
+              protocolContent: [{ type: "text", text: "x".repeat(60_000) }],
+              details: { rows: Array.from({ length: 100 }, (_, index) => ({ index })) },
+            },
+            isError: false,
+          }),
+        },
+      } as never,
+      onEphemeral: () => undefined,
+    });
+
+    expect(blobstore.putText).toHaveBeenCalledOnce();
+    expect(outcome).toMatchObject({
+      result: {
+        details: {
+          artifact: {
+            protocol: "agent-tool-artifact.v1",
+            uri: `artifact:${"a".repeat(64)}`,
+            byteLength: expect.any(Number),
+          },
+        },
+      },
+    });
+    expect(JSON.stringify(outcome)).not.toContain("x".repeat(40_000));
   });
 });

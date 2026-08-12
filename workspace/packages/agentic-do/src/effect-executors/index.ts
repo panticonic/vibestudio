@@ -1,6 +1,7 @@
 import {
   CREDENTIAL_CONNECT_PAYLOAD_KIND,
   agentToolFailureFromUnknown,
+  createAgentToolArtifactRef,
   renderAgentToolFailure,
 } from "@workspace/agentic-protocol";
 /**
@@ -62,6 +63,92 @@ function turnControlFromToolResult(
   };
 }
 
+const MAX_MODEL_TOOL_RESULT_CHARS = 32_000;
+const TOOL_ARTIFACT_THRESHOLD_BYTES = 48 * 1024;
+
+function resultRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function attachFailureToResult(result: unknown, failure: ReturnType<typeof agentToolFailureFromUnknown>) {
+  const record = resultRecord(result);
+  if (!record) {
+    return {
+      protocolContent: [{ type: "text", text: renderAgentToolFailure(failure) }],
+      details: { failure, originalResult: result },
+    };
+  }
+  const details = resultRecord(record["details"]);
+  return { ...record, details: { ...(details ?? {}), failure } };
+}
+
+function windowToolText(text: string): string {
+  if (text.length <= MAX_MODEL_TOOL_RESULT_CHARS) return text;
+  const notice =
+    `\n[Tool result compacted: ${text.length - MAX_MODEL_TOOL_RESULT_CHARS} of ` +
+    `${text.length} characters are available in the attached artifact.]\n`;
+  const available = Math.max(0, MAX_MODEL_TOOL_RESULT_CHARS - notice.length);
+  const head = Math.floor(available * 0.75);
+  return `${text.slice(0, head)}${notice}${text.slice(-(available - head))}`;
+}
+
+async function artifactBackedToolResult(
+  result: unknown,
+  tool: string,
+  invocationId: string,
+  blobstore: { putText(value: string): Promise<{ digest: string; size: number }> }
+): Promise<unknown> {
+  let json: string;
+  try {
+    json = JSON.stringify(result);
+  } catch {
+    return result;
+  }
+  const record = resultRecord(result);
+  const blocks = Array.isArray(record?.["protocolContent"])
+    ? (record!["protocolContent"] as unknown[])
+    : [];
+  const textChars = blocks.reduce<number>(
+    (total, block) =>
+      total +
+      (resultRecord(block)?.["type"] === "text" &&
+      typeof resultRecord(block)?.["text"] === "string"
+        ? String(resultRecord(block)?.["text"]).length
+        : 0),
+    0
+  );
+  const bytes = new TextEncoder().encode(json).byteLength;
+  if (bytes <= TOOL_ARTIFACT_THRESHOLD_BYTES && textChars <= MAX_MODEL_TOOL_RESULT_CHARS) {
+    return result;
+  }
+  const stored = await blobstore.putText(json);
+  const artifact = createAgentToolArtifactRef({
+    digest: stored.digest,
+    byteLength: stored.size,
+    description: `Complete ${tool} result for invocation ${invocationId}`,
+  });
+  const compactBlocks = blocks.map((block) => {
+    const value = resultRecord(block);
+    return value?.["type"] === "text" && typeof value["text"] === "string"
+      ? { ...value, text: windowToolText(value["text"]) }
+      : block;
+  });
+  compactBlocks.push({
+    type: "text",
+    text:
+      `Full structured result: ${artifact.uri} (${artifact.byteLength} bytes). ` +
+      "Pass the resource object from details.artifact to read for bounded access.",
+  });
+  const details = resultRecord(record?.["details"]);
+  return {
+    ...(record ?? {}),
+    protocolContent: compactBlocks,
+    details: { ...(details ?? {}), artifact },
+  };
+}
+
 /** local_tool (§2.4.2): registry execution with the mutation-replay guard. */
 export const localToolExecutor: EffectExecutor<LocalToolEffect> = {
   kind: "local_tool",
@@ -116,7 +203,26 @@ export const localToolExecutor: EffectExecutor<LocalToolEffect> = {
         isError: boolean;
         terminate?: boolean;
         terminalReasonCode?: string;
+        failure?: ReturnType<typeof agentToolFailureFromUnknown>;
       };
+      const failure = toolOutcome.isError
+        ? toolOutcome.failure ??
+          agentToolFailureFromUnknown(toolOutcome.result, {
+            operation: `tool.${descriptor.tool}`,
+            stage: signal.aborted ? "cancel" : "execute",
+            causal: { invocationId: descriptor.invocationId },
+            ...(signal.aborted ? { kind: "cancelled" as const } : {}),
+          })
+        : undefined;
+      const resultWithFailure = failure
+        ? attachFailureToResult(toolOutcome.result, failure)
+        : toolOutcome.result;
+      const boundedResult = await artifactBackedToolResult(
+        resultWithFailure,
+        descriptor.tool,
+        descriptor.invocationId,
+        deps.blobstore
+      );
       const turnControl = toolOutcome.isError
         ? undefined
         : toolOutcome.terminate === true
@@ -125,6 +231,14 @@ export const localToolExecutor: EffectExecutor<LocalToolEffect> = {
       return {
         kind: "tool",
         ...toolOutcome,
+        result: boundedResult,
+        ...(failure
+          ? {
+              failure,
+              reason: failure.message,
+              terminalReasonCode: failure.code,
+            }
+          : {}),
         ...(turnControl ? { turnControl } : {}),
       } satisfies EffectOutcome;
     } catch (err) {

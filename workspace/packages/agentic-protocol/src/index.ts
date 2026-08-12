@@ -52,6 +52,15 @@ export type {
   AgentToolRetryPolicy,
 } from "./tool-failure.js";
 
+export {
+  AGENT_TOOL_ARTIFACT_PROTOCOL,
+  AGENT_TOOL_ARTIFACT_URI_PREFIX,
+  agentToolArtifactRefSchema,
+  artifactDigestFromUri,
+  createAgentToolArtifactRef,
+} from "./tool-artifact.js";
+export type { AgentToolArtifactRef } from "./tool-artifact.js";
+
 export type {
   ApprovalId,
   BlockId,

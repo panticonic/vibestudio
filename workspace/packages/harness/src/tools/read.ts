@@ -21,6 +21,12 @@ import { toVcsPath, toolContextId, type ToolVcs, type ToolWorkspaceContext } fro
 import { renderReadMemoryBlock } from "./read-memory.js";
 import type { AgentFileVisibility } from "./agent-file-visibility.js";
 import {
+  AGENT_TOOL_ARTIFACT_PROTOCOL,
+  agentToolArtifactRefSchema,
+  artifactDigestFromUri,
+  type AgentToolArtifactRef,
+} from "@workspace/agentic-protocol";
+import {
   base64ToBytes,
   bytesToBase64,
   decodeUtf8,
@@ -44,6 +50,20 @@ const readLocationSchema = Type.Union([
         "File resource reference to read, normally a file:<path> value returned by another tool.",
     }),
     kind: Type.Optional(Type.Literal("file")),
+  }),
+  Type.Object({
+    resource: Type.Object(
+      {
+        protocol: Type.Literal(AGENT_TOOL_ARTIFACT_PROTOCOL),
+        uri: Type.String({ pattern: "^artifact:[0-9a-f]{64}$" }),
+        digest: Type.String({ pattern: "^[0-9a-f]{64}$" }),
+        byteLength: Type.Integer({ minimum: 0 }),
+        mediaType: Type.Literal("application/json"),
+        encoding: Type.Literal("json"),
+        description: Type.String(),
+      },
+      { additionalProperties: false }
+    ),
   }),
 ]);
 
@@ -98,6 +118,7 @@ export interface ReadToolDetails {
   };
   wasResized?: boolean;
   engine?: "runtime-fs";
+  resource?: AgentToolArtifactRef;
   directory?: boolean;
   extensionFallback?: string;
   missing?: boolean;
@@ -334,6 +355,35 @@ export function createReadTool(
     description: `Read a file as bounded text, lossless base64, or a native image attachment. Text is truncated to ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB; continue with offset. Use encoding="base64" plus byteOffset/byteLimit for arbitrary binary data; continue with the returned next byte offset. Images (jpg, png, gif, webp) default to attachments.`,
     parameters: readSchema,
     execute: async (_toolCallId, input, signal, _onUpdate) => {
+      const resource =
+        "resource" in input && input.resource
+          ? agentToolArtifactRefSchema.parse(input.resource)
+          : undefined;
+      if (resource) {
+        if (!runtimeRpc) throw new Error("Reading artifact resources requires runtime RPC");
+        const digest = artifactDigestFromUri(resource.uri);
+        if (!digest || digest !== resource.digest) {
+          throw Object.assign(new Error("Artifact resource URI and digest disagree"), {
+            code: "invalid_artifact_reference",
+          });
+        }
+        if (input.encoding === "base64" || input.byteOffset !== undefined || input.byteLimit !== undefined) {
+          throw Object.assign(new Error("Artifact resources are JSON text; use offset and limit"), {
+            code: "invalid_artifact_read_options",
+          });
+        }
+        const raw = await runtimeRpc.call<string | null>("main", "blobstore.getText", [digest]);
+        if (raw === null) {
+          throw Object.assign(new Error(`Artifact is no longer available: ${resource.uri}`), {
+            code: "artifact_not_found",
+          });
+        }
+        const formatted = formatTextResult(raw, resource.uri, input.offset, input.limit);
+        return {
+          ...formatted,
+          details: { ...formatted.details, resource, originalSize: resource.byteLength },
+        };
+      }
       const path = normalizeReadLocation(input);
       if (!path) {
         return {
@@ -543,7 +593,11 @@ async function recoverReadFailure(
   }
 }
 
-function normalizeReadLocation(input: { path?: unknown; target?: unknown }): string | null {
+function normalizeReadLocation(input: {
+  path?: unknown;
+  target?: unknown;
+  resource?: unknown;
+}): string | null {
   const raw = typeof input.path === "string" ? input.path : input.target;
   if (typeof raw !== "string" || raw.length === 0) return null;
   // Discovery and provenance tools return stable `file:<path>` references.

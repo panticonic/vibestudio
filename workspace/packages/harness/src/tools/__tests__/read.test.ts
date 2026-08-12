@@ -302,6 +302,35 @@ describe("createReadTool", () => {
     expect(result.details.path).toBe("hello.txt");
   });
 
+  it("reads a typed tool artifact resource without translating it into a path", async () => {
+    const digest = "a".repeat(64);
+    const resource = {
+      protocol: "agent-tool-artifact.v1" as const,
+      uri: `artifact:${digest}`,
+      digest,
+      byteLength: 24,
+      mediaType: "application/json" as const,
+      encoding: "json" as const,
+      description: "Complete verify result",
+    };
+    const rpc = {
+      call: vi.fn(async (_target: string, method: string, args: unknown[]) => {
+        expect(method).toBe("blobstore.getText");
+        expect(args).toEqual([digest]);
+        return '{"status":"failed"}';
+      }),
+    };
+    const tool = createReadTool(CWD, new StubFs({ files: {} }), { rpc: rpc as never });
+
+    const result = await tool.execute("call-artifact", { resource });
+
+    expect(result.content[0]).toMatchObject({
+      type: "text",
+      text: '{"status":"failed"}',
+    });
+    expect(result.details).toMatchObject({ resource, originalSize: 24 });
+  });
+
   it("respects offset and limit", async () => {
     const lines = Array.from({ length: 10 }, (_, i) => `line ${i + 1}`).join("\n");
     const fs = new StubFs({ files: { [`${CWD}/big.txt`]: lines } });

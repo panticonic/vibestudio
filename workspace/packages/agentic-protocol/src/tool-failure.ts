@@ -22,6 +22,16 @@ export const AGENT_TOOL_RETRY_POLICIES = [
   "request-approval",
 ] as const;
 
+export const AGENT_TOOL_RECOVERY_ACTIONS = [
+  "correct-request",
+  "reobserve",
+  "retry-identical",
+  "request-approval",
+  "reacquire-handle",
+  "repair-source",
+  "stop",
+] as const;
+
 const MAX_FAILURE_DATA_BYTES = 4 * 1024;
 
 const causalIdsSchema = z
@@ -60,6 +70,13 @@ export const agentToolFailureSchema = z
         afterMs: z.number().int().nonnegative().optional(),
       })
       .strict(),
+    recovery: z
+      .object({
+        action: z.enum(AGENT_TOOL_RECOVERY_ACTIONS),
+        instruction: z.string().min(1),
+      })
+      .strict()
+      .optional(),
     causal: causalIdsSchema.optional(),
     causes: z.array(failureCauseSchema).min(1),
     data: z.unknown().optional(),
@@ -174,6 +191,54 @@ function retryFor(
   }
 }
 
+function recoveryFor(
+  retry: AgentToolFailure["retry"],
+  data: Record<string, unknown> | null
+): NonNullable<AgentToolFailure["recovery"]> {
+  const explicit = record(data?.["recovery"]);
+  const explicitAction = nonempty(explicit?.["action"]);
+  const explicitInstruction =
+    nonempty(explicit?.["instruction"]) ?? nonempty(data?.["remediation"]);
+  if (
+    explicitAction &&
+    AGENT_TOOL_RECOVERY_ACTIONS.includes(
+      explicitAction as (typeof AGENT_TOOL_RECOVERY_ACTIONS)[number]
+    )
+  ) {
+    return {
+      action: explicitAction as NonNullable<AgentToolFailure["recovery"]>["action"],
+      instruction: explicitInstruction ?? "Follow the typed recovery action before retrying.",
+    };
+  }
+  switch (retry.policy) {
+    case "correct-input":
+      return {
+        action: "correct-request",
+        instruction: explicitInstruction ?? "Correct the request from newly observed facts.",
+      };
+    case "reobserve":
+      return {
+        action: "reobserve",
+        instruction: explicitInstruction ?? "Re-observe current state, then issue a new command.",
+      };
+    case "retry-identical":
+      return {
+        action: "retry-identical",
+        instruction: explicitInstruction ?? "Retry only the identical request with the same identity.",
+      };
+    case "request-approval":
+      return {
+        action: "request-approval",
+        instruction: explicitInstruction ?? "Complete the declared authority decision before retrying.",
+      };
+    default:
+      return {
+        action: "stop",
+        instruction: explicitInstruction ?? "Do not retry automatically; inspect the primary cause.",
+      };
+  }
+}
+
 function secondaryCauses(data: Record<string, unknown> | null): AgentToolFailure["causes"] {
   if (!data) return [];
   const config = record(data["config"]);
@@ -212,9 +277,16 @@ export function agentToolFailureFromUnknown(
     retry?: AgentToolFailure["retry"];
   }
 ): AgentToolFailure {
+  const root = record(error);
+  const details = record(root?.["details"]);
   const existing =
-    record(error)?.["failure"] ??
-    (isAgentToolFailure(record(error)?.["errorData"]) ? record(error)?.["errorData"] : undefined);
+    root?.["failure"] ??
+    details?.["failure"] ??
+    (isAgentToolFailure(root?.["errorData"])
+      ? root?.["errorData"]
+      : isAgentToolFailure(details?.["errorData"])
+        ? details?.["errorData"]
+        : undefined);
   if (isAgentToolFailure(existing)) {
     return {
       ...existing,
@@ -223,13 +295,14 @@ export function agentToolFailureFromUnknown(
       ...(context.causal ? { causal: { ...existing.causal, ...context.causal } } : {}),
     };
   }
-  const dataValue = record(error)?.["errorData"];
+  const dataValue = root?.["errorData"] ?? details?.["errorData"] ?? details;
   const data = record(dataValue);
   const primaryValue = data?.["primary"];
   const primary = record(primaryValue);
   const message = primary ? errorMessage(primaryValue) : errorMessage(error);
   const code = errorCode(primaryValue ?? error, primary ?? data);
   const kind = context.kind ?? kindFor(code, message);
+  const retry = context.retry ?? retryFor(kind, data);
   return agentToolFailureSchema.parse({
     protocol: AGENT_TOOL_FAILURE_PROTOCOL,
     code,
@@ -237,7 +310,8 @@ export function agentToolFailureFromUnknown(
     message,
     operation: context.operation,
     stage: context.stage,
-    retry: context.retry ?? retryFor(kind, data),
+    retry,
+    recovery: recoveryFor(retry, data),
     ...(context.causal && Object.keys(context.causal).length > 0 ? { causal: context.causal } : {}),
     causes: [
       {
@@ -272,7 +346,7 @@ export function renderAgentToolFailure(failure: AgentToolFailure): string {
     .map((cause) => `${cause.role}: ${cause.code}: ${cause.message}`);
   return [
     `[${failure.operation}:${failure.stage}] ${failure.code}: ${failure.message}`,
-    recovery,
+    failure.recovery?.instruction ?? recovery,
     ...secondary,
   ].join("\n");
 }
