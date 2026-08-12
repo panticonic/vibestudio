@@ -67,6 +67,42 @@ transcript.
 5. `useChannelMessages()` subscribes to replay + live channel events and
    reduces them into `ChatMessage[]`.
 
+## Application-owned orchestration
+
+Channels and trajectories provide durable conversation and effect facts; they
+do not make an agent authoritative for application state. Agentic applications
+should split responsibilities explicitly:
+
+- deterministic application code owns state, legal transitions, resource
+  accounting, invariants, and terminal outcomes;
+- agents interpret natural language, explain tradeoffs, and request narrow
+  methods against that authority;
+- method implementations authenticate `callerId` and enforce role authority
+  independently of prompts;
+- coordinators reread live state before resolving natural references and route
+  addressed work without acquiring mutation authority.
+
+In a multi-agent channel, strict addressed delivery is the safe default.
+Unmentioned human input should have one product-chosen recipient, while an
+explicit mention overrides that default. Products should gate input until the
+chosen recipient identities are live instead of accepting messages into an
+unroutable state.
+
+Application transitions sometimes require a conversational continuation, such
+as notifying a coordinator to open the next round. That continuation is an
+effect of the transition, not disposable UI. Persist the new state and a pending
+addressed directive together, publish it with a transition-derived idempotency
+key, and clear it only after successful publication. Redrive the recorded
+directive after reload or hibernation. Applications that must progress without
+an open panel should place this authority and outbox in a Durable Object;
+panel-local state is sufficient only when an open panel is the intended owner.
+
+The stock `@workspace/agentic-chat` UI keeps capability selection separate from
+presentation. Feature selection controls which browser methods exist, while
+product renderers may preserve, wrap, replace, or elide stock transcript,
+header, delivery, and composer surfaces. Hiding routine tool activity must not
+remove canonical events or the product's path to inspect failures.
+
 ## DO Base Classes
 
 **DurableObjectBase** — generic DO foundation (~150 lines).

@@ -10,7 +10,12 @@
  * id-collision). `*-standing` keys are ONLY for scheduled instances in `vibestudio.yml`.
  */
 import { contextId as runtimeContextId, rpc } from "@workspace/runtime";
-import { toSubscriptionConfig, unsubscribeAgentFromChannel } from "@workspace/agentic-core";
+import {
+  launchAgentIntoChannel,
+  unsubscribeAgentFromChannel,
+  withWorkspaceReviewRetry,
+  type WorkspaceReviewWaiter,
+} from "@workspace/agentic-core";
 
 export interface AddAgentToChannelArgs {
   /** Worker source, e.g. "workers/explorer-agent". */
@@ -22,6 +27,10 @@ export interface AddAgentToChannelArgs {
   channelId: string;
   /** Defaults to the current runtime context. */
   contextId?: string | null;
+  /** Whether the subscription should admit eligible existing channel history. */
+  replay?: boolean;
+  /** Optional product adapter for workspace-review approval and retry. */
+  waitForReview?: WorkspaceReviewWaiter;
   name?: string;
   /**
    * Per-agent behavior (model / thinkingLevel / approvalLevel / respondPolicy / …) plus
@@ -62,31 +71,24 @@ export async function addAgentToChannel(
 
   const key = agentObjectKey(handle, channelId);
   const agentConfig: Record<string, unknown> = {
+    ...(args.config ?? {}),
     handle,
     ...(args.name ? { name: args.name } : {}),
-    ...(args.config ?? {}),
   };
 
-  // 1. create/reactivate — per-agent behavior rides stateArgs.agentConfig.
-  const entity = await rpc.call<{ id: string; targetId: string }>("main", "runtime.createEntity", [
-    {
-      kind: "do",
-      execution: {
-        surface: "code",
-        source: args.source,
-      },
+  const launch = () =>
+    launchAgentIntoChannel(rpc, {
+      source: args.source,
       className: args.className,
       key,
+      channelId,
       contextId,
-      stateArgs: { agentConfig },
-    },
-  ]);
-  // 2. subscribe — the subscription config is presentation-only (behavior stripped).
-  const subscription = await rpc.call<{ ok: boolean; participantId?: string }>(
-    entity.targetId,
-    "subscribeChannel",
-    [{ channelId, contextId, config: toSubscriptionConfig(agentConfig) }]
-  );
+      config: agentConfig,
+      ...(args.replay !== undefined ? { replay: args.replay } : {}),
+    });
+  const { handle: entity, subscription } = args.waitForReview
+    ? await withWorkspaceReviewRetry(launch, args.waitForReview)
+    : await launch();
 
   return {
     ok: subscription.ok,
