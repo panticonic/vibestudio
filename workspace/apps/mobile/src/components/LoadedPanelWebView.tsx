@@ -95,6 +95,7 @@ function LoadedPanelWebViewImpl({
             text: colors.text,
             textSecondary: colors.textSecondary,
             primary: colors.primary,
+            onPrimary: colors.onPrimary,
           }}
         />
       </WebViewErrorBoundary>

@@ -87,6 +87,7 @@ export interface PanelWebViewProps {
     text?: string;
     textSecondary?: string;
     primary?: string;
+    onPrimary?: string;
   };
 }
 
@@ -1107,7 +1108,9 @@ const PanelWebViewImpl = forwardRef<PanelWebViewHandle, PanelWebViewProps>(funct
             ]}
             onPress={handleRetry}
           >
-            <Text style={[styles.retryText, colors?.text != null && { color: colors.text }]}>
+            <Text
+              style={[styles.retryText, colors?.onPrimary != null && { color: colors.onPrimary }]}
+            >
               Retry
             </Text>
           </Pressable>
@@ -1144,7 +1147,9 @@ const PanelWebViewImpl = forwardRef<PanelWebViewHandle, PanelWebViewProps>(funct
             ]}
             onPress={() => openExternalPdf(url)}
           >
-            <Text style={[styles.retryText, colors?.text != null && { color: colors.text }]}>
+            <Text
+              style={[styles.retryText, colors?.onPrimary != null && { color: colors.onPrimary }]}
+            >
               Open PDF
             </Text>
           </Pressable>
@@ -1159,7 +1164,7 @@ const PanelWebViewImpl = forwardRef<PanelWebViewHandle, PanelWebViewProps>(funct
         <View
           style={[
             styles.loadingOverlay,
-            colors?.background != null && { backgroundColor: colors.background + "E6" },
+            colors?.background != null && { backgroundColor: colors.background },
           ]}
         >
           <VibestudioLogo size={64} variant="symbol" style={styles.logo} />
@@ -1282,10 +1287,13 @@ const styles = StyleSheet.create({
     lineHeight: 20,
   },
   retryButton: {
+    minHeight: 44,
     paddingHorizontal: 24,
     paddingVertical: 12,
     backgroundColor: "#7c3aed",
     borderRadius: 8,
+    alignItems: "center",
+    justifyContent: "center",
   },
   retryText: {
     color: "#e0e0e0",

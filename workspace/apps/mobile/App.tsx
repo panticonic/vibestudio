@@ -23,6 +23,7 @@ import {
   hydrateThemePreferenceAtom,
   isDarkModeAtom,
   systemColorSchemeAtom,
+  themeColorsAtom,
 } from "./src/state/themeAtoms";
 import { ActionSheetHost } from "./src/components/ui/ActionSheetHost";
 import { shellClientAtom } from "./src/state/shellClientAtom";
@@ -36,6 +37,7 @@ registerBackgroundHandlers();
 function AppContent() {
   const shellClient = useAtomValue(shellClientAtom);
   const isDark = useAtomValue(isDarkModeAtom);
+  const colors = useAtomValue(themeColorsAtom);
   const effectiveScheme = useAtomValue(colorSchemeAtom);
   const setSystemColorScheme = useSetAtom(systemColorSchemeAtom);
   const hydrateThemePreference = useSetAtom(hydrateThemePreferenceAtom);
@@ -170,7 +172,7 @@ function AppContent() {
         translucent
         backgroundColor="transparent"
       />
-      <ErrorBoundary label="App">
+      <ErrorBoundary label="App" colors={colors}>
         <NavigationContainer>
           <RootNavigator />
         </NavigationContainer>

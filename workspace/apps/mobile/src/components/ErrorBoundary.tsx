@@ -8,6 +8,7 @@
 
 import React, { type ErrorInfo, type ReactNode } from "react";
 import { View, Text, ScrollView, StyleSheet } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { EmptyState, Button } from "./ui/primitives";
 import { AlertTriangle, RefreshCw } from "../design/icons";
 
@@ -20,8 +21,10 @@ interface ErrorBoundaryProps {
     background?: string;
     text?: string;
     textSecondary?: string;
-    accent?: string;
-    accentText?: string;
+    textTertiary?: string;
+    danger?: string;
+    codeBackground?: string;
+    border?: string;
   };
 }
 
@@ -59,7 +62,7 @@ export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoun
       const colors = this.props.colors;
 
       return (
-        <View
+        <SafeAreaView
           style={[
             styles.container,
             colors?.background != null && { backgroundColor: colors.background },
@@ -79,15 +82,34 @@ export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoun
                 />
               }
             />
-            {error?.message ? <Text style={styles.errorMessage}>{error.message}</Text> : null}
+            {error?.message ? (
+              <Text
+                style={[styles.errorMessage, colors?.danger != null && { color: colors.danger }]}
+              >
+                {error.message}
+              </Text>
+            ) : null}
 
             {__DEV__ && error?.stack ? (
-              <ScrollView style={styles.stackContainer}>
-                <Text style={styles.stackText}>{error.stack}</Text>
+              <ScrollView
+                style={[
+                  styles.stackContainer,
+                  colors?.codeBackground != null && { backgroundColor: colors.codeBackground },
+                  colors?.border != null && { borderColor: colors.border },
+                ]}
+              >
+                <Text
+                  style={[
+                    styles.stackText,
+                    colors?.textTertiary != null && { color: colors.textTertiary },
+                  ]}
+                >
+                  {error.stack}
+                </Text>
               </ScrollView>
             ) : null}
           </View>
-        </View>
+        </SafeAreaView>
       );
     }
 
@@ -121,6 +143,7 @@ const styles = StyleSheet.create({
     maxHeight: 200,
     width: "100%",
     backgroundColor: "#111122",
+    borderWidth: StyleSheet.hairlineWidth,
     borderRadius: 8,
     padding: 12,
   },

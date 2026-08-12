@@ -187,7 +187,12 @@ export function ConnectionBar({ onRepair }: ConnectionBarProps = {}) {
       : status === "connected" && workspaceReadiness !== "reconciled"
         ? "statusConnecting"
         : config.colorKey;
-  const backgroundColor = colors[readinessColorKey];
+  const statusPalette =
+    readinessColorKey === "statusConnected"
+      ? { background: colors.successSoft, foreground: colors.success }
+      : readinessColorKey === "statusConnecting"
+        ? { background: colors.warningSoft, foreground: colors.warning }
+        : { background: colors.dangerSoft, foreground: colors.danger };
   const reconnectLabel =
     wasConnectedRef.current && reconnectAttempt > 0
       ? `Reconnecting (attempt ${reconnectAttempt})…`
@@ -208,11 +213,16 @@ export function ConnectionBar({ onRepair }: ConnectionBarProps = {}) {
     <Animated.View
       style={[
         styles.container,
-        { backgroundColor, opacity, height: animatedHeight, overflow: "hidden" },
+        {
+          backgroundColor: statusPalette.background,
+          opacity,
+          height: animatedHeight,
+          overflow: "hidden",
+        },
       ]}
     >
-      <View style={styles.dot} />
-      <Text style={styles.text}>{label}</Text>
+      <View style={[styles.dot, { backgroundColor: statusPalette.foreground }]} />
+      <Text style={[styles.text, { color: statusPalette.foreground }]}>{label}</Text>
     </Animated.View>
   );
 
@@ -243,11 +253,9 @@ const styles = StyleSheet.create({
     width: 6,
     height: 6,
     borderRadius: 3,
-    backgroundColor: "rgba(255, 255, 255, 0.8)",
     marginRight: spacing.xs + 2,
   },
   text: {
     ...type.micro,
-    color: "#ffffff",
   },
 });
