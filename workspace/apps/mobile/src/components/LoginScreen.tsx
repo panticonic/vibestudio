@@ -3,11 +3,12 @@ import {
   ActivityIndicator,
   Alert,
   Linking,
-  SafeAreaView,
+  ScrollView,
   StyleSheet,
   Text,
   View,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { Button } from "./ui/primitives";
 import { radius, spacing, type } from "../design/tokens";
 import type { StackNavigationProp } from "@react-navigation/stack";
@@ -259,7 +260,11 @@ export function LoginScreen({ navigation }: LoginScreenProps) {
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
-      <View style={styles.content}>
+      <ScrollView
+        contentContainerStyle={styles.content}
+        bounces={false}
+        showsVerticalScrollIndicator={false}
+      >
         <VibestudioLogo size={156} variant="logo" style={styles.brandMark} />
         <Text style={[styles.subtitle, { color: colors.textSecondary }]}>
           Opening the selected workspace
@@ -322,7 +327,7 @@ export function LoginScreen({ navigation }: LoginScreenProps) {
             />
           </View>
         ) : null}
-      </View>
+      </ScrollView>
     </SafeAreaView>
   );
 }
@@ -333,7 +338,7 @@ const styles = StyleSheet.create({
   },
   content: {
     alignItems: "center",
-    flex: 1,
+    flexGrow: 1,
     justifyContent: "center",
     padding: spacing.xl,
   },

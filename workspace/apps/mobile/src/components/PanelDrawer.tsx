@@ -46,7 +46,7 @@ import {
   type MobilePanelForestRow,
 } from "../shellCore/panelForest";
 import { useVisibleAccountProfiles } from "../hooks/useVisibleAccountProfiles";
-import { hairline, radius, spacing, type } from "../design/tokens";
+import { hairline, radius, spacing, touchTarget, type } from "../design/tokens";
 import {
   Archive,
   Copy,
@@ -747,7 +747,7 @@ const styles = StyleSheet.create({
     borderRadius: radius.md,
     borderWidth: hairline,
     paddingHorizontal: spacing.md,
-    height: 38,
+    height: touchTarget,
   },
   searchInput: {
     flex: 1,
@@ -758,7 +758,7 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   loadMore: {
-    minHeight: 42,
+    minHeight: touchTarget,
     justifyContent: "center",
     paddingRight: spacing.lg,
   },

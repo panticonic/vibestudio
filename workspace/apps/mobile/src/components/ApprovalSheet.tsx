@@ -3300,9 +3300,9 @@ const styles = StyleSheet.create({
   queueButton: {
     alignItems: "center",
     borderRadius: radius.sm,
-    height: 28,
+    height: touchTarget,
     justifyContent: "center",
-    width: 28,
+    width: touchTarget,
   },
   queueLabel: {
     ...typeRamp.micro,

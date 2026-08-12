@@ -1,5 +1,6 @@
 import React from "react";
-import { View, Text, StyleSheet, Pressable, SafeAreaView, ScrollView, Alert } from "react-native";
+import { View, Text, StyleSheet, Pressable, ScrollView, Alert } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import type { StackNavigationProp } from "@react-navigation/stack";
 import { useAtomValue, useSetAtom } from "jotai";
 import {

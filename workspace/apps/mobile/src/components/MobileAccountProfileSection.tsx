@@ -350,6 +350,7 @@ export function MobileAccountProfileSection({ client }: MobileAccountProfileSect
                 accessibilityRole="button"
                 accessibilityLabel="Retry loading profile"
                 onPress={() => void load()}
+                style={styles.retryButton}
               >
                 <Text style={[styles.retry, { color: colors.primary }]}>Retry</Text>
               </Pressable>
@@ -475,6 +476,10 @@ const styles = StyleSheet.create({
   retry: {
     fontSize: 14,
     fontWeight: "700",
-    marginTop: spacing.sm,
+  },
+  retryButton: {
+    minHeight: 44,
+    justifyContent: "center",
+    alignSelf: "flex-start",
   },
 });

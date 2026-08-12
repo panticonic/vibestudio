@@ -172,7 +172,7 @@ export function PanelTreeItem({
             <Pressable
               onPress={handleChevronPress}
               style={styles.chevronButton}
-              hitSlop={8}
+              hitSlop={10}
               accessibilityRole="button"
               accessibilityLabel={item.isCollapsed ? "Expand children" : "Collapse children"}
             >
