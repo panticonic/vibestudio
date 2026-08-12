@@ -33,13 +33,14 @@ import { activePanelIdAtom, pinnedPanelIdsAtom } from "../state/navigationAtoms"
 import { pushToastAtom } from "../state/toastAtoms";
 import { showActionSheetAtom, type ActionSheetItem } from "../state/actionSheetAtoms";
 import { savePinnedPanelIds } from "../shellCore/pinnedPanels";
-import { PanelTreeItem, type FlatPanelItem } from "./PanelTreeItem";
+import { PanelTreeItem } from "./PanelTreeItem";
 import { VibestudioLogo } from "./VibestudioLogo";
 import { isBrowserPanelSource } from "@vibestudio/shared/panelChrome";
 import { type PanelCommandId } from "@vibestudio/shared/panelCommands";
 import { copyToClipboard, openExternalUrl } from "../services/nativeCapabilities";
 import {
   buildMobilePanelForestRows,
+  presentMobilePanelRow,
   type MobilePanelTreeGroup,
   type MobilePanelTreeNode,
   type MobilePanelForestRow,
@@ -355,18 +356,19 @@ export function PanelDrawer({ onSelectPanel }: PanelDrawerProps) {
   );
 
   const handleArchive = useCallback(
-    (panelId: string) => {
+    async (panelId: string) => {
       if (!shellClient) return;
-      void shellClient.panels
-        .archive(panelId)
-        .then(() => shellClient.panels.refresh())
-        .catch((error: unknown) =>
-          pushToast({
-            title: "Could not archive panel",
-            message: error instanceof Error ? error.message : "Try again.",
-            tone: "danger",
-          })
-        );
+      try {
+        await shellClient.panels.archive(panelId);
+        await shellClient.panels.refresh();
+      } catch (error) {
+        pushToast({
+          title: "Could not archive panel",
+          message: error instanceof Error ? error.message : "Try again.",
+          tone: "danger",
+        });
+        throw error;
+      }
     },
     [pushToast, shellClient]
   );
@@ -512,16 +514,7 @@ export function PanelDrawer({ onSelectPanel }: PanelDrawerProps) {
           </Pressable>
         );
       }
-      const panelItem: FlatPanelItem = {
-        id: item.panel.id,
-        title: item.panel.title,
-        depth: trimmedQuery ? 0 : item.depth,
-        childCount: trimmedQuery ? 0 : item.panel.children.length,
-        isCollapsed: item.isCollapsed,
-        icon: item.panel.icon,
-        source: item.panel.source,
-        kind: item.panel.kind,
-      };
+      const panelItem = presentMobilePanelRow(item, Boolean(trimmedQuery));
       return (
         <PanelTreeItem
           item={panelItem}

@@ -1,6 +1,7 @@
 import {
   buildMobilePanelForestRows,
   orderMobilePanelForest,
+  presentMobilePanelRow,
   type MobilePanelTreeGroup,
   type MobilePanelTreeNode,
 } from "./panelForest";
@@ -110,5 +111,39 @@ describe("mobile panel forest", () => {
       new Map()
     );
     expect(complete.some((row) => row.kind === "load-more")).toBe(false);
+  });
+
+  it("keeps unloaded child branches expandable in the rendered row projection", () => {
+    const unloadedParent: MobilePanelTreeNode = {
+      ...panel("parent"),
+      childCount: 4,
+      childrenLoadedCount: 0,
+      childrenHaveMore: true,
+    };
+    const row = buildMobilePanelForestRows(
+      [{ owner: "alice", rootCount: 1, rootPanels: [unloadedParent] }],
+      new Set(["parent"]),
+      "alice",
+      new Map()
+    ).find(
+      (
+        candidate
+      ): candidate is Extract<
+        ReturnType<typeof buildMobilePanelForestRows>[number],
+        { kind: "panel" }
+      > => candidate.kind === "panel"
+    );
+
+    expect(row).toBeDefined();
+    expect(presentMobilePanelRow(row!, false)).toMatchObject({
+      id: "parent",
+      childCount: 4,
+      isCollapsed: true,
+    });
+    expect(presentMobilePanelRow(row!, true)).toMatchObject({
+      childCount: 0,
+      depth: 0,
+      isCollapsed: true,
+    });
   });
 });

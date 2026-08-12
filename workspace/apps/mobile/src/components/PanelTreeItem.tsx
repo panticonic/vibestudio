@@ -30,6 +30,7 @@ import type { ThemeColors } from "../state/themeAtoms";
 import { radius, spacing, type } from "../design/tokens";
 import { Archive, ChevronDown, ChevronRight, Pin } from "../design/icons";
 import { MobilePanelIcon } from "./MobilePanelIcon";
+import type { MobilePanelRowPresentation } from "../shellCore/panelForest";
 
 function triggerHaptic() {
   try {
@@ -46,19 +47,8 @@ const INDENT_PER_LEVEL = 14;
 const ARCHIVE_THRESHOLD = -120;
 const ITEM_HEIGHT = 46;
 
-export interface FlatPanelItem {
-  id: string;
-  title: string;
-  depth: number;
-  childCount: number;
-  isCollapsed: boolean;
-  icon?: string;
-  source?: string;
-  kind?: "workspace" | "browser";
-}
-
 interface PanelTreeItemProps {
-  item: FlatPanelItem;
+  item: MobilePanelRowPresentation;
   isActive: boolean;
   isPinned?: boolean;
   colors: ThemeColors;
