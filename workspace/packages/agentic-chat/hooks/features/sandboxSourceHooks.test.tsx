@@ -3,10 +3,11 @@
 import React, { useEffect } from "react";
 import * as ReactJsxRuntime from "react/jsx-runtime";
 import * as ReactJsxDevRuntime from "react/jsx-dev-runtime";
+import * as RadixIcons from "@radix-ui/react-icons";
 import * as RadixThemes from "@radix-ui/themes";
 import * as ReactResponsive from "@workspace/react/responsive";
 import { act, render, waitFor } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { CONTENT_TYPE_INLINE_UI } from "@workspace/pubsub";
@@ -57,6 +58,7 @@ describe("sandbox source hooks", () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     if (originalModuleMap === undefined)
       delete (globalThis as Record<string, unknown>)["__vibestudioModuleMap__"];
     else (globalThis as Record<string, unknown>)["__vibestudioModuleMap__"] = originalModuleMap;
@@ -110,6 +112,255 @@ describe("sandbox source hooks", () => {
       { timeout: 5_000 }
     );
     expect(loadCalls).toEqual([{ specifier: "label-lib", ref: "npm:2" }]);
+  });
+
+  it("loads explicit inline_ui imports from a replayed payload", async () => {
+    const states: InlineUiState[] = [];
+    const loadCalls: Array<{ specifier: string; ref: string | undefined }> = [];
+    const messages = [
+      makeMessage({
+        id: "replayed-ui",
+        source: {
+          type: "code",
+          code: `import { label } from "label-lib"; export default function App() { return label; }`,
+        },
+        imports: { "label-lib": "npm:2" },
+        renderedAt: "2026-08-12T08:00:00.000Z",
+      }),
+    ];
+    const loadImport = async (specifier: string, ref: string | undefined) => {
+      loadCalls.push({ specifier, ref });
+      return { bundle: `module.exports = { label: "ready" };`, format: "cjs" as const };
+    };
+
+    function Harness() {
+      const state = useInlineUi({ messages, loadImport });
+      useEffect(() => {
+        states.push(state);
+      }, [state]);
+      return null;
+    }
+
+    render(<Harness />);
+
+    await waitFor(() => {
+      const entry = states.at(-1)?.inlineUiComponents.get("replayed-ui");
+      expect(entry?.error).toBeUndefined();
+      expect(entry?.Component).toBeTruthy();
+    });
+    expect(loadCalls).toEqual([{ specifier: "label-lib", ref: "npm:2" }]);
+  });
+
+  it("reloads an inline_ui import when a stable card changes its declared ref", async () => {
+    const code = `import { label } from "label-lib"; export default function App() { return label; }`;
+    const loadCalls: Array<{ specifier: string; ref: string | undefined }> = [];
+    const loadImport = async (specifier: string, ref: string | undefined) => {
+      loadCalls.push({ specifier, ref });
+      return {
+        bundle: `module.exports = { label: ${JSON.stringify(ref)} };`,
+        format: "cjs" as const,
+      };
+    };
+    const message = (ref: string, renderedAt: string) =>
+      makeMessage({
+        id: "versioned-card",
+        source: { type: "code", code },
+        imports: { "label-lib": ref },
+        renderedAt,
+      });
+
+    function Harness({ messages }: { messages: ChatMessage[] }) {
+      const state = useInlineUi({ messages, loadImport });
+      const Component = state.inlineUiComponents.get("versioned-card")?.Component;
+      return Component ? (
+        <Component props={{}} chat={{}} scope={{}} scopes={{}} />
+      ) : (
+        <div>loading</div>
+      );
+    }
+
+    const view = render(<Harness messages={[message("npm:1", "first-revision")]} />);
+    await waitFor(() => expect(view.getByText("npm:1")).toBeTruthy());
+
+    view.rerender(<Harness messages={[message("npm:2", "second-revision")]} />);
+
+    await waitFor(() => expect(view.getByText("npm:2")).toBeTruthy());
+    expect(view.queryByText("npm:1")).toBeNull();
+    expect(loadCalls).toEqual([
+      { specifier: "label-lib", ref: "npm:1" },
+      { specifier: "label-lib", ref: "npm:2" },
+    ]);
+  });
+
+  it("serializes in-flight stable-card revisions before changing package refs", async () => {
+    const moduleMap = (globalThis as Record<string, unknown>)["__vibestudioModuleMap__"] as Record<
+      string,
+      unknown
+    >;
+    let releaseFirstImport!: () => void;
+    const firstImportGate = new Promise<void>((resolve) => {
+      releaseFirstImport = resolve;
+    });
+    const loadCalls: Array<string | undefined> = [];
+    const loadImport = async (_specifier: string, ref: string | undefined) => {
+      loadCalls.push(ref);
+      if (ref === "npm:1") await firstImportGate;
+      return {
+        bundle: `module.exports = { label: ${JSON.stringify(ref)} };`,
+        format: "cjs" as const,
+      };
+    };
+    const code = `import { label } from "label-lib"; export default function App() { return label; }`;
+    const message = (ref: string, renderedAt: string) =>
+      makeMessage({
+        id: "racing-card",
+        source: { type: "code", code },
+        imports: { "label-lib": ref },
+        renderedAt,
+      });
+
+    function Harness({ messages }: { messages: ChatMessage[] }) {
+      const state = useInlineUi({ messages, loadImport });
+      const Component = state.inlineUiComponents.get("racing-card")?.Component;
+      return Component ? (
+        <Component props={{}} chat={{}} scope={{}} scopes={{}} />
+      ) : (
+        <div>loading</div>
+      );
+    }
+
+    const view = render(<Harness messages={[message("npm:1", "first-revision")]} />);
+    await waitFor(() => expect(loadCalls).toEqual(["npm:1"]));
+
+    view.rerender(<Harness messages={[message("npm:2", "second-revision")]} />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(loadCalls).toEqual(["npm:1"]);
+
+    releaseFirstImport();
+    await waitFor(() => expect(view.getByText("npm:2")).toBeTruthy());
+    expect(loadCalls).toEqual(["npm:1", "npm:2"]);
+    expect(moduleMap["label-lib"]).toEqual({ label: "npm:2" });
+  });
+
+  it("recompiles a stable inline_ui id when the file at the same path changes", async () => {
+    let source = `export default function App() { return "first"; }`;
+    let sourceReads = 0;
+    const loadSourceFile = async (sourcePath: string) => {
+      if (sourcePath !== "packages/app/Card.tsx") throw new Error(`Missing ${sourcePath}`);
+      sourceReads += 1;
+      return source;
+    };
+    const message = (renderedAt: string) =>
+      makeMessage({
+        id: "stable-card",
+        source: { type: "file", path: "packages/app/Card.tsx" },
+        renderedAt,
+      });
+
+    function Harness({ messages }: { messages: ChatMessage[] }) {
+      const state = useInlineUi({ messages, loadSourceFile });
+      const Component = state.inlineUiComponents.get("stable-card")?.Component;
+      return Component ? (
+        <Component props={{}} chat={{}} scope={{}} scopes={{}} />
+      ) : (
+        <div>loading</div>
+      );
+    }
+
+    const view = render(<Harness messages={[message("first-revision")]} />);
+    await waitFor(() => expect(view.getByText("first")).toBeTruthy());
+
+    source = `export default function App() { return "second"; }`;
+    view.rerender(<Harness messages={[message("second-revision")]} />);
+
+    await waitFor(() => expect(view.getByText("second")).toBeTruthy());
+    expect(view.queryByText("first")).toBeNull();
+    expect(sourceReads).toBe(2);
+  });
+
+  it("retries a failed stable inline_ui compilation on the next render revision", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    let source = `export default function (`;
+    const message = (renderedAt: string) =>
+      makeMessage({
+        id: "repairable-card",
+        source: { type: "file", path: "packages/app/Repairable.tsx" },
+        renderedAt,
+      });
+
+    function Harness({ messages }: { messages: ChatMessage[] }) {
+      const state = useInlineUi({
+        messages,
+        loadSourceFile: async () => source,
+      });
+      const entry = state.inlineUiComponents.get("repairable-card");
+      const Component = entry?.Component;
+      if (entry?.error) return <div>{entry.error}</div>;
+      return Component ? (
+        <Component props={{}} chat={{}} scope={{}} scopes={{}} />
+      ) : (
+        <div>loading</div>
+      );
+    }
+
+    const view = render(<Harness messages={[message("failed-revision")]} />);
+    await waitFor(() => expect(view.queryByText("loading")).toBeNull());
+
+    source = `export default function App() { return "recovered"; }`;
+    view.rerender(<Harness messages={[message("repaired-revision")]} />);
+
+    await waitFor(() => expect(view.getByText("recovered")).toBeTruthy());
+    consoleError.mockRestore();
+  });
+
+  it("compiles the onboarding overview through the file-backed inline UI pipeline", async () => {
+    const moduleMap = (globalThis as Record<string, unknown>)["__vibestudioModuleMap__"] as Record<
+      string,
+      unknown
+    >;
+    moduleMap["react"] = React;
+    moduleMap["react/jsx-runtime"] = ReactJsxRuntime;
+    moduleMap["react/jsx-dev-runtime"] = ReactJsxDevRuntime;
+    moduleMap["@radix-ui/themes"] = RadixThemes;
+    moduleMap["@radix-ui/react-icons"] = RadixIcons;
+    moduleMap["@workspace/runtime"] = {};
+    moduleMap["@workspace/model-catalog/catalog"] = {};
+
+    const sourcePath = "skills/onboarding/SetupHub.tsx";
+    const checkoutRoot =
+      path.basename(process.cwd()) === "workspace" ? path.dirname(process.cwd()) : process.cwd();
+    const states: InlineUiState[] = [];
+    const messages = [
+      makeMessage({
+        id: "onboarding-setup-overview",
+        source: { type: "file", path: sourcePath },
+      }),
+    ];
+
+    function Harness() {
+      const state = useInlineUi({
+        messages,
+        loadSourceFile: (sourceFilePath) =>
+          readFile(path.join(checkoutRoot, "workspace", sourceFilePath), "utf8"),
+      });
+      useEffect(() => {
+        states.push(state);
+      }, [state]);
+      return null;
+    }
+
+    render(<Harness />);
+
+    await waitFor(
+      () => {
+        const entry = states.at(-1)?.inlineUiComponents.get("onboarding-setup-overview");
+        expect(entry?.error).toBeUndefined();
+        expect(entry?.Component).toBeTruthy();
+      },
+      { timeout: 5_000 }
+    );
   });
 
   it("compiles action bar file sources with package.json inferred imports", async () => {

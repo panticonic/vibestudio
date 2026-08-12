@@ -7,7 +7,7 @@ import {
 } from "@radix-ui/react-icons";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { type OnboardingCapabilityDefinition, type SetupAction } from "./catalog";
-import type { SetupCapabilitySnapshot } from "./snapshot";
+import { composeOnboardingCapabilities, type SetupCapabilitySnapshot } from "./snapshot";
 import { loadOptionalTemplateSnapshot, type OptionalTemplateSnapshot } from "./templates";
 
 interface SetupHubProps {
@@ -257,7 +257,6 @@ export default function SetupHub({ chat, scope, scopes, inlineUi }: SetupHubProp
       setLoadingCapabilities(true);
       setError(null);
       try {
-        const { composeOnboardingCapabilities } = await import("./snapshot");
         const overview = await composeOnboardingCapabilities(
           verifyCapabilityId ? { verifyCapabilityId } : {}
         );

@@ -540,6 +540,44 @@ return fs.readFileSync("/tmp/a");`,
     expect(loadImport).not.toHaveBeenCalled();
   });
 
+  it("tracks build-loaded refs independently in each module registry", async () => {
+    const firstModuleMap: Record<string, unknown> = {};
+    const secondModuleMap: Record<string, unknown> = {};
+    const loadImport = vi.fn(async (_specifier: string, ref: string | undefined) => ({
+      bundle: `module.exports = { label: ${JSON.stringify(ref ?? "latest")} };`,
+      format: "cjs" as const,
+    }));
+    const runWithRef = (moduleMap: Record<string, unknown>, ref: string) =>
+      executeSandbox('import { label } from "versioned-lib"; return label;', {
+        syntax: "typescript",
+        imports: { "versioned-lib": ref },
+        moduleMap,
+        require: (id) => {
+          if (id in moduleMap) return moduleMap[id];
+          throw new Error(`Module not found: ${id}`);
+        },
+        loadImport,
+      });
+
+    await expect(runWithRef(firstModuleMap, "npm:1")).resolves.toMatchObject({
+      success: true,
+      returnValue: "npm:1",
+    });
+    await expect(runWithRef(secondModuleMap, "npm:2")).resolves.toMatchObject({
+      success: true,
+      returnValue: "npm:2",
+    });
+    await expect(runWithRef(firstModuleMap, "npm:2")).resolves.toMatchObject({
+      success: true,
+      returnValue: "npm:2",
+    });
+    await expect(runWithRef(firstModuleMap, "npm:2")).resolves.toMatchObject({
+      success: true,
+      returnValue: "npm:2",
+    });
+    expect(loadImport.mock.calls.map(([, ref]) => ref)).toEqual(["npm:1", "npm:2", "npm:2"]);
+  });
+
   it("does not mask a lazy exposed-chunk failure with build fallback", async () => {
     const globals = globalThis as Record<string, unknown>;
     const loaders = globals["__vibestudioModuleLoaders__"] as Record<

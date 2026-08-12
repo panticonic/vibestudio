@@ -45,4 +45,16 @@ export default function Card() {
     const issues = lintRendererSource(`export { reduce } from "@workspace/other/mod";`);
     expect(issues.map((issue) => issue.specifier)).toEqual(["@workspace/other/mod"]);
   });
+
+  it("flags dynamic relative imports that the file loader cannot bundle", () => {
+    const issues = lintRendererSource(`const helper = await import("./helper");`);
+    expect(issues).toEqual([
+      {
+        specifier: "./helper",
+        message:
+          'Dynamic relative import "./helper" is not supported by file-loaded sandbox renderers. ' +
+          "Use a static relative import so the local module is bundled before render.",
+      },
+    ]);
+  });
 });

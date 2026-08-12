@@ -91,8 +91,12 @@ export interface InlineUiData {
   id: string;
   /** Component source to compile and render */
   source: SandboxSource;
+  /** On-demand package builds required by the component. */
+  imports?: Record<string, string>;
   /** Optional props to pass to the component */
   props?: Record<string, unknown>;
+  /** Latest stable-ID render revision. */
+  renderedAt?: string;
 }
 
 /**
