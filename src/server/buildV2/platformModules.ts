@@ -129,6 +129,8 @@ export interface FrameworkModuleContract {
   readonly entryModule: string;
   /** Name of the mount function the generated entry calls. */
   readonly autoMountExport: string;
+  /** Internal workspace packages imported by host-generated adapter source. */
+  readonly buildDependencies: readonly string[];
 }
 
 /** Export every framework module must provide alongside its mount function. */
@@ -136,10 +138,11 @@ export const SHOULD_AUTO_MOUNT_EXPORT = "shouldAutoMount";
 
 export const REACT_FRAMEWORK_MODULE = "@workspace/react";
 export const REACT_FRAMEWORK_ENTRY_MODULE = "@workspace/react/auto-mount";
+export const UI_MODULE = "@workspace/ui";
 /** Base styles required by every generated React panel, in cascade order. */
 export const REACT_SHARED_STYLE_MODULES: readonly string[] = [
   "@radix-ui/themes/styles.css",
-  "@workspace/ui/foundation.css",
+  `${UI_MODULE}/foundation.css`,
 ];
 export const SVELTE_FRAMEWORK_MODULE = "@workspace/svelte";
 
@@ -153,12 +156,14 @@ export const FRAMEWORK_MODULES: readonly FrameworkModuleContract[] = [
     module: REACT_FRAMEWORK_MODULE,
     entryModule: REACT_FRAMEWORK_ENTRY_MODULE,
     autoMountExport: "autoMountReactPanel",
+    buildDependencies: [UI_MODULE],
   },
   {
     framework: "svelte",
     module: SVELTE_FRAMEWORK_MODULE,
     entryModule: SVELTE_FRAMEWORK_MODULE,
     autoMountExport: "autoMountSveltePanel",
+    buildDependencies: [],
   },
 ];
 

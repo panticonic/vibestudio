@@ -326,7 +326,7 @@ function declaredExportSubpaths(exports: Record<string, unknown>): string[] {
 }
 
 import type { TemplateConfig } from "./templateResolver.js";
-import { frameworkModule } from "./platformModules.js";
+import { FRAMEWORK_MODULES, frameworkModule } from "./platformModules.js";
 import { assertPresent } from "../../lintHelpers";
 
 function scanTemplates(dir: string, workspaceRoot: string): GraphNode[] {
@@ -429,6 +429,27 @@ function finalizePackageGraph(graph: PackageGraph): PackageGraph {
       if (!graph.has(depName) || node.internalDeps.includes(depName)) continue;
       node.internalDeps.push(depName);
       recordInternalDepSpecError(node, depName, depSpec);
+    }
+  }
+
+  // Framework adapters generate imports that are not present in authored
+  // package manifests. Attach those internal build inputs to the framework
+  // marker module so every path that selects the adapter receives the same
+  // exact source closure, including existing workspaces whose manifests
+  // predate a generated import.
+  for (const contract of FRAMEWORK_MODULES) {
+    const frameworkNode = graph.tryGet(contract.module);
+    if (!frameworkNode) continue;
+    for (const dependency of contract.buildDependencies) {
+      if (graph.has(dependency)) {
+        if (!frameworkNode.internalDeps.includes(dependency)) {
+          frameworkNode.internalDeps.push(dependency);
+        }
+      } else {
+        console.warn(
+          `[PackageGraph] Framework module ${contract.module} requires generated build dependency ${dependency}, which is not in the workspace`
+        );
+      }
     }
   }
 

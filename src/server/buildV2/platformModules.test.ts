@@ -45,12 +45,14 @@ describe("platform module names (contract values)", () => {
         module: "@workspace/react",
         entryModule: "@workspace/react/auto-mount",
         autoMountExport: "autoMountReactPanel",
+        buildDependencies: ["@workspace/ui"],
       },
       {
         framework: "svelte",
         module: "@workspace/svelte",
         entryModule: "@workspace/svelte",
         autoMountExport: "autoMountSveltePanel",
+        buildDependencies: [],
       },
     ]);
   });

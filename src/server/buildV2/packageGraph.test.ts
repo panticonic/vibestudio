@@ -333,9 +333,11 @@ describe("discoverPackageGraph template framework closure", () => {
       const panelDir = path.join(root, "panels", "board");
       const templateDir = path.join(root, "templates", "default");
       const reactDir = path.join(root, "packages", "react");
+      const uiDir = path.join(root, "packages", "ui");
       fs.mkdirSync(panelDir, { recursive: true });
       fs.mkdirSync(templateDir, { recursive: true });
       fs.mkdirSync(reactDir, { recursive: true });
+      fs.mkdirSync(uiDir, { recursive: true });
       fs.writeFileSync(
         path.join(panelDir, "package.json"),
         JSON.stringify({
@@ -356,14 +358,28 @@ describe("discoverPackageGraph template framework closure", () => {
           vibestudio: {},
         })
       );
+      fs.writeFileSync(
+        path.join(uiDir, "package.json"),
+        JSON.stringify({
+          name: "@workspace/ui",
+          dependencies: { "@radix-ui/themes": "^3.2.1" },
+          peerDependencies: { react: "^19.0.0" },
+          vibestudio: {},
+        })
+      );
 
       const graph = discoverPackageGraph(root);
 
+      expect(graph.get("@workspace/react").internalDeps).toContain("@workspace/ui");
       expect(graph.get("template:default").internalDeps).toContain("@workspace/react");
       expect(graph.get("@workspace-panels/board").internalDeps).toContain("template:default");
       expect(
         collectTransitiveExternalDeps(graph.get("@workspace-panels/board"), graph, root)
-      ).toMatchObject({ react: "^19.0.0", "react-dom": "^19.0.0" });
+      ).toMatchObject({
+        react: "^19.0.0",
+        "react-dom": "^19.0.0",
+        "@radix-ui/themes": "^3.2.1",
+      });
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
