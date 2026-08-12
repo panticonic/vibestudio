@@ -17,6 +17,7 @@ import {
   approvePendingWorkspaceCreationReview,
   readMainProcessErrors,
   removeManagedTestWorkspace,
+  typePanelText,
   type TestApp,
 } from "../../setup/electronSetup";
 
@@ -52,6 +53,9 @@ test.describe("Server Logs navigation", () => {
         })
         .toContain("New Panel");
 
+      // About/New is the canonical launcher. Search for the launchable panel
+      // instead of depending on the pre-launcher page's removed static link.
+      await typePanelText(testApp.app, panelId, "Server Logs");
       await expect
         .poll(() => clickServerLogs(testApp!.app, panelId), {
           timeout: 30_000,
