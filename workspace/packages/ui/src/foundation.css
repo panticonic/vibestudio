@@ -60,6 +60,40 @@
   --z-tooltip: 400;
 }
 
+/*
+ * Tool frames need different paint strategies across appearances. A tone's
+ * translucent fill is legible and useful on a light canvas; on a dark canvas
+ * the same alpha step becomes much louder, so the neutral panel fill carries
+ * the frame while its border and label carry the tone. These are defaults:
+ * product skins can still replace them through the public --tool-surface-*
+ * variables without fighting selector specificity.
+ */
+.radix-themes:where(.light, .light-theme) {
+  --tool-surface-gray-background: var(--gray-3);
+  --tool-surface-gray-border: var(--gray-a6);
+  --tool-surface-blue-background: var(--blue-a3);
+  --tool-surface-blue-border: var(--blue-a5);
+  --tool-surface-green-background: var(--green-a3);
+  --tool-surface-green-border: var(--green-a5);
+  --tool-surface-amber-background: var(--amber-a3);
+  --tool-surface-amber-border: var(--amber-a5);
+  --tool-surface-red-background: var(--red-a3);
+  --tool-surface-red-border: var(--red-a5);
+}
+
+.radix-themes:where(.dark, .dark-theme) {
+  --tool-surface-gray-background: var(--color-panel);
+  --tool-surface-gray-border: var(--gray-a4);
+  --tool-surface-blue-background: var(--color-panel);
+  --tool-surface-blue-border: var(--blue-a4);
+  --tool-surface-green-background: var(--color-panel);
+  --tool-surface-green-border: var(--green-a4);
+  --tool-surface-amber-background: var(--color-panel);
+  --tool-surface-amber-border: var(--amber-a4);
+  --tool-surface-red-background: var(--color-panel);
+  --tool-surface-red-border: var(--red-a4);
+}
+
 /* One global scrollbar treatment for the Chromium/WebKit targets we ship. */
 ::-webkit-scrollbar {
   width: var(--scrollbar-size);

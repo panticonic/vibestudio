@@ -6,6 +6,7 @@ import {
   DragHandleHorizontalIcon,
 } from "@radix-ui/react-icons";
 import {
+  type CSSProperties,
   type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
@@ -129,6 +130,23 @@ export function SurfaceFrame({
   }, [isDragging, minHeight]);
 
   const headerInteractive = collapsible || onHeaderClick;
+  const surfaceBackground = `var(--tool-surface-background, var(--tool-surface-${tone}-background, var(--color-panel)))`;
+  const surfaceBorder = `var(--tool-surface-border, var(--tool-surface-${tone}-border, var(--${tone}-a4)))`;
+  const surfaceStyle: CSSProperties & Record<"--card-background-color", string> = {
+    "--card-background-color": surfaceBackground,
+    position: "relative",
+    display: "flex",
+    flexDirection: "column",
+    ...(resizable
+      ? manualHeight != null
+        ? { height: manualHeight, minHeight }
+        : { maxHeight }
+      : {}),
+    flexShrink: 0,
+    overflow: "hidden",
+    border: `1px solid ${surfaceBorder}`,
+    background: surfaceBackground,
+  };
   const handleHeaderKeyDown = useCallback(
     (event: ReactKeyboardEvent) => {
       if (!headerInteractive) return;
@@ -147,20 +165,7 @@ export function SurfaceFrame({
       data-tone={tone}
       variant="surface"
       size="1"
-      style={{
-        position: "relative",
-        display: "flex",
-        flexDirection: "column",
-        ...(resizable
-          ? manualHeight != null
-            ? { height: manualHeight, minHeight }
-            : { maxHeight }
-          : {}),
-        flexShrink: 0,
-        overflow: "hidden",
-        border: `1px solid var(--tool-surface-border, var(--${tone}-a4))`,
-        background: `var(--tool-surface-background, var(--${tone}-a2))`,
-      }}
+      style={surfaceStyle}
     >
       {resizable && (
         <Box
