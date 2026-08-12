@@ -547,7 +547,7 @@ describe("modelCallExecutor", () => {
     );
   });
 
-  it("bounds a Codex stream that stays transport-active without semantic progress", async () => {
+  it("honors a configured semantic-progress deadline for every model transport", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     let returnCalled = false;
     mocks.stream.mockImplementation(() => ({
@@ -569,21 +569,11 @@ describe("modelCallExecutor", () => {
       },
       result: async () => ({ content: [], stopReason: "stop" }),
     }));
-    const codexSpec = {
-      ...modelSpec,
-      api: "openai-codex-responses",
-      provider: "openai-codex",
-      baseUrl: "https://chatgpt.com/backend-api",
-      streamIdleTimeoutMs: 15,
-    };
+    const boundedSpec = { ...modelSpec, streamIdleTimeoutMs: 15 };
 
     await expect(
       modelCallExecutor.execute({
-        descriptor: descriptor({
-          provider: "openai-codex",
-          model: "gpt-5.3-codex-spark",
-          modelSpec: codexSpec as never,
-        }),
+        descriptor: descriptor({ modelSpec: boundedSpec }),
         state: initialAgentState({ channelId: "channel-1", config }),
         signal: new AbortController().signal,
         deps: deps(),

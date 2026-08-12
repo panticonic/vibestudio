@@ -11,6 +11,7 @@ describe("local model materialization", () => {
     expect(materializeModel("local", "lfm2.5-2.6b", null)?.spec).toMatchObject({
       contextWindow: 128_000,
       maxTokens: 128_000,
+      streamIdleTimeoutMs: 60_000,
     });
   });
 
@@ -27,6 +28,7 @@ describe("local model materialization", () => {
     expect(materializeModel("local", entry.slug, entry)?.spec).toMatchObject({
       contextWindow: 131_072,
       maxTokens: 8192,
+      streamIdleTimeoutMs: 60_000,
     });
   });
 

@@ -27,6 +27,7 @@ import {
 export const LOCAL_PROVIDER_ID = "local";
 export const LOCAL_MODELS_EXTENSION_ID = "@workspace-extensions/local-models";
 export const LOCAL_FALLBACK_MODEL_REF = CATALOG_LOCAL_FALLBACK_MODEL_REF;
+const LOCAL_MODEL_STREAM_IDLE_TIMEOUT_MS = 60_000;
 
 /** llama-server quirks profile (design §6.4). Locked against the pinned
  *  build by the e2e tool-round-trip test; revisit on every pin bump. */
@@ -67,6 +68,7 @@ export function localEntryToSpec(entry: LocalModelDescriptor): AgentModelSpec {
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: entry.contextWindow,
     maxTokens: entry.maxTokens,
+    streamIdleTimeoutMs: LOCAL_MODEL_STREAM_IDLE_TIMEOUT_MS,
     compat: { ...LLAMA_SERVER_COMPAT },
   };
 }

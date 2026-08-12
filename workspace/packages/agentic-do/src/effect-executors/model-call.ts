@@ -1179,6 +1179,8 @@ async function executeModelCall(
     effectiveSpec.api === "openai-codex-responses"
       ? (modelSpec.streamIdleTimeoutMs ?? DEFAULT_CODEX_TRANSPORT_IDLE_TIMEOUT_MS)
       : undefined;
+  const modelProgressIdleTimeoutMs =
+    modelSpec.streamIdleTimeoutMs ?? codexTransportIdleTimeoutMs;
   const attemptId = crypto.randomUUID();
   const startedAt = new Date().toISOString();
   onModelExecutionAttempt?.({
@@ -1272,7 +1274,7 @@ async function executeModelCall(
       // socket is alive. Require provider-semantic events as a second,
       // renewable liveness lease so a stream cannot hold an interactive turn
       // open forever while producing no model progress.
-      const next = await nextModelStreamEvent(iterator, codexTransportIdleTimeoutMs, (reason) => {
+      const next = await nextModelStreamEvent(iterator, modelProgressIdleTimeoutMs, (reason) => {
         streamAbort.abort(reason);
         void iterator.return?.().catch(() => {});
       });
