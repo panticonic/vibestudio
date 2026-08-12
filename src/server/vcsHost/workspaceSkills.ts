@@ -9,6 +9,8 @@ export interface SkillFrontmatter {
   name?: string;
   description?: string;
   onboarding?: unknown;
+  /** False for development-only skills that must not enter runtime agent discovery. */
+  agentVisible?: boolean;
 }
 
 export interface SkillEntry {
@@ -40,7 +42,7 @@ export async function readWorkspaceSkillEntry(
 ): Promise<SkillEntry | null> {
   const skillPath = `${repoPath}/SKILL.md`;
   const frontmatter = await readSkillFrontmatter(path.join(workspaceRoot, skillPath));
-  if (!frontmatter) return null;
+  if (!frontmatter || frontmatter.agentVisible === false) return null;
   return {
     name: frontmatter.name ?? path.basename(repoPath),
     description: frontmatter.description ?? "",
@@ -70,10 +72,12 @@ export function parseSkillFrontmatter(content: string): SkillFrontmatter {
     const name = record["name"];
     const description = record["description"];
     const onboarding = record["onboarding"];
+    const agentVisible = record["agentVisible"];
     return {
       ...(typeof name === "string" && name ? { name } : {}),
       ...(typeof description === "string" ? { description } : {}),
       ...(onboarding !== undefined ? { onboarding } : {}),
+      ...(typeof agentVisible === "boolean" ? { agentVisible } : {}),
     };
   } catch {
     return {};

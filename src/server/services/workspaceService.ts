@@ -342,6 +342,7 @@ export function createWorkspaceService(deps: WorkspaceServiceDeps): ServiceDefin
               return null;
             }
             const frontmatter = parseSkillFrontmatter(content);
+            if (frontmatter.agentVisible === false) return null;
             return {
               name: frontmatter.name ?? path.posix.basename(split.repoPath),
               description: frontmatter.description ?? "",

@@ -492,14 +492,8 @@ function stringPrefixUpperBound(prefix: string): string | null {
 }
 
 /** Quote each term so user input can't inject FTS5 query syntax. */
-function sanitizeFtsQuery(query: string): string {
-  return query
-    .split(/\s+/u)
-    .map((term) => term.replace(/"/gu, "").trim())
-    .filter(Boolean)
-    .slice(0, 8)
-    .map((term) => `"${term}"`)
-    .join(" ");
+function ftsQuery(terms: readonly string[], operator: " " | " OR "): string {
+  return terms.map((term) => `"${term}"`).join(operator);
 }
 
 /** Split raw text into whitespace-separated word tokens (≤ `cap`), quotes and
@@ -3624,7 +3618,8 @@ export class GadWorkspaceDO extends DurableObjectBase {
       : [];
     let rows: JsonRecord[];
     if (mode === "fts") {
-      const baseMatch = sanitizeFtsQuery(input.query);
+      const queryTerms = recallTokens([input.query]);
+      const baseMatch = ftsQuery(queryTerms, " ");
       // Keyword steering only WIDENS: OR the base query with the keyword terms so
       // recall matches either — never AND-ed (would narrow), never load-bearing.
       const keywordMatch = recallTokens(input.recallKeywords)
@@ -3637,50 +3632,63 @@ export class GadWorkspaceDO extends DurableObjectBase {
         : baseMatch;
       if (!match) return { results: [] };
       const kindFilter = kinds ? ` AND kind IN (${kinds.map(() => "?").join(",")})` : "";
-      rows = this.sql
-        .exec(
-          `SELECT text, kind, log_id, head, event_id, path, content_hash, anchor_json,
+      const queryRows = (candidateMatch: string): JsonRecord[] =>
+        this.sql
+          .exec(
+            `SELECT text, kind, log_id, head, event_id, path, content_hash, anchor_json,
                   bm25(gad_memory_fts) AS score
              FROM gad_memory_fts
             WHERE gad_memory_fts MATCH ?${kindFilter}${pathFilter}
             ORDER BY score LIMIT ?`,
-          match,
-          ...(kinds ?? []),
-          ...pathBindings,
-          fetchLimit
-        )
-        .toArray() as JsonRecord[];
+            candidateMatch,
+            ...(kinds ?? []),
+            ...pathBindings,
+            fetchLimit
+          )
+          .toArray() as JsonRecord[];
+      rows = queryRows(match);
+      // Natural recall queries often mix a repository/path hint with the
+      // distinctive remembered phrase. Preserve precise all-term matching
+      // first, then widen only an empty page instead of making callers learn
+      // FTS query syntax or repeatedly guess which term the index retained.
+      if (rows.length === 0 && queryTerms.length > 1) {
+        const broadBase = ftsQuery(queryTerms, " OR ");
+        const broadMatch = keywordMatch ? `(${broadBase}) OR ${keywordMatch}` : broadBase;
+        rows = queryRows(broadMatch);
+      }
     } else {
       const queryTerms = recallTokens([input.query]);
       const keywordTerms = recallTokens(input.recallKeywords);
       if (queryTerms.length === 0 && keywordTerms.length === 0) return { results: [] };
-      const likeBindings: string[] = [];
-      const likeOf = (term: string): string => {
-        likeBindings.push(`%${term.replace(/[%_\\]/gu, "\\$&")}%`);
-        return `text LIKE ? ESCAPE '\\'`;
-      };
-      // Base query terms AND together; steering keywords OR onto the whole base
-      // (widen, never narrow) — mirrors the fts branch's `(base) OR keywords`.
-      const baseClause = queryTerms.length ? `(${queryTerms.map(likeOf).join(" AND ")})` : "";
-      const keywordClause = keywordTerms.length ? keywordTerms.map(likeOf).join(" OR ") : "";
-      const matchClause =
-        baseClause && keywordClause
-          ? `(${baseClause} OR ${keywordClause})`
-          : baseClause || keywordClause;
       const kindFilter = kinds ? ` AND kind IN (${kinds.map(() => "?").join(",")})` : "";
-      rows = this.sql
-        .exec(
-          `SELECT text, kind, log_id, head, event_id, path, content_hash, anchor_json,
+      const queryRows = (operator: " AND " | " OR "): JsonRecord[] => {
+        const likeBindings: string[] = [];
+        const likeOf = (term: string): string => {
+          likeBindings.push(`%${term.replace(/[%_\\]/gu, "\\$&")}%`);
+          return `text LIKE ? ESCAPE '\\'`;
+        };
+        const baseClause = queryTerms.length ? `(${queryTerms.map(likeOf).join(operator)})` : "";
+        const keywordClause = keywordTerms.length ? keywordTerms.map(likeOf).join(" OR ") : "";
+        const matchClause =
+          baseClause && keywordClause
+            ? `(${baseClause} OR ${keywordClause})`
+            : baseClause || keywordClause;
+        return this.sql
+          .exec(
+            `SELECT text, kind, log_id, head, event_id, path, content_hash, anchor_json,
                   NULL AS score
              FROM gad_memory_fts
             WHERE ${matchClause}${kindFilter}${pathFilter}
             LIMIT ?`,
-          ...likeBindings,
-          ...(kinds ?? []),
-          ...pathBindings,
-          fetchLimit
-        )
-        .toArray() as JsonRecord[];
+            ...likeBindings,
+            ...(kinds ?? []),
+            ...pathBindings,
+            fetchLimit
+          )
+          .toArray() as JsonRecord[];
+      };
+      rows = queryRows(" AND ");
+      if (rows.length === 0 && queryTerms.length > 1) rows = queryRows(" OR ");
     }
 
     const pageRows = this.dedupRecallRows(rows, limit);

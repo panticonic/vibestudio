@@ -83,4 +83,24 @@ describe("GadWorkspaceDO — recall deduplication", () => {
     expect(results).toHaveLength(1);
     expect(results[0]!.logId).toBe("traj:X");
   });
+
+  it("widens an empty multi-term query so a scope hint cannot mask distinctive memory", () => {
+    reach(doi).indexMemoryRow({
+      text: "Retire Harbor Lantern after launch; use Retention Service in support records",
+      kind: "commit",
+      eventId: "event:retire-codename",
+    });
+
+    const results = doi.recallMemory({
+      query: "projects/customer-retention Retire",
+      kinds: ["commit"],
+    }).results;
+
+    expect(results).toHaveLength(1);
+    expect(results[0]).toMatchObject({
+      kind: "commit",
+      eventId: "event:retire-codename",
+      snippet: expect.stringContaining("Retire Harbor Lantern"),
+    });
+  });
 });

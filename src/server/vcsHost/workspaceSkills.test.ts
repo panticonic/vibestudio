@@ -35,6 +35,11 @@ describe("workspaceSkills", () => {
       path.join(root, "agents", "ignored", "SKILL.md"),
       "---\nname: ignored\ndescription: ignored\n---\n"
     );
+    mkdirSync(path.join(root, "skills", "development-only"), { recursive: true });
+    writeFileSync(
+      path.join(root, "skills", "development-only", "SKILL.md"),
+      "---\nname: development-only\ndescription: Internal harness\nagentVisible: false\n---\n"
+    );
 
     await expect(listWorkspaceSkillEntries(root)).resolves.toEqual([
       {
@@ -61,10 +66,11 @@ describe("workspaceSkills", () => {
     });
     expect(
       parseSkillFrontmatter(
-        "---\nname: declared\nonboarding:\n  capabilities:\n    - id: connection.example\n---\n"
+        "---\nname: declared\nagentVisible: false\nonboarding:\n  capabilities:\n    - id: connection.example\n---\n"
       )
     ).toEqual({
       name: "declared",
+      agentVisible: false,
       onboarding: { capabilities: [{ id: "connection.example" }] },
     });
     expect(parseSkillFrontmatter("---\nname: [unterminated\n---\n")).toEqual({});

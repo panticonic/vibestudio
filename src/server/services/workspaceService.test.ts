@@ -484,6 +484,11 @@ describe("workspace service agent resources", () => {
         path.join(wsPath, "skills", "gamma", "SKILL.md"),
         "---\nname: \"gamma-named\"\ndescription: 'Third skill'\n---\n"
       );
+      mkdirSync(path.join(wsPath, "skills", "development-only"), { recursive: true });
+      writeFileSync(
+        path.join(wsPath, "skills", "development-only", "SKILL.md"),
+        "---\nname: development-only\ndescription: Internal harness\nagentVisible: false\n---\n"
+      );
       mkdirSync(path.join(wsPath, "packages", "foo"), { recursive: true });
       writeFileSync(
         path.join(wsPath, "packages", "foo", "SKILL.md"),

@@ -1,6 +1,7 @@
 ---
 name: system-testing
 description: Run, author, diagnose, or repair headless agentic system tests with deterministic validators, retained trajectories, and managed instances.
+agentVisible: false
 ---
 
 # Vibestudio system testing
