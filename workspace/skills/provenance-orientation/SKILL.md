@@ -34,11 +34,11 @@ globally unique).
   identity.
 - `vcs.blame` — traces an exact file range through content mappings.
 
-Continue adjacency with the same target and `nextCursor` in `after`. File
-provenance has a separate history page: pass its exact `historyNextCursor` back
-as `historyAfter` with the unchanged file target. Start a separate read when the
-question changes. Use live schemas for edge kinds and node shapes; never parse
-IDs, construct private roots, query semantic tables, or cache a client graph.
+Continue a page by copying one returned continuation with the unchanged target:
+`{ kind: "adjacency", cursor }` for edges or `{ kind: "file-history", cursor }`
+for prior file changes. Start a separate read when the question changes. Use
+live schemas for edge kinds and node shapes; never parse IDs, construct private
+roots, query semantic tables, or cache a client graph.
 
 ## Interpret evidence narrowly
 

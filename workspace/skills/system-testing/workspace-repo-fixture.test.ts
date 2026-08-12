@@ -752,11 +752,12 @@ describe("WorkspaceRepoFixtureLifecycle", () => {
     expect(fake.importSnapshot).toHaveBeenCalledTimes(SIZABLE_HISTORY_FIXTURE_REVISIONS + 1);
     expect(fake.importSnapshot.mock.calls[6]?.[0]).toMatchObject({
       intentSummary: expect.stringContaining("delayed regional exports can arrive through day 18"),
-      message: "Extend archive window for delayed regional exports",
+      message: "Extend archive window to 21 days for regional exports arriving through day 18",
     });
     expect(fake.importSnapshot.mock.calls[11]?.[0]).toMatchObject({
       intentSummary: expect.stringContaining("Retire the Harbor Lantern rollout codename"),
-      message: "Retire the Harbor Lantern rollout codename",
+      message:
+        "Retire Harbor Lantern after launch; use Retention Service in support and audit records",
     });
     const finalImport = fake.importSnapshot.mock.calls.at(-1)?.[0];
     expect(finalImport).toMatchObject({

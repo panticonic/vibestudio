@@ -516,7 +516,7 @@ describe("createProvenanceTool", () => {
     const text = result.content[0]?.type === "text" ? result.content[0].text : "";
     expect(text).toContain('past · change:file-edit · "Explain the public entry point"');
     expect(text).toContain(
-      'more file history → provenance({"target":{"kind":"file","state":{"kind":"event","eventId":"event:working"},"repositoryId":"repository:packages/foo","fileId":"file:bar"},"historyAfter":"cursor:history"})'
+      'more file history → provenance({"target":{"kind":"file","state":{"kind":"event","eventId":"event:working"},"repositoryId":"repository:packages/foo","fileId":"file:bar"},"continuation":{"kind":"file-history","cursor":"cursor:history"}})'
     );
     expect(result.details).toMatchObject({
       history: [
@@ -525,7 +525,10 @@ describe("createProvenanceTool", () => {
           summary: "Explain the public entry point",
         },
       ],
-      historyNextCursor: "cursor:history",
+      continuations: [
+        { kind: "adjacency", cursor: "cursor:next" },
+        { kind: "file-history", cursor: "cursor:history" },
+      ],
     });
   });
 
@@ -541,7 +544,7 @@ describe("createProvenanceTool", () => {
 
     await tool.execute("call:history-page", {
       target,
-      historyAfter: "cursor:history",
+      continuation: { kind: "file-history", cursor: "cursor:history" },
     });
 
     expect(f.neighbors).toHaveBeenLastCalledWith({ root: target, limit: 5 });
@@ -619,7 +622,10 @@ describe("createProvenanceTool", () => {
     const f = fixture();
     const tool = createProvenanceTool("/", f.value);
     const root = { kind: "decision" as const, decisionId: "decision:1" };
-    await tool.execute("call:4", { target: root, after: "cursor:1" });
+    await tool.execute("call:4", {
+      target: root,
+      continuation: { kind: "adjacency", cursor: "cursor:1" },
+    });
     expect(f.neighbors).toHaveBeenCalledWith({ root, limit: 5, cursor: "cursor:1" });
   });
 

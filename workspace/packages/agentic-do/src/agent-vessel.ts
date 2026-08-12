@@ -2426,9 +2426,10 @@ export abstract class AgentVesselBase extends DurableObjectBase {
   }
 
   /**
-   * Workspace memory search (WS4): chat messages and committed file content,
-   * with provenance. The recall result is journaled via the invocation terminal
-   * like any tool output — replays and audits see exactly what was recalled.
+   * Workspace memory search (WS4): chat messages, committed file content, and
+   * commit summaries with provenance. The recall result is journaled via the
+   * invocation terminal like any tool output — replays and audits see exactly
+   * what was recalled.
    */
   private createMemoryRecallTool(): AgentTool<never> {
     return {
@@ -2436,7 +2437,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       label: "memory_recall",
       executionMode: "parallel",
       description:
-        "Search workspace memory: past conversation messages and committed file content. " +
+        "Search workspace memory: past conversation messages, committed file content, and commit summaries. " +
         "Returns snippets with provenance (who/when/where). Use before re-deriving facts that may already be known.",
       parameters: {
         type: "object",
@@ -2444,8 +2445,9 @@ export abstract class AgentVesselBase extends DurableObjectBase {
           query: { type: "string", description: "Search terms." },
           kinds: {
             type: "array",
-            items: { type: "string", enum: ["message", "file"] },
-            description: "Optional filter by memory kind.",
+            items: { type: "string", enum: ["message", "file", "commit"] },
+            description:
+              "Optional filter by memory kind. Commit summaries retain decisions whose text has left current files.",
           },
           limit: { type: "number", description: "Max results (default 10, max 50)." },
         },

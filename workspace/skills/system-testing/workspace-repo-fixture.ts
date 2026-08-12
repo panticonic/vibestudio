@@ -1099,7 +1099,8 @@ function historicalContentRevisions(): HistoricalContentRevision[] {
         files: historicalPolicyFiles(revision),
         intent:
           "Extend the archive window from 14 to 21 days because delayed regional exports can arrive through day 18; a three-day buffer prevents premature deletion",
-        message: "Extend archive window for delayed regional exports",
+        message:
+          "Extend archive window to 21 days for regional exports arriving through day 18",
       };
     }
     if (revision === 11) {
@@ -1108,7 +1109,8 @@ function historicalContentRevisions(): HistoricalContentRevision[] {
         files: historicalPolicyFiles(revision),
         intent:
           "Retire the Harbor Lantern rollout codename after launch so support and audit records consistently use the public Retention Service name",
-        message: "Retire the Harbor Lantern rollout codename",
+        message:
+          "Retire Harbor Lantern after launch; use Retention Service in support and audit records",
       };
     }
     return {

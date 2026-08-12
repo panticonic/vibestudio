@@ -15,21 +15,23 @@ Use `memory_recall` when the relevant file or conversation is unknown:
 ```text
 memory_recall({
   query: "retry backoff policy",
-  kinds: ["message", "file"],
+  kinds: ["message", "file", "commit"],
   limit: 10
 })
 ```
 
 `query` is required; `kinds` and `limit` are optional. Searches completed
-trajectory messages and text files at committed workspace events. Working
-applications don't enter topical file recall until committed.
+trajectory messages, text files at committed workspace events, and commit
+summaries. Commit recall is especially useful for decisions or names removed
+from current files. Working applications don't enter topical file recall until
+committed.
 
 Treat recall as discovery, not proof. Follow message evidence through trajectory
 inspectors and managed-source facts through [Vibestudio
 VCS](../vibestudio-vcs/SKILL.md). Search indexes and read-time summaries are
 rebuildable projections; their exact causal roots are the continuation surface.
-For a file whose relevant text was later removed, page the file target returned
-by `provenance` with its exact `historyNextCursor` in `historyAfter`; do not put
-a history cursor in adjacency `after`.
+For a file whose relevant text was later removed, reuse the exact
+`{ kind: "file-history", cursor }` continuation returned by `provenance` with
+the unchanged file target.
 
 `memory_recall` is an agent tool, not a portable panel, worker, or VCS API.

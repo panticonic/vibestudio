@@ -20,7 +20,7 @@ export interface ProvenanceBlockInput {
 function historyCall(history: CanonicalProvenanceHistory): string {
   return `provenance(${JSON.stringify({
     target: history.root,
-    historyAfter: history.nextCursor,
+    continuation: { kind: "file-history", cursor: history.nextCursor },
   })})`;
 }
 
@@ -211,12 +211,12 @@ function inspectedNodeSummary(inspection: CanonicalProvenanceInspection): string
 
 function provenanceCall(
   continuation: NonNullable<ProvenanceBlockInput["continuation"]>,
-  after?: string
+  page?: { kind: "adjacency"; cursor: string }
 ): string {
   const input =
     continuation.kind === "root"
-      ? { target: continuation.root, ...(after ? { after } : {}) }
-      : { target: continuation.target, ...(after ? { after } : {}) };
+      ? { target: continuation.root, ...(page ? { continuation: page } : {}) }
+      : { target: continuation.target, ...(page ? { continuation: page } : {}) };
   return `provenance(${JSON.stringify(input)})`;
 }
 
@@ -319,7 +319,9 @@ export function renderProvenanceBlock(input: ProvenanceBlockInput): string | nul
       input.continuation
         ? `  more → ${provenanceCall(
             input.continuation,
-            input.continuation.includeCursor ? input.result.nextCursor : undefined
+            input.continuation.includeCursor
+              ? { kind: "adjacency", cursor: input.result.nextCursor }
+              : undefined
           )}`
         : "  more provenance is available"
     );

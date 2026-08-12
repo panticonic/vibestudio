@@ -87,17 +87,17 @@ const provenanceSchema = Type.Object({
       }
     )
   ),
-  after: Type.Optional(
-    Type.String({
-      description:
-        "Exact nextCursor from the preceding provenance result. Reuse it only with that result's unchanged target.",
-    })
-  ),
-  historyAfter: Type.Optional(
-    Type.String({
-      description:
-        "Exact historyNextCursor from the preceding provenance result for the same file target. This pages file history independently from adjacency after.",
-    })
+  continuation: Type.Optional(
+    Type.Union(
+      [
+        Type.Object({ kind: Type.Literal("adjacency"), cursor: Type.String() }),
+        Type.Object({ kind: Type.Literal("file-history"), cursor: Type.String() }),
+      ],
+      {
+        description:
+          "Copy one exact continuation returned by the preceding result with the same target. Adjacency and file history are distinct page streams.",
+      }
+    )
   ),
 });
 
@@ -108,9 +108,11 @@ export interface ProvenanceToolDetails {
   node: CanonicalProvenanceInspection["node"];
   adjacency: CanonicalProvenanceResult["edges"];
   history?: CanonicalProvenanceHistory["entries"];
-  historyNextCursor?: string;
   edges: number;
-  nextCursor?: string;
+  continuations: Array<
+    | { kind: "adjacency"; cursor: string }
+    | { kind: "file-history"; cursor: string }
+  >;
 }
 
 export interface ProvenanceToolDiagnostic {
@@ -301,11 +303,17 @@ function toolResult(
     ...(history
       ? {
           history: history.entries,
-          ...(history.nextCursor ? { historyNextCursor: history.nextCursor } : {}),
         }
       : {}),
     edges: result.edges.length,
-    ...(result.nextCursor ? { nextCursor: result.nextCursor } : {}),
+    continuations: [
+      ...(result.nextCursor
+        ? [{ kind: "adjacency" as const, cursor: result.nextCursor }]
+        : []),
+      ...(history?.nextCursor
+        ? [{ kind: "file-history" as const, cursor: history.nextCursor }]
+        : []),
+    ],
   };
   return {
     content: [
@@ -332,11 +340,10 @@ export function createProvenanceTool(
       'Inspect "session", an exact semantic identity/root, or an existing managed repository/file path and walk one bounded adjacency page. Service/tool/package names are not targets. Managed files also include a small exact change-history preview.',
     parameters: provenanceSchema,
     execute: async (_toolCallId, input) => {
-      const cursor = typeof input.after === "string" && input.after ? input.after : undefined;
+      const cursor =
+        input.continuation?.kind === "adjacency" ? input.continuation.cursor : undefined;
       const historyCursor =
-        typeof input.historyAfter === "string" && input.historyAfter
-          ? input.historyAfter
-          : undefined;
+        input.continuation?.kind === "file-history" ? input.continuation.cursor : undefined;
       if (input.target && typeof input.target === "object") {
         const root = parseRoot(input.target);
         const [inspection, neighbors, history] = await Promise.all([
