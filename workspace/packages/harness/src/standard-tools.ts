@@ -12,6 +12,7 @@ export {
   createGrepTool,
   createLsTool,
   createReadTool,
+  createReadBinaryTool,
   createProvenanceTool,
   createWriteTool,
   createMoveFileTool,

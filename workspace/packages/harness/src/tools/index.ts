@@ -8,8 +8,8 @@
  * for tests and for the chat-UI preview path.
  */
 
-export { createReadTool } from "./read.js";
-export type { ReadToolInput, ReadToolDetails, ReadToolDeps } from "./read.js";
+export { createReadTool, createReadBinaryTool } from "./read.js";
+export type { ReadToolInput, ReadBinaryToolInput, ReadToolDetails, ReadToolDeps } from "./read.js";
 export type { WorkspaceReadReceipt } from "./workspace-read-receipt.js";
 
 export { createProvenanceTool } from "./provenance.js";

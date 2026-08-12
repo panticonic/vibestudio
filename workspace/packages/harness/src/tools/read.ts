@@ -71,31 +71,48 @@ const readSchema = Type.Object(
         { additionalProperties: false }
       )
     ),
-    encoding: Type.Optional(
-      Type.Union([Type.Literal("text"), Type.Literal("base64")], {
-        description:
-          'Output encoding (default: "text"; images default to native image attachments). Use "base64" for lossless binary inspection and round-tripping.',
-      })
-    ),
     offset: Type.Optional(
       Type.Integer({
-        minimum: 0,
-        description:
-          'Start position: a 1-indexed line for text (omit or use 0 for the beginning), or a zero-based byte for encoding="base64".',
+        minimum: 1,
+        description: "Line number to start reading from (1-indexed).",
       })
     ),
     limit: Type.Optional(
       Type.Integer({
         minimum: 1,
-        maximum: 1024 * 1024,
-        description:
-          'Maximum lines for text (maximum: 10000) or raw bytes for encoding="base64" (default: 50 KiB; maximum: 1 MiB).',
+        maximum: 10_000,
+        description: "Maximum number of lines to read (maximum: 10000).",
       })
     ),
   },
   { additionalProperties: false }
 );
 export type ReadToolInput = Static<typeof readSchema>;
+
+const readBinarySchema = Type.Object(
+  {
+    path: Type.Optional(
+      Type.String({ description: "Path to the binary file to read (relative or absolute)." })
+    ),
+    target: Type.Optional(
+      Type.String({
+        description:
+          "File resource reference to read, normally a file:<path> value returned by another tool.",
+      })
+    ),
+    kind: Type.Optional(Type.Literal("file")),
+    offset: Type.Optional(Type.Integer({ minimum: 0, description: "Zero-based raw byte offset." })),
+    limit: Type.Optional(
+      Type.Integer({
+        minimum: 1,
+        maximum: 1024 * 1024,
+        description: "Maximum raw bytes (default: 50 KiB; maximum: 1 MiB).",
+      })
+    ),
+  },
+  { additionalProperties: false }
+);
+export type ReadBinaryToolInput = Static<typeof readBinarySchema>;
 export interface ReadToolDetails {
   truncation?: TruncationResult;
   path?: string;
@@ -352,7 +369,7 @@ export function createReadTool(
     name: "read",
     label: "read",
     executionMode: "parallel",
-    description: `Read a file as bounded text, lossless base64, or a native image attachment. Supply exactly one location: path, a file target returned by discovery, or an artifact resource. Text is truncated to ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB; continue with offset. For encoding="base64", offset/limit count raw bytes and the result returns the next byte offset. To visually inspect image pixels—including extensionless screenshots—omit encoding and range options; base64 text is not visual input.`,
+    description: `Read a file as bounded text or a native image attachment. Supply exactly one location: path, a file target returned by discovery, or an artifact resource. Text is truncated to ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB; continue with offset. Image pixels—including extensionless screenshots—are returned as model-visible image content. Use read_binary only for lossless base64 byte transport, never for visual inspection.`,
     parameters: readSchema,
     execute: async (_toolCallId, input, signal, _onUpdate) => {
       const resource =
@@ -365,11 +382,6 @@ export function createReadTool(
         if (!digest || digest !== resource.digest) {
           throw Object.assign(new Error("Artifact resource URI and digest disagree"), {
             code: "invalid_artifact_reference",
-          });
-        }
-        if (input.encoding === "base64") {
-          throw Object.assign(new Error("Artifact resources are JSON text; use offset and limit"), {
-            code: "invalid_artifact_read_options",
           });
         }
         const raw = await runtimeRpc.call<string | null>("main", "blobstore.getText", [digest]);
@@ -406,62 +418,6 @@ export function createReadTool(
           content: [{ type: "text", text: `Path not found: ${path}` }],
           details: { path, missing: true, suggestions: [] },
         };
-      }
-      if (input.encoding === "base64") {
-        try {
-          if (runtimeRpc) {
-            const bounded = await runtimeRpc.call<FsReadBytesResult>(
-              "main",
-              "fs.readBytes",
-              [
-                absolutePath,
-                {
-                  offset: offset ?? 0,
-                  limit: limit ?? DEFAULT_MAX_BYTES,
-                },
-              ],
-              signal ? { signal } : undefined
-            );
-            return withReadReceipt(
-              formatBoundedBytesResult(bounded, path),
-              path,
-              cwd,
-              bounded.contentHash,
-              bounded.totalBytes
-            );
-          }
-          const rawBytes = await retryTransientRuntimeFs(() => fs.readFile(absolutePath), signal);
-          const bytes = typeof rawBytes === "string" ? encodeUtf8(rawBytes) : rawBytes;
-          const start = Math.min(offset ?? 0, bytes.length);
-          const selected = bytes.subarray(start, start + (limit ?? DEFAULT_MAX_BYTES));
-          const end = start + selected.length;
-          return withReadReceipt(
-            formatBoundedBytesResult(
-              {
-                base64: bytesToBase64(selected),
-                contentHash: sha256Hex(bytes),
-                totalBytes: bytes.length,
-                maxBytes: limit ?? DEFAULT_MAX_BYTES,
-                start,
-                end,
-                truncated: end < bytes.length,
-                ...(end < bytes.length ? { nextOffset: end } : {}),
-              },
-              path
-            ),
-            path,
-            cwd,
-            sha256Hex(bytes),
-            bytes.length
-          );
-        } catch (err) {
-          const recovered = await recoverReadFailure(fs, path, absolutePath, signal);
-          if (recovered) return recovered;
-          if ((err as NodeJS.ErrnoException).code === "ENOENT") {
-            return missingResult(path, absolutePath);
-          }
-          throw err;
-        }
       }
       // --- Image/text read ---------------------------------------------------------------
       // Text with a recognizable filename remains a single compact UTF-8 RPC
@@ -580,6 +536,107 @@ export function createReadTool(
         path,
         signal
       );
+    },
+  };
+}
+
+/** Lossless bounded byte transport, deliberately separate from model-visible image reads. */
+export function createReadBinaryTool(
+  cwd: string,
+  fs: RuntimeFs,
+  deps?: Pick<ReadToolDeps, "rpc" | "visibility">
+): AgentTool<typeof readBinarySchema, ReadToolDetails> {
+  const runtimeRpc = deps?.rpc ?? null;
+  return {
+    name: "read_binary",
+    label: "read_binary",
+    executionMode: "parallel",
+    description:
+      "Read bounded raw file bytes as lossless base64 text for binary inspection or round-tripping. Supply path or a file target; offset/limit count bytes. This tool does not make image pixels visible to the model—use read for screenshots and other images.",
+    parameters: readBinarySchema,
+    execute: async (_toolCallId, input, signal) => {
+      const path = normalizeReadLocation(input);
+      if (!path) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: "No file reference was supplied. Call read_binary with path, or with a file:<path> target returned by a discovery tool.",
+            },
+          ],
+          details: { missing: true, suggestions: [] },
+        };
+      }
+      if (signal?.aborted) throw new Error("Operation aborted");
+      const absolutePath = resolveToCwd(path, cwd);
+      if (deps?.visibility && (await deps.visibility.isHidden(absolutePath))) {
+        return {
+          content: [{ type: "text", text: `Path not found: ${path}` }],
+          details: { path, missing: true, suggestions: [] },
+        };
+      }
+      try {
+        if (runtimeRpc) {
+          const bounded = await runtimeRpc.call<FsReadBytesResult>(
+            "main",
+            "fs.readBytes",
+            [
+              absolutePath,
+              {
+                offset: input.offset ?? 0,
+                limit: input.limit ?? DEFAULT_MAX_BYTES,
+              },
+            ],
+            signal ? { signal } : undefined
+          );
+          return withReadReceipt(
+            formatBoundedBytesResult(bounded, path),
+            path,
+            cwd,
+            bounded.contentHash,
+            bounded.totalBytes
+          );
+        }
+        const raw = await retryTransientRuntimeFs(() => fs.readFile(absolutePath), signal);
+        const bytes = typeof raw === "string" ? encodeUtf8(raw) : raw;
+        const start = Math.min(input.offset ?? 0, bytes.length);
+        const selected = bytes.subarray(start, start + (input.limit ?? DEFAULT_MAX_BYTES));
+        const end = start + selected.length;
+        return withReadReceipt(
+          formatBoundedBytesResult(
+            {
+              base64: bytesToBase64(selected),
+              contentHash: sha256Hex(bytes),
+              totalBytes: bytes.length,
+              maxBytes: input.limit ?? DEFAULT_MAX_BYTES,
+              start,
+              end,
+              truncated: end < bytes.length,
+              ...(end < bytes.length ? { nextOffset: end } : {}),
+            },
+            path
+          ),
+          path,
+          cwd,
+          sha256Hex(bytes),
+          bytes.length
+        );
+      } catch (error) {
+        const recovered = await recoverReadFailure(fs, path, absolutePath, signal);
+        if (recovered) return recovered;
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+          return {
+            content: [
+              {
+                type: "text",
+                text: `File not found: ${path}. Use ls/find before choosing another path.`,
+              },
+            ],
+            details: { path, missing: true, suggestions: [] },
+          };
+        }
+        throw error;
+      }
     },
   };
 }

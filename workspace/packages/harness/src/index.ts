@@ -46,6 +46,7 @@ export type {
 // Model-facing tools for semantic authoring, discovery, verification, and eval.
 export {
   createReadTool,
+  createReadBinaryTool,
   createProvenanceTool,
   createEditTool,
   createApplyPatchTool,
@@ -92,6 +93,7 @@ export { createWebTools } from "./web/index.js";
 export type { WebToolsDeps } from "./web/index.js";
 export type {
   ReadToolInput,
+  ReadBinaryToolInput,
   ReadToolDetails,
   ReadToolDeps,
   ProvenanceToolInput,

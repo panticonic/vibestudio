@@ -138,6 +138,7 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
       createGrepTool,
       createLsTool,
       createReadTool,
+      createReadBinaryTool,
       createProvenanceTool,
       createMoveFileTool,
       createCopyFileTool,
@@ -193,6 +194,7 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
         provenance: { vcs, context: { contextId } },
         visibility,
       }),
+      createReadBinaryTool(cwd, fs, { rpc: toolRpc, visibility }),
       createProvenanceTool(cwd, {
         vcs,
         contextId,

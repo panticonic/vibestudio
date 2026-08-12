@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { Value } from "@sinclair/typebox/value";
-import { createReadTool } from "../read.js";
+import { createReadBinaryTool, createReadTool } from "../read.js";
 import { StubFs } from "./stub-fs.js";
 
 const CWD = "/work/ctx";
@@ -319,7 +319,7 @@ describe("createReadTool", () => {
         offset: 0,
         limit: 512,
       })
-    ).toBe(true);
+    ).toBe(false);
     expect(Value.Check(tool.parameters, { target: "file:README.md", kind: "file" })).toBe(true);
     expect(
       Value.Check(tool.parameters, {
@@ -466,11 +466,10 @@ describe("createReadTool", () => {
       }),
       stream: vi.fn(async () => new Response()),
     };
-    const tool = createReadTool(CWD, fs, { rpc });
+    const tool = createReadBinaryTool(CWD, fs, { rpc });
 
     const input = {
       path: "value.bin",
-      encoding: "base64" as const,
       offset: 1,
       limit: 3,
     };
@@ -505,19 +504,28 @@ describe("createReadTool", () => {
     expect(readFile).not.toHaveBeenCalled();
   });
 
-  it("exposes one range coordinate pair for both text and bytes", () => {
-    const tool = createReadTool(CWD, new StubFs({ files: {} }));
+  it("separates native image reads from lossless byte transport", () => {
+    const fs = new StubFs({ files: {} });
+    const read = createReadTool(CWD, fs);
+    const binary = createReadBinaryTool(CWD, fs);
 
     expect(
-      Value.Check(tool.parameters, {
+      Value.Check(read.parameters, {
         path: "value.bin",
         encoding: "base64",
-        byteOffset: 1,
-        byteLimit: 3,
+        limit: 3,
       })
     ).toBe(false);
-    expect(tool.description).toContain("extensionless screenshots");
-    expect(tool.description).toContain("base64 text is not visual input");
+    expect(
+      Value.Check(binary.parameters, {
+        path: "value.bin",
+        offset: 1,
+        limit: 3,
+      })
+    ).toBe(true);
+    expect(read.description).toContain("extensionless screenshots");
+    expect(read.description).toContain("model-visible image content");
+    expect(binary.description).toContain("does not make image pixels visible");
   });
 
   it("reads known text files without requiring the optional image extension", async () => {
