@@ -52,6 +52,7 @@ export {
   cdpGadDiagnosticTests,
   docsProbeTests,
   deliveryHardeningTests,
+  developerErgonomicsTests,
   edgeCaseTests,
   filesystemTests,
   harnessResilienceTests,

@@ -333,6 +333,36 @@ describe("BuildSystemV2 — explicit build reports", () => {
     ).resolves.toEqual([]);
   });
 
+  it("keeps an unrelated broken sibling outside the protected-publication closure", async () => {
+    shouldFail = (name) => name === "@workspace/isolated";
+    typecheckDiagnostics = (unitRelativePath) =>
+      unitRelativePath === "packages/isolated"
+        ? [
+            {
+              source: "tsc",
+              severity: "error",
+              file: "packages/isolated/index.ts",
+              line: 1,
+              column: 1,
+              message: "unrelated sibling is broken",
+            },
+          ]
+        : [];
+    env = await loadWithMocks();
+    const { buildSystem } = env;
+
+    const affected = await buildSystem.listAffectedBuildUnits(CANDIDATE_VIEW, [
+      "panels/solo/index.ts",
+    ]);
+    const reports = await Promise.all(
+      affected.map((unitName) => buildSystem.getBuildReport(unitName, CANDIDATE_VIEW))
+    );
+
+    expect(affected).toEqual(["@workspace-panels/solo"]);
+    expect(reports).toEqual([expect.objectContaining({ status: "ok", diagnostics: [] })]);
+    expect(buildCalls.some((call) => call.name === "@workspace/isolated")).toBe(false);
+  });
+
   it("returns agent-actionable diagnostics for an explicit failed build", async () => {
     shouldFail = (name) => name === "@workspace-panels/app";
     env = await loadWithMocks();

@@ -21,6 +21,7 @@ export { interactionSurfaceTests } from "./tests/interaction-surfaces.js";
 export { docsProbeTests } from "./tests/docs-probes.js";
 export { projectLifecycleTests } from "./tests/project-lifecycle.js";
 export { scaffoldMatrixTests } from "./tests/scaffold-matrix.js";
+export { developerErgonomicsTests } from "./tests/developer-ergonomics.js";
 export { cdpGadDiagnosticTests } from "./tests/cdp-gad-diagnostics.js";
 export { harnessResilienceTests } from "./tests/harness-resilience.js";
 export { gitInteropTests } from "./tests/git-interop.js";
@@ -63,6 +64,7 @@ import { interactionSurfaceTests as _interaction } from "./tests/interaction-sur
 import { docsProbeTests as _docs } from "./tests/docs-probes.js";
 import { projectLifecycleTests as _projectLifecycle } from "./tests/project-lifecycle.js";
 import { scaffoldMatrixTests as _scaffoldMatrix } from "./tests/scaffold-matrix.js";
+import { developerErgonomicsTests as _developerErgonomics } from "./tests/developer-ergonomics.js";
 import { cdpGadDiagnosticTests as _cdpGad } from "./tests/cdp-gad-diagnostics.js";
 import { harnessResilienceTests as _harnessResilience } from "./tests/harness-resilience.js";
 import { gitInteropTests as _gitInterop } from "./tests/git-interop.js";
@@ -150,6 +152,7 @@ export function allTests(): TestCase[] {
     ..._interaction,
     ..._projectLifecycle,
     ..._scaffoldMatrix,
+    ..._developerErgonomics,
     ..._cdpGad,
     ..._harnessResilience,
     ..._docs,
