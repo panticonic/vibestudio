@@ -312,6 +312,14 @@ describe("createReadTool", () => {
     expect(parameters).not.toHaveProperty("allOf");
     expect(parameters).not.toHaveProperty("anyOf");
     expect(Value.Check(tool.parameters, { path: "README.md" })).toBe(true);
+    expect(
+      Value.Check(tool.parameters, {
+        path: "capture",
+        encoding: "base64",
+        offset: 0,
+        limit: 512,
+      })
+    ).toBe(true);
     expect(Value.Check(tool.parameters, { target: "file:README.md", kind: "file" })).toBe(true);
     expect(
       Value.Check(tool.parameters, {
@@ -463,8 +471,8 @@ describe("createReadTool", () => {
     const input = {
       path: "value.bin",
       encoding: "base64" as const,
-      byteOffset: 1,
-      byteLimit: 3,
+      offset: 1,
+      limit: 3,
     };
     expect(Value.Check(tool.parameters, input)).toBe(true);
     const result = await tool.execute("call-bytes", input);
@@ -497,17 +505,19 @@ describe("createReadTool", () => {
     expect(readFile).not.toHaveBeenCalled();
   });
 
-  it("rejects mixing line and byte coordinates", async () => {
-    const fs = new StubFs({ files: { [`${CWD}/value.bin`]: Buffer.from([1]) } });
-    const tool = createReadTool(CWD, fs);
+  it("exposes one range coordinate pair for both text and bytes", () => {
+    const tool = createReadTool(CWD, new StubFs({ files: {} }));
 
-    await expect(
-      tool.execute("call-mixed", {
+    expect(
+      Value.Check(tool.parameters, {
         path: "value.bin",
         encoding: "base64",
-        offset: 1,
+        byteOffset: 1,
+        byteLimit: 3,
       })
-    ).rejects.toThrow("byteOffset/byteLimit");
+    ).toBe(false);
+    expect(tool.description).toContain("extensionless screenshots");
+    expect(tool.description).toContain("base64 text is not visual input");
   });
 
   it("reads known text files without requiring the optional image extension", async () => {

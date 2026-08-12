@@ -45,63 +45,56 @@ import {
   createWorkspaceReadReceipt,
   type WorkspaceReadReceipt,
 } from "./workspace-read-receipt.js";
-const readSchema = Type.Object({
-  path: Type.Optional(
-    Type.String({ description: "Path to the file to read (relative or absolute)" })
-  ),
-  target: Type.Optional(
-    Type.String({
-      description:
-        "File resource reference to read, normally a file:<path> value returned by another tool.",
-    })
-  ),
-  kind: Type.Optional(Type.Literal("file")),
-  resource: Type.Optional(
-    Type.Object(
-      {
-        protocol: Type.Literal(AGENT_TOOL_ARTIFACT_PROTOCOL),
-        uri: Type.String({ pattern: "^artifact:[0-9a-f]{64}$" }),
-        digest: Type.String({ pattern: "^[0-9a-f]{64}$" }),
-        byteLength: Type.Integer({ minimum: 0 }),
-        mediaType: Type.Literal("application/json"),
-        encoding: Type.Literal("json"),
-        description: Type.String(),
-      },
-      { additionalProperties: false }
-    )
-  ),
-  encoding: Type.Optional(
-    Type.Union([Type.Literal("text"), Type.Literal("base64")], {
-      description:
-        'Output encoding (default: "text"; images default to native image attachments). Use "base64" for lossless binary inspection and round-tripping.',
-    })
-  ),
-  offset: Type.Optional(
-    Type.Integer({ minimum: 1, description: "Line number to start reading from (1-indexed)" })
-  ),
-  limit: Type.Optional(
-    Type.Integer({
-      minimum: 1,
-      maximum: 10_000,
-      description: "Maximum number of lines to read (maximum: 10000)",
-    })
-  ),
-  byteOffset: Type.Optional(
-    Type.Integer({
-      minimum: 0,
-      description:
-        'Zero-based byte offset for encoding="base64". Do not combine with text offset/limit.',
-    })
-  ),
-  byteLimit: Type.Optional(
-    Type.Integer({
-      minimum: 1,
-      maximum: 1024 * 1024,
-      description:
-        'Maximum raw bytes for encoding="base64" (default: 50 KiB; maximum: 1 MiB). Do not combine with text offset/limit.',
-    })
-  ),
-});
+const readSchema = Type.Object(
+  {
+    path: Type.Optional(
+      Type.String({ description: "Path to the file to read (relative or absolute)" })
+    ),
+    target: Type.Optional(
+      Type.String({
+        description:
+          "File resource reference to read, normally a file:<path> value returned by another tool.",
+      })
+    ),
+    kind: Type.Optional(Type.Literal("file")),
+    resource: Type.Optional(
+      Type.Object(
+        {
+          protocol: Type.Literal(AGENT_TOOL_ARTIFACT_PROTOCOL),
+          uri: Type.String({ pattern: "^artifact:[0-9a-f]{64}$" }),
+          digest: Type.String({ pattern: "^[0-9a-f]{64}$" }),
+          byteLength: Type.Integer({ minimum: 0 }),
+          mediaType: Type.Literal("application/json"),
+          encoding: Type.Literal("json"),
+          description: Type.String(),
+        },
+        { additionalProperties: false }
+      )
+    ),
+    encoding: Type.Optional(
+      Type.Union([Type.Literal("text"), Type.Literal("base64")], {
+        description:
+          'Output encoding (default: "text"; images default to native image attachments). Use "base64" for lossless binary inspection and round-tripping.',
+      })
+    ),
+    offset: Type.Optional(
+      Type.Integer({
+        minimum: 0,
+        description:
+          'Start position: a 1-indexed line for text (omit or use 0 for the beginning), or a zero-based byte for encoding="base64".',
+      })
+    ),
+    limit: Type.Optional(
+      Type.Integer({
+        minimum: 1,
+        maximum: 1024 * 1024,
+        description:
+          'Maximum lines for text (maximum: 10000) or raw bytes for encoding="base64" (default: 50 KiB; maximum: 1 MiB).',
+      })
+    ),
+  },
+  { additionalProperties: false }
+);
 export type ReadToolInput = Static<typeof readSchema>;
 export interface ReadToolDetails {
   truncation?: TruncationResult;
@@ -359,7 +352,7 @@ export function createReadTool(
     name: "read",
     label: "read",
     executionMode: "parallel",
-    description: `Read a file as bounded text, lossless base64, or a native image attachment. Supply exactly one location: path, a file target returned by discovery, or an artifact resource. Text is truncated to ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB; continue with offset. Use encoding="base64" plus byteOffset/byteLimit for arbitrary binary data; continue with the returned next byte offset. Images (jpg, png, gif, webp) default to attachments.`,
+    description: `Read a file as bounded text, lossless base64, or a native image attachment. Supply exactly one location: path, a file target returned by discovery, or an artifact resource. Text is truncated to ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB; continue with offset. For encoding="base64", offset/limit count raw bytes and the result returns the next byte offset. To visually inspect image pixels—including extensionless screenshots—omit encoding and range options; base64 text is not visual input.`,
     parameters: readSchema,
     execute: async (_toolCallId, input, signal, _onUpdate) => {
       const resource =
@@ -374,11 +367,7 @@ export function createReadTool(
             code: "invalid_artifact_reference",
           });
         }
-        if (
-          input.encoding === "base64" ||
-          input.byteOffset !== undefined ||
-          input.byteLimit !== undefined
-        ) {
+        if (input.encoding === "base64") {
           throw Object.assign(new Error("Artifact resources are JSON text; use offset and limit"), {
             code: "invalid_artifact_read_options",
           });
@@ -407,7 +396,7 @@ export function createReadTool(
           details: { missing: true, suggestions: [] },
         };
       }
-      const { offset, limit, byteOffset, byteLimit } = input;
+      const { offset, limit } = input;
       if (signal?.aborted) {
         throw new Error("Operation aborted");
       }
@@ -419,11 +408,6 @@ export function createReadTool(
         };
       }
       if (input.encoding === "base64") {
-        if (offset !== undefined || limit !== undefined) {
-          throw new Error(
-            'read encoding="base64" uses byteOffset/byteLimit, not text offset/limit'
-          );
-        }
         try {
           if (runtimeRpc) {
             const bounded = await runtimeRpc.call<FsReadBytesResult>(
@@ -432,8 +416,8 @@ export function createReadTool(
               [
                 absolutePath,
                 {
-                  offset: byteOffset ?? 0,
-                  limit: byteLimit ?? DEFAULT_MAX_BYTES,
+                  offset: offset ?? 0,
+                  limit: limit ?? DEFAULT_MAX_BYTES,
                 },
               ],
               signal ? { signal } : undefined
@@ -448,8 +432,8 @@ export function createReadTool(
           }
           const rawBytes = await retryTransientRuntimeFs(() => fs.readFile(absolutePath), signal);
           const bytes = typeof rawBytes === "string" ? encodeUtf8(rawBytes) : rawBytes;
-          const start = Math.min(byteOffset ?? 0, bytes.length);
-          const selected = bytes.subarray(start, start + (byteLimit ?? DEFAULT_MAX_BYTES));
+          const start = Math.min(offset ?? 0, bytes.length);
+          const selected = bytes.subarray(start, start + (limit ?? DEFAULT_MAX_BYTES));
           const end = start + selected.length;
           return withReadReceipt(
             formatBoundedBytesResult(
@@ -457,7 +441,7 @@ export function createReadTool(
                 base64: bytesToBase64(selected),
                 contentHash: sha256Hex(bytes),
                 totalBytes: bytes.length,
-                maxBytes: byteLimit ?? DEFAULT_MAX_BYTES,
+                maxBytes: limit ?? DEFAULT_MAX_BYTES,
                 start,
                 end,
                 truncated: end < bytes.length,
@@ -478,9 +462,6 @@ export function createReadTool(
           }
           throw err;
         }
-      }
-      if (byteOffset !== undefined || byteLimit !== undefined) {
-        throw new Error('read byteOffset/byteLimit require encoding="base64"');
       }
       // --- Image/text read ---------------------------------------------------------------
       // Text with a recognizable filename remains a single compact UTF-8 RPC
