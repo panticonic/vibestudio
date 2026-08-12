@@ -7,6 +7,9 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import "@radix-ui/themes/styles.css";
+import "@workspace/ui/foundation.css";
+import "@workspace/ui/themes/vibestudio.css";
 import {
   Badge,
   Box,
@@ -43,7 +46,7 @@ import {
   TrashIcon,
   UpdateIcon,
 } from "@radix-ui/react-icons";
-import { usePanelTheme, usePanelThemeConfig, useStateArgs } from "@workspace/react";
+import { useIsMobile, usePanelTheme, usePanelThemeConfig, useStateArgs } from "@workspace/react";
 import { extensions } from "@workspace/runtime";
 
 const EXTENSION = "@workspace-extensions/local-models";
@@ -224,11 +227,69 @@ function serverBadge(state: ServerState) {
   }
 }
 
+function ModelActions({
+  model,
+  busy,
+  act,
+  onRemove,
+}: {
+  model: LocalModelEntry;
+  busy: string | null;
+  act: (label: string, run: () => Promise<unknown>) => Promise<void>;
+  onRemove: (model: LocalModelEntry) => void;
+}) {
+  return (
+    <Flex gap="1" justify="end">
+      {model.state === "startable" && (
+        <Tooltip content="Load now">
+          <IconButton
+            size="1"
+            variant="soft"
+            aria-label={`Load ${model.displayName}`}
+            disabled={busy !== null}
+            onClick={() => act("load", () => invoke("ensureLoaded", [model.slug]))}
+          >
+            <RocketIcon />
+          </IconButton>
+        </Tooltip>
+      )}
+      {model.state === "not-installed" && (
+        <Tooltip content="Download and install">
+          <IconButton
+            size="1"
+            variant="soft"
+            aria-label={`Download ${model.displayName}`}
+            disabled={busy !== null}
+            onClick={() => act("install", () => invoke("installModel", [`local:${model.slug}`]))}
+          >
+            <DownloadIcon />
+          </IconButton>
+        </Tooltip>
+      )}
+      {model.server !== "utility" && (
+        <Tooltip content="Delete model">
+          <IconButton
+            size="1"
+            variant="soft"
+            color="red"
+            aria-label={`Delete ${model.displayName}`}
+            disabled={busy !== null}
+            onClick={() => onRemove(model)}
+          >
+            <TrashIcon />
+          </IconButton>
+        </Tooltip>
+      )}
+    </Flex>
+  );
+}
+
 // ── panel ───────────────────────────────────────────────────────────────────
 
 export default function LocalModelsPanel() {
   const theme = usePanelTheme();
   const appTheme = usePanelThemeConfig();
+  const isMobile = useIsMobile();
   const [status, setStatus] = useState<LocalModelsStatus | null>(null);
   const [models, setModels] = useState<LocalModelEntry[]>([]);
   const [catalog, setCatalog] = useState<CuratedModel[]>([]);
@@ -328,12 +389,23 @@ export default function LocalModelsPanel() {
 
   return (
     <Theme appearance={theme} {...appTheme}>
-      <ScrollArea type="auto" scrollbars="vertical" style={{ height: "100vh" }}>
-        <Flex direction="column" gap="4" p="4" style={{ maxWidth: 860, margin: "0 auto" }}>
+      <Box style={{ height: "100dvh", overflowY: "auto", overflowX: "hidden" }}>
+        <Flex
+          direction="column"
+          gap="4"
+          p={isMobile ? "3" : "4"}
+          style={{
+            width: "100%",
+            maxWidth: 860,
+            minWidth: 0,
+            margin: "0 auto",
+            boxSizing: "border-box",
+          }}
+        >
           {/* ── hardware header ─────────────────────────────────────────── */}
           <Card size="2">
             <Flex justify="between" align="start" gap="3" wrap="wrap">
-              <Box>
+              <Box style={{ minWidth: 0 }}>
                 <Heading size="4">Local models</Heading>
                 {hardware ? (
                   <Text size="2" color="gray" as="p" mt="1">
@@ -378,7 +450,7 @@ export default function LocalModelsPanel() {
                   </Callout.Root>
                 )}
               </Box>
-              <Flex gap="2" align="center">
+              <Flex gap="2" align="center" wrap="wrap">
                 {status && (
                   <Badge color={status.role === "owner" ? "blue" : "gray"} variant="soft">
                     {status.role}
@@ -411,7 +483,7 @@ export default function LocalModelsPanel() {
           <Card size="2">
             <Flex direction="column" gap="3">
               <Flex justify="between" align="center" gap="3" wrap="wrap">
-                <Flex align="center" gap="3">
+                <Flex align="start" gap="3" style={{ minWidth: 0 }}>
                   {status?.fallback.warm ? (
                     <CheckCircledIcon color="var(--green-9)" width={22} height={22} />
                   ) : status?.fallback.ready ? (
@@ -419,7 +491,7 @@ export default function LocalModelsPanel() {
                   ) : (
                     <DownloadIcon color="var(--gray-8)" width={22} height={22} />
                   )}
-                  <Box>
+                  <Box style={{ minWidth: 0 }}>
                     <Text size="2" weight="medium" as="p">
                       {status?.fallback.warm
                         ? "Fallback model — loaded"
@@ -447,7 +519,7 @@ export default function LocalModelsPanel() {
                     </Text>
                   </Box>
                 </Flex>
-                <Flex gap="2" align="center">
+                <Flex gap="2" align="center" wrap="wrap">
                   {status && serverBadge(status.servers.utility)}
                   {status && !status.fallback.ready && !fallbackDownload ? (
                     <Button
@@ -558,10 +630,10 @@ export default function LocalModelsPanel() {
 
           {/* ── model library ───────────────────────────────────────────── */}
           <Card size="2">
-            <Flex justify="between" align="center" mb="2">
+            <Flex justify="between" align="start" gap="2" mb="2" wrap="wrap">
               <Heading size="2">Model library</Heading>
               {status && (
-                <Text size="1" color="gray">
+                <Text size="1" color="gray" truncate style={{ maxWidth: "100%" }}>
                   {status.storageRoot} · {formatBytes(status.diskFreeBytes)} free
                 </Text>
               )}
@@ -570,6 +642,78 @@ export default function LocalModelsPanel() {
               <Text size="2" color="gray">
                 No models installed yet. Install the fallback above or add another model below.
               </Text>
+            ) : isMobile ? (
+              <Flex direction="column" gap="2">
+                {models.map((model) => (
+                  <Card key={model.slug} size="1" variant="surface">
+                    <Flex direction="column" gap="2">
+                      <Flex justify="between" align="start" gap="2">
+                        <Box style={{ minWidth: 0 }}>
+                          <Text size="2" weight="medium" as="p">
+                            {model.displayName}
+                          </Text>
+                          <Text size="1" color="gray" as="p" truncate>
+                            local:{model.slug}
+                            {model.server === "utility" ? " · fallback" : ""}
+                          </Text>
+                        </Box>
+                        {fitBadge(model.fit.fit)}
+                      </Flex>
+                      <Flex align="center" justify="between" gap="2" wrap="wrap">
+                        <Flex align="center" gap="2" wrap="wrap">
+                          <Badge color="gray" variant="soft">
+                            {Math.round(model.contextWindow / 1024)}K context
+                          </Badge>
+                          {model.toolsCapable && (
+                            <Badge color="gray" variant="soft">
+                              tools
+                            </Badge>
+                          )}
+                          {model.state === "ready" && (
+                            <Badge color="green" variant="soft">
+                              loaded
+                            </Badge>
+                          )}
+                          {model.state === "startable" && (
+                            <Badge color="amber" variant="soft">
+                              loads on use
+                            </Badge>
+                          )}
+                          {model.state === "not-installed" && (
+                            <Badge color="gray" variant="soft">
+                              not installed
+                            </Badge>
+                          )}
+                          {model.state === "starting" && (
+                            <Badge color="amber" variant="soft">
+                              preparing runtime
+                            </Badge>
+                          )}
+                          {model.state === "downloading" && (
+                            <Badge color="blue" variant="soft">
+                              downloading{" "}
+                              {model.download
+                                ? `${Math.round(model.download.progress * 100)}%`
+                                : ""}
+                            </Badge>
+                          )}
+                          {model.state === "error" && (
+                            <Badge color="red" variant="soft">
+                              error
+                            </Badge>
+                          )}
+                        </Flex>
+                        <ModelActions
+                          model={model}
+                          busy={busy}
+                          act={act}
+                          onRemove={setRemoveTarget}
+                        />
+                      </Flex>
+                    </Flex>
+                  </Card>
+                ))}
+              </Flex>
             ) : (
               <Table.Root size="1">
                 <Table.Header>
@@ -637,51 +781,12 @@ export default function LocalModelsPanel() {
                         )}
                       </Table.Cell>
                       <Table.Cell>
-                        <Flex gap="1" justify="end">
-                          {model.state === "startable" && (
-                            <Tooltip content="Load now">
-                              <IconButton
-                                size="1"
-                                variant="soft"
-                                disabled={busy !== null}
-                                onClick={() =>
-                                  act("load", () => invoke("ensureLoaded", [model.slug]))
-                                }
-                              >
-                                <RocketIcon />
-                              </IconButton>
-                            </Tooltip>
-                          )}
-                          {model.state === "not-installed" && (
-                            <Tooltip content="Download and install">
-                              <IconButton
-                                size="1"
-                                variant="soft"
-                                disabled={busy !== null}
-                                onClick={() =>
-                                  act("install", () =>
-                                    invoke("installModel", [`local:${model.slug}`])
-                                  )
-                                }
-                              >
-                                <DownloadIcon />
-                              </IconButton>
-                            </Tooltip>
-                          )}
-                          {model.server !== "utility" && (
-                            <Tooltip content="Delete model">
-                              <IconButton
-                                size="1"
-                                variant="soft"
-                                color="red"
-                                disabled={busy !== null}
-                                onClick={() => setRemoveTarget(model)}
-                              >
-                                <TrashIcon />
-                              </IconButton>
-                            </Tooltip>
-                          )}
-                        </Flex>
+                        <ModelActions
+                          model={model}
+                          busy={busy}
+                          act={act}
+                          onRemove={setRemoveTarget}
+                        />
                       </Table.Cell>
                     </Table.Row>
                   ))}
@@ -709,7 +814,13 @@ export default function LocalModelsPanel() {
               {filteredCatalog.map((entry) => {
                 const quant = hardware ? entry.quantByTier[hardware.tier] : undefined;
                 return (
-                  <Flex key={entry.slug} justify="between" align="center" gap="3">
+                  <Flex
+                    key={entry.slug}
+                    direction={isMobile ? "column" : "row"}
+                    justify="between"
+                    align={isMobile ? "stretch" : "center"}
+                    gap="3"
+                  >
                     <Box style={{ minWidth: 0 }}>
                       <Text size="2" weight="medium" as="p" truncate>
                         {entry.displayName}
@@ -739,6 +850,7 @@ export default function LocalModelsPanel() {
                       <Button
                         size="1"
                         variant="soft"
+                        style={isMobile ? { width: "100%" } : undefined}
                         disabled={busy !== null || !quant}
                         onClick={() =>
                           act("download", async () => {
@@ -799,7 +911,11 @@ export default function LocalModelsPanel() {
               )}
             </Flex>
             <Separator size="4" my="3" />
-            <Flex gap="2" align="center">
+            <Flex
+              direction={isMobile ? "column" : "row"}
+              gap="2"
+              align={isMobile ? "stretch" : "center"}
+            >
               <input
                 type="file"
                 // Chromium/Electron directory picker; the runtime import API needs the folder path.
@@ -816,17 +932,19 @@ export default function LocalModelsPanel() {
                       "The selected folder path was unavailable. Enter its absolute path instead."
                     );
                 }}
-                style={{ maxWidth: 190 }}
+                className="app-touch-target"
+                style={{ width: isMobile ? "100%" : undefined, maxWidth: isMobile ? "none" : 190 }}
               />
               <TextField.Root
                 placeholder="Import a folder of GGUF files (absolute path)…"
                 value={importPath}
                 onChange={(e) => setImportPath(e.target.value)}
-                style={{ flex: 1 }}
+                style={{ flex: 1, width: "100%" }}
               />
               <Button
                 size="1"
                 variant="soft"
+                style={isMobile ? { width: "100%" } : undefined}
                 disabled={busy !== null || !importPath.trim()}
                 onClick={() =>
                   act("import", async () => {
@@ -847,8 +965,8 @@ export default function LocalModelsPanel() {
             </Heading>
             <Flex direction="column" gap="2">
               {(["utility", "main"] as const).map((kind) => (
-                <Flex key={kind} justify="between" align="center" gap="3">
-                  <Box>
+                <Flex key={kind} justify="between" align="center" gap="3" wrap="wrap">
+                  <Box style={{ minWidth: 0 }}>
                     <Text size="2" weight="medium">
                       {kind === "utility" ? "Utility (fallback, CPU)" : "Main (library)"}
                     </Text>
@@ -856,7 +974,7 @@ export default function LocalModelsPanel() {
                       {status ? serverBadge(status.servers[kind]) : <Spinner size="1" />}
                     </Box>
                   </Box>
-                  <Flex gap="2">
+                  <Flex gap="2" wrap="wrap">
                     <Button
                       size="1"
                       variant="soft"
@@ -890,7 +1008,7 @@ export default function LocalModelsPanel() {
             </Flex>
           </Card>
         </Flex>
-      </ScrollArea>
+      </Box>
 
       {/* ── delete confirm ────────────────────────────────────────────── */}
       <Dialog.Root
