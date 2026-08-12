@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   isAutomationContextReplacement,
-  retryAutomationContextReplacement,
+  retryIdempotentAutomationRead,
 } from "./automationContext.js";
 
 describe("automation context replacement classification", () => {
@@ -25,7 +25,7 @@ describe("automation context replacement classification", () => {
     let attempts = 0;
 
     await expect(
-      retryAutomationContextReplacement(
+      retryIdempotentAutomationRead(
         async () => {
           attempts += 1;
           if (attempts === 1) {
@@ -33,7 +33,7 @@ describe("automation context replacement classification", () => {
           }
           return "ready";
         },
-        { delayMs: 0 }
+        { label: "reading readiness", delayMs: 0 }
       )
     ).resolves.toBe("ready");
     expect(attempts).toBe(2);
@@ -43,26 +43,50 @@ describe("automation context replacement classification", () => {
     let attempts = 0;
 
     await expect(
-      retryAutomationContextReplacement(async () => {
-        attempts += 1;
-        throw new Error("Unauthorized");
-      })
+      retryIdempotentAutomationRead(
+        async () => {
+          attempts += 1;
+          throw new Error("Unauthorized");
+        },
+        { label: "reading readiness" }
+      )
     ).rejects.toThrow("Unauthorized");
     expect(attempts).toBe(1);
   });
 
-  it("rethrows the final context replacement after the bounded attempts", async () => {
+  it("retries bootstrap Test API absence", async () => {
     let attempts = 0;
 
     await expect(
-      retryAutomationContextReplacement(
+      retryIdempotentAutomationRead(
         async () => {
           attempts += 1;
-          throw new Error(`Cannot find context with specified id: ${attempts}`);
+          if (attempts === 1) throw new Error("Test API not available");
+          return "ready";
         },
-        { attempts: 3, delayMs: 0 }
+        { label: "reading readiness", delayMs: 0 }
       )
-    ).rejects.toThrow("Cannot find context with specified id: 3");
-    expect(attempts).toBe(3);
+    ).resolves.toBe("ready");
+    expect(attempts).toBe(2);
+  });
+
+  it("bounds a hung observation by wall-clock time", async () => {
+    await expect(
+      retryIdempotentAutomationRead(() => new Promise(() => {}), {
+        label: "reading a hung observation",
+        timeoutMs: 10,
+      })
+    ).rejects.toThrow("[AutomationRead] Timed out after 10ms while reading a hung observation");
+  });
+
+  it("reports the last transient failure when the deadline expires", async () => {
+    await expect(
+      retryIdempotentAutomationRead(
+        async () => {
+          throw new Error("Cannot find context with specified id: 42");
+        },
+        { label: "reading readiness", timeoutMs: 10, delayMs: 0 }
+      )
+    ).rejects.toThrow("last transient failure: Cannot find context with specified id: 42");
   });
 });

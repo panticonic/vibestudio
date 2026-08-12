@@ -13,30 +13,82 @@ export function isAutomationContextReplacement(error: unknown): boolean {
   return TRANSIENT_CONTEXT_REPLACEMENT_MESSAGES.some((fragment) => message.includes(fragment));
 }
 
-/**
- * Repeat an Electron main-process evaluation only when its automation context
- * was replaced. Product, authorization, and assertion failures still surface
- * immediately.
- */
-export async function retryAutomationContextReplacement<T>(
-  evaluate: () => Promise<T>,
-  options: { attempts?: number; delayMs?: number } = {}
-): Promise<T> {
-  const attempts = options.attempts ?? 10;
-  const delayMs = options.delayMs ?? 100;
-  let lastError: unknown;
+export interface IdempotentAutomationReadOptions {
+  label: string;
+  timeoutMs?: number;
+  delayMs?: number;
+}
 
-  for (let attempt = 0; attempt < attempts; attempt += 1) {
+function isTransientAutomationReadFailure(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return isAutomationContextReplacement(error) || /Test API not available/i.test(message);
+}
+
+/**
+ * Repeat a side-effect-free Electron observation across the narrow bootstrap
+ * context handoff, within one wall-clock budget. This function may replay the
+ * callback and therefore must never receive clicks, writes, approval decisions,
+ * arbitrary scripts, or RPC mutations.
+ */
+export async function retryIdempotentAutomationRead<T>(
+  read: () => Promise<T>,
+  options: IdempotentAutomationReadOptions
+): Promise<T> {
+  const timeoutMs = options.timeoutMs ?? 10_000;
+  const delayMs = options.delayMs ?? 100;
+  const deadline = Date.now() + timeoutMs;
+  let lastTransient: unknown;
+
+  while (Date.now() < deadline) {
+    const remainingMs = Math.max(1, deadline - Date.now());
+    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      return await evaluate();
+      return await Promise.race([
+        read(),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(
+            () =>
+              reject(
+                new Error(
+                  `[AutomationRead] Timed out after ${timeoutMs}ms while ${options.label}${
+                    lastTransient
+                      ? `; last transient failure: ${
+                          lastTransient instanceof Error
+                            ? lastTransient.message
+                            : String(lastTransient)
+                        }`
+                      : ""
+                  }`
+                )
+              ),
+            remainingMs
+          );
+        }),
+      ]);
     } catch (error) {
-      if (!isAutomationContextReplacement(error)) throw error;
-      lastError = error;
-      if (attempt + 1 < attempts && delayMs > 0) {
-        await new Promise((resolve) => setTimeout(resolve, delayMs));
+      if (error instanceof Error && error.message.startsWith("[AutomationRead] Timed out")) {
+        throw error;
       }
+      if (!isTransientAutomationReadFailure(error)) throw error;
+      lastTransient = error;
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+
+    const remainingAfterRead = deadline - Date.now();
+    if (remainingAfterRead <= 0) break;
+    if (delayMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, Math.min(delayMs, remainingAfterRead)));
     }
   }
 
-  throw lastError;
+  throw new Error(
+    `[AutomationRead] Timed out after ${timeoutMs}ms while ${options.label}${
+      lastTransient
+        ? `; last transient failure: ${
+            lastTransient instanceof Error ? lastTransient.message : String(lastTransient)
+          }`
+        : ""
+    }`
+  );
 }

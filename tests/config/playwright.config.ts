@@ -1,9 +1,12 @@
 import { defineConfig } from "@playwright/test";
 import path from "path";
 import { fileURLToPath } from "url";
+import { initializeE2eRun } from "../setup/e2eRun.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+const projectRoot = path.resolve(__dirname, "../..");
+const run = initializeE2eRun(projectRoot);
 
 export default defineConfig({
   testDir: path.resolve(__dirname, "../e2e"),
@@ -13,14 +16,15 @@ export default defineConfig({
   timeout: 240000, // Electron cold-start builds can be slow for isolated workspaces
   retries: process.env.CI ? 2 : 0,
   forbidOnly: !!process.env.CI,
+  globalSetup: path.resolve(__dirname, "playwright.globalSetup.ts"),
 
   reporter: [
     ["list"],
-    ["html", { outputFolder: path.resolve(__dirname, "../../test-results/html") }],
+    ["html", { outputFolder: path.join(run.artifactRoot, "html"), open: "never" }],
     [
       "json",
       {
-        outputFile: path.resolve(__dirname, "../../test-results/results.json"),
+        outputFile: path.join(run.artifactRoot, "results.json"),
       },
     ],
     ...(process.env.CI ? [["github" as const]] : []),
@@ -37,5 +41,5 @@ export default defineConfig({
   },
 
   // Output directories
-  outputDir: path.resolve(__dirname, "../../test-results/artifacts"),
+  outputDir: path.join(run.artifactRoot, "artifacts"),
 });

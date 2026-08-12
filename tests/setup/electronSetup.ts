@@ -33,8 +33,10 @@ import type { MainProcessErrorRecord } from "../../src/main/mainProcessErrorLedg
 import type { PanelInitializationFailure } from "../../src/main/panelInitializationFailure.js";
 import {
   isAutomationContextReplacement,
-  retryAutomationContextReplacement,
+  retryIdempotentAutomationRead,
 } from "./automationContext.js";
+import { registerRunCleanupPath, releaseRunCleanupPath } from "./e2eCleanupLedger.js";
+import { E2E_ARTIFACT_ROOT_ENV, E2E_TEMP_ROOT_ENV } from "./e2eRun.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -241,7 +243,11 @@ export function createManagedTestWorkspace(
 ): string {
   const resolvedProjectRoot = options.projectRoot ?? path.resolve(__dirname, "../..");
   const templateDir = getWorkspaceTemplateDir(resolvedProjectRoot);
-  const testRoot = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-e2e-"));
+  const runTempRoot = process.env[E2E_TEMP_ROOT_ENV];
+  const testRoot = fs.mkdtempSync(
+    runTempRoot ? path.join(runTempRoot, "case-") : path.join(os.tmpdir(), "vibestudio-e2e-")
+  );
+  registerRunCleanupPath(testRoot);
   const env = getTestEnv(testRoot);
   const workspaceName = `e2e_${crypto.randomBytes(6).toString("hex")}`;
   const workspaceDir = path.join(getCentralDataDirFromEnv(env), "workspaces", workspaceName);
@@ -304,6 +310,7 @@ export function createManagedTestWorkspace(
 
 export function removeManagedTestWorkspace(workspaceDir: string): void {
   const { testRoot } = getWorkspaceInfo(workspaceDir);
+  if (releaseRunCleanupPath(testRoot)) return;
   fs.rmSync(testRoot, { recursive: true, force: true });
 }
 
@@ -586,18 +593,21 @@ export async function approvePendingStartupUnits(
     try {
       const launch = await hostLaunch.launch("electron");
       if ((await hostLaunch.resolvePendingStartupApprovals("once")) > 0) continue;
-      const hostView = await withElectronEvaluationTimeout(
-        app.evaluate(async () => {
-          const testApi = (
-            globalThis as {
-              __testApi?: Pick<TestApi, "getHostViewDebugInfo">;
-            }
-          ).__testApi;
-          if (!testApi) throw new Error("Test API not available");
-          return testApi.getHostViewDebugInfo();
-        }),
-        Math.min(ELECTRON_EVALUATE_TIMEOUT_MS, Math.max(1, deadline - Date.now())),
-        "reading host view diagnostics"
+      const hostView = await retryIdempotentAutomationRead(
+        () =>
+          app.evaluate(async () => {
+            const testApi = (
+              globalThis as {
+                __testApi?: Pick<TestApi, "getHostViewDebugInfo">;
+              }
+            ).__testApi;
+            if (!testApi) throw new Error("Test API not available");
+            return testApi.getHostViewDebugInfo();
+          }),
+        {
+          label: "reading host view diagnostics",
+          timeoutMs: Math.min(ELECTRON_EVALUATE_TIMEOUT_MS, Math.max(1, deadline - Date.now())),
+        }
       );
       lastState = { launch, hostView };
       if (launch.status === "approval-required") continue;
@@ -1101,16 +1111,18 @@ export async function isPanelContentReady(
 export async function readPanelInitializationFailure(
   app: ElectronApplication
 ): Promise<PanelInitializationFailure | null> {
-  return retryTestApiEvaluation(() =>
-    app.evaluate(() => {
-      const testApi = (
-        globalThis as {
-          __testApi?: Pick<TestApi, "readPanelInitializationFailure">;
-        }
-      ).__testApi;
-      if (!testApi) throw new Error("Test API not available");
-      return testApi.readPanelInitializationFailure();
-    })
+  return retryIdempotentAutomationRead(
+    () =>
+      app.evaluate(() => {
+        const testApi = (
+          globalThis as {
+            __testApi?: Pick<TestApi, "readPanelInitializationFailure">;
+          }
+        ).__testApi;
+        if (!testApi) throw new Error("Test API not available");
+        return testApi.readPanelInitializationFailure();
+      }),
+    { label: "reading panel initialization failure" }
   );
 }
 
@@ -1215,29 +1227,16 @@ export async function ensureHostedShellReady(
 export async function readMainProcessErrors(
   app: ElectronApplication
 ): Promise<MainProcessErrorRecord[]> {
-  return retryTestApiEvaluation(() =>
-    app.evaluate(() => {
-      const testApi = (globalThis as { __testApi?: Pick<TestApi, "readMainProcessErrors"> })
-        .__testApi;
-      if (!testApi) throw new Error("Test API not available");
-      return testApi.readMainProcessErrors();
-    })
+  return retryIdempotentAutomationRead(
+    () =>
+      app.evaluate(() => {
+        const testApi = (globalThis as { __testApi?: Pick<TestApi, "readMainProcessErrors"> })
+          .__testApi;
+        if (!testApi) throw new Error("Test API not available");
+        return testApi.readMainProcessErrors();
+      }),
+    { label: "reading main-process errors" }
   );
-}
-
-async function retryTestApiEvaluation<T>(evaluate: () => Promise<T>): Promise<T> {
-  let lastError: unknown;
-  for (let attempt = 0; attempt < 10; attempt += 1) {
-    try {
-      return await retryAutomationContextReplacement(evaluate);
-    } catch (error) {
-      lastError = error;
-      const message = error instanceof Error ? error.message : String(error);
-      if (!/Test API not available/i.test(message)) throw error;
-      await new Promise((resolve) => setTimeout(resolve, 100));
-    }
-  }
-  throw lastError;
 }
 
 export async function clearMainProcessErrors(app: ElectronApplication): Promise<void> {
@@ -1560,7 +1559,10 @@ export async function waitForAppReady(window: Page, timeout = 15000): Promise<vo
  */
 export async function takeScreenshot(window: Page, name: string): Promise<Buffer> {
   const projectRoot = path.resolve(__dirname, "../..");
-  const screenshotDir = path.join(projectRoot, "test-results", "screenshots");
+  const screenshotDir = path.join(
+    process.env[E2E_ARTIFACT_ROOT_ENV] ?? path.join(projectRoot, "test-results"),
+    "screenshots"
+  );
   fs.mkdirSync(screenshotDir, { recursive: true });
   return window.screenshot({
     path: path.join(screenshotDir, `${name}.png`),

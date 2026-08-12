@@ -6,7 +6,7 @@ import {
   launchTestApp,
   type TestApp,
 } from "../../setup/electronSetup";
-import { retryAutomationContextReplacement } from "../../setup/automationContext";
+import { retryIdempotentAutomationRead } from "../../setup/automationContext";
 
 test.skip(!hasElectronDisplay(), ELECTRON_DISPLAY_UNAVAILABLE_MESSAGE);
 
@@ -114,13 +114,14 @@ async function probeOverlay(testApp: TestApp): Promise<{
   text: string;
   card: { width: number; height: number; clientHeight: number; scrollHeight: number } | null;
 } | null> {
-  return retryAutomationContextReplacement(() =>
-    testApp.app.evaluate(async ({ webContents }) => {
-      for (const contents of webContents.getAllWebContents()) {
-        if (contents.isDestroyed()) continue;
-        try {
-          const snapshot = (await contents.executeJavaScript(
-            `(() => {
+  return retryIdempotentAutomationRead(
+    () =>
+      testApp.app.evaluate(async ({ webContents }) => {
+        for (const contents of webContents.getAllWebContents()) {
+          if (contents.isDestroyed()) continue;
+          try {
+            const snapshot = (await contents.executeJavaScript(
+              `(() => {
               if (!globalThis.__vibestudioContentOverlay) return null;
               const card = document.querySelector(".approval-card");
               const rect = card ? card.getBoundingClientRect() : null;
@@ -136,25 +137,26 @@ async function probeOverlay(testApp: TestApp): Promise<{
                 } : null,
               };
             })()`,
-            true
-          )) as {
-            hasCard: boolean;
-            tone: string | null;
-            text: string;
-            card: {
-              width: number;
-              height: number;
-              clientHeight: number;
-              scrollHeight: number;
+              true
+            )) as {
+              hasCard: boolean;
+              tone: string | null;
+              text: string;
+              card: {
+                width: number;
+                height: number;
+                clientHeight: number;
+                scrollHeight: number;
+              } | null;
             } | null;
-          } | null;
-          if (snapshot) return snapshot;
-        } catch {
-          // Try the next webContents.
+            if (snapshot) return snapshot;
+          } catch {
+            // Try the next webContents.
+          }
         }
-      }
-      return null;
-    })
+        return null;
+      }),
+    { label: "probing the content overlay" }
   );
 }
 
@@ -194,26 +196,28 @@ async function driveOverlayDrag(
 
 /** Diagnostic: dump every webContents (url + whether it's the overlay surface). */
 async function dumpWebContents(testApp: TestApp): Promise<unknown> {
-  return retryAutomationContextReplacement(() =>
-    testApp.app.evaluate(async ({ webContents }) => {
-      const out: Array<{ url: string; overlay: boolean; cardLen: number }> = [];
-      for (const contents of webContents.getAllWebContents()) {
-        if (contents.isDestroyed()) continue;
-        try {
-          const info = (await contents.executeJavaScript(
-            `(() => ({
+  return retryIdempotentAutomationRead(
+    () =>
+      testApp.app.evaluate(async ({ webContents }) => {
+        const out: Array<{ url: string; overlay: boolean; cardLen: number }> = [];
+        for (const contents of webContents.getAllWebContents()) {
+          if (contents.isDestroyed()) continue;
+          try {
+            const info = (await contents.executeJavaScript(
+              `(() => ({
               overlay: !!globalThis.__vibestudioContentOverlay,
               cardLen: document.querySelectorAll(".approval-card").length,
             }))()`,
-            true
-          )) as { overlay: boolean; cardLen: number };
-          out.push({ url: contents.getURL(), overlay: info.overlay, cardLen: info.cardLen });
-        } catch {
-          out.push({ url: contents.getURL(), overlay: false, cardLen: -1 });
+              true
+            )) as { overlay: boolean; cardLen: number };
+            out.push({ url: contents.getURL(), overlay: info.overlay, cardLen: info.cardLen });
+          } catch {
+            out.push({ url: contents.getURL(), overlay: false, cardLen: -1 });
+          }
         }
-      }
-      return out;
-    })
+        return out;
+      }),
+    { label: "reading content-overlay diagnostics" }
   );
 }
 
