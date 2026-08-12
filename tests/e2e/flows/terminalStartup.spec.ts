@@ -8,10 +8,8 @@
  * (shell-level approval prompts cannot run in-system), so this spec stays.
  */
 import { expect, test, type ElectronApplication, type Page } from "@playwright/test";
-import { execFile } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { promisify } from "node:util";
 import YAML from "yaml";
 import {
   callTerminalPanel,
@@ -23,7 +21,6 @@ import {
   getFocusedPanelWebContentsId,
   getPanelDiagnostics,
   getPanelHtml,
-  getPanelSelectorWindowPoint,
   isPanelReady,
   launchTestApp,
   reloadPanel,
@@ -34,15 +31,20 @@ import {
   typePanelText,
   type TestApp,
 } from "../../setup/electronSetup";
+import {
+  pressTerminalShortcutThroughNativeInput,
+  typeTerminalThroughNativeInput,
+} from "../../setup/nativeInput";
 
-const execFileAsync = promisify(execFile);
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 type PendingApproval = {
   approvalId: string;
   kind: string;
   title?: string;
-  allowedDecisions?: Array<"once" | "session" | "task" | "mission" | "agent" | "version" | "lock" | "deny">;
+  allowedDecisions?: Array<
+    "once" | "session" | "task" | "mission" | "agent" | "version" | "lock" | "deny"
+  >;
   mode?: "install" | "update" | "adopt-root" | "part-changed";
   parts?: Array<{
     identityKey: string;
@@ -447,51 +449,53 @@ async function waitForUsableTerminalSession(
     await expect
       .poll(
         async () => {
-        await approvePendingTerminalWork(app, window);
-        // The panel may mount before the approved shell extension's first build
-        // finishes. Once approvals are resolved, drive its explicit recovery
-        // action so the same panel instance reconnects instead of waiting for a
-        // manual click forever.
-        await clickPanelText(app, panelId, "button", "Retry").catch(() => false);
-        let sessions = await listTerminalSessions(app, panelId).catch(() => []);
-        const alive = sessions.find((session) => session.alive !== false)?.sessionId;
-        if (alive) return alive;
-
-        const now = Date.now();
-        if (now - startedAt > 5_000 && now - lastOpenRequestAt > 5_000) {
-          lastOpenRequestAt = now;
-          let openError: unknown;
-          const opened = await requestTerminalSession(app, panelId).catch((error: unknown) => {
-            openError = error;
-            return undefined;
-          });
           await approvePendingTerminalWork(app, window);
-          if (opened) return opened;
-          const openErrorMessage = openError instanceof Error ? openError.message : "";
-          const panelHtml = await getPanelHtml(app, panelId).catch(() => "");
-          lastOpenErrorMessage = openErrorMessage;
-          lastPanelHtml = panelHtml;
-          lastPanelText = await app
-            .evaluate(async (_electron, id) => {
-              const testApi = (
-                globalThis as { __testApi?: { getPanelText: (panelId: string) => Promise<string> } }
-              ).__testApi;
-              return testApi ? await testApi.getPanelText(id) : "";
-            }, panelId)
-            .catch(() => "");
-          if (
-            openErrorMessage.includes("did not request") ||
-            panelHtml.includes("did not request")
-          ) {
-            const nativeRequests = await terminalNativeAuthorityRequests(app, panelId);
-            throw new Error(
-              `Terminal authority failed with native requests ${JSON.stringify(nativeRequests)}: ${
-                openErrorMessage || panelHtml
-              }`
-            );
+          // The panel may mount before the approved shell extension's first build
+          // finishes. Once approvals are resolved, drive its explicit recovery
+          // action so the same panel instance reconnects instead of waiting for a
+          // manual click forever.
+          await clickPanelText(app, panelId, "button", "Retry").catch(() => false);
+          let sessions = await listTerminalSessions(app, panelId).catch(() => []);
+          const alive = sessions.find((session) => session.alive !== false)?.sessionId;
+          if (alive) return alive;
+
+          const now = Date.now();
+          if (now - startedAt > 5_000 && now - lastOpenRequestAt > 5_000) {
+            lastOpenRequestAt = now;
+            let openError: unknown;
+            const opened = await requestTerminalSession(app, panelId).catch((error: unknown) => {
+              openError = error;
+              return undefined;
+            });
+            await approvePendingTerminalWork(app, window);
+            if (opened) return opened;
+            const openErrorMessage = openError instanceof Error ? openError.message : "";
+            const panelHtml = await getPanelHtml(app, panelId).catch(() => "");
+            lastOpenErrorMessage = openErrorMessage;
+            lastPanelHtml = panelHtml;
+            lastPanelText = await app
+              .evaluate(async (_electron, id) => {
+                const testApi = (
+                  globalThis as {
+                    __testApi?: { getPanelText: (panelId: string) => Promise<string> };
+                  }
+                ).__testApi;
+                return testApi ? await testApi.getPanelText(id) : "";
+              }, panelId)
+              .catch(() => "");
+            if (
+              openErrorMessage.includes("did not request") ||
+              panelHtml.includes("did not request")
+            ) {
+              const nativeRequests = await terminalNativeAuthorityRequests(app, panelId);
+              throw new Error(
+                `Terminal authority failed with native requests ${JSON.stringify(nativeRequests)}: ${
+                  openErrorMessage || panelHtml
+                }`
+              );
+            }
+            sessions = await listTerminalSessions(app, panelId).catch(() => []);
           }
-          sessions = await listTerminalSessions(app, panelId).catch(() => []);
-        }
           return sessions.find((session) => session.alive !== false)?.sessionId ?? "";
         },
         { timeout: 120_000, intervals: [500, 1000, 2000] }
@@ -643,98 +647,22 @@ async function clickTerminalThroughWindow(testApp: TestApp, panelId: string): Pr
     .toBe(panelId);
 }
 
-async function nativeWindowInfo(app: ElectronApplication): Promise<{
-  id: string;
-  pid: number;
-  bounds: { x: number; y: number; width: number; height: number };
-  contentBounds: { x: number; y: number; width: number; height: number };
-}> {
-  return app.evaluate(({ BaseWindow, BrowserWindow }) => {
-    const win = BaseWindow.getAllWindows()[0] ?? BrowserWindow.getAllWindows()[0];
-    if (!win) throw new Error("No Electron window");
-    const handle = win.getNativeWindowHandle();
-    return {
-      id: process.platform === "linux" ? String(handle.readUInt32LE(0)) : handle.toString("hex"),
-      pid: process.pid,
-      bounds: win.getBounds(),
-      contentBounds: win.getContentBounds(),
+async function panelTreeTitle(app: ElectronApplication, panelId: string): Promise<string | null> {
+  return app.evaluate((_electron, id) => {
+    type PanelNode = { id: string; title?: string; children?: PanelNode[] };
+    const tree = (
+      globalThis as { __testApi?: { getPanelTree: () => PanelNode[] } }
+    ).__testApi?.getPanelTree();
+    const visit = (nodes: PanelNode[]): string | null => {
+      for (const node of nodes) {
+        if (node.id === id) return node.title ?? null;
+        const nested = visit(node.children ?? []);
+        if (nested !== null) return nested;
+      }
+      return null;
     };
-  });
-}
-
-async function xdotoolWindowId(windowInfo: { id: string; pid: number }): Promise<string> {
-  if (process.platform !== "linux") return windowInfo.id;
-  try {
-    const { stdout } = await execFileAsync("xdotool", ["search", "--pid", String(windowInfo.pid)]);
-    const ids = stdout.trim().split(/\s+/).filter(Boolean);
-    return ids.at(-1) ?? windowInfo.id;
-  } catch {
-    return windowInfo.id;
-  }
-}
-
-async function hasXdotool(): Promise<boolean> {
-  if (process.platform !== "linux") return false;
-  try {
-    await execFileAsync("xdotool", ["--version"]);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function clickTerminalThroughOs(testApp: TestApp, panelId: string): Promise<boolean> {
-  if (!(await hasXdotool())) return false;
-  try {
-    const point =
-      (await getPanelSelectorWindowPoint(testApp.app, panelId, ".xterm-helper-textarea")) ??
-      (await getPanelSelectorWindowPoint(testApp.app, panelId, ".xterm"));
-    if (!point) return false;
-    const windowInfo = await nativeWindowInfo(testApp.app);
-    const x = windowInfo.contentBounds.x + point.x;
-    const y = windowInfo.contentBounds.y + point.y;
-    if (x < 0 || y < 0) return false;
-    const windowId = await xdotoolWindowId(windowInfo);
-    await execFileAsync("xdotool", ["windowactivate", "--sync", windowId]);
-    await execFileAsync("xdotool", ["mousemove", String(x), String(y), "click", "1"]);
-    await delay(100);
-    await execFileAsync("xdotool", ["click", "1"]);
-    await delay(150);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function typeTerminalThroughOs(
-  testApp: TestApp,
-  panelId: string,
-  command: string
-): Promise<boolean> {
-  if (!(await clickTerminalThroughOs(testApp, panelId))) return false;
-  const windowInfo = await nativeWindowInfo(testApp.app);
-  const windowId = await xdotoolWindowId(windowInfo);
-  await execFileAsync("xdotool", ["key", "--window", windowId, "ctrl+u"]);
-  await execFileAsync("xdotool", ["type", "--window", windowId, "--delay", "1", command]);
-  await execFileAsync("xdotool", ["key", "--window", windowId, "Return"]);
-  return true;
-}
-
-async function pressTerminalShortcutThroughOs(
-  testApp: TestApp,
-  panelId: string,
-  key: string
-): Promise<boolean> {
-  if (!(await clickTerminalThroughOs(testApp, panelId))) return false;
-  const windowInfo = await nativeWindowInfo(testApp.app);
-  const windowId = await xdotoolWindowId(windowInfo);
-  await execFileAsync("xdotool", [
-    "key",
-    "--window",
-    windowId,
-    shortcut(key).toLowerCase().replace(/\+/g, "+"),
-  ]);
-  return true;
+    return visit(tree ?? []);
+  }, panelId);
 }
 
 function shortcut(key: string): string {
@@ -885,25 +813,10 @@ test.describe("Terminal Startup", () => {
       )
       .toBe(true);
     await expect
-      .poll(
-        () =>
-          app.evaluate((_electron, panelId) => {
-            type PanelNode = { id: string; title?: string; children?: PanelNode[] };
-            const tree = (
-              globalThis as { __testApi?: { getPanelTree: () => PanelNode[] } }
-            ).__testApi?.getPanelTree();
-            const visit = (nodes: PanelNode[]): string | undefined => {
-              for (const node of nodes) {
-                if (node.id === panelId) return node.title;
-                const nested = visit(node.children ?? []);
-                if (nested !== undefined) return nested;
-              }
-              return undefined;
-            };
-            return visit(tree ?? []);
-          }, terminalPanelId),
-        { timeout: 5_000, intervals: [100, 250, 500] }
-      )
+      .poll(() => panelTreeTitle(app, terminalPanelId), {
+        timeout: 5_000,
+        intervals: [100, 250, 500],
+      })
       .toBe("Project terminal");
 
     await executePanelScript(
@@ -938,28 +851,13 @@ test.describe("Terminal Startup", () => {
     await expectScrollbackToContain(app, terminalPanelId, sessionRef, "vibestudio-keyboard-input");
     await expectRenderedToContain(app, terminalPanelId, sessionRef, "vibestudio-keyboard-input");
 
-    const osTyped = await typeTerminalThroughOs(
-      testApp,
-      terminalPanelId,
-      "printf 'vibestudio-os-keyboard-input\\n'"
-    );
-    const osInputArrived = osTyped
-      ? await expect
-          .poll(
-            async () =>
-              scrollbackContains(app, terminalPanelId, sessionRef, "vibestudio-os-keyboard-input"),
-            {
-              timeout: 3_000,
-              intervals: [250, 500],
-            }
-          )
-          .toBe(true)
-          .then(
-            () => true,
-            () => false
-          )
-      : false;
-    if (!osInputArrived) {
+    if (process.platform === "linux") {
+      await typeTerminalThroughNativeInput(
+        app,
+        terminalPanelId,
+        "printf 'vibestudio-os-keyboard-input\\n'"
+      );
+    } else {
       await clickTerminalThroughWindow(testApp, terminalPanelId);
       await typePanelText(app, terminalPanelId, "\u0015printf 'vibestudio-os-keyboard-input\\n'\r");
     }
@@ -972,29 +870,26 @@ test.describe("Terminal Startup", () => {
     await expectRenderedToContain(app, terminalPanelId, sessionRef, "vibestudio-os-keyboard-input");
 
     await setElectronClipboardText(app, "printf 'vibestudio-paste-input\\n'\n");
-    const osPasteAttempted = await pressTerminalShortcutThroughOs(testApp, terminalPanelId, "v");
-    const osPasteArrived = osPasteAttempted
-      ? await expect
-          .poll(
-            async () =>
-              scrollbackContains(app, terminalPanelId, sessionRef, "vibestudio-paste-input"),
-            {
-              timeout: 3_000,
-              intervals: [250, 500],
-            }
-          )
-          .toBe(true)
-          .then(
-            () => true,
-            () => false
-          )
-      : false;
-    if (!osPasteArrived) {
+    if (process.platform === "linux") {
+      await pressTerminalShortcutThroughNativeInput(app, terminalPanelId, "v");
+    } else {
       await clickTerminalThroughWindow(testApp, terminalPanelId);
       await typePanelText(app, terminalPanelId, "\u0015printf 'vibestudio-paste-input\\n'\r");
     }
     await expectScrollbackToContain(app, terminalPanelId, sessionRef, "vibestudio-paste-input");
     await expectRenderedToContain(app, terminalPanelId, sessionRef, "vibestudio-paste-input");
+    await expect
+      .poll(() => executePanelScript<string>(app, terminalPanelId, "document.title"), {
+        timeout: 5_000,
+        intervals: [100, 250, 500],
+      })
+      .toBe("Project terminal");
+    await expect
+      .poll(() => panelTreeTitle(app, terminalPanelId), {
+        timeout: 5_000,
+        intervals: [100, 250, 500],
+      })
+      .toBe("Project terminal");
 
     await clickPanelSelector(app, terminalPanelId, "[aria-label='Pane menu']");
     await expect
@@ -1189,7 +1084,9 @@ test.describe("Terminal Startup", () => {
           const countLeaves = (node: typeof state.tree): number => {
             if (!node) return 0;
             if (node.kind === "leaf") return 1;
-            return countLeaves(node.a as typeof state.tree) + countLeaves(node.b as typeof state.tree);
+            return (
+              countLeaves(node.a as typeof state.tree) + countLeaves(node.b as typeof state.tree)
+            );
           };
           return {
             leaves: countLeaves(state.tree),
@@ -1228,11 +1125,9 @@ test.describe("Terminal Startup", () => {
     await expect
       .poll(
         async () =>
-          (await clickPanelSelector(
-            app,
-            terminalPanelId,
-            '[data-focused="true"] .xterm'
-          ).catch(() => false)) ||
+          (await clickPanelSelector(app, terminalPanelId, '[data-focused="true"] .xterm').catch(
+            () => false
+          )) ||
           (await clickPanelSelector(
             app,
             terminalPanelId,

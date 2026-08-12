@@ -101,6 +101,26 @@ hub, and its one-time root-device invite from the strict ready file. Use
 
 ### Develop (contributors)
 
+Requires Node.js 22.19+, pnpm, and the normal Electron system libraries. Linux
+contributors running Electron E2E tests also need the isolated X11/native-input
+tooling:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y xvfb xauth x11-utils xdotool
+```
+
+The Playwright config launches one authenticated Xvfb server per test
+invocation and passes its private `DISPLAY` to Electron and `xdotool`. This is
+intentional even when the developer has a desktop session: native keyboard,
+pointer, focus, and clipboard tests cannot interact with the real desktop or a
+concurrent test run. The harness stops Xvfb before its single run-level
+temporary-directory cleanup.
+
+`pnpm test:e2e:headed` is the deliberate exception: it borrows the current
+desktop so a developer can watch and interact with the test. Do not run that
+mode concurrently with other native-input work.
+
 ```bash
 pnpm bootstrap        # install the complete host and userland workspace graph
 pnpm dev             # build + start Electron in the source developer instance
