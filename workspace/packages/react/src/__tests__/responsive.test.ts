@@ -2,7 +2,13 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { renderHook, act } from "@testing-library/react";
-import { useIsMobile, useTouchDevice, useViewportHeight } from "../responsive";
+import {
+  getVibestudioHostPlatform,
+  resolveVibestudioHostPlatform,
+  useIsMobile,
+  useTouchDevice,
+  useViewportHeight,
+} from "../responsive";
 
 // ---------------------------------------------------------------------------
 // matchMedia mock — jsdom does not implement matchMedia
@@ -83,7 +89,28 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  Reflect.deleteProperty(globalThis, "__vibestudioHostPlatform");
   vi.restoreAllMocks();
+});
+
+describe("Vibestudio host platform", () => {
+  it("prefers the native host's explicit platform", () => {
+    expect(resolveVibestudioHostPlatform("mobile", "desktop browser")).toBe("mobile");
+  });
+
+  it("supports native hosts that predate the explicit bridge value", () => {
+    expect(resolveVibestudioHostPlatform(undefined, "Vibestudio-Mobile/3 Android")).toBe("mobile");
+  });
+
+  it("defaults ordinary hosted panels to electron chrome", () => {
+    expect(resolveVibestudioHostPlatform(undefined, "Mozilla/5.0")).toBe("electron");
+  });
+
+  it("reads the bridge-injected value used by live mobile WebViews", () => {
+    Object.assign(globalThis, { __vibestudioHostPlatform: "mobile" });
+    vi.stubGlobal("navigator", { userAgent: "Mozilla/5.0" });
+    expect(getVibestudioHostPlatform()).toBe("mobile");
+  });
 });
 
 // ---------------------------------------------------------------------------

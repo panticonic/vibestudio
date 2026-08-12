@@ -157,6 +157,11 @@ export function MainScreen() {
   const { width: viewportWidth, height: viewportHeight } = useWindowDimensions();
   const persistentNavigation =
     mobileNavigationLayout(viewportWidth, viewportHeight).kind === "tablet";
+  useEffect(() => {
+    navigation.dispatch(
+      persistentNavigation ? DrawerActions.openDrawer() : DrawerActions.closeDrawer()
+    );
+  }, [navigation, persistentNavigation]);
   const shellClient = useAtomValue(shellClientAtom);
   const panelTreeRevision = useAtomValue(panelTreeRevisionAtom);
   const setPanelTreeRevision = useSetAtom(panelTreeRevisionAtom);

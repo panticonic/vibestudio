@@ -20,6 +20,7 @@ import { EventsClient } from "@vibestudio/service-schemas/clients/eventsClient";
 import { SHELL_APPROVAL_PENDING_CHANGED_EVENT } from "@vibestudio/shell-core/approvalState";
 import { recoveryCoordinator } from "@workspace/runtime/internal/diagnostics";
 import { useStateArgs } from "@workspace/react/hooks";
+import { getVibestudioHostPlatform } from "@workspace/react/responsive";
 import { usePanelTheme, usePanelThemeConfig } from "@workspace/react/theme";
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button, Callout, Flex, Spinner, Text, Theme } from "@radix-ui/themes";
@@ -69,18 +70,6 @@ import { createAndSubscribeAgent, waitForPanelReview } from "./agentLifecycle.js
 const AgenticChat = lazy(() =>
   import("@workspace/agentic-chat/chat").then((module) => ({ default: module.AgenticChat }))
 );
-
-function detectHostPlatform(): "mobile" | "electron" {
-  const explicitPlatform = (globalThis as { __vibestudioHostPlatform?: unknown })
-    .__vibestudioHostPlatform;
-  if (explicitPlatform === "mobile") {
-    return "mobile";
-  }
-  if (typeof navigator !== "undefined" && /\bVibestudio-Mobile\//.test(navigator.userAgent)) {
-    return "mobile";
-  }
-  return "electron";
-}
 
 /** Default DO worker source and class for the AI chat agent */
 const DEFAULT_WORKER_SOURCE = "workers/agent-worker";
@@ -1331,7 +1320,7 @@ export default function ChatPanel() {
     () => ({
       name: channelName ?? "Channel",
       type: "panel" as const,
-      hostPlatform: detectHostPlatform(),
+      hostPlatform: getVibestudioHostPlatform(),
     }),
     [channelName]
   );

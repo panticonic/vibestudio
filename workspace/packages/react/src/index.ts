@@ -28,4 +28,11 @@ export {
 } from "./FormRenderer.js";
 
 // Responsive hooks
-export { useIsMobile, useTouchDevice, useViewportHeight } from "./responsive.js";
+export {
+  getVibestudioHostPlatform,
+  resolveVibestudioHostPlatform,
+  useIsMobile,
+  useTouchDevice,
+  useViewportHeight,
+  type VibestudioHostPlatform,
+} from "./responsive.js";

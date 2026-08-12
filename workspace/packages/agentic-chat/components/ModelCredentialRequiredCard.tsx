@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Box, Button, Callout, Card, Code, Flex, Spinner, Text } from "@radix-ui/themes";
+import { getVibestudioHostPlatform } from "@workspace/react/responsive";
 
 interface CredentialFlow {
   type?: string;
@@ -36,15 +37,11 @@ interface ChatApi {
   callMethod: (participantId: string, method: string, args: unknown) => Promise<unknown>;
 }
 
-function resolveBrowserHandoffPlatform(props: ModelCredentialRequiredCardProps): string | undefined {
+function resolveBrowserHandoffPlatform(
+  props: ModelCredentialRequiredCardProps
+): string | undefined {
   if (props.browserHandoffPlatform) return props.browserHandoffPlatform;
-  if ((globalThis as { __vibestudioHostPlatform?: unknown }).__vibestudioHostPlatform === "mobile") {
-    return "mobile";
-  }
-  if (typeof navigator !== "undefined" && /\bVibestudio-Mobile\//.test(navigator.userAgent)) {
-    return "mobile";
-  }
-  return undefined;
+  return getVibestudioHostPlatform() === "mobile" ? "mobile" : undefined;
 }
 
 function isResumed(value: unknown): boolean {
@@ -82,7 +79,8 @@ export default function ModelCredentialRequiredCard({
   const selectedProviderId = selectedOption.providerId || providerId;
   const selectedModelBaseUrl = selectedOption.modelBaseUrl || props.modelBaseUrl;
   const selectedFlow = selectedOption.flow || props.flow;
-  const reconnectReason = typeof props.reason === "string" && props.reason.trim() ? props.reason : "";
+  const reconnectReason =
+    typeof props.reason === "string" && props.reason.trim() ? props.reason : "";
   const diagnosticReason =
     typeof props.diagnosticReason === "string" && props.diagnosticReason.trim()
       ? props.diagnosticReason

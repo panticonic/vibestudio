@@ -4,9 +4,33 @@
  * - useIsMobile()       — viewport width < 768px (behavior branching)
  * - useTouchDevice()    — pointer: coarse (input modality branching)
  * - useViewportHeight() — reactive visual viewport height (keyboard-aware)
+ * - getVibestudioHostPlatform() — trusted outer-shell presentation owner
  */
 
 import { useSyncExternalStore } from "react";
+
+export type VibestudioHostPlatform = "mobile" | "electron";
+
+export function resolveVibestudioHostPlatform(
+  explicitPlatform: unknown,
+  userAgent: string
+): VibestudioHostPlatform {
+  if (explicitPlatform === "mobile") return "mobile";
+  if (/\bVibestudio-Mobile\//.test(userAgent)) return "mobile";
+  return "electron";
+}
+
+/**
+ * Resolve the trusted shell that owns this panel's outer chrome. The native
+ * mobile WebView injects an explicit value before userland executes; the user
+ * agent fallback preserves compatibility with older native hosts.
+ */
+export function getVibestudioHostPlatform(): VibestudioHostPlatform {
+  return resolveVibestudioHostPlatform(
+    (globalThis as { __vibestudioHostPlatform?: unknown }).__vibestudioHostPlatform,
+    typeof navigator === "undefined" ? "" : navigator.userAgent
+  );
+}
 
 // ---------------------------------------------------------------------------
 // useIsMobile
@@ -86,5 +110,9 @@ function getViewportHeightServerSnapshot(): number {
  * or when the window resizes.
  */
 export function useViewportHeight(): number {
-  return useSyncExternalStore(subscribeViewportHeight, getViewportHeightSnapshot, getViewportHeightServerSnapshot);
+  return useSyncExternalStore(
+    subscribeViewportHeight,
+    getViewportHeightSnapshot,
+    getViewportHeightServerSnapshot
+  );
 }
