@@ -19,15 +19,36 @@ import type { EntityKind, EntityRecord, EntitySource } from "./entitySpec.js";
 
 export type EntityChangeKind = "activate" | "retire" | "delete";
 
+export interface EntityCacheHydrationFence {
+  readonly revision: number;
+}
+
 export class EntityCache {
   private readonly records = new Map<string, EntityRecord>();
   private readonly bootstrapRecords = new Map<string, EntityRecord>();
+  private readonly recordRevisions = new Map<string, number>();
   private readonly listeners = new Set<(id: string, change: EntityChangeKind) => void>();
+  private revision = 0;
 
-  hydrate(records: EntityRecord[]): void {
-    this.records.clear();
-    for (const record of records) {
-      this.records.set(record.id, record);
+  beginHydration(): EntityCacheHydrationFence {
+    return { revision: this.revision };
+  }
+
+  hydrate(records: EntityRecord[], fence?: EntityCacheHydrationFence): void {
+    if (!fence) {
+      this.records.clear();
+      for (const record of records) {
+        this.records.set(record.id, record);
+      }
+    } else {
+      const snapshot = new Map(records.map((record) => [record.id, record]));
+      const ids = new Set([...this.records.keys(), ...snapshot.keys()]);
+      for (const id of ids) {
+        if ((this.recordRevisions.get(id) ?? 0) > fence.revision) continue;
+        const record = snapshot.get(id);
+        if (record) this.records.set(id, record);
+        else this.records.delete(id);
+      }
     }
     for (const record of this.bootstrapRecords.values()) {
       this.records.set(record.id, record);
@@ -41,18 +62,21 @@ export class EntityCache {
     // the stale bootstrap build identity over the authoritative record.
     this.bootstrapRecords.delete(record.id);
     this.records.set(record.id, record);
+    this.recordRevisions.set(record.id, ++this.revision);
     this.emit(record.id, "activate");
   }
 
   /** Internal: called after entity is retired (kept in cache as 'retired' for grace window). */
   _onRetire(record: EntityRecord): void {
     this.records.set(record.id, record);
+    this.recordRevisions.set(record.id, ++this.revision);
     this.emit(record.id, "retire");
   }
 
   /** Internal: called after entityGc hard-deletes a row. */
   _onDelete(id: string): void {
     if (this.records.delete(id)) {
+      this.recordRevisions.set(id, ++this.revision);
       this.emit(id, "delete");
     }
   }
@@ -116,6 +140,7 @@ export class EntityCache {
       cleanupComplete: true,
     };
     this.records.set(record.id, entry);
+    this.recordRevisions.set(record.id, ++this.revision);
     this.emit(record.id, "activate");
   }
 
@@ -143,6 +168,7 @@ export class EntityCache {
     };
     this.bootstrapRecords.set(entry.id, entry);
     this.records.set(entry.id, entry);
+    this.recordRevisions.set(entry.id, ++this.revision);
     this.emit(entry.id, "activate");
   }
 
@@ -155,6 +181,8 @@ export class EntityCache {
   _clear(): void {
     this.records.clear();
     this.bootstrapRecords.clear();
+    this.recordRevisions.clear();
+    this.revision = 0;
   }
 
   private emit(id: string, change: EntityChangeKind): void {

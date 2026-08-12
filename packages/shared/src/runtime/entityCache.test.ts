@@ -120,6 +120,26 @@ describe("EntityCache", () => {
       expect(cache.resolve("panel:new")).not.toBeNull();
     });
 
+    it("preserves mutations committed after a hydration fence", () => {
+      const staleActive = makeRecord({ id: "panel:retired-after-read" });
+      cache._onActivate(staleActive);
+      const fence = cache.beginHydration();
+
+      const activated = makeRecord({ id: "panel:activated-after-read" });
+      cache._onActivate(activated);
+      cache._onRetire({
+        ...staleActive,
+        status: "retired",
+        retiredAt: Date.now(),
+        cleanupComplete: false,
+      });
+
+      cache.hydrate([staleActive], fence);
+
+      expect(cache.resolveActive(activated.id)).toEqual(activated);
+      expect(cache.resolve(staleActive.id)?.status).toBe("retired");
+    });
+
     it("does not restore a stale bootstrap entity over its durable activation", () => {
       const bootstrap = makeRecord({
         id: "do:workspace-source",

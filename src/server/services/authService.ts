@@ -382,7 +382,7 @@ export function createAuthService(deps: {
     authority: { principals: ["host", "user"] },
     methods: authMethods,
     handler: defineServiceHandler("auth", authMethods, {
-      grantConnection: (ctx, [principalId]) => {
+      grantConnection: async (ctx, [principalId]) => {
         capabilityAuthorizer.require(ctx.caller, "panel-hosting");
         if (!deps.connectionGrants) throw new Error("Connection grants are not configured");
         // Boundary defense at the RPC ingress: a slot id ("panel:tree/…") names a
@@ -396,6 +396,11 @@ export function createAuthService(deps: {
               `runtime principal (the panel ENTITY id "panel:nav-…"), not a tree slot.`
           );
         }
+        // EntityCache is a hot projection, not identity authority. Startup
+        // hydration and a concurrent activation can briefly expose a missing
+        // projection; resolveRuntimeEntity reads through the durable store and
+        // repairs that cache entry before ConnectionGrantService validates it.
+        await deps.resolveRuntimeEntity?.(principalId);
         return deps.connectionGrants.grant(principalId, ctx.caller.runtime.id);
       },
       getConnectionInfo: (ctx) => ({

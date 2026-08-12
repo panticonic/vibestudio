@@ -6375,7 +6375,7 @@ async function main() {
           retireMobileAppPrincipal: (deviceId) => {
             appHostForGateway?.reactNative.retirePrincipal(deviceId);
           },
-          resolveRuntimeEntity: (id) => getEntityStore().resolveRecord(id),
+          resolveRuntimeEntity: (id) => getEntityStore().resolveActiveRecord(id),
         }),
         routeRegistry
       )

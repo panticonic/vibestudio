@@ -275,6 +275,36 @@ describe("auth service connection grants", () => {
     connectionGrants.stop();
   });
 
+  it("repairs a missing active-entity projection before issuing a grant", async () => {
+    const entityCache = new EntityCache();
+    const connectionGrants = new ConnectionGrantService({ entityCache });
+    const active = makePanelRecord("panel:durable");
+    const resolveRuntimeEntity = vi.fn(async (id: string) => {
+      if (id !== active.id) return null;
+      entityCache._onActivate(active);
+      return active;
+    });
+    const service = createAuthService({
+      tokenManager: new TokenManager(),
+      deviceAuthStore: makeAuthStore(),
+      getServerBootId: () => "boot_test",
+      getWorkspaceId: () => "workspace_test",
+      getConnectionInfo,
+      connectionGrants,
+      resolveRuntimeEntity,
+    });
+
+    const granted = (await service.definition.handler(
+      { caller: createVerifiedCaller("shell:test", "shell") },
+      "grantConnection",
+      [active.id]
+    )) as { token: string };
+
+    expect(resolveRuntimeEntity).toHaveBeenCalledWith(active.id);
+    expect(connectionGrants.redeem(granted.token)?.principalId).toBe(active.id);
+    connectionGrants.stop();
+  });
+
   it("allows panel-hosting app callers to issue panel connection grants", async () => {
     const entityCache = new EntityCache();
     entityCache._onActivate(makePanelRecord("panel:mobile"));

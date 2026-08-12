@@ -5,7 +5,7 @@ import { createTestDO } from "@vibestudio/durable/test-utils";
 import { WorkspaceDO } from "@panticonic/builtin/workspace-state";
 import { WorkspaceDOTestable } from "@panticonic/builtin/workspace-state/test-fixture";
 import { EntityCache } from "@vibestudio/shared/runtime/entityCache";
-import { canonicalEntityId } from "@vibestudio/shared/runtime/entitySpec";
+import { canonicalEntityId, type EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
 import { runStartupReconciliation } from "./startupReconciliation.js";
 
 describe("runStartupReconciliation", () => {
@@ -100,6 +100,34 @@ describe("runStartupReconciliation", () => {
     expect(result.gcDeletedIds).not.toContain(activeId);
 
     expect(warnings).toEqual([]);
+  });
+
+  it("does not erase an activation committed while the active snapshot is in flight", async () => {
+    const entityCache = new EntityCache();
+    let resolveSnapshot!: (records: EntityRecord[]) => void;
+    const snapshot = new Promise<EntityRecord[]>((resolve) => {
+      resolveSnapshot = resolve;
+    });
+    const dispatch = <T>(method: string, ...args: unknown[]): Promise<T> => {
+      if (method === "entityListActive") return snapshot as Promise<T>;
+      return dispatchWorkspaceDO<T>(method, ...args);
+    };
+
+    const reconciliation = runStartupReconciliation({
+      dispatchWorkspaceDO: dispatch,
+      entityCache,
+    });
+    const concurrent = workspaceDO.entityActivate({
+      kind: "panel",
+      source: { repoPath: "panels/concurrent", effectiveVersion: "v1" },
+      contextId: "ctx-concurrent",
+      key: "nav-concurrent",
+    });
+    entityCache._onActivate(concurrent);
+    resolveSnapshot([]);
+    await reconciliation;
+
+    expect(entityCache.resolveActive(concurrent.id)).toEqual(concurrent);
   });
 
   it("returns warnings (does not throw) when WorkspaceDO methods fail", async () => {
