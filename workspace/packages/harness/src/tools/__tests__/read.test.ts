@@ -303,6 +303,31 @@ describe("createReadTool", () => {
     expect(result.content[0]).toMatchObject({ type: "text", text: "hello\nworld" });
   });
 
+  it("advertises all read locations through one provider-friendly object schema", () => {
+    const tool = createReadTool(CWD, new StubFs({ files: {} }));
+    const parameters = tool.parameters as Record<string, unknown>;
+    const digest = "a".repeat(64);
+
+    expect(parameters["type"]).toBe("object");
+    expect(parameters).not.toHaveProperty("allOf");
+    expect(parameters).not.toHaveProperty("anyOf");
+    expect(Value.Check(tool.parameters, { path: "README.md" })).toBe(true);
+    expect(Value.Check(tool.parameters, { target: "file:README.md", kind: "file" })).toBe(true);
+    expect(
+      Value.Check(tool.parameters, {
+        resource: {
+          protocol: "agent-tool-artifact.v1",
+          uri: `artifact:${digest}`,
+          digest,
+          byteLength: 2,
+          mediaType: "application/json",
+          encoding: "json",
+          description: "Tool result",
+        },
+      })
+    ).toBe(true);
+  });
+
   it("accepts file resource references returned by discovery tools", async () => {
     const fs = new StubFs({ files: { [`${CWD}/hello.txt`]: "hello\nworld" } });
     const tool = createReadTool(CWD, fs);
@@ -572,7 +597,7 @@ describe("createReadTool", () => {
       call: vi.fn().mockImplementation((_target: string, method: string, args: unknown[]) => {
         if (method === "extensions.streamingMethods") return Promise.resolve([]);
         const [, extensionMethod, extensionArgs] = args;
-        expect(extensionArgs?.[0]).toEqual({
+        expect(Array.isArray(extensionArgs) ? extensionArgs[0] : undefined).toEqual({
           __bin: true,
           data: Buffer.from(pngBytes).toString("base64"),
         });

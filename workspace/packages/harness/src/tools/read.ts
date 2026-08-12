@@ -45,19 +45,19 @@ import {
   createWorkspaceReadReceipt,
   type WorkspaceReadReceipt,
 } from "./workspace-read-receipt.js";
-const readLocationSchema = Type.Union([
-  Type.Object({
-    path: Type.String({ description: "Path to the file to read (relative or absolute)" }),
-  }),
-  Type.Object({
-    target: Type.String({
+const readSchema = Type.Object({
+  path: Type.Optional(
+    Type.String({ description: "Path to the file to read (relative or absolute)" })
+  ),
+  target: Type.Optional(
+    Type.String({
       description:
         "File resource reference to read, normally a file:<path> value returned by another tool.",
-    }),
-    kind: Type.Optional(Type.Literal("file")),
-  }),
-  Type.Object({
-    resource: Type.Object(
+    })
+  ),
+  kind: Type.Optional(Type.Literal("file")),
+  resource: Type.Optional(
+    Type.Object(
       {
         protocol: Type.Literal(AGENT_TOOL_ARTIFACT_PROTOCOL),
         uri: Type.String({ pattern: "^artifact:[0-9a-f]{64}$" }),
@@ -68,11 +68,8 @@ const readLocationSchema = Type.Union([
         description: Type.String(),
       },
       { additionalProperties: false }
-    ),
-  }),
-]);
-
-const readOptionsSchema = Type.Object({
+    )
+  ),
   encoding: Type.Optional(
     Type.Union([Type.Literal("text"), Type.Literal("base64")], {
       description:
@@ -105,7 +102,6 @@ const readOptionsSchema = Type.Object({
     })
   ),
 });
-const readSchema = Type.Intersect([readLocationSchema, readOptionsSchema]);
 export type ReadToolInput = Static<typeof readSchema>;
 export interface ReadToolDetails {
   truncation?: TruncationResult;
@@ -363,7 +359,7 @@ export function createReadTool(
     name: "read",
     label: "read",
     executionMode: "parallel",
-    description: `Read a file as bounded text, lossless base64, or a native image attachment. Text is truncated to ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB; continue with offset. Use encoding="base64" plus byteOffset/byteLimit for arbitrary binary data; continue with the returned next byte offset. Images (jpg, png, gif, webp) default to attachments.`,
+    description: `Read a file as bounded text, lossless base64, or a native image attachment. Supply exactly one location: path, a file target returned by discovery, or an artifact resource. Text is truncated to ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB; continue with offset. Use encoding="base64" plus byteOffset/byteLimit for arbitrary binary data; continue with the returned next byte offset. Images (jpg, png, gif, webp) default to attachments.`,
     parameters: readSchema,
     execute: async (_toolCallId, input, signal, _onUpdate) => {
       const resource =
