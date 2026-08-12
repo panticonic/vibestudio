@@ -146,8 +146,10 @@ describe("panel-tree invariant", () => {
 
   it("seeds a real vague-reference target, observes same-panel navigation, then owns cleanup", async () => {
     const visible = tree();
+    const lifecycle: string[] = [];
     let renderedUrl = "https://example.com/";
     const archive = vi.fn(async () => {
+      lifecycle.push("archive-fixture");
       visible.delete("seeded-browser");
     });
     const handle = {
@@ -199,13 +201,18 @@ describe("panel-tree invariant", () => {
       complete: true,
     };
     const session = {
+      agentContextId: "ctx-panel-goal",
+      ownsAgentContext: true,
       messages: [completion],
       snapshot: () => ({}),
-      close: vi.fn(async () => undefined),
+      close: vi.fn(async () => {
+        lifecycle.push("close-session");
+      }),
     };
     const context = {
       runner: {
-        openPanelClient: vi.fn(async () => {
+        openPanelClient: vi.fn(async (_source: string, options: { contextId?: string }) => {
+          lifecycle.push(`open-fixture:${options.contextId ?? "missing-context"}`);
           visible.set("seeded-browser", {
             id: "seeded-browser",
             parentId: null,
@@ -214,10 +221,14 @@ describe("panel-tree invariant", () => {
           return handle;
         }),
         panelTreeClient: panelTree,
-        spawn: vi.fn(async () => session),
+        spawn: vi.fn(async () => {
+          lifecycle.push("spawn-session");
+          return session;
+        }),
       },
       remainingTimeMs: () => 1_000,
       sendAndWait: vi.fn(async () => {
+        lifecycle.push("send-prompt");
         expect(visible.has("seeded-browser")).toBe(true);
         renderedUrl = "https://example.org/";
         return completion;
@@ -248,8 +259,61 @@ describe("panel-tree invariant", () => {
       targetPreserved: true,
       reachedExpectedDestination: true,
     });
+    expect(execution.diagnostics?.["panelTreeInvariant"]).toMatchObject({
+      beforeIds: ["seeded-browser"],
+      afterTurnIds: ["seeded-browser"],
+      createdIds: [],
+      removedPreexistingIds: [],
+    });
     expect(archive).toHaveBeenCalledOnce();
     expect(visible.size).toBe(0);
+    expect(lifecycle).toEqual([
+      "spawn-session",
+      "open-fixture:ctx-panel-goal",
+      "send-prompt",
+      "archive-fixture",
+      "close-session",
+    ]);
+    expect(context.runner.openPanelClient).toHaveBeenCalledWith("https://example.com/", {
+      parentId: null,
+      focus: false,
+      contextId: "ctx-panel-goal",
+    });
+  });
+
+  it("fails closed and still closes when a spawned session does not own its context", async () => {
+    const session = {
+      agentContextId: "ctx-shared",
+      ownsAgentContext: false,
+      messages: [],
+      snapshot: () => ({}),
+      close: vi.fn(async () => undefined),
+    };
+    const context = {
+      runner: {
+        openPanelClient: vi.fn(),
+        panelTreeClient: {},
+        spawn: vi.fn(async () => session),
+      },
+      remainingTimeMs: () => 1_000,
+      sendAndWait: vi.fn(),
+    } as unknown as TestOrchestrationContext;
+
+    const execution = await orchestrateSeededPanelGoal(
+      context,
+      "Where did that browser view end up?",
+      "resolve a vague panel reference",
+      "https://example.com/",
+      "https://example.org/",
+      {} as never
+    );
+
+    expect(execution.error).toContain(
+      "Spawned panel-goal session did not expose an owned isolated agent context"
+    );
+    expect(context.runner.openPanelClient).not.toHaveBeenCalled();
+    expect(context.sendAndWait).not.toHaveBeenCalled();
+    expect(session.close).toHaveBeenCalledOnce();
   });
 
   it("keeps cleanup instructions out of every panel-automation goal", () => {

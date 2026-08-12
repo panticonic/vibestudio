@@ -1,5 +1,5 @@
 import type { ChatMessage } from "@workspace/agentic-core";
-import type { SessionSnapshot } from "@workspace/agentic-session";
+import type { HeadlessSession, SessionSnapshot } from "@workspace/agentic-session";
 import type { TestExecutionResult, TestOrchestrationContext } from "../types.js";
 
 const PAGE_SIZE = 100;
@@ -114,22 +114,17 @@ export function createdPanelRoots(
     );
 }
 
-/**
- * Run an ordinary agent goal while enforcing panel ownership outside its prompt.
- * The post-turn snapshot is evidence; harness cleanup happens only after that
- * evidence is fixed, so cleanup cannot turn a leak into a pass.
- */
-export async function orchestratePanelGoal(
+async function runPanelGoalWithSession(
   context: TestOrchestrationContext,
   prompt: string,
   phase: string,
-  tree: TreeReader = context.runner.panelTreeClient
+  session: HeadlessSession,
+  before: ReadonlyMap<string, VisiblePanelNode>,
+  tree: TreeReader,
+  startedAt: number
 ): Promise<TestExecutionResult> {
-  const startedAt = Date.now();
   const cleanupErrors: string[] = [];
   const failures: string[] = [];
-  const before = await snapshotVisiblePanelTree(tree);
-  const session = await context.runner.spawn();
 
   try {
     await context.sendAndWait(session, prompt, phase);
@@ -202,18 +197,45 @@ export async function orchestratePanelGoal(
     },
   };
 
+  for (const cleanupError of cleanupErrors) appendCleanupError(execution, cleanupError);
+  return execution;
+}
+
+async function closePanelGoalSession(
+  session: HeadlessSession,
+  execution: TestExecutionResult
+): Promise<void> {
   try {
     await session.close();
   } catch (error) {
-    cleanupErrors.push(`close headless session: ${errorMessage(error)}`);
+    appendCleanupError(execution, `close headless session: ${errorMessage(error)}`);
   }
-  if (cleanupErrors.length > 0) {
-    execution.cleanupErrors = cleanupErrors;
-    execution.error = [execution.error, `Harness cleanup failed: ${cleanupErrors.join("; ")}`]
-      .filter(Boolean)
-      .join("; ");
-  }
+}
 
+/**
+ * Run an ordinary agent goal while enforcing panel ownership outside its prompt.
+ * The post-turn snapshot is evidence; harness cleanup happens only after that
+ * evidence is fixed, so cleanup cannot turn a leak into a pass.
+ */
+export async function orchestratePanelGoal(
+  context: TestOrchestrationContext,
+  prompt: string,
+  phase: string,
+  tree: TreeReader = context.runner.panelTreeClient
+): Promise<TestExecutionResult> {
+  const startedAt = Date.now();
+  const before = await snapshotVisiblePanelTree(tree);
+  const session = await context.runner.spawn();
+  const execution = await runPanelGoalWithSession(
+    context,
+    prompt,
+    phase,
+    session,
+    before,
+    tree,
+    startedAt
+  );
+  await closePanelGoalSession(session, execution);
   return execution;
 }
 
@@ -243,18 +265,34 @@ export async function orchestrateSeededPanelGoal(
   const startedAt = Date.now();
   let fixture: Awaited<ReturnType<TestOrchestrationContext["runner"]["openPanelClient"]>> | null =
     null;
+  let session: HeadlessSession | null = null;
   let execution: TestExecutionResult | null = null;
   let fixtureStillVisible = false;
 
   try {
+    session = await context.runner.spawn();
+    const agentContextId = session.agentContextId;
+    if (!session.ownsAgentContext || !agentContextId) {
+      throw new Error("Spawned panel-goal session did not expose an owned isolated agent context");
+    }
     fixture = await context.runner.openPanelClient(initialSource, {
       parentId: null,
       focus: false,
+      contextId: agentContextId,
     });
     const initialObservation = await fixture.observe();
     const initialPath = await tree.path(fixture.id);
+    const before = await snapshotVisiblePanelTree(tree);
 
-    execution = await orchestratePanelGoal(context, prompt, phase, tree);
+    execution = await runPanelGoalWithSession(
+      context,
+      prompt,
+      phase,
+      session,
+      before,
+      tree,
+      startedAt
+    );
 
     let finalObservation: Awaited<ReturnType<typeof fixture.observe>> | null = null;
     let finalPath: Awaited<ReturnType<FixtureTreeReader["path"]>> = null;
@@ -312,6 +350,10 @@ export async function orchestrateSeededPanelGoal(
         execution ??= { messages: [], duration: Date.now() - startedAt };
         appendCleanupError(execution, `archive seeded panel ${fixture.id}: ${errorMessage(error)}`);
       }
+    }
+    if (session) {
+      execution ??= { messages: [], duration: Date.now() - startedAt };
+      await closePanelGoalSession(session, execution);
     }
   }
 

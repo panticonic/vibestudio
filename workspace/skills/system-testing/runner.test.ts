@@ -23,6 +23,7 @@ const mocks = vi.hoisted(() => ({
     })),
   },
   gad: {},
+  openPanel: vi.fn(),
   panelTree: {},
   blobstore: { putText: vi.fn() },
   vcs: {
@@ -44,6 +45,7 @@ vi.mock("@workspace/agentic-session", () => ({
 vi.mock("@workspace/runtime", () => ({
   gad: mocks.gad,
   blobstore: mocks.blobstore,
+  openPanel: mocks.openPanel,
   panelTree: mocks.panelTree,
   rpc: mocks.rpc,
   vcs: mocks.vcs,
