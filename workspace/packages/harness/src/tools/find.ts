@@ -19,6 +19,7 @@ import { resolveToCwd } from "./path-utils.js";
 import { DEFAULT_MAX_BYTES, formatSize, truncateHead, type TruncationResult } from "./truncate.js";
 import { globToRegex } from "./grep.js";
 import { walkSearchFiles } from "./search-walk.js";
+import type { AgentFileVisibility } from "./agent-file-visibility.js";
 
 const findSchema = Type.Object({
   pattern: Type.Optional(
@@ -61,6 +62,7 @@ export interface FindToolDetails {
 
 export interface FindToolDeps {
   rpc?: RpcCaller;
+  visibility?: AgentFileVisibility;
 }
 
 const DEFAULT_LIMIT = 1000;
@@ -95,6 +97,9 @@ export function createFindTool(
 
       const searchPath = resolveToCwd(searchDir || ".", cwd);
       const effectiveLimit = limit ?? DEFAULT_LIMIT;
+      if (deps?.visibility && (await deps.visibility.isHidden(searchPath))) {
+        return renderMatches([], effectiveLimit, false, deps.rpc ? "fs-service" : "runtime-fs");
+      }
 
       if (deps?.rpc) {
         let page: { files: string[]; truncated: boolean; nextCursor?: string };
@@ -130,7 +135,12 @@ export function createFindTool(
             details: { engine: "fs-service", missingSearchPath: displayPath },
           };
         }
-        const matches = page.files.map((file) =>
+        const visibleFiles = deps.visibility
+          ? await deps.visibility.filterVisible(page.files, (file) =>
+              path.isAbsolute(file) ? file : path.resolve(searchPath, file)
+            )
+          : page.files;
+        const matches = visibleFiles.map((file) =>
           path.relative(searchPath, file).replace(/\\/g, "/")
         );
         return renderMatches(matches, effectiveLimit, page.truncated, "fs-service");
@@ -164,7 +174,11 @@ export function createFindTool(
       let resultLimitReached = false;
       let cursorSeen = cursor === undefined;
 
-      for await (const full of walkSearchFiles(fs, searchPath, { includeIgnored, signal })) {
+      for await (const full of walkSearchFiles(fs, searchPath, {
+        includeIgnored,
+        signal,
+        visibility: deps?.visibility,
+      })) {
         const rel = path.relative(searchPath, full).replace(/\\/g, "/");
         const basename = path.basename(full);
         if (regex.test(rel) || basenameRegex?.test(basename)) {

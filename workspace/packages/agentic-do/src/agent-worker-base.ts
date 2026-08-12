@@ -277,10 +277,12 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
       createVerifyTool,
       createWebTools,
       createToolVcs,
+      createAgentFileVisibility,
     } = await import("@workspace/harness/standard-tools");
     const toolRpc = execution?.rpc ?? this.rpc;
     const fs = createRpcFs(toolRpc as never);
     const cwd = "/";
+    const visibility = createAgentFileVisibility(cwd, fs);
     // Reads come from the materialized working tree (fs RPC, scoped to the
     // caller's context); writes go through the canonical semantic VCS so the
     // exact working state is authoritative and disk is its projection.
@@ -316,15 +318,16 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
       createReadTool(cwd, fs, {
         rpc: toolRpc,
         provenance: { vcs, context: { contextId } },
+        visibility,
       }),
       createProvenanceTool(cwd, {
         vcs,
         contextId,
         session: { logId: session.logId, head: session.head },
       }),
-      createLsTool(cwd, fs),
-      createGrepTool(cwd, fs, { rpc: toolRpc }),
-      createFindTool(cwd, fs, { rpc: toolRpc }),
+      createLsTool(cwd, fs, visibility),
+      createGrepTool(cwd, fs, { rpc: toolRpc, visibility }),
+      createFindTool(cwd, fs, { rpc: toolRpc, visibility }),
       createApplyPatchTool(cwd, vcs, mutationContext),
       createMoveFileTool(cwd, vcs, mutationContext, fs),
       createCopyFileTool(cwd, vcs, mutationContext, fs),

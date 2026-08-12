@@ -2,6 +2,7 @@ import ignore, { type Ignore } from "ignore";
 import path from "node:path";
 import { Buffer } from "node:buffer";
 import type { Dirent, RuntimeFs } from "./runtime-fs.js";
+import type { AgentFileVisibility } from "./agent-file-visibility.js";
 
 const HARD_SKIP_DIRECTORIES = new Set([".git", ".gad", "node_modules"]);
 
@@ -58,7 +59,11 @@ async function addIgnoreFile(
 export async function* walkSearchFiles(
   fs: RuntimeFs,
   root: string,
-  options: { includeIgnored?: boolean; signal?: AbortSignal } = {}
+  options: {
+    includeIgnored?: boolean;
+    signal?: AbortSignal;
+    visibility?: AgentFileVisibility;
+  } = {}
 ): AsyncGenerator<string> {
   const matcher = ignore().add([".git/", ".gad/", "node_modules/"]);
 
@@ -74,6 +79,7 @@ export async function* walkSearchFiles(
       throwIfAborted(options.signal);
       const absolute = path.join(directory, entry.name);
       const relative = path.relative(root, absolute).replace(/\\/gu, "/");
+      if (options.visibility && (await options.visibility.isHidden(absolute))) continue;
       if (entry.isDirectory()) {
         if (HARD_SKIP_DIRECTORIES.has(entry.name)) continue;
         if (!options.includeIgnored && matcher.ignores(`${relative}/`)) continue;

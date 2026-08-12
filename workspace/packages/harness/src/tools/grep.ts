@@ -31,6 +31,7 @@ import {
   type TruncationResult,
 } from "./truncate.js";
 import { walkSearchFiles } from "./search-walk.js";
+import type { AgentFileVisibility } from "./agent-file-visibility.js";
 
 // ---------------------------------------------------------------------------
 // RE2 loader — preferred linear-time matcher. Falls back to `RegExp` when
@@ -196,6 +197,7 @@ export interface GrepToolDetails {
 
 export interface GrepToolDeps {
   rpc?: RpcCaller;
+  visibility?: AgentFileVisibility;
 }
 
 const DEFAULT_LIMIT = 100;
@@ -248,6 +250,9 @@ export function createGrepTool(
           buildRegex(pattern, { literal: false, ignoreCase: !!ignoreCase });
         }
         const searchPath = resolveToCwd(searchDir || ".", cwd);
+        if (deps.visibility && (await deps.visibility.isHidden(searchPath))) {
+          return { content: [{ type: "text", text: "No matches found" }], details: undefined };
+        }
         const servicePattern = literalSearch ? escapeRegex(pattern) : pattern;
         const result = await deps.rpc.call<{
           matches: Array<{
@@ -275,6 +280,11 @@ export function createGrepTool(
           ],
           signal ? { signal } : undefined
         );
+        const visibleMatches = deps.visibility
+          ? await deps.visibility.filterVisible(result.matches, (match) =>
+              path.isAbsolute(match.file) ? match.file : path.resolve(searchPath, match.file)
+            )
+          : result.matches;
         let linesTruncated = false;
         const formatServicePath = (file: string): string => {
           if (!path.isAbsolute(file)) return file.replace(/\\/gu, "/");
@@ -289,7 +299,7 @@ export function createGrepTool(
           return value.text;
         };
         const lines: string[] = [];
-        for (const match of result.matches) {
+        for (const match of visibleMatches) {
           const displayPath = formatServicePath(match.file);
           const beforeStart = match.lineNumber - match.before.length;
           match.before.forEach((line, index) =>
@@ -330,6 +340,9 @@ export function createGrepTool(
       }
 
       const searchPath = resolveToCwd(searchDir || ".", cwd);
+      if (deps?.visibility && (await deps.visibility.isHidden(searchPath))) {
+        return { content: [{ type: "text", text: "No matches found" }], details: undefined };
+      }
       const contextValue = context && context > 0 ? context : 0;
       const effectiveLimit = Math.max(1, limit ?? DEFAULT_LIMIT);
 
@@ -382,7 +395,11 @@ export function createGrepTool(
       // workspace into the read phase.
       const files: string[] = [];
       if (isDirectory) {
-        for await (const file of walkSearchFiles(fs, searchPath, { includeIgnored, signal })) {
+        for await (const file of walkSearchFiles(fs, searchPath, {
+          includeIgnored,
+          signal,
+          visibility: deps?.visibility,
+        })) {
           if (shouldSearchFile(file)) files.push(file);
         }
       } else {

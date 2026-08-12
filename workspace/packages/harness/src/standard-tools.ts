@@ -24,5 +24,6 @@ export {
   createWorkspaceServiceTool,
   createVerifyTool,
   createToolVcs,
+  createAgentFileVisibility,
 } from "./tools/index.js";
 export { createWebTools } from "./web/index.js";

@@ -20,6 +20,7 @@ import { splitRepoPath } from "@vibestudio/shared/runtime/entitySpec";
 import type { VcsReadMemoryResult } from "@vibestudio/service-schemas/vcs";
 import { toVcsPath, toolContextId, type ToolVcs, type ToolWorkspaceContext } from "./tool-vcs.js";
 import { renderReadMemoryBlock } from "./read-memory.js";
+import type { AgentFileVisibility } from "./agent-file-visibility.js";
 import {
   DEFAULT_MAX_BYTES,
   DEFAULT_MAX_LINES,
@@ -177,6 +178,7 @@ export interface ReadToolDeps {
     vcs: Pick<ToolVcs, "readMemory">;
     context: ToolWorkspaceContext;
   };
+  visibility?: AgentFileVisibility;
 }
 export function createReadTool(
   cwd: string,
@@ -343,6 +345,12 @@ export function createReadTool(
         throw new Error("Operation aborted");
       }
       const absolutePath = resolveToCwd(path, cwd);
+      if (deps?.visibility && (await deps.visibility.isHidden(absolutePath))) {
+        return {
+          content: [{ type: "text", text: `Path not found: ${path}` }],
+          details: { path, missing: true, suggestions: [] },
+        };
+      }
       if (input.encoding === "base64") {
         if (offset !== undefined || limit !== undefined) {
           throw new Error(

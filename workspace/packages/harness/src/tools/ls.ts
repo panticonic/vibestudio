@@ -13,6 +13,7 @@ import type { RuntimeFs, Dirent } from "./runtime-fs.js";
 import { AgentToolFailureError, agentToolFailureFromUnknown } from "@workspace/agentic-protocol";
 import { resolveToCwd } from "./path-utils.js";
 import { DEFAULT_MAX_BYTES, formatSize, truncateHead, type TruncationResult } from "./truncate.js";
+import type { AgentFileVisibility } from "./agent-file-visibility.js";
 
 const lsSchema = Type.Object({
   path: Type.Optional(
@@ -37,7 +38,8 @@ const DEFAULT_LIMIT = 500;
 
 export function createLsTool(
   cwd: string,
-  fs: RuntimeFs
+  fs: RuntimeFs,
+  visibility?: AgentFileVisibility
 ): AgentTool<typeof lsSchema, LsToolDetails | undefined> {
   return {
     name: "ls",
@@ -52,6 +54,13 @@ export function createLsTool(
 
       const dirPath = resolveToCwd(rawPath || ".", cwd);
       const effectiveLimit = limit ?? DEFAULT_LIMIT;
+
+      if (visibility && (await visibility.isHidden(dirPath))) {
+        return {
+          content: [{ type: "text", text: `Path not found: ${dirPath}` }],
+          details: { diagnostic: "not-found", path: dirPath },
+        };
+      }
 
       let stat;
       try {
@@ -104,6 +113,11 @@ export function createLsTool(
           e
         );
       }
+      if (visibility) {
+        entries = await visibility.filterVisible(entries, (entry) =>
+          pathForEntry(dirPath, entry.name)
+        );
+      }
 
       // Sort case-insensitively to match upstream.
       entries.sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()));
@@ -152,4 +166,8 @@ export function createLsTool(
       };
     },
   };
+}
+
+function pathForEntry(directory: string, entry: string): string {
+  return directory.endsWith("/") ? `${directory}${entry}` : `${directory}/${entry}`;
 }

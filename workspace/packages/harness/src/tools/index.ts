@@ -61,6 +61,9 @@ export type { FindToolInput, FindToolDetails } from "./find.js";
 export { createLsTool } from "./ls.js";
 export type { LsToolInput, LsToolDetails } from "./ls.js";
 
+export { createAgentFileVisibility } from "./agent-file-visibility.js";
+export type { AgentFileVisibility } from "./agent-file-visibility.js";
+
 export { createSuspendTurnTool } from "./suspend-turn.js";
 export type { SuspendTurnInput, SuspendTurnDetails } from "./suspend-turn.js";
 
