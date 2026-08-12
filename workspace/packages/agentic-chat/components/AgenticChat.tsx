@@ -82,6 +82,8 @@ export interface AgenticChatProps {
   renderInlineGroup?: ChatMessageAreaProps["renderInlineGroup"];
   /** Override individual invocation rendering while retaining the stock group. */
   renderInvocation?: ChatMessageAreaProps["renderInvocation"];
+  /** Product-specific prompt shown when the composer is empty. */
+  composerPlaceholder?: string;
 }
 
 /**
@@ -116,6 +118,7 @@ export const AgenticChat = forwardRef<AgenticChatHandle, AgenticChatProps>(funct
     renderMessage,
     renderInlineGroup,
     renderInvocation,
+    composerPlaceholder,
   },
   ref
 ) {
@@ -179,6 +182,7 @@ export const AgenticChat = forwardRef<AgenticChatHandle, AgenticChatProps>(funct
             renderMessage={renderMessage}
             renderInlineGroup={renderInlineGroup}
             renderInvocation={renderInvocation}
+            composerPlaceholder={composerPlaceholder}
           />
         </ChatProvider>
       </Theme>

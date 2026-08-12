@@ -32,7 +32,11 @@ vi.mock("./LazyChatFeedbackArea", () => ({
 vi.mock("./Outbox", () => ({ Outbox: () => null }));
 vi.mock("./PendingDeliveryQueue", () => ({ PendingDeliveryQueue: () => null }));
 vi.mock("./ChatDebugConsole", () => ({ ChatDebugConsole: () => null }));
-vi.mock("./ChatInput", () => ({ ChatInput: () => <div data-testid="composer" /> }));
+vi.mock("./ChatInput", () => ({
+  ChatInput: (props: { placeholder?: string }) => (
+    <div data-testid="composer" data-placeholder={props.placeholder} />
+  ),
+}));
 
 describe("ChatLayout sizing", () => {
   const fullFeatures = {
@@ -67,6 +71,7 @@ describe("ChatLayout sizing", () => {
         renderMessage={renderMessage}
         renderInlineGroup={renderInlineGroup}
         renderInvocation={renderInvocation}
+        composerPlaceholder="Issue a bridge directive…"
       />
     );
 
@@ -80,5 +85,6 @@ describe("ChatLayout sizing", () => {
         renderInvocation: "true",
       }),
     });
+    expect(getByTestId("composer").dataset["placeholder"]).toBe("Issue a bridge directive…");
   });
 });

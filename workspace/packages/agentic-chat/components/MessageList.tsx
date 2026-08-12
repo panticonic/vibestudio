@@ -239,10 +239,14 @@ export interface MessageListProps {
   onReloadPanel?: (panelId: string) => void;
   onReply?: (messageId: string) => void;
   mdxActions?: MdxActionHandlers;
-  /** Override default message card rendering */
-  renderMessage?: (msg: ChatMessage, senderInfo: SenderInfo) => React.ReactNode;
-  /** Override default inline group rendering */
-  renderInlineGroup?: (items: InlineItem[]) => React.ReactNode;
+  /** Replace, wrap, or elide a message using its complete stock renderer. */
+  renderMessage?: (
+    msg: ChatMessage,
+    senderInfo: SenderInfo,
+    defaultContent: React.ReactNode
+  ) => React.ReactNode;
+  /** Replace, wrap, or elide an inline group using its complete stock renderer. */
+  renderInlineGroup?: (items: InlineItem[], defaultContent: React.ReactNode) => React.ReactNode;
   /** Override individual invocation rendering while retaining the stock group. */
   renderInvocation?: InvocationRenderer;
   /** Override the empty-transcript placeholder (e.g. while an agent is launching). */
@@ -620,24 +624,27 @@ export const MessageList = React.memo(function MessageList({
       if (!item) return null;
 
       if (item.type === "inline-group") {
+        const defaultContent = (
+          <InlineGroup
+            key={item.key}
+            items={item.inlineItems}
+            messageTypeComponents={messageTypeComponents}
+            chat={chat}
+            onInterrupt={handleTypingInterrupt}
+            onCancelInvocation={onCancelInvocation}
+            renderInvocation={renderInvocation}
+          />
+        );
         if (customRenderInlineGroup) {
           return (
             <Flex className="message-item" direction="column">
-              {customRenderInlineGroup(item.inlineItems)}
+              {customRenderInlineGroup(item.inlineItems, defaultContent)}
             </Flex>
           );
         }
         return (
           <Flex className="message-item" direction="column">
-            <InlineGroup
-              key={item.key}
-              items={item.inlineItems}
-              messageTypeComponents={messageTypeComponents}
-              chat={chat}
-              onInterrupt={handleTypingInterrupt}
-              onCancelInvocation={onCancelInvocation}
-              renderInvocation={renderInvocation}
-            />
+            {defaultContent}
           </Flex>
         );
       }
@@ -665,53 +672,44 @@ export const MessageList = React.memo(function MessageList({
             }
           : undefined;
 
-      if (customRenderMessage) {
-        return (
-          <Flex className="message-item" direction="column">
-            {customRenderMessage(msg, sender as SenderInfo)}
-          </Flex>
-        );
-      }
-
       // Subagent runs bypass the grouping/MessageCard path for a richer card.
-      if (msg.task?.subagent) {
-        return (
-          <Flex className="message-item" direction="column">
-            <SubagentRunCard msg={msg} />
-          </Flex>
-        );
-      }
-
       // User messages are published as `message.completed`, so streaming is
       // determined solely by the canonical completion flag.
       const isStreaming = msg.kind === "message" && !msg.complete;
+      const defaultContent = msg.task?.subagent ? (
+        <SubagentRunCard msg={msg} />
+      ) : (
+        <MessageCard
+          key={msg.id || `fallback-msg-${msgIndex}`}
+          msg={msg}
+          index={msgIndex}
+          selfId={selfId}
+          senderType={sender.type}
+          senderInfo={sender as SenderInfo}
+          participants={allParticipants}
+          mentionLabels={mentionLabels}
+          replyContext={replyContext}
+          isStreaming={isStreaming}
+          isCopied={copied}
+          inlineUiComponents={inlineUiComponents}
+          messageTypeComponents={messageTypeComponents}
+          chat={chat}
+          browserHandoffCaller={browserHandoffCaller}
+          onInterrupt={handleInterruptMessage}
+          onCopy={handleCopyMessage}
+          onClearCopied={handleClearCopiedMessage}
+          onReply={onReply}
+          onFocusPanel={onFocusPanel}
+          onReloadPanel={onReloadPanel}
+          mdxActions={mdxActions}
+        />
+      );
 
       return (
         <Flex className="message-item" direction="column">
-          <MessageCard
-            key={msg.id || `fallback-msg-${msgIndex}`}
-            msg={msg}
-            index={msgIndex}
-            selfId={selfId}
-            senderType={sender.type}
-            senderInfo={sender as SenderInfo}
-            participants={allParticipants}
-            mentionLabels={mentionLabels}
-            replyContext={replyContext}
-            isStreaming={isStreaming}
-            isCopied={copied}
-            inlineUiComponents={inlineUiComponents}
-            messageTypeComponents={messageTypeComponents}
-            chat={chat}
-            browserHandoffCaller={browserHandoffCaller}
-            onInterrupt={handleInterruptMessage}
-            onCopy={handleCopyMessage}
-            onClearCopied={handleClearCopiedMessage}
-            onReply={onReply}
-            onFocusPanel={onFocusPanel}
-            onReloadPanel={onReloadPanel}
-            mdxActions={mdxActions}
-          />
+          {customRenderMessage
+            ? customRenderMessage(msg, sender as SenderInfo, defaultContent)
+            : defaultContent}
         </Flex>
       );
     },
@@ -810,7 +808,17 @@ export const MessageList = React.memo(function MessageList({
                 <div className="message-item" key="active-typing">
                   <Flex className="message-item" direction="column">
                     {customRenderInlineGroup ? (
-                      customRenderInlineGroup(activeTypingItems)
+                      customRenderInlineGroup(
+                        activeTypingItems,
+                        <InlineGroup
+                          items={activeTypingItems}
+                          messageTypeComponents={messageTypeComponents}
+                          chat={chat}
+                          onInterrupt={handleTypingInterrupt}
+                          onCancelInvocation={onCancelInvocation}
+                          renderInvocation={renderInvocation}
+                        />
+                      )
                     ) : (
                       <InlineGroup
                         items={activeTypingItems}

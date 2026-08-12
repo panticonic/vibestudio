@@ -216,6 +216,8 @@ export interface ChatSandboxValue {
     options?: {
       idempotencyKey?: string;
       tier?: MessageTier;
+      mentions?: string[];
+      replyTo?: string;
       metadata?: Record<string, unknown>;
     }
   ) => Promise<unknown>;

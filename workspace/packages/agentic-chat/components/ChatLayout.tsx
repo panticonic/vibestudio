@@ -20,6 +20,8 @@ export interface ChatLayoutProps extends Pick<
 > {
   /** Resolved browser-owned capabilities to mount in the stock layout. */
   features: ResolvedAgenticChatFeatures;
+  /** Product-specific prompt shown when the composer is empty. */
+  composerPlaceholder?: string;
 }
 
 /**
@@ -46,6 +48,7 @@ export const ChatLayout = React.memo(function ChatLayout({
   renderInlineGroup,
   renderInvocation,
   features,
+  composerPlaceholder,
 }: ChatLayoutProps) {
   return (
     <>
@@ -77,7 +80,7 @@ export const ChatLayout = React.memo(function ChatLayout({
         {features.feedback ? <LazyChatFeedbackArea /> : null}
         <PendingDeliveryQueue />
         <Outbox />
-        <ChatInput />
+        <ChatInput placeholder={composerPlaceholder} />
       </Flex>
       <ChatDebugConsole />
     </>

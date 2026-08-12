@@ -14,12 +14,20 @@ describe("normalizeSandboxSendOptions", () => {
 
     expect(
       normalizeSandboxSendOptions(
-        { idempotencyKey: "chosen", tier: "primary", metadata },
+        {
+          idempotencyKey: "chosen",
+          tier: "primary",
+          mentions: ["agent:helm", "agent:engineering"],
+          replyTo: "message:briefing",
+          metadata,
+        },
         "fallback"
       )
     ).toEqual({
       idempotencyKey: "chosen",
       tier: "primary",
+      mentions: ["agent:helm", "agent:engineering"],
+      replyTo: "message:briefing",
       metadata,
     });
   });

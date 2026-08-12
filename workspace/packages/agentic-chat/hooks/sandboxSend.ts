@@ -3,6 +3,8 @@ import type { MessageTier } from "@workspace/agentic-protocol";
 export interface SandboxSendOptions {
   idempotencyKey?: string;
   tier?: MessageTier;
+  mentions?: string[];
+  replyTo?: string;
   metadata?: Record<string, unknown>;
 }
 
@@ -12,11 +14,15 @@ export function normalizeSandboxSendOptions(
 ): {
   idempotencyKey: string;
   tier: MessageTier;
+  mentions?: string[];
+  replyTo?: string;
   metadata?: Record<string, unknown>;
 } {
   return {
     idempotencyKey: options?.idempotencyKey ?? fallbackIdempotencyKey,
     tier: options?.tier ?? "secondary",
+    ...(options?.mentions?.length ? { mentions: options.mentions } : {}),
+    ...(options?.replyTo ? { replyTo: options.replyTo } : {}),
     ...(options?.metadata ? { metadata: options.metadata } : {}),
   };
 }

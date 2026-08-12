@@ -697,6 +697,46 @@ describe("MessageList typing indicators (roster-based)", () => {
     ]);
   });
 
+  it("lets group and message overrides delegate to their complete stock renderers", () => {
+    render(
+      React.createElement(MessageList, {
+        messages: [
+          makeMessage({
+            id: "message-1",
+            content: "Captain's log",
+            complete: true,
+          }),
+          makeMessage({
+            id: "action-1",
+            contentType: "invocation",
+            content: "",
+            invocation: {
+              id: "tool-1",
+              name: "commit_order",
+              arguments: { order: "burn-clear" },
+              execution: { status: "complete", description: "Committed burn" },
+            },
+            complete: true,
+          }),
+        ],
+        participants: {},
+        selfId: "user-1",
+        allParticipants: {},
+        renderMessage: (_message: ChatMessage, _sender: unknown, defaultContent: React.ReactNode) =>
+          React.createElement("section", { "data-testid": "message-wrapper" }, defaultContent),
+        renderInlineGroup: (_items: InlineItem[], defaultContent: React.ReactNode) =>
+          React.createElement("section", { "data-testid": "group-wrapper" }, defaultContent),
+        renderInvocation: () =>
+          React.createElement("span", { "data-testid": "custom-invocation" }, "BRIDGE ORDER"),
+      } as never)
+    );
+
+    expect(screen.getByTestId("message-wrapper").textContent).toContain("Captain's log");
+    expect(
+      screen.getByTestId("group-wrapper").contains(screen.getByTestId("custom-invocation"))
+    ).toBe(true);
+  });
+
   it("does not synthesize generic invocation UI for malformed invocation messages", () => {
     render(
       React.createElement(MessageList, {

@@ -81,11 +81,16 @@ function modelSwitchConfigFromSettings(
 
 const MAX_IMAGE_COUNT = 10;
 
+export interface ChatInputProps {
+  /** Product-specific prompt shown when the composer is empty. */
+  placeholder?: string;
+}
+
 /**
  * Chat input area with text input, image attachment, and send button.
  * Reads from ChatContext.
  */
-export function ChatInput() {
+export function ChatInput({ placeholder }: ChatInputProps = {}) {
   const {
     connected,
     allParticipants,
@@ -588,7 +593,10 @@ export function ChatInput() {
               maxHeight: isMobile ? Math.min(120, viewportHeight * 0.22) : 180,
               resize: "none",
             }}
-            placeholder={isMobile ? "Type a message…" : "Type a message…  (⏎ send · ⇧⏎ newline)"}
+            placeholder={
+              placeholder ??
+              (isMobile ? "Type a message…" : "Type a message…  (⏎ send · ⇧⏎ newline)")
+            }
             value={input}
             onChange={(e) => handleInputChange(e.target.value)}
             onInput={handleTextAreaInput}

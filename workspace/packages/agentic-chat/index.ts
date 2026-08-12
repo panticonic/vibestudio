@@ -96,6 +96,7 @@ export { ChatMessageArea } from "./components/ChatMessageArea";
 export type { ChatMessageAreaProps } from "./components/ChatMessageArea";
 export { ChatFeedbackArea } from "./components/ChatFeedbackArea";
 export { ChatInput } from "./components/ChatInput";
+export type { ChatInputProps } from "./components/ChatInput";
 export { Outbox } from "./components/Outbox";
 export { OutboxItem } from "./components/OutboxItem";
 export type { OutboxItemProps, OutboxLane } from "./components/OutboxItem";
