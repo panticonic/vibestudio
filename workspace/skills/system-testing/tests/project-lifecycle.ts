@@ -150,6 +150,56 @@ function validatePanelCreate(result: TestExecutionResult) {
       };
 }
 
+function validateCuratedIconPanelCreate(result: TestExecutionResult) {
+  const base = completedScenarioEvidence(result, ["eval", "verify"]);
+  if (!base.passed) return base;
+  const calls = getToolCalls(result);
+  const catalogIndex = calls.findIndex(
+    (call) =>
+      call.name === "eval" &&
+      call.execution?.isError !== true &&
+      String(call.arguments?.["code"] ?? "").includes("listProjectIcons")
+  );
+  const createIndex = calls.findIndex(
+    (call) =>
+      call.name === "eval" &&
+      call.execution?.isError !== true &&
+      String(call.arguments?.["code"] ?? "").includes("createProjects")
+  );
+  if (catalogIndex < 0 || createIndex < 0 || catalogIndex > createIndex) {
+    return {
+      passed: false,
+      reason: "The panel was created before the exact curated icon catalog was discovered",
+    };
+  }
+  const buildIndex = calls.findIndex((call) => {
+    if (call.name !== "verify" || call.execution?.isError === true) return false;
+    const resultDetails = details(call);
+    return resultDetails?.["operation"] === "build" && resultDetails["status"] === "ok";
+  });
+  if (buildIndex < createIndex) {
+    return { passed: false, reason: "No successful structured panel build was returned" };
+  }
+  const openIndex = calls.findIndex(
+    (call, index) =>
+      index > buildIndex &&
+      call.name === "eval" &&
+      call.execution?.isError !== true &&
+      String(call.arguments?.["code"] ?? "").includes("openPanel") &&
+      /\.snapshot\s*\(/u.test(String(call.arguments?.["code"] ?? ""))
+  );
+  if (openIndex < 0 || !hasBootReadyPanelEvidence(base.evidence.evalValues)) {
+    return {
+      passed: false,
+      reason: "The clean build was not followed by a boot-ready panel observation and snapshot",
+    };
+  }
+  if (!walkRecords(base.evidence.evalValues).some((record) => createdProject(record, "panels"))) {
+    return { passed: false, reason: "No published generated panel scaffold was returned" };
+  }
+  return { passed: true, reason: undefined };
+}
+
 function validateWorkerCreate(result: TestExecutionResult) {
   const base = completedScenarioEvidence(result);
   if (!base.passed) return base;
@@ -745,6 +795,17 @@ export const projectLifecycleTests: TestCase[] = [
     resources: [PANEL_AUTOMATION_RESOURCE],
     prompt: "Create a brand-new isolated panel project and open it for use.",
     validate: validatePanelCreate,
+  },
+  {
+    name: "panel-curated-icon-build-open",
+    description: "Discover a supported icon, then create, build, and open a panel",
+    category: "project-lifecycle",
+    workspaceRepoFixture: CREATED_PANEL_WORKSPACE_REPO_FIXTURE,
+    authorityPolicy: panelControlAuthorityPolicy("inspect-curated-icon-panel"),
+    resources: [PANEL_AUTOMATION_RESOURCE],
+    prompt:
+      "Create a brand-new isolated panel with a supported built-in database-style icon selected from this workspace's available icon catalog. Verify that it builds cleanly, then open the panel for use.",
+    validate: validateCuratedIconPanelCreate,
   },
   {
     name: "panel-fork-dry-run-and-commit",

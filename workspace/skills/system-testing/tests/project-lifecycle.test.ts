@@ -65,6 +65,7 @@ describe("project lifecycle prompts", () => {
 
     expect(panelPrompts).toEqual([
       "Create a brand-new isolated panel project and open it for use.",
+      "Create a brand-new isolated panel with a supported built-in database-style icon selected from this workspace's available icon catalog. Verify that it builds cleanly, then open the panel for use.",
       "Fork the existing panel into a new isolated panel and open the result.",
       "Build a simple, polished To-Do list as a brand-new isolated panel. Begin with two small deliberate defects—one compiler error and one obvious usability problem—so the development loop has real failures to find. Observe the compiler defect through a structured compile or build check, then diagnose and repair only that failure while leaving the usability defect intact. Launch the compile-clean but visibly flawed panel, save a screenshot in scratch, and read that image so your UX repair is based on the rendered pixels rather than DOM text alone. Repair the usability defect in a separate source edit. Refresh the same running panel with the repaired source, save and visually read a second screenshot, exercise the add, complete, filter, and delete flows in the live UI, and publish the finished result. Make the final experience keyboard-friendly, responsive, visually polished, and free of runtime or console errors. Report the defects you observed and concrete final verification.",
     ]);
@@ -80,6 +81,10 @@ describe("project lifecycle prompts", () => {
       projectLifecycleTests.find((test) => test.name === name)?.workspaceRepoFixture;
 
     expect(fixtureFor("panel-create-commit-open")).toEqual({
+      kind: "created-repository",
+      section: "panels",
+    });
+    expect(fixtureFor("panel-curated-icon-build-open")).toEqual({
       kind: "created-repository",
       section: "panels",
     });
@@ -136,6 +141,88 @@ describe("project lifecycle prompts", () => {
           senderMetadata: { type: "agent" },
           complete: true,
           content: "Created.",
+        },
+      ],
+    } as TestExecutionResult;
+
+    expect(test.validate(result)).toEqual({ passed: true, reason: undefined });
+  });
+
+  it("accepts curated icon discovery followed by a clean build and boot-ready panel", () => {
+    const test = projectLifecycleTests.find(
+      ({ name }) => name === "panel-curated-icon-build-open"
+    )!;
+    const source = "panels/catalog-board";
+    const result = {
+      duration: 0,
+      messages: [
+        { kind: "message", senderId: "user", complete: true, content: "prompt" },
+        invocation(
+          "catalog",
+          "eval",
+          { code: "return listProjectIcons();" },
+          { returnValue: { lucide: ["database"], brand: [] } }
+        ),
+        invocation(
+          "create",
+          "eval",
+          { code: "return createProjects([{ projectType: 'panel', icon: 'lucide:database' }]);" },
+          {
+            returnValue: {
+              created: source,
+              files: ["index.tsx", "package.json"],
+              preflight: {
+                ok: true,
+                projectType: "panel",
+                checked: ["index.tsx", "package.json"],
+              },
+              publication: {
+                published: true,
+                committedEventId: "event:catalog",
+                publishedEventId: "event:catalog",
+                mainEventId: "event:catalog",
+                effectId: "effect:catalog",
+              },
+            },
+          }
+        ),
+        invocation(
+          "build",
+          "verify",
+          { operation: "build", target: source },
+          { operation: "build", target: source, status: "ok", report: { diagnostics: [] } }
+        ),
+        invocation(
+          "open",
+          "eval",
+          { code: "const panel = await openPanel(source); return [await panel.observe(), await panel.snapshot()];" },
+          {
+            returnValue: [
+              {
+                source,
+                panelId: "panel:catalog",
+                phase: "ready",
+                attemptId: "attempt:catalog",
+                runtimeEntityId: "runtime:catalog",
+                buildKey: "build:catalog",
+              },
+              {
+                panelId: "panel:catalog",
+                attemptId: "attempt:catalog",
+                runtimeEntityId: "runtime:catalog",
+                buildKey: "build:catalog",
+                capturedAt: 1,
+                document: { kind: "synth", structure: {} },
+              },
+            ],
+          }
+        ),
+        {
+          kind: "message",
+          senderId: "agent",
+          senderMetadata: { type: "agent" },
+          complete: true,
+          content: "Created the catalog-backed panel; its build is clean and it opened successfully.",
         },
       ],
     } as TestExecutionResult;
