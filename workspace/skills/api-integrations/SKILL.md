@@ -1,78 +1,73 @@
 ---
 name: api-integrations
-description: Connect, use, or diagnose an external API through host-mediated credentials and egress, including provider setup UI, static secrets, OAuth, browser redirects, webhooks, and Git HTTP authentication.
+description: Connect, use, or diagnose external APIs through host-mediated credentials and egress.
 ---
 
 # API integrations
 
 Credentials are host-held, URL-bound, and usable only through mediated egress.
-Workspace code must never receive, log, or relay their secret material.
+Workspace code must never receive, log, or relay secret material.
 
-Use `docs_search` and `docs_open` for the current `credentials` schemas. In
-source code, the public workspace client lives under
-`packages/runtime/src`; host-side wire schemas live in the service-schema
-package. Do not infer a method from an internal RPC name.
+Use `docs_search`/`docs_open` for current `credentials` schemas. The public
+workspace client lives under `packages/runtime/src`; host-side wire schemas are
+in the service-schema package.
 
 ## Missing credentials
 
-Treat a missing credential as a normal setup state. Ask only for non-secret
-facts needed to identify the provider and audience. Do not open a prompt with
-placeholder endpoints, search source for a secret, or switch to a lower-level
+Treat missing credentials as normal setup state. Ask only for non-secret facts
+needed to identify the provider and audience. Never open a prompt with
+placeholder endpoints, search source for a secret, or fall back to a lower-level
 credential service.
 
-Credential IDs are opaque. Preserve the complete returned value, including any
-prefix. For a diagnostic probe, convert only the canonical unavailable outcome
-to a bounded `{ missing: true }` result and rethrow every other error. Do not
-return raw errors, metadata, or request details.
+Credential IDs are opaque — preserve the complete returned value including any
+prefix. For diagnostic probes, convert only the canonical unavailable outcome to
+`{ missing: true }` and rethrow everything else. Never return raw errors,
+metadata, or request details.
 
-Call the appropriate setup API once. A denial or cancellation ends that setup
-attempt; unattended approval cannot invent client IDs, tokens, or secrets.
+Call the setup API once. A denial or cancellation ends that attempt.
 
 ## Setup experience
 
-- Use one persistent `inline_ui` workflow when setup has several related
-  steps. Its controls should call trusted helpers directly.
-- Put provider-console links next to the step that needs them. Offer internal
-  `openPanel(...)` and external `openExternal(...)` actions when both make
-  sense.
+- Use one persistent `inline_ui` workflow for multi-step setup, with controls
+  calling trusted helpers directly.
+- Put provider-console links next to the step that needs them. Offer
+  `openPanel(...)` and `openExternal(...)` when both apply.
 - For OAuth authorize URLs, pass the expected redirect URI to
-  `openExternal(...)` so the host validates the callback binding.
-- Ask about user outcomes, not OAuth vocabulary, credential formats, scope
-  names, or storage mechanics. Put exceptional choices behind an advanced
-  path.
+  `openExternal(...)` so the host validates the callback.
+- Ask about user outcomes, not OAuth vocabulary, credential formats, or storage
+  mechanics. Put exceptional choices behind an advanced path.
 - Collect secrets only through host-owned credential input or a dedicated
-  provider workflow. Never use chat, feedback forms, or panel React state.
+  provider workflow — never chat, feedback forms, or panel React state.
 - Keep provider choice, access intent, browser action, progress, error, and
-  retry in one workflow when they belong to one connection attempt.
+  retry in one workflow per connection attempt.
 
-Use owner skills for GitHub, Google Workspace, and web-search providers instead
-of rebuilding their setup flows here.
+Use owner skills for GitHub, Google Workspace, and web-search providers.
 
-## Choose the credential mechanism
+## Credential mechanisms
 
-Import `credentials` from `@workspace/runtime`; it is not an ambient eval
-global. Prefer provider OAuth over static tokens when available.
+Import `credentials` from `@workspace/runtime` (not an ambient eval global).
+Prefer provider OAuth over static tokens when available.
 
-- Use `requestCredentialInput` for user-entered static API keys or tokens.
-- Use `connect` for host-owned OAuth. The host composes redirects and stores
-  tokens; userland supplies only public configuration and the exact audience.
-- Use `configureClient` when OAuth client material must be stored separately.
-- Use `fetch` for authenticated HTTP requests and `gitHttp` for Git smart HTTP.
-- Use `forAudience` or `hookForUrl` only when their live contract matches the
-  caller's transport.
+| Method | Use for |
+| --- | --- |
+| `requestCredentialInput` | User-entered static API keys or tokens |
+| `connect` | Host-owned OAuth (host stores tokens; userland supplies public config and audience) |
+| `configureClient` | Separate OAuth client material storage |
+| `fetch` | Authenticated HTTP requests |
+| `gitHttp` | Git smart HTTP |
+| `forAudience` / `hookForUrl` | Only when their live contract matches the caller's transport |
 
-Read the live schema for supported OAuth flow discriminants and required
-fields. Choose authorization-code with PKCE for redirect-capable interactive
-clients, device code when the provider supports it and callbacks cannot reach
-the server, and client credentials only for service identity. Do not maintain a
-provider-support list in this skill.
+Read the live schema for supported OAuth flow discriminants. Choose
+authorization-code with PKCE for redirect-capable interactive clients, device
+code when callbacks can't reach the server, and client credentials only for
+service identity.
 
-When durable renewal is requested, verify the stored result's lifecycle facts;
-requested scopes or the existence of a refresh token are not by themselves a
-renewal guarantee. OAuth client configurations are bound to their authorize
-and token endpoints; create a distinct configuration when that binding changes.
+When durable renewal is requested, verify the stored result's lifecycle facts —
+requested scopes or a refresh token alone don't guarantee renewal. OAuth client
+configs are bound to their endpoints; create a distinct config when that binding
+changes.
 
-## Use the credential
+## Using credentials
 
 ```ts
 import { credentials } from "@workspace/runtime";
@@ -84,12 +79,12 @@ const response = await credentials.fetch(
 );
 ```
 
-The credential audience must cover the exact destination. Do not splice tokens
+The credential audience must cover the exact destination. Never splice tokens
 into URLs or headers yourself.
 
-For unmanaged Git, use `@vibestudio/git` with `credentials.gitHttp()`. For a
-shared managed repository, use the runtime `git` provider and
-[Git Bridge](../../extensions/git-bridge/SKILL.md). Remote declarations contain
+For unmanaged Git, use `@vibestudio/git` with `credentials.gitHttp()`. For
+shared managed repos, use the runtime `git` provider and [Git
+Bridge](../../extensions/git-bridge/SKILL.md). Remote declarations contain
 credential-free HTTP(S) URLs and logical credential names, never concrete
 secrets. Imports return unpublished semantic candidates and never advance
 protected main by themselves.

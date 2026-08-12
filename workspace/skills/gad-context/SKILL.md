@@ -1,34 +1,31 @@
 ---
 name: gad-context
-description: Inspect Vibestudio's canonical trajectory and channel logs, agent turns, invocations, publications, rosters, health, and storage diagnostics without confusing them with semantic source history.
+description: Inspect canonical trajectory/channel logs, agent turns, invocations, publications, rosters, health, and storage diagnostics.
 ---
 
 # GAD context
 
 Use the typed `gad` namespace from `@workspace/runtime`. Read
-[DIAGNOSTICS.md](DIAGNOSTICS.md) before live incident work, and use live docs
-for current method schemas and result shapes.
+[DIAGNOSTICS.md](DIAGNOSTICS.md) before live incident work; use live docs for
+current method schemas and result shapes.
 
 ## Model
 
 - Private agent trajectory and transmitted channel history are separate
   hash-chained logs.
-- Agent context is projected into typed message, block, invocation, approval,
-  turn, usage, and checkpoint records.
-- A channel row that publishes a trajectory event carries exact origin-log,
+- Agent context projects into typed message, block, invocation, approval, turn,
+  usage, and checkpoint records.
+- A channel row publishing a trajectory event carries exact origin-log,
   origin-head, and origin-envelope coordinates. User- or channel-origin rows
   correctly have no trajectory origin.
-- Managed source history belongs to semantic VCS, not GAD. Read
-  [Vibestudio VCS](../vibestudio-vcs/SKILL.md) for file, change, work-unit,
-  decision, event, history, or blame questions.
+- Managed source history belongs to semantic VCS, not GAD. Read [Vibestudio
+  VCS](../vibestudio-vcs/SKILL.md) for file, change, work-unit, decision, event,
+  history, or blame questions.
 
-Do not infer joins from payload text or timestamps, reconstruct file history
-from log storage, or query undocumented tables because an inspector omitted a
-field.
+Never infer joins from payload text or timestamps, reconstruct file history from
+log storage, or query undocumented tables because an inspector omitted a field.
 
 ## Start with bounded inspectors
-
-Choose the narrowest live inspector:
 
 | Question | Inspector |
 | --- | --- |
@@ -45,10 +42,9 @@ Use `getTrajectoryForEnvelope` or `listPublishedEnvelopesForTrajectory` only
 after a bounded inspector identifies the exact artifact. Avoid broad hydrated
 reads in agent turns.
 
-Channel reads return `{ items, pageInfo }` and use tail, before, or after
-windows. Follow returned cursors and preserve the first page's snapshot bound
-when reading a live tail. Do not request oversized pages or chase newly appended
-rows indefinitely.
+Channel reads return `{ items, pageInfo }` with tail/before/after windows.
+Follow returned cursors and preserve the first page's snapshot bound on a live
+tail. Never request oversized pages or chase newly appended rows indefinitely.
 
 ```ts
 const health = await gad.inspectAgentHealth({ channelId: chat.channelId });
@@ -61,24 +57,23 @@ return {
 };
 ```
 
-## Do not poll the observing turn
+## Don't poll the observing turn
 
 When inspecting `chat.channelId`, the diagnostic eval is itself the newest open
-invocation. Take one snapshot. If the result says durable integrity is healthy
-and only the current diagnostic is in flight, report normal current activity
-and return. Polling cannot observe that invocation close because it closes only
-after the eval returns, and each retry creates another invocation.
+invocation. Take one snapshot. If durable integrity is healthy and only the
+current diagnostic is in flight, report normal activity and return. Polling
+can't observe that invocation close — it closes only after eval returns, and
+each retry creates another invocation.
 
 For another visible chat panel, resolve its panel handle, read its state args,
 and use the exact stored channel identity. `chat.channelId` always means the
 current response channel.
 
-## Escalate carefully
+## Escalation
 
 Inspector summaries, rows, byte counts, and stored-value digests are the normal
 surface. Fetch or hydrate one exact value only when its content is required.
-Large values are stored by reference and must not be returned wholesale from
-eval.
+Large values are stored by reference — never return them wholesale from eval.
 
 Use bounded schema or SQL inspection only after a typed inspector identifies a
 specific storage defect. Confirm the live schema first. Preserve the distinction
@@ -87,8 +82,8 @@ coordinates.
 
 For code provenance, continue from a typed trajectory invocation into semantic
 VCS through recorded causal edges. For a fix that appears inactive, verify the
-context working state, exact build, and running artifact before changing the
-code again.
+context working state, exact build, and running artifact before changing code
+again.
 
 Prefer fail-loud invariant evidence over projection code that hides corrupt
 logs. A failed assistant message is terminal; unexpected open turns, missing

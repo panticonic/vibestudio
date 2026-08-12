@@ -1,11 +1,11 @@
 ---
 name: architecture
-description: "Design or review cross-cutting Vibestudio architecture: trust boundaries, unit ownership, agent topology, durable logs and semantic state, provenance, permissions, credentials, publication, builds, and caches."
+description: "Design or review cross-cutting Vibestudio architecture: trust boundaries, ownership, agents, state, provenance, permissions, credentials, builds."
 ---
 
 # Vibestudio architecture
 
-This guide identifies which component owns a fact or effect. Use task skills
+Use this skill to decide which component owns a fact or effect. Use task skills
 for implementation details.
 
 ## Read by question
@@ -18,18 +18,17 @@ for implementation details.
 
 ## System model
 
-The trusted host owns identity, protected refs, permission decisions,
-credential injection, builds, disk projection, and network egress. Workspace
-units have explicit trust models: panels run in isolated webviews; workers and
-Durable Objects run in workerd isolates; extensions run as approved Node
-services; apps are approved clients. Agents are ordinary workspace
-participants and use the same services and gates as other callers.
+The trusted host owns identity, protected refs, permission decisions, credential
+injection, builds, disk projection, and network egress. Workspace units have
+explicit trust models: panels run in isolated webviews; workers and DOs run in
+workerd isolates; extensions run as approved Node services; apps are approved
+clients. Agents are ordinary workspace participants using the same services and
+gates as other callers.
 
 Durable conversations and tool activity live in canonical trajectory/channel
-logs. Managed source, applications, integration decisions, and publication
-live in the semantic workspace graph. Materialized files, indexes, Git
-checkouts, and build outputs are projections; do not make one a competing
-authority.
+logs. Managed source, applications, integration decisions, and publication live
+in the semantic workspace graph. Materialized files, indexes, Git checkouts, and
+build outputs are projections — never make one a competing authority.
 
 ## Load-bearing invariants
 
@@ -38,8 +37,8 @@ authority.
 - Trust comes from declared identity and review, not filesystem location.
 - Store durable history as immutable, walkable facts. Caches must be disposable
   and rebuildable.
-- Join tool invocations to semantic work through recorded causal edges; do not
-  add a claims or provenance sidecar.
+- Join tool invocations to semantic work through recorded causal edges — no
+  claims or provenance sidecar.
 - Keep semantic source authority singular. Git, builds, and filesystem
   projections are adapters or consumers.
 - Authentication establishes caller identity; grants and approvals authorize
@@ -50,5 +49,5 @@ authority.
 
 When documents disagree, prefer the live generated service contract and schema
 of record, then the canonical domain skill, then broad orientation prose. For
-managed source operations, [Vibestudio VCS](../vibestudio-vcs/SKILL.md) is the
-canonical workflow.
+managed source operations, [Vibestudio VCS](../vibestudio-vcs/SKILL.md) is
+canonical.
