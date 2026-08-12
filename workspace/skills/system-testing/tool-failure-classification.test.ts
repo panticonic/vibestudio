@@ -42,6 +42,7 @@ describe("tool failure classification", () => {
     };
     expect(isReadOnlyInputRejection("read", failure)).toBe(true);
     expect(isReadOnlyInputRejection("write", failure)).toBe(false);
+    expect(isReadOnlyInputRejection("read", undefined, Symbol("missing"))).toBe(false);
   });
 
   it("keeps an exact-root provenance miss diagnostic-only", () => {

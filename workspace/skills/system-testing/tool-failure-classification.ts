@@ -29,12 +29,13 @@ export function isPreExecutionArgumentRejection(...values: unknown[]): boolean {
 export function isReadOnlyInputRejection(toolName: string, ...values: unknown[]): boolean {
   if (!new Set(["read", "ls", "grep", "find", "glob", "stat"]).has(toolName)) return false;
   return values.some((value) => {
-    let rendered: string;
+    let rendered: unknown;
     try {
       rendered = typeof value === "string" ? value : JSON.stringify(value);
     } catch {
       return false;
     }
+    if (typeof rendered !== "string") return false;
     return (
       rendered.includes('"protocol":"agent-tool-failure.v1"') &&
       rendered.includes('"kind":"invalid-input"') &&

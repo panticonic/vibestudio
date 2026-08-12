@@ -9,6 +9,25 @@ Measure one user-visible boundary at a time, keep cold and warm paths separate,
 and compare equivalent states. Optimize only a bottleneck supported by the
 report, then rerun the smallest measurement that can prove the change.
 
+## Capability map
+
+Stay inside the canonical userland surfaces below. They provide the same
+process, build, lifecycle, and browser evidence used by host-side
+investigations without granting shell, `/proc`, inspector-port, or artifact
+content access.
+
+| Question                                                  | Primary userland surface                          | Evidence                                                                                                     |
+| --------------------------------------------------------- | ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| How long did a panel action or reload take?               | `profilePanelInteraction`, `profilePanelReload`   | wall time, Chromium runtime/page/network/long-task deltas                                                    |
+| Which panel functions consumed CPU or retained memory?    | `profilePanel`, `heapSnapshot`                    | context-fs profile reference, never an inlined profile                                                       |
+| Did server or workerd resources move during a workload?   | `profileHost`, `hostPerformanceSnapshot`          | CPU, RSS/heap deltas, retained event-loop samples, workerd RSS and occupancy                                 |
+| Which startup phase was slow?                             | `readStartupProfile`                              | current-boot semantic activation, reconciliation, build discovery, and responsiveness warnings               |
+| Was an exact build new or cached, and what made it large? | `profileBuild`                                    | first-run classification/timing, verified-cache timing/key proof, artifact/module bytes, panel bundle report |
+| Which isolate code consumed CPU?                          | `profileWorkerd`, `profileDO`                     | bounded V8 CPU-profile reference                                                                             |
+| How large/responsive is the Electron process family?      | `electronPerformanceSnapshot` from `client_eval`  | per-process and aggregate working-set bytes, CPU percentage, Electron-main event-loop samples                |
+| What did a mobile source build target and emit?           | `mobile-debug.buildAndroid`                       | duration, selected ABIs, APK path and bytes                                                                  |
+| Where did agent/chat latency occur?                       | managed system-test run plus panel/host profiling | model/tool trajectory, durable delivery phases, visible completion                                           |
+
 ## Panel and app profiling
 
 Reuse one existing panel handle and acquire one page for its current runtime
@@ -78,30 +97,34 @@ page from the same handle.
 
 ## Build and bundle profiling
 
-Build the exact context under investigation, then inspect immutable metadata
-for every returned build key:
+Use the bounded profiler for the exact semantic context. It invokes the same
+build report used for validation, summarizes immutable artifacts and executable
+modules on the host, and never returns their source:
 
 ```ts
-const report = await services.build.getBuildReport(source, `ctx:${ctx.contextId}`);
-const metadata = await Promise.all(
-  report.builds
-    .filter((build) => build.buildKey)
-    .map((build) =>
-      services.build.getBuildMetadata(build.buildKey!, {
-        includeExecutableModules: false,
-      })
-    )
-);
-return { report, metadata };
+import { contextId } from "@workspace/runtime";
+import { profileBuild } from "@workspace/testkit";
+
+return await profileBuild("panels/chat", {
+  ref: `ctx:${contextId}`,
+  verifyCache: true,
+});
 ```
 
-For panels, `metadata.bundleReport` separates initial, lazy, and total payloads
-and lists their largest inputs. Worker metadata can contain megabytes of sealed
-executable source, so keep `includeExecutableModules: false` unless source-level
-provenance is the measurement. Attribute initial bytes before splitting code.
-Do not infer that an import is unused from bundle size alone; confirm it with a
-coverage run or source ownership. Measure cache-cold and verified-cache build
-paths separately.
+`firstRun.cacheState` is evidence-based: `built-during-profile`, `preexisting`,
+or `unknown`. Never call a preexisting first run “cold.” The optional repeat is
+a verified-cache observation only when `sameBuildKeys` is true. For panels,
+each target's `bundleReport` separates initial, lazy, and total payloads and
+lists the largest inputs. `artifactBytes` is emitted artifact size while
+`executableSourceBytes` is sealed executable-module source size; do not add
+them as if they were one transfer budget.
+
+Attribute initial bytes before splitting code. Do not infer that an import is
+unused from bundle size alone; confirm it with a coverage run or source
+ownership. Use `services.build.getBuildMetadata(key,
+{ includeExecutableModules: false })` only when the compact profiler does not
+answer a provenance question. Request executable module contents only for a
+separate, explicitly justified source-attribution investigation.
 
 ## Performance by construction
 
@@ -156,8 +179,29 @@ boundary exists, reconsider the dependency or the package boundary.
 
 ## Host, worker, and startup profiling
 
-- Query `services.serverLog` for the exact time window around startup, builds,
-  routing, workerd supervision, and event-loop budget warnings.
+- Wrap one canonical operation with `profileHost`; do not reproduce it through
+  a profiling-only path:
+
+  ```ts
+  import { profileBuild, profileHost } from "@workspace/testkit";
+
+  return await profileHost(() => profileBuild("workers/example", { verifyCache: true }), {
+    label: "exact worker build",
+  });
+  ```
+
+  The summary contains server CPU/RSS/heap deltas, current workerd RSS and
+  occupancy, and event-loop maxima whose completed sample windows intersected
+  the workload. `sampleCount: 0` means no five-second monitor interval closed;
+  it does not prove zero delay. RSS and heap deltas are endpoints, not retained
+  allocation proof. Repeat equivalent states and use a heap snapshot only when
+  object attribution is required.
+
+- Use `readStartupProfile()` for the current server boot before querying raw
+  logs. It extracts the structured semantic-activation and reconciliation
+  phases, build discovery, and event-loop warnings. Query `services.serverLog`
+  only when that bounded projection identifies a phase that needs deeper
+  evidence.
 - Use `runtime.supervision.health(identity)` and
   `runtime.supervision.logs(identity)` for one exact panel, extension, app, or
   worker incarnation. Do not substitute a new build for an observation read.
@@ -219,6 +263,97 @@ operation.
 Correlate across processes with durable or runtime identity and locally
 measured durations. Do not subtract raw timestamps from different monotonic
 clocks.
+
+### Electron process resources
+
+Electron metrics are client-affine. Run this through `client_eval`, not ordinary
+server-side `eval`:
+
+```ts
+import { electronPerformanceSnapshot } from "@workspace/testkit";
+return await electronPerformanceSnapshot();
+```
+
+The result contains only Electron's aggregate process-family working set,
+per-process PID/type/working-set/CPU counters, and retained Electron-main
+event-loop summaries—no URLs, titles, DOM, or panel content. Capture before and
+after snapshots in the same inviting desktop client. Chromium renderers may
+share or move between panels, so use a panel CDP profile for panel attribution
+and Electron metrics for family-level resource movement. An empty event-loop
+sample set has the same interval semantics as `profileHost`. Do not combine
+Electron, workspace-server, and workerd RSS if the question is a single
+process; report the three owners separately.
+
+### Mobile build and launch performance
+
+Mobile builds remain extension-owned. Target the attached Android device's ABI
+or pass an explicit ABI list so a development profile does not accidentally
+measure every native architecture:
+
+```ts
+const devices = await extensions.invoke("mobile-debug", "listDevices", []);
+return await extensions.invoke("mobile-debug", "buildAndroid", [
+  { variant: "internal", device: devices[0]?.serial },
+]);
+```
+
+The receipt reports `durationMs`, `architectures`, `apkPath`, and `apkBytes`.
+Pair it with `verifyWorkspaceReady({ sinceMs: startedAt })` to measure the real
+source launch through `workspace-connected`; process liveness alone is not app
+readiness. Use native/WebView tooling only for attribution not represented by
+the extension, and preserve one canonical build/install/activation path.
+
+### Chat and agent-workflow latency
+
+Measure two boundaries rather than collapsing “chat latency” into one number:
+
+1. Profile publish/submit through the first visible completed response in the
+   real chat panel with `profilePanelInteraction`. This owns browser work,
+   network observations, rendering, long tasks, and interaction latency.
+2. Run the smallest exact managed system test and inspect its bounded run
+   packet. The trajectory owns model turns, tool calls, suspensions, durable
+   channel append, recipient mailbox claim/admission, and terminal cleanup.
+
+If the panel is slow while the trajectory completes promptly, investigate
+delivery/projection/rendering. If tool or model phases dominate while the panel
+has no long tasks, investigate the workflow. For subagent delivery, keep task
+channel terminal append, parent mailbox commit/claim/admission, and parent run
+projection as separate coordinates. Raw timestamps from different monotonic
+clocks are not subtractable; compare durations or shared durable event
+coordinates.
+
+## Static performance review
+
+Measurements find active bottlenecks; static review prevents obvious work from
+entering the experiment. For each changed unit, inspect:
+
+- eager imports and package barrels in the initial browser or isolate closure;
+- serialized awaits that are independent, repeated reads/builds without
+  single-flight ownership, and polling where an authoritative event exists;
+- React effects/subscriptions whose dependencies recreate work or retain
+  listeners, and render-time transformations that can be moved to the owning
+  data boundary;
+- unbounded arrays, logs, queues, caches, returned records, or diagnostic
+  payloads;
+- filesystem hashing/discovery that ignores the canonical graph or immutable
+  manifest;
+- Electron/mobile startup work that blocks readiness despite being optional;
+- duplicate “fast paths,” flags, or alternate implementations instead of
+  reducing the canonical path.
+
+Turn each suspicion into a build report, runtime profile, lifecycle span, or
+focused test before claiming a performance result.
+
+## Cleanup ownership
+
+| Acquired resource                                     | Required cleanup                                                   |
+| ----------------------------------------------------- | ------------------------------------------------------------------ |
+| `profilePanelInteraction` / `profilePanelReload` page | automatic in `finally`                                             |
+| raw `handle.cdp.page()`                               | `await page.close()`                                               |
+| workerd inspector helper                              | automatic; raw inspector sessions must close in `finally`          |
+| opened test panel/entity                              | close or retire the exact handle/entity                            |
+| managed system-test instance                          | `pnpm system-test --instance ID stop`                              |
+| owned ephemeral server                                | terminate and await the exact process after inspector/page cleanup |
 
 ## Optimization loop
 

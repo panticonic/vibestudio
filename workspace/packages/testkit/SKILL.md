@@ -9,7 +9,9 @@ description: Deterministic in-system E2E testing, orchestration, supervision and
 test runner that works inside eval and panels, panel automation over
 `panelTree`/CDP, worker/DO orchestration and inspection, supervision
 (console/crash/health watching), and profiling for both panels (Chromium CDP)
-and workerd isolates (V8 inspector).
+and workerd isolates (V8 inspector). It also projects bounded workspace-server,
+workerd, Electron, startup, and build measurements without shell or raw host
+process access.
 `panelTree` is the top-level runtime panel-tree API; do not use
 `workspace.panelTree`.
 
@@ -124,7 +126,41 @@ Inside tests, `t.supervisor` does this automatically for opened panels.
 
 ## Profiling
 
-Panels (Chromium, via the CDP bridge):
+Use the compact cross-layer helpers before dropping to raw profiling APIs:
+
+```ts
+import {
+  profileBuild,
+  profileHost,
+  profilePanelInteraction,
+  profilePanelReload,
+  readStartupProfile,
+} from "@workspace/testkit";
+import { contextId } from "@workspace/runtime";
+
+const build = await profileBuild("panels/example", {
+  ref: `ctx:${contextId}`,
+  verifyCache: true,
+});
+const host = await profileHost(() => runExactWorkload(), { label: "exact workload" });
+const startup = await readStartupProfile();
+```
+
+- `profileBuild` returns first-path and verified-cache timing plus bounded
+  artifact/module/bundle attribution. It never returns bundle or module source.
+- `profileHost` returns server CPU/RSS/heap deltas, workerd RSS/occupancy, and
+  retained event-loop samples around one real operation.
+- `profilePanelInteraction` and `profilePanelReload` return the browser-native
+  page/runtime/network profile and always release their CDP page lease.
+- `readStartupProfile` extracts current-boot structured phases from the server
+  log. It requests the normal `server-logs.read` approval.
+
+Electron process-family counters require the inviting desktop client, so call
+`electronPerformanceSnapshot()` from `client_eval`. Ordinary server-side eval
+has no Electron process affinity. See the performance skill for the capability
+matrix, cold/warm semantics, chat-latency decomposition, and cleanup rules.
+
+Lower-level panels (Chromium, via the CDP bridge):
 
 ```
 import { profilePanel, heapSnapshot, listProfiles } from "@workspace/testkit";
@@ -171,6 +207,7 @@ const last = await tb.call.lastRun();
 | --------------------------- | ----------------------------------------------- | ------------------------------- |
 | Panel access (CDP/automate) | first driver-DO automation of a workspace panel | per target/requester, grantable |
 | `workerd.inspector`         | first workerd profiling per caller              | per caller, grantable           |
+| Server logs                 | `readStartupProfile` or direct log query        | per caller, grantable           |
 | Panel open (structural)     | first `openPanel` from a new entity             | standard panelTree flow         |
 
 Pre-grant by running one small eval and approving the prompts before kicking

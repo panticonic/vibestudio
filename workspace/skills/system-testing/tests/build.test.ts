@@ -5,6 +5,41 @@ import type { TestExecutionResult } from "../types.js";
 import { buildTests } from "./build.js";
 
 const npmTest = buildTests.find((test) => test.name === "build-npm-package")!;
+const performanceTest = buildTests.find((test) => test.name === "build-performance-profile")!;
+
+describe("build performance validation", () => {
+  it("accepts a bounded exact-build profile with verified cache evidence", () => {
+    const result = execution([
+      performanceEvalInvocation({
+        version: 1,
+        source: "panels/example",
+        ref: "ctx:context-1",
+        firstRun: { elapsedMs: 21, cacheState: "preexisting" },
+        verifiedCacheRun: { elapsedMs: 2, sameBuildKeys: true },
+        targets: [
+          {
+            buildKey: "build-key",
+            artifactBytes: 1_024,
+            executableModuleCount: 3,
+            executableSourceBytes: 2_048,
+          },
+        ],
+      }),
+      finalAgentMessage("The first observed path took 21 ms and the verified cache took 2 ms."),
+    ]);
+
+    expect(performanceTest.validate(result)).toEqual({ passed: true, reason: undefined });
+  });
+
+  it("rejects prose or partial timing without the bounded attribution record", () => {
+    const result = execution([
+      performanceEvalInvocation({ elapsedMs: 2, sameBuildKeys: true }),
+      finalAgentMessage("The cached build was fast and all keys matched."),
+    ]);
+
+    expect(performanceTest.validate(result)).toMatchObject({ passed: false });
+  });
+});
 
 describe("build npm package validation", () => {
   it("pregrants the expected npm dependency inspection prompt", () => {
@@ -89,6 +124,33 @@ function evalInvocation(
         terminalOutcome: isError ? "tool_error" : "success",
         isError,
         result: returnValue === undefined ? undefined : { details: { returnValue } },
+      },
+    }),
+  };
+}
+
+function performanceEvalInvocation(returnValue: unknown): ChatMessage {
+  return {
+    id: "eval-performance",
+    kind: "message",
+    senderId: "agent",
+    senderMetadata: { type: "agent" },
+    complete: true,
+    contentType: "invocation",
+    content: JSON.stringify({
+      id: "call-eval-performance",
+      name: "eval",
+      arguments: {
+        code: `
+          import { profileBuild } from "@workspace/testkit";
+          return await profileBuild("panels/example", { verifyCache: true });
+        `,
+      },
+      execution: {
+        status: "complete",
+        terminalOutcome: "success",
+        isError: false,
+        result: { details: { returnValue } },
       },
     }),
   };

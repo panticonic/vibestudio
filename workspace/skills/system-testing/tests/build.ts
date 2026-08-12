@@ -40,6 +40,56 @@ function validateWorkspaceBuild(result: TestExecutionResult) {
     : { passed: false, reason: "Completed build call did not return artifacts and metadata" };
 }
 
+function buildPerformanceResult(values: readonly unknown[]): boolean {
+  return walkRecords(values).some((record) => {
+    const firstRun = record["firstRun"];
+    const verifiedCacheRun = record["verifiedCacheRun"];
+    const targets = record["targets"];
+    return (
+      record["version"] === 1 &&
+      typeof record["source"] === "string" &&
+      firstRun !== null &&
+      typeof firstRun === "object" &&
+      typeof (firstRun as Record<string, unknown>)["elapsedMs"] === "number" &&
+      typeof (firstRun as Record<string, unknown>)["cacheState"] === "string" &&
+      verifiedCacheRun !== null &&
+      typeof verifiedCacheRun === "object" &&
+      typeof (verifiedCacheRun as Record<string, unknown>)["elapsedMs"] === "number" &&
+      (verifiedCacheRun as Record<string, unknown>)["sameBuildKeys"] === true &&
+      Array.isArray(targets) &&
+      targets.length > 0 &&
+      targets.every((target) => {
+        if (target === null || typeof target !== "object") return false;
+        const value = target as Record<string, unknown>;
+        return (
+          typeof value["buildKey"] === "string" &&
+          typeof value["artifactBytes"] === "number" &&
+          typeof value["executableModuleCount"] === "number" &&
+          typeof value["executableSourceBytes"] === "number"
+        );
+      })
+    );
+  });
+}
+
+function validateBuildPerformanceProfile(result: TestExecutionResult) {
+  const base = completedScenarioEvidence(result);
+  if (!base.passed) return base;
+  if (!/\b(?:profileBuild|getPerformanceProfile)\b/u.test(base.evidence.evalCode)) {
+    return {
+      passed: false,
+      reason: "Completed eval did not invoke the bounded workspace build profiler",
+    };
+  }
+  return buildPerformanceResult(base.evidence.evalValues)
+    ? { passed: true, reason: undefined }
+    : {
+        passed: false,
+        reason:
+          "Build profiling returned no structured first-run, verified-cache, and size evidence",
+      };
+}
+
 function validateNpmImport(result: TestExecutionResult) {
   const base = completedScenarioEvidence(result);
   if (!base.passed) return base;
@@ -94,10 +144,20 @@ function validateWorkspaceImport(result: TestExecutionResult) {
 
 export const buildTests: TestCase[] = [
   {
+    name: "build-performance-profile",
+    description:
+      "Profile one exact workspace build and attribute its verified-cache and payload costs",
+    category: "build",
+    prompt:
+      "Use the shipped performance guidance to profile a small existing workspace UI unit in this exact context. Compare the observed first build path with a verified-cache repeat, attribute artifact, executable-module, and bundle size where available, and report the exact measurements plus whether the build keys matched. Keep source and bundle contents out of the result.",
+    validate: validateBuildPerformanceProfile,
+  },
+  {
     name: "build-workspace-package",
     description: "Build and type-check a workspace unit and verify success",
     category: "build",
-    prompt: "Build and type-check a small existing workspace UI unit and tell me whether it succeeded, including any diagnostics you observed.",
+    prompt:
+      "Build and type-check a small existing workspace UI unit and tell me whether it succeeded, including any diagnostics you observed.",
     validate: validateWorkspaceBuild,
   },
   {

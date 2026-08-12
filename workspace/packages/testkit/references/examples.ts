@@ -9,8 +9,13 @@ import {
   listUnits,
   openPanel,
   panelText,
+  profileBuild,
+  profileHost,
   profilePanel,
+  profilePanelInteraction,
+  profilePanelReload,
   profileWorkerd,
+  readStartupProfile,
   listWorkerdTargets,
   runSuites,
   summarize,
@@ -32,7 +37,10 @@ export async function runBuiltinSuites(filter?: {
 }
 
 /** Smoke-test a single panel: opens, renders text, no console errors. */
-export async function smokePanel(source: string, expectedText?: string | RegExp): Promise<RunSummary> {
+export async function smokePanel(
+  source: string,
+  expectedText?: string | RegExp
+): Promise<RunSummary> {
   const s = suite(`smoke:${source}`).test("opens cleanly", async (t) => {
     const handle = await openPanel(source);
     t.defer(() => handle.close().then(() => undefined));
@@ -69,6 +77,34 @@ export async function profilePanelWorkload(
   } finally {
     await handle.close().catch(() => undefined);
   }
+}
+
+/** Browser-native interaction report with automatic CDP-page cleanup. */
+export async function profilePanelInteractionWorkload(
+  handle: Awaited<ReturnType<typeof openPanel>>,
+  workload: Parameters<typeof profilePanelInteraction>[1]
+) {
+  return profilePanelInteraction(handle, workload, { label: "panel interaction" });
+}
+
+/** Profile a real panel lifecycle reload without replacing its handle. */
+export async function profilePanelReloadWorkload(handle: Awaited<ReturnType<typeof openPanel>>) {
+  return profilePanelReload(handle, { label: "panel reload", disableCache: true });
+}
+
+/** Exact build attribution plus a verified-cache repeat. */
+export async function profileWorkspaceBuild(source: string, contextId: string) {
+  return profileBuild(source, { ref: `ctx:${contextId}`, verifyCache: true });
+}
+
+/** Correlate one canonical workload with host/workerd resource movement. */
+export async function profileHostWorkload<T>(workload: () => Promise<T>) {
+  return profileHost(workload, { label: "userland workload" });
+}
+
+/** Current-boot semantic activation/reconciliation/build-discovery phases. */
+export async function startupProfile() {
+  return readStartupProfile();
 }
 
 /** One-line system overview: units + inspector targets + stored profiles. */

@@ -132,6 +132,33 @@ participants, or message sender lookup. A read receipt is a monotone projection
 update; its optional external-session signal is presentation only and must not
 append to GAD or create a durable-entity mailbox row.
 
+## Performance investigations
+
+Use the performance skill's deterministic profilers for the measured operation
+and the system-test record for agentic phase ownership. A system-test duration
+is an end-to-end harness boundary, not a model-latency metric by itself.
+
+- For build behavior, return the bounded `profileBuild` record: exact source
+  and ref, evidence-labeled first run, verified-cache timing/key equality,
+  artifact/module bytes, and bundle attribution. Never inline bundle or sealed
+  module contents into the trajectory.
+- For visible chat latency, pair a real-panel interaction profile with the exact
+  system-test trajectory. The panel owns browser/network/rendering evidence;
+  the trajectory owns model turns, tools, suspensions, durable delivery, and
+  cleanup.
+- For host/resource movement, wrap the canonical operation with `profileHost`.
+  Treat an empty event-loop sample set as “no monitor interval closed,” not as
+  proof of zero event-loop delay.
+- For recipient/subagent latency, retain the task-channel append, mailbox
+  commit/claim/admission, and parent projection as distinct durable phases.
+  Compare durations or shared durable coordinates; do not subtract timestamps
+  from unrelated monotonic clocks.
+
+Performance system tests should prove that the agent used the documented
+bounded surface and returned structured measurements. They should not demand a
+specific fast number from variable CI hardware, accept confident prose without
+the record, or grant shell/process/filesystem escape hatches.
+
 ## Cleanup is behavior
 
 Session close failures, fixture leaks, stale participants, and repository
