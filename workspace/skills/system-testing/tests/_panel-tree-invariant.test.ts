@@ -146,7 +146,7 @@ describe("panel-tree invariant", () => {
 
   it("seeds a real vague-reference target, observes same-panel navigation, then owns cleanup", async () => {
     const visible = tree();
-    let source = "https://example.com/";
+    let renderedUrl = "https://example.com/";
     const archive = vi.fn(async () => {
       visible.delete("seeded-browser");
     });
@@ -156,8 +156,9 @@ describe("panel-tree invariant", () => {
       archive,
       observe: vi.fn(async () => ({
         panelId: "seeded-browser",
-        source,
+        source: "browser:https://example.com/",
         phase: "ready",
+        host: { view: { exists: true, url: renderedUrl } },
       })),
     };
     const page = (parentId: string | null) => ({
@@ -218,7 +219,7 @@ describe("panel-tree invariant", () => {
       remainingTimeMs: () => 1_000,
       sendAndWait: vi.fn(async () => {
         expect(visible.has("seeded-browser")).toBe(true);
-        source = "https://example.org/";
+        renderedUrl = "https://example.org/";
         return completion;
       }),
     } as unknown as TestOrchestrationContext;
@@ -235,15 +236,17 @@ describe("panel-tree invariant", () => {
     expect(execution.error).toBeUndefined();
     expect(execution.diagnostics?.["seededPanelGoal"]).toEqual({
       panelId: "seeded-browser",
-      expectedFinalSource: "https://example.org/",
-      initialSource: "https://example.com/",
+      expectedFinalUrl: "https://example.org/",
+      initialSource: "browser:https://example.com/",
+      initialUrl: "https://example.com/",
       initialPhase: "ready",
       initialPathIds: ["seeded-browser"],
-      finalSource: "https://example.org/",
+      finalSource: "browser:https://example.com/",
+      finalUrl: "https://example.org/",
       finalPhase: "ready",
       finalPathIds: ["seeded-browser"],
       targetPreserved: true,
-      reachedExpectedSource: true,
+      reachedExpectedDestination: true,
     });
     expect(archive).toHaveBeenCalledOnce();
     expect(visible.size).toBe(0);

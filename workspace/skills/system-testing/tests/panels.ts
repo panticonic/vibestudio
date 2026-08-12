@@ -23,12 +23,12 @@ function validateSeededPanelNavigation(result: Parameters<TestCase["validate"]>[
   const evidence = result.diagnostics?.["seededPanelGoal"] as
     | Partial<SeededPanelGoalEvidence>
     | undefined;
-  return evidence?.initialSource === "https://example.com/" &&
+  return evidence?.initialUrl === "https://example.com/" &&
     evidence.initialPhase === "ready" &&
-    evidence.finalSource === "https://example.org/" &&
+    evidence.finalUrl === "https://example.org/" &&
     evidence.finalPhase === "ready" &&
     evidence.targetPreserved === true &&
-    evidence.reachedExpectedSource === true &&
+    evidence.reachedExpectedDestination === true &&
     evidence.initialPathIds?.includes(evidence.panelId ?? "") &&
     evidence.finalPathIds?.includes(evidence.panelId ?? "")
     ? { passed: true, reason: undefined }

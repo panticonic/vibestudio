@@ -22,15 +22,17 @@ export interface PanelTreeInvariantEvidence {
 
 export interface SeededPanelGoalEvidence {
   panelId: string;
-  expectedFinalSource: string;
+  expectedFinalUrl: string;
   initialSource: string | null;
+  initialUrl: string | null;
   initialPhase: string | null;
   initialPathIds: string[];
   finalSource: string | null;
+  finalUrl: string | null;
   finalPhase: string | null;
   finalPathIds: string[];
   targetPreserved: boolean;
-  reachedExpectedSource: boolean;
+  reachedExpectedDestination: boolean;
 }
 
 type TreeReader = Pick<
@@ -235,7 +237,7 @@ export async function orchestrateSeededPanelGoal(
   prompt: string,
   phase: string,
   initialSource: string,
-  expectedFinalSource: string,
+  expectedFinalUrl: string,
   tree: FixtureTreeReader = context.runner.panelTreeClient
 ): Promise<TestExecutionResult> {
   const startedAt = Date.now();
@@ -269,15 +271,17 @@ export async function orchestrateSeededPanelGoal(
 
     const evidence: SeededPanelGoalEvidence = {
       panelId: fixture.id,
-      expectedFinalSource,
+      expectedFinalUrl,
       initialSource: initialObservation.source ?? null,
+      initialUrl: initialObservation.host?.view.url ?? null,
       initialPhase: initialObservation.phase ?? null,
       initialPathIds: initialPath?.entries.map((entry) => entry.node.slotId) ?? [],
       finalSource: finalObservation?.source ?? null,
+      finalUrl: finalObservation?.host?.view.url ?? null,
       finalPhase: finalObservation?.phase ?? null,
       finalPathIds: finalPath?.entries.map((entry) => entry.node.slotId) ?? [],
       targetPreserved: fixtureStillVisible && finalObservation?.panelId === fixture.id,
-      reachedExpectedSource: finalObservation?.source === expectedFinalSource,
+      reachedExpectedDestination: finalObservation?.host?.view.url === expectedFinalUrl,
     };
     execution.diagnostics = {
       ...(execution.diagnostics ?? {}),
@@ -287,10 +291,10 @@ export async function orchestrateSeededPanelGoal(
     if (!evidence.targetPreserved) {
       appendExecutionError(execution, "Agent did not preserve the seeded panel-tree target");
     }
-    if (!evidence.reachedExpectedSource) {
+    if (!evidence.reachedExpectedDestination) {
       appendExecutionError(
         execution,
-        `Seeded panel ended on ${evidence.finalSource ?? "an unavailable source"}, expected ${expectedFinalSource}`
+        `Seeded panel rendered ${evidence.finalUrl ?? "an unavailable URL"}, expected ${expectedFinalUrl}`
       );
     }
   } catch (error) {

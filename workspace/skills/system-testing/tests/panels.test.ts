@@ -63,15 +63,17 @@ describe("panel system-test declarations", () => {
     const navigation = panelTests.find((test) => test.name === "panel-tree-navigation")!;
     const evidence = {
       panelId: "seeded-browser",
-      expectedFinalSource: "https://example.org/",
-      initialSource: "https://example.com/",
+      expectedFinalUrl: "https://example.org/",
+      initialSource: "browser:https://example.com/",
+      initialUrl: "https://example.com/",
       initialPhase: "ready",
       initialPathIds: ["seeded-browser"],
-      finalSource: "https://example.org/",
+      finalSource: "browser:https://example.com/",
+      finalUrl: "https://example.org/",
       finalPhase: "ready",
       finalPathIds: ["seeded-browser"],
       targetPreserved: true,
-      reachedExpectedSource: true,
+      reachedExpectedDestination: true,
     };
 
     expect(
@@ -86,7 +88,7 @@ describe("panel system-test declarations", () => {
         messages: [],
         duration: 1,
         diagnostics: {
-          seededPanelGoal: { ...evidence, finalSource: "https://example.com/" },
+          seededPanelGoal: { ...evidence, finalUrl: "https://example.com/" },
         },
       })
     ).toMatchObject({ passed: false });
