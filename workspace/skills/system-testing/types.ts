@@ -57,6 +57,16 @@ export const CREATED_PACKAGE_WORKSPACE_REPO_FIXTURE = {
   section: "packages",
 } as const satisfies WorkspaceRepoCreationScope;
 
+export const CREATED_SKILL_WORKSPACE_REPO_FIXTURE = {
+  kind: "created-repository",
+  section: "skills",
+} as const satisfies WorkspaceRepoCreationScope;
+
+export const CREATED_PROJECT_WORKSPACE_REPO_FIXTURE = {
+  kind: "created-repository",
+  section: "projects",
+} as const satisfies WorkspaceRepoCreationScope;
+
 export const CREATED_WORKER_WORKSPACE_REPO_FIXTURE = {
   kind: "created-repository",
   section: "workers",

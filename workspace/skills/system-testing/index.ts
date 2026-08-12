@@ -62,6 +62,7 @@ export {
   oauthTests,
   panelTests,
   projectLifecycleTests,
+  scaffoldMatrixTests,
   rpcTests,
   selfDevelopmentTests,
   selectedTestStages,
