@@ -869,6 +869,21 @@ test.describe("Terminal Startup", () => {
         intervals: [100, 250, 500],
       })
       .toBe("Project terminal");
+    expect(await clickPanelSelector(app, terminalPanelId, '[aria-label="Terminal settings"]')).toBe(
+      true
+    );
+    await expect
+      .poll(
+        () =>
+          executePanelScript<boolean>(
+            app,
+            terminalPanelId,
+            `!document.querySelector('[aria-label="Panel name"]') &&
+              document.activeElement?.getAttribute('aria-label') !== 'Panel name'`
+          ),
+        { timeout: 5_000, intervals: [100, 250, 500] }
+      )
+      .toBe(true);
     await expect
       .poll(
         () =>
@@ -890,9 +905,6 @@ test.describe("Terminal Startup", () => {
         { timeout: 5_000, intervals: [100, 250, 500] }
       )
       .toBe("Project terminal");
-    expect(await clickPanelSelector(app, terminalPanelId, '[aria-label="Terminal settings"]')).toBe(
-      true
-    );
 
     await executePanelScript(
       app,
