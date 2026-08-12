@@ -32,7 +32,7 @@ export const trustedUnitAuthoringTests: TestCase[] = [
     workspaceRepoFixture: BUILDABLE_EXTENSION_WORKSPACE_REPO_FIXTURE,
     authorityPolicy: focusedVerificationAuthority,
     prompt:
-      "The disposable status extension's focused test is failing because its startup label is wrong. Fix the extension, verify the focused behavior and its build, and leave the coherent repair saved in this task's history. Do not publish it.",
+      'The disposable status extension keeps reporting "waiting" even though it is ready. Please fix it.',
     validate: () => ({ passed: true }),
   },
   {
@@ -43,7 +43,7 @@ export const trustedUnitAuthoringTests: TestCase[] = [
     workspaceRepoFixture: BUILDABLE_APP_WORKSPACE_REPO_FIXTURE,
     authorityPolicy: focusedVerificationAuthority,
     prompt:
-      "The disposable terminal app's focused test is failing because its startup label is wrong. Fix the app, verify the focused behavior and its target build, and leave the coherent repair saved in this task's history. Do not publish it.",
+      'The disposable terminal app still prints "booting" after startup has completed. Please fix it.',
     validate: () => ({ passed: true }),
   },
 ];

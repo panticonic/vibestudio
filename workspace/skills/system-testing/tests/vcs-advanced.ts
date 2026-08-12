@@ -302,8 +302,7 @@ export const vcsAdvancedTests: TestCase[] = [
   },
   {
     name: "vcs-sizable-history-memory-recall",
-    description:
-      "Recover a retired project fact and its rationale from a sizable semantic history",
+    description: "Recover a retired project fact and its rationale from a sizable semantic history",
     category: "vcs-advanced",
     workspaceRepoFixture: HISTORICAL_CONTENT_WORKSPACE_REPO_FIXTURE,
     prompt:
@@ -320,7 +319,7 @@ export const vcsAdvancedTests: TestCase[] = [
     prompt:
       "Review src/retention-policy.ts in the disposable historical project. Why is archiveWindowDays 21 rather than 14, and did the later history reverse that decision? Ground the answer in the workspace's recorded evidence.",
     validate: (result) =>
-      requireHistoricalAnswer(result, [/21/u, /14/u, /day 18|regional export/iu]),
+      requireHistoricalAnswer(result, [/\b21\b/u, /\b14\b/u, /day 18|regional export/iu]),
   },
   {
     name: "vcs-explicit-move-copy",

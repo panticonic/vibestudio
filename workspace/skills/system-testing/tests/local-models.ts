@@ -20,7 +20,7 @@ export const localModelTests: TestCase[] = [
       ],
     },
     prompt:
-      "Please get the bundled local model ready, then use that model—not your current one—to read the disposable project's README and tell me its heading.",
+      "Please use the bundled local model—not your current one—to read the disposable project's README and tell me its heading.",
     validate: () => ({ passed: true }),
   },
 ];

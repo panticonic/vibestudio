@@ -43,8 +43,9 @@ function execution(final: string, calls: ReturnType<typeof invocation>[]): TestE
 
 describe("reduced VCS agentic catalog", () => {
   it("keeps every agent prompt user-like and free of method choreography", () => {
-    expect([...vcsTests, ...vcsAdvancedTests]).toHaveLength(13);
-    for (const test of [...vcsTests, ...vcsAdvancedTests]) {
+    const tests = [...vcsTests, ...vcsAdvancedTests];
+    expect(new Set(tests.map((test) => test.name)).size).toBe(tests.length);
+    for (const test of tests) {
       expect(test.prompt).not.toContain("vcs.");
       expect(test.prompt).not.toContain("expectedWorkingHead");
       expect(test.prompt).not.toContain("commandId");

@@ -150,7 +150,7 @@ export const buildTests: TestCase[] = [
     category: "performance",
     workspaceRepoFixture: OPTIMIZABLE_PANEL_WORKSPACE_REPO_FIXTURE,
     prompt:
-      "The disposable panel is much larger than its tiny UI warrants. Find the source of the waste, improve it without changing what the panel renders, and leave the measured, verified repair saved in this task. Do not publish it.",
+      "The disposable panel is much larger than its tiny UI warrants. Please investigate and fix it without changing what it displays.",
     validate: () => ({ passed: true }),
   },
   {
