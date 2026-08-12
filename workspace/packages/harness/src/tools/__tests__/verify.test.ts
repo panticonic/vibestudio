@@ -52,6 +52,10 @@ describe("context-exact verify tool", () => {
         target: "packages/parser",
         contextId: "context-7",
         ref: "ctx:context-7",
+        reportRequest: {
+          method: "build.getBuildReport",
+          args: ["packages/parser", "ctx:context-7"],
+        },
         reportDigest: expect.stringMatching(/^[0-9a-f]{64}$/u),
         unit: {
           repoPath: "packages/parser",
@@ -124,6 +128,9 @@ describe("context-exact verify tool", () => {
       text: expect.stringContaining("1 diagnostic"),
     });
     expect((result.content[0] as { text: string }).text).not.toContain("Cannot find name");
+    expect((result.content[0] as { text: string }).text).toContain(
+      "Do not rerun this unchanged build."
+    );
     expect(result.details).toMatchObject({
       operation: "build",
       report: { diagnostics: [{ source: "tsc", severity: "error" }] },
@@ -141,6 +148,36 @@ describe("context-exact verify tool", () => {
     expect(failure).not.toHaveProperty("report");
     expect(failure).not.toHaveProperty("receipt");
     expect(JSON.stringify(result)).not.toContain("[object Object]");
+  });
+
+  it("classifies a skipped content target as a correctable request", async () => {
+    const { callMain } = rpcResult({
+      repoPath: "packages/docs",
+      kind: "content",
+      status: "skipped" as const,
+      diagnostics: [],
+      builds: [],
+    });
+
+    const result = await createVerifyTool(callMain, () => "context-7").execute("call-build", {
+      operation: "build",
+      target: "packages/docs",
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0]).toMatchObject({
+      type: "text",
+      text: expect.stringContaining("Build skipped for packages/docs"),
+    });
+    expect(result.details).toMatchObject({
+      status: "skipped",
+      failure: {
+        code: "build_target_not_buildable",
+        kind: "domain",
+        retry: { policy: "correct-input" },
+        recovery: { action: "correct-request" },
+      },
+    });
   });
 
   it("bounds the one canonical diagnostic array and remaps target references", async () => {

@@ -89,6 +89,10 @@ export interface BuildVerificationReceipt {
   target: string;
   contextId: string;
   ref: string;
+  reportRequest: {
+    method: "build.getBuildReport";
+    args: [target: string, ref: string];
+  };
   reportDigest: string;
   unit: {
     repoPath: string;
@@ -147,17 +151,29 @@ export function createVerifyTool(
         const bounded = boundBuildReport(report);
         const failed = report.status !== "ok";
         const receipt = buildVerificationReceipt(command.target, exactContextId, report, bounded);
-        const failure = failed
-          ? verificationFailure({
-              code: "build_verification_failed",
-              message: `Build failed for ${command.target} with ${report.diagnostics.length} ${report.diagnostics.length === 1 ? "diagnostic" : "diagnostics"}.`,
-              recovery: {
-                action: "repair-source",
-                instruction:
-                  "Inspect details.report.diagnostics, repair the source or dependency declarations, then rerun verify once.",
-              },
-            })
-          : undefined;
+        const failure =
+          report.status === "failed"
+            ? verificationFailure({
+                code: "build_verification_failed",
+                message: `Build failed for ${command.target} with ${report.diagnostics.length} ${report.diagnostics.length === 1 ? "diagnostic" : "diagnostics"}.`,
+                recovery: {
+                  action: "repair-source",
+                  instruction:
+                    "This receipt already proves the current failure; do not rerun unchanged. Inspect details.report.diagnostics, or use details.receipt.reportRequest once when omitted diagnostics are required. Repair the source or dependencies, then rerun verify once with the same target.",
+                },
+              })
+            : report.status === "skipped"
+              ? verificationFailure({
+                  code: "build_target_not_buildable",
+                  message: `Build skipped for ${command.target} because it resolves to ${report.kind} content with no build targets.`,
+                  retryPolicy: "correct-input",
+                  recovery: {
+                    action: "correct-request",
+                    instruction:
+                      "Use details.receipt.unit.repoPath to identify the requested content, then select the owning buildable unit before retrying.",
+                  },
+                })
+              : undefined;
         return {
           content: [
             {
@@ -270,6 +286,10 @@ function buildVerificationReceipt(
     target,
     contextId,
     ref: `ctx:${contextId}`,
+    reportRequest: {
+      method: "build.getBuildReport",
+      args: [target, `ctx:${contextId}`],
+    },
     reportDigest: sha256Hex(encodeUtf8(JSON.stringify(report))),
     unit: {
       repoPath: report.repoPath,
@@ -365,7 +385,8 @@ function renderBuild(
     `Build ${report.status} for ${target} (${report.kind}; ` +
     `${report.builds.length} target${report.builds.length === 1 ? "" : "s"}; ` +
     `${diagnosticSummary}). ` +
-    "Structured diagnostics are in details.report.diagnostics; exact reusable evidence is in details.receipt."
+    "Structured diagnostics are in details.report.diagnostics; exact reusable evidence and the full-report request are in details.receipt." +
+    (report.status === "failed" ? " Do not rerun this unchanged build." : "")
   );
 }
 
