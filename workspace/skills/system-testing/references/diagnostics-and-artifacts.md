@@ -25,7 +25,7 @@ For each failure, state:
 4. the first point where actual behavior diverged;
 5. why the evidence classifies the defect as infrastructure, documentation,
    harness, or validator;
-6. the repair and the focused/category/smoke verification that proves it.
+6. the repair and the smallest evidence-directed verification that proves it.
 
 Do not infer a cause from the final answer when the trajectory shows a tool
 failure, stale documentation, cleanup fault, or successful recovery hidden by

@@ -678,9 +678,10 @@ Before assuming a repair failed, verify:
   its build metadata derives from that exact semantic state;
 - the manifest's `systemEpoch` matches the host before any runtime starts.
 
-Then rerun the exact failed test through the CLI, followed by its category and
-smoke coverage. Inspect any new failure trajectory rather than adding prompt
-instructions or timing delays.
+Then rerun the exact failed test through the CLI. Expand only when the change's
+plausible blast radius identifies another exact scenario or conventional test
+whose result is not already known. Inspect any new failure trajectory rather
+than adding prompt instructions or timing delays.
 
 ## Phase 8: Iterate or Finalize
 
@@ -696,13 +697,14 @@ if (retest.result.passed) {
 ## Tips
 
 - **Start with the smallest relevant exact test.** Run `doctor` and discover its
-  current name first; run the affected category and smoke only after the exact
-  test passes.
+  current name first; expand beyond it only when the changed behavior supplies
+  a concrete reason.
 - **Keep each repair semantically coherent.** Don't bundle unrelated fixes.
 - **Use the isolated semantic task context for workspace-owned source.** Create
   a Git branch only when editing a plain external project repository.
 - **Check type errors before committing.** Use the `@workspace-extensions/typecheck-service` extension.
-- **Re-run the full smoke suite after fixing.** Your fix might break something else.
+- **Keep verification evidence-directed.** Do not rerun category, smoke, or
+  full-suite coverage merely because an exact case passed.
 - **Declare typed repository fixtures.** Any agentic case that may create or
   fork workspace source must select the `projects/...` content fixture or the
   seeded `packages/...` buildable-package fixture. The baseline is local; normal
