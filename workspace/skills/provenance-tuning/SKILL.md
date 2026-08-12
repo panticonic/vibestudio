@@ -1,6 +1,6 @@
 ---
 name: provenance-tuning
-description: Diagnose and improve Vibestudio semantic provenance reads when automatic read-time memory, inspect, neighbors, history, or blame are slow, incomplete, confusing, stale, or suspected of crossing scope. Use exact typed roots and fixtures; repair graph semantics, indexes, or presentation without adding caches, claims stores, or opaque handles.
+description: Diagnose slow, incomplete, confusing, stale, or cross-scope semantic provenance reads; repair graph recording, indexes, content mappings, or presentation with exact typed roots and fixtures.
 ---
 
 # Provenance read review
@@ -27,10 +27,9 @@ For automatic read-time memory, capture the full bytes hash and exact displayed
 UTF-16 range from the `read` details. Confirm the attachment is `stale` rather
 than present when semantic state no longer names those bytes, and confirm that
 this diagnostic does not add warning prose to the file content. Inspect the
-  blame-selected roots instead of comparing rendered prose alone. Then inspect
-  the model-visible block: it should plainly answer “why do these lines exist?”
-  with tier-labeled intent and application-anchored arrival context, then offer
-  its once-only cursored continuations without dumping every internal root.
+blame-selected roots instead of comparing rendered prose alone. Then inspect
+the model-visible block: it should answer why the lines exist with tier-labeled
+intent and bounded, reusable continuations.
 
 ## Classify the ownership problem
 
@@ -64,5 +63,5 @@ recorded reason from an ordinary read without being prompted to call a
 provenance method.
 
 Report the exact symptom, owner, semantic change, focused tests, and measured
-before/after behavior. Seek approval before widening global page limits; an
-ordinary semantic or index correction needs no parallel compatibility path.
+before/after behavior. Do not widen global page limits to hide an indexing or
+query-plan defect.

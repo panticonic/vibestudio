@@ -4,7 +4,7 @@
   "files": [
     {
       "path": "SKILL.md",
-      "sha256": "da3bd536e1fde78fb6e1b4d2fc7c31105a46071bbae6649a92660a8c0d9f579c"
+      "sha256": "5099390448a64c9877cc40289484a80450cca63e447652da16b57e612e2b197f"
     },
     {
       "path": "agents/openai.yaml",
@@ -71,5 +71,5 @@
       "sha256": "1b8a8b5b185b47039733272129292f2d6442205bb02d4b07e328790795eb77cb"
     }
   ],
-  "packageDigest": "597c3cd21bdb2261278c0d4376774cde4ff8a750c3e2701fab854a3ecf590d5d"
+  "packageDigest": "a6e6634c73bd0d9d3712b454090da845c9e65d05fb1aaa48f884569e36abdcab"
 }

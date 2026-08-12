@@ -1,138 +1,60 @@
 ---
 name: appdev
-description: Author Vibestudio trusted workspace apps for Electron, React Native, and terminal targets, including manifests, capabilities, pairing/client auth, build artifacts, approval flow, and development workflow.
+description: Create or modify trusted workspace apps for Electron, React Native, or terminal targets, including manifests, capabilities, client authentication, build artifacts, approval, and verification.
 ---
 
-# App Development Skill
+# Trusted app development
 
-Use this skill when creating or modifying trusted workspace apps under `apps/`.
-Apps are trusted client units with explicit target runtimes. They are different
-from panels, workers, and extensions:
+Apps under `apps/` are approved client runtimes. Panels are ordinary UI
+surfaces, workers and Durable Objects are sandboxed services, and extensions
+are trusted Node services.
 
-- Panels are ordinary user-facing workspace surfaces.
-- Workers and Durable Objects are userland runtime services.
-- Extensions are trusted Node service units.
-- Apps are trusted client runtimes that can become shell/mobile/terminal
-  principals.
+## Read by task
 
-## Files
+| Task | Reference |
+| --- | --- |
+| Package, manifest, source, dependencies, panel commands | [AUTHORING.md](AUTHORING.md) |
+| Electron, React Native, or terminal contracts | [TARGETS.md](TARGETS.md) |
+| App capability declarations | [CAPABILITIES.md](CAPABILITIES.md) |
+| Semantic development and diagnostics | [DEV_LOOP.md](DEV_LOOP.md) |
+| Native bootstrap, pairing, and mobile artifacts | [MOBILE.md](MOBILE.md) |
+| Remote clients and credentials | [REMOTE_CLIENTS.md](REMOTE_CLIENTS.md) |
+| Focused checks and smoke coverage | [TESTING.md](TESTING.md) |
 
-| Document                               | Content                                                                                                  |
-| -------------------------------------- | -------------------------------------------------------------------------------------------------------- |
-| [AUTHORING.md](AUTHORING.md)           | Package layout, manifest shape, source paths, dependencies, declaration rules, and panel-command hosting |
-| [TARGETS.md](TARGETS.md)               | Electron, React Native, and terminal target contracts                                                    |
-| [CAPABILITIES.md](CAPABILITIES.md)     | Capability declarations and what each app capability unlocks                                             |
-| [DEV_LOOP.md](DEV_LOOP.md)             | Semantic source, explicit context checks, publication, approval, reload, and debugging workflow          |
-| [MOBILE.md](MOBILE.md)                 | Native mobile host bootstrap, pairing, principal grants, and RN build artifacts                          |
-| [REMOTE_CLIENTS.md](REMOTE_CLIENTS.md) | Server pairing, remote shells, terminal-client direction, and credential model                           |
-| [TESTING.md](TESTING.md)               | Focused checks and smoke scenarios for app changes                                                       |
+Read only the references relevant to the target and change.
 
-## Critical Rules
+## Invariants
 
-0. **Build production-ready systems** — apps are trusted workspace
-   infrastructure, not throwaway prototypes. Design for real use from the
-   start: proper state persistence, error handling, principled authority, and
-   tested edge cases. Do not populate apps with hardcoded demo/fake data —
-   build real empty states and real data entry flows.
-1. `@workspace-apps/foo` maps to `apps/foo`, not `apps/@workspace-apps/foo`.
-2. App identity comes from `package.json` package name plus the approved build
-   identity, not from a special filesystem path.
-3. Give every app a semantic `vibestudio.icon`. Follow the shared
-   [icon guide](../workspace-dev/references/icons.md): prefer a curated Lucide
-   concept or truthful brand mark, then a meaningful emoji or original artwork.
-   Use a repo-local image such as `./assets/icon.svg` for drawn or branded icons.
-   Image paths are relative to `package.json`, may not traverse outside the unit,
-   and must be at most 1 MiB. Do not use generated initials or remote favicon
-   services.
-   For UI controls, import named Lucide components from `@workspace/ui/icons`;
-   do not add another web icon catalog.
-4. App code is trusted client code. Add capabilities deliberately and keep the
-   capability list no broader than the target needs.
-5. App source participates in the workspace-wide semantic VCS. Read
-   [vibestudio-vcs](../vibestudio-vcs/SKILL.md) before changing it. Author exact
-   working intent, build or test the returned working head, commit the complete
-   local application chain, and publish through `vcs.push`. Explicit checks are
-   fast local feedback; push validates semantic ancestry/integration, reruns
-   the exact-candidate build/typecheck gate, obtains approval, and atomically
-   advances protected refs. Do not reconstruct the workflow from
-   filesystem dirtiness, paths, or repository state hashes.
-6. Electron shell apps that manage panel layout must declare `panel-hosting`.
-7. React Native workspace apps are loaded by the shipped native host bootstrap;
-   clean-install pairing must work before the workspace app bundle is available.
-8. Terminal apps run as supervised Node processes only after they are selected
-   for launch or explicitly activated through
-   `runtime.supervision.activate({ kind: "app", releaseId: appName })`.
-9. Apps that need durable shared data should call a manifest-declared worker
-   Durable Object service. The app itself does not get a generic workspace SQL
-   database; use `workers.resolveService(...)` + `rpc.call(...)` against narrow
-   DO methods. Admit the relevant authenticated principal families in both the
-   service's `authority.principals` and each DO method's
-   `@rpc({ principals, effect, tier, sensitivity })` policy. For editable
-   content that benefits from history and agent collaboration, use
-   version-controlled files under `projects/` instead.
-10. **Respect the host theme** — use `usePanelTheme()` from `@workspace/react`
-    for live dark/light awareness. Do not hardcode a color scheme. Build
-    mobile-friendly, responsive layouts — apps render on desktop and mobile
-    hosts.
-11. **Agentically enabled by default** — expose app DO methods with explicit
-    `@rpc` contracts so agents can call them alongside human UIs. If the app has
-    a conversational or collaborative dimension, integrate it with the workspace
-    channel/messaging system using `addAgentToChannel`. Every meaningful app
-    surface should be programmable by agents as a first-class concern.
-12. **Keep panel commands generic and host-local** — when an app hosts panels,
-    follow [AUTHORING.md#hosting-panel-contributed-commands](AUTHORING.md#hosting-panel-contributed-commands).
-    The panel owns command semantics and execution; the app owns only native
-    presentation and local routing. Never forward `target: "shell"` to a server
-    session or add feature-specific command behavior to generic shell code.
+- `@workspace-apps/<name>` maps to `apps/<name>`. App identity comes from the
+  package manifest and approved build, not its display path.
+- Give each app a semantic `vibestudio.icon`; follow the shared
+  [icon guide](../workspace-dev/references/icons.md). Use host UI icons from
+  `@workspace/ui/icons` rather than adding another catalog.
+- App code is trusted client code. Declare only the capabilities its target
+  requires and let the normal review flow approve them.
+- Read [Vibestudio VCS](../vibestudio-vcs/SKILL.md) before editing managed app
+  source. Check the exact working head, commit the complete local chain, and
+  publish explicitly.
+- Electron layout hosts declare `panel-hosting`. React Native pairing must work
+  in the shipped bootstrap before a workspace bundle exists. Terminal apps run
+  only as explicitly activated supervised processes.
+- Put durable shared data behind a manifest-declared worker or Durable Object
+  service with explicit RPC authority. Use version-controlled project files
+  when the content benefits from history and collaboration.
+- Use `usePanelTheme()` and responsive layouts. Shared client behavior needs
+  focused evidence in every affected target.
+- Keep panel commands generic and host-local: panels own command meaning; apps
+  own presentation and local routing.
 
-## Quick Start
+## Workflow
 
-Create an app repo under `apps/<name>` with package name
-`@workspace-apps/<name>`, then declare the app in `meta/vibestudio.yml`:
+Create `apps/<name>` with package name `@workspace-apps/<name>`, then declare it
+under `apps:` in `meta/vibestudio.yml`. Use live generated docs and the manifest
+schema for exact fields instead of copying a manifest template from this file.
 
-```yaml
-apps:
-  - source: apps/my-app
-    ref: main
-```
+Run the smallest target-specific checks from [TESTING.md](TESTING.md). Use
+[system testing](../system-testing/SKILL.md) when a change crosses startup,
+pairing, shell UI, mobile bootstrap, or client-auth boundaries.
 
-Minimal Electron app package:
-
-```json
-{
-  "name": "@workspace-apps/my-app",
-  "version": "0.1.0",
-  "private": true,
-  "type": "module",
-  "vibestudio": {
-    "displayName": "My App",
-    "icon": "✨",
-    "app": {
-      "target": "electron",
-      "renderer": "index.tsx",
-      "capabilities": ["notifications"]
-    }
-  },
-  "dependencies": {
-    "@vibestudio/rpc": "workspace:*",
-    "@vibestudio/shared": "workspace:*",
-    "react": "^19.0.0",
-    "react-dom": "^19.0.0"
-  }
-}
-```
-
-For shell/mobile/remote-client work, read [TARGETS.md](TARGETS.md),
-[CAPABILITIES.md](CAPABILITIES.md), and [REMOTE_CLIENTS.md](REMOTE_CLIENTS.md)
-before editing.
-
-## Related Skills
-
-- Use `workspace-dev` for ordinary panels and workers.
-- Use `workspace-dev/WORKERS.md` for DO-backed app databases and worker service
-  declarations.
-- Use `extensiondev` for trusted Node service units.
-- Use `system-testing` after app changes that affect startup, pairing, shell
-  UX, mobile bootstrap, or client auth.
-- Use `vibestudio-vcs` for every app-source mutation, comparison, semantic
-  commit, external snapshot import, and publication.
+Use [workspace development](../workspace-dev/SKILL.md) for panels and workers,
+and [extension development](../extensiondev/SKILL.md) for trusted Node services.

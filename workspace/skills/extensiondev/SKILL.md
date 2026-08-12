@@ -1,138 +1,51 @@
 ---
 name: extensiondev
-description: Author Vibestudio extensions — long-lived Node processes that expose RPC APIs (and optionally HTTP fetch handlers) to panels, workers, and other extensions. Covers manifest, activate(), capability declarations, the VCS dev loop, and debugging.
+description: Create or modify trusted Vibestudio extensions: supervised Node services with RPC methods, optional fetch handlers, explicit authority, semantic publication, and runtime diagnostics.
 ---
 
-# Extension Development Skill
+# Extension development
 
-Vibestudio extensions are workspace units that live alongside panels and workers but run in their own forked Node process with **full Node access** (`node:fs`, `child_process`, native addons). They are the canonical way to add a new RPC API, replace an in-host service, or wrap a long-running native dependency.
+Extensions under `extensions/` run as approved Node processes with Node APIs,
+native modules, sockets, and host filesystem access. Prefer a worker when a
+workerd isolate is sufficient. To call an installed extension, use the live
+generated docs and `extensions` runtime API; this skill is for authoring one.
 
-If you're calling an existing extension from a panel or worker, you don't need this skill — see `workspace-dev/TOOLS.md` for `extensions.use(name)` patterns. This skill is for **writing** an extension.
+## Read by task
 
-## Files
+| Task | Reference |
+| --- | --- |
+| Package manifest, `activate(ctx)`, API, authority | [AUTHORING.md](AUTHORING.md) |
+| Optional HTTP fetch handler | [FETCH.md](FETCH.md) |
+| Build, publish, inspect, and reload | [DEV_LOOP.md](DEV_LOOP.md) |
 
-| Document                       | Content                                                                                  |
-| ------------------------------ | ---------------------------------------------------------------------------------------- |
-| [AUTHORING.md](AUTHORING.md)   | Workspace layout, `package.json`, `activate(ctx)`, the API contract, the `ctx.*` surface |
-| [FETCH.md](FETCH.md)           | Optional default-export `fetch` handler and the `/_r/ext/<name>/*` route                 |
-| [DEV_LOOP.md](DEV_LOOP.md)     | Semantic publication as the dev signal, dev-session approval, inspector, log stream      |
-| [MIGRATIONS.md](MIGRATIONS.md) | Migrating an in-host service into an extension (the canary pattern)                      |
+## Invariants
 
-## When to write an extension
+- Use `extensions/<name>` with a private ESM package and a validated
+  `vibestudio.extension` manifest.
+- Give the unit a semantic icon; follow the
+  [icon guide](../workspace-dev/references/icons.md).
+- Return a plain object from `activate(ctx)`. Its own enumerable function
+  properties are the RPC surface.
+- Treat Node and `ctx.fs` access as trusted authority, not a sandbox. Declare
+  protected resources in `authority.provides` and bind methods through
+  `vibestudio.extension.methodAuthority`; do not add advisory prompts inside
+  methods.
+- Use `ctx.log` for structured runtime logs. Select the exact live extension
+  identity before reading supervision health or logs.
+- Read [Vibestudio VCS](../vibestudio-vcs/SKILL.md) before editing. Only an
+  approved protected-main publication can drive the build and activation
+  projection; local or merely committed work does not update the running unit.
+- Add a repo-local `SKILL.md` that documents the extension's public purpose,
+  trust boundary, diagnostics, and non-obvious topology. Point to live docs or
+  code for changing method catalogs.
 
-- You want a callable API that needs **Node**: filesystem, child processes, native or WASM modules, long-lived sockets, large in-memory state.
-- You're replacing an in-tree `src/server/services/*` service that doesn't need to be in-host (the spec lists migration candidates — see [MIGRATIONS.md](MIGRATIONS.md)).
-- You want a fetch endpoint that has trusted ambient access to the user's machine.
+## Workflow
 
-If a worker (workerd isolate) is sufficient, prefer that — workers are cheaper and have the workerd sandbox as a real boundary. Extensions trade that boundary for full Node access; the trust grant is the elevated install approval.
+Create the package, declare it under `extensions:` in `meta/vibestudio.yml`, and
+let the elevated review cover the exact native code and requested authority.
+Use `extensions.use(...)` or `extensions.invoke(...)` only after activation.
 
-## Critical rules
-
-1. **`workspace/extensions/<name>/`** is the location. The package must be `private: true` and `type: "module"`, and the `package.json` must have `vibestudio.extension` (validated at install **and** boot — bad manifests fail closed).
-2. **Give every extension a semantic `vibestudio.icon`.** Follow the shared
-   [icon guide](../workspace-dev/references/icons.md): prefer a truthful brand
-   mark for a named integration or a curated Lucide concept otherwise. Use a
-   repo-local image such as `./assets/icon.svg`; keep images at most 1 MiB, do
-   not traverse outside the unit, and never use generated initials, remote
-   favicon services, or another general icon catalog.
-3. **`activate(ctx)` returns a plain object.** Its own enumerable function properties become RPC methods. Inherited methods, `then`, and non-function properties are skipped.
-4. **`ctx.fs` for an extension is unrestricted** — it covers the whole host filesystem. This is not a sandbox; it exists for _auditable_ writes. For silent ambient work, import `node:fs` directly. The install approval is the trust boundary.
-5. **Protect extension-owned resources declaratively.** Add exact
-   `authority.provides` definitions and bind protected methods with
-   `vibestudio.extension.methodAuthority`. The extension dispatcher enforces
-   them before `activate()` API code runs; never add an advisory prompt inside
-   a method.
-6. **Prefer ESM**. For external CommonJS packages, use default imports + destructure (`import pkg from "x"; const { fn } = pkg`). Named imports from CJS are blocked.
-7. **No `console.log` in production paths.** Use `ctx.log.{debug,info,warn,error}` so logs land in the exact supervised entity's stream (`runtime.supervision.logs(identity)`). `console.*` is captured too, but as `source: "stdout"` / `"stderr"` instead of structured records.
-8. **Protected semantic publication is the dev signal.** Read
-   [vibestudio-vcs](../vibestudio-vcs/SKILL.md), author source on an exact
-   working head, commit the complete local application chain, and publish the
-   committed event through semantic ancestry/integration validation, approval,
-   and atomic protected-ref publication. Explicit builds provide fast local
-   feedback, while the push gate repeats the exact-candidate build/typecheck
-   check before approval and a successful `main` advance triggers the separate
-   build/update projection.
-   That projection requires extension update approval before replacement and
-   retains the previous runnable extension on any build or activation failure.
-   Working or merely committed context work does not update the active
-   extension.
-9. **Every extension ships a repo-local `SKILL.md`.** Put it at
-   `workspace/extensions/<name>/SKILL.md` and document the extension's RPC
-   surface, logs, trust boundaries, and any remote-server topology assumptions.
-   This is part of done for new extensions.
-
-## Quick start
-
-```ts
-// workspace/extensions/hello/package.json
-{
-  "name": "@workspace-extensions/hello",
-  "version": "0.1.0",
-  "type": "module",
-  "private": true,
-  "vibestudio": {
-    "displayName": "Hello",
-    "icon": "👋",
-    "entry": "index.ts",
-    "sourcemap": true,
-    "extension": { "activationEvents": ["onInvoke"] }
-  }
-}
-```
-
-```ts
-// workspace/extensions/hello/index.ts
-import type { ExtensionContext } from "@vibestudio/extension";
-
-export async function activate(ctx: ExtensionContext) {
-  ctx.log.info("hello activating");
-  return {
-    async greet(name: string) {
-      return `hello, ${name}`;
-    },
-  };
-}
-```
-
-Declare it in `meta/vibestudio.yml`:
-
-```yaml
-extensions:
-  - source: extensions/hello
-```
-
-Saving that change (a gated meta write) raises one **elevated, joint approval** listing every newly-declared extension, because they run as native code. Once approved and running, call it:
-
-```ts
-import { extensions } from "@workspace/runtime";
-const hello = extensions.use<{ greet(name: string): Promise<string> }>(
-  "@workspace-extensions/hello"
-);
-await hello.greet("world");
-```
-
-The declared set in `meta/vibestudio.yml` is the single source of truth, reconciled at startup and on every `meta` push into `main`.
-
-## Common tasks
-
-| Task                                              | How                                                                                                                         |
-| ------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| Scaffold a new extension                          | Copy from `docs/extensions/templates/{minimal,plain-js-dep,external-cjs,native-wasm}/`                                      |
-| Read manifest rules                               | See [AUTHORING.md](AUTHORING.md) — `vibestudio.extension` shape, `dependencyMode`                                           |
-| Gate access to an extension-owned shared resource | Declare `authority.provides` + `extension.methodAuthority`; see [AUTHORING.md](AUTHORING.md)                                |
-| Add an HTTP endpoint                              | See [FETCH.md](FETCH.md) — default-export `fetch` handler                                                                   |
-| Publish source and pick up changes                | See [DEV_LOOP.md](DEV_LOOP.md) — semantic commit/publication gates and exact runtime supervision                            |
-| Migrate from `src/server/services/*`              | See [MIGRATIONS.md](MIGRATIONS.md) — canary pattern, `extensions.use(...)` codemod                                          |
-| Inspect an extension's status / health / logs     | Select its exact identity from `runtime.supervision.list({ kind: "extension" })`, then use `describe`, `health`, and `logs` |
-| Force restart (no source change)                  | `extensions.reload(name)` — approval-gated, restarts the active approved build                                              |
-
-## Reference material
-
-- [EXTENSIONS.md](../../../EXTENSIONS.md) — the canonical spec (manifest, ABI, approval flow, migration candidates, future work)
-- [docs/extensions/runtime.md](../../../docs/extensions/runtime.md) — manifest + entry-shape reference
-- [docs/extensions/generated-code.md](../../../docs/extensions/generated-code.md) — rules for code-generators emitting extensions
-- [docs/extensions/templates/](../../../docs/extensions/templates/) — four working scaffolds
-- Existing canary extensions (read these for working examples):
-  - `workspace/extensions/image-service/`
-  - `workspace/extensions/typecheck-service/`
-  - `workspace/extensions/browser-data/`
+For exact manifest and runtime shapes, use [AUTHORING.md](AUTHORING.md), live
+generated docs, and the extension host types. Start implementation review at
+the extension's entry point and follow direct imports. Run its focused tests
+and the smallest affected manifest, authority, and runtime checks.

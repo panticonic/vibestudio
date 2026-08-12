@@ -199,10 +199,21 @@ export function validateSchemaFixtures() {
 
 function validateCanonicalSkill() {
   const skill = read(SKILL_PATH);
-  const roster = Object.keys(vcsMethods);
-  if (roster.length !== 23) throw new Error(`public VCS surface changed to ${roster.length} methods`);
-  for (const method of roster) {
-    if (!skill.includes(method)) throw new Error(`${SKILL_PATH}: does not teach vcs.${method}`);
+  if (!skill.includes("(references/public-contract.md)")) {
+    throw new Error(`${SKILL_PATH}: must link the generated public contract`);
+  }
+  const proceduralGuidance = [
+    ["exact working heads", "workingHead"],
+    ["local comparison", 'view: "local"'],
+    ["incoming source selection", "sourceEventId"],
+    ["merge conclusion", "resolution.complete && resolution.concluded"],
+    ["whole-chain commit", 'operation: "commit"'],
+    ["protected publication", 'operation: "push"'],
+  ];
+  for (const [label, marker] of proceduralGuidance) {
+    if (!skill.includes(marker)) {
+      throw new Error(`${SKILL_PATH}: missing ${label} guidance (${marker})`);
+    }
   }
 
   const canonicalFiles = listSkillFiles().filter(

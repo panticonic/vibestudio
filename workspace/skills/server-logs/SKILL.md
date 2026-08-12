@@ -1,114 +1,55 @@
 ---
 name: server-logs
-description: Inspect and live-tail the workspace server's own host logs (every console/dev-log line the server process emits) via the serverLog service — query with filters, aggregate stats, and stream new records over the server-log:append event.
+description: Query, summarize, or live-follow the workspace server's structured host-process logs through serverLog, or direct a user to the Server Logs viewer.
 ---
 
-# Server logs — inspect and tail the host log stream
+# Server logs
 
-The workspace server captures **its own process logs** (startup, builds, git,
-RPC, panel runtime, workerd supervision, third-party output — everything that
-goes through `console.*`, which includes every `createDevLogger` subsystem)
-into a per-boot ring buffer with structured metadata, and exposes it through
-the read-only **`serverLog`** service. This is the host-process complement to
-exact-entity logs (`runtime.supervision.logs(identity)`, which cover _your_
-panels/extensions/workers): use `serverLog` when you need to see what the **server itself** is
-doing — why a build failed to schedule, what happened around a crash or
-reconnect, when the idle-exit fired, and so on.
+`serverLog` covers the workspace server process: startup, builds, RPC,
+supervision, Git, reconnects, and other host subsystems. Use
+`runtime.supervision.logs(identity)` instead for one exact panel, app,
+extension, worker, or Durable Object incarnation.
 
-Secrets (pairing codes, admin/gateway tokens) are redacted at capture time,
-so the surface is safe to read from any caller kind (panel, worker, DO,
-agent eval).
+The service is read-only and redacts known secrets at capture time, but callers
+still use its normal authority contract. Use live docs for current filters,
+record fields, bounds, and event schemas.
 
-## The record shape
+## Bounded inspection
 
 ```ts
-{
-  seq: number;        // monotonic per-boot cursor — dedupe/catch-up key
-  timestamp: number;  // epoch ms
-  level: "verbose" | "info" | "warn" | "error";
-  tag?: string;       // subsystem, parsed from the "[Tag]" log prefix (e.g. "Server", "BuildV2", "webrtc-ingress")
-  message: string;
-  fields?: unknown[]; // structured trailing log args, JSON-safe
-  pid: number;
-}
-```
-
-Every `query`/`tail` response is wrapped in an envelope with process
-metadata: `{ records, latestSeq, workspaceId, serverBootId, pid, startedAt }`.
-A change of `serverBootId` between calls means the server restarted and all
-`seq` cursors reset.
-
-## Reading logs
-
-```ts
-// Last 200 records (ascending seq) — the starting snapshot for a tail.
-const snap = await services.serverLog.tail(200);
-
-// Filtered query: most recent matches, ascending order.
-await services.serverLog.query({ level: "warn", limit: 100 });
-await services.serverLog.query({ tag: "BuildV2", contains: "failed" });
-await services.serverLog.query({ since: Date.now() - 60_000 });
-
-// Catch up after a gap: everything newer than a cursor you already have.
-await services.serverLog.query({ sinceSeq: snap.latestSeq });
-
-// What's in the buffer: counts by level + the live subsystem tag list.
-await services.serverLog.stats();
-```
-
-Filters compose: `sinceSeq`/`since`/`until` bound the range, `level` is a
-minimum (verbose < info < warn < error), `tag` is an exact subsystem match
-(discover tags via `stats().byTag`), `contains` is a case-insensitive
-substring. `limit` (default 500, max 5000) keeps the **most recent** matches.
-
-## Live tailing (streaming)
-
-New records are pushed as batched **`server-log:append`** events
-(`{ records: ServerLogRecord[] }`):
-
-```ts
-import { EventsClient } from "@vibestudio/service-schemas/clients/eventsClient";
-
-// The client owns one long-lived response for its complete desired topic set.
-const events = new EventsClient(rpc);
-const off = events.on("server-log:append", ({ records }) => {
-  for (const r of records)
-    if (r.seq > lastSeq) {
-      lastSeq = r.seq;
-      render(r);
-    }
+const snapshot = await services.serverLog.tail(200);
+const warnings = await services.serverLog.query({
+  level: "warn",
+  sinceSeq: snapshot.latestSeq,
+  limit: 100,
 });
-await events.subscribe("server-log:append");
-
-// Seed/catch up after opening the watch so the seq cursor closes the race.
-const snap = await rpc.call("main", "serverLog.query", [{ sinceSeq: lastSeq }]);
-
-// Teardown cancels the response; there is no separate server-side lease.
-off();
-await events.unsubscribeAll();
+return { snapshot, warnings };
 ```
 
-From eval'd agent code, `services.serverLog.*` works for queries; for
-short bounded inspection prefer one `query({ sinceSeq })`. If an agent truly
-needs live following, it must own and cancel an `events.watch` response (the
-`EventsClient` pattern above); never create an unowned background follower.
+Use `stats()` to discover active subsystem tags before filtering by exact tag.
+Compose level, time, sequence, tag, and text filters instead of fetching the
+whole buffer. Responses include a boot identity and latest sequence; reset the
+cursor when the boot identity changes.
 
-## Where else these logs live
+## Live following
 
-- `<workspace>/state/logs/server-log.jsonl` — the same structured records,
-  appended per boot (rotated once to `.1`); read this for post-mortems of a
-  server that already exited.
-- `<workspace>/state/logs/server.log` — raw stdout/stderr of a
-  desktop-spawned detached server (unstructured; truncated per spawn).
-- Deployed remote boxes use the systemd user unit:
-  `vibestudio remote deploy logs <user@host>` or
-  `ssh <host> journalctl --user -u vibestudio-server -f`. Pairing, doctor,
-  identity, and WebRTC ingress failures should be visible there.
+For a short agent investigation, prefer repeated bounded queries with
+`sinceSeq`. A real live viewer should subscribe to the documented
+`server-log:append` event, establish the watch before catching up from its last
+sequence, deduplicate by sequence, and cancel the event response during
+teardown. Never leave an unowned background follower.
 
-## Good citizenship
+The human-facing `about/server-logs` panel already provides live viewing and is
+usually better than dumping raw records into chat.
 
-- The buffer holds the last ~20k records of the current boot only; don't
-  treat it as an archive — use the JSONL file for history.
-- Poll with `sinceSeq` cursors instead of re-fetching full tails.
-- The **Server Logs** about page (`about/server-logs`) is a ready-made live
-  viewer for humans; point users there instead of dumping raw logs at them.
+## Offline and remote logs
+
+Server state keeps structured JSONL logs for post-mortem inspection after a
+process exits. Desktop supervisors and remote service managers may also retain
+their own stdout/stderr or journal. Use the remote-access CLI's log command for
+a deployed server. Do not assume a workspace agent can read host filesystem
+paths directly.
+
+Treat the in-memory ring as a current-boot diagnostic surface, not an archive.
+Keep queries bounded, preserve the boot and sequence coordinates in reports,
+and quote only the records needed to explain the incident.

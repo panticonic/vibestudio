@@ -1,318 +1,117 @@
 ---
 name: sandbox
-description: Execute code in the sandbox — the server-side eval tool, eval-private db, inline UI and action-bar components, custom chat message types, feedback forms, browser automation, and runtime APIs such as fs, git, workers, webhooks, credentials, and GAD.
+description: Run server-side eval code or build chat-panel interactions with inline UI, action bars, custom messages, feedback, browser automation, and portable runtime APIs.
 ---
 
-# Sandbox Execution Skill
+# Sandbox execution
 
-How to use the sandbox — the `eval` tool (which runs code **server-side** in your
-own per-agent `EvalDO`), inline UI components, custom feedback forms, and all
-runtime APIs they can access. `eval` runs server-side and does not require a
-connected panel; `inline_ui`/`load_action_bar`/`feedback_*` render in the chat
-panel.
+`eval` runs server-side in the caller's per-agent EvalDO. Inline UI, action
+bars, and feedback components render in a connected chat panel.
 
-## Files
+## Read by task
 
-| Document                                           | Content                                                                                                                                               |
-| -------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [EVAL.md](EVAL.md)                                 | Eval tool — run code, explicit timeout/recovery, stream console, static imports, package loading                                                      |
-| [INLINE_UI.md](INLINE_UI.md)                       | Inline UI — persistent interactive components in chat                                                                                                 |
-| [ACTION_BAR.md](ACTION_BAR.md)                     | Action bar — file-backed compact UI pinned above chat history                                                                                         |
-| [CUSTOM_MESSAGES.md](CUSTOM_MESSAGES.md)           | Custom message types — register a renderer, publish typed instances with reducer updates                                                              |
-| [MDX.md](MDX.md)                                   | Normal rich chat messages — callouts, badges, tables, ActionButton                                                                                    |
-| [FEEDBACK.md](FEEDBACK.md)                         | Feedback forms — block until user responds                                                                                                            |
-| [RUNTIME_API.md](RUNTIME_API.md)                   | Full runtime API reference — fs, eval `db`, worker/DO app databases, workers, webhooks, ai, git, browser data, custom shared-resource approval grants |
-| [CHAT_API.md](CHAT_API.md)                         | Chat API — publish messages, call methods, interact with the conversation                                                                             |
-| [BROWSER_AUTOMATION.md](BROWSER_AUTOMATION.md)     | Browser automation — Playwright-style page API via the workerd-native CDP client                                                                      |
-| [PATTERNS.md](PATTERNS.md)                         | Common patterns and recipes                                                                                                                           |
-| [INTERACTION_PATTERNS.md](INTERACTION_PATTERNS.md) | When to use inline UI for side-effect actions with choices/complexity                                                                                 |
+| Task | Reference |
+| --- | --- |
+| Eval, imports, timeouts, cancellation, scope, filesystem | [EVAL.md](EVAL.md) |
+| Portable runtime clients and services | [RUNTIME_API.md](RUNTIME_API.md) |
+| Persistent chat components | [INLINE_UI.md](INLINE_UI.md) |
+| Pinned panel controls | [ACTION_BAR.md](ACTION_BAR.md) |
+| Typed custom transcript messages | [CUSTOM_MESSAGES.md](CUSTOM_MESSAGES.md) |
+| Ordinary rich chat content | [MDX.md](MDX.md) |
+| Blocking user feedback | [FEEDBACK.md](FEEDBACK.md) |
+| Chat and channel operations | [CHAT_API.md](CHAT_API.md) |
+| Panel/browser CDP automation | [BROWSER_AUTOMATION.md](BROWSER_AUTOMATION.md) |
+| Common recipes | [PATTERNS.md](PATTERNS.md) |
+| Choosing an interaction surface | [INTERACTION_PATTERNS.md](INTERACTION_PATTERNS.md) |
 
-These links are workspace files. Open one with the `read` tool, for example
-`read({ path: "skills/sandbox/RUNTIME_API.md" })`. `docs_search` searches the
-live API catalog and accepts `{ query: "..." }`; it never opens a file path.
+Use `help()` inside eval for the exact injected/importable runtime surface and
+`help("<binding>")` for its callable methods. Use `docs_search` and `docs_open`
+as agent tools for live service schemas; they are not eval functions.
 
-For workspace server host logs, use the separate
-[server-logs](../server-logs/SKILL.md) skill. It covers the read-only
-`serverLog` service, bounded queries, and live following through
-`server-log:append` or the `about/server-logs` viewer.
+## Choose the execution surface
 
-## Execution Modes
+| Surface | Runs in | Use for |
+| --- | --- | --- |
+| `eval` | server-side EvalDO | imperative code, services, files, persistent agent scope |
+| `inline_ui` | chat panel | persistent interactive content in the transcript |
+| `load_action_bar` | chat panel | compact controls pinned above history |
+| `feedback_form` / `feedback_custom` | chat panel | a response the agent must await |
 
-All code runs through the same compile pipeline (Sucrase transform + CJS
-execution). **`eval` executes server-side in your per-agent `EvalDO`** (a
-Durable Object) — it does not run in the panel and does not require a connected
-panel. **`inline_ui`/`load_action_bar`/`feedback_custom` render React in the
-chat panel** (panel-only). Eval/UI tools accept either raw `code` or a
-context-relative `path` where noted; file-loaded sources support static relative
-imports and infer bare package imports from the nearest `package.json` when
-possible. The execution modes differ in presentation:
+Panel-only tools are absent in headless sessions. Return data from eval and ask
+through normal conversation when no renderer is connected.
 
-| Tool              | Where it runs          | Rendering                          | Lifecycle                                           | Response                             |
-| ----------------- | ---------------------- | ---------------------------------- | --------------------------------------------------- | ------------------------------------ |
-| `eval`            | server-side (`EvalDO`) | imperative (run + return)          | activation-resident heap + durable exact scope/`db` | immediate (result to agent)          |
-| `inline_ui`       | panel                  | component (render React)           | persistent (in chat history)                        | none (fire-and-forget)               |
-| `load_action_bar` | panel                  | component from file (render React) | persistent (top of current panel)                   | immediate tool result                |
-| `feedback_custom` | panel                  | component (render React)           | transient                                           | deferred (blocks until user submits) |
+## Eval essentials
 
-Perspective matters. In agent eval, `panelTree.self()` is the EvalDO runtime,
-not the visible chat panel. Use `parent`/`getParent()` and
-bounded `panelTree.roots()`/`panelTree.children()`/`panelTree.search()` when the user refers to a
-visible parent, sibling, or child panel, then read that panel's `stateArgs` to find its
-`channelName`/`channelId` before running GAD or channel diagnostics.
+`scope`, `scopes`, `db`, `ctx`, `help`, and—when agent-owned—`chat` and `agent`
+are ambient eval bindings. Use them directly. Portable clients such as `rpc`,
+`services`, `fs`, `workers`, `credentials`, `gad`, and `panelTree` are injected
+and also importable from `@workspace/runtime`.
 
-Storage matters too. The eval `db` is private to the agent's EvalDO. For
-application data that panels, apps, workers, or other agents must share, build a
-worker Durable Object with `DurableObjectBase` + `this.sql`, declare it as a
-manifest service, and call it through `workers.resolveService(...)` + `rpc.call(...)`.
-See [workspace-dev/WORKERS.md](../workspace-dev/WORKERS.md#durable-object-backed-app-databases).
+Workspace and platform packages resolve on first use. Raw inline code must
+declare npm packages through the eval `imports` map; file-loaded code can infer
+them from the nearest `package.json`. Use static relative imports. Consult
+[EVAL.md](EVAL.md) rather than maintaining a package table here.
 
-## Injected Variables
+Eval `db` and `scope` belong to the agent's EvalDO. Scope persists serializable
+values across reloads but cannot restore functions or live handles. Put shared
+application data behind a manifest-declared Durable Object service with narrow
+RPC methods; do not treat eval storage as an app database.
 
-The two surfaces inject **different** variables, because eval runs server-side
-and components render in the panel:
+`panelTree.self()` identifies the EvalDO runtime, not the visible chat panel.
+Resolve visible parents, siblings, or children through bounded panel-tree reads,
+then read the target panel's state args when its channel identity is needed.
 
-- **`eval`** (server-side): `rpc`, `services`, `fs`, `ctx`, `scope`, `scopes`,
-  `db`, and `help` are injected as free variables — use them directly, do NOT
-  `import` them, and do NOT `import` them from `@workspace/runtime` (the eval
-  engine rejects importing the pre-injected names). See
-  [EVAL.md](EVAL.md#injected-variables). When eval runs as an **agent** (bound
-  to a channel), `chat` is injected too (see [EVAL.md](EVAL.md#chat-agent-eval));
-  CLI/panel eval has no channel and gets no `chat`.
-- **`inline_ui` / `load_action_bar` components** (panel): receive
-  `{ props, chat, scope, scopes }`; inline UI also receives
-  `{ inlineUi: { id, renderedAt } }` so stable-ID updates can trigger refresh.
-  Their serializable scope is browser-local,
-  keyed to the panel, and persisted in `localStorage` across reloads; it is not
-  the server-side eval scope or channel-shared application state.
-  `feedback_custom` components receive
-  `{ onSubmit, onCancel, onError, chat, scope, scopes }`. Inside a component,
-  reach runtime services via `chat.rpc.call(...)` (see [CHAT_API.md](CHAT_API.md)).
+Account, workspace membership, live presence, channel participants, and runtime
+identity answer different questions. Use the specific API described in
+[RUNTIME_API.md](RUNTIME_API.md); never infer a verified user from an agent or
+runtime entity.
 
-For panel identity inside components, use `panel.slotId` for panel-tree
-operations and PubSub/channel clients. `rpc.selfId` is the current live runtime
-entity and can change after a panel navigation or reopen.
+## Component essentials
 
-## People, Presence, and Runtime Identity
+Inline, action-bar, and feedback source files must default-export a component.
+Read the matching reference for its injected props and lifecycle. Component
+scope is browser-local and is not eval scope or shared application state.
 
-Do not infer the user account from `agent.describe()` or another runtime
-identity. An agent/runtime identity describes the executing participant;
-`services.account.getProfile()` returns the verified user subject for the
-current authenticated call by default.
+Use stable inline IDs when rerendering one workflow. Send user-authored follow-up
+prompts with `chat.send(...)`; publish custom visual state only through the
+typed custom-message APIs. Do not construct raw transcript rows.
 
-These APIs answer different questions:
+Use inline UI when a side effect has meaningful choices, progress, retry, or
+failure state. Keep simple status in ordinary chat and use feedback only when
+the agent truly needs the returned decision.
 
-- `services.account.getProfile()` — the current durable user identity.
-- `services.account.listWorkspaceMembers()` — durable workspace membership and
-  roles, including members who are offline.
-- `services.workspacePresence.list()` — live human connections across the
-  current workspace; an empty array is valid.
-- `chat.getParticipants()` — participants in the current conversation channel,
-  including agents and headless participants, with top-level `type`, `name`,
-  `isPerson`, `isAgent`, and optional `handle`. `headless`/`panel` clients are
-  neither people nor agents. It is available only in channel-bound agent eval.
-- `services.gad.inspectChannelRoster(...)` — durable channel diagnostic
-  evidence; it is not workspace-wide presence.
+## Paths and source
 
-```ts
-eval({
-  code: `
-    const [profile, members, present, channelParticipants] = await Promise.all([
-      services.account.getProfile(),
-      services.account.listWorkspaceMembers(),
-      services.workspacePresence.list(),
-      chat.getParticipants(),
-    ]);
-    return { profile, members, present, channelParticipants };
-  `,
-});
-```
+- Tool `path` arguments are context-relative, with no leading slash.
+- Runtime filesystem paths are rooted at the semantic context. Prefer
+  `panels/chat/package.json` to `/panels/chat/package.json` for clarity.
+- Workspace source uses root-relative repository paths such as `packages/`,
+  `panels/`, `workers/`, `skills/`, `apps/`, `extensions/`, and `meta/`. Never
+  use a host checkout path.
+- Use `fs.mktemp` or `fs.mkdtemp` for disposable state and clean it up.
 
-Server-wide multi-workspace catalog operations belong to the shell or CLI's
-stable hub session and are intentionally unavailable from workspace eval.
-Current-workspace APIs remain available. Do not guess a hub session id or retry
-an unavailable `hubControl` service from agent eval.
+Read [Vibestudio VCS](../vibestudio-vcs/SKILL.md) before changing managed
+source. Build and test the exact working state, commit the complete local
+application chain, and publish explicitly.
 
-## Credential Lookups
+## Browser and credential safety
 
-Use the operation that answers the user's question directly. To call an
-external API, import `credentials` from `@workspace/runtime` and call
-`credentials.fetch(...)` once. Do not preflight it with
-`resolveCredential(...)`: the fetch already returns the canonical
-missing-credential outcome without exposing credential material.
+Use `handle.cdp.page()` for ordinary browser automation. It returns the
+canonical Playwright-style client; do not install a separate Playwright package.
+Acquire protocol-level CDP only when needed and close every page/session you
+own.
 
-Use `resolveCredential(...)` only when the task is explicitly to diagnose
-credential routing without making a network request. A quiet URL lookup is one
-read-only call and returns a secret-free summary or `null`:
+For authenticated HTTP, call the host-mediated credential operation directly.
+Resolve or inventory credentials only when credential routing itself is the
+question. Never expose credential material or invent authority wildcards. Read
+[API integrations](../api-integrations/SKILL.md) for setup and egress rules.
 
-```ts
-import { credentials } from "@workspace/runtime";
+## Completion rules
 
-const credential = await credentials.resolveCredential({ url });
-return { hasCredential: credential !== null };
-```
-
-Do not list every credential before resolving one URL. For a bounded lifecycle
-inventory, use the aggregate API directly:
-
-```ts
-return credentials.summarizeStoredCredentials();
-```
-
-Use `credentials.inspectStoredCredentials()` only when an administrator
-actually needs per-credential runtime/grant details; it may require
-`credentials.audit.read` authority. In general, omit `authority.requests` to
-use the caller's admitted authority; when an exact
-allowlist is genuinely required, discover its exact capability/resource first.
-Never invent a wildcard such as `workspace:*`.
-
-## Path Conventions
-
-- `eval`, `inline_ui`, `load_action_bar`, and `feedback_custom` `path`
-  parameters are context-relative file paths such as `.vibestudio/eval/audit.ts`;
-  do not prefix these with `/`.
-- Runtime `fs.*` methods are rooted at the caller's current context folder. A
-  leading slash in `fs.readFile("/panels/chat/package.json")` means
-  "context-root absolute", not a host path like `/home/...`. Prefer
-  `panels/chat/package.json` in examples and source edits because it is less
-  ambiguous.
-- Workspace source paths have repo shape (`packages/<name>/…`,
-  `panels/<name>/…`, `meta/…`, etc.) and mutating them through `fs` is captured
-  by the semantic adapter against the exact working head. Managed
-  move/copy retains identity/provenance. Platform-ignored paths and paths outside
-  workspace source repos are direct context-local scratch. For disposable files, prefer
-  `const path = await fs.mktemp("purpose")`; for a directory use
-  `const dir = await fs.mkdtemp("purpose")`. See
-  [EVAL.md](EVAL.md#filesystem-access) for copy/rename and cleanup examples.
-- Never use host absolute paths for workspace source such as
-  `/home/user/.../workspace/panels/...`.
-
-## Available Imports
-
-### In `eval` (server-side)
-
-The injected variables above (`rpc`, `services`, `fs`, `ctx`, `scope`, `scopes`,
-`db`, `help`) are NOT imports — use them as free variables. Everything else is
-loaded via the `imports` parameter (npm) or auto-resolution (workspace), then
-brought in with a normal `import`. Both static `import` and dynamic
-`await import(...)` work in eval — both compile to the EvalDO's per-object
-require (isolated per owner). See [EVAL.md](EVAL.md#imports).
-
-### In components (`inline_ui` / `load_action_bar` / `feedback_custom`)
-
-These are pre-bundled with the panel and work as bare `import` statements in
-component code:
-
-| Module                                  | What it provides                                                                    |
-| --------------------------------------- | ----------------------------------------------------------------------------------- |
-| `@workspace/runtime`                    | rpc, fs, git, workers, workspace, contextId, panel navigation, credentials, and GAD |
-| `browserData` from `@workspace/runtime` | Browser data import/export (cookies, passwords, bookmarks, history)                 |
-| `react`, `react/jsx-runtime`            | React hooks and component APIs                                                      |
-| `@radix-ui/themes`                      | UI components (Button, Flex, Card, Table, etc.)                                     |
-| `@radix-ui/react-icons`                 | Icon components                                                                     |
-
-### On-demand imports (require `imports` parameter)
-
-For browser automation, use `handle.cdp.page()` — it returns the canonical
-Playwright-style page driven by our workerd-native CDP client
-and is the single browser-automation surface (there is no separate "full
-Playwright" tier; do not import or install any `playwright*` package). It loads
-the standalone `@workspace/cdp-client` internally, so eval code should not import
-that package directly for ordinary page work. For protocol-level CDP, you may
-`import { CdpConnection } from "@workspace/cdp-client"` and connect via
-`handle.cdp.getCdpEndpoint()`. See [BROWSER_AUTOMATION.md](BROWSER_AUTOMATION.md).
-
-These are built on first use. Pass them in the tool's `imports` parameter:
-
-| Module                                  | `imports` value                         | What it provides                      |
-| --------------------------------------- | --------------------------------------- | ------------------------------------- |
-| `@workspace-skills/*`                   | auto-resolved                           | Just `import` — built on first use    |
-| `@workspace/*` packages                 | auto-resolved                           | Just `import` — built on first use    |
-| platform SDK packages (`@vibestudio/*`) | auto-resolved                           | Just `import` — built on first use    |
-| npm packages                            | `imports: { "lodash": "npm:^4.17.21" }` | Requires explicit `imports` parameter |
-
-Workspace packages (`@workspace*`) and platform SDK packages
-(`@vibestudio/*`) are **auto-resolved** — just write the import statement and
-they are built on demand. No `imports` parameter is needed.
-
-npm packages require the `imports` parameter with `"npm:<version>"` for raw inline code, using registry semver/range values such as `"npm:1"`, `"npm:1.3.0"`, or `"npm:^4.17.21"`. File-loaded code can infer dependency versions from the nearest `package.json`.
-
-File-loaded package inference checks `dependencies`, `peerDependencies`,
-`optionalDependencies`, then `devDependencies`. It also supports
-`package.json` `imports` aliases and simple `tsconfig.json` paths. Use explicit
-`imports` to override inferred versions.
-
-To evaluate a workspace package from a non-default revision, pass an explicit
-build selector accepted by the live import resolver. Semantic VCS selectors and
-content-only build selectors have different authority; read
-[vibestudio-vcs](../vibestudio-vcs/SKILL.md) before carrying an identity from a
-build into a source operation.
-
-In eval, injected ambient globals like `services`, `ctx`, `scope`, `scopes`,
-`db`, `chat`, `agent`, and `help` are free variables, not runtime exports. For
-portable client code, `@workspace/runtime` is importable in eval and exports
-namespaces such as `vcs`, `fs`, `workspace`, `credentials`, and `panelTree`:
-
-```
-eval({ code: `
-  import { contextId, vcs } from "@workspace/runtime";
-  import { createProjects } from "@workspace-skills/workspace-dev";
-  const status = await vcs.status({ contextId });
-  // workspace packages: just import, auto-resolved
-` })
-```
-
-For direct authoring, use the schema-validated
-[VCS authoring examples](../vibestudio-vcs/references/authoring-basics.md).
-Take `contextId` from the runtime binding, select a repository returned at the
-exact working head by the task-supplied path, and use complete file
-identities returned by `vcs.inspect`/`vcs.neighbors` and `vcs.listFiles`. Never assume `default` or
-`projects/default`.
-
-The runtime `vcs` namespace is generated from one canonical method registry.
-Use `await help("vcs")` for transport shapes and the
-[Vibestudio VCS skill](../vibestudio-vcs/SKILL.md) for semantics. The unit of
-revision is an event or application state, not a per-repository state hash.
-
-See [EVAL.md](EVAL.md) for details. On-demand imports are not available in inline_ui/load_action_bar/feedback_custom components (use eval to preload first).
-
-## Interaction Patterns
-
-See [MDX.md](MDX.md) for rich normal chat messages and `ActionButton`.
-See [INTERACTION_PATTERNS.md](INTERACTION_PATTERNS.md) for when to use inline UI vs eval for side-effect actions. In short: if an action involves choices or could fail, prefer rendering an inline UI that lets the user trigger it. When a UI control represents a user choice or follow-up instruction that should go back to the agent, send that prompt with `chat.send(content)`. Use [ACTION_BAR.md](ACTION_BAR.md) when small controls or status should stay pinned above chat history for the current panel. For setup workflows with links, use the [INLINE_UI.md](INLINE_UI.md) link/checklist patterns and offer both internal browser-panel opens and approval-gated `openExternal` system-browser opens.
-
-Transcript-visible behavior is driven by typed PubSub events. User-authored
-prompts generated by inline UI, action bars, or similar controls should go
-through `chat.send(content)`, which publishes a canonical `message.completed`
-agentic event and can start the next agent turn. Do not use `chat.send` for
-agent acknowledgements or ordinary eval status; those should come from the
-agent's normal response path. Do **not** use `chat.publish("message", {
-content })` for visible transcript text: that writes a legacy raw PubSub row
-which may be persisted but is not reduced by the current `agentic-chat` UI.
-Rendered UI should go through `inline_ui`, `load_action_bar`, `feedback_form`,
-or `feedback_custom` rather than hand-written raw channel records.
-
-## Critical Rules
-
-1. **Do NOT import eval-only ambient variables** — `ctx`, `scope`, `scopes`, `db`, `help`, `chat`, and `agent` are injected free variables in eval. `services`, `hosts`, `runtime`, `rpc`, and `fs` are portable bindings shared with panels/workers, so either use them directly in eval or import them from `@workspace/runtime`. For _packages_, both static `import` and dynamic `await import(...)` work in eval. File-loaded relative imports must be static/literal.
-2. **Workspace packages are auto-resolved** — just write `import { createProjects } from "@workspace-skills/workspace-dev"` and it builds on first use; npm packages require `imports: { "lodash": "npm:^4.17.21" }`. (For raw services, use `rpc.call("main", "<svc>.<method>", [...])`.)
-3. **Components must `export default`** — named exports alone won't work for inline_ui/load_action_bar/feedback_custom components
-4. **Inline UI / action-bar components receive `{ props, chat }`** (NOT `scope`/`scopes` — the eval REPL scope is server-side and is not shared into rendered components) — always default `props` (`{ props = {}, chat }`) and guard property access (`props?.items ?? []`). For maximum portability, prefer embedding small constant data in the component source.
-5. **Feedback components receive `{ onSubmit, onCancel, onError, chat }`**
-6. **Workspace code builds from the exact working head** — source under `packages/`, `panels/`, `workers/`, `skills/`, `apps/`, and `extensions/` is one semantic workspace. Managed edits author work units and advance the working head; commit records the complete local application chain. Run explicit context checks for advisory confidence. Protected publication validates semantic ancestry and integration, obtains approval, and atomically advances refs; post-publication builds are derived projections, and runtime activation retains the previous runnable artifact on failure. Read [vibestudio-vcs](../vibestudio-vcs/SKILL.md) before any source operation.
-7. **Close temporary panels you open** — when eval opens a browser/workspace panel for diagnostics, scraping, setup, or testing, keep its handle and call `await handle.close()` in `finally` when done. Reuse an existing handle instead of opening duplicates. Leave a panel open only when the user explicitly asked to inspect or continue using it, or the workflow explicitly needs it to remain open.
-8. **Use DO workers for shared app data** — eval `db` is private scratch storage for the current EvalDO. User-facing databases should be Durable Object services with narrow RPC methods, live service `authority.principals`, and method-level `@rpc({ principals, effect, tier, sensitivity })`.
-
-For optional workspace probes, prefer one of these patterns:
-
-- Import the helper statically and catch the helper call:
-  `const status = await getStatus().catch(error => ({ error: String(error) }))`.
-- If the helper may not exist in this workspace at all, run that probe in a
-  separate eval and tolerate that separate eval failing.
-
-(A missing package still throws even though dynamic `await import(...)` works in
-eval, so wrap optional loads in a try/catch or isolate them in a separate eval.)
-
-## Environment Compatibility
-
-- `inline_ui`, `load_action_bar`, `feedback_form`, and `feedback_custom` are **panel-only** — they render in a browser context, so they require a connected panel.
-- `eval` runs **server-side** in your per-agent `EvalDO`: it works in both panel and **headless** sessions and keeps working even if the panel or user disconnects. `set_title` works in both panel and headless sessions.
+- Bound eval results; store large reports or handles in scope or files.
+- Close temporary panels, CDP clients, workers, and other resources in a
+  `finally` path unless the user asked to keep them.
+- Let protected operations use their normal authority flow. Do not add
+  preflight calls, retries, or alternate transports merely to avoid approval.
+- Treat optional missing packages as separate optional probes; do not let one
+  failed import obscure otherwise useful results.

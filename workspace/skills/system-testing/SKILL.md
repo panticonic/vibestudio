@@ -1,455 +1,176 @@
 ---
 name: system-testing
-description: Orchestrate Vibestudio headless agentic system tests, inspect complete trajectories and runtime evidence, classify root causes, repair the platform or docs, and verify focused, category, and smoke coverage. Use when asked to run, author, diagnose, or repair system tests. Do not recursively invoke it from a spawned test subject that was asked to exercise one capability.
+description: Run, author, diagnose, or repair Vibestudio headless agentic system tests and their deterministic validators, retained trajectories, runtime evidence, and managed test instances.
 ---
 
 # Vibestudio system testing
 
-System tests exercise Vibestudio through real headless agent sessions and retain
-their conversations, tool invocations, lifecycle events, cleanup evidence,
-provenance, and runtime diagnostics. A failing command starts an investigation;
-it is not the reporting boundary.
+System tests drive real headless agents and retain conversations, tool
+invocations, runtime events, cleanup, provenance, and diagnostics. A failing
+command starts an investigation; it is not the reporting boundary.
 
 ## Read by task
 
-| Task                            | Reference                                                            |
-| ------------------------------- | -------------------------------------------------------------------- |
-| Diagnose a run or artifact      | [diagnostics and artifacts](references/diagnostics-and-artifacts.md) |
-| Author or revise scenarios      | [scenario authoring](references/scenario-authoring.md)               |
-| Choose suites and coverage      | [scenario catalog](references/scenario-catalog.md)                   |
-| Repair a discovered defect      | [self-improvement workflow](SELF_IMPROVEMENT.md)                     |
-| Exercise semantic workspace VCS | [Vibestudio VCS protocol](../vibestudio-vcs/SKILL.md)                |
+| Task | Reference |
+| --- | --- |
+| Diagnose a run or artifact | [diagnostics and artifacts](references/diagnostics-and-artifacts.md) |
+| Author or revise a scenario | [scenario authoring](references/scenario-authoring.md) |
+| Select coverage | [scenario catalog](references/scenario-catalog.md) |
+| Repair a discovered defect | [self-improvement](SELF_IMPROVEMENT.md) |
+| Exercise managed source | [Vibestudio VCS](../vibestudio-vcs/SKILL.md) |
 
-Implementation entry points are `runner.ts` (`HeadlessRunner`),
-`test-runner.ts` (`TestRunner`), `types.ts`, `stages.ts`, `diagnostics.ts`, and
-`tests/`. Import suite collections through
-`@workspace-skills/system-testing/stages`, not internal test-file paths.
+Implementation entry points are `runner.ts`, `test-runner.ts`, `types.ts`,
+`stages.ts`, `diagnostics.ts`, and `tests/`. Import suite collections from the
+stages entry point, not individual test files.
 
-## Required headless repair loop
+## CLI repair loop
 
-For CLI-driven verification, diagnosis, or repair, follow this order:
+Use one stable, unique instance ID throughout an investigation.
 
-1. Check infrastructure first:
+1. Provision and check infrastructure:
 
    ```bash
-   pnpm system-test --instance INSTANCE doctor --approve-startup \
-     --model openai-codex:gpt-5.3-codex-spark
+   pnpm system-test --instance <id> doctor
    ```
 
-   This command is the provisioning boundary as well as the diagnostic one. If
-   `INSTANCE` is absent, stale, unpaired, or has no server yet, the launcher
-   creates a named ephemeral server from the current checkout, waits for its
-   ready record, and pairs the instance-scoped CLI before running `doctor`.
-   Agents should invoke it directly; “no server is running” is not a blocker and
-   is not a reason to ask the user to start one. Use one stable unique instance
-   name throughout parallel work. The launcher refuses to take ownership of an
-   unrelated existing instance.
+   Doctor owns creation, readiness, and pairing of an isolated ephemeral
+   instance. A missing or unpaired server is not a blocker. Inspect the printed
+   supervisor log and repair failed infrastructure before interpreting scenario
+   behavior. Never borrow or stop an unrelated instance.
 
-   Repair failed infrastructure checks before interpreting scenario behavior.
-   On a fresh disposable instance, `--approve-startup` resolves only exact,
-   version-bound startup install reviews and refuses if any unrelated consent is
-   pending. It does not approve credentials, userland requests, publication,
-   or standing grants. Test turns themselves use the runner's host-attested
-   authority policy and `approvalLevel: 2`; this pair is the supported
-   unattended auto-approve workflow. The policy is resident on the test
-   context. Trusted panel and worker infrastructure preserves it, and every
-   downstream agent is forced onto the same exact model with full-auto and no
-   fallback; userland cannot inject or widen that policy.
-   Model readiness is lifecycle-aware: an expired URL-bound credential counts
-   as ready only when it has both durable refresh material and an exact refresh
-   recipe. Reconnect a nonrenewable credential; do not retry around it or import
-   credentials from another tool's private store. `doctor` proves catalog,
-   required extension, and credential readiness; approved lazy extensions may
-   remain `available` until first use, while a pending startup unit review fails
-   before a scenario can strand itself inside an unavailable native extension.
-   It does not spend a provider request, so provider quota is
-   established only by the journaled model attempt in a run.
-
-2. Discover the exact current test name:
+2. List tests only when the exact name is unknown:
 
    ```bash
-   pnpm system-test --instance INSTANCE list --json
+   pnpm system-test --instance <id> list --json
    ```
 
-3. Run the smallest relevant exact test:
+3. Run the smallest exact test:
 
    ```bash
-   pnpm system-test --instance INSTANCE run TEST_NAME \
-     --model openai-codex:gpt-5.3-codex-spark
+   pnpm system-test --instance <id> run <test-name>
    ```
 
-   Every case has a 10-minute deadline by default so one wedged turn cannot
-   hold an unattended run forever. Use `--test-timeout-ms N` to override that
-   case budget. Multi-phase orchestrations share one budget and every phase
-   receives only the time remaining from the original deadline. A timeout is a
-   terminal errored result to inspect, not a reason to add sleeps or retries.
+   Use `--detach` plus the documented status command for a long run. Treat
+   cancellation and timeouts as terminal records whose cleanup evidence must be
+   inspected; do not add sleeps or extend a deadline to conceal liveness bugs.
+   Pass an explicit model only when the model itself is the experiment. The
+   default route and quota fallback live in `config.ts`.
 
-   Cancellation is terminal only after the active test has followed its normal
-   cleanup path: the agent turn is interrupted, the headless session/context is
-   retired, and any exact repository fixture is cleaned. Inspect a cancelled
-   record's cleanup failures just as you would an errored record; do not assume
-   cancellation made partial work disappear.
-
-   The intermediate durable status is `cancelling`. Treat it as live work:
-   cleanup retains the orchestrator and descendant evaluated-execution
-   admissions until teardown and terminal-record persistence have settled.
-
-   For a long run, start with `--detach` and observe it with
-   `system-test status RUN_ID --wait --json`. Each running case reports its
-   current lifecycle `phase`, `phaseStartedAt`, `elapsedMs`, and
-   `phaseElapsedMs`. `session-cleanup:*` means the user task has ended and the
-   harness is waiting for an acknowledged unsubscribe, evidence capture,
-   disconnect, or runtime-context retirement—not that the model is still
-   working. `workspace-fixture-cleanup:*` names the exact semantic teardown
-   boundary: task status/ancestry, publication intersection, cleanup-context
-   creation, each revert/commit/push counteraction boundary, or context
-   destruction. Use
-   `inspect` while the run is live for the exact cleanup phase and transcript
-   evidence.
-
-   A suite never occupies one long-lived runner RPC. The sealed runner starts
-   the durable eval and returns; the orchestrator uses short status, terminal
-   result, result-release, and cancellation calls keyed by the run ID. A
-   closed runner socket is therefore an infrastructure failure, not a reason
-   to extend a request deadline. Inspect whether the inner eval is still
-   progressing and recover its durable terminal record before rerunning.
-
-   Repository cleanup does not bypass protected-main authority. The harness
-   derives repository identities from the task line's semantic
-   `repository-create` changes, creates a case-policy cleanup context with
-   critical deletion authority for only those exact paths, and counteracts the
-   exact authored changes. Any unrelated path or unrelated test policy fails
-   closed.
-
-4. On any non-zero exit, inspect the durable run packet immediately:
+4. On any non-zero exit, inspect the retained run immediately:
 
    ```bash
-   pnpm system-test --instance INSTANCE inspect RUN_ID --json
+   pnpm system-test --instance <id> inspect <run-id> --json
    ```
 
-   Completed runs are inspected from the terminal heartbeat packet first, so
-   diagnostics do not queue behind a failed run's still-unwinding eval scope.
-   The durable-record fallback is read-only and its reconstruction eval has a
-   30-second execution deadline; a failed diagnostic returns an explicit error
-   instead of waiting forever.
-
-   If the bounded packet cannot explain the mismatch, inspect the full test
-   trajectory:
+   If that bounded packet is insufficient:
 
    ```bash
-   pnpm system-test --instance INSTANCE trajectory RUN_ID TEST_NAME --full --json
+   pnpm system-test --instance <id> trajectory <run-id> <test-name> --full --json
    ```
 
 5. Classify the root cause as infrastructure, documentation, harness, or
-   validator. Default to repairing infrastructure. Do not compensate for a
-   platform or documentation defect by teaching the prompt the answer.
+   validator. Repair the owning layer. Do not over-specify the test prompt to
+   route around a platform or documentation defect.
 
-Use a stable named instance for destructive or publication-heavy system
-testing. The first command provisions its ephemeral server automatically. Each
-instance acquires its own workspace from the exact promoted base-template pin
-and never publishes back to that upstream, so parallel hubs cannot seed one
-another's next bootstrap:
+6. Run focused conventional checks. Host-code-only changes can use the owned
+   source server. Changes under `workspace/` require a freshly provisioned
+   workspace copy: stop the managed instance, then rerun doctor.
 
-```bash
-pnpm system-test --instance system-tests-a doctor --approve-startup \
-  --model openai-codex:gpt-5.3-codex-spark
-```
+7. Rerun only affected coverage. Use a prior run's rerun command when several
+   failures remain relevant to the same fix. Expand to a category or smoke set
+   only when the changed behavior or captured evidence justifies it.
 
-6. Implement the root fix and run focused conventional tests/type checks.
-   Restarting the current source server is sufficient for host-code-only
-   changes. A named `--bootstrap-workspace` deliberately preserves its acquired
-   semantic state and never reacquires the promoted base pin on restart. For a
-   fresh checkout after workspace-source changes, run
-   `pnpm system-test --instance INSTANCE stop`, then invoke `doctor` again; the
-   launcher provisions a fresh checkout acquired from the exact promoted base
-   template pin. The source-server supervisor isolates the
-   hub lease, identity, databases, workspace, ports, ready file, CLI device, and
-   CLI sessions while reusing profile-owned model configuration and encrypted
-   provider credentials. Address that exact hub with
-   `pnpm system-test --instance INSTANCE ...`; never terminate or retarget another
-   developer's live instance.
-
-7. Expand verification only when the changed behavior or captured trajectory
-   justifies it. Do not automatically run the whole category or smoke suite
-   after an exact pass. Use the prior run to rerun failures that remain
-   relevant to the same repair:
+8. Stop the exact managed instance:
 
    ```bash
-   pnpm system-test --instance INSTANCE rerun RUN_ID
+   pnpm system-test --instance <id> stop
    ```
 
-8. When verification is complete, stop exactly the managed instance:
+Do not report completion while an owned instance, panel, page, or inspector is
+still live. Stop only for missing credentials, required new authority,
+unavailable external infrastructure, or an unauthorized server restart—not at
+an artifact path or validator message.
 
-   ```bash
-   pnpm system-test --instance INSTANCE stop
-   ```
+## Orchestrator and test subject
 
-   The launcher refuses to stop an instance it did not create.
+Use `HeadlessRunner` or `TestRunner` only to orchestrate tests. If the prompt
+asks the current agent to exercise one capability and return evidence, it is the
+test subject: use that capability's normal skill and API. Do not recursively
+spawn a system-test agent.
 
-Stop only when repair requires missing credentials, new authority, unavailable
-external infrastructure, or a server restart that has not been authorized.
-Do not stop at an artifact path or restated validator error: explain the
-concrete mismatch in the captured behavior.
-
-Headless tests are non-interactive. Their turn observer treats credential setup
-and reconnect waits as terminal infrastructure failures, while ordinary
-interactive sessions remain resumable. If one appears in a run packet, repair
-readiness or complete the canonical connection flow instead of extending the
-test timeout. Stored-credential use approval is a separate security decision:
-the unattended agent-worker version must already have a normal version grant
-from the workspace approval UI. Never auto-grant it in the harness. A run with
-zero model evidence and a pending credential approval is waiting for that
-decision, not suffering a model, WebRTC, or VCS failure.
-
-## Orchestrator versus test subject
-
-Use `HeadlessRunner` or `TestRunner` only when orchestrating a suite. If the
-current prompt asks for one capability exercise and a marker, you are the test
-subject: use that capability's canonical skill/API directly and return evidence.
-Do not spawn another system-test agent.
-
-Every ordinary test gets an isolated agent context. This prevents working VCS
-state from leaking between tests. A genuine multi-actor scenario belongs in
-`TestCase.orchestrate`: the harness spawns independent sessions and coordinates
-their user-visible goals. Never prompt one agent to write another context's
-state or invent a foreign context reference.
-
-A test that creates or publishes workspace source must declare a typed fixture.
-Use `CONTENT_WORKSPACE_REPO_FIXTURE` for an empty `projects/...` repository and
-`BUILDABLE_PACKAGE_WORKSPACE_REPO_FIXTURE` only when a minimal `packages/...`
-unit is necessary. Setup imports one exact generated snapshot into a fresh task
-context through the public semantic VCS; it never publishes scaffolding.
-Ordinary agents and the first role in a multi-actor scenario use that local
-baseline. Teardown destroys the task context directly when no task event reached
-main. Otherwise it opens a fresh context at current main. It never inventories
-the ambient workspace: it derives any other repository identities from the task
-context's exact first-parent work and point-inspects only those identities on
-main. It finds the newest task event actually reachable from current main
-through paged event history, counteracts published task work in reverse causal
-order, then commits once and pushes once. Newer unpublished work disappears
-with the task context. There is no fixture-only repository API or cleanup merge
-protocol. Keep all fixture mechanics out of user-like prompts.
+Each ordinary test gets an isolated context. Multi-actor behavior belongs in a
+declared orchestration with independent sessions. Source-changing cases must
+declare the repository fixture type required by the scenario; fixture setup and
+cleanup use public semantic VCS and remain outside the user-like prompt. Read
+the authoring reference for exact fixture and authority contracts.
 
 ## Agentic and deterministic layers
 
-System-testing is the agentic layer: a model selects skills and tools, acts in a
-real session, and is judged by semantic validators. `@workspace/testkit` is the
-deterministic layer for exact assertions, CDP automation, viewport checks,
-transcript behavior, and similar precisely specifiable properties.
+System testing is the agentic layer: a model selects skills and tools and is
+judged by semantic validators. `@workspace/testkit` is the deterministic layer
+for exact assertions, panel automation, viewport checks, and runtime
+supervision.
 
-Run deterministic coverage directly when no agent judgment is under test:
+Use deterministic coverage directly when model judgment is unnecessary. Use
+both layers when an agent must discover and perform a workflow whose effects
+can be asserted exactly.
 
-```ts
-import { runDeterministic } from "@workspace-skills/system-testing/deterministic";
+A completed turn is not a mechanical quality verdict. Inspect the trajectory
+for confusion, unnecessary source search, repeated failures, and poor recovery
+even when final validators pass. Preserve recovered tool failures as product or
+documentation evidence.
 
-const { suiteResult } = await runDeterministic();
-```
-
-Use both layers when an agent must discover and perform a workflow whose final
-effects can also be asserted exactly.
-
-An ordinary agentic result is not a mechanical quality verdict. A completed
-turn with a final response establishes that the trajectory was captured; the
-stage report marks that transcript for human review and surfaces its tool-call
-count, unexpected failures, repeated failed operations, and final report. Read
-the trajectory even when the row is green. Confusion, needless source
-searching, retries, and eventual success after a poor route are product and
-documentation findings, not details to erase with a stricter response schema.
-
-Agent-goal prompts must not name internal agent tools, embed API call
-expressions, prescribe model/config objects, or dictate an exact call sequence.
-When exact wire behavior matters, make it an explicit harness probe and keep
-its deterministic validator there.
+Prompts describe realistic user goals and observable outcomes. They do not name
+internal tools, API expressions, configuration objects, validator markers, or a
+required call sequence. Put exact wire checks in deterministic probes.
 
 ## Programmatic orchestration
 
-```ts
-import { HeadlessRunner } from "@workspace-skills/system-testing/runner";
-import { TestRunner } from "@workspace-skills/system-testing/test-runner";
-import { smokeTests } from "@workspace-skills/system-testing/stages";
+Use `HeadlessRunner` from `runner.ts`, `TestRunner` from `test-runner.ts`, and
+suite exports from `stages.ts`. Keep full results in eval scope and return only
+bounded summaries. Read those public types for callbacks, concurrency,
+cancellation, and retained results instead of copying their API here.
 
-const runner = new HeadlessRunner(ctx.contextId);
-const tester = new TestRunner(runner, {
-  onTestStart: (test) => console.log(`Running ${test.name}`),
-  onTestEnd: (test, result) => console.log(`${result.passed ? "PASS" : "FAIL"}: ${test.name}`),
-});
+Headless runs have no panel-only tools. Their identity, model route, approval
+mode, fallback, and test authority come from the sealed runner policy; userland
+subjects must not inject or widen it. Credential setup waits are infrastructure
+failures in unattended tests and must be repaired through the canonical
+connection flow.
 
-scope.results = await tester.runSuite(smokeTests);
-return {
-  total: scope.results.total,
-  passed: scope.results.passed,
-  failed: scope.results.failed,
-  errored: scope.results.errored,
-  skipped: scope.results.skipped,
-};
-```
+Use separate instances for parallel workspace experiments and separate agent
+sessions when eval work itself must proceed concurrently. Do not interpret a
+closed orchestration socket, mailbox delay, or still-running eval as a slow
+model without checking the retained lifecycle and transport evidence.
 
-There is no default per-test harness deadline. An explicit deadline is an
-operator cancellation boundary, never a workaround for effect, transport, or
-Durable Object liveness bugs.
+## Authoring and validation rules
 
-The default execution route uses `openai-codex:gpt-5.3-codex-spark`, with
-`openai-codex:gpt-5.6-luna` at `low` thinking effort as its sole fallback for
-`usage_limit_terminal`. Doctor verifies both models and every spawned test
-agent receives the same route. Context-created auxiliary agents are covered
-too: host mediation replaces their requested model, approval, and fallback
-fields with the resident case policy. Other model failures remain visible.
-
-An explicit `--model REF` selects a single-model diagnostic run and disables
-the default fallback. Use it when the selected model is itself part of the
-experiment, not merely to recover from Spark quota exhaustion.
-
-One named agent session owns one EvalDO notebook: its live heap is retained
-while its kernel activation remains resident and its exact durable scope is cold-recovered, so eval work is
-intentionally FIFO. Concurrent CLI `inspect` and `trajectory` requests wait on
-that same admission queue and inherit caller cancellation; they do not fail
-merely because another read is active and they have no fixed wait deadline.
-Use distinct named server instances for parallel workspace experiments and
-distinct agent sessions when inspection itself must execute in parallel.
-
-Headless channel observation does not keep the channel Durable Object resident.
-The active EvalDO/runtime owner injects a resident receiver registrar, channel
-events arrive through finite durable mailbox delivery, and initial/recovery state
-arrives in the join replay. If a live run has a growing channel mailbox with the
-first row retrying on an EvalDO target, inspect resident-receiver diagnostics and
-relationship revision before attributing the delay to the model. Never restore a
-long-lived channel response stream or raise the test timeout to route around that
-failure.
-
-Recipient-specific delivery may omit every event authored by the headless
-participant itself. Validation and diagnostics therefore derive authorship from
-the channel participant metadata, never from the first visible sender or message
-order. A transcript beginning with an agent tool call is valid and must still
-recognize a later completed agent text response.
-
-A finite channel delivery is a separate inbound EvalDO invocation. The owner
-must re-enter the registering eval execution context for the callback and revoke
-and drain its registrations when that execution settles. Also, recipient mailbox
-sequences are not globally contiguous because self-authored and unaddressed
-events are intentionally omitted; a sequence jump must not trigger replay repair
-from a resident callback. Errors mentioning an inactive retained eval context or
-repeated `getReplayAfter` calls during resident delivery indicate infrastructure
-failure, not a slow model.
-
-## Interactive staged runs
-
-In an interactive workspace-agent session, derive stage choices from
-`allTests()` and `testStages()`. Keep the full run state in `scope`, run one
-category-sized stage per eval with bounded concurrency, and publish one stage
-report card after every stage through `reportStage`.
-
-The report card is a bounded presentation, not the diagnostic record. Full
-messages and snapshots remain in `scope.results.results`. Mention recovered
-tool failures even when the final task passed; they can reveal infrastructure
-defects hidden by successful agent recovery.
-Typed no-effect and guest-code failures remain visible in the diagnostic record,
-but are diagnostic-only and do not count as unexpected tool failures. Only an
-unclassified failure is an unexpected failure that belongs in rerun and failure
-summaries.
-
-Ordinary local agent tools have no implicit wall-clock deadline. They inherit
-explicit cancellation from the owning turn; tools and deferred protocols may
-own deadlines only where those deadlines are part of their semantics. Treat an
-unexpected timeout terminal as infrastructure evidence and inspect the affected
-invocation. Do not conceal it by increasing the system-test deadline or by
-prompting the agent away from the broken capability.
-Structured channel deliveries are independently bounded to 15 seconds per
-attempt and durably retried. A channel alarm waiting longer than that is a
-transport defect: inspect the channel delivery outbox and recipient lifecycle
-rather than extending the test deadline.
-Build publication has the same liveness separation: graph/effective-version
-settlement is authoritative and finite, while changed-unit cache warming runs
-downstream. If opening a newly published panel blocks all later VCS/filesystem
-calls, treat that as build-settlement head-of-line blocking, not as an agent
-prompt or validator problem.
-Shell `createPanel` has a similarly narrow completion boundary: it proves the
-durable slot was committed and may emit `panel-created` before its RPC response,
-but it does not prove activation, attachment, or boot. Tests that need a ready
-application must use testkit `openPanel`/`withPanel` or await the exact runtime
-attempt; tests of creation responsiveness should assert the slot receipt and
-later lifecycle projection as separate facts. Never add a sleep between them.
-
-Repository fixtures are also complete authority fixtures. The runner grants
-gated `workspace-main-advance` to the immutable atomic
-`workspace-source-change:publication:<id>` transaction. The fixture reconciler
-then enforces the declared repository ownership and counteracts any unexpected
-publication. Critical cleanup authority remains repository-qualified as
-`workspace-repo-delete:<repoPath>`: exact for a seeded fixture and section-wide
-for an as-yet-unnamed created/derived fixture. The cleanup context inherits the
-same resident test policy, so teardown uses the ordinary protected VCS path
-without an interactive card or a privileged cleanup API.
-
-Repository fixtures automatically claim the suite scheduler resource
-`vcs:protected-main`. Their task contexts and local working heads are isolated,
-but successful publication and cleanup counteraction both advance the one
-protected branch. The runner therefore serializes fixture cases without
-requiring each test definition to remember this global constraint; unrelated
-cases with disjoint resources still run concurrently.
-
-The protected-publication wait remains part of the originating VCS request:
-its abort signal must reach the authority acquisition. An eval deadline or run
-cancellation therefore closes any pending acquisition and unwinds the held
-EvalDO execution. A timed-out tool whose underlying eval remains `running`, or
-a `system-test cancel` command that waits on that eval, is cancellation
-propagation breakage—not an ordinary test timeout.
-
-Rich unit/config review is presentation carried by that same acquisition.
-Panel, app, extension, worker, and meta changes must not call a legacy approval
-queue directly. If a fixture-authorized panel publish produces an interactive
-unit card, the canonical authority path was bypassed; repair the host gate
-instead of adding a unit-card-specific test exception.
-
-## Semantic VCS scenarios
-
-VCS tests validate one semantic agentic system, not a sequence of old file/VCS
-commands. The test subject must read
-[vibestudio-vcs](../vibestudio-vcs/SKILL.md) and demonstrate:
-
-- exact committed-event and local-application identities;
-- complete-chain commit with no staging or selective remainder protocol;
-- compare plus bounded coordinate merge pages, intent review, and explicit conflict resolutions;
-- exact-event publication to protected main;
-- explicit move/copy operations with stable move identity and copy ancestry;
-- counteraction-based revert without erased history;
-- walkable content, command, and trajectory-invocation causality plus blame;
-- one bounded `gad.diagnoseInvocation` join whose terminal failure preserves
-  primary and cleanup causes and reports any truncation;
-- mixed native-edit/import-boundary blame that keeps exact new intent separate
-  from honestly unknown pre-import authorship;
-- typed stale-basis recovery and identical-request command idempotency.
-
-Workers and Durable Objects created for a test follow the test context's working
-state by default. Use `ref: "main"` only when the test explicitly needs
-protected-main code. A panel still needs an explicit context build ref when its
-unpublished code is under test.
-
-If host and userland behavior disagree, inspect runtime-image `stateHash`,
-`scopeRef`, `buildKey`, and effective version before blaming WebRTC or adding a
-retry. A persistent workspace runs semantic state, not unimported files from the
-host checkout. The workspace `systemEpoch` must exactly match the host; an
-epoch mismatch is a fail-readiness condition, never a compatibility case.
-
-Prompts state realistic user goals and final evidence fields. They do not name
-the exact call sequence, object shape, or recovery branch. Validators inspect
-the resulting effects and complete trajectory; a final prose marker alone is
-not sufficient evidence of protocol correctness.
+- Follow typed lifecycle phases and structured errors; never parse explanatory
+  prose for control flow.
+- Keep primary operation failure separate from cleanup, rollback, and transport
+  evidence.
+- Test panel slot commitment separately from boot readiness and rendered
+  correctness. Use exact lifecycle waits, not sleeps.
+- Let repository fixtures claim their declared scheduler resources; do not add
+  undeclared parallel publication against protected main.
+- Preserve ordinary authority and cancellation through publication and cleanup.
+  A test policy authorizes only its declared case resources.
+- Keep fixture mechanics, cleanup coordinates, and validator knowledge out of
+  the subject prompt.
+- For semantic VCS cases, validate the public workflow and recorded identities,
+  decisions, moves/copies, counteractions, provenance, and typed recovery—not an
+  implementation-specific sequence.
+- Workers and DOs normally follow the test context; panels need an explicit
+  context ref when unpublished code is under test.
 
 ## Artifact security
 
-CLI artifacts are stored with restrictive permissions under
-`${XDG_CONFIG_HOME:-~/.config}/vibestudio/system-test-runs/<run-id>/` unless an
-output directory is supplied. Full trajectories can contain sensitive data.
-Do not publish them, paste them wholesale, or weaken their permissions; extract
-only the bounded evidence needed to explain the mismatch.
+Run artifacts default to the profile's `vibestudio/system-test-runs/<run-id>`
+directory with restrictive permissions unless an output directory is supplied.
+Full trajectories can contain sensitive data. Do not publish them, paste them
+wholesale, or weaken permissions; extract only the bounded evidence needed to
+explain the mismatch.
 
-## Environment compatibility
-
-The orchestrator can run from server-side eval, workers, Durable Objects, or
-panels. In eval/worker/DO contexts it uses its authorized runtime identity as
-the PubSub participant ID. Do not invent synthetic participant IDs. Panel-only
-orchestrators with a stable panel slot may use that slot.
-
-For trusted app failures under `apps/`, read `skills/appdev/SKILL.md`. For host
-source under `src/` or root `packages/`, use the checkout/repair procedure in
-[SELF_IMPROVEMENT.md](SELF_IMPROVEMENT.md); workspace source repair uses the
-semantic VCS protocol linked above.
+The orchestrator can run from eval, workers, Durable Objects, or panels. Use the
+authorized runtime participant identity; never invent a synthetic participant.
+For trusted app failures, read [app development](../appdev/SKILL.md). For host
+source repair, use [SELF_IMPROVEMENT.md](SELF_IMPROVEMENT.md).

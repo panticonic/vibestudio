@@ -1,168 +1,77 @@
 ---
 name: onboarding
-description: State-aware first-run setup, stable capability routing, and ready-now discovery.
+description: Open or maintain Vibestudio's state-aware setup overview, route a selected capability to its owner workflow, refresh owner state, or hand off an optional template installation.
 ---
 
 # Onboarding
 
-Onboarding projects durable setup state from each capability owner. It does not
-store completion flags, infer authority, or treat every product capability as a
-checklist item.
+Onboarding projects durable state from each capability owner. It does not keep
+completion flags, infer authority, or turn ordinary product features into a
+checklist.
 
-## Opening overview
+## Open the overview
 
-Render `skills/onboarding/SetupHub.tsx` with `inline_ui` using the stable ID
-`onboarding-setup-overview`. Do not run a leading `client_eval` or pass a
-composed snapshot. The checked-in component displays its panel-scope cache
-immediately and refreshes capability-owner state on mount.
+Render the checked-in component with a stable ID:
 
-The component reads GitHub connection status, model settings, agent defaults,
-local models, browser imports, web search, and installed capability owners
-directly. It composes device/workspace topology
-from `hubControl.listDevices` and `hubControl.listWorkspaces`, plus the
-client-local route mode. A failed read becomes an honest `unknown` row and does
-not suppress the rest. Base-owned definitions are always present; if one of
-their owners cannot be discovered, that row is **Unavailable** because the base
-capability is broken or incomplete. Optional owners such as Google Workspace
-join the catalog only after their template is installed. Template discovery is
-not part of the opening load: the user-facing **Load optional templates**
-button explains templates and only then contacts the verified registry. Before
-installation, an optional owner's registry entry appears only there;
-onboarding never pretends that an absent optional owner is a broken base
-capability.
-
-The opening message is short. The inline setup overview is the first-screen
-information architecture. Do not load or publish an onboarding action bar.
-
-## Capability selections
-
-For agent-owned selections, the component sends readable text and typed message
-metadata.
-
-```ts
-{
-  interaction: {
-    source: "onboarding-setup-hub",
-    kind: "onboarding-capability",
-    action: "setup",
-    targetId: "connection.github"
-  }
-}
+```text
+inline_ui({
+  id: "onboarding-setup-overview",
+  path: "skills/onboarding/SetupHub.tsx",
+  props: {}
+})
 ```
 
-Resolve the structured interaction through `client_eval`: statically import
-`executeOnboardingSelection` from `@workspace-skills/onboarding` and pass the
-complete `interaction` object; never route from its readable label. The
-checked-in function validates the selection and performs About, workspace-panel,
-and shell navigation in the inviting client.
+Do not compose a snapshot first or pass private state as props. The component
+uses its panel cache immediately, then reads capability-owner state. A failed
+owner read becomes an honest unknown or unavailable row without suppressing
+other capabilities.
 
-- `owner-skill`: read `route.ownerSkillPath` and use that owner workflow.
-- `model-settings`: use the model-settings provider/default workflow.
-- `conversation`: explain or begin using the ready capability.
+Template-registry discovery is user-initiated through the overview. Do not
+contact the registry during the initial capability load.
 
-Client-owned panel navigation focuses the destination and waits for its exact
-application readiness before returning `handled: true` with the committed
-`panelId` and `readiness: "ready"`. If the slot was committed but readiness
-failed, the result is `readiness: "unconfirmed"` with the structured failure;
-do not repeat the open because that panel slot is already committed.
-shell navigation returns `handled: true`. Owner/model/conversation routes
-return `handled: false` with the authoritative target. An unconfirmed result
-also includes the structured failure. Unknown IDs and
-unsupported actions are errors. Do not fall back to matching button prose.
-`client_eval` owns only the client-affine selection boundary.
-After an `owner-skill` handoff, use ordinary server-side `eval` for owner
-helpers unless the operation actually depends on the inviting panel's DOM,
-loaded modules, panel-local scope, or Electron-local host transport. Portable
-runtime helpers such as `openExternal()` work from either eval path and retain
-their normal approval flow.
+## Route a selection
 
-For `kind: "onboarding-template"`, statically import and call
-`resolveOnboardingTemplateSelection` with the complete interaction. Read its
-returned `ownerSkillPath`, then use its registry-bound `selection` with the Templates
-skill's single reviewed `add` workflow. The click starts that exact Composer
-transaction; protected main still presents the one merged-diff approval.
+The component sends readable text plus typed interaction metadata. Route the
+complete interaction object, never its label:
 
-## Verification and refresh
+- For a capability interaction, call `executeOnboardingSelection` from
+  `@workspace-skills/onboarding` through `client_eval` because navigation is
+  client-affine.
+- For a template interaction, call `resolveOnboardingTemplateSelection`, then
+  pass its exact registry-bound selection to
+  [Templates](../templates/SKILL.md).
 
-Stored Google/GitHub credentials are `connected-unverified`. The component's
-`check` and `refresh` controls call the checked-in capability composer directly;
-do not route those clicks through the agent.
+Follow the returned discriminant. A committed panel slot with unconfirmed
+readiness must not be opened again. Owner-skill, model-setting, and conversation
+routes return their authoritative next target; do not match button prose or
+invent a fallback route.
 
-After a workflow success, failure, cancellation, or another external change
-that may affect setup, render `SetupHub.tsx` again with the same stable ID and
-no snapshot props. The update replaces and bumps the existing card; its new
-render revision tells the mounted component to refresh capability state. Never
-put credential material, browser samples, device IDs, pairing links, profile
-paths, or private topology in inline props or panel scope.
+After the client-affine handoff, use ordinary server-side eval unless work
+depends on the inviting client's DOM, panel state, or native transport.
 
-Do not claim that the refreshed card contains a particular row, status, or
-action: the component reads owner state asynchronously after it renders. Report
-only the completed operation, render the card, and let the card be the
-authoritative observation. For template operations, first honor Composer's
-`contextIntegration`: `integrated` is ready to refresh; `needs-merge` requires
-the ordinary agentic VCS merge in the returned context; `unavailable` means the
-installation succeeded on protected main but this conversation cannot yet
-claim to observe it.
+## Refresh
 
-## Templates
+The component owns check and refresh controls. After setup succeeds, fails, is
+cancelled, or changes externally, render the same component ID again with no
+snapshot props. Report the operation, but do not claim a row's refreshed state
+before the component reads it.
 
-Onboarding shows recommended outcomes from the current verified template
-registry together with their actual Composer installation status. It does not
-maintain a second list of official repository URLs.
-
-Registry discovery is explicit user intent. Do not query or refresh the
-template registry during opening capability materialization. The setup card
-explains that templates are reviewed bundles of workspace additions and that
-loading them contacts the verified registry before the load button is used.
-
-The overview offers `Review & add` only when Composer reports that the outcome
-is available. Installed outcomes are labeled and are not offered again; an
-unknown status is honest and not actionable until refresh. A structured
-selection hands the registry identity to the Templates skill's canonical
-reviewed `add` workflow unchanged. Never
-guess a tag or commit, silently install from an inferred interest, or reproduce
-template preparation inside onboarding. The Templates surface and composer
-remain the sole installation path; onboarding only recognizes the need and
-hands off the user's selected intent.
-
-After installation, do not surface excluded trust or provider suggestions.
-They are optional hints, not unfinished setup. Consult one only when the user
-later requests the corresponding capability or a concrete failure makes it
-relevant; then use the Templates skill's single host-approval path.
-
-Keep optional templates visually separate from required setup. Their presence
-is discoverability, not an unfinished-setup checklist or recommendation. Once
-installed, ordinary runtime owner discovery exposes any setup workflow the new
-units provide. For Google Workspace this means the catalog first offers the
-template; after the add succeeds, its owner skill contributes the Google
-connection row and controls credential configuration, verification, repair,
-and Gmail setup. Onboarding stores no duplicate Google definition or setup
-state.
+For template operations, honor the composer's `contextIntegration` result:
+refresh after `integrated`, merge normally after `needs-merge`, and do not claim
+this conversation observes the result after `unavailable`.
 
 ## Product rules
 
-- Durable preparation is setup. Ordinary work and ready-on-demand capabilities
-  are not setup.
-- Optional configuration is neutral unless a selected workflow failed.
-- Do not show a completion denominator.
-- Connection is not authorization. Repair/reconnect belongs to the owner skill;
-  credential inspect/revoke to `about/credentials`; model/default change to
-  model settings; grants to `about/permissions`.
-- Contextual setup such as Gmail, News, custom providers, Slack, or a project
-  upstream appears only after the relevant goal is selected.
-- Secrets use host-owned credential input. Never ask for them in chat or keep
-  them in inline UI state.
-- A setup selection opens one owner-controlled workflow surface. Never turn a
-  single capability setup into a sequence of one-question feedback forms.
-  Owner workflows use persistent inline UI, call trusted helpers directly,
-  ask about plain-language outcomes, preselect a recommended default, and hide
-  credential formats and permission vocabulary unless an advanced case
-  requires them. Do not return selections to the agent just to build an eval
-  call.
-- Host-governed trust, permission, publication, and workspace-settings choices
-  use their canonical approval surfaces. `feedback_custom` is never a proxy
-  approval UI.
+- Show durable preparation, not every ready-on-demand capability.
+- Keep optional configuration neutral and omit completion denominators.
+- Connection status is not effect authorization. Route repair, credentials,
+  model settings, and grants to their owning surfaces.
+- Keep secrets in host-owned credential input, never chat or inline props.
+- Open one owner-controlled workflow for each selection. Do not replace it with
+  a chain of feedback questions or a custom approval UI.
+- Onboarding may suggest verified template outcomes, but Templates remains the
+  sole installation and update path.
 
-See [GETTING_STARTED.md](GETTING_STARTED.md) for the concise execution recipe,
+Read [GETTING_STARTED.md](GETTING_STARTED.md) for the execution recipe,
 [OVERVIEW.md](OVERVIEW.md) for product concepts, and
-[REMOTE_SERVER.md](REMOTE_SERVER.md) for remote deployment details.
+[REMOTE_SERVER.md](REMOTE_SERVER.md) for remote setup.

@@ -1,583 +1,161 @@
 ---
 name: capabilities
-description: Inspect active workspace permission grants and design, declare, discover, or debug Vibestudio capabilities and dynamic intra-workspace services without confusing manifests, grants, approvals, or generated audit catalogs.
+description: Design, declare, discover, inspect, or debug Vibestudio authority and dynamic workspace services without confusing method contracts, unit requests, grants, approvals, live declarations, or generated audit evidence.
 ---
 
 # Capabilities and workspace services
 
-Read this skill before adding a host-service effect, a worker or Durable Object API,
-an authority request, or a workspace-owned approval flow.
-
-When changing host enforcement, mission closure, static host authority, or the
-System Agent boundary, also read
-[`references/authority-implementation-checklist.md`](references/authority-implementation-checklist.md).
-It names the review inputs and tests that must move together.
-
-## The four things that must stay separate
-
-1. A **method contract** says which authenticated principals may call a method, its
-   tier, its receiver requirements, and how its concrete resource is derived.
-2. A unit's checked-in **authority manifest** is the maximum authority that exact
-   source artifact requests. A request is intent, never permission.
-3. A host **grant or fresh approval** authorizes an eligible request. Open methods do
-   not need a grant; gated methods intersect requests with grants; critical methods
-   require a fresh approval for every exercise.
-4. A workspace service's **provided capability** protects a resource the service
-   owns. The receiver declares and enforces it before provider code runs; downstream
-   host effects such as egress, credential use, protected publication, or external
-   browser opens still acquire their own host capabilities independently.
-
-Never turn discovery, a build, generated documentation, a static code census, or an
-observed invocation into a grant. Generated authority ledgers are review/audit evidence
-only; editing or regenerating one is not capability approval. Workspace code admission
-comes from a human decision over the exact sealed version and manifest, not a generated
-static host catalog.
-
-`workers.resetStorage` and `workers.restoreStorageBackup` exercise the reviewed
-`workers.storage.reset` capability. They accept only one exact Durable Object
-source/class/object key, require an audit `intent`, and use the normal critical
-approval path. A resolved handle identifies the target but does not authorize
-replacement. `workers.listStorageBackups` is read-only discovery. Prefer a
-forward schema migration whenever the state is not explicitly disposable.
-
-## Inspecting and changing live decisions
-
-Use the host permission inventory when someone asks what access is active across the
-workspace:
-
-```ts
-const inventory = await rpc.call("main", "permissions.list", []);
-```
-
-`permissions.list` returns the grant inventory directly as a `SavedPermissionGrant[]`;
-it is not wrapped in `{ grants: ... }`. Each row has non-empty `id`, `kind`,
-`callerLabel`, `scopeLabel`, `why`, `approvedBy`, `duration`, and `revokeEffect`
-fields. `kind` is `capability`, `credential-use`, or `browser-site`; optional
-resource, provenance, and timestamp fields are also returned when applicable.
-Treat the result as an array before inspecting or slicing it, especially when the
-inventory is large. This is a read-only inspection; use the explicit approval UI
-and host permission APIs for changes.
-
-Do not ask for a decision from inside provider code. Declare the resource in
-`vibestudio.authority.provides` and bind the receiving `@rpc` method to its local
-capability. The host derives the exact receiver resource, evaluates the canonical
-grant store, and presents the normal approval card before entering the method.
-
-For prepared provider state, declare a handle-producing method and return
-`prepareOpaqueHandle(selector, presentation)`. The host replaces that preparation
-with an unguessable handle. A consuming method declares
-`resource: { kind: "opaque-handle", argument: 0 }`; it receives the private selector
-only after the host has checked the handle's workspace, capability definition,
-provider, logical receiver, and resource type. A handle identifies a resource but
-never authorizes it.
-
-## Dynamic workspace capabilities
-
-Workspace-built services are discovered from the exact caller's live semantic
-workspace context. They are not limited to a startup scan or a checked-in global
-census.
-
-### Agent authoring loop: keep docs outside eval
-
-`docs_search` and `docs_open` are agent tools. They are **not** globals or exports
-inside `eval`; `docs`, `docs.search`, and `docs.open` are undefined there. Use this
-order after editing a provider:
-
-1. Call the agent tool `workspace_service` with `operation: "upsert"`. It writes
-   the `services` row and, when `transport.objectKey` is present, the matching
-   `singletonObjects` row as one schema-validated semantic edit. Do not splice
-   either YAML list with generic `edit`/`write`; a singleton is launchable
-   infrastructure, not a discoverable service by itself. Supply the required
-   `presentation` and `notability` values from the tool schema so authority
-   prompts can describe and prioritize the service consistently; a `sharing`
-   domain also requires `substanceKind`.
-2. Call the agent tool `docs_search` for the new service name or protocol. If the
-   row is absent, stop: the declaration is missing or invalid in the current
-   context. Re-read the relevant YAML and repair it. Do not start eval and do not
-   guess a route.
-3. Call the agent tool `docs_open` for the service and exact method. Only after it
-   reports the expected live provider version and method should you start eval.
-4. Inside eval, use only the documented runtime exports:
-
-```ts
-import { workers, rpc } from "@workspace/runtime";
-const service = await workers.resolveService("example.protocol.v1");
-if (service.kind !== "durable-object") throw new Error("Expected a Durable Object service");
-return rpc.call(service.targetId, "methodName", []);
-```
-
-Import only runtime values that the eval actually uses. TypeScript's `type`
-keyword is a modifier for a real imported type name, not an export named
-`type`; never write `import { workers, type } from "@workspace/runtime"`.
-
-There is no polling delay in this sequence. A docs result is the read-after-edit
-proof that the current semantic context can build and describe the declaration;
-absence is a concrete authoring diagnostic, not eventual success to wait for.
-
-- Declare a service with `workspace_service`, supplying a stable protocol,
-  source, user-facing title/action/description, reviewed `notability`,
-  principals, and transport.
-- Use the agent tools `docs_search` / `docs_open` to inspect the live
-  caller-visible contract before starting an eval. These are tool names, not
-  `@workspace/runtime` exports. Inside eval, consume the result through the
-  documented `workers.*` and `rpc.*` runtime APIs. Service and API docs are
-  generated from the same exact declaration set used for resolution. Never
-  reference `docs` from eval code.
-- To enumerate services before you know a name or protocol, call
-  `docs_search({ query: "", surface: "workspace" })`. Open one of the returned
-  IDs; do not search source files or another unit's manifest to reconstruct the
-  live service registry.
-- `workers.listServices()` is the lightweight runtime enumeration. Each
-  workspace-owned row carries its `docsId`; open that id with `docs_open` before
-  choosing a receiver method. This is the same live catalog, not a second census.
-- Tool calls use the strict shapes `docs_search({ query: "...", surface?, limit? })`
-  and `docs_open({ id: "workspace:<service>[.<method>]" })`. Do not pass filesystem
-  `path` fields or copy search fields into `docs_open`.
-- Resolve by protocol with `workers.resolveService(protocol, objectKey?)` or
-  `workers.resolveDurableObject(source, className, objectKey)`, then call the returned
-  target through `rpc.call` or a typed client.
-- Resolution, direct-RPC authority, and provider identity are bound to the same caller
-  context and exact provider effective version. A declaration visible in another
-  context does not authorize or resolve in this one.
-
-Do not add workspace service names to a generated host catalog. Static reviewed
-censuses are appropriate for static host capabilities; workspace-built units
-must remain live, context-relative declarations.
-
-The provider method roster and source signatures in live docs are derived during the
-exact context build and sealed with that build's effective version. This metadata is
-documentation only: it neither requests nor grants authority, and the receiver's live
-`@rpc` declaration independently remains default-deny. A missing method contract is a
-provider documentation defect to fix, not a reason to guess from source.
-
-An installed unit that knows a service contract requests the exact
-`workspace-service:<name>` capability in its reviewed manifest. Admitted agent eval is
-different: the live declaration chooses the exact service capability and provider EV,
-then the ordinary session grant or acquisition, mission closure, context-integrity
-latch, and receiver policy intersect at the call. Evaluated code has no manifest
-ceiling and receives no authority from the harness package. Never replace live
-selection with a generated list of today's service names.
-
-The shortest authoring loop is:
-
-1. Add the worker/DO method and its `@rpc` receiver contract.
-2. Add the context-local singleton/service declaration to `meta/vibestudio.yml`.
-3. Ask live docs for the protocol you just declared; this proves that documentation and
-   resolution see the same semantic context.
-4. Resolve the protocol and call the returned target. Do not guess a source/class/key
-   route or edit an authority catalog.
-
-`workspace-service` describes a declared service boundary, not every method on
-every workspace Durable Object. A disposable object intentionally addressed by
-source/class/key through `workers.resolveDurableObject(...)` instead declares
-`effect: { kind: "open" }`; it has no service-declaration admission boundary.
-A manifest-declared service may also expose an open method: the live service
-declaration supplies the separate `workspace-service:<name>` target requirement.
-Provider-owned protected methods instead use
-`effect: { kind: "userland-capability", ... }` backed by the same package's
-`authority.provides`. Never change a protected method to open merely to bypass a
-missing service declaration. Add the live declaration and use
-`resolveService(...)`, or keep the object explicitly lifecycle-owned and direct.
-
-### Installed provider/consumer recipe
-
-When the **consumer is installed workspace code** (rather than eval), use this
-complete shape. The provider is a context-local Durable Object service and the
-consumer is an ordinary disposable worker.
-
-If a suitable service is already present, discover it through live docs and
-start at the consumer manifest/code below; do not create a duplicate provider
-or edit `meta/vibestudio.yml` merely to demonstrate consumption.
-
-Provider receiver (`workers/local-greeting/index.ts`):
-
-```ts
-import { DurableObjectBase, rpc } from "@workspace/runtime/worker/kernel";
-
-export class LocalGreetingDO extends DurableObjectBase {
-  protected schemaProductionBaseline() {
-    return { version: 1, name: "local-greeting-v1" } as const;
-  }
-
-  protected createTables(): void {}
-
-  @rpc({
-    principals: ["code"],
-    effect: { kind: "open" },
-    tier: "open",
-    sensitivity: "read",
-  })
-  async greet(): Promise<{ greeting: string }> {
-    return { greeting: "hello from the local provider" };
-  }
-}
-```
-
-Live declaration (`meta/vibestudio.yml`):
-
-```yaml
-singletonObjects:
-  - source: workers/local-greeting
-    className: LocalGreetingDO
-    key: main
-services:
-  - source: workers/local-greeting
-    name: local-greeting
-    title: Local greeting
-    action: read local greetings
-    description: Read greetings stored in this workspace.
-    notability: everyday
-    presentation: { domain: automation, verb: see }
-    protocols: [example.local-greeting.v1]
-    authority:
-      principals: [code]
-    durableObject: { className: LocalGreetingDO }
-```
-
-Consumer manifest fragment (`workers/local-consumer/package.json`):
-
-Manifest request tiers are only `"gated"` and `"critical"`. Do not copy the
-provider method's `@rpc` tier `"open"` into the manifest: receiver policy and
-requested authority are intentionally different layers.
-
-`requests` describes only effects performed by this installed code. Evaluated child
-code is governed by its host-admitted task or mission session, not this manifest.
-Unknown fields and malformed entries are always rejected.
-
-```json
-{
-  "vibestudio": {
-    "authority": {
-      "provides": [],
-      "requests": [
-        {
-          "capability": "workspace-service:local-greeting",
-          "resource": { "kind": "prefix", "prefix": "" },
-          "tier": "gated",
-          "evidence": "bounded-dynamic"
-        }
-      ]
-    }
-  }
-}
-```
-
-Consumer receiver (`workers/local-consumer/index.ts`):
-
-```ts
-import {
-  createWorkerRuntime,
-  handleWorkerRpc,
-  type ExecutionContext,
-  type WorkerEnv,
-} from "@workspace/runtime/worker";
-
-let exposedFor: string | null = null;
-
-export default {
-  async fetch(request: Request, env: WorkerEnv, _ctx: ExecutionContext) {
-    const runtime = createWorkerRuntime(env);
-    if (exposedFor !== env.WORKER_ID) {
-      runtime.rpc.expose("consumeLocalService", async () => {
-        const service = await runtime.workers.resolveService("example.local-greeting.v1");
-        if (service.kind !== "durable-object") throw new Error("Expected local DO service");
-        return runtime.rpc.call(service.targetId, "greet", []);
-      });
-      exposedFor = env.WORKER_ID;
-    }
-    return handleWorkerRpc(runtime, request) ?? new Response("ready");
-  },
-};
-```
-
-The low-level installed-worker `runtime.rpc.call(...)` returns `unknown` unless
-the caller supplies a documented result type or uses a typed client. For a
-smoke/proof endpoint, return the provider result intact instead of guessing and
-projecting fields. If application code needs individual fields, define or
-import the provider's public result contract and call
-`runtime.rpc.call<ThatResult>(...)`; do not infer a shape from a method name.
-
-Build both units in the same context, ask live docs for
-`example.local-greeting.v1`, then exercise the installed consumer through the
-normal typed lifecycle. This complete eval shape keeps the build selector,
-runtime context, RPC target, and cleanup aligned:
-
-```ts
-import { contextId, rpc, workers } from "@workspace/runtime";
-
-const source = "workers/local-consumer";
-const report = await services.build.getBuildReport(source, `ctx:${contextId}`);
-if (report.status !== "ok") return report;
-
-const handle = await workers.create(source, {
-  key: `probe-${crypto.randomUUID()}`,
-  contextId,
-});
-let observed: unknown;
-try {
-  observed = await rpc.call(handle.targetId, "consumeLocalService", []);
-} finally {
-  await workers.destroy(handle);
-}
-return { observed, createdId: handle.id, retiredId: handle.id };
-```
-
-Do not replace `services.build.getBuildReport` with an invented helper or raw
-`runtime.createEntity`: the explicit build selects the context-local artifact,
-and `workers.create` carries that same context through the canonical lifecycle.
-The installed request remains only a maximum: the exact live
-declaration/provider EV and the ordinary grant or approval path must still admit
-the call.
-
-The provider DO and regular-worker consumer may also live in **one worker
-package**. Export the DO class and the default worker `fetch` handler from the
-same entry file, list that class under `vibestudio.durable.classes`, point the
-singleton/service declaration at that same package source, and keep the exact
-`workspace-service:<name>` request on the package. Prefer this shape when a task
-already owns one disposable worker repository; do not create a second repository
-only to imitate the two-directory illustration above.
-
-## Authoring a unit
-
-For a panel, worker, app, extension, or package that performs gated or critical work:
-
-1. Prefer typed runtime APIs. Use live docs to find the operation and its resource
-   shape; do not guess a transport method string.
-2. Add the narrow request to that unit's checked-in
-   `package.json#vibestudio.authority.requests`.
-   Add requests only for gated or critical effects. Open methods and host-owned
-   runtime lifecycle plumbing are deliberately absent; putting either in a manifest
-   is an error because neither is discretionary unit authority.
-3. Use the narrowest resource supported by the operation: exact identity, origin,
-   domain, or a deliberate prefix. A bare prefix is slash-hierarchical
-   (`context` covers `context/panel`, not `contextual`). End a lexical dynamic
-   namespace with its separator when names share a reviewed stem
-   (`projects/system-test-` covers generated system-test names only). Do not use
-   a wildcard to silence a build error.
-4. Run an explicit build/typecheck against `ctx:<contextId>`. The build compares and
-   seals the reviewed manifest; it must never rewrite it.
-5. Exercise the path. If authority is absent, let the typed acquisition flow explain
-   or request it. Do not catch `EACCES` and retry through another service, caller, or
-   host identity.
-
-Changing code invalidates version-bound grants because authority follows the exact
-execution digest. Critical authority is never persistent.
-
-An agent-owned eval is a conduit, not a separately trusted app. A durable choice is
-**Always for this agent** and remains keyed to that exact agent binding. This is not an
-installed-code update or version decision. Every eval still receives code review before
-it can run, and its effects intersect the binding, admitted task or approved mission,
-current grants, receiver policy, and context lineage.
-
-## Panel-tree relationship authority
-
-Panel coordination uses two distinct relationships:
-
-- The mutable panel tree is presentation and organization. Reparenting, sorting, or
-  nesting a panel does not transfer runtime capabilities.
-- Immutable runtime launch ancestry is control provenance. A panel, its bound agent,
-  and that agent's EvalDO can control panel runtimes they spawned because the host
-  verifies the descendant chain. This relationship check is terminal authorization
-  input, not a grant copied between principals.
-
-Consequently, a collection may freely create, move, rename, and coordinate its own
-spawned descendants without prompting at every operation. Moving an imported or
-unrelated panel under that collection does not make it creator-controlled. Runtime or
-CDP control of such a foreign-context target still selects the exact
-`context.boundary` decision for that requester and target context. A remembered gated
-decision can cover later operations within that same scope; privileged targets remain
-critical and require a fresh decision.
-
-Do not propagate capabilities upward to ancestors, downward to arbitrary visual
-descendants, or across a reparent operation. If a coordinator needs prompt-free
-control, have it spawn the resources it owns. If it adopts existing resources, retain
-their provenance and use the ordinary exact context-boundary approval.
-
-## Review and activation lifecycle
-
-Executable workspace units are reviewed as exact build identities, not by package
-name alone. The identity includes the unit's source effective version, transitive
-workspace dependency versions, relevant external dependency versions, runtime ABI,
-and its complete sealed authority contract for direct installed-code `requests`.
-
-- On a fresh workspace, every executable version already present—apps, native
-  extensions, panels, workers, and userland Durable Objects owned by those workers—is
-  collected into one startup batch when it lacks prior admission. This is one user
-  decision with many progressively disclosed unit rows, not one prompt per capability
-  or per host. The selected host app owns the bootstrap surface, but it does not approve
-  itself: the host resolves the entire batch before activating that exact app version.
-- A protected-main publication that changes an executable unit or anything in its
-  transitive build closure presents one combined source-and-authority review before
-  the head advances. The exact candidate identities accepted by that decision are
-  handed directly to activation; activation must not ask the same question again.
-- Shared libraries do not receive runtime authority of their own. Changing one changes
-  the effective versions of its executable dependents, so those dependent apps,
-  extensions, panels, and workers appear in the protected-publication review.
-- Added capabilities are shown first in user-facing language. Unchanged capabilities
-  stay collapsed under details; removals are summarized. A code-only change therefore
-  says that no new permissions are requested without hiding that the exact code version
-  is changing.
-- Direct installed-code capabilities render as shared authority rows in the
-  exact-version review. Evaluated code is not part of that version's authority:
-  it enters only through a host-admitted task or approved mission and uses ordinary
-  grants or fresh approval.
-- A manifest request remains only a maximum. Version review admits the exact installed
-  unit to use that maximum at gated tier; action-scoped resources, credentials,
-  outside-content trust, and critical operations can still require their own just-in-time
-  decision. Those are different consent objects, not duplicate version prompts.
-- Denied or dismissed unit versions never activate. A later source edit produces a new
-  identity and a new review; no session-duration source-change bypass exists.
-
-Do not add a second approval around build completion, host startup, or runtime
-activation. If an exact version was reviewed at protected publication, propagate that
-identity through the canonical trust handoff. If it was not reviewed (for example an
-existing unit in a newly created workspace), enqueue it in the shared startup batch.
-
-An exact `workspace-service:<name>` request is allowed even when that provider is not
-present in the checkout being built. This is an intentional dynamic bound, not an
-unused request: the live semantic context supplies the declaration and exact provider
-EV later. Installed units may not request `workspace-service:*`; evaluated sessions
-select exact live services and cannot turn a wildcard into authority.
-
-## Userland-owned capabilities
-
-When a workspace service owns a protected resource, declare that capability in the
-provider manifest's `authority.provides` list and bind each protected method through
-extension `methodAuthority` or the Durable Object's `@rpc` effect. Use the receiver
-object for simple resources. For prepared state, declare
-`produces: { kind: "opaque-handle", capability: "<local-name>" }`, return
-`prepareOpaqueHandle(selector, { title, detail? })`, and bind the consumer with
-`resource: { kind: "opaque-handle", argument: <index> }`.
-The dispatcher enforces the declaration before provider code runs and routes missing
-authority through the same trusted acquisition UI used by host capabilities.
-
-Never add an advisory prompt inside provider code. Credentials, network access,
-filesystem authority, protected-main publication, panel control, and other host
-effects must still cross their own independently protected receivers.
-
-## Content integrity
-
-Content provenance is authority input. File versions and durable channel messages are
-stamped at their write chokepoints from the authoring session's monotone latch. Reads
-advance the receiving session's latch before bytes become visible. Never accept a
-caller-supplied `contentClass` or `externalKeys`, and never copy content through a new
-file or message to make it appear internal.
-
-The host represents two or more exact outside sources as one
-`lineage-set:<sha256>` coordinate. Its digest covers the canonical sorted leaf
-keys, and the content-trust store retains and verifies that exact member list.
-Successive ingestion grows one aggregate set monotonically, so listing a large
-multi-source tree does not consume one latch slot per source. Treat a lineage
-set as an opaque content-addressed fact: workspace code must not invent one,
-nest sets, parse its digest as members, or replace it with a lossy domain/count
-summary. Host trust and diagnostics expand it through the canonical store;
-unknown or digest-mismatched sets fail closed. An exact vouch may name the set,
-and applies only to that exact membership.
-
-A bound agent can inspect only lineage already present in its own session with
-`contextIntegrity.explain({ key?, cursor?, limit? })`. The host verifies the
-set digest before returning a bounded page of exact leaf coordinates and trust
-decisions. The cursor is opaque and bound to the set; pagination is a
-presentation bound, not truncation of the stored lineage. Directory listing is
-an observation and may ingest provenance for returned names, but it must not
-fail merely because a large exact tree has more than 256 leaf sources—the host
-stores their canonical monotone union as one set coordinate.
-
-If an otherwise valid standing grant is refused after outside content entered the
-session, use the authority preflight/approval explanation. The outside lineage is a
-fact to preserve, not an error to erase.
-
-## Mission closure
-
-A mission is an immutable, content-addressed authority closure, not a label attached
-to an agent. Its charter binds the exact harness EV, hashed skills, exposed host and
-workspace services, model settings, trigger, and network policy. Starting a mission
-session is allowed only while that exact closure is active.
-
-- Change any closure input by creating a revised mission and obtaining approval for
-  that exact revision. Do not mutate a running session or repair a digest in place.
-- Preserve the original mission, session, caller, owner, and context lineage through
-  every service and RPC leg. A host caller substituted for a failing internal leg is
-  an authority escalation.
-- Treat standing restrictions as durable deny grants. A later allow, broader manifest,
-  or acquisition decision cannot override them.
-- Resolve pinned userland providers to exact EVs before approval. A `follow-head`
-  provider is an explicit closure policy, not permission to silently widen its methods
-  or capabilities.
-- Use `workspaceServiceDiscovery: "live-declarations"` only for a reviewed mission
-  whose purpose genuinely spans services created after approval. It admits live
-  declaration selection into the closure; it grants no service capability. The exact
-  provider EV, session grant/acquisition, receiver policy, and
-  context integrity still intersect at each call.
-- Keep event triggers inside the closed filter grammar. Do not evaluate workspace
-  expressions as trigger policy.
-
-Host-shipped seeded missions are reconciled from immutable product snapshot outputs.
-Their checked-in JSON is explicit reviewed input; `@seed` is resolved only from the
-shipped snapshot. Product reseeding makes an old closure inert before replacing its
-grants. Never derive a seed from the mutable workspace tree, and never turn ordinary
-workspace code into a product seed.
-
-## Product-owned System Agent
-
-The System Agent is a pinned, product-owned mission and worker, not a privileged copy
-of an ordinary workspace agent.
-
-- Its model-facing tool surface remains exactly `eval` and `say`. Shell operations
-  happen through typed services inside the ordinary eval runtime.
-- Its prompt, handbook, manifest, mission seed, and execution version come from the
-  immutable product snapshot. Workspace prompt overrides, skills, memory recall, or
-  edited worker code must not widen it.
-- Its conversation is host-derived per `(workspace, authenticated user, product
-snapshot)`. Callers do not supply user, channel, worker, context, or membership
-  identities.
-- Its channel has an exact locked roster containing that user and that exact worker
-  target. Generic subscription or channel configuration cannot add participants.
-- Conversation eval cannot settle approvals, read protected approval payloads,
-  activate/renew/widen delegation, alter its own trust root, or extract stored
-  credential material. Those require separate human or delegated-policy boundaries.
-
-Do not add a System-Agent-only transport, eval dialect, receiver bypass, or lifecycle
-branch. If a shell operation is missing, add the typed semantic service with ordinary
-receiver enforcement and review its inclusion in the mission closure.
-
-## Diagnosing a denial
-
-- Search/open the live docs for the exact caller context.
-- Confirm the service declaration exists in that semantic context and the resolved
-  provider/source is the intended one.
-- Use `authority.preflight` before a protected host-service call when the outcome
-  is uncertain. Read each leaf's structured `failure.reasonCode` and
-  `failure.remediation`; never parse the human error string.
-- Treat `missing-grant` and `lineage` with
-  `remediation.kind: "request-user-approval"` as dynamically acquirable. An
-  interactive agent/session call suspends on the existing acquisition rendezvous
-  when its context requests `authorityAcquisition: "wait"`; an installed-code call
-  receives `EACQUIRE` plus `errorData.acquisition` so its owning UI can present the
-  same user decision. Retry only after that exact acquisition resolves.
-- Treat `fixed-code-not-requested` with
-  `remediation.kind: "update-installed-code-manifest"` as an immutable installed-code failure,
-  not as a promptable permission. For installed panels/workers, add the returned
-  exact `remediation.request` to the owning unit manifest and submit the new sealed
-  version for review. An admitted eval never repairs a package manifest: it requests
-  ordinary interactive authority or, when unattended, proposes a mission revision.
-- Treat `receiver-undeclared` with
-  `remediation.kind: "declare-rpc-receiver"` as a provider defect. Add the
-  appropriate reviewed `@rpc` contract to the receiver or route the operation
-  through its declared service/channel API. Caller grants and manifest requests
-  cannot authorize an undeclared method.
-- Treat relationship, principal, session, denial, and attestation reason codes as
-  terminal for that invocation and follow their explicit remediation. Never turn a
-  relationship or transport failure into a permission prompt.
-- Direct authority attestations are runtime transport internals. Workspace code must
-  not import `@vibestudio/rpc/internal`, inspect or forward nonces, or copy a caller
-  envelope. Durable Object receivers use the sanitized `this.caller` identity and
-  `this.authorization` facts; ordinary calls go through the runtime RPC client.
-- Inspect the unit's sealed build metadata and execution digest, not only its mutable
-  `package.json`.
-- Keep the original caller/session across closure legs. Never replace it with a host
-  caller to make an internal leg pass.
-
-Unknown schemas, missing provenance, missing provider declarations, and unclassified
-authority fail closed. This is prerelease software: fix the source contract or the
-runtime architecture instead of adding compatibility shims or parallel paths.
+Read this before adding a host effect, worker or Durable Object API, authority
+request, or provider-owned approval boundary. For host enforcement, mission
+closure, product seeds, or the System Agent, also read the
+[authority implementation checklist](references/authority-implementation-checklist.md).
+
+## Keep the authority layers separate
+
+1. A **method contract** defines admitted principals, receiver/resource
+   derivation, effect, sensitivity, and tier.
+2. An installed unit's checked-in **authority manifest** is the maximum gated
+   or critical authority requested by that exact code. A request is not a
+   grant.
+3. A host **grant or fresh approval** authorizes an eligible request. Open
+   methods need no grant; critical effects require a fresh decision.
+4. A workspace provider's **provided capability** protects a resource it owns.
+   The receiver enforces it before provider code runs. Downstream host effects
+   such as credentials, egress, publication, or browser opening remain
+   independently protected.
+
+Discovery, generated docs, builds, code censuses, and observed invocations are
+never grants. Generated authority catalogs are review evidence; workspace code
+admission comes from a decision over the exact sealed unit and manifest.
+
+## Inspect or acquire authority
+
+Use live docs for `permissions`, `authority.preflight`, and the target service's
+current method contract. Permission inventory is a read-only view; modify
+decisions only through the owning host surface.
+
+Let the real protected operation enter the normal acquisition path. Do not ask
+for authority inside provider code, probe by making a broader call, or retry
+through another caller. Use preflight only when knowing the structured outcome
+before the effect is useful.
+
+Opaque preparation handles identify provider-owned state; they do not authorize
+it. Produce them with the declared handle mechanism and bind consumers to the
+matching capability and argument. Never accept or invent a raw selector as a
+substitute.
+
+## Author a dynamic workspace service
+
+Workspace services are resolved from the exact caller's semantic context, not
+a startup scan or static host catalog.
+
+1. Add the provider method and its explicit `@rpc` receiver contract.
+2. Use the `workspace_service` agent tool with `operation: "upsert"` to update
+   the service and singleton declaration atomically. Supply the presentation,
+   notability, principals, protocol, source, and transport required by its
+   schema. Do not splice these YAML lists by hand.
+3. Call `docs_search` and `docs_open` as agent tools. Absence is a declaration
+   or build diagnostic; do not poll or guess a route.
+4. In eval, resolve the documented protocol and call the returned target:
+
+   ```ts
+   import { rpc, workers } from "@workspace/runtime";
+
+   const service = await workers.resolveService("example.protocol");
+   return rpc.call(service.targetId, "methodName", []);
+   ```
+
+`docs_search` and `docs_open` are not eval globals or runtime exports. Live docs
+and resolution use the same context-relative declaration and provider build.
+Do not source-scan another unit to reconstruct the roster or add dynamic
+service names to a generated host catalog.
+
+Use `workers.listServices()` only for lightweight runtime enumeration, then
+open the returned docs ID before choosing a method. Use
+`resolveDurableObject(...)` only for explicitly lifecycle-owned objects whose
+contract is addressed by source, class, and key rather than a discoverable
+service.
+
+## Protect provider-owned resources
+
+Declare local capabilities in the provider manifest's `authority.provides` and
+bind each protected receiver through its `@rpc` effect or extension method
+authority. Use the declared receiver resource for simple values and a prepared
+opaque handle for private provider state.
+
+An installed consumer that knows a service requests the exact
+`workspace-service:<name>` capability in its manifest. Evaluated code has no
+installed-unit manifest ceiling; live selection, task or mission admission,
+session grants, receiver policy, context lineage, and content integrity still
+intersect at the call.
+
+Do not mark a protected method open to compensate for a missing service
+declaration or consumer request. Fix the owning contract.
+
+## Author an executable unit request
+
+For a panel, worker, app, extension, or package that performs gated or critical
+work:
+
+1. Find the typed operation and exact resource through live docs.
+2. Add the narrow request to
+   `package.json#vibestudio.authority.requests`. Do not request open methods or
+   host-owned lifecycle plumbing.
+3. Use the narrowest exact identity, origin, domain, or intentional prefix. Do
+   not use a wildcard to silence a build error.
+4. Build or typecheck the exact `ctx:<contextId>` working state. The build seals
+   and checks the manifest; it does not write or approve it.
+5. Exercise the real path. On denial, follow structured remediation rather than
+   catching `EACCES` and trying a parallel route.
+
+Version-bound grants follow the exact execution digest. Shared library changes
+therefore affect the reviewed identities of executable dependents. Carry a
+reviewed identity into activation; do not add a second approval around build,
+startup, or first use.
+
+## Relationship authority
+
+Panel-tree placement is presentation, not authority. Immutable launch ancestry
+can prove control over runtimes a panel, its bound agent, or that agent's eval
+created. Moving an unrelated panel into a collection does not transfer that
+relationship or its context authority.
+
+Do not propagate capabilities through ancestors, descendants, or reparenting.
+Have a coordinator spawn resources it should control; otherwise preserve their
+provenance and use the exact context-boundary decision.
+
+## Content integrity, missions, and product agents
+
+Content provenance is authority input. The host stamps files and durable
+messages at their write boundaries and advances the receiving session's
+monotone integrity latch on reads. Never accept caller-supplied content class,
+copy content to disguise its origin, or invent/parse lineage-set coordinates.
+Use `contextIntegrity.explain` for bounded diagnostics from the current session.
+
+A mission is an immutable authority closure over the exact harness, skills,
+services, model, trigger, and network policy. Change closure inputs through a
+reviewed mission revision; preserve caller, owner, session, and context lineage
+through every leg. Standing restrictions are durable denies, not suggestions.
+
+The System Agent is a product-owned mission with a product-derived worker,
+prompt, roster, tools, and execution identity. It uses ordinary typed services
+inside eval. Do not add a special transport, receiver bypass, approval channel,
+workspace prompt injection, self-grant path, or credential extraction route.
+Use the checklist for exact invariants and verification.
+
+## Diagnose a denial
+
+Read the live method and provider contract, then follow the structured reason
+and remediation:
+
+| Outcome | Action |
+| --- | --- |
+| Missing grant or content-lineage decision with user-approval remediation | Let the existing acquisition flow request the exact decision. Retry only after it resolves. |
+| Installed code did not request the capability | Add the returned narrow request to the owning manifest and submit a newly sealed unit for review. |
+| Receiver is undeclared | Add or repair the provider's reviewed receiver contract. Caller grants cannot authorize it. |
+| Principal, relationship, session, attestation, or explicit denial | Treat it as terminal for that invocation and follow its exact remediation. |
+
+Inspect sealed build metadata and execution identity, not only mutable source.
+Preserve structured errors and the original caller across internal legs. Unknown
+schemas, missing provider declarations, missing provenance, and unclassified
+authority fail closed.

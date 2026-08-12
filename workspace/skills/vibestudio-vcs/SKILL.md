@@ -106,20 +106,6 @@ Managed workspace state is semantic history, not a Git worktree. Use the agent-f
 
 Use `help("vcs")` for the method index and `help("vcs.merge")` for an exact live method contract.
 
-The canonical service roster is `vcs.edit`, `vcs.move`, `vcs.copy`,
-`vcs.merge`, `vcs.revert`, `vcs.commit`, `vcs.discard`, `vcs.importSnapshot`,
-`vcs.registerExternalDelta`, `vcs.supersedeExternalDelta`,
-`vcs.finalizeExternalDelta`, `vcs.push`, `vcs.status`, `vcs.compare`,
-`vcs.inspect`, `vcs.neighbors`, `vcs.history`, `vcs.blame`, `vcs.readMemory`,
-`vcs.resolveRepository`, `vcs.readFile`, `vcs.listDirectory`, and
-`vcs.listFiles`. Agent tools expose the common subset; direct runtime callers
-use the same contracts for lifecycle operations.
-
-## Completion checklist
-
-- The latest exact working head was used for every mutation.
-- Managed writes carry meaningful `intent` where it adds information, never filler.
-- Incoming work is `complete && concluded`; composed coordinates were semantically reviewed.
-- Conflicts were resolved per coordinate with explicit rationale where useful.
-- Focused verification passed.
-- The whole local chain was committed, status is clean, and any requested push names the exact committed event.
+The generated public contract and `help` output own the method roster. Agent
+tools expose the common workflow; direct runtime callers use the same semantic
+contracts with explicit service fields.

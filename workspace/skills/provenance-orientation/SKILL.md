@@ -1,137 +1,61 @@
 ---
 name: provenance-orientation
-description: Orient in Vibestudio's semantic VCS graph from an exact session, managed file, event, application, work unit, change, decision, command, trajectory invocation, or typed node. Use when origin, causation, incorporation, copy lineage, integration decisions, external import boundaries, what is actually known, or history could change the next action.
+description: Trace origin, causation, incorporation, copy lineage, integration decisions, or external import boundaries from an exact managed path, session, event, application, work unit, change, decision, command, invocation, or typed semantic root.
 ---
 
 # Provenance orientation
 
-Read the canonical [Vibestudio VCS skill](../vibestudio-vcs/SKILL.md) before
-walking code history. Provenance is the adjacency of the same semantic VCS
-records used for editing and integration, not a parallel memory product.
+Read [Vibestudio VCS](../vibestudio-vcs/SKILL.md) first. Provenance is the
+adjacency of semantic VCS and trajectory records, not a parallel memory store.
 
-## Start with the smallest exact question
+## Start at the decision boundary
 
-Use the friendly tool for a session, managed path, or known semantic identity:
+An ordinary managed-text `read` already attaches a bounded explanation for the
+displayed lines. Stop when it answers the question. Continue only when history
+can change the next action: unfamiliar code, integration, ambiguous intent,
+copy attribution, or an import boundary.
+
+Use the friendly tool for a session, managed path, or returned semantic root:
 
 ```ts
 provenance({ target: "session" });
-provenance({ target: "packages/example" });
 provenance({ target: "packages/example/src/index.ts" });
 provenance({ target: "change:…" });
 ```
 
-An exact managed repository-root path resolves to its typed repository node at
-the current working head. A managed file path resolves to the stable file
-identity at that same exact state. The tool inspects the selected node, then
-calls `vcs.neighbors`; its compact `node · …` line appears before the direct
-edges so intent, command state, and invocation metadata are visible without a
-second lookup. For a file it also shows a small exact `vcs.history` preview of
-the changes that touched that stable identity; continue from a returned change
-node into the causal graph.
+Pass roots and edge endpoints back unchanged. Event, application, work-unit,
+change, decision, and command shorthands are accepted. Trajectory invocations,
+turns, and messages require their complete typed coordinates because their
+local IDs are not globally unique.
 
-It accepts these semantic shorthands:
-`event:`, `application:`, `work-unit:`, `change:`, `decision:`, and `command:`.
-Pass `inspect.root`, `neighbors.root`, or either endpoint of a returned edge as
-the `target` unchanged: `provenance({ target: exactCoordinate })`. The inspected
-`node` is a value view, not a reusable root.
-Invocation, turn, and message roots require their complete typed
-`{ kind, logId, head, ...Id }` coordinate returned by an edge; their local IDs
-alone are not global graph coordinates.
+## Choose the smallest read
 
-An ordinary managed-text `read` already attaches bounded, exact-coordinate
-workspace memory for the displayed lines. Start there. If that compact
-explanation answers the question, stop; its typed change target is the
-continuation for `provenance` only when deeper context can change the answer or
-action.
+- `vcs.inspect` returns one exact node, its reusable root, and a bounded edge
+  preview.
+- `vcs.neighbors` pages immediate edges.
+- `vcs.history` pages committed event ancestry or changes to one stable file
+  identity.
+- `vcs.blame` traces an exact file range through content mappings.
 
-Read intent tiers literally: `stated` is the author's explicit purpose,
-`trigger` is durable assignment evidence with its sender, and `mechanical` is
-only an effect description. A mechanical span warrants reading the code and
-inspecting its work unit. Merge-arrival text follows the exact application and
-decision; composed bytes name both parent purposes.
+Continue a page with the same target and returned cursor. Start a separate read
+when the question changes. Use live schemas for edge kinds and node shapes; do
+not parse IDs, construct private roots, query semantic tables, or cache a client
+graph.
 
-Call explicit provenance at a real decision boundary: before relying on
-unfamiliar code, integrating another context, explaining an edit whose attached
-memory is inconclusive, or attributing copied content. A normal file read is
-enough for a mechanical change whose history does not matter.
+## Interpret evidence narrowly
 
-## Read immediate edges literally
+Keep actor, executor, cause, intent, authorization, and content origin
+separate. An edge records a relationship, not the truth of every upstream
+claim. Walk to the exact change, work unit, decision, command, event, or
+trajectory record needed for a consequential conclusion.
 
-Each page contains direct typed edges. Important kinds include:
+Intent tiers are not interchangeable: `stated` is explicit purpose, `trigger`
+is durable assignment evidence, and `mechanical` describes only the effect. Do
+not invent private reasoning or authorship from a turn summary.
 
-- `caused-by` from work unit to command and, for agent-caused work, from command
-  to the exact trajectory invocation that caused it. A fully paged direct
-  command with no invocation edge is an honest causal endpoint;
-- `part-of-turn` from an invocation to its exact turn, and `triggered-by` from
-  that turn to the exact message that opened it;
-- `applies-work`, `applies-change`, `realizes-change`, and `authored-change` for
-  application, basis-specific realization, and authored-work structure;
-- `imports-repository` from an import work unit to every exact repository state
-  targeted by its external snapshot;
-- `incorporates-change`, `decides-change`, and `counteracts` for
-  semantic relationships;
-- `preserves-content`, `copies-content`, and `incorporates-content` between
-  applied-change nodes for exact coordinate mappings;
-- `parent-event`, `committed-by`, `places-file`, and `contains-repository` for
-  workspace structure.
-
-Do not flatten executor, cause, initiating intent, authorization, and content
-origin into one “author” value. Walk the relevant edges for the question.
-
-## Choose the focused public read
-
-- `vcs.inspect` returns the exact reusable `root`, one inspected value, and a
-  bounded adjacency preview.
-- `vcs.neighbors` pages immediate edges without hidden traversal state.
-- `vcs.history` pages committed ancestry from an event root or past changes to a
-  stable file identity at an exact state. It is not a second general graph walk.
-- `vcs.blame` traces one exact file range through content-coordinate mappings.
-
-For “what has this file been for?”, walk file history as purpose evidence.
-Compare each optional resolved intent: `mechanical` is a gap, a changed intent
-without `viaDecisionId` is local drift, and one with `viaDecisionId` is imported
-purpose whose decision should be inspected.
-
-Continue `neighbors` with the same target and returned cursor. If a question
-changes, begin a new read. Never parse an ID, manufacture a node kind, query
-private semantic tables, or add a client-side graph cache.
-
-## Trust by walking to recorded evidence
-
-An edge says what the system recorded; it does not make every upstream claim
-true. For consequential conclusions, continue to the exact change, work unit,
-decision, command, event, or trajectory evidence. Inspecting a work unit exposes
-its `intentSummary`; inspecting a command exposes its method and terminal state;
-inspecting the typed trajectory-invocation endpoint exposes its canonical tool
-name, turn, status, outcome, and start/completion event references. Continue to
-the turn for its bounded summary and then to the triggering message for its
-exact stored text blocks and original channel-message identity. This is the
-observable intent evidence: do not invent private reasoning, an actor, or an
-authorship assertion from it. Bulky tool arguments remain in the invocation's
-canonical trajectory event rather than being copied into the bounded VCS node;
-the command, work unit, and changes show what semantic action was admitted and
-what actually happened.
-
-A copy should reach its immediate source coordinate; repeated walks may then
-reach the original edit. An integration explanation should reach the decision
-and source changes it accounted for. Channel delivery remains canonical in the
-trajectory log and is projected through the typed message node; do not create a
-parallel VCS copy or cross-system provenance façade.
-
-When blame reports an import boundary, pass its terminal typed `change`,
-`workUnit`, and `command` roots unchanged to provenance inspection. Report that
-work unit's `externalSnapshot`—
-its `sourceKind`, `sourceUri`, `snapshotRevision`, and `snapshotDigest`—as
-snapshot-level facts. Its `targetRepositoryIds` vector is the exact complete
-target set, including an identical import with no authored change;
-`imports-repository` neighbors expose the same relation as pageable typed
-edges. URI and revision
-are source-observed; the digest commits the descriptors the semantic workspace
-verified and admitted. Continue through the work unit's command to the causal
-invocation and triggering message when
-importer intent matters, and quote the work unit's exact `intentSummary` rather
-than reconstructing intent from effects. The terminal change's ownership field
-is the exact join; its presence in a bounded authored-change preview is not
-required. State that earlier coordinate authorship is unknown:
-importer intent explains why the bytes entered Vibestudio, but it does not make
-the importer, external revision committer, or current agent their author.
+A copy should reach its immediate source coordinate. An integration explanation
+should reach the decision and source changes it accounted for. At an external
+import boundary, report the recorded source kind, credential-free URI,
+revision, digest, and target repositories as snapshot facts. Importer intent
+explains why bytes entered Vibestudio; it does not identify the earlier file
+author or external committer.

@@ -1,468 +1,138 @@
 ---
 name: workspace-dev
-description: Build, develop, and diagnose Vibestudio workspace units — project scaffolding, panel lifecycle/loading, workers, Durable Objects, runtime publishing, repo-local SKILL.md authoring, and development workflow.
+description: Create, develop, verify, and diagnose workspace panels, workers, Durable Objects, packages, and repo-local skills, including project scaffolding and panel lifecycle debugging.
 ---
 
-# Workspace Development Skill
+# Workspace development
 
-Documentation for developing Vibestudio workspace units, including panels, workers,
-packages, skills, and extensions.
+Use [app development](../appdev/SKILL.md) for trusted apps and
+[extension development](../extensiondev/SKILL.md) for trusted Node services.
 
-For trusted workspace apps under `apps/` (`@workspace-apps/*`, Electron shell,
-mobile React Native, or terminal targets), use the `appdev` skill instead.
+## Read by task
 
-## Panel loading and lifecycle triage
+| Task | Reference |
+| --- | --- |
+| Canonical development loop | [WORKFLOW.md](WORKFLOW.md) |
+| Build, inspect, interact with, and polish a panel | [PANEL_DEBUG_LOOP.md](PANEL_DEBUG_LOOP.md) |
+| Panel lifecycle, observation, failure diagnosis, host commands | [PANEL_API.md](PANEL_API.md) |
+| Workers, Durable Objects, service-backed data, agent workers | [WORKERS.md](WORKERS.md) |
+| Typed parent-child contracts | [RPC.md](RPC.md) |
+| CDP/browser automation | [BROWSER.md](BROWSER.md) |
+| Agent tool recipes | [TOOLS.md](TOOLS.md) |
+| Icons and unit identity | [references/icons.md](references/icons.md) |
 
-For “Preparing panel…”, blank-panel, failed boot, or repeatedly stuck loading
-reports, stop routing here: read the diagnostics section of
-[`skills/workspace-dev/PANEL_API.md`](PANEL_API.md#diagnostics) first. Do not
-preload the general file catalog or adjacent VCS, sandbox, server-log,
-performance, or panel-authoring skills. Reuse the exact existing handle, call
-its read-only `observe()`, then make one bounded `diagnose()` call. That packet
-owns the current attempt identity, lifecycle phase, structured failure, host
-state, console history, and build provenance.
+Also read [capabilities](../capabilities/SKILL.md) before adding authority,
+[performance](../performance/SKILL.md) before changing startup cost, and
+[Vibestudio VCS](../vibestudio-vcs/SKILL.md) before managed-source operations.
 
-Choose a narrower surface only from that evidence: supervision for its exact
-live runtime entity, the build report for the exact source/ref, and server logs
-only when the packet places the defect below the lifecycle boundary. Do not
-rebuild, reload, open a duplicate panel, inspect system-test source, or enter
-VCS merely to discover why the current attempt is stuck. Use the performance
-skill only after the lifecycle is healthy and elapsed-time attribution is the
-remaining question.
+## Diagnose panel loading first
 
-When authoring skill docs, keep repo-specific guidance in the repo it documents
-as a top-level `SKILL.md`. Use `skills/<name>` only for cross-repo workflows or
-skills that are themselves reusable code packages.
+For a preparing, blank, failed, or stuck panel, start at
+[PANEL_API diagnostics](PANEL_API.md#diagnostics). Reuse the existing handle,
+call its read-only `observe()`, then one bounded `diagnose()` call. That packet
+owns the active attempt, phase, failure, host state, console history, and build
+provenance.
 
-## Repo-Local Skill Docs
+Escalate only from that evidence: exact-entity supervision, the exact source/ref
+build report, or server logs when the packet places the failure below the panel
+lifecycle. Do not rebuild, reload, open a duplicate, enter VCS, or inspect test
+sources merely to discover the failing layer. Use performance profiling only
+after lifecycle health is established.
 
-Any workspace repo can carry a top-level `SKILL.md`. Add or update that file
-when a package, panel, worker, extension, project, template, about page, or
-other repo needs agent guidance that should travel with its code.
+## Repo-local skills
 
-Use repo-local skill docs for implementation-specific workflows, APIs, schemas,
-debugging recipes, generated files, ownership notes, or schema-migration guidance. Put
-the file at the repo root:
+Put implementation-specific guidance beside the code it documents as
+`<repo>/SKILL.md`, for example `packages/foo/SKILL.md`, `workers/foo/SKILL.md`,
+or `panels/foo/SKILL.md`. Use `skills/<name>` only for cross-repository
+workflows or reusable skill packages. Keep method rosters, generated schemas,
+and volatile constants in live docs or code; a repo-local skill should explain
+purpose, workflow, ownership, invariants, and diagnostics.
 
-- `packages/foo/SKILL.md`
-- `workers/foo/SKILL.md`
-- `panels/foo/SKILL.md`
-- `extensions/foo/SKILL.md`
-- `projects/foo/SKILL.md`
+## Core rules
 
-Use `skills/<name>/SKILL.md` only for workspace-wide workflows, cross-repo
-guidance, or a reusable skill package that exports code. The built-in onboarding
-skill intentionally stays at `skills/onboarding/SKILL.md` because it describes
-the whole workspace. Trusted app repos under `apps/` can also carry `SKILL.md`,
-but use the `appdev` skill when developing those apps.
+- Use workspace-root-relative paths. Never put host checkout paths in workspace
+  source or tool arguments.
+- Use structured read/edit/write/move/copy and semantic VCS tools for managed
+  files. Use eval for runtime operations, not as a file editor or shell.
+- Use `verify` for exact-context build checks and focused tests.
+- In eval, use ambient `scope`, `scopes`, `db`, `ctx`, `help`, `chat`, and
+  `agent` directly. Portable runtime bindings are also importable from
+  `@workspace/runtime`; read [sandbox eval](../sandbox/EVAL.md) for details.
+- Retain mutating receipts in `scope` before awaiting a later step. Eval is not
+  transactional: a successful mutation remains when a later statement fails.
+- Reuse handles and close temporary panels, pages, workers, and diagnostics.
+  After an eval-kernel restart, reacquire a lost handle from its retained stable
+  ID rather than opening a duplicate.
+- Give every panel and worker one semantic manifest icon from the shared guide.
+  Use `@workspace/ui/icons` for controls.
+- Inspect accessible roles and names before automation. Repeated item controls
+  need item-specific accessible names; do not select by ordinal guesswork.
+- Respect the host theme and narrow mobile viewports.
 
-Agents read skills by the path shown in the generated skill index, for example
-`read("packages/foo/SKILL.md")`; do not assume every skill lives under
-`skills/<name>`.
+## Persistence and programmable surfaces
 
-## Files
+Use Durable Object SQLite for transactional shared application state. Use
+version-controlled files under `projects/` for content that benefits from
+history, diffing, and human/agent collaboration. Do not keep meaningful shared
+state only in panel state args, eval scope, or process memory.
 
-| Document                                   | Content                                                                                                                                                          |
-| ------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [WORKFLOW.md](WORKFLOW.md)                 | Canonical agent workflow: scaffold, open, inspect, edit, rebuild/reload, close                                                                                   |
-| [PANEL_DEBUG_LOOP.md](PANEL_DEBUG_LOOP.md) | Short canonical create/build/screenshot/rebuild/interact/publish recipe for panel debugging and polish tasks                                                     |
-| [PANEL_API.md](PANEL_API.md)               | Runtime panel lifecycle API, host-command contribution, canonical observation, failed/stalled loading diagnosis, and structured failure ownership                |
-| [WORKERS.md](WORKERS.md)                   | Workers & Durable Objects: DO-backed app databases, AgentWorkerBase (@workspace/agentic-do), DurableObjectBase, PiRunner, custom shared-resource approval grants |
-| [capabilities](../capabilities/SKILL.md)   | Explicit requests and provided capabilities, dynamic workspace service discovery, host grants, receiver-owned acquisition, and content provenance                |
-| [performance](../performance/SKILL.md)     | Bounded panel/app profiling plus build, worker, startup, and optimization workflow                                                                               |
-| [RPC.md](RPC.md)                           | Typed parent-child contracts                                                                                                                                     |
-| [BROWSER.md](BROWSER.md)                   | Browser automation (Playwright/CDP)                                                                                                                              |
-| [TOOLS.md](TOOLS.md)                       | Agent tools reference                                                                                                                                            |
-| [create-project.ts](create-project.ts)     | Project scaffolding helpers (importable via eval `imports` parameter)                                                                                            |
-| [references/icons.md](references/icons.md) | Canonical Lucide/brand icon selection, accessibility, unit assets, and no-bloat rules                                                                            |
+Expose application operations as narrow, app-shaped RPC methods with explicit
+receiver contracts. Use channels and structured events when collaboration is
+part of the product. Keep UI projection methods out of the domain API.
 
-For host-process debugging while developing workspace units, pair the relevant
-unit/panel diagnostics below with the [server-logs](../server-logs/SKILL.md)
-skill. `serverLog` captures the workspace server's own logs and supports live
-following through `server-log:append` and the `about/server-logs` viewer.
+## Scaffold projects
 
-## Interaction Patterns
-
-See the sandbox skill's [INTERACTION_PATTERNS.md](../sandbox/INTERACTION_PATTERNS.md) for when to use inline UI vs eval for side-effect actions. In short: if an action involves choices or could fail, prefer rendering an inline UI that lets the user trigger it and reports results back via `chat.publish`.
-
-## Host commands
-
-When a panel action should be reachable from application chrome, read
-[PANEL_API.md#host-commands](PANEL_API.md#host-commands). Contribute one
-state-aware command set with `useHostCommands` from `@workspace/react`; do not
-add duplicate mobile headers, call shell-specific RPC, or teach the host the
-panel's feature logic. The panel owns command ids, copy, availability, and
-execution. Desktop and mobile hosts own only idiomatic presentation and route
-the selected id back to the contributing panel.
-
-## Critical Rules
-
-0. **Build production-ready systems** — workspace units are durable
-   infrastructure, not throwaway prototypes. Design for real use from the start:
-   proper schema migrations, error surfaces, principled state management, and
-   tested edge cases. Do not scaffold a "v1 prototype" with the intent to
-   rewrite later. Do not populate apps with hardcoded demo data or placeholder
-   content — build real empty states, real data entry flows, and real
-   persistence from the start.
-
-For a panel build/debug/polish task, read and follow
-[PANEL_DEBUG_LOOP.md](PANEL_DEBUG_LOOP.md) first. It is the canonical bounded
-recipe. Do not preload the full workflow, browser, panel, and eval manuals; open
-only the specific reference needed when the recipe reaches an unfamiliar typed
-result. A read-only loading/lifecycle triage is not a build/debug/polish task;
-use the panel-loading route above without loading this authoring loop.
-
-1. **Relative workspace paths only** — use `panels/my-app/index.tsx`, NEVER host absolute paths such as `/home/.../workspace/...`. In runtime `fs.*` calls, `/panels/...` is context-root absolute and accepted, but docs and source-edit examples prefer `panels/...` to avoid ambiguity.
-2. **NEVER use Bash** for vcs, file listing, or file creation — use the structured tools
-3. **Use filesystem tools for file edits** — Read, Edit, Write (not eval).
-   Whole-file Write is idempotent: writing bytes already present in the
-   working file succeeds with `details.unchanged: true` and records no semantic
-   edit. Treat that as completion, not as a reason to manufacture a different
-   change.
-4. **Use eval only for runtime operations** — project creation and panel/runtime control. Use the first-class `verify` agent tool for compiler/build checks and tests against the exact working state.
-5. **Eval injected globals + package imports** — in eval, the **ambient-only** globals `scope`, `scopes`, `db`, `ctx`, `help`, and (in agent eval) `chat`/`agent` are injected free variables; do **not** `import` them. `services`, `hosts`, `runtime`, `rpc`, and `fs` are portable runtime bindings: they are available directly in eval and importable from `@workspace/runtime`, with the same semantics in panels and workers. `@workspace/runtime` also exposes `openPanel`/`getPanelHandle`/`panelTree`, `vcs`/`workspace`/`gad`/`credentials`/`git`. Both static `import` and dynamic `await import(...)` work. See `sandbox/EVAL.md` for the full surface.
-6. **Close panels you open for temporary work** — keep the one development panel the user is reviewing, but close duplicate, browser, child, and diagnostic panels with `await handle.close()` when done. Start current-owner discovery with bounded `panelTree.roots({ limit })`; use `children()`/`search()` for addressed reads and the advanced `page()` form only with a complete explicit group. Reuse existing panels instead of opening another copy.
-7. **Read the capabilities skill before adding authority** — workspace services are resolved from the caller's live semantic context; manifests request but never grant; generated catalogs are not authoring surfaces.
-8. **Eval is a notebook kernel** — `scope` retains live objects across cells while
-   the EvalDO's 30-minute idle lease is active. Store a working `PanelHandle` or
-   `CdpPage` there when a multi-cell workflow benefits from it, and also retain
-   stable identity/provenance needed for cold recovery. The durable scope
-   snapshot preserves only exact data, never degraded class instances; after an
-   explicit `[kernel] Restarted` result, reacquire each named lost handle with
-   `getPanelHandle(scope.panelId)` rather than opening a duplicate panel.
-9. **Discover accessible names before live UI actions** — read
-   [BROWSER.md](BROWSER.md) before using `handle.cdp.page()`. Inspect the intended
-   roles and their computed accessible names before clicking or filling; do not
-   guess from a visual label or source snippet because descendant badges and
-   labels contribute to the name.
-10. **Collection actions need item-specific accessible names** — controls
-    repeated per row/card/item must include that item's visible identity, for
-    example `aria-label={\`Complete ${todo.text}\`}`and`aria-label={\`Delete ${todo.text}\`}`. Repeated identical action names are
-an accessibility defect: repair the panel before exercising the flow.
-Never use `.first()`, `.last()`, or `.nth()`to guess which repeated control
-belongs to an item. Ordinals are acceptable only after`inspect()` proves
-    the intended rendered ancestor context.
-11. **Give every panel and worker a semantic icon** — read
-    [references/icons.md](references/icons.md), then pass one recognizable icon
-    as `icon` to `createProjects`. Prefer a curated `lucide:<name>` or truthful
-    `brand:<name>` catalog id; the scaffold materializes only that SVG. A single
-    meaningful emoji or original unit-local artwork remains valid when it is the
-    better identity. Keep images simple, square, legible at 16–20 px, and at most
-    1 MiB. The scaffold writes the value to the single canonical
-    `vibestudio.icon` field; do not create a parallel agent/panel icon field.
-    Prefer a concrete object or action over initials, random colors, or
-    hash-derived identicons. For UI controls, import named tree-shakeable Lucide
-    components from `@workspace/ui/icons`; do not add another icon catalog.
-    Vibestudio renders unit identity consistently as the panel's
-    HTML favicon and in the launcher, panel tree, breadcrumbs, agent picker, and
-    approval prompts. Browser panels are the exception: their authentic site
-    favicon is captured and resolved from browser data, so never invent an icon
-    for a website.
-12. **Design initial loading as a budgeted path** — read the
-    [performance skill](../performance/SKILL.md) before adding a large runtime
-    dependency or making panel readiness await data. Panels must render a real
-    empty shell without secondary data; workers and Durable Objects must keep
-    entry evaluation and constructors small. Put feature-only parsers, provider
-    SDKs, renderers, migration tools, and diagnostics behind the operation that
-    needs them, then prove the initial/lazy split in build metadata. A source
-    `import()` is not proof—the build artifacts and real runtime loader must
-    preserve that boundary.
-
-## Persistence
-
-Choose the right persistence layer for the data shape:
-
-- **Durable Object SQLite** (`this.sql` in a `DurableObjectBase` subclass) —
-  the default for live application state that needs transactions, queries, or
-  shared access across panels/agents/apps. See
-  [WORKERS.md](WORKERS.md#durable-object-backed-app-databases) for the full
-  pattern.
-- **Version-controlled files in `projects/`** — for editable content that
-  benefits from history, diffing, branching, and easy agent access. Freely
-  create new repos under `projects/` (e.g. `projects/my-dataset/`,
-  `projects/config-store/`). Content there is ordinary workspace source:
-  agents can read, edit, and commit it through the VCS surface, and multiple
-  users or agents can collaborate on it through normal branch/merge. Use this
-  for structured documents, configuration, datasets, templates, or any content
-  that humans and agents jointly author.
-
-Do not store meaningful application state only in panel `stateArgs`, eval
-`scope`, or ephemeral in-memory structures. If a user closes a panel and
-reopens it, or an agent restarts, state that matters should survive.
-
-## Agentic Integration
-
-Workspace apps should be agentically enabled by default. When building a panel,
-worker, or app that manages data or exposes actions:
-
-1. **Expose DO methods over RPC** with explicit `@rpc` contracts so agents can
-   call them, not just human UIs. Keep methods app-shaped (`addItem`,
-   `listItems`, `getStatus`) rather than UI-shaped (`getTableRows`).
-2. **Integrate with channels** — if the app has a conversational or
-   collaborative surface, wire it into the workspace messaging system using
-   `addAgentToChannel` from `@workspace-skills/agents`. Agents should be able
-   to participate in the app's workflows.
-3. **Publish structured events** that agents can subscribe to and act on.
-   Prefer the workspace channel/envelope system over ad-hoc notification
-   mechanisms.
-
-The goal is that every meaningful workspace surface is programmable by agents
-as a first-class concern, not bolted on after the human UI ships.
-
-## Theme And Layout
-
-All panels and apps must respect the host theme and work on mobile viewports:
-
-1. **Use the passed-down theme** — call `usePanelTheme()` from `@workspace/react`
-   to get the live `"dark"` | `"light"` appearance and subscribe to changes.
-   For Radix-based panels, `autoMount` wires this automatically through
-   `usePanelThemeConfig()`. Do not hardcode a color scheme or ignore the host theme.
-2. **Mobile-friendly layout** — use responsive CSS (flexbox/grid, relative
-   units, `max-width: 100%` on media, vertical stacking at narrow widths).
-   Panels render on desktop, tablet, and mobile hosts. Test that the UI is
-   usable at small viewports, not just wide screens.
-
-## Quick Start Workflow
-
-When building functionality that needs both a panel and a backing service,
-create them together with `createProjects` — one call, one approval prompt:
+Use `createProjects` for one coherent publication of one or more related units:
 
 ```ts
-eval({
-  code: `
-  import { createProjects } from "@workspace-skills/workspace-dev";
-  import { openPanel } from "@workspace/runtime";
+import { createProjects } from "@workspace-skills/workspace-dev";
 
-  scope.created = await createProjects([
-    { projectType: "worker", name: "task-board-store", title: "Task Board Store", icon: "🗃️" },
-    { projectType: "panel", name: "task-board", title: "Task Board", icon: "📋" },
-  ]);
-  scope.createdPanel = await openPanel(scope.created[1].created);
-  return {
-    created: scope.created,
-    observation: await scope.createdPanel.observe(),
-    snapshot: await scope.createdPanel.snapshot(),
-  };
-`,
-});
+scope.created = await createProjects([
+  { projectType: "worker", name: "task-board-store", title: "Task Board Store" },
+  { projectType: "panel", name: "task-board", title: "Task Board" },
+]);
+return scope.created;
 ```
 
-Even for a single project, use `createProjects` with a one-element array.
+Pass a one-element array for a single unit. Each result returns the canonical
+repository path, created files, preflight evidence, and publication receipt.
+Use `create-project.ts` for exact result and error types.
 
-`createProjects` returns an array of results, one per project.
-Each result includes
-`{ created, files, preflight, publication }`.
-For every project type, `created` is the complete canonical repository path
-(`panels/name`, `workers/name`, and so on), not a basename. Pass it directly to
-APIs that accept a workspace source.
-`name` is a stable repository identifier matching `^[a-z][a-z0-9-]*$`. For an
-isolated suffix use lowercase base 36, for example
-`` `my-app-${Date.now().toString(36)}` ``; a raw ISO timestamp is invalid.
-`preflight.ok === true`, `scope === "planned-repository"`, and
-`semanticBuildGate === "pending-publication"` prove the mutation-free checks
-that are possible before the repository has an exact semantic state: canonical
-project type, package identity, executable entry, authority-manifest syntax,
-skill instructions, and the module-dependency contract. Compilation and
-semantic authority coverage run later against the exact committed candidate in
-the protected publication gate. The dependency contract uses the same shared
-syntax-aware analyzer as eval import validation and sandbox-renderer linting;
-comments, strings, templates, regular expressions, Node built-ins, and
-self-imports do not become phantom packages. Value imports in production source
-must be in `dependencies` or `peerDependencies`; test-only and type-only imports
-may be in `devDependencies` (DefinitelyTyped packages satisfy their matching
-type-only module).
+If publication fails after creation, follow the structured retry policy and
+recover or repair the already-created repository. Never call `createProjects`
+again. If a later open or snapshot fails, resume from the stored creation
+receipt. An existing destination is not part of the attempt; choose a distinct
+name or stop.
 
-A failure is a `ProjectPreflightError`, not a flat compiler string. Eval
-preserves `errorData.code === "project_preflight_failed"`,
-`stage: "dependency-contract"`, and one issue per package with the exact source
-file, specifier, import kind/syntax, line/column, expected manifest field,
-observed wrong field, accepted coordinates, and remediation. Repair the
-manifest/source named by that packet and rerun the same operation; do not try a
-different canonical source merely to escape its contract.
+Use context-local project files directly when the user wants private scratch
+content rather than a published executable unit.
 
-`publication` then names the exact
-`committedEventId`, `publishedEventId`, `mainEventId`, `effectId`, and
-`appliedAt`. If repository creation and commit succeed but
-protected publication fails, the helper throws `ScaffoldPublicationError`.
-Eval preserves its structured `errorData`, including
-`code: "scaffold_publication_failed"`, `published: false`, the exact committed
-event and original push request, the nested typed VCS error, and its command-ID
-retry policy. Do not call `createProjects` again. Branch on
-`retry.commandIdPolicy`: use `recoverProjectPublication` for an uncertain
-external effect or a refusal that only needs a freshly observed main. For
-`repair-source-and-recommit`, consume every nested `BuildGateFailed` diagnostic,
-repair the already-created repository, rebuild the exact context, commit a new
-event, and publish from fresh status. Retrying the rejected commit cannot pass.
-`stop-integrity-investigation` is terminal pending investigation.
+## Open and verify panels
 
-Eval is not a transaction: if creation publishes and a later statement in the
-same cell fails, those repositories still exist. Resume from
-`scope.created` and retry only the failed
-open/verification phase. Never rerun `createProjects` because
-`openPanel`, `snapshot`, or another downstream operation failed.
+`openPanel(source, options)` waits for the selected runtime attempt's boot
+handshake. `createPanelSlot` returns only the durable tree placement. Neither a
+slot nor boot readiness proves the rendered UI is correct.
 
-The same rule applies to `forkPanel`, `forkWorker`, and every mutating helper:
-assign its receipt into `scope` before the next awaited operation. A panel
-snapshot is a structured document-capture object, not a string; return or
-inspect its fields and do not call string methods such as `slice()` on it.
+For unpublished code, pass the exact context and `ctx:<contextId>` ref. After
+open or rebuild, return the observation and a structured snapshot from the same
+handle. Keep the handle and stable panel ID together in scope for later cells.
 
-`Project already exists: <path>` is not a recoverable publication failure. It
-means the requested repository is outside this creation attempt. Stop or choose
-a genuinely new name; never adopt, edit, or publish the existing repository as
-if this call had created it.
+Use `PANEL_DEBUG_LOOP.md` for authoring and polish. For host chrome actions,
+follow [host commands](PANEL_API.md#host-commands): the panel owns command
+meaning and execution; desktop and mobile hosts own presentation and routing.
 
-Edit the generated files with the `edit`/`write` tools — each edit is recorded as
-authored intent on the context's exact working head and projected to disk.
-Before comparing, committing, updating, moving/copying managed files, or
-publishing, read the canonical [Vibestudio VCS skill](../vibestudio-vcs/SKILL.md).
-Runtime-managed workers and Durable Objects follow their owning semantic
-context by default. Pass `ref: "main"` only when deliberately running protected
-main. Panel navigation still needs an explicit context build ref when testing
-unpublished panel code.
+## Development and runtime provenance
 
-One context is a complete workspace branch spanning all repositories. A vault,
-project, or repository is focus within that branch, never a context. A panel's
-context is host-bound; its agents and channels must use that same context, and
-`stateArgs` cannot override it. Create a new context only through an explicit
-fork/clone/subagent lifecycle operation. Use `panel.switchContext(...)` only to
-move the current panel to an already-created branch.
+Author from the exact working head, run focused checks, commit the complete
+local application chain, and publish explicitly. Work that needs a separate
+commit boundary belongs in another context.
 
-For context-local scratch files under `projects/`, do not scaffold. Write inside
-a repo-shaped path such as `projects/tmp-name/note.md`; that repo remains private
-to the current context until you intentionally commit the complete local chain
-and publish its committed workspace event. `createProjects` is for published
-workspace units: it scaffolds coherent units and takes them through the
-canonical commit/publication protocol. File-oriented APIs also accept a shorthand such as
-`projects/note.md`, canonicalize it to `projects/note/note.md`, and return the
-canonical path; use the full form when composing later paths.
+Workers and Durable Objects normally follow their owning context. Panels must
+be launched with an explicit context ref when testing unpublished source. If a
+change appears absent, inspect the current VCS relation, requested/effective
+ref, build key, runtime identity, and rebuild observation before editing again.
+Do not infer revision from filesystem dirtiness or renderer presence.
 
-`openPanel` returns a host-mediated `PanelHandle` and is part of the portable
-runtime surface. It works from eval, panels, workers, and DOs. It returns only
-after the exact runtime attempt is application boot-ready and throws a
-structured `PanelOperationError` on resolve/build/host/boot failure. It accepts
-an explicit `ref`; use plain launch for main/pushed code and pin context-local
-code deliberately:
-
-```tsx
-import { openPanel } from "@workspace/runtime";
-const myApp = await openPanel("panels/my-app");
-const local = await openPanel("panels/my-app", {
-  contextId: ctx.contextId,
-  ref: `ctx:${ctx.contextId}`,
-});
-const observation = await local.observe();
-const snapshot = await local.snapshot();
-return { panelId: local.id, observation, snapshot };
-```
-
-Use `createPanelSlot(source, options)` when the authoritative result is the
-durable panel-tree receipt rather than a ready renderer. It returns promptly,
-never focuses, and has no readiness option; call `handle.observe()` later when
-live runtime state matters. Slot commit starts server-owned, level-triggered
-activation; it is recovered after transient failure or restart independently of
-the creator. `openPanel` joins that activation and waits on the exact attempt's
-event stream without a fixed deadline. Pass a caller-owned `AbortSignal` when the
-workflow supports cancellation and a stable `operationId` when it may retry.
-
-Boot readiness and rendered verification are deliberately distinct. A
-successful `openPanel(...)` or `observe()` proves that the selected immutable
-attempt reached its application boot handshake; it does **not** prove that the
-rendered UI is correct. For every create/fork/open/rebuild task, call
-`snapshot()` after the ready observation and return both values from the same
-eval. Do not report success from a panel id, `phase: "ready"`, or build key
-alone. The snapshot is the provenance-bound rendered evidence that catches
-blank, error, stale, and semantically wrong UI.
-
-Returning only a panel id proves tree allocation, not a working application.
-For later cells, keep the live handle and stable identity together:
-`scope.panelHandle = handle; scope.panelId = handle.id`. Reuse
-`scope.panelHandle` while present. Only after `[kernel] Restarted` reports that
-key as lost should you reconstruct it with `getPanelHandle(scope.panelId)`.
-
-## Common Tasks
-
-| Task                                 | How                                                                                                                                                                                                                                                                                                                                                                                                          |
-| ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Create projects                      | `eval` — `import { createProjects } from "@workspace-skills/workspace-dev"` then `return await createProjects([{ projectType, name, title }, ...])`. Create related units (e.g. a DO store + its panel) in one call for one approval prompt. Even for a single project, pass a one-element array. Retain the exact `publication`; recover from `scaffold_publication_failed` data without rerunning creation |
-| Fork panel                           | `eval` — `import { forkPanel } from "@workspace-skills/workspace-dev"`; store the `dryRun: true` plan, then assign the applied receipt to `scope.forkedProject` **before** opening `scope.forkedProject.created`. Store the handle too, and return the structured observation and snapshot without string-coercing either. If open/snapshot fails, resume from scope; never fork again.                      |
-| Fork worker                          | `eval` — `import { forkWorker } from "@workspace-skills/workspace-dev"` then `forkWorker({ from: "workers/source", name: "new-worker", title, dryRun: true })`; pass `classMap` for multi-class workers                                                                                                                                                                                                      |
-| Build app database                   | Create a worker DO with `DurableObjectBase` + `this.sql` — include it in the same `createProjects` call as its panel. Declare it as a live service with `authority.principals` and explicit `@rpc` receiver policies, then call it from panels/apps/eval via `workers.resolveService(protocol, objectKey?)` + `rpc.call(...)`. See [WORKERS.md](WORKERS.md#durable-object-backed-app-databases).             |
-| Add repo guidance                    | Edit or create `<repo>/SKILL.md` next to the code it documents, such as `packages/foo/SKILL.md`; create `skills/<name>` only for cross-repo or reusable skill packages                                                                                                                                                                                                                                       |
-| Expose a panel action in host chrome | Read [PANEL_API.md#host-commands](PANEL_API.md#host-commands), compose one memoized `HostCommand[]`, and call `useHostCommands(commands, onRun)`. Omit unavailable actions from the set; do not create a second registration or duplicate the behavior in desktop/mobile shell code.                                                                                                                         |
-| Launch panel                         | `eval` — `const handle = await openPanel(source)` for pushed/main code, or `openPanel(source, { contextId: ctx.contextId, ref: \`ctx:${ctx.contextId}\` })`for intentional context-local code; return both`await handle.observe()`and`await handle.snapshot()` before reporting success.                                                                                                                     |
-| Inspect panel console                | `eval` — `const history = await handle.cdp.consoleHistory({ limit: 200, errorLimit: 100 })`; read `history.errors`, `history.entries`, `history.dropped`, and `history.capacity`. The return value is an object, not an array.                                                                                                                                                                               |
-| Launch worker                        | `eval` — `rpc.call("main", "runtime.createEntity", [{ kind: "worker", source: "workers/my-worker", key: "my-worker", contextId: ctx.contextId }])`; the owning context is the default code ref. Pass `ref: "main"` only for protected-main code. Retire with `rpc.call("main", "runtime.retireEntity", [{ id }])` using the returned handle's `id`                                                           |
-| Read a file                          | `Read({ file_path: "panels/my-app/index.tsx" })`                                                                                                                                                                                                                                                                                                                                                             |
-| Edit a file                          | `Edit({ file_path: "panels/my-app/index.tsx", old_string: "...", new_string: "..." })`                                                                                                                                                                                                                                                                                                                       |
-| Check compiler/build                 | `verify({ operation: "build", target: "panels/my-app" })`; inspect its structured target diagnostics and rerun after repairs.                                                                                                                                                                                                                                                                                |
-| Run tests                            | `verify({ operation: "test", target: "packages/my-lib", file?, testName? })`; failed or zero discovered tests are explicit error outcomes.                                                                                                                                                                                                                                                                   |
-| Operate workspace VCS                | Read [vibestudio-vcs](../vibestudio-vcs/SKILL.md); retain the exact working head, merge stable-coordinate pages, review intents/composed results, commit the complete chain, then publish                                                                                                                                                                                                                    |
-| Move/copy managed files              | Use `vcs.move` or `vcs.copy`; runtime `fs.rename`/`fs.copyFile` and agent `move_file`/`copy_file` route through the same identity-aware adapter                                                                                                                                                                                                                                                              |
-| Import an external snapshot          | Use `vcs.importSnapshot` with a canonical credential-free source URI, exact source revision, and complete repository/file descriptors; the semantic workspace verifies host-observed CAS descriptors, derives the snapshot digest, and atomically returns the committed event/application/work-unit/repository/snapshot evidence                                                                             |
-
-(`extensions` is a runtime client — the same surface bare, as
-`services.extensions`, or imported from `@workspace/runtime`.
-`use(name).method(...)` is typed sugar; `extensions.invoke(name, method,
-[args])` is the untyped equivalent. Invocation preserves the admitted caller
-and execution-session context in panels, workers, and server-side eval.)
-
-The development loop is semantic: author work from the exact working head;
-compare with an exact committed source event; merge incoming coordinates in
-small local steps; test; commit the complete local application chain; then
-publish the clean committed event. Work needing another commit boundary belongs
-in another context. See [WORKFLOW.md](WORKFLOW.md) for the development loop and the
-[Vibestudio VCS skill](../vibestudio-vcs/SKILL.md) for protocol details.
-| Get workspace config | `eval` — `workspace.getInfo()` and inspect its `config` |
-| Set init panels | `eval` — `workspace.setInitPanels([{ source: "panels/my-app" }])` |
-
-Workspace catalog operations (list/create/delete/select) belong to the human
-shell's stable hub session and are not available from workspace eval.
-
-## Environment Compatibility
-
-- Panel lifecycle operations (`openPanel`, bounded `panelTree` reads, `PanelHandle.observe`,
-  `rebuild`/`reload`/`close`) are portable across panel, worker, DO, and eval
-  contexts; presentation and CDP still require an available host.
-- Project scaffolding (`createProjects`) and semantic workspace VCS operations
-  work in **headless** sessions via eval + RPC; build and test verification is
-  exposed directly through the `verify` agent tool.
-- `verify` routes unit tests through `@workspace-extensions/test-runner`; it
-  does not grant arbitrary shell execution.
-
-## Provenance And Reloads
-
-VCS state and ordinary builds can address an exact **working state**. Workers
-and Durable Objects select `ctx:<contextId>` from their owning context by
-default; `ref: "main"` is an explicit pin. Panel launch/navigation keeps its
-own ref-capable API and must be pinned when unpublished panel code is intended.
-If an edit appears absent at runtime, check provenance before changing the fix:
-
-- Was the runtime launched or navigated with an explicit `ref` for the context
-  branch, or was the change pushed to `main` first?
-- Does the observed working head contain the expected work unit and exact
-  application, rather than merely a projected file?
-- Did the build system rebuild that source?
-- For a worker or DO, does its recorded owning context match the working head,
-  or was it explicitly pinned to `main`/another immutable ref?
-- For a panel, did launch/navigation pass `ref: \`ctx:${ctx.contextId}\`` when
-  unpublished code was intended?
-- Did the already-open panel run `handle.rebuild()` after the edit, and does its
-  returned observation name the intended `requestedRef`, `effectiveVersion`,
-  and `buildKey`?
-- In dogfood mode, did the mirror apply or skip because the host checkout was dirty?
-
-Log the exact event or application state alongside runtime build provenance.
-Use `vcs.compare({ view: "changes" })` to plan an update and `inspect`,
-`neighbors`, `history`, or `blame` to traverse commands, files, changes, work
-units, applications, decisions, events, and trajectories. Paths are views; they
-do not define revision identity.
-
-Context-local state may remain ahead of or diverged from `main` after another
-context publishes. Call `vcs.status` again and branch on the typed relation.
-Do not reconstruct semantic state from filesystem dirtiness or rendered byte
-differences. See [contexts and state](../vibestudio-vcs/references/contexts-and-state.md)
-and [provenance and blame](../vibestudio-vcs/references/provenance-and-blame.md).
-
-Panel operations already report their exact runtime/build provenance through
-`observe()`, lifecycle return values, structured failures, and snapshots. Use
-those identities rather than filesystem dirtiness or a renderer-presence guess.
+Panel lifecycle APIs and semantic checks work in headless eval, but visual
+presentation and CDP require an available host. Workspace catalog selection and
+creation belong to the human shell's hub session, not workspace eval.
