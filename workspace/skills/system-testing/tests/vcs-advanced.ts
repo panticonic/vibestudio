@@ -307,6 +307,7 @@ export const vcsAdvancedTests: TestCase[] = [
     workspaceRepoFixture: HISTORICAL_CONTENT_WORKSPACE_REPO_FIXTURE,
     prompt:
       "The disposable historical project no longer names its rollout codename. What was that codename, why was it retired, and which recorded evidence supports the answer?",
+    validation: "agent-evidence",
     validate: (result) =>
       requireHistoricalAnswer(result, [/Harbor Lantern/iu, /retir/iu, /Retention Service/iu]),
   },
@@ -318,6 +319,7 @@ export const vcsAdvancedTests: TestCase[] = [
     workspaceRepoFixture: HISTORICAL_CONTENT_WORKSPACE_REPO_FIXTURE,
     prompt:
       "Review src/retention-policy.ts in the disposable historical project. Why is archiveWindowDays 21 rather than 14, and did the later history reverse that decision? Ground the answer in the workspace's recorded evidence.",
+    validation: "agent-evidence",
     validate: (result) =>
       requireHistoricalAnswer(result, [/\b21\b/u, /\b14\b/u, /day 18|regional export/iu]),
   },

@@ -56,7 +56,16 @@ export const serverLogTests: TestCase[] = [
     category: "server-logs",
     prompt:
       "Something in this workspace seemed slow to start a moment ago. Can you check the recent server logs and tell me what happened?",
-    validate: () => ({ passed: true }),
+    validation: "agent-evidence",
+    validate: (result) => {
+      const code = successfulEvalCode(result);
+      if (!/serverLog\.(?:query|tail|stats)\b/u.test(code)) {
+        return { passed: false, reason: "No successful server-log inspection was observed" };
+      }
+      return successfulEvalReturnValues(result).length > 0
+        ? noIncompleteInvocations(result)
+        : { passed: false, reason: "Server-log inspection returned no observable evidence" };
+    },
   },
   {
     name: "server-log-query-stats",

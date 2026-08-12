@@ -177,6 +177,33 @@ describe("storage and discovery semantic validators", () => {
     expect(test.validate(execution(final))).toMatchObject({ passed: false });
   });
 
+  it("requires a real host-log observation for the vague startup incident", () => {
+    const test = serverLogTests.find(
+      (candidate) => candidate.name === "server-log-startup-diagnosis"
+    )!;
+    const observed = invocation(
+      "eval",
+      {
+        code: "return await services.serverLog.query({ limit: 30 });",
+      },
+      {
+        details: {
+          success: true,
+          returnValue: { records: [{ level: "info", message: "startup complete" }] },
+        },
+      }
+    );
+
+    expect(test.validation).toBe("agent-evidence");
+    expect(test.validate(execution("Startup completed after one slow build.", [observed]))).toEqual(
+      {
+        passed: true,
+        reason: undefined,
+      }
+    );
+    expect(test.validate(execution("Everything looks fine."))).toMatchObject({ passed: false });
+  });
+
   it("requires an identity-joined webhook lifecycle and final cleanup", () => {
     const test = webhookTests.find(
       (candidate) => candidate.name === "webhook-subscription-lifecycle"
