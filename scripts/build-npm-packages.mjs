@@ -61,12 +61,6 @@ export const WORKSPACE_TEMPLATE_ROOT_FILES = [
   "tsconfig.integration.mobile.json",
 ];
 
-// Support dirs referenced by workspace/package.json metadata. Host packages are
-// intentionally not copied here: packaged runtime builds resolve @vibestudio/*
-// from the installed app node_modules (vendor/postinstall), not from a duplicate
-// sibling source tree.
-export const WORKSPACE_TEMPLATE_SUPPORT_DIRS = ["patches"];
-
 // Only run the build when invoked directly (`node scripts/build-npm-packages.mjs`),
 // not when imported (e.g. by the drift-guard test) — importing must be free of
 // side effects beyond the cheap top-level reads above.
@@ -127,7 +121,6 @@ function stageServer() {
 
   // First-run workspace template (runtimePaths.ts: appRoot/workspace-template).
   stageWorkspaceTemplate(path.join(root, "workspace-template"));
-  stageWorkspaceTemplateSupport(root);
   stageBaseTemplateRelease(root);
 
   // Bin shims.
@@ -166,7 +159,7 @@ function stageServer() {
       vibestudio: "scripts/vibestudio-launcher.mjs",
     },
     engines: { node: ">=22.13.0" },
-    files: ["dist", "vendor", "workspace-template", "patches", "scripts", "build-resources"],
+    files: ["dist", "vendor", "workspace-template", "scripts", "build-resources"],
     scripts: { postinstall: "node scripts/vendor-install.mjs" },
     // Full host build-dependency surface (app minus electron).
     dependencies: computeHostDependencies({ electron: false }),
@@ -187,7 +180,6 @@ function stageApp() {
 
   // The app runs unpackaged: it reads appRoot/workspace as the first-run template.
   stageWorkspaceTemplate(path.join(root, "workspace"));
-  stageWorkspaceTemplateSupport(root);
 
   copyFile("scripts/vibestudio-launcher.mjs", path.join(root, "scripts/vibestudio-launcher.mjs"));
   stageNpmUpdateLauncherFiles(root);
@@ -227,7 +219,7 @@ function stageApp() {
       "vibestudio-server": "scripts/vibestudio-server-shim.mjs",
     },
     engines: { node: ">=22.13.0" },
-    files: ["dist", "vendor", "workspace", "patches", "scripts", "build-resources"],
+    files: ["dist", "vendor", "workspace", "scripts", "build-resources"],
     scripts: { postinstall: "node scripts/vendor-install.mjs" },
     dependencies: computeHostDependencies({ electron: true }),
     publishConfig: { access: "public" },
@@ -334,14 +326,6 @@ function stageWorkspaceTemplate(dest) {
     } else if (entry.isFile() && WORKSPACE_TEMPLATE_ROOT_FILES.includes(entry.name)) {
       copyTree(path.join(src, entry.name), path.join(dest, entry.name), templateSkip);
     }
-  }
-}
-
-function stageWorkspaceTemplateSupport(pkgRoot) {
-  for (const dir of WORKSPACE_TEMPLATE_SUPPORT_DIRS) {
-    const src = path.join(repoRoot, dir);
-    if (!fs.existsSync(src)) continue;
-    copyTree(src, path.join(pkgRoot, dir), defaultSkip);
   }
 }
 

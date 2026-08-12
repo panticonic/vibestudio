@@ -2280,10 +2280,9 @@ export class WorkerdManager {
         modules: [{ name: "worker.js", esModule: bundleContent }],
         bindings,
         compatibilityDate: "2025-12-01",
-        // `nodejs_compat` gives worker DOs access to the Node-compatible
-        // subset workerd ships (buffer, util, events, etc.). Required by
-        // `@earendil-works/pi-agent-core` and the harness image / pi-ai code
-        // paths that assume a Node-ish runtime.
+        // `nodejs_compat` gives worker DOs the Node-compatible subset workerd
+        // ships (buffer, util, events, etc.). Build V2 admits registry
+        // dependency closures against this one generic worker target.
         compatibilityFlags: ["nodejs_compat"],
         globalOutbound: networkServiceName,
         durableObjectNamespaces: [

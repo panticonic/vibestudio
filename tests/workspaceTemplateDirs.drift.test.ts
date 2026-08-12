@@ -16,7 +16,6 @@ import { WORKSPACE_SOURCE_DIRS } from "@vibestudio/workspace-contracts/sourceDir
 import {
   WORKSPACE_TEMPLATE_DIRS,
   WORKSPACE_TEMPLATE_ROOT_FILES,
-  WORKSPACE_TEMPLATE_SUPPORT_DIRS,
 } from "../scripts/build-npm-packages.mjs";
 
 // Source dirs that exist in the workspace taxonomy but are deliberately NOT
@@ -68,10 +67,6 @@ describe("packaged workspace template staging drift guard", () => {
     ]);
   });
 
-  it("stages only sibling patch files referenced by workspace metadata", () => {
-    expect([...WORKSPACE_TEMPLATE_SUPPORT_DIRS].sort()).toEqual(["patches"]);
-  });
-
   it("keeps the native Electron workspace template self-contained", () => {
     const resources = electronBuilderConfig().extraResources ?? [];
     const workspaceTemplate = resources.find(
@@ -85,11 +80,9 @@ describe("packaged workspace template staging drift guard", () => {
       ].sort()
     );
 
-    for (const dir of WORKSPACE_TEMPLATE_SUPPORT_DIRS) {
-      expect(resources).toEqual(
-        expect.arrayContaining([expect.objectContaining({ from: dir, to: dir })])
-      );
-    }
+    expect(resources).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ from: "patches" })])
+    );
     expect(resources).toEqual(
       expect.arrayContaining([
         expect.objectContaining({

@@ -9,10 +9,8 @@
  * markup is version-tracked separately from any one provider's token-exchange
  * logic.
  *
- * pi-ai ships similar helpers at `@earendil-works/pi-ai/utils/oauth/oauth-page.js`
- * but doesn't export that subpath in `package.json#exports`, so we can't
- * import them without breaking our bundle. A self-contained reimplementation
- * is a dozen lines; the copy is worth it.
+ * The page is deliberately self-contained so provider implementations do not
+ * couple shared host presentation to an SDK's private, unexported helpers.
  */
 
 function escapeHtml(s: string): string {

@@ -1,1 +1,1 @@
-pnpm check:runtime-docs && pnpm check:agent-docs && pnpm check:unit-authority && pnpm check:product-seed-records && pnpm check:execution-root-providers && pnpm check:host-boundary && pnpm type-check && pnpm lint && pnpm format:check
+pnpm check:runtime-docs && pnpm check:agent-docs && pnpm check:unit-authority && pnpm check:product-seed-records && pnpm check:execution-root-providers && pnpm check:host-boundary && pnpm check:userland-package-manager-boundary && pnpm type-check && pnpm lint && pnpm format:check
