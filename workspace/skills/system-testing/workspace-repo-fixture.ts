@@ -1089,9 +1089,14 @@ function buildablePanelFiles(
               ],
               provides: [],
             },
-            exposeModules: ["react", "react/jsx-runtime", "react/jsx-dev-runtime"],
+            exposeModules: [
+              "react",
+              "react/jsx-runtime",
+              "react/jsx-dev-runtime",
+              "@workspace/ui",
+            ],
           },
-          dependencies: { react: "^19.0.0" },
+          dependencies: { "@workspace/ui": "workspace:*", react: "^19.0.0" },
         },
         null,
         2

@@ -887,6 +887,8 @@ describe("WorkspaceRepoFixtureLifecycle", () => {
     const seededText = fake.putText.mock.calls.map(([text]) => text).join("\n");
     expect(seededText.match(/"Ready"/gu)?.length).toBe(512);
     expect(seededText).toContain("{statusLabels[0]}");
+    expect(seededText).toContain('"@workspace/ui": "workspace:*"');
+    expect(seededText).toContain('"@workspace/ui"');
 
     await fixture.cleanup(state);
   });
