@@ -222,7 +222,7 @@ function LogRow({
         </Box>
         <Text
           style={{
-            color: "var(--gray-10)",
+            color: "var(--gray-11)",
             flexShrink: 0,
             fontVariantNumeric: "tabular-nums",
           }}
@@ -697,12 +697,7 @@ function ServerLogsPage() {
 
         <Box style={{ flex: "1 0 0" }} />
 
-        <Button
-          size="2"
-          variant={follow ? "solid" : "soft"}
-          color={follow ? "grass" : "gray"}
-          onClick={toggleFollow}
-        >
+        <Button size="2" variant="soft" color={follow ? "grass" : "gray"} onClick={toggleFollow}>
           {follow ? <PauseIcon /> : <PlayIcon />}
           {follow ? "Following" : "Follow"}
         </Button>
