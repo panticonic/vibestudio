@@ -37,6 +37,8 @@ maintained as parallel prose constants.
   participants, presence, and notifications.
 - `unit-diagnostics`, `server-logs`, `harness-tools`: bounded operational and
   provenance inspection.
+- `local-models`: persistent model installation, readiness, and real delegated
+  inference through the ordinary agent runtime.
 - `eval-lifecycle`, `harness-resilience`, `edge-cases`: cancellation,
   persistence, cleanup, transport errors, large results, and recovery.
 - `self-development`: exact dirty semantic builds, current/isolated launches,
