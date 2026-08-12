@@ -134,7 +134,7 @@ describe("new panel launcher", () => {
     expect(screen.getAllByRole("option").length).toBeGreaterThanOrEqual(3);
   });
 
-  it("uses an about page to fill a sparse idle panel list and keeps it searchable", async () => {
+  it("shows about pages after workspace panels and keeps them searchable", async () => {
     render(<AboutPanelRoot />);
 
     expect(await findRow("Terminal")).toBeTruthy();

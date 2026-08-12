@@ -66,7 +66,7 @@ describe("launcher suggestions", () => {
     expect(suggestions).toHaveLength(20);
   });
 
-  it("fills a sparse panel catalog with the most-used about pages", () => {
+  it("shows about pages after workspace panels and before browser history", () => {
     const suggestions = buildIdleLauncherSuggestions({
       value: "",
       panels: [
@@ -94,11 +94,12 @@ describe("launcher suggestions", () => {
       "panel:panels/chat",
       "panel:about/history",
       "panel:about/help",
+      "panel:about/permissions",
       "history:https://example.com/docs",
     ]);
   });
 
-  it("does not add about-page fallbacks when there are enough workspace panels", () => {
+  it("keeps about pages visible when the workspace has four panels", () => {
     const suggestions = buildIdleLauncherSuggestions({
       value: "",
       panels: Array.from({ length: 4 }, (_, index) => ({
@@ -111,7 +112,13 @@ describe("launcher suggestions", () => {
       browserUrl: null,
     });
 
-    expect(suggestions.some((suggestion) => suggestion.id === "panel:about/history")).toBe(false);
+    expect(suggestions.map((suggestion) => suggestion.id)).toEqual([
+      "panel:panels/app-0",
+      "panel:panels/app-1",
+      "panel:panels/app-2",
+      "panel:panels/app-3",
+      "panel:about/history",
+    ]);
   });
 
   it("prefers sentence-like chat unless a destination is an exact or prefix match", () => {

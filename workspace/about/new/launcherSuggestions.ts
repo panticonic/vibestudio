@@ -28,7 +28,6 @@ const MATCH_SUBSTRING = 1_000_000_000_000;
 const PROMPT_PRIORITY = 2_250_000_000_000;
 const URL_PRIORITY = 4_000_000_000_000;
 const DEFAULT_LAUNCHER_SUGGESTION_LIMIT = 20;
-const IDLE_PANEL_SUGGESTION_FLOOR = 4;
 
 export function parseLauncherInput(input: string): LauncherInput {
   const first = input[0];
@@ -156,9 +155,9 @@ export function buildLauncherSuggestions(input: {
 /**
  * Build the empty-query launcher in explicit tiers.
  *
- * Workspace panels are the primary destinations. About pages only fill a
- * small sparse-catalog floor, after which browser history may use the remaining
- * result budget. Each tier retains the normal durable usage ranking.
+ * Workspace panels are the primary destinations, followed by the workspace's
+ * about pages and then browser history. Each tier retains the normal durable
+ * usage ranking.
  */
 export function buildIdleLauncherSuggestions(input: {
   value: string;
@@ -180,12 +179,11 @@ export function buildIdleLauncherSuggestions(input: {
       limit: panelLimit,
     });
   const primaryPanels = panelSuggestions(input.panels, limit);
-  const panelFloor = Math.min(limit, IDLE_PANEL_SUGGESTION_FLOOR);
-  const fallbackPanels = panelSuggestions(
+  const aboutPanels = panelSuggestions(
     input.aboutPanels,
-    Math.max(0, panelFloor - primaryPanels.length)
+    Math.max(0, limit - primaryPanels.length)
   );
-  const remaining = Math.max(0, limit - primaryPanels.length - fallbackPanels.length);
+  const remaining = Math.max(0, limit - primaryPanels.length - aboutPanels.length);
   const otherDestinations = buildLauncherSuggestions({
     value: input.value,
     panels: [],
@@ -195,7 +193,7 @@ export function buildIdleLauncherSuggestions(input: {
     limit: remaining,
   });
 
-  return [...primaryPanels, ...fallbackPanels, ...otherDestinations];
+  return [...primaryPanels, ...aboutPanels, ...otherDestinations];
 }
 
 export const LAUNCHER_GROUP_LABELS: Record<LauncherSuggestion["kind"], string> = {
