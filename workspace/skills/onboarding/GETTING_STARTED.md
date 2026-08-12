@@ -41,6 +41,8 @@ Owner workflows remain authoritative:
 - Browser migration uses `extensions/browser-data/SKILL.md`.
 - Enhanced search uses `skills/web-research/SKILL.md`; DuckDuckGo is already a
   healthy default.
+- Recurring scripts and agent prompts use `skills/automations/SKILL.md`; help
+  shape and propose the inert draft before the user reviews it in Automations.
 - Model/provider and agent-default changes use model settings.
 - Device and remote controls open the typed shell connection surface.
 - Credential inspection/revocation and agent grants open their distinct About
@@ -62,6 +64,11 @@ and bumps the card; its render revision triggers a fresh owner read.
 
 Ready-now choices begin work directly. For example, a PDF choice asks for the
 document or starts an ingestion task; it never creates a PDF setup flow.
+Likewise, **Schedule recurring work** begins the Automations owner workflow: it
+chooses a deterministic method or an agent prompt, resolves or builds the exact
+target, and proposes a reviewable draft. The supervision panel is where the user
+approves it and later inspects runs, linked conversations, final messages, and
+errors; opening the panel alone does not complete the request.
 Channel and project configuration is disclosed only when the user chooses that
 channel or project goal.
 

@@ -42,6 +42,12 @@ readiness must not be opened again. Owner-skill, model-setting, and conversation
 routes return their authoritative next target; don't match button prose or
 invent a fallback.
 
+**Schedule recurring work** is a ready-now conversation route owned by
+[Automations](../automations/SKILL.md). Read that returned skill, clarify only
+the details needed to choose a method or agent run, and propose an inert draft.
+Do not open an empty supervision panel in place of helping, and do not imply the
+draft is scheduled before the user reviews it in Automations.
+
 After the client-affine handoff, use ordinary server-side eval unless work
 depends on the inviting client's DOM, panel state, or native transport.
 
@@ -65,6 +71,8 @@ conversation observes it after `unavailable`.
 - Secrets go through host-owned credential input, never chat or inline props.
 - Open one owner-controlled workflow per selection. Don't replace it with
   feedback questions or a custom approval UI.
+- Treat recurring work as an immediately usable agent capability, not setup.
+  Automations owns its review, schedule, execution, history, and supervision.
 - Onboarding may suggest verified template outcomes, but Templates remains the
   sole install/update path.
 

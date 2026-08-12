@@ -282,6 +282,23 @@ export const onboardingCatalog: readonly OnboardingCapabilityDefinition[] = [
     visibility: "primary",
   },
   {
+    id: "capability.automations",
+    title: "Schedule recurring work",
+    summary: "Run reviewed scripts or agent prompts on a schedule and supervise every run.",
+    category: "ready-now",
+    role: "ready-capability",
+    scope: "workspace",
+    tier: "direct",
+    ownerSkillPath: "skills/automations/SKILL.md",
+    actions: { explore: { via: "conversation" } },
+    visibility: "primary",
+    examples: [
+      "Run a reporting script every morning",
+      "Ask a fresh agent to review project changes each week",
+      "Revisit one ongoing agent conversation on a schedule",
+    ],
+  },
+  {
     id: "capability.build",
     title: "Build apps",
     summary: "Create panels, workers, apps, extensions, and agents.",

@@ -67,8 +67,25 @@ The chat panel hosts an AI agent that can:
 - **Tune its own model defaults** — the host chat agent's provider, effort, approval, and chattiness are configurable
 - **Import browser data** — cookies, passwords, bookmarks, history
 - **Automate browsers** via Playwright-style CDP automation (`handle.cdp.page()`)
+- **Schedule recurring work** — run a reviewed worker method or agent prompt on
+  a cadence, then inspect durable history, linked conversations, final messages,
+  and errors in Automations
 - **Use private eval SQLite for scratch work**, call DO-backed app databases,
   call AI models, manage workers
+
+### Automations
+
+Automations are reviewed recurring tasks. A deterministic script runs as a
+method on an exact Durable Object build; agent work sends a prompt through the
+ordinary turn loop, either in a fresh conversation for every run or in one
+specific continuing conversation. Agents can prepare inert drafts, but only the
+user activates them after reviewing the exact target, schedule, reach, and
+standing authority.
+
+The **Automations** panel is both the review and supervision surface. It
+highlights active runs, drafts awaiting review, and recent failures; provides
+search, filters, and paged run history; shows each run's final message or error;
+and links agent runs to their exact conversations.
 
 ### Workers (Workerd)
 

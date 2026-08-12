@@ -105,4 +105,17 @@ describe("executeOnboardingSelection", () => {
       executeOnboardingSelection(onboardingInteraction("connection.retired", "setup"), deps)
     ).rejects.toThrow("Unknown or retired onboarding capability");
   });
+
+  it("hands recurring-work choices to the Automations skill", async () => {
+    await expect(
+      executeOnboardingSelection(
+        onboardingInteraction("capability.automations", "explore"),
+        dependencies()
+      )
+    ).resolves.toEqual({
+      handled: false,
+      target: { via: "conversation" },
+      ownerSkillPath: "skills/automations/SKILL.md",
+    });
+  });
 });

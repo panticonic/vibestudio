@@ -64,6 +64,17 @@ describe("onboarding catalog", () => {
     expect(localModels?.actions?.setup).toEqual({ via: "panel", path: "about/local-models" });
   });
 
+  it("offers recurring work as a ready capability owned by Automations", () => {
+    expect(onboardingCatalog.find((entry) => entry.id === "capability.automations")).toEqual(
+      expect.objectContaining({
+        title: "Schedule recurring work",
+        role: "ready-capability",
+        ownerSkillPath: "skills/automations/SKILL.md",
+        actions: { explore: { via: "conversation" } },
+      })
+    );
+  });
+
   it("composes and validates declarations from installed owner skills", () => {
     const catalog = composeOnboardingCatalog([
       {

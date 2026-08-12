@@ -49,6 +49,17 @@ describe("onboarding selection routing", () => {
     );
   });
 
+  it("routes recurring-work intent to the Automations owner workflow", () => {
+    expect(
+      resolveOnboardingSelection(onboardingInteraction("capability.automations", "explore"))
+    ).toEqual(
+      expect.objectContaining({
+        ownerSkillPath: "skills/automations/SKILL.md",
+        target: { via: "conversation" },
+      })
+    );
+  });
+
   it("does not invent a template route for a base capability", () => {
     expect(() =>
       resolveOnboardingSelection({

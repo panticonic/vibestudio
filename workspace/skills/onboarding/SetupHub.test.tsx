@@ -143,9 +143,34 @@ describe("SetupHub", () => {
     );
     expect(view.getByText("Google Workspace")).toBeTruthy();
     expect(view.getByRole("button", { name: "Ingest PDFs" })).toBeTruthy();
+    expect(view.getByRole("button", { name: "Schedule recurring work" })).toBeTruthy();
     expect(view.queryByText(/PDF.*Not configured/i)).toBeNull();
     expect(view.getByText(/not unfinished setup/i)).toBeTruthy();
     await waitFor(() => expect(view.getByText("Refresh")).toBeTruthy());
+  });
+
+  it("sends recurring-work intent with its stable catalog identity", async () => {
+    const send = vi.fn(async () => undefined);
+    const view = render(
+      <Theme>
+        <SetupHub scope={setupScope()} chat={{ send }} />
+      </Theme>
+    );
+
+    fireEvent.click(view.getByRole("button", { name: "Schedule recurring work" }));
+
+    await waitFor(() =>
+      expect(send).toHaveBeenCalledWith("Explore Schedule recurring work", {
+        metadata: {
+          interaction: {
+            source: "onboarding-setup-hub",
+            kind: "onboarding-capability",
+            action: "explore",
+            targetId: "capability.automations",
+          },
+        },
+      })
+    );
   });
 
   it("reports a missing base owner without inventing an install action", async () => {
