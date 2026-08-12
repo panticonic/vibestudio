@@ -6,12 +6,7 @@ import {
   type TestExecutionResult,
 } from "../types.js";
 import { panelControlAuthorityPolicy, PANEL_AUTOMATION_RESOURCE } from "../panel-authority.js";
-import {
-  finalMessageHasAll,
-  getToolCalls,
-  hasSuccessfulImageRead,
-  type InvocationCardPayloadLike,
-} from "./_helpers.js";
+import { finalMessageHasAll, getToolCalls, type InvocationCardPayloadLike } from "./_helpers.js";
 import { completedScenarioEvidence, walkRecords } from "./_scenario-evidence.js";
 import { orchestratePanelGoal } from "./_panel-tree-invariant.js";
 
@@ -183,20 +178,61 @@ function extensionlessTarget(call: InvocationCardPayloadLike): boolean {
   return basename.length > 0 && !/\.[A-Za-z0-9]{1,8}$/u.test(basename);
 }
 
+function normalizedFilePath(value: unknown): string | null {
+  return typeof value === "string" && value.length > 0
+    ? value.replace(/^file:(?:\/\/)?/iu, "")
+    : null;
+}
+
+function screenshotPaths(call: InvocationCardPayloadLike): Set<string> {
+  const paths = new Set<string>();
+  for (const record of records(call)) {
+    const direct = normalizedFilePath(record["path"] ?? record["screenshot"]);
+    if (direct) paths.add(direct);
+    const returned = record["returnValue"];
+    const returnedPath = isRecord(returned)
+      ? normalizedFilePath(returned["path"] ?? returned["screenshot"])
+      : normalizedFilePath(returned);
+    if (returnedPath) paths.add(returnedPath);
+  }
+  return paths;
+}
+
+function isNativeImageRead(call: InvocationCardPayloadLike): boolean {
+  return records(call).some(
+    (record) =>
+      typeof record["mimeType"] === "string" &&
+      record["mimeType"].startsWith("image/") &&
+      typeof record["size"] === "number" &&
+      record["size"] > 0
+  );
+}
+
 function validateExtensionlessScreenshot(result: TestExecutionResult) {
   const base = completedScenarioEvidence(result, ["eval", "read"]);
   if (!base.passed) return base;
-  const screenshot = getToolCalls(result).some(
-    (call) =>
+  const calls = getToolCalls(result);
+  const capturedPaths = new Set(
+    calls.flatMap((call) =>
       call.name === "eval" &&
       isComplete(call) &&
       /\.screenshot\s*\(/u.test(String(call.arguments?.["code"] ?? "")) &&
-      /fs\.mktemp\s*\(/u.test(String(call.arguments?.["code"] ?? ""))
+      /fs\.writeFile\s*\(/u.test(String(call.arguments?.["code"] ?? ""))
+        ? [...screenshotPaths(call)]
+        : []
+    )
   );
-  const imageRead = getToolCalls(result).some(
-    (call) => call.name === "read" && isComplete(call) && extensionlessTarget(call)
+  const imageRead = calls.some(
+    (call) =>
+      call.name === "read" &&
+      isComplete(call) &&
+      extensionlessTarget(call) &&
+      isNativeImageRead(call) &&
+      capturedPaths.has(
+        normalizedFilePath(call.arguments?.["target"] ?? call.arguments?.["path"]) ?? ""
+      )
   );
-  return screenshot && imageRead && hasSuccessfulImageRead(result)
+  return capturedPaths.size > 0 && imageRead
     ? { passed: true, reason: undefined }
     : {
         passed: false,

@@ -262,7 +262,7 @@ describe("developer ergonomics scenarios", () => {
       "capture",
       "eval",
       {
-        code: "const bytes = await page.screenshot(); const path = await fs.mktemp('capture'); return path;",
+        code: "const bytes = await page.screenshot(); const path = await fs.mktemp('capture'); await fs.writeFile(path, bytes); return path;",
       },
       { returnValue: "file:/.tmp/capture-123" }
     );
@@ -278,12 +278,33 @@ describe("developer ergonomics scenarios", () => {
     ).toEqual({ passed: true, reason: undefined });
   });
 
+  it("accepts a named extensionless scratch path when capture and image read identities match", () => {
+    const capture = call(
+      "capture",
+      "eval",
+      {
+        code: "const bytes = await page.screenshot(); const path = 'scratch/capture'; await fs.writeFile(path, bytes); return { path };",
+      },
+      { returnValue: { path: "scratch/capture" } }
+    );
+    const read = call(
+      "read",
+      "read",
+      { path: "scratch/capture" },
+      { mimeType: "image/png", size: 4096 }
+    );
+
+    expect(
+      scenario("extensionless-screenshot-resource-read").validate(execution([capture, read]))
+    ).toEqual({ passed: true, reason: undefined });
+  });
+
   it("does not count base64 screenshot text as native image inspection", () => {
     const capture = call(
       "capture",
       "eval",
       {
-        code: "const bytes = await page.screenshot(); const path = await fs.mktemp('capture'); return path;",
+        code: "const bytes = await page.screenshot(); const path = await fs.mktemp('capture'); await fs.writeFile(path, bytes); return path;",
       },
       { returnValue: "file:/.tmp/capture-123", mimeType: "image/png", size: 4096 }
     );
