@@ -54,7 +54,7 @@ export function usePaletteCommands(
 
   useEffect(() => {
     // Palette registration must never crash a host that lacks palette support
-    // (headless runtimes, the mobile app, or tests rendering a panel without a
+    // (headless runtimes or tests rendering a panel without a
     // connected bridge). The runtime's own calls are already fire-and-forget;
     // this guards the access path itself.
     let unsubscribe: () => void = () => {};

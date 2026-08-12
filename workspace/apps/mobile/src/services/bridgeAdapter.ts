@@ -11,14 +11,13 @@ import {
   type BridgeStreamRelay,
   type RpcEnvelope,
 } from "@vibestudio/rpc";
-import {
-  PIPE_CLOSED_CODE,
-  type WebRtcSession,
-} from "@vibestudio/rpc/transports/webrtcClient";
+import { PIPE_CLOSED_CODE, type WebRtcSession } from "@vibestudio/rpc/transports/webrtcClient";
 import type { MobileRpcClient } from "./mobileTransport";
 
 export interface BridgeAdapterCallbacks {
   navigateToPanel(panelId: string): void;
+  /** Consume an event addressed to this panel's local owning shell. */
+  handleShellEvent?(panelId: string, event: string, payload: unknown): boolean;
 }
 
 type PanelLease = { runtimeEntityId: PanelEntityId; connectionId: string };
@@ -243,12 +242,23 @@ export function createBridgeAdapter(deps: {
         case "openFolderDialog":
           return null;
         case "postEnvelope": {
+          const [envelope] = args as [RpcEnvelope];
+          if (
+            envelope.target === "shell" &&
+            envelope.message.type === "event" &&
+            deps.callbacks.handleShellEvent?.(
+              panelId,
+              envelope.message.event,
+              envelope.message.payload
+            )
+          ) {
+            return;
+          }
           // Send over the panel's dedicated "panel" session; replies + events
           // arrive via the session's onMessage → deliverToPanel. The bridge
           // acknowledgement is delivery backpressure: do not tell the WebView
           // that its envelope was accepted until the session is open and the
           // frame has actually been written.
-          const [envelope] = args as [RpcEnvelope];
           await sendPanelEnvelope(panelId, envelope);
           return;
         }

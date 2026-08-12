@@ -43,6 +43,10 @@ import { addWebViewEntry, sweepIdleWebViews, type WebViewEntry } from "./webView
 import { loadPinnedPanelIds, savePinnedPanelIds } from "../shellCore/pinnedPanels";
 import { resolveMobileBackAction } from "../shellCore/mobileBackNavigation";
 import { mobileNavigationLayout } from "../shellCore/mobileLayout";
+import {
+  contributedPanelCommandId,
+  presentMobilePanelCommands,
+} from "../shellCore/mobilePanelCommands";
 import { PANEL_UI_IDLE_SWEEP_MS } from "@vibestudio/shared/constants";
 import { parseHostConfig } from "../services/panelUrls";
 import {
@@ -357,6 +361,7 @@ export function MainScreen() {
     (panelId: string) => {
       webViewRefsMap.current.delete(panelId);
       webViewThemeSignaturesRef.current.delete(panelId);
+      shellClient?.panelCommands.clear(panelId);
       if (shellClient) {
         void shellClient.panels.unload(panelId).catch((error: unknown) =>
           pushToast({
@@ -1385,21 +1390,46 @@ export function MainScreen() {
           "archive",
         ]
       );
+      const contributedCommands = presentMobilePanelCommands(
+        shellClient.panelCommands.get(panelId)
+      );
       const isPinned = pinnedPanelIds.has(panelId);
       showActionSheet({
         title: panel?.title ?? "Panel",
         subtitle: chrome?.editableAddress,
-        items: commands.map((command) => {
-          const presentation = PANEL_COMMAND_PRESENTATION[command.id];
-          return {
-            id: command.id,
-            label: command.label,
-            description: command.description,
-            icon: command.id === "toggle-pin" && isPinned ? PinOffIcon : presentation?.icon,
-            tone: command.id === "archive" ? ("danger" as const) : ("default" as const),
-          };
-        }),
-        onSelect: (id) => performPanelCommand(id as PanelCommandId, panelId),
+        items: [
+          ...contributedCommands.map((command) => ({
+            ...command,
+            icon: MessageCircleIcon,
+          })),
+          ...commands.map((command) => {
+            const presentation = PANEL_COMMAND_PRESENTATION[command.id];
+            return {
+              id: command.id,
+              label: command.label,
+              description: command.description,
+              icon: command.id === "toggle-pin" && isPinned ? PinOffIcon : presentation?.icon,
+              tone: command.id === "archive" ? ("danger" as const) : ("default" as const),
+            };
+          }),
+        ],
+        onSelect: (id) => {
+          const commandId = contributedPanelCommandId(id);
+          if (!commandId) {
+            performPanelCommand(id as PanelCommandId, panelId);
+            return;
+          }
+          const webView = webViewRefsMap.current.get(panelId);
+          if (!webView) {
+            pushToast({
+              title: "Conversation is not ready",
+              message: "Wait for the panel to finish loading, then try again.",
+              tone: "warning",
+            });
+            return;
+          }
+          webView.dispatchHostEvent("runtime:palette-run", { commandId });
+        },
       });
     },
     [
@@ -1408,6 +1438,7 @@ export function MainScreen() {
       addressBarVisible,
       performPanelCommand,
       pinnedPanelIds,
+      pushToast,
       shellClient,
       showActionSheet,
     ]

@@ -58,6 +58,11 @@ function mapsShallowEqual<K, V>(a: Map<K, V>, b: Map<K, V>): boolean {
  * every frame but active-status rarely flips).
  */
 export function ChatHeader() {
+  if (getVibestudioHostPlatform() === "mobile") return null;
+  return <DesktopChatHeader />;
+}
+
+function DesktopChatHeader() {
   const {
     channelId,
     channelTitle,
@@ -82,8 +87,6 @@ export function ChatHeader() {
     (chat as { rpc?: AccountRpc } | undefined)?.rpc,
     participantIds
   );
-  const shellOwnsPanelTitle = getVibestudioHostPlatform() === "mobile";
-
   const [participantPresenceStatus, setParticipantPresenceStatus] = useState<
     Map<string, ChannelPresenceStatus>
   >(new Map());
@@ -155,7 +158,6 @@ export function ChatHeader() {
       toolApproval={toolApproval}
       onRemoveAgent={onRemoveAgent}
       onDebugConsoleChange={onDebugConsoleChange}
-      shellOwnsPanelTitle={shellOwnsPanelTitle}
     />
   );
 }
@@ -177,8 +179,6 @@ interface ChatHeaderInnerProps {
   toolApproval?: ToolApprovalProps;
   onRemoveAgent?: (handle: string) => void;
   onDebugConsoleChange?: (agentHandle: string | null) => void;
-  /** Native mobile chrome already presents the durable panel identity. */
-  shellOwnsPanelTitle: boolean;
 }
 
 function chatHeaderInnerPropsEqual(
@@ -197,7 +197,6 @@ function chatHeaderInnerPropsEqual(
     prev.toolApproval === next.toolApproval &&
     prev.onRemoveAgent === next.onRemoveAgent &&
     prev.onDebugConsoleChange === next.onDebugConsoleChange &&
-    prev.shellOwnsPanelTitle === next.shellOwnsPanelTitle &&
     mapsShallowEqual(prev.participantActiveStatus, next.participantActiveStatus) &&
     mapsShallowEqual(prev.participantPresenceStatus, next.participantPresenceStatus)
   );
@@ -217,7 +216,6 @@ const ChatHeaderInner = React.memo(function ChatHeaderInner({
   toolApproval,
   onRemoveAgent,
   onDebugConsoleChange,
-  shellOwnsPanelTitle,
 }: ChatHeaderInnerProps) {
   const visiblePendingAgents = pendingAgents
     ? Array.from(pendingAgents.entries()).filter(([handle, _info]) => {
@@ -235,7 +233,6 @@ const ChatHeaderInner = React.memo(function ChatHeaderInner({
       size="1"
       variant="surface"
       style={{ flexShrink: 0 }}
-      data-shell-owns-panel-title={shellOwnsPanelTitle ? "true" : undefined}
     >
       {/* Wide layout */}
       <Flex
@@ -246,13 +243,11 @@ const ChatHeaderInner = React.memo(function ChatHeaderInner({
         gap="2"
         style={{ minWidth: 0 }}
       >
-        {shellOwnsPanelTitle ? null : (
-          <Flex gap="2" align="center" wrap="wrap" style={{ minWidth: 0, flex: "1 1 240px" }}>
-            <Text size="4" weight="bold" style={{ minWidth: 0 }}>
-              {title}
-            </Text>
-          </Flex>
-        )}
+        <Flex gap="2" align="center" wrap="wrap" style={{ minWidth: 0, flex: "1 1 240px" }}>
+          <Text size="4" weight="bold" style={{ minWidth: 0 }}>
+            {title}
+          </Text>
+        </Flex>
         <Flex gap="2" align="center" wrap="wrap" style={{ minWidth: 0 }}>
           {!connected && <Badge color="gray">{friendlyConnectionStatus(status)}</Badge>}
           {Object.values(participants).map((p) => {
@@ -304,11 +299,9 @@ const ChatHeaderInner = React.memo(function ChatHeaderInner({
         style={{ minWidth: 0 }}
       >
         <Flex gap="2" align="center" style={{ minWidth: 0 }}>
-          {shellOwnsPanelTitle ? null : (
-            <Text size="4" weight="bold" truncate style={{ minWidth: 0 }}>
-              {title}
-            </Text>
-          )}
+          <Text size="4" weight="bold" truncate style={{ minWidth: 0 }}>
+            {title}
+          </Text>
           {!connected && <Badge color="gray">{friendlyConnectionStatus(status)}</Badge>}
         </Flex>
         <ChatHeaderOverflowMenu

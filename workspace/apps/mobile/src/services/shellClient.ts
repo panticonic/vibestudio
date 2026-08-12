@@ -79,7 +79,8 @@ import {
   saveMobileShellStartupSnapshot,
   type MobileShellStartupSnapshot,
 } from "./shellStartupSnapshot";
-import type { Panel } from "@vibestudio/shared/types";
+import type { PaletteCommand, Panel } from "@vibestudio/shared/types";
+import { PanelCommandRegistry } from "@vibestudio/shell-core/panelCommandRegistry";
 
 export type { MobileAccountProfile, MobileAccountProfileUpdate } from "./accountProfileClient";
 
@@ -223,6 +224,7 @@ class MobilePanels implements PanelHost {
       onPanelsChanged?: () => void;
       getSelfUserId: () => string | null;
       navigateToPanel: (panelId: string) => void;
+      onPanelCommandContribution: (panelId: string, payload: unknown) => void;
       clientSessionId: string;
     }
   ) {
@@ -276,6 +278,11 @@ class MobilePanels implements PanelHost {
         getPanelInit: (panelId) => this.getPanelInit(panelId),
         callbacks: {
           navigateToPanel: this.deps.navigateToPanel,
+          handleShellEvent: (panelId, event, payload) => {
+            if (event !== "runtime:palette-contribution") return false;
+            this.deps.onPanelCommandContribution(panelId, payload);
+            return true;
+          },
         },
         deliverToPanel: (panelId, envelope) => this.deliverToPanel(panelId, envelope),
         getPanelLease: (panelId) => this.runtimeConnectionBySlot.get(panelId),
@@ -936,6 +943,11 @@ export class ShellClient {
   serverUrl: string;
   private facade: PanelAssetFacade | null = null;
   private statusUnsub: (() => void) | null = null;
+  private readonly panelCommandRegistry = new PanelCommandRegistry();
+  readonly panelCommands: {
+    get(panelId: string): PaletteCommand[];
+    clear(panelId: string): void;
+  };
   private navigationListeners = new Set<(panelId: string) => void>();
 
   /** Listen to an event addressed directly to this authenticated mobile session. */
@@ -960,6 +972,10 @@ export class ShellClient {
     // Remote is WebRTC: the client re-pairs to the stored shell credential's
     // signaling room (no server URL, no native WS grant) — see mobileTransport.ts.
     this.transport = new MobileRpcClient({});
+    this.panelCommands = {
+      get: (panelId) => this.panelCommandRegistry.get(panelId),
+      clear: (panelId) => this.panelCommandRegistry.clear(panelId),
+    };
     this.accountProfileClient = new MobileAccountProfileClient(this.transport);
     if (config.onStatusChange) {
       this.statusUnsub = this.transport.onStatusChange(config.onStatusChange);
@@ -984,6 +1000,12 @@ export class ShellClient {
       clientSessionId: config.credentials.deviceId,
       navigateToPanel: (panelId) => {
         for (const listener of this.navigationListeners) listener(panelId);
+      },
+      onPanelCommandContribution: (panelId, payload) => {
+        this.panelCommandRegistry.accept({
+          caller: { callerId: panelId, callerKind: "panel", callerPanelId: panelId },
+          payload,
+        });
       },
     });
     const userNotificationStore = createGadServiceClient(this.transport);
@@ -1332,6 +1354,7 @@ export class ShellClient {
     })();
     this.statusUnsub?.();
     this.statusUnsub = null;
+    this.panelCommandRegistry.clear();
   }
 }
 export type MobilePanelsClient = InstanceType<typeof MobilePanels>;

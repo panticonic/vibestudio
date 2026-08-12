@@ -14,16 +14,20 @@
  * Failed sends restore their draft to the composer rather than leaving a
  * separate retriable outbox entry.
  */
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { usePaletteCommands } from "@workspace/react";
+import { getVibestudioHostPlatform } from "@workspace/react/responsive";
 import { useChatContext } from "../context/ChatContext";
 import { deriveActiveOutbox } from "./Outbox";
+import { ChatNativeActionsDialog } from "./ChatNativeActionsDialog";
 
 type ChatCommand = { id: string; label: string; hint?: string; section: string };
 
 const SECTION = "Chat";
 
 export function ChatPaletteCommands() {
+  const [nativeActionsOpen, setNativeActionsOpen] = useState(false);
+  const nativeHost = getVibestudioHostPlatform() === "mobile";
   const {
     onNewConversation,
     messages,
@@ -47,6 +51,14 @@ export function ChatPaletteCommands() {
 
   const commands = useMemo<ChatCommand[]>(() => {
     const cmds: ChatCommand[] = [];
+    if (nativeHost) {
+      cmds.push({
+        id: "chat-conversation-actions",
+        label: "Conversation actions",
+        hint: "People, agents, branches, and autonomy",
+        section: SECTION,
+      });
+    }
     if (onNewConversation) {
       cmds.push({ id: "chat-new-conversation", label: "New conversation", section: SECTION });
     }
@@ -69,10 +81,13 @@ export function ChatPaletteCommands() {
       cmds.push({ id: "chat-undo", label: "Undo last send action", section: SECTION });
     }
     return cmds;
-  }, [onNewConversation, canFlush, queuedCount, canUndo]);
+  }, [nativeHost, onNewConversation, canFlush, queuedCount, canUndo]);
 
   usePaletteCommands(commands, (id) => {
     switch (id) {
+      case "chat-conversation-actions":
+        setNativeActionsOpen(true);
+        break;
       case "chat-new-conversation":
         onNewConversation?.();
         break;
@@ -90,5 +105,7 @@ export function ChatPaletteCommands() {
     }
   });
 
-  return null;
+  return nativeHost ? (
+    <ChatNativeActionsDialog open={nativeActionsOpen} onOpenChange={setNativeActionsOpen} />
+  ) : null;
 }

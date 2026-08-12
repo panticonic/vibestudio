@@ -232,17 +232,18 @@
   --base-card-padding-left: var(--agentic-panel-padding);
 }
 
-/* The native app bar already owns durable panel identity. Keep this row for
-   conversation status/actions, but do not make it look like a second titlebar. */
-.chat-header-card[data-shell-owns-panel-title="true"] {
-  --base-card-padding-top: 0;
-  --base-card-padding-bottom: 0;
-  min-block-size: 40px;
-}
-
 .chat-header-menu-button {
   min-inline-size: 32px;
   min-block-size: 32px;
+}
+
+.chat-native-actions-dialog {
+  max-block-size: min(86dvh, 760px);
+  overflow-y: auto;
+}
+
+.chat-native-actions-dialog button {
+  min-block-size: 44px;
 }
 
 @media (pointer: coarse) {

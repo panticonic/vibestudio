@@ -56,10 +56,11 @@ describe("ChatHeader hosted chrome", () => {
     expect(view.getAllByText("Deep work").length).toBeGreaterThan(0);
   });
 
-  it("leaves title ownership to the native shell without hiding chat actions", () => {
+  it("leaves the entire chrome row to the native shell", () => {
     Object.assign(globalThis, { __vibestudioHostPlatform: "mobile" });
     const view = renderHeader();
     expect(view.queryByText("Deep work")).toBeNull();
-    expect(view.getAllByLabelText("Chat menu").length).toBeGreaterThan(0);
+    expect(view.queryByLabelText("Chat menu")).toBeNull();
+    expect(view.container.querySelector('[data-part="chat-header"]')).toBeNull();
   });
 });

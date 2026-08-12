@@ -105,6 +105,17 @@ describe("AppBar address UX", () => {
     expect(queryByLabelText("Open panel drawer")).toBeNull();
   });
 
+  it("uses one generic panel menu entry point for native and contributed actions", () => {
+    const onShowActions = jest.fn();
+    const { getByLabelText, queryByLabelText } = render(
+      <AppBar title="Agentic Chat" onMenuPress={jest.fn()} onShowActions={onShowActions} />
+    );
+
+    fireEvent.press(getByLabelText("Panel menu"));
+    expect(onShowActions).toHaveBeenCalledTimes(1);
+    expect(queryByLabelText("Panel actions")).toBeNull();
+  });
+
   it("updates the address query and selects shared autocomplete actions", () => {
     const onAddressQueryChange = jest.fn();
     const onSelectAddressSuggestion = jest.fn();

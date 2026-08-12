@@ -78,6 +78,7 @@ import {
 } from "@vibestudio/shared/panelChrome";
 import type { WorkspaceTemplatePin } from "@vibestudio/workspace-contracts/types";
 import { createTemplateManagementClient } from "@workspace/template-management";
+import { PanelCommandRegistry } from "@vibestudio/shell-core/panelCommandRegistry";
 import { createBrowserSiteActions } from "./browserSiteActions";
 // Type for the shell transport bridge injected by the preload script
 type ShellTransportBridge = {
@@ -254,7 +255,6 @@ import type {
   ThemeConfig,
   PanelFocusResult,
   MovePanelRequest,
-  PaletteCommand,
 } from "@vibestudio/shared/types";
 import type { BrowserNavigationIntent } from "@vibestudio/shared/panelCommands";
 // =============================================================================
@@ -498,41 +498,16 @@ export const panel = {
   expandIds: (panelIds: string[]) => viewClient.expandPanelIds(panelIds),
 };
 // =============================================================================
-// Command palette (shell-local registry over attributed panel ↔ shell events)
+// Panel commands (shared registry; desktop presents them in the command palette)
 // =============================================================================
-type PanelPaletteContribution = {
-  panelId: string;
-  commands: PaletteCommand[];
-};
+const panelCommandRegistry = new PanelCommandRegistry();
 
-const paletteContributions = new Map<string, PaletteCommand[]>();
-const isPaletteCommand = (value: unknown): value is PaletteCommand => {
-  const command = value as Partial<PaletteCommand> | null;
-  return (
-    !!command &&
-    typeof command === "object" &&
-    typeof command.id === "string" &&
-    typeof command.label === "string" &&
-    (command.hint === undefined || typeof command.hint === "string") &&
-    (command.section === undefined || typeof command.section === "string")
-  );
-};
-
-rpc.on("runtime:palette-contribution", ({ caller, payload }) => {
-  if (caller.callerKind !== "panel" && caller.callerKind !== "app") return;
-  const commands = (payload as { commands?: unknown } | null)?.commands;
-  if (!Array.isArray(commands) || !commands.every(isPaletteCommand)) return;
-  const panelId = caller.callerPanelId ?? caller.callerId;
-  if (commands.length === 0) paletteContributions.delete(panelId);
-  else paletteContributions.set(panelId, commands);
-});
+rpc.on("runtime:palette-contribution", (event) => panelCommandRegistry.accept(event));
 
 export const palette = {
-  list: async (): Promise<PanelPaletteContribution[]> => {
+  list: async () => {
     const focusedPanelId = await viewClient.getFocusedPanelId().catch(() => null);
-    return [...paletteContributions]
-      .map(([panelId, commands]) => ({ panelId, commands }))
-      .sort((a, b) => (a.panelId === focusedPanelId ? -1 : b.panelId === focusedPanelId ? 1 : 0));
+    return panelCommandRegistry.list(focusedPanelId);
   },
   run: (panelId: string, commandId: string) =>
     rpc.emit(panelId, "runtime:palette-run", { commandId }),

@@ -44,6 +44,22 @@ function panelRequestEnvelope(requestId: string): RpcEnvelope {
   };
 }
 
+function shellContributionEnvelope(): RpcEnvelope {
+  const caller = { callerId: "panel:forged", callerKind: "panel" as const };
+  return {
+    from: caller.callerId,
+    target: "shell",
+    delivery: { caller },
+    provenance: [caller],
+    message: {
+      type: "event",
+      event: "runtime:palette-contribution",
+      fromId: caller.callerId,
+      payload: { commands: [{ id: "chat-actions", label: "Conversation actions" }] },
+    },
+  };
+}
+
 function stampedPanelEnvelope(requestId: string) {
   return expect.objectContaining({
     from: "panel:runtime-a",
@@ -103,6 +119,25 @@ describe("bridgeAdapter CDP routing", () => {
 });
 
 describe("bridgeAdapter panel session relay", () => {
+  it("keeps ephemeral shell chrome events at the owning mobile host", async () => {
+    const handleShellEvent = jest.fn(() => true);
+    const openPanelSession = jest.fn();
+    const adapter = createAdapter({
+      transport: { openPanelSession } as never,
+      callbacks: { navigateToPanel: jest.fn(), handleShellEvent },
+    });
+
+    await expect(
+      adapter.handle("panel:tree/panel-a", "postEnvelope", [shellContributionEnvelope()])
+    ).resolves.toBeUndefined();
+    expect(handleShellEvent).toHaveBeenCalledWith(
+      "panel:tree/panel-a",
+      "runtime:palette-contribution",
+      { commands: [{ id: "chat-actions", label: "Conversation actions" }] }
+    );
+    expect(openPanelSession).not.toHaveBeenCalled();
+  });
+
   it("holds a pipe-racing envelope until the shared transport reconnects", async () => {
     const pipeClosed = Object.assign(new Error("Not connected to server"), {
       code: "PIPE_CLOSED",

@@ -5,7 +5,7 @@
  *   [Menu]  [ address pill: title + host/meta caption ]  [⋯]  [+]
  *
  * The pill is the discoverability hub: tap to edit the address, long-press for
- * panel actions, and its caption line surfaces the source/URL + repo state
+ * panel menu, and its caption line surfaces the source/URL + repo state
  * that used to hide behind the address toggle. Address mode swaps in an
  * edit row (back/forward/input/reload) plus autocomplete suggestions.
  */
@@ -185,7 +185,7 @@ export function AppBar({
             onPress={onToggleAddressBar}
             onLongPress={onShowActions}
             accessibilityRole="button"
-            accessibilityLabel="Edit address. Long-press for panel actions."
+            accessibilityLabel="Edit address. Long-press for panel menu."
             style={({ pressed }) => [
               styles.pill,
               {
@@ -236,7 +236,7 @@ export function AppBar({
             <IconButton
               icon={MoreHorizontal}
               onPress={onShowActions}
-              label="Panel actions"
+              label="Panel menu"
               color={colors.textSecondary}
             />
           ) : null}
