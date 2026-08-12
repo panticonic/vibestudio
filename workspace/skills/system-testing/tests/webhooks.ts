@@ -147,7 +147,7 @@ export const webhookTests: TestCase[] = [
       ],
     },
     prompt:
-      "Exercise a harmless temporary webhook subscription end to end: create it, confirm it is listed, rotate its secret, revoke it, and verify cleanup. If this deployment cannot support the test, explain the concrete blocker instead of pretending it succeeded.",
+      "Try a harmless temporary webhook subscription, confirm that it appears, and check that its secret can be rotated. If this deployment cannot support that, explain the concrete blocker.",
     validate: lifecycleChecked,
   },
   {

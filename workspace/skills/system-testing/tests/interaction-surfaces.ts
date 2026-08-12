@@ -330,7 +330,7 @@ export const interactionSurfaceTests: TestCase[] = [
     description: "Update a published custom message in place and clear its renderer",
     category: "interaction-surfaces",
     prompt:
-      "Publish a small custom chat message, update that same message in place, and then clean up the message type registration. If this context cannot do that, explain why.",
+      "Try updating one small custom chat message in place. If this context cannot do that, explain why.",
     validate: (result) => {
       const ok = finalMessageHasAll(result, ["CUSTOM_MESSAGE_UPDATE_OK", "cleared"]);
       if (ok.passed) return noIncompleteInvocations(result);

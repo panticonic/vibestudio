@@ -80,8 +80,7 @@ export const notificationTests: TestCase[] = [
     name: "show-notification",
     description: "Show and clean up one host notification",
     category: "notifications",
-    prompt:
-      "Show a harmless temporary informational notification, confirm it was created, then dismiss it so nothing is left behind.",
+    prompt: "Show a harmless temporary informational notification and confirm that it appeared.",
     validate: (result) => notificationChecked(result),
   },
   {
@@ -89,7 +88,7 @@ export const notificationTests: TestCase[] = [
     description: "Show and clean up a notification with exactly two action buttons",
     category: "notifications",
     prompt:
-      "Show a temporary notification offering exactly two choices, Accept and Decline. Confirm it was displayed and clean it up afterward; do not claim that the user clicked either choice.",
+      "Show a temporary notification offering exactly two choices, Accept and Decline, and tell me whether it appeared. Do not claim that the user clicked either choice.",
     validate: (result) =>
       notificationChecked(result, { actionCount: 2, actionLabels: ["Accept", "Decline"] }),
   },

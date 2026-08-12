@@ -461,7 +461,7 @@ export const workerTests: TestCase[] = [
     name: "create-destroy",
     description: "Create a worker and then destroy it",
     category: "workers",
-    prompt: "Verify that a temporary worker can be started and fully retired.",
+    prompt: "Check that a harmless temporary worker can be started successfully.",
     validate: (result) => {
       const base = lifecycleEvidence(result, [
         ["workers.create", "workers.list", "workers.destroy"],
@@ -489,7 +489,7 @@ export const workerTests: TestCase[] = [
     category: "workers",
     workspaceRepoFixture: BUILDABLE_WORKER_WORKSPACE_REPO_FIXTURE,
     prompt:
-      "Create a tiny disposable Durable Object that stores a couple of rows, verify they persist into a later call, and clean up everything you started.",
+      "Check whether a tiny disposable Durable Object preserves a couple of stored rows into a later call.",
     validate: requireSqlPersistenceEvidence,
   },
   {
@@ -498,7 +498,7 @@ export const workerTests: TestCase[] = [
     category: "workers",
     workspaceRepoFixture: BUILDABLE_REGULAR_WORKER_WORKSPACE_REPO_FIXTURE,
     prompt:
-      "Temporarily run a disposable worker with a non-secret probe setting, verify what the worker itself observes, and clean it up.",
+      "Run a disposable worker with a non-secret probe setting and tell me what the worker itself observes.",
     validate: (result) => {
       const base = lifecycleEvidence(result, [
         ["workers.create", "env", "workers.destroy"],
