@@ -1,6 +1,105 @@
-import type { TestCase } from "../types.js";
+import type { TestCase, TestExecutionResult } from "../types.js";
 import { BUILDABLE_PACKAGE_WORKSPACE_REPO_FIXTURE } from "../types.js";
 import { validateAgentCompletionReport } from "../test-runner.js";
+import { findLastAgentMessage, getToolCalls, noIncompleteInvocations } from "./_helpers.js";
+
+function record(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function callDetails(call: ReturnType<typeof getToolCalls>[number]) {
+  return record(record(call.execution?.result)?.["details"]);
+}
+
+function protocolText(call: ReturnType<typeof getToolCalls>[number]): string {
+  const content = record(call.execution?.result)?.["protocolContent"];
+  return Array.isArray(content)
+    ? content
+        .map((block) => record(block)?.["text"])
+        .filter((text): text is string => typeof text === "string")
+        .join("\n")
+    : "";
+}
+
+function validateUnintegratedSubagentDiff(result: TestExecutionResult) {
+  const base = validateAgentCompletionReport(result);
+  if (!base.passed) return base;
+  const calls = getToolCalls(result);
+  const spawn = calls.find(
+    (call) =>
+      call.name === "spawn_subagent" &&
+      call.execution?.status === "complete" &&
+      call.execution.isError !== true
+  );
+  if (!spawn) {
+    return { passed: false, reason: "No completed child launch established a canonical run" };
+  }
+  const runHandle = callDetails(spawn)?.["runId"];
+  if (typeof runHandle !== "string" || !runHandle) {
+    return { passed: false, reason: "The child launch receipt did not identify its exact run" };
+  }
+  const task = result.messages.find(
+    (message) =>
+      message.task?.id === spawn.id &&
+      message.task.execution.status === "complete" &&
+      message.task.execution.terminalOutcome === "success" &&
+      message.task.execution.isError !== true
+  )?.task;
+  const sourceEventId = record(record(task?.execution.result)?.["details"])?.["sourceEventId"];
+  if (typeof sourceEventId !== "string" || !sourceEventId) {
+    return {
+      passed: false,
+      reason: "The exact terminal child did not retain a committed source event",
+    };
+  }
+  const inspection = calls.find((call) => {
+    if (
+      call.name !== "inspect_subagent" ||
+      call.arguments?.["query"] !== "diff" ||
+      call.arguments?.["runId"] !== runHandle ||
+      call.execution?.status !== "complete" ||
+      call.execution.isError === true
+    ) {
+      return false;
+    }
+    const details = callDetails(call);
+    const integration = record(details?.["semanticIntegration"]);
+    return (
+      details?.["runId"] === runHandle &&
+      integration?.["state"] === "unattempted" &&
+      integration["sourceEventId"] === sourceEventId
+    );
+  });
+  if (!inspection) {
+    return {
+      passed: false,
+      reason:
+        "No bounded diff joined the exact terminal child's committed event to an unintegrated parent state",
+    };
+  }
+  const diff = protocolText(inspection);
+  const escapedEvent = sourceEventId.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+  if (
+    !new RegExp(`Source\\s+${escapedEvent}:\\s*[1-9]\\d*\\s+adopt`, "u").test(diff) ||
+    !/Coordinate:.*\badopt\b/iu.test(diff) ||
+    !/Child source is committed and clean/iu.test(diff)
+  ) {
+    return {
+      passed: false,
+      reason: "The child-relative diff did not prove a non-empty committed clean change",
+    };
+  }
+  const final = findLastAgentMessage(result);
+  if (!/export/iu.test(final) || !/(?:unintegrated|not integrated|left .*separate)/iu.test(final)) {
+    return {
+      passed: false,
+      reason: "The parent did not summarize the export diff and its unintegrated disposition",
+    };
+  }
+  return noIncompleteInvocations(result);
+}
 
 export const agentOrchestrationTests: TestCase[] = [
   {
@@ -10,8 +109,9 @@ export const agentOrchestrationTests: TestCase[] = [
     category: "agent-orchestration",
     workspaceRepoFixture: BUILDABLE_PACKAGE_WORKSPACE_REPO_FIXTURE,
     prompt:
-      "Ask a fresh subagent to add and commit one small deterministic typed export in the disposable package. Review what the child changed without integrating it, then summarize the bounded diff and leave the terminal child result available for later inspection.",
-    validate: validateAgentCompletionReport,
+      "Ask a fresh subagent to add one small deterministic typed export in the disposable package. Review what the child changed without integrating it, then summarize the bounded diff.",
+    validation: "agent-evidence",
+    validate: validateUnintegratedSubagentDiff,
   },
   {
     name: "subagent-design-synthesis",
