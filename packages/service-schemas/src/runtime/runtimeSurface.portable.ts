@@ -38,7 +38,7 @@ export const CREATE_PANEL_SLOT_SIGNATURE =
 
 export const PANEL_HANDLE_AUTOMATION_GUIDE =
   "The returned PanelHandle is the complete lifecycle and inspection API. " +
-  "Use `const page = await handle.cdp.page()` before `await page.evaluate(...)` or `await page.screenshot(...)`; page() returns a Promise, not a page proxy. " +
+  "Use `const session = await handle.cdp.session(); const page = session.page` for multi-step automation. The session records the immutable panel generation; after rebuild/navigation call `await session.refresh()` and use the returned session instead of replaying an uncertain action. For a one-off read, `await handle.cdp.page()` remains available and returns a Promise, not a page proxy. " +
   'For a one-call host image use `await handle.cdp.screenshot({ format: "png" })`. ' +
   "For host-captured logs since panel creation use `await handle.cdp.consoleHistory()` (live page console events are separate).";
 

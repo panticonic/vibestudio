@@ -384,6 +384,7 @@ export function createPanelRuntime(options: CreatePanelRuntimeOptions): PanelRun
       navigate: (url) => navigatePanel(metadata.id, url).then(() => undefined),
       navigateHistory: (delta) => navigateHistory(metadata.id, delta).then(() => undefined),
       reload: () => restartPanel(metadata.id),
+      observe: () => observePanel(metadata.id),
     });
 
   const observePanel = async (id: string): Promise<PanelObservation> => {

@@ -69,4 +69,106 @@ describe("createCdpAutomation screenshot", () => {
     expect(reload).toHaveBeenCalledOnce();
     expect(call).not.toHaveBeenCalled();
   });
+
+  it("fences a CDP session to one panel attempt and explicitly replaces a stale page", async () => {
+    const oldPage = { close: vi.fn(async () => undefined), isClosed: () => false };
+    const newPage = { close: vi.fn(async () => undefined), isClosed: () => false };
+    const connect = vi
+      .fn()
+      .mockResolvedValueOnce({
+        contexts: () => [{ pages: () => [oldPage] }],
+        close: vi.fn(async () => undefined),
+      })
+      .mockResolvedValueOnce({
+        contexts: () => [{ pages: () => [newPage] }],
+        close: vi.fn(async () => undefined),
+      });
+    const loadModule = vi.fn(async () => ({ BrowserImpl: { connect } }));
+    const call = vi.fn(async (_target: string, method: string) => {
+      if (method === "panelCdp.getCdpEndpoint") {
+        return { wsEndpoint: "ws://panel", token: "grant" };
+      }
+      throw new Error(`Unexpected RPC method: ${method}`);
+    });
+    const generation = (attemptId: string, runtimeEntityId: string) =>
+      ({
+        panelId: "panel:child",
+        phase: "ready",
+        attemptId,
+        runtimeEntityId,
+        buildKey: `build:${attemptId}`,
+      }) as never;
+    const oldGeneration = generation("attempt:old", "panel-runtime:old");
+    const newGeneration = generation("attempt:new", "panel-runtime:new");
+    const observe = vi
+      .fn()
+      .mockResolvedValueOnce(oldGeneration)
+      .mockResolvedValueOnce(oldGeneration)
+      .mockResolvedValueOnce(newGeneration)
+      .mockResolvedValueOnce(newGeneration)
+      .mockResolvedValueOnce(newGeneration);
+    const cdp = createCdpAutomation({ call } as never, "panel:child", {
+      loadModule,
+      observe,
+    });
+
+    const session = await cdp.session();
+    expect(session.generation).toMatchObject({
+      protocol: "panel-cdp-generation.v1",
+      attemptId: "attempt:old",
+      runtimeEntityId: "panel-runtime:old",
+    });
+
+    const refreshed = await session.refresh();
+    expect(refreshed).toMatchObject({
+      status: "replaced",
+      previousGeneration: { attemptId: "attempt:old" },
+      session: { generation: { attemptId: "attempt:new" }, page: newPage },
+    });
+    expect(oldPage.close).toHaveBeenCalledOnce();
+    expect(connect).toHaveBeenCalledTimes(2);
+  });
+
+  it("reconnects a closed page without pretending the panel generation changed", async () => {
+    let firstClosed = false;
+    const firstPage = {
+      close: vi.fn(async () => {
+        firstClosed = true;
+      }),
+      isClosed: () => firstClosed,
+    };
+    const secondPage = { close: vi.fn(async () => undefined), isClosed: () => false };
+    const connect = vi
+      .fn()
+      .mockResolvedValueOnce({ contexts: () => [{ pages: () => [firstPage] }] })
+      .mockResolvedValueOnce({ contexts: () => [{ pages: () => [secondPage] }] });
+    const generation = {
+      panelId: "panel:child",
+      phase: "ready",
+      attemptId: "attempt:stable",
+      runtimeEntityId: "panel-runtime:stable",
+      buildKey: "build:stable",
+    } as never;
+    const cdp = createCdpAutomation(
+      {
+        call: vi.fn(async () => ({ wsEndpoint: "ws://panel", token: "grant" })),
+      } as never,
+      "panel:child",
+      {
+        loadModule: async () => ({ BrowserImpl: { connect } }),
+        observe: async () => generation,
+      }
+    );
+
+    const session = await cdp.session();
+    await session.close();
+    const refreshed = await session.refresh();
+
+    expect(refreshed).toMatchObject({
+      status: "reconnected",
+      generation: { attemptId: "attempt:stable" },
+      session: { generation: { attemptId: "attempt:stable" }, page: secondPage },
+    });
+    expect(connect).toHaveBeenCalledTimes(2);
+  });
 });

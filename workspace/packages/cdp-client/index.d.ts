@@ -146,6 +146,21 @@ export type WaitState = "attached" | "detached" | "visible" | "hidden";
 export interface ActionOptions {
   timeout?: number;
 }
+export interface ClickOptions extends ActionOptions {
+  /** Assert one semantic locator state after the pointer event is delivered. */
+  expect?: {
+    locator: CdpLocator;
+    state?: WaitState;
+    timeout?: number;
+  };
+}
+export interface CdpInteractionOutcome {
+  protocol: "cdp-interaction-outcome.v1";
+  action: "click" | "dblclick";
+  delivery: "dispatched";
+  target: CdpDomInspection;
+  effect: { status: "not-asserted" } | { status: "observed"; locator: string; state: WaitState };
+}
 export interface ByTextOptions {
   exact?: boolean;
 }
@@ -176,8 +191,8 @@ export interface CdpLocator {
   last(): CdpLocator;
   all(): Promise<CdpLocator[]>;
   // Actions (auto-waiting)
-  click(opts?: ActionOptions): Promise<void>;
-  dblclick(opts?: ActionOptions): Promise<void>;
+  click(opts?: ClickOptions): Promise<CdpInteractionOutcome>;
+  dblclick(opts?: ClickOptions): Promise<CdpInteractionOutcome>;
   hover(opts?: ActionOptions): Promise<void>;
   fill(value: string, opts?: ActionOptions): Promise<void>;
   type(text: string, opts?: ActionOptions): Promise<void>;
@@ -242,7 +257,7 @@ export interface CdpPage {
    * the callback so the bounded JSON report matches the intended UX boundary.
    */
   profile(
-    action: () => void | Promise<void>,
+    action: () => unknown | Promise<unknown>,
     options?: CdpProfileOptions
   ): Promise<CdpProfileReport>;
   evaluate(pageFunction: string | ((arg?: unknown) => unknown), arg?: unknown): Promise<unknown>;
@@ -287,6 +302,8 @@ export interface CdpPage {
   screenshot(options?: CdpScreenshotOptions): Promise<Uint8Array>;
   /** Disconnect this automation client. The owning panel remains open. */
   close(): Promise<void>;
+  /** True after client close, bridge replacement, transport loss, or command timeout. */
+  isClosed(): boolean;
 }
 
 /** Low-level raw CDP connection. Use for protocol-level work beyond the Page API. */
@@ -300,6 +317,7 @@ export class CdpConnection {
   send(method: string, params?: Record<string, unknown>): Promise<unknown>;
   on(method: string, listener: (params: unknown) => void): () => void;
   close(): void;
+  isClosed(): boolean;
 }
 
 export interface CdpFailureData {
@@ -310,7 +328,8 @@ export interface CdpFailureData {
     | "cdp_evaluation_failed"
     | "cdp_locator_operation_failed"
     | "cdp_locator_not_actionable"
-    | "cdp_locator_state_mismatch";
+    | "cdp_locator_state_mismatch"
+    | "cdp_interaction_outcome_not_observed";
   operation: string;
   failureKind: "user-code" | "infrastructure";
   recovery:

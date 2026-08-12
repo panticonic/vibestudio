@@ -196,6 +196,7 @@ function recoveryFor(
   data: Record<string, unknown> | null
 ): NonNullable<AgentToolFailure["recovery"]> {
   const explicit = record(data?.["recovery"]);
+  const legacyRecovery = nonempty(data?.["recovery"]);
   const explicitAction = nonempty(explicit?.["action"]);
   const explicitInstruction =
     nonempty(explicit?.["instruction"]) ?? nonempty(data?.["remediation"]);
@@ -208,6 +209,21 @@ function recoveryFor(
     return {
       action: explicitAction as NonNullable<AgentToolFailure["recovery"]>["action"],
       instruction: explicitInstruction ?? "Follow the typed recovery action before retrying.",
+    };
+  }
+  if (legacyRecovery?.includes("reacquire-page")) {
+    return {
+      action: "reacquire-handle",
+      instruction:
+        legacyRecovery === "inspect-panel-and-reacquire-page"
+          ? "Inspect the panel lifecycle, then refresh or reacquire its generation-fenced CDP session. Do not reuse the cached page."
+          : "Refresh or reacquire the panel's generation-fenced CDP session. Do not reuse the cached page.",
+    };
+  }
+  if (legacyRecovery === "reobserve-locator") {
+    return {
+      action: "reobserve",
+      instruction: "Inspect the current DOM and form a locator from current accessible facts.",
     };
   }
   switch (retry.policy) {
@@ -224,17 +240,20 @@ function recoveryFor(
     case "retry-identical":
       return {
         action: "retry-identical",
-        instruction: explicitInstruction ?? "Retry only the identical request with the same identity.",
+        instruction:
+          explicitInstruction ?? "Retry only the identical request with the same identity.",
       };
     case "request-approval":
       return {
         action: "request-approval",
-        instruction: explicitInstruction ?? "Complete the declared authority decision before retrying.",
+        instruction:
+          explicitInstruction ?? "Complete the declared authority decision before retrying.",
       };
     default:
       return {
         action: "stop",
-        instruction: explicitInstruction ?? "Do not retry automatically; inspect the primary cause.",
+        instruction:
+          explicitInstruction ?? "Do not retry automatically; inspect the primary cause.",
       };
   }
 }

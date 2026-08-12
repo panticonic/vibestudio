@@ -580,7 +580,7 @@ function coverageMetrics(raw: CoverageResult): CdpProfileCoverage {
 export async function runCdpProfile(input: {
   page: ProfilePage;
   transport: ProtocolTransport;
-  action: () => void | Promise<void>;
+  action: () => unknown | Promise<unknown>;
   options?: CdpProfileOptions;
 }): Promise<CdpProfileReport> {
   const options = input.options ?? {};

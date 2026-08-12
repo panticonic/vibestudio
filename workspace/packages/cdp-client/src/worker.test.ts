@@ -586,7 +586,15 @@ describe("worker CDP client", () => {
     const browser = await BrowserImpl.connect("ws://cdp");
     const page = browser.contexts()[0]!.pages()[0]!;
 
-    await page.getByRole("button", { name: "Go" }).click();
+    const outcome = await page.getByRole("button", { name: "Go" }).click();
+
+    expect(outcome).toMatchObject({
+      protocol: "cdp-interaction-outcome.v1",
+      action: "click",
+      delivery: "dispatched",
+      target: { found: true },
+      effect: { status: "not-asserted" },
+    });
 
     const probeEvaluation = FakeWebSocket.sent
       .filter((entry) => entry.method === "Runtime.evaluate")
@@ -610,6 +618,28 @@ describe("worker CDP client", () => {
       params: expect.objectContaining({
         expression: "new Promise((resolve) => setTimeout(resolve, 0))",
       }),
+    });
+  });
+
+  it("returns an observed semantic postcondition from a click", async () => {
+    installFakeWebSocket();
+    const browser = await BrowserImpl.connect("ws://cdp");
+    const page = browser.contexts()[0]!.pages()[0]!;
+    const dialog = page.getByRole("dialog", { name: "Card details" });
+
+    const outcome = await page.getByRole("button", { name: "Open card" }).click({
+      expect: { locator: dialog, state: "visible" },
+    });
+
+    expect(outcome).toMatchObject({
+      protocol: "cdp-interaction-outcome.v1",
+      action: "click",
+      delivery: "dispatched",
+      effect: {
+        status: "observed",
+        locator: 'getByRole("dialog", { name: "Card details" })',
+        state: "visible",
+      },
     });
   });
 

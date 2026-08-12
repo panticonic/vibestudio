@@ -3,11 +3,15 @@ import type { Browser, CdpPage } from "@workspace/cdp-client";
 import type {
   CdpAutomation,
   CdpEndpoint,
+  PanelCdpGeneration,
+  PanelCdpSession,
+  PanelCdpSessionRefresh,
   PanelConsoleHistoryOptions,
   PanelConsoleHistoryResult,
   PanelScreenshotOptions,
   PanelScreenshotResult,
 } from "../core/index.js";
+import type { PanelObservation } from "@vibestudio/shared/panel/observation";
 
 export type { CdpAutomation, CdpEndpoint };
 
@@ -25,6 +29,7 @@ interface CdpAutomationOptions {
   navigate?: (url: string) => Promise<void>;
   navigateHistory?: (delta: -1 | 1) => Promise<void>;
   reload?: () => Promise<void>;
+  observe?: () => Promise<PanelObservation>;
 }
 
 function isCdpClientModule(value: unknown): value is CdpClientModule {
@@ -103,8 +108,104 @@ export function createCdpAutomation(
     return resolvedPage;
   };
 
+  const generationOf = (observation: PanelObservation): PanelCdpGeneration => {
+    if (observation.phase !== "ready" || !observation.runtimeEntityId) {
+      throw Object.assign(
+        new Error(
+          `Panel ${JSON.stringify(id)} is ${observation.phase}; acquire a CDP session only after it is ready.`
+        ),
+        {
+          code: "panel_cdp_generation_unavailable",
+          errorData: {
+            code: "panel_cdp_generation_unavailable",
+            panelId: id,
+            phase: observation.phase,
+            attemptId: observation.attemptId,
+            recovery: {
+              action: "reobserve",
+              instruction:
+                "Observe the panel lifecycle and acquire a session after phase becomes ready.",
+            },
+          },
+        }
+      );
+    }
+    return {
+      protocol: "panel-cdp-generation.v1",
+      panelId: id,
+      attemptId: observation.attemptId,
+      runtimeEntityId: observation.runtimeEntityId,
+      buildKey: observation.buildKey,
+    };
+  };
+
+  const sameGeneration = (left: PanelCdpGeneration, right: PanelCdpGeneration): boolean =>
+    left.panelId === right.panelId &&
+    left.attemptId === right.attemptId &&
+    left.runtimeEntityId === right.runtimeEntityId;
+
+  const acquireSession = async (): Promise<PanelCdpSession> => {
+    if (!options.observe) {
+      throw new Error(
+        "Generation-fenced CDP sessions are unavailable in this runtime; use a PanelHandle created by panelTree/openPanel."
+      );
+    }
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const before = generationOf(await options.observe());
+      const page = await connectPage();
+      const after = generationOf(await options.observe());
+      if (!sameGeneration(before, after)) {
+        await page.close();
+        continue;
+      }
+
+      let session!: PanelCdpSession;
+      session = {
+        protocol: "panel-cdp-session.v1",
+        generation: after,
+        page,
+        refresh: async (): Promise<PanelCdpSessionRefresh> => {
+          const current = generationOf(await options.observe!());
+          if (sameGeneration(session.generation, current) && !page.isClosed()) {
+            return { status: "current", session };
+          }
+          await page.close();
+          if (sameGeneration(session.generation, current)) {
+            return {
+              status: "reconnected",
+              generation: current,
+              session: await acquireSession(),
+            };
+          }
+          return {
+            status: "replaced",
+            previousGeneration: session.generation,
+            session: await acquireSession(),
+          };
+        },
+        close: () => page.close(),
+      };
+      return session;
+    }
+    throw Object.assign(
+      new Error(`Panel ${JSON.stringify(id)} changed generation during three CDP acquisitions`),
+      {
+        code: "panel_cdp_generation_churn",
+        errorData: {
+          code: "panel_cdp_generation_churn",
+          panelId: id,
+          recovery: {
+            action: "reobserve",
+            instruction: "Inspect the panel lifecycle before acquiring another CDP session.",
+          },
+        },
+      }
+    );
+  };
+
   return {
     page: connectPage,
+    session: acquireSession,
     consoleHistory: (options?: PanelConsoleHistoryOptions) => {
       return rpc.call<PanelConsoleHistoryResult>("main", "panelCdp.consoleHistory", [id, options]);
     },

@@ -98,6 +98,28 @@ type ByTextOptions = { exact?: boolean };
 type ByRoleOptions = { name?: TextMatcher; exact?: boolean };
 type ActionOptions = { timeout?: number };
 type WaitState = "attached" | "detached" | "visible" | "hidden";
+type ClickOptions = ActionOptions & {
+  /** Optional semantic postcondition observed after the pointer event is delivered. */
+  expect?: {
+    locator: WorkerCdpLocator;
+    state?: WaitState;
+    timeout?: number;
+  };
+};
+
+export interface CdpInteractionOutcome {
+  protocol: "cdp-interaction-outcome.v1";
+  action: "click" | "dblclick";
+  delivery: "dispatched";
+  target: CdpDomInspection;
+  effect:
+    | { status: "not-asserted" }
+    | {
+        status: "observed";
+        locator: string;
+        state: WaitState;
+      };
+}
 type Keyboard = {
   down(key: string): Promise<void>;
   up(key: string): Promise<void>;
@@ -415,6 +437,10 @@ export class CdpConnection {
       )
     );
     this.ws.close();
+  }
+
+  isClosed(): boolean {
+    return this.closed;
   }
 
   private disconnect(error: Error): void {
@@ -792,7 +818,8 @@ export interface CdpFailureData {
     | "cdp_evaluation_failed"
     | "cdp_locator_operation_failed"
     | "cdp_locator_not_actionable"
-    | "cdp_locator_state_mismatch";
+    | "cdp_locator_state_mismatch"
+    | "cdp_interaction_outcome_not_observed";
   operation: string;
   failureKind: "user-code" | "infrastructure";
   recovery:
@@ -1097,7 +1124,7 @@ class WorkerCdpPage {
    * user-visible boundary chosen by the caller.
    */
   async profile(
-    action: () => void | Promise<void>,
+    action: () => unknown | Promise<unknown>,
     options?: CdpProfileOptions
   ): Promise<CdpProfileReport> {
     if (this.profileActive) {
@@ -1390,10 +1417,53 @@ class WorkerCdpPage {
 
   async clickDescriptor(
     descriptor: LocatorDescriptor,
-    opts: { clickCount?: number; button?: "left" | "right" | "middle"; timeout?: number } = {}
-  ): Promise<void> {
+    opts: ClickOptions & {
+      clickCount?: number;
+      button?: "left" | "right" | "middle";
+    } = {}
+  ): Promise<CdpInteractionOutcome> {
     const point = await this.resolveHitPoint(descriptor, opts.timeout);
+    const target = (await this.runLocatorOp("inspect", descriptor, null, {
+      timeout: 0,
+    })) as Omit<CdpDomInspection, "selector"> & { found: boolean };
     await this.dispatchClickAt(point, opts);
+    const action = opts.clickCount === 2 ? "dblclick" : "click";
+    if (!opts.expect) {
+      return {
+        protocol: "cdp-interaction-outcome.v1",
+        action,
+        delivery: "dispatched",
+        target: { selector: describeLocator(descriptor), ...target },
+        effect: { status: "not-asserted" },
+      };
+    }
+    const state = opts.expect.state ?? "visible";
+    try {
+      await opts.expect.locator.waitFor({ state, timeout: opts.expect.timeout ?? opts.timeout });
+    } catch (cause) {
+      const expectedLocator = opts.expect.locator.toString();
+      throw new CdpError(
+        `${action} was dispatched to ${describeLocator(descriptor)}, but expected ${expectedLocator} to become ${state}`,
+        {
+          cause,
+          locator: describeLocator(descriptor),
+          code: "cdp_interaction_outcome_not_observed",
+          operation: action,
+          recovery: "reobserve-locator",
+        }
+      );
+    }
+    return {
+      protocol: "cdp-interaction-outcome.v1",
+      action,
+      delivery: "dispatched",
+      target: { selector: describeLocator(descriptor), ...target },
+      effect: {
+        status: "observed",
+        locator: opts.expect.locator.toString(),
+        state,
+      },
+    };
   }
 
   async hoverDescriptor(descriptor: LocatorDescriptor, opts: ActionOptions = {}): Promise<void> {
@@ -1579,6 +1649,11 @@ class WorkerCdpPage {
   async close(): Promise<void> {
     this.connection.close();
   }
+
+  /** True after client close, bridge replacement, transport loss, or command timeout. */
+  isClosed(): boolean {
+    return this.connection.isClosed();
+  }
 }
 
 class WorkerCdpLocator {
@@ -1655,11 +1730,11 @@ class WorkerCdpLocator {
   }
 
   // ---- Actions (auto-waiting) -------------------------------------------
-  async click(opts: ActionOptions = {}): Promise<void> {
-    await this.page.clickDescriptor(this.descriptor, opts);
+  async click(opts: ClickOptions = {}): Promise<CdpInteractionOutcome> {
+    return this.page.clickDescriptor(this.descriptor, opts);
   }
-  async dblclick(opts: ActionOptions = {}): Promise<void> {
-    await this.page.clickDescriptor(this.descriptor, { ...opts, clickCount: 2 });
+  async dblclick(opts: ClickOptions = {}): Promise<CdpInteractionOutcome> {
+    return this.page.clickDescriptor(this.descriptor, { ...opts, clickCount: 2 });
   }
   async hover(opts: ActionOptions = {}): Promise<void> {
     await this.page.hoverDescriptor(this.descriptor, opts);

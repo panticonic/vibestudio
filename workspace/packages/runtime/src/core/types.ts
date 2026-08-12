@@ -105,6 +105,40 @@ export interface CdpEndpoint {
   token?: string;
 }
 
+export interface PanelCdpGeneration {
+  protocol: "panel-cdp-generation.v1";
+  panelId: string;
+  attemptId: string;
+  runtimeEntityId: string;
+  buildKey: string | null;
+}
+
+export interface PanelCdpSession {
+  readonly protocol: "panel-cdp-session.v1";
+  readonly generation: PanelCdpGeneration;
+  readonly page: CdpPage;
+  /**
+   * Re-observe the durable panel attempt. The current page is retained when
+   * its generation is still active; otherwise it is closed and replaced.
+   * No browser interaction is replayed.
+   */
+  refresh(): Promise<PanelCdpSessionRefresh>;
+  close(): Promise<void>;
+}
+
+export type PanelCdpSessionRefresh =
+  | { status: "current"; session: PanelCdpSession }
+  | {
+      status: "reconnected";
+      generation: PanelCdpGeneration;
+      session: PanelCdpSession;
+    }
+  | {
+      status: "replaced";
+      previousGeneration: PanelCdpGeneration;
+      session: PanelCdpSession;
+    };
+
 export interface PanelScreenshotOptions {
   format?: "png" | "jpeg";
   quality?: number;
@@ -135,6 +169,8 @@ export type PanelDiagnosticsResult = PanelDiagnosticPacket;
 export interface CdpAutomation {
   /** The canonical @workspace/cdp-client automation page for this panel target. */
   page(): Promise<CdpPage>;
+  /** Acquire a page fenced to the panel's current immutable runtime attempt. */
+  session(): Promise<PanelCdpSession>;
   /**
    * Historical console messages captured by the Electron host from panel
    * creation time. This is separate from live CDP console events.
