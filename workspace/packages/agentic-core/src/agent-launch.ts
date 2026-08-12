@@ -306,6 +306,10 @@ export function buildAgentTaskSeedEvent(
       outcome: "completed",
       tier: "primary",
       to: [{ kind: "participant" as const, participantId: input.childParticipantId }],
+      // Turn metadata makes the child's ordinary turn closure observable to
+      // its vessel. A subagent that returns a final answer instead of calling
+      // the explicit `complete` tool must still publish a durable terminal.
+      metadata: { origin: "agent-initiated" },
     },
     createdAt: input.createdAt ?? new Date().toISOString(),
   };

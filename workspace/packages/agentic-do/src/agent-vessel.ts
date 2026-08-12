@@ -1441,6 +1441,24 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     summary?: string;
     finalMessage?: string;
   }): Promise<void> {
+    const subagent = this.subagentIdentity();
+    if (
+      subagent &&
+      subagent.taskChannelId === input.channelId &&
+      !this.subagentTerminalIntentRecorded(subagent.runId)
+    ) {
+      const failed = Boolean(input.reason && input.reason !== "tool_terminated");
+      const report =
+        input.finalMessage?.trim() || input.summary?.trim() || (failed ? input.reason : undefined);
+      if (report) {
+        await this.recordOwnSubagentTerminalIntent(
+          subagent,
+          report,
+          failed ? "failed" : "completed"
+        );
+      }
+      return;
+    }
     const runId = input.metadata.automation?.runId;
     if (!runId) return;
     const service = await this.rpc.call<{

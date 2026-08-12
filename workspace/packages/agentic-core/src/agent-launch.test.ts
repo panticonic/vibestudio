@@ -315,6 +315,7 @@ describe("agent launch primitive", () => {
         role: "user",
         blocks: [{ type: "text", content: "audit this" }],
         to: [{ kind: "participant", participantId: "child-participant" }],
+        metadata: { origin: "agent-initiated" },
       },
     });
 

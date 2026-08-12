@@ -1976,6 +1976,30 @@ class SubagentSpawnProbe extends TestVessel {
   async completeOwnRunForTest(report: string, outcome: "success" | "failed") {
     return this.completeAsSubagent(report, outcome);
   }
+  async closeOwnTurnForTest(input: { finalMessage?: string; reason?: string; summary?: string }) {
+    await this.onTurnClosed({
+      channelId: "task-child-run-1",
+      turnId: "turn-child-1",
+      metadata: { origin: "agent-initiated" },
+      ...input,
+    });
+  }
+  ownTerminalWakeForTest() {
+    const row = this.sql
+      .exec(
+        `SELECT payload_json, disposition
+           FROM agent_wake_queue
+          WHERE wake_id = ?`,
+        "subagent-terminal-publish:child-run-1"
+      )
+      .toArray()[0];
+    return row
+      ? {
+          payload: JSON.parse(String(row["payload_json"])),
+          disposition: String(row["disposition"]),
+        }
+      : null;
+  }
   async guardBackgroundSuspensionForTest(channelId = CHANNEL) {
     return this.guardBackgroundSuspension(channelId);
   }
@@ -2417,6 +2441,23 @@ describe("AgentVesselBase.runDeferredEval (the agent's eval-tool deferral gate)"
 });
 
 describe("AgentVesselBase.runDeferredSpawn", () => {
+  it("turns a subagent's natural final answer into a durable terminal intent", async () => {
+    const probe = await makeChildCompletionProbe();
+
+    await probe.closeOwnTurnForTest({ finalMessage: "Five concise design bullets." });
+
+    expect(probe.ownTerminalWakeForTest()).toMatchObject({
+      disposition: "ready",
+      payload: {
+        runId: "child-run-1",
+        taskChannelId: "task-child-run-1",
+        parentRef: "participant-parent",
+        report: "Five concise design bullets.",
+        outcome: "completed",
+      },
+    });
+  });
+
   it("terminates the child model loop after recording its durable completion", async () => {
     const probe = await makeChildCompletionProbe();
 
