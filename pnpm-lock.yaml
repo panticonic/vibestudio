@@ -2816,6 +2816,9 @@ importers:
 
   workspace/workers/linked-agent:
     dependencies:
+      '@vibestudio/shared':
+        specifier: workspace:*
+        version: link:../../../packages/shared
       '@vibestudio/trajectory-identity':
         specifier: workspace:*
         version: link:../../../packages/trajectory-identity
