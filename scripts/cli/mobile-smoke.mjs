@@ -1027,6 +1027,29 @@ function sqlString(value) {
   return `'${String(value).replace(/'/g, "''")}'`;
 }
 
+async function assertNoVisiblePanelCrash(device, xml, context) {
+  const labels = collectWindowLabels(xml);
+  const text = labels.join("\n");
+  if (/Something went wrong/i.test(text)) {
+    await tapVisibleNode(device, xml, "Error details");
+    await sleep(250);
+    const diagnosticLabels = collectWindowLabels(await dumpWindowXml(device));
+    throw new Error(
+      `${context} crashed the panel. Visible labels: ${summarizeLabels(diagnosticLabels)}`
+    );
+  }
+  if (/Component error:/i.test(text)) {
+    await tapVisibleNode(device, xml, "Technical details");
+    await sleep(250);
+    const diagnosticLabels = collectWindowLabels(await dumpWindowXml(device));
+    throw new Error(
+      `${context} surfaced a visible component error. Visible labels: ${summarizeLabels(
+        diagnosticLabels
+      )}`
+    );
+  }
+}
+
 async function waitForInitialAgentTurn(device, deadlineMs, agentProbe, options = {}) {
   let lastLabels = [];
   let lastAgentState = "not checked";
@@ -1057,32 +1080,13 @@ async function waitForInitialAgentTurn(device, deadlineMs, agentProbe, options =
     }
 
     assertNoBlockingPermissionDialog(xml);
+    await assertNoVisiblePanelCrash(device, xml, "Initial agent turn");
 
     if (
       /\b(Error|Recovery failed)\b/i.test(text) ||
       /Runner (?:prompt|continue) completed without/i.test(text) ||
       /Agent turn failed|Cannot continue|DO RPC relay failed|Connection error/i.test(text)
     ) {
-      if (/Something went wrong/i.test(text)) {
-        await tapVisibleNode(device, xml, "Error details");
-        await sleep(250);
-        const diagnosticLabels = collectWindowLabels(await dumpWindowXml(device));
-        throw new Error(
-          `Initial agent turn crashed the panel. Visible labels: ${summarizeLabels(
-            diagnosticLabels
-          )}`
-        );
-      }
-      if (/Component error:/i.test(text)) {
-        await tapVisibleNode(device, xml, "Technical details");
-        await sleep(250);
-        const diagnosticLabels = collectWindowLabels(await dumpWindowXml(device));
-        throw new Error(
-          `Initial agent turn surfaced a visible component error. Visible labels: ${summarizeLabels(
-            diagnosticLabels
-          )}`
-        );
-      }
       throw new Error(
         `Initial agent turn surfaced a visible error. Visible labels: ${summarizeLabels(labels)}`
       );
@@ -1270,6 +1274,7 @@ async function captureAndAssertPanelVisible(device, agentTimeoutMs, readyInfo, o
     await sleep(500);
   }
   assertNoBlockingPermissionDialog(panelXml);
+  await assertNoVisiblePanelCrash(device, panelXml, "Panel rendering");
   await fsp.mkdir(screenshotDir, { recursive: true });
   const screenshotPath = path.join(
     screenshotDir,

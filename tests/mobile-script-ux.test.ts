@@ -257,6 +257,20 @@ describe("mobile script platform and relay guarantees", () => {
     expect(source).not.toContain("@(?:agent|ai-chat)");
   });
 
+  it("rejects visible panel crashes even when the agent-turn probe is skipped", () => {
+    const source = fs.readFileSync(
+      path.join(process.cwd(), "scripts/cli/mobile-smoke.mjs"),
+      "utf8"
+    );
+    const capture = source.slice(
+      source.indexOf("async function captureAndAssertPanelVisible"),
+      source.indexOf("function assertNoBlockingPermissionDialog")
+    );
+    expect(capture).toContain(
+      'await assertNoVisiblePanelCrash(device, panelXml, "Panel rendering")'
+    );
+  });
+
   it("fails iOS smoke explicitly instead of reporting install/launch as a pass", () => {
     const result = spawnSync(
       process.execPath,
