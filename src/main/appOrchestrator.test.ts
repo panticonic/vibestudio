@@ -10,11 +10,8 @@ import {
   executionArtifactDigest,
   executionSourceClosureDigest,
 } from "@vibestudio/shared/execution/retention";
-import {
-  AppOrchestrator,
-  ELECTRON_APP_HOST_CAPABILITIES,
-  readBakedElectronApp,
-} from "./appOrchestrator.js";
+import { AppOrchestrator, readBakedElectronApp } from "./appOrchestrator.js";
+import { APP_CAPABILITIES_BY_NATIVE_HOST } from "@vibestudio/shared/unitManifest";
 
 const EXECUTION_DIGEST_1 = "1".repeat(64);
 const EXECUTION_DIGEST_2 = "2".repeat(64);
@@ -107,7 +104,7 @@ describe("AppOrchestrator", () => {
       source: "apps/shell",
       target: "electron",
       url: "http://localhost/app",
-      capabilities: ELECTRON_APP_HOST_CAPABILITIES,
+      capabilities: APP_CAPABILITIES_BY_NATIVE_HOST.electron,
       effectiveVersion: "ev-shell",
       ...sealedAuthority(),
     });
@@ -116,7 +113,7 @@ describe("AppOrchestrator", () => {
       "@workspace-apps/shell",
       "http://localhost/app",
       undefined,
-      ELECTRON_APP_HOST_CAPABILITIES,
+      APP_CAPABILITIES_BY_NATIVE_HOST.electron,
       {
         source: "apps/shell",
         effectiveVersion: "ev-shell",

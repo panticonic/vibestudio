@@ -32,7 +32,7 @@ const vibestudioApp = {
     },
     // No `tray` / `globalShortcut` bridges: the `tray` and `global-shortcut`
     // capabilities are declarable in the unit manifest but are NOT in this host's
-    // supported set (ELECTRON_APP_HOST_CAPABILITIES in src/main/appOrchestrator.ts),
+    // supported set (APP_CAPABILITIES_BY_NATIVE_HOST.electron),
     // so an app requesting them is rejected before it ever loads. Exposing a
     // throwing stub here would only be a capability that lies about existing.
     fs: {

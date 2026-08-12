@@ -1,10 +1,32 @@
 import { describe, expect, it } from "vitest";
 import {
+  APP_CAPABILITIES_BY_NATIVE_HOST,
+  APP_CAPABILITIES_BY_TARGET,
   UnitManifestError,
   appUnitManifestDescriptor,
   extensionUnitManifestDescriptor,
   validateUnitManifest,
 } from "./unitManifest.js";
+
+describe("app capability catalog", () => {
+  it("derives native-host support as a strict subset of the target vocabulary", () => {
+    const electronVocabulary = new Set(APP_CAPABILITIES_BY_TARGET.electron);
+    const reactNativeVocabulary = new Set(APP_CAPABILITIES_BY_TARGET["react-native"]);
+
+    expect(
+      APP_CAPABILITIES_BY_NATIVE_HOST.electron.every((capability) =>
+        electronVocabulary.has(capability)
+      )
+    ).toBe(true);
+    expect(electronVocabulary.has("tray")).toBe(true);
+    expect(APP_CAPABILITIES_BY_NATIVE_HOST.electron).not.toContain("tray");
+    expect(
+      APP_CAPABILITIES_BY_NATIVE_HOST["react-native"].every((capability) =>
+        reactNativeVocabulary.has(capability)
+      )
+    ).toBe(true);
+  });
+});
 
 describe("validateUnitManifest", () => {
   it("validates extension manifests through the shared unit validator", () => {

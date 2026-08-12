@@ -124,40 +124,83 @@ export function isTerminalWorker(vibestudio: Record<string, unknown> | undefined
   return workerTerminalConfig(vibestudio) !== null;
 }
 
-export const APP_CAPABILITIES_BY_TARGET = {
-  electron: [
-    "native-menus",
-    "notifications",
-    "tray",
-    "global-shortcut",
-    "fs-read",
-    "fs-write",
-    "clipboard",
-    "dialog",
-    "open-external",
-    "window-management",
-    "camera",
-    "microphone",
-    "location",
-    "panel-hosting",
-    "incoming-pair-links",
-  ],
-  "react-native": [
-    "notifications",
-    "camera",
-    "keychain",
-    "fs-read",
-    "fs-write",
-    "clipboard",
-    "open-external",
-    "panel-hosting",
-    "connection-management",
-  ],
-  terminal: ["clipboard", "open-external", "connection-management"],
-} as const satisfies Record<WorkspaceAppTarget, readonly string[]>;
+type NativeAppHost = "electron" | "react-native";
 
-export type AppCapability =
-  (typeof APP_CAPABILITIES_BY_TARGET)[keyof typeof APP_CAPABILITIES_BY_TARGET][number];
+interface AppCapabilityDescriptor {
+  targets: readonly WorkspaceAppTarget[];
+  nativeHosts?: readonly NativeAppHost[];
+}
+
+/**
+ * One catalog owns both the manifest vocabulary and concrete native-host
+ * support. A target may recognize a capability without every host having
+ * implemented it; loaders must use the derived native-host set as well as the
+ * target vocabulary.
+ */
+export const APP_CAPABILITY_CATALOG = {
+  "native-menus": { targets: ["electron"], nativeHosts: ["electron"] },
+  notifications: {
+    targets: ["electron", "react-native"],
+    nativeHosts: ["electron", "react-native"],
+  },
+  tray: { targets: ["electron"] },
+  "global-shortcut": { targets: ["electron"] },
+  "fs-read": {
+    targets: ["electron", "react-native"],
+    nativeHosts: ["electron"],
+  },
+  "fs-write": {
+    targets: ["electron", "react-native"],
+    nativeHosts: ["electron"],
+  },
+  clipboard: {
+    targets: ["electron", "react-native", "terminal"],
+    nativeHosts: ["react-native"],
+  },
+  dialog: { targets: ["electron"] },
+  "open-external": {
+    targets: ["electron", "react-native", "terminal"],
+    nativeHosts: ["electron", "react-native"],
+  },
+  "window-management": { targets: ["electron"], nativeHosts: ["electron"] },
+  camera: { targets: ["electron", "react-native"] },
+  microphone: { targets: ["electron"] },
+  location: { targets: ["electron"] },
+  "panel-hosting": {
+    targets: ["electron", "react-native"],
+    nativeHosts: ["electron"],
+  },
+  "incoming-pair-links": { targets: ["electron"], nativeHosts: ["electron"] },
+  keychain: { targets: ["react-native"], nativeHosts: ["react-native"] },
+  "connection-management": { targets: ["react-native", "terminal"] },
+} as const satisfies Record<string, AppCapabilityDescriptor>;
+
+export type AppCapability = keyof typeof APP_CAPABILITY_CATALOG;
+
+const appCapabilities = Object.keys(APP_CAPABILITY_CATALOG) as AppCapability[];
+const capabilitiesForTarget = (target: WorkspaceAppTarget): readonly AppCapability[] =>
+  Object.freeze(
+    appCapabilities.filter((capability) =>
+      (APP_CAPABILITY_CATALOG[capability].targets as readonly WorkspaceAppTarget[]).includes(target)
+    )
+  );
+const capabilitiesForNativeHost = (host: NativeAppHost): readonly AppCapability[] =>
+  Object.freeze(
+    appCapabilities.filter((capability) =>
+      (APP_CAPABILITY_CATALOG[capability] as AppCapabilityDescriptor).nativeHosts?.includes(host)
+    )
+  );
+
+export const APP_CAPABILITIES_BY_TARGET = Object.freeze({
+  electron: capabilitiesForTarget("electron"),
+  "react-native": capabilitiesForTarget("react-native"),
+  terminal: capabilitiesForTarget("terminal"),
+}) satisfies Record<WorkspaceAppTarget, readonly AppCapability[]>;
+
+export const APP_CAPABILITIES_BY_NATIVE_HOST = Object.freeze({
+  electron: capabilitiesForNativeHost("electron"),
+  "react-native": capabilitiesForNativeHost("react-native"),
+}) satisfies Record<NativeAppHost, readonly AppCapability[]>;
 
 export class UnitManifestError extends Error {
   readonly code: string;

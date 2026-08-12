@@ -4,7 +4,10 @@ import * as path from "node:path";
 import * as crypto from "node:crypto";
 import { pathToFileURL } from "node:url";
 import type { PanelViewLike } from "@vibestudio/shared/panelInterfaces";
-import type { AppCapability } from "@vibestudio/shared/unitManifest";
+import {
+  APP_CAPABILITIES_BY_NATIVE_HOST,
+  type AppCapability,
+} from "@vibestudio/shared/unitManifest";
 import { parseUnitAuthorityManifest } from "@vibestudio/shared/authorityManifest";
 import { parseSha256 } from "@vibestudio/shared/execution/identity";
 import { domainHash } from "@vibestudio/shared/execution/identity";
@@ -18,18 +21,9 @@ import type { UnitAuthorityManifest } from "@vibestudio/shared/authorityManifest
 
 const log = createDevLogger("AppOrchestrator");
 
-export const ELECTRON_APP_HOST_CAPABILITIES = [
-  "native-menus",
-  "notifications",
-  "open-external",
-  "window-management",
-  "panel-hosting",
-  "incoming-pair-links",
-  "fs-read",
-  "fs-write",
-] as const satisfies readonly AppCapability[];
-
-const electronAppHostCapabilitySet = new Set<AppCapability>(ELECTRON_APP_HOST_CAPABILITIES);
+const electronAppHostCapabilitySet = new Set<AppCapability>(
+  APP_CAPABILITIES_BY_NATIVE_HOST.electron
+);
 
 export interface AppAvailableEvent {
   appId: string;

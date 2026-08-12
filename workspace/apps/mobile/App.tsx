@@ -9,7 +9,7 @@ import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { NavigationContainer } from "@react-navigation/native";
 import { Provider as JotaiProvider, useAtomValue, useSetAtom } from "jotai";
-import type { AppCapability } from "@vibestudio/shared/unitManifest";
+import { APP_CAPABILITIES_BY_NATIVE_HOST } from "@vibestudio/shared/unitManifest";
 import { RootNavigator } from "./src/navigation/RootNavigator";
 import { ErrorBoundary } from "./src/components/ErrorBoundary";
 import { Toast } from "./src/components/Toast";
@@ -30,14 +30,7 @@ import { approvalDeepLinkAtom } from "./src/state/approvalDeepLinkAtom";
 import { pushToastAtom } from "./src/state/toastAtoms";
 import { parsePanelLocationLink, type PanelLocation } from "@vibestudio/shared/panelLocation";
 
-const APPROVED_APP_CAPABILITIES = [
-  "notifications",
-  "keychain",
-  "clipboard",
-  "open-external",
-] satisfies readonly AppCapability[];
-
-setApprovedAppCapabilities(APPROVED_APP_CAPABILITIES);
+setApprovedAppCapabilities(APP_CAPABILITIES_BY_NATIVE_HOST["react-native"]);
 registerBackgroundHandlers();
 
 function AppContent() {
