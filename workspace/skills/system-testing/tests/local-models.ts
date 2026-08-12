@@ -4,16 +4,16 @@ import {
   type TestExecutionResult,
   type TestOrchestrationContext,
 } from "../types.js";
-import type { ValidationTrajectoryEvent } from "../runner.js";
+import type { HeadlessSession } from "@workspace/agentic-session";
 import {
   findLastAgentMessage,
   getToolCalls,
   noIncompleteInvocations,
   successfulEvalCode,
 } from "./_helpers.js";
-import { SERVER_LOG_READ_AUTHORITY } from "./server-logs.js";
 
 const FIXTURE_HEADING = /\bsystem-test-local-model-download-and-task-[a-z0-9]{8}\b/iu;
+const BUNDLED_LOCAL_MODEL = "local:lfm2.5-2.6b";
 const LOCAL_MODEL_RUNTIME_AUTHORITY = {
   ruleId: "run-bundled-local-model",
   capability: { kind: "exact" as const, key: "internal-model-runtime.use" },
@@ -21,21 +21,14 @@ const LOCAL_MODEL_RUNTIME_AUTHORITY = {
   tier: "gated" as const,
   decision: "once" as const,
 };
-const LOCAL_SKILL_PROMPT =
-  "Please have the bundled local model check whether the workspace server has logged any recent warnings, then summarize what it finds.";
+const LOCAL_SKILL_PROMPT = "What is the safe way to inspect this workspace server's recent logs?";
+const LOCAL_MODEL_SETUP_PROMPT =
+  "Please prepare the bundled local model for a subsequent task and report its exact model reference.";
 
 interface CompletedLocalModelTask {
   model: string;
   report: string;
   runId: string;
-  taskChannelId: string | null;
-}
-
-interface LocalSkillTrajectoryEvidence {
-  eventCount: number;
-  model: string | null;
-  serverLogInspectionSeq: number | null;
-  serverLogSkillReadSeq: number | null;
   taskChannelId: string | null;
 }
 
@@ -127,154 +120,127 @@ function requireLocalModelTask(result: TestExecutionResult) {
   return noIncompleteInvocations(result);
 }
 
-function successfulInvocationStarts(
-  events: readonly ValidationTrajectoryEvent[]
-): ValidationTrajectoryEvent[] {
-  const completed = new Set(
-    events.flatMap((event) => {
-      const invocationId = event.causality?.invocationId;
-      return event.kind === "invocation.completed" && invocationId ? [invocationId] : [];
-    })
-  );
-  return events.filter(
-    (event) =>
-      event.kind === "invocation.started" &&
-      Boolean(event.causality?.invocationId && completed.has(event.causality.invocationId))
-  );
-}
-
-export function summarizeLocalSkillTrajectory(
-  events: readonly ValidationTrajectoryEvent[],
-  task: CompletedLocalModelTask
-): LocalSkillTrajectoryEvidence {
-  const completedStarts = successfulInvocationStarts(events);
-  const serverLogSkillRead = completedStarts.find((event) => {
-    const payload = event.payload as { name?: unknown; request?: unknown };
-    return (
-      payload.name === "read" &&
-      strings(payload.request).some((value) => /skills\/server-logs\/SKILL\.md\b/u.test(value))
-    );
-  });
-  const serverLogInspection = completedStarts.find((event) => {
-    const payload = event.payload as { name?: unknown; request?: unknown };
-    return (
-      payload.name === "eval" &&
-      strings(payload.request).some((value) =>
-        /services\.serverLog\.(?:query|stats|tail)\b/u.test(value)
-      )
-    );
-  });
-  return {
-    eventCount: events.length,
-    model: task.model,
-    serverLogInspectionSeq: serverLogInspection?.seq ?? null,
-    serverLogSkillReadSeq: serverLogSkillRead?.seq ?? null,
-    taskChannelId: task.taskChannelId,
-  };
-}
-
-function emptyLocalSkillEvidence(): LocalSkillTrajectoryEvidence {
-  return {
-    eventCount: 0,
-    model: null,
-    serverLogInspectionSeq: null,
-    serverLogSkillReadSeq: null,
-    taskChannelId: null,
-  };
-}
-
 function formatError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+async function closeSession(
+  session: HeadlessSession,
+  label: string,
+  cleanupErrors: string[]
+): Promise<void> {
+  try {
+    await session.close();
+  } catch (cause) {
+    cleanupErrors.push(`${label} close: ${formatError(cause)}`);
+  }
+  cleanupErrors.push(
+    ...session.snapshot().cleanupErrors.map((entry) => `${label} ${entry.phase}: ${entry.message}`)
+  );
 }
 
 async function orchestrateLocalSkillUse(
   context: TestOrchestrationContext
 ): Promise<TestExecutionResult> {
   const startedAt = Date.now();
-  const session = await context.runner.spawn();
+  const setupSession = await context.runner.spawn();
+  let subjectSession: HeadlessSession | undefined;
+  let setupClosed = false;
+  let setupCompleted = false;
   let error: string | undefined;
-  let evidence = emptyLocalSkillEvidence();
+  const cleanupErrors: string[] = [];
 
   try {
     await context.sendAndWait(
-      session,
-      LOCAL_SKILL_PROMPT,
-      "delegate a server-log check to the bundled local model"
+      setupSession,
+      LOCAL_MODEL_SETUP_PROMPT,
+      "prepare the bundled local model"
     );
-    const partial = {
-      messages: [...session.messages],
-      duration: Date.now() - startedAt,
-    } as TestExecutionResult;
-    const task = completedLocalModelTasks(partial).at(-1);
-    if (task?.taskChannelId) {
-      const events = await context.runner.readChannelTrajectoryForValidation(
-        task.taskChannelId,
-        500
-      );
-      evidence = summarizeLocalSkillTrajectory(events, task);
-    } else if (task) {
-      evidence = { ...emptyLocalSkillEvidence(), model: task.model };
-    }
+    setupCompleted = true;
+    await closeSession(setupSession, "setup session", cleanupErrors);
+    setupClosed = true;
+
+    subjectSession = await context.runner.forModelSubject(BUNDLED_LOCAL_MODEL).spawn();
+    await context.sendAndWait(
+      subjectSession,
+      LOCAL_SKILL_PROMPT,
+      "ask the local model for server-log guidance"
+    );
   } catch (cause) {
     error = formatError(cause);
   }
 
+  const resultSession = subjectSession ?? setupSession;
   const execution: TestExecutionResult = {
-    messages: [...session.messages],
+    messages: [...resultSession.messages],
     duration: Date.now() - startedAt,
-    snapshot: session.snapshot(),
+    snapshot: resultSession.snapshot(),
     ...(error ? { error } : {}),
-    diagnostics: { localSkillTrajectory: evidence },
+    diagnostics: {
+      localModelSubject: {
+        direct: Boolean(subjectSession),
+        model: BUNDLED_LOCAL_MODEL,
+        setupCompleted,
+      },
+    },
   };
-  try {
-    await session.close();
-  } catch (cause) {
-    execution.cleanupErrors = [`close: ${formatError(cause)}`];
-  }
-  const cleanupErrors = session
-    .snapshot()
-    .cleanupErrors.map((entry) => `${entry.phase}: ${entry.message}`);
+  if (subjectSession) await closeSession(subjectSession, "subject session", cleanupErrors);
+  if (!setupClosed) await closeSession(setupSession, "setup session", cleanupErrors);
   if (cleanupErrors.length > 0) {
-    execution.cleanupErrors = [...(execution.cleanupErrors ?? []), ...cleanupErrors];
-  }
-  if (execution.cleanupErrors?.length) {
-    execution.error ??= `Headless cleanup failed: ${execution.cleanupErrors.join("; ")}`;
+    execution.cleanupErrors = cleanupErrors;
+    execution.error ??= `Headless cleanup failed: ${cleanupErrors.join("; ")}`;
   }
   return execution;
 }
 
-function requireLocalSkillUse(result: TestExecutionResult) {
-  const lifecycleFailure = lifecycleInspectionFailure(result);
-  if (lifecycleFailure) return { passed: false, reason: lifecycleFailure };
-  const tasks = completedLocalModelTasks(result);
-  if (tasks.length === 0) {
-    return {
-      passed: false,
-      reason: "No local-model child completed the delegated server-log task",
-    };
+function records(value: unknown, found: Record<string, unknown>[] = []): Record<string, unknown>[] {
+  if (Array.isArray(value)) {
+    for (const child of value) records(child, found);
+    return found;
   }
-  const evidence = result.diagnostics?.["localSkillTrajectory"] as
-    | Partial<LocalSkillTrajectoryEvidence>
-    | undefined;
+  if (!value || typeof value !== "object") return found;
+  const record = value as Record<string, unknown>;
+  found.push(record);
+  for (const child of Object.values(record)) records(child, found);
+  return found;
+}
+
+function requireLocalSkillUse(result: TestExecutionResult) {
+  const subject = result.diagnostics?.["localModelSubject"] as Record<string, unknown> | undefined;
+  const executedLocally = records(result.modelExecutionEvidence).some(
+    (record) =>
+      record["ref"] === BUNDLED_LOCAL_MODEL ||
+      (record["provider"] === "local" && record["model"] === "lfm2.5-2.6b")
+  );
   if (
-    !evidence ||
-    !evidence.taskChannelId ||
-    !evidence.model?.startsWith("local:") ||
-    !Number.isInteger(evidence.serverLogSkillReadSeq) ||
-    !Number.isInteger(evidence.serverLogInspectionSeq) ||
-    Number(evidence.serverLogSkillReadSeq) >= Number(evidence.serverLogInspectionSeq)
+    subject?.["direct"] !== true ||
+    subject["setupCompleted"] !== true ||
+    subject["model"] !== BUNDLED_LOCAL_MODEL ||
+    !executedLocally
   ) {
     return {
       passed: false,
-      reason:
-        "The local child did not successfully load the server-logs skill before inspecting the server-log service",
+      reason: "The bundled local model was not the direct, successfully prepared test subject",
+    };
+  }
+  const loadedSkill = getToolCalls(result).some(
+    (call) =>
+      call.name === "read" &&
+      call.execution?.status === "complete" &&
+      call.execution.isError !== true &&
+      strings(call.arguments).some((value) => /skills\/server-logs\/SKILL\.md\b/u.test(value))
+  );
+  if (!loadedSkill) {
+    return {
+      passed: false,
+      reason: "The local model did not successfully load the server-logs skill",
     };
   }
   const final = findLastAgentMessage(result);
-  if (!/server|log/iu.test(final) || !/warn|no warning/iu.test(final)) {
+  if (!/server|log/iu.test(final) || !/bounded|limit|tail|query|stats/iu.test(final)) {
     return {
       passed: false,
-      reason: "The parent response did not summarize the local child's warning inspection",
+      reason: "The local model did not explain a bounded server-log inspection workflow",
     };
   }
   return noIncompleteInvocations(result);
@@ -303,7 +269,7 @@ export const localModelTests: TestCase[] = [
     timeoutMs: 30 * 60_000,
     resources: ["profile:local-models"],
     authorityPolicy: {
-      authority: [LOCAL_MODEL_RUNTIME_AUTHORITY, ...SERVER_LOG_READ_AUTHORITY.authority],
+      authority: [LOCAL_MODEL_RUNTIME_AUTHORITY],
     },
     prompt: LOCAL_SKILL_PROMPT,
     orchestrate: orchestrateLocalSkillUse,

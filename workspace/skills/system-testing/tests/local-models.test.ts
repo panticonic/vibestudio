@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { ValidationTrajectoryEvent } from "../runner.js";
 import type { TestExecutionResult } from "../types.js";
-import { localModelTests, summarizeLocalSkillTrajectory } from "./local-models.js";
+import { localModelTests } from "./local-models.js";
 
 const taskTest = localModelTests[0]!;
 const skillTest = localModelTests[1]!;
@@ -125,102 +124,102 @@ describe("local model task evidence", () => {
   });
 });
 
-function trajectoryEvent(
-  kind: ValidationTrajectoryEvent["kind"],
-  seq: number,
-  invocationId: string,
-  payload: Record<string, unknown>
-): ValidationTrajectoryEvent {
-  return {
-    kind,
-    seq,
-    causality: { invocationId },
-    payload,
-  } as unknown as ValidationTrajectoryEvent;
-}
-
 describe("local model skill evidence", () => {
   const model = "local:lfm2.5-2.6b";
-  const taskChannelId = "task-local-skill";
-  const events = [
-    trajectoryEvent("invocation.started", 2, "read-skill", {
-      name: "read",
-      request: { path: "skills/server-logs/SKILL.md" },
-    }),
-    trajectoryEvent("invocation.completed", 3, "read-skill", {
-      terminalOutcome: "success",
-    }),
-    trajectoryEvent("invocation.started", 4, "inspect-logs", {
-      name: "eval",
-      request: {
-        code: "return services.serverLog.query({ level: 'warn', limit: 20 });",
-      },
-    }),
-    trajectoryEvent("invocation.completed", 5, "inspect-logs", {
-      terminalOutcome: "success",
-    }),
-  ];
 
-  function validExecution(): TestExecutionResult {
-    const result = execution(model, {
-      taskChannelId,
-      finalText: "The local check found no recent warnings in the server logs.",
-    });
-    result.diagnostics = {
-      localSkillTrajectory: summarizeLocalSkillTrajectory(events, {
-        model,
-        report: "No recent warnings.",
-        runId: "spawn-local-model",
-        taskChannelId,
-      }),
-    };
-    return result;
+  function validExecution(options?: {
+    readStatus?: "complete" | "error";
+    readPath?: string;
+    final?: string;
+    modelEvidence?: unknown;
+    subject?: Record<string, unknown>;
+  }): TestExecutionResult {
+    const readStatus = options?.readStatus ?? "complete";
+    return {
+      duration: 1,
+      messages: [
+        {
+          id: "read-skill",
+          senderId: "agent",
+          kind: "message",
+          contentType: "invocation",
+          complete: true,
+          content: "",
+          invocation: {
+            id: "read-skill",
+            name: "read",
+            arguments: {
+              path: options?.readPath ?? "skills/server-logs/SKILL.md",
+            },
+            execution: {
+              status: readStatus,
+              description: "",
+              isError: readStatus === "error",
+            },
+          },
+        },
+        {
+          id: "final",
+          senderId: "agent",
+          senderMetadata: { type: "agent" },
+          kind: "message",
+          complete: true,
+          content:
+            options?.final ??
+            "Use a bounded server-log tail or query with an explicit limit; keep boot and sequence coordinates.",
+          model: { ref: model },
+        },
+      ],
+      diagnostics: {
+        localModelSubject: options?.subject ?? {
+          direct: true,
+          model,
+          setupCompleted: true,
+        },
+      },
+      modelExecutionEvidence: options?.modelEvidence ?? {
+        attempts: [{ provider: "local", model: "lfm2.5-2.6b" }],
+      },
+    } as unknown as TestExecutionResult;
   }
 
-  it("requires a successful skill read before a successful service inspection", () => {
+  it("requires the prepared local model itself to load the relevant skill", () => {
     expect(skillTest.orchestrate).toBeTypeOf("function");
     expect(skillTest.validation).toBe("agent-evidence");
     expect(skillTest.validate(validExecution())).toEqual({ passed: true, reason: undefined });
   });
 
-  it("rejects missing or reversed child-trajectory evidence", () => {
-    const missing = validExecution();
-    missing.diagnostics = {
-      localSkillTrajectory: {
-        eventCount: 2,
-        model,
-        serverLogInspectionSeq: 4,
-        serverLogSkillReadSeq: null,
-        taskChannelId,
-      },
-    };
-    expect(skillTest.validate(missing)).toMatchObject({ passed: false });
-
-    const reversed = validExecution();
-    reversed.diagnostics = {
-      localSkillTrajectory: {
-        eventCount: 4,
-        model,
-        serverLogInspectionSeq: 2,
-        serverLogSkillReadSeq: 4,
-        taskChannelId,
-      },
-    };
-    expect(skillTest.validate(reversed)).toMatchObject({ passed: false });
+  it("rejects hosted execution or a supervisor standing in for the model subject", () => {
+    expect(
+      skillTest.validate(
+        validExecution({
+          modelEvidence: {
+            attempts: [{ provider: "openai-codex", model: "gpt-5.3-codex-spark" }],
+          },
+        })
+      )
+    ).toMatchObject({ passed: false });
+    expect(
+      skillTest.validate(
+        validExecution({
+          subject: { direct: false, model, setupCompleted: true },
+        })
+      )
+    ).toMatchObject({ passed: false });
   });
 
-  it("does not count failed skill or service calls as evidence", () => {
-    const failed = events.filter(
-      (event) =>
-        event.kind !== "invocation.completed" || event.causality?.invocationId !== "read-skill"
-    );
+  it("does not count another file or a failed read as skill evidence", () => {
     expect(
-      summarizeLocalSkillTrajectory(failed, {
-        model,
-        report: "No recent warnings.",
-        runId: "spawn-local-model",
-        taskChannelId,
-      })
-    ).toMatchObject({ serverLogSkillReadSeq: null, serverLogInspectionSeq: 4 });
+      skillTest.validate(validExecution({ readPath: "skills/local-models/SKILL.md" }))
+    ).toMatchObject({ passed: false });
+    expect(skillTest.validate(validExecution({ readStatus: "error" }))).toMatchObject({
+      passed: false,
+    });
+  });
+
+  it("requires bounded server-log guidance in the local model's answer", () => {
+    expect(skillTest.validate(validExecution({ final: "The server logs exist." }))).toMatchObject({
+      passed: false,
+    });
   });
 });

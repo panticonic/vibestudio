@@ -22,7 +22,7 @@ const mocks = vi.hoisted(() => ({
       close: vi.fn(),
     })),
   },
-  gad: { listTrajectoryEvents: vi.fn() },
+  gad: {},
   panelTree: {},
   blobstore: { putText: vi.fn() },
   vcs: {
@@ -60,7 +60,6 @@ describe("HeadlessRunner", () => {
     mocks.rpc.stream.mockReset();
     mocks.rpc.on.mockClear();
     mocks.rpc.registerResidentSession.mockClear();
-    mocks.gad.listTrajectoryEvents.mockReset();
     for (const method of Object.values(mocks.vcs)) method.mockReset();
     mocks.blobstore.putText.mockReset();
     mocks.blobstore.putText.mockImplementation(async (text: string) => ({
@@ -210,30 +209,30 @@ describe("HeadlessRunner", () => {
     ]);
   });
 
-  it("reads a bounded hydrated channel trajectory through canonical coordinates", async () => {
-    const runner = new HeadlessRunner("ctx-test");
-    mocks.gad.listTrajectoryEvents
-      .mockResolvedValueOnce(Array.from({ length: 200 }, (_, index) => ({ seq: index + 1 })))
-      .mockResolvedValueOnce([{ seq: 201 }, { seq: 202 }]);
-
-    const events = await runner.readChannelTrajectoryForValidation("task-local", 202);
-
-    expect(events).toHaveLength(202);
-    expect(mocks.gad.listTrajectoryEvents).toHaveBeenNthCalledWith(1, {
-      trajectoryId: "branch:channel:task-local",
-      branchId: "branch:channel:task-local",
-      cursor: 0,
-      limit: 200,
+  it("can make the model under test the direct headless subject", async () => {
+    const root = new HeadlessRunner("ctx-test").forTest("local-model-subject", {
+      authorityPolicy: { authority: [] },
     });
-    expect(mocks.gad.listTrajectoryEvents).toHaveBeenNthCalledWith(2, {
-      trajectoryId: "branch:channel:task-local",
-      branchId: "branch:channel:task-local",
-      cursor: 200,
-      limit: 2,
+    const subject = root.forModelSubject("local:lfm2.5-2.6b");
+
+    await subject.spawn();
+
+    const config = mocks.createWithAgent.mock.calls[0]![0] as {
+      extraConfig: Record<string, unknown>;
+      testPolicy: { agent: Record<string, unknown> };
+    };
+    expect(config.extraConfig).toMatchObject({ model: "local:lfm2.5-2.6b" });
+    expect(config.extraConfig).not.toHaveProperty("fallbackModel");
+    expect(config.testPolicy.agent).toEqual({
+      model: "local:lfm2.5-2.6b",
+      approvalLevel: 2,
+      fallback: "disabled",
     });
-    await expect(runner.readChannelTrajectoryForValidation("", 1)).rejects.toThrow(
-      "channelId must be non-empty"
-    );
+    expect(subject.modelPolicySnapshot()).toMatchObject({
+      primaryModel: "local:lfm2.5-2.6b",
+      activeModel: "local:lfm2.5-2.6b",
+      fallbackModel: null,
+    });
   });
 
   it("fault-aborts one exact agent vessel through the hidden runtime harness seam", async () => {
