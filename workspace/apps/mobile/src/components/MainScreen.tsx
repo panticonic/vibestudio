@@ -9,6 +9,7 @@ import {
   Alert,
   AppState,
   Pressable,
+  useWindowDimensions,
 } from "react-native";
 import { useNavigation, DrawerActions } from "@react-navigation/native";
 import { useDrawerStatus } from "@react-navigation/drawer";
@@ -41,6 +42,7 @@ import {
 import { addWebViewEntry, sweepIdleWebViews, type WebViewEntry } from "./webViewStack";
 import { loadPinnedPanelIds, savePinnedPanelIds } from "../shellCore/pinnedPanels";
 import { resolveMobileBackAction } from "../shellCore/mobileBackNavigation";
+import { mobileNavigationLayout } from "../shellCore/mobileLayout";
 import { PANEL_UI_IDLE_SWEEP_MS } from "@vibestudio/shared/constants";
 import { parseHostConfig } from "../services/panelUrls";
 import {
@@ -152,6 +154,9 @@ function smokePhase(phase: string, extra?: Record<string, unknown>): void {
 export function MainScreen() {
   const navigation = useNavigation();
   const drawerStatus = useDrawerStatus();
+  const { width: viewportWidth, height: viewportHeight } = useWindowDimensions();
+  const persistentNavigation =
+    mobileNavigationLayout(viewportWidth, viewportHeight).kind === "tablet";
   const shellClient = useAtomValue(shellClientAtom);
   const panelTreeRevision = useAtomValue(panelTreeRevisionAtom);
   const setPanelTreeRevision = useSetAtom(panelTreeRevisionAtom);
@@ -1816,7 +1821,7 @@ export function MainScreen() {
     if (Platform.OS !== "android") return;
     const onBackPress = () => {
       const action = resolveMobileBackAction({
-        drawerOpen: drawerStatus === "open",
+        drawerOpen: !persistentNavigation && drawerStatus === "open",
         addressBarVisible,
         browserCanGoBack: Boolean(activePanelId && webViewNavigation[activePanelId]?.canGoBack),
         parentPanelId: activePanelParentId,
@@ -1849,6 +1854,7 @@ export function MainScreen() {
     activatePanel,
     addressBarVisible,
     drawerStatus,
+    persistentNavigation,
     webViewNavigation,
   ]);
   const handleRepair = useCallback(() => {
@@ -1967,6 +1973,7 @@ export function MainScreen() {
       <AppBar
         title={activePanelTitle}
         onMenuPress={handleMenuPress}
+        showMenuButton={!persistentNavigation}
         onPanelCreated={handlePanelCreated}
         addressBarVisible={addressBarVisible}
         address={activeChromeState?.editableAddress ?? ""}

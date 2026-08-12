@@ -53,11 +53,7 @@ describe("AppBar address UX", () => {
 
     const { getByLabelText } = render(
       <Provider store={store}>
-        <AppBar
-          title="Agentic Chat"
-          onMenuPress={jest.fn()}
-          onPanelCreated={onPanelCreated}
-        />
+        <AppBar title="Agentic Chat" onMenuPress={jest.fn()} onPanelCreated={onPanelCreated} />
       </Provider>
     );
 
@@ -99,6 +95,14 @@ describe("AppBar address UX", () => {
     expect(image.props.uri).toBe(
       "http://127.0.0.1:43100/__vibestudio/unit-icon?source=panels%2Fchat&path=assets%2Ficon.svg"
     );
+  });
+
+  it("removes the redundant drawer button beside persistent tablet navigation", () => {
+    const { queryByLabelText } = render(
+      <AppBar title="Agentic Chat" onMenuPress={jest.fn()} showMenuButton={false} />
+    );
+
+    expect(queryByLabelText("Open panel drawer")).toBeNull();
   });
 
   it("updates the address query and selects shared autocomplete actions", () => {

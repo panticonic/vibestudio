@@ -14,7 +14,7 @@ import { MainScreen } from "../components/MainScreen";
 import { PanelDrawer } from "../components/PanelDrawer";
 import { activePanelIdAtom } from "../state/navigationAtoms";
 import { shellClientAtom } from "../state/shellClientAtom";
-import { mobileDrawerWidth } from "../shellCore/mobileLayout";
+import { mobileNavigationLayout } from "../shellCore/mobileLayout";
 
 export type DrawerParamList = {
   PanelContent: undefined;
@@ -23,19 +23,22 @@ export type DrawerParamList = {
 const Drawer = createDrawerNavigator<DrawerParamList>();
 
 export function MainNavigator() {
-  const { width } = useWindowDimensions();
+  const { width, height } = useWindowDimensions();
+  const layout = mobileNavigationLayout(width, height);
+  const persistent = layout.kind === "tablet";
 
   return (
     <Drawer.Navigator
+      defaultStatus={persistent ? "open" : "closed"}
       screenOptions={{
         headerShown: false,
-        drawerType: "front",
-        drawerStyle: { width: mobileDrawerWidth(width) },
-        swipeEnabled: true,
+        drawerType: persistent ? "permanent" : "front",
+        drawerStyle: { width: layout.drawerWidth },
+        swipeEnabled: !persistent,
         swipeEdgeWidth: 50,
       }}
       drawerContent={(props: { navigation: { closeDrawer: () => void } }) => (
-        <DrawerContentWrapper navigation={props.navigation} />
+        <DrawerContentWrapper navigation={props.navigation} persistent={persistent} />
       )}
     >
       <Drawer.Screen name="PanelContent" component={MainScreen} />
@@ -47,13 +50,19 @@ export function MainNavigator() {
  * Wrapper that provides PanelDrawer with the onSelectPanel callback.
  * Hydrates and focuses the selected durable panel, then closes the drawer.
  */
-function DrawerContentWrapper({ navigation }: { navigation: { closeDrawer: () => void } }) {
+function DrawerContentWrapper({
+  navigation,
+  persistent,
+}: {
+  navigation: { closeDrawer: () => void };
+  persistent: boolean;
+}) {
   const shellClient = useAtomValue(shellClientAtom);
   const setActivePanelId = useSetAtom(activePanelIdAtom);
 
   const handleSelectPanel = useCallback(
     (panelId: string) => {
-      navigation.closeDrawer();
+      if (!persistent) navigation.closeDrawer();
       if (!shellClient) {
         setActivePanelId(panelId);
         return;
@@ -65,7 +74,7 @@ function DrawerContentWrapper({ navigation }: { navigation: { closeDrawer: () =>
         });
       });
     },
-    [navigation, setActivePanelId, shellClient]
+    [navigation, persistent, setActivePanelId, shellClient]
   );
 
   return <PanelDrawer onSelectPanel={handleSelectPanel} />;

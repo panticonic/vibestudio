@@ -52,6 +52,8 @@ interface AppBarProps {
   title: string;
   /** Called when the hamburger menu button is pressed */
   onMenuPress: () => void;
+  /** Permanent tablet navigation already exposes the panel tree. */
+  showMenuButton?: boolean;
   /** Called after a new panel is created, with the new panel's ID */
   onPanelCreated?: (panelId: string) => void;
   addressBarVisible?: boolean;
@@ -74,6 +76,7 @@ interface AppBarProps {
 export function AppBar({
   title,
   onMenuPress,
+  showMenuButton = true,
   onPanelCreated,
   addressBarVisible = false,
   address = "",
@@ -175,7 +178,9 @@ export function AppBar({
             },
           ]}
         >
-          <IconButton icon={Menu} onPress={onMenuPress} label="Open panel drawer" />
+          {showMenuButton ? (
+            <IconButton icon={Menu} onPress={onMenuPress} label="Open panel drawer" />
+          ) : null}
           <Pressable
             onPress={onToggleAddressBar}
             onLongPress={onShowActions}
