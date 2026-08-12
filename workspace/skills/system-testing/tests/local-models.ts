@@ -8,6 +8,17 @@ export const localModelTests: TestCase[] = [
     timeoutMs: 30 * 60_000,
     resources: ["profile:local-models"],
     workspaceRepoFixture: CONTENT_WORKSPACE_REPO_FIXTURE,
+    authorityPolicy: {
+      authority: [
+        {
+          ruleId: "run-bundled-local-model",
+          capability: { kind: "exact", key: "internal-model-runtime.use" },
+          resource: { kind: "exact", key: "local-models" },
+          tier: "gated",
+          decision: "once",
+        },
+      ],
+    },
     prompt:
       "Please get the bundled local model ready, then use that model—not your current one—to read the disposable project's README and tell me its heading.",
     validate: () => ({ passed: true }),
