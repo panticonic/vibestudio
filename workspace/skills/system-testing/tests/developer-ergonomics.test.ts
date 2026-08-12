@@ -95,6 +95,9 @@ describe("developer ergonomics scenarios", () => {
       "panel-rebuild-reacquire-and-interact",
       "stale-edit-reobserve-and-apply",
     ]);
+    expect(developerErgonomicsTests.every((test) => test.validation === "agent-evidence")).toBe(
+      true
+    );
     expect(scenario("failed-build-bounded-diagnostics").expectedToolFailures).toEqual([
       { name: "verify", errorIncludes: "Build failed" },
     ]);
@@ -273,6 +276,27 @@ describe("developer ergonomics scenarios", () => {
     expect(
       scenario("extensionless-screenshot-resource-read").validate(execution([capture, read]))
     ).toEqual({ passed: true, reason: undefined });
+  });
+
+  it("does not count base64 screenshot text as native image inspection", () => {
+    const capture = call(
+      "capture",
+      "eval",
+      {
+        code: "const bytes = await page.screenshot(); const path = await fs.mktemp('capture'); return path;",
+      },
+      { returnValue: "file:/.tmp/capture-123", mimeType: "image/png", size: 4096 }
+    );
+    const read = call(
+      "read",
+      "read",
+      { target: "file:/.tmp/capture-123", encoding: "base64", limit: 512 },
+      { encoding: "base64", size: 512, originalSize: 4096 }
+    );
+
+    expect(
+      scenario("extensionless-screenshot-resource-read").validate(execution([capture, read])).passed
+    ).toBe(false);
   });
 
   it("requires a replaced session and an observed postcondition after rebuild", () => {

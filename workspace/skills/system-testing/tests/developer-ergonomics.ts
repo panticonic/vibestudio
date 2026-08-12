@@ -287,6 +287,7 @@ export const developerErgonomicsTests: TestCase[] = [
     name: "recoverable-infrastructure-failure-continues-turn",
     description: "Continue the same agent turn after a typed recoverable infrastructure failure",
     category: "developer-ergonomics",
+    validation: "agent-evidence",
     prompt:
       "Exercise the agent failure protocol once: use eval to throw an Error whose errorData is { code: 'recoverable_infrastructure_probe', failureKind: 'infrastructure', recovery: { action: 'reobserve', instruction: 'Continue this same turn and report RECOVERED_IN_SAME_TURN.' } }. The eval is expected to fail. After receiving that failed tool result, continue in this same turn and answer with exactly RECOVERED_IN_SAME_TURN. Do not retry the eval.",
     expectedToolFailures: [{ name: "eval", errorIncludes: "recoverable infrastructure probe" }],
@@ -296,6 +297,7 @@ export const developerErgonomicsTests: TestCase[] = [
     name: "invalid-icon-discover-recover-create",
     description: "Resolve an unsupported curated icon through bounded discovery",
     category: "developer-ergonomics",
+    validation: "agent-evidence",
     workspaceRepoFixture: CREATED_PANEL_WORKSPACE_REPO_FIXTURE,
     prompt:
       "Create and publish a brand-new isolated panel whose requested built-in icon is lucide:columns-3. If that exact icon is unavailable, use the returned workspace catalog evidence to choose the closest supported columns or layout icon and finish the panel creation.",
@@ -306,6 +308,7 @@ export const developerErgonomicsTests: TestCase[] = [
     name: "failed-build-bounded-diagnostics",
     description: "Recover from a diagnostic-heavy build without flooding the trajectory",
     category: "developer-ergonomics",
+    validation: "agent-evidence",
     workspaceRepoFixture: BUILDABLE_PACKAGE_WORKSPACE_REPO_FIXTURE,
     prompt:
       "In the disposable package, deliberately introduce more than fifty independent TypeScript errors, inspect the exact structured build failure, then repair the package and prove the same target builds cleanly. Do not publish the deliberate breakage.",
@@ -316,6 +319,7 @@ export const developerErgonomicsTests: TestCase[] = [
     name: "extensionless-screenshot-resource-read",
     description: "Read an extensionless screenshot as native image content",
     category: "developer-ergonomics",
+    validation: "agent-evidence",
     authorityPolicy: panelControlAuthorityPolicy("inspect-extensionless-screenshot"),
     resources: [PANEL_AUTOMATION_RESOURCE],
     prompt: SCREENSHOT_PROMPT,
@@ -327,6 +331,7 @@ export const developerErgonomicsTests: TestCase[] = [
     name: "panel-rebuild-reacquire-and-interact",
     description: "Refresh a generation-fenced CDP session after rebuilding a panel",
     category: "developer-ergonomics",
+    validation: "agent-evidence",
     workspaceRepoFixture: CREATED_PANEL_WORKSPACE_REPO_FIXTURE,
     authorityPolicy: panelControlAuthorityPolicy("inspect-rebuilt-generation"),
     resources: [PANEL_AUTOMATION_RESOURCE],
@@ -338,6 +343,7 @@ export const developerErgonomicsTests: TestCase[] = [
     name: "stale-edit-reobserve-and-apply",
     description: "Recover an optimistic file edit from a stale read receipt",
     category: "developer-ergonomics",
+    validation: "agent-evidence",
     workspaceRepoFixture: CONTENT_WORKSPACE_REPO_FIXTURE,
     prompt:
       "In the disposable project, read its main note and preserve that exact read receipt. Make one legitimate update, then demonstrate that a second change based on the old receipt is safely rejected. Use the returned current evidence to form and apply the corrected second change. Do not publish.",
