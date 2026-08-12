@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
-import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import ignore from "ignore";
 
 export const HOST_BUILD_FINGERPRINT_PATH = "dist/host-build-fingerprint.json";
 
@@ -26,28 +26,53 @@ const INPUT_FILES = [
   "tsconfig.workers.json",
 ];
 
-function collectFiles(cwd) {
-  try {
-    return execFileSync(
-      "git",
-      [
-        "ls-files",
-        "--cached",
-        "--others",
-        "--exclude-standard",
-        "-z",
-        "--",
-        ...INPUT_ROOTS,
-        ...INPUT_FILES,
-      ],
-      { cwd, encoding: "utf8" }
-    )
-      .split("\0")
-      .filter((filePath) => filePath && !filePath.endsWith(".tsbuildinfo"))
-      .sort((left, right) => left.localeCompare(right));
-  } catch (error) {
-    throw new Error(`Host builds require a Git source checkout at ${cwd}`, { cause: error });
+function ignoreScope(directory, relativeRoot) {
+  const ignorePath = path.join(directory, ".gitignore");
+  if (!fs.existsSync(ignorePath)) return null;
+  return {
+    relativeRoot,
+    matcher: ignore().add(fs.readFileSync(ignorePath, "utf8")),
+  };
+}
+
+function ignoredBy(scopes, relativePath, isDirectory) {
+  for (const scope of scopes) {
+    const scopedPath = path.posix.relative(scope.relativeRoot || ".", relativePath);
+    if (!scopedPath || scopedPath.startsWith("../")) continue;
+    if (scope.matcher.ignores(isDirectory ? `${scopedPath}/` : scopedPath)) return true;
   }
+  return false;
+}
+
+function collectTree(cwd, relativeRoot, inheritedScopes, files) {
+  const directory = path.resolve(cwd, relativeRoot);
+  if (!fs.existsSync(directory)) return;
+
+  const localScope = ignoreScope(directory, relativeRoot);
+  const scopes = localScope ? [...inheritedScopes, localScope] : inheritedScopes;
+  for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+    const relativePath = path.posix.join(relativeRoot, entry.name);
+    const isDirectory = entry.isDirectory();
+    if (ignoredBy(scopes, relativePath, isDirectory)) continue;
+    if (isDirectory) {
+      collectTree(cwd, relativePath, scopes, files);
+    } else {
+      files.add(relativePath);
+    }
+  }
+}
+
+function collectFiles(cwd) {
+  const rootScope = ignoreScope(cwd, "");
+  const scopes = rootScope ? [rootScope] : [];
+  const files = new Set();
+  for (const relativeRoot of INPUT_ROOTS) collectTree(cwd, relativeRoot, scopes, files);
+  for (const relativePath of INPUT_FILES) {
+    if (fs.existsSync(path.resolve(cwd, relativePath))) files.add(relativePath);
+  }
+  return [...files]
+    .filter((filePath) => !filePath.endsWith(".tsbuildinfo"))
+    .sort((left, right) => left.localeCompare(right));
 }
 
 export function computeHostBuildFingerprint({
@@ -62,19 +87,11 @@ export function computeHostBuildFingerprint({
     const filePath = path.resolve(cwd, relativePath);
     hash.update(relativePath);
     hash.update("\0");
-    try {
-      const stat = fs.lstatSync(filePath);
-      if (stat.isSymbolicLink()) {
-        hash.update(`link:${fs.readlinkSync(filePath)}`);
-      } else {
-        hash.update(fs.readFileSync(filePath));
-      }
-    } catch (error) {
-      if (error?.code !== "ENOENT") throw error;
-      // `git ls-files --cached` retains tracked deletions. Hash an explicit
-      // tombstone so a stable deletion has a stable fingerprint and a file
-      // removed during the build still changes the completed snapshot.
-      hash.update("missing");
+    const stat = fs.lstatSync(filePath);
+    if (stat.isSymbolicLink()) {
+      hash.update(`link:${fs.readlinkSync(filePath)}`);
+    } else {
+      hash.update(fs.readFileSync(filePath));
     }
     hash.update("\0");
   }

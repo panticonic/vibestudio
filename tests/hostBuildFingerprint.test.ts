@@ -1,4 +1,3 @@
-import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -18,8 +17,6 @@ function fixture(): string {
   fs.writeFileSync(path.join(cwd, "src", "entry.ts"), "export const value = 1;\n");
   fs.mkdirSync(path.join(cwd, "dist"), { recursive: true });
   fs.writeFileSync(path.join(cwd, ".gitignore"), "dist/\n.wrangler/\n*.tsbuildinfo\n");
-  execFileSync("git", ["init", "--quiet"], { cwd });
-  execFileSync("git", ["add", ".gitignore", "src/entry.ts"], { cwd });
   return cwd;
 }
 
@@ -44,6 +41,12 @@ describe("host build fingerprint", () => {
     expect(computeHostBuildFingerprint({ cwd, mode: "production" }).fingerprint).not.toBe(
       initial.fingerprint
     );
+  });
+
+  it("does not require repository metadata", () => {
+    const cwd = fixture();
+    expect(fs.existsSync(path.join(cwd, ".git"))).toBe(false);
+    expect(computeHostBuildFingerprint({ cwd }).inputCount).toBeGreaterThan(0);
   });
 
   it("changes when the workerd build helper changes", () => {

@@ -287,6 +287,9 @@ importers:
       husky:
         specifier: ^9.1.7
         version: 9.1.7
+      ignore:
+        specifier: 7.0.5
+        version: 7.0.5
       jsdom:
         specifier: ^29.0.1
         version: 29.0.1(@noble/hashes@2.2.0)

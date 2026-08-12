@@ -154,6 +154,7 @@
     "electron-builder-squirrel-windows": "26.15.3",
     "husky": "^9.1.7",
     "jsdom": "^29.0.1",
+    "ignore": "7.0.5",
     "prettier": "^3.6.2",
     "tsx": "^4.21.0",
     "oxlint": "^1.77.0",
