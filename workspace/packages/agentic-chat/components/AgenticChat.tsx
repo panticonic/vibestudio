@@ -2,7 +2,7 @@ import type { ChannelConfig } from "@workspace/pubsub";
 import { Theme } from "@radix-ui/themes";
 import { forwardRef, useEffect, useImperativeHandle } from "react";
 import { ErrorBoundary } from "./ErrorBoundary";
-import { ChatLayout } from "./ChatLayout";
+import { ChatLayout, type ChatLayoutProps } from "./ChatLayout";
 import { ChatHostCommands } from "./ChatPaletteCommands";
 import { ChatProvider } from "../context/ChatProvider";
 import { useAgenticChat } from "../hooks/useAgenticChat";
@@ -84,8 +84,12 @@ export interface AgenticChatProps {
   renderInvocation?: ChatMessageAreaProps["renderInvocation"];
   /** Replace, wrap, or elide the empty transcript using its complete stock renderer. */
   renderEmptyState?: ChatMessageAreaProps["renderEmptyState"];
+  /** Replace, wrap, or elide the stock conversation header. */
+  renderHeader?: ChatLayoutProps["renderHeader"];
   /** Product-specific prompt shown when the composer is empty. */
   composerPlaceholder?: string;
+  /** Recipients used when composer text contains no explicit @mention. */
+  composerDefaultMentions?: readonly string[];
 }
 
 /**
@@ -121,7 +125,9 @@ export const AgenticChat = forwardRef<AgenticChatHandle, AgenticChatProps>(funct
     renderInlineGroup,
     renderInvocation,
     renderEmptyState,
+    renderHeader,
     composerPlaceholder,
+    composerDefaultMentions,
   },
   ref
 ) {
@@ -186,7 +192,9 @@ export const AgenticChat = forwardRef<AgenticChatHandle, AgenticChatProps>(funct
             renderInlineGroup={renderInlineGroup}
             renderInvocation={renderInvocation}
             renderEmptyState={renderEmptyState}
+            renderHeader={renderHeader}
             composerPlaceholder={composerPlaceholder}
+            composerDefaultMentions={composerDefaultMentions}
           />
         </ChatProvider>
       </Theme>

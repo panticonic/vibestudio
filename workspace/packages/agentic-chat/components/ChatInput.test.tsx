@@ -47,6 +47,7 @@ function renderInput(
     flushNarration?: FlushNarration;
     undoableAction?: UndoableAction;
     pendingSendCount?: number;
+    defaultMentions?: readonly string[];
     context?: Partial<ChatContextValue>;
     inputContext?: Partial<ChatInputContextValue>;
   } = {}
@@ -89,7 +90,7 @@ function renderInput(
   render(
     <Theme>
       <ChatProvider value={ctx} inputValue={inputCtx}>
-        <ChatInput />
+        <ChatInput defaultMentions={opts.defaultMentions} />
       </ChatProvider>
     </Theme>
   );
@@ -113,6 +114,44 @@ describe("ChatInput keyboard shortcuts", () => {
     expect(onSendMessage).toHaveBeenCalledTimes(1);
     const [, options] = onSendMessage.mock.calls[0]!;
     expect(options?.metadata?.deliverAfterTurn).toBeUndefined();
+  });
+
+  it("routes unaddressed text to product-supplied default recipients", async () => {
+    const { onSendMessage } = renderInput({
+      input: "Bridge-wide directive",
+      defaultMentions: ["agent-engineering", "agent-navigation", "agent-engineering"],
+    });
+
+    await keyDown({ key: "Enter" });
+
+    const [, options] = onSendMessage.mock.calls[0]!;
+    expect(options?.mentions).toEqual(["agent-engineering", "agent-navigation"]);
+  });
+
+  it("uses explicit mentions instead of product-supplied defaults", async () => {
+    const engineering = {
+      id: "agent-engineering",
+      metadata: { type: "agent", handle: "engineering" },
+    };
+    const navigation = {
+      id: "agent-navigation",
+      metadata: { type: "agent", handle: "navigation" },
+    };
+    const { onSendMessage } = renderInput({
+      input: "@engineering take the order",
+      defaultMentions: ["agent-engineering", "agent-navigation"],
+      context: {
+        allParticipants: {
+          "agent-engineering": engineering,
+          "agent-navigation": navigation,
+        } as unknown as ChatContextValue["allParticipants"],
+      },
+    });
+
+    await keyDown({ key: "Enter" });
+
+    const [, options] = onSendMessage.mock.calls[0]!;
+    expect(options?.mentions).toEqual(["agent-engineering"]);
   });
 
   it("Shift+Enter does NOT send (newline)", async () => {

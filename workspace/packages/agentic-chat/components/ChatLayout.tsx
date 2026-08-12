@@ -22,6 +22,10 @@ export interface ChatLayoutProps extends Pick<
   features: ResolvedAgenticChatFeatures;
   /** Product-specific prompt shown when the composer is empty. */
   composerPlaceholder?: string;
+  /** Recipients used when composer text contains no explicit @mention. */
+  composerDefaultMentions?: readonly string[];
+  /** Replace, wrap, or elide the stock conversation header. */
+  renderHeader?: (defaultContent: React.ReactNode) => React.ReactNode;
 }
 
 /**
@@ -50,7 +54,10 @@ export const ChatLayout = React.memo(function ChatLayout({
   renderEmptyState,
   features,
   composerPlaceholder,
+  composerDefaultMentions,
+  renderHeader,
 }: ChatLayoutProps) {
+  const defaultHeader = <ChatHeader />;
   return (
     <>
       <Flex
@@ -68,7 +75,7 @@ export const ChatLayout = React.memo(function ChatLayout({
             "max(var(--agentic-root-padding), env(safe-area-inset-top, 0)) max(var(--agentic-root-padding), env(safe-area-inset-right, 0)) max(var(--agentic-root-padding), env(safe-area-inset-bottom, 0)) max(var(--agentic-root-padding), env(safe-area-inset-left, 0))",
         }}
       >
-        <ChatHeader />
+        {renderHeader ? renderHeader(defaultHeader) : defaultHeader}
         <ChatConnectionErrorBanner />
         <ChatDirtyRepoWarnings />
         {features.actionBar ? <LazyChatActionBar /> : null}
@@ -82,7 +89,7 @@ export const ChatLayout = React.memo(function ChatLayout({
         {features.feedback ? <LazyChatFeedbackArea /> : null}
         <PendingDeliveryQueue />
         <Outbox />
-        <ChatInput placeholder={composerPlaceholder} />
+        <ChatInput placeholder={composerPlaceholder} defaultMentions={composerDefaultMentions} />
       </Flex>
       <ChatDebugConsole />
     </>

@@ -84,13 +84,15 @@ const MAX_IMAGE_COUNT = 10;
 export interface ChatInputProps {
   /** Product-specific prompt shown when the composer is empty. */
   placeholder?: string;
+  /** Recipients used when the message contains no explicit @mention. */
+  defaultMentions?: readonly string[];
 }
 
 /**
  * Chat input area with text input, image attachment, and send button.
  * Reads from ChatContext.
  */
-export function ChatInput({ placeholder }: ChatInputProps = {}) {
+export function ChatInput({ placeholder, defaultMentions }: ChatInputProps = {}) {
   const {
     connected,
     allParticipants,
@@ -314,13 +316,15 @@ export function ChatInput({ placeholder }: ChatInputProps = {}) {
             ? getAttachmentInputsFromPendingImages(pendingImages)
             : undefined;
         const effectiveMode = mode === "after-turn" && hasOpenTurn ? "after-turn" : "default";
+        const explicitMentions = getMentionsFromInput(
+          input,
+          allParticipants,
+          selectedMentionIds,
+          accountProfiles
+        );
         await onSendMessage(attachments, {
-          mentions: getMentionsFromInput(
-            input,
-            allParticipants,
-            selectedMentionIds,
-            accountProfiles
-          ),
+          mentions:
+            explicitMentions.length > 0 ? explicitMentions : [...new Set(defaultMentions ?? [])],
           replyTo: replyTo ?? undefined,
           // After-turn delivery is a message intent in payload.metadata.
           ...(effectiveMode === "after-turn" ? { metadata: { deliverAfterTurn: true } } : {}),
@@ -347,6 +351,7 @@ export function ChatInput({ placeholder }: ChatInputProps = {}) {
       allParticipants,
       selectedMentionIds,
       accountProfiles,
+      defaultMentions,
       replyTo,
       mentions,
       hapticTick,

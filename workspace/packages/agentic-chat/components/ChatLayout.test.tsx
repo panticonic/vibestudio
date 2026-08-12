@@ -2,9 +2,12 @@
 
 import { render } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
+import type { ReactNode } from "react";
 import { ChatLayout } from "./ChatLayout";
 
-vi.mock("./ChatHeader", () => ({ ChatHeader: () => null }));
+vi.mock("./ChatHeader", () => ({
+  ChatHeader: () => <div data-testid="stock-header">Stock header</div>,
+}));
 vi.mock("./ChatConnectionErrorBanner", () => ({ ChatConnectionErrorBanner: () => null }));
 vi.mock("./ChatDirtyRepoWarnings", () => ({ ChatDirtyRepoWarnings: () => null }));
 vi.mock("./LazyChatActionBar", () => ({
@@ -35,8 +38,12 @@ vi.mock("./Outbox", () => ({ Outbox: () => null }));
 vi.mock("./PendingDeliveryQueue", () => ({ PendingDeliveryQueue: () => null }));
 vi.mock("./ChatDebugConsole", () => ({ ChatDebugConsole: () => null }));
 vi.mock("./ChatInput", () => ({
-  ChatInput: (props: { placeholder?: string }) => (
-    <div data-testid="composer" data-placeholder={props.placeholder} />
+  ChatInput: (props: { placeholder?: string; defaultMentions?: readonly string[] }) => (
+    <div
+      data-testid="composer"
+      data-placeholder={props.placeholder}
+      data-default-mentions={props.defaultMentions?.join(",")}
+    />
   ),
 }));
 
@@ -68,6 +75,9 @@ describe("ChatLayout sizing", () => {
     const renderInlineGroup = vi.fn();
     const renderInvocation = vi.fn();
     const renderEmptyState = vi.fn();
+    const renderHeader = vi.fn((defaultContent: ReactNode) => (
+      <div data-testid="product-header">{defaultContent}</div>
+    ));
     const { getByTestId, queryByTestId } = render(
       <ChatLayout
         features={{ feedback: false, inlineUi: false, actionBar: false, clientEval: false }}
@@ -75,7 +85,9 @@ describe("ChatLayout sizing", () => {
         renderInlineGroup={renderInlineGroup}
         renderInvocation={renderInvocation}
         renderEmptyState={renderEmptyState}
+        renderHeader={renderHeader}
         composerPlaceholder="Issue a bridge directive…"
+        composerDefaultMentions={["engineering", "navigation"]}
       />
     );
 
@@ -91,5 +103,8 @@ describe("ChatLayout sizing", () => {
       }),
     });
     expect(getByTestId("composer").dataset["placeholder"]).toBe("Issue a bridge directive…");
+    expect(getByTestId("composer").dataset["defaultMentions"]).toBe("engineering,navigation");
+    expect(getByTestId("product-header").contains(getByTestId("stock-header"))).toBe(true);
+    expect(renderHeader).toHaveBeenCalledOnce();
   });
 });
