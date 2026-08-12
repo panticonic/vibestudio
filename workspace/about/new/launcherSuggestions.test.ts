@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   autocompleteForSuggestion,
+  buildIdleLauncherSuggestions,
   buildLauncherSuggestions,
   groupLauncherSuggestions,
   isLikelyAgentPrompt,
@@ -63,6 +64,54 @@ describe("launcher suggestions", () => {
     });
 
     expect(suggestions).toHaveLength(20);
+  });
+
+  it("fills a sparse panel catalog with the most-used about pages", () => {
+    const suggestions = buildIdleLauncherSuggestions({
+      value: "",
+      panels: [
+        { path: "panels/chat", title: "Chat" },
+        { path: "panels/terminal", title: "Terminal" },
+      ],
+      aboutPanels: [
+        { path: "about/help", title: "Help" },
+        { path: "about/history", title: "History" },
+        { path: "about/permissions", title: "Permissions" },
+      ],
+      panelUsage: {
+        "panels/chat": { count: 2, lastUsed: 200 },
+        "panels/terminal": { count: 20, lastUsed: 100 },
+        "about/help": { count: 4, lastUsed: 300 },
+        "about/history": { count: 12, lastUsed: 100 },
+        "about/permissions": { count: 1, lastUsed: 400 },
+      },
+      browserSuggestions: history,
+      browserUrl: null,
+    });
+
+    expect(suggestions.map((suggestion) => suggestion.id)).toEqual([
+      "panel:panels/terminal",
+      "panel:panels/chat",
+      "panel:about/history",
+      "panel:about/help",
+      "history:https://example.com/docs",
+    ]);
+  });
+
+  it("does not add about-page fallbacks when there are enough workspace panels", () => {
+    const suggestions = buildIdleLauncherSuggestions({
+      value: "",
+      panels: Array.from({ length: 4 }, (_, index) => ({
+        path: `panels/app-${index}`,
+        title: `App ${index}`,
+      })),
+      aboutPanels: [{ path: "about/history", title: "History" }],
+      panelUsage: { "about/history": { count: 10_000, lastUsed: 999 } },
+      browserSuggestions: [],
+      browserUrl: null,
+    });
+
+    expect(suggestions.some((suggestion) => suggestion.id === "panel:about/history")).toBe(false);
   });
 
   it("prefers sentence-like chat unless a destination is an exact or prefix match", () => {

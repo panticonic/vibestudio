@@ -134,11 +134,11 @@ describe("new panel launcher", () => {
     expect(screen.getAllByRole("option").length).toBeGreaterThanOrEqual(3);
   });
 
-  it("keeps about pages searchable without letting them crowd apps out of the idle list", async () => {
+  it("uses an about page to fill a sparse idle panel list and keeps it searchable", async () => {
     render(<AboutPanelRoot />);
 
     expect(await findRow("Terminal")).toBeTruthy();
-    expect(screen.queryByText("About Vibestudio", { selector: ".launcher-title" })).toBeNull();
+    expect(await findRow("About Vibestudio")).toBeTruthy();
 
     fireEvent.change(screen.getByRole("combobox"), { target: { value: "about" } });
     expect(await findRow("About Vibestudio")).toBeTruthy();

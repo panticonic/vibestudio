@@ -32,6 +32,7 @@ import {
 } from "./launchablePanels";
 import {
   autocompleteForSuggestion,
+  buildIdleLauncherSuggestions,
   buildLauncherSuggestions,
   groupLauncherSuggestions,
   parseLauncherInput,
@@ -520,17 +521,20 @@ function NewPanelPage() {
   }, [historyReviewPending, historyRefreshEpoch]);
 
   const baseSuggestions = useMemo(() => {
-    // The idle list is a starting surface for apps, not an index of settings
-    // and utility pages. About pages remain available as soon as the user
-    // searches for one.
-    const panelCatalog = panelGroups
-      ? parsedInput.query.trim()
-        ? [...panelGroups.panels, ...panelGroups.about]
-        : panelGroups.panels
-      : [];
+    const query = parsedInput.query.trim();
+    if (!query) {
+      return buildIdleLauncherSuggestions({
+        value,
+        panels: panelGroups?.panels ?? [],
+        aboutPanels: panelGroups?.about ?? [],
+        panelUsage,
+        browserSuggestions,
+        browserUrl,
+      });
+    }
     return buildLauncherSuggestions({
       value,
-      panels: panelCatalog,
+      panels: panelGroups ? [...panelGroups.panels, ...panelGroups.about] : [],
       panelUsage,
       browserSuggestions,
       browserUrl,

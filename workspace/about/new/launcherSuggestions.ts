@@ -27,6 +27,8 @@ const MATCH_PREFIX = 2_000_000_000_000;
 const MATCH_SUBSTRING = 1_000_000_000_000;
 const PROMPT_PRIORITY = 2_250_000_000_000;
 const URL_PRIORITY = 4_000_000_000_000;
+const DEFAULT_LAUNCHER_SUGGESTION_LIMIT = 20;
+const IDLE_PANEL_SUGGESTION_FLOOR = 4;
 
 export function parseLauncherInput(input: string): LauncherInput {
   const first = input[0];
@@ -148,7 +150,52 @@ export function buildLauncherSuggestions(input: {
             other.url.replace(/\/$/, "") === candidate.browser.url.replace(/\/$/, "")
         )
     )
-    .slice(0, input.limit ?? 20);
+    .slice(0, input.limit ?? DEFAULT_LAUNCHER_SUGGESTION_LIMIT);
+}
+
+/**
+ * Build the empty-query launcher in explicit tiers.
+ *
+ * Workspace panels are the primary destinations. About pages only fill a
+ * small sparse-catalog floor, after which browser history may use the remaining
+ * result budget. Each tier retains the normal durable usage ranking.
+ */
+export function buildIdleLauncherSuggestions(input: {
+  value: string;
+  panels: LaunchablePanel[];
+  aboutPanels: LaunchablePanel[];
+  panelUsage: PanelUsage;
+  browserSuggestions: BrowserAddressSuggestion[];
+  browserUrl: string | null;
+  limit?: number;
+}): LauncherSuggestion[] {
+  const limit = input.limit ?? DEFAULT_LAUNCHER_SUGGESTION_LIMIT;
+  const panelSuggestions = (panels: LaunchablePanel[], panelLimit: number) =>
+    buildLauncherSuggestions({
+      value: input.value,
+      panels,
+      panelUsage: input.panelUsage,
+      browserSuggestions: [],
+      browserUrl: null,
+      limit: panelLimit,
+    });
+  const primaryPanels = panelSuggestions(input.panels, limit);
+  const panelFloor = Math.min(limit, IDLE_PANEL_SUGGESTION_FLOOR);
+  const fallbackPanels = panelSuggestions(
+    input.aboutPanels,
+    Math.max(0, panelFloor - primaryPanels.length)
+  );
+  const remaining = Math.max(0, limit - primaryPanels.length - fallbackPanels.length);
+  const otherDestinations = buildLauncherSuggestions({
+    value: input.value,
+    panels: [],
+    panelUsage: input.panelUsage,
+    browserSuggestions: input.browserSuggestions,
+    browserUrl: input.browserUrl,
+    limit: remaining,
+  });
+
+  return [...primaryPanels, ...fallbackPanels, ...otherDestinations];
 }
 
 export const LAUNCHER_GROUP_LABELS: Record<LauncherSuggestion["kind"], string> = {
