@@ -1,4 +1,5 @@
 import type { TestCase, TestExecutionResult } from "../types.js";
+import { OPTIMIZABLE_PANEL_WORKSPACE_REPO_FIXTURE } from "../types.js";
 import {
   completedScenarioEvidence,
   hasNonEmptyStructuredResult,
@@ -143,6 +144,15 @@ function validateWorkspaceImport(result: TestExecutionResult) {
 }
 
 export const buildTests: TestCase[] = [
+  {
+    name: "panel-performance-optimize",
+    description: "Measure and remove a disposable panel's avoidable bundle-size waste",
+    category: "performance",
+    workspaceRepoFixture: OPTIMIZABLE_PANEL_WORKSPACE_REPO_FIXTURE,
+    prompt:
+      "The disposable panel is much larger than its tiny UI warrants. Find the source of the waste, improve it without changing what the panel renders, and leave the measured, verified repair saved in this task. Do not publish it.",
+    validate: () => ({ passed: true }),
+  },
   {
     name: "build-performance-profile",
     description:

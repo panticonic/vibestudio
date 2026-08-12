@@ -44,6 +44,8 @@ workspace source must select a typed repository fixture:
   with a trusted extension manifest, source, icon, and focused failing test.
 - `BUILDABLE_APP_WORKSPACE_REPO_FIXTURE` owns an `apps/...` repo with a terminal
   app manifest, source, icon, and focused failing test.
+- `OPTIMIZABLE_PANEL_WORKSPACE_REPO_FIXTURE` owns a minimal `panels/...` repo
+  with a deliberately wasteful but behaviorally trivial bundle.
 
 The harness imports that repository as one exact snapshot into a fresh task
 context. Setup does not publish it. A fixture that never reached main disappears

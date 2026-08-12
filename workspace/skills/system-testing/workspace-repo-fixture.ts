@@ -47,6 +47,7 @@ export type WorkspaceRepoCreationScope =
   | { kind: "buildable-app"; section: "apps" }
   | { kind: "buildable-worker"; section: "workers" }
   | { kind: "buildable-regular-worker"; section: "workers" }
+  | { kind: "optimizable-panel"; section: "panels" }
   | { kind: "created-repository"; section: WorkspaceRepoSection }
   | { kind: "buildable-panel-with-derived"; section: "panels" };
 
@@ -932,6 +933,9 @@ function repositorySeedFiles(
   if (fixture.kind === "buildable-app") {
     return buildableAppFiles(repoName);
   }
+  if (fixture.kind === "optimizable-panel") {
+    return buildablePanelFiles(repoName, { repeatedStatusLabels: 512 });
+  }
   if (fixture.kind === "buildable-worker") {
     return [
       {
@@ -1025,51 +1029,7 @@ function repositorySeedFiles(
     ];
   }
   if (fixture.kind === "buildable-panel-with-derived") {
-    return [
-      {
-        path: "package.json",
-        content: `${JSON.stringify(
-          {
-            name: `@workspace-panels/${repoName}`,
-            version: "0.0.0",
-            private: true,
-            type: "module",
-            vibestudio: {
-              title: `System Test ${repoName}`,
-              entry: "index.tsx",
-              authority: {
-                requests: [
-                  {
-                    capability: "context.boundary",
-                    resource: { kind: "prefix", prefix: "context" },
-                    tier: "critical",
-                    evidence: "bounded-dynamic",
-                  },
-                ],
-                provides: [],
-              },
-              exposeModules: ["react", "react/jsx-runtime", "react/jsx-dev-runtime"],
-            },
-            dependencies: { react: "^19.0.0" },
-          },
-          null,
-          2
-        )}\n`,
-      },
-      {
-        path: "index.tsx",
-        content: [
-          'import type { CSSProperties } from "react";',
-          "",
-          'const style: CSSProperties = { minHeight: "100vh", display: "grid", placeContent: "center" };',
-          "",
-          "export default function SystemTestPanelFixture() {",
-          "  return <main style={style}>Buildable system-test panel fixture</main>;",
-          "}",
-          "",
-        ].join("\n"),
-      },
-    ];
+    return buildablePanelFiles(repoName);
   }
   return [
     {
@@ -1091,6 +1051,63 @@ function repositorySeedFiles(
       content: [
         'export const fixtureValue = "baseline";',
         'export const fixtureNeighbor = "untouched";',
+        "",
+      ].join("\n"),
+    },
+  ];
+}
+
+function buildablePanelFiles(
+  repoName: string,
+  options: { repeatedStatusLabels?: number } = {}
+): Array<{ path: string; content: string }> {
+  const repeatedStatusLabels = options.repeatedStatusLabels ?? 0;
+  const statusDeclaration = repeatedStatusLabels
+    ? `const statusLabels = [${Array.from({ length: repeatedStatusLabels }, () => '"Ready"').join(",")}];`
+    : null;
+  return [
+    {
+      path: "package.json",
+      content: `${JSON.stringify(
+        {
+          name: `@workspace-panels/${repoName}`,
+          version: "0.0.0",
+          private: true,
+          type: "module",
+          vibestudio: {
+            title: `System Test ${repoName}`,
+            entry: "index.tsx",
+            authority: {
+              requests: [
+                {
+                  capability: "context.boundary",
+                  resource: { kind: "prefix", prefix: "context" },
+                  tier: "critical",
+                  evidence: "bounded-dynamic",
+                },
+              ],
+              provides: [],
+            },
+            exposeModules: ["react", "react/jsx-runtime", "react/jsx-dev-runtime"],
+          },
+          dependencies: { react: "^19.0.0" },
+        },
+        null,
+        2
+      )}\n`,
+    },
+    {
+      path: "index.tsx",
+      content: [
+        'import type { CSSProperties } from "react";',
+        "",
+        'const style: CSSProperties = { minHeight: "100vh", display: "grid", placeContent: "center" };',
+        ...(statusDeclaration ? [statusDeclaration, ""] : []),
+        "export default function SystemTestPanelFixture() {",
+        statusDeclaration
+          ? "  return <main style={style}>{statusLabels[0]}</main>;"
+          : "  return <main style={style}>Buildable system-test panel fixture</main>;",
+        "}",
         "",
       ].join("\n"),
     },

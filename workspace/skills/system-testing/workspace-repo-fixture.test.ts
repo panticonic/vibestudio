@@ -8,6 +8,7 @@ import {
 const BUILDABLE = { kind: "buildable-package", section: "packages" } as const;
 const BUILDABLE_EXTENSION = { kind: "buildable-extension", section: "extensions" } as const;
 const BUILDABLE_APP = { kind: "buildable-app", section: "apps" } as const;
+const OPTIMIZABLE_PANEL = { kind: "optimizable-panel", section: "panels" } as const;
 const BUILDABLE_WORKER = { kind: "buildable-worker", section: "workers" } as const;
 const CREATED_PANEL = { kind: "created-repository", section: "panels" } as const;
 const PANEL_WITH_DERIVED = {
@@ -860,6 +861,28 @@ describe("WorkspaceRepoFixtureLifecycle", () => {
     expect(seededText).toContain('expect(startupLabel()).toBe("ready")');
     expect(seededText).toMatch(/startupLabel\(\): string \{ return "(?:waiting|booting)"; \}/u);
     expect(seededText).toContain("assets/icon.svg");
+
+    await fixture.cleanup(state);
+  });
+
+  it("seeds one behaviorally trivial panel with attributable bundle waste", async () => {
+    const fake = createPort();
+    const fixture = new WorkspaceRepoFixtureLifecycle(
+      fake.port,
+      "performance-test",
+      "system-test-performance",
+      OPTIMIZABLE_PANEL
+    );
+
+    const state = await fixture.prepare();
+
+    expect(state).toMatchObject({
+      repoPath: "panels/system-test-performance",
+      seedFilePaths: ["index.tsx", "package.json"],
+    });
+    const seededText = fake.putText.mock.calls.map(([text]) => text).join("\n");
+    expect(seededText.match(/"Ready"/gu)?.length).toBe(512);
+    expect(seededText).toContain("{statusLabels[0]}");
 
     await fixture.cleanup(state);
   });

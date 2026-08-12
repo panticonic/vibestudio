@@ -50,6 +50,15 @@ function checked(
 
 export const serverLogTests: TestCase[] = [
   {
+    name: "server-log-startup-diagnosis",
+    description:
+      "Use recent host logs to distinguish a concrete startup incident from normal activity",
+    category: "server-logs",
+    prompt:
+      "Something in this workspace seemed slow to start a moment ago. Can you check the recent server logs and tell me what happened?",
+    validate: () => ({ passed: true }),
+  },
+  {
     name: "server-log-query-stats",
     description: "Query recent server host logs bounded and report log statistics",
     category: "server-logs",
