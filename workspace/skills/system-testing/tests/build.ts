@@ -6,6 +6,18 @@ import {
   invocationReturnValue,
   walkRecords,
 } from "./_scenario-evidence.js";
+import type { InvocationCardPayloadLike } from "./_helpers.js";
+import {
+  eventRef,
+  managedMutation,
+  record,
+  stringArray,
+  successfulToolDetails,
+  unitForPath,
+  verificationMatches,
+  workspacePath,
+  zeroWorkingCounts,
+} from "./_managed-unit-evidence.js";
 
 function buildResult(values: readonly unknown[]): boolean {
   return walkRecords(values).some((record) => {
@@ -91,51 +103,172 @@ function validateBuildPerformanceProfile(result: TestExecutionResult) {
       };
 }
 
-function callDetails(value: unknown): Record<string, unknown> | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  const details = (value as Record<string, unknown>)["details"];
-  return details && typeof details === "object" && !Array.isArray(details)
-    ? (details as Record<string, unknown>)
-    : null;
+interface BuildProfileEvidence {
+  index: number;
+  unit: string;
+  contextId: string;
+  initialBytes: Map<string, number>;
+}
+
+function buildProfileEvidence(
+  call: InvocationCardPayloadLike,
+  index: number
+): BuildProfileEvidence | null {
+  if (
+    call.name !== "eval" ||
+    call.execution?.status !== "complete" ||
+    call.execution.isError === true ||
+    !/\b(?:profileBuild|getPerformanceProfile)\b/u.test(String(call.arguments?.["code"] ?? ""))
+  ) {
+    return null;
+  }
+  const returned = invocationReturnValue(call);
+  if (!returned.present) return null;
+  const profiles = walkRecords([returned.value]).filter(
+    (candidate) =>
+      candidate["version"] === 1 &&
+      typeof candidate["source"] === "string" &&
+      typeof candidate["ref"] === "string" &&
+      record(candidate["report"]) !== null &&
+      Array.isArray(candidate["targets"])
+  );
+  if (profiles.length !== 1) return null;
+
+  const profile = profiles[0]!;
+  const unit = unitForPath(profile["source"], "panels");
+  const ref = profile["ref"];
+  const contextId = typeof ref === "string" && ref.startsWith("ctx:") ? ref.slice(4) : null;
+  const report = record(profile["report"]);
+  const verifiedCacheRun = record(profile["verifiedCacheRun"]);
+  if (
+    !unit ||
+    !contextId ||
+    workspacePath(profile["source"]) !== unit ||
+    workspacePath(report?.["repoPath"]) !== unit ||
+    report?.["status"] !== "ok" ||
+    verifiedCacheRun?.["sameBuildKeys"] !== true
+  ) {
+    return null;
+  }
+
+  const initialBytes = new Map<string, number>();
+  for (const targetValue of profile["targets"] as unknown[]) {
+    const target = record(targetValue);
+    const bundleReport = record(target?.["bundleReport"]);
+    const initial = record(bundleReport?.["initial"]);
+    if (
+      typeof target?.["target"] !== "string" ||
+      typeof target["buildKey"] !== "string" ||
+      typeof initial?.["bytes"] !== "number" ||
+      initial["bytes"] < 0
+    ) {
+      continue;
+    }
+    initialBytes.set(target["target"], initial["bytes"]);
+  }
+  return initialBytes.size > 0 ? { index, unit, contextId, initialBytes } : null;
+}
+
+function profileImproved(before: BuildProfileEvidence, after: BuildProfileEvidence): boolean {
+  if (before.unit !== after.unit || before.contextId !== after.contextId) return false;
+  return [...before.initialBytes].some(
+    ([target, bytes]) =>
+      typeof after.initialBytes.get(target) === "number" && after.initialBytes.get(target)! < bytes
+  );
 }
 
 function validatePanelPerformanceRepair(result: TestExecutionResult) {
   const base = completedScenarioEvidence(result, ["eval", "verify", "vcs"]);
   if (!base.passed) return base;
-  const completed = base.evidence.calls.filter(
-    (call) => call.execution?.status === "complete" && call.execution.isError !== true
-  );
-  const profiles = completed.filter(
-    (call) =>
-      call.name === "eval" &&
-      /\b(?:profileBuild|getPerformanceProfile)\b/u.test(String(call.arguments?.["code"] ?? ""))
-  );
-  const buildVerified = completed.some((call) => {
-    if (call.name !== "verify" || call.arguments?.["operation"] !== "build") return false;
-    const details = callDetails(call.execution?.result);
-    return details?.["operation"] === "build" && details["status"] === "ok";
+  const calls = base.evidence.calls;
+  const profiles = calls.flatMap((call, index) => {
+    const evidence = buildProfileEvidence(call, index);
+    return evidence ? [evidence] : [];
   });
-  const committed = completed.some(
-    (call) => call.name === "vcs" && call.arguments?.["operation"] === "commit"
-  );
-  const clean = completed.some((call) => {
-    if (call.name !== "vcs" || call.arguments?.["operation"] !== "status") return false;
-    const status = callDetails(call.execution?.result)?.["result"];
-    return Boolean(
-      status &&
-      typeof status === "object" &&
-      !Array.isArray(status) &&
-      (status as Record<string, unknown>)["clean"] === true
-    );
+  const mutations = calls.flatMap((call, index) => {
+    const evidence = managedMutation(call, index, "panels");
+    return evidence ? [evidence] : [];
   });
-  if (profiles.length < 2 || !buildVerified || !committed || !clean) {
+  if (mutations.length === 0) {
+    return { passed: false, reason: "No completed managed panel optimization was observed" };
+  }
+  const units = new Set(mutations.map(({ unit }) => unit));
+  const contexts = new Set(mutations.map(({ contextId }) => contextId));
+  const applicationIds = mutations.map(({ applicationId }) => applicationId);
+  if (
+    units.size !== 1 ||
+    contexts.size !== 1 ||
+    new Set(applicationIds).size !== applicationIds.length
+  ) {
     return {
       passed: false,
-      reason:
-        "The trajectory did not prove before/after profiling, a successful final build, a committed repair, and a clean task state",
+      reason: "Panel optimization mutations did not form one context-local chain for one unit",
     };
   }
-  return { passed: true, reason: undefined };
+  const unit = [...units][0]!;
+  const contextId = [...contexts][0]!;
+  const firstMutationIndex = mutations[0]!.index;
+  const lastMutationIndex = mutations.at(-1)!.index;
+
+  for (const before of profiles) {
+    if (
+      before.index >= firstMutationIndex ||
+      before.unit !== unit ||
+      before.contextId !== contextId
+    ) {
+      continue;
+    }
+    for (const after of profiles) {
+      if (after.index <= lastMutationIndex || !profileImproved(before, after)) continue;
+
+      for (let buildIndex = after.index + 1; buildIndex < calls.length; buildIndex += 1) {
+        if (!verificationMatches(calls[buildIndex]!, "build", unit, contextId)) continue;
+
+        for (let commitIndex = buildIndex + 1; commitIndex < calls.length; commitIndex += 1) {
+          const commitCall = calls[commitIndex]!;
+          if (commitCall.name !== "vcs" || commitCall.arguments?.["operation"] !== "commit") {
+            continue;
+          }
+          const commitDetails = successfulToolDetails(commitCall, "vcs");
+          const commit = record(commitDetails?.["result"]);
+          const event = record(commit?.["event"]);
+          const eventId = event?.["kind"] === "event" ? event["eventId"] : null;
+          const committedApplicationIds = commit?.["committedApplicationIds"];
+          if (
+            commit?.["contextId"] !== contextId ||
+            typeof eventId !== "string" ||
+            !stringArray(committedApplicationIds) ||
+            committedApplicationIds.length !== applicationIds.length ||
+            !committedApplicationIds.every((id, index) => id === applicationIds[index])
+          ) {
+            continue;
+          }
+
+          for (let statusIndex = commitIndex + 1; statusIndex < calls.length; statusIndex += 1) {
+            const statusCall = calls[statusIndex]!;
+            if (statusCall.name !== "vcs" || statusCall.arguments?.["operation"] !== "status") {
+              continue;
+            }
+            const status = record(successfulToolDetails(statusCall, "vcs")?.["result"]);
+            if (
+              status?.["contextId"] === contextId &&
+              status["clean"] === true &&
+              eventRef(status["committed"], eventId) &&
+              eventRef(status["workingHead"], eventId) &&
+              zeroWorkingCounts(status["workingCounts"])
+            ) {
+              return { passed: true, reason: undefined };
+            }
+          }
+        }
+      }
+    }
+  }
+  return {
+    passed: false,
+    reason:
+      "No causal optimization episode joined a same-context baseline, managed panel mutation, smaller initial payload profile, exact final build, complete application-chain commit, and matching clean event",
+  };
 }
 
 function validateNpmImport(result: TestExecutionResult) {

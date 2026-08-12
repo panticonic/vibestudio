@@ -9,34 +9,48 @@ const performanceTest = buildTests.find((test) => test.name === "build-performan
 const optimizationTest = buildTests.find((test) => test.name === "panel-performance-optimize")!;
 
 describe("build performance validation", () => {
-  it("gates the vague optimization task on before/after and saved-state evidence", () => {
-    const result = execution([
-      performanceEvalInvocation({ firstRun: { elapsedMs: 20 } }),
-      performanceEvalInvocation({ firstRun: { elapsedMs: 5 } }),
-      completedInvocation(
-        "verify",
-        { operation: "build", target: "panels/example" },
-        {
-          operation: "build",
-          status: "ok",
-        }
-      ),
-      completedInvocation("vcs", { operation: "commit" }, { operation: "commit" }),
-      completedInvocation(
-        "vcs",
-        { operation: "status" },
-        {
-          operation: "status",
-          result: { clean: true },
-        }
-      ),
-      finalAgentMessage("The panel now has the same visible output with less bundle waste."),
-    ]);
+  it("gates the vague task on one causal measured optimization episode", () => {
+    const result = optimizationExecution();
 
     expect(optimizationTest.validation).toBe("agent-evidence");
     expect(optimizationTest.validate(result)).toEqual({ passed: true, reason: undefined });
-    result.messages.splice(2, 1);
-    expect(optimizationTest.validate(result)).toMatchObject({ passed: false });
+  });
+
+  it("rejects profiles from another unit or context and profiles with no payload improvement", () => {
+    expect(
+      optimizationTest.validate(optimizationExecution({ afterUnit: "panels/other" }))
+    ).toMatchObject({ passed: false });
+    expect(
+      optimizationTest.validate(optimizationExecution({ afterContextId: "context:other" }))
+    ).toMatchObject({ passed: false });
+    expect(
+      optimizationTest.validate(optimizationExecution({ beforeBytes: 4_096, afterBytes: 4_096 }))
+    ).toMatchObject({ passed: false });
+  });
+
+  it("rejects profiling or final build evidence observed in the wrong order", () => {
+    const profiledAfterTheEdit = optimizationExecution();
+    const [baseline] = profiledAfterTheEdit.messages.splice(1, 1);
+    profiledAfterTheEdit.messages.splice(3, 0, baseline!);
+
+    const buildBeforeTheFinalProfile = optimizationExecution();
+    const [build] = buildBeforeTheFinalProfile.messages.splice(4, 1);
+    buildBeforeTheFinalProfile.messages.splice(3, 0, build!);
+
+    expect(optimizationTest.validate(profiledAfterTheEdit)).toMatchObject({ passed: false });
+    expect(optimizationTest.validate(buildBeforeTheFinalProfile)).toMatchObject({ passed: false });
+  });
+
+  it("requires the commit to consume the mutation and the later clean status to match its event", () => {
+    const wrongCommit = optimizationExecution({ committedApplicationIds: ["application:other"] });
+    const wrongStatus = optimizationExecution({ statusEventId: "event:other" });
+    const statusBeforeCommit = optimizationExecution();
+    const [status] = statusBeforeCommit.messages.splice(6, 1);
+    statusBeforeCommit.messages.splice(5, 0, status!);
+
+    expect(optimizationTest.validate(wrongCommit)).toMatchObject({ passed: false });
+    expect(optimizationTest.validate(wrongStatus)).toMatchObject({ passed: false });
+    expect(optimizationTest.validate(statusBeforeCommit)).toMatchObject({ passed: false });
   });
 
   it("accepts a bounded exact-build profile with verified cache evidence", () => {
@@ -160,16 +174,16 @@ function evalInvocation(
   };
 }
 
-function performanceEvalInvocation(returnValue: unknown): ChatMessage {
+function performanceEvalInvocation(returnValue: unknown, id = "performance"): ChatMessage {
   return {
-    id: "eval-performance",
+    id: `eval-${id}`,
     kind: "message",
     senderId: "agent",
     senderMetadata: { type: "agent" },
     complete: true,
     contentType: "invocation",
     content: JSON.stringify({
-      id: "call-eval-performance",
+      id: `call-eval-${id}`,
       name: "eval",
       arguments: {
         code: `
@@ -185,6 +199,145 @@ function performanceEvalInvocation(returnValue: unknown): ChatMessage {
       },
     }),
   };
+}
+
+const OPTIMIZATION_UNIT = "panels/example";
+const OPTIMIZATION_CONTEXT = "context:task";
+const OPTIMIZATION_APPLICATION = "application:optimization";
+const OPTIMIZATION_EVENT = "event:optimization";
+
+function performanceProfile(
+  bytes: number,
+  unit = OPTIMIZATION_UNIT,
+  contextId = OPTIMIZATION_CONTEXT
+): Record<string, unknown> {
+  return {
+    version: 1,
+    source: unit,
+    ref: `ctx:${contextId}`,
+    firstRun: { elapsedMs: 20, cacheState: "built-during-profile" },
+    verifiedCacheRun: { elapsedMs: 2, sameBuildKeys: true },
+    report: { repoPath: unit, status: "ok", builds: [{ target: "runtime" }] },
+    targets: [
+      {
+        target: "runtime",
+        buildKey: `build:${bytes}`,
+        artifactBytes: bytes + 200,
+        executableModuleCount: 1,
+        executableSourceBytes: bytes + 100,
+        bundleReport: {
+          initial: { requests: 1, bytes, jsBytes: bytes, cssBytes: 0 },
+        },
+      },
+    ],
+  };
+}
+
+function managedOptimization(
+  unit = OPTIMIZATION_UNIT,
+  contextId = OPTIMIZATION_CONTEXT,
+  applicationId = OPTIMIZATION_APPLICATION
+): ChatMessage {
+  return completedInvocation(
+    "edit",
+    { path: `${unit}/index.tsx`, oldText: "waste", newText: "concise" },
+    {
+      storage: "vcs",
+      vcsResult: {
+        contextId,
+        applicationId,
+        changeCount: 1,
+        changeIds: ["change:optimization"],
+        workingHead: { kind: "application", applicationId },
+      },
+    }
+  );
+}
+
+function finalBuild(unit = OPTIMIZATION_UNIT, contextId = OPTIMIZATION_CONTEXT): ChatMessage {
+  return completedInvocation(
+    "verify",
+    { operation: "build", target: unit },
+    {
+      operation: "build",
+      target: unit,
+      status: "ok",
+      receipt: {
+        protocol: "build-verification-receipt.v1",
+        contextId,
+        ref: `ctx:${contextId}`,
+        target: unit,
+        status: "ok",
+        unit: { repoPath: unit, kind: "panel" },
+      },
+    }
+  );
+}
+
+function optimizationCommit(
+  applicationIds: string[] = [OPTIMIZATION_APPLICATION],
+  contextId = OPTIMIZATION_CONTEXT,
+  eventId = OPTIMIZATION_EVENT
+): ChatMessage {
+  return completedInvocation(
+    "vcs",
+    { operation: "commit", message: "Remove measured panel bundle waste" },
+    {
+      operation: "commit",
+      result: {
+        contextId,
+        event: { kind: "event", eventId },
+        committedApplicationIds: applicationIds,
+      },
+    }
+  );
+}
+
+function finalCleanStatus(
+  contextId = OPTIMIZATION_CONTEXT,
+  eventId = OPTIMIZATION_EVENT
+): ChatMessage {
+  return completedInvocation(
+    "vcs",
+    { operation: "status" },
+    {
+      operation: "status",
+      result: {
+        contextId,
+        clean: true,
+        committed: { kind: "event", eventId },
+        workingHead: { kind: "event", eventId },
+        workingCounts: { applications: 0, workUnits: 0, changes: 0 },
+      },
+    }
+  );
+}
+
+function optimizationExecution(
+  options: {
+    beforeBytes?: number;
+    afterBytes?: number;
+    afterUnit?: string;
+    afterContextId?: string;
+    committedApplicationIds?: string[];
+    statusEventId?: string;
+  } = {}
+): TestExecutionResult {
+  return execution([
+    performanceEvalInvocation(
+      performanceProfile(options.beforeBytes ?? 8_192),
+      "optimization-before"
+    ),
+    managedOptimization(),
+    performanceEvalInvocation(
+      performanceProfile(options.afterBytes ?? 2_048, options.afterUnit, options.afterContextId),
+      "optimization-after"
+    ),
+    finalBuild(),
+    optimizationCommit(options.committedApplicationIds),
+    finalCleanStatus(OPTIMIZATION_CONTEXT, options.statusEventId),
+    finalAgentMessage("The panel now has the same visible output with less initial bundle waste."),
+  ]);
 }
 
 function completedInvocation(
