@@ -135,6 +135,7 @@ describe("AutomationActivity", () => {
     await screen.findByText("Everything looks good.");
     expect(api.get).toHaveBeenCalledWith(automation.missionId);
     expect(api.getRun).toHaveBeenCalledWith(run.runId);
+    expect(screen.queryByText("Additional provider token cost")).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "Stop recurring calls" }));
     await waitFor(() => expect(api.pause).toHaveBeenCalledWith(automation.missionId));
@@ -181,6 +182,82 @@ describe("AutomationActivity", () => {
     fireEvent.click(screen.getByRole("button", { name: "Review changes" }));
     await waitFor(() => expect(api.requestReview).toHaveBeenCalledWith(draft.missionId));
     expect(await screen.findByRole("button", { name: "Stop recurring calls" })).toBeTruthy();
+  });
+
+  it.each([
+    ["two-hour interval", { kind: "schedule" as const, everyMs: 7_200_000 }, true],
+    ["one-hour interval", { kind: "schedule" as const, everyMs: 3_600_000 }, false],
+    [
+      "weekly calendar schedule",
+      { kind: "cron" as const, expression: "5 5 * * THU", timezone: "America/New_York" },
+      true,
+    ],
+    [
+      "hourly calendar schedule",
+      { kind: "cron" as const, expression: "5 * * * *", timezone: "America/New_York" },
+      false,
+    ],
+  ])("%s provider-cache warning: %s", async (_label, trigger, expected) => {
+    const agentExecution = automation.charter.execution;
+    if (agentExecution.kind !== "agent") throw new Error("Expected an agent automation fixture");
+    const continuedAutomation: MissionRecord = {
+      ...automation,
+      charter: {
+        ...automation.charter,
+        trigger,
+        execution: {
+          ...agentExecution,
+          conversation: {
+            mode: "continue",
+            channelId: "project-research",
+            contextId: "ctx-project-research",
+          },
+        },
+      },
+    };
+    render(
+      <Theme>
+        <AutomationActivity
+          activity={{
+            snapshot: {
+              missionId: continuedAutomation.missionId,
+              runId: run.runId,
+              name: continuedAutomation.name,
+              revision: continuedAutomation.revision,
+              action: "prompt",
+              trigger: "scheduled",
+              startedAt: run.startedAt,
+              createdAt: continuedAutomation.createdAt,
+              activatedAt: continuedAutomation.activatedAt,
+              schedule:
+                trigger.kind === "cron"
+                  ? {
+                      kind: "cron",
+                      expression: trigger.expression,
+                      timezone: trigger.timezone,
+                    }
+                  : { kind: "interval", everyMs: trigger.everyMs },
+            },
+            status: "succeeded",
+            openedAt: new Date(run.startedAt).toISOString(),
+            closedAt: new Date(run.finishedAt!).toISOString(),
+          }}
+          automation={continuedAutomation}
+          run={run}
+          client={client()}
+        />
+      </Theme>
+    );
+
+    expect(screen.queryByText("Additional provider token cost")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /Inspect automation tick Daily check/ }));
+    if (expected) {
+      expect(await screen.findByText("Additional provider token cost")).toBeTruthy();
+      expect(screen.getByText(/API-provider context caches may expire/)).toBeTruthy();
+      expect(screen.getByText(/consumes additional input tokens/)).toBeTruthy();
+    } else {
+      expect(screen.queryByText("Additional provider token cost")).toBeNull();
+    }
   });
 
   it("edits the exact action parameters as an inert new revision", async () => {

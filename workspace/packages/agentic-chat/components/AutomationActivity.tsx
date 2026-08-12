@@ -206,6 +206,67 @@ function terminationSummary(trigger: MissionCharter["trigger"]): string {
   return parts.length > 0 ? parts.join(" or ") : "Runs until stopped or completed";
 }
 
+const PROVIDER_CONTEXT_CACHE_TTL_MS = 60 * 60 * 1_000;
+
+function cronFieldCoversRange(field: string, minimum: number, maximum: number): boolean {
+  const covered = new Set<number>();
+  for (const part of field.split(",")) {
+    const [range = "", rawStep] = part.split("/");
+    const step = rawStep === undefined ? 1 : Number(rawStep);
+    if (!Number.isInteger(step) || step < 1) return false;
+    const [rawStart, rawEnd] = range === "*" ? [minimum, maximum] : range.split("-").map(Number);
+    const start = rawStart ?? Number.NaN;
+    const end = rawEnd ?? start;
+    if (
+      !Number.isInteger(start) ||
+      !Number.isInteger(end) ||
+      start < minimum ||
+      end > maximum ||
+      start > end
+    ) {
+      return false;
+    }
+    for (let value = start; value <= end; value += step) covered.add(value);
+  }
+  return covered.size === maximum - minimum + 1;
+}
+
+function cronCanWaitLongerThanProviderCacheTtl(expression: string): boolean {
+  const canonical = canonicalCronExpression(expression);
+  if (canonical === "@hourly") return false;
+  if (canonical.startsWith("@")) return true;
+  const [, hour, day, month, weekday] = canonical.split(" ") as [
+    string,
+    string,
+    string,
+    string,
+    string,
+  ];
+  return !(
+    cronFieldCoversRange(hour, 0, 23) &&
+    cronFieldCoversRange(day, 1, 31) &&
+    cronFieldCoversRange(month, 1, 12) &&
+    (cronFieldCoversRange(weekday, 0, 6) || cronFieldCoversRange(weekday, 1, 7))
+  );
+}
+
+function continuingConversationExceedsProviderCacheTtl(automation: MissionRecord): boolean {
+  const { execution, trigger } = automation.charter;
+  if (
+    execution.kind !== "agent" ||
+    execution.conversation.mode !== "continue" ||
+    trigger.kind === "manual"
+  ) {
+    return false;
+  }
+  if (trigger.kind === "schedule") return trigger.everyMs > PROVIDER_CONTEXT_CACHE_TTL_MS;
+  try {
+    return cronCanWaitLongerThanProviderCacheTtl(trigger.expression);
+  } catch {
+    return false;
+  }
+}
+
 function localDateTimeInput(value?: number): string {
   if (value === undefined) return "";
   const date = new Date(value);
@@ -587,6 +648,10 @@ function Inspector({
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   useEffect(() => setCurrent(automation), [automation]);
+  const showProviderCacheWarning = useMemo(
+    () => current !== null && continuingConversationExceedsProviderCacheTtl(current),
+    [current]
+  );
   const changed = useCallback(
     (value: MissionRecord) => {
       cacheFor(definitionCaches, client).set(value.missionId, Promise.resolve(value));
@@ -647,6 +712,24 @@ function Inspector({
           <Callout.Text>
             Created here {formatAbsolute(Date.parse(definition.institutedAt))}. This draft is inert
             until you review its exact action, schedule, and authority.
+          </Callout.Text>
+        </Callout.Root>
+      ) : null}
+      {showProviderCacheWarning ? (
+        <Callout.Root color="amber" size="1">
+          <Callout.Icon>
+            <ExclamationTriangleIcon />
+          </Callout.Icon>
+          <Callout.Text>
+            <Text as="span" weight="medium" style={{ display: "block" }}>
+              Additional provider token cost
+            </Text>
+            <Text as="span" style={{ display: "block" }}>
+              This automation continues one chat conversation and can wait more than one hour
+              between wake-ups. API-provider context caches may expire during that gap. After the
+              cache expires, each later wake-up consumes additional input tokens to restore the
+              conversation context.
+            </Text>
           </Callout.Text>
         </Callout.Root>
       ) : null}

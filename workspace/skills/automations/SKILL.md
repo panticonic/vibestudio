@@ -168,6 +168,12 @@ execution: {
 }
 ```
 
+Continuing one conversation preserves its logical history, but provider-side
+context caching is not durable storage. When that conversation's schedule can
+wait more than one hour between wake-ups, its chat inspector warns that later
+runs may consume additional input tokens to restore context after the provider
+cache TTL expires. Fresh-conversation automations do not show this warning.
+
 For an exact small script, keep the code inline and let it run as the selected
 agent in that conversation:
 
