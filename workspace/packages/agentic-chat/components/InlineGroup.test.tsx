@@ -10,6 +10,7 @@ import { InlineGroup, type InlineItem } from "./InlineGroup";
 const render = (ui: React.ReactElement) => rtlRender(<Theme>{ui}</Theme>);
 import { CustomMessageCard } from "./CustomMessage";
 import type { MessageTypeComponentEntry } from "../types";
+import type { InvocationCardPayload } from "@workspace/agentic-core";
 
 type CustomInlineItem = Extract<InlineItem, { type: "custom" }>;
 type ReadyMessageTypeComponentEntry = Extract<MessageTypeComponentEntry, { status: "ready" }>;
@@ -51,7 +52,49 @@ function customEntry(): ReadyMessageTypeComponentEntry {
   };
 }
 
+function invocationItem(): Extract<InlineItem, { type: "invocation" }> {
+  return {
+    type: "invocation",
+    id: "invocation-1",
+    senderId: "agent-1",
+    complete: true,
+    invocation: {
+      id: "invocation-1",
+      name: "game_action",
+      arguments: { move: "north" },
+      execution: { status: "complete", description: "Move the player", result: { ok: true } },
+    } satisfies InvocationCardPayload,
+  };
+}
+
 describe("InlineGroup custom messages", () => {
+  it("lets a host replace or elide individual invocation presentation", () => {
+    const renderInvocation = vi.fn(({ payload, expanded, onToggle }) => (
+      <button type="button" onClick={onToggle}>
+        {expanded ? "expanded" : "collapsed"} {payload.name}
+      </button>
+    ));
+    const { container } = render(
+      <InlineGroup items={[invocationItem()]} renderInvocation={renderInvocation} />
+    );
+
+    expect(screen.getByText("collapsed game_action")).toBeTruthy();
+    expect(container.querySelector('[data-testid="invocation-pill"]')).toBeNull();
+
+    fireEvent.click(screen.getByText("collapsed game_action"));
+    expect(screen.getByText("expanded game_action")).toBeTruthy();
+    expect(renderInvocation).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        expanded: true,
+        payload: expect.objectContaining({ name: "game_action" }),
+      }),
+      expect.anything()
+    );
+
+    const hidden = render(<InlineGroup items={[invocationItem()]} renderInvocation={() => null} />);
+    expect(hidden.container.querySelector('[data-invocation-name="game_action"]')).toBeNull();
+  });
+
   it("lets the host toggle custom renderers between collapsed and expanded views", () => {
     render(
       <InlineGroup

@@ -29,6 +29,7 @@ vi.mock("@workspace/tool-ui", () => ({
 
 import { useAgenticChat } from "./useAgenticChat";
 import type { ChatContextValue, ConnectionConfig } from "../types";
+import type { AgenticChatUiFeature } from "../features";
 
 function createClient(
   channelConfig: { title?: string; titleExplicit?: boolean } = {}
@@ -66,9 +67,11 @@ function createRpcCall() {
 function Probe({
   config,
   onContext,
+  uiFeatures,
 }: {
   config: ConnectionConfig;
   onContext?: (value: ChatContextValue) => void;
+  uiFeatures?: readonly AgenticChatUiFeature[];
 }) {
   const { contextValue } = useAgenticChat({
     config,
@@ -78,6 +81,7 @@ function Probe({
       rpc: config.rpc,
       loadImport: vi.fn(async () => ({ bundle: "", format: "cjs" as const })),
     },
+    uiFeatures,
   });
   onContext?.(contextValue);
   return null;
@@ -156,6 +160,79 @@ describe("useAgenticChat set_title", () => {
       expect(methods).toBeDefined();
     });
     expect(methods?.["set_title"]).toBeUndefined();
+
+    unmount();
+  });
+
+  it("advertises the existing full UI method surface by default", async () => {
+    const client = createClient();
+    let methods: Record<string, MethodDefinition> | undefined;
+    pubsubMock.connectViaRpc.mockImplementation(
+      (options: { methods: Record<string, MethodDefinition> }) => {
+        methods = options.methods;
+        return client;
+      }
+    );
+    const config: ConnectionConfig = {
+      clientId: "panel:chat",
+      rpc: {
+        selfId: "panel:chat",
+        call: createRpcCall(),
+        stream: vi.fn(async () => new Response()),
+        on: vi.fn(() => () => undefined),
+      },
+    };
+
+    const { unmount } = render(<Probe config={config} />);
+
+    await waitFor(() => expect(methods).toBeDefined());
+    expect(Object.keys(methods ?? {})).toEqual(
+      expect.arrayContaining([
+        "feedback_form",
+        "feedback_custom",
+        "confirm",
+        "ui_prompt",
+        "inline_ui",
+        "load_action_bar",
+      ])
+    );
+
+    unmount();
+  });
+
+  it("does not advertise browser-owned UI methods when no UI features are selected", async () => {
+    const client = createClient();
+    let methods: Record<string, MethodDefinition> | undefined;
+    pubsubMock.connectViaRpc.mockImplementation(
+      (options: { methods: Record<string, MethodDefinition> }) => {
+        methods = options.methods;
+        return client;
+      }
+    );
+    const config: ConnectionConfig = {
+      clientId: "panel:chat",
+      rpc: {
+        selfId: "panel:chat",
+        call: createRpcCall(),
+        stream: vi.fn(async () => new Response()),
+        on: vi.fn(() => () => undefined),
+      },
+    };
+
+    const { unmount } = render(<Probe config={config} uiFeatures={[]} />);
+
+    await waitFor(() => expect(methods).toBeDefined());
+    expect(methods?.["client_eval"]).toBeDefined();
+    for (const name of [
+      "feedback_form",
+      "feedback_custom",
+      "confirm",
+      "ui_prompt",
+      "inline_ui",
+      "load_action_bar",
+    ]) {
+      expect(methods?.[name]).toBeUndefined();
+    }
 
     unmount();
   });

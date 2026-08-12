@@ -4,6 +4,7 @@ import React, { useEffect } from "react";
 import * as ReactJsxRuntime from "react/jsx-runtime";
 import * as ReactJsxDevRuntime from "react/jsx-dev-runtime";
 import * as RadixThemes from "@radix-ui/themes";
+import * as ReactResponsive from "@workspace/react/responsive";
 import { act, render, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { readFile } from "node:fs/promises";
@@ -207,6 +208,7 @@ describe("sandbox source hooks", () => {
     moduleMap["react/jsx-runtime"] = ReactJsxRuntime;
     moduleMap["react/jsx-dev-runtime"] = ReactJsxDevRuntime;
     moduleMap["@radix-ui/themes"] = RadixThemes;
+    moduleMap["@workspace/react/responsive"] = ReactResponsive;
 
     const sourcePath = "packages/agentic-chat/components/ModelCredentialRequiredCard.tsx";
     const cwd = process.cwd();

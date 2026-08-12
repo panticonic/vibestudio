@@ -1,4 +1,4 @@
-import React, { useCallback, useState } from "react";
+import React, { useCallback, useState, type ReactNode } from "react";
 import { Box, Flex, Spinner, Text } from "@radix-ui/themes";
 import { prettifyToolName } from "@workspace/pubsub";
 import type { CustomMessageCardPayload, InvocationCardPayload } from "@workspace/agentic-core";
@@ -18,7 +18,26 @@ export type InlineItem =
   | { type: "custom"; id: string; payload: CustomMessageCardPayload }
   | { type: "typing"; id: string; data: TypingIndicatorData; senderId: string };
 
-interface InlineGroupProps {
+export interface InvocationRenderContext {
+  id: string;
+  payload: InvocationCardPayload;
+  senderId: string;
+  expanded: boolean;
+  onToggle: () => void;
+  onCancel?: () => void;
+}
+
+/**
+ * Replaces one invocation's stock collapsed and expanded presentations. The
+ * second argument is the complete default renderer, so a host can return it,
+ * wrap it, replace it, or return null to keep the invocation out of the UI.
+ */
+export type InvocationRenderer = (
+  context: InvocationRenderContext,
+  defaultContent: ReactNode
+) => ReactNode;
+
+export interface InlineGroupProps {
   items: InlineItem[];
   messageTypeComponents?: Map<string, MessageTypeComponentEntry>;
   chat?: Record<string, unknown> & Partial<Pick<ChatSandboxValue, "rpc">>;
@@ -31,6 +50,8 @@ interface InlineGroupProps {
    * panel-local / channel-method abort for everything else.
    */
   onCancelInvocation?: (invocation: InvocationCardPayload, senderId: string) => void;
+  /** Per-invocation presentation override. */
+  renderInvocation?: InvocationRenderer;
 }
 
 /**
@@ -113,6 +134,7 @@ export const InlineGroup = React.memo(function InlineGroup({
   chat = {},
   onInterrupt,
   onCancelInvocation,
+  renderInvocation,
 }: InlineGroupProps) {
   const [expandedIds, setExpandedIds] = useState<ReadonlySet<string>>(() => new Set());
   const toggle = useCallback((id: string) => {
@@ -145,18 +167,39 @@ export const InlineGroup = React.memo(function InlineGroup({
           />
         );
       }
-      case "invocation":
-        return (
+      case "invocation": {
+        const onCancel =
+          canCancelInvocation(item.invocation) && onCancelInvocation
+            ? () => onCancelInvocation(item.invocation, item.senderId)
+            : undefined;
+        const onToggle = () => toggle(item.id);
+        const defaultContent = (
           <ActionPill
             key={item.id}
             id={item.id}
             payload={item.invocation}
             onExpand={toggle}
-            onCancel={canCancelInvocation(item.invocation) && onCancelInvocation
-              ? () => onCancelInvocation(item.invocation, item.senderId)
-              : undefined}
+            onCancel={onCancel}
           />
         );
+        return renderInvocation ? (
+          <React.Fragment key={item.id}>
+            {renderInvocation(
+              {
+                id: item.id,
+                payload: item.invocation,
+                senderId: item.senderId,
+                expanded: false,
+                onToggle,
+                onCancel,
+              },
+              defaultContent
+            )}
+          </React.Fragment>
+        ) : (
+          defaultContent
+        );
+      }
       case "custom":
         return (
           <CustomPill
@@ -219,17 +262,33 @@ export const InlineGroup = React.memo(function InlineGroup({
             onCollapse={collapse}
           />
         );
-      case "invocation":
-        return (
+      case "invocation": {
+        const onCancel =
+          canCancelInvocation(item.invocation) && onCancelInvocation
+            ? () => onCancelInvocation(item.invocation, item.senderId)
+            : undefined;
+        const defaultContent = (
           <ExpandedAction
             payload={item.invocation}
             chat={chat}
             onCollapse={collapse}
-            onCancel={canCancelInvocation(item.invocation) && onCancelInvocation
-              ? () => onCancelInvocation(item.invocation, item.senderId)
-              : undefined}
+            onCancel={onCancel}
           />
         );
+        return renderInvocation
+          ? renderInvocation(
+              {
+                id: item.id,
+                payload: item.invocation,
+                senderId: item.senderId,
+                expanded: true,
+                onToggle: collapse,
+                onCancel,
+              },
+              defaultContent
+            )
+          : defaultContent;
+      }
       case "custom":
         return (
           <ExpandedCustom

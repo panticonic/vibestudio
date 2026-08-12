@@ -56,6 +56,36 @@
 - UI-only types: `ChatContextValue`, `ChatInputContextValue`, `InlineUiComponentEntry`
 - UI-only hooks: `useChatFeedback`, `useChatTools`, `useChatDebug`, `useInlineUi`
 
+## Composing browser-owned surfaces
+
+`AgenticChat` keeps its existing full UI by default. A host that needs a
+smaller product or game surface selects the browser-owned capabilities for the
+participant's lifetime:
+
+```tsx
+<AgenticChat
+  uiFeatures={["feedback"]}
+  renderInvocation={({ payload }, defaultContent) =>
+    payload.name === "game_action" ? <GameMove payload={payload} /> : defaultContent
+  }
+/>
+```
+
+The selection is a capability boundary, not a CSS visibility switch. Omitting
+`feedback` removes `feedback_form`, `feedback_custom`, `confirm`, and
+`ui_prompt` from the joined participant as well as the stock feedback area.
+Omitting `inline-ui` removes `inline_ui`, skips component compilation, and
+hides historical inline-UI cards from the stock transcript. Omitting
+`action-bar` similarly removes `load_action_bar` and its stock presentation.
+Pass `uiFeatures={[]}` for none of these browser-owned surfaces. Remount the
+participant to change the selection because channel methods are fixed at join.
+
+`renderInvocation` can replace, wrap, or return `null` for each invocation; its
+second argument is the complete default renderer. `renderMessage` and
+`renderInlineGroup` remain the wider escape hatches. For a wholly different
+conversation model, consume `useChatCore()` directly. Headless game flows can
+instead use `HeadlessSession` and expose no conversation UI at all.
+
 ## Transcript Event Flow
 
 ```

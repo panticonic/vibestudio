@@ -9,6 +9,11 @@ import { MessageList } from "./MessageList";
 import { deriveActiveOutbox } from "./Outbox";
 import { SignalPills } from "./SignalPills";
 import { pendingReviewNotice } from "@vibestudio/shared/authority/reviewPending";
+import {
+  DEFAULT_AGENTIC_CHAT_UI_FEATURES,
+  selectAgenticChatTranscriptMessages,
+  type ResolvedAgenticChatUiFeatures,
+} from "../features";
 
 export interface ChatMessageAreaProps {
   /** Override default message card rendering */
@@ -19,13 +24,22 @@ export interface ChatMessageAreaProps {
   renderInlineGroup?: (
     ...args: Parameters<NonNullable<import("./MessageList").MessageListProps["renderInlineGroup"]>>
   ) => ReactNode;
+  /** Override individual invocation rendering while retaining the stock group. */
+  renderInvocation?: import("./InlineGroup").InvocationRenderer;
+  /** Resolved browser-owned features for the stock transcript. */
+  uiFeatures?: ResolvedAgenticChatUiFeatures;
 }
 
 /**
  * Message list area with load-earlier button.
  * Reads from ChatContext and passes to MessageList.
  */
-export function ChatMessageArea({ renderMessage, renderInlineGroup }: ChatMessageAreaProps = {}) {
+export function ChatMessageArea({
+  renderMessage,
+  renderInlineGroup,
+  renderInvocation,
+  uiFeatures = DEFAULT_AGENTIC_CHAT_UI_FEATURES,
+}: ChatMessageAreaProps = {}) {
   const {
     connected,
     messages,
@@ -69,10 +83,15 @@ export function ChatMessageArea({ renderMessage, renderInlineGroup }: ChatMessag
   // anything here either — otherwise a transiently-pending historical message
   // would vanish from BOTH places mid-replay.
   const transcriptMessages = useMemo(() => {
-    if (!connected) return messages;
-    const hiddenIds = new Set(deriveActiveOutbox(messages, selfId, participants).map((m) => m.id));
-    return hiddenIds.size > 0 ? messages.filter((m) => !hiddenIds.has(m.id)) : messages;
-  }, [connected, messages, selfId, participants]);
+    const featureVisibleMessages = selectAgenticChatTranscriptMessages(messages, uiFeatures);
+    if (!connected) return featureVisibleMessages;
+    const hiddenIds = new Set(
+      deriveActiveOutbox(featureVisibleMessages, selfId, participants).map((message) => message.id)
+    );
+    return hiddenIds.size > 0
+      ? featureVisibleMessages.filter((message) => !hiddenIds.has(message.id))
+      : featureVisibleMessages;
+  }, [connected, messages, selfId, participants, uiFeatures.inlineUi]);
 
   // Empty-transcript surface. While the spawned agent is starting, show an
   // accurate status (the pre-send queue below the composer shows the spinner
@@ -195,6 +214,7 @@ export function ChatMessageArea({ renderMessage, renderInlineGroup }: ChatMessag
         mdxActions={mdxActions}
         renderMessage={renderMessage}
         renderInlineGroup={renderInlineGroup}
+        renderInvocation={renderInvocation}
       />
     </Flex>
   );

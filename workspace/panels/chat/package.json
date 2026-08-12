@@ -14,6 +14,7 @@
       "@radix-ui/themes",
       "@radix-ui/react-icons",
       "@workspace/runtime",
+      "@workspace/react/responsive",
       "@workspace/ui"
     ],
     "authority": {

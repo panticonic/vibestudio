@@ -3,7 +3,7 @@ import { Box, Button, Flex, ScrollArea, Text } from "@radix-ui/themes";
 import type { Participant } from "@workspace/pubsub";
 import { useStickToBottom } from "../hooks/useStickToBottom.js";
 import { useScrollAnchor, type ScrollAnchorItem } from "../hooks/useScrollAnchor.js";
-import { InlineGroup, type InlineItem } from "./InlineGroup";
+import { InlineGroup, type InlineItem, type InvocationRenderer } from "./InlineGroup";
 import { NewContentIndicator } from "./NewContentIndicator";
 import { MessageCard } from "./MessageCard";
 import { SubagentRunCard } from "./SubagentRunCard";
@@ -243,6 +243,8 @@ export interface MessageListProps {
   renderMessage?: (msg: ChatMessage, senderInfo: SenderInfo) => React.ReactNode;
   /** Override default inline group rendering */
   renderInlineGroup?: (items: InlineItem[]) => React.ReactNode;
+  /** Override individual invocation rendering while retaining the stock group. */
+  renderInvocation?: InvocationRenderer;
   /** Override the empty-transcript placeholder (e.g. while an agent is launching). */
   emptyState?: React.ReactNode;
 }
@@ -308,6 +310,7 @@ export const MessageList = React.memo(function MessageList({
   mdxActions,
   renderMessage: customRenderMessage,
   renderInlineGroup: customRenderInlineGroup,
+  renderInvocation,
   emptyState,
 }: MessageListProps) {
   // --- Scroll state ---
@@ -633,6 +636,7 @@ export const MessageList = React.memo(function MessageList({
               chat={chat}
               onInterrupt={handleTypingInterrupt}
               onCancelInvocation={onCancelInvocation}
+              renderInvocation={renderInvocation}
             />
           </Flex>
         );
@@ -729,6 +733,7 @@ export const MessageList = React.memo(function MessageList({
       onReloadPanel,
       customRenderMessage,
       customRenderInlineGroup,
+      renderInvocation,
     ]
   );
 
@@ -813,6 +818,7 @@ export const MessageList = React.memo(function MessageList({
                         chat={chat}
                         onInterrupt={handleTypingInterrupt}
                         onCancelInvocation={onCancelInvocation}
+                        renderInvocation={renderInvocation}
                       />
                     )}
                   </Flex>

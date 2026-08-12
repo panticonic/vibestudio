@@ -65,6 +65,14 @@ import {
 import { scheduleBackgroundWork } from "../utils/scheduleBackgroundWork";
 import { sendSandboxText, type SandboxSendOptions } from "./sandboxSend";
 import { connectionRetryDelayMs, isTransientConnectionFailure } from "./connectionRetry";
+import {
+  resolveAgenticChatUiFeatures,
+  selectAgenticChatMethods,
+  type AgenticChatUiFeature,
+  type ResolvedAgenticChatUiFeatures,
+} from "../features";
+
+const NO_INLINE_UI_MESSAGES: ChatContextValue["messages"] = [];
 /** Installed agent info passed from the host panel. */
 interface InstalledAgentInfo {
   agentId: string;
@@ -199,7 +207,20 @@ export interface UseAgenticChatOptions {
   }) => void | Promise<void>;
   /** Changes when the host resolves a workspace review that blocked connection. */
   connectionRetrySignal?: number;
+  /**
+   * Browser-owned UI capabilities exposed by this participant. Omit for the
+   * full default surface; pass an empty array for a conversation with none.
+   * Fixed for the lifetime of the mounted participant.
+   */
+  uiFeatures?: readonly AgenticChatUiFeature[];
 }
+
+export interface UseAgenticChatResult {
+  contextValue: ChatContextValue;
+  inputContextValue: ChatInputContextValue;
+  uiFeatures: ResolvedAgenticChatUiFeatures;
+}
+
 export function useAgenticChat({
   config,
   channelName,
@@ -223,10 +244,9 @@ export function useAgenticChat({
   initialActionBarMaxHeight,
   onActionBarFileChange,
   connectionRetrySignal,
-}: UseAgenticChatOptions): {
-  contextValue: ChatContextValue;
-  inputContextValue: ChatInputContextValue;
-} {
+  uiFeatures: requestedUiFeatures,
+}: UseAgenticChatOptions): UseAgenticChatResult {
+  const [uiFeatures] = useState(() => resolveAgenticChatUiFeatures(requestedUiFeatures));
   const metadata = useMemo<ClientParticipantMetadata>(
     () => metadataOption ?? { name: channelName, type: "panel" },
     [channelName, metadataOption]
@@ -567,7 +587,11 @@ export function useAgenticChat({
     scopeManager,
   });
   const debug = useChatDebug();
-  const inlineUi = useInlineUi({ messages: core.messages, loadSourceFile, loadImport });
+  const inlineUi = useInlineUi({
+    messages: uiFeatures.inlineUi ? core.messages : NO_INLINE_UI_MESSAGES,
+    loadSourceFile,
+    loadImport,
+  });
   const messageTypes = useMessageTypeRegistry({
     client: core.client,
     messages: core.messages,
@@ -576,9 +600,14 @@ export function useAgenticChat({
     loadImport,
   });
   const [actionBarData, setActionBarData] = useState<ActionBarData | null>(null);
-  const actionBar = useActionBar({ data: actionBarData, loadSourceFile, loadImport });
+  const actionBar = useActionBar({
+    data: uiFeatures.actionBar ? actionBarData : null,
+    loadSourceFile,
+    loadImport,
+  });
   const lastLoadedActionBarKeyRef = useRef<string | null>(null);
   useEffect(() => {
+    if (!uiFeatures.actionBar) return;
     const canonical = core.canonicalActionBar;
     if (!canonical?.source) return;
     const next: ActionBarData = {
@@ -596,7 +625,7 @@ export function useAgenticChat({
         canonical.maxHeight
       );
     }
-  }, [core.canonicalActionBar]);
+  }, [core.canonicalActionBar, uiFeatures.actionBar]);
   const publishActionBarContext = useCallback(
     async (
       action: "loaded" | "cleared",
@@ -745,7 +774,7 @@ export function useAgenticChat({
     [onActionBarFileChange]
   );
   useEffect(() => {
-    if (!core.connected || !initialActionBarFile) return;
+    if (!uiFeatures.actionBar || !core.connected || !initialActionBarFile) return;
     const loadKey = actionBarLoadKey(
       initialActionBarFile,
       initialActionBarProps,
@@ -770,6 +799,7 @@ export function useAgenticChat({
     initialActionBarProps,
     initialActionBarMaxHeight,
     loadActionBarFromFile,
+    uiFeatures.actionBar,
   ]);
   // --- Stable refs for connection effect (avoids unstable object deps) ---
   const feedbackRef = useRef(feedback);
@@ -801,7 +831,7 @@ export function useAgenticChat({
         try {
           const feedbackMethods = feedbackRef.current.buildFeedbackMethods();
           const toolMethods = chatToolsRef.current.buildToolMethods();
-          const methods: Record<string, MethodDefinition> = {
+          const availableMethods: Record<string, MethodDefinition> = {
             ...feedbackMethods,
             ...toolMethods,
             confirm: {
@@ -1278,6 +1308,7 @@ Use package imports available to inline_ui plus relative imports for local helpe
               },
             },
           };
+          const methods = selectAgenticChatMethods(availableMethods, uiFeatures);
           await core.connectToChannel({
             channelId: channelName,
             methods,
@@ -1324,6 +1355,7 @@ Use package imports available to inline_ui plus relative imports for local helpe
     publishTypedAgenticEvent,
     connectionAttempt,
     connectionRetrySignal,
+    uiFeatures,
   ]);
   // --- Wrap platform actions ---
   const handleAddAgent = useCallback(
@@ -1583,5 +1615,5 @@ Use package imports available to inline_ui plus relative imports for local helpe
       metadata,
     ]
   );
-  return { contextValue, inputContextValue };
+  return { contextValue, inputContextValue, uiFeatures };
 }

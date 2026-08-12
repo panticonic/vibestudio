@@ -10,7 +10,17 @@ import { Outbox } from "./Outbox";
 import { PendingDeliveryQueue } from "./PendingDeliveryQueue";
 import { ChatInput } from "./ChatInput";
 import { ChatDebugConsole } from "./ChatDebugConsole";
+import type { ChatMessageAreaProps } from "./ChatMessageArea";
+import { DEFAULT_AGENTIC_CHAT_UI_FEATURES, type ResolvedAgenticChatUiFeatures } from "../features";
 import "../styles.css";
+
+export interface ChatLayoutProps extends Pick<
+  ChatMessageAreaProps,
+  "renderMessage" | "renderInlineGroup" | "renderInvocation"
+> {
+  /** Resolved browser-owned capabilities to mount in the stock layout. */
+  uiFeatures?: ResolvedAgenticChatUiFeatures;
+}
 
 /**
  * Default full chat layout — drop-in replacement for the old ChatPhase.
@@ -31,7 +41,12 @@ import "../styles.css";
  * </ChatProvider>
  * ```
  */
-export const ChatLayout = React.memo(function ChatLayout() {
+export const ChatLayout = React.memo(function ChatLayout({
+  renderMessage,
+  renderInlineGroup,
+  renderInvocation,
+  uiFeatures = DEFAULT_AGENTIC_CHAT_UI_FEATURES,
+}: ChatLayoutProps) {
   return (
     <>
       <Flex
@@ -52,9 +67,14 @@ export const ChatLayout = React.memo(function ChatLayout() {
         <ChatHeader />
         <ChatConnectionErrorBanner />
         <ChatDirtyRepoWarnings />
-        <LazyChatActionBar />
-        <ChatMessageArea />
-        <LazyChatFeedbackArea />
+        {uiFeatures.actionBar ? <LazyChatActionBar /> : null}
+        <ChatMessageArea
+          renderMessage={renderMessage}
+          renderInlineGroup={renderInlineGroup}
+          renderInvocation={renderInvocation}
+          uiFeatures={uiFeatures}
+        />
+        {uiFeatures.feedback ? <LazyChatFeedbackArea /> : null}
         <PendingDeliveryQueue />
         <Outbox />
         <ChatInput />

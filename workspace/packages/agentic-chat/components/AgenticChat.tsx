@@ -16,6 +16,8 @@ import type {
   ChatSandboxValue,
 } from "../types";
 import { scheduleChatCapabilityWarmup } from "../utils/chatCapabilityWarmup";
+import type { ChatMessageAreaProps } from "./ChatMessageArea";
+import type { AgenticChatUiFeature } from "../features";
 
 export interface AgenticChatHandle {
   /**
@@ -69,6 +71,17 @@ export interface AgenticChatProps {
   }) => void | Promise<void>;
   /** Host approval changes can unblock the initial channel connection. */
   connectionRetrySignal?: number;
+  /**
+   * Browser-owned UI capabilities exposed by this chat participant. Omit for
+   * feedback, inline UI, and action bars; pass [] to expose none of them.
+   */
+  uiFeatures?: readonly AgenticChatUiFeature[];
+  /** Override ordinary transcript message rendering. */
+  renderMessage?: ChatMessageAreaProps["renderMessage"];
+  /** Override complete inline groups (thinking, invocations, typing, custom messages). */
+  renderInlineGroup?: ChatMessageAreaProps["renderInlineGroup"];
+  /** Override individual invocation rendering while retaining the stock group. */
+  renderInvocation?: ChatMessageAreaProps["renderInvocation"];
 }
 
 /**
@@ -99,10 +112,14 @@ export const AgenticChat = forwardRef<AgenticChatHandle, AgenticChatProps>(funct
     initialActionBarMaxHeight,
     onActionBarFileChange,
     connectionRetrySignal,
+    uiFeatures: requestedUiFeatures,
+    renderMessage,
+    renderInlineGroup,
+    renderInvocation,
   },
   ref
 ) {
-  const { contextValue, inputContextValue } = useAgenticChat({
+  const { contextValue, inputContextValue, uiFeatures } = useAgenticChat({
     config,
     channelName,
     channelConfig,
@@ -121,6 +138,7 @@ export const AgenticChat = forwardRef<AgenticChatHandle, AgenticChatProps>(funct
     initialActionBarMaxHeight,
     onActionBarFileChange,
     connectionRetrySignal,
+    uiFeatures: requestedUiFeatures,
   });
   useEffect(() => scheduleChatCapabilityWarmup(), []);
   useImperativeHandle(
@@ -156,7 +174,12 @@ export const AgenticChat = forwardRef<AgenticChatHandle, AgenticChatProps>(funct
       >
         <ChatProvider value={contextValue} inputValue={inputContextValue}>
           <ChatPaletteCommands />
-          <ChatLayout />
+          <ChatLayout
+            uiFeatures={uiFeatures}
+            renderMessage={renderMessage}
+            renderInlineGroup={renderInlineGroup}
+            renderInvocation={renderInvocation}
+          />
         </ChatProvider>
       </Theme>
     </ErrorBoundary>

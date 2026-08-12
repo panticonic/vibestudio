@@ -20,6 +20,7 @@ export const DEFAULT_HOST_MODULES: readonly string[] = [
   "@radix-ui/themes",
   "@radix-ui/react-icons",
   "@workspace/runtime",
+  "@workspace/react/responsive",
   "@vibestudio/browser-data/client",
 ];
 

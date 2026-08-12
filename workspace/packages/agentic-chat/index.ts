@@ -40,6 +40,14 @@ export type { ChatProviderProps } from "./context/ChatProvider";
 // --- Hooks ---
 export { useAgenticChat } from "./hooks/useAgenticChat";
 export type { UseAgenticChatOptions } from "./hooks/useAgenticChat";
+export type { UseAgenticChatResult } from "./hooks/useAgenticChat";
+export {
+  AGENTIC_CHAT_UI_FEATURES,
+  DEFAULT_AGENTIC_CHAT_UI_FEATURES,
+  resolveAgenticChatUiFeatures,
+  selectAgenticChatTranscriptMessages,
+} from "./features";
+export type { AgenticChatUiFeature, ResolvedAgenticChatUiFeatures } from "./features";
 export { useChannelSignals } from "./hooks/useChannelSignals";
 export type { ChannelSignal, UseChannelSignalsOptions } from "./hooks/useChannelSignals";
 
@@ -77,6 +85,7 @@ export type { AgenticChatHandle, AgenticChatProps } from "./components/AgenticCh
 
 // --- Layout components (composable) ---
 export { ChatLayout } from "./components/ChatLayout";
+export type { ChatLayoutProps } from "./components/ChatLayout";
 export { ChatHeader } from "./components/ChatHeader";
 export { ForkSwitcher } from "./components/ForkSwitcher";
 export { ForkTreeView } from "./components/ForkTreeView";
@@ -104,7 +113,12 @@ export type { MessageListProps, SenderInfo } from "./components/MessageList";
 export { MessageCard } from "./components/MessageCard";
 export { MessageContent } from "./components/MessageContent";
 export { InlineGroup } from "./components/InlineGroup";
-export type { InlineItem } from "./components/InlineGroup";
+export type {
+  InlineGroupProps,
+  InlineItem,
+  InvocationRenderContext,
+  InvocationRenderer,
+} from "./components/InlineGroup";
 export { ThinkingPill, ExpandedThinking, PREVIEW_MAX_LENGTH } from "./components/ThinkingMessage";
 export { ActionPill, ExpandedAction } from "./components/ActionMessage";
 export { MethodArgumentsModal } from "./components/MethodArgumentsModal";
