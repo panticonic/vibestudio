@@ -29,12 +29,6 @@ import {
   type WorkspaceReadReceipt,
 } from "./workspace-read-receipt.js";
 
-const expectedHash = Type.Optional(
-  Type.String({
-    pattern: "^[0-9a-f]{64}$",
-    description: "Expected current content hash. Supply it to reject stale edits.",
-  })
-);
 const receipt = Type.Optional(workspaceReadReceiptSchema);
 const mode = Type.Optional(
   Type.Integer({
@@ -53,7 +47,6 @@ const patchOperationSchema = Type.Union([
     {
       kind: Type.Literal("replace"),
       path,
-      expectedHash,
       receipt,
       mode,
       replacements: Type.Array(
@@ -73,7 +66,6 @@ const patchOperationSchema = Type.Union([
     {
       kind: Type.Literal("write"),
       path,
-      expectedHash,
       receipt,
       mode,
       content: Type.String(),
@@ -84,22 +76,17 @@ const patchOperationSchema = Type.Union([
     {
       kind: Type.Literal("write_binary"),
       path,
-      expectedHash,
       receipt,
       mode,
       base64: Type.String({ description: "Complete file bytes encoded as canonical base64." }),
     },
     { additionalProperties: false }
   ),
-  Type.Object(
-    { kind: Type.Literal("delete"), path, expectedHash, receipt },
-    { additionalProperties: false }
-  ),
+  Type.Object({ kind: Type.Literal("delete"), path, receipt }, { additionalProperties: false }),
   Type.Object(
     {
       kind: Type.Literal("chmod"),
       path,
-      expectedHash,
       receipt,
       mode: Type.Integer({ minimum: 0, maximum: 0o777 }),
     },
@@ -109,11 +96,17 @@ const patchOperationSchema = Type.Union([
 
 const applyPatchSchema = Type.Object(
   {
-    operations: Type.Array(patchOperationSchema, { minItems: 1, maxItems: 200 }),
+    operations: Type.Array(patchOperationSchema, {
+      minItems: 1,
+      maxItems: 200,
+      description:
+        "Atomic file operations. Operation objects contain only operation-specific fields; intent is a request-level sibling of operations.",
+    }),
     intent: Type.Optional(
       Type.String({
         minLength: 1,
-        description: "Purpose when it is not already clear from the request.",
+        description:
+          "Request-level purpose when it is not already clear from the request. Keep this beside operations, never inside an operation.",
       })
     ),
   },
@@ -124,7 +117,6 @@ export type ApplyPatchOperation =
   | {
       kind: "replace";
       path: string;
-      expectedHash?: string;
       receipt?: WorkspaceReadReceipt;
       mode?: number;
       replacements: Array<{ oldText: string; newText: string }>;
@@ -132,7 +124,6 @@ export type ApplyPatchOperation =
   | {
       kind: "write";
       path: string;
-      expectedHash?: string;
       receipt?: WorkspaceReadReceipt;
       mode?: number;
       content: string;
@@ -140,7 +131,6 @@ export type ApplyPatchOperation =
   | {
       kind: "write_binary";
       path: string;
-      expectedHash?: string;
       receipt?: WorkspaceReadReceipt;
       mode?: number;
       base64: string;
@@ -148,13 +138,11 @@ export type ApplyPatchOperation =
   | {
       kind: "delete";
       path: string;
-      expectedHash?: string;
       receipt?: WorkspaceReadReceipt;
     }
   | {
       kind: "chmod";
       path: string;
-      expectedHash?: string;
       receipt?: WorkspaceReadReceipt;
       mode: number;
     };
@@ -173,20 +161,6 @@ export interface ApplyPatchToolDetails {
 
 function patchFailure(code: string, message: string, data: Record<string, unknown>): Error {
   return Object.assign(new Error(message), { code, errorData: { code, message, ...data } });
-}
-
-function assertExpectedHash(
-  operation: ApplyPatchOperation,
-  actual: string | undefined,
-  canonicalPath: string
-): void {
-  if (!operation.expectedHash) return;
-  if (actual === operation.expectedHash) return;
-  throw patchFailure("PatchPreconditionFailed", `Stale content at ${canonicalPath}`, {
-    path: canonicalPath,
-    expectedHash: operation.expectedHash,
-    actualHash: actual ?? null,
-  });
 }
 
 function canonicalBase64(value: string, canonicalPath: string): string {
@@ -287,7 +261,7 @@ export function createApplyPatchTool(
     name: "apply_patch",
     label: "apply_patch",
     description:
-      'Atomically mutate multiple managed workspace files in one semantic work unit, or perform a binary write, deletion, or mode change. Use edit for ordinary changes confined to one text file. Every operation requires its discriminator: for text replacement use { kind: "replace", path, replacements: [{ oldText, newText }] }. expectedHash and receipt belong on the operation, not a replacement; omit optional fields instead of sending null. Every path must name a file inside an existing repository, including its top-level section and repository name (for example projects/app/README.md); workspace-root files and bare section paths are not managed repositories. Replacements are exact preconditions: the tool never guesses a fuzzy match. Each path may appear once. Pass each file\'s read receipt when stale-write protection matters; a conflict returns a fresh receipt and bounded current excerpts. All operations are validated before anything changes; move_file and copy_file remain the identity-preserving structural tools.',
+      'Atomically mutate multiple managed workspace files in one semantic work unit, or perform a binary write, deletion, or mode change. Use edit for ordinary changes confined to one text file and write for a whole-file text replacement. Request shape: { intent?: "purpose", operations: [...] }; intent is a request-level sibling of operations, never an operation field. Every operation requires its discriminator: for text replacement use { kind: "replace", path, replacements: [{ oldText, newText }] }; omit optional fields instead of sending null. Every path must name a file inside an existing repository, including its top-level section and repository name (for example projects/app/README.md); workspace-root files and bare section paths are not managed repositories. Replacements are exact preconditions: the tool never guesses a fuzzy match. Each path may appear once. When stale-write protection matters, copy each file\'s receipt from read onto its operation without rewriting it; a conflict returns a fresh receipt and bounded current excerpts. Never invent or manually reconstruct content hashes. All operations are validated before anything changes; move_file and copy_file remain the identity-preserving structural tools.',
     parameters: applyPatchSchema,
     cancellationMode: "settle",
     execute: async (
@@ -341,7 +315,6 @@ export function createApplyPatchTool(
                 }
               : {}),
           });
-          assertExpectedHash(operation, file?.contentHash, canonicalPath);
           return { operation, canonicalPath, route, repository, file };
         })
       );

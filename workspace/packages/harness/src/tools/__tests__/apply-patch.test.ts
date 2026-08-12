@@ -14,6 +14,8 @@ describe("apply_patch", () => {
     expect(tool.description).toContain("workspace-root files");
     expect(tool.description).toContain('{ kind: "replace", path, replacements:');
     expect(tool.description).toContain("omit optional fields instead of sending null");
+    expect(tool.description).toContain("intent is a request-level sibling of operations");
+    expect(tool.description).toContain("Never invent or manually reconstruct content hashes");
   });
 
   it("applies a multi-file content, presence, and mode transaction", async () => {
@@ -76,7 +78,7 @@ describe("apply_patch", () => {
     expect(vcs.modes.get("meta/asset.bin")).toBe(0o600);
   });
 
-  it("rejects every operation before mutation when a precondition is stale", async () => {
+  it("rejects every operation before mutation when a read receipt is stale", async () => {
     const vcs = new StubVcs({ files: { "meta/a.ts": "old", "meta/b.ts": "old" } });
     const tool = createApplyPatchTool("/", vcs, authority);
     await expect(
@@ -87,11 +89,16 @@ describe("apply_patch", () => {
             kind: "write",
             path: "meta/b.ts",
             content: "new",
-            expectedHash: "f".repeat(64),
+            receipt: {
+              protocol: "workspace-read-receipt.v1",
+              path: "meta/b.ts",
+              contentHash: "f".repeat(64),
+              byteLength: 3,
+            },
           },
         ],
       } as never)
-    ).rejects.toMatchObject({ code: "PatchPreconditionFailed" });
+    ).rejects.toMatchObject({ code: "WorkspaceReadConflict" });
     expect(vcs.lastEditInput).toBeUndefined();
     expect(vcs.read("meta/a.ts")).toBe("old");
   });
