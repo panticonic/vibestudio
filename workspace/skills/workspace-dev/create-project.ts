@@ -411,6 +411,32 @@ export interface CreateProjectParams {
   template?: string;
 }
 
+export type ProjectIconCatalog = string[];
+
+export interface ProjectIconFailureData {
+  code: "project_icon_invalid";
+  icon: string;
+  kind: "lucide" | "brand";
+  name: string;
+  available: string[];
+  suggestions: string[];
+  remediation: string;
+}
+
+export class ProjectIconError extends Error {
+  readonly code = "project_icon_invalid";
+  readonly errorData: ProjectIconFailureData;
+
+  constructor(errorData: ProjectIconFailureData) {
+    super(
+      `Unknown curated ${errorData.kind} icon: ${errorData.name || "(empty)"}. ` +
+        "Call listProjectIcons() and choose a returned catalog id."
+    );
+    this.name = "ProjectIconError";
+    this.errorData = errorData;
+  }
+}
+
 interface ResolvedProject {
   projectType: ProjectType;
   projectPath: string;
@@ -431,22 +457,96 @@ const BRAND_ICON_COLORS: Readonly<Record<string, string>> = {
   typescript: "#3178C6",
 };
 
+function catalogDirectory(kind: "lucide" | "brand"): string {
+  return `skills/workspace-dev/assets/icons/${kind === "brand" ? "brands" : "lucide"}`;
+}
+
+async function catalogNames(kind: "lucide" | "brand"): Promise<string[]> {
+  const entries = await fs.readdir(catalogDirectory(kind));
+  const names = entries
+    .filter((entry) => entry.endsWith(".svg"))
+    .map((entry) => entry.slice(0, -4))
+    .sort((left, right) => left.localeCompare(right));
+  if (kind === "brand") {
+    const metadata = Object.keys(BRAND_ICON_COLORS).sort((left, right) =>
+      left.localeCompare(right)
+    );
+    if (names.length !== metadata.length || names.some((name, index) => name !== metadata[index])) {
+      throw new Error(
+        "The curated brand icon assets and color metadata disagree; repair the workspace-dev catalog"
+      );
+    }
+  }
+  return names;
+}
+
+/** Return the exact icon ids accepted by {@link createProjects}. */
+export async function listProjectIcons(): Promise<ProjectIconCatalog> {
+  const [lucide, brand] = await Promise.all([catalogNames("lucide"), catalogNames("brand")]);
+  return [
+    ...lucide.map((name) => `lucide:${name}`),
+    ...brand.map((name) => `brand:${name}`),
+  ].sort((left, right) => left.localeCompare(right));
+}
+
+function editDistance(left: string, right: string): number {
+  const previous = Array.from({ length: right.length + 1 }, (_, index) => index);
+  for (let leftIndex = 1; leftIndex <= left.length; leftIndex += 1) {
+    const current = [leftIndex];
+    for (let rightIndex = 1; rightIndex <= right.length; rightIndex += 1) {
+      current[rightIndex] = Math.min(
+        (current[rightIndex - 1] ?? 0) + 1,
+        (previous[rightIndex] ?? 0) + 1,
+        (previous[rightIndex - 1] ?? 0) + (left[leftIndex - 1] === right[rightIndex - 1] ? 0 : 1)
+      );
+    }
+    previous.splice(0, previous.length, ...current);
+  }
+  return previous[right.length] ?? Math.max(left.length, right.length);
+}
+
+function invalidProjectIcon(
+  icon: string,
+  kind: "lucide" | "brand",
+  name: string,
+  available: string[]
+): ProjectIconError {
+  const suggestions = [...available]
+    .sort(
+      (left, right) =>
+        editDistance(name, left) - editDistance(name, right) || left.localeCompare(right)
+    )
+    .slice(0, 5)
+    .map((candidate) => `${kind}:${candidate}`);
+  return new ProjectIconError({
+    code: "project_icon_invalid",
+    icon,
+    kind,
+    name,
+    available: available.map((candidate) => `${kind}:${candidate}`),
+    suggestions,
+    remediation:
+      "Call listProjectIcons(), then pass one returned id such as `lucide:database` or omit `icon`.",
+  });
+}
+
 async function materializeCatalogIcon(
   icon: string | undefined,
   files: Record<string, string>
 ): Promise<string | undefined> {
+  const declaredKind = /^(lucide|brand):/u.exec(icon ?? "")?.[1] as "lucide" | "brand" | undefined;
+  if (!declaredKind) return icon;
   const match = /^(lucide|brand):([a-z0-9-]+)$/u.exec(icon ?? "");
-  if (!match) return icon;
-  const kind = match[1] as "lucide" | "brand";
-  const name = match[2];
-  if (!name) throw new Error(`Invalid curated icon id: ${icon}`);
+  const kind = declaredKind;
+  const available = await catalogNames(kind);
+  const name = match?.[2] ?? "";
+  if (!match || !available.includes(name)) {
+    throw invalidProjectIcon(icon!, kind, name, available);
+  }
   const library = kind === "brand" ? "brands" : "lucide";
   const brandColor = BRAND_ICON_COLORS[name];
-  if (kind === "brand" && !brandColor) {
-    throw new Error(`Unknown curated brand icon: ${name}`);
-  }
+  if (kind === "brand" && !brandColor) throw new Error(`Missing brand color metadata: ${name}`);
   const source = `skills/workspace-dev/assets/icons/${library}/${name}.svg`;
-  if (!(await fs.exists(source))) throw new Error(`Unknown curated ${kind} icon: ${name}`);
   let svg = (await fs.readFile(source, "utf-8")) as string;
   svg =
     kind === "brand"

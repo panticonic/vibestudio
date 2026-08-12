@@ -248,6 +248,59 @@ describe("createProjects", () => {
     );
   });
 
+  it("discovers the exact curated icon catalog instead of requiring guessed names", async () => {
+    addFile("skills/workspace-dev/assets/icons/lucide/database.svg", "<svg />");
+    addFile("skills/workspace-dev/assets/icons/lucide/messages-square.svg", "<svg />");
+    for (const name of [
+      "claude",
+      "git",
+      "gmail",
+      "gnubash",
+      "javascript",
+      "react",
+      "svelte",
+      "typescript",
+    ]) {
+      addFile(`skills/workspace-dev/assets/icons/brands/${name}.svg`, "<svg />");
+    }
+    const { listProjectIcons } = await import("./create-project.js");
+
+    await expect(listProjectIcons()).resolves.toEqual([
+      "brand:claude",
+      "brand:git",
+      "brand:gmail",
+      "brand:gnubash",
+      "brand:javascript",
+      "brand:react",
+      "brand:svelte",
+      "brand:typescript",
+      "lucide:database",
+      "lucide:messages-square",
+    ]);
+  });
+
+  it("returns a structured catalog repair plan before creating an unknown icon", async () => {
+    addFile("skills/workspace-dev/assets/icons/lucide/database.svg", "<svg />");
+    const { createProjects, ProjectIconError } = await import("./create-project.js");
+
+    const failure = await createProjects([
+      { projectType: "panel", name: "board", icon: "lucide:columns-3" },
+    ]).catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(ProjectIconError);
+    expect((failure as InstanceType<typeof ProjectIconError>).errorData).toEqual({
+      code: "project_icon_invalid",
+      icon: "lucide:columns-3",
+      kind: "lucide",
+      name: "columns-3",
+      available: ["lucide:database"],
+      suggestions: ["lucide:database"],
+      remediation: expect.stringContaining("listProjectIcons()"),
+    });
+    expect(mocks.edit).not.toHaveBeenCalled();
+    expect(mocks.commit).not.toHaveBeenCalled();
+  });
+
   it("keeps the built-in default panel deterministic without consulting template files", async () => {
     addFile("templates/default/template.json", JSON.stringify({ framework: "svelte" }));
     const { createProjects } = await import("./create-project.js");

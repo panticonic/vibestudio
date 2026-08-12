@@ -155,10 +155,14 @@ approval prompt instead of separate prompts for each:
 
 ```
 eval({ code: `
-  import { createProjects } from "@workspace-skills/workspace-dev";
+  import { createProjects, listProjectIcons } from "@workspace-skills/workspace-dev";
+  const icons = await listProjectIcons();
+  const databaseIcon = icons.find((icon) => icon === "lucide:database");
+  const panelIcon = icons.find((icon) => icon === "lucide:panels-top-left");
+  if (!databaseIcon || !panelIcon) throw new Error("Required catalog icons are unavailable");
   return await createProjects([
-    { projectType: "worker", name: "task-board-store", title: "Task Board Store" },
-    { projectType: "panel", name: "task-board", title: "Task Board" },
+    { projectType: "worker", name: "task-board-store", title: "Task Board Store", icon: databaseIcon },
+    { projectType: "panel", name: "task-board", title: "Task Board", icon: panelIcon },
   ]);
 `
 })
@@ -172,6 +176,18 @@ Even for a single project, use `createProjects` with a one-element array.
 | `projectType` | string | Yes | One of: `panel`, `package`, `skill`, `project`, `worker` |
 | `name` | string | Yes | Stable kebab-case identifier matching `^[a-z][a-z0-9-]*$` |
 | `title` | string | No | Human-readable title (defaults to name) |
+| `icon` | string | No | Emoji, local relative asset, or an exact `lucide:<name>` / `brand:<name>` id returned by `listProjectIcons()` |
+| `template` | string | No | Panel template name, or `agentic` for the agentic worker scaffold |
+
+Do not guess catalog names from the full upstream Lucide or Simple Icons
+libraries: the scaffold deliberately accepts a small curated set. Call
+`listProjectIcons()` and choose an exact returned id. An invalid catalog id
+throws `ProjectIconError` before any VCS mutation, with `available`, bounded
+`suggestions`, and a remediation in `errorData`.
+
+The catalog result is a sorted flat array of the exact accepted strings (for
+example `lucide:database` and `brand:react`), so it can be searched, sliced, or
+passed directly without reconstructing prefixes.
 
 For an isolated generated name, append a lowercase base-36 suffix such as
 `` `todo-list-${Date.now().toString(36)}` ``. Do not append a raw ISO timestamp:

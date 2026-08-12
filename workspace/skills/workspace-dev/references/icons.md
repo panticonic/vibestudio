@@ -28,11 +28,25 @@ Every user-visible or executable unit declares exactly one
 3. A single semantic emoji only when it is more expressive than a drawn icon.
 4. Original repo-local artwork for a product identity.
 
-For new panels and workers, pass `lucide:<name>` or `brand:<name>` to
-`createProjects`. The scaffold copies only that SVG into `assets/icon.svg` and
-writes `vibestudio.icon: "./assets/icon.svg"`; no icon library enters the unit's
-runtime bundle. Available curated sources live in `assets/icons/lucide/` and
-`assets/icons/brands/` beside this reference.
+For new panels and workers, discover the accepted ids and pass one exact result
+to `createProjects`:
+
+```ts
+import { createProjects, listProjectIcons } from "@workspace-skills/workspace-dev";
+
+const icons = await listProjectIcons();
+const icon = icons.find((candidate) => candidate === "lucide:messages-square");
+if (!icon) throw new Error("The messages icon is unavailable");
+return createProjects([
+  { projectType: "panel", name: "inbox", icon },
+]);
+```
+
+Do not infer availability from the full upstream libraries or guess a plausible
+Lucide name. The scaffold copies only the selected SVG into `assets/icon.svg`
+and writes `vibestudio.icon: "./assets/icon.svg"`; no icon library enters the
+unit's runtime bundle. Invalid catalog ids fail before mutation with the exact
+available ids and suggestions in structured error data.
 
 For apps and extensions, copy the chosen catalog SVG into the unit as
 `assets/icon.svg`, replace Lucide's `currentColor` with a visible fixed color,

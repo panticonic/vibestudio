@@ -1,11 +1,13 @@
 export {
   createProjects,
+  listProjectIcons,
   forkProject,
   forkPanel,
   forkWorker,
   recoverProjectPublication,
   ScaffoldPublicationError,
   ScaffoldPublicationRecoveryError,
+  ProjectIconError,
 } from "./create-project.js";
 export type {
   CreateProjectParams,
@@ -14,6 +16,8 @@ export type {
   ProjectPublication,
   ScaffoldPublicationRecoveryFailureData,
   ScaffoldPublicationFailureData,
+  ProjectIconCatalog,
+  ProjectIconFailureData,
 } from "./create-project.js";
 export {
   buildProjectManifest,
