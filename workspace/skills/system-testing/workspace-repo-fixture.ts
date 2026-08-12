@@ -1180,21 +1180,7 @@ function buildableExtensionFiles(repoName: string): Array<{ path: string; conten
         "",
       ].join("\n"),
     },
-    {
-      path: "SKILL.md",
-      content: [
-        "---",
-        `name: ${repoName}`,
-        "description: Disposable status extension used to exercise trusted extension editing.",
-        "---",
-        "",
-        "# Status extension",
-        "",
-        "Keep the status result and its focused unit test aligned. Use the normal extension",
-        "development workflow and context-aware verification surface.",
-        "",
-      ].join("\n"),
-    },
+    trustedUnitSkillFile(repoName, "extension"),
   ];
 }
 
@@ -1252,7 +1238,31 @@ function buildableAppFiles(repoName: string): Array<{ path: string; content: str
         "",
       ].join("\n"),
     },
+    trustedUnitSkillFile(repoName, "app"),
   ];
+}
+
+function trustedUnitSkillFile(
+  repoName: string,
+  kind: "app" | "extension"
+): { path: string; content: string } {
+  const noun = kind === "app" ? "terminal app" : "status extension";
+  const skill = kind === "app" ? "appdev" : "extensiondev";
+  return {
+    path: "SKILL.md",
+    content: [
+      "---",
+      `name: ${repoName}`,
+      `description: Disposable ${noun} used to exercise trusted ${kind} editing.`,
+      "---",
+      "",
+      `# ${kind === "app" ? "Terminal app" : "Status extension"}`,
+      "",
+      `Read \`skills/${skill}/SKILL.md\` before changing this trusted ${kind} and follow its`,
+      "documented workflow. Keep the status result and its focused unit test aligned.",
+      "",
+    ].join("\n"),
+  };
 }
 
 interface HistoricalContentRevision {

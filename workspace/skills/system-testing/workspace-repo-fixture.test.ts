@@ -831,6 +831,7 @@ describe("WorkspaceRepoFixtureLifecycle", () => {
       repoName: "system-test-extension",
       repoPath: "extensions/system-test-extension",
       packageName: "@workspace-extensions/system-test-extension",
+      skillPath: "skills/extensiondev/SKILL.md",
       expectedFiles: ["SKILL.md", "assets/icon.svg", "index.test.ts", "index.ts", "package.json"],
     },
     {
@@ -839,7 +840,8 @@ describe("WorkspaceRepoFixtureLifecycle", () => {
       repoName: "system-test-app",
       repoPath: "apps/system-test-app",
       packageName: "@workspace-apps/system-test-app",
-      expectedFiles: ["assets/icon.svg", "index.test.ts", "index.ts", "package.json"],
+      skillPath: "skills/appdev/SKILL.md",
+      expectedFiles: ["SKILL.md", "assets/icon.svg", "index.test.ts", "index.ts", "package.json"],
     },
   ])("seeds a buildable trusted $label with a focused failing test", async (scenario) => {
     const fake = createPort();
@@ -861,6 +863,7 @@ describe("WorkspaceRepoFixtureLifecycle", () => {
     expect(seededText).toContain('expect(startupLabel()).toBe("ready")');
     expect(seededText).toMatch(/startupLabel\(\): string \{ return "(?:waiting|booting)"; \}/u);
     expect(seededText).toContain("assets/icon.svg");
+    expect(seededText).toContain(`Read \`${scenario.skillPath}\` before changing this trusted`);
     if (scenario.fixture.kind === "buildable-app") {
       expect(seededText).toContain('"capability": "context.boundary"');
       expect(seededText).toContain('"evidence": "bounded-dynamic"');
