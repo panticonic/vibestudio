@@ -47,6 +47,40 @@ ordinary product behavior does not require shipping a new host.
 7. Verify both authority behavior and recovery behavior. A happy-path UI test
    alone is not sufficient for a boundary migration.
 
+## Shipping prerequisite: one Base release path
+
+Several migrations below end in an ordinary workspace worker. Adding such a
+worker only under this checkout's `workspace/` tree is not a completed move:
+the durable shipping owner is the externally released Base selected by the
+host's exact Base pointer, and existing workspaces must receive the unit through
+ordinary Composer reconciliation.
+
+Do not solve that release boundary by teaching the host to seed workers. That
+would create a second distribution channel beside Base, make worker presence
+depend on host version, and turn an extraction into a new builtin mechanism.
+
+Before the first builtin-to-worker deletion, the Base cutover must prove this
+sequence:
+
+1. Publish a root-capable exact Base release containing the worker, its package
+   manifest, service declaration, singleton declaration, and authority request.
+2. Adopt the verified Base receipt into the corresponding host release rather
+   than copying Base source into the host artifact.
+3. Prove both a fresh workspace and an existing locally modified workspace
+   acquire the worker through the same Base/Composer lineage.
+4. Land any durable-data migration as a Base-owned migration with counts and
+   digests. Do not keep the builtin as a fallback reader.
+5. Delete the builtin class, catalog entry, internal-DO export, and host
+   authority in the host/Base pair that makes the workspace service required.
+
+Phone provisioning should be the first proof. Its current builtin is stateless,
+already has a typed protocol, and delegates to the connected-client transport,
+so the cutover exercises distribution and authority without a durable-data
+migration. Completion means protocol resolution selects the Base worker in
+fresh and reconciled workspaces and `PhoneProvisioningDO` no longer exists in
+the host. A local worker coexisting with the builtin is not progress toward
+that acceptance condition.
+
 ## Target architecture
 
 The desired execution stack is:
