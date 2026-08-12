@@ -18,7 +18,9 @@ describe("vague intent discovery scenarios", () => {
   });
 
   it("allows phone observation but never unattended provisioning", () => {
-    const policy = scenario("vague-phone-setup-readiness").authorityPolicy;
+    const phoneScenario = scenario("vague-phone-setup-readiness");
+    expect(phoneScenario.resources).toEqual(["mobile:android-device"]);
+    const policy = phoneScenario.authorityPolicy;
     expect(policy).not.toBeInstanceOf(Function);
     if (!policy || policy instanceof Function)
       throw new Error("Expected a static authority policy");

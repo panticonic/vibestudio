@@ -72,6 +72,7 @@ export const intentDiscoveryTests: TestCase[] = [
     description:
       "Discover the phone onboarding path, observe current readiness, and stop before provisioning",
     category: "intent-discovery",
+    resources: ["mobile:android-device"],
     authorityPolicy: phoneDiscoveryAuthority,
     prompt:
       "I'd like to use this workspace from my phone. See how far setup can get right now without installing or pairing anything, then give me just the next thing I need to do.",
