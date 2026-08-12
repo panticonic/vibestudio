@@ -2734,7 +2734,6 @@ app.on("ready", async () => {
           return getPanelView();
         },
         getViewManager,
-        serverClient: sc,
         panelLayoutStore,
         getWorkspaceId: () => conn.workspaceConfig.id,
         getAccountUserId,

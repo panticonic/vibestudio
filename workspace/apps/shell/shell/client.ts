@@ -78,6 +78,7 @@ import {
 } from "@vibestudio/shared/panelChrome";
 import type { WorkspaceTemplatePin } from "@vibestudio/workspace-contracts/types";
 import { createTemplateManagementClient } from "@workspace/template-management";
+import { createBrowserSiteActions } from "./browserSiteActions";
 // Type for the shell transport bridge injected by the preload script
 type ShellTransportBridge = {
   send: (envelope: RpcEnvelope) => Promise<void>;
@@ -193,6 +194,16 @@ const autofillClient = createTypedServiceClient(
 const viewClient = createTypedServiceClient("view", viewMethods, (service, method, args) =>
   rpc.call("main", `${service}.${method}`, args)
 );
+const browserSiteActions = createBrowserSiteActions({
+  native: {
+    getBrowserPageIdentity: (panelId) => viewClient.getBrowserPageIdentity(panelId),
+    setNativeBrowserZoom: (panelId, origin, zoomFactor) =>
+      viewClient.setNativeBrowserZoom(panelId, origin, zoomFactor),
+    clearNativeBrowserSiteData: (panelId, origin) =>
+      viewClient.clearNativeBrowserSiteData(panelId, origin),
+  },
+  data: browserDataClient,
+});
 const workspaceClient = createTypedServiceClient(
   "workspace",
   workspaceMethods,
@@ -361,11 +372,11 @@ export const panel = {
   findInPage: (panelId: string, text: string, options: { forward: boolean; findNext: boolean }) =>
     viewClient.findInPage(panelId, text, options),
   stopFindInPage: (panelId: string) => viewClient.stopFindInPage(panelId),
-  getBrowserSiteState: (panelId: string) => viewClient.getBrowserSiteState(panelId),
-  toggleBrowserBookmark: (panelId: string) => viewClient.toggleBrowserBookmark(panelId),
+  getBrowserSiteState: (panelId: string) => browserSiteActions.getBrowserSiteState(panelId),
+  toggleBrowserBookmark: (panelId: string) => browserSiteActions.toggleBrowserBookmark(panelId),
   setBrowserZoom: (panelId: string, zoomFactor: number) =>
-    viewClient.setBrowserZoom(panelId, zoomFactor),
-  clearBrowserSiteData: (panelId: string) => viewClient.clearBrowserSiteData(panelId),
+    browserSiteActions.setBrowserZoom(panelId, zoomFactor),
+  clearBrowserSiteData: (panelId: string) => browserSiteActions.clearBrowserSiteData(panelId),
   printBrowserPage: (panelId: string) => viewClient.printBrowserPage(panelId),
   saveBrowserPagePdf: (panelId: string) => viewClient.saveBrowserPagePdf(panelId),
   stopBrowserMedia: (panelId: string) => viewClient.stopBrowserMedia(panelId),

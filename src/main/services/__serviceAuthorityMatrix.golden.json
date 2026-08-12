@@ -2727,7 +2727,7 @@
         "capability": null,
         "presentation": null
       },
-      "clearBrowserSiteData": {
+      "clearNativeBrowserSiteData": {
         "authority": {
           "inherits": true
         },
@@ -2739,7 +2739,7 @@
           "session": "family",
           "residency": "native-effect",
           "family": "panel.control",
-          "rationale": "P-panels: shell-driven browser site-data clear for the focused panel; core mutually inspectable workspace UX."
+          "rationale": "Clears Electron session storage for an origin that is still displayed by the selected browser panel."
         },
         "capability": null,
         "presentation": null
@@ -2872,7 +2872,7 @@
         "capability": null,
         "presentation": null
       },
-      "getBrowserSiteState": {
+      "getBrowserPageIdentity": {
         "authority": {
           "inherits": true
         },
@@ -2884,7 +2884,7 @@
           "session": "family",
           "residency": "native-effect",
           "family": "panel.read",
-          "rationale": "P-panels: read of the focused browser panel's per-site UI state; core mutually inspectable workspace UX."
+          "rationale": "Reads the exact URL, origin, and native document title from an Electron browser webContents."
         },
         "capability": null,
         "presentation": null
@@ -3181,23 +3181,6 @@
         "capability": null,
         "presentation": null
       },
-      "setBrowserZoom": {
-        "authority": {
-          "inherits": true
-        },
-        "access": {
-          "sensitivity": "write"
-        },
-        "tier": {
-          "tier": "open",
-          "session": "family",
-          "residency": "native-effect",
-          "family": "panel.mutate",
-          "rationale": "P-panels: per-site zoom control on the focused browser panel; core mutually inspectable workspace UX."
-        },
-        "capability": null,
-        "presentation": null
-      },
       "setFocusedPanelId": {
         "authority": {
           "inherits": true
@@ -3228,6 +3211,23 @@
           "residency": "native-effect",
           "family": "view.mutate",
           "rationale": "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family"
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "setNativeBrowserZoom": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "panel.mutate",
+          "rationale": "Applies an already-selected zoom factor to the exact Electron browser webContents."
         },
         "capability": null,
         "presentation": null
@@ -3364,23 +3364,6 @@
           "residency": "native-effect",
           "family": "panel.control",
           "rationale": "P-panels: dismisses the in-page find session; core mutually inspectable workspace UX."
-        },
-        "capability": null,
-        "presentation": null
-      },
-      "toggleBrowserBookmark": {
-        "authority": {
-          "inherits": true
-        },
-        "access": {
-          "sensitivity": "write"
-        },
-        "tier": {
-          "tier": "open",
-          "session": "family",
-          "residency": "native-effect",
-          "family": "panel.control",
-          "rationale": "P-panels: bookmark toggle on the focused browser panel; core mutually inspectable workspace UX."
         },
         "capability": null,
         "presentation": null

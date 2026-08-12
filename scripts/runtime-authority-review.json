@@ -1,7 +1,19 @@
 {
   "version": 1,
-  "censusDigest": "sha256:7f9e744a590b0485d553ced43d92cbc834275236a5df16f5ba0601f1fb77ee79",
+  "censusDigest": "sha256:1c525649e080adface55fd5ea2c813f9ecd9569d82b0d97c9c08a55d350b54d4",
   "decisions": {
+    "host:view.getBrowserPageIdentity": {
+      "review": "exact-native-browser-page-identity-read",
+      "change": "Replaces the compound browser site-state facade with a bounded read of the selected Electron webContents URL, origin, transport security, and document title. Bookmark, cookie-summary, and zoom-preference reads no longer cross the host boundary through view; workspace chrome composes them from the browser-data provider."
+    },
+    "host:view.setNativeBrowserZoom": {
+      "review": "stale-checked-native-browser-zoom-effect",
+      "change": "Replaces host-owned zoom preference policy with the irreducible Electron setZoomFactor effect. The caller supplies the exact origin whose preference it persisted, and the receiver rejects the effect if the selected panel has navigated to another origin."
+    },
+    "host:view.clearNativeBrowserSiteData": {
+      "review": "stale-checked-native-browser-storage-effect",
+      "change": "Replaces the compound canonical-plus-native site-data operation with Electron session storage deletion only. Workspace chrome owns canonical cookie deletion and projection flushing; the receiver clears native cookies, cache, local storage, IndexedDB, and service workers only while the selected panel still displays the supplied origin."
+    },
     "host:fs.readBytes": {
       "review": "bounded-workspace-binary-range-read",
       "change": "Adds the existing workspace-local fs.read authority to a bounded lossless byte-range transport. Managed files still resolve at the caller's exact semantic working head and scratch files remain context-contained; each response is capped at 1 MiB, carries canonical base64, exact byte continuation coordinates, total size, and a whole-file SHA-256, and grants no write or path-enumeration authority."

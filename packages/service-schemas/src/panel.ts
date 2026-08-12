@@ -378,67 +378,53 @@ export const panelMethods = defineServiceMethods({
     returns: z.void(),
     access: WRITE_ACCESS,
   },
-  getBrowserSiteState: {
+  getBrowserPageIdentity: {
     tier: {
       tier: "open",
       session: "family",
       residency: "native-effect",
       family: "panel.read",
       rationale:
-        "P-panels: read of the focused browser panel's per-site UI state; core mutually inspectable workspace UX.",
+        "Reads the exact URL, origin, and native document title from an Electron browser webContents.",
     },
-    description: "Return canonical bookmark, cookie, and zoom state for the current browser page.",
+    description: "Return the native page identity needed for workspace-owned browser actions.",
     args: z.tuple([z.string()]),
     returns: z.object({
       origin: z.string().url(),
       url: z.string().url(),
       secure: z.boolean(),
-      zoomFactor: z.number(),
-      bookmarkId: z.number().int().nullable(),
-      cookieCount: z.number().int().nonnegative(),
+      title: z.string(),
     }),
     access: READ_ACCESS,
   },
-  toggleBrowserBookmark: {
-    tier: {
-      tier: "open",
-      session: "family",
-      residency: "native-effect",
-      family: "panel.control",
-      rationale:
-        "P-panels: bookmark toggle on the focused browser panel; core mutually inspectable workspace UX.",
-    },
-    description: "Add or remove the current browser page from canonical bookmarks.",
-    args: z.tuple([z.string()]),
-    returns: z.object({ bookmarked: z.boolean(), bookmarkId: z.number().int().nullable() }),
-    access: WRITE_ACCESS,
-  },
-  setBrowserZoom: {
+  setNativeBrowserZoom: {
     tier: {
       tier: "open",
       session: "family",
       residency: "native-effect",
       family: "panel.mutate",
       rationale:
-        "P-panels: per-site zoom control on the focused browser panel; core mutually inspectable workspace UX.",
+        "Applies an already-selected zoom factor to the exact Electron browser webContents.",
     },
-    description: "Set and persist page zoom for the current browser origin.",
-    args: z.tuple([z.string(), z.number().min(0.25).max(5)]),
-    returns: z.number(),
+    description:
+      "Apply native page zoom after workspace code has persisted the preference for this exact origin.",
+    args: z.tuple([z.string(), z.string().url(), z.number().min(0.25).max(5)]),
+    returns: z.void(),
     access: WRITE_ACCESS,
   },
-  clearBrowserSiteData: {
+  clearNativeBrowserSiteData: {
     tier: {
       tier: "open",
       session: "family",
       residency: "native-effect",
       family: "panel.control",
       rationale:
-        "P-panels: shell-driven browser site-data clear for the focused panel; core mutually inspectable workspace UX.",
+        "Clears Electron session storage for an origin that is still displayed by the selected browser panel.",
     },
-    description: "Clear canonical cookies and local site data for the current browser origin.",
-    args: z.tuple([z.string()]),
-    returns: z.number().int().nonnegative(),
+    description:
+      "Clear native cookies, cache, local storage, IndexedDB, and service workers for one current origin.",
+    args: z.tuple([z.string(), z.string().url()]),
+    returns: z.void(),
     access: WRITE_ACCESS,
   },
   printBrowserPage: {

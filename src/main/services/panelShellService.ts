@@ -5,10 +5,8 @@ import type { PanelRegistry } from "@vibestudio/shared/panelRegistry";
 import type { PanelView } from "../panelView.js";
 import type { ViewManager } from "../viewManager.js";
 import { sanitizeFilenamePart } from "../safeFilename.js";
-import type { ServerClient } from "../serverClient.js";
 import { panelMethods } from "@vibestudio/service-schemas/panel";
 import { buildPanelChromeState, type PanelChromeState } from "@vibestudio/shared/panelChrome";
-import { createBrowserDataClient } from "@vibestudio/browser-data";
 import { callerHasPlatformCapability, requireAppCapability } from "./appCapabilities.js";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import { dialog } from "electron";
@@ -41,7 +39,6 @@ export interface PanelViewMethodDeps {
   panelRegistry: PanelRegistry;
   panelView: PanelView;
   getViewManager: () => ViewManager;
-  serverClient?: ServerClient | null;
   panelLayoutStore?: PanelLayoutStoreApi | null;
   getWorkspaceId?: () => string;
   getAccountUserId?: () => Promise<string>;
@@ -165,69 +162,44 @@ export function buildPanelViewHandler(deps: PanelViewMethodDeps): ServiceHandler
       if (contents && !contents.isDestroyed()) contents.stopFindInPage("clearSelection");
       return;
     },
-    getBrowserSiteState: async (ctx, [panelId]) => {
+    getBrowserPageIdentity: async (ctx, [panelId]) => {
       const vm = deps.getViewManager();
-      requirePanelHostingAppCapability(ctx, vm, "getBrowserSiteState");
+      requirePanelHostingAppCapability(ctx, vm, "getBrowserPageIdentity");
       const page = currentBrowserPage(panelId, deps.panelRegistry, vm);
-      const client = requireBrowserDataClient(deps.serverClient);
-      const [preferences, bookmarks, siteData] = await Promise.all([
-        client.getSitePreferences(page.origin),
-        client.searchBookmarks(page.url),
-        client.getCookieSiteSummary(page.origin),
-      ]);
-      vm.getWebContents(panelId)?.setZoomFactor(preferences.zoomFactor);
-      const bookmark = bookmarks.find((item) => item.url === page.url);
+      const contents = vm.getWebContents(panelId);
       return {
         ...page,
-        zoomFactor: preferences.zoomFactor,
-        bookmarkId: bookmark?.id ?? null,
-        cookieCount: siteData.cookieCount,
+        title: contents?.getTitle() ?? "",
       };
     },
-    toggleBrowserBookmark: async (ctx, [panelId]) => {
+    setNativeBrowserZoom: async (ctx, [panelId, origin, zoomFactor]) => {
       const vm = deps.getViewManager();
-      requirePanelHostingAppCapability(ctx, vm, "toggleBrowserBookmark");
+      requirePanelHostingAppCapability(ctx, vm, "setNativeBrowserZoom");
       const page = currentBrowserPage(panelId, deps.panelRegistry, vm);
-      const client = requireBrowserDataClient(deps.serverClient);
-      const bookmark = (await client.searchBookmarks(page.url)).find(
-        (item) => item.url === page.url
-      );
-      if (bookmark) {
-        await client.deleteBookmark(bookmark.id);
-        return { bookmarked: false, bookmarkId: null };
+      if (page.origin !== origin) {
+        throw Object.assign(new Error("Browser page changed before zoom could be applied"), {
+          code: "ESTALE",
+        });
       }
       const contents = vm.getWebContents(panelId);
-      const bookmarkId = await client.addBookmark({
-        title: contents?.getTitle().trim() || new URL(page.url).hostname,
-        url: page.url,
-        folderPath: "/",
-      });
-      return { bookmarked: true, bookmarkId };
+      if (!contents || contents.isDestroyed()) throw new Error("Browser page is not loaded");
+      contents.setZoomFactor(zoomFactor);
     },
-    setBrowserZoom: async (ctx, [panelId, zoomFactor]) => {
+    clearNativeBrowserSiteData: async (ctx, [panelId, origin]) => {
       const vm = deps.getViewManager();
-      requirePanelHostingAppCapability(ctx, vm, "setBrowserZoom");
+      requirePanelHostingAppCapability(ctx, vm, "clearNativeBrowserSiteData");
       const page = currentBrowserPage(panelId, deps.panelRegistry, vm);
-      const client = requireBrowserDataClient(deps.serverClient);
-      const rounded = Math.round(Math.min(5, Math.max(0.25, zoomFactor)) * 20) / 20;
-      await client.setSiteZoom(page.origin, rounded);
-      vm.getWebContents(panelId)?.setZoomFactor(rounded);
-      return rounded;
-    },
-    clearBrowserSiteData: async (ctx, [panelId]) => {
-      const vm = deps.getViewManager();
-      requirePanelHostingAppCapability(ctx, vm, "clearBrowserSiteData");
-      const page = currentBrowserPage(panelId, deps.panelRegistry, vm);
-      const client = requireBrowserDataClient(deps.serverClient);
-      const removed = await client.clearCookiesForOrigin(page.origin);
+      if (page.origin !== origin) {
+        throw Object.assign(new Error("Browser page changed before site data could be cleared"), {
+          code: "ESTALE",
+        });
+      }
       const contents = vm.getWebContents(panelId);
       if (!contents || contents.isDestroyed()) throw new Error("Browser page is not loaded");
       await contents.session.clearData({
-        origins: [page.origin],
+        origins: [origin],
         dataTypes: ["cookies", "cache", "localStorage", "indexedDB", "serviceWorkers"],
       });
-      await client.flushCookieProjection([page.origin]);
-      return removed;
     },
     printBrowserPage: async (ctx, [panelId]) => {
       const vm = deps.getViewManager();
@@ -313,13 +285,6 @@ export function buildPanelViewHandler(deps: PanelViewMethodDeps): ServiceHandler
       requirePanelHostingAppCapability(ctx, viewManager, "openPanelDevTools");
       viewManager.openDevTools(panelId, mode);
     },
-  });
-}
-
-function requireBrowserDataClient(serverClient?: ServerClient | null) {
-  if (!serverClient) throw new Error("Browser environment is unavailable");
-  return createBrowserDataClient({
-    callService: (service, method, args) => serverClient.call(service, method, args),
   });
 }
 

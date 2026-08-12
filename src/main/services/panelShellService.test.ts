@@ -110,7 +110,6 @@ function createServiceHarness(appCapabilities: string[] = []) {
         reload,
         forceReload,
       }) as never,
-    serverClient: serverClient as never,
   });
 
   return {

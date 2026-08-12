@@ -5395,14 +5395,14 @@ export const HOST_AUTHORITY_METHODS = {
     capability: null,
     presentation: null,
   },
-  "view.clearBrowserSiteData": {
+  "view.clearNativeBrowserSiteData": {
     tier: {
       tier: "open",
       session: "family",
       residency: "native-effect",
       family: "panel.control",
       rationale:
-        "P-panels: shell-driven browser site-data clear for the focused panel; core mutually inspectable workspace UX.",
+        "Clears Electron session storage for an origin that is still displayed by the selected browser panel.",
     },
     capability: null,
     presentation: null,
@@ -5490,14 +5490,14 @@ export const HOST_AUTHORITY_METHODS = {
     capability: null,
     presentation: null,
   },
-  "view.getBrowserSiteState": {
+  "view.getBrowserPageIdentity": {
     tier: {
       tier: "open",
       session: "family",
       residency: "native-effect",
       family: "panel.read",
       rationale:
-        "P-panels: read of the focused browser panel's per-site UI state; core mutually inspectable workspace UX.",
+        "Reads the exact URL, origin, and native document title from an Electron browser webContents.",
     },
     capability: null,
     presentation: null,
@@ -5702,18 +5702,6 @@ export const HOST_AUTHORITY_METHODS = {
     capability: null,
     presentation: null,
   },
-  "view.setBrowserZoom": {
-    tier: {
-      tier: "open",
-      session: "family",
-      residency: "native-effect",
-      family: "panel.mutate",
-      rationale:
-        "P-panels: per-site zoom control on the focused browser panel; core mutually inspectable workspace UX.",
-    },
-    capability: null,
-    presentation: null,
-  },
   "view.setFocusedPanelId": {
     tier: {
       tier: "open",
@@ -5734,6 +5722,18 @@ export const HOST_AUTHORITY_METHODS = {
       family: "view.mutate",
       rationale:
         "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "view.setNativeBrowserZoom": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "panel.mutate",
+      rationale:
+        "Applies an already-selected zoom factor to the exact Electron browser webContents.",
     },
     capability: null,
     presentation: null,
@@ -5829,18 +5829,6 @@ export const HOST_AUTHORITY_METHODS = {
       family: "panel.control",
       rationale:
         "P-panels: dismisses the in-page find session; core mutually inspectable workspace UX.",
-    },
-    capability: null,
-    presentation: null,
-  },
-  "view.toggleBrowserBookmark": {
-    tier: {
-      tier: "open",
-      session: "family",
-      residency: "native-effect",
-      family: "panel.control",
-      rationale:
-        "P-panels: bookmark toggle on the focused browser panel; core mutually inspectable workspace UX.",
     },
     capability: null,
     presentation: null,
