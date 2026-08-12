@@ -61,11 +61,13 @@ field or a mobile-only resolver. On mobile, SVG artwork is rendered by
 `react-native-svg`; React Native `Image` is only the raster path. Add focused
 behavioral coverage for every affected row in this table.
 
-## Built-in catalog and provenance
+## Unit ownership and provenance
 
-Run `pnpm generate:unit-icons` after changing the built-in assignment table in
-`scripts/sync-unit-icons.mjs`; run `pnpm check:unit-icons` in validation.
-Generated units contain only their own small SVG.
+Each unit owns its checked-in `vibestudio.icon` declaration and local artwork.
+Change the unit's manifest and `assets/icon.svg` together; there is no central
+host-owned assignment table. Run the workspace tests after changing unit
+identity so the icon-coverage check verifies every executable unit and its
+local asset. Units contain only their own small SVG.
 
 - Semantic sources: Lucide Static 1.27.0, ISC license.
 - Brand sources: Simple Icons 16.27.1. The collection is CC0, but individual

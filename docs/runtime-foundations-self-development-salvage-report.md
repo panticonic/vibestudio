@@ -183,26 +183,26 @@ never merged.
 Every claim below was checked against `69991d51`. Re-verify before starting a
 package; these are the facts the specifications depend on.
 
-| Claim                                                          | Verified at                                                                                                                  |
-| -------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| Seven dangling evidence references across five missing files   | `docs/runtime-foundations/*.json` and `scripts/generate-runtime-foundation-ledgers.mjs`                                      |
-| Generator performs no evidence-path validation                 | `scripts/generate-runtime-foundation-ledgers.mjs` (900 lines; no `existsSync` over `parityAssertion` targets)                |
-| Evidence check gates normal quality and test runs              | `package.json:47,67,74`                                                                                                      |
-| `build.gc` accepts a caller-supplied unit list                 | `src/server/services/buildService.ts:123`                                                                                    |
-| Only the current effective build key per unit is retained      | `src/server/buildV2/index.ts:1456-1466`                                                                                      |
-| Every other build directory is recursively removed             | `src/server/buildV2/buildStore.ts:814-830`                                                                                   |
-| App rollback history is five deep and keyed by build key       | `src/server/appHost.ts:99,119,1018-1023`                                                                                     |
-| Rollback resolves artifacts through the build store            | `src/server/appHost.ts:1202`                                                                                                 |
-| `build.gc` is reachable from userland eval                     | `packages/shared/src/authority/hostMethodCapabilities.ts:42`; `src/server/services/evalInvocationExposure.generated.ts:5776` |
-| Semantic content GC is a separate scheduled collector          | `src/server/services/vcsGcScheduler.ts:8-46`                                                                                 |
-| Content GC root set omits execution artifact source states     | `src/server/vcsHost/workspaceVcs.ts:255-283`                                                                                 |
-| This codebase already lost data to a missing GC root class     | `src/server/vcsHost/workspaceVcs.ts:274-280` (comment records the cached-view incident)                                      |
-| Eval exposes two public execution shapes                       | `packages/service-schemas/src/eval.ts:264,285,292`                                                                           |
-| Eval disposal method is `dispose`, not `release`               | `packages/service-schemas/src/eval.ts:278`                                                                                   |
-| Both eval shapes have live consumers                           | `workspace/packages/harness/src/tools/eval.ts:227`; `workspace/packages/agentic-do/src/agent-vessel.ts:4207`                 |
-| `ChannelStructureRevision` is absent; locked membership is not | `workspace/workers/pubsub-channel/types.ts:92`                                                                               |
-| Developer instance supervisor exists                           | `src/dev/instanceRegistry.ts`; `src/dev/runInstance.ts`                                                                      |
-| Runtime image records already carry execution identity         | `src/server/runtimeImageStore.ts:14-27`                                                                                      |
+| Claim                                                          | Verified at                                                                                                         |
+| -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| Seven dangling evidence references across five missing files   | `docs/runtime-foundations/*.json` and `scripts/generate-runtime-foundation-ledgers.mjs`                             |
+| Generator performs no evidence-path validation                 | `scripts/generate-runtime-foundation-ledgers.mjs` (900 lines; no `existsSync` over `parityAssertion` targets)       |
+| Evidence check gates normal quality and test runs              | `package.json:47,67,74`                                                                                             |
+| `build.gc` accepts a caller-supplied unit list                 | `src/server/services/buildService.ts:123`                                                                           |
+| Only the current effective build key per unit is retained      | `src/server/buildV2/index.ts:1456-1466`                                                                             |
+| Every other build directory is recursively removed             | `src/server/buildV2/buildStore.ts:814-830`                                                                          |
+| App rollback history is five deep and keyed by build key       | `src/server/appHost.ts:99,119,1018-1023`                                                                            |
+| Rollback resolves artifacts through the build store            | `src/server/appHost.ts:1202`                                                                                        |
+| `build.gc` is reachable from userland eval                     | `packages/shared/src/authority/hostAuthorityCatalog.generated.ts`; `docs/runtime-foundations/authority-ledger.json` |
+| Semantic content GC is a separate scheduled collector          | `src/server/services/vcsGcScheduler.ts:8-46`                                                                        |
+| Content GC root set omits execution artifact source states     | `src/server/vcsHost/workspaceVcs.ts:255-283`                                                                        |
+| This codebase already lost data to a missing GC root class     | `src/server/vcsHost/workspaceVcs.ts:274-280` (comment records the cached-view incident)                             |
+| Eval exposes two public execution shapes                       | `packages/service-schemas/src/eval.ts:264,285,292`                                                                  |
+| Eval disposal method is `dispose`, not `release`               | `packages/service-schemas/src/eval.ts:278`                                                                          |
+| Both eval shapes have live consumers                           | `workspace/packages/harness/src/tools/eval.ts:227`; `workspace/packages/agentic-do/src/agent-vessel.ts:4207`        |
+| `ChannelStructureRevision` is absent; locked membership is not | `workspace/workers/pubsub-channel/types.ts:92`                                                                      |
+| Developer instance supervisor exists                           | `src/dev/instanceRegistry.ts`; `src/dev/runInstance.ts`                                                             |
+| Runtime image records already carry execution identity         | `src/server/runtimeImageStore.ts:14-27`                                                                             |
 
 ## 2. Current architectural baseline
 
@@ -398,10 +398,9 @@ removed.
 Three properties make this worse than an ordinary bug:
 
 - **It is reachable from userland.** `build.gc` is a host method under the
-  `workspace.build-cache.manage` capability
-  (`packages/shared/src/authority/hostMethodCapabilities.ts:42`) and is exposed
-  to eval as `host:build.gc`
-  (`src/server/services/evalInvocationExposure.generated.ts:5776`).
+  `service:build.gc` capability and admits the `code` principal
+  (`packages/shared/src/authority/hostAuthorityCatalog.generated.ts` and the
+  `host:build.gc` row in `docs/runtime-foundations/authority-ledger.json`).
 - **It is silent.** `buildStore.gc` catches and discards every per-entry error
   and returns only `{ freed }`. Nothing reports what was destroyed.
 - **The failure surfaces late and elsewhere.** The user learns about it at the

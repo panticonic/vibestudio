@@ -2,8 +2,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { format, resolveConfig } from "prettier";
-import YAML from "yaml";
 import { runtimeFoundationEvidence } from "./runtime-foundation-evidence.mjs";
 import {
   assertNoOrphanEvidence,
@@ -21,19 +19,6 @@ import {
 import { gadWireMethods } from "../packages/service-schemas/src/workspaceSource.ts";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const prettierOptions = (await resolveConfig(path.join(root, "src", "server", "index.ts"))) ?? {};
-
-const formatTypeScript = async (source, filepath) => {
-  const seen = new Set();
-  let current = source;
-  while (!seen.has(current)) {
-    seen.add(current);
-    const formatted = await format(current, { ...prettierOptions, filepath });
-    if (formatted === current) return formatted;
-    current = formatted;
-  }
-  throw new Error(`Prettier did not converge for ${path.relative(root, filepath)}`);
-};
 const output = path.join(root, "docs", "runtime-foundations");
 const check = process.argv.includes("--check");
 if (!check) fs.mkdirSync(output, { recursive: true });
@@ -358,11 +343,7 @@ for (const file of directRoots.flatMap(walk).sort()) {
       sensitivity: sensitivity ?? "unknown",
       tier,
       capability:
-        productBuiltinMethodCapability(
-          "vibestudio/internal",
-          builtinClassForFile(file),
-          method
-        ) ??
+        productBuiltinMethodCapability("vibestudio/internal", builtinClassForFile(file), method) ??
         directCapability(sourceName, method, sensitivity, match[0]),
       authenticatedFacts: [
         "session",
@@ -419,11 +400,7 @@ for (const file of directRoots.flatMap(walk).sort()) {
       sensitivity,
       tier,
       capability:
-        productBuiltinMethodCapability(
-          "vibestudio/internal",
-          builtinClassForFile(file),
-          method
-        ) ??
+        productBuiltinMethodCapability("vibestudio/internal", builtinClassForFile(file), method) ??
         directCapability(sourceName, method, sensitivity, declarationSource),
       authenticatedFacts: [
         "session",
@@ -482,11 +459,7 @@ for (const file of directRoots.flatMap(walk).sort()) {
       sensitivity,
       tier,
       capability:
-        productBuiltinMethodCapability(
-          "vibestudio/internal",
-          builtinClassForFile(file),
-          method
-        ) ??
+        productBuiltinMethodCapability("vibestudio/internal", builtinClassForFile(file), method) ??
         directCapability(sourceName, method, sensitivity),
       authenticatedFacts: [
         "session",
@@ -559,10 +532,9 @@ for (const manifestPath of workspacePackageManifests.sort()) {
       );
     }
     const owner = path.relative(root, sourceFile).replaceAll(path.sep, "/");
-    const sourceName = path.relative(path.join(root, "workspace"), packageDirectory).replaceAll(
-      path.sep,
-      "/"
-    );
+    const sourceName = path
+      .relative(path.join(root, "workspace"), packageDirectory)
+      .replaceAll(path.sep, "/");
     for (const method of declared) {
       const policy = methods[method];
       const principals = [...(policy.authority?.principals ?? [])].sort();
@@ -617,7 +589,9 @@ for (const builtin of PRODUCT_BUILTIN_CATALOG) {
   const file = path.join(root, builtin.sourceFile);
   const source = fs.readFileSync(file, "utf8");
   const exposed = [
-    ...source.matchAll(/@schemaRpc\(\)\s+(?:async\s+)?(?:["']([^"']+)["']|([A-Za-z_$][\w$]*))\s*\(/g),
+    ...source.matchAll(
+      /@schemaRpc\(\)\s+(?:async\s+)?(?:["']([^"']+)["']|([A-Za-z_$][\w$]*))\s*\(/g
+    ),
   ].map((match) => match[1] ?? match[2]);
   if (exposed.length === 0) continue;
   const declared = Object.keys(builtin.directMethods);
@@ -740,124 +714,11 @@ for (const [id, decision] of Object.entries(authorityReview.decisions)) {
 for (const row of authorityRows) {
   const decision = authorityReview.decisions[row.id];
   if (decision) row.r3b = decision;
-}
-
-const evalRuntimeBoundaries = JSON.parse(
-  fs.readFileSync(path.join(root, "scripts/eval-runtime-boundaries.json"), "utf8")
-);
-if (
-  evalRuntimeBoundaries.version !== 1 ||
-  !Array.isArray(evalRuntimeBoundaries.kernelCapabilities) ||
-  evalRuntimeBoundaries.kernelCapabilities.length === 0 ||
-  !Array.isArray(evalRuntimeBoundaries.directSurfaceReachability)
-) {
-  throw new Error("scripts/eval-runtime-boundaries.json has an unsupported schema");
-}
-const directRows = authorityRows.filter((row) => row.rpcPlane === "workspace-do");
-const directSurfaceReachability = {};
-for (const group of evalRuntimeBoundaries.directSurfaceReachability) {
-  if (
-    !group ||
-    typeof group.definitionSource !== "string" ||
-    !group.definitionSource ||
-    !Array.isArray(group.runtimeSources) ||
-    group.runtimeSources.length === 0 ||
-    !Array.isArray(group.methods) ||
-    group.methods.length === 0
-  ) {
-    throw new Error(`Invalid direct eval surface reachability group ${JSON.stringify(group)}`);
-  }
-  const runtimeSources = [...new Set(group.runtimeSources)].sort();
-  const methods = [...new Set(group.methods)].sort();
-  if (
-    runtimeSources.length !== group.runtimeSources.length ||
-    methods.length !== group.methods.length
-  ) {
-    throw new Error(`Duplicate direct eval reachability entry ${JSON.stringify(group)}`);
-  }
-  for (const method of methods) {
-    if (
-      typeof method !== "string" ||
-      !directRows.some((row) => row.source === group.definitionSource && row.method === method)
-    ) {
-      throw new Error(`Unknown direct eval definition ${group.definitionSource}.${String(method)}`);
-    }
-  }
-  for (const runtimeSource of runtimeSources) {
-    if (
-      typeof runtimeSource !== "string" ||
-      !fs.existsSync(path.join(root, "workspace", runtimeSource, "package.json"))
-    ) {
-      throw new Error(`Unknown direct eval runtime source ${String(runtimeSource)}`);
-    }
-    if (runtimeSource === group.definitionSource) {
-      throw new Error(`${runtimeSource} redundantly reaches its own direct definitions`);
-    }
-    const edges = (directSurfaceReachability[runtimeSource] ??= []);
-    for (const method of methods) {
-      const edge = { source: group.definitionSource, method };
-      if (edges.some((existing) => existing.source === edge.source && existing.method === method)) {
-        throw new Error(
-          `Duplicate direct eval reachability for ${runtimeSource} -> ${edge.source}.${method}`
-        );
-      }
-      edges.push(edge);
-    }
-    edges.sort((left, right) =>
-      `${left.source}:${left.method}`.localeCompare(`${right.source}:${right.method}`)
-    );
+  if (!row.capabilitySelector && !row.capability) {
+    row.capability =
+      row.rpcPlane === "host-service" ? `service:${row.owner}.${row.method}` : `rpc:${row.method}`;
   }
 }
-const sortedDirectSurfaceReachability = Object.fromEntries(
-  Object.entries(directSurfaceReachability).sort(([left], [right]) => left.localeCompare(right))
-);
-const workspaceManifest = YAML.parse(
-  fs.readFileSync(path.join(root, "workspace", "meta", "vibestudio.yml"), "utf8")
-);
-const workspaceServices = [...(workspaceManifest.services ?? [])]
-  .map((service) => ({
-    name: service.name,
-    principals: service.authority?.principals,
-  }))
-  .filter((service) => typeof service.name === "string" && service.name.length > 0)
-  .sort((left, right) => left.name.localeCompare(right.name));
-const duplicateWorkspaceServiceNames = workspaceServices
-  .filter(
-    (service, index) => workspaceServices.findIndex((row) => row.name === service.name) !== index
-  )
-  .map((service) => service.name);
-if (duplicateWorkspaceServiceNames.length > 0) {
-  throw new Error(
-    `Workspace-authored services collide with product services: ${[
-      ...new Set(duplicateWorkspaceServiceNames),
-    ].join(", ")}`
-  );
-}
-for (const service of workspaceServices) {
-  if (!Array.isArray(service.principals) || service.principals.length === 0) {
-    throw new Error(`Workspace service ${service.name} has no compositional authority principals`);
-  }
-}
-const workspaceServiceEvalRows = workspaceServices.map((service) => ({
-  id: `workspace-service:${service.name}`,
-  capability: `workspace-service:${service.name}`,
-  rpcPlane: "workspace-service",
-  authorityPrincipals: service.principals,
-}));
-const invocationSubjects = [
-  ...authorityRows
-    .filter((row) => !row.capabilitySelector)
-    .map((row) =>
-      Object.assign(row, {
-        capability:
-          row.capability ??
-          (row.rpcPlane === "host-service"
-            ? `service:${row.owner}.${row.method}`
-            : `rpc:${row.method}`),
-      })
-    ),
-  ...workspaceServiceEvalRows,
-];
 
 const executionRows = [
   [
@@ -1061,49 +922,3 @@ write("execution-update-ledger.json", { version: 1, rows: serializedExecutionRow
 write("authority-ledger.json", { version: 1, rows: serializedAuthorityRows });
 write("channel-behavior-ledger.json", { version: 1, rows: serializedChannelRows });
 write("bootstrap-dependency-graph.json", serializedBootstrap);
-
-const evalSurfaceRows = invocationSubjects.map((row) => ({
-  id: row.id,
-  rpcPlane: row.rpcPlane,
-  capability: row.capability,
-  authorityPrincipals: row.authorityPrincipals,
-  ...(row.owner ? { owner: row.owner } : {}),
-  ...(row.source ? { source: row.source } : {}),
-  ...(row.method ? { method: row.method } : {}),
-  ...(row.sensitivity ? { sensitivity: row.sensitivity } : {}),
-  ...(row.resourceDerivation ? { resourceDerivation: row.resourceDerivation } : {}),
-}));
-const evalInvocationExposure = [
-  ...new Set(
-    evalSurfaceRows
-      .filter((row) => row.authorityPrincipals?.includes("code") && !row.capability.endsWith("*"))
-      .map((row) => row.capability)
-  ),
-].sort();
-const evalServerHostMethods = Object.entries(serverServiceAuthority)
-  .flatMap(([service, entry]) => Object.keys(entry.methods).map((method) => ({ service, method })))
-  .sort((left, right) =>
-    left.service === right.service
-      ? left.method.localeCompare(right.method)
-      : left.service.localeCompare(right.service)
-  );
-const evalExposurePath = path.join(
-  root,
-  "src",
-  "server",
-  "services",
-  "evalInvocationExposure.generated.ts"
-);
-const evalExposureSource = await formatTypeScript(
-  `/* Generated by scripts/generate-runtime-foundation-ledgers.mjs. Admission census only; never a request or grant. */\n\nexport const EVAL_INVOCATION_SURFACE_CENSUS = ${JSON.stringify(evalSurfaceRows, null, 2)} as const;\n\n/** Every reviewed server-host method. Bootstrap verifies that this exact census is registered before accepting RPC. */\nexport const EVAL_SERVER_HOST_METHODS = ${JSON.stringify(evalServerHostMethods, null, 2)} as const;\n\n/** Reviewed runtime sources that may reach exact direct RPC methods defined by another workspace unit. */\nexport const EVAL_DIRECT_SURFACE_REACHABILITY = ${JSON.stringify(sortedDirectSurfaceReachability, null, 2)} as const;\n\nexport const EVAL_INVOCATION_EXPOSURE_CAPABILITIES = ${JSON.stringify(evalInvocationExposure, null, 2)} as const;\n`,
-  evalExposurePath
-);
-if (check) {
-  if (fs.readFileSync(evalExposurePath, "utf8") !== evalExposureSource) {
-    throw new Error(
-      `${path.relative(root, evalExposurePath)} is stale; run pnpm generate:runtime-foundations`
-    );
-  }
-} else {
-  fs.writeFileSync(evalExposurePath, evalExposureSource);
-}
