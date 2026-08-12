@@ -92,7 +92,8 @@ export const SendButton = React.memo(function SendButton({
           <IconButton
             className="send-button-chevron"
             size={size}
-            variant="solid"
+            color="gray"
+            variant="soft"
             disabled={menuDisabled}
             aria-label="Send options"
             title="Send options"
@@ -129,9 +130,7 @@ export const SendButton = React.memo(function SendButton({
                 <Flex align="center" gap="2">
                   <ImageIcon />
                   <Text size="2" weight="medium">
-                    {attachmentCount > 0
-                      ? `Images attached (${attachmentCount})`
-                      : "Attach image…"}
+                    {attachmentCount > 0 ? `Images attached (${attachmentCount})` : "Attach image…"}
                   </Text>
                 </Flex>
               </DropdownMenu.Item>
@@ -159,11 +158,7 @@ function SendMenuRow({
   disabled?: boolean;
 }) {
   return (
-    <DropdownMenu.Item
-      className="send-menu-row"
-      disabled={disabled}
-      onSelect={() => onSelect()}
-    >
+    <DropdownMenu.Item className="send-menu-row" disabled={disabled} onSelect={() => onSelect()}>
       <Flex direction="column" gap="1" style={{ minWidth: 0 }}>
         <Flex align="center" justify="between" gap="3">
           <Flex align="center" gap="2">
