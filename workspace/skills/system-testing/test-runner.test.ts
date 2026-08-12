@@ -1530,6 +1530,21 @@ describe("system-test implementation boundary", () => {
             arguments: { path: "projects/example/src/index.ts" },
           },
         },
+        {
+          id: "eval-fixture",
+          senderId: "agent",
+          kind: "message",
+          contentType: "invocation",
+          complete: true,
+          content: "",
+          invocation: {
+            id: "call:eval-fixture",
+            name: "eval",
+            arguments: {
+              code: 'return fs.readFile("skills/system-testing/workspace-repo-fixture.ts")',
+            },
+          },
+        },
       ],
     } as unknown as TestExecutionResult;
 
@@ -1538,6 +1553,12 @@ describe("system-test implementation boundary", () => {
         id: "call:fixture",
         name: "read",
         arguments: '{"path":"skills/system-testing/workspace-repo-fixture.ts"}',
+      },
+      {
+        id: "call:eval-fixture",
+        name: "eval",
+        arguments:
+          '{"code":"return fs.readFile(\\"skills/system-testing/workspace-repo-fixture.ts\\")"}',
       },
     ]);
   });

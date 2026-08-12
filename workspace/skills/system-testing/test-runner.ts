@@ -890,7 +890,7 @@ export function findSystemTestImplementationInspections(
   const inspect = (invocation: InvocationLike | undefined) => {
     if (!invocation || typeof invocation !== "object") return;
     const name = asString(invocation.name) ?? asString(invocation.method) ?? "(unknown)";
-    if (!["read", "grep", "find", "ls"].includes(name)) return;
+    if (!["read", "grep", "find", "ls", "eval"].includes(name)) return;
     const args = invocation.arguments;
     const serialized = args === undefined ? "" : safeJson(args);
     if (!/skills[\/]system-testing(?:[\/]|\b)/u.test(serialized)) return;
