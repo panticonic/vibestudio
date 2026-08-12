@@ -5,22 +5,11 @@ import {
   successfulEvalCode,
   successfulEvalReturnValues,
 } from "./_helpers.js";
-
-function records(value: unknown, found: Record<string, unknown>[] = []): Record<string, unknown>[] {
-  if (Array.isArray(value)) {
-    for (const item of value) records(item, found);
-    return found;
-  }
-  if (!value || typeof value !== "object") return found;
-  const item = value as Record<string, unknown>;
-  found.push(item);
-  for (const child of Object.values(item)) records(child, found);
-  return found;
-}
+import { walkRecords } from "./_scenario-evidence.js";
 
 function hasNamedTrue(values: unknown[], pattern: RegExp): boolean {
   return values.some((value) =>
-    records(value).some((item) =>
+    walkRecords([value]).some((item) =>
       Object.entries(item).some(([key, child]) => pattern.test(key) && child === true)
     )
   );
@@ -28,7 +17,7 @@ function hasNamedTrue(values: unknown[], pattern: RegExp): boolean {
 
 function hasDigest(values: unknown[]): boolean {
   return values.some((value) =>
-    records(value).some((item) =>
+    walkRecords([value]).some((item) =>
       Object.entries(item).some(
         ([key, child]) =>
           /digest|hash/iu.test(key) && typeof child === "string" && /^[0-9a-f]{64}$/u.test(child)

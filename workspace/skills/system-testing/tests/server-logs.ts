@@ -6,6 +6,7 @@ import {
   successfulEvalCode,
   successfulEvalReturnValues,
 } from "./_helpers.js";
+import { walkRecords } from "./_scenario-evidence.js";
 
 const serverLogReadAuthority: TestAuthorityPolicy = {
   authority: [
@@ -18,18 +19,6 @@ const serverLogReadAuthority: TestAuthorityPolicy = {
     },
   ],
 };
-
-function records(value: unknown, found: Record<string, unknown>[] = []): Record<string, unknown>[] {
-  if (Array.isArray(value)) {
-    for (const item of value) records(item, found);
-    return found;
-  }
-  if (!value || typeof value !== "object") return found;
-  const item = value as Record<string, unknown>;
-  found.push(item);
-  for (const child of Object.values(item)) records(child, found);
-  return found;
-}
 
 function exactNumber(message: string, value: number): boolean {
   return new RegExp(`(?:^|\\D)${value}(?:\\D|$)`, "u").test(message);
@@ -58,7 +47,7 @@ function startupDiagnosisChecked(result: Parameters<typeof noIncompleteInvocatio
     };
   }
 
-  const envelopes = records(successfulEvalReturnValues(result)).filter(
+  const envelopes = walkRecords(successfulEvalReturnValues(result)).filter(
     (item) =>
       Array.isArray(item["records"]) &&
       Number.isInteger(item["latestSeq"]) &&
@@ -137,7 +126,7 @@ export const serverLogTests: TestCase[] = [
         [/serverLog\.query/iu, /serverLog\.stats/iu],
         /\blimit\s*:\s*[1-9]\d*/u,
         (values, final) => {
-          const all = records(values);
+          const all = walkRecords(values);
           const envelope = all.find(
             (item) =>
               Array.isArray(item["records"]) &&
@@ -182,7 +171,7 @@ export const serverLogTests: TestCase[] = [
       "Look at only the newest few entries in the server's host-log tail. Tell me how many you observed and the severity of the newest entry.",
     validate: (result) =>
       checked(result, [/serverLog\.tail/iu], /serverLog\.tail\(\s*[1-9]\d*/u, (values, final) => {
-        const envelope = records(values).find(
+        const envelope = walkRecords(values).find(
           (item) =>
             Array.isArray(item["records"]) &&
             Number.isInteger(item["latestSeq"]) &&
