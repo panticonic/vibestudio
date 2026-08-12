@@ -648,6 +648,19 @@ describe("ViewManager", () => {
 
       const diagnostics = await vm.getPanelDisplayDiagnostics();
       expect(diagnostics.manager.visiblePanelId).toBeNull();
+
+      expect(vm.getProcessPerformanceSnapshot()).toMatchObject({
+        version: 1,
+        familyWorkingSetBytes: 20 * 1024 * 1024,
+        processes: [
+          {
+            pid: 1234,
+            type: "Tab",
+            workingSetBytes: 20 * 1024 * 1024,
+            cpuPercent: 1.25,
+          },
+        ],
+      });
     });
 
     it("ignores a stale release after a newer binding incarnation takes over the slot", () => {

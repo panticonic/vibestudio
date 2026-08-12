@@ -42,13 +42,7 @@ export { rawCdpSession, withCdpSession } from "./cdp.js";
 export type { RawCdpSession } from "./cdp.js";
 
 // Worker/DO orchestration + inspection
-export {
-  listUnits,
-  unitDiagnostics,
-  callDO,
-  ensureWorker,
-  restartUnit,
-} from "./workers.js";
+export { listUnits, unitDiagnostics, callDO, ensureWorker, restartUnit } from "./workers.js";
 export type { CompactUnitStatus, UnitDiagnostics } from "./workers.js";
 
 // Supervision
@@ -74,3 +68,20 @@ export {
   profileDO,
 } from "./workerd-profile.js";
 export type { WorkerdTarget } from "./workerd-profile.js";
+
+// Bounded wall/resource/build/startup profiling over canonical host services.
+export {
+  hostPerformanceSnapshot,
+  profileHost,
+  profileBuild,
+  electronPerformanceSnapshot,
+  readStartupProfile,
+  profilePanelInteraction,
+  profilePanelReload,
+  summarizeHostSpan,
+} from "./performance.js";
+export type {
+  ElectronProcessPerformanceSnapshot,
+  HostSpanProfile,
+  HostSpanSummary,
+} from "./performance.js";

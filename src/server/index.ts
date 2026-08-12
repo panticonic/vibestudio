@@ -348,7 +348,15 @@ getProductBootManifest();
 // =============================================================================
 
 async function main() {
-  const stopEventLoopMonitor = startEventLoopResponsivenessMonitor({ label: "workspace-server" });
+  const eventLoopSamples: import("../eventLoopResponsiveness.js").EventLoopResponsivenessSample[] =
+    [];
+  const stopEventLoopMonitor = startEventLoopResponsivenessMonitor({
+    label: "workspace-server",
+    onSample: (sample) => {
+      eventLoopSamples.push(sample);
+      if (eventLoopSamples.length > 240) eventLoopSamples.shift();
+    },
+  });
   const { setUserDataPath } = await import("@vibestudio/env-paths");
   const { loadCentralEnv } = await import("@vibestudio/workspace/loader");
   const { loadPersistedAdminToken, savePersistedAdminToken, getAdminTokenPath } =
@@ -3442,6 +3450,18 @@ async function main() {
         serverBootId,
         startedAt: serverLogStartedAt,
         recordContextIngestion,
+      })
+    );
+  }
+
+  // ── bounded host/workerd performance diagnostics ──
+  {
+    const { createHostPerformanceService } = await import("./services/hostPerformanceService.js");
+    container.registerRpc(
+      createHostPerformanceService({
+        startedAt: serverLogStartedAt,
+        eventLoopSamples: () => eventLoopSamples,
+        workerdSnapshot: () => workerdManagerForGateway?.performanceSnapshot() ?? null,
       })
     );
   }

@@ -1406,6 +1406,18 @@ export const HOST_AUTHORITY_METHODS = {
     capability: null,
     presentation: null,
   },
+  "build.getPerformanceProfile": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "untrusted-execution",
+      family: "build.read",
+      rationale:
+        "Bounded timing and size projection over the canonical workspace-local build path and immutable artifact cache.",
+    },
+    capability: null,
+    presentation: null,
+  },
   "build.hasUnit": {
     tier: {
       tier: "open",
@@ -3090,6 +3102,18 @@ export const HOST_AUTHORITY_METHODS = {
         verb: "act",
       },
     },
+  },
+  "hostPerformance.snapshot": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "observability",
+      family: "hostPerformance.read",
+      rationale:
+        "Bounded read-only host and workerd resource counters; no process control or host filesystem access.",
+    },
+    capability: null,
+    presentation: null,
   },
   "hubControl.addWorkspaceMember": {
     tier: {

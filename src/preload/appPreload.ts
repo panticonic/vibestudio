@@ -21,6 +21,7 @@ const serviceCall = (method: string, ...args: unknown[]) =>
 const vibestudioApp = {
   getBootstrapConfig: () => ipcRenderer.invoke("vibestudio:getPanelInit"),
   getInfo: () => ipcRenderer.invoke("vibestudio:bridge.getInfo"),
+  getProcessPerformanceSnapshot: () => ipcRenderer.invoke("vibestudio:performance.snapshot"),
   serviceCall,
   native: {
     menu: {

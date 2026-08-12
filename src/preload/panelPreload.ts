@@ -64,6 +64,7 @@ const vibestudioShell = {
   getPanelInit: () => ipcRenderer.invoke("vibestudio:getPanelInit"),
   getBootstrapConfig: () => ipcRenderer.invoke("vibestudio:getPanelInit"),
   getInfo: () => ipcRenderer.invoke("vibestudio:bridge.getInfo"),
+  getProcessPerformanceSnapshot: () => ipcRenderer.invoke("vibestudio:performance.snapshot"),
   reportPanelBoot: (boot: PanelBootObservation) => ipcRenderer.send("vibestudio:panel-boot", boot),
   focusPanel: (
     panelId: string,

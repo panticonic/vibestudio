@@ -7316,6 +7316,19 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     },
   },
   {
+    id: "host:build.getPerformanceProfile",
+    rpcPlane: "host-service",
+    capability: "service:build.getPerformanceProfile",
+    authorityPrincipals: ["code", "user", "host"],
+    owner: "build",
+    method: "getPerformanceProfile",
+    sensitivity: "read",
+    resourceDerivation: {
+      kind: "literal",
+      key: "service:build.getPerformanceProfile",
+    },
+  },
+  {
     id: "host:build.hasUnit",
     rpcPlane: "host-service",
     capability: "service:build.hasUnit",
@@ -8944,6 +8957,19 @@ export const EVAL_INVOCATION_SURFACE_CENSUS = [
     resourceDerivation: {
       kind: "literal",
       key: "service:hostLifecycle.shutdown",
+    },
+  },
+  {
+    id: "host:hostPerformance.snapshot",
+    rpcPlane: "host-service",
+    capability: "service:hostPerformance.snapshot",
+    authorityPrincipals: ["user", "code", "host"],
+    owner: "hostPerformance",
+    method: "snapshot",
+    sensitivity: "read",
+    resourceDerivation: {
+      kind: "literal",
+      key: "service:hostPerformance.snapshot",
     },
   },
   {
@@ -12858,6 +12884,10 @@ export const EVAL_SERVER_HOST_METHODS = [
   },
   {
     service: "build",
+    method: "getPerformanceProfile",
+  },
+  {
+    service: "build",
     method: "hasUnit",
   },
   {
@@ -13343,6 +13373,10 @@ export const EVAL_SERVER_HOST_METHODS = [
   {
     service: "hostLifecycle",
     method: "shutdown",
+  },
+  {
+    service: "hostPerformance",
+    method: "snapshot",
   },
   {
     service: "mirror",
@@ -14502,6 +14536,7 @@ export const EVAL_INVOCATION_EXPOSURE_CAPABILITIES = [
   "service:build.getBuildReport",
   "service:build.getEffectiveVersion",
   "service:build.getPanelMetadata",
+  "service:build.getPerformanceProfile",
   "service:build.hasUnit",
   "service:build.inspectBuildProvenance",
   "service:build.inspectExecution",
@@ -14630,6 +14665,7 @@ export const EVAL_INVOCATION_EXPOSURE_CAPABILITIES = [
   "service:fs.writeFile",
   "service:gateway.fetch",
   "service:governance.list",
+  "service:hostPerformance.snapshot",
   "service:hubControl.addWorkspaceMember",
   "service:hubControl.createWorkspace",
   "service:hubControl.deleteWorkspace",

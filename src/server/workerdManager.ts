@@ -58,6 +58,7 @@ import {
   RUNTIME_IMAGE_WARMING_ERROR_CODE,
 } from "./runtimeReadinessError.js";
 import { migrationDefinitionSourceDigest } from "./buildV2/durableObjectSchemaSource.js";
+import type { WorkerdPerformanceSnapshot } from "@vibestudio/service-schemas/hostPerformance";
 
 const log = createDevLogger("WorkerdManager");
 /** uniqueKey of the single static namespace that hosts all userland DO facets.
@@ -3096,7 +3097,7 @@ export class WorkerdManager {
     if (pid === this.workerdMemorySamplePid) this.stopWorkerdMemorySampling();
   }
 
-  private workerdDiagnostics(pid: number | undefined): Record<string, unknown> {
+  private workerdDiagnostics(pid: number | undefined): WorkerdPerformanceSnapshot {
     const currentRssBytes = pid ? this.readProcessRssBytes(pid) : null;
     const ownsSamples = pid !== undefined && pid === this.workerdMemorySamplePid;
     if (currentRssBytes !== null && ownsSamples) {
@@ -3131,6 +3132,11 @@ export class WorkerdManager {
       bootGeneration: this.bootGeneration,
       pendingBootGeneration: this.pendingBootGeneration,
     };
+  }
+
+  /** Bounded, read-only resource/occupancy snapshot for userland profilers. */
+  performanceSnapshot(): WorkerdPerformanceSnapshot {
+    return this.workerdDiagnostics(this.process?.pid);
   }
 
   private rememberWorkerdStartupOutput(line: string): void {

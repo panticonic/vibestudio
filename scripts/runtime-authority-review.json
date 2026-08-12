@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "censusDigest": "sha256:4a63ee30d58721d471d4557d0eefaf484927f5cd2b30512cc82d4447e1b14262",
+  "censusDigest": "sha256:7f9e744a590b0485d553ced43d92cbc834275236a5df16f5ba0601f1fb77ee79",
   "decisions": {
     "host:fs.readBytes": {
       "review": "bounded-workspace-binary-range-read",
@@ -221,6 +221,14 @@
     "host:build.gc": {
       "review": "read-only-execution-retention-report",
       "change": "Narrows the public method to a zero-argument read-only retention report. Quarantine and sweep are no longer advertised no-op modes and remain available only through the private two-collector epoch coordinator after source-closure preflight and publication interlock checks."
+    },
+    "host:build.getPerformanceProfile": {
+      "review": "bounded-canonical-build-performance-read",
+      "change": "Adds an open read-only projection over the existing exact-context build report and immutable build store. It returns bounded wall timing, cache-key equality, artifact and executable-module byte counts, and the existing bundle report while deliberately excluding artifact and module contents; it grants no publication, cache mutation, external acquisition, or alternate build path."
+    },
+    "host:hostPerformance.snapshot": {
+      "review": "bounded-host-runtime-performance-read",
+      "change": "Adds an open read-only snapshot of workspace-server CPU and memory counters, at most 240 retained event-loop summaries, and workerd RSS plus aggregate occupancy. It exposes no process control, command execution, host filesystem, URLs, payloads, credentials, or inspector endpoint and cannot enable or extend profiling."
     },
     "host:eval.events": {
       "review": "owner-scoped-bounded-eval-event-catchup",

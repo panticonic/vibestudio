@@ -3,6 +3,8 @@ import { createDevLogger } from "@vibestudio/dev-log";
 
 export interface EventLoopResponsivenessSample {
   label: string;
+  /** Epoch-ms capture time for correlation with logs and bounded workloads. */
+  sampledAt: number;
   intervalMs: number;
   utilization: number;
   p50Ms: number;
@@ -30,6 +32,7 @@ export function startEventLoopResponsivenessMonitor(options: {
     previousUtilization = currentUtilization;
     const sample: EventLoopResponsivenessSample = {
       label: options.label,
+      sampledAt: Date.now(),
       intervalMs,
       utilization: delta.utilization,
       p50Ms: histogram.percentile(50) / 1_000_000,

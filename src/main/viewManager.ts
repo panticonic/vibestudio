@@ -135,6 +135,18 @@ interface PanelDisplayDiagnostics {
   }>;
 }
 
+export interface ElectronProcessPerformanceSnapshot {
+  version: 1;
+  sampledAt: number;
+  familyWorkingSetBytes: number;
+  processes: Array<{
+    pid: number;
+    type: string;
+    workingSetBytes: number;
+    cpuPercent: number;
+  }>;
+}
+
 interface ManagedView {
   id: string;
   view: WebContentsView;
@@ -2151,6 +2163,29 @@ export class ViewManager {
           Math.round(((metric.cpu as { percentCPUUsage?: number }).percentCPUUsage ?? 0) * 100) /
           100,
       })),
+    };
+  }
+
+  /**
+   * Bounded Electron process-family counters for client-affine profiling.
+   * Unlike display diagnostics this contains no URLs, titles, screenshots, or
+   * panel state and is safe to return through the panel preload.
+   */
+  getProcessPerformanceSnapshot(): ElectronProcessPerformanceSnapshot {
+    const processes = this.safeAppMetrics().map((metric) => ({
+      pid: metric.pid,
+      type: metric.type,
+      workingSetBytes: metric.memory.workingSetSize * 1024,
+      cpuPercent: (metric.cpu as { percentCPUUsage?: number }).percentCPUUsage ?? 0,
+    }));
+    return {
+      version: 1,
+      sampledAt: Date.now(),
+      familyWorkingSetBytes: processes.reduce(
+        (total, process) => total + process.workingSetBytes,
+        0
+      ),
+      processes,
     };
   }
 

@@ -416,6 +416,53 @@ export const unitBuildReportSchema = z
   .strict();
 export type UnitBuildReportWire = z.infer<typeof unitBuildReportSchema>;
 
+const buildProfileArtifactSchema = z
+  .object({
+    path: z.string(),
+    role: z.string(),
+    bytes: z.number().int().nonnegative(),
+  })
+  .strict();
+
+const buildProfileTargetSchema = z
+  .object({
+    target: z.string(),
+    buildKey: z.string(),
+    builtAt: z.string(),
+    artifactCount: z.number().int().nonnegative(),
+    artifactBytes: z.number().int().nonnegative(),
+    largestArtifacts: z.array(buildProfileArtifactSchema),
+    executableModuleCount: z.number().int().nonnegative(),
+    executableSourceBytes: z.number().int().nonnegative(),
+    bundleReport: panelBundleReportSchema.optional(),
+  })
+  .strict();
+
+export const buildPerformanceProfileSchema = z
+  .object({
+    version: z.literal(1),
+    source: z.string(),
+    ref: z.string().optional(),
+    startedAt: z.number(),
+    firstRun: z
+      .object({
+        elapsedMs: z.number().nonnegative(),
+        cacheState: z.enum(["built-during-profile", "preexisting", "unknown"]),
+      })
+      .strict(),
+    verifiedCacheRun: z
+      .object({
+        elapsedMs: z.number().nonnegative(),
+        sameBuildKeys: z.boolean(),
+      })
+      .strict()
+      .optional(),
+    report: unitBuildReportSchema,
+    targets: z.array(buildProfileTargetSchema),
+  })
+  .strict();
+export type BuildPerformanceProfileWire = z.infer<typeof buildPerformanceProfileSchema>;
+
 export const aboutPageMetaSchema = z
   .object({
     name: z.string(),
@@ -737,6 +784,29 @@ export const buildMethods = defineServiceMethods({
     // Like getBuild, this is an advisory projection over a content-addressed
     // compilation. Diagnostics are useful precisely in read-only inspection.
     access: READ_ACCESS,
+  },
+  getPerformanceProfile: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "untrusted-execution",
+      family: "build.read",
+      rationale:
+        "Bounded timing and size projection over the canonical workspace-local build path and immutable artifact cache.",
+    },
+    description:
+      "Profile the canonical exact-context build report, summarize immutable artifact/module sizes without returning bundle contents, and optionally run the same report again to verify the cache path. The first run is labeled from immutable builtAt evidence rather than assumed cold.",
+    args: z.tuple([
+      z.string().describe("Unit name or workspace-relative path."),
+      z.string().optional().describe("Exact workspace build ref, such as ctx:<contextId>."),
+      z.object({ verifyCache: z.boolean().optional() }).strict().optional(),
+    ]),
+    returns: buildPerformanceProfileSchema,
+    access: READ_ACCESS,
+    examples: [
+      { args: ["panels/chat", "ctx:<contextId>", { verifyCache: true }] },
+      { args: ["workers/example", "ctx:<contextId>", { verifyCache: false }] },
+    ],
   },
   getEffectiveVersion: {
     tier: {

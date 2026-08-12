@@ -119,6 +119,7 @@ Authority principals: `code`, `host`, `user`
 | `build.getBuildNpm` | Build an npm package as a CJS library bundle for sandbox use, leaving the given externals unbundled. |
 | `build.getBuildMetadata` | Cached build metadata for an immutable build key, or null if it is not cached. Includes the unit's most recent structured build diagnostics (esbuild + tsc) when any were captured. Pass includeExecutableModules:false for compact profiling and provenance reads that do not need the sealed source inventory. |
 | `build.getBuildReport` | Explicitly build a unit (runtime, or library targets for packages) at the requested workspace state and return a compact, agent-actionable report. Read all diagnostics from report.diagnostics or target-specific diagnostics from report.builds. Artifact manifests are intentionally excluded; inspect an immutable build key separately when artifact provenance is needed. This advisory projection does not publish source, authorize publication, or advance any head. |
+| `build.getPerformanceProfile` | Profile the canonical exact-context build report, summarize immutable artifact/module sizes without returning bundle contents, and optionally run the same report again to verify the cache path. The first run is labeled from immutable builtAt evidence rather than assumed cold. |
 | `build.getEffectiveVersion` | Effective version (content-derived identity) of a workspace unit, or null if unknown. |
 | `build.inspectBuildProvenance` | Resolve a workspace build unit (by name, relative path, or basename) and report its effective version, immutable build keys, and cached artifact metadata. Reports ambiguity when a basename matches multiple units. |
 | `build.listRecentBuildEvents` | List recent state-triggered build lifecycle events and failures, optionally filtered by unit name or workspace-relative path. |
@@ -319,6 +320,16 @@ Authority principals: `host`, `user`
 | Method | Description |
 |--------|-------------|
 | `hostLifecycle.shutdown` | Gracefully shut down the workspace server process (same path as SIGTERM). Shell-only. |
+
+## `hostPerformance`
+
+Bounded workspace host and workerd performance diagnostics
+
+Authority principals: `code`, `host`, `user`
+
+| Method | Description |
+|--------|-------------|
+| `hostPerformance.snapshot` | Capture workspace-server memory/CPU counters, retained event-loop responsiveness samples, and workerd RSS/occupancy. Pass since to correlate samples with one workload. |
 
 ## `mirror`
 

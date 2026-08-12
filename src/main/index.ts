@@ -57,10 +57,20 @@ import {
 } from "./protocolHandler.js";
 import { BrowserEnvironmentReadiness } from "./services/browserEnvironmentReadiness.js";
 import { installRelaunchHandler, type RelaunchOptions } from "./relaunchApp.js";
-import { startEventLoopResponsivenessMonitor } from "../eventLoopResponsiveness.js";
+import {
+  startEventLoopResponsivenessMonitor,
+  type EventLoopResponsivenessSample,
+} from "../eventLoopResponsiveness.js";
 
 const log = createDevLogger("App");
-const stopMainEventLoopMonitor = startEventLoopResponsivenessMonitor({ label: "electron-main" });
+const mainEventLoopSamples: EventLoopResponsivenessSample[] = [];
+const stopMainEventLoopMonitor = startEventLoopResponsivenessMonitor({
+  label: "electron-main",
+  onSample: (sample) => {
+    mainEventLoopSamples.push(sample);
+    if (mainEventLoopSamples.length > 240) mainEventLoopSamples.shift();
+  },
+});
 app.once("quit", stopMainEventLoopMonitor);
 const APP_NAME = "Vibestudio";
 const APP_SHUTDOWN_TIMEOUT_MS = 30_000;
@@ -3083,6 +3093,13 @@ app.on("ready", async () => {
     ipcMain.handle("vibestudio:bridge.getInfo", async (event) => {
       const callerId = resolveCallerId(event);
       return shellCore?.panelManager.getInfo(asPanelSlotId(callerId));
+    });
+    ipcMain.handle("vibestudio:performance.snapshot", (event) => {
+      resolveCaller(event);
+      return {
+        ...getViewManager().getProcessPerformanceSnapshot(),
+        eventLoop: { samples: mainEventLoopSamples.slice(-60) },
+      };
     });
     ipcMain.handle("vibestudio:getBootstrapConfig", async (event) => {
       const callerId = tryResolveCallerId(event);

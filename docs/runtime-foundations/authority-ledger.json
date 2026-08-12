@@ -22932,6 +22932,52 @@
       "parityAssertion": "generated-census:host-authority"
     },
     {
+      "id": "host:build.getPerformanceProfile",
+      "rpcPlane": "host-service",
+      "owner": "build",
+      "method": "getPerformanceProfile",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "untrusted-execution",
+      "mechanismFamily": "build.read",
+      "reviewRationale": "Bounded timing and size projection over the canonical workspace-local build path and immutable artifact cache.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:build.getPerformanceProfile"
+      },
+      "authorityPrincipals": [
+        "code",
+        "user",
+        "host"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:build.getPerformanceProfile),allOf(capability(user,service:build.getPerformanceProfile),workspace-member),allOf(capability(code,service:build.getPerformanceProfile),workspace-member))",
+      "r3b": {
+        "review": "bounded-canonical-build-performance-read",
+        "change": "Adds an open read-only projection over the existing exact-context build report and immutable build store. It returns bounded wall timing, cache-key equality, artifact and executable-module byte counts, and the existing bundle report while deliberately excluding artifact and module contents; it grants no publication, cache mutation, external acquisition, or alternate build path."
+      },
+      "capability": "service:build.getPerformanceProfile",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
       "id": "host:build.hasUnit",
       "rpcPlane": "host-service",
       "owner": "build",
@@ -28736,6 +28782,52 @@
         "change": null
       },
       "capability": "service:hostLifecycle.shutdown",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:hostPerformance.snapshot",
+      "rpcPlane": "host-service",
+      "owner": "hostPerformance",
+      "method": "snapshot",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "observability",
+      "mechanismFamily": "hostPerformance.read",
+      "reviewRationale": "Bounded read-only host and workerd resource counters; no process control or host filesystem access.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:hostPerformance.snapshot"
+      },
+      "authorityPrincipals": [
+        "user",
+        "code",
+        "host"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:hostPerformance.snapshot),allOf(capability(user,service:hostPerformance.snapshot),workspace-member),allOf(capability(code,service:hostPerformance.snapshot),workspace-member))",
+      "r3b": {
+        "review": "bounded-host-runtime-performance-read",
+        "change": "Adds an open read-only snapshot of workspace-server CPU and memory counters, at most 240 retained event-loop summaries, and workerd RSS plus aggregate occupancy. It exposes no process control, command execution, host filesystem, URLs, payloads, credentials, or inspector endpoint and cannot enable or extend profiling."
+      },
+      "capability": "service:hostPerformance.snapshot",
       "parityAssertion": "generated-census:host-authority"
     },
     {

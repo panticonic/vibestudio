@@ -1,4 +1,5 @@
 import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
+import type { BuildPerformanceProfileWire } from "@vibestudio/service-schemas/build";
 import { describe, expect, it, vi } from "vitest";
 
 import { createBuildService } from "./buildService.js";
@@ -65,6 +66,16 @@ function makeBuildSystem(): BuildSystemV2 {
           }
         : null
     ),
+    getBuildReport: vi.fn(async () => ({
+      repoPath: "extensions/example",
+      unitName: "@workspace-extensions/example",
+      kind: "extension",
+      status: "ok" as const,
+      diagnostics: [],
+      builds: [
+        { target: "runtime", status: "ok" as const, buildKey: "build-key", diagnostics: [] },
+      ],
+    })),
     getEffectiveVersion: vi.fn(),
     getExternalDeps: vi.fn(),
     listRecentBuildEvents: vi.fn(() => []),
@@ -175,6 +186,35 @@ describe("build service extension diagnostics", () => {
       name: "@workspace-extensions/example",
     });
     expect(metadata).not.toHaveProperty("executableModules");
+  });
+
+  it("profiles exact builds without returning artifact or module contents", async () => {
+    const buildSystem = makeBuildSystem();
+    const service = createBuildService({ buildSystem, listUnits: () => [] });
+
+    const profile = (await service.handler(
+      { caller: createVerifiedCaller("shell", "shell") },
+      "getPerformanceProfile",
+      ["extensions/example", "ctx:feature", { verifyCache: true }]
+    )) as BuildPerformanceProfileWire;
+
+    expect(profile).toMatchObject({
+      version: 1,
+      source: "extensions/example",
+      ref: "ctx:feature",
+      firstRun: { cacheState: "preexisting" },
+      verifiedCacheRun: { sameBuildKeys: true },
+      targets: [
+        {
+          buildKey: "build-key",
+          artifactCount: 1,
+          artifactBytes: 10,
+          executableModuleCount: 1,
+        },
+      ],
+    });
+    expect(JSON.stringify(profile)).not.toContain("export const example");
+    expect(buildSystem.getBuildReport).toHaveBeenCalledTimes(2);
   });
 
   it("resolves panel metadata by its public workspace source path", async () => {

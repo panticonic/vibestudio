@@ -50,6 +50,76 @@ export function createBuildService(deps: {
         return diagnostics && diagnostics.length > 0 ? { ...metadata, diagnostics } : metadata;
       },
       getBuildReport: (_ctx, [unit, ref]) => deps.buildSystem.getBuildReport(unit, ref),
+      getPerformanceProfile: async (_ctx, [unit, ref, options]) => {
+        const startedAt = Date.now();
+        const firstStartedAt = performance.now();
+        const report = await deps.buildSystem.getBuildReport(unit, ref);
+        const firstElapsedMs = performance.now() - firstStartedAt;
+        const targets = report.builds.flatMap((target) => {
+          if (!target.buildKey) return [];
+          const build = deps.buildSystem.getBuildByKey(target.buildKey);
+          if (!build) return [];
+          const artifacts = build.artifacts
+            .map((artifact) => {
+              const bytes =
+                artifact.byteLength ??
+                (artifact.encoding === "base64"
+                  ? Buffer.from(artifact.content, "base64").byteLength
+                  : Buffer.byteLength(artifact.content));
+              return { path: artifact.path, role: artifact.role, bytes };
+            })
+            .sort((left, right) => right.bytes - left.bytes);
+          const executableModules = build.metadata.executableModules ?? [];
+          return [
+            {
+              target: target.target,
+              buildKey: target.buildKey,
+              builtAt: build.metadata.builtAt,
+              artifactCount: artifacts.length,
+              artifactBytes: artifacts.reduce((sum, artifact) => sum + artifact.bytes, 0),
+              largestArtifacts: artifacts.slice(0, 20),
+              executableModuleCount: executableModules.length,
+              executableSourceBytes: executableModules.reduce(
+                (sum, module) => sum + Buffer.byteLength(module.source),
+                0
+              ),
+              ...(build.metadata.bundleReport ? { bundleReport: build.metadata.bundleReport } : {}),
+            },
+          ];
+        });
+        const builtTimes = targets
+          .map((target) => Date.parse(target.builtAt))
+          .filter(Number.isFinite);
+        const cacheState =
+          targets.length === 0 || builtTimes.length === 0
+            ? "unknown"
+            : builtTimes.some((builtAt) => builtAt >= startedAt)
+              ? "built-during-profile"
+              : "preexisting";
+        let verifiedCacheRun: { elapsedMs: number; sameBuildKeys: boolean } | undefined;
+        if (options?.verifyCache !== false && report.status === "ok") {
+          const warmStartedAt = performance.now();
+          const cached = await deps.buildSystem.getBuildReport(unit, ref);
+          const firstKeys = report.builds.map((build) => build.buildKey ?? null);
+          const cachedKeys = cached.builds.map((build) => build.buildKey ?? null);
+          verifiedCacheRun = {
+            elapsedMs: performance.now() - warmStartedAt,
+            sameBuildKeys:
+              firstKeys.length === cachedKeys.length &&
+              firstKeys.every((key, index) => key === cachedKeys[index]),
+          };
+        }
+        return {
+          version: 1 as const,
+          source: unit,
+          ...(ref ? { ref } : {}),
+          startedAt,
+          firstRun: { elapsedMs: firstElapsedMs, cacheState },
+          ...(verifiedCacheRun ? { verifiedCacheRun } : {}),
+          report,
+          targets,
+        };
+      },
       getEffectiveVersion: (_ctx, [unit]) => deps.buildSystem.getEffectiveVersion(unit),
       inspectBuildProvenance: (_ctx, [source]) => {
         const bs = deps.buildSystem;
