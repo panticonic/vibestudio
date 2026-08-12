@@ -42,6 +42,31 @@ must not add an extension flag or alternate no-approval method.
 not embed the screenshot bytes; call `screenshot` separately only when the
 image itself is needed.
 
+## Performance receipts
+
+`doctor` reports the selected Android device ABI and current internal APK byte
+size when available. For source-build profiling, either pass a device so the
+extension selects its ABI or pass an explicit architecture list:
+
+```ts
+const devices = await extensions.invoke("mobile-debug", "listDevices", []);
+const startedAt = Date.now();
+const build = await extensions.invoke("mobile-debug", "buildAndroid", [
+  { variant: "internal", device: devices[0]?.serial },
+]);
+const ready = await extensions.invoke("mobile-debug", "verifyWorkspaceReady", [
+  { device: devices[0]?.serial, sinceMs: startedAt, timeoutMs: 180_000 },
+]);
+return { build, ready };
+```
+
+The build receipt contains `durationMs`, `architectures`, `apkPath`, and
+`apkBytes`. The canonical build is deliberately resource-bounded
+(`--no-daemon`, two Gradle workers, in-process Kotlin compilation); there is no
+separate profiling build path. A device-targeted measurement must report the
+selected ABI. An empty `architectures` array means the caller intentionally
+measured Gradle's configured default set, not a device-specific build.
+
 After a pairing or provisioning workflow, verify the workspace shell rather
 than stopping at process liveness:
 

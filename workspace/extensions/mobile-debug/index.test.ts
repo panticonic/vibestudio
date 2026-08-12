@@ -6,10 +6,19 @@ import type { ExtensionContext } from "@vibestudio/extension";
 import {
   activate,
   pidScopedLogcatArgs,
+  validateAndroidArchitectures,
   workspaceReadinessFromLog,
 } from "./index.js";
 
 describe("@workspace-extensions/mobile-debug", () => {
+  it("validates and deduplicates target Android architectures", () => {
+    expect(validateAndroidArchitectures(["arm64-v8a", "arm64-v8a", "x86_64"])).toEqual([
+      "arm64-v8a",
+      "x86_64",
+    ]);
+    expect(() => validateAndroidArchitectures(["mips"])).toThrow(/Unsupported Android ABI/u);
+  });
+
   it("adds an adb logcat pid filter after resolving a package pid", () => {
     expect(pidScopedLogcatArgs(["logcat", "-v", "time"], "1234")).toEqual([
       "logcat",
@@ -152,5 +161,4 @@ describe("@workspace-extensions/mobile-debug", () => {
       issues: ["invalid distance code"],
     });
   });
-
 });
