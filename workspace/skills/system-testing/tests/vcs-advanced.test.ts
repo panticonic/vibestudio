@@ -117,6 +117,155 @@ describe("reduced VCS agentic catalog", () => {
     expect(test.validate(execution(final, [withoutMemory])).passed).toBe(false);
   });
 
+  it("requires sizable-history recall to expose the buried decision at a committed event", () => {
+    const test = vcsAdvancedTests.find(({ name }) => name === "vcs-sizable-history-memory-recall")!;
+    const recall = invocation(
+      "historical-recall",
+      "memory_recall",
+      { query: "retired rollout codename", kinds: ["commit"], limit: 10 },
+      {
+        protocolContent: [
+          {
+            type: "text",
+            text: "[commit] workspace-event:retire-codename\nRetire Harbor Lantern after launch; use Retention Service in support and audit records",
+          },
+        ],
+        details: { resultCount: 1 },
+      }
+    );
+    const final =
+      "The codename was Harbor Lantern. It was retired after launch so support and audit records consistently use the public Retention Service name.";
+
+    expect(test.validate(execution(final, [recall]))).toEqual({
+      passed: true,
+      reason: undefined,
+    });
+    expect(test.validate(execution(final, [])).passed).toBe(false);
+
+    const unanchored = structuredClone(recall);
+    const result = unanchored.invocation.execution.result as {
+      protocolContent: Array<{ text: string }>;
+    };
+    result.protocolContent[0]!.text = result.protocolContent[0]!.text.replace(
+      "workspace-event:retire-codename",
+      "unknown"
+    );
+    expect(test.validate(execution(final, [unanchored])).passed).toBe(false);
+  });
+
+  it("joins an exact edited-file read to preserved and buried historical evidence", () => {
+    const test = vcsAdvancedTests.find(
+      ({ name }) => name === "vcs-sizable-history-edited-file-context"
+    )!;
+    const path = "projects/history/src/retention-policy.ts";
+    const contentHash = "a".repeat(64);
+    const read = invocation(
+      "historical-file-read",
+      "read",
+      { path },
+      {
+        protocolContent: [
+          {
+            type: "text",
+            text: "export const archiveWindowDays = 21;\nexport const policyRevision = 36;\n",
+          },
+        ],
+        details: {
+          path,
+          contentHash,
+          receipt: {
+            protocol: "workspace-read-receipt.v1",
+            path,
+            contentHash,
+            byteLength: 75,
+          },
+          displayedRange: {
+            coordinateKind: "utf16",
+            start: 0,
+            end: 75,
+            startLine: 1,
+            endLine: 2,
+          },
+          provenance: {
+            status: "attached",
+            episodes: [
+              {
+                intent: {
+                  tier: "stated",
+                  text: "Record retention-policy audit checkpoint 36 without changing the approved archive window",
+                },
+                change: { kind: "change", changeId: "change:checkpoint-36" },
+                workUnit: { kind: "work-unit", workUnitId: "work:checkpoint-36" },
+                command: { kind: "command", commandId: "command:checkpoint-36" },
+              },
+            ],
+          },
+        },
+      }
+    );
+    const final =
+      "The window moved from 14 to 21 days because regional exports can arrive through day 18. Later checkpoints retained 21 and did not reverse that decision.";
+    const history = invocation(
+      "historical-file-provenance",
+      "provenance",
+      { target: path },
+      {
+        protocolContent: [
+          {
+            type: "text",
+            text: 'past · change:archive-window · stated: "Extend the archive window from 14 to 21 days because delayed regional exports can arrive through day 18; a three-day buffer prevents premature deletion"',
+          },
+        ],
+      }
+    );
+
+    expect(test.validate(execution(final, [read, history]))).toEqual({
+      passed: true,
+      reason: undefined,
+    });
+
+    const mismatchedReceipt = structuredClone(read);
+    const details = (
+      mismatchedReceipt.invocation.execution.result as {
+        details: { receipt: Record<string, unknown> };
+      }
+    ).details;
+    details.receipt["contentHash"] = "b".repeat(64);
+    expect(test.validate(execution(final, [mismatchedReceipt, history])).passed).toBe(false);
+
+    const missingRoots = structuredClone(read);
+    const episode = (
+      missingRoots.invocation.execution.result as {
+        details: { provenance: { episodes: Array<Record<string, unknown>> } };
+      }
+    ).details.provenance.episodes[0]!;
+    delete episode["command"];
+    expect(test.validate(execution(final, [missingRoots, history])).passed).toBe(false);
+
+    const wrongFileHistory = structuredClone(history);
+    wrongFileHistory.invocation.arguments["target"] = "projects/history/src/unrelated.ts";
+    expect(test.validate(execution(final, [read, wrongFileHistory])).passed).toBe(false);
+
+    const recalledDecision = invocation(
+      "historical-decision-recall",
+      "memory_recall",
+      { query: "regional exports day 18", kinds: ["commit"], limit: 10 },
+      {
+        protocolContent: [
+          {
+            type: "text",
+            text: "[commit] workspace-event:archive-window\nExtend the archive window from 14 to 21 days because delayed regional exports can arrive through day 18",
+          },
+        ],
+        details: { resultCount: 1 },
+      }
+    );
+    expect(test.validate(execution(final, [read, recalledDecision]))).toEqual({
+      passed: true,
+      reason: undefined,
+    });
+  });
+
   it("accepts conclusive move/copy receipts and strictly validates an optional deeper walk", () => {
     const test = vcsAdvancedTests.find(({ name }) => name === "vcs-explicit-move-copy")!;
     const moveState = { kind: "application", applicationId: "application:move" };

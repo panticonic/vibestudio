@@ -286,6 +286,155 @@ function requireHistoricalAnswer(
   return noIncompleteInvocations(result);
 }
 
+function protocolText(call: ReturnType<typeof getToolCalls>[number]): string {
+  const envelope = isRecord(call.execution?.result) ? call.execution.result : null;
+  return Array.isArray(envelope?.["protocolContent"])
+    ? envelope["protocolContent"]
+        .filter(isRecord)
+        .map((content) => (typeof content["text"] === "string" ? content["text"] : ""))
+        .join("\n")
+    : "";
+}
+
+function requireHistoricalMemoryRecall(result: TestExecutionResult) {
+  const answer = requireHistoricalAnswer(result, [
+    /Harbor Lantern/iu,
+    /retir/iu,
+    /Retention Service/iu,
+  ]);
+  if (!answer.passed) return answer;
+
+  const recall = getToolCalls(result).find((call) => {
+    if (
+      call.name !== "memory_recall" ||
+      call.execution?.status !== "complete" ||
+      call.execution.isError === true ||
+      typeof call.arguments?.["query"] !== "string" ||
+      !call.arguments["query"].trim()
+    ) {
+      return false;
+    }
+    const limit = call.arguments["limit"];
+    if (
+      limit !== undefined &&
+      (!Number.isInteger(limit) || Number(limit) < 1 || Number(limit) > 50)
+    ) {
+      return false;
+    }
+    const envelope = isRecord(call.execution.result) ? call.execution.result : null;
+    const details = envelope && isRecord(envelope["details"]) ? envelope["details"] : null;
+    const text = protocolText(call);
+    return (
+      typeof details?.["resultCount"] === "number" &&
+      details["resultCount"] > 0 &&
+      /\[commit\]\s+workspace-event:\S+/u.test(text) &&
+      /Harbor Lantern/iu.test(text) &&
+      /retir/iu.test(text) &&
+      /Retention Service/iu.test(text)
+    );
+  });
+  return recall
+    ? answer
+    : {
+        passed: false,
+        reason:
+          "No bounded workspace-memory recall returned the retired decision with an exact committed-event anchor",
+      };
+}
+
+function requireHistoricalEditedFileContext(result: TestExecutionResult) {
+  const answer = requireHistoricalAnswer(result, [
+    /\b21\b/u,
+    /\b14\b/u,
+    /day 18|regional export/iu,
+    /(?:did not|never|not\s+(?:later\s+)?revers|remain(?:ed|s)?|still)/iu,
+  ]);
+  if (!answer.passed) return answer;
+
+  let currentPath: string | undefined;
+  const read = getToolCalls(result).find((call) => {
+    const details = readResultDetails(call);
+    const path = details?.["path"];
+    const receipt = isRecord(details?.["receipt"]) ? details["receipt"] : null;
+    const displayedRange = isRecord(details?.["displayedRange"]) ? details["displayedRange"] : null;
+    const provenance = isRecord(details?.["provenance"]) ? details["provenance"] : null;
+    if (
+      typeof path !== "string" ||
+      !path.endsWith("/src/retention-policy.ts") ||
+      call.arguments?.["path"] !== path ||
+      typeof details?.["contentHash"] !== "string" ||
+      receipt?.["protocol"] !== "workspace-read-receipt.v1" ||
+      receipt["path"] !== path ||
+      receipt["contentHash"] !== details["contentHash"] ||
+      displayedRange?.["coordinateKind"] !== "utf16" ||
+      !Number.isInteger(displayedRange["start"]) ||
+      !Number.isInteger(displayedRange["end"]) ||
+      Number(displayedRange["end"]) <= Number(displayedRange["start"]) ||
+      provenance?.["status"] !== "attached" ||
+      !Array.isArray(provenance["episodes"]) ||
+      !/archiveWindowDays\s*=\s*21/u.test(protocolText(call))
+    ) {
+      return false;
+    }
+    const preservedDecision = provenance["episodes"].filter(isRecord).some((episode) => {
+      const intent = isRecord(episode["intent"]) ? episode["intent"] : null;
+      const change = isRecord(episode["change"]) ? episode["change"] : null;
+      const workUnit = isRecord(episode["workUnit"]) ? episode["workUnit"] : null;
+      const command = isRecord(episode["command"]) ? episode["command"] : null;
+      return (
+        intent?.["tier"] === "stated" &&
+        typeof intent["text"] === "string" &&
+        /without changing the approved archive window/iu.test(intent["text"]) &&
+        change?.["kind"] === "change" &&
+        typeof change["changeId"] === "string" &&
+        workUnit?.["kind"] === "work-unit" &&
+        typeof workUnit["workUnitId"] === "string" &&
+        command?.["kind"] === "command" &&
+        typeof command["commandId"] === "string"
+      );
+    });
+    if (preservedDecision) currentPath = path;
+    return preservedDecision;
+  });
+  if (!read || !currentPath) {
+    return {
+      passed: false,
+      reason:
+        "No exact current-file read joined its content receipt and displayed range to typed provenance showing the later history preserved the archive-window decision",
+    };
+  }
+
+  const decisionIntent = /regional exports can arrive through day 18/iu;
+  const historicalDecision = getToolCalls(result).some((call) => {
+    if (
+      call.execution?.status !== "complete" ||
+      call.execution.isError === true ||
+      !decisionIntent.test(protocolText(call))
+    ) {
+      return false;
+    }
+    const text = protocolText(call);
+    if (call.name === "provenance") {
+      return call.arguments?.["target"] === currentPath && /\bchange:\S+/u.test(text);
+    }
+    if (call.name !== "memory_recall") return false;
+    const envelope = isRecord(call.execution.result) ? call.execution.result : null;
+    const details = envelope && isRecord(envelope["details"]) ? envelope["details"] : null;
+    return (
+      typeof details?.["resultCount"] === "number" &&
+      details["resultCount"] > 0 &&
+      /\[commit\]\s+workspace-event:\S+/u.test(text)
+    );
+  });
+  return historicalDecision
+    ? answer
+    : {
+        passed: false,
+        reason:
+          "No exact-file semantic history or committed memory result supplied the buried regional-export decision",
+      };
+}
+
 export const vcsAdvancedTests: TestCase[] = [
   {
     name: "vcs-read-injected-memory",
@@ -308,8 +457,7 @@ export const vcsAdvancedTests: TestCase[] = [
     prompt:
       "The disposable historical project no longer names its rollout codename. What was that codename, why was it retired, and which recorded evidence supports the answer?",
     validation: "agent-evidence",
-    validate: (result) =>
-      requireHistoricalAnswer(result, [/Harbor Lantern/iu, /retir/iu, /Retention Service/iu]),
+    validate: requireHistoricalMemoryRecall,
   },
   {
     name: "vcs-sizable-history-edited-file-context",
@@ -320,8 +468,7 @@ export const vcsAdvancedTests: TestCase[] = [
     prompt:
       "Review src/retention-policy.ts in the disposable historical project. Why is archiveWindowDays 21 rather than 14, and did the later history reverse that decision? Ground the answer in the workspace's recorded evidence.",
     validation: "agent-evidence",
-    validate: (result) =>
-      requireHistoricalAnswer(result, [/\b21\b/u, /\b14\b/u, /day 18|regional export/iu]),
+    validate: requireHistoricalEditedFileContext,
   },
   {
     name: "vcs-explicit-move-copy",
