@@ -1,81 +1,49 @@
-/**
- * Edit tool. Reads the base from the caller's exact working state and records
- * the change as an UNCOMMITTED working edit through `vcs.edit` (edit-first; disk
- * is a projection of semantic state, never written directly). It does NOT commit, so
- * nothing builds or advances `main` until a deliberate `vcs.commit` + `vcs.push`.
- * The fuzzy / BOM / line-ending matching logic is the upstream pi-coding-agent
- * behaviour.
- */
+/** Ergonomic targeted-text facade over the canonical mutation engine. */
 
 import { Type, type Static } from "@sinclair/typebox";
-import type { AgentTool } from "@workspace/pi-core";
-import type { TextContent, ImageContent } from "@workspace/pi-ai";
-import type { VcsWorkingMutationResult } from "@vibestudio/service-schemas/vcs";
+import type { AgentTool, AgentToolResult } from "@workspace/pi-core";
 import {
-  canonicalizeWorkspaceFilePath,
-  splitRepoPath,
-} from "@vibestudio/shared/runtime/entitySpec";
+  mutateFiles,
+  mutationResultText,
+  type SemanticFileMutationDetails,
+} from "./file-mutation.js";
+import { isWorkspaceReadReceipt, workspaceReadReceiptSchema } from "./workspace-read-receipt.js";
 import type { RuntimeFs } from "./runtime-fs.js";
-import { base64ToBytes, decodeUtf8, encodeUtf8, utf8ByteLength } from "./portable-bytes.js";
-import { resolveToolFile } from "../semantic-file-resolution.js";
-import {
-  resolveToolWorkingState,
-  toVcsPath,
-  toolCommandId,
-  toolContextId,
-  type ToolEditingVcs,
-  type ToolMutationContext,
-} from "./tool-vcs.js";
-import {
-  detectLineEnding,
-  differingTextEdits,
-  fuzzyFindText,
-  generateDiffString,
-  normalizeForFuzzyMatch,
-  normalizeToLF,
-  restoreLineEndings,
-  stripBom,
-} from "./edit-diff.js";
-import {
-  assertWorkspaceReadReceipt,
-  workspaceReadReceiptSchema,
-} from "./workspace-read-receipt.js";
-import { sha256Hex } from "@vibestudio/content-addressing";
+import type { ToolEditingVcs, ToolMutationContext } from "./tool-vcs.js";
 
-const editSchema = Type.Object({
-  path: Type.String({ description: "Path to the file to edit (relative or absolute)" }),
-  oldText: Type.String({
-    minLength: 1,
-    description: "Exact text to find and replace (must match exactly)",
-  }),
-  newText: Type.String({ description: "New text to replace the old text with" }),
-  receipt: Type.Optional(workspaceReadReceiptSchema),
-  intent: Type.Optional(
-    Type.String({
+const editSchema = Type.Object(
+  {
+    path: Type.String({
       minLength: 1,
       description:
-        "Optional purpose when it is not already clear from the request; preserved as stated provenance.",
-    })
-  ),
-});
+        "Text file to change. Managed source paths must be inside an existing workspace repository; .tmp paths use context-local scratch storage.",
+    }),
+    oldText: Type.String({
+      minLength: 1,
+      description:
+        "Text identifying exactly one site. Exact bytes are preferred; when absent, one normalized match may bridge line endings, trailing whitespace, smart punctuation, Unicode spaces, and BOM-preserving text.",
+    }),
+    newText: Type.String({ description: "Replacement text." }),
+    receipt: Type.Optional(
+      Type.Object(workspaceReadReceiptSchema.properties, {
+        additionalProperties: false,
+        description:
+          "Optimistic precondition returned by read. Pass the complete receipt object unchanged.",
+      })
+    ),
+    intent: Type.Optional(
+      Type.String({
+        minLength: 1,
+        description:
+          "Purpose not already evident from the request. Stored as stated semantic VCS intent for managed files.",
+      })
+    ),
+  },
+  { additionalProperties: false }
+);
 
 export type EditToolInput = Static<typeof editSchema>;
-
-export interface EditToolDetails {
-  /** Unified diff of the changes made */
-  diff: string;
-  /** Line number of the first change in the new file (for editor navigation) */
-  firstChangedLine?: number;
-  storage?: "vcs" | "scratch";
-  /** A recoverable precondition mismatch. No file was changed. */
-  diagnostic?: "missing-file" | "not-found" | "ambiguous" | "binary-file";
-  /** Number of matching replacement sites when `diagnostic` is `ambiguous`. */
-  matchCount?: number;
-  /** One-based candidate line numbers for an ambiguous replacement. */
-  candidateLines?: number[];
-  /** Exact canonical semantic result for a managed edit. */
-  vcsResult?: VcsWorkingMutationResult;
-}
+export type EditToolDetails = SemanticFileMutationDetails;
 
 export function createEditTool(
   cwd: string,
@@ -85,191 +53,45 @@ export function createEditTool(
 ): AgentTool<typeof editSchema, EditToolDetails> {
   return {
     name: "edit",
-    label: "edit",
+    label: "Edit file",
     description:
-      'Replace text in one file. Every call must include path, oldText, and newText together. Pass the receipt returned by read to reject a stale edit with a fresh receipt and bounded current excerpts. Use write instead when replacing the whole file. To undo a managed semantic change, use vcs({ operation: "revert", changeIds: [...] }); editing the bytes back creates unrelated new intent.',
+      'Replace one uniquely identifiable text span. Matching is deterministic and shared with apply_patch: one exact occurrence wins; only when exact bytes are absent may one normalized occurrence match across line endings, trailing whitespace, smart punctuation, Unicode spaces, and BOM-preserving text. Ambiguous, missing, binary, or stale input returns a structured conflict and changes nothing. Managed edits author a semantic VCS work unit tied to this invocation and optional stated intent; .tmp edits are explicitly scratch. Include unchanged surrounding text when a short anchor is ambiguous. Undo a named semantic change with vcs({ operation: "revert", changeIds: [...] }) rather than writing old bytes as unrelated intent.',
     parameters: editSchema,
     cancellationMode: "settle",
-    execute: async (_toolCallId, input, signal) => {
+    execute: async (_toolCallId, input, signal): Promise<AgentToolResult<EditToolDetails>> => {
       const { path, oldText, newText } = input;
       if (typeof path !== "string" || typeof oldText !== "string" || typeof newText !== "string") {
-        throw new Error("edit requires path, oldText, and newText");
-      }
-      if (signal?.aborted) throw new Error("Operation aborted");
-
-      const relPath = canonicalizeWorkspaceFilePath(toVcsPath(path, cwd));
-      const repo = splitRepoPath(relPath);
-      const useVcs = Boolean(repo || !fs);
-      const scratch = !useVcs && fs ? await fs.readFile(relPath, "utf8") : null;
-      const workingHead = useVcs ? await resolveToolWorkingState(vcs, context) : null;
-      const exactFile =
-        useVcs && workingHead ? await resolveToolFile(vcs, workingHead, relPath) : null;
-      const base = exactFile;
-      if (!base && scratch === null) {
-        assertWorkspaceReadReceipt(input.receipt, { path: relPath });
-        return {
-          content: [
-            {
-              type: "text",
-              text:
-                `No changes made: ${path} does not exist. ` +
-                "Create it with the write tool, or read/list the parent directory and retry with the current path.",
-            },
-          ],
-          details: { diff: "", diagnostic: "missing-file" },
-        };
-      }
-      if (base && base.content.kind !== "text") {
-        assertWorkspaceReadReceipt(input.receipt, {
-          path: relPath,
-          contentHash: base.contentHash,
-          byteLength: base64ToBytes(base.content.base64).byteLength,
+        throw Object.assign(new Error("edit requires path, oldText, and newText"), {
+          code: "InvalidFileMutation",
         });
-        return {
-          content: [
+      }
+      if (input.receipt !== undefined && !isWorkspaceReadReceipt(input.receipt)) {
+        throw Object.assign(
+          new Error("edit receipt must be the complete object returned by read"),
+          {
+            code: "InvalidWorkspaceReadReceipt",
+          }
+        );
+      }
+      const details = await mutateFiles(
+        cwd,
+        vcs,
+        context,
+        {
+          operations: [
             {
-              type: "text",
-              text:
-                `No changes made: ${path} is binary and cannot be edited as text. ` +
-                "Use the write tool with binary content if replacement is intended.",
+              kind: "replace",
+              path,
+              replacements: [{ oldText, newText }],
+              ...(input.receipt !== undefined ? { receipt: input.receipt } : {}),
             },
           ],
-          details: { diff: "", diagnostic: "binary-file", storage: "vcs" },
-        };
-      }
-      if (signal?.aborted) throw new Error("Operation aborted");
-
-      const sourceContent = base
-        ? base.content.kind === "text"
-          ? base.content.text
-          : ""
-        : typeof scratch === "string"
-          ? scratch
-          : scratch
-            ? decodeUtf8(scratch)
-            : "";
-      assertWorkspaceReadReceipt(input.receipt, {
-        path: relPath,
-        contentHash: base?.contentHash ?? sha256Hex(encodeUtf8(sourceContent)),
-        byteLength: utf8ByteLength(sourceContent),
-        text: sourceContent,
-        anchors: [oldText],
-      });
-      const { bom, text: content } = stripBom(sourceContent);
-      const matchResult = fuzzyFindText(content, oldText);
-      if (!matchResult.found) {
-        return {
-          content: [
-            {
-              type: "text",
-              text:
-                `No changes made: the requested old text was not found in ${path}. ` +
-                "Read the current file (or grep for a shorter anchor) and retry with current text including whitespace and newlines.",
-            },
-          ],
-          details: {
-            diff: "",
-            diagnostic: "not-found",
-            storage: base ? "vcs" : "scratch",
-          },
-        };
-      }
-
-      const fuzzyContent = normalizeForFuzzyMatch(normalizeToLF(content));
-      const fuzzyOldText = normalizeForFuzzyMatch(normalizeToLF(oldText));
-      const occurrences = fuzzyContent.split(fuzzyOldText).length - 1;
-      if (occurrences > 1) {
-        const candidateLines: number[] = [];
-        for (let at = fuzzyContent.indexOf(fuzzyOldText); at >= 0; ) {
-          candidateLines.push(fuzzyContent.slice(0, at).split("\n").length);
-          at = fuzzyContent.indexOf(fuzzyOldText, at + Math.max(1, fuzzyOldText.length));
-        }
-        return {
-          content: [
-            {
-              type: "text",
-              text:
-                `No changes made: found ${occurrences} matching occurrences in ${path}` +
-                `${candidateLines.length ? ` on lines ${candidateLines.join(", ")}` : ""}. ` +
-                "Include surrounding context in oldText so the replacement identifies one site.",
-            },
-          ],
-          details: {
-            diff: "",
-            diagnostic: "ambiguous",
-            matchCount: occurrences,
-            candidateLines,
-            storage: base ? "vcs" : "scratch",
-          },
-        };
-      }
-      if (signal?.aborted) throw new Error("Operation aborted");
-
-      const baseContent = matchResult.contentForReplacement;
-      const start = matchResult.index;
-      const end = matchResult.index + matchResult.matchLength;
-      const matchedText = baseContent.slice(start, end);
-      const nearbyText = matchedText || baseContent.slice(0, start) || baseContent.slice(end);
-      const replacementText = restoreLineEndings(
-        normalizeToLF(newText),
-        detectLineEnding(nearbyText)
-      );
-      const newContent = baseContent.slice(0, start) + replacementText + baseContent.slice(end);
-      if (baseContent === newContent) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `No changes made to ${path}. The replacement produced identical content.`,
-            },
-          ],
-          details: { diff: "" },
-        };
-      }
-
-      const storedNewContent = bom + newContent;
-      // oldText/newText may include unchanged context solely to identify one
-      // match. Derive edits from the exact before/after bytes so those anchors
-      // retain their existing provenance instead of becoming newly authored.
-      const semanticEdits = differingTextEdits(sourceContent, storedNewContent);
-
-      // Tie this edit to the authoring tool-call (the edge into the agentic
-      // trajectory: file → edit → invocation → turn → session, queryable + kept
-      // through commit). The exact causal invocation arrives through verified
-      // RPC context, never through this tool payload.
-      let vcsResult: VcsWorkingMutationResult | undefined;
-      if (base && exactFile && workingHead) {
-        vcsResult = await vcs.edit({
-          contextId: toolContextId(context),
-          expectedWorkingHead: workingHead,
-          commandId: toolCommandId(context),
-          ...(input.intent?.trim() ? { intentSummary: input.intent.trim() } : {}),
-          changes: [
-            {
-              kind: "text-edit",
-              repositoryId: exactFile.repositoryId,
-              fileId: exactFile.fileId,
-              edits: semanticEdits,
-            },
-          ],
-        });
-      } else if (fs) {
-        await fs.writeFile(relPath, storedNewContent);
-      }
-
-      const diffResult = generateDiffString(baseContent, newContent);
-      const content_: (TextContent | ImageContent)[] = [
-        { type: "text", text: `Successfully replaced text in ${path}.` },
-      ];
-      return {
-        content: content_,
-        details: {
-          diff: diffResult.diff,
-          firstChangedLine: diffResult.firstChangedLine,
-          storage: base ? "vcs" : "scratch",
-          ...(vcsResult ? { vcsResult } : {}),
+          ...(input.intent ? { intent: input.intent } : {}),
         },
-      };
+        signal,
+        fs
+      );
+      return { content: [{ type: "text", text: mutationResultText(details) }], details };
     },
   };
 }

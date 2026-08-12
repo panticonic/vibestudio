@@ -279,9 +279,7 @@ function validatePanelGenerationRecovery(result: TestExecutionResult) {
 }
 
 function validateStaleEditRecovery(result: TestExecutionResult) {
-  const base = completedScenarioEvidence(result, ["read", "apply_patch"], {
-    allowFailed: (call) => call.name === "apply_patch",
-  });
+  const base = completedScenarioEvidence(result, ["read", "edit"]);
   if (!base.passed) return base;
   const calls = getToolCalls(result);
   const readIndex = calls.findIndex(
@@ -291,28 +289,126 @@ function validateStaleEditRecovery(result: TestExecutionResult) {
       records(call).some((record) => record["protocol"] === "workspace-read-receipt.v1")
   );
   const staleIndex = calls.findIndex((call, index) => {
-    if (index <= readIndex || call.name !== "apply_patch" || !isFailed(call)) return false;
-    const typed = failure(call, "WorkspaceReadConflict");
-    const recovery = typed?.["recovery"];
-    return (
-      isRecord(recovery) &&
-      recovery["action"] === "reobserve" &&
-      records(call).some(
-        (record) =>
-          record["protocol"] === "workspace-read-receipt.v1" &&
-          typeof record["contentHash"] === "string"
-      )
-    );
+    if (index <= readIndex || call.name !== "edit" || !isComplete(call)) return false;
+    return records(call).some((record) => {
+      if (record["protocol"] !== "file-mutation.v1" || record["status"] !== "conflict") {
+        return false;
+      }
+      const conflicts = record["conflicts"];
+      return (
+        Array.isArray(conflicts) &&
+        conflicts.some((conflict) => {
+          if (!isRecord(conflict) || conflict["reason"] !== "content-changed") return false;
+          const currentReceipt = conflict["currentReceipt"];
+          const recovery = conflict["recovery"];
+          return (
+            isRecord(currentReceipt) &&
+            currentReceipt["protocol"] === "workspace-read-receipt.v1" &&
+            typeof currentReceipt["contentHash"] === "string" &&
+            isRecord(recovery) &&
+            recovery["action"] === "reobserve"
+          );
+        })
+      );
+    });
   });
   const recoveredIndex = calls.findIndex(
-    (call, index) => index > staleIndex && call.name === "apply_patch" && isComplete(call)
+    (call, index) =>
+      index > staleIndex &&
+      call.name === "edit" &&
+      isComplete(call) &&
+      records(call).some(
+        (record) => record["protocol"] === "file-mutation.v1" && record["status"] === "applied"
+      )
   );
   return readIndex >= 0 && staleIndex > readIndex && recoveredIndex > staleIndex
     ? { passed: true, reason: undefined }
     : {
         passed: false,
         reason:
-          "The stale receipt was not rejected with fresh evidence and followed by a corrected edit",
+          "The stale receipt did not return a non-error conflict with fresh evidence followed by a corrected edit",
+      };
+}
+
+function fileMutationRecord(
+  call: InvocationCardPayloadLike,
+  status: "applied" | "unchanged" | "conflict"
+): Record<string, unknown> | null {
+  return (
+    records(call).find(
+      (record) => record["protocol"] === "file-mutation.v1" && record["status"] === status
+    ) ?? null
+  );
+}
+
+function hasSemanticMutationEvidence(record: Record<string, unknown>): boolean {
+  const vcsResult = record["vcsResult"];
+  return (
+    record["storage"] === "vcs" &&
+    typeof record["intent"] === "string" &&
+    isRecord(vcsResult) &&
+    typeof vcsResult["workUnitId"] === "string" &&
+    typeof vcsResult["applicationId"] === "string" &&
+    Array.isArray(vcsResult["changeIds"]) &&
+    vcsResult["changeIds"].length > 0
+  );
+}
+
+function validateUnifiedFileAuthoring(result: TestExecutionResult) {
+  const base = completedScenarioEvidence(result, ["write", "edit", "read"]);
+  if (!base.passed) return base;
+  const calls = getToolCalls(result);
+  const writeIndex = calls.findIndex((call) => {
+    if (
+      call.name !== "write" ||
+      !isComplete(call) ||
+      typeof call.arguments?.["intent"] !== "string"
+    ) {
+      return false;
+    }
+    const mutation = fileMutationRecord(call, "applied");
+    return Boolean(
+      mutation &&
+      hasSemanticMutationEvidence(mutation) &&
+      records(call).some((record) => record["kind"] === "write" && record["status"] === "created")
+    );
+  });
+  const editIndex = calls.findIndex((call, index) => {
+    if (
+      index <= writeIndex ||
+      call.name !== "edit" ||
+      !isComplete(call) ||
+      typeof call.arguments?.["intent"] !== "string"
+    ) {
+      return false;
+    }
+    const mutation = fileMutationRecord(call, "applied");
+    return Boolean(
+      mutation &&
+      hasSemanticMutationEvidence(mutation) &&
+      records(call).some(
+        (record) => record["mode"] === "normalized" && typeof record["line"] === "number"
+      )
+    );
+  });
+  const editedPath =
+    editIndex >= 0 && typeof calls[editIndex]?.arguments?.["path"] === "string"
+      ? calls[editIndex]!.arguments!["path"]
+      : null;
+  const readIndex = calls.findIndex(
+    (call, index) =>
+      index > editIndex &&
+      call.name === "read" &&
+      isComplete(call) &&
+      call.arguments?.["path"] === editedPath &&
+      JSON.stringify(call.execution?.result ?? "").includes("unified-agentic-ergonomics")
+  );
+  return writeIndex >= 0 && editIndex > writeIndex && readIndex > editIndex
+    ? { passed: true, reason: undefined }
+    : {
+        passed: false,
+        reason:
+          "write/edit did not preserve semantic intent evidence, report normalized matching, and read back the exact authored file",
       };
 }
 
@@ -377,14 +473,24 @@ export const developerErgonomicsTests: TestCase[] = [
     validate: validatePanelGenerationRecovery,
   },
   {
+    name: "write-edit-unified-matching-provenance",
+    description:
+      "Author through ergonomic write/edit while preserving shared matching and VCS intent",
+    category: "developer-ergonomics",
+    validation: "agent-evidence",
+    workspaceRepoFixture: CONTENT_WORKSPACE_REPO_FIXTURE,
+    prompt:
+      'In the disposable project, create one new text file with the complete content `Status: “before”` and a concise stated intent. Then make a targeted replacement in that same file using straight-quoted old text `Status: "before"`, changing it to `Status: "unified-agentic-ergonomics"` with a distinct concise stated intent. Use the natural whole-file and targeted-edit capabilities, verify the final file by reading it, and do not publish.',
+    validate: validateUnifiedFileAuthoring,
+  },
+  {
     name: "stale-edit-reobserve-and-apply",
     description: "Recover an optimistic file edit from a stale read receipt",
     category: "developer-ergonomics",
     validation: "agent-evidence",
     workspaceRepoFixture: CONTENT_WORKSPACE_REPO_FIXTURE,
     prompt:
-      "In the disposable project, read its main note and preserve that exact read receipt. Make one legitimate update, then demonstrate that a second change based on the old receipt is safely rejected. Use the returned current evidence to form and apply the corrected second change. Do not publish.",
-    expectedToolFailures: [{ name: "apply_patch", errorIncludes: "WorkspaceReadConflict" }],
+      "In the disposable project, read its main note and preserve that exact read receipt. Make one legitimate targeted update, then demonstrate that a second targeted change based on the old receipt returns a recoverable conflict without becoming a failed tool call. Use the returned current evidence to form and apply the corrected second change. Do not publish.",
     validate: validateStaleEditRecovery,
   },
 ];

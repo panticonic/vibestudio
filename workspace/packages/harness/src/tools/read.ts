@@ -648,12 +648,24 @@ function withReadReceipt(
   contentHash: string,
   byteLength: number
 ): ReadResult {
+  const receipt = createWorkspaceReadReceipt(
+    canonicalReceiptPath(path, cwd),
+    contentHash,
+    byteLength
+  );
   return {
     ...result,
+    content: [
+      ...result.content,
+      {
+        type: "text",
+        text: `Read receipt (pass this exact object as receipt to edit, write, or the matching apply_patch operation): ${JSON.stringify(receipt)}`,
+      },
+    ],
     details: {
       ...result.details,
       contentHash,
-      receipt: createWorkspaceReadReceipt(canonicalReceiptPath(path, cwd), contentHash, byteLength),
+      receipt,
     },
   };
 }

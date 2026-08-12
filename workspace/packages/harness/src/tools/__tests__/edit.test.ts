@@ -44,7 +44,12 @@ describe("canonical edit tool", () => {
       oldText: "foo",
       newText: "bar",
     });
-    expect(result.details).toMatchObject({ diagnostic: "ambiguous", matchCount: 2 });
+    expect(result.details).toMatchObject({
+      status: "conflict",
+      conflicts: [
+        { reason: "ambiguous", matchMode: "exact", matchCount: 2, candidateLines: [1, 2] },
+      ],
+    });
     expect(vcs.lastEditInput).toBeUndefined();
   });
 
@@ -85,6 +90,18 @@ describe("canonical edit tool", () => {
       kind: "text-edit",
       edits: [{ start: 18, end: 25, text: "goodbye" }],
     });
+    const result = await createEditTool(
+      CWD,
+      new StubVcs({ files: { "meta/a.ts": "say “hello”\n" } }),
+      authority
+    ).execute("invocation:fuzzy-evidence", {
+      path: "meta/a.ts",
+      oldText: 'say "hello"',
+      newText: "say goodbye",
+    });
+    expect(result.details.operations[0]?.matches).toEqual([
+      { replacement: 0, mode: "normalized", line: 1 },
+    ]);
   });
 
   it("keeps non-repository scratch edits on the scoped filesystem", async () => {
@@ -106,38 +123,33 @@ describe("canonical edit tool", () => {
     });
     const tool = createEditTool(CWD, vcs, authority);
 
-    const failure = await tool
-      .execute("invocation:stale-receipt", {
+    const result = await tool.execute("invocation:stale-receipt", {
+      path: "meta/a.ts",
+      oldText: "currentValue = 1",
+      newText: "currentValue = 3",
+      receipt: {
+        protocol: "workspace-read-receipt.v1",
         path: "meta/a.ts",
-        oldText: "currentValue = 1",
-        newText: "currentValue = 3",
-        receipt: {
-          protocol: "workspace-read-receipt.v1",
-          path: "meta/a.ts",
-          contentHash: "f".repeat(64),
-          byteLength: 31,
-        },
-      } as never)
-      .then(
-        () => {
-          throw new Error("Expected stale receipt to fail");
-        },
-        (error: unknown) => error as { code: string; errorData: Record<string, unknown> }
-      );
-
-    expect(failure).toMatchObject({
-      code: "WorkspaceReadConflict",
-      errorData: {
-        reason: "content-changed",
-        currentReceipt: {
-          protocol: "workspace-read-receipt.v1",
-          path: "meta/a.ts",
-        },
-        closestCurrentExcerpts: [
-          expect.objectContaining({ text: expect.stringContaining("currentValue = 2") }),
-        ],
-        recovery: { action: "reobserve" },
+        contentHash: "f".repeat(64),
+        byteLength: 31,
       },
+    } as never);
+
+    expect(result.details).toMatchObject({
+      status: "conflict",
+      conflicts: [
+        {
+          reason: "content-changed",
+          currentReceipt: {
+            protocol: "workspace-read-receipt.v1",
+            path: "meta/a.ts",
+          },
+          closestCurrentExcerpts: [
+            expect.objectContaining({ text: expect.stringContaining("currentValue = 2") }),
+          ],
+          recovery: { action: "reobserve" },
+        },
+      ],
     });
     expect(vcs.lastEditInput).toBeUndefined();
   });

@@ -8,6 +8,7 @@ import {
   stripBom,
   differingTextEdits,
   generateDiffString,
+  findUniqueText,
 } from "../edit-diff.js";
 
 describe("edit-diff", () => {
@@ -55,7 +56,9 @@ describe("edit-diff", () => {
       expect(result.found).toBe(true);
       expect(result.usedFuzzyMatch).toBe(true);
       expect(result.contentForReplacement).toBe(content);
-      expect(content.slice(result.index, result.index + result.matchLength)).toBe("\u201chello\u201d");
+      expect(content.slice(result.index, result.index + result.matchLength)).toBe(
+        "\u201chello\u201d"
+      );
     });
 
     it("maps a multiline fuzzy match back across stripped trailing whitespace", () => {
@@ -74,6 +77,57 @@ describe("edit-diff", () => {
     it("returns not-found when no match", () => {
       const result = fuzzyFindText("foo bar", "xyz");
       expect(result.found).toBe(false);
+    });
+  });
+
+  describe("findUniqueText", () => {
+    it("prefers a unique exact match over other normalized equivalents", () => {
+      const content = 'first: “value”\nsecond: "value"\n';
+      expect(findUniqueText(content, 'second: "value"')).toMatchObject({
+        found: true,
+        ambiguous: false,
+        matchMode: "exact",
+        candidateLines: [2],
+      });
+    });
+
+    it("reports exact ambiguity with bounded candidate locations", () => {
+      expect(findUniqueText("same\nother\nsame\n", "same")).toMatchObject({
+        found: false,
+        ambiguous: true,
+        matchMode: "exact",
+        matchCount: 2,
+        candidateLines: [1, 3],
+      });
+    });
+
+    it("maps one normalized match back to the untouched source coordinates", () => {
+      const content = "before\r\nStatus: “before”  \r\nafter\r\n";
+      const result = findUniqueText(content, 'Status: "before"');
+      expect(result).toMatchObject({
+        found: true,
+        ambiguous: false,
+        matchMode: "normalized",
+        candidateLines: [2],
+      });
+      expect(content.slice(result.index, result.index + result.matchLength)).toBe(
+        "Status: “before”"
+      );
+    });
+
+    it("refuses ambiguous normalized matches", () => {
+      expect(findUniqueText('“same”\n"same"  \n', "'same'")).toMatchObject({
+        found: false,
+        ambiguous: false,
+        matchCount: 0,
+      });
+      expect(findUniqueText("“same”\n“same”\n", '"same"')).toMatchObject({
+        found: false,
+        ambiguous: true,
+        matchMode: "normalized",
+        matchCount: 2,
+        candidateLines: [1, 2],
+      });
     });
   });
 

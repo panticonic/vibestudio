@@ -45,6 +45,10 @@ describe("createReadTool", () => {
       contentHash: expect.stringMatching(/^[0-9a-f]{64}$/u),
       byteLength: 11,
     });
+    expect(result.content[1]).toMatchObject({
+      type: "text",
+      text: expect.stringContaining('"protocol":"workspace-read-receipt.v1","path":"hello.txt"'),
+    });
     expect(readFile).toHaveBeenCalledWith(`${CWD}/hello.txt`, "utf8");
   });
 
@@ -125,16 +129,16 @@ describe("createReadTool", () => {
       type: "text",
       text: expect.stringMatching(/^second(?:\n|$)/u),
     });
-    expect(result.content[1]).toMatchObject({
+    expect(result.content[2]).toMatchObject({
       type: "text",
       text: expect.stringContaining(
         "workspace memory · why packages/example/src/value.ts lines 2-2 exist"
       ),
     });
-    expect((result.content[1] as { text: string }).text).toContain(
+    expect((result.content[2] as { text: string }).text).toContain(
       'stated: "Keep the retry budget owned by the caller"'
     );
-    expect((result.content[1] as { text: string }).text).toContain(
+    expect((result.content[2] as { text: string }).text).toContain(
       'change {"kind":"change","changeId":"change:value"}'
     );
     expect(result.details).toMatchObject({
@@ -179,7 +183,7 @@ describe("createReadTool", () => {
       type: "text",
       text: "export const value = 1;",
     });
-    expect(result.content).toHaveLength(1);
+    expect(result.content).toHaveLength(2);
     expect(result.details.provenance).toEqual({
       status: "unavailable",
       path: "packages/example/src/value.ts",
@@ -201,7 +205,10 @@ describe("createReadTool", () => {
     const tool = createReadTool(CWD, fs);
 
     await expect(tool.execute("call-1", { path: "hello.txt" })).resolves.toMatchObject({
-      content: [{ type: "text", text: "hello" }],
+      content: [
+        { type: "text", text: "hello" },
+        { type: "text", text: expect.stringContaining("workspace-read-receipt.v1") },
+      ],
     });
     expect(readFile).toHaveBeenCalledTimes(2);
   });
@@ -555,7 +562,10 @@ describe("createReadTool", () => {
     const tool = createReadTool(CWD, fs, { rpc });
 
     await expect(tool.execute("call-1", { path: "guide.md" })).resolves.toMatchObject({
-      content: [{ type: "text", text: "approval guide" }],
+      content: [
+        { type: "text", text: "approval guide" },
+        { type: "text", text: expect.stringContaining("workspace-read-receipt.v1") },
+      ],
       details: { path: "guide.md", engine: "runtime-fs" },
     });
     expect(rpc.call).not.toHaveBeenCalledWith(

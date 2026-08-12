@@ -93,6 +93,7 @@ describe("developer ergonomics scenarios", () => {
       "failed-build-bounded-diagnostics",
       "extensionless-screenshot-resource-read",
       "panel-rebuild-reacquire-and-interact",
+      "write-edit-unified-matching-provenance",
       "stale-edit-reobserve-and-apply",
     ]);
     expect(developerErgonomicsTests.every((test) => test.validation === "agent-evidence")).toBe(
@@ -104,9 +105,7 @@ describe("developer ergonomics scenarios", () => {
     expect(scenario("invalid-icon-discover-recover-create").expectedToolFailures).toEqual([
       { name: "eval", errorIncludes: "project_icon_invalid" },
     ]);
-    expect(scenario("stale-edit-reobserve-and-apply").expectedToolFailures).toEqual([
-      { name: "apply_patch", errorIncludes: "WorkspaceReadConflict" },
-    ]);
+    expect(scenario("stale-edit-reobserve-and-apply").expectedToolFailures).toBeUndefined();
   });
 
   it("requires a recoverable infrastructure failure followed by same-turn completion", () => {
@@ -374,28 +373,98 @@ describe("developer ergonomics scenarios", () => {
     };
     const currentReceipt = { ...readReceipt, contentHash: "b".repeat(64), byteLength: 18 };
     const read = call("read", "read", { path: readReceipt.path }, { receipt: readReceipt });
-    const first = call("first", "apply_patch", { operations: [] }, { applicationId: "one" });
+    const first = call(
+      "first",
+      "edit",
+      { path: readReceipt.path },
+      {
+        protocol: "file-mutation.v1",
+        status: "applied",
+        applicationId: "one",
+      }
+    );
     const stale = call(
       "stale",
-      "apply_patch",
-      { operations: [{ receipt: readReceipt }] },
-      failure("WorkspaceReadConflict", {
-        recovery: { action: "reobserve", instruction: "Use current receipt" },
-        currentReceipt,
-      }),
-      true
+      "edit",
+      { path: readReceipt.path, receipt: readReceipt },
+      {
+        protocol: "file-mutation.v1",
+        status: "conflict",
+        storage: "vcs",
+        conflicts: [
+          {
+            reason: "content-changed",
+            currentReceipt,
+            recovery: { action: "reobserve", instruction: "Use current receipt" },
+          },
+        ],
+      }
     );
     const corrected = call(
       "corrected",
-      "apply_patch",
-      { operations: [{ receipt: currentReceipt }] },
-      { applicationId: "two" }
+      "edit",
+      { path: readReceipt.path, receipt: currentReceipt },
+      { protocol: "file-mutation.v1", status: "applied", applicationId: "two" }
     );
 
     expect(
       scenario("stale-edit-reobserve-and-apply").validate(
         execution([read, first, stale, corrected])
       )
+    ).toEqual({ passed: true, reason: undefined });
+  });
+
+  it("requires write/edit semantic intent evidence and a normalized match before readback", () => {
+    const path = "projects/fixture/notes/ergonomics.txt";
+    const vcsResult = {
+      workUnitId: "work:1",
+      applicationId: "application:1",
+      changeIds: ["change:1"],
+    };
+    const write = call(
+      "write",
+      "write",
+      { path, content: "Status: “before”\n", intent: "Create the status note" },
+      {
+        protocol: "file-mutation.v1",
+        status: "applied",
+        storage: "vcs",
+        intent: "Create the status note",
+        operations: [{ kind: "write", status: "created", path }],
+        conflicts: [],
+        vcsResult,
+      }
+    );
+    const edit = call(
+      "edit",
+      "edit",
+      {
+        path,
+        oldText: 'Status: "before"',
+        newText: 'Status: "unified-agentic-ergonomics"',
+        intent: "Advance the status note",
+      },
+      {
+        protocol: "file-mutation.v1",
+        status: "applied",
+        storage: "vcs",
+        intent: "Advance the status note",
+        operations: [
+          {
+            kind: "replace",
+            status: "changed",
+            path,
+            matches: [{ replacement: 0, mode: "normalized", line: 1 }],
+          },
+        ],
+        conflicts: [],
+        vcsResult: { ...vcsResult, workUnitId: "work:2", changeIds: ["change:2"] },
+      }
+    );
+    const read = call("read", "read", { path }, { text: 'Status: "unified-agentic-ergonomics"' });
+
+    expect(
+      scenario("write-edit-unified-matching-provenance").validate(execution([write, edit, read]))
     ).toEqual({ passed: true, reason: undefined });
   });
 });

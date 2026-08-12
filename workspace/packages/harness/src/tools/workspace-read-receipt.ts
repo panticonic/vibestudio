@@ -17,6 +17,10 @@ export const workspaceReadReceiptSchema = Type.Object(
 
 export type WorkspaceReadReceipt = Static<typeof workspaceReadReceiptSchema>;
 
+export function isWorkspaceReadReceipt(value: unknown): value is WorkspaceReadReceipt {
+  return Value.Check(workspaceReadReceiptSchema, value);
+}
+
 export function canonicalReceiptPath(path: string, cwd: string): string {
   return canonicalizeWorkspaceFilePath(toVcsPath(path, cwd));
 }
@@ -45,7 +49,7 @@ export function assertWorkspaceReadReceipt(
   }
 ): void {
   if (candidate === undefined) return;
-  if (!Value.Check(workspaceReadReceiptSchema, candidate)) {
+  if (!isWorkspaceReadReceipt(candidate)) {
     throw Object.assign(new Error("Malformed workspace read receipt"), {
       code: "InvalidWorkspaceReadReceipt",
       errorData: {

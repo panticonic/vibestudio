@@ -33,16 +33,14 @@ export function restoreLineEndings(text: string, ending: LineEnding): string {
  * the LLM doesn't fail edits over invisible character substitutions.
  */
 export function normalizeForFuzzyMatch(text: string): string {
-  return (
-    text
-      .split("\n")
-      .map((line) => line.trimEnd())
-      .join("\n")
-      .replace(/[\u2018\u2019\u201A\u201B]/g, "'")
-      .replace(/[\u201C\u201D\u201E\u201F]/g, '"')
-      .replace(/[\u2010\u2011\u2012\u2013\u2014\u2015\u2212]/g, "-")
-      .replace(/[\u00A0\u2002-\u200A\u202F\u205F\u3000]/g, " ")
-  );
+  return text
+    .split("\n")
+    .map((line) => line.trimEnd())
+    .join("\n")
+    .replace(/[\u2018\u2019\u201A\u201B]/g, "'")
+    .replace(/[\u201C\u201D\u201E\u201F]/g, '"')
+    .replace(/[\u2010\u2011\u2012\u2013\u2014\u2015\u2212]/g, "-")
+    .replace(/[\u00A0\u2002-\u200A\u202F\u205F\u3000]/g, " ");
 }
 
 export interface FuzzyMatchResult {
@@ -50,6 +48,17 @@ export interface FuzzyMatchResult {
   index: number;
   matchLength: number;
   usedFuzzyMatch: boolean;
+  contentForReplacement: string;
+}
+
+export interface UniqueTextMatch {
+  found: boolean;
+  ambiguous: boolean;
+  index: number;
+  matchLength: number;
+  matchMode?: "exact" | "normalized";
+  matchCount: number;
+  candidateLines: number[];
   contentForReplacement: string;
 }
 
@@ -160,6 +169,109 @@ export function fuzzyFindText(content: string, oldText: string): FuzzyMatchResul
   };
 }
 
+function occurrenceIndexes(content: string, query: string): number[] {
+  if (!query) return [];
+  const indexes: number[] = [];
+  for (let at = content.indexOf(query); at >= 0; ) {
+    indexes.push(at);
+    at = content.indexOf(query, at + Math.max(1, query.length));
+  }
+  return indexes;
+}
+
+function lineAt(content: string, index: number): number {
+  return content.slice(0, index).split("\n").length;
+}
+
+/**
+ * Resolve one deterministic edit span. Exact bytes win when they identify one
+ * site. Only when no exact site exists do we compare normalized line endings,
+ * trailing whitespace, smart punctuation, and Unicode spaces. Normalization is
+ * an index only: the returned coordinates always address the original text.
+ */
+export function findUniqueText(content: string, oldText: string): UniqueTextMatch {
+  if (!oldText) {
+    return {
+      found: false,
+      ambiguous: false,
+      index: -1,
+      matchLength: 0,
+      matchCount: 0,
+      candidateLines: [],
+      contentForReplacement: content,
+    };
+  }
+
+  const exact = occurrenceIndexes(content, oldText);
+  if (exact.length === 1) {
+    return {
+      found: true,
+      ambiguous: false,
+      index: exact[0]!,
+      matchLength: oldText.length,
+      matchMode: "exact",
+      matchCount: 1,
+      candidateLines: [lineAt(content, exact[0]!)],
+      contentForReplacement: content,
+    };
+  }
+  if (exact.length > 1) {
+    return {
+      found: false,
+      ambiguous: true,
+      index: -1,
+      matchLength: 0,
+      matchMode: "exact",
+      matchCount: exact.length,
+      candidateLines: exact.slice(0, 20).map((index) => lineAt(content, index)),
+      contentForReplacement: content,
+    };
+  }
+
+  const normalizedContent = normalizedMatchSpace(content);
+  const normalizedOldText = normalizedMatchSpace(oldText).text;
+  const normalized = occurrenceIndexes(normalizedContent.text, normalizedOldText);
+  if (normalized.length !== 1) {
+    return {
+      found: false,
+      ambiguous: normalized.length > 1,
+      index: -1,
+      matchLength: 0,
+      ...(normalized.length > 1 ? { matchMode: "normalized" as const } : {}),
+      matchCount: normalized.length,
+      candidateLines: normalized
+        .slice(0, 20)
+        .map((index) => lineAt(content, normalizedContent.starts[index] ?? 0)),
+      contentForReplacement: content,
+    };
+  }
+
+  const normalizedIndex = normalized[0]!;
+  const originalStart = normalizedContent.starts[normalizedIndex];
+  const originalEnd = normalizedContent.ends[normalizedIndex + normalizedOldText.length - 1];
+  if (originalStart === undefined || originalEnd === undefined) {
+    return {
+      found: false,
+      ambiguous: false,
+      index: -1,
+      matchLength: 0,
+      matchCount: 0,
+      candidateLines: [],
+      contentForReplacement: content,
+    };
+  }
+  return {
+    found: true,
+    ambiguous: false,
+    index: originalStart,
+    matchLength: originalEnd - originalStart,
+    matchMode: "normalized",
+    matchCount: 1,
+    candidateLines: [lineAt(content, originalStart)],
+    contentForReplacement: content,
+  };
+}
+
 /** Strip a UTF-8 BOM if present, returning the BOM and the rest. */
 export function stripBom(content: string): { bom: string; text: string } {
   return content.startsWith("\uFEFF")
@@ -242,7 +354,7 @@ export function differingTextEdits(oldContent: string, newContent: string): Text
 export function generateDiffString(
   oldContent: string,
   newContent: string,
-  contextLines = 4,
+  contextLines = 4
 ): DiffResult {
   const parts = Diff.diffLines(oldContent, newContent);
   const output: string[] = [];

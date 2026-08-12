@@ -12,10 +12,9 @@ describe("apply_patch", () => {
     expect(tool.description).toContain("top-level section and repository name");
     expect(tool.description).toContain("projects/app/README.md");
     expect(tool.description).toContain("workspace-root files");
-    expect(tool.description).toContain('{ kind: "replace", path, replacements:');
-    expect(tool.description).toContain("omit optional fields instead of sending null");
-    expect(tool.description).toContain("intent is a request-level sibling of operations");
-    expect(tool.description).toContain("Never invent or manually reconstruct content hashes");
+    expect(tool.description).toContain("one normalized occurrence");
+    expect(tool.description).toContain("structured conflict");
+    expect(tool.description).toContain("without reconstructing hashes");
   });
 
   it("applies a multi-file content, presence, and mode transaction", async () => {
@@ -47,7 +46,13 @@ describe("apply_patch", () => {
 
     expect(result.details).toMatchObject({
       status: "applied",
-      paths: ["meta/a.ts", "meta/new.ts", "meta/delete.ts", "meta/script.sh"],
+      intent: "Update the complete fixture atomically",
+      operations: [
+        { path: "meta/a.ts", status: "changed" },
+        { path: "meta/new.ts", status: "created" },
+        { path: "meta/delete.ts", status: "deleted" },
+        { path: "meta/script.sh", status: "changed" },
+      ],
     });
     expect(vcs.read("meta/a.ts")).toBe("const a = 10;\nconst b = 20;\n");
     expect(vcs.modes.get("meta/a.ts")).toBe(0o600);
@@ -81,24 +86,26 @@ describe("apply_patch", () => {
   it("rejects every operation before mutation when a read receipt is stale", async () => {
     const vcs = new StubVcs({ files: { "meta/a.ts": "old", "meta/b.ts": "old" } });
     const tool = createApplyPatchTool("/", vcs, authority);
-    await expect(
-      tool.execute("invocation:stale", {
-        operations: [
-          { kind: "write", path: "meta/a.ts", content: "new" },
-          {
-            kind: "write",
+    const result = await tool.execute("invocation:stale", {
+      operations: [
+        { kind: "write", path: "meta/a.ts", content: "new" },
+        {
+          kind: "write",
+          path: "meta/b.ts",
+          content: "new",
+          receipt: {
+            protocol: "workspace-read-receipt.v1",
             path: "meta/b.ts",
-            content: "new",
-            receipt: {
-              protocol: "workspace-read-receipt.v1",
-              path: "meta/b.ts",
-              contentHash: "f".repeat(64),
-              byteLength: 3,
-            },
+            contentHash: "f".repeat(64),
+            byteLength: 3,
           },
-        ],
-      } as never)
-    ).rejects.toMatchObject({ code: "WorkspaceReadConflict" });
+        },
+      ],
+    } as never);
+    expect(result.details).toMatchObject({
+      status: "conflict",
+      conflicts: [{ reason: "content-changed", path: "meta/b.ts" }],
+    });
     expect(vcs.lastEditInput).toBeUndefined();
     expect(vcs.read("meta/a.ts")).toBe("old");
   });
@@ -106,17 +113,19 @@ describe("apply_patch", () => {
   it("rejects ambiguous replacements instead of choosing a site", async () => {
     const vcs = new StubVcs({ files: { "meta/a.ts": "same\nsame\n" } });
     const tool = createApplyPatchTool("/", vcs, authority);
-    await expect(
-      tool.execute("invocation:ambiguous", {
-        operations: [
-          {
-            kind: "replace",
-            path: "meta/a.ts",
-            replacements: [{ oldText: "same", newText: "changed" }],
-          },
-        ],
-      } as never)
-    ).rejects.toMatchObject({ code: "PatchPreconditionFailed" });
+    const result = await tool.execute("invocation:ambiguous", {
+      operations: [
+        {
+          kind: "replace",
+          path: "meta/a.ts",
+          replacements: [{ oldText: "same", newText: "changed" }],
+        },
+      ],
+    } as never);
+    expect(result.details).toMatchObject({
+      status: "conflict",
+      conflicts: [{ reason: "ambiguous", matchCount: 2, candidateLines: [1, 2] }],
+    });
     expect(vcs.lastEditInput).toBeUndefined();
   });
 
@@ -128,32 +137,29 @@ describe("apply_patch", () => {
     });
     const tool = createApplyPatchTool("/", vcs, authority);
 
-    const failure = await tool
-      .execute("invocation:not-found", {
-        operations: [
-          {
-            kind: "replace",
-            path: "meta/a.ts",
-            replacements: [{ oldText: "return submitOldValue();", newText: "return done;" }],
-          },
-        ],
-      } as never)
-      .then(
-        () => {
-          throw new Error("Expected the stale exact replacement to fail");
+    const result = await tool.execute("invocation:not-found", {
+      operations: [
+        {
+          kind: "replace",
+          path: "meta/a.ts",
+          replacements: [{ oldText: "return submitOldValue();", newText: "return done;" }],
         },
-        (error: unknown) => error as { errorData: Record<string, unknown> }
-      );
-
-    expect(failure.errorData).toMatchObject({
-      code: "PatchPreconditionFailed",
-      reason: "not-found",
-      currentHash: expect.any(String),
-      requestedText: "return submitOldValue();",
-      closestCurrentExcerpts: [
-        expect.objectContaining({ text: expect.stringContaining("submitCurrentValue") }),
       ],
-      remediation: expect.stringContaining("Re-read"),
+    } as never);
+
+    expect(result.details).toMatchObject({
+      status: "conflict",
+      conflicts: [
+        {
+          reason: "not-found",
+          requestedText: "return submitOldValue();",
+          currentReceipt: { protocol: "workspace-read-receipt.v1", path: "meta/a.ts" },
+          closestCurrentExcerpts: [
+            expect.objectContaining({ text: expect.stringContaining("submitCurrentValue") }),
+          ],
+          recovery: { action: "reobserve" },
+        },
+      ],
     });
     expect(vcs.lastEditInput).toBeUndefined();
   });
@@ -167,45 +173,107 @@ describe("apply_patch", () => {
     });
     const tool = createApplyPatchTool("/", vcs, authority);
 
-    const failure = await tool
-      .execute("invocation:receipt-conflict", {
-        operations: [
-          { kind: "write", path: "meta/b.ts", content: "would mutate\n" },
-          {
-            kind: "replace",
-            path: "meta/a.ts",
-            receipt: {
-              protocol: "workspace-read-receipt.v1",
-              path: "meta/a.ts",
-              contentHash: "f".repeat(64),
-              byteLength: 31,
-            },
-            replacements: [{ oldText: "currentValue = 1", newText: "currentValue = 3" }],
-          },
-        ],
-      } as never)
-      .then(
-        () => {
-          throw new Error("Expected stale receipt to fail");
-        },
-        (error: unknown) => error as { code: string; errorData: Record<string, unknown> }
-      );
-
-    expect(failure).toMatchObject({
-      code: "WorkspaceReadConflict",
-      errorData: {
-        reason: "content-changed",
-        currentReceipt: {
-          protocol: "workspace-read-receipt.v1",
+    const result = await tool.execute("invocation:receipt-conflict", {
+      operations: [
+        { kind: "write", path: "meta/b.ts", content: "would mutate\n" },
+        {
+          kind: "replace",
           path: "meta/a.ts",
+          receipt: {
+            protocol: "workspace-read-receipt.v1",
+            path: "meta/a.ts",
+            contentHash: "f".repeat(64),
+            byteLength: 31,
+          },
+          replacements: [{ oldText: "currentValue = 1", newText: "currentValue = 3" }],
         },
-        closestCurrentExcerpts: [
-          expect.objectContaining({ text: expect.stringContaining("currentValue = 2") }),
-        ],
-        recovery: { action: "reobserve" },
-      },
+      ],
+    } as never);
+
+    expect(result.details).toMatchObject({
+      status: "conflict",
+      conflicts: [
+        {
+          reason: "content-changed",
+          currentReceipt: {
+            protocol: "workspace-read-receipt.v1",
+            path: "meta/a.ts",
+          },
+          closestCurrentExcerpts: [
+            expect.objectContaining({ text: expect.stringContaining("currentValue = 2") }),
+          ],
+          recovery: { action: "reobserve" },
+        },
+      ],
     });
     expect(vcs.lastEditInput).toBeUndefined();
     expect(vcs.read("meta/b.ts")).toBe("unchanged\n");
+  });
+
+  it("uses the same normalized matcher as edit without weakening atomicity", async () => {
+    const vcs = new StubVcs({
+      files: {
+        "meta/a.ts": "const title = “Current”;  \r\n",
+        "meta/b.ts": "before\n",
+      },
+    });
+    const result = await createApplyPatchTool("/", vcs, authority).execute(
+      "invocation:normalized",
+      {
+        operations: [
+          {
+            kind: "replace",
+            path: "meta/a.ts",
+            replacements: [
+              { oldText: 'const title = "Current";\n', newText: 'const title = "Next";\n' },
+            ],
+          },
+          { kind: "write", path: "meta/b.ts", content: "after\n" },
+        ],
+      } as never
+    );
+
+    expect(result.details).toMatchObject({
+      status: "applied",
+      operations: [
+        { matches: [{ replacement: 0, mode: "normalized", line: 1 }] },
+        { status: "changed" },
+      ],
+    });
+    expect(vcs.read("meta/a.ts")).toBe('const title = "Next";\r\n');
+    expect(vcs.read("meta/b.ts")).toBe("after\n");
+  });
+
+  it("bounds diff evidence across the whole atomic result", async () => {
+    const oldText = `old:${"a".repeat(30_000)}\n`;
+    const newText = `new:${"b".repeat(30_000)}\n`;
+    const vcs = new StubVcs({ files: { "meta/a.txt": oldText, "meta/b.txt": oldText } });
+
+    const result = await createApplyPatchTool("/", vcs, authority).execute(
+      "invocation:bounded-diff",
+      {
+        operations: [
+          { kind: "write", path: "meta/a.txt", content: newText },
+          { kind: "write", path: "meta/b.txt", content: newText },
+        ],
+      } as never
+    );
+
+    const details = result.details as {
+      operations: Array<{
+        diff?: string;
+        diffTruncated?: boolean;
+        diffOriginalChars?: number;
+      }>;
+    };
+    expect(
+      details.operations.reduce((length, operation) => length + (operation.diff?.length ?? 0), 0)
+    ).toBeLessThanOrEqual(24_000);
+    expect(details.operations.some((operation) => operation.diffTruncated)).toBe(true);
+    expect(
+      details.operations.some(
+        (operation) => (operation.diffOriginalChars ?? 0) > (operation.diff?.length ?? 0)
+      )
+    ).toBe(true);
   });
 });
