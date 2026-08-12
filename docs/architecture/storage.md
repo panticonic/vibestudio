@@ -12,20 +12,16 @@ inside the DO class:
 
 - `createTables()` creates the current schema with `CREATE TABLE IF NOT EXISTS`.
 - `schemaVersion` declares the target schema version.
-- `schemaProductionBaseline()` names the oldest exact deployed shape this class
-  supports.
-- `schemaMigrations()` retains contiguous, named N-1→N transformations. The
-  whole chain, ledger, downgrade guard, and final validation commit in one
-  Durable Object storage transaction.
-- `schemaMigrationFixtureObjectKeys()` names exact representative userland
-  objects captured and replayed by the protected-publication schema gate.
+- `validateSchema()` proves the exact current owned shape.
 
-Fresh objects create only the final schema. Incompatible or drifted persistence
-fails with `DO_SCHEMA_INCOMPATIBLE`; a thrown migration fails with
-`DO_SCHEMA_MIGRATION_FAILED` and leaves the previous database intact. The full
-contract is [Durable Object schema migrations](../durable-object-schema-migrations.md).
+Fresh objects create only the current schema. Different-version, unversioned,
+malformed, or drifted persistence fails unchanged with
+`DO_SCHEMA_INCOMPATIBLE`. There is no migration callback, baseline, ledger, or
+retained fixture. The full contract is
+[Durable Object current-schema lifecycle](../durable-object-schema-migrations.md).
 For explicitly disposable userland data, `workers.resetStorage()` makes a
-verified backup before resetting; it is a recovery primitive, not a migration.
+verified backup before resetting; it is a destructive recovery primitive, not
+a format upgrade.
 
 The host stores DO SQLite files under:
 
@@ -35,9 +31,6 @@ The host stores DO SQLite files under:
 
 Backups live outside workerd's directory under
 `<statePath>/.databases/do-backups/<operation-id>/`.
-Permanent versioned migration fixtures live separately under
-`<statePath>/.databases/do-schema-fixtures/<fixture-digest>/`.
-
 Storage maintenance (reset/restore) is a journaled, fenced operation recorded
 in `<statePath>/.databases/do-maintenance.db`. While an operation's journal
 row is open, host dispatch to that one object is refused with
