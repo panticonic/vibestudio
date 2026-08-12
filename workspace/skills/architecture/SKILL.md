@@ -1,11 +1,11 @@
 ---
 name: architecture
-description: Design or review cross-cutting Vibestudio architecture: trust boundaries, unit ownership, agent topology, durable logs and semantic state, provenance, permissions, credentials, publication, builds, and caches.
+description: "Design or review cross-cutting Vibestudio architecture: trust boundaries, unit ownership, agent topology, durable logs and semantic state, provenance, permissions, credentials, publication, builds, and caches."
 ---
 
 # Vibestudio architecture
 
-Use this skill to decide which component owns a fact or effect. Use task skills
+This guide identifies which component owns a fact or effect. Use task skills
 for implementation details.
 
 ## Read by question

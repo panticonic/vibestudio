@@ -1,6 +1,6 @@
 ---
 name: extensiondev
-description: Create or modify trusted Vibestudio extensions: supervised Node services with RPC methods, optional fetch handlers, explicit authority, semantic publication, and runtime diagnostics.
+description: "Create or modify trusted Vibestudio extensions: supervised Node services with RPC methods, optional fetch handlers, explicit authority, semantic publication, and runtime diagnostics."
 ---
 
 # Extension development
