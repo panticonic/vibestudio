@@ -93,7 +93,7 @@ function listChecked(result: Parameters<typeof noIncompleteInvocations>[0]) {
   const subscriptions = values
     .flatMap((value) => {
       if (Array.isArray(value)) return [value];
-      return records(value)
+      return walkRecords([value])
         .map((item) => item["subscriptions"])
         .filter((item): item is unknown[] => Array.isArray(item));
     })

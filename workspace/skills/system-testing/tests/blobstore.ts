@@ -99,7 +99,7 @@ export const blobstoreTests: TestCase[] = [
           hasDigest(values) &&
           hasNamedTrue(values, /equal|same|exact|match|round.?trip/iu) &&
           values.some((value) =>
-            records(value).some((item) =>
+            walkRecords([value]).some((item) =>
               Object.entries(item).some(
                 ([key, child]) =>
                   /size|length|bytes/iu.test(key) && Number.isInteger(child) && Number(child) > 0
@@ -126,7 +126,7 @@ export const blobstoreTests: TestCase[] = [
         ],
         [/tree/iu, /difference|changed|diff/iu, /materializ/iu, /files?/iu],
         (values) => {
-          const all = records(values);
+          const all = walkRecords(values);
           const hashes = all.some((item) =>
             Object.entries(item).some(
               ([key, child]) =>
