@@ -1,11 +1,13 @@
 # Host/userland boundary roadmap
 
-Status: proposed follow-on architecture work, revised after implementation review
+Status: proposed pre-release architecture work, revised 2026-08-12 for clean cuts
 
-This document describes the remaining high-risk, high-value work after the
-small host-surface extractions landed in August 2026. It is a forward-looking
-plan based on the current implementation. `docs/host-residency-redesign.md` is
-historical context, not the specification for this work.
+This document describes the remaining high-value boundary work after the small
+host-surface extractions landed in August 2026. It assumes the external-Base
+cutover in `docs/external-base-cutover-and-self-development-plan.md` and the
+pre-release policy in `docs/agentic-upgrade-migrations-plan.md`.
+
+`docs/host-residency-redesign.md` is historical context, not the specification.
 
 ## Objective
 
@@ -16,767 +18,471 @@ effects that workspace code cannot safely, durably, or independently own:
 - protected credentials and approval/grant records;
 - exact-context repository and build attestation;
 - process, native view, OS, and device effects;
-- runtime supervision, leases, recovery, and cleanup;
-- sealed application loading and client-host ABI negotiation; and
-- deterministic migration of storage whose authority owner changes.
+- runtime supervision, leases, recovery, and cleanup; and
+- sealed application loading and one current client-host protocol.
 
-Workspace code should own product policy, presentation, orchestration, and
-mutable application behavior. An extension should own a reviewed local native
-provider when a workspace feature needs filesystem, process, or device access
-but does not need to become part of the host kernel.
+Workspace code owns product policy, presentation, orchestration, and mutable
+application behavior. An extension owns a reviewed local native provider when a
+workspace feature needs filesystem, process, or device access but does not need
+to become host kernel.
 
-The target is not a low method count for its own sake. It is a boundary where
-each host method represents one irreducible fact or effect, where ordinary
-product changes do not require a host release, and where moving code out does
-not weaken an atomic authority decision.
+The target is not a low method count for its own sake. Each host method must
+represent one irreducible authority fact or native effect, and ordinary product
+changes must not require a host release.
+
+## Pre-release cut rule
+
+All workstreams in this roadmap land before the first supported release. They
+use coordinated destructive cuts, not migration infrastructure:
+
+1. Define the target owner and current schema.
+2. Implement and validate the target against freshly created workspaces.
+3. Bump `systemEpoch` for any host/workspace ABI change.
+4. Republish Base and every official template at that exact epoch.
+5. Switch the only route to the target and delete the old route, reader,
+   writer, schema, and storage code in the same release series.
+6. Delete and recreate controlled workspaces.
+
+There is no old-owner/new-owner coexistence protocol, maintenance admission,
+route receipt, storage-transfer envelope, skipped-upgrade adapter, or downgrade
+path. Pre-release internal databases and runtime state are disposable. Valuable
+user-level facts may be exported explicitly before the cut and imported through
+the fresh product's current interface; obsolete internal stores are not
+translated.
+
+This includes Durable Object schemas. Delete the current generic
+production-baseline, ordered-migration, migration-ledger, retained-fixture, and
+Build V2 migration-chain machinery. The replacement is smaller: initialize a
+truly empty store at the one canonical current schema; validate exact version
+and shape on later opens; reject every other store unchanged. Host SQLite
+stores already follow this model and provide the reference behavior.
+
+If any workstream slips past the first supported release, stop. Its destructive
+sequence is no longer authorized. Re-plan it from the actual durable user data
+and availability requirements rather than reviving the speculative migration
+design removed from this roadmap.
 
 ## Ownership model
 
-Every record and operation in a migration must be classified into one of these
-categories before code moves:
+Classify every record and operation before moving code:
 
-| Category                        | Owner                       | Examples                                                                                                | Recovery rule                                                                                         |
-| ------------------------------- | --------------------------- | ------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
-| Authority and supervision facts | Host kernel                 | current slot/entity/context binding, immutable history identity, active closure digest, lease ownership | Must remain readable across host upgrades; never reconstructed from product projections               |
-| Protected user facts            | Host kernel or narrow vault | credentials, grants, protected cookies, encryption metadata                                             | Lossless deterministic host migration                                                                 |
-| Durable product facts           | Workspace service or app    | user titles, navigation payload, pins, layout, access counters, mission documents                       | Migrated once to the new owner; not described as disposable merely because they are non-authoritative |
-| Derived projections             | Workspace service or app    | FTS tables, ranking indexes, denormalized search rows                                                   | May be deleted and rebuilt from durable facts                                                         |
-| Native runtime resources        | Client-host adapter         | `webContents`, `WebView`, `Page`, process handles, CDP sessions                                         | Reconciled from protocol state and leases after crash or reconnect                                    |
-| Migration-only state            | Host upgrade coordinator    | source/target identity, verification digest, committed route receipt                                    | Exists only to make an ownership cutover deterministic; never becomes a product fallback              |
+| Category                        | Owner                       | Examples                                                                                        | Current-generation recovery                                                   |
+| ------------------------------- | --------------------------- | ----------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| Authority and supervision facts | Host kernel                 | slot/entity/context binding, immutable history identity, active closure digest, lease ownership | Kernel transaction/log recovery; never reconstructed from product projections |
+| Protected user facts            | Host kernel or narrow vault | credentials, grants, protected cookies, encryption metadata                                     | Current vault backup/re-authentication; no old-format importer                |
+| Durable product facts           | Workspace service/app       | titles, navigation payload, pins, layout, access counters, mission documents                    | Current service persistence and ordinary product export/import                |
+| Derived projections             | Workspace service/app       | FTS, ranking indexes, denormalized search rows                                                  | Delete and rebuild from current durable facts                                 |
+| Native runtime resources        | Client-host adapter         | `webContents`, `WebView`, `Page`, processes, CDP sessions                                       | Reconcile from current protocol state and leases                              |
 
-Presentation is not synonymous with disposable. Conversely, persistence alone
-does not justify kernel ownership. Residency follows the exact decision or
+Presentation is not synonymous with disposable. Persistence alone does not
+justify kernel ownership. Residency follows the exact authority decision or
 effect that consumes the fact.
 
-## Non-negotiable migration rules
+## Non-negotiable boundary rules
 
-1. Move one owner, not one call site. At steady state there is one writer, one
-   required route, and no fallback reader.
-2. Never bridge a broken boundary with compatibility shims, dual writes,
-   best-effort translation, parallel transports, or a second product service.
-3. Keep every fact needed by an atomic authority decision in the same kernel
-   transaction. A userland projection may refer to an opaque kernel identity;
-   it may not become a second authority source.
-4. Treat semantic workspace repair and durable-owner transfer as different
-   mechanisms. Agentic migration notes can repair userland source and product
-   schema. They cannot freeze host-owned writes, attest a storage copy, or
-   commit a service route.
-5. Any operation spanning kernel and userland stores must define its order,
-   idempotency key, crash points, replay behavior, and orphan cleanup. “The UI
-   will retry” is not a transaction protocol.
-6. Prefer a narrow effect contract over a product facade. For example,
-   `setNativeZoom(panelId, factor)` is a host effect; applying a user's site
-   preference is workspace policy.
-7. Client hosts implement one semantic protocol. Electron `webContents`, React
-   Native `WebView`, and headless browser pages are adapters, not separate
-   product architectures.
-8. Optional native behavior is represented by negotiated endowments, not
-   throwing stubs, no-op product adapters, or platform-specific service names.
-9. Delete special cases made obsolete by the new owner. Explicit
-   migration-only readers are permitted during a cutover window, but they are
-   not callable product routes and can never be selected after commit.
-10. Verify authority, recovery, skipped-upgrade, and workspace-switch behavior.
-    A happy-path UI test is not sufficient evidence for an ownership move.
+1. Move an owner, not one call site. The result has one writer and one route.
+2. Never bridge a boundary with compatibility shims, dual writes, translation
+   fallbacks, parallel transports, or a second product service.
+3. Keep every fact needed by an atomic authority decision in one kernel
+   transaction. Userland may refer to an opaque kernel identity; it may not
+   become a second authority source.
+4. Prefer a narrow effect contract over a product facade. `setNativeZoom` is a
+   host effect; applying a user's site preference is workspace policy.
+5. Client hosts implement one semantic protocol. Electron, React Native, and
+   headless pages are adapters, not separate product architectures.
+6. Optional native behavior is negotiated as an endowment, never represented by
+   throwing stubs or no-op product adapters.
+7. Delete old routes and special cases when the new owner lands.
+8. Exact epoch equality is the only declared host/workspace generation gate.
+   Typed contracts and Build V2 prove the exact current composition.
+9. Current-generation crash recovery may use leases, CAS, and idempotent effect
+   receipts. It must not parse or translate an obsolete generation.
+10. Verify authority, recovery, workspace switching, and fresh provisioning;
+    representative old state must fail closed.
+11. Persistent schemas are empty-or-exact-current. There are no production
+    baselines, ordered migration callbacks, migration ledgers, or retained
+    migration fixtures.
 
-## Where agentic repair replaces machinery
+## Where agentic intelligence replaces machinery
 
-Use the intelligence already present in the migration session for problems that
-are semantic and workspace-specific:
+Use agents for semantic current-generation work:
 
-- reconciling a locally modified workspace with the new Base contract;
-- repairing manifests, service declarations, imports, and product schemas;
-- recognizing old product-data shapes and choosing an honest mapping;
-- writing or adapting a one-shot non-secret importer and its verifier;
-- rebuilding derived projections and diagnosing records that do not conform;
-- explaining ambiguous cases and escalating to the user instead of guessing.
+- deciding the honest host/userland boundary;
+- editing Base manifests, service declarations, and imports;
+- fixing the exact candidate until type/static/build checks pass;
+- rebuilding derived projections;
+- interpreting ambiguous product behavior and escalating instead of guessing;
+- selecting useful product-level data to export before a destructive cut; and
+- reviewing the coordinated host/Base/template release.
 
-Do not build version matrices, migration DSLs, universal product-schema
-registries, or host-side semantic planners for those tasks. The migration note
-states the target and sharp edges; the agent inspects the actual state.
+Do not build version matrices, migration DSLs, host-side semantic planners,
+universal schema registries, or old-shape importers. Agentic intelligence is not
+a reason to admit obsolete internal state; it keeps the current system simple.
 
-Agentic judgment stops where improvisation could create authority or lose
-unrecoverable data. Write fencing, immutable source snapshots, protected-secret
-transforms, route commitment, exact issuer binding, lease fencing, and native
-process identity remain deterministic kernel operations.
+## Foundation 0: current-generation route and catalog discipline
 
-## Foundation 0: a minimal durable-owner cutover envelope
+The original roadmap proposed a durable-owner cutover envelope because it
+assumed existing workspaces had to survive host-owner removal. That assumption
+does not hold pre-release. The required foundation is smaller:
 
-### Why Base reconciliation is not the transaction
+1. Runtime service catalogs distinguish host contracts from concrete providers.
+2. Each service key resolves to exactly one provider in the effective current
+   build.
+3. Workspace providers may replace removed builtins; builtins do not silently
+   shadow them.
+4. Duplicate providers fail Build V2 before activation.
+5. A host release that removes a provider is promoted only with an exact Base
+   release whose fresh composition provides the replacement.
+6. The host, Base, and all optional templates carry one exact epoch.
+7. Fresh provisioning proves the selected route end to end.
+8. Old workspaces are rejected and recreated; no route is inferred from their
+   historical lineage.
 
-Workspace workers ship through the externally released Base selected by the
-host's exact Base pointer. Existing workspaces receive Base changes through
-ordinary Composer reconciliation. That remains the only product distribution
-path; the host must not seed workers from host source.
+This is admission of one current configuration, not a compatibility system.
 
-Composer reconciliation, however, is asynchronous and may require a semantic
-merge. It does not prevent an old builtin from accepting writes, and a
-migration note has no applied ledger or cross-store commit record. Therefore a
-host/Base pair cannot safely copy data and delete the builtin in one release.
+### First proof: phone provisioning
 
-The durable cutover is an **offline, per-workspace startup hold**. It is
-triggered only by a structured `ownerCutovers` declaration in the host's exact
-Base release artifact, never by a pin difference or prose note. The hold is
-small, deterministic, and non-dismissible because it is a write fence;
-semantic migration remains agentic.
+Use phone/device provisioning as the first route proof because it exercises a
+real host-to-workspace provider boundary without requiring valuable durable
+pre-release data.
 
-### Divide deterministic safety from semantic judgment
+1. Separate the host protocol contract from builtin provider registration.
+2. Publish the exact Base provider and declare its authority.
+3. Make Build V2 prove that the effective Base has exactly one conforming
+   provider.
+4. Remove the builtin provider and its catalog entry.
+5. Bump the epoch and republish official templates.
+6. Recreate a fresh workspace and prove provisioning end to end.
+7. Verify that a missing, duplicate, or locally deleted provider fails before
+   product startup.
 
-The host owns only the facts an agent cannot safely improvise:
+### Foundation acceptance
 
-1. fence the previous host generation and admit no normal workspace traffic;
-2. take one immutable source-storage snapshot;
-3. retain the old route as the uncommitted owner;
-4. wait for the existing Base/Composer operation to land a conforming target;
-5. atomically commit the new owner and route; and
-6. after commit, start only the new owner or remain in repair.
-
-The existing Composer migration session and its agent own the semantic work:
-
-- inspect the actual workspace and target Base release;
-- repair divergent source, manifests, and service declarations;
-- select or patch the bounded data importer for the actual old shape;
-- run domain-specific conformance checks; and
-- explain or escalate data that cannot be mapped honestly.
-
-### Maintenance admission, not normal startup
-
-The host preflight enters maintenance before normal epoch/API admission when
-the workspace needs the shipped Base to cross a repairable epoch or when a
-declared owner cutover lacks a route receipt. Configuration handling is split
-into structural parsing and runtime admission: maintenance may inspect an
-old-epoch workspace without activating it, and normal admission still rejects
-that epoch until migration commits the target state. Unsupported downgrades or
-source epochs fail exactly before product traffic.
-
-Host Tier 0 exposes only pre-admission semantic
-snapshot/materialization/import/publish I/O; it does not interpret workspace
-semantics. Composer and the migration agent run as a restricted maintenance
-closure built from exact workspace/Base source through ordinary Build V2 and
-endowed only with semantic VCS and cutover-scoped effects. The host embeds no
-copy. The closure starts no workspace apps, panels, unrelated extensions, or
-routable product services. This is the normal Composer operation behind a host
-lifecycle gate, not a second resolver or migration path.
-
-If the workspace-owned harness cannot start, the external rescue harness may
-repair semantic source and publish that repair through the existing exact
-snapshot path. It then hands back to the same pending operation. Its deliberate
-lack of host RPC means it cannot read protected source storage, install target
-storage, or commit a route.
-
-A normally admissible same-epoch semantic hold may retain the migration plan's
-dismissal policy. An epoch-crossing maintenance hold cannot admit incompatible
-source, and an owner-cutover hold additionally cannot release its write fence
-until route commit.
-
-There is no generic migration DSL, per-record-family host schema registry, or
-host algorithm for deciding whether two semantic datasets are equivalent. A
-cutover supplies a simple idempotent importer and a verifier appropriate to
-that owner. For a byte-preserving move, the importer may be raw namespace
-adoption. For non-secret product data, it may be Base-owned code exercised by
-the migration session. Protected plaintext is transformed only by sealed host
-code; it is never exposed to the agent merely to make the framework uniform.
-
-### The cutover-scoped data envelope
-
-The migration session receives one bounded operation envelope rather than a
-general storage-migration service:
-
-- an immutable read-only source export produced by the sealed old-owner
-  adapter;
-- an empty private target staging area;
-- contained Base-owned importer/verifier execution over those paths;
-- host verification and exact-target installation of the staged result; and
-- no ordinary route to either owner while the envelope is open.
-
-The current same-target userland backup/restore surface is not this mechanism:
-it excludes internal owners and cannot install one owner's backup as another
-target. Protected vault data uses a cutover-specific sealed host transform;
-non-secret transformations and semantic verification remain agent-authored.
-
-Counts, digests, reference checks, and product probes are verifier evidence,
-not fields hard-coded into a universal host protocol. The host needs only a
-minimal receipt containing three deliberately separate facts:
-
-- cutover and workspace identity;
-- immutable source snapshot identity;
-- distribution provenance: the exact Base release that carried the target and
-  migration intent;
-- activated-build evidence: the exact effective build initially migrated and
-  verified;
-- stable route identity: service protocol, provider principal, object identity,
-  and reviewed authority contract;
-- an opaque digest of the successful verifier evidence; and
-- the committed route/version.
-
-This is not an applied-notes ledger. It is the authority fact that selects the
-one callable owner. Only the stable route selects future traffic. The Base and
-activated-build identities remain audit evidence, so conforming userland code
-can evolve without another host transaction. The source snapshot remains
-available for diagnosis or a new repair attempt, but it is never a post-commit
-product fallback.
-
-### Cutover sequence
-
-1. Startup reads the host artifact and route receipts before normal config
-   admission. A missing declared receipt enters maintenance and fences the
-   workspace generation.
-2. Maintenance snapshots the old owner, then opens the normal durable Composer
-   operation for the exact target Base. The old product route is not started.
-3. The ordinary migration agent brings the actual workspace to the target
-   contract. Build V2 proves that the effective workspace—not merely the Base
-   release—contains the declared stable provider, and the semantic update
-   carries the target epoch.
-4. The contained importer/verifier transforms the immutable source into staged
-   target output; the host installs the verified output.
-5. On successful evidence, the host commits the owner/route receipt, tears down
-   maintenance, and runs normal epoch/API admission once.
-6. A later retirement release deletes the builtin catalog, product class, DO
-   export, and product authority. A bounded offline snapshot reader may remain
-   only while a supported skipped upgrade still needs it.
-
-The target Base and cutover may therefore ship together; a separate prepare
-release is optional rehearsal, not a correctness requirement. The source
-reader, startup hold, and route commit are the correctness mechanism. A host
-must never assume that a workspace observed an intermediate release.
-
-### First proofs
-
-1. First separate builtin contract availability from provider selection and
-   make resolution consult committed routes. Then use phone provisioning to
-   prove exact Base distribution, required-route gating, fresh/reconciled
-   workspace behavior, and catalog deletion without a data transfer.
-2. Before moving workspace state, missions, or browser data, prove the offline
-   hold/snapshot/commit envelope on the smallest low-value durable builtin or a
-   faithful storage fixture, including crash injection at every step.
-
-### Acceptance criteria
-
-- Writes cannot reach either owner while the cutover hold is active.
-- A crash before route commit leaves the old owner authoritative on retry; a
-  crash after commit selects only the new owner.
-- Repeating the importer against the same snapshot converges on the same target.
-- A skipped host release either migrates through a supported offline adapter or
-  fails before product startup with an exact unsupported-source diagnostic.
-- No resolver gives a builtin implicit precedence over a committed workspace
-  route.
-- Base inspection proves the target route in the exact release, and maintenance
-  Build V2 proves the effective locally authoritative provider before commit.
-- A locally deleted or incompatible target remains pending; template lineage
-  never silently resurrects it.
-- Base source is never copied into the host artifact or seeded by host code.
-- The host contains no semantic migration planner or record-family framework.
+- Fresh current-generation workspaces select exactly one provider per key.
+- Builtins cannot shadow workspace providers.
+- Missing or duplicate providers fail mechanically.
+- Host removal and Base addition are tested as one exact release set.
+- Old-epoch fixtures fail closed without maintenance startup.
+- No owner-transfer or compatibility artifacts exist.
 
 ## Target execution stack
 
 ```text
-workspace app / worker
-  durable product state, policy, orchestration, and presentation
-              |
-              | authenticated, versioned client-host protocol
-              v
-workspace shell core
-  shared panel state machine and product navigation
-              |
-              | native effects, acknowledgements, leases, host events
-              v
-Electron / React Native / headless adapter
-  webContents, WebView, Page, OS APIs, bounded local storage
-              |
-              v
-workspace host kernel
-  authority, protected facts, supervision, exact execution
+Workspace product service / app
+  -> typed current-generation host contract
+    -> receiver-enforced authority
+      -> narrow host kernel effect or fact
+
+Client presentation
+  -> one desired/observed protocol
+    -> Electron | React Native | headless adapter
 ```
 
-Extensions sit beside workspace workers. They provide reviewed local native
-capabilities through the existing extension invocation boundary; they do not
-become implicit host services.
+The host never needs to understand product workflow to provide a native effect.
+The workspace never gains authority merely by presenting desired state.
 
 ## Workstream A: one client-host protocol and workspace-owned panel shell
 
-This combines the former panel-relocation and client-protocol workstreams. The
-convergent protocol foundation lands first, panel ownership moves second, and
-broad event and preload cleanup finishes third. This order avoids inventing an
-Electron-only migration channel and replacing it immediately afterward.
-
 ### Current problem
 
-Electron main instantiates the shared `PanelManager`, owns product presentation
-state, performs lease/materialization recovery, and exposes product-oriented
-panel methods through `view`. Mobile runs the same product logic in the
-workspace app. Headless constructs a partially disabled `PanelManager` with
-no-op adapters. Connection recovery and event projection are assembled
-differently by platform.
+Panel lifecycle and presentation are split across Electron `PanelManager`,
+mobile/headless paths, preload/event bridges, and workspace product code.
+Different transports carry overlapping semantics, and host-local persistence
+can become a second product state.
 
-The existing generic recovery coordinator and `PanelHostRegistration` are
-useful ingredients, but they do not define native command acknowledgements,
-renderer crash replay, lease-loss convergence, local-state ownership, or a
-cross-adapter conformance contract.
+### A0: convergent desired/observed envelope
 
-### A0: convergent protocol envelope
+Define one generation-fenced protocol:
 
-Create a versioned package with three deliberately small shapes:
+- client sends a complete desired snapshot for the current workspace and shell
+  generation;
+- adapter returns revisioned observed native state;
+- stale generations and revisions are rejected;
+- reconnect resends desired state rather than replaying imperative history;
+- unsupported capabilities are absent negotiated endowments; and
+- native resource identities and leases remain adapter-owned.
 
-1. A negotiated handshake carrying sealed launch identity, host generation,
-   protocol version, and native endowments.
-2. A revisioned desired presentation snapshot from the workspace shell and a
-   revisioned observed-native snapshot from the adapter.
-3. Idempotent request/reply effects for operations that are not desired state,
-   such as print, find, downloads, or opening DevTools.
-
-The desired snapshot covers:
-
-- panel surface create, bind, update, focus, visibility, bounds, and destroy;
-- lease-bound materialization identity and native binding;
-- native navigation and session-data desired effects where they are genuinely
-  stateful; and
-- product-supplied residency/retention intent.
-
-The observed snapshot covers actual bindings, current revisions, native
-crashes/navigation, and capability-dependent observations. Typed host-origin
-events wake the shell to fetch a newer observation; they are not a second state
-channel.
-
-Recovery is convergence, not a separately programmed workflow. On initial
-connection, reconnect, renderer replacement, lease change, or workspace switch,
-the current shell generation sends its complete desired snapshot. The adapter
-idempotently converges native resources and returns its observation. Generation
-and revision fencing reject messages from an obsolete renderer. A disconnected
-shell owns no implicit lease on product state; the adapter follows one bounded
-resource-retention timeout and then tears down unclaimed resources.
-
-Build the adapter conformance harness here, before moving `PanelManager`. It
-tests idempotency, stale-generation fencing, eventual convergence, effect
-deduplication, and teardown against in-memory Electron, React Native, and
-headless fakes, then against real adapters as they cut over. Existing transports
-may carry the envelope during migration; there is still one semantic protocol.
+Build a conformance harness with in-memory, Electron, mobile, and headless
+adapters. Existing transports may carry the envelope only until the same
+current release deletes their old semantic messages; there is never a runtime
+choice between protocols.
 
 ### A1: relocate Electron panel ownership
 
-`workspace/apps/shell` becomes the Electron product shell and owns:
+Move product behavior out of `PanelManager`:
 
-- `PanelManager` and panel-tree projection;
-- product navigation and placement policy;
-- collapse, focus, layout, pin, title, and search presentation state; and
-- derivation of native residency/retention intent.
+- workspace shell owns layout, selection, titles, grouping, and presentation
+  policy;
+- Electron adapter owns `webContents`/view creation, attachment, native bounds,
+  focus, zoom effect, teardown, and process identity;
+- kernel retains only authority and lifecycle facts needed to validate effects.
 
-Electron main owns a `PanelHostAdapter` containing only native surface effects,
-native observations, lease reconciliation, and the protocol transport. It does
-not understand pinning, column layout, launcher ranking, or product navigation.
+Inventory and eliminate all current local-state owners, not merely
+`panels.json`. Land the new envelope and deletion atomically in the coordinated
+epoch release; recreate workspaces rather than importing old panel state.
 
-#### Local-state inventory and target keying
+### A2: consolidate mobile, headless, event, and preload paths
 
-The migration must cover all current owners, not just `panels.json`:
+- Mobile and headless implement the same envelope and endowments.
+- Preload exposes transport, not product policy.
+- Event projection is derived from observed protocol state.
+- Legacy event/message forms are deleted.
+- There are no platform-specific product services or no-op adapters.
 
-| Current owner                 | Current data                                                                          | Current scope                                 | Target                                                                                          |
-| ----------------------------- | ------------------------------------------------------------------------------------- | --------------------------------------------- | ----------------------------------------------------------------------------------------------- |
-| `shellCore/localViewState.ts` | collapsed IDs, focused slot, local title projection in `local-view-state/panels.json` | implicit resolved client/workspace state path | versioned shell record keyed explicitly by device, workspace, account, and shell app identity   |
-| `PanelLayoutStore`            | opaque multi-column layout                                                            | device + workspace + account                  | versioned shell record with the same explicit scope                                             |
-| `PanelPinStore`               | pinned slot IDs                                                                       | device + workspace                            | versioned shell record preserving workspace scope unless a separate product decision changes it |
+### Acceptance
 
-The local-state host capability is a generic bounded record store with quotas,
-atomic replace, version, and explicit scope. It has no panel schema and does not
-expose layout or pin methods.
+- The shell can converge after reconnect from desired plus observed state.
+- A stale client cannot mutate current native resources.
+- Workspace switching cannot leak a view/process across generations.
+- Unsupported features are absent, not represented by failure stubs.
+- Source search finds one semantic protocol and no legacy message readers.
 
-For each old record, use the new record's existence as the natural idempotency
-marker: if absent, read and validate the old JSON, atomically write the new
-record, and thereafter read only the new record. No separate local migration
-ledger or dual write is needed. Corrupt presentation data may reset according
-to an explicit per-record policy, but one corrupt record must not silently reset
-the other two.
-
-Pins no longer feed native resource GC directly. The shell publishes a
-revisioned set of retention intents through the panel-host protocol. The native
-adapter combines those intents with mechanical facts it owns, such as attached
-surfaces and automation leases, then applies resource caps and idle eviction.
-After renderer loss it follows the common recovery policy; it never reopens a
-product pin database.
-
-### A2: finish host-adapter consolidation
-
-After Electron runs the workspace-owned shell:
-
-1. Carry native ingress such as pair links and panel locations as typed
-   host-origin events on the authenticated protocol.
-2. Replace `desktopEvents` with the canonical event domain plus a native event
-   source.
-3. Reduce Electron preload to authenticated transport, sealed bootstrap
-   identity, and genuinely `WebContents`-local input/overlay bridges.
-4. Make mobile converge the same desired/observed snapshots and lease changes
-   rather than maintaining a parallel materializer contract.
-5. Make headless consume the protocol directly rather than instantiate a
-   product `PanelManager` with no-op dependencies.
-6. Delete `createElectronShellCore`, main-process `PanelManager`, product methods
-   from `view`, the native layout/pin stores, and obsolete recovery/event paths.
-
-### Acceptance criteria
-
-- The A0 conformance suite exists before the A1 ownership switch.
-- Electron main does not instantiate `PanelManager` or read panel product state.
-- Electron and mobile execute the same shared panel state machine.
-- No panel product record is dual-written across renderer and main.
-- Native GC consumes protocol retention intent, not `PanelPinStore`.
-- Restart, renderer crash, panel crash, lease transfer, transport reconnect, and
-  workspace switch converge by replaying the same desired snapshot.
-- Unsupported features are absent from negotiated endowments.
-- The `view` schema contains only native view effects that have not yet moved
-  into the canonical protocol; it is deleted when the protocol covers them.
-
-## Workstream B: split workspace authority state from durable presentation
+## Workstream B: split workspace authority from presentation
 
 ### Current problem
 
-The `workspace.state` builtin contains authority-bearing topology beside
-durable product facts and disposable indexes. In particular, `slot_history`
-contains the exact entity and context used for context-boundary authorization,
-and navigation selects that history entry while changing the current slot
-pointer in one storage transaction. Treating all “presentation history” as
-userland would split an authority transaction.
-
-Titles and access counters are also durable facts. They are not reconstructable
-merely because FTS and ranking projections can be rebuilt.
+`workspace.state` contains authority-bearing topology beside product facts and
+derived indexes. `slot_history` binds the exact entity/context used by
+authorization while titles, access counters, search policy, and ranking are
+product behavior.
 
 ### Target cut
 
-Retain a small kernel topology/history spine containing:
+Retain a small kernel topology/history spine:
 
 - slot identity and parent/child ownership;
 - current immutable history-entry identity and cursor;
-- each committed entry's entity, source, and context facts;
-- the entry's bounded opaque presentation payload in the same immutable row;
+- each entry's entity, source, context, and bounded opaque payload;
 - prepared navigation authority facts and commit tokens;
 - lifecycle leases and cleanup acknowledgements; and
-- bounded ancestry and ownership projections consumed by authorization.
+- bounded authority projections.
 
-Move to a Base workspace service:
+Move to a Base service:
 
-- all interpretation and rendering of the opaque history payload;
-- user-assigned titles, tags, keywords, and other durable search facts;
-- durable access/usage facts; and
-- launcher and navigation presentation policy.
+- interpretation/rendering of the opaque payload;
+- titles, tags, keywords, and durable search facts;
+- access/usage facts; and
+- launcher/navigation presentation policy.
 
-Keep only FTS tables, ranking indexes, caches, and denormalized search rows in
-the disposable category.
+FTS, ranking indexes, caches, and denormalized rows are rebuildable.
 
-Keeping the opaque payload beside the authority row is deliberate. Splitting it
-would require a distributed prepare/commit protocol solely to move uninterpreted
-bytes. Storage residency is not product ownership: the kernel enforces a size
-bound and returns the exact bytes, but knows no payload schema, default, title,
-or rendering rule. Workspace code may change that meaning. When stored payloads
-must change, an agentic migration may run one offline transform limited to the
-opaque field; the kernel prevents it from changing the entry identity, entity,
-source, or context. No runtime compatibility reader remains afterward.
+### Clean-cut sequence
 
-Mutable product facts do not join the navigation transaction. A user title is
-written directly and durably by the presentation service. Access observations
-are idempotent by immutable entry identity and can be retried or re-observed on
-shell recovery. Their use in ranking does not turn them into authority facts or
-require a kernel outbox.
+1. Inventory each table, column, method, and transaction by consumer.
+2. Make the kernel payload opaque and bounded while preserving its atomic
+   history/cursor transaction.
+3. Define the fresh Base service and current product schema.
+4. Prove projection rebuilds from current-format fixtures.
+5. Delete product tables/methods/policy from the builtin.
+6. Bump epoch, republish, and recreate workspaces. Do not copy the obsolete
+   builtin store.
 
-### Migration sequence
+### Acceptance
 
-1. Inventory every table, column, method, and transaction by the exact kernel or
-   product decision that consumes it.
-2. Make the kernel's history payload explicitly opaque and bounded. Remove any
-   kernel interpretation while keeping the existing atomic history/cursor write.
-3. Split durable product facts from derived indexes inside the existing owner;
-   prove that index rebuild preserves titles, payload, and usage facts.
-4. Publish the Base presentation service as the exact cutover target.
-5. Use Foundation 0 to migrate durable presentation facts under an offline
-   workspace gate and commit the new route.
-6. Delete migrated tables, product methods, and search/ranking policy from the
-   builtin. Narrow its catalog and authority manifest to the kernel spine.
-
-### Acceptance criteria
-
-- Every remaining builtin field has a named authority or supervision consumer.
-- History selection and current-cursor mutation remain one kernel transaction.
-- The immutable payload remains available with its entry without a cross-store
-  commit, while the kernel has no product-specific knowledge of its contents.
-- Deleting an FTS/ranking projection cannot erase titles, payload, or access
-  facts and cannot change an authorization decision.
-- Userland can change navigation presentation and ranking without a host build.
+- Every remaining builtin field has a named authority/supervision consumer.
+- History selection and cursor mutation remain one kernel transaction.
+- Kernel has no title, ranking, or product-payload interpretation.
+- Userland can change presentation without a host build.
+- No old-store reader or transfer operation exists.
 
 ## Workstream C: reduce missions to immutable reviewed closures
 
 ### Current problem
 
-The missions builtin owns mission CRUD, revisions, state transitions, run
-records, approval presentation, exposure compilation, and reviewed-closure
-activation. Editing currently revokes authority only because the builtin edit
-method explicitly suspends its own active closure. A kernel cannot observe
-arbitrary writes after mission documents move to a workspace service.
-
-Activation also rejects non-builtin publishers and accepts presentation text
-from the caller. Moving `requestReview` before changing those rules would either
-fail outright or trust the new userland owner to describe its own authority.
+The missions builtin owns documents, revisions, schedules, runs, approval
+presentation, exposure compilation, and authority activation. Editing currently
+revokes authority only because the builtin owns both product and kernel state.
 
 ### Target cut
 
 A Base missions service owns documents, revisions, schedules, run presentation,
-and mission policy. A small kernel closure service owns:
+and policy. A kernel closure service owns:
 
 - canonical closure input and mechanical capability/resource compilation;
-- digest calculation, verification, and exact issuer binding;
-- trusted mechanical presentation of the verified exposure;
-- activation, explicit suspension/replacement, retirement, and session binding.
+- digest verification and exact issuer binding;
+- trusted mechanical presentation of verified exposure; and
+- activation, suspension/replacement, retirement, and session binding.
 
-An activated closure is immutable authority independent of later document
-edits. Editing a mission creates a new inactive revision. The previous closure
-remains active until an explicit kernel suspend or atomic replace operation.
-The product UI must show that distinction rather than imply that editing a
-draft changed active authority.
+An activated closure is immutable. Editing creates a new inactive revision;
+the previous closure changes only through explicit suspend/replace.
 
-Automatic edit-driven revocation is deliberately not a target. Requiring it
-would force a kernel-owned mission revision commitment/CAS and make revision
-state partly kernel-owned again.
+### Clean-cut sequence
 
-### Migration sequence
+1. Define canonical closure input independent of mission models.
+2. Make the kernel render mechanical authority facts.
+3. Authenticate one exact installed/reviewed workspace publisher.
+4. Implement immutable activation and explicit suspend/replace.
+5. Publish the Base missions service.
+6. Delete mission product tables, CRUD, compilation, and UX copy from kernel.
+7. Bump epoch and recreate; old mission data is not imported.
 
-1. Define canonical closure input independent of mission domain models.
-2. Make the kernel mechanically render the exact verified authority facts;
-   remove caller-authored authority presentation.
-3. Replace builtin-only publication with authentication of an exact installed,
-   reviewed workspace publisher and issuer. Do not broaden publication to
-   arbitrary workspace callers.
-4. Implement immutable activation plus explicit suspend/replace and update the
-   UI semantics while mission data still has its old owner.
-5. Publish the Base missions service and move `requestReview` only after steps
-   1–4 are active, or land that boundary atomically.
-6. Use Foundation 0 to migrate mission documents, revisions, schedules, and run
-   facts to the Base service.
-7. Delete mission CRUD tables, edit-triggered suspension, domain compilation,
-   and mission-specific approval copy from the kernel.
+### Acceptance
 
-### Acceptance criteria
+- Kernel contains no mission title, charter, schedule, or UX policy.
+- A workspace service cannot omit authority facts or forge issuer identity.
+- Editing cannot mutate active authority.
+- Product clearly distinguishes active closure from draft.
+- No old mission-store reader remains.
 
-- The closure kernel contains no mission title, charter, scheduling, or UX
-  policy.
-- A malicious missions service cannot omit or soften an authority fact or
-  publish as an unreviewed issuer.
-- Editing produces an inactive revision and cannot silently mutate active
-  authority.
-- Suspend and replace are explicit kernel transactions with exact closure
-  identities.
-- The product clearly distinguishes the active closure from newer drafts.
-
-## Workstream D: decompose browser data into vault and product services
+## Workstream D: split browser vault from product data
 
 ### Current problem
 
-The browser-data builtin combines passwords, form-fill secrets, cookies,
-bookmarks, history, favicons, site preferences, search engines, downloads, and
-import-job state. Protected secrets justify durable kernel storage; ordinary
-browser product records do not inherit that justification.
+The browser-data builtin combines passwords, form secrets, cookies, bookmarks,
+history, favicons, preferences, search engines, downloads, and import state.
 
 ### Target cut
 
-Create two explicit stores:
+Create:
 
-1. A host-protected browser vault for passwords, sensitive form-fill values,
-   protected cookie material where required, encryption, backup, and recovery.
-2. A Base browser-data service for bookmarks, history, favicons, search
-   engines, site preferences, download presentation, and import progress.
+1. a host-protected vault for passwords, sensitive form values, protected
+   cookie material, encryption, backup, and recovery; and
+2. a Base browser-data service for bookmarks, history, favicons, search
+   engines, preferences, download presentation, and import progress.
 
-The vault exposes typed record effects with caller and origin scoping. It does
-not expose browser-product workflows such as import jobs or bookmark folders.
-Native browser projection remains a client-adapter effect.
+The vault exposes narrow typed effects with caller/origin scoping. It does not
+expose browser product workflows.
 
-### Migration sequence
+### Clean-cut sequence
 
-1. Threat-model every record family and record why compromise or loss requires
-   host protection, workspace durability, or only a rebuildable projection.
-2. Define vault schemas, encryption/backup invariants, and narrow effect APIs.
-3. Define userland durable facts separately from rebuildable browser indexes.
-4. For workflows spanning both stores, keep coordination in userland and use
-   idempotent vault operation identities plus durable workflow receipts. Do not
-   introduce dual writes or a host-owned import workflow.
-5. Publish the Base product service as the exact cutover target.
-6. Use Foundation 0 under one offline gate to split and verify record families,
-   then commit both required routes.
-7. Delete the monolithic builtin and register only the protected vault.
+1. Threat-model each record family and assign its target owner.
+2. Define one current vault schema and narrow effect API.
+3. Define one current product schema and rebuildable indexes.
+4. Keep cross-store workflow in userland with idempotent current-generation
+   vault operation identities.
+5. Publish the Base product service and delete the monolithic builtin.
+6. Bump epoch, recreate workspaces, and require re-authentication/re-import.
+   Do not translate the old vault or product store.
 
-### Acceptance criteria
+### Acceptance
 
-- Workspace code never receives bulk vault contents without an explicit
-  reviewed operation.
-- Browser presentation features are deployable as Base/workspace changes.
-- Bookmarks, history, preferences, and import state are treated as durable
-  product facts, not disposable indexes.
-- Import, backup, restore, and native cookie projection have one coordinator
-  each and idempotent cross-store effects.
-- No post-commit read or write falls back to the monolithic store.
+- Workspace code cannot bulk-read vault contents.
+- Browser product features deploy as Base changes.
+- Product facts are durable in their current owner, not mislabeled as cache.
+- Each cross-store workflow has one coordinator.
+- No old monolithic route or reader remains.
 
 ## Workstream E: thin mobile and Electron recovery surfaces
 
-### Current problem
+Recovery surfaces run before arbitrary workspace apps and therefore remain
+narrow native infrastructure:
 
-The shipped mobile bootstrap is a substantial secondary application containing
-pairing, reconnection, approval, and launch behavior. Electron's launch gate is
-smaller, but recovery behavior is separately assembled by platform.
+- load sealed current-generation recovery UI;
+- expose the same mechanical approval facts/actions as normal UI;
+- negotiate current protocol/endowments;
+- activate the approved app; and
+- tear down every recovery transport and native retention intent.
 
-### Target cut
+Normal reconnect and lease loss use Workstream A. Recovery never parses old
+workspace formats or becomes a second product shell.
 
-After Workstream A defines normal protocol recovery, shipped clients contain
-only:
+### Acceptance
 
-- bundle selection, integrity and ABI verification;
-- pairing sufficient to reach an approved workspace app;
-- a bounded mechanical approval renderer needed before that app exists; and
-- reset, diagnostics, and recovery operations.
+- Recovery UI cannot host general workspace product behavior.
+- Approval facts/actions match normal launch gates.
+- Activation leaves no duplicate transport/subscriber.
+- Old-epoch state fails before recovery tries to interpret it.
 
-The common pre-app launch/recovery state machine lives in a neutral package.
-Platform renderers remain small and native-idiomatic. Recovery cannot become a
-second normal product shell.
-
-### Acceptance criteria
-
-- Recovery code cannot enter the normal post-launch product state.
-- The shipped bootstrap has no panel tree, settings, or ordinary shell flows.
-- Approval facts and actions are identical across launch gates.
-- Activating an approved app leaves no live recovery transport, native
-  retention intent, or duplicate event subscriber.
-- Normal reconnect and lease loss use Workstream A's protocol rather than the
-  launch-recovery surface.
-
-## Workstream F: reconsider the development builtin
+## Workstream F: reduce the Development builtin
 
 ### Current problem
 
-`developmentNative` is already a good exact-effect boundary, but the development
-builtin owns a large durable product workflow for sessions, recipes, runs,
-repair attention, and target selection. Its `durable-data` justification does
-not establish why all of that workflow must be immutable host code.
+`developmentNative` is close to an exact-effect boundary, but the Development
+builtin owns product workflow for sessions, recipes, runs, repair attention,
+and target selection.
 
 ### Target cut
 
-Keep exact native effects and receipts in the host:
+Keep exact native effects and receipts in host:
 
 - exact repository materialization and build execution;
 - owned process and terminal handles;
 - executor attestation and attached-host publication; and
 - effect inspection, stop, recovery, and retirement.
 
-Move development workflow and presentation to a Base workspace service. If
-durable recovery records must survive workspace code changes, introduce a
-generic host-owned execution ledger containing opaque state-machine receipts,
-not a development-domain service.
+Move pair selection, recipes, retries, pagination, repair UX, and presentation
+to Base. A generic execution ledger may retain opaque facts needed to identify,
+fence, inspect, and retire native effects; it does not model Development
+workflow.
 
-Use the same rule as workspace history: the ledger retains only the exact facts
-needed to identify, fence, inspect, and retire native effects. Recipe selection,
-pagination, retry policy, and repair presentation remain userland facts.
+This minimal slice lands early enough to support external-Base
+self-development without enlarging the temporary builtin.
 
-### Acceptance criteria
+### Acceptance
 
-- The native service accepts exact identities on every effect.
+- Every native effect accepts exact identities.
 - Workspace workflow cannot forge process/build receipts.
-- Recipe selection, pagination, UX state, and repair presentation are not host
-  concerns.
-- Crash recovery uses the generic ledger or native effect inspection, not a
-  second copy of the product workflow.
+- Recipe and repair policy are userland.
+- Crash recovery inspects generic exact effects, not a second workflow model.
 
 ## Delivery graph
 
-The dependency order is:
-
 ```text
-External-Base exact root + structured owner-cutover declarations
-  `--> Foundation 0: durable-owner cutover
-         |-- stateless Base route proof
-         `-- durable transfer crash proof
+External Base: exact source + current-only schemas
+  -> Foundation 0: exact provider/catalog discipline
+       -> phone provisioning proof
 
-Workstream A0: desired/observed client-host envelope + harness
-  `-- A1: Electron PanelManager relocation
-       `-- A2: mobile/headless/event/preload consolidation
-            `-- E: thin launch/recovery surfaces
+Workstream A0 protocol + harness
+  -> A1 Electron panel cut
+     -> A2 mobile/headless/event/preload consolidation
+        -> E thin recovery surfaces
 
-Foundation 0 durable proof
-  |-- B: workspace authority/presentation split
-  |-- C: missions closure split
-  `-- D: browser vault/product split
+Foundation 0
+  -> B workspace authority/presentation split
+  -> C missions/closure split
+  -> D browser vault/product split
 
-External-Base self-development needs
-  `--> early F: Base-owned pair workflow over narrow native effects
-
-B authority-boundary patterns + Foundation 0
-  `--> finish F against the proven generic execution ledger
+External-Base self-development
+  -> early F Base-owned pair workflow
 ```
 
-Recommended landing order:
+Recommended order:
 
-1. Land the external-Base exact-source boundary, root/pointer contracts,
-   provided-route evidence, and structured owner-cutover declarations.
-2. Implement maintenance admission, the cutover data envelope,
-   receipt-backed route commit, route-aware provider resolution, and skipped
-   upgrade behavior.
-3. Prove the Base route with stateless phone provisioning, then prove a durable
-   transfer with crash injection.
-4. Move pair selection/workflow/retries/presentation to Base and retain only
-   sealed exact effects plus generic execution receipts in the host; complete
-   this minimal F slice before external-Base self-development grows.
-5. Externalize Base and delete the in-tree `workspace/` after its explicit
-   development and build consumers are replaced. Later Base work lands in its
-   external repository; deletion does not wait for A-E.
-6. Land A0's minimal desired/observed protocol envelope, generation fencing,
-   and adapter conformance harness.
-7. Relocate Electron `PanelManager` and all three local-state owners in A1.
-8. Finish mobile, headless, event, and preload consolidation in A2.
-9. Split workspace state around its authority-bearing history spine.
-10. Land mechanical closure rendering and immutable activation, then move
-   missions.
-11. Split browser vault and browser product data.
-12. Thin pre-app recovery surfaces.
-13. Finish any remaining Development-domain extraction after the generic
-    migration and execution receipt patterns have proven themselves.
+1. Land external-Base exact-source and current-only format contracts.
+2. Land provider/catalog discipline and fresh phone provisioning proof.
+3. Move pair workflow/presentation to Base and keep narrow exact host effects.
+4. Externalize Base and delete in-tree `workspace/`.
+5. Land A0, A1, A2, and E.
+6. Land B, C, and D as separate epoch-coordinated destructive cuts.
+7. Finish any remaining Development extraction.
+8. Complete all boundary cuts before declaring a supported release.
 
-Steps 9–11 may be designed in parallel after their prerequisites, but each
-durable owner cutover uses the same offline primitive. They must not invent
-service-specific fallback routes or new migration channels.
+Each cut republishes the official template set and recreates controlled
+workspaces. It does not share a migration primitive because none exists.
 
 ## Evidence and verification
 
-Every ownership workstream must produce:
+Every workstream produces:
 
-- an old-owner/new-owner inventory at method, field, table, durable object, and
-  native-resource granularity;
-- an authority data-flow naming the exact kernel decision that consumes every
-  retained fact;
-- a classification of durable product facts versus rebuildable projections;
-- for operations that genuinely span stores, a protocol table listing operation
-  order, idempotency identity, crash points, replay, and orphan cleanup;
-- an exact Base release and required-route proof for every new workspace unit;
-- an immutable source fixture, cutover-specific semantic verifier, committed
-  owner receipt, and skipped-upgrade fixture for every durable move;
-- focused unit tests for the new owner and proof that old routes are absent;
+- an old-owner/new-owner inventory at method, field, table, object, and native
+  resource granularity;
+- an authority data flow naming the kernel consumer of every retained fact;
+- a classification of durable product facts versus projections;
+- the exact Base release and fresh provider proof;
+- focused tests for the new owner and proof old routes are absent;
 - generated authority/catalog checks;
 - client-host conformance tests where applicable;
-- the smallest exact headless system test for the affected user workflow;
-- crash/restart/reconnect/workspace-switch testing whenever ownership or local
-  presentation state changes; and
-- a final residency census showing the deleted host surface and any bounded
-  migration-only adapter that remains.
+- the smallest exact managed headless test for the user workflow;
+- crash/restart/reconnect/workspace-switch tests for current-generation state;
+- a representative old-state fixture that fails closed; and
+- a final source/residency census with no compatibility reader or adapter,
+  including no Durable Object migration definition or ledger.
 
-For durable cutovers, inject failure after freeze, after target preparation,
-after verification, immediately before route commit, and immediately after
-route commit. Verification is incomplete until every restart chooses exactly
-one owner.
-
-Method and line-count reductions are evidence, not the acceptance condition.
-The decisive evidence is that product behavior has one workspace owner, atomic
-authority facts remain together, migrations cannot lose writes, and the
-remaining host contract consists only of irreducible facts and effects.
+Method and line-count reductions are evidence, not acceptance. The decisive
+facts are one product owner, co-located authority facts, one current protocol,
+and a host surface made only of irreducible authority and effects.
 
 ## Explicit non-goals
 
-- Moving an authority-bearing field merely because it also affects
-  presentation.
-- Treating user titles, payload, counters, pins, or layout as rebuildable cache.
-- Using agentic migration notes to attest host-owned storage movement.
-- Preserving a routable builtin as a safety fallback after cutover.
-- Giving extensions implicit service authority or using them as a second Base
-  distribution channel.
+- Preserving pre-release internal workspace state.
+- Building migration, maintenance-admission, downgrade, or skipped-upgrade
+  infrastructure.
+- Moving an authority fact merely because it affects presentation.
+- Treating product facts as cache in the current target architecture.
+- Preserving a builtin as fallback after its replacement lands.
+- Giving extensions implicit service authority or a second Base channel.
 - Designing one client protocol per platform.
-- Completing all extractions in one host/Base release.
-
-The minimal-host goal remains intact. Authority atomicity, deterministic owner
-transfer, and native lifecycle reconciliation are legitimate kernel
-responsibilities; retaining them is not host-surface metastasis.
+- Carrying compatibility adapters into steady state—or creating them for the
+  cutover window.
+- Completing all extractions in one commit. They may be separate clean cuts,
+  but all finish before the supported release.
