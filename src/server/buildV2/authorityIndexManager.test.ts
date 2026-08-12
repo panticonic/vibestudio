@@ -122,4 +122,18 @@ describe("authority index manager", () => {
     expect(manager.promotePublished(candidate.stateHash, candidate.epoch)).toBe(true);
     expect(manager.publishedBaseline(candidate.epoch)?.stateHash).toBe("state:candidate");
   });
+
+  it("preserves an incomplete candidate as a conservative published selector", () => {
+    const manager = new AuthorityIndexManager();
+    const candidate = {
+      ...index("state:candidate"),
+      complete: false,
+      blockingConsumers: new Set(["@workspace-about/broken"]),
+    };
+
+    manager.stageCandidate(candidate);
+
+    expect(manager.promotePublished(candidate.stateHash, candidate.epoch)).toBe(true);
+    expect(manager.publishedBaseline(candidate.epoch)).toBe(candidate);
+  });
 });

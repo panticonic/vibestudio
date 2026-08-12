@@ -542,6 +542,10 @@ describe("createProjects", () => {
     }]).catch((error: unknown) => error)) as InstanceType<typeof ScaffoldPublicationError>;
 
     expect(failure.errorData.retry.commandIdPolicy).toBe("repair-source-and-recommit");
+    expect(failure.errorData.recovery).toEqual({
+      action: "repair-source",
+      instruction: expect.stringContaining("repair the committed source"),
+    });
     await expect(recoverProjectPublication(failure)).rejects.toMatchObject({
       errorData: {
         stage: "repair-source",

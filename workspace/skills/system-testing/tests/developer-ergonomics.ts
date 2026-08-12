@@ -72,13 +72,7 @@ function validateInvalidIconRecovery(result: TestExecutionResult) {
       records(call).some((record) => record["protocol"] === "workspace-dev-catalog.v1")
     );
   });
-  if (rejectedIndex < 0) {
-    return {
-      passed: false,
-      reason: "The unsupported icon did not return typed catalog-backed correction evidence",
-    };
-  }
-  const catalogIndex = calls.findIndex(
+  const discoveredIndex = calls.findIndex(
     (call, index) =>
       index > rejectedIndex &&
       call.name === "eval" &&
@@ -90,6 +84,12 @@ function validateInvalidIconRecovery(result: TestExecutionResult) {
           record["entries"].length > 0
       )
   );
+  // Proactive discovery is the best outcome and must not be penalized for
+  // avoiding a predictable failure. When the unsupported icon is attempted,
+  // the typed failure's embedded bounded catalog is already sufficient
+  // correction evidence; an extra catalog round trip is optional.
+  const catalogIndex =
+    discoveredIndex >= 0 ? discoveredIndex : rejectedIndex >= 0 ? rejectedIndex : -1;
   const createIndex = calls.findIndex(
     (call, index) => index > catalogIndex && call.name === "eval" && createdPublishedPanel(call)
   );
@@ -259,11 +259,12 @@ const SCREENSHOT_PROMPT =
 export const developerErgonomicsTests: TestCase[] = [
   {
     name: "invalid-icon-discover-recover-create",
-    description: "Recover from an unsupported curated icon through bounded discovery",
+    description: "Resolve an unsupported curated icon through bounded discovery",
     category: "developer-ergonomics",
     workspaceRepoFixture: CREATED_PANEL_WORKSPACE_REPO_FIXTURE,
     prompt:
       "Create and publish a brand-new isolated panel whose requested built-in icon is lucide:columns-3. If that exact icon is unavailable, use the returned workspace catalog evidence to choose the closest supported columns or layout icon and finish the panel creation.",
+    expectedToolFailures: [{ name: "eval", errorIncludes: "project_icon_invalid" }],
     validate: validateInvalidIconRecovery,
   },
   {

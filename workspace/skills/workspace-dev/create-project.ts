@@ -44,6 +44,10 @@ export interface ScaffoldPublicationFailureData {
       | "repair-source-and-recommit"
       | "stop-integrity-investigation";
   };
+  recovery?: {
+    action: "repair-source";
+    instruction: string;
+  };
 }
 
 export class ScaffoldPublicationError extends Error {
@@ -104,6 +108,36 @@ function errorDetail(error: unknown): {
     code,
     message: error instanceof Error ? error.message : String(error),
     ...(errorData === undefined ? {} : { errorData }),
+  };
+}
+
+function publicationFailureRecovery(
+  detail: ReturnType<typeof errorDetail>,
+  contextId: string
+): Pick<ScaffoldPublicationFailureData, "retry" | "recovery"> {
+  const commandIdPolicy =
+    detail.code === "ExternalEffectFailed"
+      ? "reuse-identical-only-if-outcome-uncertain"
+      : detail.code === "BuildGateFailed"
+        ? "repair-source-and-recommit"
+        : detail.code === "IntegrityFailure"
+          ? "stop-integrity-investigation"
+          : "reobserve-status-and-use-new-command";
+  return {
+    retry: {
+      operation: "vcs.push",
+      statusRequest: { contextId },
+      commandIdPolicy,
+    },
+    ...(detail.code === "BuildGateFailed"
+      ? {
+          recovery: {
+            action: "repair-source" as const,
+            instruction:
+              "Inspect the bounded build diagnostics, repair the committed source, then commit and publish a new exact revision.",
+          },
+        }
+      : {}),
   };
 }
 
@@ -352,18 +386,7 @@ async function writeProjectFiles(
         published: false,
         publicationRequest,
         vcsError: detail,
-        retry: {
-          operation: "vcs.push",
-          statusRequest: { contextId },
-          commandIdPolicy:
-            detail.code === "ExternalEffectFailed"
-              ? "reuse-identical-only-if-outcome-uncertain"
-              : detail.code === "BuildGateFailed"
-                ? "repair-source-and-recommit"
-                : detail.code === "IntegrityFailure"
-                  ? "stop-integrity-investigation"
-                  : "reobserve-status-and-use-new-command",
-        },
+        ...publicationFailureRecovery(detail, contextId),
       },
       error
     );
@@ -1073,18 +1096,7 @@ export async function createProjects(projects: CreateProjectParams[]): Promise<
         published: false,
         publicationRequest,
         vcsError: detail,
-        retry: {
-          operation: "vcs.push",
-          statusRequest: { contextId },
-          commandIdPolicy:
-            detail.code === "ExternalEffectFailed"
-              ? "reuse-identical-only-if-outcome-uncertain"
-              : detail.code === "BuildGateFailed"
-                ? "repair-source-and-recommit"
-                : detail.code === "IntegrityFailure"
-                  ? "stop-integrity-investigation"
-                  : "reobserve-status-and-use-new-command",
-        },
+        ...publicationFailureRecovery(detail, contextId),
       },
       error
     );

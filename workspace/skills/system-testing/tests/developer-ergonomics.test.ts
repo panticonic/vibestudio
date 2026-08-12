@@ -97,6 +97,9 @@ describe("developer ergonomics scenarios", () => {
     expect(scenario("failed-build-bounded-diagnostics").expectedToolFailures).toEqual([
       { name: "verify", errorIncludes: "Build failed" },
     ]);
+    expect(scenario("invalid-icon-discover-recover-create").expectedToolFailures).toEqual([
+      { name: "eval", errorIncludes: "project_icon_invalid" },
+    ]);
     expect(scenario("stale-edit-reobserve-and-apply").expectedToolFailures).toEqual([
       { name: "apply_patch", errorIncludes: "WorkspaceReadConflict" },
     ]);
@@ -144,6 +147,39 @@ describe("developer ergonomics scenarios", () => {
       scenario("invalid-icon-discover-recover-create").validate(
         execution([rejected, discovered, created])
       )
+    ).toEqual({ passed: true, reason: undefined });
+  });
+
+  it("accepts proactive bounded discovery that avoids the invalid-icon failure", () => {
+    const catalog = {
+      protocol: "workspace-dev-catalog.v1",
+      resource: "icon",
+      query: "columns-3",
+      total: 39,
+      entries: [{ id: "lucide:columns", family: "lucide", name: "columns" }],
+      truncated: 38,
+    };
+    const discovered = call(
+      "catalog",
+      "eval",
+      { code: "return searchProjectCatalog(query);" },
+      { returnValue: catalog }
+    );
+    const created = call(
+      "created",
+      "eval",
+      { code: "return createProjects(corrected);" },
+      {
+        returnValue: {
+          created: "panels/columns-board",
+          preflight: { ok: true, projectType: "panel" },
+          publication: { published: true },
+        },
+      }
+    );
+
+    expect(
+      scenario("invalid-icon-discover-recover-create").validate(execution([discovered, created]))
     ).toEqual({ passed: true, reason: undefined });
   });
 

@@ -380,7 +380,6 @@ export function createWorkspaceService(deps: WorkspaceServiceDeps): ServiceDefin
           relativePath: inputPath === unitPath ? "" : inputPath.slice(unitPath.length + 1),
         };
       },
-
     }),
   };
 }

@@ -4,7 +4,7 @@ import * as path from "node:path";
 import { createRequire } from "node:module";
 import { afterEach, describe, expect, it } from "vitest";
 import type { BuildProviderInput } from "@vibestudio/shared/buildProvider";
-import { writeProjectedMetroConfig } from "../workspace/extensions/react-native/metroConfig.js";
+import { writeProjectedMetroConfig } from "./metroConfig.js";
 
 const temporaryRoots: string[] = [];
 const require = createRequire(import.meta.url);

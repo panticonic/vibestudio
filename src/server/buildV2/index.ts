@@ -2380,15 +2380,9 @@ export async function initBuildSystemV2(
       const candidateAuthorityIndex = rootOptions.workspaceAuthorityEnvironmentAt
         ? await authorityIndexAt(ref, view, signal)
         : null;
-      for (const name of candidateAuthorityIndex?.blockingConsumers ?? []) {
-        if (view.graph.has(name)) names.add(name);
-      }
       const candidateAuthorityAttestations = rootOptions.workspaceAuthorityEnvironmentAt
         ? await authorityAttestationsAt(ref, view, signal)
         : null;
-      for (const name of candidateAuthorityAttestations?.blockingConsumers ?? []) {
-        if (view.graph.has(name)) names.add(name);
-      }
 
       // Service authority is intentionally a separate relation from the
       // package DAG. A provider's decorator/manifest/configuration can change
@@ -2444,7 +2438,7 @@ export async function initBuildSystemV2(
           for (const query of candidateIndex.consumersByQuery.keys()) changedQueries.add(query);
         }
         const authorityConsumers = authorityConsumersForProviderChanges(
-          [candidateIndex],
+          [candidateIndex, candidateAuthorityAttestations!],
           new Set([...candidateProviderUnits, ...publishedProviderUnits]),
           changedQueries
         );
@@ -2461,11 +2455,10 @@ export async function initBuildSystemV2(
       if (!ref) throw new Error("Missing exact state for authority index staging");
       const view = await viewAt(ref);
       const index = await authorityIndexAt(ref, view, signal);
-      if (index.blockingConsumers.size > 0) {
-        throw new Error(
-          `Authority baseline has blocking consumers: ${[...index.blockingConsumers].sort().join(", ")}`
-        );
-      }
+      // An incomplete index is still a sound conservative selector: its
+      // blocking consumers are retained and joined into every provider/meta
+      // authority change. A publication that does not touch those relations
+      // must not be rejected by an unrelated pre-existing consumer failure.
       authorityIndexManager.stageCandidate(index);
     },
 

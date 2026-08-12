@@ -138,14 +138,10 @@ export class AuthorityIndexManager {
   }
 
   establishPublished(index: AuthorityDependencyIndex): void {
-    if (!index.complete || index.blockingConsumers.size > 0)
-      throw new Error("Cannot establish an incomplete authority baseline");
     this.touch(this.published, this.epochKey(index.epoch), index);
   }
 
   stageCandidate(index: AuthorityDependencyIndex): void {
-    if (!index.complete || index.blockingConsumers.size > 0)
-      throw new Error("Cannot stage an incomplete authority index");
     this.touch(this.pending, `${index.stateHash}\0${this.epochKey(index.epoch)}`, index);
   }
 
@@ -156,13 +152,7 @@ export class AuthorityIndexManager {
   promotePublished(stateHash: string, epoch: AuthorityAnalysisEpoch): boolean {
     const pendingKey = `${stateHash}\0${this.epochKey(epoch)}`;
     const index = this.pending.get(pendingKey);
-    if (
-      !index ||
-      !index.complete ||
-      index.blockingConsumers.size > 0 ||
-      index.stateHash !== stateHash
-    )
-      return false;
+    if (!index || index.stateHash !== stateHash) return false;
     this.touch(this.published, this.epochKey(epoch), index);
     this.pending.delete(pendingKey);
     return true;

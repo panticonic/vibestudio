@@ -232,7 +232,7 @@ describe("trusted unit authoring evidence", () => {
   it("requires the commit receipt itself to prove its exact clean event", () => {
     const unit = "extensions/example";
     const uncleanCommit = commit(["application:repair"]);
-    (uncleanCommit.details as { status: Record<string, unknown> }).status.clean = false;
+    (uncleanCommit.details as { status: Record<string, unknown> }).status["clean"] = false;
     const unrelatedCleanStatus: Operation = {
       name: "vcs",
       arguments: { operation: "status" },

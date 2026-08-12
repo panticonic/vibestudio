@@ -2712,10 +2712,7 @@ async function main() {
       authorizeEffect: (ctx, effect) => dispatcher.authorizeHostEffect(ctx, effect),
       hasAppCapability: (callerId, capability) =>
         appHostForGateway?.hasAppCapability(callerId, capability) ?? false,
-      getProviders: () => [
-        ...trustedUnitHosts(),
-        buildUnitChangeApprovalProvider,
-      ],
+      getProviders: () => [...trustedUnitHosts(), buildUnitChangeApprovalProvider],
       resolveUnitOrigins,
       // Descriptive relationship state lets the gate attribute newly arriving
       // units to the template operation that staged them. It is not an
@@ -6417,11 +6414,9 @@ async function main() {
         ),
       ]);
       const required = new Set(
-        [
-          ...lifecycle,
-          ...alarms,
-          ...durableWorkOwners.map((entry) => entry.owner),
-        ].map((target) => `${target.source}\0${target.className}\0${target.objectKey}`)
+        [...lifecycle, ...alarms, ...durableWorkOwners.map((entry) => entry.owner)].map(
+          (target) => `${target.source}\0${target.className}\0${target.objectKey}`
+        )
       );
       const activeKeys = new Set(
         records

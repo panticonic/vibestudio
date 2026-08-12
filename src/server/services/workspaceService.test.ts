@@ -287,7 +287,6 @@ describe("workspace service handler", () => {
     await service.handler(panelCtx, "setConfigField", ["title", "Test"]);
     expect(setConfigField).toHaveBeenCalledWith("title", "Test", panelCtx);
   });
-
 });
 
 // ─── Agent resource loading: getAgentsMd / listSkills / readSkill ────────────
