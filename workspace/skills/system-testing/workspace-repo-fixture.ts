@@ -23,6 +23,7 @@ interface FixtureBlobstore {
 export type WorkspaceRepoSection =
   | "projects"
   | "packages"
+  | "skills"
   | "workers"
   | "panels"
   | "extensions"
@@ -1206,7 +1207,17 @@ function buildableAppFiles(repoName: string): Array<{ path: string; content: str
             displayName: `System Test ${repoName}`,
             icon: "./assets/icon.svg",
             app: { target: "terminal", entry: "index.ts" },
-            authority: { requests: [], provides: [] },
+            authority: {
+              requests: [
+                {
+                  capability: "context.boundary",
+                  resource: { kind: "prefix", prefix: "context" },
+                  tier: "critical",
+                  evidence: "bounded-dynamic",
+                },
+              ],
+              provides: [],
+            },
           },
           devDependencies: { vitest: "^3.2.4" },
         },

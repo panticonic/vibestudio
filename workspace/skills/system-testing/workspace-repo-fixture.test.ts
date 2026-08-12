@@ -861,6 +861,10 @@ describe("WorkspaceRepoFixtureLifecycle", () => {
     expect(seededText).toContain('expect(startupLabel()).toBe("ready")');
     expect(seededText).toMatch(/startupLabel\(\): string \{ return "(?:waiting|booting)"; \}/u);
     expect(seededText).toContain("assets/icon.svg");
+    if (scenario.fixture.kind === "buildable-app") {
+      expect(seededText).toContain('"capability": "context.boundary"');
+      expect(seededText).toContain('"evidence": "bounded-dynamic"');
+    }
 
     await fixture.cleanup(state);
   });
