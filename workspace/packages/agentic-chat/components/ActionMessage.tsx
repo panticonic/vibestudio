@@ -10,6 +10,11 @@ import { CopyButton } from "./shared/CopyButton";
 import { getStatusColor, getStatusKey, StatusDot } from "./shared/invocationStatus";
 import { ToolArgumentsView, ToolDataView } from "./shared/ToolDataView";
 import { renderDocsToolResult } from "./tool-result-renderers/DocsResult";
+import {
+  extractFileMutationDetails,
+  renderFileMutationArguments,
+  renderFileMutationToolResult,
+} from "./tool-result-renderers/FileMutationResult";
 import { formatInvocationPreview } from "./action-format";
 
 export function formatDisplayName(toolName: string): string {
@@ -68,6 +73,49 @@ export function toolPresentation(payload: InvocationCardPayload): {
 } {
   const args = payload.arguments;
   const details = resultDetails(payload);
+  const fileMutation = extractFileMutationDetails(payload.execution.result);
+  if (payload.name === "write") {
+    const path = compactText(args["path"], 72) || "file";
+    const outcome = fileMutation?.status === "conflict" ? " · conflict" : "";
+    return {
+      displayName: "Write",
+      preview: `${path}${outcome}`,
+      ...(fileMutation?.status === "conflict" ? { color: "amber" as const } : {}),
+    };
+  }
+  if (payload.name === "edit") {
+    const path = compactText(args["path"], 64) || "file";
+    const oldText = compactText(args["oldText"], 38);
+    const match = fileMutation?.operations[0]?.matches?.[0];
+    const suffix =
+      fileMutation?.status === "conflict"
+        ? " · conflict"
+        : match?.mode === "normalized"
+          ? " · normalized match"
+          : "";
+    return {
+      displayName: "Edit",
+      preview: `${path}${oldText ? ` · ${oldText}` : ""}${suffix}`,
+      ...(fileMutation?.status === "conflict" || match?.mode === "normalized"
+        ? { color: "amber" as const }
+        : {}),
+    };
+  }
+  if (payload.name === "apply_patch") {
+    const operations = Array.isArray(args["operations"]) ? args["operations"] : [];
+    const paths = operations
+      .map((operation) => compactText(valueRecord(operation)?.["path"], 36))
+      .filter(Boolean);
+    const preview =
+      paths.length === 1
+        ? paths[0]!
+        : `${operations.length} atomic operations${paths.length ? ` · ${paths.slice(0, 2).join(", ")}` : ""}`;
+    return {
+      displayName: "Apply Patch",
+      preview: `${preview}${fileMutation?.status === "conflict" ? " · conflict" : ""}`,
+      ...(fileMutation?.status === "conflict" ? { color: "amber" as const } : {}),
+    };
+  }
   const runId = compactText(args["runId"] ?? details?.["runId"], 24);
   if (payload.name === "suspend_turn") {
     const reason = readableReason(args["reason"] ?? details?.["reason"]) || "Suspend";
@@ -399,6 +447,16 @@ export const ExpandedAction = React.memo(function ExpandedAction({
   const isError = statusKey === "error";
   const presentation = useMemo(() => toolPresentation(payload), [payload]);
   const color = presentation.color ?? getStatusColor(statusKey);
+  const fileMutation = useMemo(
+    () => extractFileMutationDetails(payload.execution.result),
+    [payload.execution.result]
+  );
+  const resultColor =
+    fileMutation?.status === "conflict"
+      ? "amber"
+      : fileMutation?.status === "unchanged"
+        ? "gray"
+        : "green";
 
   const displayName = presentation.displayName;
 
@@ -480,15 +538,18 @@ export const ExpandedAction = React.memo(function ExpandedAction({
 
         {hasArgs && (
           <CollapsibleSection label="Arguments" defaultOpen={true}>
-            <ToolArgumentsView args={payload.arguments} chat={chat} />
+            {renderFileMutationArguments(payload.name, payload.arguments) ?? (
+              <ToolArgumentsView args={payload.arguments} chat={chat} />
+            )}
           </CollapsibleSection>
         )}
 
         {exec.result !== undefined && !isError && (
-          <CollapsibleSection label="Result" defaultOpen={!isPending} color="green">
-            {renderDocsToolResult(payload.name, exec.result) ?? (
-              <ToolDataView value={exec.result} label="Result" chat={chat} />
-            )}
+          <CollapsibleSection label="Result" defaultOpen={!isPending} color={resultColor}>
+            {renderFileMutationToolResult(payload.name, exec.result) ??
+              renderDocsToolResult(payload.name, exec.result) ?? (
+                <ToolDataView value={exec.result} label="Result" chat={chat} />
+              )}
           </CollapsibleSection>
         )}
 

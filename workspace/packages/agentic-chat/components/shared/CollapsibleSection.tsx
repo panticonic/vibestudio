@@ -11,7 +11,7 @@ export function CollapsibleSection({
   label: string;
   defaultOpen?: boolean;
   children: React.ReactNode;
-  color?: "gray" | "red" | "green" | "blue";
+  color?: "gray" | "red" | "green" | "blue" | "amber";
 }) {
   const [isOpen, setIsOpen] = useState(defaultOpen);
 
