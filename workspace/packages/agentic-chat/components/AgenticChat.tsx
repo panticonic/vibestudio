@@ -90,6 +90,8 @@ export interface AgenticChatProps {
   composerPlaceholder?: string;
   /** Recipients used when composer text contains no explicit @mention. */
   composerDefaultMentions?: readonly string[];
+  /** Product-owned readiness gate for the composer. */
+  composerDisabled?: boolean;
 }
 
 /**
@@ -128,6 +130,7 @@ export const AgenticChat = forwardRef<AgenticChatHandle, AgenticChatProps>(funct
     renderHeader,
     composerPlaceholder,
     composerDefaultMentions,
+    composerDisabled,
   },
   ref
 ) {
@@ -195,6 +198,7 @@ export const AgenticChat = forwardRef<AgenticChatHandle, AgenticChatProps>(funct
             renderHeader={renderHeader}
             composerPlaceholder={composerPlaceholder}
             composerDefaultMentions={composerDefaultMentions}
+            composerDisabled={composerDisabled}
           />
         </ChatProvider>
       </Theme>

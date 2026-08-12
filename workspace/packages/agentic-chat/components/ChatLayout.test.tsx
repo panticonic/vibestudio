@@ -38,11 +38,16 @@ vi.mock("./Outbox", () => ({ Outbox: () => null }));
 vi.mock("./PendingDeliveryQueue", () => ({ PendingDeliveryQueue: () => null }));
 vi.mock("./ChatDebugConsole", () => ({ ChatDebugConsole: () => null }));
 vi.mock("./ChatInput", () => ({
-  ChatInput: (props: { placeholder?: string; defaultMentions?: readonly string[] }) => (
+  ChatInput: (props: {
+    placeholder?: string;
+    defaultMentions?: readonly string[];
+    disabled?: boolean;
+  }) => (
     <div
       data-testid="composer"
       data-placeholder={props.placeholder}
       data-default-mentions={props.defaultMentions?.join(",")}
+      data-disabled={String(props.disabled)}
     />
   ),
 }));
@@ -88,6 +93,7 @@ describe("ChatLayout sizing", () => {
         renderHeader={renderHeader}
         composerPlaceholder="Issue a bridge directive…"
         composerDefaultMentions={["engineering", "navigation"]}
+        composerDisabled
       />
     );
 
@@ -104,6 +110,7 @@ describe("ChatLayout sizing", () => {
     });
     expect(getByTestId("composer").dataset["placeholder"]).toBe("Issue a bridge directive…");
     expect(getByTestId("composer").dataset["defaultMentions"]).toBe("engineering,navigation");
+    expect(getByTestId("composer").dataset["disabled"]).toBe("true");
     expect(getByTestId("product-header").contains(getByTestId("stock-header"))).toBe(true);
     expect(renderHeader).toHaveBeenCalledOnce();
   });

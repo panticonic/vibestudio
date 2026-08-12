@@ -48,6 +48,7 @@ function renderInput(
     undoableAction?: UndoableAction;
     pendingSendCount?: number;
     defaultMentions?: readonly string[];
+    disabled?: boolean;
     context?: Partial<ChatContextValue>;
     inputContext?: Partial<ChatInputContextValue>;
   } = {}
@@ -90,7 +91,7 @@ function renderInput(
   render(
     <Theme>
       <ChatProvider value={ctx} inputValue={inputCtx}>
-        <ChatInput defaultMentions={opts.defaultMentions} />
+        <ChatInput defaultMentions={opts.defaultMentions} disabled={opts.disabled} />
       </ChatProvider>
     </Theme>
   );
@@ -284,6 +285,20 @@ describe("ChatInput send-button intent", () => {
     const options = screen.getByLabelText("Send options").closest("button");
     expect(primary?.hasAttribute("disabled")).toBe(true);
     expect(options?.hasAttribute("disabled")).toBe(false);
+  });
+
+  it("honors a product-owned readiness gate even while the channel is connected", async () => {
+    const { onSendMessage } = renderInput({ disabled: true, input: "premature order" });
+
+    expect(textarea().hasAttribute("disabled")).toBe(true);
+    expect(
+      screen
+        .getByLabelText(/^Send \(/)
+        .closest("button")
+        ?.hasAttribute("disabled")
+    ).toBe(true);
+    await keyDown({ key: "Enter" });
+    expect(onSendMessage).not.toHaveBeenCalled();
   });
 });
 

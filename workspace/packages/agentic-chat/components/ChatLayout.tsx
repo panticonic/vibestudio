@@ -24,6 +24,8 @@ export interface ChatLayoutProps extends Pick<
   composerPlaceholder?: string;
   /** Recipients used when composer text contains no explicit @mention. */
   composerDefaultMentions?: readonly string[];
+  /** Product-owned readiness gate for the composer. */
+  composerDisabled?: boolean;
   /** Replace, wrap, or elide the stock conversation header. */
   renderHeader?: (defaultContent: React.ReactNode) => React.ReactNode;
 }
@@ -55,6 +57,7 @@ export const ChatLayout = React.memo(function ChatLayout({
   features,
   composerPlaceholder,
   composerDefaultMentions,
+  composerDisabled,
   renderHeader,
 }: ChatLayoutProps) {
   const defaultHeader = <ChatHeader />;
@@ -89,7 +92,11 @@ export const ChatLayout = React.memo(function ChatLayout({
         {features.feedback ? <LazyChatFeedbackArea /> : null}
         <PendingDeliveryQueue />
         <Outbox />
-        <ChatInput placeholder={composerPlaceholder} defaultMentions={composerDefaultMentions} />
+        <ChatInput
+          placeholder={composerPlaceholder}
+          defaultMentions={composerDefaultMentions}
+          disabled={composerDisabled}
+        />
       </Flex>
       <ChatDebugConsole />
     </>

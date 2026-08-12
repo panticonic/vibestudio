@@ -86,13 +86,15 @@ export interface ChatInputProps {
   placeholder?: string;
   /** Recipients used when the message contains no explicit @mention. */
   defaultMentions?: readonly string[];
+  /** Product-owned readiness gate in addition to channel connectivity. */
+  disabled?: boolean;
 }
 
 /**
  * Chat input area with text input, image attachment, and send button.
  * Reads from ChatContext.
  */
-export function ChatInput({ placeholder, defaultMentions }: ChatInputProps = {}) {
+export function ChatInput({ placeholder, defaultMentions, disabled = false }: ChatInputProps = {}) {
   const {
     connected,
     allParticipants,
@@ -298,6 +300,7 @@ export function ChatInput({ placeholder, defaultMentions }: ChatInputProps = {})
     async (mode: "default" | "after-turn" = "default") => {
       try {
         setSendError(null);
+        if (disabled) return;
         // A `/model …` line is a command, never a chat message. If it resolves
         // to models, switch to the top match; otherwise coach instead of
         // sending the literal text to the agent.
@@ -361,6 +364,7 @@ export function ChatInput({ placeholder, defaultMentions }: ChatInputProps = {})
       modelCandidates,
       modelMenuIndex,
       switchModel,
+      disabled,
     ]
   );
 
@@ -507,7 +511,8 @@ export function ChatInput({ placeholder, defaultMentions }: ChatInputProps = {})
     void handleSendMessage("after-turn");
   }, [handleSendMessage]);
 
-  const canSend = connected && (input.trim().length > 0 || pendingImages.length > 0);
+  const inputDisabled = disabled || !connected;
+  const canSend = !inputDisabled && (input.trim().length > 0 || pendingImages.length > 0);
 
   return (
     <>
@@ -532,7 +537,7 @@ export function ChatInput({ placeholder, defaultMentions }: ChatInputProps = {})
             images={pendingImages}
             onImagesChange={handleImagesChange}
             onError={(error) => setSendError(error)}
-            disabled={!connected}
+            disabled={inputDisabled}
           />
         </Card>
       )}
@@ -606,7 +611,7 @@ export function ChatInput({ placeholder, defaultMentions }: ChatInputProps = {})
             onChange={(e) => handleInputChange(e.target.value)}
             onInput={handleTextAreaInput}
             onKeyDown={handleKeyDown}
-            disabled={!connected}
+            disabled={inputDisabled}
           />
           <Box className="chat-input-send-dock">
             <SendButton
@@ -614,11 +619,11 @@ export function ChatInput({ placeholder, defaultMentions }: ChatInputProps = {})
               agentBusy={agentBusy}
               canSendAfterTurn={hasOpenTurn}
               disabled={!canSend}
-              optionsDisabled={!connected}
+              optionsDisabled={inputDisabled}
               size={sendButtonSize}
               onSend={handleSendClick}
               onSendAfterTurn={handleSendAfterTurn}
-              onAttach={connected ? toggleImageInput : undefined}
+              onAttach={inputDisabled ? undefined : toggleImageInput}
               attachmentCount={pendingImages.length}
             />
           </Box>
