@@ -16,6 +16,7 @@ beforeAll(() => {
 afterAll(() => setBuildSourceProvider(null));
 import { discoverPackageGraph } from "./packageGraph.js";
 import { clearBuildProvidersForTests, registerBuildProvider } from "./buildProviderRegistry.js";
+import type { BuildProviderInput } from "@vibestudio/shared/buildProvider";
 
 const SOURCE_STATE_HASH = `state:${"c".repeat(64)}`;
 
@@ -309,6 +310,17 @@ describe("buildUnit app builds", () => {
   });
 
   it("routes React Native app builds through the registered build provider", async () => {
+    let providerInput: BuildProviderInput | null = null;
+    let projectedPlatformSource = "";
+    const testNodeModules = path.join(root, "node_modules");
+    const platformPackage = path.join(testNodeModules, "@platform", "fake");
+    fs.mkdirSync(path.join(platformPackage, "src"), { recursive: true });
+    fs.writeFileSync(
+      path.join(platformPackage, "package.json"),
+      JSON.stringify({ name: "@platform/fake", version: "0.1.0", type: "module" })
+    );
+    fs.writeFileSync(path.join(platformPackage, "src", "index.ts"), "export const fake = true;\n");
+    initBuilder(testNodeModules);
     const appDir = path.join(workspaceRoot, "apps", "mobile");
     fs.mkdirSync(appDir, { recursive: true });
     fs.writeFileSync(
@@ -317,6 +329,7 @@ describe("buildUnit app builds", () => {
         name: "@workspace-apps/mobile",
         version: "0.1.0",
         private: true,
+        dependencies: { "@platform/fake": "workspace:*" },
         vibestudio: {
           app: {
             target: "react-native",
@@ -349,34 +362,46 @@ describe("buildUnit app builds", () => {
       contractVersion: "1",
       activeEv: "ev-provider",
       activeBuildKey: "provider-build",
-      build: async (_input) => ({
-        artifacts: [
-          {
-            path: "ios/main.hbc",
-            role: "primary",
-            contentType: "application/octet-stream",
-            encoding: "base64",
+      build: async (input) => {
+        providerInput = input;
+        projectedPlatformSource = fs.readFileSync(
+          path.join(input.dependencyProjection.modules["@platform/fake"]!, "src", "index.ts"),
+          "utf8"
+        );
+        return {
+          artifacts: [
+            {
+              path: "ios/main.hbc",
+              role: "primary",
+              contentType: "application/octet-stream",
+              encoding: "base64",
+              platform: "ios",
+              stream: { method: "buildArtifact", args: ["ios-main"] },
+            },
+          ],
+          metadata: {
+            rnHostAbi: "rn-host-2",
             platform: "ios",
-            stream: { method: "buildArtifact", args: ["ios-main"] },
           },
-        ],
-        metadata: {
-          rnHostAbi: "rn-host-2",
-          platform: "ios",
-        },
-      }),
+        };
+      },
       streamArtifact: async (_artifact, input) =>
         new Response(`bundle:${input.unitName}:${input.effectiveVersion}`),
     });
 
     const graph = discoverPackageGraph(workspaceRoot);
-    const result = await buildUnit(
-      graph.get("@workspace-apps/mobile"),
-      "c".repeat(64),
-      graph,
-      workspaceRoot,
-      SOURCE_STATE_HASH
-    );
+    let result: Awaited<ReturnType<typeof buildUnit>>;
+    try {
+      result = await buildUnit(
+        graph.get("@workspace-apps/mobile"),
+        "c".repeat(64),
+        graph,
+        workspaceRoot,
+        SOURCE_STATE_HASH
+      );
+    } finally {
+      initBuilder(path.resolve(__dirname, "../../../node_modules"));
+    }
 
     expect(result.metadata).toMatchObject({
       kind: "app",
@@ -397,6 +422,20 @@ describe("buildUnit app builds", () => {
       },
     });
     expect(result.sourceStateHash).toBe(SOURCE_STATE_HASH);
+    expect(providerInput).toMatchObject({
+      sourcePath: appDir,
+      dependencyProjection: {
+        nodeModulesPath: null,
+        modules: {
+          "@platform/fake": expect.stringContaining("workspace-modules"),
+          "@workspace-apps/mobile": appDir,
+        },
+      },
+    });
+    expect(projectedPlatformSource).toBe("export const fake = true;\n");
+    expect(providerInput!.dependencyProjection.modules["@platform/fake"]).not.toBe(platformPackage);
+    expect(providerInput).not.toHaveProperty("workspaceRoot");
+    expect(providerInput).not.toHaveProperty("sourceRoot");
     expect(result.artifacts).toEqual([
       expect.objectContaining({
         path: "ios/main.hbc",

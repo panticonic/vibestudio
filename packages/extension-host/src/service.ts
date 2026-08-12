@@ -1989,7 +1989,7 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
       this.deps.registerBuildProvider({
         name: entry.name,
         target,
-        contractVersion: "vibestudio-build-provider-v1",
+        contractVersion: "vibestudio-build-provider-v2",
         activeEv: entry.activeEv,
         activeBuildKey: entry.activeBundleKey,
         build: async (input) => {

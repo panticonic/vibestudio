@@ -15,12 +15,18 @@ export interface BuildProviderArtifact {
   };
 }
 
+export interface BuildProviderDependencyProjection {
+  /** Build V2's content-addressed external dependency tree. */
+  nodeModulesPath: string | null;
+  /** Exact source roots for workspace and platform modules in this build closure. */
+  modules: Readonly<Record<string, string>>;
+}
+
 export interface BuildProviderInput {
   target: BuildProviderTarget;
   unitName: string;
   sourcePath: string;
-  sourceRoot: string;
-  workspaceRoot: string;
+  dependencyProjection: BuildProviderDependencyProjection;
   effectiveVersion: string;
   manifest: Record<string, unknown>;
 }

@@ -1,0 +1,22 @@
+{
+  "blockedImports": {
+    "react-native-keychain": ["src/services/pushNotifications.ts"],
+    "@react-native-clipboard/clipboard": ["src/services/nativeCapabilities.ts"],
+    "@react-native-firebase/messaging": [
+      "src/services/backgroundHandlers.ts",
+      "src/services/pushNotifications.ts"
+    ],
+    "@notifee/react-native": [
+      "src/services/backgroundHandlers.ts",
+      "src/services/notificationCategories.ts",
+      "src/services/pushNotifications.ts"
+    ],
+    "@react-native-async-storage/async-storage": ["src/services/nativeAppStorage.ts"],
+    "@vibestudio/mobile-webrtc": [
+      "src/services/mobileTransport.ts",
+      "src/services/mobileCredentials.ts",
+      "src/services/workspaceSelection.ts",
+      "src/services/appBootstrap.ts"
+    ]
+  }
+}

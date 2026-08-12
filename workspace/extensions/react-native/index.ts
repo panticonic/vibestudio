@@ -3,9 +3,9 @@ import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { createRequire } from "node:module";
 import type { BuildProviderInput, BuildProviderOutput } from "@vibestudio/shared/buildProvider";
 import { contentTypeForPath } from "@vibestudio/shared/contentType";
+import { writeProjectedMetroConfig } from "./metroConfig.js";
 
 export type Api = Awaited<ReturnType<typeof activate>>;
 declare module "@vibestudio/extension" {
@@ -19,7 +19,6 @@ interface ArtifactFile {
   tempDir: string;
 }
 
-const require = createRequire(import.meta.url);
 const ownedTempDirs = new Set<string>();
 
 export async function activate() {
@@ -42,11 +41,19 @@ export async function activate() {
       ownedTempDirs.add(tempDir);
       const artifacts: BuildProviderOutput["artifacts"] = [];
       try {
+        const metroConfig = writeProjectedMetroConfig(input, tempDir);
         for (const platform of ["android", "ios"] as const) {
           const bundlePath = path.join(tempDir, `index.${platform}.bundle`);
           const assetsDir = path.join(tempDir, `${platform}-assets`);
           fs.mkdirSync(assetsDir, { recursive: true });
-          await runReactNativeBundle(input, platform, entryPath, bundlePath, assetsDir);
+          await runReactNativeBundle(
+            input,
+            platform,
+            entryPath,
+            bundlePath,
+            assetsDir,
+            metroConfig
+          );
           const bundleArtifactId = randomUUID();
           artifactFiles.set(bundleArtifactId, { filePath: bundlePath, tempDir });
           artifacts.push({
@@ -120,14 +127,29 @@ async function runReactNativeBundle(
   platform: "android" | "ios",
   entryPath: string,
   bundlePath: string,
-  assetsDir: string
+  assetsDir: string,
+  metroConfig: string
 ): Promise<void> {
-  const repoRoot = resolveRepoRoot(input.workspaceRoot);
-  const bundleScript = require.resolve("react-native/scripts/bundle.js", {
-    paths: [repoRoot, process.cwd()],
+  const nodeModulesPath = input.dependencyProjection.nodeModulesPath;
+  if (!nodeModulesPath) {
+    throw new Error("React Native builds require a Build V2 dependency projection");
+  }
+  const reactNativePath = path.join(nodeModulesPath, "react-native");
+  const bundleScript = path.join(reactNativePath, "scripts", "bundle.js");
+  if (!fs.existsSync(bundleScript)) {
+    throw new Error(
+      "Build V2 dependency projection does not contain react-native/scripts/bundle.js"
+    );
+  }
+  const cliConfig = JSON.stringify({
+    root: input.sourcePath,
+    reactNativePath,
+    platforms: { android: {}, ios: {} },
+    dependencies: {},
+    project: { android: {}, ios: {} },
+    commands: [],
+    assets: [],
   });
-  const cliPath = require.resolve("react-native/cli.js", { paths: [repoRoot, process.cwd()] });
-  const metroConfig = path.join(repoRoot, "apps", "mobile", "metro.config.js");
   const args = [
     bundleScript,
     "--platform",
@@ -144,18 +166,16 @@ async function runReactNativeBundle(
     metroConfig,
     "--max-workers",
     process.env["VIBESTUDIO_RN_BUNDLE_WORKERS"] ?? "2",
-    "--config-cmd",
-    `${process.execPath} ${cliPath} config`,
+    "--load-config",
+    cliConfig,
   ];
   await run(process.execPath, args, {
-    cwd: path.join(repoRoot, "apps", "mobile"),
+    cwd: input.sourcePath,
     env: {
       ...process.env,
       // Provider builds are one-shot bundles. Keep Metro out of watch mode so
       // local mobile smoke tests do not depend on the host inotify limit.
       CI: "1",
-      VIBESTUDIO_WORKSPACE_APP_ROOT: input.sourcePath,
-      VIBESTUDIO_WORKSPACE_NODE_MODULES: path.join(input.workspaceRoot, "node_modules"),
     },
   });
 }
@@ -184,25 +204,6 @@ function run(
         );
     });
   });
-}
-
-function resolveRepoRoot(workspaceRoot: string): string {
-  for (const start of [process.env["VIBESTUDIO_REPO_ROOT"], process.cwd(), workspaceRoot]) {
-    if (!start) continue;
-    let current = path.resolve(start);
-    while (true) {
-      if (
-        fs.existsSync(path.join(current, "apps", "mobile", "metro.config.js")) &&
-        fs.existsSync(path.join(current, "node_modules", "react-native", "cli.js"))
-      ) {
-        return current;
-      }
-      const parent = path.dirname(current);
-      if (parent === current) break;
-      current = parent;
-    }
-  }
-  throw new Error("Could not locate Vibestudio repo root for React Native provider");
 }
 
 function walkFiles(dir: string): string[] {

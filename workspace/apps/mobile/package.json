@@ -10,6 +10,7 @@
     "app": {
       "target": "react-native",
       "renderer": "App.tsx",
+      "nativeModulePolicy": "native-module-policy.json",
       "rnComponentName": "Vibestudio",
       "rnHostAbi": "rn-host-3",
       "capabilities": [

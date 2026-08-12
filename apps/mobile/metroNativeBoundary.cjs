@@ -1,44 +1,12 @@
+const fs = require("fs");
 const path = require("path");
-
-const BLOCKED_NATIVE_IMPORTS = {
-  "react-native-keychain": [
-    "src/services/pushNotifications.ts",
-  ],
-  "@react-native-clipboard/clipboard": [
-    "src/services/nativeCapabilities.ts",
-  ],
-  "@react-native-firebase/messaging": [
-    "src/services/backgroundHandlers.ts",
-    "src/services/pushNotifications.ts",
-  ],
-  "@notifee/react-native": [
-    "src/services/backgroundHandlers.ts",
-    "src/services/notificationCategories.ts",
-    "src/services/pushNotifications.ts",
-  ],
-  "@react-native-async-storage/async-storage": [
-    "src/services/nativeAppStorage.ts",
-  ],
-  // The shared WebRTC shell-connection capability (provider + reconnect + the
-  // device's shell-reconnect credential, which it persists via AsyncStorage). The
-  // credential helpers are an INDIRECT path to that storage, so gate the package's
-  // consumers too — not just the direct AsyncStorage import inside it — to the
-  // trusted shell chrome. (apps/mobile/index.js, the out-of-tree native host
-  // bootstrap, is allowlisted by absolute path in createNativeBoundary.)
-  "@vibestudio/mobile-webrtc": [
-    "src/services/mobileTransport.ts",
-    "src/services/mobileCredentials.ts",
-    "src/services/workspaceSelection.ts",
-    "src/services/appBootstrap.ts",
-  ],
-};
 
 function normalize(filePath) {
   return path.resolve(filePath).replace(/\\/g, "/");
 }
 
-function blockedImportFor(moduleName) {
-  for (const blocked of Object.keys(BLOCKED_NATIVE_IMPORTS)) {
+function blockedImportFor(blockedImports, moduleName) {
+  for (const blocked of Object.keys(blockedImports)) {
     if (moduleName === blocked || moduleName.startsWith(`${blocked}/`)) {
       return blocked;
     }
@@ -47,8 +15,25 @@ function blockedImportFor(moduleName) {
 }
 
 function createNativeBoundary(workspaceAppRoot) {
+  const appPackage = JSON.parse(
+    fs.readFileSync(path.join(workspaceAppRoot, "package.json"), "utf8"),
+  );
+  const declaration = appPackage.vibestudio?.app?.nativeModulePolicy;
+  if (typeof declaration !== "string" || !declaration) {
+    throw new Error("Mobile workspace app must declare vibestudio.app.nativeModulePolicy");
+  }
+  const appRoot = path.resolve(workspaceAppRoot);
+  const policyPath = path.resolve(appRoot, declaration);
+  if (!policyPath.startsWith(`${appRoot}${path.sep}`)) {
+    throw new Error("Mobile native-module policy escapes the workspace app");
+  }
+  const policy = JSON.parse(fs.readFileSync(policyPath, "utf8"));
+  const blockedImports = policy.blockedImports;
+  if (!blockedImports || typeof blockedImports !== "object") {
+    throw new Error("Mobile native-module-policy.json must declare blockedImports");
+  }
   const allowedByModule = new Map(
-    Object.entries(BLOCKED_NATIVE_IMPORTS).map(([moduleName, relativePaths]) => [
+    Object.entries(blockedImports).map(([moduleName, relativePaths]) => [
       moduleName,
       new Set(relativePaths.map((relativePath) => normalize(path.join(workspaceAppRoot, relativePath)))),
     ]),
@@ -89,7 +74,7 @@ function createNativeBoundary(workspaceAppRoot) {
 
   return {
     guardNativeModuleImport(moduleName, originModulePath) {
-      const blocked = blockedImportFor(moduleName);
+      const blocked = blockedImportFor(blockedImports, moduleName);
       if (!blocked) return;
       const origin = originModulePath ? normalize(originModulePath) : "";
       if (allowedByModule.get(blocked)?.has(origin)) return;
@@ -103,6 +88,5 @@ function createNativeBoundary(workspaceAppRoot) {
 }
 
 module.exports = {
-  BLOCKED_NATIVE_IMPORTS,
   createNativeBoundary,
 };

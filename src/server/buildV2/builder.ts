@@ -3107,46 +3107,53 @@ async function buildApp(
       ].join(":"),
       sourcemap
     );
-    const providerInput: BuildProviderInput = {
-      target: "react-native",
-      unitName: node.name,
-      sourcePath: appSourcePath,
-      sourceRoot,
-      workspaceRoot,
-      effectiveVersion: ev,
-      manifest: extractedManifest,
-    };
-    const output = await provider.build(providerInput);
-    const entries = await materializeBuildProviderArtifacts(
-      provider,
-      providerInput,
-      output.artifacts
-    );
-    const metadata: BuildMetadata = {
-      kind: "app",
-      name: node.name,
-      buildKey: providerBuildKey,
-      sourcePath: node.relativePath,
-      ev,
-      sourceStateHash,
-      sourcemap,
-      authority,
-      details: {
-        kind: "app",
+    const env = await prepareBuildEnv(node, providerBuildKey, graph, workspaceRoot, sourceRoot);
+    try {
+      const providerInput: BuildProviderInput = {
         target: "react-native",
-        platform: output.metadata?.platform,
-        integrity: null,
-        rnHostAbi: output.metadata?.rnHostAbi ?? null,
-        provider: {
-          name: provider.name,
-          activeEv: provider.activeEv,
-          activeBuildKey: provider.activeBuildKey,
-          contractVersion: provider.contractVersion,
+        unitName: node.name,
+        sourcePath: appSourcePath,
+        dependencyProjection: {
+          nodeModulesPath: env.nodeModulesDir || null,
+          modules: collectBuildProviderModules(node, graph, sourceRoot, env.outdir),
         },
-      },
-      builtAt: new Date().toISOString(),
-    };
-    return buildStore.put(providerBuildKey, { entries }, metadata);
+        effectiveVersion: ev,
+        manifest: extractedManifest,
+      };
+      const output = await provider.build(providerInput);
+      const entries = await materializeBuildProviderArtifacts(
+        provider,
+        providerInput,
+        output.artifacts
+      );
+      const metadata: BuildMetadata = {
+        kind: "app",
+        name: node.name,
+        buildKey: providerBuildKey,
+        sourcePath: node.relativePath,
+        ev,
+        sourceStateHash,
+        sourcemap,
+        authority,
+        details: {
+          kind: "app",
+          target: "react-native",
+          platform: output.metadata?.platform,
+          integrity: null,
+          rnHostAbi: output.metadata?.rnHostAbi ?? null,
+          provider: {
+            name: provider.name,
+            activeEv: provider.activeEv,
+            activeBuildKey: provider.activeBuildKey,
+            contractVersion: provider.contractVersion,
+          },
+        },
+        builtAt: new Date().toISOString(),
+      };
+      return buildStore.put(providerBuildKey, { entries }, metadata);
+    } finally {
+      env.cleanup();
+    }
   }
 
   return buildPanel(
@@ -3159,6 +3166,76 @@ async function buildApp(
     sourceRoot,
     sourceStateHash,
     authority
+  );
+}
+
+function collectBuildProviderModules(
+  node: GraphNode,
+  graph: PackageGraph,
+  sourceRoot: string,
+  projectionRoot: string
+): Record<string, string> {
+  const modules: Record<string, string> = {};
+  const externalWorkspacePackages: string[] = [];
+  const visitedExternal = new Set<string>();
+  const closure = collectTransitiveInternalDeps(node, graph);
+  for (const sourceUnit of closure) {
+    modules[sourceUnit.name] = path.join(sourceRoot, sourceUnit.relativePath);
+    for (const [dependency, specifier] of Object.entries(sourceUnit.dependencies)) {
+      if (specifier.startsWith("workspace:") && !graph.isInternal(dependency)) {
+        externalWorkspacePackages.push(dependency);
+      }
+    }
+  }
+
+  while (externalWorkspacePackages.length > 0) {
+    const packageName = externalWorkspacePackages.shift()!;
+    if (visitedExternal.has(packageName)) continue;
+    visitedExternal.add(packageName);
+    const packageJsonPath = _appNodeModules
+      .map((nodeModulesPath) =>
+        path.join(nodeModulesPath, ...packageName.split("/"), "package.json")
+      )
+      .find((candidate) => fs.existsSync(candidate));
+    if (!packageJsonPath) {
+      throw new Error(`Build dependency projection cannot locate workspace package ${packageName}`);
+    }
+    const manifest = JSON.parse(fs.readFileSync(packageJsonPath, "utf8")) as {
+      name?: string;
+      dependencies?: Record<string, string>;
+      peerDependencies?: Record<string, string>;
+    };
+    if (manifest.name !== packageName) {
+      throw new Error(`Build dependency projection resolved the wrong package for ${packageName}`);
+    }
+    const packageRoot = fs.realpathSync(path.dirname(packageJsonPath));
+    const projectedPackageRoot = path.join(
+      projectionRoot,
+      "workspace-modules",
+      Buffer.from(packageName).toString("base64url")
+    );
+    fs.cpSync(packageRoot, projectedPackageRoot, {
+      recursive: true,
+      dereference: true,
+      filter(source) {
+        const relative = path.relative(packageRoot, source);
+        const firstSegment = relative.split(path.sep)[0];
+        return !["node_modules", ".git", ".cache"].includes(firstSegment ?? "");
+      },
+    });
+    modules[packageName] = projectedPackageRoot;
+    for (const [dependency, specifier] of Object.entries({
+      ...manifest.peerDependencies,
+      ...manifest.dependencies,
+    })) {
+      if (specifier.startsWith("workspace:") && !graph.isInternal(dependency)) {
+        externalWorkspacePackages.push(dependency);
+      }
+    }
+  }
+
+  return Object.fromEntries(
+    Object.entries(modules).sort(([left], [right]) => left.localeCompare(right))
   );
 }
 

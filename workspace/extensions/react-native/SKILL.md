@@ -11,11 +11,18 @@ This extension builds mobile app artifacts served to native hosts.
 
 - Build both `android` and `ios` Metro bundles when the workspace app supports
   both platforms.
+- Resolve React Native, registry dependencies, and workspace/platform modules
+  only from the dependency projection supplied in `BuildProviderInput` by
+  Build V2. The provider must not search `process.cwd()`, a checkout root, the
+  root lockfile, or the native host's Metro configuration.
+- Keep native-module importer policy in the app's declared
+  `nativeModulePolicy` JSON. The build provider reads it from the immutable app
+  source projection; the native development host consumes the same data.
 - Each primary artifact must include `platform: "android" | "ios"`, `role:
   "primary"`, `integrity`, content type, encoding, and URL.
 - The server bootstrap manifest must include `rnHostAbi`, app/build identity,
   capabilities, artifact set integrity, and provider identity.
-- Read the native-host ABI from `apps/mobile/package.json` and keep it aligned
+- Read the native-host ABI from the workspace app package and keep it aligned
   with the delivery constant in `@vibestudio/mobile-webrtc`. Change both only
   when the native contract changes.
 

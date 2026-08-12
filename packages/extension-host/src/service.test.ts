@@ -1008,6 +1008,7 @@ describe("ExtensionHost activation", () => {
       expect.objectContaining({
         name: extensionNode.name,
         target: "react-native",
+        contractVersion: "vibestudio-build-provider-v2",
         activeEv: "ev-current",
         activeBuildKey: "bundle-key",
       })

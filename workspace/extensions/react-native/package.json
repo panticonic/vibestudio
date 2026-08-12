@@ -50,6 +50,7 @@
     }
   },
   "dependencies": {
+    "@react-native/metro-config": "0.79.7",
     "@vibestudio/shared": "workspace:*"
   }
 }

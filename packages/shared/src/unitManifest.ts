@@ -513,6 +513,11 @@ function validateAppBlock(
       `React Native app ${options.unitName} rnHostAbi must be a non-empty string`,
       "MANIFEST_APP_RN_ABI"
     );
+    assertOptionalString(
+      appRecord["nativeModulePolicy"],
+      `React Native app ${options.unitName} nativeModulePolicy must be a non-empty string`,
+      "MANIFEST_APP_RN_NATIVE_POLICY"
+    );
     if (
       typeof appRecord["rnComponentName"] !== "string" ||
       typeof appRecord["rnHostAbi"] !== "string"
@@ -522,7 +527,11 @@ function validateAppBlock(
         "MANIFEST_APP_RN_REQUIRED"
       );
     }
-  } else if (appRecord["rnComponentName"] !== undefined || appRecord["rnHostAbi"] !== undefined) {
+  } else if (
+    appRecord["rnComponentName"] !== undefined ||
+    appRecord["rnHostAbi"] !== undefined ||
+    appRecord["nativeModulePolicy"] !== undefined
+  ) {
     throw new UnitManifestError(
       `${target === "terminal" ? "Terminal" : "Electron"} app ${options.unitName} must not declare React Native-only fields`,
       "MANIFEST_APP_RN_FIELD"
