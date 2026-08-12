@@ -3452,16 +3452,48 @@ export class GadWorkspaceDO extends DurableObjectBase {
     return this.memoryIndexMode;
   }
 
-  /** Reconcile commit messages from the semantic event DAG. The recall index is
-   * disposable; workspace events remain the authority. */
+  /** Reconcile searchable commit documents from the semantic event DAG. The
+   * recall index is disposable; workspace events and their authored work-unit
+   * intents remain the authority. */
   private ensureCommitMemoryIndex(): void {
     this.ensureMemoryIndex();
+
+    // Commit memory originally indexed only the event message. Rebuild that
+    // disposable projection once so existing workspaces gain the authored
+    // intent terms as well; subsequent calls only project newly committed
+    // events. This marker is deliberately internal rather than part of the
+    // public file-index marker namespace.
+    const projectionVersionKey = "memory:commit-projection-version";
+    const projectionVersion = "2";
+    if (this.getStateValue(projectionVersionKey) !== projectionVersion) {
+      this.sql.exec(
+        `DELETE FROM gad_memory_fts
+          WHERE kind = 'commit'
+            AND event_id IN (SELECT event_id FROM gad_workspace_events)`
+      );
+    }
+
     const missing = this.sql
       .exec(
-        `SELECT e.event_id, e.result_workspace_fact_root_id, e.message
+        `SELECT e.event_id,
+                e.result_workspace_fact_root_id,
+                e.message,
+                (
+                  SELECT GROUP_CONCAT(intent_summary, CHAR(10))
+                    FROM (
+                      SELECT DISTINCT TRIM(w.intent_summary) AS intent_summary
+                        FROM gad_workspace_event_applications ea
+                        JOIN gad_work_unit_applications a
+                          ON a.application_id = ea.application_id
+                        JOIN gad_work_units w
+                          ON w.work_unit_id = a.work_unit_id
+                       WHERE ea.event_id = e.event_id
+                         AND TRIM(COALESCE(w.intent_summary, '')) <> ''
+                       ORDER BY ea.ordinal
+                    )
+                ) AS intent_summaries
            FROM gad_workspace_events e
           WHERE e.kind <> 'genesis'
-            AND TRIM(COALESCE(e.message, '')) <> ''
             AND NOT EXISTS (
               SELECT 1 FROM gad_memory_fts m
                WHERE m.kind = 'commit'
@@ -3470,7 +3502,12 @@ export class GadWorkspaceDO extends DurableObjectBase {
       )
       .toArray() as JsonRecord[];
     for (const row of missing) {
-      const summary = asString(row["message"]);
+      const message = asString(row["message"])?.trim();
+      const intentSummaries = asString(row["intent_summaries"])?.trim();
+      const summary = [message, intentSummaries]
+        .filter((part): part is string => Boolean(part))
+        .filter((part, index, parts) => parts.indexOf(part) === index)
+        .join("\n");
       const eventId = asString(row["event_id"]);
       const workspaceFactRootId = asString(row["result_workspace_fact_root_id"]);
       if (!summary || !eventId || !workspaceFactRootId) continue;
@@ -3481,6 +3518,7 @@ export class GadWorkspaceDO extends DurableObjectBase {
         anchor: { workspaceEventId: eventId, workspaceFactRootId },
       });
     }
+    this.setStateValue(projectionVersionKey, projectionVersion);
   }
 
   private indexMemoryRow(row: {

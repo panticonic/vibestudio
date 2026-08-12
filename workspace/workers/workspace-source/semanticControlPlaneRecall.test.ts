@@ -103,4 +103,49 @@ describe("GadWorkspaceDO — recall deduplication", () => {
       snippet: expect.stringContaining("Retire Harbor Lantern"),
     });
   });
+
+  it("recalls a commit from the authored intent when its title uses different words", () => {
+    gad.sql.exec(
+      `INSERT INTO gad_workspace_events
+         (event_id, command_id, kind, result_workspace_fact_root_id, message, created_at)
+       VALUES ('event:retention-launch', 'command:commit', 'commit',
+               'root:retention-launch', 'Finish the post-launch documentation pass',
+               '2026-01-02T00:00:00.000Z');
+       INSERT INTO gad_work_units
+         (work_unit_id, command_id, kind, intent_summary, author_context_id,
+          content_class, external_lineage_json, normalization_protocol, created_at)
+       VALUES ('work:retention-launch', 'command:edit', 'edit',
+               'Retire the Harbor Lantern rollout codename so support and audit records use Retention Service',
+               'context:author', 'internal', '[]', 'semantic-v1',
+               '2026-01-01T00:00:00.000Z');
+       INSERT INTO gad_work_unit_applications
+         (application_id, work_unit_id, basis_kind, basis_id,
+          result_workspace_fact_root_id, semantic_protocol)
+       VALUES ('application:retention-launch', 'work:retention-launch', 'event',
+               'event:parent', 'root:retention-launch', 'semantic-v1');
+       INSERT INTO gad_workspace_event_applications (event_id, ordinal, application_id)
+       VALUES ('event:retention-launch', 0, 'application:retention-launch')`
+    );
+    reach(doi).indexMemoryRow({
+      text: "Finish the post-launch documentation pass",
+      kind: "commit",
+      eventId: "event:retention-launch",
+      anchor: {
+        workspaceEventId: "event:retention-launch",
+        workspaceFactRootId: "root:retention-launch",
+      },
+    });
+
+    const results = doi.recallMemory({
+      query: "Harbor Lantern rollout codename",
+      kinds: ["commit"],
+    }).results;
+
+    expect(results).toHaveLength(1);
+    expect(results[0]).toMatchObject({
+      kind: "commit",
+      eventId: "event:retention-launch",
+      snippet: expect.stringContaining("Harbor Lantern rollout codename"),
+    });
+  });
 });
