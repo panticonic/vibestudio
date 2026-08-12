@@ -252,6 +252,47 @@ describe("fold: an agent only owns turns it authored", () => {
     });
   });
 
+  it("folds the exact producing model identity from message.started into its completion", () => {
+    const selfId = "agent:self";
+    const modelRequest = request(1);
+    let state = initialAgentState({ channelId: "c", config, selfId });
+    state = applyEvent(state, turnOpened(selfId, "turn:model-identity", 1));
+    state = applyEvent(
+      state,
+      envelope(
+        selfId,
+        "message.started",
+        { role: "assistant", modelRequest },
+        { messageId: "m:model-identity", turnId: "turn:model-identity" },
+        2
+      )
+    );
+    state = applyEvent(
+      state,
+      envelope(
+        selfId,
+        "message.completed",
+        {
+          role: "assistant",
+          blocks: [{ type: "thinking", content: "durable reasoning" }],
+          outcome: "completed",
+        },
+        { messageId: "m:model-identity", turnId: "turn:model-identity" },
+        3
+      )
+    );
+
+    expect(state.entries.at(-1)).toMatchObject({
+      kind: "assistant",
+      messageId: "m:model-identity",
+      model: {
+        provider: modelRequest.provider,
+        api: modelRequest.modelSpec.api,
+        model: modelRequest.model,
+      },
+    });
+  });
+
   it("ignores another agent's invocation lifecycle state", () => {
     const selfId = "agent:self";
     let state: AgentState = initialAgentState({ channelId: "c", config, selfId });

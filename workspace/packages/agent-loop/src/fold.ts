@@ -181,6 +181,14 @@ export function applyEvent(prev: AgentState, envelope: LogEnvelope): AgentState 
       const role = payload["role"];
       const messageId = String(causality["messageId"] ?? "");
       if (role === "assistant") {
+        if (
+          !foreignAuthor &&
+          state.inFlightModelCall &&
+          state.inFlightModelCall.messageId !== messageId
+        ) {
+          return state; // stale terminal for an older attempt — fold ignores
+        }
+        const modelRequest = foreignAuthor ? undefined : state.inFlightModelCall?.request;
         const entry: SessionEntry = {
           kind: "assistant",
           seq: envelope.seq,
@@ -189,15 +197,21 @@ export function applyEvent(prev: AgentState, envelope: LogEnvelope): AgentState 
           blocks: Array.isArray(payload["blocks"]) ? (payload["blocks"] as unknown[]) : [],
           outcome:
             typeof payload["outcome"] === "string" ? (payload["outcome"] as string) : undefined,
+          ...(modelRequest
+            ? {
+                model: {
+                  provider: modelRequest.provider,
+                  api: modelRequest.modelSpec.api,
+                  model: modelRequest.model,
+                },
+              }
+            : {}),
         };
         if (foreignAuthor) {
           return {
             ...state,
             entries: [...state.entries, entry],
           };
-        }
-        if (state.inFlightModelCall && state.inFlightModelCall.messageId !== messageId) {
-          return state; // stale terminal for an older attempt — fold ignores
         }
         return {
           ...state,

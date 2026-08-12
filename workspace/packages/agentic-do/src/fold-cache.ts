@@ -13,6 +13,7 @@ import {
   overlayInputConfig,
   type AgentLoopConfig,
   type AgentState,
+  MODEL_CONTEXT_VERSION,
 } from "@workspace/agent-loop";
 import type { LogEnvelope } from "@workspace/agentic-protocol";
 
@@ -63,7 +64,11 @@ export class FoldCache {
       .toArray();
     if (rows.length === 0) return null;
     try {
-      return JSON.parse(String(rows[0]!["state_blob"])) as AgentState;
+      const state = JSON.parse(String(rows[0]!["state_blob"])) as AgentState;
+      // The cache is disposable. A projection-version mismatch must cold-fold
+      // the journal so historical assistant identity is reconstructed from
+      // the exact message.started request rather than guessed from live config.
+      return state.modelContextVersion === MODEL_CONTEXT_VERSION ? state : null;
     } catch {
       return null;
     }

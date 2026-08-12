@@ -153,6 +153,7 @@
         "./packages/pi-ai/src/api/openai-codex-responses.ts"
       ],
       "@workspace/pi-ai/api/simple-options": ["./packages/pi-ai/src/api/simple-options.ts"],
+      "@workspace/pi-ai/api/transform-messages": ["./packages/pi-ai/src/api/transform-messages.ts"],
       "@workspace/channel-fork": ["./packages/channel-fork/src/index.ts"],
       "@workspace/pubsub": ["./packages/pubsub/src/index.ts"],
       "@workspace/react": ["./packages/react/src/index.ts"],

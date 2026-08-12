@@ -53,6 +53,13 @@ export interface AgentModelSpec {
   compat?: Record<string, unknown>;
 }
 
+/** Exact model identity that produced a durable assistant message. */
+export interface AssistantModelIdentity {
+  provider: string;
+  api: string;
+  model: string;
+}
+
 export type RespondPolicy =
   | "all"
   | "mentioned"
@@ -426,6 +433,9 @@ export type SessionEntry =
       senderRef?: ParticipantRef;
       blocks: unknown[];
       outcome?: string;
+      /** Present only for model-produced messages. Runtime diagnostics and
+       * model-free direct invocations have no model identity to invent. */
+      model?: AssistantModelIdentity;
     }
   | {
       kind: "tool-result";
@@ -449,6 +459,8 @@ export type SessionEntry =
   | { kind: "note"; seq: number; text: string };
 
 export interface AgentState {
+  /** Invalidates non-authoritative fold caches when model-context projection changes. */
+  modelContextVersion: number;
   logId: string;
   head: string;
   channelId: string;
@@ -480,6 +492,8 @@ export interface AgentState {
   deferredPostTurnQueue: DeferredPrompt[];
 }
 
+export const MODEL_CONTEXT_VERSION = 1;
+
 /**
  * A trajectory fork inherits semantic conversation entries, not executable
  * delivery state. Replaying the parent's prefix under a new agent identity can
@@ -499,6 +513,7 @@ export function normalizeForkControlState(state: AgentState): AgentState {
   );
   return {
     ...state,
+    modelContextVersion: MODEL_CONTEXT_VERSION,
     pendingPrompt,
     pendingPromptPreparations,
     steeringQueue: state.steeringQueue.filter((entry) => entry.seq > state.forkSeq),
@@ -523,6 +538,7 @@ export interface InitialStateInput {
 export function initialAgentState(input: InitialStateInput): AgentState {
   const logId = input.logId ?? logIdForChannel(input.channelId);
   return {
+    modelContextVersion: MODEL_CONTEXT_VERSION,
     logId,
     head: input.head ?? logId,
     channelId: input.channelId,

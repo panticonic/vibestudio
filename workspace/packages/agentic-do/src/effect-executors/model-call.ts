@@ -401,6 +401,13 @@ export function toPiMessages(messages: ModelMessage[]): Message[] {
       out.push({
         role: "assistant",
         content: toPiAssistantBlocks(message.blocks ?? []) as never,
+        ...(message.model
+          ? {
+              provider: message.model.provider,
+              api: message.model.api,
+              model: message.model.model,
+            }
+          : {}),
         usage: {},
         stopReason: "stop",
         timestamp: 0,

@@ -4,7 +4,7 @@
  * TrajectoryBackedSessionStorage — the log IS the session.
  */
 
-import type { AgentState, SessionEntry } from "./state.js";
+import type { AgentState, AssistantModelIdentity, SessionEntry } from "./state.js";
 
 export interface ModelMessage {
   role: "user" | "assistant" | "toolResult";
@@ -13,6 +13,7 @@ export interface ModelMessage {
   toolCallId?: string;
   toolName?: string;
   isError?: boolean;
+  model?: AssistantModelIdentity;
 }
 
 export function buildModelContext(
@@ -89,7 +90,11 @@ function modelMessageFromEntry(entry: SessionEntry, selfId?: string): ModelMessa
           content: `[${participantLabel(author)}]: ${assistantBlocksToText(entry.blocks)}`,
         };
       }
-      return { role: "assistant", blocks: entry.blocks };
+      return {
+        role: "assistant",
+        blocks: entry.blocks,
+        ...(entry.model ? { model: entry.model } : {}),
+      };
     }
     case "tool-result":
       return {

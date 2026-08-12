@@ -6,6 +6,7 @@ import {
   type InitialStateInput,
   type ModelCallEffect,
 } from "@workspace/agent-loop";
+import { transformMessages } from "@workspace/pi-ai/api/transform-messages";
 import {
   CredentialApprovalDeferredError,
   type ExecutorDeps,
@@ -70,6 +71,53 @@ describe("model-facing tool results", () => {
         },
       ])[1]
     ).toMatchObject({ role: "toolResult", content });
+  });
+});
+
+describe("historical assistant model identity", () => {
+  const thinking = {
+    type: "thinking",
+    content: "reasoning that belongs to its producing model",
+    metadata: { pi: { thinkingSignature: "signed-reasoning" } },
+  };
+  const identity = {
+    provider: "anthropic",
+    api: "anthropic-messages",
+    model: "claude-sonnet-4-6",
+  };
+  const currentModel = {
+    id: identity.model,
+    provider: identity.provider,
+    api: identity.api,
+    input: ["text"],
+  } as never;
+
+  it("preserves reasoning for the same model and downgrades it for a real cross-model handoff", () => {
+    const [historical] = toPiMessages([{ role: "assistant", blocks: [thinking], model: identity }]);
+
+    expect(historical).toMatchObject(identity);
+    expect(transformMessages([historical!], currentModel)[0]).toMatchObject({
+      role: "assistant",
+      content: [
+        {
+          type: "thinking",
+          thinking: "reasoning that belongs to its producing model",
+          thinkingSignature: "signed-reasoning",
+        },
+      ],
+    });
+
+    expect(
+      transformMessages([historical!], {
+        id: "gpt-5.6-sol",
+        provider: "openai-codex",
+        api: "openai-codex-responses",
+        input: ["text"],
+      } as never)[0]
+    ).toMatchObject({
+      role: "assistant",
+      content: [{ type: "text", text: "reasoning that belongs to its producing model" }],
+    });
   });
 });
 

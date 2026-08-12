@@ -37,6 +37,11 @@ describe("buildModelContext: multi-agent attribution", () => {
         messageId: "m2",
         senderRef: { kind: "agent", id: selfId },
         blocks: [{ type: "text", content: "my own turn" }],
+        model: {
+          provider: "anthropic",
+          api: "anthropic-messages",
+          model: "claude-sonnet-4-6",
+        },
       },
     ];
     const state: AgentState = { ...initialAgentState({ channelId: "c", config, selfId }), entries };
@@ -48,6 +53,11 @@ describe("buildModelContext: multi-agent attribution", () => {
     expect(msgs[1]).toEqual({
       role: "assistant",
       blocks: [{ type: "text", content: "my own turn" }],
+      model: {
+        provider: "anthropic",
+        api: "anthropic-messages",
+        model: "claude-sonnet-4-6",
+      },
     });
   });
 

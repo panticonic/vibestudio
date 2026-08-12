@@ -31,7 +31,8 @@
     "./providers/all": "./src/providers-all.ts",
     "./api/mistral-conversations": "./src/api/mistral-conversations.ts",
     "./api/openai-codex-responses": "./src/api/openai-codex-responses.ts",
-    "./api/simple-options": "./src/api/simple-options.ts"
+    "./api/simple-options": "./src/api/simple-options.ts",
+    "./api/transform-messages": "./src/api/transform-messages.ts"
   },
   "dependencies": {
     "@earendil-works/pi-ai": "0.82.0"
