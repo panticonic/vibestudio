@@ -20,10 +20,26 @@ export interface PanelTreeInvariantEvidence {
   remainingCreatedIds: string[];
 }
 
+export interface SeededPanelGoalEvidence {
+  panelId: string;
+  expectedFinalSource: string;
+  initialSource: string | null;
+  initialPhase: string | null;
+  initialPathIds: string[];
+  finalSource: string | null;
+  finalPhase: string | null;
+  finalPathIds: string[];
+  targetPreserved: boolean;
+  reachedExpectedSource: boolean;
+}
+
 type TreeReader = Pick<
   TestOrchestrationContext["runner"]["panelTreeClient"],
   "roots" | "children" | "get"
 >;
+
+type FixtureTreeReader = TreeReader &
+  Pick<TestOrchestrationContext["runner"]["panelTreeClient"], "path">;
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -92,8 +108,7 @@ export function createdPanelRoots(
   return createdIds
     .map((id) => after.get(id))
     .filter(
-      (node): node is VisiblePanelNode =>
-        node !== undefined && !created.has(node.parentId ?? "")
+      (node): node is VisiblePanelNode => node !== undefined && !created.has(node.parentId ?? "")
     );
 }
 
@@ -156,7 +171,9 @@ export async function orchestratePanelGoal(
       );
     }
   } catch (error) {
-    failures.push(`Panel-tree invariant could not inspect the post-turn tree: ${errorMessage(error)}`);
+    failures.push(
+      `Panel-tree invariant could not inspect the post-turn tree: ${errorMessage(error)}`
+    );
   }
 
   let snapshot: SessionSnapshot | undefined;
@@ -196,4 +213,109 @@ export async function orchestratePanelGoal(
   }
 
   return execution;
+}
+
+function appendExecutionError(execution: TestExecutionResult, message: string): void {
+  execution.error = [execution.error, message].filter(Boolean).join("; ");
+}
+
+function appendCleanupError(execution: TestExecutionResult, message: string): void {
+  execution.cleanupErrors = [...(execution.cleanupErrors ?? []), message];
+  appendExecutionError(execution, `Harness cleanup failed: ${message}`);
+}
+
+/**
+ * Seed one real, harness-owned panel before the agent turn, then prove that the
+ * same visible tree target reached the requested source. The ordinary tree
+ * invariant treats the fixture as pre-existing agent state; this wrapper owns
+ * its eventual archival regardless of the agent outcome.
+ */
+export async function orchestrateSeededPanelGoal(
+  context: TestOrchestrationContext,
+  prompt: string,
+  phase: string,
+  initialSource: string,
+  expectedFinalSource: string,
+  tree: FixtureTreeReader = context.runner.panelTreeClient
+): Promise<TestExecutionResult> {
+  const startedAt = Date.now();
+  let fixture: Awaited<ReturnType<TestOrchestrationContext["runner"]["openPanelClient"]>> | null =
+    null;
+  let execution: TestExecutionResult | null = null;
+  let fixtureStillVisible = false;
+
+  try {
+    fixture = await context.runner.openPanelClient(initialSource, {
+      parentId: null,
+      focus: false,
+    });
+    const initialObservation = await fixture.observe();
+    const initialPath = await tree.path(fixture.id);
+
+    execution = await orchestratePanelGoal(context, prompt, phase, tree);
+
+    let finalObservation: Awaited<ReturnType<typeof fixture.observe>> | null = null;
+    let finalPath: Awaited<ReturnType<FixtureTreeReader["path"]>> = null;
+    try {
+      finalPath = await tree.path(fixture.id);
+      fixtureStillVisible = finalPath !== null;
+      if (fixtureStillVisible) finalObservation = await fixture.observe();
+    } catch (error) {
+      appendExecutionError(
+        execution,
+        `Could not inspect the seeded panel after the agent turn: ${errorMessage(error)}`
+      );
+    }
+
+    const evidence: SeededPanelGoalEvidence = {
+      panelId: fixture.id,
+      expectedFinalSource,
+      initialSource: initialObservation.source ?? null,
+      initialPhase: initialObservation.phase ?? null,
+      initialPathIds: initialPath?.entries.map((entry) => entry.node.slotId) ?? [],
+      finalSource: finalObservation?.source ?? null,
+      finalPhase: finalObservation?.phase ?? null,
+      finalPathIds: finalPath?.entries.map((entry) => entry.node.slotId) ?? [],
+      targetPreserved: fixtureStillVisible && finalObservation?.panelId === fixture.id,
+      reachedExpectedSource: finalObservation?.source === expectedFinalSource,
+    };
+    execution.diagnostics = {
+      ...(execution.diagnostics ?? {}),
+      seededPanelGoal: evidence,
+    };
+
+    if (!evidence.targetPreserved) {
+      appendExecutionError(execution, "Agent did not preserve the seeded panel-tree target");
+    }
+    if (!evidence.reachedExpectedSource) {
+      appendExecutionError(
+        execution,
+        `Seeded panel ended on ${evidence.finalSource ?? "an unavailable source"}, expected ${expectedFinalSource}`
+      );
+    }
+  } catch (error) {
+    execution ??= {
+      messages: [],
+      duration: Date.now() - startedAt,
+      error: `Could not prepare or run the seeded panel goal: ${errorMessage(error)}`,
+    };
+  } finally {
+    if (fixture) {
+      try {
+        if (!fixtureStillVisible) fixtureStillVisible = (await tree.path(fixture.id)) !== null;
+        if (fixtureStillVisible) await fixture.archive();
+      } catch (error) {
+        execution ??= { messages: [], duration: Date.now() - startedAt };
+        appendCleanupError(execution, `archive seeded panel ${fixture.id}: ${errorMessage(error)}`);
+      }
+    }
+  }
+
+  return (
+    execution ?? {
+      messages: [],
+      duration: Date.now() - startedAt,
+      error: "Seeded panel goal did not produce an execution result",
+    }
+  );
 }

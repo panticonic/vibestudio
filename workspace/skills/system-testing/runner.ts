@@ -4,7 +4,7 @@ import {
   type SessionSnapshot,
 } from "@workspace/agentic-session";
 import type { ConnectionConfig } from "@workspace/agentic-core";
-import { blobstore, gad, panelTree, rpc, vcs, workers } from "@workspace/runtime";
+import { blobstore, gad, openPanel, panelTree, rpc, vcs, workers } from "@workspace/runtime";
 import {
   SYSTEM_TEST_AGENT_MODEL,
   systemTestModelRoute,
@@ -169,6 +169,8 @@ function fixtureContextAuthority(
 
 export class HeadlessRunner {
   readonly validationEvidenceReader: BlobReader = blobstore;
+  /** Runtime-initialized panel opener for harness-owned scenario fixtures. */
+  readonly openPanelClient = openPanel;
   /** Runtime-initialized panel-tree client for harness-owned invariants. */
   readonly panelTreeClient = panelTree;
 

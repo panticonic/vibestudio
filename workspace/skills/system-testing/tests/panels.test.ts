@@ -45,7 +45,6 @@ describe("panel system-test declarations", () => {
   it("guards every scenario that can create a panel", () => {
     for (const test of panelTests.filter((candidate) => candidate.name !== "panel-list-sources")) {
       expect(test.orchestrate).toEqual(expect.any(Function));
-      expect(test.validation).toBeUndefined();
     }
   });
 
@@ -57,5 +56,39 @@ describe("panel system-test declarations", () => {
     });
     expect(navigation?.prompt).toContain("that browser view");
     expect(navigation?.prompt).not.toMatch(/\b(?:panel[- ]?id|slot[- ]?id|parent[- ]?id)\b/iu);
+    expect(navigation?.validation).toBe("agent-evidence");
+  });
+
+  it("requires independent same-panel navigation evidence", () => {
+    const navigation = panelTests.find((test) => test.name === "panel-tree-navigation")!;
+    const evidence = {
+      panelId: "seeded-browser",
+      expectedFinalSource: "https://example.org/",
+      initialSource: "https://example.com/",
+      initialPhase: "ready",
+      initialPathIds: ["seeded-browser"],
+      finalSource: "https://example.org/",
+      finalPhase: "ready",
+      finalPathIds: ["seeded-browser"],
+      targetPreserved: true,
+      reachedExpectedSource: true,
+    };
+
+    expect(
+      navigation.validate({
+        messages: [],
+        duration: 1,
+        diagnostics: { seededPanelGoal: evidence },
+      })
+    ).toEqual({ passed: true, reason: undefined });
+    expect(
+      navigation.validate({
+        messages: [],
+        duration: 1,
+        diagnostics: {
+          seededPanelGoal: { ...evidence, finalSource: "https://example.com/" },
+        },
+      })
+    ).toMatchObject({ passed: false });
   });
 });

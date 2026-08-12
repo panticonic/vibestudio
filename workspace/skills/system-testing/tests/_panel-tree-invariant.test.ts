@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   createdPanelRoots,
   orchestratePanelGoal,
+  orchestrateSeededPanelGoal,
   panelTreeDifference,
   type VisiblePanelNode,
 } from "./_panel-tree-invariant.js";
@@ -140,6 +141,111 @@ describe("panel-tree invariant", () => {
       passed: false,
       reason: expect.stringContaining("Agent left temporary panels"),
     });
+  });
+
+  it("seeds a real vague-reference target, observes same-panel navigation, then owns cleanup", async () => {
+    const visible = tree();
+    let source = "https://example.com/";
+    const archive = vi.fn(async () => {
+      visible.delete("seeded-browser");
+    });
+    const handle = {
+      id: "seeded-browser",
+      kind: "browser",
+      archive,
+      observe: vi.fn(async () => ({
+        panelId: "seeded-browser",
+        source,
+        phase: "ready",
+      })),
+    };
+    const page = (parentId: string | null) => ({
+      revision: 1,
+      group: parentId ? "children" : "roots",
+      entries: [...visible.values()]
+        .filter((node) => node.parentId === parentId)
+        .map((node) => ({
+          node: {
+            slotId: node.id,
+            parentSlotId: node.parentId,
+            kind: node.kind,
+          },
+          handle,
+        })),
+      nextCursor: null,
+    });
+    const panelTree = {
+      roots: vi.fn(async () => page(null)),
+      children: vi.fn(async (parentId: string) => page(parentId)),
+      path: vi.fn(async (id: string) =>
+        visible.has(id)
+          ? {
+              revision: 1,
+              entries: page(null).entries.filter((entry) => entry.node.slotId === id),
+            }
+          : null
+      ),
+      get: vi.fn(() => handle),
+    };
+    const completion = {
+      id: "agent-completion",
+      senderId: "agent",
+      senderMetadata: { type: "agent" as const },
+      kind: "message" as const,
+      contentType: "text" as const,
+      content: "The existing browser view now shows example.org.",
+      complete: true,
+    };
+    const session = {
+      messages: [completion],
+      snapshot: () => ({}),
+      close: vi.fn(async () => undefined),
+    };
+    const context = {
+      runner: {
+        openPanelClient: vi.fn(async () => {
+          visible.set("seeded-browser", {
+            id: "seeded-browser",
+            parentId: null,
+            kind: "browser",
+          });
+          return handle;
+        }),
+        panelTreeClient: panelTree,
+        spawn: vi.fn(async () => session),
+      },
+      remainingTimeMs: () => 1_000,
+      sendAndWait: vi.fn(async () => {
+        expect(visible.has("seeded-browser")).toBe(true);
+        source = "https://example.org/";
+        return completion;
+      }),
+    } as unknown as TestOrchestrationContext;
+
+    const execution = await orchestrateSeededPanelGoal(
+      context,
+      "Where did that browser view end up?",
+      "resolve a vague panel reference",
+      "https://example.com/",
+      "https://example.org/",
+      panelTree as never
+    );
+
+    expect(execution.error).toBeUndefined();
+    expect(execution.diagnostics?.["seededPanelGoal"]).toEqual({
+      panelId: "seeded-browser",
+      expectedFinalSource: "https://example.org/",
+      initialSource: "https://example.com/",
+      initialPhase: "ready",
+      initialPathIds: ["seeded-browser"],
+      finalSource: "https://example.org/",
+      finalPhase: "ready",
+      finalPathIds: ["seeded-browser"],
+      targetPreserved: true,
+      reachedExpectedSource: true,
+    });
+    expect(archive).toHaveBeenCalledOnce();
+    expect(visible.size).toBe(0);
   });
 
   it("keeps cleanup instructions out of every panel-automation goal", () => {
