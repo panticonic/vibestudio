@@ -1481,6 +1481,28 @@ describe("validateAgentCompletionReport", () => {
     });
   });
 
+  it("rejects a completion report when harness-observed execution invariants failed", () => {
+    const result = execution("Task completed. The temporary panel was inspected.");
+    result.error = "Agent left temporary panels in the tree: panel-leak";
+
+    expect(validateAgentCompletionReport(result)).toEqual({
+      passed: false,
+      reason:
+        "Agent-goal execution failed: Agent left temporary panels in the tree: panel-leak",
+    });
+  });
+
+  it("rejects a completion report when harness cleanup did not finish", () => {
+    const result = execution("Task completed. The panel lifecycle was verified.");
+    result.cleanupErrors = ["archive leaked panel panel-leak: unavailable"];
+
+    expect(validateAgentCompletionReport(result)).toEqual({
+      passed: false,
+      reason:
+        "Agent-goal cleanup failed: archive leaked panel panel-leak: unavailable",
+    });
+  });
+
   it("flags a wasteful trajectory for review without converting success into failure", () => {
     const result = execution("The requested command completed successfully.");
     result.snapshot = {

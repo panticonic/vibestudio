@@ -1098,6 +1098,19 @@ function asString(value: unknown): string | undefined {
 }
 
 export function validateAgentCompletionReport(result: TestExecutionResult): TestResult {
+  if (result.error) {
+    return {
+      passed: false,
+      reason: `Agent-goal execution failed: ${result.error}`,
+    };
+  }
+  if (result.cleanupErrors?.length) {
+    return {
+      passed: false,
+      reason: `Agent-goal cleanup failed: ${result.cleanupErrors.join("; ")}`,
+    };
+  }
+
   const final = findFinalAgentCompletionMessage(result.messages)?.content?.trim();
   if (!final) return { passed: false, reason: "No agent completion report received" };
 

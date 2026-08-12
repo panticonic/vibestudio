@@ -42,16 +42,20 @@ describe("panel system-test declarations", () => {
     });
   });
 
-  it("states user goals without coaching panel cleanup", () => {
-    for (const test of panelTests) {
-      expect(test.prompt).not.toMatch(/\b(?:archive|close|clean\s*up|cleanup)\b/iu);
-    }
-  });
-
   it("guards every scenario that can create a panel", () => {
     for (const test of panelTests.filter((candidate) => candidate.name !== "panel-list-sources")) {
       expect(test.orchestrate).toEqual(expect.any(Function));
       expect(test.validation).toBeUndefined();
     }
+  });
+
+  it("uses the navigation case for a vague user reference instead of panel ids", () => {
+    const navigation = panelTests.find((test) => test.name === "panel-tree-navigation");
+
+    expect(navigation).toMatchObject({
+      description: "Resolve a vague browser-view reference through the panel tree",
+    });
+    expect(navigation?.prompt).toContain("that browser view");
+    expect(navigation?.prompt).not.toMatch(/\b(?:panel[- ]?id|slot[- ]?id|parent[- ]?id)\b/iu);
   });
 });

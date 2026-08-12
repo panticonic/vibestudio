@@ -10,7 +10,7 @@ const BROWSER_PANEL_PROMPT =
   "Compare the visible heading on https://example.com/ with what you see after moving the same browser view to https://example.org/. Base the comparison on the rendered pages, and tell me where that view ends up.";
 
 const PANEL_TREE_NAVIGATION_PROMPT =
-  "I lose track of browser views in the panel tree. Use one browser view to compare https://example.com/ with https://example.org/, then tell me where the investigation lived in the tree and which destination it ended on.";
+  "I lost track of that browser view in the panel tree. Compare https://example.com/ with https://example.org/ there, then tell me where the investigation lived and which destination it ended on.";
 
 const BROWSER_IMPORT_PROMPT =
   "Check the Browser Import inspector itself and tell me its exact panel identity, source, and lifecycle phase once it is usable.";
@@ -40,7 +40,7 @@ export const panelTests: TestCase[] = [
   },
   {
     name: "panel-tree-navigation",
-    description: "Navigate a temporary browser panel with panel-tree awareness",
+    description: "Resolve a vague browser-view reference through the panel tree",
     category: "panels",
     authorityPolicy: panelControlAuthorityPolicy("inspect-tree-panel"),
     resources: [PANEL_AUTOMATION_RESOURCE],
