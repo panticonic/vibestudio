@@ -12,10 +12,10 @@ body,
   overflow: hidden;
   /* Pre-paint background before the Radix theme mounts — follow the system
      preference so a light-mode user never gets a dark flash. Literal because
-     nothing is themed yet; these are the default `grayColor` (mauve) steps 6
-     and 3, matching `--app-chrome-bg` below, so the first paint is already the
-     frame the user is about to see. */
-  background: #dbd8e0;
+     nothing is themed yet; this is the default `grayColor` (mauve) step 3,
+     matching `--app-chrome-bg` below in both appearances so the first paint is
+     already the frame the user is about to see. */
+  background: #f2eff3;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -38,27 +38,22 @@ body,
    Hue rides the theme's own `grayColor` — `--gray-*`, which the app pairs with
    its violet accent as `mauve`. That keeps the frame in the brand's neutral
    family rather than a foreign one, and it follows the user's gray choice for
-   free. What made mauve read as "branded" before was never the hue but the
-   step: chrome sat at gray-2/4, so it came out as lavender-tinted near-white.
-   Several rungs down it reads as grey with a warm undertone, and the tint
-   works *for* it — a perfectly neutral grey next to these faintly magenta
-   panel surfaces picks up a green cast by simultaneous contrast.
+   free. In light mode the frame deliberately uses the same calm step as the
+   approval prompt: across a large desktop area the deeper rungs read muddy,
+   while this faint mauve still distinguishes the chrome from panel content.
 
    ONE ramp serves both the frame (titlebar, tree, pane backing — via the
    `--app-chrome-*` aliases below) and the floating surfaces (approval card and
    pill, which read `--surface-raised`/`--surface-card` directly). That is
-   deliberate: a floating card reads as a lighter shade of the same grey the
-   frame is cut from. It does mean retuning the frame moves those cards with it,
-   so check the approval overlay after changing a step here.
-
-   Light mode is a properly grey shelf, several rungs down the scale — not
-   off-white, and not dark-mode dark either. Raised surfaces stay one rung
-   lighter than the chrome base in BOTH appearances so elevation still reads.
+   deliberate: the frame and floating card share a neutral family. In light
+   mode their main surfaces meet at gray-3; the card's border and shadow,
+   rather than a second background hue, carry its elevation. Dark mode keeps
+   its existing tonal lift because that contrast remains useful there.
    ============================================================================ */
 .radix-themes:where(.light, .light-theme) {
-  --surface-chrome: var(--gray-6);
-  --surface-card: var(--gray-5);
-  --surface-raised: var(--gray-4);
+  --surface-chrome: var(--gray-3);
+  --surface-card: var(--gray-4);
+  --surface-raised: var(--gray-3);
   --surface-border: var(--gray-a7);
   /* Approval cards already carry a hairline border. Keep their light-mode lift
      compact enough for the native overlay's 16px transparent margin. */
@@ -121,12 +116,11 @@ body,
   border-radius: 0;
 }
 
-/* The tree is persistent shell chrome, not panel content. In light mode its
-   raised surface was nearly identical to pale panel pages, so keep it on the
-   slightly deeper chrome step used by the surrounding shell. */
+/* The tree is an interior shell surface, like the prompt, rather than the
+   desktop frame behind it. It therefore keeps the generic panel-card fill
+   above (`--app-chrome-bg-strong`) instead of overriding it with the deeper
+   base chrome rung. */
 .app-shell-panel-card[data-shell-panel-sidebar="true"] {
-  --card-background-color: var(--app-chrome-bg);
-  background-color: var(--app-chrome-bg);
   /* A Card's size prop buys a generous inset that suits a content card and
      wastes a navigator: sixteen pixels on each side is an eighth of a 260px
      sidebar spent on nothing, before the tree has indented anything. The rows,
