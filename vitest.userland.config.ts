@@ -1,70 +1,67 @@
 import { defineConfig } from "vitest/config";
 import path from "node:path";
-import baseConfig from "./vitest.config";
+import { vitestSharedConfig } from "./vitest.sharedConfig";
+import { workspaceSourceAliases } from "./vitest.sourceAliases";
+import { userlandDependencyAliases } from "./vitest.userlandProjection";
 
-const base = baseConfig as {
-  test?: Record<string, unknown>;
-  [key: string]: unknown;
-};
-const baseTest = base.test ?? {};
-const baseServer = (baseTest.server as Record<string, unknown> | undefined) ?? {};
-const baseDeps = (baseServer.deps as Record<string, unknown> | undefined) ?? {};
-const baseInline = Array.isArray(baseDeps.inline) ? baseDeps.inline : [];
-
-export default defineConfig({
-  ...base,
-  resolve: {
-    ...((base.resolve as Record<string, unknown> | undefined) ?? {}),
-    // The terminal app renders through Ink, whose reconciler and scheduler are
-    // React consumers the root `dedupe` list never named. Userland carries its
-    // own physical copies of both, so Ink's hooks ran against a second React
-    // instance and every terminal surface rendered as an empty frame under
-    // test — while working correctly outside it.
-    dedupe: [
-      ...(((base.resolve as { dedupe?: string[] } | undefined)?.dedupe ?? []) as string[]),
-      "react-reconciler",
-      "scheduler",
-    ],
-  },
-  test: {
-    ...baseTest,
-    name: "userland",
-    reporters: [
-      "default",
-      [
-        path.resolve(__dirname, "scripts/runtime-foundation-evidence-reporter.mjs"),
-        { project: "userland", root: __dirname },
+export default defineConfig(async () => {
+  const projectedDependencies = await userlandDependencyAliases(__dirname);
+  const baseServer = vitestSharedConfig.test.server;
+  const baseDeps = baseServer.deps;
+  const baseInline = baseDeps.inline;
+  return {
+    ...vitestSharedConfig,
+    resolve: {
+      ...vitestSharedConfig.resolve,
+      alias: [
+        ...vitestSharedConfig.resolve.alias,
+        ...workspaceSourceAliases(__dirname),
+        ...projectedDependencies,
       ],
-    ],
-    // Userland's full suite concurrently transforms several large dependency
-    // graphs (TypeScript, provider SDKs, and panel barrels). A five-second
-    // per-test budget makes otherwise-fast dynamic-import tests fail under
-    // CPU contention even though they pass immediately in isolation.
-    testTimeout: 30_000,
-    // Unbounded host-core parallelism oversubscribes the SQLite-heavy semantic
-    // suites and can keep a worker from servicing Vitest's own RPC heartbeat.
-    // Four workers retain broad parallel coverage without turning machine
-    // core count into a liveness dependency.
-    maxWorkers: 4,
-    include: [
-      "workspace/**/*.test.ts",
-      "workspace/**/*.test.tsx",
-      "tests/workspace-integration/**/*.test.ts",
-      "tests/workspace-integration/**/*.test.tsx",
-    ],
-    server: {
-      ...baseServer,
-      deps: {
-        ...baseDeps,
-        inline: [
-          ...baseInline,
-          // Userland has its own physical node_modules tree. Externalizing any
-          // React consumer from there bypasses Vite's root React aliases and
-          // creates a second hook dispatcher (notably Jotai and Radix). Inline
-          // that tree so every react/react-dom import joins the root graph.
-          /\/workspace\/node_modules\//,
+      // The terminal app renders through Ink, whose reconciler and scheduler
+      // are React consumers the root `dedupe` list never named. Keep projected
+      // dependency graphs on the runner's one React dispatcher.
+      dedupe: [...vitestSharedConfig.resolve.dedupe, "react-reconciler", "scheduler"],
+    },
+    test: {
+      ...vitestSharedConfig.test,
+      name: "userland",
+      reporters: [
+        "default",
+        [
+          path.resolve(__dirname, "scripts/runtime-foundation-evidence-reporter.mjs"),
+          { project: "userland", root: __dirname },
         ],
+      ],
+      // Userland's full suite concurrently transforms several large dependency
+      // graphs (TypeScript, provider SDKs, and panel barrels). A five-second
+      // per-test budget makes otherwise-fast dynamic-import tests fail under
+      // CPU contention even though they pass immediately in isolation.
+      testTimeout: 30_000,
+      // Unbounded host-core parallelism oversubscribes the SQLite-heavy semantic
+      // suites and can keep a worker from servicing Vitest's own RPC heartbeat.
+      // Four workers retain broad parallel coverage without turning machine
+      // core count into a liveness dependency.
+      maxWorkers: 4,
+      include: [
+        "workspace/**/*.test.ts",
+        "workspace/**/*.test.tsx",
+        "tests/workspace-integration/**/*.test.ts",
+        "tests/workspace-integration/**/*.test.tsx",
+      ],
+      server: {
+        ...baseServer,
+        deps: {
+          ...baseDeps,
+          inline: [
+            ...baseInline,
+            // Userland npm dependencies live in the content-addressed build
+            // cache. Inline that projection so Vite's React aliases/dedupe also
+            // govern dependencies loaded from it.
+            /\/derived-cache\/external-deps\//,
+          ],
+        },
       },
     },
-  },
+  };
 });

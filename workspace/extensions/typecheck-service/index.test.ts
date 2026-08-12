@@ -238,6 +238,49 @@ describe("@workspace-extensions/typecheck-service", () => {
     }
   });
 
+  it("discovers live userland packages without pnpm workspace membership", async () => {
+    const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-typecheck-source-"));
+    const contextProjectionsPath = fs.mkdtempSync(
+      path.join(os.tmpdir(), "vibestudio-typecheck-context-projections-")
+    );
+    const sharedPath = path.join(workspaceRoot, "packages", "shared");
+    const panelPath = path.join(workspaceRoot, "panels", "my-app");
+    fs.mkdirSync(sharedPath, { recursive: true });
+    fs.mkdirSync(panelPath, { recursive: true });
+    fs.writeFileSync(path.join(workspaceRoot, "pnpm-workspace.yaml"), "packages: []\n");
+    fs.writeFileSync(
+      path.join(sharedPath, "package.json"),
+      JSON.stringify({ name: "@workspace/shared", exports: { ".": "./index.ts" } })
+    );
+    fs.writeFileSync(path.join(sharedPath, "index.ts"), "export const value = 1;\n");
+    fs.writeFileSync(
+      path.join(panelPath, "package.json"),
+      JSON.stringify({
+        name: "@workspace-panels/my-app",
+        dependencies: { "@workspace/shared": "workspace:*" },
+      })
+    );
+    fs.writeFileSync(
+      path.join(panelPath, "index.ts"),
+      "import { value } from '@workspace/shared';\nconst result: number = value;\n"
+    );
+    const service = await api(undefined, contextProjectionsPath, workspaceRoot);
+
+    try {
+      const result = await service.checkPanel("panels/my-app");
+      expect(result.errorCount).toBe(0);
+      expect(result.diagnostics).not.toContainEqual(
+        expect.objectContaining({
+          code: 2307,
+          message: expect.stringContaining("@workspace/shared"),
+        })
+      );
+    } finally {
+      fs.rmSync(workspaceRoot, { recursive: true, force: true });
+      fs.rmSync(contextProjectionsPath, { recursive: true, force: true });
+    }
+  });
+
   it("resolves workspace packages from source/state layout without a workspace manifest", async () => {
     const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-typecheck-source-"));
     const contextProjectionsPath = fs.mkdtempSync(

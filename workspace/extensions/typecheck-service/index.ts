@@ -1,24 +1,9 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { PANEL_PRINCIPAL_PREFIX } from "@vibestudio/shared/principalIds";
+import { WORKSPACE_IMPORT_PARENT_DIRS } from "@vibestudio/workspace-contracts/sourceDirs";
 import { typeCheckRpcMethods } from "./typecheckService.js";
-import {
-  discoverWorkspaceContext,
-  type WorkspaceContext,
-  type WorkspacePackageInfo,
-} from "@vibestudio/typecheck";
-
-const WORKSPACE_PACKAGE_ROOTS = [
-  "about",
-  "apps",
-  "extensions",
-  "packages",
-  "panels",
-  "projects",
-  "skills",
-  "templates",
-  "workers",
-] as const;
+import { type WorkspaceContext, type WorkspacePackageInfo } from "@vibestudio/typecheck";
 
 interface ExtensionContextLike {
   workspace: {
@@ -111,9 +96,11 @@ async function buildContextWorkspaceContext(
 ): Promise<WorkspaceContext | undefined> {
   const info = await ctx.workspace.getInfo();
   if (!contextId) {
-    return (
-      discoverWorkspaceContext(info.path) ?? discoverWorkspaceSourceContext(info.path) ?? undefined
-    );
+    // Live userland is its own package universe. The host checkout's pnpm
+    // manifest deliberately does not enumerate these units, so package
+    // discovery must follow the semantic workspace roots just like exact
+    // context discovery below.
+    return discoverWorkspaceSourceContext(info.path) ?? undefined;
   }
   validateContextId(contextId);
 
@@ -142,7 +129,7 @@ async function buildContextWorkspaceContext(
  */
 function discoverExactContextWorkspaceContext(contextRoot: string): WorkspaceContext {
   const packages = new Map<string, WorkspacePackageInfo>();
-  for (const root of WORKSPACE_PACKAGE_ROOTS) {
+  for (const root of WORKSPACE_IMPORT_PARENT_DIRS) {
     for (const pkgDir of packageDirsUnder(path.join(contextRoot, root))) {
       const packageJsonPath = path.join(pkgDir, "package.json");
       let parsed: Record<string, unknown>;
@@ -172,7 +159,7 @@ function discoverExactContextWorkspaceContext(contextRoot: string): WorkspaceCon
 
 function discoverWorkspaceSourceContext(workspaceRoot: string): WorkspaceContext | null {
   const packages = new Map<string, WorkspacePackageInfo>();
-  for (const root of WORKSPACE_PACKAGE_ROOTS) {
+  for (const root of WORKSPACE_IMPORT_PARENT_DIRS) {
     const dir = path.join(workspaceRoot, root);
     for (const pkgDir of packageDirsUnder(dir)) {
       const packageJsonPath = path.join(pkgDir, "package.json");

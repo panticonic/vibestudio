@@ -3,5 +3,8 @@ nodeLinker: hoisted
 packages:
   - "packages/*"
   - "apps/*"
+  # The workspace root is a checkout-tooling project (TypeScript/Vitest), not
+  # the package manager for buildable userland units. Panels, workers, apps,
+  # extensions, skills, and userland libraries are resolved from semantic
+  # workspace state by Vibestudio's build/dependency system.
   - "workspace"
-  - "workspace/*/*"

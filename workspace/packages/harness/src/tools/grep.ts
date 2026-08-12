@@ -51,8 +51,8 @@ let re2WarningEmitted = false;
 
 try {
   // Use createRequire so that environments without the optional native
-  // dependency (e.g. CI on alpine, Termux, fresh checkouts where
-  // `pnpm install` skipped postinstall scripts) keep working with the
+  // dependency (e.g. workerd, CI on alpine, or a dependency projection that
+  // intentionally disables native install scripts) keep working with the
   // structural-shape fallback below.
   const { createRequire } = await import("node:module");
   const requireFn = createRequire(import.meta.url);
@@ -93,8 +93,8 @@ function warnFallbackOnce(): void {
   console.warn(
     "[harness/grep] `re2` native binding not available — falling back to V8 RegExp. " +
       "Pattern length is capped and structural ReDoS shapes are rejected, but matching is " +
-      "no longer guaranteed linear-time. Install build tooling (python3, make, g++) and " +
-      "re-run `pnpm install` in workspace/packages/harness to enable RE2."
+      "no longer guaranteed linear-time. Native RE2 acceleration must be provisioned by " +
+      "the active runtime dependency environment."
   );
 }
 

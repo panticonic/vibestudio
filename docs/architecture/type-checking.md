@@ -14,6 +14,26 @@ exact `typescript@7.0.2` dependency.
 - Package scripts invoke the normal `typescript/bin/tsc` entry point. There is
   no compiler alias or fallback generation.
 
+Nested userland units are not pnpm workspace projects. The root lockfile owns
+the host, platform packages, application targets, and the single `workspace`
+checkout-tooling project; it does not lock panels, workers, extensions, skills,
+or userland libraries. Their `package.json` manifests belong to semantic
+workspace state and are resolved by the build system.
+
+Checkout-wide userland checks intentionally inspect many semantic units in one
+compiler process. `scripts/type-check-userland.ts` therefore asks the build
+dependency resolver for one content-addressed aggregate external-dependency
+projection, combines it with the host/tooling packages in a disposable source
+view, and runs the existing tsconfigs unchanged. Vitest configs use the same
+projection for userland imports. This is repository validation plumbing, not a
+second userland lock: exact runtime builds still resolve only the target unit's
+transitive semantic dependency closure.
+
+`pnpm check:userland-package-manager-boundary` rejects nested `workspace/...`
+patterns and lockfile importers. A userland dependency or patch must be handled
+by semantic manifests and the in-app dependency system; adding it to the host
+root merely to make a panel compile is a boundary violation.
+
 The React Native config declares its Node, React, and React Native ambient type
 sets explicitly. Node-shaped types are intentional: Metro maps the exact
 `path`, `fs`, and `crypto` imports reachable through shared packages to mobile

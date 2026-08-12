@@ -1,23 +1,15 @@
 import { defineConfig } from "vitest/config";
-import path from "path";
 import { workspaceSourceAliases } from "./vitest.sourceAliases";
+import { userlandDependencyAliases } from "./vitest.userlandProjection";
 
 // Browser-mode test project. Opened Radix overlays (Dialog/DropdownMenu/Popover/
-// HoverCard) can't render under jsdom: pnpm `node-linker=hoisted` leaves two
-// path-distinct React copies (hoisted vs nested .pnpm), and the externalized
-// overlay sidecars (react-remove-scroll, …) load the second one, so hooks crash
-// with a null dispatcher the moment a portal mounts. No vitest alias/dedupe/
-// inline combination fixes that (the CJS sidecars resist SSR transform). A real
-// browser bundles ONE React, so the overlays open correctly. The jsdom suite
-// (vitest.config.ts) excludes *.browser.test.tsx; this config runs only those.
+// HoverCard) exercise externalized CJS sidecars that do not faithfully model a
+// browser bundle under jsdom. A real browser bundles one React dispatcher, so
+// these tests run here; the jsdom suite excludes *.browser.test.tsx.
 
-export default defineConfig({
+export default defineConfig(async () => ({
   resolve: {
-    alias: [
-      ...workspaceSourceAliases(__dirname),
-      { find: "ignore", replacement: path.resolve(__dirname, "node_modules/ignore") },
-      { find: "picomatch", replacement: path.resolve(__dirname, "node_modules/picomatch") },
-    ],
+    alias: [...workspaceSourceAliases(__dirname), ...(await userlandDependencyAliases(__dirname))],
     dedupe: ["react", "react-dom"],
   },
   test: {
@@ -42,4 +34,4 @@ export default defineConfig({
       instances: [{ browser: "chromium" }],
     },
   },
-});
+}));

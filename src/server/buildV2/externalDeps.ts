@@ -16,7 +16,6 @@ import * as crypto from "crypto";
 import { getSharedDerivedDataPath } from "@vibestudio/env-paths";
 import { NpmResolutionError, runNpmInstall } from "@vibestudio/shared/npmInstaller";
 import type { PackageGraph, GraphNode } from "./packageGraph.js";
-import { assertPresent } from "../../lintHelpers";
 import { BuildRequestError } from "./diagnostics.js";
 
 // ---------------------------------------------------------------------------
@@ -31,12 +30,14 @@ export function collectTransitiveExternalDeps(
   unit: GraphNode,
   graph: PackageGraph,
   workspaceRoot?: string,
-  packageRoots: string[] = []
+  packageRoots: string[] = [],
+  appRoot?: string
 ): Record<string, string> {
   const externals: Record<string, string> = {};
   const appProvidedPackages = new Set([
     ...readWorkspacePatchedDependencyNames(),
     ...readWorkspacePatchedDependencyNames(process.env["VIBESTUDIO_APP_ROOT"]),
+    ...readWorkspacePatchedDependencyNames(appRoot),
   ]);
   const visited = new Set<string>();
   const visitedPackageJson = new Set<string>();
@@ -51,9 +52,7 @@ export function collectTransitiveExternalDeps(
     // instead of shadowing them with unpatched registry installs.
     if (appProvidedPackages.has(name)) return;
     // External dependency — take higher version if conflict
-    if (!externals[name] || compareVersions(version, assertPresent(externals[name])) > 0) {
-      externals[name] = version;
-    }
+    mergeExternalDependencySpecs(externals, { [name]: version });
   }
 
   function walkDeps(dependencies: Record<string, string>, options: { walkWorkspaceDeps: boolean }) {
@@ -267,6 +266,21 @@ function compareVersions(a: string, b: string): number {
   return 0;
 }
 
+/**
+ * Merge dependency requirements using the same deterministic conflict rule as
+ * build-graph traversal. Checkout tooling uses this when it projects several
+ * independently buildable userland units into one validation environment.
+ */
+export function mergeExternalDependencySpecs(
+  target: Record<string, string>,
+  source: Readonly<Record<string, string>>
+): void {
+  for (const [name, version] of Object.entries(source)) {
+    const current = target[name];
+    if (!current || compareVersions(version, current) > 0) target[name] = version;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Cached Installation
 // ---------------------------------------------------------------------------
@@ -279,8 +293,11 @@ function hashDeps(deps: Record<string, string>, overrides: Record<string, string
   return hash.digest("hex").slice(0, 16);
 }
 
-function readWorkspaceNpmOverrides(): Record<string, string> {
-  const pkgPath = path.join(process.env["VIBESTUDIO_APP_ROOT"] ?? process.cwd(), "package.json");
+function readWorkspaceNpmOverrides(appRoot?: string): Record<string, string> {
+  const pkgPath = path.join(
+    appRoot ?? process.env["VIBESTUDIO_APP_ROOT"] ?? process.cwd(),
+    "package.json"
+  );
   if (!fs.existsSync(pkgPath)) return {};
 
   try {
@@ -535,9 +552,10 @@ function isReusableExternalDepsCache(cacheDir: string): boolean {
  */
 export async function ensureExternalDeps(
   deps: Record<string, string>,
-  dependencyOverrides: Record<string, string> = {}
+  dependencyOverrides: Record<string, string> = {},
+  options: { appRoot?: string } = {}
 ): Promise<string> {
-  const overrides = { ...readWorkspaceNpmOverrides(), ...dependencyOverrides };
+  const overrides = { ...readWorkspaceNpmOverrides(options.appRoot), ...dependencyOverrides };
   return ensureDepsInstalled(deps, {
     baseDir: getExternalDepsBaseDir(),
     key: hashDeps(deps, overrides),

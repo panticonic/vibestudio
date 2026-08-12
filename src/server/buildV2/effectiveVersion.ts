@@ -236,11 +236,11 @@ const BUILD_CACHE_VERSION = "30";
 
 /**
  * Host-root files whose CONTENTS are folded into every build key. Changing the
- * host's dependency set (root package.json / pnpm lockfile / workspace layout)
- * must invalidate cached workspace builds, since it can change what external
- * npm deps resolve to. These are host-root files, not content-addressed
- * workspace state — see the design note in effectiveVersion.ts's header for the
- * future step of moving them into GAD workspace state.
+ * platform/tooling dependency set (root package.json / pnpm lockfile / host
+ * workspace layout) can change host-provided APIs and patched packages visible
+ * to builds, so it must invalidate cached workspace builds. Buildable userland
+ * units are deliberately not pnpm importers; their dependency identity comes
+ * from content-addressed workspace state instead.
  */
 const ROOT_DEPENDENCY_FINGERPRINT_FILES = ["package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml"];
 const WORKSPACE_DEPENDENCY_FINGERPRINT_FILES = [
@@ -486,7 +486,8 @@ function rootDependencyFingerprint(): string {
  *   hash(BUILD_CACHE_VERSION, root-deps fingerprint, unitName, ev, sourcemap).
  * This is the content-addressed store key. The root-deps fingerprint folds in
  * the CONTENTS of the host's package.json / pnpm-lock.yaml / pnpm-workspace.yaml
- * (see getRootDependencyFingerprintInfo for observability). Unit name is
+ * (see getRootDependencyFingerprintInfo for observability). The root lock is
+ * the host/platform lock, never the unit's dependency authority. Unit name is
  * included to prevent different units with identical EVs from sharing builds
  * (different entry points, HTML titles, dependency sets produce different
  * artifacts).
