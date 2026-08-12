@@ -22,7 +22,7 @@ const mocks = vi.hoisted(() => ({
       close: vi.fn(),
     })),
   },
-  gad: {},
+  gad: { listTrajectoryEvents: vi.fn() },
   panelTree: {},
   blobstore: { putText: vi.fn() },
   vcs: {
@@ -60,6 +60,7 @@ describe("HeadlessRunner", () => {
     mocks.rpc.stream.mockReset();
     mocks.rpc.on.mockClear();
     mocks.rpc.registerResidentSession.mockClear();
+    mocks.gad.listTrajectoryEvents.mockReset();
     for (const method of Object.values(mocks.vcs)) method.mockReset();
     mocks.blobstore.putText.mockReset();
     mocks.blobstore.putText.mockImplementation(async (text: string) => ({
@@ -209,6 +210,32 @@ describe("HeadlessRunner", () => {
     ]);
   });
 
+  it("reads a bounded hydrated channel trajectory through canonical coordinates", async () => {
+    const runner = new HeadlessRunner("ctx-test");
+    mocks.gad.listTrajectoryEvents
+      .mockResolvedValueOnce(Array.from({ length: 200 }, (_, index) => ({ seq: index + 1 })))
+      .mockResolvedValueOnce([{ seq: 201 }, { seq: 202 }]);
+
+    const events = await runner.readChannelTrajectoryForValidation("task-local", 202);
+
+    expect(events).toHaveLength(202);
+    expect(mocks.gad.listTrajectoryEvents).toHaveBeenNthCalledWith(1, {
+      trajectoryId: "branch:channel:task-local",
+      branchId: "branch:channel:task-local",
+      cursor: 0,
+      limit: 200,
+    });
+    expect(mocks.gad.listTrajectoryEvents).toHaveBeenNthCalledWith(2, {
+      trajectoryId: "branch:channel:task-local",
+      branchId: "branch:channel:task-local",
+      cursor: 200,
+      limit: 2,
+    });
+    await expect(runner.readChannelTrajectoryForValidation("", 1)).rejects.toThrow(
+      "channelId must be non-empty"
+    );
+  });
+
   it("fault-aborts one exact agent vessel through the hidden runtime harness seam", async () => {
     const runner = new HeadlessRunner("ctx-test");
     mocks.rpc.call.mockResolvedValue({ aborted: true });
@@ -349,7 +376,7 @@ describe("HeadlessRunner", () => {
     };
     expect(config.extraConfig["systemPrompt"]).toBe(SYSTEM_TEST_AGENT_PROMPT);
     expect(SYSTEM_TEST_AGENT_PROMPT).toContain("closest user-facing skill");
-    expect(SYSTEM_TEST_AGENT_PROMPT).toContain("Do not inspect");
+    expect(SYSTEM_TEST_AGENT_PROMPT).toContain("must never be used to infer an answer");
     expect(SYSTEM_TEST_AGENT_PROMPT).toContain("exercise the documented path honestly");
     expect(SYSTEM_TEST_AGENT_PROMPT).toContain("most straightforward supported approach");
     expect(SYSTEM_TEST_AGENT_PROMPT).toContain("normal approval routing");

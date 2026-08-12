@@ -27,4 +27,9 @@ describe("agent-goal prompt boundaries", () => {
     const prompt = named(localModelTests, "local-model-download-and-task").prompt;
     expect(prompt).not.toMatch(/\b(?:download|install|ensureLoaded)\b/iu);
   });
+
+  it("leaves local-model skill discovery and API choice to product guidance", () => {
+    const prompt = named(localModelTests, "local-model-skill-guided-server-log-summary").prompt;
+    expect(prompt).not.toMatch(/\b(?:skill|SKILL\.md|read|eval|serverLog|tail|query|stats)\b/iu);
+  });
 });

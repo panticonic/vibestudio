@@ -23,6 +23,7 @@ import type { AttachedHostApprovalAuditEvent } from "@vibestudio/service-schemas
 import type { TestAuthorityPolicy } from "./types.js";
 import type { BlobReader } from "@workspace/agentic-protocol";
 import { createRecoveryCoordinator } from "@vibestudio/shell-core/recoveryCoordinator";
+import { channelTrajectoryFor } from "@vibestudio/trajectory-identity";
 
 // This runner is eval'd server-side (in the orchestrating agent's EvalDO), so it
 // uses the portable client surface — NOT panel-only `getStateArgs`/`slotId`.
@@ -119,6 +120,10 @@ export interface SelfDevelopmentRepository {
   repoPath: "projects/vibestudio";
   workingHead: VcsStateNodeRef;
 }
+
+export type ValidationTrajectoryEvent = Awaited<
+  ReturnType<typeof gad.listTrajectoryEvents>
+>[number];
 
 function fixturePublicationAuthority(
   fixture: (WorkspaceRepoCreationScope & { repoName: string | null }) | null
@@ -616,6 +621,43 @@ export class HeadlessRunner {
 
   rpcFaultEvidence(session: HeadlessSession): readonly SystemTestRpcFaultEvidence[] {
     return [...(this.sessionRpcFaultEvidence.get(session) ?? [])];
+  }
+
+  /**
+   * Read one bounded, hydrated channel trajectory for an evidence validator.
+   * Full trajectories stay in eval memory; scenarios should persist only the
+   * small semantic projection needed to judge their outcome.
+   */
+  async readChannelTrajectoryForValidation(
+    channelId: string,
+    maxEvents = 500
+  ): Promise<ValidationTrajectoryEvent[]> {
+    if (!channelId.trim()) throw new TypeError("channelId must be non-empty");
+    if (!Number.isInteger(maxEvents) || maxEvents < 1 || maxEvents > 1_000) {
+      throw new RangeError("maxEvents must be an integer between 1 and 1000");
+    }
+
+    const { logId, head } = channelTrajectoryFor(channelId);
+    const events: ValidationTrajectoryEvent[] = [];
+    let cursor = 0;
+    while (events.length < maxEvents) {
+      const limit = Math.min(200, maxEvents - events.length);
+      const page = await gad.listTrajectoryEvents({
+        trajectoryId: logId,
+        branchId: head,
+        cursor,
+        limit,
+      });
+      if (page.length === 0) break;
+      const nextCursor = page.at(-1)?.seq;
+      if (typeof nextCursor !== "number" || !Number.isInteger(nextCursor) || nextCursor <= cursor) {
+        throw new Error("Channel trajectory returned a non-advancing event cursor");
+      }
+      events.push(...page.slice(0, maxEvents - events.length));
+      cursor = nextCursor;
+      if (page.length < limit) break;
+    }
+    return events;
   }
 
   /** Non-blocking live snapshots for CLI inspection. Observation never issues

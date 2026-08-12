@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
+import type { ValidationTrajectoryEvent } from "../runner.js";
 import type { TestExecutionResult } from "../types.js";
-import { localModelTests } from "./local-models.js";
+import { localModelTests, summarizeLocalSkillTrajectory } from "./local-models.js";
 
-const test = localModelTests[0]!;
+const taskTest = localModelTests[0]!;
+const skillTest = localModelTests[1]!;
 
 function execution(
   model: string,
@@ -10,7 +12,9 @@ function execution(
     taskStatus?: "running" | "complete";
     terminalOutcome?: "success" | "tool_error";
     childHeading?: string;
+    finalText?: string;
     finalHeading?: string;
+    taskChannelId?: string;
   } = {}
 ): TestExecutionResult {
   const runId = "spawn-local-model";
@@ -67,7 +71,11 @@ function execution(
             description: "",
             result: { protocolContent: [{ type: "text", text: `# ${heading}` }] },
           },
-          subagent: { agentKind: "pi", launchConfig: { model } },
+          subagent: {
+            agentKind: "pi",
+            launchConfig: { model },
+            ...(options.taskChannelId ? { taskChannelId: options.taskChannelId } : {}),
+          },
         },
       },
       {
@@ -76,7 +84,7 @@ function execution(
         senderMetadata: { type: "agent" },
         kind: "message" as const,
         complete: true,
-        content: `The README heading is ${options.finalHeading ?? heading}.`,
+        content: options.finalText ?? `The README heading is ${options.finalHeading ?? heading}.`,
       },
     ],
   } as unknown as TestExecutionResult;
@@ -84,35 +92,135 @@ function execution(
 
 describe("local model task evidence", () => {
   it("requires lifecycle inspection and an exact local-model child", () => {
-    expect(test.validation).toBe("agent-evidence");
-    expect(test.validate(execution("local:lfm2.5-2.6b"))).toEqual({
+    expect(taskTest.validation).toBe("agent-evidence");
+    expect(taskTest.validate(execution("local:lfm2.5-2.6b"))).toEqual({
       passed: true,
       reason: undefined,
     });
   });
 
   it("rejects a child launched on a hosted model", () => {
-    expect(test.validate(execution("openai-codex:gpt-5.3-codex-spark"))).toMatchObject({
+    expect(taskTest.validate(execution("openai-codex:gpt-5.3-codex-spark"))).toMatchObject({
       passed: false,
     });
   });
 
   it("rejects a local child that has not completed successfully", () => {
     expect(
-      test.validate(execution("local:lfm2.5-2.6b", { taskStatus: "running" }))
+      taskTest.validate(execution("local:lfm2.5-2.6b", { taskStatus: "running" }))
     ).toMatchObject({ passed: false });
     expect(
-      test.validate(execution("local:lfm2.5-2.6b", { terminalOutcome: "tool_error" }))
+      taskTest.validate(execution("local:lfm2.5-2.6b", { terminalOutcome: "tool_error" }))
     ).toMatchObject({ passed: false });
   });
 
   it("requires the parent to report the local child's observed heading", () => {
     expect(
-      test.validate(
+      taskTest.validate(
         execution("local:lfm2.5-2.6b", {
           finalHeading: "system-test-local-model-download-and-task-deadbeef",
         })
       )
     ).toMatchObject({ passed: false });
+  });
+});
+
+function trajectoryEvent(
+  kind: ValidationTrajectoryEvent["kind"],
+  seq: number,
+  invocationId: string,
+  payload: Record<string, unknown>
+): ValidationTrajectoryEvent {
+  return {
+    kind,
+    seq,
+    causality: { invocationId },
+    payload,
+  } as unknown as ValidationTrajectoryEvent;
+}
+
+describe("local model skill evidence", () => {
+  const model = "local:lfm2.5-2.6b";
+  const taskChannelId = "task-local-skill";
+  const events = [
+    trajectoryEvent("invocation.started", 2, "read-skill", {
+      name: "read",
+      request: { path: "skills/server-logs/SKILL.md" },
+    }),
+    trajectoryEvent("invocation.completed", 3, "read-skill", {
+      terminalOutcome: "success",
+    }),
+    trajectoryEvent("invocation.started", 4, "inspect-logs", {
+      name: "eval",
+      request: {
+        code: "return services.serverLog.query({ level: 'warn', limit: 20 });",
+      },
+    }),
+    trajectoryEvent("invocation.completed", 5, "inspect-logs", {
+      terminalOutcome: "success",
+    }),
+  ];
+
+  function validExecution(): TestExecutionResult {
+    const result = execution(model, {
+      taskChannelId,
+      finalText: "The local check found no recent warnings in the server logs.",
+    });
+    result.diagnostics = {
+      localSkillTrajectory: summarizeLocalSkillTrajectory(events, {
+        model,
+        report: "No recent warnings.",
+        runId: "spawn-local-model",
+        taskChannelId,
+      }),
+    };
+    return result;
+  }
+
+  it("requires a successful skill read before a successful service inspection", () => {
+    expect(skillTest.orchestrate).toBeTypeOf("function");
+    expect(skillTest.validation).toBe("agent-evidence");
+    expect(skillTest.validate(validExecution())).toEqual({ passed: true, reason: undefined });
+  });
+
+  it("rejects missing or reversed child-trajectory evidence", () => {
+    const missing = validExecution();
+    missing.diagnostics = {
+      localSkillTrajectory: {
+        eventCount: 2,
+        model,
+        serverLogInspectionSeq: 4,
+        serverLogSkillReadSeq: null,
+        taskChannelId,
+      },
+    };
+    expect(skillTest.validate(missing)).toMatchObject({ passed: false });
+
+    const reversed = validExecution();
+    reversed.diagnostics = {
+      localSkillTrajectory: {
+        eventCount: 4,
+        model,
+        serverLogInspectionSeq: 2,
+        serverLogSkillReadSeq: 4,
+        taskChannelId,
+      },
+    };
+    expect(skillTest.validate(reversed)).toMatchObject({ passed: false });
+  });
+
+  it("does not count failed skill or service calls as evidence", () => {
+    const failed = events.filter(
+      (event) =>
+        event.kind !== "invocation.completed" || event.causality?.invocationId !== "read-skill"
+    );
+    expect(
+      summarizeLocalSkillTrajectory(failed, {
+        model,
+        report: "No recent warnings.",
+        runId: "spawn-local-model",
+        taskChannelId,
+      })
+    ).toMatchObject({ serverLogSkillReadSeq: null, serverLogInspectionSeq: 4 });
   });
 });
