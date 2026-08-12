@@ -4,7 +4,7 @@
   "files": [
     {
       "path": "SKILL.md",
-      "sha256": "1f8d36c4a6d0e6b8182e8e787678fdf38ec4957caeec3d9f81c40efcf3282b25"
+      "sha256": "7001d4a27542242d54c8d03020b459e486ac34ac5339888dfdb3c9fd018e9ebc"
     },
     {
       "path": "agents/openai.yaml",
@@ -20,7 +20,7 @@
     },
     {
       "path": "references/authoring-basics.md",
-      "sha256": "3de69ca101d8c08f3413e47a1f3ad551ea2e92e7b0ff25e2def301431d9fa1c6"
+      "sha256": "517c6b9f7f1d777fc90b73aa0c0d6f5813f6f0542605b1a2eda4e25a5000467d"
     },
     {
       "path": "references/checks-and-publication.md",
@@ -28,11 +28,11 @@
     },
     {
       "path": "references/compare-and-merge.md",
-      "sha256": "5a98387aff8031307f058bf69958c4288ce3d4a17c93aec924ec8b83e79c95bf"
+      "sha256": "a9474d067c69f9edab1b9909c605503877f4622164f4616aea126f5192474799"
     },
     {
       "path": "references/contexts-and-state.md",
-      "sha256": "7041768a90a2c1dc22c69a3ff733d423b86b4b213189b8616627a5c6b3a93d77"
+      "sha256": "3dd4b25e58eaf6102fcf4a4dec6b47a863db5060e7cd6a5079894923884a491f"
     },
     {
       "path": "references/external-snapshot-import.md",
@@ -44,7 +44,7 @@
     },
     {
       "path": "references/provenance-and-blame.md",
-      "sha256": "f247f9dba5d0bba5ac066720907e0179b91ceb645060e95ad2069c6ab7e493cb"
+      "sha256": "085061c4011a6c6ae517cf61812209bbf79b2560cf5b5967ae7eead7eddc7429"
     },
     {
       "path": "references/public-contract.json",
@@ -71,5 +71,5 @@
       "sha256": "1b8a8b5b185b47039733272129292f2d6442205bb02d4b07e328790795eb77cb"
     }
   ],
-  "packageDigest": "a6e6634c73bd0d9d3712b454090da845c9e65d05fb1aaa48f884569e36abdcab"
+  "packageDigest": "1676661ec04f61d9fe6f81e6628ef3d901326fb5663762db01bd9dbf0d6d2729"
 }

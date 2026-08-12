@@ -7,20 +7,52 @@ export type CanonicalProvenanceResult = Awaited<ReturnType<ToolVcs["neighbors"]>
 export type CanonicalProvenanceInspection = Awaited<ReturnType<ToolVcs["inspect"]>>;
 export type CanonicalProvenanceHistory = Awaited<ReturnType<ToolVcs["history"]>>;
 
+export interface ProvenancePages {
+  adjacency: number;
+  fileHistory: number;
+  limit: number;
+}
+
+export function provenancePageStreams(pages: ProvenancePages): {
+  inspection: boolean;
+  adjacency: boolean;
+  fileHistory: boolean;
+} {
+  return {
+    inspection: pages.adjacency === 1 && pages.fileHistory === 1,
+    adjacency: pages.adjacency > 1 || pages.fileHistory === 1,
+    fileHistory: pages.fileHistory > 1 || pages.adjacency === 1,
+  };
+}
+
 export interface ProvenanceBlockInput {
   label: string;
   inspection?: CanonicalProvenanceInspection;
   history?: CanonicalProvenanceHistory;
   result: CanonicalProvenanceResult;
-  continuation?:
-    | { kind: "target"; target: string; includeCursor: boolean }
-    | { kind: "root"; root: VcsSemanticNodeRef; includeCursor: boolean };
+  pages?: ProvenancePages;
+  reference?: (
+    root: VcsSemanticNodeRef,
+    continuation?: { stream: "adjacency" | "file-history"; page: number; cursor: string }
+  ) => string;
 }
 
-function historyCall(history: CanonicalProvenanceHistory): string {
+function historyCall(
+  history: CanonicalProvenanceHistory,
+  page: number,
+  limit: number,
+  reference?: ProvenanceBlockInput["reference"]
+): string {
   return `provenance(${JSON.stringify({
-    target: history.root,
-    continuation: { kind: "file-history", cursor: history.nextCursor },
+    ...(reference
+      ? {
+          target: reference(history.root, {
+            stream: "file-history",
+            page,
+            cursor: history.nextCursor!,
+          }),
+        }
+      : { root: history.root, historyPage: page, ...(limit === 5 ? {} : { limit }) }),
   })})`;
 }
 
@@ -210,14 +242,38 @@ function inspectedNodeSummary(inspection: CanonicalProvenanceInspection): string
 }
 
 function provenanceCall(
-  continuation: NonNullable<ProvenanceBlockInput["continuation"]>,
-  page?: { kind: "adjacency"; cursor: string }
+  root: VcsSemanticNodeRef,
+  adjacencyPage?: number,
+  limit = 5,
+  reference?: ProvenanceBlockInput["reference"],
+  cursor?: string
 ): string {
-  const input =
-    continuation.kind === "root"
-      ? { target: continuation.root, ...(page ? { continuation: page } : {}) }
-      : { target: continuation.target, ...(page ? { continuation: page } : {}) };
+  const input = {
+    ...(reference
+      ? {
+          target: reference(
+            root,
+            adjacencyPage && cursor
+              ? { stream: "adjacency", page: adjacencyPage, cursor }
+              : undefined
+          ),
+        }
+      : {
+          root,
+          ...(adjacencyPage ? { adjacencyPage } : {}),
+          ...(limit === 5 ? {} : { limit }),
+        }),
+  };
   return `provenance(${JSON.stringify(input)})`;
+}
+
+function referencedNode(
+  node: VcsSemanticNodeRef,
+  reference?: ProvenanceBlockInput["reference"]
+): string {
+  return reference
+    ? `${node.kind} · provenance(${JSON.stringify({ target: reference(node) })})`
+    : JSON.stringify(node);
 }
 
 function nodeLabel(node: VcsSemanticNodeRef): string {
@@ -286,45 +342,47 @@ function inspectionContinuation(
 
 export function renderProvenanceBlock(input: ProvenanceBlockInput): string | null {
   if (!input.inspection && !input.history && input.result.edges.length === 0) return null;
-  const lines = [
-    `prov · ${input.label} · ${input.result.edges.length} edge${input.result.edges.length === 1 ? "" : "s"}`,
-  ];
-  if (input.inspection) {
+  const pages = input.pages ?? { adjacency: 1, fileHistory: 1, limit: 5 };
+  const streams = provenancePageStreams(pages);
+  const pageLabel =
+    streams.fileHistory && !streams.adjacency
+      ? `file history page ${pages.fileHistory}`
+      : streams.adjacency && !streams.fileHistory
+        ? `adjacency page ${pages.adjacency}`
+        : `${input.result.edges.length} edge${input.result.edges.length === 1 ? "" : "s"}`;
+  const lines = [`prov · ${input.label} · ${pageLabel}`];
+  if (streams.inspection && input.inspection) {
     lines.push(`  node · ${inspectedNodeSummary(input.inspection)}`);
     const next = inspectionContinuation(input.inspection);
     if (next) {
       lines.push(
-        `  inspect ${next.label} → ${provenanceCall({
-          kind: "root",
-          root: next.root,
-          includeCursor: false,
-        })}`
+        `  inspect ${next.label} → ${provenanceCall(next.root, undefined, pages.limit, input.reference)}`
       );
     }
   }
-  for (const entry of input.history?.entries ?? []) {
-    lines.push(`  past · ${nodeLabel(entry.node)} · ${JSON.stringify(entry.summary)}`);
-  }
-  if (input.history?.nextCursor) {
-    lines.push(`  more file history → ${historyCall(input.history)}`);
-  }
-  for (const edge of input.result.edges) {
-    // Labels are pleasant but not reusable. Render the complete typed
-    // coordinates so an agent can continue the graph without parsing an ID or
-    // manufacturing the missing log/head/state portion of a root.
-    lines.push(`  ${JSON.stringify(edge.from)} —${edge.kind}→ ${JSON.stringify(edge.to)}`);
-  }
-  if (input.result.nextCursor) {
+  if (streams.fileHistory && input.history?.nextCursor) {
     lines.push(
-      input.continuation
-        ? `  more → ${provenanceCall(
-            input.continuation,
-            input.continuation.includeCursor
-              ? { kind: "adjacency", cursor: input.result.nextCursor }
-              : undefined
-          )}`
-        : "  more provenance is available"
+      `  more file history → ${historyCall(input.history, pages.fileHistory + 1, pages.limit, input.reference)}`
     );
+  }
+  if (streams.fileHistory) {
+    for (const entry of input.history?.entries ?? []) {
+      lines.push(
+        `  past · ${input.reference ? referencedNode(entry.node, input.reference) : nodeLabel(entry.node)} · ${JSON.stringify(entry.summary)}`
+      );
+    }
+  }
+  if (streams.adjacency && input.result.nextCursor) {
+    lines.push(
+      `  more → ${provenanceCall(input.result.root, pages.adjacency + 1, pages.limit, input.reference, input.result.nextCursor)}`
+    );
+  }
+  if (streams.adjacency) {
+    for (const edge of input.result.edges) {
+      lines.push(
+        `  ${referencedNode(edge.from, input.reference)} —${edge.kind}→ ${referencedNode(edge.to, input.reference)}`
+      );
+    }
   }
   return lines.join("\n");
 }

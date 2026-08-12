@@ -19,6 +19,8 @@ import { splitRepoPath } from "@vibestudio/shared/runtime/entitySpec";
 import type { VcsReadMemoryResult } from "@vibestudio/service-schemas/vcs";
 import { toVcsPath, toolContextId, type ToolVcs, type ToolWorkspaceContext } from "./tool-vcs.js";
 import { renderReadMemoryBlock } from "./read-memory.js";
+import type { AgentReferenceStore } from "./agent-pagination.js";
+import { putProvenanceReference } from "./provenance-reference.js";
 import type { AgentFileVisibility } from "./agent-file-visibility.js";
 import {
   AGENT_TOOL_ARTIFACT_PROTOCOL,
@@ -222,6 +224,7 @@ export interface ReadToolDeps {
     vcs: Pick<ToolVcs, "readMemory">;
     context: ToolWorkspaceContext;
   };
+  agentReferences?: AgentReferenceStore;
   visibility?: AgentFileVisibility;
 }
 export function createReadTool(
@@ -344,6 +347,11 @@ export function createReadTool(
         startLine: displayed.startLine,
         endLine: displayed.endLine,
         result: provenance,
+        ...(deps?.agentReferences
+          ? {
+              reference: (root) => putProvenanceReference(deps.agentReferences!, root, 5),
+            }
+          : {}),
       });
       return {
         ...result,

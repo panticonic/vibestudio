@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
+import { createMemoryAgentReferenceStore } from "../agent-pagination.js";
+import { putProvenanceReference } from "../provenance-reference.js";
 import { createWorkspaceVcsTool, type ToolWorkflowVcs } from "../workspace-vcs.js";
 
 function fixture() {
@@ -56,7 +58,7 @@ function fixture() {
       },
     ],
     intentsTruncated: false,
-    nextCursor: null,
+    nextCursor: null as string | null,
   }));
   const merge = vi.fn(async (input: Parameters<ToolWorkflowVcs["merge"]>[0]) => ({
     status: "working" as const,
@@ -85,7 +87,7 @@ function fixture() {
     intentsTruncated: false,
     counts: { adopt: 0, convergent: 0, composed: 0, conflict: 0, resolved: 1 },
     conflicts: [],
-    nextConflictCursor: null,
+    nextConflictCursor: null as string | null,
     composed: [
       {
         coordinate: { kind: "file" as const, id: "file:source" },
@@ -151,36 +153,6 @@ function fixture() {
     blame,
     push,
     resolveRepository,
-    neighbors: vi.fn(async () => ({
-      root: working,
-      edges: [
-        {
-          kind: "contains-repository" as const,
-          from: working,
-          to: {
-            kind: "repository" as const,
-            state: working,
-            repositoryId: "repository:packages/demo",
-          },
-        },
-      ],
-      nextCursor: null,
-    })),
-    inspect: vi.fn(async (input) => ({
-      root: input.node,
-      node: {
-        kind: "repository" as const,
-        state: working,
-        value: {
-          kind: "present" as const,
-          repositoryId: "repository:packages/demo",
-          repoPath: "packages/demo",
-          manifestId: "manifest:demo",
-        },
-      },
-      edges: [],
-      hasMoreEdges: false,
-    })),
     readFile: vi.fn(async () => ({
       repositoryId: "repository:packages/demo",
       fileId: "file:demo",
@@ -220,7 +192,7 @@ describe("workspace VCS agent tool", () => {
 
     const compared = await tool.execute("call:compare", {
       operation: "compare",
-      sourceEventId: "event:source",
+      source: "event:source",
     });
     expect(f.compare).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -258,7 +230,75 @@ describe("workspace VCS agent tool", () => {
     });
   });
 
-  it("exposes one compare command schema with both explicit source selectors", () => {
+  it("resolves a compact event ref through the unified source selector", async () => {
+    const f = fixture();
+    const references = createMemoryAgentReferenceStore();
+    const tool = createWorkspaceVcsTool(
+      "/",
+      f.vcs,
+      { contextId: "context:test", commandId: "command:ref-source" },
+      references
+    );
+
+    await tool.execute("call:ref-source", {
+      operation: "compare",
+      source: putProvenanceReference(
+        references,
+        { kind: "event", eventId: "event:source" },
+        5
+      ),
+    });
+
+    expect(f.compare).toHaveBeenCalledWith(
+      expect.objectContaining({ source: { kind: "event", eventId: "event:source" } })
+    );
+  });
+
+  it("continues compare with one complete ref without exposing its page or opaque cursor", async () => {
+    const f = fixture();
+    const source = { kind: "event" as const, eventId: "event:source" };
+    const first = await f.compare({ target: f.working, source, limit: 5 });
+    f.compare.mockClear();
+    f.compare.mockResolvedValueOnce(first);
+    const references = createMemoryAgentReferenceStore();
+    const tool = createWorkspaceVcsTool(
+      "/",
+      f.vcs,
+      {
+        contextId: "context:test",
+        commandId: "command:compare-page",
+      },
+      references
+    );
+    const ref = references.put("vcs-compare", {
+      basis: { target: f.working, source, limit: 5 },
+      page: 2,
+      cursor: "cursor:compare",
+    });
+
+    const result = await tool.execute("call:compare-page", {
+      operation: "compare",
+      ref,
+    });
+
+    expect(f.compare).toHaveBeenCalledOnce();
+    expect(f.compare).toHaveBeenLastCalledWith({
+      target: f.working,
+      source,
+      cursor: "cursor:compare",
+      limit: 5,
+    });
+    expect(JSON.stringify(result)).not.toContain("cursor:compare");
+    expect(result.details).toMatchObject({
+      result: {
+        page: 2,
+        coordinateCount: 1,
+        continuation: null,
+      },
+    });
+  });
+
+  it("exposes one compare command schema with one semantic source selector", () => {
     const f = fixture();
     const tool = createWorkspaceVcsTool("/", f.vcs, {
       contextId: "context:test",
@@ -269,26 +309,29 @@ describe("workspace VCS agent tool", () => {
     ).anyOf.filter((branch) => JSON.stringify(branch).includes('"const":"compare"'));
 
     expect(compareBranches).toHaveLength(1);
-    expect(JSON.stringify(compareBranches[0])).toContain('"sourceEventId"');
-    expect(JSON.stringify(compareBranches[0])).toContain('"sourceDeltaId"');
+    expect(JSON.stringify(compareBranches[0])).toContain('"source"');
+    expect(JSON.stringify(compareBranches[0])).not.toContain('"sourceEventId"');
+    expect(JSON.stringify(compareBranches[0])).not.toContain('"sourceDeltaId"');
     expect(JSON.stringify(compareBranches[0])).toContain('"contextId"');
     expect(JSON.stringify(compareBranches[0])).toContain('"view"');
   });
 
-  it("rejects an ambiguous compare selector before reading semantic state", async () => {
+  it("returns a recoverable diagnostic for an ambiguous compare selector", async () => {
     const f = fixture();
     const tool = createWorkspaceVcsTool("/", f.vcs, {
       contextId: "context:test",
       commandId: "command:ambiguous-compare",
     });
 
-    await expect(
-      tool.execute("call:ambiguous-compare", {
-        operation: "compare",
-        view: "local",
-        sourceEventId: "event:source",
-      })
-    ).rejects.toThrow(/exactly one source selector/);
+    const result = await tool.execute("call:ambiguous-compare", {
+      operation: "compare",
+      view: "local",
+      source: "event:source",
+    });
+    expect(result.details).toMatchObject({
+      operation: "compare",
+      result: { status: "invalid-request" },
+    });
     expect(f.status).not.toHaveBeenCalled();
     expect(f.compare).not.toHaveBeenCalled();
   });
@@ -309,43 +352,9 @@ describe("workspace VCS agent tool", () => {
     );
     expect(contract).not.toContain('"const":"listDirectory"');
     expect(contract).not.toContain('"const":"listFiles"');
-  });
-
-  it("inspects and pages exact typed semantic roots without lower-level service fields", async () => {
-    const f = fixture();
-    const tool = createWorkspaceVcsTool("/", f.vcs, {
-      contextId: "context:test",
-      commandId: "command:walk",
-    });
-    const root = {
-      kind: "repository" as const,
-      state: f.working,
-      repositoryId: "repository:packages/demo",
-    };
-
-    const inspected = await tool.execute("call:inspect", {
-      operation: "inspect",
-      root,
-      limit: 7,
-    });
-    expect(f.vcs.inspect).toHaveBeenCalledWith({ node: root, edgeLimit: 7 });
-    expect(inspected.details).toMatchObject({ operation: "inspect", result: { root } });
-
-    const neighbors = await tool.execute("call:neighbors", {
-      operation: "neighbors",
-      root,
-      after: "cursor:next",
-      limit: 9,
-    });
-    expect(f.vcs.neighbors).toHaveBeenCalledWith({
-      root,
-      cursor: "cursor:next",
-      limit: 9,
-    });
-    expect(neighbors.content[0]).toMatchObject({
-      type: "text",
-      text: expect.stringContaining("contains-repository"),
-    });
+    expect(contract).not.toContain('"const":"inspect"');
+    expect(contract).not.toContain('"const":"neighbors"');
+    expect(contract).toContain("Use provenance for semantic roots and graph adjacency");
   });
 
   it("records one exact coordinate merge decision", async () => {
@@ -356,7 +365,7 @@ describe("workspace VCS agent tool", () => {
     });
     const result = await tool.execute("call:merge", {
       operation: "merge",
-      sourceEventId: "event:source",
+      source: "event:source",
       coordinates: [{ kind: "file", id: "file:source" }],
       intent: "Merge the source behavior after coordinate review",
     });
@@ -377,6 +386,52 @@ describe("workspace VCS agent tool", () => {
     });
   });
 
+  it("never exposes merge conflict cursors through the agent contract", async () => {
+    const f = fixture();
+    const base = await f.merge({
+      contextId: "context:test",
+      expectedWorkingHead: f.working,
+      commandId: "fixture",
+      source: { kind: "event", eventId: "event:source" },
+    });
+    f.merge.mockClear();
+    f.merge.mockResolvedValueOnce({
+      ...base,
+      resolution: { complete: false, remainingCoordinateCount: 1, concluded: false },
+      counts: { adopt: 0, convergent: 0, composed: 0, conflict: 1, resolved: 0 },
+      nextConflictCursor: "cursor:conflicts",
+    });
+    const tool = createWorkspaceVcsTool("/", f.vcs, {
+      contextId: "context:test",
+      commandId: "command:merge-conflicts",
+    });
+
+    const result = await tool.execute("call:merge-conflicts", {
+      operation: "merge",
+      source: "event:source",
+      coordinates: [{ kind: "file", id: "file:source" }],
+    });
+
+    expect(JSON.stringify(result)).not.toContain("cursor:conflicts");
+    expect(result.content[0]).toMatchObject({
+      type: "text",
+      text: expect.stringMatching(
+        /More conflicts: vcs\(\{"operation":"compare","ref":"@r[0-9a-z]+-[0-9a-f]{4}"\}\)/u
+      ),
+    });
+    expect(result.details).toMatchObject({
+      operation: "merge",
+      result: {
+        status: "needs-decision",
+        conflictCount: 0,
+        continuation: {
+          operation: "compare",
+          ref: expect.stringMatching(/^@r/u),
+        },
+      },
+    });
+  });
+
   it("merges an external delta into the retained context that returned it", async () => {
     const f = fixture();
     const tool = createWorkspaceVcsTool("/", f.vcs, {
@@ -387,7 +442,7 @@ describe("workspace VCS agent tool", () => {
     await tool.execute("call:template-review", {
       operation: "merge",
       contextId: "context:template-operation",
-      sourceDeltaId: "external-delta:examples",
+      source: "external-delta:examples",
       intent: "Integrate the reviewed Examples contribution",
     });
 
@@ -401,20 +456,20 @@ describe("workspace VCS agent tool", () => {
     );
   });
 
-  it("rejects a merge without exactly one source", async () => {
+  it("returns a normal diagnostic for an invalid merge source", async () => {
     const f = fixture();
     const tool = createWorkspaceVcsTool("/", f.vcs, {
       contextId: "context:test",
       commandId: "command:ambiguous-merge",
     });
 
-    await expect(
-      tool.execute("call:ambiguous-merge", {
-        operation: "merge",
-        sourceEventId: "event:source",
-        sourceDeltaId: "external-delta:source",
-      })
-    ).rejects.toThrow(/exactly one source selector/);
+    const result = await tool.execute("call:ambiguous-merge", {
+      operation: "merge",
+      source: "not-a-semantic-source",
+    });
+    expect(result.details).toMatchObject({
+      result: { status: "invalid-source", source: "not-a-semantic-source" },
+    });
     expect(f.merge).not.toHaveBeenCalled();
   });
 
@@ -427,7 +482,7 @@ describe("workspace VCS agent tool", () => {
 
     await tool.execute("call:resolve", {
       operation: "merge",
-      sourceEventId: "event:source",
+      source: "event:source",
       resolutions: [
         {
           coordinate: { kind: "file", id: "file:source" },
@@ -462,7 +517,7 @@ describe("workspace VCS agent tool", () => {
 
     await tool.execute("call:decline", {
       operation: "merge",
-      sourceEventId: "event:source",
+      source: "event:source",
       resolutions: [
         {
           coordinate: { kind: "file", id: "file:source" },
@@ -501,8 +556,37 @@ describe("workspace VCS agent tool", () => {
     );
     expect(result.content[0]).toMatchObject({
       type: "text",
-      text: expect.stringContaining("command:origin"),
+      text: expect.stringMatching(
+        /1\.\.4 · authored · change provenance\(\{"target":"@r[0-9a-z]+-[0-9a-f]{4}"\}\) · applied change provenance\(\{"target":"@r[0-9a-z]+-[0-9a-f]{4}"\}\) · work provenance\(\{"target":"@r[0-9a-z]+-[0-9a-f]{4}"\}\) · command provenance\(\{"target":"@r[0-9a-z]+-[0-9a-f]{4}"\}\)/u
+      ),
     });
+  });
+
+  it("returns recoverable diagnostics for incomplete blame requests and invalid ranges", async () => {
+    const f = fixture();
+    const tool = createWorkspaceVcsTool("/", f.vcs, {
+      contextId: "context:test",
+      commandId: "command:invalid-blame",
+    });
+
+    const missing = await tool.execute("call:missing-blame-path", { operation: "blame" });
+    expect(missing.details).toMatchObject({
+      result: { status: "invalid-request", recovery: { field: "path" } },
+    });
+
+    const invalidRange = await tool.execute("call:invalid-blame-range", {
+      operation: "blame",
+      path: "packages/demo/a.ts",
+      start: 5,
+      end: 2,
+    });
+    expect(invalidRange.details).toMatchObject({
+      result: {
+        status: "invalid-request",
+        recovery: { range: { start: 0, end: 5 } },
+      },
+    });
+    expect(f.blame).not.toHaveBeenCalled();
   });
 
   it("discards the whole local chain from the live head with the invocation command", async () => {
@@ -622,23 +706,16 @@ describe("workspace VCS agent tool", () => {
 
     expect(result.content[0]).toMatchObject({
       type: "text",
-      text: expect.stringContaining(
-        'pass these typed roots unchanged to provenance: inspect terminal change {"kind":"change","changeId":"change:import"}, then owning import work unit {"kind":"work-unit","workUnitId":"work-unit:import"} for the exact external snapshot; earlier coordinate authorship is unknown'
+      text: expect.stringMatching(
+        /change provenance\(\{"target":"@r[0-9a-z]+-[0-9a-f]{4}"\}\) · applied change provenance\(\{"target":"@r[0-9a-z]+-[0-9a-f]{4}"\}\) · work provenance\(\{"target":"@r[0-9a-z]+-[0-9a-f]{4}"\}\) · command provenance\(\{"target":"@r[0-9a-z]+-[0-9a-f]{4}"\}\) · inspect terminal change with provenance\(\{"target":"@r[0-9a-z]+-[0-9a-f]{4}"\}\), then owning import work with provenance\(\{"target":"@r[0-9a-z]+-[0-9a-f]{4}"\}\) for the exact external snapshot/u
       ),
     });
     expect(result.details).toMatchObject({
       result: {
-        spans: [
-          {
-            change: { kind: "change", changeId: "change:import" },
-            appliedChange: {
-              kind: "applied-change",
-              appliedChangeId: "applied-change:import",
-            },
-            workUnit: { kind: "work-unit", workUnitId: "work-unit:import" },
-            command: { kind: "command", commandId: "command:import" },
-          },
-        ],
+        page: 1,
+        coordinateKind: "utf16",
+        spanCount: 1,
+        continuation: null,
       },
     });
   });

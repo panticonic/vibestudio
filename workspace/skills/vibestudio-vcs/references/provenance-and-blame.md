@@ -1,6 +1,6 @@
 # Provenance and blame
 
-## Start from a typed root
+## Start from a friendly target
 
 Use roots returned by VCS responses or construct a schema-valid root with an
 explicit kind: event, application, applied-change, work-unit, change, decision,
@@ -14,15 +14,26 @@ Use the four walk surfaces deliberately:
 - `history` projects committed event ancestry from an event root;
 - `blame` traces one exact file range through content-coordinate mappings.
 
-Pass `nextCursor` only with the same root and query. Traversal state belongs to
-the client; the server does not retain a search session.
+Agent-facing `provenance` starts from `target: "session"`, a managed path, or a
+semantic shorthand, then graph results advertise complete compact `@ref` values.
+Continue with that `@ref` as `target` and no other selector. The durable
+channel-scoped reference retains the exact root and forwards every opaque
+service cursor byte-for-byte. Direct service clients still carry `nextCursor`
+with the same root and query because the server does not retain a search
+session.
+
+In `provenance`, `target` is the sole selector. It accepts a friendly string such
+as `"session"`, a managed path, a semantic identity, or any returned `@ref`.
+Treat an advertised ref as the complete continuation. Exact typed roots remain a
+direct-service concept and never cross the agent-facing selector contract.
 
 The focused `provenance` agent tool composes these reads: it renders the selected
 node's semantic fields before one exact adjacency page. For a file root it also
-renders a bounded past-history preview with exact change IDs and summaries. Its
-result details retain the typed node and edge endpoints. Prefer it for ordinary
-orientation; use direct VCS reads for custom adjacency, history pagination, or
-range tracing.
+renders a bounded past-history preview with compact change refs and summaries. Its
+structured details retain only bounded counts and continuation refs. Each continuation
+ref retains exactly one stream and page. Prefer it
+for ordinary orientation; use direct VCS reads for custom adjacency, history
+pagination, or range tracing.
 
 ## Use read-time memory
 
@@ -133,13 +144,16 @@ coincidentally equal text inside a replacement is not silently reclassified as
 untouched. A mapping that changes units or exceeds either state's extent is an
 integrity failure. Page large ranges rather than asking for an unbounded trace.
 The opaque blame cursor is bound to the exact requested range and resumes at
-the first unreturned coordinate; reuse it only with the same state, file, and
-range.
+the first unreturned coordinate. Agent-facing blame returns a complete compact
+`ref` that retains that exact state, file, range, page, and cursor; continue by
+copying the advertised `vcs({ operation: "blame", ref })` call unchanged. Direct service clients
+must reuse the cursor only with the same basis.
 
 Each blame span's `path` contains only the exact content-mapping route between
 applied-change nodes. Its terminal `appliedChange`, `change`, `workUnit`, and
-`command` fields are canonical typed provenance roots: pass any of them
-unchanged to `inspect` or `neighbors`. Follow `realizes-change` from
+`command` fields are canonical typed provenance roots. Agent-facing blame
+renders compact refs for them; pass a ref to `provenance`. Follow
+`realizes-change` from
 `appliedChange` when the mapped-content route matters, or inspect the other
 roots directly to reach semantic intent and the causal trajectory invocation.
 The span also carries the terminal `workUnitId` and resolved intent `tier`, but

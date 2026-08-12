@@ -2,6 +2,7 @@ import type {
   VcsHistoryResult,
   VcsReadMemoryEpisode,
   VcsReadMemoryResult,
+  VcsSemanticNodeRef,
 } from "@vibestudio/service-schemas/vcs";
 
 type AttachedReadMemory = Extract<VcsReadMemoryResult, { status: "attached" }>;
@@ -17,7 +18,11 @@ const compact = (value: string, limit = 280): string => {
     : `${normalized.slice(0, Math.max(0, limit - 1)).trimEnd()}…`;
 };
 const quoted = (value: string): string => JSON.stringify(compact(value));
-const root = (value: object): string => JSON.stringify(value);
+type ReferenceSemanticRoot = (value: VcsSemanticNodeRef) => string;
+const root = (value: VcsSemanticNodeRef, reference?: ReferenceSemanticRoot): string =>
+  reference
+    ? `${value.kind} · provenance(${JSON.stringify({ target: reference(value) })})`
+    : JSON.stringify(value);
 
 function lineAt(
   content: string,
@@ -69,11 +74,12 @@ function prepareEpisode(
   episode: VcsReadMemoryEpisode,
   readingContextId: string,
   contentStart: number,
-  contentStartLine: number
+  contentStartLine: number,
+  reference?: ReferenceSemanticRoot
 ): RenderableEpisode {
   const range = `● lines ${renderedRanges(content, episode, contentStart, contentStartLine)}`;
-  const work = `work unit ${root(episode.workUnit)}`;
-  const change = `change ${root(episode.change)}`;
+  const work = `work unit ${root(episode.workUnit, reference)}`;
+  const change = `change ${root(episode.change, reference)}`;
   const why = `${episode.intent.tier}: ${quoted(episode.intent.text)}`;
   if (episode.authorContextId === readingContextId) {
     return { episode, base: [range, "yours", why, work, change] };
@@ -87,8 +93,8 @@ function prepareEpisode(
       range,
       arrival
         ? arrival.mode === "arrived"
-          ? `arrived via merge ${root(arrival.decision)}`
-          : `accepted as merged truth by ${root(arrival.decision)}`
+          ? `arrived via merge ${root(arrival.decision, reference)}`
+          : `accepted as merged truth by ${root(arrival.decision, reference)}`
         : episode.stop === "import-boundary"
           ? "imported from outside workspace history"
           : "authored here",
@@ -128,10 +134,10 @@ function episodeText(value: RenderableEpisode): string {
     .join(" · ");
 }
 
-function historyText(entry: HistoryEntry): string {
+function historyText(entry: HistoryEntry, reference?: ReferenceSemanticRoot): string {
   const intent = entry.intent ? ` · ${entry.intent.tier}: ${quoted(entry.intent.text)}` : "";
   const decision = entry.viaDecisionId ? ` · via decision ${entry.viaDecisionId}` : "";
-  return `- ${quoted(entry.summary)}${intent}${decision} · ${root(entry.node)}`;
+  return `- ${quoted(entry.summary)}${intent}${decision} · ${root(entry.node, reference)}`;
 }
 
 export function renderReadMemoryBlock(input: {
@@ -143,14 +149,21 @@ export function renderReadMemoryBlock(input: {
   startLine: number;
   endLine: number;
   result: AttachedReadMemory;
+  reference?: ReferenceSemanticRoot;
 }): string | null {
   if (input.result.episodes.length === 0 && input.result.history.length === 0) return null;
   const header =
     `workspace memory · why ${input.label} lines ${input.startLine}-${input.endLine} exist · ` +
     "verified against this exact content";
-  const footer =
-    `dig deeper · provenance({ target: … }) on any subject above · ` +
-    `vcs.history with intents for how this file's purpose has drifted`;
+  const fileRoot: Extract<VcsSemanticNodeRef, { kind: "file" }> = {
+    kind: "file",
+    state: input.result.state,
+    repositoryId: input.result.repositoryId,
+    fileId: input.result.fileId,
+  };
+  const footer = input.reference
+    ? `dig deeper into this file · provenance(${JSON.stringify({ target: input.reference(fileRoot) })}) · pass every returned @ref through the same target field`
+    : `dig deeper into this file · provenance(${JSON.stringify({ target: input.label })})`;
   const episodes = input.result.episodes
     .map((episode) =>
       prepareEpisode(
@@ -158,7 +171,8 @@ export function renderReadMemoryBlock(input: {
         episode,
         input.readingContextId,
         input.contentStart ?? 0,
-        input.contentStartLine ?? 1
+        input.contentStartLine ?? 1,
+        input.reference
       )
     )
     .sort(
@@ -173,10 +187,13 @@ export function renderReadMemoryBlock(input: {
       header,
       ...episodes.map(episodeText),
       ...(input.result.history.length > 0
-        ? ["earlier file history", ...input.result.history.map(historyText)]
+        ? [
+            "earlier file history",
+            ...input.result.history.map((entry) => historyText(entry, input.reference)),
+          ]
         : []),
       ...(dropped
-        ? ["… attachment truncated; use the cursored continuations below for complete coverage"]
+        ? ["… attachment truncated; use the compact continuations below for complete coverage"]
         : []),
       footer,
     ].join("\n");

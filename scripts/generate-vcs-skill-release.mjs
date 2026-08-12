@@ -205,7 +205,7 @@ function validateCanonicalSkill() {
   const proceduralGuidance = [
     ["exact working heads", "workingHead"],
     ["local comparison", 'view: "local"'],
-    ["incoming source selection", "sourceEventId"],
+    ["incoming source selection", 'source: "event:..."'],
     ["merge conclusion", "resolution.complete && resolution.concluded"],
     ["whole-chain commit", 'operation: "commit"'],
     ["protected publication", 'operation: "push"'],

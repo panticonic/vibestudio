@@ -1,4 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
+import { Value } from "@sinclair/typebox/value";
+import { createMemoryAgentReferenceStore } from "../agent-pagination.js";
+import { putProvenanceReference } from "../provenance-reference.js";
 import {
   createProvenanceTool,
   type ProvenanceToolDeps,
@@ -423,17 +426,21 @@ function fixture() {
       repoPath: "packages/foo",
     })
   );
-  const history = vi.fn(async (input: Parameters<ProvenanceToolDeps["vcs"]["history"]>[0]) => ({
-    root: input.root,
-    entries: [
-      {
-        node: { kind: "change" as const, changeId: "change:file-edit" },
-        createdAt: "2026-07-15T10:00:00.000Z",
-        summary: "Explain the public entry point",
-      },
-    ],
-    nextCursor: "cursor:history",
-  }));
+  const history = vi.fn(
+    async (
+      input: Parameters<ProvenanceToolDeps["vcs"]["history"]>[0]
+    ): ReturnType<ProvenanceToolDeps["vcs"]["history"]> => ({
+      root: input.root,
+      entries: [
+        {
+          node: { kind: "change" as const, changeId: "change:file-edit" },
+          createdAt: "2026-07-15T10:00:00.000Z",
+          summary: "Explain the public entry point",
+        },
+      ],
+      nextCursor: "cursor:history",
+    })
+  );
   const value: ProvenanceToolDeps = {
     vcs: { status, resolveRepository, neighbors, inspect, readFile, history },
     contextId: "context:1",
@@ -443,6 +450,42 @@ function fixture() {
 }
 
 describe("createProvenanceTool", () => {
+  it("exposes only friendly targets and compact refs as selectors", () => {
+    const tool = createProvenanceTool("/", fixture().value);
+    const root = {
+      kind: "file",
+      state: working,
+      repositoryId: "repository:packages/foo",
+      fileId: "file:bar",
+    };
+
+    expect(
+      Value.Check(tool.parameters, {
+        target: "packages/foo/bar.ts",
+        limit: 3,
+      })
+    ).toBe(true);
+    expect(Value.Check(tool.parameters, { target: "@r1-abcd" })).toBe(true);
+    expect(Value.Check(tool.parameters, { target: "@r1-abcd", historyPage: 2 })).toBe(false);
+    expect(Value.Check(tool.parameters, { root, historyPage: 2 })).toBe(false);
+    expect(Value.Check(tool.parameters, { target: root, historyPage: 2 })).toBe(false);
+    expect(Value.Check(tool.parameters, { root: { ...root, historyPage: 2 } })).toBe(false);
+  });
+
+  it("accepts an ordinary subject ref as an idempotent first-page read", async () => {
+    const f = fixture();
+    const references = createMemoryAgentReferenceStore();
+    const tool = createProvenanceTool("/", f.value, references);
+    const root = { kind: "change" as const, changeId: "change:1" };
+
+    const result = await tool.execute("call:first-page", {
+      target: putProvenanceReference(references, root, 5),
+    });
+
+    expect(f.neighbors).toHaveBeenCalledWith({ root, limit: 5 });
+    expect(result.details).toMatchObject({ subjectKind: "change", adjacencyCount: 1 });
+  });
+
   it("resolves a friendly repository path to its typed repository node", async () => {
     const f = fixture();
     const tool = createProvenanceTool("/", f.value);
@@ -472,10 +515,7 @@ describe("createProvenanceTool", () => {
     expect(f.history).not.toHaveBeenCalled();
     expect(result.details).toMatchObject({
       target: "packages/foo",
-      root: {
-        kind: "repository",
-        repositoryId: "repository:packages/foo",
-      },
+      subjectKind: "repository",
     });
   });
 
@@ -493,7 +533,11 @@ describe("createProvenanceTool", () => {
       },
       limit: 5,
     });
-    expect(result.details).toMatchObject({ target: "packages/foo/bar.ts", edges: 1 });
+    expect(result.details).toMatchObject({
+      target: "packages/foo/bar.ts",
+      subjectKind: "file",
+      adjacencyCount: 1,
+    });
     expect(f.inspect).toHaveBeenCalledWith({
       node: {
         kind: "file",
@@ -514,27 +558,27 @@ describe("createProvenanceTool", () => {
       limit: 5,
     });
     const text = result.content[0]?.type === "text" ? result.content[0].text : "";
-    expect(text).toContain('past · change:file-edit · "Explain the public entry point"');
-    expect(text).toContain(
-      'more file history → provenance({"target":{"kind":"file","state":{"kind":"event","eventId":"event:working"},"repositoryId":"repository:packages/foo","fileId":"file:bar"},"continuation":{"kind":"file-history","cursor":"cursor:history"}})'
+    expect(text).toMatch(
+      /past · change · provenance\(\{"target":"@r[0-9a-z]+-[0-9a-f]{4}"\}\) · "Explain the public entry point"/u
     );
+    expect(text).toMatch(
+      /more file history → provenance\(\{"target":"@r[0-9a-z]+-[0-9a-f]{4}"\}\)/u
+    );
+    expect(text).not.toContain("cursor:history");
+    expect(text).not.toContain("cursor:next");
     expect(result.details).toMatchObject({
-      history: [
-        {
-          node: { kind: "change", changeId: "change:file-edit" },
-          summary: "Explain the public entry point",
-        },
-      ],
+      historyCount: 1,
       continuations: [
-        { kind: "adjacency", cursor: "cursor:next" },
-        { kind: "file-history", cursor: "cursor:history" },
+        { target: expect.stringMatching(/^@r/u), kind: "adjacency" },
+        { target: expect.stringMatching(/^@r/u), kind: "file-history" },
       ],
     });
   });
 
-  it("pages file history independently from adjacency", async () => {
+  it("carries the exact file-history page and cursor inside one continuation ref", async () => {
     const f = fixture();
-    const tool = createProvenanceTool("/", f.value);
+    const references = createMemoryAgentReferenceStore();
+    const tool = createProvenanceTool("/", f.value, references);
     const target = {
       kind: "file" as const,
       state: working,
@@ -542,17 +586,149 @@ describe("createProvenanceTool", () => {
       fileId: "file:bar",
     };
 
-    await tool.execute("call:history-page", {
-      target,
-      continuation: { kind: "file-history", cursor: "cursor:history" },
+    const ref = putProvenanceReference(references, target, 2, {
+      stream: "file-history",
+      page: 2,
+      cursor: "cursor:history",
+    });
+    const result = await tool.execute("call:history-page", {
+      target: ref,
     });
 
-    expect(f.neighbors).toHaveBeenLastCalledWith({ root: target, limit: 5 });
-    expect(f.history).toHaveBeenLastCalledWith({
+    expect(f.neighbors).not.toHaveBeenCalled();
+    expect(f.inspect).not.toHaveBeenCalled();
+    expect(f.history).toHaveBeenCalledOnce();
+    expect(f.history).toHaveBeenCalledWith({
+      root: target,
+      direction: "past",
+      cursor: "cursor:history",
+      limit: 2,
+    });
+    const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+    expect(text).toContain("file history page 2");
+    expect(text).toMatch(
+      /more file history → provenance\(\{"target":"@r[0-9a-z]+-[0-9a-f]{4}"\}\)/u
+    );
+    expect(text.indexOf("more file history")).toBeLessThan(text.indexOf("past ·"));
+    expect(text).not.toContain("node ·");
+    expect(text).not.toContain("—caused-by→");
+    expect(result.details).toMatchObject({
+      historyCount: 1,
+      continuations: [{ target: expect.stringMatching(/^@r/u), kind: "file-history" }],
+    });
+    expect(result.details).not.toHaveProperty("adjacencyCount");
+  });
+
+  it("fetches only the advertised adjacency stream for an adjacency continuation", async () => {
+    const f = fixture();
+    const references = createMemoryAgentReferenceStore();
+    const tool = createProvenanceTool("/", f.value, references);
+    const target = {
+      kind: "file" as const,
+      state: working,
+      repositoryId: "repository:packages/foo",
+      fileId: "file:bar",
+    };
+
+    await tool.execute("call:adjacency-page", {
+      target: putProvenanceReference(references, target, 3, {
+        stream: "adjacency",
+        page: 2,
+        cursor: "cursor:next",
+      }),
+    });
+
+    expect(f.neighbors).toHaveBeenCalledWith({
+      root: target,
+      cursor: "cursor:next",
+      limit: 3,
+    });
+    expect(f.inspect).not.toHaveBeenCalled();
+    expect(f.history).not.toHaveBeenCalled();
+  });
+
+  it("clamps an oversized page preference instead of rejecting the turn", async () => {
+    const f = fixture();
+    const references = createMemoryAgentReferenceStore();
+    const tool = createProvenanceTool("/", f.value, references);
+    const target = {
+      kind: "file" as const,
+      state: working,
+      repositoryId: "repository:packages/foo",
+      fileId: "file:bar",
+    };
+
+    await tool.execute("call:clamped-limit", {
+      target: putProvenanceReference(references, target, 5, {
+        stream: "file-history",
+        page: 2,
+        cursor: "cursor:history",
+      }),
+      limit: 50,
+    });
+
+    expect(f.history).toHaveBeenNthCalledWith(1, {
       root: target,
       direction: "past",
       cursor: "cursor:history",
       limit: 5,
+    });
+  });
+
+  it("returns a normal empty page when an advertised continuation reaches the stream end", async () => {
+    const f = fixture();
+    f.history.mockResolvedValueOnce({
+      root: {
+        kind: "file",
+        state: working,
+        repositoryId: "repository:packages/foo",
+        fileId: "file:bar",
+      },
+      entries: [],
+      nextCursor: null,
+    });
+    const references = createMemoryAgentReferenceStore();
+    const tool = createProvenanceTool("/", f.value, references);
+    const target = {
+      kind: "file" as const,
+      state: working,
+      repositoryId: "repository:packages/foo",
+      fileId: "file:bar",
+    };
+
+    const result = await tool.execute("call:history-unavailable", {
+      target: putProvenanceReference(references, target, 5, {
+        stream: "file-history",
+        page: 2,
+        cursor: "cursor:history",
+      }),
+    });
+
+    expect(result.details).toMatchObject({
+      target: expect.stringMatching(/^@r/u),
+      subjectKind: "file",
+      historyCount: 0,
+      continuations: [],
+    });
+  });
+
+  it("returns a normal diagnostic for a nonexistent friendly repository path", async () => {
+    const f = fixture();
+    f.value.vcs.resolveRepository = vi.fn(async () => null);
+    const tool = createProvenanceTool("/", f.value);
+
+    const result = await tool.execute("call:missing-repository", {
+      target: "projects/missing-history",
+      limit: 1,
+    });
+
+    expect(result.details).toMatchObject({
+      diagnostic: "invalid-target",
+      target: "projects/missing-history",
+    });
+    expect(result.content[0]).toMatchObject({
+      type: "text",
+      text: expect.stringContaining("is not present in the working state"),
     });
   });
 
@@ -574,7 +750,10 @@ describe("createProvenanceTool", () => {
     expect(f.inspect).toHaveBeenCalledWith({ node: root, edgeLimit: 1 });
     expect(f.readFile).not.toHaveBeenCalled();
     expect(f.history).not.toHaveBeenCalled();
-    expect(result.details).toMatchObject({ target: "packages/foo", root });
+    expect(result.details).toMatchObject({
+      target: "packages/foo",
+      subjectKind: "repository",
+    });
   });
 
   it("walks the exact session trajectory node", async () => {
@@ -618,51 +797,55 @@ describe("createProvenanceTool", () => {
     });
   });
 
-  it("passes an exact typed node through unchanged with its cursor", async () => {
+  it("passes an exact typed node through unchanged while carrying its cursor internally", async () => {
     const f = fixture();
-    const tool = createProvenanceTool("/", f.value);
+    const references = createMemoryAgentReferenceStore();
+    const tool = createProvenanceTool("/", f.value, references);
     const root = { kind: "decision" as const, decisionId: "decision:1" };
     await tool.execute("call:4", {
-      target: root,
-      continuation: { kind: "adjacency", cursor: "cursor:1" },
+      target: putProvenanceReference(references, root, 5, {
+        stream: "adjacency",
+        page: 2,
+        cursor: "cursor:next",
+      }),
     });
-    expect(f.neighbors).toHaveBeenCalledWith({ root, limit: 5, cursor: "cursor:1" });
+    expect(f.neighbors).toHaveBeenCalledOnce();
+    expect(f.neighbors).toHaveBeenLastCalledWith({
+      root,
+      limit: 5,
+      cursor: "cursor:next",
+    });
   });
 
   it("renders work-unit intent before exact adjacency and retains its endpoints", async () => {
     const f = fixture();
     const tool = createProvenanceTool("/", f.value);
     const result = await tool.execute("call:work", { target: "work-unit:1" });
-    const details = detailsOf(result);
     const text = result.content[0]?.type === "text" ? result.content[0].text : "";
 
     expect(text).toContain(
       'node · work-unit · edit · stated: "Rename the public entry point" · command command:1'
     );
-    expect(text).toContain(
-      '{"kind":"work-unit","workUnitId":"work-unit:1"} —authored-change→ {"kind":"change","changeId":"change:1"}'
+    expect(text).toMatch(
+      /work-unit · provenance\(\{"target":"@r[0-9a-z]+-[0-9a-f]{4}"\}\) —authored-change→ change · provenance\(\{"target":"@r[0-9a-z]+-[0-9a-f]{4}"\}\)/u
     );
     expect(text.indexOf("node ·")).toBeLessThan(text.indexOf("—authored-change→"));
-    expect(details.adjacency).toEqual([
-      {
-        kind: "authored-change",
-        from: { kind: "work-unit", workUnitId: "work-unit:1" },
-        to: { kind: "change", changeId: "change:1" },
-      },
-    ]);
+    expect(detailsOf(result)).toMatchObject({ subjectKind: "work-unit", adjacencyCount: 1 });
   });
 
   it("renders command state and trajectory-invocation metadata", async () => {
     const f = fixture();
-    const tool = createProvenanceTool("/", f.value);
+    const references = createMemoryAgentReferenceStore();
+    const tool = createProvenanceTool("/", f.value, references);
     const command = await tool.execute("call:command", { target: "command:1" });
+    const invocationRoot = {
+      kind: "trajectory-invocation" as const,
+      logId: "log:1",
+      head: "head:1",
+      invocationId: "invocation:1",
+    };
     const invocation = await tool.execute("call:invocation", {
-      target: {
-        kind: "trajectory-invocation",
-        logId: "log:1",
-        head: "head:1",
-        invocationId: "invocation:1",
-      },
+      target: putProvenanceReference(references, invocationRoot, 5),
     });
     const commandText = command.content[0]?.type === "text" ? command.content[0].text : "";
     const invocationText = invocation.content[0]?.type === "text" ? invocation.content[0].text : "";
@@ -674,8 +857,8 @@ describe("createProvenanceTool", () => {
     expect(invocationText).toContain(
       'request aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa · json · 48 bytes · read services.blobstore.getText("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")'
     );
-    expect(invocationText).toContain(
-      '{"kind":"trajectory-invocation","logId":"log:1","head":"head:1","invocationId":"invocation:1"} —part-of-trajectory→ {"kind":"trajectory","logId":"log:1","head":"head:1"}'
+    expect(invocationText).toMatch(
+      /trajectory-invocation · provenance\(\{"target":"@r[0-9a-z]+-[0-9a-f]{4}"\}\) —part-of-trajectory→ trajectory · provenance\(\{"target":"@r[0-9a-z]+-[0-9a-f]{4}"\}\)/u
     );
     expect(invocationText.indexOf("node ·")).toBeLessThan(
       invocationText.indexOf("—part-of-trajectory→")
@@ -690,29 +873,31 @@ describe("createProvenanceTool", () => {
     const rendered = result.content[0]?.type === "text" ? result.content[0].text : "";
 
     expect(rendered).toContain("node · command · vcs.edit · complete · context context:1");
-    expect(details.root).toEqual({ kind: "command", commandId: "command:direct" });
-    expect(details.adjacency).toEqual([]);
+    expect(details).toMatchObject({ subjectKind: "command", adjacencyCount: 0 });
     expect(rendered).not.toContain("trajectory-invocation");
   });
 
   it("renders the exact intent-bearing turn and triggering message", async () => {
     const f = fixture();
-    const tool = createProvenanceTool("/", f.value);
+    const references = createMemoryAgentReferenceStore();
+    const tool = createProvenanceTool("/", f.value, references);
+    const turnRoot = {
+      kind: "trajectory-turn" as const,
+      logId: "log:1",
+      head: "head:1",
+      turnId: "turn:1",
+    };
+    const messageRoot = {
+      kind: "trajectory-message" as const,
+      logId: "log:1",
+      head: "head:1",
+      messageId: "message:prompt",
+    };
     const turn = await tool.execute("call:turn", {
-      target: {
-        kind: "trajectory-turn",
-        logId: "log:1",
-        head: "head:1",
-        turnId: "turn:1",
-      },
+      target: putProvenanceReference(references, turnRoot, 5),
     });
     const message = await tool.execute("call:message", {
-      target: {
-        kind: "trajectory-message",
-        logId: "log:1",
-        head: "head:1",
-        messageId: "message:prompt",
-      },
+      target: putProvenanceReference(references, messageRoot, 5),
     });
     const turnDetails = detailsOf(turn);
     const turnText = turn.content[0]?.type === "text" ? turn.content[0].text : "";
@@ -724,22 +909,7 @@ describe("createProvenanceTool", () => {
     expect(messageText).toContain(
       'node · trajectory-message · role user · status completed · turn turn:1 · source channel-message:prompt · sender user:user:alice participant user:alice · text "Move the parser"'
     );
-    expect(turnDetails.root).toEqual({
-      kind: "trajectory-turn",
-      logId: "log:1",
-      head: "head:1",
-      turnId: "turn:1",
-    });
-    expect(turnDetails.adjacency).toContainEqual({
-      kind: "triggered-by",
-      from: turnDetails.root,
-      to: {
-        kind: "trajectory-message",
-        logId: "log:1",
-        head: "head:1",
-        messageId: "message:prompt",
-      },
-    });
+    expect(turnDetails).toMatchObject({ subjectKind: "trajectory-turn", adjacencyCount: 1 });
   });
 
   it("returns a corrective diagnostic for non-target vocabulary", async () => {
@@ -759,7 +929,7 @@ describe("createProvenanceTool", () => {
     });
   });
 
-  it("guides ambiguous trajectory labels toward exact typed roots", async () => {
+  it("guides ambiguous trajectory labels toward returned compact refs", async () => {
     const f = fixture();
     const tool = createProvenanceTool("/", f.value);
     const result = await tool.execute("call:trajectory-label", {
@@ -772,6 +942,6 @@ describe("createProvenanceTool", () => {
       },
     });
     const text = result.content[0]?.type === "text" ? result.content[0].text : "";
-    expect(text).toContain("Trajectory nodes require the exact typed target");
+    expect(text).toContain("Trajectory subnodes require the compact ref");
   });
 });

@@ -58,7 +58,8 @@ or adding warning prose to the file content. The visible
 tier-labeled intent, merge-arrival context, independently labeled commit
 evidence, and intent-annotated file history. It samples for coverage, orders
 surprise before routine work, collapses the reading context's own work, and
-gives the cursored continuations once. This is a projection of canonical GAD
+gives compact, complete continuations while retaining exact content identities
+and opaque service cursors inside the harness. This is a projection of canonical GAD
 facts, not a second claims store.
 
 Do not ask the model to choose a provenance level or recall keywords before

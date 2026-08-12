@@ -4,18 +4,30 @@ import { Type } from "@sinclair/typebox";
 import { canonicalJson, sha256HexSyncText } from "@vibestudio/content-addressing";
 import type { AgentTool, AgentToolResult } from "@workspace/pi-core";
 import type {
+  VcsBlameInput,
   VcsCommitResult,
+  VcsCompareInput,
   VcsDiscardResult,
-  VcsInspectResult,
-  VcsNeighborsResult,
+  VcsMergeSource,
   VcsSemanticNodeRef,
   VcsStatusResult,
   VcsWorkingMutationResult,
 } from "@vibestudio/service-schemas/vcs";
 import { driveMerge, renderCompareReview, renderMergeReview } from "../merge-driver.js";
-import { semanticRootSchema } from "./provenance.js";
 import { resolveToolFile } from "../semantic-file-resolution.js";
 import { base64ToBytes } from "./portable-bytes.js";
+import {
+  AgentReferenceUnavailableError,
+  agentReferenceSchema,
+  createMemoryAgentReferenceStore,
+  isAgentReference,
+  loadAgentReference,
+  type AgentReferenceStore,
+} from "./agent-pagination.js";
+import {
+  loadProvenanceReference,
+  putProvenanceReference,
+} from "./provenance-reference.js";
 import {
   resolveToolWorkingState,
   toVcsPath,
@@ -40,23 +52,6 @@ const workspaceVcsSchema = Type.Union([
   Type.Object({ operation: Type.Literal("status") }, { additionalProperties: false }),
   Type.Object(
     {
-      operation: Type.Literal("inspect"),
-      root: semanticRootSchema,
-      limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 500 })),
-    },
-    { additionalProperties: false }
-  ),
-  Type.Object(
-    {
-      operation: Type.Literal("neighbors"),
-      root: semanticRootSchema,
-      after: Type.Optional(Type.String()),
-      limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 500 })),
-    },
-    { additionalProperties: false }
-  ),
-  Type.Object(
-    {
       operation: Type.Literal("compare"),
       contextId: Type.Optional(
         Type.String({
@@ -65,26 +60,21 @@ const workspaceVcsSchema = Type.Union([
             "Exact retained workspace context returned by another operation; omit to use the current task context.",
         })
       ),
-      sourceEventId: Type.Optional(
+      source: Type.Optional(
         Type.String({
           minLength: 1,
-          description: "Exact incoming committed event; omit when view is local.",
-        })
-      ),
-      sourceDeltaId: Type.Optional(
-        Type.String({
-          minLength: 1,
-          description: "Exact external semantic delta returned for review.",
+          description:
+            "Incoming committed event, external delta, or compact semantic @ref; omit when view is local.",
         })
       ),
       view: Type.Optional(
         Type.Literal("local", {
           description:
-            "Compare the complete current working state, including uncommitted applications, against protected main; omit when sourceEventId is present.",
+            "Compare the complete current working state, including uncommitted applications, against protected main; omit when source is present.",
         })
       ),
       status: Type.Optional(Type.Literal("conflict")),
-      after: Type.Optional(Type.String()),
+      ref: Type.Optional(agentReferenceSchema),
       limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 500 })),
     },
     { additionalProperties: false }
@@ -99,8 +89,10 @@ const workspaceVcsSchema = Type.Union([
             "Exact retained workspace context returned by another operation; omit to use the current task context.",
         })
       ),
-      sourceEventId: Type.Optional(Type.String({ minLength: 1 })),
-      sourceDeltaId: Type.Optional(Type.String({ minLength: 1 })),
+      source: Type.String({
+        minLength: 1,
+        description: "Incoming committed event, external delta, or compact semantic @ref.",
+      }),
       coordinates: Type.Optional(Type.Array(coordinateSchema, { maxItems: 500 })),
       resolutions: Type.Optional(
         Type.Union([
@@ -161,7 +153,12 @@ const workspaceVcsSchema = Type.Union([
   Type.Object(
     {
       operation: Type.Literal("blame"),
-      path: Type.String({ minLength: 1 }),
+      path: Type.Optional(
+        Type.String({
+          minLength: 1,
+          description: "Managed file path. Required to start blame; omit when ref is present.",
+        })
+      ),
       start: Type.Optional(
         Type.Integer({
           minimum: 0,
@@ -176,7 +173,7 @@ const workspaceVcsSchema = Type.Union([
             "Exclusive zero-based UTF-16 content offset (byte offset for binary); omit start and end to blame the full file. This is not a line number.",
         })
       ),
-      after: Type.Optional(Type.String()),
+      ref: Type.Optional(agentReferenceSchema),
       limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 500 })),
     },
     { additionalProperties: false }
@@ -186,23 +183,19 @@ const workspaceVcsSchema = Type.Union([
 
 export type WorkspaceVcsToolInput =
   | { operation: "status" }
-  | { operation: "inspect"; root: VcsSemanticNodeRef; limit?: number }
-  | { operation: "neighbors"; root: VcsSemanticNodeRef; after?: string; limit?: number }
   | {
       operation: "compare";
       contextId?: string;
-      sourceEventId?: string;
-      sourceDeltaId?: string;
+      source?: string;
       view?: "local";
       status?: "conflict";
-      after?: string;
+      ref?: string;
       limit?: number;
     }
   | {
       operation: "merge";
       contextId?: string;
-      sourceEventId?: string;
-      sourceDeltaId?: string;
+      source: string;
       coordinates?: Array<{ kind: "file" | "repository"; id: string }>;
       resolutions?:
         | Array<{
@@ -218,10 +211,10 @@ export type WorkspaceVcsToolInput =
   | { operation: "discard" }
   | {
       operation: "blame";
-      path: string;
+      path?: string;
       start?: number;
       end?: number;
-      after?: string;
+      ref?: string;
       limit?: number;
     }
   | { operation: "push" };
@@ -236,8 +229,6 @@ export interface WorkspaceVcsToolDetails {
 export type ToolWorkflowVcs = Pick<
   ToolVcs,
   | "status"
-  | "inspect"
-  | "neighbors"
   | "compare"
   | "merge"
   | "revert"
@@ -261,24 +252,113 @@ function mutationText(verb: string, result: VcsWorkingMutationResult): string {
   );
 }
 
-function edgeText(result: Pick<VcsInspectResult | VcsNeighborsResult, "edges">): string[] {
-  return result.edges.map(
-    (edge) =>
-      `${edge.kind} · ${JSON.stringify(edge.from)} → ${JSON.stringify(edge.to)}` +
-      (edge.summary ? ` · ${edge.summary}` : "")
+interface VcsCompareReference {
+  basis: Omit<VcsCompareInput, "cursor">;
+  page: number;
+  cursor: string;
+}
+
+interface VcsBlameReference {
+  basis: VcsBlameInput;
+  page: number;
+  cursor: string;
+}
+
+function publicCompareResult(
+  result: Awaited<ReturnType<ToolWorkflowVcs["compare"]>>,
+  page: number,
+  continuationRef: string | null
+) {
+  return {
+    page,
+    resolution: result.resolution,
+    counts: result.counts,
+    intentCounts: result.intentCounts,
+    coordinateCount: result.coordinates.length,
+    intentsTruncated: result.intentsTruncated,
+    continuation: continuationRef
+      ? { operation: "compare" as const, ref: continuationRef }
+      : null,
+  };
+}
+
+function publicBlameResult(
+  result: Awaited<ReturnType<ToolWorkflowVcs["blame"]>>,
+  page: number,
+  continuationRef: string | null
+) {
+  return {
+    page,
+    coordinateKind: result.coordinateKind,
+    spanCount: result.spans.length,
+    continuation: continuationRef ? { operation: "blame" as const, ref: continuationRef } : null,
+  };
+}
+
+function unavailableReferenceResult(
+  operation: "compare" | "blame",
+  ref: string
+): AgentToolResult<WorkspaceVcsToolDetails> {
+  return resultOf(
+    operation,
+    `${operation} reference ${ref} is unavailable, expired, or belongs to another operation. Start again with the ordinary ${operation} selectors.`,
+    { status: "reference-unavailable", ref }
   );
+}
+
+function sourceFromSelector(
+  references: AgentReferenceStore,
+  selector: string
+): VcsMergeSource | null {
+  if (isAgentReference(selector)) {
+    try {
+      const root = loadProvenanceReference(references, selector).root;
+      if (root.kind === "event") return { kind: "event", eventId: root.eventId };
+      if (root.kind === "external-delta") {
+        return { kind: "external-delta", deltaId: root.deltaId };
+      }
+      return null;
+    } catch (error) {
+      if (error instanceof AgentReferenceUnavailableError) return null;
+      throw error;
+    }
+  }
+  if (selector.startsWith("event:") || selector.startsWith("workspace-event:")) {
+    return { kind: "event", eventId: selector };
+  }
+  if (selector.startsWith("external-delta:")) {
+    return { kind: "external-delta", deltaId: selector };
+  }
+  return null;
+}
+
+function invalidSourceResult(operation: "compare" | "merge", source: string) {
+  return resultOf(
+    operation,
+    `Source ${source} is not an available event or external delta. Pass an exact returned identity or compact semantic @ref unchanged.`,
+    { status: "invalid-source", source }
+  );
+}
+
+function invalidRequestResult(
+  operation: "compare" | "blame" | "commit",
+  message: string,
+  recovery: Record<string, unknown>
+) {
+  return resultOf(operation, message, { status: "invalid-request", recovery });
 }
 
 export function createWorkspaceVcsTool(
   cwd: string,
   vcs: ToolWorkflowVcs,
-  context: ToolMutationContext
+  context: ToolMutationContext,
+  references: AgentReferenceStore = createMemoryAgentReferenceStore()
 ): AgentTool<typeof workspaceVcsSchema, WorkspaceVcsToolDetails> {
   return {
     name: "vcs",
     label: "vcs",
     description:
-      "Inspect and change semantic workspace history: compare intent and coordinate net effects (use compare view:'local' for working state relative to protected main), merge, review composed results, revert, commit, discard, blame, or push. Browse and edit ordinary paths with the dedicated filesystem tools.",
+      "Review and change semantic workspace state: status, compare intent and coordinate net effects (use compare view:'local' for working state relative to protected main), merge, revert, commit, discard, blame, or push. Use provenance for semantic roots and graph adjacency. Start compare and blame with ordinary selectors; continue by copying the complete advertised call containing only operation and ref. Exact selectors, page geometry, and opaque VCS cursors stay internal. Browse and edit ordinary paths with the dedicated filesystem tools.",
     parameters: workspaceVcsSchema,
     cancellationMode: "settle",
     execute: async (
@@ -322,101 +402,100 @@ export function createWorkspaceVcsTool(
         );
       }
 
-      if (command.operation === "inspect") {
-        const result = await vcs.inspect({
-          node: command.root,
-          edgeLimit: command.limit ?? 25,
-        });
-        const lines = [
-          `Inspected ${JSON.stringify(result.root)} · ${JSON.stringify(result.node)}`,
-          ...edgeText(result),
-        ];
-        if (result.hasMoreEdges) {
-          lines.push(
-            "More direct edges exist: use neighbors with this unchanged root to page them."
-          );
-        }
-        return resultOf(command.operation, lines.join("\n"), result);
-      }
-
-      if (command.operation === "neighbors") {
-        const result = await vcs.neighbors({
-          root: command.root,
-          ...(command.after ? { cursor: command.after } : {}),
-          limit: command.limit ?? 25,
-        });
-        const lines = edgeText(result);
-        if (result.nextCursor) {
-          lines.push(`More edges: rerun neighbors with after=${result.nextCursor}`);
-        }
-        return resultOf(
-          command.operation,
-          lines.join("\n") || `No direct edges for ${JSON.stringify(result.root)}`,
-          result
-        );
-      }
-
       if (command.operation === "compare") {
-        const selectedContextId = command.contextId ?? contextId;
-        const localView = command.view === "local";
-        const sourceEventId = command.sourceEventId;
-        const sourceDeltaId = command.sourceDeltaId;
-        if (
-          Number(localView) +
-            Number(sourceEventId !== undefined) +
-            Number(sourceDeltaId !== undefined) !==
-          1
-        ) {
-          throw new Error(
-            "Compare requires exactly one source selector: view:'local', sourceEventId, or sourceDeltaId."
+        const suppliedSelectorCount =
+          Number(command.view === "local") + Number(command.source !== undefined);
+        if (command.ref && suppliedSelectorCount > 0) {
+          return resultOf(
+            command.operation,
+            "Compare continuation accepts the advertised ref alone; do not repeat source selectors.",
+            { status: "invalid-request", recovery: { operation: "compare", ref: command.ref } }
           );
         }
-        const status = localView ? await vcs.status({ contextId: selectedContextId }) : null;
-        const target = localView
-          ? ({ kind: "event", eventId: status!.mainEventId } as const)
-          : await resolveToolWorkingState(vcs, { contextId: selectedContextId });
-        const source = sourceEventId
-          ? ({ kind: "event", eventId: sourceEventId } as const)
-          : sourceDeltaId
-            ? ({ kind: "external-delta", deltaId: sourceDeltaId } as const)
+        let basis: Omit<VcsCompareInput, "cursor">;
+        let page = 1;
+        let cursor: string | undefined;
+        if (command.ref) {
+          if (
+            command.contextId !== undefined ||
+            command.status !== undefined ||
+            command.limit !== undefined
+          ) {
+            return resultOf(
+              command.operation,
+              "Compare continuation accepts the advertised ref alone; do not repeat context, filters, or limits.",
+              { status: "invalid-request", recovery: { operation: "compare", ref: command.ref } }
+            );
+          }
+          try {
+            const retained = loadAgentReference<VcsCompareReference>(
+              references,
+              "vcs-compare",
+              command.ref
+            );
+            basis = retained.basis;
+            page = retained.page;
+            cursor = retained.cursor;
+          } catch (error) {
+            if (error instanceof AgentReferenceUnavailableError) {
+              return unavailableReferenceResult(command.operation, command.ref);
+            }
+            throw error;
+          }
+        } else {
+          if (suppliedSelectorCount !== 1) {
+            return invalidRequestResult(
+              command.operation,
+              "Compare requires exactly one starting selector: view:'local' or source. Continue only with the advertised ref.",
+              { operation: "compare", selectors: ["view", "source", "ref"] }
+            );
+          }
+          const selectedContextId = command.contextId ?? contextId;
+          const localView = command.view === "local";
+          const status = localView ? await vcs.status({ contextId: selectedContextId }) : null;
+          const target = localView
+            ? ({ kind: "event", eventId: status!.mainEventId } as const)
+            : await resolveToolWorkingState(vcs, { contextId: selectedContextId });
+          const source = command.source
+            ? sourceFromSelector(references, command.source)
             : status!.workingHead;
-        const result = await vcs.compare({
-          target,
-          source,
-          ...(command.status ? { statusFilter: command.status } : {}),
-          ...(command.after ? { cursor: command.after } : {}),
-          limit: command.limit ?? 100,
-        });
-        return resultOf(
-          command.operation,
-          `${localView ? "Local working state relative to protected main.\n" : ""}${renderCompareReview(result)}`,
-          result
-        );
+          if (!source) return invalidSourceResult(command.operation, command.source!);
+          basis = {
+            target,
+            source,
+            ...(command.status ? { statusFilter: command.status } : {}),
+            limit: command.limit ?? 100,
+          };
+        }
+        {
+          const result = await vcs.compare({ ...basis, ...(cursor ? { cursor } : {}) });
+          const review = renderCompareReview({ ...result, nextCursor: null });
+          const continuationRef = result.nextCursor
+            ? references.put("vcs-compare", {
+                basis,
+                page: page + 1,
+                cursor: result.nextCursor,
+              } satisfies VcsCompareReference)
+            : null;
+          const continuation = continuationRef
+            ? `\nMore coordinates: vcs({"operation":"compare","ref":"${continuationRef}"}).`
+            : "";
+          return resultOf(
+            command.operation,
+            `${command.view === "local" ? "Local working state relative to protected main.\n" : ""}${review}${continuation}`,
+            publicCompareResult(result, page, continuationRef)
+          );
+        }
       }
 
       if (command.operation === "merge") {
         const selectedContextId = command.contextId ?? contextId;
-        if (
-          Number(command.sourceEventId !== undefined) +
-            Number(command.sourceDeltaId !== undefined) !==
-          1
-        ) {
-          throw new Error(
-            "Merge requires exactly one source selector: sourceEventId or sourceDeltaId."
-          );
-        }
-        if (command.sourceEventId?.startsWith("external-delta:")) {
-          throw new Error(
-            "This is an external delta, not an event. Pass it unchanged as sourceDeltaId."
-          );
-        }
+        const source = sourceFromSelector(references, command.source);
+        if (!source) return invalidSourceResult(command.operation, command.source);
         const expectedWorkingHead = await resolveToolWorkingState(vcs, {
           contextId: selectedContextId,
         });
         const baseCommandId = toolCommandId(context);
-        const source = command.sourceEventId
-          ? ({ kind: "event", eventId: command.sourceEventId } as const)
-          : ({ kind: "external-delta", deltaId: command.sourceDeltaId! } as const);
         const driven = await driveMerge({
           vcs,
           contextId: selectedContextId,
@@ -425,11 +504,36 @@ export function createWorkspaceVcsTool(
           ...(command.coordinates ? { coordinates: command.coordinates } : {}),
           ...(command.resolutions ? { resolutions: command.resolutions } : {}),
           ...(command.intent ? { intentSummary: command.intent } : {}),
-          headline: `Merge ${command.sourceEventId ?? command.sourceDeltaId}`,
+          headline: `Merge ${command.source}`,
           commandIdForPage: ({ expectedWorkingHead: pageHead }) =>
             `${baseCommandId}:merge:${sha256HexSyncText(canonicalJson({ contextId: selectedContextId, expectedWorkingHead: pageHead, source, coordinates: command.coordinates, resolutions: command.resolutions, intentSummary: command.intent }))}`,
         });
-        return resultOf(command.operation, renderMergeReview(driven.review), driven);
+        const publicReview = { ...driven.review, nextConflictCursor: null };
+        const compareRef = driven.review.nextConflictCursor
+          ? references.put("vcs-compare", {
+              basis: {
+                target: driven.workingHead,
+                source,
+                statusFilter: "conflict",
+                limit: 100,
+              },
+              page: 2,
+              cursor: driven.review.nextConflictCursor,
+            } satisfies VcsCompareReference)
+          : null;
+        const continuation = compareRef
+          ? `\nMore conflicts: vcs({"operation":"compare","ref":"${compareRef}"}).`
+          : "";
+        return resultOf(command.operation, `${renderMergeReview(publicReview)}${continuation}`, {
+          status: driven.status,
+          resolution: publicReview.resolution,
+          counts: publicReview.counts,
+          intentCount: publicReview.intents.length,
+          intentsTruncated: publicReview.intentsTruncated,
+          composedCount: publicReview.composed.length,
+          conflictCount: publicReview.conflicts.length,
+          continuation: compareRef ? { operation: "compare", ref: compareRef } : null,
+        });
       }
 
       if (command.operation === "revert") {
@@ -450,7 +554,13 @@ export function createWorkspaceVcsTool(
 
       if (command.operation === "commit") {
         const message = command.message.trim();
-        if (!message) throw new Error("vcs commit requires a non-empty message");
+        if (!message) {
+          return invalidRequestResult(
+            command.operation,
+            "Commit requires a non-empty durable intent summary.",
+            { operation: "commit", field: "message" }
+          );
+        }
         const expectedWorkingHead = await resolveToolWorkingState(vcs, context);
         let result: VcsCommitResult;
         try {
@@ -533,43 +643,110 @@ export function createWorkspaceVcsTool(
       }
 
       if (command.operation === "blame") {
-        const state = await resolveToolWorkingState(vcs, context);
-        const workspacePath = toVcsPath(command.path, cwd);
-        const file = await resolveToolFile(vcs, state, workspacePath);
-        if (!file) throw new Error(`No managed file at ${command.path}`);
-        const contentLength =
-          file.content.kind === "text"
-            ? file.content.text.length
-            : base64ToBytes(file.content.base64).byteLength;
-        const start = command.start ?? 0;
-        const end = command.end ?? contentLength;
-        if (end < start || end > contentLength) {
-          throw new Error(`blame range ${start}..${end} is outside 0..${contentLength}`);
+        if (
+          command.ref &&
+          (command.path !== undefined ||
+            command.start !== undefined ||
+            command.end !== undefined ||
+            command.limit !== undefined)
+        ) {
+          return resultOf(
+            command.operation,
+            "Blame continuation accepts the advertised ref alone; do not repeat the path, range, or limit.",
+            { status: "invalid-request", recovery: { operation: "blame", ref: command.ref } }
+          );
         }
-        const result = await vcs.blame({
-          state,
-          repositoryId: file.repositoryId,
-          fileId: file.fileId,
-          range: { start, end },
-          ...(command.after ? { cursor: command.after } : {}),
-          limit: command.limit ?? 100,
-        });
-        const lines = result.spans.map(
-          (span) =>
-            `${span.start}..${span.end} · ${span.stop} · ` +
-            `change ${JSON.stringify(span.change)} · applied change ${JSON.stringify(span.appliedChange)} · ` +
-            `work ${JSON.stringify(span.workUnit)} · command ${JSON.stringify(span.command)}` +
-            (span.stop === "import-boundary"
-              ? ` · pass these typed roots unchanged to provenance: inspect terminal change ${JSON.stringify(span.change)}, then owning import work unit ${JSON.stringify(span.workUnit)} for the exact external snapshot; earlier coordinate authorship is unknown`
-              : "")
-        );
-        if (result.nextCursor)
-          lines.push(`More spans: rerun blame with after=${result.nextCursor}`);
-        return resultOf(
-          command.operation,
-          lines.join("\n") || `No blame spans for ${workspacePath}`,
-          result
-        );
+        let basis: VcsBlameInput;
+        let page = 1;
+        let cursor: string | undefined;
+        if (command.ref) {
+          try {
+            const retained = loadAgentReference<VcsBlameReference>(
+              references,
+              "vcs-blame",
+              command.ref
+            );
+            basis = retained.basis;
+            page = retained.page;
+            cursor = retained.cursor;
+          } catch (error) {
+            if (error instanceof AgentReferenceUnavailableError) {
+              return unavailableReferenceResult(command.operation, command.ref);
+            }
+            throw error;
+          }
+        } else {
+          if (!command.path) {
+            return invalidRequestResult(
+              command.operation,
+              "Blame requires a managed path to start, or the complete ref advertised by an earlier blame page.",
+              { operation: "blame", field: "path" }
+            );
+          }
+          const state = await resolveToolWorkingState(vcs, context);
+          const workspacePath = toVcsPath(command.path, cwd);
+          const file = await resolveToolFile(vcs, state, workspacePath);
+          if (!file) {
+            return invalidRequestResult(
+              command.operation,
+              `No managed file exists at ${command.path}.`,
+              { operation: "blame", field: "path", path: command.path }
+            );
+          }
+          const contentLength =
+            file.content.kind === "text"
+              ? file.content.text.length
+              : base64ToBytes(file.content.base64).byteLength;
+          const start = command.start ?? 0;
+          const end = command.end ?? contentLength;
+          if (end < start || end > contentLength) {
+            return invalidRequestResult(
+              command.operation,
+              `Blame range ${start}..${end} is outside 0..${contentLength}.`,
+              { operation: "blame", range: { start: 0, end: contentLength } }
+            );
+          }
+          basis = {
+            state,
+            repositoryId: file.repositoryId,
+            fileId: file.fileId,
+            range: { start, end },
+            limit: command.limit ?? 100,
+          };
+        }
+        {
+          const result = await vcs.blame({ ...basis, ...(cursor ? { cursor } : {}) });
+          const lines = result.spans.map((span) => {
+            const changeRef = putProvenanceReference(references, span.change, 5);
+            const appliedChangeRef = putProvenanceReference(references, span.appliedChange, 5);
+            const workRef = putProvenanceReference(references, span.workUnit, 5);
+            const commandRef = putProvenanceReference(references, span.command, 5);
+            return (
+              `${span.start}..${span.end} · ${span.stop} · ` +
+              `change provenance({"target":"${changeRef}"}) · ` +
+              `applied change provenance({"target":"${appliedChangeRef}"}) · ` +
+              `work provenance({"target":"${workRef}"}) · ` +
+              `command provenance({"target":"${commandRef}"})` +
+              (span.stop === "import-boundary"
+                ? ` · inspect terminal change with provenance({"target":"${changeRef}"}), then owning import work with provenance({"target":"${workRef}"}) for the exact external snapshot; earlier coordinate authorship is unknown`
+                : "")
+            );
+          });
+          const continuationRef = result.nextCursor
+            ? references.put("vcs-blame", {
+                basis,
+                page: page + 1,
+                cursor: result.nextCursor,
+              } satisfies VcsBlameReference)
+            : null;
+          if (continuationRef)
+            lines.push(`More spans: vcs({"operation":"blame","ref":"${continuationRef}"}).`);
+          return resultOf(
+            command.operation,
+            lines.join("\n") || "No blame spans for the requested range",
+            publicBlameResult(result, page, continuationRef)
+          );
+        }
       }
 
       if (command.operation !== "push") {

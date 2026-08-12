@@ -250,7 +250,7 @@ function createFileTransferTool(
               `${kind === "move" ? "Moved" : "Copied"} ${sourcePath} to ${destinationPath}. ` +
               `${kind === "move" ? "Preserved" : "Minted"} file identity ${produced.fileId}; ` +
               `semantic change ${changeId}. Inspect the exact destination with ` +
-              `vcs({ operation: "inspect", root: ${JSON.stringify(destinationDetails.root)} }).`,
+              `provenance({ target: ${JSON.stringify(destinationPath)} }).`,
           },
         ],
         details: {

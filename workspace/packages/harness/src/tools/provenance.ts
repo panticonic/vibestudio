@@ -6,8 +6,19 @@ import { vcsSemanticNodeRefSchema, type VcsSemanticNodeRef } from "@vibestudio/s
 import { splitRepoPath } from "@vibestudio/shared/runtime/entitySpec";
 import type { ToolVcs } from "./tool-vcs.js";
 import { resolveToolFile } from "../semantic-file-resolution.js";
+import {
+  AgentReferenceUnavailableError,
+  createMemoryAgentReferenceStore,
+  isAgentReference,
+  type AgentReferenceStore,
+} from "./agent-pagination.js";
+import {
+  loadProvenanceReference,
+  putProvenanceReference,
+} from "./provenance-reference.js";
 import { resolveToolWorkingState, toVcsPath } from "./tool-vcs.js";
 import {
+  provenancePageStreams,
   renderProvenanceBlock,
   type CanonicalProvenanceHistory,
   type CanonicalProvenanceInspection,
@@ -16,115 +27,56 @@ import {
 
 const ORIENTATION_EDGE_LIMIT = 5;
 
-const stateRootSchema = Type.Union([
-  Type.Object({ kind: Type.Literal("event"), eventId: Type.String() }),
-  Type.Object({ kind: Type.Literal("application"), applicationId: Type.String() }),
-]);
+class InvalidProvenanceTargetError extends Error {}
 
-export const semanticRootSchema = Type.Union(
-  [
-    Type.Object({ kind: Type.Literal("event"), eventId: Type.String() }),
-    Type.Object({ kind: Type.Literal("application"), applicationId: Type.String() }),
-    Type.Object({ kind: Type.Literal("applied-change"), appliedChangeId: Type.String() }),
-    Type.Object({ kind: Type.Literal("work-unit"), workUnitId: Type.String() }),
-    Type.Object({ kind: Type.Literal("change"), changeId: Type.String() }),
-    Type.Object({ kind: Type.Literal("decision"), decisionId: Type.String() }),
-    Type.Object({ kind: Type.Literal("command"), commandId: Type.String() }),
-    Type.Object({
-      kind: Type.Literal("file"),
-      state: stateRootSchema,
-      repositoryId: Type.String(),
-      fileId: Type.String(),
-    }),
-    Type.Object({
-      kind: Type.Literal("repository"),
-      state: stateRootSchema,
-      repositoryId: Type.String(),
-    }),
-    Type.Object({
-      kind: Type.Literal("trajectory"),
-      logId: Type.String(),
-      head: Type.String(),
-    }),
-    Type.Object({
-      kind: Type.Literal("trajectory-invocation"),
-      logId: Type.String(),
-      head: Type.String(),
-      invocationId: Type.String(),
-    }),
-    Type.Object({
-      kind: Type.Literal("trajectory-turn"),
-      logId: Type.String(),
-      head: Type.String(),
-      turnId: Type.String(),
-    }),
-    Type.Object({
-      kind: Type.Literal("trajectory-message"),
-      logId: Type.String(),
-      head: Type.String(),
-      messageId: Type.String(),
-    }),
-  ],
+const provenanceSchema = Type.Object(
   {
+    target: Type.Optional(
+      Type.String({
+        description:
+          'Friendly selector used to start a walk: an existing managed file path (not an intermediate directory), exact repository root, "session", or semantic shorthand such as "workspace-event:...", "applied-change:...", "change:...", or "decision:...". A service, tool, package name, or general topic is not a target.',
+      })
+    ),
+    limit: Type.Optional(
+      Type.Integer({
+        minimum: 1,
+        description:
+          "Preferred entries per adjacency and file-history page. Values above 20 are safely clamped. Omit it when following a returned reference because the reference retains the page geometry.",
+      })
+    ),
+  },
+  {
+    additionalProperties: false,
     description:
-      "Exact typed semantic root returned by provenance details or either endpoint of a returned edge. Copy it unchanged, especially for trajectory nodes.",
+      "Inspect one subject. Use target for a friendly path or semantic identity, then pass each returned compact @ref back through the same target field. A continuation ref is complete: do not add a cursor or page. Omit target for the current session.",
   }
 );
-
-const provenanceSchema = Type.Object({
-  target: Type.Optional(
-    Type.Union(
-      [
-        Type.String({
-          description:
-            'Existing managed file path (not an intermediate directory), exact repository root, "session", or semantic shorthand such as "workspace-event:...", "applied-change:...", "change:...", or "decision:...". A service, tool, package name, or general topic is not a target.',
-        }),
-        semanticRootSchema,
-      ],
-      {
-        description:
-          "A friendly string or one exact typed root returned by provenance details or an edge endpoint. Pass typed roots unchanged.",
-      }
-    )
-  ),
-  continuation: Type.Optional(
-    Type.Union(
-      [
-        Type.Object({ kind: Type.Literal("adjacency"), cursor: Type.String() }),
-        Type.Object({ kind: Type.Literal("file-history"), cursor: Type.String() }),
-      ],
-      {
-        description:
-          "Copy one exact continuation returned by the preceding result with the same target. Adjacency and file history are distinct page streams.",
-      }
-    )
-  ),
-});
 
 export type ProvenanceToolInput = Static<typeof provenanceSchema>;
 export interface ProvenanceToolDetails {
   target: string;
-  root: VcsSemanticNodeRef;
-  node: CanonicalProvenanceInspection["node"];
-  adjacency: CanonicalProvenanceResult["edges"];
-  history?: CanonicalProvenanceHistory["entries"];
-  edges: number;
+  ref: string;
+  subjectKind: VcsSemanticNodeRef["kind"];
+  adjacencyCount?: number;
+  historyCount?: number;
+  limit: number;
   continuations: Array<
-    | { kind: "adjacency"; cursor: string }
-    | { kind: "file-history"; cursor: string }
+    { target: string; kind: "adjacency" | "file-history" }
   >;
 }
 
-export interface ProvenanceToolDiagnostic {
+export interface ProvenanceInvalidTargetDiagnostic {
   diagnostic: "invalid-target";
   target: string;
   acceptedTargets: readonly [
     "session",
     "managed repository or file path",
     "event/application/applied-change/work-unit/change/decision/command identity",
-    "exact typed root",
+    "compact ref returned by provenance",
   ];
 }
+
+export type ProvenanceToolDiagnostic = ProvenanceInvalidTargetDiagnostic;
 
 export interface WorkspacePathProvenanceDeps {
   vcs: Pick<ToolVcs, "status" | "resolveRepository" | "neighbors" | "inspect" | "readFile">;
@@ -163,7 +115,7 @@ function semanticRootForTarget(
   if (target === "session") return { kind: "trajectory", ...session };
   if (target.startsWith("trajectory")) {
     throw new Error(
-      "Trajectory nodes require the exact typed target with kind, logId, head, and invocationId/turnId/messageId as applicable; copy the complete edge endpoint into target"
+      "Trajectory subnodes require the compact ref advertised by a preceding provenance result; do not reconstruct their composite identity"
     );
   }
   throw new Error(
@@ -176,13 +128,13 @@ function invalidTargetResult(target: string, message: string) {
     "session",
     "managed repository or file path",
     "event/application/applied-change/work-unit/change/decision/command identity",
-    "exact typed root",
+    "compact ref returned by provenance",
   ] as const;
   return {
     content: [
       {
         type: "text" as const,
-        text: `${message}\nUse "session", an existing managed repository/file path, a returned semantic identity, or an exact typed root. Service and tool names are not provenance targets.`,
+        text: `${message}\nUse "session", an existing managed repository/file path, a semantic identity, or a compact ref returned by provenance. Service and tool names are not provenance targets.`,
       },
     ],
     details: {
@@ -197,39 +149,6 @@ function parseRoot(input: unknown): VcsSemanticNodeRef {
   const parsed = vcsSemanticNodeRefSchema.safeParse(input);
   if (parsed.success) return parsed.data;
   throw new Error(`Invalid typed semantic root: ${parsed.error.issues[0]?.message ?? "unknown"}`);
-}
-
-function rootLabel(root: VcsSemanticNodeRef): string {
-  switch (root.kind) {
-    case "event":
-      return root.eventId;
-    case "external-delta":
-      return root.deltaId;
-    case "application":
-      return root.applicationId;
-    case "applied-change":
-      return root.appliedChangeId;
-    case "work-unit":
-      return root.workUnitId;
-    case "change":
-      return root.changeId;
-    case "decision":
-      return root.decisionId;
-    case "command":
-      return root.commandId;
-    case "file":
-      return `${root.repositoryId}/${root.fileId}`;
-    case "repository":
-      return root.repositoryId;
-    case "trajectory":
-      return `${root.logId}@${root.head}`;
-    case "trajectory-invocation":
-      return `${root.invocationId} @ ${root.logId}@${root.head}`;
-    case "trajectory-turn":
-      return `${root.turnId} @ ${root.logId}@${root.head}`;
-    case "trajectory-message":
-      return `${root.messageId} @ ${root.logId}@${root.head}`;
-  }
 }
 
 export async function neighborsForWorkspacePath(
@@ -254,7 +173,9 @@ export async function neighborsForWorkspacePath(
       repoPath: split.repoPath,
     });
     if (!repository) {
-      throw new Error(`Repository ${split.repoPath} is not present in the working state`);
+      throw new InvalidProvenanceTargetError(
+        `Repository ${split.repoPath} is not present in the working state`
+      );
     }
     const root: Extract<VcsSemanticNodeRef, { kind: "repository" }> = {
       kind: "repository",
@@ -270,7 +191,7 @@ export async function neighborsForWorkspacePath(
   }
   const file = await resolveToolFile(deps.vcs, workingHead, workspacePath);
   if (!file) {
-    throw new Error(
+    throw new InvalidProvenanceTargetError(
       `No file identity at ${workspacePath} in the working state. Provenance paths must name an existing managed file or an exact repository root; use ls for intermediate directories.`
     );
   }
@@ -290,28 +211,42 @@ export async function neighborsForWorkspacePath(
 
 function toolResult(
   target: string,
-  inspection: CanonicalProvenanceInspection,
+  root: VcsSemanticNodeRef,
+  inspection: CanonicalProvenanceInspection | undefined,
   result: CanonicalProvenanceResult,
   history: CanonicalProvenanceHistory | undefined,
-  continuation: NonNullable<Parameters<typeof renderProvenanceBlock>[0]["continuation"]>
+  pages: { adjacency: number; fileHistory: number; limit: number },
+  references: AgentReferenceStore
 ) {
+  const streams = provenancePageStreams(pages);
+  const ref = putProvenanceReference(references, root, pages.limit);
   const details: ProvenanceToolDetails = {
     target,
-    root: inspection.root,
-    node: inspection.node,
-    adjacency: result.edges,
-    ...(history
-      ? {
-          history: history.entries,
-        }
-      : {}),
-    edges: result.edges.length,
+    ref,
+    subjectKind: root.kind,
+    limit: pages.limit,
+    ...(streams.adjacency ? { adjacencyCount: result.edges.length } : {}),
+    ...(streams.fileHistory && history ? { historyCount: history.entries.length } : {}),
     continuations: [
-      ...(result.nextCursor
-        ? [{ kind: "adjacency" as const, cursor: result.nextCursor }]
+      ...(streams.adjacency && result.nextCursor
+        ? [{
+            target: putProvenanceReference(references, root, pages.limit, {
+              stream: "adjacency",
+              page: pages.adjacency + 1,
+              cursor: result.nextCursor,
+            }),
+            kind: "adjacency" as const,
+          }]
         : []),
-      ...(history?.nextCursor
-        ? [{ kind: "file-history" as const, cursor: history.nextCursor }]
+      ...(streams.fileHistory && history?.nextCursor
+        ? [{
+            target: putProvenanceReference(references, root, pages.limit, {
+              stream: "file-history",
+              page: pages.fileHistory + 1,
+              cursor: history.nextCursor,
+            }),
+            kind: "file-history" as const,
+          }]
         : []),
     ],
   };
@@ -320,100 +255,162 @@ function toolResult(
       {
         type: "text" as const,
         text:
-          renderProvenanceBlock({ label: target, inspection, history, result, continuation }) ??
-          `prov · ${target} · unavailable`,
+          renderProvenanceBlock({
+            label: target,
+            inspection,
+            history,
+            result,
+            pages,
+            reference: (root, continuation) =>
+              putProvenanceReference(references, root, pages.limit, continuation),
+          }) ?? `prov · ${target} · unavailable`,
       },
     ],
     details,
   };
 }
 
+async function loadProvenancePages(
+  deps: ProvenanceToolDeps,
+  root: VcsSemanticNodeRef,
+  pages: { adjacency: number; fileHistory: number; limit: number },
+  continuation?: { stream: "adjacency" | "file-history"; cursor: string },
+  firstNeighbors?: CanonicalProvenanceResult
+): Promise<{
+  inspection: CanonicalProvenanceInspection | undefined;
+  neighbors: CanonicalProvenanceResult;
+  history: CanonicalProvenanceHistory | undefined;
+}> {
+  const fileRoot = root.kind === "file" ? root : undefined;
+  const streams = provenancePageStreams(pages);
+  const [inspection, neighbors, history] = await Promise.all([
+    streams.inspection
+      ? deps.vcs.inspect({ node: root, edgeLimit: 1 })
+      : Promise.resolve(undefined),
+    streams.adjacency
+      ? firstNeighbors
+        ? Promise.resolve(firstNeighbors)
+        : deps.vcs.neighbors({
+            root,
+            limit: pages.limit,
+            ...(continuation?.stream === "adjacency"
+              ? { cursor: continuation.cursor }
+              : {}),
+          })
+      : Promise.resolve({ root, edges: [], nextCursor: null }),
+    streams.fileHistory && fileRoot
+      ? deps.vcs.history({
+          root: fileRoot,
+          direction: "past",
+          limit: pages.limit,
+          ...(continuation?.stream === "file-history"
+            ? { cursor: continuation.cursor }
+            : {}),
+        })
+      : Promise.resolve(undefined),
+  ]);
+  return { inspection, neighbors, history };
+}
+
 export function createProvenanceTool(
   cwd: string,
-  deps: ProvenanceToolDeps
+  deps: ProvenanceToolDeps,
+  references: AgentReferenceStore = createMemoryAgentReferenceStore()
 ): AgentTool<typeof provenanceSchema, ProvenanceToolDetails | ProvenanceToolDiagnostic> {
   return {
     name: "provenance",
     label: "provenance",
     executionMode: "parallel",
     description:
-      'Inspect "session", an exact semantic identity/root, or an existing managed repository/file path and walk one bounded adjacency page. Service/tool/package names are not targets. Managed files also include a small exact change-history preview.',
+      'Inspect "session", a semantic shorthand, an existing managed repository/file path, or a short returned @ref and walk one bounded page. Use the single target field for friendly entry points, graph endpoints, and complete continuation refs. Never add a cursor or page to a returned ref. Exact roots, page geometry, and VCS cursors stay inside trusted code. Service/tool/package names are not targets. Managed files also include a small exact change-history preview.',
     parameters: provenanceSchema,
     execute: async (_toolCallId, input) => {
-      const cursor =
-        input.continuation?.kind === "adjacency" ? input.continuation.cursor : undefined;
-      const historyCursor =
-        input.continuation?.kind === "file-history" ? input.continuation.cursor : undefined;
-      if (input.target && typeof input.target === "object") {
-        const root = parseRoot(input.target);
-        const [inspection, neighbors, history] = await Promise.all([
-          deps.vcs.inspect({ node: root, edgeLimit: 1 }),
-          deps.vcs.neighbors({
-            root,
-            limit: ORIENTATION_EDGE_LIMIT,
-            ...(cursor ? { cursor } : {}),
-          }),
-          root.kind === "file"
-            ? deps.vcs.history({
-                root,
-                direction: "past",
-                limit: 5,
-                ...(historyCursor ? { cursor: historyCursor } : {}),
-              })
-            : Promise.resolve(undefined),
-        ]);
-        return toolResult(rootLabel(root), inspection, neighbors, history, {
-          kind: "root",
-          root,
-          includeCursor: true,
-        });
-      }
-      const target = String(input.target ?? "session").trim() || "session";
-      const path = target.startsWith("file:") ? target.slice(5) : target;
-      if (splitRepoPath(path)) {
-        const page = await neighborsForWorkspacePath(cwd, deps, path, {
-          cursor,
-          limit: ORIENTATION_EDGE_LIMIT,
-        });
-        const [inspection, history] = await Promise.all([
-          deps.vcs.inspect({ node: page.root, edgeLimit: 1 }),
-          page.root.kind === "file"
-            ? deps.vcs.history({
-                root: page.root,
-                direction: "past",
-                limit: 5,
-                ...(historyCursor ? { cursor: historyCursor } : {}),
-              })
-            : Promise.resolve(undefined),
-        ]);
-        return toolResult(page.label, inspection, page.result, history, {
-          kind: "target",
-          target: page.label,
-          includeCursor: true,
-        });
-      }
-      let root: VcsSemanticNodeRef;
+      const pages = { adjacency: 1, fileHistory: 1, limit: Math.min(input.limit ?? ORIENTATION_EDGE_LIMIT, 20) };
+      let targetLabel = "session";
       try {
-        root = semanticRootForTarget(target, deps.session);
-      } catch (error) {
-        return invalidTargetResult(
+        const requestedTarget = String(input.target ?? "session").trim() || "session";
+        if (isAgentReference(requestedTarget)) {
+          const basis = loadProvenanceReference(references, requestedTarget);
+          const root = parseRoot(basis.root);
+          pages.limit = basis.limit;
+          if (basis.stream === "adjacency" && basis.page) pages.adjacency = basis.page;
+          if (basis.stream === "file-history" && basis.page) pages.fileHistory = basis.page;
+          targetLabel = requestedTarget;
+          const loaded = await loadProvenancePages(
+            deps,
+            root,
+            pages,
+            basis.stream && basis.cursor
+              ? { stream: basis.stream, cursor: basis.cursor }
+              : undefined
+          );
+          return toolResult(
+            targetLabel,
+            root,
+            loaded.inspection,
+            loaded.neighbors,
+            loaded.history,
+            pages,
+            references
+          );
+        }
+        const target = requestedTarget;
+        targetLabel = target;
+        const path = target.startsWith("file:") ? target.slice(5) : target;
+        if (splitRepoPath(path)) {
+          const firstPage = await neighborsForWorkspacePath(cwd, deps, path, {
+            limit: pages.limit,
+          });
+          targetLabel = firstPage.label;
+          const loaded = await loadProvenancePages(
+            deps,
+            firstPage.root,
+            pages,
+            undefined,
+            firstPage.result
+          );
+          return toolResult(
+            targetLabel,
+            firstPage.root,
+            loaded.inspection,
+            loaded.neighbors,
+            loaded.history,
+            pages,
+            references
+          );
+        }
+
+        let root: VcsSemanticNodeRef;
+        try {
+          root = semanticRootForTarget(target, deps.session);
+        } catch (error) {
+          return invalidTargetResult(
+            target,
+            error instanceof Error ? error.message : `Invalid provenance target: ${target}`
+          );
+        }
+        const loaded = await loadProvenancePages(deps, root, pages);
+        return toolResult(
           target,
-          error instanceof Error ? error.message : `Invalid provenance target: ${target}`
-        );
-      }
-      const [inspection, neighbors] = await Promise.all([
-        deps.vcs.inspect({ node: root, edgeLimit: 1 }),
-        deps.vcs.neighbors({
           root,
-          limit: ORIENTATION_EDGE_LIMIT,
-          ...(cursor ? { cursor } : {}),
-        }),
-      ]);
-      return toolResult(target, inspection, neighbors, undefined, {
-        kind: "root",
-        root,
-        includeCursor: true,
-      });
+          loaded.inspection,
+          loaded.neighbors,
+          loaded.history,
+          pages,
+          references
+        );
+      } catch (error) {
+        if (error instanceof InvalidProvenanceTargetError) {
+          return invalidTargetResult(targetLabel, error.message);
+        }
+        if (error instanceof AgentReferenceUnavailableError) {
+          return invalidTargetResult(
+            error.ref,
+            `Provenance reference ${error.ref} is unavailable or expired. Start again from a friendly target.`
+          );
+        }
+        throw error;
+      }
     },
   };
 }

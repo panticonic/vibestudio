@@ -86,8 +86,11 @@ mint a semantic command, work unit, or event.
 
 Use `resolveRepository` when a repository path is known, then use `listFiles`
 to discover files by stable identity. Use `neighbors` from an event/application
-root only when the repository path itself is unknown. Follow `nextCursor` until
-the intended identity is found; never choose a convenient first-page result.
+root only when the repository path itself is unknown. In an agent, perform that
+walk through `provenance` and follow each complete advertised continuation ref until the
+intended identity is found, always with its compact `ref`; the harness carries
+each exact root and service cursor internally. Never choose a convenient
+first-page result.
 
 A placed file reports `contentKind`, `byteLength`, and `coordinateExtent`.
 `contentKind` derives the only valid range unit (`text` → UTF-16, `bytes` →

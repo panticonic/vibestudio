@@ -9,7 +9,8 @@ Managed workspace state is semantic history, not a Git worktree. Use
 `apply_patch` for atomic multi-file text/binary writes, exact replacements,
 deletes, and mode changes; `edit` or `write` for a single simple text change;
 `move_file`/`copy_file` for identity-preserving transfers. Use `vcs` for status,
-provenance, compare, merge, revert, commit, discard, blame, and push.
+compare, merge, revert, commit, discard, blame, and push. Use `provenance` as
+the sole agent-facing graph walker for typed roots and adjacency.
 
 ## Non-negotiable rules
 
@@ -47,7 +48,7 @@ provenance, compare, merge, revert, commit, discard, blame, and push.
    ```
 
       Compare is read-only with no `intent` field. Never pass main as
-   `sourceEventId` here — that reverses the comparison and can truthfully show
+   `source` here — that reverses the comparison and can truthfully show
    no changes.
 
 5. For incoming committed work, call merge directly in the normal case. The
@@ -57,7 +58,7 @@ provenance, compare, merge, revert, commit, discard, blame, and push.
    for a deliberate read-only preview:
 
    ```js
-   vcs({ operation: "compare", sourceEventId: "event:...", limit: 500 })
+   vcs({ operation: "compare", source: "event:...", limit: 500 })
    ```
 
 6. Review both views in compare results:
@@ -73,7 +74,7 @@ provenance, compare, merge, revert, commit, discard, blame, and push.
    ```js
    vcs({
      operation: "merge",
-     sourceEventId: "event:...",
+     source: "event:...",
      intent: "Bring the reviewed child implementation into the parent"
    })
    ```
@@ -89,7 +90,7 @@ provenance, compare, merge, revert, commit, discard, blame, and push.
    ```js
    vcs({
      operation: "merge",
-     sourceEventId: "event:...",
+     source: "event:...",
      resolutions: [{
        coordinate: { kind: "file", id: "file:..." },
        resolution: "current",
@@ -107,8 +108,9 @@ provenance, compare, merge, revert, commit, discard, blame, and push.
 
 10. Use the merge result as the completion receipt. `status: "unchanged"` is an
 idempotent receipt, not an error — still inspect `resolution.complete`. If
-conflicts exceed the bounded result, continue only the filtered sequence with
-the returned cursor. A convergent or net-zero source still gets one
+conflicts exceed the bounded result, continue only the filtered sequence by
+copying the advertised `compare` call containing its complete compact ref. A
+convergent or net-zero source still gets one
 decision-only merge call to establish conclusion and ancestry.
 11. Run focused tests and commit the complete application chain. The compact
 commit verifies that the context is clean at the committed event; request status

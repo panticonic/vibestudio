@@ -21,24 +21,24 @@ provenance({ target: "packages/example/src/index.ts" });
 provenance({ target: "change:…" });
 ```
 
-Pass roots and edge endpoints back unchanged. Event, application, work-unit,
-change, decision, and command shorthands are accepted. Trajectory invocations,
-turns, and messages require complete typed coordinates (local IDs are not
-globally unique).
+`target` is the sole selector: start with a friendly target, then pass every
+returned compact `@ref` through the same field. Trusted state retains exact
+typed roots; do not repeat long content-addressed identities. Event,
+application, work-unit, change, decision, and command string shorthands remain
+accepted through `target`.
 
 ## Choose the smallest read
 
-- `vcs.inspect` — one exact node, its reusable root, and a bounded edge preview.
-- `vcs.neighbors` — pages immediate edges.
-- `vcs.history` — pages committed event ancestry or changes to one stable file
-  identity.
-- `vcs.blame` — traces an exact file range through content mappings.
+- `provenance({ target })` — resolve a managed path/identity or follow one `@ref`.
+- `provenance({ target: ref })` — follow an endpoint or continue the advertised stream.
+- `vcs({ operation: "blame", ... })` — trace an exact file range through content
+  mappings.
 
-Continue a page by copying one returned continuation with the unchanged target:
-`{ kind: "adjacency", cursor }` for edges or `{ kind: "file-history", cursor }`
-for prior file changes. Start a separate read when the question changes. Use
-live schemas for edge kinds and node shapes; never parse IDs, construct private
-roots, query semantic tables, or cache a client graph.
+Continue by copying the advertised `provenance({ target: ref })` call unchanged.
+The channel-scoped ref durably retains the exact root, stream, page, query, and
+opaque service cursor inside trusted code. Never add a page or cursor. Start a separate read when the
+question changes. Use live schemas for edge kinds and node shapes; never parse
+IDs, construct private roots, query semantic tables, or cache a client graph.
 
 ## Interpret evidence narrowly
 

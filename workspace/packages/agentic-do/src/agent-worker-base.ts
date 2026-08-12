@@ -10,6 +10,7 @@ import type { DurableObjectContext } from "@workspace/runtime/worker/durable-bas
 import { createRpcFs } from "@workspace/runtime/worker/rpc-fs";
 import type { AgentTool } from "@workspace/pi-core";
 import type { ParticipantDescriptor } from "@workspace/harness";
+import { createAgentReferenceStore } from "@workspace/harness/agent-references";
 import type { ThinkingLevel } from "@workspace/agent-loop";
 import { channelTrajectoryFor } from "@vibestudio/trajectory-identity";
 import type { RpcClient } from "@vibestudio/rpc";
@@ -167,6 +168,11 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
     );
     const session = channelTrajectoryFor(channelId);
     const contextId = () => this.subscriptions.getContextId(channelId);
+    const agentReferences = createAgentReferenceStore({
+      get: (key) => this.getStateValue(`agent:refs:${channelId}:${key}`),
+      set: (key, value) => this.setStateValue(`agent:refs:${channelId}:${key}`, value),
+      delete: (key) => this.deleteStateValue(`agent:refs:${channelId}:${key}`),
+    });
     // Tool registries are also built without an invocation to expose schemas
     // to the model. Defer the fail-closed check until a mutation executes.
     const mutationContext = {
@@ -194,14 +200,19 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
       createReadTool(cwd, fs, {
         rpc: toolRpc,
         provenance: { vcs, context: { contextId } },
+        agentReferences,
         visibility,
       }),
       createReadBinaryTool(cwd, fs, { rpc: toolRpc, visibility }),
-      createProvenanceTool(cwd, {
-        vcs,
-        contextId,
-        session: { logId: session.logId, head: session.head },
-      }),
+      createProvenanceTool(
+        cwd,
+        {
+          vcs,
+          contextId,
+          session: { logId: session.logId, head: session.head },
+        },
+        agentReferences
+      ),
       createWriteTool(cwd, vcs, mutationContext, fs),
       createEditTool(cwd, vcs, mutationContext, fs),
       createLsTool(cwd, fs, visibility),
@@ -210,7 +221,7 @@ export abstract class AgentWorkerBase extends AgentVesselBase {
       createApplyPatchTool(cwd, vcs, mutationContext),
       createMoveFileTool(cwd, vcs, mutationContext, fs),
       createCopyFileTool(cwd, vcs, mutationContext, fs),
-      createWorkspaceVcsTool(cwd, vcs, mutationContext),
+      createWorkspaceVcsTool(cwd, vcs, mutationContext, agentReferences),
       createEvalTool(
         <T>(method: string, methodArgs: unknown[]) => toolRpc.call<T>("main", method, methodArgs),
         // Scope the agent's EvalDO per channel (matches the old per-(channel,panel) scope),

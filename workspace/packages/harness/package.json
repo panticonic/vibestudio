@@ -5,6 +5,7 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
+    "./agent-references": "./src/tools/agent-pagination.ts",
     "./merge-driver": "./src/merge-driver.ts",
     "./resource-loader": "./src/resource-loader.ts",
     "./semantic-file-resolution": "./src/semantic-file-resolution.ts",

@@ -40,7 +40,7 @@ describe("provenance formatting", () => {
     });
 
     expect(rendered).toContain(
-      'inspect sole application → provenance({"target":{"kind":"application","applicationId":"application:import"}})'
+      'inspect sole application → provenance({"root":{"kind":"application","applicationId":"application:import"}})'
     );
   });
 
@@ -145,7 +145,7 @@ describe("provenance formatting", () => {
 
     expect(rendered).toContain("243 applied changes (0 in preview)");
     expect(rendered).toContain(
-      'inspect owning work → provenance({"target":{"kind":"work-unit","workUnitId":"work:import"}})'
+      'inspect owning work → provenance({"root":{"kind":"work-unit","workUnitId":"work:import"}})'
     );
   });
 

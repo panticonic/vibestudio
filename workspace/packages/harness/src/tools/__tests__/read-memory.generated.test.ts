@@ -150,9 +150,11 @@ describe("generated read-memory renderer corpus", () => {
     expect(first).toContain('composed with yours stated: "Migrate configuration"');
     expect(first).toContain("earlier file history");
     expect(first).toContain(
-      "attachment truncated; use the cursored continuations below for complete coverage"
+      "attachment truncated; use the compact continuations below for complete coverage"
     );
-    expect(first).toContain("dig deeper · provenance({ target: … })");
+    expect(first).toContain(
+      'dig deeper into this file · provenance({"target":"packages/fixture/src/memory.ts"})'
+    );
     expect(first).toContain("…");
     expect(first).not.toContain("  Preserve   a whitespace");
 
@@ -211,6 +213,29 @@ describe("generated read-memory renderer corpus", () => {
     expect(historyOnly).toContain("verified against this exact content");
     expect(historyOnly).toContain("A prior commit still explains this file");
     expect(historyOnly).not.toContain("inspect deeper with provenance");
+  });
+
+  it("renders compact provenance refs when the caller retains exact roots", () => {
+    const byKind = new Map<string, number>();
+    const output = renderReadMemoryBlock({
+      label: "packages/fixture/src/memory.ts",
+      content: "one\ntwo\nthree",
+      readingContextId: "context:reader",
+      startLine: 1,
+      endLine: 3,
+      result: attached({ episodes: [episode(0)] }),
+      reference: (value) => {
+        const ordinal = (byKind.get(value.kind) ?? 0) + 1;
+        byKind.set(value.kind, ordinal);
+        return `@r${ordinal}-${value.kind.slice(0, 4).padEnd(4, "0")}`;
+      },
+    });
+
+    expect(output).toContain('work unit work-unit · provenance({"target":"@r1-work"})');
+    expect(output).toContain('change change · provenance({"target":"@r1-chan"})');
+    expect(output).toContain('dig deeper into this file · provenance({"target":"@r1-file"})');
+    expect(output).not.toContain('"workUnitId"');
+    expect(output).not.toContain('"fileId"');
   });
 
   it("collapses the reading context's own episode without dropping its intent", () => {

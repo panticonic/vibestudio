@@ -183,6 +183,9 @@
       ],
       "@workspace/runtime/workerd-client": ["./packages/runtime/src/shared/workerd.ts"],
       "@workspace/harness/resource-loader": ["./packages/harness/src/resource-loader.ts"],
+      "@workspace/harness/agent-references": [
+        "./packages/harness/src/tools/agent-pagination.ts"
+      ],
       "@workspace/harness/standard-tools": ["./packages/harness/src/standard-tools.ts"],
       "@workspace/harness/merge-driver": ["./packages/harness/src/merge-driver.ts"],
       "@workspace/harness/semantic-file-resolution": [

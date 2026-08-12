@@ -5,9 +5,7 @@ import type { ToolFileTransferVcs } from "../tool-vcs.js";
 const working = { kind: "event" as const, eventId: "event:working" };
 const next = { kind: "application" as const, applicationId: "application:next" };
 
-function fixture(
-  options: { missing?: boolean; failure?: Error; producedFileId?: string } = {}
-) {
+function fixture(options: { missing?: boolean; failure?: Error; producedFileId?: string } = {}) {
   const status = vi.fn(async () => ({
     contextId: "context:1",
     committed: working,
@@ -111,7 +109,7 @@ describe("stable-identity file transfer tools", () => {
     });
     expect(result.content[0]).toMatchObject({
       type: "text",
-      text: expect.stringContaining('vcs({ operation: "inspect", root: {"kind":"file"'),
+      text: expect.stringContaining('provenance({ target: "panels/target/src/moved.ts" })'),
     });
     expect(move.mock.calls[0]?.[0]).not.toHaveProperty("intentSummary");
   });
