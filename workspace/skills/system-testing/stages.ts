@@ -1,92 +1,93 @@
 import type { TestCase } from "./types.js";
-import { mobileTests as _mobile } from "./tests/mobile.js";
-import { deliveryHardeningTests as _deliveryHardening } from "./tests/delivery-hardening.js";
 import { assertSystemTestDeclaration } from "./prompt-contract.js";
+import { deterministicTestCases } from "./deterministic.js";
+import { smokeTests } from "./tests/smoke.js";
+import { filesystemTests } from "./tests/filesystem.js";
+import { vcsTests } from "./tests/vcs.js";
+import { panelTests } from "./tests/panels.js";
+import { workerTests } from "./tests/workers.js";
+import { buildTests } from "./tests/build.js";
+import { oauthTests } from "./tests/oauth.js";
+import { workspaceTests } from "./tests/workspace.js";
+import { notificationTests } from "./tests/notifications.js";
+import { skillTests } from "./tests/skills.js";
+import { agentCapabilityTests } from "./tests/agent-capabilities.js";
+import { rpcTests } from "./tests/rpc-communication.js";
+import { edgeCaseTests } from "./tests/edge-cases.js";
+import { agenticRuntimeTests } from "./tests/agentic-runtime.js";
+import { interactionSurfaceTests } from "./tests/interaction-surfaces.js";
+import { docsProbeTests } from "./tests/docs-probes.js";
+import { projectLifecycleTests } from "./tests/project-lifecycle.js";
+import { scaffoldMatrixTests } from "./tests/scaffold-matrix.js";
+import { developerErgonomicsTests } from "./tests/developer-ergonomics.js";
+import { cdpGadDiagnosticTests } from "./tests/cdp-gad-diagnostics.js";
+import { harnessResilienceTests } from "./tests/harness-resilience.js";
+import { gitInteropTests } from "./tests/git-interop.js";
+import { templateTests } from "./tests/templates.js";
+import { vcsAdvancedTests } from "./tests/vcs-advanced.js";
+import { blobstoreTests } from "./tests/blobstore.js";
+import { serverLogTests } from "./tests/server-logs.js";
+import { unitDiagnosticsTests } from "./tests/unit-diagnostics.js";
+import { multiUserTests } from "./tests/multi-user.js";
+import { approvalPermissionTests } from "./tests/approvals-permissions.js";
+import { evalLifecycleTests } from "./tests/eval-lifecycle.js";
+import { selfDevelopmentTests } from "./tests/self-development.js";
+import { docsDiscoveryTests } from "./tests/docs-discovery.js";
+import { webhookTests } from "./tests/webhooks.js";
+import { extensionSurfaceTests } from "./tests/extensions-surface.js";
+import { trustedUnitAuthoringTests } from "./tests/trusted-unit-authoring.js";
+import { localModelTests } from "./tests/local-models.js";
+import { harnessToolTests } from "./tests/harness-tools.js";
+import { credentialTests } from "./tests/credentials.js";
+import { agentOrchestrationTests } from "./tests/agent-orchestration.js";
+import { mobileTests } from "./tests/mobile.js";
+import { deliveryHardeningTests } from "./tests/delivery-hardening.js";
+import { intentDiscoveryTests } from "./tests/intent-discovery.js";
 
-export { smokeTests } from "./tests/smoke.js";
-export { filesystemTests } from "./tests/filesystem.js";
-export { vcsTests } from "./tests/vcs.js";
-export { panelTests } from "./tests/panels.js";
-export { workerTests } from "./tests/workers.js";
-export { buildTests } from "./tests/build.js";
-export { oauthTests } from "./tests/oauth.js";
-export { workspaceTests } from "./tests/workspace.js";
-export { notificationTests } from "./tests/notifications.js";
-export { skillTests } from "./tests/skills.js";
-export { agentCapabilityTests } from "./tests/agent-capabilities.js";
-export { rpcTests } from "./tests/rpc-communication.js";
-export { edgeCaseTests } from "./tests/edge-cases.js";
-export { agenticRuntimeTests } from "./tests/agentic-runtime.js";
-export { interactionSurfaceTests } from "./tests/interaction-surfaces.js";
-export { docsProbeTests } from "./tests/docs-probes.js";
-export { projectLifecycleTests } from "./tests/project-lifecycle.js";
-export { scaffoldMatrixTests } from "./tests/scaffold-matrix.js";
-export { developerErgonomicsTests } from "./tests/developer-ergonomics.js";
-export { cdpGadDiagnosticTests } from "./tests/cdp-gad-diagnostics.js";
-export { harnessResilienceTests } from "./tests/harness-resilience.js";
-export { gitInteropTests } from "./tests/git-interop.js";
-export { templateTests } from "./tests/templates.js";
-export { vcsAdvancedTests } from "./tests/vcs-advanced.js";
-export { blobstoreTests } from "./tests/blobstore.js";
-export { serverLogTests } from "./tests/server-logs.js";
-export { unitDiagnosticsTests } from "./tests/unit-diagnostics.js";
-export { multiUserTests } from "./tests/multi-user.js";
-export { approvalPermissionTests } from "./tests/approvals-permissions.js";
-export { evalLifecycleTests } from "./tests/eval-lifecycle.js";
-export { selfDevelopmentTests } from "./tests/self-development.js";
-export { docsDiscoveryTests } from "./tests/docs-discovery.js";
-export { webhookTests } from "./tests/webhooks.js";
-export { extensionSurfaceTests } from "./tests/extensions-surface.js";
-export { trustedUnitAuthoringTests } from "./tests/trusted-unit-authoring.js";
-export { localModelTests } from "./tests/local-models.js";
-export { harnessToolTests } from "./tests/harness-tools.js";
-export { credentialTests } from "./tests/credentials.js";
-export { agentOrchestrationTests } from "./tests/agent-orchestration.js";
-export { mobileTests } from "./tests/mobile.js";
-export { deliveryHardeningTests } from "./tests/delivery-hardening.js";
-export { intentDiscoveryTests } from "./tests/intent-discovery.js";
-
-import { smokeTests as _smoke } from "./tests/smoke.js";
-import { filesystemTests as _fs } from "./tests/filesystem.js";
-import { vcsTests as _vcs } from "./tests/vcs.js";
-import { panelTests as _panels } from "./tests/panels.js";
-import { workerTests as _workers } from "./tests/workers.js";
-import { buildTests as _build } from "./tests/build.js";
-import { oauthTests as _oauth } from "./tests/oauth.js";
-import { workspaceTests as _ws } from "./tests/workspace.js";
-import { notificationTests as _notif } from "./tests/notifications.js";
-import { skillTests as _skills } from "./tests/skills.js";
-import { agentCapabilityTests as _agent } from "./tests/agent-capabilities.js";
-import { rpcTests as _rpc } from "./tests/rpc-communication.js";
-import { edgeCaseTests as _edge } from "./tests/edge-cases.js";
-import { agenticRuntimeTests as _agenticRuntime } from "./tests/agentic-runtime.js";
-import { interactionSurfaceTests as _interaction } from "./tests/interaction-surfaces.js";
-import { docsProbeTests as _docs } from "./tests/docs-probes.js";
-import { projectLifecycleTests as _projectLifecycle } from "./tests/project-lifecycle.js";
-import { scaffoldMatrixTests as _scaffoldMatrix } from "./tests/scaffold-matrix.js";
-import { developerErgonomicsTests as _developerErgonomics } from "./tests/developer-ergonomics.js";
-import { cdpGadDiagnosticTests as _cdpGad } from "./tests/cdp-gad-diagnostics.js";
-import { harnessResilienceTests as _harnessResilience } from "./tests/harness-resilience.js";
-import { gitInteropTests as _gitInterop } from "./tests/git-interop.js";
-import { templateTests as _templates } from "./tests/templates.js";
-import { vcsAdvancedTests as _vcsAdvanced } from "./tests/vcs-advanced.js";
-import { blobstoreTests as _blobstore } from "./tests/blobstore.js";
-import { serverLogTests as _serverLogs } from "./tests/server-logs.js";
-import { unitDiagnosticsTests as _unitDiagnostics } from "./tests/unit-diagnostics.js";
-import { multiUserTests as _multiUser } from "./tests/multi-user.js";
-import { approvalPermissionTests as _approvals } from "./tests/approvals-permissions.js";
-import { evalLifecycleTests as _evalLifecycle } from "./tests/eval-lifecycle.js";
-import { selfDevelopmentTests as _selfDevelopment } from "./tests/self-development.js";
-import { docsDiscoveryTests as _docsDiscovery } from "./tests/docs-discovery.js";
-import { webhookTests as _webhooks } from "./tests/webhooks.js";
-import { extensionSurfaceTests as _extensionSurface } from "./tests/extensions-surface.js";
-import { trustedUnitAuthoringTests as _trustedUnitAuthoring } from "./tests/trusted-unit-authoring.js";
-import { localModelTests as _localModels } from "./tests/local-models.js";
-import { harnessToolTests as _harnessTools } from "./tests/harness-tools.js";
-import { credentialTests as _credentials } from "./tests/credentials.js";
-import { agentOrchestrationTests as _agentOrchestration } from "./tests/agent-orchestration.js";
-import { deterministicTestCases as _deterministic } from "./deterministic.js";
-import { intentDiscoveryTests as _intentDiscovery } from "./tests/intent-discovery.js";
+export {
+  agentCapabilityTests,
+  agenticRuntimeTests,
+  agentOrchestrationTests,
+  approvalPermissionTests,
+  blobstoreTests,
+  buildTests,
+  cdpGadDiagnosticTests,
+  credentialTests,
+  deliveryHardeningTests,
+  developerErgonomicsTests,
+  docsDiscoveryTests,
+  docsProbeTests,
+  edgeCaseTests,
+  evalLifecycleTests,
+  extensionSurfaceTests,
+  filesystemTests,
+  gitInteropTests,
+  harnessResilienceTests,
+  harnessToolTests,
+  intentDiscoveryTests,
+  interactionSurfaceTests,
+  localModelTests,
+  mobileTests,
+  multiUserTests,
+  notificationTests,
+  oauthTests,
+  panelTests,
+  projectLifecycleTests,
+  rpcTests,
+  scaffoldMatrixTests,
+  selfDevelopmentTests,
+  serverLogTests,
+  skillTests,
+  smokeTests,
+  templateTests,
+  trustedUnitAuthoringTests,
+  unitDiagnosticsTests,
+  vcsAdvancedTests,
+  vcsTests,
+  webhookTests,
+  workerTests,
+  workspaceTests,
+};
 
 export type TestStage = {
   index: number;
@@ -114,49 +115,49 @@ export type NextTestStage = {
 
 export function allTests(): TestCase[] {
   const tests = [
-    ..._smoke,
-    ..._fs,
-    ..._vcs,
-    ..._vcsAdvanced,
-    ..._gitInterop,
-    ..._templates,
-    ..._panels,
-    ..._workers,
-    ..._build,
-    ..._oauth,
-    ..._credentials,
-    ..._ws,
-    ..._unitDiagnostics,
-    ..._multiUser,
-    ..._approvals,
-    ..._notif,
-    ..._skills,
-    ..._agent,
-    ..._rpc,
-    ..._edge,
-    ..._agenticRuntime,
-    ..._agentOrchestration,
-    ..._evalLifecycle,
-    ..._selfDevelopment,
-    ..._blobstore,
-    ..._serverLogs,
-    ..._webhooks,
-    ..._extensionSurface,
-    ..._trustedUnitAuthoring,
-    ..._localModels,
-    ..._harnessTools,
-    ..._mobile,
-    ..._deliveryHardening,
-    ..._intentDiscovery,
-    ..._docsDiscovery,
-    ..._interaction,
-    ..._projectLifecycle,
-    ..._scaffoldMatrix,
-    ..._developerErgonomics,
-    ..._cdpGad,
-    ..._harnessResilience,
-    ..._docs,
-    ..._deterministic(),
+    ...smokeTests,
+    ...filesystemTests,
+    ...vcsTests,
+    ...vcsAdvancedTests,
+    ...gitInteropTests,
+    ...templateTests,
+    ...panelTests,
+    ...workerTests,
+    ...buildTests,
+    ...oauthTests,
+    ...credentialTests,
+    ...workspaceTests,
+    ...unitDiagnosticsTests,
+    ...multiUserTests,
+    ...approvalPermissionTests,
+    ...notificationTests,
+    ...skillTests,
+    ...agentCapabilityTests,
+    ...rpcTests,
+    ...edgeCaseTests,
+    ...agenticRuntimeTests,
+    ...agentOrchestrationTests,
+    ...evalLifecycleTests,
+    ...selfDevelopmentTests,
+    ...blobstoreTests,
+    ...serverLogTests,
+    ...webhookTests,
+    ...extensionSurfaceTests,
+    ...trustedUnitAuthoringTests,
+    ...localModelTests,
+    ...harnessToolTests,
+    ...mobileTests,
+    ...deliveryHardeningTests,
+    ...intentDiscoveryTests,
+    ...docsDiscoveryTests,
+    ...interactionSurfaceTests,
+    ...projectLifecycleTests,
+    ...scaffoldMatrixTests,
+    ...developerErgonomicsTests,
+    ...cdpGadDiagnosticTests,
+    ...harnessResilienceTests,
+    ...docsProbeTests,
+    ...deterministicTestCases(),
   ];
   for (const test of tests) assertSystemTestDeclaration(test);
   return tests;
