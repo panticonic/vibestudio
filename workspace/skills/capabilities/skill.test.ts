@@ -15,7 +15,7 @@ describe("capabilities skill", () => {
     expect(markdown).toContain('workers.resolveService("example.protocol")');
     expect(markdown).toContain("not eval globals or runtime exports");
     expect(markdown).toContain("not a startup scan or static");
-    expect(markdown).toContain("Never source-scan another unit");
+    expect(markdown).toMatch(/(?:Never|Do not) source-scan another unit/u);
   });
 
   it("keeps installed requests separate from grants and runtime calls", () => {

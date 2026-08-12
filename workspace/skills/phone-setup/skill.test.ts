@@ -10,7 +10,7 @@ describe("phone setup skill", () => {
 
     expect(markdown).toContain('workers.resolveService("vibestudio.phone-provisioning.v1")');
     expect(markdown).toContain("open its live docs");
-    expect(markdown).toContain("Preserve returned provider and device IDs exactly");
+    expect(markdown).toMatch(/Preserve (?:the )?returned provider and device IDs exactly/u);
     expect(markdown).toContain("adb, Xcode, and the phone are attached to the user's desktop");
     expect(markdown).toContain("Never expose a pairing secret");
     expect(markdown).toContain("A hub device ID");

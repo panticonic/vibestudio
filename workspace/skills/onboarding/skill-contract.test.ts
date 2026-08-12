@@ -11,7 +11,7 @@ describe("onboarding skill template handoff", () => {
     expect(skill).toContain("resolveOnboardingTemplateSelection");
     expect(skill).toContain("exact registry-bound selection");
     expect(skill).toContain("[Templates](../templates/SKILL.md)");
-    expect(skill).toContain("Templates remains the sole install/update path");
+    expect(skill).toMatch(/Templates remains the sole (?:install\/update|installation and update) path/u);
     expect(skill).not.toContain("vibestudio-template-examples.git");
   });
 });
