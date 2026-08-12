@@ -405,7 +405,7 @@ function App() {
 
   return (
     <Theme appearance={theme} {...appTheme}>
-      <Box style={{ height: "100vh", boxSizing: "border-box", background: "var(--surface-panel)" }}>
+      <Box style={{ height: "100dvh", boxSizing: "border-box", background: "var(--surface-panel)" }}>
         <PanelChrome
           header={
             <Heading size="4" truncate>

@@ -439,7 +439,7 @@ export default function DevelopmentPanel() {
 
   return (
     <Theme appearance={theme} accentColor="blue" grayColor="slate" radius="medium" scaling="100%">
-      <Box p="4" style={{ minHeight: "100vh", background: "var(--color-background)" }}>
+      <Box p="4" style={{ minHeight: "100dvh", background: "var(--color-background)" }}>
         <Flex justify="between" align="center" mb="4" gap="3" wrap="wrap">
           <Box>
             <Heading size="7">Development</Heading>

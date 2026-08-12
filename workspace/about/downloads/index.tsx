@@ -25,7 +25,7 @@ export default function DownloadsPanel() {
 
   return (
     <Theme appearance={theme} accentColor="iris">
-      <Flex direction="column" gap="3" p="4" style={{ minHeight: "100vh" }}>
+      <Flex direction="column" gap="3" p="4" style={{ minHeight: "100dvh" }}>
         <Heading size="5">Downloads</Heading>
         {error && <Text color="red">{error}</Text>}
         {downloads.length === 0 && <Text color="gray">No browser downloads yet.</Text>}

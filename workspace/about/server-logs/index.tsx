@@ -177,10 +177,12 @@ function LogRow({
   record,
   expanded,
   onToggle,
+  isMobile,
 }: {
   record: LogRecord;
   expanded: boolean;
   onToggle: () => void;
+  isMobile: boolean;
 }) {
   const hasFields = !!record.fields && record.fields.length > 0;
   const tint =
@@ -196,6 +198,49 @@ function LogRow({
         ? "var(--amber-9)"
         : "transparent";
 
+  const metadata = (
+    <>
+      <Text
+        style={{
+          color: "var(--gray-11)",
+          flexShrink: 0,
+          fontVariantNumeric: "tabular-nums",
+        }}
+      >
+        {fmtTime(record.timestamp)}
+      </Text>
+      <Box style={{ flexShrink: 0 }}>
+        <LevelChip level={record.level} />
+      </Box>
+      {record.tag && (
+        <Text
+          style={{
+            flexShrink: 0,
+            color: "var(--accent-11)",
+            background: "var(--accent-a3)",
+            borderRadius: 4,
+            padding: "0 6px",
+            fontSize: 11,
+          }}
+        >
+          {record.tag}
+        </Text>
+      )}
+    </>
+  );
+  const message = (
+    <Text
+      style={{
+        color: "var(--gray-12)",
+        whiteSpace: "pre-wrap",
+        wordBreak: "break-word",
+        minWidth: 0,
+      }}
+    >
+      {record.message}
+    </Text>
+  );
+
   return (
     <Box
       onClick={hasFields ? onToggle : undefined}
@@ -210,7 +255,7 @@ function LogRow({
         lineHeight: 1.55,
       }}
     >
-      <Flex align="baseline" gap="2" style={{ minWidth: 0 }}>
+      <Flex align={isMobile ? "start" : "baseline"} gap="2" style={{ minWidth: 0 }}>
         <Box style={{ width: 12, flexShrink: 0, opacity: 0.5 }}>
           {hasFields ? (
             expanded ? (
@@ -220,42 +265,19 @@ function LogRow({
             )
           ) : null}
         </Box>
-        <Text
-          style={{
-            color: "var(--gray-11)",
-            flexShrink: 0,
-            fontVariantNumeric: "tabular-nums",
-          }}
-        >
-          {fmtTime(record.timestamp)}
-        </Text>
-        <Box style={{ flexShrink: 0 }}>
-          <LevelChip level={record.level} />
-        </Box>
-        {record.tag && (
-          <Text
-            style={{
-              flexShrink: 0,
-              color: "var(--accent-11)",
-              background: "var(--accent-a3)",
-              borderRadius: 4,
-              padding: "0 6px",
-              fontSize: 11,
-            }}
-          >
-            {record.tag}
-          </Text>
+        {isMobile ? (
+          <Flex direction="column" gap="1" style={{ flex: 1, minWidth: 0 }}>
+            <Flex align="center" gap="2" wrap="wrap">
+              {metadata}
+            </Flex>
+            {message}
+          </Flex>
+        ) : (
+          <>
+            {metadata}
+            {message}
+          </>
         )}
-        <Text
-          style={{
-            color: "var(--gray-12)",
-            whiteSpace: "pre-wrap",
-            wordBreak: "break-word",
-            minWidth: 0,
-          }}
-        >
-          {record.message}
-        </Text>
       </Flex>
       {hasFields && expanded && record.fields && (
         <Box
@@ -772,6 +794,7 @@ function ServerLogsPage() {
                 record={it.record}
                 expanded={expanded.has(it.record.seq)}
                 onToggle={() => toggleExpand(it.record.seq)}
+                isMobile={isMobile}
               />
             )
           )}
