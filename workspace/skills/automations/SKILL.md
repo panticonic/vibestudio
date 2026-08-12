@@ -328,6 +328,12 @@ The **Automations** panel and each scheduled tick's chat-history pill share the
 same supervision surface. The overview calls out
 running work, naturally completed definitions, drafts awaiting review, and
 failures from the last 24 hours.
+Calendar schedules are presented as plain-language rules such as “Every
+Thursday at 5:05 AM in New York time.” Editing common hourly, daily, weekly,
+and monthly rules uses time controls, weekday choices, and timezone search.
+Advanced cron stays lossless behind an Advanced control with a field legend,
+live validation, a human interpretation, and five concrete upcoming runs; the
+raw expression is never the only explanation shown to the user.
 Search and server-side filters keep large collections responsive. Each
 definition exposes bounded recent runs and paged history; each run shows its
 terminal message or error and links to the exact conversation when it has one.

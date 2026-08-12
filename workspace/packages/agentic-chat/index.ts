@@ -118,6 +118,7 @@ export type {
   AutomationUiClient,
   AutomationUiRpc,
 } from "./components/AutomationActivity";
+export { CronScheduleDisplay, CronScheduleEditor } from "./components/CronScheduleControls";
 
 // --- Primitive components ---
 export { MessageList } from "./components/MessageList";

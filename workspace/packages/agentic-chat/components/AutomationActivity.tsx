@@ -34,6 +34,12 @@ import type {
   MissionRecord,
   MissionRunRecord,
 } from "@vibestudio/shared/authority/mission";
+import {
+  canonicalCronExpression,
+  canonicalCronTimeZone,
+  describeCronSchedule,
+} from "@vibestudio/shared/authority/cronSchedule";
+import { CronScheduleDisplay, CronScheduleEditor } from "./CronScheduleControls.js";
 
 export interface AutomationUiClient {
   get(missionId: string): Promise<MissionRecord | null>;
@@ -169,7 +175,11 @@ export function formatAutomationInterval(value: number): string {
 function scheduleSummary(snapshot: AutomationActivitySnapshot): string {
   if (!snapshot.schedule) return "Manual";
   if (snapshot.schedule.kind === "cron") {
-    return `${snapshot.schedule.expression} · ${snapshot.schedule.timezone}`;
+    try {
+      return describeCronSchedule(snapshot.schedule.expression, snapshot.schedule.timezone);
+    } catch {
+      return "Calendar schedule";
+    }
   }
   return `Every ${formatAutomationInterval(snapshot.schedule.everyMs)}`;
 }
@@ -287,9 +297,16 @@ export function AutomationParametersEditor({
       setError("Recurring schedules must run no more often than once per minute.");
       return;
     }
-    if (scheduleKind === "cron" && (!cronExpression.trim() || !timezone.trim())) {
-      setError("Cron expression and IANA timezone are required.");
-      return;
+    let normalizedCronExpression: string | undefined;
+    let normalizedTimezone: string | undefined;
+    if (scheduleKind === "cron") {
+      try {
+        normalizedCronExpression = canonicalCronExpression(cronExpression);
+        normalizedTimezone = canonicalCronTimeZone(timezone);
+      } catch (cause) {
+        setError(cause instanceof Error ? cause.message : String(cause));
+        return;
+      }
     }
     const untilAt = until ? new Date(until).getTime() : undefined;
     if (until && (!Number.isSafeInteger(untilAt) || untilAt! <= Date.now())) {
@@ -348,8 +365,8 @@ export function AutomationParametersEditor({
             : scheduleKind === "cron"
               ? {
                   kind: "cron",
-                  expression: cronExpression.trim(),
-                  timezone: timezone.trim(),
+                  expression: normalizedCronExpression!,
+                  timezone: normalizedTimezone!,
                   ...(untilAt === undefined ? {} : { untilAt }),
                   ...(parsedMaxRuns === undefined ? {} : { maxRuns: parsedMaxRuns }),
                 }
@@ -431,36 +448,12 @@ export function AutomationParametersEditor({
         </Box>
       ) : null}
       {scheduleKind === "cron" ? (
-        <Grid columns={{ initial: "1", sm: "2" }} gap="3">
-          <Box>
-            <Text as="div" size="1" color="gray" mb="1">
-              Cron expression · minute hour day month weekday
-            </Text>
-            <TextField.Root
-              aria-label="Cron expression"
-              value={cronExpression}
-              onChange={(event) => setCronExpression(event.target.value)}
-              placeholder="5 5 * * THU"
-            />
-            <Text as="div" size="1" color="gray" mt="1">
-              Example: 5 5 * * THU means Thursdays at 5:05 a.m.
-            </Text>
-          </Box>
-          <Box>
-            <Text as="div" size="1" color="gray" mb="1">
-              IANA timezone
-            </Text>
-            <TextField.Root
-              aria-label="Cron timezone"
-              value={timezone}
-              onChange={(event) => setTimezone(event.target.value)}
-              placeholder="America/New_York"
-            />
-            <Text as="div" size="1" color="gray" mt="1">
-              Wall-clock time stays correct through daylight-saving changes.
-            </Text>
-          </Box>
-        </Grid>
+        <CronScheduleEditor
+          expression={cronExpression}
+          timezone={timezone}
+          onExpressionChange={setCronExpression}
+          onTimezoneChange={setTimezone}
+        />
       ) : null}
       {scheduleKind !== "manual" ? (
         <Grid columns={{ initial: "1", sm: "2" }} gap="3">
@@ -689,18 +682,19 @@ function Inspector({
           <Text as="div" size="1" color="gray">
             Cadence
           </Text>
-          <Text size="2" weight="medium">
-            {current.charter.trigger.kind === "schedule"
-              ? `Every ${formatAutomationInterval(current.charter.trigger.everyMs)}`
-              : current.charter.trigger.kind === "cron"
-                ? current.charter.trigger.expression
-                : "Manual only"}
-          </Text>
           {current.charter.trigger.kind === "cron" ? (
-            <Text as="div" size="1" color="gray">
-              {current.charter.trigger.timezone}
+            <CronScheduleDisplay
+              expression={current.charter.trigger.expression}
+              timezone={current.charter.trigger.timezone}
+              technical
+            />
+          ) : (
+            <Text size="2" weight="medium">
+              {current.charter.trigger.kind === "schedule"
+                ? `Every ${formatAutomationInterval(current.charter.trigger.everyMs)}`
+                : "Manual only"}
             </Text>
-          ) : null}
+          )}
         </Box>
         <Box>
           <Text as="div" size="1" color="gray">

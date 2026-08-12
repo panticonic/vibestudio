@@ -37,6 +37,7 @@ import { openPanel, rpc, workers } from "@workspace/runtime";
 import {
   AutomationActivity,
   AutomationParametersEditor,
+  CronScheduleDisplay,
   createAutomationUiClient,
   type AutomationUiClient,
 } from "@workspace/agentic-chat";
@@ -417,9 +418,7 @@ function executionDescription(automation: AutomationRecord): string {
 function scheduleDescription(automation: AutomationRecord): string {
   const trigger = automation.charter.trigger;
   if (trigger.kind === "manual") return "Manual only";
-  return trigger.kind === "schedule"
-    ? `Every ${duration(trigger.everyMs)}`
-    : `${trigger.expression} · ${trigger.timezone}`;
+  return trigger.kind === "schedule" ? `Every ${duration(trigger.everyMs)}` : "Calendar schedule";
 }
 
 function ScheduleDetails({ automation }: { automation: AutomationRecord }) {
@@ -841,11 +840,19 @@ function AutomationCard({
             <Text as="div" size="1" color="gray">
               Schedule
             </Text>
-            <Flex align="center" gap="1">
+            <Flex align="start" gap="1">
               <ClockIcon />
-              <Text size="2" weight="medium">
-                {schedule}
-              </Text>
+              {automation.charter.trigger.kind === "cron" ? (
+                <CronScheduleDisplay
+                  expression={automation.charter.trigger.expression}
+                  timezone={automation.charter.trigger.timezone}
+                  technical
+                />
+              ) : (
+                <Text size="2" weight="medium">
+                  {schedule}
+                </Text>
+              )}
             </Flex>
             <ScheduleDetails automation={automation} />
           </Box>

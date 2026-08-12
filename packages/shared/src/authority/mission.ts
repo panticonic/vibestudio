@@ -1,8 +1,12 @@
 import { createHash } from "node:crypto";
-import { Cron } from "croner";
 import type { ResourceScope } from "@vibestudio/rpc";
 import { canonicalJson } from "../canonicalJson.js";
 import { normalizeWorkspaceRepoPath } from "../runtime/entitySpec.js";
+import {
+  canonicalCronExpression,
+  canonicalCronTimeZone,
+  cronNextOccurrence,
+} from "./cronSchedule.js";
 
 export type MissionState =
   | "draft"
@@ -209,9 +213,15 @@ export function validateMissionCharter(charter: MissionCharter): void {
     }
   }
   if (charter.trigger.kind === "cron") {
-    validateCronExpression(charter.trigger.expression);
-    validateTimeZone(charter.trigger.timezone);
-    cronNextRunAt(charter.trigger, Date.UTC(2024, 0, 1));
+    const expression = canonicalCronExpression(charter.trigger.expression);
+    if (expression !== charter.trigger.expression) {
+      throw new Error(`Automation cron expression must be canonical: ${expression}`);
+    }
+    const timezone = canonicalCronTimeZone(charter.trigger.timezone);
+    if (timezone !== charter.trigger.timezone) {
+      throw new Error(`Automation cron timezone must be canonical IANA timezone ${timezone}`);
+    }
+    cronNextOccurrence(expression, timezone, Date.UTC(2024, 0, 1));
   }
   if (charter.trigger.kind !== "manual") {
     if (
@@ -317,7 +327,9 @@ export function missionNextRunAt(
   now: number,
   cadenceOrigin = now
 ): number {
-  if (trigger.kind === "cron") return cronNextRunAt(trigger, now);
+  if (trigger.kind === "cron") {
+    return cronNextOccurrence(trigger.expression, trigger.timezone, now);
+  }
   const anchorAt = trigger.anchorAt ?? cadenceOrigin;
   if (anchorAt > now) return anchorAt;
   const elapsed = now - anchorAt;
@@ -335,56 +347,6 @@ export function missionCompletionResponse(value: unknown): MissionCompletionResp
     return null;
   }
   return { protocol: MISSION_COMPLETION_PROTOCOL, response: candidate.response.trim() };
-}
-
-function validateCronExpression(expression: string): void {
-  const trimmed = expression.trim();
-  const nickname = /^@(yearly|annually|monthly|weekly|daily|midnight|hourly)$/iu.test(trimmed);
-  if (!nickname && trimmed.split(/\s+/u).length !== 5) {
-    throw new Error(
-      "Automation cron expression must use the five-field minute/hour/day/month/weekday format"
-    );
-  }
-  const canonical = nickname
-    ? trimmed.toLowerCase()
-    : trimmed.split(/\s+/u).join(" ").toUpperCase();
-  if (expression !== canonical) {
-    throw new Error(`Automation cron expression must be canonical: ${canonical}`);
-  }
-}
-
-function validateTimeZone(timezone: string): void {
-  try {
-    const canonical = new Intl.DateTimeFormat("en-US", { timeZone: timezone }).resolvedOptions()
-      .timeZone;
-    if (canonical !== timezone) {
-      throw new Error(`use canonical IANA timezone ${canonical}`);
-    }
-  } catch (error) {
-    throw new Error(
-      `Automation cron timezone must be a canonical IANA timezone: ${
-        error instanceof Error ? error.message : String(error)
-      }`
-    );
-  }
-}
-
-function cronNextRunAt(trigger: Extract<MissionTrigger, { kind: "cron" }>, now: number): number {
-  let next: Date | null;
-  try {
-    next = new Cron(trigger.expression, {
-      timezone: trigger.timezone,
-      paused: true,
-    }).nextRun(new Date(now));
-  } catch (error) {
-    throw new Error(
-      `Invalid automation cron schedule: ${error instanceof Error ? error.message : String(error)}`
-    );
-  }
-  if (!next || !Number.isSafeInteger(next.getTime())) {
-    throw new Error("Automation cron schedule has no future occurrence");
-  }
-  return next.getTime();
 }
 
 /**

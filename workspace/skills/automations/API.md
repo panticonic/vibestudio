@@ -92,6 +92,12 @@ IANA timezone, including daylight-saving transitions. Both accept `untilAt`
 (no new run starts at or after the boundary) and `maxRuns` (total admitted runs;
 failures count and overlap skips do not). The count survives revisions.
 
+The shared chat-history inspector and Automations dashboard render calendar
+schedules in plain language. Their editor round-trips common hourly, daily,
+weekly, and monthly expressions through visual controls and preserves all other
+valid expressions in an Advanced editor with validation and upcoming-run
+previews. Both paths save the same canonical `cron` trigger.
+
 A prompt tick can end its recurring goal by calling
 `complete_automation({ response })`. Eval and method executions return the same
 signal as data:

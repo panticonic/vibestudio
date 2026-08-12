@@ -49,5 +49,9 @@ describe("Automations skill contract", () => {
     expect(skill).toContain("`complete_automation` tool");
     expect(api).toContain('protocol: "automation-completion.v1"');
     expect(api).toContain("transitions the definition to `completed`");
+    expect(skill).toContain("plain-language rules");
+    expect(skill).toContain("five concrete upcoming runs");
+    expect(api).toContain("round-trips common hourly, daily, weekly, and monthly expressions");
+    expect(api).toContain("Both paths save the same canonical `cron` trigger");
   });
 });

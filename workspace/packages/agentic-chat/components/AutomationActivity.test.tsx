@@ -243,19 +243,24 @@ describe("AutomationActivity", () => {
       </Theme>
     );
 
-    expect(screen.getByText(/5 5 \* \* THU · America\/New_York/)).toBeTruthy();
+    expect(screen.getByText(/Every Thursday at 5:05.*New York time/)).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: /Inspect automation tick Daily check/ }));
     expect(await screen.findByText("4 runs of 8")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Edit parameters" }));
-    expect((screen.getByLabelText("Cron expression") as HTMLInputElement).value).toBe(
-      "5 5 * * THU"
+    expect(screen.queryByLabelText("Cron expression")).toBeNull();
+    expect((screen.getByLabelText("Time") as HTMLInputElement).value).toBe("05:05");
+    expect((screen.getByLabelText("Thursday") as HTMLButtonElement).dataset["state"]).toBe(
+      "checked"
     );
     expect((screen.getByLabelText("Cron timezone") as HTMLInputElement).value).toBe(
       "America/New_York"
     );
+    expect(screen.getByText("Next five runs")).toBeTruthy();
+    fireEvent.click(screen.getByRole("radio", { name: "Advanced" }));
     fireEvent.change(screen.getByLabelText("Cron expression"), {
       target: { value: "35 7 * * MON-FRI" },
     });
+    expect(await screen.findByText(/Every Monday through Friday at 7:35/)).toBeTruthy();
     fireEvent.change(screen.getByLabelText("Maximum runs"), { target: { value: "12" } });
     fireEvent.click(screen.getByRole("button", { name: "Save as new revision" }));
 
