@@ -24,6 +24,23 @@ function exactNumber(message: string, value: number): boolean {
   return new RegExp(`(?:^|\\D)${value}(?:\\D|$)`, "u").test(message);
 }
 
+function coordinatedLogSnapshots(values: readonly unknown[]) {
+  return values.flatMap((value) => {
+    const nested = walkRecords([value]);
+    const hasObservedRecord = nested.some(
+      (record) =>
+        Number.isInteger(record["seq"]) &&
+        typeof record["level"] === "string" &&
+        (typeof record["message"] === "string" || typeof record["msg"] === "string")
+    );
+    if (!hasObservedRecord) return [];
+    return nested.filter(
+      (record) =>
+        Number.isInteger(record["latestSeq"]) && typeof record["serverBootId"] === "string"
+    );
+  });
+}
+
 function startupDiagnosisChecked(result: Parameters<typeof noIncompleteInvocations>[0]) {
   if (!hasLoadedSkill(result, "server-logs")) {
     return {
@@ -47,22 +64,17 @@ function startupDiagnosisChecked(result: Parameters<typeof noIncompleteInvocatio
     };
   }
 
-  const envelopes = walkRecords(successfulEvalReturnValues(result)).filter(
-    (item) =>
-      Array.isArray(item["records"]) &&
-      Number.isInteger(item["latestSeq"]) &&
-      typeof item["serverBootId"] === "string"
-  );
-  if (envelopes.length === 0) {
+  const snapshots = coordinatedLogSnapshots(successfulEvalReturnValues(result));
+  if (snapshots.length === 0) {
     return { passed: false, reason: "No coordinated server-log snapshot was observed" };
   }
 
   const final = findLastAgentMessage(result);
   if (
-    !envelopes.some(
-      (envelope) =>
-        final.includes(String(envelope["serverBootId"])) &&
-        exactNumber(final, Number(envelope["latestSeq"]))
+    !snapshots.some(
+      (snapshot) =>
+        final.includes(String(snapshot["serverBootId"])) &&
+        exactNumber(final, Number(snapshot["latestSeq"]))
     ) ||
     !/(?:start|startup|boot|slow|delay|build|normal|warn|error|incident)/iu.test(final)
   ) {

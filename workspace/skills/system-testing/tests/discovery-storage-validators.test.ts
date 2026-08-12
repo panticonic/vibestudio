@@ -195,12 +195,12 @@ describe("storage and discovery semantic validators", () => {
           success: true,
           returnValue: {
             earlier: {
-              records: [{ level: "info", message: "server launching" }],
+              records: [{ seq: 11, level: "info", message: "server launching" }],
               latestSeq: 12,
               serverBootId: "boot:test-startup",
             },
             current: {
-              records: [{ level: "info", message: "startup complete" }],
+              records: [{ seq: 40, level: "info", message: "startup complete" }],
               latestSeq: 41,
               serverBootId: "boot:test-startup",
             },
@@ -233,6 +233,47 @@ describe("storage and discovery semantic validators", () => {
       passed: false,
       reason: expect.stringContaining("coordinates"),
     });
+  });
+
+  it("accepts a bounded compact snapshot without requiring the raw service envelope", () => {
+    const test = serverLogTests.find(
+      (candidate) => candidate.name === "server-log-startup-diagnosis"
+    )!;
+    const skill = invocation(
+      "read",
+      { path: "skills/server-logs/SKILL.md" },
+      { text: "Use bounded server-log inspection." }
+    );
+    const observed = invocation(
+      "eval",
+      {
+        code: `
+          const tail = await rpc.call("main", "serverLog.tail", [30]);
+          return {
+            tailMeta: { serverBootId: tail.serverBootId, latestSeq: tail.latestSeq },
+            tail: tail.records.map(({ seq, level, message }) => ({ seq, level, message })),
+          };
+        `,
+      },
+      {
+        details: {
+          success: true,
+          returnValue: {
+            tailMeta: { serverBootId: "boot:compact", latestSeq: 87 },
+            tail: [{ seq: 84, level: "warn", msg: "startup was briefly slow" }],
+          },
+        },
+      }
+    );
+
+    expect(
+      test.validate(
+        execution("Startup was briefly slow in boot:compact; latest sequence 87.", [
+          skill,
+          observed,
+        ])
+      )
+    ).toEqual({ passed: true, reason: undefined });
   });
 
   it("requires an identity-joined webhook lifecycle and final cleanup", () => {
