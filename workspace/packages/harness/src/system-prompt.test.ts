@@ -125,7 +125,13 @@ describe("composeSystemPrompt", () => {
   it("includes core conversation fork and subagent operating guidance", () => {
     expect(VIBESTUDIO_BASE_SYSTEM_PROMPT).toContain("## Conversation Forks And Subagents");
     expect(VIBESTUDIO_BASE_SYSTEM_PROMPT).toContain("do not conflate them");
-    expect(VIBESTUDIO_BASE_SYSTEM_PROMPT).toContain("context window cache is shared");
+    expect(VIBESTUDIO_BASE_SYSTEM_PROMPT).toContain("cache-compatible model transport");
+    expect(VIBESTUDIO_BASE_SYSTEM_PROMPT).toContain(
+      "changing provider or model does not inherit the parent's provider cache"
+    );
+    expect(VIBESTUDIO_BASE_SYSTEM_PROMPT).toContain(
+      'Prefer `mode: "fresh"` when a precise task, paths, and durable workspace context are sufficient'
+    );
     expect(VIBESTUDIO_BASE_SYSTEM_PROMPT).toContain(
       "do not poll a live child with status, transcript, log, or diff reads"
     );

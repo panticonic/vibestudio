@@ -49,10 +49,14 @@ remove a successfully installed model as cleanup.
 
 Model execution belongs to a real agent turn. For a bounded delegated task,
 spawn a normal `pi` subagent with `config.model` set to the exact installed
-`local:<slug>` reference. Use `mode: "fork"` when it needs the current
-trajectory or workspace context and `mode: "fresh"` when it does not. The
-runtime joins an in-progress bundled download, starts the correct server, and
-injects loopback authentication at the trusted execution edge.
+`local:<slug>` reference. Prefer `mode: "fresh"` when the task and exact paths
+are self-contained; the child's durable workspace context still derives from
+the parent. Use `mode: "fork"` only when the local child needs the parent's
+conversation trajectory. A local child cannot reuse a cloud provider's context
+cache, so forking across that model boundary carries input without the cache
+savings of a compatible same-model fork. The runtime joins an in-progress
+bundled download, starts the correct server, and injects loopback authentication
+at the trusted execution edge.
 
 Continue useful foreground work, then suspend while the child runs. Do not poll
 the child. Its terminal delivery proves that the configured local-model agent
