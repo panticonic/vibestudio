@@ -27,6 +27,17 @@ async function sourceRoot(unit: string): Promise<string> {
 }
 
 describe("WorkspaceTreeScanner", () => {
+  it("does not materialize the source projection before the first consumer asks", async () => {
+    const root = await sourceRoot("lazy");
+    const provide = vi.fn(async () => root);
+
+    const scanner = new WorkspaceTreeScanner(provide);
+
+    expect(provide).not.toHaveBeenCalled();
+    expect(JSON.stringify(await scanner.getSourceTree())).toContain("panels/lazy");
+    expect(provide).toHaveBeenCalledTimes(1);
+  });
+
   it("scans the exact async semantic projection instead of a checkout captured at construction", async () => {
     const first = await sourceRoot("first");
     const second = await sourceRoot("external-seed");

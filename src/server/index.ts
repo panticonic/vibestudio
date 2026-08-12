@@ -1924,12 +1924,6 @@ async function main() {
     const { stateHash } = await workspaceVcs.ensureFresh();
     return workspaceVcs.materializeSourceTree(stateHash);
   });
-  // New Panel needs this catalog on its first-ever mount. Start the one
-  // authoritative scan while its runtime is still building; concurrent RPCs
-  // join this work, and later protected publications invalidate the result.
-  void treeScanner
-    .getSourceTree()
-    .catch((err: unknown) => console.warn("[WorkspaceTree] Startup warmup failed:", err));
   const skippedDeclaredRemoteRepoWarnings = new Set<string>();
   const syncDeclaredRemotesForSource = async (repoPath?: string): Promise<void> => {
     const repos = repoPath
