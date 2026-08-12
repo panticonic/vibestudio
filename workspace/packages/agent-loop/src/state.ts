@@ -5,7 +5,11 @@
  * (hydration happens in executors, never in the fold).
  */
 
-import type { InvocationTransport, ParticipantRef } from "@workspace/agentic-protocol";
+import type {
+  AgentToolFailure,
+  InvocationTransport,
+  ParticipantRef,
+} from "@workspace/agentic-protocol";
 import { logIdForChannel } from "@vibestudio/trajectory-identity";
 
 export type ThinkingLevel = "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
@@ -407,6 +411,9 @@ export type SessionEntry =
        * while parallel sibling invocations are still settling. */
       terminalOutcome?: "tool_error" | "infrastructure_error";
       terminalReasonCode?: string;
+      /** Typed recovery survives folding so parallel sibling settlement cannot
+       * turn a recoverable infrastructure failure into a terminal turn. */
+      failureRecovery?: AgentToolFailure["recovery"];
     }
   | { kind: "note"; seq: number; text: string };
 

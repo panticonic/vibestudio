@@ -517,6 +517,107 @@ describe("agent-loop core lifecycle", () => {
     );
   });
 
+  it("continues the same turn when infrastructure failure has typed recovery", () => {
+    const s = scenario();
+    prompt(s);
+    resolveEffect(s, ids.modelEffect(msg0), {
+      kind: "model",
+      blocks: [
+        { type: "toolCall", id: "tc-repair", name: "eval", arguments: { code: "create()" } },
+      ],
+      stopReason: "completed",
+    });
+
+    resolveEffect(s, ids.invocationEffect("tc-repair"), {
+      kind: "tool",
+      result: { error: "protected publication build gate failed" },
+      isError: true,
+      reason: "protected publication build gate failed",
+      terminalOutcome: "infrastructure_error",
+      terminalReasonCode: "scaffold_publication_failed",
+      failure: {
+        protocol: "agent-tool-failure.v1",
+        code: "scaffold_publication_failed",
+        kind: "infrastructure",
+        message: "protected publication build gate failed",
+        operation: "tool.eval",
+        stage: "execute",
+        retry: { policy: "none", commandIdPolicy: "not-applicable" },
+        recovery: {
+          action: "repair-source",
+          instruction: "Inspect diagnostics, repair source, and publish a new revision.",
+        },
+        causes: [
+          {
+            role: "primary",
+            code: "scaffold_publication_failed",
+            message: "protected publication build gate failed",
+          },
+        ],
+      },
+    });
+
+    expect(
+      s.log.find((row) => row.envelopeId === ids.invocationTerminal("tc-repair"))
+    ).toMatchObject({
+      payload: {
+        terminalOutcome: "infrastructure_error",
+        failure: { recovery: { action: "repair-source" } },
+      },
+    });
+    expect(s.log.some((row) => row.envelopeId.includes(":infrastructure:"))).toBe(false);
+    expect(s.state.openTurn).not.toBeNull();
+    expect(pendingEffectIds(s)).toEqual([ids.modelEffect(ids.messageId(turn1, 1))]);
+  });
+
+  it("retains typed recovery while waiting for parallel siblings", () => {
+    const s = scenario();
+    prompt(s);
+    resolveEffect(s, ids.modelEffect(msg0), {
+      kind: "model",
+      blocks: [
+        { type: "toolCall", id: "tc-repair", name: "eval", arguments: {} },
+        { type: "toolCall", id: "tc-sibling", name: "read", arguments: {} },
+      ],
+      stopReason: "completed",
+    });
+
+    resolveEffect(s, ids.invocationEffect("tc-repair"), {
+      kind: "tool",
+      result: { error: "panel generation changed" },
+      isError: true,
+      terminalOutcome: "infrastructure_error",
+      terminalReasonCode: "cdp_target_closed",
+      failure: {
+        protocol: "agent-tool-failure.v1",
+        code: "cdp_target_closed",
+        kind: "infrastructure",
+        message: "panel generation changed",
+        operation: "tool.eval",
+        stage: "execute",
+        retry: { policy: "none", commandIdPolicy: "not-applicable" },
+        recovery: {
+          action: "reacquire-handle",
+          instruction: "Acquire a page for the current panel generation.",
+        },
+        causes: [
+          { role: "primary", code: "cdp_target_closed", message: "panel generation changed" },
+        ],
+      },
+    });
+    expect(pendingEffectIds(s)).toEqual([ids.invocationEffect("tc-sibling")]);
+
+    resolveEffect(s, ids.invocationEffect("tc-sibling"), {
+      kind: "tool",
+      result: { ok: true },
+      isError: false,
+    });
+
+    expect(s.log.some((row) => row.envelopeId.includes(":infrastructure:"))).toBe(false);
+    expect(s.state.openTurn).not.toBeNull();
+    expect(pendingEffectIds(s)).toEqual([ids.modelEffect(ids.messageId(turn1, 1))]);
+  });
+
   it("waits for parallel siblings before publishing an infrastructure diagnostic", () => {
     const s = scenario();
     prompt(s);

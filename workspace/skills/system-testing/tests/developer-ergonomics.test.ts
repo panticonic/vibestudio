@@ -88,6 +88,7 @@ function scenario(name: string) {
 describe("developer ergonomics scenarios", () => {
   it("registers the focused regression names and induced failure policy", () => {
     expect(developerErgonomicsTests.map((test) => test.name)).toEqual([
+      "recoverable-infrastructure-failure-continues-turn",
       "invalid-icon-discover-recover-create",
       "failed-build-bounded-diagnostics",
       "extensionless-screenshot-resource-read",
@@ -103,6 +104,33 @@ describe("developer ergonomics scenarios", () => {
     expect(scenario("stale-edit-reobserve-and-apply").expectedToolFailures).toEqual([
       { name: "apply_patch", errorIncludes: "WorkspaceReadConflict" },
     ]);
+  });
+
+  it("requires a recoverable infrastructure failure followed by same-turn completion", () => {
+    const recoverable = call(
+      "recoverable-infrastructure",
+      "eval",
+      { code: "throw recoverable;" },
+      failure("recoverable_infrastructure_probe", {
+        kind: "infrastructure",
+        recovery: { action: "reobserve", instruction: "Continue this same turn." },
+      }),
+      true
+    );
+    (
+      recoverable.invocation.execution as typeof recoverable.invocation.execution & {
+        terminalOutcome?: string;
+      }
+    ).terminalOutcome = "infrastructure_error";
+
+    const result = execution([recoverable]);
+    const final = result.messages.at(-1) as { content?: string };
+    final.content = "RECOVERED_IN_SAME_TURN";
+
+    expect(scenario("recoverable-infrastructure-failure-continues-turn").validate(result)).toEqual({
+      passed: true,
+      reason: undefined,
+    });
   });
 
   it("accepts typed invalid-icon correction followed by bounded discovery and creation", () => {

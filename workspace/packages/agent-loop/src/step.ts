@@ -559,6 +559,21 @@ function infrastructureFailureDiagnostic(
   };
 }
 
+function recoveryActionFromFailurePayload(payload: Record<string, unknown>): string | undefined {
+  const failure = payload["failure"];
+  if (!failure || typeof failure !== "object") return undefined;
+  const recovery = (failure as Record<string, unknown>)["recovery"];
+  if (!recovery || typeof recovery !== "object") return undefined;
+  const action = (recovery as Record<string, unknown>)["action"];
+  return typeof action === "string" ? action : undefined;
+}
+
+function infrastructureFailureTerminatesTurn(payload: Record<string, unknown>): boolean {
+  if (payload["terminalOutcome"] !== "infrastructure_error") return false;
+  const action = recoveryActionFromFailurePayload(payload);
+  return action === undefined || action === "stop";
+}
+
 function turnWaitingItem(
   turnId: string,
   waitingCount: number,
@@ -1614,11 +1629,11 @@ function eventStep(state: AgentState, envelope: LogEnvelope, ctx: StepContext): 
         };
       }
     }
-    // Infrastructure cannot be repaired by another model continuation inside
-    // this turn. Wait for every sibling invocation above, then publish one
-    // deterministic, non-model diagnostic before durably closing the turn.
-    // Folded tool-result entries retain this classification so an earlier
-    // infrastructure failure is not forgotten when a sibling settles last.
+    // Origin and recoverability are independent. A typed recovery action can
+    // make an infrastructure-origin failure actionable inside this turn
+    // (repair source, reacquire a handle, reobserve, or retry). Only failures
+    // with no recovery contract or an explicit stop action terminate after
+    // every sibling invocation settles.
     const currentInvocationId = String(causality["invocationId"] ?? "");
     const priorInfrastructureFailure = [...state.entries]
       .reverse()
@@ -1626,10 +1641,11 @@ function eventStep(state: AgentState, envelope: LogEnvelope, ctx: StepContext): 
         (entry) =>
           entry.seq >= turn.openedAtSeq &&
           entry.kind === "tool-result" &&
-          entry.terminalOutcome === "infrastructure_error"
+          entry.terminalOutcome === "infrastructure_error" &&
+          (entry.failureRecovery?.action === undefined || entry.failureRecovery.action === "stop")
       );
     const infrastructureFailure =
-      kind === "invocation.failed" && payload["terminalOutcome"] === "infrastructure_error"
+      kind === "invocation.failed" && infrastructureFailureTerminatesTurn(payload)
         ? {
             invocationId: currentInvocationId,
             code:

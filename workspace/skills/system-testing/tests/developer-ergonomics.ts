@@ -7,6 +7,7 @@ import {
 } from "../types.js";
 import { panelControlAuthorityPolicy, PANEL_AUTOMATION_RESOURCE } from "../panel-authority.js";
 import {
+  finalMessageHasAll,
   getToolCalls,
   hasSuccessfulImageRead,
   type InvocationCardPayloadLike,
@@ -99,6 +100,31 @@ function validateInvalidIconRecovery(result: TestExecutionResult) {
         passed: false,
         reason: "The agent did not discover the bounded catalog and create the corrected panel",
       };
+}
+
+function validateRecoverableInfrastructureContinuation(result: TestExecutionResult) {
+  const base = completedScenarioEvidence(result, [], {
+    allowFailed: (call) =>
+      call.name === "eval" && failure(call, "recoverable_infrastructure_probe") !== null,
+  });
+  if (!base.passed) return base;
+  const failed = getToolCalls(result).find((call) => {
+    const typed = call.name === "eval" ? failure(call, "recoverable_infrastructure_probe") : null;
+    const recovery = typed?.["recovery"];
+    return (
+      isFailed(call) &&
+      call.execution?.terminalOutcome === "infrastructure_error" &&
+      isRecord(recovery) &&
+      recovery["action"] === "reobserve"
+    );
+  });
+  if (!failed) {
+    return {
+      passed: false,
+      reason: "The eval failure did not retain its infrastructure origin and typed recovery",
+    };
+  }
+  return finalMessageHasAll(result, ["RECOVERED_IN_SAME_TURN"]);
 }
 
 function buildReceipt(record: Record<string, unknown>, status: "ok" | "failed") {
@@ -257,6 +283,15 @@ const SCREENSHOT_PROMPT =
   "Open a tiny disposable browser view, capture its rendered pixels to a scratch file with no filename extension, read that file as an image, and report the visible heading. Clean up the view when finished.";
 
 export const developerErgonomicsTests: TestCase[] = [
+  {
+    name: "recoverable-infrastructure-failure-continues-turn",
+    description: "Continue the same agent turn after a typed recoverable infrastructure failure",
+    category: "developer-ergonomics",
+    prompt:
+      "Exercise the agent failure protocol once: use eval to throw an Error whose errorData is { code: 'recoverable_infrastructure_probe', failureKind: 'infrastructure', recovery: { action: 'reobserve', instruction: 'Continue this same turn and report RECOVERED_IN_SAME_TURN.' } }. The eval is expected to fail. After receiving that failed tool result, continue in this same turn and answer with exactly RECOVERED_IN_SAME_TURN. Do not retry the eval.",
+    expectedToolFailures: [{ name: "eval", errorIncludes: "recoverable infrastructure probe" }],
+    validate: validateRecoverableInfrastructureContinuation,
+  },
   {
     name: "invalid-icon-discover-recover-create",
     description: "Resolve an unsupported curated icon through bounded discovery",

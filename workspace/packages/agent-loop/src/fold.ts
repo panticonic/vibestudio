@@ -5,7 +5,12 @@
  * lastSeq/lastHash advance.
  */
 
-import type { ActorRef, LogEnvelope, ParticipantRef } from "@workspace/agentic-protocol";
+import type {
+  ActorRef,
+  AgentToolFailure,
+  LogEnvelope,
+  ParticipantRef,
+} from "@workspace/agentic-protocol";
 import { participantKey, participantRefFromActor } from "@workspace/agentic-protocol";
 import type {
   AgentState,
@@ -449,6 +454,11 @@ export function applyEvent(prev: AgentState, envelope: LogEnvelope): AgentState 
                 : {}),
               ...(typeof payload["terminalReasonCode"] === "string"
                 ? { terminalReasonCode: payload["terminalReasonCode"] }
+                : {}),
+              ...(payload["failure"] && typeof payload["failure"] === "object"
+                ? {
+                    failureRecovery: (payload["failure"] as AgentToolFailure).recovery,
+                  }
                 : {}),
             };
       return {

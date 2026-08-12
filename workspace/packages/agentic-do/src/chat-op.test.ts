@@ -1381,6 +1381,44 @@ describe("AgentVesselBase.onEvalComplete (deferred-eval resume)", () => {
     });
   });
 
+  it("preserves typed in-turn recovery on an eval infrastructure failure", async () => {
+    const vessel = await makeVessel();
+    const deliverSpy = stubDriver(vessel);
+    vessel.callerKindForTest = "do";
+    vessel.callerIdForTest = await expectedEvalCaller();
+    await vessel.onEvalComplete({
+      runId: "inv-repairable",
+      agentInvocationId: "call-repairable",
+      result: {
+        success: false,
+        console: "",
+        error: "protected publication build gate failed",
+        failureKind: "infrastructure",
+        failureCode: "scaffold_publication_failed",
+        errorData: {
+          code: "scaffold_publication_failed",
+          recovery: {
+            action: "repair-source",
+            instruction: "Inspect diagnostics and publish a repaired revision.",
+          },
+        },
+      },
+      channelId: CHANNEL,
+    });
+
+    expect(deliverSpy.mock.calls[0]![1]).toMatchObject({
+      kind: "tool",
+      isError: true,
+      terminalOutcome: "infrastructure_error",
+      terminalReasonCode: "scaffold_publication_failed",
+      failure: {
+        kind: "infrastructure",
+        recovery: { action: "repair-source" },
+        causal: { invocationId: "call-repairable" },
+      },
+    });
+  });
+
   it("is a no-op without a channelId or result (can't route the resume)", async () => {
     const vessel = await makeVessel();
     const deliverSpy = stubDriver(vessel);
