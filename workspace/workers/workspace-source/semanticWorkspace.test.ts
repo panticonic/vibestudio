@@ -457,7 +457,7 @@ describe("SemanticWorkspace repository counteractions", () => {
       const page = vcsNeighborsResultSchema.parse(dispatch.result);
       pagedStateEdges.push(...page.edges);
       if (!page.nextCursor) break;
-      expect(page.nextCursor).toMatch(/^semantic-page-v1\./);
+      expect(page.nextCursor).toMatch(/^semantic-page-v2\./);
       stateCursor = page.nextCursor;
     }
     if (stateNeighbors.kind !== "complete") throw new Error("neighbors did not complete");
@@ -1191,7 +1191,7 @@ describe("SemanticWorkspace repository counteractions", () => {
       const page = vcsBlameResultSchema.parse(dispatch.result);
       pagedBlameSpans.push(...page.spans);
       if (!page.nextCursor) break;
-      expect(page.nextCursor).toMatch(/^semantic-page-v1\./u);
+      expect(page.nextCursor).toMatch(/^semantic-page-v2\./u);
       blameCursor = page.nextCursor;
     }
     expect(pagedBlameSpans).toEqual(vcsBlameResultSchema.parse(editedBlameDispatch.result).spans);
@@ -1485,7 +1485,7 @@ describe("SemanticWorkspace repository counteractions", () => {
         const page = vcsNeighborsResultSchema.parse(dispatch.result);
         edges.push(...page.edges);
         if (!page.nextCursor) return edges;
-        expect(page.nextCursor).toMatch(/^semantic-page-v1\./);
+        expect(page.nextCursor).toMatch(/^semantic-page-v2\./);
         cursor = page.nextCursor;
       }
       throw new Error("neighbor paging did not terminate");
@@ -1591,21 +1591,52 @@ describe("SemanticWorkspace repository counteractions", () => {
         const page = vcsHistoryResultSchema.parse(dispatch.result);
         entries.push(...page.entries);
         if (!page.nextCursor) return entries;
-        expect(page.nextCursor).toMatch(/^semantic-page-v1\./);
+        expect(page.nextCursor).toMatch(/^semantic-page-v2\./);
+        expect(page.nextCursor.length).toBeLessThan(512);
         cursor = page.nextCursor;
       }
       throw new Error("history paging did not terminate");
     };
     if (fileHistory.kind !== "complete") throw new Error("history did not complete");
     const expectedFileHistory = vcsHistoryResultSchema.parse(fileHistory.result).entries;
+    const fileHistoryRoot = {
+      kind: "file" as const,
+      state: edited.workingHead,
+      repositoryId,
+      fileId: copiedFileId,
+    };
+    const firstFileHistoryPage = await semantic.dispatch("history", {
+      ingress,
+      input: { root: fileHistoryRoot, direction: "past", limit: 1 },
+    });
+    if (firstFileHistoryPage.kind !== "complete") throw new Error("history did not complete");
+    const exactHistoryCursor = vcsHistoryResultSchema.parse(firstFileHistoryPage.result).nextCursor;
+    expect(exactHistoryCursor).toMatch(/^semantic-page-v2\./);
+    expect(exactHistoryCursor!.length).toBeLessThan(512);
+    const corruptedHistoryCursor = `${exactHistoryCursor!.slice(0, -1)}${exactHistoryCursor!.endsWith("A") ? "B" : "A"}`;
     await expect(
-      collectHistoryPages({
-        kind: "file",
-        state: edited.workingHead,
-        repositoryId,
-        fileId: copiedFileId,
+      semantic.dispatch("history", {
+        ingress,
+        input: {
+          root: fileHistoryRoot,
+          direction: "past",
+          limit: 1,
+          cursor: corruptedHistoryCursor,
+        },
       })
-    ).resolves.toEqual(expectedFileHistory);
+    ).rejects.toThrow(/cursor does not match its exact basis/u);
+    await expect(
+      semantic.dispatch("history", {
+        ingress,
+        input: {
+          root: { ...fileHistoryRoot, fileId: importedFileId },
+          direction: "past",
+          limit: 1,
+          cursor: exactHistoryCursor!,
+        },
+      })
+    ).rejects.toThrow(/cursor does not match its exact basis/u);
+    await expect(collectHistoryPages(fileHistoryRoot)).resolves.toEqual(expectedFileHistory);
 
     const eventHistory = await semantic.dispatch("history", {
       ingress,
