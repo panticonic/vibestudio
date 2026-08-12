@@ -2,6 +2,8 @@ import { AGENTIC_EVENT_PAYLOAD_KIND, CREDENTIAL_CONNECT_PAYLOAD_KIND } from "./c
 import type {
   ActorRef,
   AgenticEvent,
+  AutomationDefinitionSnapshot,
+  AutomationInstitutedPayload,
   ChannelForkArchivedPayload,
   ChannelForkRenamedPayload,
   ChannelForkedPayload,
@@ -41,6 +43,13 @@ export interface ChannelTimelineEntry {
   participantId: string;
   kind: string;
   createdAt: string;
+}
+
+export interface ProjectedAutomationInstitution {
+  definition: AutomationDefinitionSnapshot;
+  actor: ActorRef;
+  createdAt: string;
+  seq: number;
 }
 
 export interface ProjectedMessageTypeDefinition {
@@ -138,6 +147,9 @@ export interface ChannelViewState {
   messageTypes: Record<string, ProjectedMessageTypeDefinition>;
   customMessages: Record<string, ProjectedCustomMessage>;
   systemNotices: Record<string, ProjectedSystemNotice>;
+  /** Durable definition events keyed by mission identity. A duplicate retry
+   * updates no scheduler state and collapses to the same history item. */
+  automationInstitutions: Record<string, ProjectedAutomationInstitution>;
   /** Direct-child forks rooted off this channel, in append (seq) order. */
   forks: ForkProjection[];
   turns: TurnMap;
@@ -165,6 +177,7 @@ export function createInitialChannelViewState(): ChannelViewState {
     messageTypes: {},
     customMessages: {},
     systemNotices: {},
+    automationInstitutions: {},
     forks: [],
     turns: {},
     intendedRecipientsByMessage: {},
@@ -437,6 +450,24 @@ export function reduceChannelView(
         customMessages: {
           ...next.customMessages,
           [payload.messageId]: updated,
+        },
+      };
+    }
+  } else if (event.kind === "automation.instituted") {
+    const payload = event.payload as AutomationInstitutedPayload;
+    const missionId = payload.definition.missionId;
+    const existing = next.automationInstitutions?.[missionId];
+    if (!existing || parsed.seq < existing.seq) {
+      next = {
+        ...next,
+        automationInstitutions: {
+          ...(next.automationInstitutions ?? {}),
+          [missionId]: {
+            definition: payload.definition,
+            actor: event.actor,
+            createdAt: event.createdAt,
+            seq: parsed.seq,
+          },
         },
       };
     }

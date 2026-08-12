@@ -65,6 +65,7 @@ function client(): AutomationUiClient & {
   get: ReturnType<typeof vi.fn>;
   getRun: ReturnType<typeof vi.fn>;
   edit: ReturnType<typeof vi.fn>;
+  requestReview: ReturnType<typeof vi.fn>;
   pause: ReturnType<typeof vi.fn>;
 } {
   return {
@@ -138,6 +139,48 @@ describe("AutomationActivity", () => {
     fireEvent.click(screen.getByRole("button", { name: "Stop recurring calls" }));
     await waitFor(() => expect(api.pause).toHaveBeenCalledWith(automation.missionId));
     expect(await screen.findByRole("button", { name: "Resume" })).toBeTruthy();
+  });
+
+  it("renders an instituted draft immediately and opens definition controls without fetching a run", async () => {
+    const draft = { ...automation, revision: 1, state: "draft" as const, runCount: 0 };
+    const api = client();
+    api.get.mockResolvedValue(draft);
+    api.requestReview.mockResolvedValue({ ...draft, state: "active" as const });
+    render(
+      <Theme>
+        <AutomationActivity
+          definition={{
+            snapshot: {
+              missionId: draft.missionId,
+              name: draft.name,
+              summary: draft.charter.summary,
+              revision: draft.revision,
+              action: "prompt",
+              createdAt: draft.createdAt,
+              schedule: { kind: "interval", everyMs: 86_400_000 },
+            },
+            institutedAt: new Date(draft.createdAt).toISOString(),
+          }}
+          client={api}
+        />
+      </Theme>
+    );
+
+    expect(screen.getByText("Needs review")).toBeTruthy();
+    expect(screen.getByText(/Every 1 day · created/)).toBeTruthy();
+    expect(api.get).not.toHaveBeenCalled();
+    expect(api.getRun).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Inspect automation Daily check" }));
+    await screen.findByText(/This draft is inert until you review/);
+    expect(api.get).toHaveBeenCalledWith(draft.missionId);
+    expect(api.getRun).not.toHaveBeenCalled();
+    expect(screen.queryByText("This tick")).toBeNull();
+    expect(screen.getByRole("button", { name: "Edit parameters" })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Review changes" }));
+    await waitFor(() => expect(api.requestReview).toHaveBeenCalledWith(draft.missionId));
+    expect(await screen.findByRole("button", { name: "Stop recurring calls" })).toBeTruthy();
   });
 
   it("edits the exact action parameters as an inert new revision", async () => {

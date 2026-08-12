@@ -25,6 +25,7 @@ import { sha256HexSyncText } from "@vibestudio/content-addressing";
 import type { ChannelEvent, ParticipantDescriptor } from "@workspace/harness";
 import type { RpcChannelMessage } from "@workspace/pubsub";
 import type { VcsCompareResult, VcsStatusResult } from "@vibestudio/service-schemas/vcs";
+import type { MissionRecord } from "@vibestudio/shared/authority/mission";
 import { AgentVesselBase } from "./agent-vessel.js";
 import type { ChannelClient } from "./channel-client.js";
 import type { AgentLoopDriver } from "./agent-loop-driver.js";
@@ -104,6 +105,8 @@ class TestVessel extends AgentVesselBase {
   callerIdForTest: string | null = null;
   callerKindForTest: string | null = null;
   blobTextReaderForTest: ((digest: string) => Promise<string | null>) | null = null;
+  automationProposalForTest: MissionRecord | null = null;
+  readonly automationProposalCalls: Array<{ args: unknown[]; options?: unknown }> = [];
   readonly channelPublishFailures = new Set<string>();
   readonly channelStub = {
     published: [] as Array<{
@@ -236,6 +239,10 @@ class TestVessel extends AgentVesselBase {
     return this.callerKindForTest;
   }
 
+  protected override get rpcRequestId(): string | null {
+    return "request-for-test";
+  }
+
   protected override participantId(): string {
     return AGENT_ID;
   }
@@ -264,6 +271,22 @@ class TestVessel extends AgentVesselBase {
               vessel.blobTextReaderForTest
             ) {
               return vessel.blobTextReaderForTest(String(args[0]));
+            }
+            if (
+              vessel.automationProposalForTest &&
+              targetId === "main" &&
+              method === "workers.resolveService" &&
+              args[0] === "vibestudio.missions.v1"
+            ) {
+              return { kind: "durable-object", targetId: "do:missions" };
+            }
+            if (
+              vessel.automationProposalForTest &&
+              targetId === "do:missions" &&
+              method === "proposeDraft"
+            ) {
+              vessel.automationProposalCalls.push({ args, options });
+              return vessel.automationProposalForTest;
             }
             return target.call(targetId, method, args, options as never);
           };
@@ -1217,6 +1240,83 @@ describe("AgentVesselBase.chatOp", () => {
     const started = vessel.channelStub.published.find((p) => p.event.kind === "custom.started");
     expect(started).toBeDefined();
     expect(started!.event.actor.kind).toBe("agent");
+  });
+
+  it("proposes one idempotent draft and immediately publishes its inspectable institution", async () => {
+    const vessel = await makeVessel();
+    vessel.callerIdForTest = await expectedEvalCaller();
+    vessel.automationProposalForTest = {
+      missionId: "mission-daily",
+      name: "Daily check",
+      revision: 1,
+      charter: {
+        summary: "Check the project every morning.",
+        harness: { unit: "workers/agent", ev: "a".repeat(64) },
+        execution: {
+          kind: "agent",
+          target: { source: "workers/agent", className: "Agent", objectKey: "daily" },
+          action: { kind: "prompt", text: "Check the project." },
+          conversation: { mode: "fresh" },
+          toolExposure: {
+            services: [],
+            userlandServices: [],
+            workspaceServiceDiscovery: "bound",
+            evalNetwork: "none",
+            declaredOrigins: [],
+          },
+          declaredLineageClasses: ["none"],
+        },
+        trigger: { kind: "cron", expression: "5 5 * * THU", timezone: "America/New_York" },
+      },
+      owner: { userId: "alice", deviceId: AGENT_ID },
+      state: "draft",
+      revisionDigest: "b".repeat(64),
+      createdAt: 1_700_000_000_000,
+      updatedAt: 1_700_000_000_000,
+      runCount: 0,
+      permissions: [],
+      standingRestrictions: [],
+    };
+
+    const input = {
+      name: "Daily check",
+      charter: vessel.automationProposalForTest.charter,
+      permissions: [],
+    };
+    await expect(
+      vessel.chatOp(CHANNEL, "proposeAutomation", [
+        input,
+        { invocationId: "invocation-daily", ordinal: 1 },
+      ])
+    ).resolves.toMatchObject({ missionId: "mission-daily", state: "draft" });
+
+    expect(vessel.automationProposalCalls).toEqual([
+      {
+        args: [input],
+        options: {
+          idempotencyKey: expect.stringMatching(/automation:proposal:.*:[0-9a-f]{64}$/),
+        },
+      },
+    ]);
+    expect(vessel.channelStub.published).toContainEqual(
+      expect.objectContaining({
+        idempotencyKey: "automation:instituted:mission-daily",
+        event: expect.objectContaining({
+          kind: "automation.instituted",
+          payload: expect.objectContaining({
+            definition: expect.objectContaining({
+              missionId: "mission-daily",
+              action: "prompt",
+              schedule: {
+                kind: "cron",
+                expression: "5 5 * * THU",
+                timezone: "America/New_York",
+              },
+            }),
+          }),
+        }),
+      })
+    );
   });
 
   it("updateCustomMessage publishes custom.updated AS the agent and returns its pubsubId", async () => {

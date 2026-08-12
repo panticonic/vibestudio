@@ -51,6 +51,9 @@ interval or a cron calendar in an explicit timezone, and capture optional end
 time, maximum-run, and natural-completion behavior. Agents can later edit, run,
 pause, resume, or retire reviewed automations when the user asks; activation of
 a new revision remains a human review action.
+The successful proposal immediately appears at that point in the conversation
+as an inspectable pill. The user can open it to review or edit the draft before
+any tick exists; it is the same durable definition shown in Automations.
 Do not open an empty supervision panel in place of helping, and do not imply the
 draft is scheduled before the user reviews it in Automations.
 

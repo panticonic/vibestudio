@@ -115,6 +115,40 @@ function envelope(payload: AgenticEvent, seq = 1): ChannelEnvelope<AgenticEvent>
 }
 
 describe("@workspace/agentic-protocol schemas", () => {
+  it("validates a first-class automation institution with a friendly schedule snapshot", () => {
+    const event: AgenticEvent<"automation.instituted"> = {
+      kind: "automation.instituted",
+      actor: agent,
+      payload: {
+        protocol: AGENTIC_PROTOCOL_VERSION,
+        definition: {
+          missionId: "mission-weekly",
+          name: "Weekly review",
+          summary: "Review the project every Thursday.",
+          revision: 1,
+          action: "prompt",
+          createdAt: 1_700_000_000_000,
+          schedule: {
+            kind: "cron",
+            expression: "5 5 * * THU",
+            timezone: "America/New_York",
+            maxRuns: 12,
+          },
+        },
+      },
+      createdAt: "2026-07-14T00:00:00.000Z",
+    };
+
+    expect(agenticEventSchema.safeParse(event).success).toBe(true);
+    const state = reduceChannelView(createInitialChannelViewState(), envelope(event));
+    expect(state.automationInstitutions["mission-weekly"]).toMatchObject({
+      definition: event.payload.definition,
+      actor: agent,
+      createdAt: event.createdAt,
+      seq: 1,
+    });
+  });
+
   it("keeps semantic integration out of subagent lifecycle terminals", () => {
     const terminal = {
       kind: "invocation.completed",

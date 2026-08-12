@@ -213,7 +213,7 @@ workspace BuildStore root set.
 ## Injected Variables
 
 These are available in eval code. `scope`, `scopes`, `db`, `ctx`, `help`, `chat`,
-and `agent` are eval-context ambient variables. `rpc`, `fs`, `services`, and
+`agent`, and `automations` are eval-context ambient variables. `rpc`, `fs`, `services`, and
 `hosts` are the same portable bindings used by panels/workers; use them
 ambiently or import them from `@workspace/runtime`.
 
@@ -229,6 +229,7 @@ ambiently or import them from `@workspace/runtime`.
 | `db`                               | Synchronous in-DO SQLite (see below)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | `chat`                             | The full chat API for the current channel — `publish`/`send`, custom-message cards, `registerMessageType`, `callMethod`, etc. (agent eval only; see below)                                                                                                                                                                                                                                                                                                                                                                                                   |
 | `agent`                            | Inspect/configure THIS agent's own state — `await agent.describe()`, `await agent.setModel("provider:model")`, etc. (agent eval only; see below)                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `automations`                      | Propose an inert recurring automation with trusted current-channel provenance — `await automations.propose(input)` (agent eval only; see below)                                                                                                                                                                                                                                                                                                                                                                                                              |
 | `help()`                           | `await help()` lists services + import guidance; `await help("vcs")` returns a compact live method index; `await help("vcs.edit")` returns that method's exact schema and typed errors                                                                                                                                                                                                                                                                                                                                                                       |
 
 ```
@@ -278,6 +279,21 @@ use GAD inspectors or the channel DO's read-only `inspectAgent` method.
 > gets no `chat` — interact with the channel through `rpc`/`services` instead.
 > The `chat` handle is also available to panel-rendered components
 > (`inline_ui`, `feedback_custom`, action bars) — see [CHAT_API.md](CHAT_API.md).
+
+### automations (agent eval)
+
+`automations.propose(input)` is the agent authoring path for recurring work. It
+creates one canonical inert draft through `vibestudio.missions.v1`, then
+publishes a typed institution event as this agent in `chat.channelId` before the
+call returns. The new definition therefore appears immediately in chat as a
+zero-fetch pill that the user can open to inspect, edit, and review; it does not
+wait for a first run.
+
+The binding deliberately accepts no channel or actor identity. The owning agent
+supplies those facts after verifying this EvalDO, and the mission service remains
+the only scheduler and run-ledger owner. See
+[Automations](../automations/SKILL.md) for the charter, cron/interval schedules,
+end policies, completion responses, and supervision workflow.
 
 ### agent (agent eval)
 
@@ -414,7 +430,7 @@ per-object require, which is isolated per owner (your loaded modules never leak
 to another agent's EvalDO sharing the same isolate).
 
 Do NOT import the **ambient-only** globals (`scope`, `scopes`, `db`, `ctx`, `help`,
-`chat`) — they are injected free variables, not module exports,
+`chat`, `agent`, `automations`) — they are injected free variables, not module exports,
 and the eval engine rejects importing them.
 
 `rpc` and `fs` are the exception: they are injected ambiently (the table above)

@@ -16,9 +16,12 @@ cadence with its `cron` trigger rather than adding worker-level cron
 configuration, heartbeat loops, timers, a second alarm owner, or an independent
 run log.
 
-An automation draft is inert. An agent may propose one with `proposeDraft`, but
-only the user can review its exact code, schedule, reach, and standing authority
-in the **Automations** panel. Never imply that a proposal is already scheduled.
+An automation draft is inert. An agent proposes one with the agent-owned
+`automations.propose(...)` eval binding. That one operation creates the canonical
+draft and immediately adds an inspectable, editable pill to the current chat;
+the user can also supervise the same definition in **Automations**. Only the
+user can review its exact code, schedule, reach, and standing authority. Never
+imply that a proposal is already scheduled.
 
 Read [API.md](API.md) before authoring a draft. Use one of two execution forms,
 with two first-class actions on the agent form:
@@ -53,8 +56,10 @@ Typical choices are:
    worker. If no suitable agent/worker exists, use
    [Workspace development](../workspace-dev/SKILL.md) to create and verify one.
    Do not put meaningful task code inside the scheduler.
-3. Resolve the target's exact effective version, then call `proposeDraft` with
-   the complete charter and least authority needed.
+3. Resolve the target's exact effective version, then call
+   `automations.propose(...)` with the complete charter and least authority
+   needed. Do not call the lower-level mission service directly: the owner
+   binding is what durably institutes the draft in this conversation.
 4. Tell the user what will run and when, and that the inert draft is waiting in
    **Automations** for review. Do not say it is scheduled until the user approves
    it there.
@@ -64,54 +69,48 @@ execution, history, or approval across parallel mechanisms.
 
 ## Propose an automation
 
-Resolve the target's current exact effective version and the missions service
-in the same eval. The harness unit and execution source must be the same
-canonical workspace repo path.
+Resolve the target's current exact effective version and propose the draft in
+the same eval. The harness unit and execution source must be the same canonical
+workspace repo path.
 
 ```ts
-import { rpc, workers } from "@workspace/runtime";
+import { rpc } from "@workspace/runtime";
 
 const unit = "workers/daily-report";
 const ev = await rpc.call<string | null>("main", "build.getEffectiveVersion", [unit]);
 if (!ev) throw new Error(`Build ${unit} before proposing its automation`);
 
-const missions = await workers.resolveService("vibestudio.missions.v1");
-if (missions.kind !== "durable-object") {
-  throw new Error("The automations service is unavailable");
-}
-
-return rpc.call(missions.targetId, "proposeDraft", [
-  {
-    name: "Daily report",
-    charter: {
-      summary: "Collect the daily figures and store a concise report.",
-      harness: { unit, ev },
-      execution: {
-        kind: "method",
-        target: {
-          source: unit,
-          className: "DailyReportDO",
-          objectKey: "daily-report",
-        },
-        method: "buildReport",
-        args: [],
+return automations.propose({
+  name: "Daily report",
+  charter: {
+    summary: "Collect the daily figures and store a concise report.",
+    harness: { unit, ev },
+    execution: {
+      kind: "method",
+      target: {
+        source: unit,
+        className: "DailyReportDO",
+        objectKey: "daily-report",
       },
-      trigger: {
-        kind: "cron",
-        expression: "0 7 * * *",
-        timezone: "America/New_York",
-        maxRuns: 30,
-      },
+      method: "buildReport",
+      args: [],
     },
-    permissions: [],
+    trigger: {
+      kind: "cron",
+      expression: "0 7 * * *",
+      timezone: "America/New_York",
+      maxRuns: 30,
+    },
   },
-]);
+  permissions: [],
+});
 ```
 
-After a successful proposal, tell the user its name and that it is waiting in
-Automations. The panel shows the exact target, schedule, conversation behavior,
-reach, and standing authority before activation. Do not call `requestReview`
-for them.
+After a successful proposal, tell the user its name and that it is waiting for
+review. Its chat pill is already visible at the exact institution point; opening
+it or opening Automations shows the same definition controls, schedule,
+conversation behavior, reach, and standing authority. Do not publish a second
+summary card. Do not call `requestReview` for them.
 
 ## Choose conversation behavior deliberately
 
@@ -324,8 +323,10 @@ server-side `filter` and `query` options instead of fetching every definition.
 Use `listRuns` with its returned cursor for older history; never fetch an
 unbounded ledger or poll every automation.
 
-The **Automations** panel and each scheduled tick's chat-history pill share the
-same supervision surface. The overview calls out
+The institution pill, each scheduled tick's chat-history pill, and the
+**Automations** panel share the same supervision surface. The institution pill
+exists before the first run, opens with no run lookup, and lets the user edit or
+review the inert draft directly. The overview calls out
 running work, naturally completed definitions, drafts awaiting review, and
 failures from the last 24 hours.
 Calendar schedules are presented as plain-language rules such as “Every

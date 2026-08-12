@@ -4,6 +4,14 @@ Resolve protocol `vibestudio.missions.v1` with `workers.resolveService(...)`,
 then call the returned Durable Object target with `rpc.call(targetId, method,
 args)`. The service is context-aware and user-scoped.
 
+Agent-authored definitions use the higher-level ambient
+`automations.propose(input)` binding. It calls `proposeDraft` with a transport
+idempotency key and, before returning, publishes one typed
+`automation.instituted` event as the owning agent in the current channel. This
+is the documented proposal path because it supplies trusted channel provenance
+without putting channel identifiers in the mission API. Direct service calls
+remain the lower-level lifecycle contract for non-chat integrations.
+
 This service owns the complete automation lifecycle: definition and human
 review, schedule delivery, non-overlapping execution, durable run history,
 terminal summaries and errors, and agent-conversation identity. Callers must
@@ -64,7 +72,7 @@ type Charter = {
     | {
         kind: "cron";
         expression: string; // five-field Vixie cron
-        timezone: string;   // canonical IANA timezone
+        timezone: string; // canonical IANA timezone
         untilAt?: number;
         maxRuns?: number;
       };
@@ -122,7 +130,7 @@ definition, and wins over a count/time boundary reached on that same run.
 | `get`           | `missionId`                                             | definition or `null`                                       | addressed inspection                        |
 | `listRuns`      | `missionId`, `{ limit?, cursor? }`                      | `{ items, nextCursor? }`                                   | paged historical ledger                     |
 | `getRun`        | `runId`                                                 | exact run or `null`                                        | chat tick inspection                        |
-| `proposeDraft`  | `{ name, charter, permissions, standingRestrictions? }` | inert draft                                                | agent proposals                             |
+| `proposeDraft`  | `{ name, charter, permissions, standingRestrictions? }` | inert draft                                                | backing operation for `automations.propose` |
 | `createDraft`   | same as `proposeDraft`                                  | inert draft                                                | trusted user/code tooling                   |
 | `edit`          | `missionId`, changed fields                             | new inert revision                                         | behavior changes                            |
 | `requestReview` | `missionId`                                             | active definition after approval                           | human review surfaces only                  |
@@ -180,3 +188,11 @@ turn metadata carries a bounded immutable tick snapshot—mission/run ids, run
 number, name, revision, action, trigger, schedule, creation/activation times—so
 collapsed history pills render without network reads. Opening a pill lazily
 calls `get` and `getRun` for current controls and full bounded details.
+
+Agent proposal also writes a bounded immutable definition snapshot—mission id,
+name, summary, revision, action, schedule, and creation time—to the originating
+channel. Its institution pill therefore renders immediately and performs no
+service read while collapsed. Opening it calls only `get`; no run exists yet.
+The same shared inspector provides editing and human review controls, and later
+provides run-now, pause/stop, resume, completion, and historical tick details as
+the definition changes state.

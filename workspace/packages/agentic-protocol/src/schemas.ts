@@ -619,6 +619,49 @@ const buildCompletedPayloadSchema = z
   })
   .strict();
 
+const automationTerminationSchema = {
+  untilAt: z.number().int().nonnegative().optional(),
+  maxRuns: z.number().int().positive().optional(),
+};
+
+const automationScheduleSnapshotSchema = z.union([
+  z
+    .object({
+      kind: z.literal("interval"),
+      everyMs: z.number().int().min(60_000),
+      anchorAt: z.number().int().nonnegative().optional(),
+      jitterMs: z.number().int().nonnegative().optional(),
+      ...automationTerminationSchema,
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("cron"),
+      expression: z.string().min(1).max(512),
+      timezone: z.string().min(1).max(128),
+      ...automationTerminationSchema,
+    })
+    .strict(),
+  z.null(),
+]);
+
+const automationInstitutedPayloadSchema = z
+  .object({
+    protocol: protocolSchema,
+    definition: z
+      .object({
+        missionId: z.string().min(1),
+        name: z.string().min(1).max(200),
+        summary: z.string().min(1).max(4_000),
+        revision: z.number().int().positive(),
+        action: z.enum(["prompt", "eval", "method"]),
+        createdAt: z.number().int().nonnegative(),
+        schedule: automationScheduleSnapshotSchema,
+      })
+      .strict(),
+  })
+  .strict();
+
 function eventSchema<K extends string, P extends z.ZodTypeAny>(kind: K, payload: P) {
   return z
     .object({
@@ -671,6 +714,7 @@ export const eventKindSchemas = {
   "messageType.cleared": eventSchema("messageType.cleared", messageTypeClearedPayloadSchema),
   "custom.started": eventSchema("custom.started", customStartedPayloadSchema),
   "custom.updated": eventSchema("custom.updated", customUpdatedPayloadSchema),
+  "automation.instituted": eventSchema("automation.instituted", automationInstitutedPayloadSchema),
   "memory.recalled": eventSchema("memory.recalled", memoryRecalledPayloadSchema),
   "build.completed": eventSchema("build.completed", buildCompletedPayloadSchema),
   "external.envelope_published": eventSchema(

@@ -2225,6 +2225,44 @@ describe("chatMessagesFromChannelView", () => {
     );
   });
 
+  it("projects an automation draft at institution time before any run exists", () => {
+    const instituted: AgenticEvent<"automation.instituted"> = {
+      kind: "automation.instituted",
+      actor: agent,
+      payload: {
+        protocol: AGENTIC_PROTOCOL_VERSION,
+        definition: {
+          missionId: "mission-weekly",
+          name: "Weekly review",
+          summary: "Review the project every Thursday.",
+          revision: 1,
+          action: "prompt",
+          createdAt: Date.parse("2026-05-20T12:00:00.000Z"),
+          schedule: {
+            kind: "cron",
+            expression: "5 5 * * THU",
+            timezone: "America/New_York",
+          },
+        },
+      },
+      createdAt: "2026-05-20T12:00:00.000Z",
+    };
+    const state = reduceChannelView(createInitialChannelViewState(), envelope(instituted, 7));
+
+    expect(chatMessagesFromChannelView(state)).toContainEqual(
+      expect.objectContaining({
+        id: "automation:instituted:mission-weekly",
+        seq: 7,
+        contentType: "automation",
+        complete: true,
+        automationDefinition: {
+          snapshot: instituted.payload.definition,
+          institutedAt: instituted.createdAt,
+        },
+      })
+    );
+  });
+
   it("orders open turn typing by the latest event in that turn", () => {
     const opened: AgenticEvent<"turn.opened"> = {
       kind: "turn.opened",

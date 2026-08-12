@@ -21,7 +21,16 @@ import { portableExports } from "./runtimeSurface.portable.js";
  * Eval-only ambient globals (free variables; owner-local compatibility imports
  * resolve to the same references). Order is not significant.
  */
-export const EVAL_AMBIENT_ONLY = ["scope", "scopes", "db", "ctx", "help", "chat", "agent"] as const;
+export const EVAL_AMBIENT_ONLY = [
+  "scope",
+  "scopes",
+  "db",
+  "ctx",
+  "help",
+  "chat",
+  "agent",
+  "automations",
+] as const;
 
 export type EvalAmbientOnlyName = (typeof EVAL_AMBIENT_ONLY)[number];
 

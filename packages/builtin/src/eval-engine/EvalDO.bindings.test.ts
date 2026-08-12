@@ -1,12 +1,12 @@
 /**
- * The eval owner bindings (`chat` + `agent`): present + forwarding for agent-owned
+ * The eval owner bindings (`chat` + `agent` + `automations`): present + forwarding for agent-owned
  * eval, ABSENT for non-agent (CLI/panel) eval.
  */
 import { describe, expect, it, vi } from "vitest";
 import { buildOwnerBindings } from "./evalOwnerBindings.js";
 
 describe("buildOwnerBindings", () => {
-  it("injects NO chat/agent for a non-agent eval (no channelId/agentRef → CLI/panel)", () => {
+  it("injects no owner bindings for a non-agent eval (no channelId/agentRef → CLI/panel)", () => {
     const call = vi.fn();
     expect(buildOwnerBindings({}, call)).toEqual({});
     expect(buildOwnerBindings({ channelId: "c" }, call)).toEqual({}); // agentRef missing
@@ -17,7 +17,12 @@ describe("buildOwnerBindings", () => {
   it("agent self-config + chat forward to the owning runtime's gated chatOp on this channel", async () => {
     const call = vi.fn(async () => undefined);
     const b = buildOwnerBindings(
-      { channelId: "chan-1", agentRef: "do:a:Agent:k", contextId: "ctx-1" },
+      {
+        channelId: "chan-1",
+        agentRef: "do:a:Agent:k",
+        contextId: "ctx-1",
+        agentInvocationId: "invocation-1",
+      },
       call
     ) as {
       agent: {
@@ -32,6 +37,7 @@ describe("buildOwnerBindings", () => {
         contextId: string;
         channelId: string;
       };
+      automations: { propose: (input: unknown) => Promise<unknown> };
     };
 
     await b.agent.setModel("openai:gpt-5.3");
@@ -63,5 +69,13 @@ describe("buildOwnerBindings", () => {
     ]);
     expect(b.chat.contextId).toBe("ctx-1");
     expect(b.chat.channelId).toBe("chan-1");
+
+    const proposal = { name: "Daily check" };
+    await b.automations.propose(proposal);
+    expect(call).toHaveBeenCalledWith("do:a:Agent:k", "chatOp", [
+      "chan-1",
+      "proposeAutomation",
+      [proposal, { invocationId: "invocation-1", ordinal: 1 }],
+    ]);
   });
 });

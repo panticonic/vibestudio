@@ -87,7 +87,8 @@ import { createPrivateGuestGlobal } from "@vibestudio/shared/evalConfinement";
  * deriving the objectKey from the verified caller), so the DO needs no in-DO authz.
  *
  * Bindings mirror the in-app eval tool's surface: injected
- * `rpc`/`services`/`fs`/`ctx` + `scope`/`scopes`/`help` + `db`, plus a `chat`
+ * `rpc`/`services`/`fs`/`ctx` + `scope`/`scopes`/`help` + `db`, plus `chat`,
+ * `agent`, and `automations`
  * binding when the owner is an agent DO bound to a channel (a pure forwarding
  * proxy to the agent — the EvalDO carries ZERO channel logic). (Panel-style
  * `import { fs } from "@workspace/runtime"` does not initialize in a DO isolate.)
@@ -2750,17 +2751,17 @@ export class EvalDO extends DurableObjectBase {
       },
     };
 
-    // `chat` binding — pure forwarding to the owning agent DO. Present only when
+    // Owner bindings — pure forwarding to the owning agent DO. Present only when
     // the owner is an agent DO that supplied a channelId (the eval service sets
     // both). The EvalDO carries NO channel/card logic: every ChatSandboxValue
     // method is `agentRef.chatOp(channelId, "<method>", args)`, and the agent
     // performs it AS the agent (correct @agent attribution) and relays the
     // result. `rpc` reuses the already-injected rpc shape.
-    // `chat` + `agent` are injected ONLY for agent-owned eval; absent otherwise
+    // `chat` + `agent` + `automations` are injected ONLY for agent-owned eval; absent otherwise
     // (CLI/panel eval) — see buildOwnerBindings.
     Object.assign(
       bindings,
-      // Same signal threading as `rpcBinding`: the `chat`/`agent` ops the owning agent forwards
+      // Same signal threading as `rpcBinding`: owner ops the agent forwards
       // are outbound rpc.calls too, so a cancelled run unwinds them instead of wedging the chain.
       hardenBoundary(
         buildOwnerBindings(args, (target, method, values) =>

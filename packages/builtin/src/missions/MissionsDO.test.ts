@@ -80,6 +80,12 @@ class LegacyMissionsV2DO extends DurableObjectBase {
   }
 }
 
+class IdempotentProposalMissionsDO extends MissionsDO {
+  protected override get rpcIdempotencyKey(): string | null {
+    return "agent-proposal-request";
+  }
+}
+
 const charter = (): MissionCharter => ({
   summary: "Prepare a daily summary",
   harness: { unit: "workers/summary", ev: "a".repeat(64) },
@@ -228,7 +234,13 @@ describe("MissionsDO", () => {
     ).toEqual([
       { version: 3, name: "automation-actions-and-activation" },
       { version: 4, name: "automation-termination-and-calendar-schedules" },
+      { version: 5, name: "idempotent-agent-automation-proposals" },
     ]);
+    expect(
+      migrated.sql
+        .exec(`SELECT name FROM sqlite_master WHERE type='table' AND name='mission_proposals'`)
+        .one()
+    ).toEqual({ name: "mission_proposals" });
     await expect(
       migrated.callAs(
         { callerId: "panel:alice", callerKind: "panel", userId: "alice" },
@@ -267,6 +279,25 @@ describe("MissionsDO", () => {
     await expect(callAs<MissionRecord[]>(alice, "list")).resolves.toEqual([
       expect.objectContaining({ missionId: created.missionId }),
     ]);
+  });
+
+  it("returns the same draft when an agent proposal transport is retried", async () => {
+    const { callAs, sql } = await createTestDO(IdempotentProposalMissionsDO, {
+      WORKER_SOURCE: "vibestudio/internal",
+      WORKER_CLASS_NAME: "MissionsDO",
+      __objectKey: "workspace",
+    });
+    const caller = { callerId: "do:agent", callerKind: "do" as const, userId: "alice" };
+    const input = { name: "Daily summary", charter: charter(), permissions: [] };
+
+    const first = await callAs<MissionRecord>(caller, "proposeDraft", input);
+    const retried = await callAs<MissionRecord>(caller, "proposeDraft", input);
+
+    expect(retried.missionId).toBe(first.missionId);
+    expect(sql.exec(`SELECT COUNT(*) AS count FROM missions`).one()).toEqual({ count: 1 });
+    expect(sql.exec(`SELECT mission_id FROM mission_proposals`).one()).toEqual({
+      mission_id: first.missionId,
+    });
   });
 
   it("compiles only eligible gated permissions into standing grants", async () => {

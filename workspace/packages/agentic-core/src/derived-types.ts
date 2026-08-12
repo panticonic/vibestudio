@@ -11,6 +11,7 @@
 
 import type { Attachment } from "@workspace/pubsub";
 import type {
+  AutomationDefinitionSnapshot,
   LifecycleMessageReasonCode,
   MessageModelPayload,
   MessageTier,
@@ -237,6 +238,11 @@ export interface AutomationActivityPayload {
   reason?: string;
 }
 
+export interface AutomationDefinitionPayload {
+  snapshot: AutomationDefinitionSnapshot;
+  institutedAt: string;
+}
+
 // ===========================================================================
 // ChatMessage (derived from Pi AgentMessage for component rendering)
 // ===========================================================================
@@ -298,6 +304,8 @@ export interface ChatMessage {
   diagnostic?: DiagnosticNotice;
   /** First-class reviewed automation tick projected from durable turn metadata. */
   automation?: AutomationActivityPayload;
+  /** First-class draft institution projected from a durable channel event. */
+  automationDefinition?: AutomationDefinitionPayload;
   /**
    * Per-recipient delivery state for this message, resolved against the
    * intended-recipient snapshot plus the received/read ack maps. Present when

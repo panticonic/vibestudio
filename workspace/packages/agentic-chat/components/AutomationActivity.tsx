@@ -28,6 +28,7 @@ import {
 import type {
   AutomationActivityPayload,
   AutomationActivitySnapshot,
+  AutomationDefinitionPayload,
 } from "@workspace/agentic-core";
 import type {
   MissionCharter,
@@ -105,14 +106,24 @@ export function createAutomationUiClient(
   return client;
 }
 
-export interface AutomationActivityProps {
-  activity: AutomationActivityPayload;
+interface AutomationActivitySharedProps {
   client: AutomationUiClient;
   automation?: MissionRecord | null;
-  run?: MissionRunRecord | null;
   display?: "pill" | "row";
   onChanged?(automation: MissionRecord): void;
 }
+
+export type AutomationActivityProps =
+  | (AutomationActivitySharedProps & {
+      activity: AutomationActivityPayload;
+      definition?: never;
+      run?: MissionRunRecord | null;
+    })
+  | (AutomationActivitySharedProps & {
+      definition: AutomationDefinitionPayload;
+      activity?: never;
+      run?: never;
+    });
 
 const definitionCaches = new WeakMap<
   AutomationUiClient,
@@ -172,7 +183,7 @@ export function formatAutomationInterval(value: number): string {
   return `${Math.round(value / 1_000)} seconds`;
 }
 
-function scheduleSummary(snapshot: AutomationActivitySnapshot): string {
+function scheduleSummary(snapshot: Pick<AutomationActivitySnapshot, "schedule">): string {
   if (!snapshot.schedule) return "Manual";
   if (snapshot.schedule.kind === "cron") {
     try {
@@ -216,6 +227,22 @@ function activityStatus(activity: AutomationActivityPayload) {
     return { label: "Skipped", color: "amber" as const, icon: <ExclamationTriangleIcon /> };
   }
   return { label: "Running", color: "blue" as const, icon: <Spinner size="1" /> };
+}
+
+function definitionStatus(state?: MissionRecord["state"]) {
+  if (state === "active") {
+    return { label: "Active", color: "green" as const, icon: <PlayIcon /> };
+  }
+  if (state === "paused") {
+    return { label: "Paused", color: "amber" as const, icon: <PauseIcon /> };
+  }
+  if (state === "completed") {
+    return { label: "Completed", color: "green" as const, icon: <CheckCircledIcon /> };
+  }
+  if (state === "retired") {
+    return { label: "Retired", color: "gray" as const, icon: <CrossCircledIcon /> };
+  }
+  return { label: "Needs review", color: "amber" as const, icon: <Pencil2Icon /> };
 }
 
 function durationLabel(startedAt: number, finishedAt?: number): string {
@@ -541,12 +568,14 @@ export function AutomationParametersEditor({
 
 function Inspector({
   activity,
+  definition,
   automation,
   run,
   client,
   onChanged,
 }: {
-  activity: AutomationActivityPayload;
+  activity?: AutomationActivityPayload;
+  definition?: AutomationDefinitionPayload;
   automation: MissionRecord | null;
   run: MissionRunRecord | null;
   client: AutomationUiClient;
@@ -593,7 +622,8 @@ function Inspector({
     return (
       <Callout.Root color="amber">
         <Callout.Text>
-          This automation definition is no longer available. The tick provenance remains in history.
+          This automation definition is no longer available. Its historical provenance remains in
+          this conversation.
         </Callout.Text>
       </Callout.Root>
     );
@@ -609,6 +639,17 @@ function Inspector({
   const execution = current.charter.execution;
   return (
     <Flex direction="column" gap="4">
+      {definition && (current.state === "draft" || current.state === "needs-reapproval") ? (
+        <Callout.Root color="amber" size="1">
+          <Callout.Icon>
+            <ClockIcon />
+          </Callout.Icon>
+          <Callout.Text>
+            Created here {formatAbsolute(Date.parse(definition.institutedAt))}. This draft is inert
+            until you review its exact action, schedule, and authority.
+          </Callout.Text>
+        </Callout.Root>
+      ) : null}
       <Flex justify="between" gap="3" wrap="wrap">
         <Box>
           <Text as="div" size="1" color="gray">
@@ -771,115 +812,125 @@ function Inspector({
           </Callout.Text>
         </Callout.Root>
       ) : null}
-      <Separator size="4" />
-      <Box>
-        <Flex align="center" gap="2" mb="2">
-          <LightningBoltIcon />
-          <Text weight="medium">This tick</Text>
-          <Badge color={activityStatus(activity).color} variant="soft">
-            {activityStatus(activity).label}
-          </Badge>
-        </Flex>
-        <Grid columns={{ initial: "1", sm: "3" }} gap="3">
-          <Box>
-            <Text as="div" size="1" color="gray">
-              Started
-            </Text>
-            <Text size="2">{formatAbsolute(run?.startedAt ?? activity.snapshot.startedAt)}</Text>
-          </Box>
-          <Box>
-            <Text as="div" size="1" color="gray">
-              Duration
-            </Text>
-            <Text size="2">
-              {durationLabel(
-                run?.startedAt ?? activity.snapshot.startedAt,
-                run?.finishedAt ?? (activity.closedAt ? Date.parse(activity.closedAt) : undefined)
-              )}
-            </Text>
-          </Box>
-          <Box>
-            <Text as="div" size="1" color="gray">
-              Trigger
-            </Text>
-            <Text size="2">
-              {activity.snapshot.trigger === "scheduled" ? "Scheduled tick" : "Run now"}
-              {(run?.runNumber ?? activity.snapshot.runNumber) === undefined
-                ? ""
-                : ` · #${run?.runNumber ?? activity.snapshot.runNumber}`}
-            </Text>
-          </Box>
-        </Grid>
-        {run?.error || (activity.status === "failed" && activity.summary) ? (
-          <Callout.Root color={activity.status === "skipped" ? "amber" : "red"} size="1" mt="3">
-            <Callout.Icon>
-              <CrossCircledIcon />
-            </Callout.Icon>
-            <Callout.Text>{run?.error ?? activity.summary}</Callout.Text>
-          </Callout.Root>
-        ) : null}
-        {run?.completionResponse ? (
-          <Callout.Root color="green" size="1" mt="3">
-            <Callout.Icon>
-              <CheckCircledIcon />
-            </Callout.Icon>
-            <Callout.Text>
-              <Text as="span" weight="medium" style={{ display: "block" }}>
-                Natural completion response
+      {activity ? <Separator size="4" /> : null}
+      {activity ? (
+        <Box>
+          <Flex align="center" gap="2" mb="2">
+            <LightningBoltIcon />
+            <Text weight="medium">This tick</Text>
+            <Badge color={activityStatus(activity).color} variant="soft">
+              {activityStatus(activity).label}
+            </Badge>
+          </Flex>
+          <Grid columns={{ initial: "1", sm: "3" }} gap="3">
+            <Box>
+              <Text as="div" size="1" color="gray">
+                Started
               </Text>
-              <Text
-                as="span"
-                style={{ display: "block", whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}
-              >
-                {run.completionResponse}
+              <Text size="2">{formatAbsolute(run?.startedAt ?? activity.snapshot.startedAt)}</Text>
+            </Box>
+            <Box>
+              <Text as="div" size="1" color="gray">
+                Duration
               </Text>
-            </Callout.Text>
-          </Callout.Root>
-        ) : null}
-        {(run?.finalMessage && run.finalMessage !== run.completionResponse) ||
-        (activity.status === "succeeded" && activity.summary && !run?.completionResponse) ? (
-          <Box
-            mt="3"
-            p="3"
-            style={{
-              borderRadius: "var(--radius-2)",
-              background: "var(--gray-a2)",
-              whiteSpace: "pre-wrap",
-              overflowWrap: "anywhere",
-              maxHeight: 260,
-              overflow: "auto",
-            }}
-          >
-            <Text size="2">
-              {run?.finalMessage && run.finalMessage !== run.completionResponse
-                ? run.finalMessage
-                : activity.summary}
-            </Text>
-          </Box>
-        ) : null}
-        {run && client.openConversation && run.channelId && run.contextId ? (
-          <Button size="1" variant="soft" mt="3" onClick={() => client.openConversation?.(run)}>
-            Open conversation
-          </Button>
-        ) : null}
-      </Box>
+              <Text size="2">
+                {durationLabel(
+                  run?.startedAt ?? activity.snapshot.startedAt,
+                  run?.finishedAt ?? (activity.closedAt ? Date.parse(activity.closedAt) : undefined)
+                )}
+              </Text>
+            </Box>
+            <Box>
+              <Text as="div" size="1" color="gray">
+                Trigger
+              </Text>
+              <Text size="2">
+                {activity.snapshot.trigger === "scheduled" ? "Scheduled tick" : "Run now"}
+                {(run?.runNumber ?? activity.snapshot.runNumber) === undefined
+                  ? ""
+                  : ` · #${run?.runNumber ?? activity.snapshot.runNumber}`}
+              </Text>
+            </Box>
+          </Grid>
+          {run?.error || (activity.status === "failed" && activity.summary) ? (
+            <Callout.Root color={activity.status === "skipped" ? "amber" : "red"} size="1" mt="3">
+              <Callout.Icon>
+                <CrossCircledIcon />
+              </Callout.Icon>
+              <Callout.Text>{run?.error ?? activity.summary}</Callout.Text>
+            </Callout.Root>
+          ) : null}
+          {run?.completionResponse ? (
+            <Callout.Root color="green" size="1" mt="3">
+              <Callout.Icon>
+                <CheckCircledIcon />
+              </Callout.Icon>
+              <Callout.Text>
+                <Text as="span" weight="medium" style={{ display: "block" }}>
+                  Natural completion response
+                </Text>
+                <Text
+                  as="span"
+                  style={{ display: "block", whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}
+                >
+                  {run.completionResponse}
+                </Text>
+              </Callout.Text>
+            </Callout.Root>
+          ) : null}
+          {(run?.finalMessage && run.finalMessage !== run.completionResponse) ||
+          (activity.status === "succeeded" && activity.summary && !run?.completionResponse) ? (
+            <Box
+              mt="3"
+              p="3"
+              style={{
+                borderRadius: "var(--radius-2)",
+                background: "var(--gray-a2)",
+                whiteSpace: "pre-wrap",
+                overflowWrap: "anywhere",
+                maxHeight: 260,
+                overflow: "auto",
+              }}
+            >
+              <Text size="2">
+                {run?.finalMessage && run.finalMessage !== run.completionResponse
+                  ? run.finalMessage
+                  : activity.summary}
+              </Text>
+            </Box>
+          ) : null}
+          {run && client.openConversation && run.channelId && run.contextId ? (
+            <Button size="1" variant="soft" mt="3" onClick={() => client.openConversation?.(run)}>
+              Open conversation
+            </Button>
+          ) : null}
+        </Box>
+      ) : null}
       <details>
         <summary style={{ cursor: "pointer", fontSize: 13, color: "var(--gray-11)" }}>
           Technical provenance
         </summary>
         <Flex direction="column" gap="2" mt="2">
           <Code size="1" style={{ overflowWrap: "anywhere" }}>
-            tick revision r{activity.snapshot.revision} · {activity.snapshot.action}
+            {activity
+              ? `tick revision r${activity.snapshot.revision} · ${activity.snapshot.action}`
+              : `instituted revision r${definition?.snapshot.revision} · ${definition?.snapshot.action}`}
           </Code>
-          <Code size="1" style={{ overflowWrap: "anywhere" }}>
-            run {activity.snapshot.runId}
-          </Code>
+          {activity ? (
+            <Code size="1" style={{ overflowWrap: "anywhere" }}>
+              run {activity.snapshot.runId}
+            </Code>
+          ) : (
+            <Code size="1" style={{ overflowWrap: "anywhere" }}>
+              automation {current.missionId}
+            </Code>
+          )}
           {run ? (
             <Code size="1" style={{ overflowWrap: "anywhere" }}>
               reviewed closure {run.closureDigest}
             </Code>
           ) : null}
-          {current.revision === activity.snapshot.revision ? (
+          {current.revision === (activity?.snapshot.revision ?? definition?.snapshot.revision) ? (
             <>
               <Code size="1" style={{ overflowWrap: "anywhere" }}>
                 {current.charter.harness.unit}@{current.charter.harness.ev}
@@ -891,7 +942,8 @@ function Inspector({
           ) : (
             <Text size="1" color="amber">
               The automation is now at r{current.revision}; edit controls affect the current
-              revision, while this tick remains bound to the closure above.
+              revision, while this history item preserves r
+              {activity?.snapshot.revision ?? definition?.snapshot.revision}.
             </Text>
           )}
         </Flex>
@@ -902,27 +954,32 @@ function Inspector({
 
 export const AutomationActivity = React.memo(function AutomationActivity({
   activity,
+  definition,
   client,
   automation: suppliedAutomation,
   run: suppliedRun,
   display = "pill",
   onChanged,
 }: AutomationActivityProps) {
+  const snapshot = activity?.snapshot ?? definition!.snapshot;
+  const isDefinition = definition !== undefined;
   const [open, setOpen] = useState(false);
   const [automation, setAutomation] = useState<MissionRecord | null | undefined>(
     suppliedAutomation
   );
-  const [run, setRun] = useState<MissionRunRecord | null | undefined>(suppliedRun);
+  const [run, setRun] = useState<MissionRunRecord | null | undefined>(
+    isDefinition ? null : suppliedRun
+  );
   const [error, setError] = useState<string | null>(null);
   useEffect(() => setAutomation(suppliedAutomation), [suppliedAutomation]);
-  useEffect(() => setRun(suppliedRun), [suppliedRun]);
+  useEffect(() => setRun(isDefinition ? null : suppliedRun), [isDefinition, suppliedRun]);
   useEffect(() => {
-    if (!open || (automation !== undefined && run !== undefined)) return;
+    if (!open || (automation !== undefined && (isDefinition || run !== undefined))) return;
     let cancelled = false;
     setError(null);
     void Promise.all([
-      automation === undefined ? cachedDefinition(client, activity.snapshot.missionId) : automation,
-      run === undefined ? cachedRun(client, activity.snapshot.runId) : run,
+      automation === undefined ? cachedDefinition(client, snapshot.missionId) : automation,
+      !isDefinition && run === undefined ? cachedRun(client, activity!.snapshot.runId) : run,
     ])
       .then(([nextAutomation, nextRun]) => {
         if (cancelled) return;
@@ -935,16 +992,25 @@ export const AutomationActivity = React.memo(function AutomationActivity({
     return () => {
       cancelled = true;
     };
-  }, [activity.snapshot.missionId, activity.snapshot.runId, automation, client, open, run]);
-  const status = useMemo(() => activityStatus(activity), [activity]);
-  const since = activity.snapshot.activatedAt ?? activity.snapshot.createdAt;
+  }, [activity, automation, client, isDefinition, open, run, snapshot.missionId]);
+  const status = useMemo(
+    () => (activity ? activityStatus(activity) : definitionStatus(automation?.state)),
+    [activity, automation?.state]
+  );
+  const since = activity
+    ? (activity.snapshot.activatedAt ?? activity.snapshot.createdAt)
+    : snapshot.createdAt;
   const isRunRow = display === "row";
   return (
     <Dialog.Root open={open} onOpenChange={setOpen}>
       <Dialog.Trigger>
         <button
           type="button"
-          aria-label={`Inspect automation tick ${activity.snapshot.name}`}
+          aria-label={
+            activity
+              ? `Inspect automation tick ${snapshot.name}`
+              : `Inspect automation ${snapshot.name}`
+          }
           style={{
             border: 0,
             padding: 0,
@@ -975,39 +1041,42 @@ export const AutomationActivity = React.memo(function AutomationActivity({
               {status.label}
             </Badge>
             <Text size="2" weight="medium" truncate>
-              {isRunRow
+              {isRunRow && activity
                 ? activity.snapshot.trigger === "scheduled"
                   ? "Scheduled tick"
                   : "Run now"
-                : activity.snapshot.name}
+                : snapshot.name}
             </Text>
             <Text size="1" color="gray">
               <ClockIcon />{" "}
-              {isRunRow
+              {isRunRow && activity
                 ? `${formatAbsolute(activity.snapshot.startedAt)} · ${durationLabel(activity.snapshot.startedAt, activity.closedAt ? Date.parse(activity.closedAt) : undefined)}`
-                : `${scheduleSummary(activity.snapshot)} · since ${formatAbsolute(since)}`}
+                : `${scheduleSummary(snapshot)} · ${isDefinition ? "created" : "since"} ${formatAbsolute(since)}`}
             </Text>
           </Flex>
         </button>
       </Dialog.Trigger>
       <Dialog.Content maxWidth="760px" aria-describedby={undefined}>
-        <Dialog.Title>{activity.snapshot.name}</Dialog.Title>
+        <Dialog.Title>{snapshot.name}</Dialog.Title>
         <Dialog.Description size="2" color="gray" mb="4">
-          Reviewed automation and exact tick details
+          {isDefinition
+            ? "Automation definition created in this conversation"
+            : "Reviewed automation and exact tick details"}
         </Dialog.Description>
         {error ? (
           <Callout.Root color="red">
             <Callout.Text>{error}</Callout.Text>
           </Callout.Root>
-        ) : automation === undefined || run === undefined ? (
+        ) : automation === undefined || (!isDefinition && run === undefined) ? (
           <Flex justify="center" py="6">
             <Spinner />
           </Flex>
         ) : (
           <Inspector
             activity={activity}
+            definition={definition}
             automation={automation}
-            run={run}
+            run={run ?? null}
             client={client}
             onChanged={(value) => {
               setAutomation(value);

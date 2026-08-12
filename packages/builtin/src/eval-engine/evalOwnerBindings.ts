@@ -13,6 +13,8 @@ export interface OwnerBindingArgs {
   channelId?: string;
   agentRef?: string;
   contextId?: string;
+  /** Stable owning tool invocation, supplied by the host rather than guest code. */
+  agentInvocationId?: string;
 }
 
 /** The `chat` surface forwarded to the owning agent DO (mirrors agentic-core's
@@ -88,6 +90,13 @@ export interface ChatBinding {
   rpc: { call: (target: string, method: string, args: unknown[]) => Promise<unknown> };
 }
 
+/** Agent-owned automation authoring. The owner runtime supplies channel
+ * provenance and emits the durable institution event; guest code only
+ * supplies the actual automation definition. */
+export interface AutomationsBinding {
+  propose(input: unknown): Promise<unknown>;
+}
+
 type CallFn = (target: string, method: string, callArgs: unknown[]) => Promise<unknown>;
 
 /**
@@ -129,6 +138,20 @@ export function buildOwnerBindings(args: OwnerBindingArgs, call: CallFn): Record
     rpc: { call },
   };
   const configure = op("configureAgent");
+  let automationProposalOrdinal = 0;
+  const automations: AutomationsBinding = {
+    propose: (input) => {
+      automationProposalOrdinal += 1;
+      const provenance = args.agentInvocationId
+        ? { invocationId: args.agentInvocationId, ordinal: automationProposalOrdinal }
+        : undefined;
+      return call(agentRef, "chatOp", [
+        channelId,
+        "proposeAutomation",
+        provenance ? [input, provenance] : [input],
+      ]);
+    },
+  };
   const agent = {
     describe: op("describeSelf"),
     configure: (patch: Record<string, unknown>) => configure(patch),
@@ -139,5 +162,5 @@ export function buildOwnerBindings(args: OwnerBindingArgs, call: CallFn): Record
       configure(respondFrom !== undefined ? { respondPolicy, respondFrom } : { respondPolicy }),
     setRespondFrom: (respondFrom: string[]) => configure({ respondFrom }),
   };
-  return { chat, agent };
+  return { chat, agent, automations };
 }

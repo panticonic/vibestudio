@@ -86,7 +86,7 @@ interface RunRow {
 }
 
 export class MissionsDO extends DurableObjectBase {
-  static override schemaVersion = 4;
+  static override schemaVersion = 5;
   protected override schemaProductionBaseline() {
     return { version: 2, name: "automations-v2" } as const;
   }
@@ -295,6 +295,37 @@ export class MissionsDO extends DurableObjectBase {
           sql.exec(`ALTER TABLE missions_v4 RENAME TO missions`);
         },
       },
+      {
+        version: 5,
+        name: "idempotent-agent-automation-proposals",
+        validateSource: (sql) => {
+          assertColumns(sql, "missions", [
+            "mission_id",
+            "name",
+            "revision",
+            "charter_json",
+            "permissions_json",
+            "standing_restrictions_json",
+            "owner_user_id",
+            "owner_device_id",
+            "state",
+            "revision_digest",
+            "active_closure_digest",
+            "seeded",
+            "schedule_origin_at",
+            "next_run_at",
+            "last_run_at",
+            "created_at",
+            "updated_at",
+            "activated_at",
+            "run_count",
+            "completed_at",
+            "completion_reason",
+            "completion_response",
+          ]);
+        },
+        migrate: (sql) => sql.exec(missionProposalsTableSql()),
+      },
     ];
   }
   static override rpcMethods = missionsMethods;
@@ -313,13 +344,14 @@ export class MissionsDO extends DurableObjectBase {
       PRIMARY KEY (mission_id, revision)
     )`);
     this.sql.exec(missionRunsTableSql("mission_runs"));
+    this.sql.exec(missionProposalsTableSql());
     this.sql.exec(
       `CREATE INDEX mission_runs_by_mission ON mission_runs(mission_id, started_at DESC)`
     );
   }
 
   protected override requiredTables(): readonly string[] {
-    return ["missions", "mission_revisions", "mission_runs"];
+    return ["missions", "mission_revisions", "mission_runs", "mission_proposals"];
   }
 
   protected override schemaIndexDefinitions(): readonly string[] {
@@ -633,7 +665,7 @@ export class MissionsDO extends DurableObjectBase {
     permissions: MissionPermission[];
     standingRestrictions?: MissionStandingRestriction[];
   }): MissionRecord {
-    return this.insertDraft(input);
+    return this.insertDraft(input, this.rpcIdempotencyKey ?? undefined);
   }
 
   @schemaRpc()
@@ -646,13 +678,27 @@ export class MissionsDO extends DurableObjectBase {
     return this.insertDraft(input);
   }
 
-  private insertDraft(input: {
-    name: string;
-    charter: MissionCharter;
-    permissions: MissionPermission[];
-    standingRestrictions?: MissionStandingRestriction[];
-  }): MissionRecord {
+  private insertDraft(
+    input: {
+      name: string;
+      charter: MissionCharter;
+      permissions: MissionPermission[];
+      standingRestrictions?: MissionStandingRestriction[];
+    },
+    proposalKey?: string
+  ): MissionRecord {
     const caller = this.requireOwnerCaller();
+    if (proposalKey) {
+      const existing = this.sql
+        .exec(
+          `SELECT mission_id FROM mission_proposals
+            WHERE owner_user_id=? AND proposal_key=?`,
+          caller.userId,
+          proposalKey
+        )
+        .toArray()[0];
+      if (existing) return this.requireMission(String(existing["mission_id"]));
+    }
     assertExecutionPermissions(input.charter, input.permissions);
     const now = Date.now();
     const missionId = `msn_${crypto.randomUUID().replaceAll("-", "")}`;
@@ -662,24 +708,36 @@ export class MissionsDO extends DurableObjectBase {
       input.permissions,
       standingRestrictions
     );
-    this.sql.exec(
-      `INSERT INTO missions
-       (mission_id,name,revision,charter_json,permissions_json,standing_restrictions_json,
-        owner_user_id,owner_device_id,state,revision_digest,active_closure_digest,seeded,
-        schedule_origin_at,next_run_at,last_run_at,created_at,updated_at,activated_at,
-        run_count,completed_at,completion_reason,completion_response)
-       VALUES (?,?,1,?,?,?,?,?,'draft',?,NULL,0,NULL,NULL,NULL,?,?,NULL,0,NULL,NULL,NULL)`,
-      missionId,
-      input.name,
-      canonicalJson(input.charter),
-      canonicalJson(input.permissions),
-      canonicalJson(standingRestrictions),
-      caller.userId,
-      caller.callerId,
-      revisionDigest,
-      now,
-      now
-    );
+    this.ctx.storage.transactionSync(() => {
+      this.sql.exec(
+        `INSERT INTO missions
+         (mission_id,name,revision,charter_json,permissions_json,standing_restrictions_json,
+          owner_user_id,owner_device_id,state,revision_digest,active_closure_digest,seeded,
+          schedule_origin_at,next_run_at,last_run_at,created_at,updated_at,activated_at,
+          run_count,completed_at,completion_reason,completion_response)
+         VALUES (?,?,1,?,?,?,?,?,'draft',?,NULL,0,NULL,NULL,NULL,?,?,NULL,0,NULL,NULL,NULL)`,
+        missionId,
+        input.name,
+        canonicalJson(input.charter),
+        canonicalJson(input.permissions),
+        canonicalJson(standingRestrictions),
+        caller.userId,
+        caller.callerId,
+        revisionDigest,
+        now,
+        now
+      );
+      if (proposalKey) {
+        this.sql.exec(
+          `INSERT INTO mission_proposals
+           (owner_user_id,proposal_key,mission_id,created_at) VALUES (?,?,?,?)`,
+          caller.userId,
+          proposalKey,
+          missionId,
+          now
+        );
+      }
+    });
     return this.requireMission(missionId);
   }
 
@@ -1569,6 +1627,16 @@ function missionRunsTableSql(name: "mission_runs" | "mission_runs_v4"): string {
     final_message TEXT,
     completion_response TEXT,
     error TEXT
+  )`;
+}
+
+function missionProposalsTableSql(): string {
+  return `CREATE TABLE mission_proposals (
+    owner_user_id TEXT NOT NULL,
+    proposal_key TEXT NOT NULL,
+    mission_id TEXT NOT NULL UNIQUE,
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (owner_user_id, proposal_key)
   )`;
 }
 

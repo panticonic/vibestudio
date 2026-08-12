@@ -117,6 +117,7 @@ export type {
   ApprovalCardPayload,
   AutomationActivityPayload,
   AutomationActivitySnapshot,
+  AutomationDefinitionPayload,
   ForkRowPayload,
   CustomMessageCardPayload,
   CustomMessageDisplayMode,

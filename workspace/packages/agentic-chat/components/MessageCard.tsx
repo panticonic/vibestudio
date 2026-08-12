@@ -452,10 +452,18 @@ export const MessageCard = React.memo(function MessageCard({
   }
 
   // Handle system messages (e.g., agent disconnection notifications)
-  if (msg.contentType === "automation" && msg.automation && automationClient) {
+  if (
+    msg.contentType === "automation" &&
+    (msg.automation || msg.automationDefinition) &&
+    automationClient
+  ) {
     return (
       <Box key={key} className="message-row message-row-system">
-        <AutomationActivity activity={msg.automation} client={automationClient} />
+        {msg.automation ? (
+          <AutomationActivity activity={msg.automation} client={automationClient} />
+        ) : (
+          <AutomationActivity definition={msg.automationDefinition!} client={automationClient} />
+        )}
       </Box>
     );
   }

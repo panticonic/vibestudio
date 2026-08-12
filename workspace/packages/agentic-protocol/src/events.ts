@@ -107,6 +107,7 @@ export type EventKind =
   | "messageType.cleared"
   | "custom.started"
   | "custom.updated"
+  | "automation.instituted"
   | "memory.recalled"
   | "build.completed"
   | "external.envelope_published"
@@ -737,6 +738,42 @@ export interface SystemPayload {
   details?: unknown;
 }
 
+export type AutomationScheduleSnapshot =
+  | {
+      kind: "interval";
+      everyMs: number;
+      anchorAt?: number;
+      jitterMs?: number;
+      untilAt?: number;
+      maxRuns?: number;
+    }
+  | {
+      kind: "cron";
+      expression: string;
+      timezone: string;
+      untilAt?: number;
+      maxRuns?: number;
+    }
+  | null;
+
+/** Immutable, zero-fetch definition summary written when an agent creates a
+ * draft. The mission ledger remains canonical; this snapshot makes the
+ * institution event immediately useful and permanently understandable. */
+export interface AutomationDefinitionSnapshot {
+  missionId: string;
+  name: string;
+  summary: string;
+  revision: number;
+  action: "prompt" | "eval" | "method";
+  createdAt: number;
+  schedule: AutomationScheduleSnapshot;
+}
+
+export interface AutomationInstitutedPayload {
+  protocol: "agentic.trajectory.v1";
+  definition: AutomationDefinitionSnapshot;
+}
+
 export interface CompactionPayload {
   protocol: "agentic.trajectory.v1";
   summary: string;
@@ -799,31 +836,33 @@ export type PayloadFor<K extends EventKind> = K extends "message.received" | "me
                         ? CustomStartedPayload
                         : K extends "custom.updated"
                           ? CustomUpdatedPayload
-                          : K extends "external.envelope_published"
-                            ? ExternalEnvelopePublishedPayload
-                            : K extends "external.envelope_observed"
-                              ? ExternalEnvelopeObservedPayload
-                              : K extends "external.participant_observed"
-                                ? ExternalParticipantObservedPayload
-                                : K extends `branch.${string}`
-                                  ? BranchPayload
-                                  : K extends `turn.${string}`
-                                    ? TurnPayload
-                                    : K extends "system.compaction_recorded"
-                                      ? CompactionPayload
-                                      : K extends "system.event"
-                                        ? SystemPayload
-                                        : K extends "memory.recalled"
-                                          ? MemoryRecalledPayload
-                                          : K extends "build.completed"
-                                            ? BuildCompletedPayload
-                                            : K extends "channel.forked"
-                                              ? ChannelForkedPayload
-                                              : K extends "channel.fork_renamed"
-                                                ? ChannelForkRenamedPayload
-                                                : K extends "channel.fork_archived"
-                                                  ? ChannelForkArchivedPayload
-                                                  : never;
+                          : K extends "automation.instituted"
+                            ? AutomationInstitutedPayload
+                            : K extends "external.envelope_published"
+                              ? ExternalEnvelopePublishedPayload
+                              : K extends "external.envelope_observed"
+                                ? ExternalEnvelopeObservedPayload
+                                : K extends "external.participant_observed"
+                                  ? ExternalParticipantObservedPayload
+                                  : K extends `branch.${string}`
+                                    ? BranchPayload
+                                    : K extends `turn.${string}`
+                                      ? TurnPayload
+                                      : K extends "system.compaction_recorded"
+                                        ? CompactionPayload
+                                        : K extends "system.event"
+                                          ? SystemPayload
+                                          : K extends "memory.recalled"
+                                            ? MemoryRecalledPayload
+                                            : K extends "build.completed"
+                                              ? BuildCompletedPayload
+                                              : K extends "channel.forked"
+                                                ? ChannelForkedPayload
+                                                : K extends "channel.fork_renamed"
+                                                  ? ChannelForkRenamedPayload
+                                                  : K extends "channel.fork_archived"
+                                                    ? ChannelForkArchivedPayload
+                                                    : never;
 
 export interface AgenticEvent<K extends EventKind = EventKind> {
   kind: K;

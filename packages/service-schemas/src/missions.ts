@@ -353,12 +353,12 @@ export const missionsMethods = defineServiceMethods({
       rationale: "An inert automation draft grants nothing and schedules nothing",
     },
     description:
-      "Propose an inert automation draft. Agents should use this method, then direct the user to Automations for review.",
+      "Create the inert draft behind the agent-owned automations.propose binding. The binding also institutes it in the originating chat before returning.",
     args: z.tuple([createInputSchema]),
     returns: missionRecordSchema,
     authority: AGENT_PROPOSAL,
     access: { sensitivity: "write" },
-    agentFacing: true,
+    agentFacing: false,
   },
   createDraft: {
     capability: "missions.edit",

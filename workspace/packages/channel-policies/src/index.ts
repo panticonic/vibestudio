@@ -137,6 +137,7 @@ export const AGENTIC_EVENT_AUDIENCE_POLICY = {
   "messageType.cleared": "broadcast",
   "custom.started": "broadcast",
   "custom.updated": "broadcast",
+  "automation.instituted": "broadcast",
   "memory.recalled": "broadcast",
   "build.completed": "broadcast",
   "external.envelope_published": "broadcast",

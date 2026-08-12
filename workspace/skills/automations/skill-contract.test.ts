@@ -14,7 +14,8 @@ describe("Automations skill contract", () => {
     expect(skill).toContain("**Agent** sends a prompt through the ordinary agent turn loop");
     expect(skill).toContain("exact inline `eval` code executed without a model call");
     expect(skill).toContain("does not require a new worker");
-    expect(skill).toContain("proposeDraft");
+    expect(skill).toContain("`automations.propose(...)`");
+    expect(skill).toContain("immediately adds an inspectable, editable pill");
     expect(skill).toContain("inert draft is waiting in **Automations** for review");
     expect(skill).toContain("Do not call `requestReview` for them");
   });
@@ -29,6 +30,8 @@ describe("Automations skill contract", () => {
     expect(skill).toContain("links to the exact conversation");
     expect(api).toContain("canonical deep-link identity for that conversation");
     expect(skill).toContain("chat-history pill");
+    expect(api).toContain("`automation.instituted` event");
+    expect(api).toContain("Opening it calls only `get`; no run exists yet");
     expect(skill).toContain("Collapsed transcript pills perform no service reads");
     expect(skill).toContain(
       "Agents can use the agent-facing `edit`, `runNow`, `pause`, `resume`, and"

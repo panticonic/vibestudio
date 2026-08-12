@@ -25,6 +25,7 @@ describe("onboarding skill template handoff", () => {
     expect(skill).toContain("**Schedule recurring work** is a ready-now conversation route");
     expect(skill).toContain("[Automations](../automations/SKILL.md)");
     expect(skill).toContain("propose an inert draft");
+    expect(skill).toContain("immediately appears at that point in the conversation");
     expect(skill).not.toContain("automations setup status");
   });
 });

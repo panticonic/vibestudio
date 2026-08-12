@@ -58,6 +58,7 @@ import {
   resolveShouldRespond,
   type ActorRef,
   type AgenticEvent,
+  type AutomationDefinitionSnapshot,
   type CustomMessageDisplayMode,
   type ParticipantRef,
 } from "@workspace/agentic-protocol";
@@ -90,6 +91,7 @@ import type { DoAlarmSchedule } from "@vibestudio/shared/doDispatcher";
 import {
   MISSION_COMPLETION_PROTOCOL,
   missionCompletionResponse,
+  type MissionRecord,
 } from "@vibestudio/shared/authority/mission";
 import type {
   ClaimRequest,
@@ -4684,6 +4686,64 @@ export abstract class AgentVesselBase extends DurableObjectBase {
         });
         return undefined;
       }
+      case "proposeAutomation": {
+        const [input, provenance] = a as [
+          unknown,
+          { invocationId?: unknown; ordinal?: unknown } | undefined,
+        ];
+        const service = await this.rpc.call<{ kind?: unknown; targetId?: unknown }>(
+          "main",
+          "workers.resolveService",
+          ["vibestudio.missions.v1"]
+        );
+        if (service.kind !== "durable-object" || typeof service.targetId !== "string") {
+          throw new Error("The Automations service is unavailable");
+        }
+        const proposalRequestIdentity =
+          provenance &&
+          typeof provenance.invocationId === "string" &&
+          provenance.invocationId.length > 0 &&
+          Number.isSafeInteger(provenance.ordinal) &&
+          Number(provenance.ordinal) > 0
+            ? `${provenance.invocationId}:${Number(provenance.ordinal)}`
+            : (this.rpcRequestId ?? crypto.randomUUID());
+        const automation = await this.rpc.call<MissionRecord>(
+          service.targetId,
+          "proposeDraft",
+          [input],
+          {
+            idempotencyKey: `automation:proposal:${this.objectKey}:${sha256HexSyncText(proposalRequestIdentity)}`,
+          }
+        );
+        const descriptor = this.getEffectiveParticipantInfo(
+          channelId,
+          this.subscriptions.getConfig(channelId)
+        );
+        const senderMetadata = {
+          type: "agent",
+          name: descriptor.name,
+          handle: descriptor.handle,
+        };
+        const event: AgenticEvent<"automation.instituted"> = {
+          kind: "automation.instituted",
+          actor: {
+            kind: "agent",
+            id: participantId,
+            displayName: descriptor.name,
+            metadata: senderMetadata,
+          },
+          payload: {
+            protocol: AGENTIC_PROTOCOL_VERSION,
+            definition: automationDefinitionSnapshot(automation),
+          },
+          createdAt: new Date(automation.createdAt).toISOString(),
+        };
+        await channel.publishAgenticEvent(participantId, event, {
+          idempotencyKey: `automation:instituted:${automation.missionId}`,
+          senderMetadata,
+        });
+        return automation;
+      }
       case "publishCustomMessage": {
         const [input, options] = a as [
           { typeId: string; initialState?: unknown; displayMode?: CustomMessageDisplayMode },
@@ -8085,6 +8145,38 @@ export abstract class AgentVesselBase extends DurableObjectBase {
 
 function automationCompletionStateKey(runId: string): string {
   return `automation:completion:${runId}`;
+}
+
+function automationDefinitionSnapshot(automation: MissionRecord): AutomationDefinitionSnapshot {
+  const execution = automation.charter.execution;
+  const trigger = automation.charter.trigger;
+  return {
+    missionId: automation.missionId,
+    name: automation.name,
+    summary: automation.charter.summary,
+    revision: automation.revision,
+    action: execution.kind === "method" ? "method" : execution.action.kind,
+    createdAt: automation.createdAt,
+    schedule:
+      trigger.kind === "schedule"
+        ? {
+            kind: "interval",
+            everyMs: trigger.everyMs,
+            ...(trigger.anchorAt === undefined ? {} : { anchorAt: trigger.anchorAt }),
+            ...(trigger.jitterMs === undefined ? {} : { jitterMs: trigger.jitterMs }),
+            ...(trigger.untilAt === undefined ? {} : { untilAt: trigger.untilAt }),
+            ...(trigger.maxRuns === undefined ? {} : { maxRuns: trigger.maxRuns }),
+          }
+        : trigger.kind === "cron"
+          ? {
+              kind: "cron",
+              expression: trigger.expression,
+              timezone: trigger.timezone,
+              ...(trigger.untilAt === undefined ? {} : { untilAt: trigger.untilAt }),
+              ...(trigger.maxRuns === undefined ? {} : { maxRuns: trigger.maxRuns }),
+            }
+          : null,
+  };
 }
 
 function automationCompletionForTurn(

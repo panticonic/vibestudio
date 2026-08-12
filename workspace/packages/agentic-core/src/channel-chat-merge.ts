@@ -87,6 +87,9 @@ export function chatMessagesFromChannelView(state: ChannelViewState): ChatMessag
   const turns = Object.values(state.turns).flatMap(projectedTurnToTypingMessage);
   const waitingTurns = Object.values(state.turns).flatMap(projectedWaitingTurnMessage);
   const automationTurns = Object.values(state.turns).flatMap(projectedAutomationTurnMessage);
+  const automationInstitutions = Object.values(state.automationInstitutions ?? {}).map(
+    projectedAutomationInstitutionToChatMessage
+  );
   const silentClosedTurns = Object.values(state.turns).flatMap((turn) =>
     projectedClosedTurnWithoutResponseMessage(turn, {
       hasAssistantMessage:
@@ -162,6 +165,7 @@ export function chatMessagesFromChannelView(state: ChannelViewState): ChatMessag
     ...turns,
     ...waitingTurns,
     ...automationTurns,
+    ...automationInstitutions,
     ...silentClosedTurns,
     ...inlineUi,
     ...custom,
@@ -179,6 +183,30 @@ export function chatMessagesFromChannelView(state: ChannelViewState): ChatMessag
       const { sortTime: _sortTime, ...rest } = message as ChatMessage & { sortTime?: number };
       return rest;
     });
+}
+
+function projectedAutomationInstitutionToChatMessage(
+  institution: import("@workspace/agentic-protocol").ProjectedAutomationInstitution
+): ChatMessage & { sortTime: number } {
+  return {
+    id: `automation:instituted:${institution.definition.missionId}`,
+    senderId: institution.actor.id,
+    content: institution.definition.name,
+    contentType: "automation",
+    kind: "system",
+    complete: true,
+    automationDefinition: {
+      snapshot: institution.definition,
+      institutedAt: institution.createdAt,
+    },
+    senderMetadata: {
+      name: institution.actor.displayName ?? institution.actor.id,
+      type: institution.actor.kind,
+      handle: institution.actor.id,
+    },
+    seq: institution.seq,
+    sortTime: Date.parse(institution.createdAt) || 0,
+  };
 }
 
 function projectedSystemNoticeToChatMessage(
