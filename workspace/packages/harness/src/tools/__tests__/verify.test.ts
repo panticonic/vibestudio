@@ -21,7 +21,13 @@ describe("context-exact verify tool", () => {
       kind: "package",
       status: "ok" as const,
       diagnostics: [],
-      builds: [{ target: "library:worker" as const, diagnosticIndexes: [] }],
+      builds: [
+        {
+          target: "library:worker" as const,
+          buildKey: "a".repeat(64),
+          diagnosticIndexes: [],
+        },
+      ],
     });
     const controller = new AbortController();
     const tool = createVerifyTool(callMain, () => "context-7");
@@ -38,7 +44,25 @@ describe("context-exact verify tool", () => {
       controller.signal
     );
     expect(result.isError).toBe(false);
-    expect(result.details).toMatchObject({ operation: "build", status: "ok" });
+    expect(result.details).toMatchObject({
+      operation: "build",
+      status: "ok",
+      receipt: {
+        protocol: "build-verification-receipt.v1",
+        target: "packages/parser",
+        contextId: "context-7",
+        ref: "ctx:context-7",
+        reportDigest: expect.stringMatching(/^[0-9a-f]{64}$/u),
+        unit: {
+          repoPath: "packages/parser",
+          unitName: "@workspace/parser",
+          kind: "package",
+        },
+        status: "ok",
+        builds: [{ target: "library:worker", buildKey: "a".repeat(64) }],
+        diagnostics: { total: 0, retained: 0, truncated: 0 },
+      },
+    });
   });
 
   it("publishes an immediate running update before waiting for verification", async () => {
@@ -131,6 +155,9 @@ describe("context-exact verify tool", () => {
     expect(result.details).toMatchObject({
       truncatedDiagnostics: 5,
       truncatedDiagnosticText: 1_000,
+      receipt: {
+        diagnostics: { total: 45, retained: 40, truncated: 5 },
+      },
       report: {
         diagnostics: expect.arrayContaining([
           expect.objectContaining({ message: expect.stringMatching(/\[truncated\]$/u) }),

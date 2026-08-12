@@ -413,14 +413,41 @@ export interface CreateProjectParams {
 
 export type ProjectIconCatalog = string[];
 
+export interface ProjectCatalogQuery {
+  resource: "icon";
+  query?: string;
+  families?: Array<"lucide" | "brand">;
+  limit?: number;
+}
+
+export interface ProjectCatalogEntry {
+  resource: "icon";
+  id: string;
+  family: "lucide" | "brand";
+  name: string;
+}
+
+export interface ProjectCatalogResult {
+  protocol: "workspace-dev-catalog.v1";
+  resource: "icon";
+  query: string | null;
+  total: number;
+  entries: ProjectCatalogEntry[];
+  truncated: number;
+}
+
 export interface ProjectIconFailureData {
   code: "project_icon_invalid";
   icon: string;
   kind: "lucide" | "brand";
   name: string;
-  available: string[];
   suggestions: string[];
-  remediation: string;
+  catalogQuery: ProjectCatalogQuery;
+  catalog: ProjectCatalogResult;
+  recovery: {
+    action: "correct-request";
+    instruction: string;
+  };
 }
 
 export class ProjectIconError extends Error {
@@ -430,7 +457,7 @@ export class ProjectIconError extends Error {
   constructor(errorData: ProjectIconFailureData) {
     super(
       `Unknown curated ${errorData.kind} icon: ${errorData.name || "(empty)"}. ` +
-        "Call listProjectIcons() and choose a returned catalog id."
+        "Use the bounded catalog result in errorData.catalog or call searchProjectCatalog()."
     );
     this.name = "ProjectIconError";
     this.errorData = errorData;
@@ -482,11 +509,64 @@ async function catalogNames(kind: "lucide" | "brand"): Promise<string[]> {
 
 /** Return the exact icon ids accepted by {@link createProjects}. */
 export async function listProjectIcons(): Promise<ProjectIconCatalog> {
-  const [lucide, brand] = await Promise.all([catalogNames("lucide"), catalogNames("brand")]);
-  return [
-    ...lucide.map((name) => `lucide:${name}`),
-    ...brand.map((name) => `brand:${name}`),
-  ].sort((left, right) => left.localeCompare(right));
+  return (await searchProjectCatalog({ resource: "icon" })).entries.map((entry) => entry.id);
+}
+
+/** Bounded discovery for curated project resources accepted by scaffolding. */
+export async function searchProjectCatalog(
+  query: ProjectCatalogQuery
+): Promise<ProjectCatalogResult> {
+  const families: Array<"lucide" | "brand"> = query.families?.length
+    ? [...new Set(query.families)]
+    : ["lucide", "brand"];
+  const entries = (
+    await Promise.all(
+      families.map(async (family) => catalogEntries(family, await catalogNames(family)))
+    )
+  ).flat();
+  return filterProjectCatalog(entries, query.query, query.limit);
+}
+
+function catalogEntries(family: "lucide" | "brand", names: string[]): ProjectCatalogEntry[] {
+  return names.map((name) => ({
+    resource: "icon",
+    id: `${family}:${name}`,
+    family,
+    name,
+  }));
+}
+
+function filterProjectCatalog(
+  entries: ProjectCatalogEntry[],
+  query: string | undefined,
+  requestedLimit: number | undefined
+): ProjectCatalogResult {
+  const normalizedQuery = query?.trim().toLowerCase() ?? "";
+  const limit = Math.max(
+    1,
+    Math.min(requestedLimit ?? (normalizedQuery ? 12 : entries.length), 500)
+  );
+  const ranked = entries
+    .map((entry) => ({
+      entry,
+      score: normalizedQuery
+        ? entry.id === normalizedQuery || entry.name === normalizedQuery
+          ? -1_000
+          : entry.id.includes(normalizedQuery) || entry.name.includes(normalizedQuery)
+            ? -500 + Math.abs(entry.name.length - normalizedQuery.length)
+            : editDistance(normalizedQuery, entry.name)
+        : 0,
+    }))
+    .sort((left, right) => left.score - right.score || left.entry.id.localeCompare(right.entry.id));
+  const selected = ranked.slice(0, limit).map(({ entry }) => entry);
+  return {
+    protocol: "workspace-dev-catalog.v1",
+    resource: "icon",
+    query: normalizedQuery || null,
+    total: entries.length,
+    entries: selected,
+    truncated: Math.max(0, entries.length - selected.length),
+  };
 }
 
 function editDistance(left: string, right: string): number {
@@ -518,15 +598,25 @@ function invalidProjectIcon(
     )
     .slice(0, 5)
     .map((candidate) => `${kind}:${candidate}`);
+  const catalogQuery: ProjectCatalogQuery = {
+    resource: "icon",
+    query: name,
+    families: [kind],
+    limit: 12,
+  };
   return new ProjectIconError({
     code: "project_icon_invalid",
     icon,
     kind,
     name,
-    available: available.map((candidate) => `${kind}:${candidate}`),
     suggestions,
-    remediation:
-      "Call listProjectIcons(), then pass one returned id such as `lucide:database` or omit `icon`.",
+    catalogQuery,
+    catalog: filterProjectCatalog(catalogEntries(kind, available), name, catalogQuery.limit),
+    recovery: {
+      action: "correct-request",
+      instruction:
+        "Pass one exact id from errorData.catalog.entries, call searchProjectCatalog(errorData.catalogQuery), or omit icon.",
+    },
   });
 }
 

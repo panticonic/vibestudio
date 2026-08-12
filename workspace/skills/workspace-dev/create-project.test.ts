@@ -263,7 +263,7 @@ describe("createProjects", () => {
     ]) {
       addFile(`skills/workspace-dev/assets/icons/brands/${name}.svg`, "<svg />");
     }
-    const { listProjectIcons } = await import("./create-project.js");
+    const { listProjectIcons, searchProjectCatalog } = await import("./create-project.js");
 
     await expect(listProjectIcons()).resolves.toEqual([
       "brand:claude",
@@ -277,6 +277,16 @@ describe("createProjects", () => {
       "lucide:database",
       "lucide:messages-square",
     ]);
+    await expect(
+      searchProjectCatalog({ resource: "icon", query: "message square", limit: 1 })
+    ).resolves.toMatchObject({
+      protocol: "workspace-dev-catalog.v1",
+      resource: "icon",
+      query: "message square",
+      total: 10,
+      entries: [{ resource: "icon", id: "lucide:messages-square", family: "lucide" }],
+      truncated: 9,
+    });
   });
 
   it("returns a structured catalog repair plan before creating an unknown icon", async () => {
@@ -293,9 +303,32 @@ describe("createProjects", () => {
       icon: "lucide:columns-3",
       kind: "lucide",
       name: "columns-3",
-      available: ["lucide:database"],
       suggestions: ["lucide:database"],
-      remediation: expect.stringContaining("listProjectIcons()"),
+      catalogQuery: {
+        resource: "icon",
+        query: "columns-3",
+        families: ["lucide"],
+        limit: 12,
+      },
+      catalog: {
+        protocol: "workspace-dev-catalog.v1",
+        resource: "icon",
+        query: "columns-3",
+        total: 1,
+        entries: [
+          {
+            resource: "icon",
+            id: "lucide:database",
+            family: "lucide",
+            name: "database",
+          },
+        ],
+        truncated: 0,
+      },
+      recovery: {
+        action: "correct-request",
+        instruction: expect.stringContaining("errorData.catalog.entries"),
+      },
     });
     expect(mocks.edit).not.toHaveBeenCalled();
     expect(mocks.commit).not.toHaveBeenCalled();

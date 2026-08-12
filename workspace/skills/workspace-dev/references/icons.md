@@ -32,10 +32,14 @@ For new panels and workers, discover the accepted ids and pass one exact result
 to `createProjects`:
 
 ```ts
-import { createProjects, listProjectIcons } from "@workspace-skills/workspace-dev";
+import { createProjects, searchProjectCatalog } from "@workspace-skills/workspace-dev";
 
-const icons = await listProjectIcons();
-const icon = icons.find((candidate) => candidate === "lucide:messages-square");
+const catalog = await searchProjectCatalog({
+  resource: "icon",
+  query: "messages square",
+  limit: 5,
+});
+const icon = catalog.entries[0]?.id;
 if (!icon) throw new Error("The messages icon is unavailable");
 return createProjects([
   { projectType: "panel", name: "inbox", icon },

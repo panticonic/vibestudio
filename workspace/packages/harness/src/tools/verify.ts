@@ -2,6 +2,8 @@
 import { Type } from "@sinclair/typebox";
 import type { AgentTool, AgentToolResult } from "@workspace/pi-core";
 import type { UnitBuildReportWire } from "@vibestudio/service-schemas/build";
+import { sha256Hex } from "@vibestudio/content-addressing";
+import { encodeUtf8 } from "./portable-bytes.js";
 
 const buildVerificationSchema = Type.Object(
   {
@@ -66,6 +68,7 @@ export type VerifyToolDetails =
       target: string;
       status: UnitBuildReportWire["status"];
       report: UnitBuildReportWire;
+      receipt: BuildVerificationReceipt;
       truncatedDiagnostics: number;
       truncatedDiagnosticText: number;
     }
@@ -77,6 +80,25 @@ export type VerifyToolDetails =
       truncatedFiles: number;
       truncatedErrors: number;
     };
+
+export interface BuildVerificationReceipt {
+  protocol: "build-verification-receipt.v1";
+  target: string;
+  contextId: string;
+  ref: string;
+  reportDigest: string;
+  unit: {
+    repoPath: string;
+    unitName?: string;
+    kind: string;
+  };
+  status: UnitBuildReportWire["status"];
+  builds: Array<{
+    target: UnitBuildReportWire["builds"][number]["target"];
+    buildKey: string | null;
+  }>;
+  diagnostics: { total: number; retained: number; truncated: number };
+}
 
 const MAX_DIAGNOSTICS = 40;
 const MAX_DIAGNOSTIC_MESSAGE_CHARS = 2_000;
@@ -93,7 +115,7 @@ export function createVerifyTool(
     name: "verify",
     label: "verify",
     description:
-      'Build or test one workspace unit against this conversation\'s exact semantic working state. Use { operation:"build", target } for compiler/bundler diagnostics and { operation:"test", target, file?, testName? } for Vitest. This is the supported code-verification boundary: it materializes the exact context, preserves execution authority and approvals, returns structured bounded evidence, and never treats zero discovered tests as success. Do not emulate it with a shell command or generic eval wrapper.',
+      'Build or test one workspace unit against this conversation\'s exact semantic working state. Use { operation:"build", target } for compiler/bundler diagnostics and { operation:"test", target, file?, testName? } for Vitest. This is the supported code-verification boundary: it materializes the exact context, preserves execution authority and approvals, returns structured bounded evidence plus a reusable build receipt, and never treats zero discovered tests as success. Do not emulate it with a shell command or generic eval wrapper.',
     parameters: verifySchema,
     execute: async (
       _toolCallId,
@@ -113,13 +135,15 @@ export function createVerifyTool(
         details: { operation: command.operation, target: command.target, status: "running" },
       });
       if (command.operation === "build") {
+        const exactContextId = contextId();
         const report = await callMain<UnitBuildReportWire>(
           "build.getBuildReport",
-          [command.target, `ctx:${contextId()}`],
+          [command.target, `ctx:${exactContextId}`],
           signal
         );
         const bounded = boundBuildReport(report);
         const failed = report.status !== "ok";
+        const receipt = buildVerificationReceipt(command.target, exactContextId, report, bounded);
         return {
           content: [{ type: "text", text: renderBuild(command.target, bounded.report) }],
           details: {
@@ -127,6 +151,7 @@ export function createVerifyTool(
             target: command.target,
             status: report.status,
             report: bounded.report,
+            receipt,
             truncatedDiagnostics: bounded.truncatedDiagnostics,
             truncatedDiagnosticText: bounded.truncatedDiagnosticText,
           },
@@ -164,6 +189,36 @@ export function createVerifyTool(
         },
         isError: status !== "passed",
       };
+    },
+  };
+}
+
+function buildVerificationReceipt(
+  target: string,
+  contextId: string,
+  report: UnitBuildReportWire,
+  bounded: ReturnType<typeof boundBuildReport>
+): BuildVerificationReceipt {
+  return {
+    protocol: "build-verification-receipt.v1",
+    target,
+    contextId,
+    ref: `ctx:${contextId}`,
+    reportDigest: sha256Hex(encodeUtf8(JSON.stringify(report))),
+    unit: {
+      repoPath: report.repoPath,
+      ...(report.unitName ? { unitName: report.unitName } : {}),
+      kind: report.kind,
+    },
+    status: report.status,
+    builds: report.builds.map((build) => ({
+      target: build.target,
+      buildKey: build.buildKey ?? null,
+    })),
+    diagnostics: {
+      total: report.diagnostics.length,
+      retained: bounded.report.diagnostics.length,
+      truncated: bounded.truncatedDiagnostics,
     },
   };
 }
@@ -236,7 +291,7 @@ function renderBuild(target: string, report: UnitBuildReportWire): string {
     `Build ${report.status} for ${target} (${report.kind}; ` +
     `${report.builds.length} target${report.builds.length === 1 ? "" : "s"}; ` +
     `${report.diagnostics.length} diagnostic${report.diagnostics.length === 1 ? "" : "s"}). ` +
-    "Structured diagnostics are in details.report.diagnostics."
+    "Structured diagnostics are in details.report.diagnostics; exact reusable evidence is in details.receipt."
   );
 }
 

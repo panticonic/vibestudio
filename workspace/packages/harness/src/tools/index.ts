@@ -10,6 +10,7 @@
 
 export { createReadTool } from "./read.js";
 export type { ReadToolInput, ReadToolDetails, ReadToolDeps } from "./read.js";
+export type { WorkspaceReadReceipt } from "./workspace-read-receipt.js";
 
 export { createProvenanceTool } from "./provenance.js";
 export type {
@@ -88,7 +89,7 @@ export type {
 } from "./workspace-service.js";
 
 export { createVerifyTool, verifySchema } from "./verify.js";
-export type { VerifyToolInput, VerifyToolDetails } from "./verify.js";
+export type { VerifyToolInput, VerifyToolDetails, BuildVerificationReceipt } from "./verify.js";
 
 // Pure helpers
 export { resolveToCwd, expandPath } from "./path-utils.js";

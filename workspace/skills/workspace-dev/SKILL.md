@@ -86,11 +86,14 @@ part of the product. Keep UI projection methods out of the domain API.
 Use `createProjects` for one coherent publication of related units:
 
 ```ts
-import { createProjects, listProjectIcons } from "@workspace-skills/workspace-dev";
+import { createProjects, searchProjectCatalog } from "@workspace-skills/workspace-dev";
 
-const icons = await listProjectIcons();
-const databaseIcon = icons.find((icon) => icon === "lucide:database");
-const panelIcon = icons.find((icon) => icon === "lucide:panels-top-left");
+const [databaseCatalog, panelCatalog] = await Promise.all([
+  searchProjectCatalog({ resource: "icon", query: "database", limit: 5 }),
+  searchProjectCatalog({ resource: "icon", query: "panels top left", limit: 5 }),
+]);
+const databaseIcon = databaseCatalog.entries[0]?.id;
+const panelIcon = panelCatalog.entries[0]?.id;
 if (!databaseIcon || !panelIcon) throw new Error("Required catalog icons are unavailable");
 
 scope.created = await createProjects([

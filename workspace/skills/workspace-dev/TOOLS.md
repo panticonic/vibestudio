@@ -155,10 +155,13 @@ approval prompt instead of separate prompts for each:
 
 ```
 eval({ code: `
-  import { createProjects, listProjectIcons } from "@workspace-skills/workspace-dev";
-  const icons = await listProjectIcons();
-  const databaseIcon = icons.find((icon) => icon === "lucide:database");
-  const panelIcon = icons.find((icon) => icon === "lucide:panels-top-left");
+  import { createProjects, searchProjectCatalog } from "@workspace-skills/workspace-dev";
+  const [databaseCatalog, panelCatalog] = await Promise.all([
+    searchProjectCatalog({ resource: "icon", query: "database", limit: 5 }),
+    searchProjectCatalog({ resource: "icon", query: "panels top left", limit: 5 }),
+  ]);
+  const databaseIcon = databaseCatalog.entries[0]?.id;
+  const panelIcon = panelCatalog.entries[0]?.id;
   if (!databaseIcon || !panelIcon) throw new Error("Required catalog icons are unavailable");
   return await createProjects([
     { projectType: "worker", name: "task-board-store", title: "Task Board Store", icon: databaseIcon },
@@ -176,18 +179,20 @@ Even for a single project, use `createProjects` with a one-element array.
 | `projectType` | string | Yes | One of: `panel`, `package`, `skill`, `project`, `worker` |
 | `name` | string | Yes | Stable kebab-case identifier matching `^[a-z][a-z0-9-]*$` |
 | `title` | string | No | Human-readable title (defaults to name) |
-| `icon` | string | No | Emoji, local relative asset, or an exact `lucide:<name>` / `brand:<name>` id returned by `listProjectIcons()` |
+| `icon` | string | No | Emoji, local relative asset, or an exact catalog entry id returned by `searchProjectCatalog({ resource: "icon", query })` |
 | `template` | string | No | Panel template name, or `agentic` for the agentic worker scaffold |
 
 Do not guess catalog names from the full upstream Lucide or Simple Icons
 libraries: the scaffold deliberately accepts a small curated set. Call
-`listProjectIcons()` and choose an exact returned id. An invalid catalog id
-throws `ProjectIconError` before any VCS mutation, with `available`, bounded
-`suggestions`, and a remediation in `errorData`.
+`searchProjectCatalog({ resource: "icon", query, limit })` and choose an exact
+entry id. An invalid catalog id throws `ProjectIconError` before any VCS
+mutation, with the exact bounded query/result, suggestions, and recovery in
+`errorData`.
 
-The catalog result is a sorted flat array of the exact accepted strings (for
-example `lucide:database` and `brand:react`), so it can be searched, sliced, or
-passed directly without reconstructing prefixes.
+The typed catalog result records the resource, normalized query, total count,
+bounded entries, and truncation count. Pass an entry's exact `id` directly.
+`listProjectIcons()` remains the unbounded convenience read when every icon is
+genuinely needed.
 
 For an isolated generated name, append a lowercase base-36 suffix such as
 `` `todo-list-${Date.now().toString(36)}` ``. Do not append a raw ISO timestamp:

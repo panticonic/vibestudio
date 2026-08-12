@@ -1,6 +1,7 @@
 export {
   createProjects,
   listProjectIcons,
+  searchProjectCatalog,
   forkProject,
   forkPanel,
   forkWorker,
@@ -18,6 +19,9 @@ export type {
   ScaffoldPublicationFailureData,
   ProjectIconCatalog,
   ProjectIconFailureData,
+  ProjectCatalogQuery,
+  ProjectCatalogEntry,
+  ProjectCatalogResult,
 } from "./create-project.js";
 export {
   buildProjectManifest,
