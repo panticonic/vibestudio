@@ -3,8 +3,8 @@
   "unitKind": "extension",
   "name": "@workspace-extensions/react-native",
   "sourceRepo": "extensions/react-native",
-  "sourceDigest": "f6210cc792b12d0e7bb722bdf68b902124bf98d9f3bd947e9b29889628e388f8",
+  "sourceDigest": "fecbc9a65057593ebd767b01dd0f051c28650dde267f7267b22c618050f34492",
   "signatureKeyId": "vibestudio-dev-seed-v1",
-  "signature": "vibestudio-dev-seed-sha256:e69777622b47d55573ba60ee8d7ff438dbffcb1e9604aa66357b4c52cf2e14f9",
+  "signature": "vibestudio-dev-seed-sha256:6c77c78c4ed881dd7e1545b31efae50e8c7028d2934abfd90f8470513470e23a",
   "createdBy": "vibestudio"
 }

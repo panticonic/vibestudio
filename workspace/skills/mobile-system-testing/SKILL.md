@@ -1,6 +1,6 @@
 ---
 name: mobile-system-testing
-description: Agentic system-test declarations for the optional Vibestudio mobile outcome.
+description: Maintain or run the Android provisioning and mobile-extension system-test scenarios contributed by the optional Mobile template.
 ---
 
 # Mobile system testing

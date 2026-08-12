@@ -1,13 +1,12 @@
 ---
 name: development
-description: Build Vibestudio from the exact semantic working state through the development panel, including source adoption, semantic and native tool sessions, checkpointing, and diagnostics.
+description: Use the development panel to adopt Vibestudio source, build an exact semantic working state, run semantic or native development sessions, checkpoint native work, and inspect run diagnostics.
 ---
 
 # Development panel
 
-Open `panels/development` when a user or agent wants to build Vibestudio from
-its exact semantic working state. It is the UI for the canonical `development`
-service, not a shell or a checkout runner.
+`panels/development` is the UI for the canonical `development` service, not a
+shell or checkout runner.
 
 - If the project is absent, use the panel's explicit **Adopt source** action.
   It imports `projects/vibestudio` from the credential-free canonical origin and

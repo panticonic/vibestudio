@@ -1,12 +1,9 @@
 ---
 name: mobile-debug-extension
-description: Use the mobile-debug extension to install, launch, screenshot, and tail logs for Android devices and iOS simulators.
+description: Build, install, launch, screenshot, verify, and inspect logs for Vibestudio on Android devices or emulators and iOS simulators through the mobile-debug extension.
 ---
 
 # Mobile Debug Extension
-
-Use this when an agent needs to inspect or iterate on the mobile app with a
-real device, Android emulator, or iOS simulator.
 
 ## Platform Backends
 
@@ -78,27 +75,10 @@ const workspace = await extensions.invoke("mobile-debug", "verifyWorkspaceReady"
 ]);
 ```
 
-`verifyWorkspaceReady` waits for both `workspace-panels-initialized` and
-`workspace-connected`. It also fails immediately on panel activation/load
-errors, including corrupt compressed assets. `panelWebViewLoaded` is reported
-separately because an existing panel may remain intentionally held by another
-device until the user selects **Take over**. Keep the documented three-minute
-deadline for cold source workspaces: their first mobile host build can take
-longer than a minute even though subsequent launches are immediate.
-
-## Pairing Smoke Markers
-
-Watch for `[VibestudioMobileSmoke] phase=...` lines:
-
-- `embedded-pairing-start`
-- `embedded-pairing-complete`
-- `embedded-bootstrap-fetch-start`
-- `embedded-bundle-activate-start`
-- `embedded-bundle-activate-complete`
-- `workspace-panel-webview-loaded`
-
-Missing markers usually mean the failure is in pairing, bundle delivery,
-native activation, or panel materialization respectively.
+`verifyWorkspaceReady` waits for the workspace initialization and connection
+markers and fails on panel activation or load errors. Read its returned phase
+evidence and the extension source for the current marker set; do not duplicate
+marker strings or fixed cold-start timings in callers.
 
 ## Debugging A Bad Mobile Panel
 
@@ -110,10 +90,6 @@ native activation, or panel materialization respectively.
 - If the active bundle is suspect, re-pair or call native reset so the shipped
   bootstrap can recover.
 
-## Commands
-
-```bash
-node scripts/cli/mobile-smoke.mjs --platform android --avd <name>
-node scripts/cli/mobile-smoke.mjs --platform ios --simulator <name>
-pnpm smoke:full
-```
+From the source checkout, use the repository mobile smoke entry point for the
+target platform. Use the full composition smoke only when the change spans
+desktop pairing, transport, mobile activation, and panel loading.

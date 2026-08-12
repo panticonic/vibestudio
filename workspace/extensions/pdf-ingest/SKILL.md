@@ -1,6 +1,6 @@
 ---
 name: pdf-ingestion
-description: Ingest local PDF documents in Vibestudio with the @workspace-extensions/pdf-ingest extension. Use when extracting text, layout, OCR, page images, metadata, or poem/stanza-preserving structure from PDFs in workspace files or user-provided binary data.
+description: Extract text, layout, OCR, page images, metadata, or structure from local PDFs through @workspace-extensions/pdf-ingest.
 ---
 
 # PDF Ingestion
@@ -45,9 +45,9 @@ calling `pdf.ingest(...)`, `pdf.probe(...)`, or `pdf.renderPage(...)`.
 - Do not use cloud OCR unless the user explicitly chooses that privacy/cost
   tradeoff.
 
-## Poetry And Archives
+## Structure-sensitive documents
 
-For poems, always set:
+For poetry, tables, or other layout-sensitive documents, start with:
 
 ```ts
 {
@@ -57,10 +57,9 @@ For poems, always set:
 }
 ```
 
-Inspect `pages[].lines`, not only `pages[].text`, when splitting poems. Stanza
-breaks are inferred from vertical gaps and should be preserved. Use
-`pages[].warnings`, `lines[].confidence`, and `pages[].stats` to flag uncertain
-pages for review.
+Inspect `pages[].lines` and geometry rather than relying only on flattened text.
+Use page warnings, confidence, and statistics to identify material that needs
+review.
 
 ## Useful Calls
 

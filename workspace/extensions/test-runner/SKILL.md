@@ -1,11 +1,11 @@
 ---
 name: workspace-test-runner
-description: Run Vitest tests for workspace panels, packages, workers, or extensions through the first-class verify tool. Use when asked to run workspace unit tests without shell commands.
+description: Run focused Vitest tests for workspace panels, packages, workers, or extensions through the context-aware verify tool.
 ---
 
 # Workspace Test Runner
 
-Use the first-class verification boundary. It preserves the conversation's
+Use `verify`, the first-class verification boundary. It preserves the conversation's
 exact semantic context, execution authority, cancellation, progress, and
 bounded structured results:
 

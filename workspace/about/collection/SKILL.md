@@ -1,12 +1,9 @@
 ---
 name: collection-conductor
-description: Supervise, inspect, automate, annotate, and recursively reorganize Vibestudio collection panel subtrees.
+description: Inspect, annotate, automate, title, group, move, or recursively reorganize the panel subtree owned by a Vibestudio collection conductor.
 ---
 
 # Collection conductor
-
-Use this skill when a collection panel asks you to inspect, automate, title,
-group, move, or otherwise supervise its child panels.
 
 The collection system prompt supplies a stable `rootPanelId`. That id defines
 the scope; a list of panel ids in chat does not. Traverse only the sibling

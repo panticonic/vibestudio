@@ -1,11 +1,12 @@
 ---
 name: headless-sessions
-description: Run agentic sessions without a UI — eval harnesses, workers, automated pipelines, tests. Uses ConnectionManager from @workspace/agentic-core and HeadlessSession from @workspace/agentic-session.
+description: Drive agentic channels without a React UI from eval harnesses, workers, pipelines, or tests through HeadlessSession or ConnectionManager.
 ---
 
 # Headless Agentic Sessions
 
-Run agentic sessions (connection, messaging) without the chat panel UI. Useful for eval harnesses, worker-driven pipelines, tests, and any context where React isn't available.
+Headless sessions provide channel connection, messaging, and transcript reads
+without a chat panel.
 
 The session itself is just a channel client: it connects to a PubSub channel,
 subscribes an agent DO, sends user messages, and reads the persisted transcript.

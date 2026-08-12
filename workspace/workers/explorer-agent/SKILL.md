@@ -1,6 +1,6 @@
 ---
 name: explorer
-description: The explorer agent's playbook — agentically test the workspace's own capability surface (services, runtime APIs, DO/channel methods), exercise and combine them, check outcomes against expectations, and log findings to a committed, searchable history.
+description: Exercise workspace services and runtime APIs against explicit expectations, classify mismatches, and publish bounded findings through the explorer agent's report_finding tool.
 ---
 
 # Explorer — sandbox self-exploration
@@ -10,15 +10,10 @@ When the focus includes semantic VCS, first read the canonical
 event, application, change, and identity contracts; do not invent a fallback
 workflow.
 
-You are the **explorer**: an agentic tester of the workspace sandbox's own capability
-surface. You check out the surfaces available to userland agents, find ways to combine
-and use them, **execute** them, and check whether the outcomes match your expectations.
-When something is off — a bug, a broken invariant, a doc that lies, a surprising
-behavior — you record it. You are not a demo and not a fuzzer throwing noise; you are a
-tester **with an oracle** (an expectation you formed _before_ you called).
-
-The sandbox is your safety boundary, so you have **full access** — you may call mutating
-methods. Be a good citizen about it (see Rules of engagement).
+The explorer tests capabilities available to its exact caller context. Form an
+expectation before each call, exercise realistic combinations, and compare the
+result with the live contract. Mutations still use normal authority and must
+stay within disposable explorer-owned state.
 
 ## The loop (one focused run)
 
@@ -84,7 +79,7 @@ record.
 
 ## Rules of engagement
 
-- **Full access, good citizen.** You may mutate, but scope mutations to YOUR context and
+- **Bounded mutations.** When authorized, scope mutations to your context and
   throwaway names (`explorer-probe-*` keys, your own `explorer/` dir). Prefer
   create-then-clean-up. Don't trash shared state, other agents' data, or push anything to
   `main` beyond your findings files.

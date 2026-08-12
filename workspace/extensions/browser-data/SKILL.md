@@ -1,13 +1,12 @@
 ---
 name: browser-environment
-description: Import into and manage the user's canonical Vibestudio browser environment.
+description: Import, inspect, and update the user's canonical browser data through the browser-data extension. Use for bookmarks, history, cookies, passwords, form fill, search engines, favicons, downloads, or installed-browser import.
 ---
 
 # Browser Environment
 
-Use the `browserData` client from `@workspace/runtime`. BrowserDataDO is the
-authority for bookmarks, history, cookies, passwords, structured form-fill
-values, search engines, favicons, import jobs, and download metadata.
+Use the `browserData` client from `@workspace/runtime`. Use `docs_search` and
+`docs_open` for the live method schemas.
 
 The environment is derived from the verified user and workspace. Never ask for
 or pass a user id, environment key, Electron partition, source profile, or
@@ -41,10 +40,9 @@ has a complete user-approved selection:
    [the collection conductor skill](../../about/collection/SKILL.md).
 
 Sources are opaque installed-browser records. Local profiles are merged inside
-the trusted provider and are never presented to userland. Supported categories
-are bookmarks, history, cookies, passwords, form fill, search engines, and
-favicons. Extensions, settings, and imported site permissions are deliberately
-unsupported.
+the trusted provider and are never presented to userland. The preview schema
+is the source of truth for supported categories; do not infer unsupported
+settings, extensions, or site permissions.
 
 Imports commit bounded idempotent batches. A cancelled or interrupted job keeps
 committed batches; starting the same source again continues through the

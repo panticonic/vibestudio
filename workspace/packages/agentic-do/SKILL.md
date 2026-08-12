@@ -1,13 +1,9 @@
 ---
 name: agentic-do
-description: Work on @workspace/agentic-do agent runtime behavior, including model/provider defaults, live session tuning, and subagent delegation/supervision tools.
+description: Develop @workspace/agentic-do agent runtime behavior, including model and provider defaults, live session tuning, tool-failure diagnostics, structured channel observations, and subagent supervision.
 ---
 
 # Agentic DO
-
-Use this skill when work is specific to the `@workspace/agentic-do` package: the
-standard agent runtime, model/provider defaults, credential setup wiring, live
-agent session knobs, or the subagent tool surface.
 
 Read the local reference that matches the task before editing:
 
@@ -37,44 +33,13 @@ A channel subscription can opt an agent into exact non-chat payload kinds:
 }
 ```
 
-Matching is exact: there are no wildcards, filters, or kind registry. Presence
-and `agentic.trajectory.v1/event` are reserved for their existing infrastructure
-routes and cannot be observed. A subscription only auto-wakes for observations
-when its `wakePolicy` is `every-envelope`; `explicit` and `manual` suppress them.
-Self-authored events are always excluded.
+Matching is exact. Self-authored events and infrastructure payload kinds are
+excluded. Only `wakePolicy: "every-envelope"` wakes for observations; other
+wake policies suppress them. The envelope ID supplies deterministic prompt
+identity, and observation configuration controls model delivery rather than
+channel access.
 
-The model receives a readable prompt paired with a structured sidecar:
-
-```ts
-{
-  role: "user",
-  content: {
-    message: "Channel observation: application.incident.v1",
-    structuredInput: {
-      kind: "channel-observation",
-      version: 1,
-      source: {
-        channelId,
-        envelopeId,
-        sequence,
-        payloadKind: "application.incident.v1",
-        timestamp,
-        sender
-      },
-      payload
-    }
-  }
-}
-```
-
-The source envelope ID supplies deterministic prompt identity. Redelivery and
-replay therefore do not create duplicate turns, while different envelope IDs
-remain different inputs. Observations arriving during an open turn use the
-normal steering path. Payloads whose canonical JSON exceeds 32,768 characters
-are replaced with `payload: null` plus an 8,192-character canonical preview and
-the original character count.
-
-Observation configuration controls model delivery, not privacy. The channel
-still persists and exposes events according to its own membership, delivery,
-and access rules; only public participant metadata is copied into the
-model-facing sender reference.
+Read `../agentic-core/src/agent-subscription-config.ts` for the configuration
+contract and `src/agent-vessel.ts` for routing, prompt shape, and payload bounds.
+Keep those files and their focused tests aligned instead of duplicating their
+constants here.

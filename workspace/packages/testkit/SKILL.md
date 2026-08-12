@@ -1,227 +1,110 @@
 ---
 name: testkit
-description: Deterministic in-system E2E testing, orchestration, supervision and profiling for userland code (packages, panels, workers, DOs) via @workspace/testkit. Use for running/writing deterministic tests from eval, watching panels/workers for errors, capturing CPU profiles and heap snapshots of panels or workerd, and driving the Testbench panel. For agentic (LLM-driven) system tests, use the system-testing skill instead — testkit is the deterministic layer underneath it.
+description: Write and run deterministic in-system tests with @workspace/testkit, including panel automation, worker and Durable Object orchestration, runtime supervision, and bounded profiling. Use system-testing instead when an LLM must perform or judge the scenario.
 ---
 
-# Testkit Skill
+# Testkit
 
-`@workspace/testkit` is the deterministic in-system testing SDK: a vitest-free
-test runner that works inside eval and panels, panel automation over
-`panelTree`/CDP, worker/DO orchestration and inspection, supervision
-(console/crash/health watching), and profiling for both panels (Chromium CDP)
-and workerd isolates (V8 inspector). It also projects bounded workspace-server,
-workerd, Electron, startup, and build measurements without shell or raw host
-process access.
-`panelTree` is the top-level runtime panel-tree API; do not use
-`workspace.panelTree`.
+`@workspace/testkit` is the deterministic layer beneath agentic system tests.
+Use it when expected behavior can be asserted directly. Use
+[system testing](../../skills/system-testing/SKILL.md) when a model must
+interpret instructions or outcomes.
 
-**Layering:** testkit = deterministic layer (this skill). system-testing =
-agentic layer (spawns headless agent sessions) — it can run testkit suites via
-its `deterministic` stage. Reach for testkit when the expected behavior is
-exactly specifiable; reach for system-testing when judging behavior needs a
-model.
+For the complete public API, read `src/index.ts`; for ready-to-run recipes, read
+[`references/examples.ts`](references/examples.ts). Use the
+[performance skill](../../skills/performance/SKILL.md) for measurement design,
+cold/warm semantics, and cleanup rules.
 
 ## Eval conventions
 
-- `scope`, `scopes`, `chat` are ambient globals in eval — do not import them.
-- Store full run results in `scope` (`scope.testkitRun` by convention) and
-  **return only `summarize(result)`** — full results and profile artifacts are
-  too large for eval returns.
-- Profile artifacts are written to context fs under `/.testkit/profiles/`
-  (standard V8 `.cpuprofile` / `.heapsnapshot` — open in speedscope or Chrome
-  DevTools). Saved runs live under `/.testkit/runs/`.
+- `scope`, `scopes`, and `chat` are ambient eval globals; do not import them.
+- Store full results in `scope` and return only `summarize(result)`.
+- Runs and profiles are written under `/.testkit/`; do not inline large reports,
+  CPU profiles, or heap snapshots.
+- `panelTree` is the top-level runtime API. There is no
+  `workspace.panelTree` namespace.
 
-## Quick start — run the built-in suites
+## Run deterministic suites
 
-```
-eval({
-  code: `
-    import { runSuites, summarize } from "@workspace/testkit";
-    import { allSuites } from "@workspace/testkit/suites";
-    const result = await runSuites(allSuites(), {
-      onTestEnd: (r) => console.log(\`\${r.status}: \${r.suite} > \${r.name}\`),
-    });
-    scope.testkitRun = result;
-    return summarize(result);
-  `,
-})
+```ts
+import { allSuites } from "@workspace/testkit/suites";
+import { runSuites, summarize } from "@workspace/testkit";
+
+const result = await runSuites(allSuites());
+scope.testkitRun = result;
+return summarize(result);
 ```
 
-Built-in suites exercise the bootable base: `panel-lifecycle`,
-`panel-viewport`, and `chat-transcript`. Feature templates own their suites;
-import one explicitly from that feature package when testing it. For example,
-the Spectrolite template exports `@workspace-panels/spectrolite/testkit-suite`.
+The base package contains only base-workspace suites. Feature packages own
+their feature-specific suites; import those explicitly.
 
-## Writing ad-hoc tests in eval
-
-```
-eval({
-  code: `
-    import { suite, runSuites, summarize, expect, openPanel, waitForText, panelText } from "@workspace/testkit";
-    const s = suite("my-feature")
-      .test("panel renders the greeting", async (t) => {
-        const h = await openPanel("panels/my-app");   // auto-watched by t.supervisor
-        t.defer(() => h.close());                      // LIFO cleanup, always runs
-        await waitForText(h, "Hello");
-        expect(await panelText(h), "greeting").toContain("Hello");
-      });
-    const result = await runSuites(s);
-    scope.testkitRun = result;
-    return summarize(result);
-  `,
-})
-```
-
-Key facts:
-
-- `suite(name, { timeoutMs?, failOnSupervision? })`; default test timeout 30s.
-- Tests fail automatically if supervision sees console errors or crashes in
-  panels the test opened (`failOnSupervision: false` or
-  `t.supervisor.unwatchPanel(id)` to opt out when a case intentionally exercises
-  a failing panel).
-- Assertions throw serializable errors: `expect(x, "label").toEqual(...)`,
-  `.toContain`, `.toMatch`, `.not.*`, etc.
-- Suites are instance-scoped — re-running an eval block never double-registers.
-
-## Panel automation
-
-- `openPanel(source, { stateArgs? })` / `withPanel(source, fn)` (boot-ready; auto-close)
-- Shell `createPanel` is deliberately only slot-committed. Do not substitute it
-  when a test requires a boot-ready app, and do not sleep after it; observe the
-  exact lifecycle projection instead.
-- Existing panels: obtain handles through bounded `panelTree.page`,
-  `panelTree.search`, or addressed `panelTree.get`; do not
-  call `handle.close`, `handle.navigate`, or `handle.reload` unless that is the
-  test.
-- `panelText(h)` / `waitForText(h, text)` — approval-free readable snapshot path (agent API with accessibility-tree fallback)
-- `evalInPanel(h, expression)` — Runtime.evaluate by value (CDP)
-- `setViewport(h, { width, height, mobile })` / `audit(h)` — overflow + console health
-- `rawCdpSession(h)` — any CDP method
-- Workspace and browser panels are both CDP-accessible through `PanelHandle`;
-  `testkit-driver` remains useful for orchestration/isolation.
-- Never automate the panel your eval runs in (testkit guards against this).
-
-## Workers and DOs
-
-```
-import { listUnits, unitDiagnostics, callDO, ensureWorker, restartUnit } from "@workspace/testkit";
-await ensureWorker("workers/my-worker");          // create-if-missing + wait running
-await callDO("vibestudio.my-store.v1", "method", [args]);
-await unitDiagnostics("my-worker", { sinceSeq: 0 });  // exact-resume log cursor
-```
-
-## Supervision
-
-```
-import { supervise } from "@workspace/testkit";
-const sup = supervise([panelHandle, "my-worker"]);   // panels and/or unit names
-// ... exercise the system ...
-const report = await sup.collect();                  // findings since watch start
-await sup.assertClean({ allow: [/known noise/] });   // throws with evidence
-sup.stop();
-```
-
-Inside tests, `t.supervisor` does this automatically for opened panels.
-`sup.healthProbe(name, fn, { intervalMs })` adds interval probes.
-
-## Profiling
-
-Use the compact cross-layer helpers before dropping to raw profiling APIs:
+For a focused case:
 
 ```ts
 import {
-  profileBuild,
-  profileHost,
-  profilePanelInteraction,
-  profilePanelReload,
-  readStartupProfile,
+  expect,
+  openPanel,
+  panelText,
+  runSuites,
+  suite,
+  summarize,
+  waitForText,
 } from "@workspace/testkit";
-import { contextId } from "@workspace/runtime";
 
-const build = await profileBuild("panels/example", {
-  ref: `ctx:${contextId}`,
-  verifyCache: true,
+const greeting = suite("greeting").test("renders", async (t) => {
+  const panel = await openPanel("panels/my-app");
+  t.defer(() => panel.close());
+  await waitForText(panel, "Hello");
+  expect(await panelText(panel), "panel text").toContain("Hello");
 });
-const host = await profileHost(() => runExactWorkload(), { label: "exact workload" });
-const startup = await readStartupProfile();
+
+const result = await runSuites(greeting);
+scope.testkitRun = result;
+return summarize(result);
 ```
 
-- `profileBuild` returns first-path and verified-cache timing plus bounded
-  artifact/module/bundle attribution. It never returns bundle or module source.
-- `profileHost` returns server CPU/RSS/heap deltas, workerd RSS/occupancy, and
-  retained event-loop samples around one real operation.
-- `profilePanelInteraction` and `profilePanelReload` return the browser-native
-  page/runtime/network profile and always release their CDP page lease.
-- `readStartupProfile` extracts current-boot structured phases from the server
-  log. It requests the normal `server-logs.read` approval.
+Tests supervise panels they open and run deferred cleanup in LIFO order. Opt
+out of supervision only when the case intentionally produces the observed
+failure. Do not automate the panel hosting the current eval.
 
-Electron process-family counters require the inviting desktop client, so call
-`electronPerformanceSnapshot()` from `client_eval`. Ordinary server-side eval
-has no Electron process affinity. See the performance skill for the capability
-matrix, cold/warm semantics, chat-latency decomposition, and cleanup rules.
+## Panels, workers, and supervision
 
-Lower-level panels (Chromium, via the CDP bridge):
+`openPanel` and `withPanel` wait for boot readiness. Shell panel creation only
+commits a slot; do not substitute it and add a sleep. Existing panels must be
+addressed through bounded `panelTree` reads.
 
-```
-import { profilePanel, heapSnapshot, listProfiles } from "@workspace/testkit";
-const ref = await profilePanel(handle, async () => { /* workload */ });
-// ref = { path, kind, target, durationMs, summary: { totalSamples, topFunctions } }
-const heap = await heapSnapshot(handle);  // streamed to fs, never inlined
-```
+The package also exposes panel text and CDP helpers, worker/DO lifecycle calls,
+unit diagnostics, and `supervise(...)`. Discover exact signatures in
+`src/index.ts` or live docs rather than copying an API catalog into a skill.
+Always select exact live runtime identities for supervision and logs.
 
-Workerd (V8 inspector, approval-gated via the `workerdInspector` service):
+## Profiling
 
-```
-import { listWorkerdTargets, profileWorkerd, profileDO } from "@workspace/testkit";
-const targets = await listWorkerdTargets();   // what workerd actually exposes
-const ref = await profileWorkerd("worker-host", async () => { /* workload */ });
-const doRef = await profileDO("vibestudio.gad.workspace.v1", async () => { /* DO calls */ });
-```
+Start with the cross-layer helpers exported from `@workspace/testkit`:
 
-Caveats:
+- `profileBuild` for first-path and verified-cache build evidence;
+- `profileHost` for server, workerd, and event-loop measurements around one
+  workload;
+- `profilePanelInteraction` or `profilePanelReload` for browser-native page,
+  runtime, and network evidence;
+- `profileWorkerd` or `profileDO` for bounded V8 CPU profiles;
+- `readStartupProfile` for current-boot phases.
 
-- First `getEndpoint` per caller raises a one-time `workerd.inspector`
-  approval. The inspector is always on (loopback-bound; disable with
-  `VIBESTUDIO_DISABLE_WORKERD_INSPECTOR=1`).
-- Regular workers share the `worker-host` isolate-loader service — a profile
-  of that target may include sibling workers. Per-source DO services are
-  precise. Use `listWorkerdTargets()` to see real granularity.
-- `.cpuprofile` files load directly in speedscope / Chrome DevTools
-  Performance; the Testbench panel renders an inline flamegraph.
+These helpers bound their reports and own inspector/page cleanup. Electron
+process counters require `client_eval` because they are client-affine. Use raw
+CDP or inspector sessions only when the compact helpers cannot answer the
+question, and close every acquired session.
 
-## Testbench panel
+## Approval and cleanup
 
-`openPanel("panels/testbench")` — UI for browsing/running suites with live
-per-test status, run history (`/.testkit/runs/`), and a profile viewer with
-flamegraphs. It also exposes RPC for agents:
+Panel automation, workerd inspection, host logs, and structural panel creation
+may require their normal scoped approvals. Let the real operation request them;
+do not add a bypass or preflight permission query.
 
-```
-const tb = await openPanel("panels/testbench");
-const summary = await tb.call.runSuites({ suite: "panel-lifecycle" });
-const last = await tb.call.lastRun();
-```
+Every test must clean up panels, page clients, workers, temporary data, and
+supervisors it owns. Keep state only when the user or harness explicitly asks
+for it.
 
-## Approvals to expect
-
-| Prompt                      | When                                            | Scope                           |
-| --------------------------- | ----------------------------------------------- | ------------------------------- |
-| Panel access (CDP/automate) | first driver-DO automation of a workspace panel | per target/requester, grantable |
-| `workerd.inspector`         | first workerd profiling per caller              | per caller, grantable           |
-| Server logs                 | `readStartupProfile` or direct log query        | per caller, grantable           |
-| Panel open (structural)     | first `openPanel` from a new entity             | standard panelTree flow         |
-
-Pre-grant by running one small eval and approving the prompts before kicking
-off long suites.
-
-For copy-paste helpers that cover the flows above, read
-[references/examples.ts](references/examples.ts).
-
-## Files
-
-| File                                                         | Content                                       |
-| ------------------------------------------------------------ | --------------------------------------------- |
-| [references/examples.ts](references/examples.ts)             | Copy-paste eval snippets for every flow above |
-| [src/index.ts](src/index.ts)                                 | The SDK public exports                        |
-| [src/suites/](src/suites/)                                   | Built-in deterministic suites                 |
-| [../../workers/testkit-driver](../../workers/testkit-driver) | Driver DO for workspace-panel CDP             |
-| [../../panels/testbench](../../panels/testbench)             | Test runner / profile viewer panel            |
+The `panels/testbench` UI can run suites and inspect saved runs and profiles.
+Use it when a human needs live progress or flamegraph inspection; direct eval
+is simpler for automation.

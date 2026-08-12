@@ -1,13 +1,9 @@
 ---
 name: terminal
-description: Run bounded local commands through Vibestudio's installed terminal capability, using argv mode by default and shell text only when shell interpretation is intentional.
+description: Run bounded local commands from an agent without a direct terminal tool through the installed shell extension; use literal argv by default and shell text only for intentional shell syntax.
 ---
 
 # Terminal commands
-
-Use this skill when a user asks to run a command, inspect command output, or
-exercise the local terminal from an agent that does not already have a direct
-terminal tool.
 
 The public agent/runtime path is the installed `shell` extension. For a normal
 command, use argv mode so arguments are passed literally:

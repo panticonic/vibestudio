@@ -1,12 +1,11 @@
 ---
 name: react-native-build-extension
-description: Maintain the React Native workspace-app build provider and mobile bootstrap artifact contract.
+description: Develop or diagnose the React Native build provider in extensions/react-native and its mobile bootstrap artifact contract.
 ---
 
 # React Native Build Extension
 
-Use this when changing `workspace/extensions/react-native` or debugging mobile
-bundle artifacts served to native hosts.
+This extension builds mobile app artifacts served to native hosts.
 
 ## Contract
 
@@ -16,8 +15,9 @@ bundle artifacts served to native hosts.
   "primary"`, `integrity`, content type, encoding, and URL.
 - The server bootstrap manifest must include `rnHostAbi`, app/build identity,
   capabilities, artifact set integrity, and provider identity.
-- Current native-host ABI is `rn-host-3`. Bump it only when the native host
-  contract changes, and update the workspace app manifest and skills together.
+- Read the native-host ABI from `apps/mobile/package.json` and keep it aligned
+  with the delivery constant in `@vibestudio/mobile-webrtc`. Change both only
+  when the native contract changes.
 
 ## Failure Modes
 
@@ -31,8 +31,7 @@ bundle artifacts served to native hosts.
 
 ## Verification
 
-- Run focused build-provider tests after manifest/artifact changes.
-- Run `pnpm -C apps/mobile test --runInBand` for native bootstrap delivery
-  callers.
-- Run `node scripts/cli/mobile-smoke.mjs --platform android` or
-  `pnpm smoke:full` before claiming end-to-end mobile delivery works.
+- Run focused build-provider and native delivery tests after changing manifests
+  or artifacts.
+- Use the repository mobile smoke workflow before claiming end-to-end delivery
+  when the change crosses build, transport, and activation boundaries.
