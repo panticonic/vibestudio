@@ -1,13 +1,14 @@
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { PackageManifest } from "@vibestudio/shared/types";
 import type { GraphNode, PackageGraph } from "./packageGraph.js";
 import { directorySourceProvider } from "./buildSource.js";
 import {
   createExactWorkspaceAuthorityEnvironment,
   resolveProviderCatalog,
+  resolveProviderRpcCatalog,
 } from "./userlandAuthority.js";
 
 function authority(title: string) {
@@ -90,6 +91,8 @@ describe("exact userland provider catalogs", () => {
       }`
     );
     const graph = {} as PackageGraph;
+    const source = directorySourceProvider(root);
+    const materializeForBuild = vi.spyOn(source, "materializeForBuild");
     const input = {
       stateHash: "state:catalog",
       provider: providerNode(root, manifestAuthority),
@@ -97,11 +100,16 @@ describe("exact userland provider catalogs", () => {
       className: "NotesDO",
       graph,
       workspaceRoot: root,
-      source: directorySourceProvider(root),
+      source,
     };
+    const sourceCatalog = await resolveProviderRpcCatalog(input);
     const first = await resolveProviderCatalog(input);
     const second = await resolveProviderCatalog(input);
     expect(second).toBe(first);
+    expect(sourceCatalog.methods).toEqual([
+      expect.objectContaining({ className: "NotesDO", name: "deleteNote" }),
+    ]);
+    expect(materializeForBuild).toHaveBeenCalledTimes(1);
     expect(first.methods.get("deleteNote")).toMatchObject({
       kind: "protected",
       canonicalCapability: expect.stringMatching(

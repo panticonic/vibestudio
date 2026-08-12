@@ -2,7 +2,7 @@ import type { ReviewedUnit } from "@vibestudio/shared/approvals";
 import type { CapabilityPresentationResolver } from "@vibestudio/shared/authorityPresentation";
 import { sha256Canonical } from "@vibestudio/shared/authority/invocationSnapshot";
 import {
-  authorityReviewFromPackageJson,
+  authorityReviewFromManifest,
   type UnitChangeApprovalProvider,
   type UnitChangeReview,
 } from "@vibestudio/unit-host";
@@ -54,7 +54,6 @@ export interface BuildUnitChangeApprovalProvider extends UnitChangeApprovalProvi
 
 export function createBuildUnitChangeApprovalProvider(deps: {
   getBuildSystem(): BuildSystemV2;
-  readWorkspaceFileAtState(stateHash: string, path: string): Promise<string | null>;
   describeCapability: CapabilityPresentationResolver;
   admissionStore: UnitAdmissionStore;
   /** Absent only in tests that exercise admission bookkeeping on its own. */
@@ -91,42 +90,21 @@ export function createBuildUnitChangeApprovalProvider(deps: {
     if (candidate.kind !== "panel" && candidate.kind !== "worker") {
       throw new Error(`Unexpected reviewed runtime kind: ${candidate.kind}`);
     }
-    const packageJsonSource = await requirePackageJson(
-      deps,
-      candidate.stateHash,
-      `${candidate.unitPath}/package.json`,
-      candidate.unitName
-    );
-    const parsed = JSON.parse(packageJsonSource) as {
-      name?: unknown;
-      version?: unknown;
-      vibestudio?: { displayName?: unknown; title?: unknown; icon?: unknown };
-    };
-    if (parsed.name !== candidate.unitName) {
-      throw new Error(`Candidate package name does not match ${candidate.unitName}`);
-    }
+    const manifest = candidate.manifest;
     if (
-      parsed.vibestudio?.icon !== undefined &&
-      (typeof parsed.vibestudio.icon !== "string" ||
-        !parsed.vibestudio.icon.trim() ||
-        parsed.vibestudio.icon.trim().length > 256)
+      manifest.icon !== undefined &&
+      (typeof manifest.icon !== "string" ||
+        !manifest.icon.trim() ||
+        manifest.icon.trim().length > 256)
     ) {
       throw new Error(`Candidate ${candidate.unitName} has an invalid vibestudio.icon`);
     }
 
     const previousAuthority = previous
-      ? authorityReviewFromPackageJson(
-          await requirePackageJson(
-            deps,
-            previous.stateHash,
-            `${previous.unitPath}/package.json`,
-            previous.unitName
-          ),
-          previous.unitName
-        )
+      ? authorityReviewFromManifest(previous.manifest.authority, previous.unitName)
       : { requests: [], serviceRequests: [], provides: [] };
-    const authority = authorityReviewFromPackageJson(
-      packageJsonSource,
+    const authority = authorityReviewFromManifest(
+      manifest.authority,
       candidate.unitName,
       {
         requests: previousAuthority.requests,
@@ -199,15 +177,15 @@ export function createBuildUnitChangeApprovalProvider(deps: {
         unitKind: candidate.kind,
         unitName: candidate.unitName,
         displayName:
-          typeof parsed.vibestudio?.displayName === "string"
-            ? parsed.vibestudio.displayName
-            : typeof parsed.vibestudio?.title === "string"
-              ? parsed.vibestudio.title
+          typeof manifest.displayName === "string"
+            ? manifest.displayName
+            : typeof manifest.title === "string"
+              ? manifest.title
               : candidate.unitName,
-        ...(typeof parsed.vibestudio?.icon === "string" && parsed.vibestudio.icon.trim()
-          ? { icon: parsed.vibestudio.icon.trim() }
+        ...(typeof manifest.icon === "string" && manifest.icon.trim()
+          ? { icon: manifest.icon.trim() }
           : {}),
-        version: typeof parsed.version === "string" ? parsed.version : null,
+        version: candidate.packageVersion,
         source: { kind: "workspace-repo", repo: candidate.unitPath, ref: "main" },
         ev: candidate.effectiveVersion,
         capabilities: [],
@@ -395,17 +373,4 @@ function identityFingerprint(identity: BuildUnitIdentityResolution): string {
     externalDeps: identity.externalDeps,
     serviceBindings: identity.serviceBindings ?? [],
   });
-}
-
-async function requirePackageJson(
-  deps: {
-    readWorkspaceFileAtState(stateHash: string, path: string): Promise<string | null>;
-  },
-  stateHash: string,
-  path: string,
-  unitName: string
-): Promise<string> {
-  const source = await deps.readWorkspaceFileAtState(stateHash, path);
-  if (!source) throw new Error(`Current manifest for ${unitName} is missing at ${path}`);
-  return source;
 }

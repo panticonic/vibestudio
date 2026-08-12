@@ -1,9 +1,31 @@
 import { describe, expect, it, vi } from "vitest";
+import type { UserlandCapabilityDefinition } from "@vibestudio/shared/authorityManifest";
 import type { BuildUnitIdentityResolution } from "../buildV2/index.js";
 import { createBuildUnitChangeApprovalProvider } from "./buildUnitChangeApprovalProvider.js";
 
 const state = `state:${"a".repeat(64)}`;
 const previousState = `state:${"b".repeat(64)}`;
+
+function manifest(
+  capability: string,
+  presentation: { displayName?: string; title?: string } = { displayName: "Example panel" },
+  provides: readonly UserlandCapabilityDefinition[] = []
+): BuildUnitIdentityResolution["manifest"] {
+  return {
+    ...presentation,
+    authority: {
+      provides,
+      requests: [
+        {
+          capability,
+          resource: { kind: "exact", key: "workspace" },
+          tier: "gated",
+          evidence: "exact",
+        },
+      ],
+    },
+  };
+}
 
 function identity(
   overrides: Partial<BuildUnitIdentityResolution> = {}
@@ -14,36 +36,13 @@ function identity(
     kind: "panel",
     stateHash: previousState,
     effectiveVersion: "ev-old",
+    manifest: manifest("window-management"),
+    packageVersion: "0.1.0",
     dependencyEvs: { "@workspace/runtime": "runtime-old" },
     externalDeps: {},
     serviceBindings: [],
     ...overrides,
   };
-}
-
-function packageJson(
-  capability: string,
-  manifest: { displayName?: string; title?: string } = { displayName: "Example panel" },
-  provides: readonly Record<string, unknown>[] = []
-): string {
-  return JSON.stringify({
-    name: "@workspace-panels/example",
-    version: "0.1.0",
-    vibestudio: {
-      ...manifest,
-      authority: {
-        provides,
-        requests: [
-          {
-            capability,
-            resource: { kind: "exact", key: "workspace" },
-            tier: "gated",
-            evidence: "exact",
-          },
-        ],
-      },
-    },
-  });
 }
 
 function approvalStore() {
@@ -75,17 +74,20 @@ describe("createBuildUnitChangeApprovalProvider", () => {
   it("uses a manifest title when a unit has no separate display name", async () => {
     const buildSystem = {
       listBuildUnitIdentities: vi.fn(async (ref?: string) =>
-        ref ? [identity({ stateHash: state, effectiveVersion: "ev-new" })] : [identity()]
+        ref
+          ? [
+              identity({
+                stateHash: state,
+                effectiveVersion: "ev-new",
+                manifest: manifest("notifications", { title: "About Vibestudio" }),
+              }),
+            ]
+          : [identity({ manifest: manifest("window-management", { title: "About Vibestudio" }) })]
       ),
     };
     const store = approvalStore();
     const provider = createBuildUnitChangeApprovalProvider({
       getBuildSystem: () => buildSystem as never,
-      readWorkspaceFileAtState: vi.fn(async (at: string) =>
-        at === state
-          ? packageJson("notifications", { title: "About Vibestudio" })
-          : packageJson("window-management", { title: "About Vibestudio" })
-      ),
       admissionStore: store as never,
       describeCapability: (capability) => ({
         title: capability,
@@ -109,18 +111,15 @@ describe("createBuildUnitChangeApprovalProvider", () => {
                 stateHash: state,
                 effectiveVersion: "ev-new",
                 dependencyEvs: { "@workspace/runtime": "runtime-new" },
+                manifest: manifest("notifications"),
               }),
             ]
           : [identity()]
       ),
     };
-    const readWorkspaceFileAtState = vi.fn(async (at: string) =>
-      at === state ? packageJson("notifications") : packageJson("window-management")
-    );
     const store = approvalStore();
     const provider = createBuildUnitChangeApprovalProvider({
       getBuildSystem: () => buildSystem as never,
-      readWorkspaceFileAtState,
       admissionStore: store as never,
       describeCapability: (capability) => ({
         title: capability === "notifications" ? "Show notifications" : "Navigate panels",
@@ -179,11 +178,6 @@ describe("createBuildUnitChangeApprovalProvider", () => {
   });
 
   it("reviews a provides-only authority change", async () => {
-    const buildSystem = {
-      listBuildUnitIdentities: vi.fn(async (ref?: string) =>
-        ref ? [identity({ stateHash: state, effectiveVersion: "ev-new" })] : [identity()]
-      ),
-    };
     const service = {
       name: "notes",
       title: "Team notes",
@@ -195,14 +189,22 @@ describe("createBuildUnitChangeApprovalProvider", () => {
       presentation: { domain: "files", verb: "act" },
       notability: "headline",
       grantScopes: ["session"],
+    } satisfies UserlandCapabilityDefinition;
+    const buildSystem = {
+      listBuildUnitIdentities: vi.fn(async (ref?: string) =>
+        ref
+          ? [
+              identity({
+                stateHash: state,
+                effectiveVersion: "ev-new",
+                manifest: manifest("notifications", undefined, [service]),
+              }),
+            ]
+          : [identity({ manifest: manifest("notifications") })]
+      ),
     };
     const provider = createBuildUnitChangeApprovalProvider({
       getBuildSystem: () => buildSystem as never,
-      readWorkspaceFileAtState: vi.fn(async (at: string) =>
-        at === state
-          ? packageJson("notifications", undefined, [service])
-          : packageJson("notifications")
-      ),
       admissionStore: approvalStore() as never,
       describeCapability: (capability) => ({
         title: capability,
@@ -226,7 +228,6 @@ describe("createBuildUnitChangeApprovalProvider", () => {
     const unchanged = identity();
     const provider = createBuildUnitChangeApprovalProvider({
       getBuildSystem: () => ({ listBuildUnitIdentities: vi.fn(async () => [unchanged]) }) as never,
-      readWorkspaceFileAtState: vi.fn(),
       admissionStore: approvalStore() as never,
       describeCapability: (capability) => ({
         title: capability,
@@ -256,12 +257,6 @@ describe("createBuildUnitChangeApprovalProvider", () => {
     const provider = createBuildUnitChangeApprovalProvider({
       getBuildSystem: () =>
         ({ listBuildUnitIdentities: vi.fn(async () => [panel, worker]) }) as never,
-      readWorkspaceFileAtState: vi.fn(async (_at, path) =>
-        packageJson(path.startsWith("workers/") ? "notifications" : "window-management").replace(
-          "@workspace-panels/example",
-          path.startsWith("workers/") ? "@workspace-workers/example" : "@workspace-panels/example"
-        )
-      ),
       admissionStore: store as never,
       describeCapability: (capability) => ({
         title: capability,
@@ -290,7 +285,6 @@ describe("createBuildUnitChangeApprovalProvider", () => {
     // card §5.4 and U7 exist to delete.
     const store = approvalStore();
     store.latestAdmittedVersion.mockImplementation(() => "ev-from-a-previous-release");
-    const readWorkspaceFileAtState = vi.fn(async () => packageJson("window-management"));
     const provider = createBuildUnitChangeApprovalProvider({
       getBuildSystem: () =>
         ({
@@ -298,7 +292,6 @@ describe("createBuildUnitChangeApprovalProvider", () => {
             identity({ stateHash: state, effectiveVersion: "ev-panel" }),
           ]),
         }) as never,
-      readWorkspaceFileAtState,
       admissionStore: store as never,
       describeCapability: (capability) => ({
         title: capability,
@@ -309,7 +302,6 @@ describe("createBuildUnitChangeApprovalProvider", () => {
     });
 
     await expect(provider.creationReview()).resolves.toMatchObject({ units: [], identityKeys: [] });
-    expect(readWorkspaceFileAtState).not.toHaveBeenCalled();
   });
 
   it("still owes the review for a workspace whose admissions cover only host-build units", async () => {
@@ -331,7 +323,6 @@ describe("createBuildUnitChangeApprovalProvider", () => {
             identity({ stateHash: state, effectiveVersion: "ev-panel" }),
           ]),
         }) as never,
-      readWorkspaceFileAtState: vi.fn(async () => packageJson("window-management")),
       admissionStore: store as never,
       describeCapability: (capability) => ({
         title: capability,

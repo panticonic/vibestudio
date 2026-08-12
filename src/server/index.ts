@@ -2786,7 +2786,6 @@ async function main() {
     await import("./services/buildUnitChangeApprovalProvider.js");
   const buildUnitChangeApprovalProvider = createBuildUnitChangeApprovalProvider({
     getBuildSystem: () => assertPresent(buildSystemInstance),
-    readWorkspaceFileAtState,
     describeCapability,
     admissionStore: unitAdmissionStore,
     grantStore: capabilityGrantStore,
@@ -6188,6 +6187,22 @@ async function main() {
     // introspection surface; it absorbed the former `meta` service
     // (listServices/describeService now live on `docs`).
     const { createDocsService } = await import("./services/docsService.js");
+    const workspaceDocsByState = new Map<
+      string,
+      Promise<readonly import("./services/docsService.js").LiveWorkspaceServiceDoc[]>
+    >();
+    const rememberWorkspaceDocs = (
+      stateHash: string,
+      pending: Promise<readonly import("./services/docsService.js").LiveWorkspaceServiceDoc[]>
+    ): void => {
+      workspaceDocsByState.delete(stateHash);
+      workspaceDocsByState.set(stateHash, pending);
+      while (workspaceDocsByState.size > 16) {
+        const oldest = workspaceDocsByState.keys().next().value as string | undefined;
+        if (oldest === undefined) break;
+        workspaceDocsByState.delete(oldest);
+      }
+    };
     container.registerRpc(
       createDocsService({
         dispatcher,
@@ -6197,83 +6212,96 @@ async function main() {
         },
         workspaceServicesForCaller: async (ctx) => {
           const contextId = entityCache.resolveContext(ctx.caller.runtime.id);
-          const declarations = contextId
-            ? buildWorkspaceDeclarations(
-                await readWorkspaceConfigFromState(
-                  workspaceVcs,
-                  workspaceId,
-                  await workspaceVcs.resolveContextState(contextId)
-                )
-              )
-            : workspaceDecls;
-          const services = declarations.services;
-          const buildSystem =
-            container.get<import("./buildV2/index.js").BuildSystemV2>("buildSystem");
-          if (!buildSystem)
-            throw new Error("Build system is unavailable for workspace service docs");
-          const builds = new Map<string, Promise<import("./buildV2/buildStore.js").BuildResult>>();
-          const buildFor = (source: string) => {
-            let pending = builds.get(source);
-            if (!pending) {
-              pending = buildSystem
-                .getBuild(source, contextId ? `ctx:${contextId}` : undefined)
-                .then((result) => {
-                  if (!("metadata" in result) || result.metadata.kind !== "worker") {
-                    throw new Error(`Workspace service provider ${source} is not a worker build`);
-                  }
-                  return result;
-                });
-              builds.set(source, pending);
-            }
-            return pending;
-          };
-          return Promise.all(
-            services.map(async (declaration) => {
-              try {
-                const build = await buildFor(declaration.source);
-                const methods = declaration.durableObject
-                  ? (build.metadata.workspaceRpcCatalog ?? []).filter(
-                      (method) => method.className === declaration.durableObject?.className
-                    )
-                  : [];
-                return {
-                  declaration,
-                  ...(declaration.durableObject
-                    ? {
-                        defaultObjectKey:
-                          declarations.singletons.find(
-                            declaration.source,
-                            declaration.durableObject.className
-                          )?.key ?? null,
-                      }
-                    : {}),
-                  providerEffectiveVersion: build.metadata.ev,
-                  methods,
-                };
-              } catch (error) {
-                // Live API discovery is also the repair surface. One provider
-                // that is invalid in the caller's in-progress context must not
-                // make host/runtime docs or other workspace services
-                // undiscoverable. Keep its declaration visible, mark it
-                // unavailable, and leave the authoritative build diagnostic in
-                // the build system rather than inventing a stale method roster.
-                return {
-                  declaration,
-                  ...(declaration.durableObject
-                    ? {
-                        defaultObjectKey:
-                          declarations.singletons.find(
-                            declaration.source,
-                            declaration.durableObject.className
-                          )?.key ?? null,
-                      }
-                    : {}),
-                  providerBuildError: error instanceof Error ? error.message : String(error),
-                  methods: [],
-                };
+          const stateHash = contextId
+            ? await workspaceVcs.resolveContextState(contextId)
+            : (await workspaceVcs.ensureFresh()).stateHash;
+          const cached = workspaceDocsByState.get(stateHash);
+          if (cached) {
+            rememberWorkspaceDocs(stateHash, cached);
+            return cached;
+          }
+          const pending = (async () => {
+            const declarations = buildWorkspaceDeclarations(
+              await readWorkspaceConfigFromState(workspaceVcs, workspaceId, stateHash)
+            );
+            const services = declarations.services;
+            const buildSystem =
+              container.get<import("./buildV2/index.js").BuildSystemV2>("buildSystem");
+            if (!buildSystem)
+              throw new Error("Build system is unavailable for workspace service docs");
+            const providerCatalogs = new Map<
+              string,
+              Promise<import("./buildV2/index.js").ResolvedWorkspaceRpcCatalog>
+            >();
+            const providerCatalogFor = (source: string, className: string) => {
+              const key = `${source}\0${className}`;
+              let provider = providerCatalogs.get(key);
+              if (!provider) {
+                provider = buildSystem.resolveWorkspaceRpcCatalog(source, className, stateHash);
+                providerCatalogs.set(key, provider);
               }
-            })
-          );
+              return provider;
+            };
+            return Promise.all(
+              services.map(async (declaration) => {
+                try {
+                  const provider = declaration.durableObject
+                    ? await providerCatalogFor(
+                        declaration.source,
+                        declaration.durableObject.className
+                      )
+                    : await buildSystem.resolveBuildUnit(declaration.source, stateHash);
+                  if (!provider) {
+                    throw new Error(
+                      `Workspace service provider ${declaration.source} is not an exact build unit`
+                    );
+                  }
+                  return {
+                    declaration,
+                    ...(declaration.durableObject
+                      ? {
+                          defaultObjectKey:
+                            declarations.singletons.find(
+                              declaration.source,
+                              declaration.durableObject.className
+                            )?.key ?? null,
+                        }
+                      : {}),
+                    providerEffectiveVersion: provider.effectiveVersion,
+                    methods: "methods" in provider ? provider.methods : [],
+                  };
+                } catch (error) {
+                  // Live API discovery is also the repair surface. One provider
+                  // that is invalid in the caller's in-progress context must not
+                  // make host/runtime docs or other workspace services
+                  // undiscoverable. Keep its declaration visible, mark it
+                  // unavailable, and leave the authoritative build diagnostic in
+                  // the build system rather than inventing a stale method roster.
+                  return {
+                    declaration,
+                    ...(declaration.durableObject
+                      ? {
+                          defaultObjectKey:
+                            declarations.singletons.find(
+                              declaration.source,
+                              declaration.durableObject.className
+                            )?.key ?? null,
+                        }
+                      : {}),
+                    providerBuildError: error instanceof Error ? error.message : String(error),
+                    methods: [],
+                  };
+                }
+              })
+            );
+          })();
+          rememberWorkspaceDocs(stateHash, pending);
+          void pending.catch(() => {
+            if (workspaceDocsByState.get(stateHash) === pending) {
+              workspaceDocsByState.delete(stateHash);
+            }
+          });
+          return pending;
         },
       })
     );

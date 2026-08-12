@@ -58,9 +58,11 @@ import type { UnitAuthorityManifest } from "@vibestudio/shared/authorityManifest
 import {
   createExactWorkspaceAuthorityEnvironment,
   resolveProviderCatalog,
+  resolveProviderRpcCatalog,
   type ExactWorkspaceAuthorityEnvironment,
   type ExactWorkspaceServiceBinding,
 } from "./userlandAuthority.js";
+import type { WorkspaceRpcMethodDoc } from "./workspaceRpcCatalog.js";
 import { sha256Canonical } from "@vibestudio/shared/authority/invocationSnapshot";
 import {
   authorityDependencyIndexFromDeclarations,
@@ -191,6 +193,9 @@ export interface BuildUnitResolution {
 }
 
 export interface BuildUnitIdentityResolution extends BuildUnitResolution {
+  /** Review presentation and authority from the exact discovered package manifest. */
+  manifest: GraphNode["manifest"];
+  packageVersion: string | null;
   dependencyEvs: Record<string, string>;
   externalDeps: Record<string, string>;
   serviceBindings: Array<{
@@ -300,6 +305,15 @@ export interface ResolvedUnitIcon {
   body: Buffer;
 }
 
+export interface ResolvedWorkspaceRpcCatalog {
+  source: string;
+  unitName: string;
+  className: string;
+  stateHash: string;
+  effectiveVersion: string;
+  methods: readonly WorkspaceRpcMethodDoc[];
+}
+
 export interface BuildSystemV2 {
   /**
    * Get build result for a panel/worker/extension/library.
@@ -354,6 +368,13 @@ export interface BuildSystemV2 {
     ref?: string,
     kinds?: readonly GraphNode["kind"][]
   ): Promise<BuildUnitCatalogEntry[]>;
+
+  /** Resolve live workspace RPC documentation directly from exact source. */
+  resolveWorkspaceRpcCatalog(
+    unitPath: string,
+    className: string,
+    ref?: string
+  ): Promise<ResolvedWorkspaceRpcCatalog>;
 
   /**
    * List the build units affected by workspace-relative source changes at an
@@ -2061,6 +2082,8 @@ export async function initBuildSystemV2(
         kind: node.kind,
         stateHash,
         effectiveVersion,
+        manifest: node.manifest,
+        packageVersion: node.packageVersion ?? null,
         dependencyEvs,
         externalDeps: collectTransitiveExternalDeps(node, graph, workspaceRoot, appNodeModuleRoots),
         serviceBindings: await serviceBindingsForNode(
@@ -2115,6 +2138,8 @@ export async function initBuildSystemV2(
               kind: node.kind,
               stateHash,
               effectiveVersion,
+              manifest: node.manifest,
+              packageVersion: node.packageVersion ?? null,
               dependencyEvs,
               externalDeps: collectTransitiveExternalDeps(
                 node,
@@ -2168,6 +2193,53 @@ export async function initBuildSystemV2(
           };
         })
         .sort((left, right) => left.unitName.localeCompare(right.unitName));
+    },
+
+    async resolveWorkspaceRpcCatalog(
+      unitPath: string,
+      className: string,
+      requestedRef?: string
+    ): Promise<ResolvedWorkspaceRpcCatalog> {
+      const ref = validateBuildRef(requestedRef);
+      let stateHash: string;
+      let graph: PackageGraph;
+      let evMap: EffectiveVersionMap;
+      if (ref && ref !== MAIN_HEAD) {
+        stateHash = ref.startsWith("state:")
+          ? ref
+          : await source.resolveContextState(ref.slice("ctx:".length));
+        ({ graph, evMap } = await viewAt(stateHash));
+      } else {
+        const snapshot = currentState();
+        stateHash = snapshot.stateHash;
+        graph = snapshot.graph;
+        evMap = snapshot.evMap;
+      }
+      const provider = resolveUnit(graph, unitPath, workspaceRoot);
+      if (!provider) {
+        throw new Error(`Unknown workspace service provider at ${stateHash}: ${unitPath}`);
+      }
+      const effectiveVersion = evMap[provider.name];
+      if (!effectiveVersion) {
+        throw new Error(`No effective version for ${provider.name} at ${stateHash}`);
+      }
+      const catalog = await resolveProviderRpcCatalog({
+        stateHash,
+        provider,
+        effectiveVersion,
+        className,
+        graph,
+        workspaceRoot,
+        source: getBuildSourceProvider(),
+      });
+      return {
+        source: provider.relativePath,
+        unitName: provider.name,
+        className,
+        stateHash,
+        effectiveVersion,
+        methods: catalog.methods,
+      };
     },
 
     async getBuildNpm(

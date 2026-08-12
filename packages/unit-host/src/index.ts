@@ -55,13 +55,28 @@ export function authorityReviewFromPackageJson(
   const packageJson = JSON.parse(packageJsonSource) as {
     vibestudio?: { authority?: unknown };
   };
-  if (packageJson.vibestudio?.authority === undefined) {
+  return authorityReviewFromManifest(
+    packageJson.vibestudio?.authority,
+    label,
+    previous,
+    presentationFor,
+    requesterKind
+  );
+}
+
+/** Build a review packet from an exact graph manifest that was already read
+ * from package.json during workspace discovery. */
+export function authorityReviewFromManifest(
+  authority: unknown,
+  label: string,
+  previous: UnitAuthorityManifest = { requests: [], provides: [] },
+  presentationFor?: CapabilityPresentationResolver,
+  requesterKind?: CapabilityRequesterKind
+) {
+  if (authority === undefined) {
     throw new Error(`${label} must declare vibestudio.authority`);
   }
-  const manifest = parseUnitAuthorityManifest(
-    packageJson.vibestudio.authority,
-    `${label} vibestudio.authority`
-  );
+  const manifest = parseUnitAuthorityManifest(authority, `${label} vibestudio.authority`);
   const resolver = presentationFor ?? describeCapability;
   return summarizeAuthorityManifest(manifest, previous, (capability) =>
     resolver(capability, requesterKind)

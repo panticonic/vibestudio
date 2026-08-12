@@ -28,6 +28,8 @@ export interface GraphNode {
   relativePath: string;
   /** Package name from package.json (e.g., "@workspace/lib-a") */
   name: string;
+  /** Package version from the exact discovered manifest. */
+  packageVersion?: string;
   /** Unit kind */
   kind: "package" | "panel" | "worker" | "extension" | "app" | "template";
   /** All dependencies from package.json (name → version) */
@@ -257,6 +259,7 @@ function packageNodeFromJson(
     path: path.join(workspaceRoot, ...relativePath.split("/")),
     relativePath,
     name: pkg.name,
+    ...(typeof pkg.version === "string" ? { packageVersion: pkg.version } : {}),
     kind,
     dependencies: allDeps,
     dependencyOverrides: packageManagerOverrides(pkg),

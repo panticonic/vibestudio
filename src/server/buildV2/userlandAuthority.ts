@@ -189,8 +189,25 @@ interface CatalogCacheEntry {
   value: UserlandServiceAuthorityCatalog;
 }
 
+export interface ExactProviderRpcCatalog {
+  provider: {
+    unitName: string;
+    source: string;
+    effectiveVersion: string;
+    className: string;
+  };
+  methods: readonly WorkspaceRpcMethodDoc[];
+}
+
+interface RpcCatalogCacheEntry {
+  key: string;
+  value: ExactProviderRpcCatalog;
+}
+
 const catalogEntries = new Map<string, CatalogCacheEntry>();
 const catalogFlights = new Map<string, Promise<UserlandServiceAuthorityCatalog>>();
+const rpcCatalogEntries = new Map<string, RpcCatalogCacheEntry>();
+const rpcCatalogFlights = new Map<string, Promise<ExactProviderRpcCatalog>>();
 const MAX_CATALOG_CACHE = 64;
 
 function rememberCatalog(key: string, value: UserlandServiceAuthorityCatalog): void {
@@ -200,6 +217,16 @@ function rememberCatalog(key: string, value: UserlandServiceAuthorityCatalog): v
     const oldest = catalogEntries.keys().next().value as string | undefined;
     if (oldest === undefined) break;
     catalogEntries.delete(oldest);
+  }
+}
+
+function rememberRpcCatalog(key: string, value: ExactProviderRpcCatalog): void {
+  rpcCatalogEntries.delete(key);
+  rpcCatalogEntries.set(key, { key, value });
+  while (rpcCatalogEntries.size > MAX_CATALOG_CACHE) {
+    const oldest = rpcCatalogEntries.keys().next().value as string | undefined;
+    if (oldest === undefined) break;
+    rpcCatalogEntries.delete(oldest);
   }
 }
 
@@ -314,9 +341,10 @@ function catalogDigest(
   });
 }
 
-export async function resolveProviderCatalog(
-  input: ProviderCatalogResolverInput
-): Promise<UserlandServiceAuthorityCatalog> {
+function providerCatalogIdentity(input: ProviderCatalogResolverInput): {
+  classManifest: NonNullable<GraphNode["manifest"]["durable"]>["classes"][number];
+  key: string;
+} {
   if (input.provider.kind !== "worker") {
     throw new Error(
       `Workspace service provider ${input.provider.relativePath} is not a worker unit`
@@ -333,20 +361,33 @@ export async function resolveProviderCatalog(
     input.provider.manifest.authority ?? { requests: [], provides: [] }
   );
   const schemaVersion = classManifest.rpcSchema ?? "none";
-  const key = [
-    input.effectiveVersion,
-    authorityManifestDigest,
-    input.className,
-    schemaVersion,
-    USERLAND_AUTHORITY_ANALYZER_VERSION,
-  ].join("\0");
-  const cached = catalogEntries.get(key);
+  return {
+    classManifest,
+    key: [
+      input.provider.relativePath,
+      input.effectiveVersion,
+      authorityManifestDigest,
+      input.className,
+      schemaVersion,
+      USERLAND_AUTHORITY_ANALYZER_VERSION,
+    ].join("\0"),
+  };
+}
+
+/** Resolve documentation and receiver declarations from one exact provider
+ * source view. Authority analysis and live documentation share this extraction
+ * so neither needs an executable worker build. */
+export async function resolveProviderRpcCatalog(
+  input: ProviderCatalogResolverInput
+): Promise<ExactProviderRpcCatalog> {
+  const { classManifest, key } = providerCatalogIdentity(input);
+  const cached = rpcCatalogEntries.get(key);
   if (cached) {
-    catalogEntries.delete(key);
-    catalogEntries.set(key, cached);
+    rpcCatalogEntries.delete(key);
+    rpcCatalogEntries.set(key, cached);
     return cached.value;
   }
-  const flight = catalogFlights.get(key);
+  const flight = rpcCatalogFlights.get(key);
   if (flight) return flight;
   const pending = (async () => {
     const materialized = await input.source.materializeForBuild(
@@ -364,11 +405,47 @@ export async function resolveProviderCatalog(
         `${input.provider.relativePath}:${input.className} names unknown workspace RPC schema ${classManifest.rpcSchema}`
       );
     }
-    const docs = await collectWorkspaceRpcCatalog(sourcePath, {
-      provider: input.provider.relativePath,
-      authority: packageAuthority,
-      ...(schema ? { rpcSchemas: { [input.className]: schema } } : {}),
-    });
+    const methods = (
+      await collectWorkspaceRpcCatalog(sourcePath, {
+        provider: input.provider.relativePath,
+        authority: packageAuthority,
+        ...(schema ? { rpcSchemas: { [input.className]: schema } } : {}),
+      })
+    ).filter((entry) => entry.className === input.className);
+    const catalog: ExactProviderRpcCatalog = {
+      provider: {
+        unitName: input.provider.name,
+        source: input.provider.relativePath,
+        effectiveVersion: input.effectiveVersion,
+        className: input.className,
+      },
+      methods,
+    };
+    rememberRpcCatalog(key, catalog);
+    return catalog;
+  })();
+  rpcCatalogFlights.set(key, pending);
+  try {
+    return await pending;
+  } finally {
+    rpcCatalogFlights.delete(key);
+  }
+}
+
+export async function resolveProviderCatalog(
+  input: ProviderCatalogResolverInput
+): Promise<UserlandServiceAuthorityCatalog> {
+  const { key } = providerCatalogIdentity(input);
+  const cached = catalogEntries.get(key);
+  if (cached) {
+    catalogEntries.delete(key);
+    catalogEntries.set(key, cached);
+    return cached.value;
+  }
+  const flight = catalogFlights.get(key);
+  if (flight) return flight;
+  const pending = (async () => {
+    const sourceCatalog = await resolveProviderRpcCatalog(input);
     const serviceBinding: ExactWorkspaceServiceBinding = {
       name: "__catalog__",
       protocols: [],
@@ -379,7 +456,7 @@ export async function resolveProviderCatalog(
       target: { kind: "durable-object", className: input.className, defaultObjectKey: null },
     };
     const methods = new Map<string, UserlandMethodAuthority>();
-    for (const doc of docs.filter((entry) => entry.className === input.className)) {
+    for (const doc of sourceCatalog.methods) {
       if (methods.has(doc.name))
         throw new Error(`Duplicate RPC method ${input.className}.${doc.name}`);
       methods.set(doc.name, projectMethod(doc, serviceBinding));

@@ -41,6 +41,10 @@ export function createDocsService(deps: {
   reportWorkspaceDocsError?: (error: unknown) => void;
 }): ServiceDefinition {
   const indexCache = new Map<string, ReturnType<typeof createCatalogIndex>>();
+  const workspaceIndexCache = new WeakMap<
+    readonly LiveWorkspaceServiceDoc[],
+    ReturnType<typeof createCatalogIndex>
+  >();
   let lastWorkspaceDocsError: string | null = null;
   const indexFor = async (
     ctx: Parameters<ServiceDefinition["handler"]>[0],
@@ -51,6 +55,8 @@ export function createDocsService(deps: {
       try {
         services = (await deps.workspaceServicesForCaller?.(ctx)) ?? [];
         lastWorkspaceDocsError = null;
+        const cached = workspaceIndexCache.get(services);
+        if (cached) return cached;
       } catch (error) {
         // Documentation is a repair surface. A malformed in-progress workspace
         // declaration must not hide the stable host/runtime API needed to fix
@@ -105,6 +111,7 @@ export function createDocsService(deps: {
       runtimeSurfaces: deps.runtimeSurfaces,
       workspaceCapabilities,
     }));
+    if (includeWorkspace) workspaceIndexCache.set(services, index);
     indexCache.set(key, index);
     if (indexCache.size > 32) {
       const oldestKey = indexCache.keys().next().value;

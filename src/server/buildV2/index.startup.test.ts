@@ -175,6 +175,73 @@ describe("BuildSystemV2 startup", () => {
     expect(readFile).toHaveBeenCalledOnce();
   });
 
+  it("resolves workspace RPC documentation from exact source without building the worker", async () => {
+    const workerDir = path.join(workspaceRoot, "workers", "notes");
+    fs.mkdirSync(workerDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(workerDir, "package.json"),
+      JSON.stringify({
+        name: "@workspace-workers/notes",
+        version: "0.1.0",
+        vibestudio: {
+          authority: { requests: [], provides: [] },
+          durable: { classes: [{ className: "NotesDO" }] },
+        },
+      })
+    );
+    fs.writeFileSync(
+      path.join(workerDir, "provider.ts"),
+      `class NotesDO {
+        /** Return one note without changing it. */
+        @rpc({ principals: ["code"], effect: { kind: "open" }, tier: "open", sensitivity: "read" })
+        async getNote(id: string): Promise<{ id: string }> { return { id }; }
+      }`
+    );
+
+    vi.doMock("./builder.js", async () => {
+      const actual = await vi.importActual<typeof import("./builder.js")>("./builder.js");
+      return {
+        ...actual,
+        buildUnit: vi.fn(async () => {
+          throw new Error("workspace documentation must not build a worker");
+        }),
+      };
+    });
+    const source = fakeWorkspaceSource(workspaceRoot);
+    const materializeForBuild = vi.spyOn(source, "materializeForBuild");
+    const { initBuildSystemV2 } = await import("./index.js");
+    const builder = await import("./builder.js");
+    buildSystem = await initBuildSystemV2(workspaceRoot, source, []);
+    materializeForBuild.mockClear();
+
+    const first = await buildSystem.resolveWorkspaceRpcCatalog(
+      "workers/notes",
+      "NotesDO",
+      TEST_STATE
+    );
+    const cached = await buildSystem.resolveWorkspaceRpcCatalog(
+      "workers/notes",
+      "NotesDO",
+      TEST_STATE
+    );
+
+    expect(first).toMatchObject({
+      source: "workers/notes",
+      unitName: "@workspace-workers/notes",
+      className: "NotesDO",
+      stateHash: TEST_STATE,
+      methods: [
+        expect.objectContaining({
+          name: "getNote",
+          description: "Return one note without changing it.",
+        }),
+      ],
+    });
+    expect(cached.methods).toBe(first.methods);
+    expect(materializeForBuild).toHaveBeenCalledTimes(1);
+    expect(builder.buildUnit).not.toHaveBeenCalled();
+  });
+
   it("keeps authority analysis cold until publication validation needs it", async () => {
     let resolveEnvironment!: (value: { services: [] }) => void;
     const environment = new Promise<{ services: [] }>((resolve) => {
@@ -807,7 +874,11 @@ describe("BuildSystemV2 startup", () => {
     ]);
 
     expect(first?.stateHash).toBe("state:context");
-    expect(second?.stateHash).toBe("state:context");
+    expect(second).toMatchObject({
+      stateHash: "state:context",
+      packageVersion: "0.1.0",
+      manifest: {},
+    });
     expect(discoverGraph).toHaveBeenCalledTimes(2);
     expect(unitHashes).toHaveBeenCalledTimes(2);
   });
