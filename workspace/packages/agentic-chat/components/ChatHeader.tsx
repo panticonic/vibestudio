@@ -4,7 +4,6 @@ import { DotsHorizontalIcon } from "@radix-ui/react-icons";
 import { getVibestudioHostPlatform } from "@workspace/react/responsive";
 import type { ChannelPresenceStatus, Participant } from "@workspace/pubsub";
 import type { ToolApprovalProps } from "@workspace/tool-ui";
-import { isAgentParticipantType } from "@workspace/agentic-core";
 import { useChatContext } from "../context/ChatContext";
 import type { ChatParticipantMetadata, PendingAgent } from "../types";
 import {
@@ -15,9 +14,9 @@ import {
 import { ParticipantBadgeMenu } from "./ParticipantBadgeMenu";
 import { PendingAgentBadge } from "./PendingAgentBadge";
 import { ToolPermissionsDropdown } from "./ToolPermissionsDropdown";
-import { LazyAgentDialog } from "./LazyAgentDialog";
 import { ForkSwitcher } from "./ForkSwitcher";
 import { ChannelPeopleMenu } from "./ChannelPeopleMenu";
+import { ConversationAgentDialogs, useConversationActions } from "./useConversationActions";
 
 const NOOP = () => {};
 
@@ -145,7 +144,6 @@ function DesktopChatHeader() {
 
   return (
     <ChatHeaderInner
-      channelId={channelId}
       title={channelTitle ?? "Agentic Chat"}
       connected={connected}
       status={status}
@@ -165,7 +163,6 @@ function DesktopChatHeader() {
 // ---------- Memoized inner component ----------
 
 interface ChatHeaderInnerProps {
-  channelId: string | null;
   title: string;
   connected: boolean;
   status: string;
@@ -186,7 +183,6 @@ function chatHeaderInnerPropsEqual(
   next: ChatHeaderInnerProps
 ): boolean {
   return (
-    prev.channelId === next.channelId &&
     prev.title === next.title &&
     prev.connected === next.connected &&
     prev.status === next.status &&
@@ -203,7 +199,6 @@ function chatHeaderInnerPropsEqual(
 }
 
 const ChatHeaderInner = React.memo(function ChatHeaderInner({
-  channelId,
   title,
   connected,
   status,
@@ -279,7 +274,6 @@ const ChatHeaderInner = React.memo(function ChatHeaderInner({
           ))}
           <ForkSwitcher />
           <ChatHeaderOverflowMenu
-            channelId={channelId}
             participants={participants}
             accountProfiles={accountProfiles}
             participantPresenceStatus={participantPresenceStatus}
@@ -305,7 +299,6 @@ const ChatHeaderInner = React.memo(function ChatHeaderInner({
           {!connected && <Badge color="gray">{friendlyConnectionStatus(status)}</Badge>}
         </Flex>
         <ChatHeaderOverflowMenu
-          channelId={channelId}
           participants={participants}
           accountProfiles={accountProfiles}
           participantPresenceStatus={participantPresenceStatus}
@@ -322,7 +315,6 @@ const ChatHeaderInner = React.memo(function ChatHeaderInner({
  * Single overflow menu for secondary chat actions at every container width.
  */
 function ChatHeaderOverflowMenu({
-  channelId,
   participants,
   accountProfiles,
   participantPresenceStatus,
@@ -330,7 +322,6 @@ function ChatHeaderOverflowMenu({
   onRemoveAgent,
   onDebugConsoleChange,
 }: {
-  channelId: string | null;
   participants: Record<string, Participant<ChatParticipantMetadata>>;
   accountProfiles: Map<string, AccountProfile>;
   participantPresenceStatus: Map<string, ChannelPresenceStatus>;
@@ -338,18 +329,12 @@ function ChatHeaderOverflowMenu({
   onRemoveAgent?: (handle: string) => void;
   onDebugConsoleChange?: (agentHandle: string | null) => void;
 }) {
-  const [addAgentOpen, setAddAgentOpen] = useState(false);
-  const [settingsParticipantId, setSettingsParticipantId] = useState<string | null>(null);
-  const { onAddAgent, onReplaceAgent, onOpenClaudeCode, messages, deferredAgent } =
-    useChatContext();
-
-  const participantList = Object.values(participants);
-  const agentCount = participantList.filter((participant) =>
-    isAgentParticipantType(participant.metadata.type)
-  ).length;
-  const canChangeAgent = (!!onAddAgent || !!onReplaceAgent) && !deferredAgent?.active;
-  const agentActionLabel =
-    messages.length === 0 && agentCount === 1 && onReplaceAgent ? "Switch agent" : "Add agent";
+  const actions = useConversationActions({
+    participants,
+    accountProfiles,
+    onRemoveAgent,
+    onDebugConsoleChange,
+  });
 
   return (
     <>
@@ -368,15 +353,12 @@ function ChatHeaderOverflowMenu({
         <DropdownMenu.Content align="end">
           <ForkSwitcher variant="submenu" />
           <ChannelPeopleMenu variant="submenu" />
-          {participantList.length > 0 && <DropdownMenu.Separator />}
-          {participantList.map((p) => {
-            // Humans render their live account handle (WP6 §6); agents keep
-            // their channel-carried handle.
-            const handle = accountProfiles.get(p.id)?.handle ?? p.metadata.handle ?? p.id;
-            const presenceStatus = participantPresenceStatus.get(p.id);
-            if (!isAgentParticipantType(p.metadata.type)) {
+          {actions.participants.length > 0 && <DropdownMenu.Separator />}
+          {actions.participants.map(({ participant, handle, isAgent }) => {
+            const presenceStatus = participantPresenceStatus.get(participant.id);
+            if (!isAgent) {
               return (
-                <DropdownMenu.Item key={p.id} disabled>
+                <DropdownMenu.Item key={participant.id} disabled>
                   <Flex align="center" gap="2">
                     <span
                       aria-label={presenceStatus ?? "offline"}
@@ -400,26 +382,24 @@ function ChatHeaderOverflowMenu({
               );
             }
             return (
-              <DropdownMenu.Sub key={p.id}>
+              <DropdownMenu.Sub key={participant.id}>
                 <DropdownMenu.SubTrigger>@{handle}</DropdownMenu.SubTrigger>
                 <DropdownMenu.SubContent>
-                  <DropdownMenu.Item onSelect={() => setSettingsParticipantId(p.id)}>
+                  <DropdownMenu.Item onSelect={() => actions.openAgentSettings(participant.id)}>
                     Settings…
                   </DropdownMenu.Item>
-                  {onDebugConsoleChange && (
-                    <DropdownMenu.Item onSelect={() => onDebugConsoleChange(handle)}>
+                  {actions.canOpenDebugConsole && (
+                    <DropdownMenu.Item onSelect={() => actions.openDebugConsole(handle)}>
                       Debug Console
                     </DropdownMenu.Item>
                   )}
-                  {onRemoveAgent && (
+                  {actions.canRemoveAgent && (
                     <>
                       <DropdownMenu.Separator />
                       <DropdownMenu.Item
                         color="red"
                         onSelect={() => {
-                          if (window.confirm(`Remove @${handle} and its saved agent settings?`)) {
-                            onRemoveAgent(handle);
-                          }
+                          actions.requestRemoveAgent(handle);
                         }}
                       >
                         Remove Agent
@@ -431,13 +411,13 @@ function ChatHeaderOverflowMenu({
             );
           })}
           <DropdownMenu.Separator />
-          {canChangeAgent && (
-            <DropdownMenu.Item onSelect={() => setAddAgentOpen(true)}>
-              {agentActionLabel}
+          {actions.canChangeAgent && (
+            <DropdownMenu.Item onSelect={actions.openAddAgent}>
+              {actions.agentActionLabel}
             </DropdownMenu.Item>
           )}
-          {onOpenClaudeCode && channelId && (
-            <DropdownMenu.Item onSelect={() => void onOpenClaudeCode(channelId)}>
+          {actions.canOpenClaudeCode && (
+            <DropdownMenu.Item onSelect={actions.openClaudeCode}>
               Open Claude Code
             </DropdownMenu.Item>
           )}
@@ -450,16 +430,7 @@ function ChatHeaderOverflowMenu({
           )}
         </DropdownMenu.Content>
       </DropdownMenu.Root>
-      <LazyAgentDialog open={addAgentOpen} onOpenChange={setAddAgentOpen} />
-      {settingsParticipantId && (
-        <LazyAgentDialog
-          open
-          onOpenChange={(open) => {
-            if (!open) setSettingsParticipantId(null);
-          }}
-          editParticipantId={settingsParticipantId}
-        />
-      )}
+      <ConversationAgentDialogs controller={actions} />
     </>
   );
 }

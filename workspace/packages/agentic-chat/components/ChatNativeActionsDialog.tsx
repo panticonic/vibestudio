@@ -1,13 +1,11 @@
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import { Button, Card, Dialog, Flex, Text } from "@radix-ui/themes";
-import { isAgentParticipantType } from "@workspace/agentic-core";
 import { useChatContext } from "../context/ChatContext";
-import type { ChatParticipantMetadata } from "../types";
 import { useAccountProfiles, type AccountRpc } from "../hooks/useAccountProfiles";
 import { ChannelPeopleMenu } from "./ChannelPeopleMenu";
 import { ForkSwitcher } from "./ForkSwitcher";
-import { LazyAgentDialog } from "./LazyAgentDialog";
 import { ToolPermissionsDropdown } from "./ToolPermissionsDropdown";
+import { ConversationAgentDialogs, useConversationActions } from "./useConversationActions";
 
 interface ChatNativeActionsDialogProps {
   open: boolean;
@@ -16,36 +14,19 @@ interface ChatNativeActionsDialogProps {
 
 /** Touch-oriented conversation controls opened from the native panel menu. */
 export function ChatNativeActionsDialog({ open, onOpenChange }: ChatNativeActionsDialogProps) {
-  const {
-    channelId,
-    participants,
-    messages,
-    chat,
-    deferredAgent,
-    toolApproval,
-    onAddAgent,
-    onReplaceAgent,
-    onOpenClaudeCode,
-    onRemoveAgent,
-    onDebugConsoleChange,
-  } = useChatContext();
-  const [addAgentOpen, setAddAgentOpen] = useState(false);
-  const [settingsParticipantId, setSettingsParticipantId] = useState<string | null>(null);
+  const { participants, chat, toolApproval, onRemoveAgent, onDebugConsoleChange } =
+    useChatContext();
   const participantIds = useMemo(() => Object.keys(participants), [participants]);
   const accountProfiles = useAccountProfiles(
     (chat as { rpc?: AccountRpc } | undefined)?.rpc,
     participantIds
   );
-  const agents = useMemo(
-    () =>
-      Object.values(participants).filter((participant) =>
-        isAgentParticipantType(participant.metadata.type)
-      ),
-    [participants]
-  );
-  const canChangeAgent = (!!onAddAgent || !!onReplaceAgent) && !deferredAgent?.active;
-  const agentActionLabel =
-    messages.length === 0 && agents.length === 1 && onReplaceAgent ? "Switch agent" : "Add agent";
+  const actions = useConversationActions({
+    participants,
+    accountProfiles,
+    onRemoveAgent,
+    onDebugConsoleChange,
+  });
 
   const leaveDialog = (action: () => void) => {
     onOpenChange(false);
@@ -76,14 +57,7 @@ export function ChatNativeActionsDialog({ open, onOpenChange }: ChatNativeAction
               <Text size="1" weight="bold" color="gray">
                 Agents
               </Text>
-              {agents.map((participant) => {
-                const typedParticipant = participant as typeof participant & {
-                  metadata: ChatParticipantMetadata;
-                };
-                const handle =
-                  accountProfiles.get(participant.id)?.handle ??
-                  typedParticipant.metadata.handle ??
-                  participant.id;
+              {actions.agents.map(({ participant, handle }) => {
                 return (
                   <Card key={participant.id} size="1" variant="surface">
                     <Flex align="center" justify="between" gap="2" wrap="wrap">
@@ -95,32 +69,28 @@ export function ChatNativeActionsDialog({ open, onOpenChange }: ChatNativeAction
                           size="2"
                           variant="soft"
                           onClick={() =>
-                            leaveDialog(() => setSettingsParticipantId(participant.id))
+                            leaveDialog(() => actions.openAgentSettings(participant.id))
                           }
                         >
                           Settings
                         </Button>
-                        {onDebugConsoleChange ? (
+                        {actions.canOpenDebugConsole ? (
                           <Button
                             size="2"
                             variant="soft"
                             color="gray"
-                            onClick={() => leaveDialog(() => onDebugConsoleChange(handle))}
+                            onClick={() => leaveDialog(() => actions.openDebugConsole(handle))}
                           >
                             Debug
                           </Button>
                         ) : null}
-                        {onRemoveAgent ? (
+                        {actions.canRemoveAgent ? (
                           <Button
                             size="2"
                             variant="soft"
                             color="red"
                             onClick={() => {
-                              if (
-                                window.confirm(`Remove @${handle} and its saved agent settings?`)
-                              ) {
-                                leaveDialog(() => onRemoveAgent(handle));
-                              }
+                              if (actions.requestRemoveAgent(handle)) onOpenChange(false);
                             }}
                           >
                             Remove
@@ -132,20 +102,16 @@ export function ChatNativeActionsDialog({ open, onOpenChange }: ChatNativeAction
                 );
               })}
               <Flex gap="2" wrap="wrap">
-                {canChangeAgent ? (
-                  <Button size="2" onClick={() => leaveDialog(() => setAddAgentOpen(true))}>
-                    {agentActionLabel}
+                {actions.canChangeAgent ? (
+                  <Button size="2" onClick={() => leaveDialog(actions.openAddAgent)}>
+                    {actions.agentActionLabel}
                   </Button>
                 ) : null}
-                {onOpenClaudeCode && channelId ? (
+                {actions.canOpenClaudeCode ? (
                   <Button
                     size="2"
                     variant="soft"
-                    onClick={() =>
-                      leaveDialog(() => {
-                        void onOpenClaudeCode(channelId);
-                      })
-                    }
+                    onClick={() => leaveDialog(actions.openClaudeCode)}
                   >
                     Open Claude Code
                   </Button>
@@ -178,16 +144,7 @@ export function ChatNativeActionsDialog({ open, onOpenChange }: ChatNativeAction
         </Dialog.Content>
       </Dialog.Root>
 
-      <LazyAgentDialog open={addAgentOpen} onOpenChange={setAddAgentOpen} />
-      {settingsParticipantId ? (
-        <LazyAgentDialog
-          open
-          onOpenChange={(nextOpen) => {
-            if (!nextOpen) setSettingsParticipantId(null);
-          }}
-          editParticipantId={settingsParticipantId}
-        />
-      ) : null}
+      <ConversationAgentDialogs controller={actions} />
     </>
   );
 }
