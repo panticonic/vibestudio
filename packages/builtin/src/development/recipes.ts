@@ -1,5 +1,5 @@
 import type { DevelopmentRecipe } from "@vibestudio/service-schemas/development";
-import { canonicalJson } from "@vibestudio/shared/contentTree/canonicalJson";
+import { canonicalJson } from "@vibestudio/content-addressing";
 import { domainHash } from "@vibestudio/shared/execution/identity";
 
 function reviewedRecipe(

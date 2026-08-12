@@ -11,7 +11,7 @@
 //     Shared public package specifiers such as `@vibestudio/shared` remain the
 //     intentional platform boundary.
 //
-// Four finding categories are produced:
+// Five finding categories are produced:
 //
 //   1. "import-violation" - a hard dependency: an ES `import`/`export ... from`,
 //      a dynamic `import(...)`, or a CommonJS `require(...)` whose specifier
@@ -31,6 +31,10 @@
 //      resolving compiler inputs outside workspace/. The workspace root owns
 //      the monorepo development projection; extracted packages must not regain
 //      host-source coupling through private `paths`, `extends`, or references.
+//
+//   5. "workspace-source-identity" - production host code embedding the path
+//      of a concrete workspace implementation unit. Generic workspace contract
+//      names remain valid; concrete userland inventory belongs to exact source.
 //
 // Cross-boundary integration tests live under `tests/workspace-integration/`;
 // that neutral harness is intentionally excluded from both directions.
@@ -65,6 +69,8 @@ const SELF_FILES = new Set(["scripts/check-host-workspace-imports.mjs"]);
 // @workspace-skills, @workspace-extensions, @workspace-packages). We require a
 // trailing "/" because a real import/export specifier always has a subpath.
 const WORKSPACE_IMPORT_SCOPE_RE = /^@workspace(-[a-z-]+)?\//;
+const CONCRETE_WORKSPACE_SOURCE_RE =
+  /^workspace\/(?:about|apps|extensions|packages|panels|skills|workers)\/[^/]+(?:\/|$)/u;
 
 /** True if `specifier` is an import/export/require target inside a workspace scope. */
 export function isWorkspaceImportScope(specifier) {
@@ -86,15 +92,14 @@ export function resolvesIntoAnyRoot(absFile, specifier, roots) {
   return roots.some((root) => resolved === root.slice(0, -1) || resolved.startsWith(root));
 }
 
-function moduleReferences(text, absFile) {
+function parseSource(text, absFile) {
   const plugins = ["decorators-legacy", "importAttributes", "explicitResourceManagement"];
   if (/\.[cm]?tsx?$/u.test(absFile)) {
     plugins.push(["typescript", { dts: absFile.endsWith(".d.ts") }]);
   }
   if (/\.(?:tsx|jsx|js)$/u.test(absFile)) plugins.push("jsx");
-  let ast;
   try {
-    ast = parse(text, {
+    return parse(text, {
       sourceType: "unambiguous",
       plugins,
       allowAwaitOutsideFunction: true,
@@ -104,6 +109,10 @@ function moduleReferences(text, absFile) {
   } catch (error) {
     throw new Error(`Could not inspect imports in ${absFile}`, { cause: error });
   }
+}
+
+function moduleReferences(text, absFile) {
+  const ast = parseSource(text, absFile);
   const references = [];
   const visit = (value) => {
     if (Array.isArray(value)) {
@@ -138,6 +147,40 @@ function moduleReferences(text, absFile) {
   };
   visit(ast.program);
   return references;
+}
+
+function stringReferences(text, absFile) {
+  const ast = parseSource(text, absFile);
+  const references = [];
+  const visit = (value) => {
+    if (Array.isArray(value)) {
+      for (const child of value) visit(child);
+      return;
+    }
+    if (!value || typeof value !== "object" || typeof value.type !== "string") return;
+    if (value.type === "StringLiteral") {
+      references.push({ value: value.value, line: value.loc?.start.line ?? 1 });
+    }
+    for (const [key, child] of Object.entries(value)) {
+      if (!["loc", "extra", "leadingComments", "innerComments", "trailingComments"].includes(key)) {
+        visit(child);
+      }
+    }
+  };
+  visit(ast.program);
+  return references;
+}
+
+export function collectConcreteWorkspaceIdentityFindings({ text, absFile, root = DEFAULT_ROOT }) {
+  const file = path.relative(root, absFile).split(path.sep).join("/");
+  return stringReferences(text, absFile)
+    .filter(({ value }) => CONCRETE_WORKSPACE_SOURCE_RE.test(value))
+    .map(({ value, line }) => ({
+      file,
+      line,
+      specifier: value,
+      category: "workspace-source-identity",
+    }));
 }
 
 /**
@@ -284,6 +327,13 @@ function* walkSourceFiles(root, scannedRoots, scannedFiles = []) {
   }
 }
 
+function isProductionHostSource(relativePath) {
+  if (!/^(?:src|packages|apps)\//u.test(relativePath)) return false;
+  return !/(?:^|\/)(?:testFixtures?\/|[^/]+\.(?:test|spec|testFixture)\.[cm]?[jt]sx?$)/u.test(
+    relativePath
+  );
+}
+
 function* walkWorkspaceCompilerConfigs(root) {
   const packageRoot = path.join(root, "workspace", "packages");
   if (!fs.existsSync(packageRoot)) return;
@@ -346,6 +396,9 @@ export function scanRepository(root = DEFAULT_ROOT) {
         resolveImport,
       })
     );
+    if (isProductionHostSource(relFile)) {
+      findings.push(...collectConcreteWorkspaceIdentityFindings({ text, absFile, root }));
+    }
   }
   for (const manifest of [
     path.join(root, "package.json"),
@@ -427,10 +480,10 @@ function check(root) {
 
   const categories = [
     "import-violation",
-    "workspace-reference",
     "workspace-host-import",
     "workspace-host-config",
     "workspace-package-identity",
+    "workspace-source-identity",
   ];
   console.error("Host/workspace boundary violations:\n");
   for (const category of categories) {
@@ -442,7 +495,7 @@ function check(root) {
   }
   const counts = countByCategory(findings);
   console.error(
-    `Summary: ${findings.length} violation(s) - import-violation: ${counts["import-violation"] ?? 0}, workspace-host-import: ${counts["workspace-host-import"] ?? 0}, workspace-host-config: ${counts["workspace-host-config"] ?? 0}, workspace-package-identity: ${counts["workspace-package-identity"] ?? 0}.`
+    `Summary: ${findings.length} violation(s) - import-violation: ${counts["import-violation"] ?? 0}, workspace-host-import: ${counts["workspace-host-import"] ?? 0}, workspace-host-config: ${counts["workspace-host-config"] ?? 0}, workspace-package-identity: ${counts["workspace-package-identity"] ?? 0}, workspace-source-identity: ${counts["workspace-source-identity"] ?? 0}.`
   );
   return 1;
 }

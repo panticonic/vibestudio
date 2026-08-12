@@ -5,7 +5,7 @@ import * as path from "node:path";
 import * as crypto from "node:crypto";
 import type { PanelViewLike } from "@vibestudio/shared/panelInterfaces";
 import { domainHash } from "@vibestudio/shared/execution/identity";
-import { canonicalJson } from "@vibestudio/shared/contentTree/canonicalJson";
+import { canonicalJson } from "@vibestudio/content-addressing";
 import {
   executionArtifactDigest,
   executionSourceClosureDigest,

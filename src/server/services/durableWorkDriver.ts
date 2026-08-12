@@ -201,11 +201,9 @@ export function createDurableWorkHandlers(
       // durable-work owner MUST self-adopt the claiming worker inside its own
       // `claimReadyWork` (call `adoptDurableWorkWorkerGeneration(input.workerId)`
       // before selecting rows) so stale leases from a dead host generation are
-      // released before the claim. Current owners — pubsub
-      // `workspace/workers/pubsub-channel/channel-do.ts` and the agent vessel
-      // `workspace/packages/agentic-do/src/agent-vessel.ts` — both do. Any new
-      // owner that skips this reintroduces the stuck-lease-after-host-restart
-      // failure on non-recovery claims.
+      // released before the claim. Every owner implementation must cover this
+      // invariant in its own conformance tests; skipping it reintroduces the
+      // stuck-lease-after-host-restart failure on non-recovery claims.
       if (request.trigger === "recovery") {
         await doDispatch.dispatch(owner, "adoptDurableWorkWorker", request.workerId);
       }

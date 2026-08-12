@@ -47,6 +47,62 @@ export const claudeLaunchProfileSchema = z
 export type ClaudeLaunchEnvironment = z.infer<typeof environmentSchema>;
 export type ClaudeLaunchProfile = z.infer<typeof claudeLaunchProfileSchema>;
 
+/** Portable result returned by a launch provider before the local CLI materializes it. */
+export interface PreparedClaudeLaunch {
+  entityId: string;
+  contextId: string;
+  channelId: string;
+  vesselRef: string;
+  profile: ClaudeLaunchProfile;
+}
+
+/** Hook event carried from the local Claude bridge to its linked channel vessel. */
+export type ClaudeHookEvent =
+  | { hook: "SessionStart"; claudeSessionId?: string; model?: string; cwd?: string }
+  | { hook: "UserPromptSubmit"; promptText: string; turnKey: string; promptId?: string }
+  | {
+      hook: "PreToolUse";
+      toolName: string;
+      toolUseId: string;
+      request?: unknown;
+      promptId?: string;
+      turnSource: "local" | "channel";
+    }
+  | {
+      hook: "PostToolUse";
+      toolUseId: string;
+      toolName?: string;
+      outputSummary?: string;
+      promptId?: string;
+      turnSource: "local" | "channel";
+    }
+  | {
+      hook: "PostToolUseFailure";
+      toolUseId: string;
+      toolName?: string;
+      error: string;
+      interrupted?: boolean;
+      promptId?: string;
+      turnSource: "local" | "channel";
+    }
+  | {
+      hook: "Stop";
+      finalText?: string;
+      turnKey: string;
+      promptId?: string;
+      turnSource: "local" | "channel";
+    }
+  | {
+      hook: "StopFailure";
+      error: string;
+      errorDetails?: string;
+      finalText?: string;
+      turnKey: string;
+      promptId?: string;
+      turnSource: "local" | "channel";
+    }
+  | { hook: "SessionEnd"; claudeSessionId?: string; reason?: string };
+
 export interface MaterializedClaudeLaunch {
   profileDir: string;
   argv: string[];

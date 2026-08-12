@@ -11,7 +11,7 @@ import {
   type DevelopmentRun,
   type DevelopmentSession,
 } from "@vibestudio/service-schemas/development";
-import { canonicalJson } from "@vibestudio/shared/contentTree/canonicalJson";
+import { canonicalJson } from "@vibestudio/content-addressing";
 import { domainHash } from "@vibestudio/shared/execution/identity";
 import type { ExecutionArtifactRefV1 } from "@vibestudio/shared/execution/retention";
 import type { ExactRepositorySnapshotPlan } from "../vcsHost/workspaceVcs.js";

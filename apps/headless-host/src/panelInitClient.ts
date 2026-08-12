@@ -1,8 +1,6 @@
 /**
- * Panel-init resolution for the headless host — a port of mobile's
- * createMobileShellCore (workspace/apps/mobile/src/shellCore/) minus the
- * mobile-only pieces: the shared PanelManager over plain RPC delegates,
- * with in-memory view state. getPanelInit() returns the bootstrap config
+ * Panel-init resolution for the headless host: the shared PanelManager over
+ * plain RPC delegates, with in-memory view state. getPanelInit() returns the bootstrap config
  * (incl. a fresh single-use auth.grantConnection token — never cache it).
  */
 import { PanelRegistry } from "@vibestudio/shared/panelRegistry";

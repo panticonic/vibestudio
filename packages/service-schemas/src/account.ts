@@ -58,7 +58,7 @@ export const accountProfileUpdateSchema = z
     handle: z
       .string()
       .regex(HANDLE_PATTERN, "Handle must match /^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/")
-      .refine((handle) => !RESERVED_HANDLES.has(handle), "Handle is reserved")
+      .refine((handle) => !RESERVED_HANDLES.has(handle.toLowerCase()), "Handle is reserved")
       .optional(),
   })
   .strict();

@@ -13,53 +13,9 @@ import * as fs from "node:fs";
 import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
+import type { ClaudeHookEvent } from "@vibestudio/shared/claudeLaunchProfile";
 
-/** Structural mirror of the vessel's LinkedHookEvent (no workspace import). */
-export type BridgeHookEvent =
-  | { hook: "SessionStart"; claudeSessionId?: string; model?: string; cwd?: string }
-  | { hook: "UserPromptSubmit"; promptText: string; turnKey: string; promptId?: string }
-  | {
-      hook: "PreToolUse";
-      toolName: string;
-      toolUseId: string;
-      request?: unknown;
-      promptId?: string;
-      turnSource: "local" | "channel";
-    }
-  | {
-      hook: "PostToolUse";
-      toolUseId: string;
-      toolName?: string;
-      outputSummary?: string;
-      promptId?: string;
-      turnSource: "local" | "channel";
-    }
-  | {
-      hook: "PostToolUseFailure";
-      toolUseId: string;
-      toolName?: string;
-      error: string;
-      interrupted?: boolean;
-      promptId?: string;
-      turnSource: "local" | "channel";
-    }
-  | {
-      hook: "Stop";
-      finalText?: string;
-      turnKey: string;
-      promptId?: string;
-      turnSource: "local" | "channel";
-    }
-  | {
-      hook: "StopFailure";
-      error: string;
-      errorDetails?: string;
-      finalText?: string;
-      turnKey: string;
-      promptId?: string;
-      turnSource: "local" | "channel";
-    }
-  | { hook: "SessionEnd"; claudeSessionId?: string; reason?: string };
+export type BridgeHookEvent = ClaudeHookEvent;
 
 export interface EmittedHookLine {
   event: string;

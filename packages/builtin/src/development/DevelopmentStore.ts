@@ -9,7 +9,7 @@ import {
 } from "@vibestudio/service-schemas/development";
 import { preparedNativeBuildSchema } from "@vibestudio/service-schemas/developmentNative";
 import type { z } from "zod";
-import { canonicalJson } from "@vibestudio/shared/contentTree/canonicalJson";
+import { canonicalJson } from "@vibestudio/content-addressing";
 import type { SqlStorage } from "@vibestudio/durable";
 
 export type PreparedNativeBuild = z.infer<typeof preparedNativeBuildSchema>;

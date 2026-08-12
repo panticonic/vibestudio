@@ -1,4 +1,4 @@
-import { canonicalJson } from "../contentTree/canonicalJson.js";
+import { canonicalJson } from "@vibestudio/content-addressing";
 import { domainHash, parseSha256, type Sha256 } from "./identity.js";
 
 export type ExecutionOwnerKind =

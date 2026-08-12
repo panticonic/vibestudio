@@ -1,5 +1,5 @@
 import type { BuildResult } from "./buildV2/buildStore.js";
-import { canonicalJson } from "@vibestudio/shared/contentTree/canonicalJson";
+import { canonicalJson } from "@vibestudio/content-addressing";
 import {
   verifyExecutionArtifactRef,
   type ExecutionArtifactRefV1,

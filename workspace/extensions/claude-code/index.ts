@@ -9,8 +9,8 @@ import {
   materializeClaudeLaunch,
   reconcileClaudeLaunchCredential,
   removeMaterializedClaudeLaunch,
-  type ClaudeLaunchProfile,
   type MaterializedClaudeLaunch,
+  type PreparedClaudeLaunch,
 } from "@vibestudio/shared/claudeLaunchProfile";
 import {
   claudeContainedSpawnEnvironment,
@@ -64,19 +64,12 @@ export interface PrepareSubagentBinding {
 }
 
 /** The awaited return of {@link prepare}. */
-export interface PrepareResult {
-  entityId: string;
-  contextId: string;
-  channelId: string;
-  vesselRef: string;
+export interface PrepareResult extends PreparedClaudeLaunch {
   /** Canonical entity id of the linked vessel DO (its RPC caller identity) —
    *  used by a spawning parent as the subagent run's childEntityId. */
   vesselEntityId: string;
   /** The linked vessel's participant id on the channel (task-seed addressing). */
   vesselParticipantId: string | null;
-  /** Portable semantic declaration. Host reach and paths are materialized only
-   * on the machine that actually executes Claude. */
-  profile: ClaudeLaunchProfile;
 }
 
 /** Claude Code CLI options a parent may set per subagent launch (the

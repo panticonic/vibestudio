@@ -5,6 +5,7 @@ import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 
 import {
+  collectConcreteWorkspaceIdentityFindings,
   collectFindings,
   collectWorkspaceCompilerConfigFindings,
   collectWorkspaceFindings,
@@ -144,6 +145,35 @@ describe("collectFindings — import-violation category", () => {
       root: ROOT,
     });
     expect(result).toHaveLength(0);
+  });
+});
+
+describe("collectConcreteWorkspaceIdentityFindings — workspace-source-identity category", () => {
+  it("rejects concrete userland implementation paths embedded in production host source", () => {
+    expect(
+      collectConcreteWorkspaceIdentityFindings({
+        text: `export const owner = "workspace/workers/agent-worker/index.ts";`,
+        absFile: "/repo/src/server/generated.ts",
+        root: ROOT,
+      })
+    ).toEqual([
+      {
+        file: "src/server/generated.ts",
+        line: 1,
+        specifier: "workspace/workers/agent-worker/index.ts",
+        category: "workspace-source-identity",
+      },
+    ]);
+  });
+
+  it("allows generic workspace coordinates and contract names", () => {
+    expect(
+      collectConcreteWorkspaceIdentityFindings({
+        text: `const kind = "workspace"; const prefix = "workspace/"; const service = "workspace.units";`,
+        absFile: "/repo/src/server/contracts.ts",
+        root: ROOT,
+      })
+    ).toEqual([]);
   });
 });
 

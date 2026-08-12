@@ -13,7 +13,7 @@ import type {
   preparedNativeBuildSchema,
 } from "@vibestudio/service-schemas/developmentNative";
 import type { VcsInspectResult, VcsStatusResult } from "@vibestudio/service-schemas/vcs";
-import { canonicalJson } from "@vibestudio/shared/contentTree/canonicalJson";
+import { canonicalJson } from "@vibestudio/content-addressing";
 import type { z } from "zod";
 import { DevelopmentStore, developmentSessionId } from "./DevelopmentStore.js";
 import { developmentRecipes } from "./recipes.js";

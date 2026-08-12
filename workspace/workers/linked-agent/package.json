@@ -128,6 +128,7 @@
     }
   },
   "dependencies": {
+    "@vibestudio/shared": "workspace:*",
     "@vibestudio/trajectory-identity": "workspace:*",
     "@workspace/runtime": "workspace:*",
     "@workspace/agentic-do": "workspace:*",

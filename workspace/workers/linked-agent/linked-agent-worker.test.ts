@@ -520,7 +520,7 @@ describe("LinkedAgentWorker", () => {
       bridgeSessionId: bridge.ack.bridgeSessionId,
       seq: 1,
       batchId: "batch-1",
-      event: { hook: "Stop", finalText: "done", turnKey: "turn-1" },
+      event: { hook: "Stop", finalText: "done", turnKey: "turn-1", turnSource: "channel" },
     });
     expect(worker.queueRows()).toHaveLength(1);
     expect(worker.queueRows()[0]).toMatchObject({
@@ -629,7 +629,12 @@ describe("LinkedAgentWorker", () => {
       bridgeSessionId: bridge.ack.bridgeSessionId,
       seq: 1,
       batchId: "batch-busy-1",
-      event: { hook: "PreToolUse", toolName: "Read", toolUseId: "busy-tool" },
+      event: {
+        hook: "PreToolUse",
+        toolName: "Read",
+        toolUseId: "busy-tool",
+        turnSource: "channel",
+      },
     });
 
     await worker.processChannelEvent(
@@ -648,7 +653,7 @@ describe("LinkedAgentWorker", () => {
       bridgeSessionId: bridge.ack.bridgeSessionId,
       seq: 2,
       batchId: "batch-busy-1",
-      event: { hook: "Stop", turnKey: "busy-turn" },
+      event: { hook: "Stop", turnKey: "busy-turn", turnSource: "channel" },
     });
 
     const rows = worker.queueRows();
@@ -869,7 +874,12 @@ describe("LinkedAgentWorker", () => {
       bridgeSessionId: bridge.ack.bridgeSessionId,
       seq: 1,
       batchId: "batch-channel",
-      event: { hook: "PreToolUse", toolName: "Read", toolUseId: "tu-channel" },
+      event: {
+        hook: "PreToolUse",
+        toolName: "Read",
+        toolUseId: "tu-channel",
+        turnSource: "channel",
+      },
     });
 
     const opened = worker
@@ -889,7 +899,12 @@ describe("LinkedAgentWorker", () => {
       bridgeSessionId: bridge.ack.bridgeSessionId,
       seq: 2,
       batchId: "batch-channel",
-      event: { hook: "Stop", finalText: "done", turnKey: "claude-generated-key" },
+      event: {
+        hook: "Stop",
+        finalText: "done",
+        turnKey: "claude-generated-key",
+        turnSource: "channel",
+      },
     });
 
     const kinds = worker.appendedEvents().map((event) => event["payloadKind"]);
@@ -917,7 +932,12 @@ describe("LinkedAgentWorker", () => {
       bridgeSessionId: bridge.ack.bridgeSessionId,
       seq: 1,
       batchId: "batch-detach",
-      event: { hook: "PreToolUse", toolName: "Read", toolUseId: "tool-detach" },
+      event: {
+        hook: "PreToolUse",
+        toolName: "Read",
+        toolUseId: "tool-detach",
+        turnSource: "channel",
+      },
     });
     worker.gadCalls.length = 0;
 
@@ -967,17 +987,28 @@ describe("LinkedAgentWorker", () => {
         toolName: "Bash",
         toolUseId: "tu-1",
         request: { command: "ls", timeout: 1_000 },
+        turnSource: "local",
       },
     });
     await worker.ingestHookEvent({
       bridgeSessionId: "bridge-session-1",
       seq: 3,
-      event: { hook: "PostToolUse", toolUseId: "tu-1", outputSummary: "ok" },
+      event: {
+        hook: "PostToolUse",
+        toolUseId: "tu-1",
+        outputSummary: "ok",
+        turnSource: "local",
+      },
     });
     await worker.ingestHookEvent({
       bridgeSessionId: "bridge-session-1",
       seq: 4,
-      event: { hook: "Stop", finalText: "all fixed", turnKey: "turn-9" },
+      event: {
+        hook: "Stop",
+        finalText: "all fixed",
+        turnKey: "turn-9",
+        turnSource: "local",
+      },
     });
     const kinds = worker.gadCalls
       .filter((call) => call.method === "appendLogEvent")
@@ -1074,7 +1105,12 @@ describe("LinkedAgentWorker", () => {
       bridgeSessionId: bridge.ack.bridgeSessionId,
       seq: 1,
       batchId: "batch-failure",
-      event: { hook: "PreToolUse", toolName: "Bash", toolUseId: "tool-failure" },
+      event: {
+        hook: "PreToolUse",
+        toolName: "Bash",
+        toolUseId: "tool-failure",
+        turnSource: "channel",
+      },
     });
     await worker.ingestHookEvent({
       bridgeSessionId: bridge.ack.bridgeSessionId,
@@ -1085,6 +1121,7 @@ describe("LinkedAgentWorker", () => {
         toolName: "Bash",
         toolUseId: "tool-failure",
         error: "permission denied",
+        turnSource: "channel",
       },
     });
     await worker.ingestHookEvent({
@@ -1096,6 +1133,7 @@ describe("LinkedAgentWorker", () => {
         error: "authentication_failed",
         errorDetails: "credential rejected",
         turnKey: "failure-turn",
+        turnSource: "channel",
       },
     });
     expect(worker.appendedEvents().map((event) => event["payloadKind"])).toContain(
@@ -1123,14 +1161,24 @@ describe("LinkedAgentWorker", () => {
       bridgeSessionId: bridge.ack.bridgeSessionId,
       seq: 1,
       batchId: "batch-terminal-replay",
-      event: { hook: "PreToolUse", toolName: "Read", toolUseId: "tool-replay" },
+      event: {
+        hook: "PreToolUse",
+        toolName: "Read",
+        toolUseId: "tool-replay",
+        turnSource: "channel",
+      },
     });
     worker.failLogAppend = true;
     const terminal = {
       bridgeSessionId: bridge.ack.bridgeSessionId,
       seq: 2,
       batchId: "batch-terminal-replay",
-      event: { hook: "Stop", finalText: "done", turnKey: "terminal-replay" } as const,
+      event: {
+        hook: "Stop",
+        finalText: "done",
+        turnKey: "terminal-replay",
+        turnSource: "channel",
+      } as const,
     };
     await expect(worker.ingestHookEvent(terminal)).rejects.toThrow(/simulated replay/);
     expect(worker.queueRows()[0]).toMatchObject({ terminal_outcome: "completed" });

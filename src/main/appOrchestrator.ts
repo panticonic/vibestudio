@@ -11,7 +11,7 @@ import {
 import { parseUnitAuthorityManifest } from "@vibestudio/shared/authorityManifest";
 import { parseSha256 } from "@vibestudio/shared/execution/identity";
 import { domainHash } from "@vibestudio/shared/execution/identity";
-import { canonicalJson } from "@vibestudio/shared/contentTree/canonicalJson";
+import { canonicalJson } from "@vibestudio/content-addressing";
 import {
   verifyExecutionArtifactRef,
   type ExecutionArtifactRefV1,

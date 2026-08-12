@@ -8,9 +8,9 @@ import {
   materializeClaudeLaunch,
   reconcileClaudeLaunchCredential,
   removeMaterializedClaudeLaunch,
-  type ClaudeLaunchProfile,
-  type MaterializedClaudeLaunch,
   type ClaudeCliRoute,
+  type MaterializedClaudeLaunch,
+  type PreparedClaudeLaunch,
 } from "@vibestudio/shared/claudeLaunchProfile";
 import {
   claudeContainedSpawnEnvironment,
@@ -38,14 +38,7 @@ import { resolveBridgeConfig, runChannelHostLoop } from "./channelHost.js";
  */
 const CLAUDE_CODE_PROVIDER = "claudeCode";
 
-/** Structural mirror of the extension's PrepareResult (no workspace import). */
-export interface PrepareResult {
-  entityId: string;
-  contextId: string;
-  channelId: string;
-  vesselRef: string;
-  profile: ClaudeLaunchProfile;
-}
+export type PrepareResult = PreparedClaudeLaunch;
 
 export { findContextBinding };
 

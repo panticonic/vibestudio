@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { canonicalJson } from "../contentTree/canonicalJson.js";
+import { canonicalJson } from "@vibestudio/content-addressing";
 
 /** Full SHA-256 values are the only executable/security identifiers. */
 export type Sha256 = string & { readonly __sha256: unique symbol };

@@ -14,7 +14,7 @@ import type { PendingApproval } from "@vibestudio/shared/approvals";
 import type { ProtectedPublicationEvent } from "@vibestudio/shared/protectedPublicationEvents";
 import { WORKSPACE_SYSTEM_EPOCH } from "@vibestudio/shared/vcs/systemEpoch";
 import { RESUMABLE_GZIP_HEADER } from "@vibestudio/shared/panel/assetHeaders";
-import { canonicalJson } from "@vibestudio/shared/contentTree/canonicalJson";
+import { canonicalJson } from "@vibestudio/content-addressing";
 import { domainHash } from "@vibestudio/shared/execution/identity";
 import {
   executionArtifactDigest,

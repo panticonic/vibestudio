@@ -21,7 +21,7 @@ import {
   parseUnitAuthorityManifest,
   type UnitAuthorityManifest,
 } from "@vibestudio/shared/authorityManifest";
-import { canonicalJson } from "@vibestudio/shared/contentTree/canonicalJson";
+import { canonicalJson } from "@vibestudio/content-addressing";
 import {
   canonicalArtifactPath,
   domainHash,

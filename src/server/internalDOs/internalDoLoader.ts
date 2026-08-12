@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { createHash } from "node:crypto";
-import { canonicalJson } from "@vibestudio/shared/contentTree/canonicalJson";
+import { canonicalJson } from "@vibestudio/content-addressing";
 import { domainHash, parseSha256, sha256 } from "@vibestudio/shared/execution/identity";
 import {
   executionArtifactDigest,

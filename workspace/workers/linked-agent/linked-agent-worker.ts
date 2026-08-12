@@ -26,6 +26,7 @@ import {
   type AgenticEvent,
 } from "@workspace/agentic-protocol";
 import { ids } from "@workspace/agent-loop";
+import type { ClaudeHookEvent } from "@vibestudio/shared/claudeLaunchProfile";
 import { channelTrajectoryFor } from "@vibestudio/trajectory-identity";
 import type { AgentTool } from "@workspace/pi-core";
 import {
@@ -66,41 +67,7 @@ interface LinkedBridgeStream extends LinkedAttachment {
 
 /** Hook events reported by the bridge (plan §7.4). `seq` is a per-session
  *  monotonic counter minted by the bridge; redelivery is a no-op. */
-export type LinkedHookEvent =
-  | { hook: "SessionStart"; claudeSessionId?: string; model?: string; cwd?: string }
-  | { hook: "UserPromptSubmit"; promptText: string; turnKey: string; promptId?: string }
-  | {
-      hook: "PreToolUse";
-      toolName: string;
-      toolUseId: string;
-      request?: unknown;
-      promptId?: string;
-    }
-  | {
-      hook: "PostToolUse";
-      toolUseId: string;
-      toolName?: string;
-      outputSummary?: string;
-      promptId?: string;
-    }
-  | {
-      hook: "PostToolUseFailure";
-      toolUseId: string;
-      toolName?: string;
-      error: string;
-      interrupted?: boolean;
-      promptId?: string;
-    }
-  | { hook: "Stop"; finalText?: string; turnKey: string; promptId?: string }
-  | {
-      hook: "StopFailure";
-      error: string;
-      errorDetails?: string;
-      finalText?: string;
-      turnKey: string;
-      promptId?: string;
-    }
-  | { hook: "SessionEnd"; claudeSessionId?: string; reason?: string };
+export type LinkedHookEvent = ClaudeHookEvent;
 
 interface QueueRow {
   seq: number;

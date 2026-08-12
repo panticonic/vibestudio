@@ -48,30 +48,12 @@ export interface UserSubject {
   handle: string;
 }
 
-/**
- * Handle shape. Mirrors `METHOD_NAME_PATTERN` in
- * `workspace/workers/pubsub-channel/types.ts` — a user handle becomes an
- * addressable participant handle in the channel layer, so it must satisfy the
- * same pattern. Re-declared host-side because the host never imports from
- * `workspace/` (host-boundary rule; asserted by `pnpm check:host-boundary`).
- */
+/** Host-owned account-handle syntax. Product projections must preserve or
+ * encode this identity; userland naming policy never narrows account creation. */
 export const HANDLE_PATTERN = /^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/;
 
-/**
- * Handles no user may claim. Mirrors `RESERVED_METHOD_NAMES` in
- * `workspace/workers/pubsub-channel/types.ts` (built-in tool names a channel
- * handle must not shadow), plus `system` — the synthetic subject the in-process
- * `server` principal resolves to (WP0 §5.4), which is not a real account row.
- */
-export const RESERVED_HANDLES: ReadonlySet<string> = new Set([
-  "read",
-  "edit",
-  "write",
-  "grep",
-  "find",
-  "ls",
-  "system",
-]);
+/** Synthetic host principals that can never identify an account row. */
+export const RESERVED_HANDLES: ReadonlySet<string> = new Set(["system"]);
 
 /** True iff `handle` matches `HANDLE_PATTERN` and is not reserved. */
 export function isValidHandle(handle: string): boolean {

@@ -10,7 +10,7 @@ import {
 } from "./distBake.js";
 import type { BuildResult } from "./buildStore.js";
 import { domainHash } from "@vibestudio/shared/execution/identity";
-import { canonicalJson } from "@vibestudio/shared/contentTree/canonicalJson";
+import { canonicalJson } from "@vibestudio/content-addressing";
 import {
   executionArtifactDigest,
   executionSourceClosureDigest,
