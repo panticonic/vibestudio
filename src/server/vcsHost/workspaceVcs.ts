@@ -62,7 +62,11 @@ import type {
   ProtectedRefPublication,
   ProtectedRefStore,
 } from "../services/protectedRefStore.js";
-import type { BuildRecord, WorkspaceStateSource } from "../buildV2/stateTrigger.js";
+import type {
+  BuildRecord,
+  WorkspaceStateFile,
+  WorkspaceStateSource,
+} from "../buildV2/stateTrigger.js";
 import type { BuildSourceProvider } from "../buildV2/buildSource.js";
 import { type GraphNode, type PackageGraph } from "../buildV2/packageGraph.js";
 import { discoverPackageGraphAtTree } from "../buildV2/packageGraphTree.js";
@@ -228,13 +232,7 @@ type PublicationGateContext = CallerPublicationGateContext | { kind: "workspace-
 type SemanticEffect = WorkspaceSourceSemanticEffect;
 type SemanticDispatchResult = WorkspaceSourceSemanticDispatchResult;
 
-export interface ContentFile {
-  content: { kind: "text"; text: string } | { kind: "bytes"; base64: string };
-  stateHash: string;
-  contentHash: string;
-  mode: number;
-  size: number;
-}
+export type ContentFile = WorkspaceStateFile;
 
 export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   readonly contentProjection: ContentProjectionStore;

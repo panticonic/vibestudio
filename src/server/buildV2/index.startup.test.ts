@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { createHash } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { discoverPackageGraph } from "./packageGraph.js";
@@ -27,6 +28,9 @@ function fakeWorkspaceSource(workspaceRoot: string): WorkspaceStateSource & Buil
     },
     async resolveContextState() {
       return TEST_STATE;
+    },
+    async readFile() {
+      return null;
     },
     executionStateForContent(stateHash) {
       return { kind: "event", eventId: `event:${stateHash}` };
@@ -114,6 +118,61 @@ describe("BuildSystemV2 startup", () => {
       process.env["VIBESTUDIO_SHARED_DERIVED_CACHE_DIR"] = previousSharedDerivedCacheDir;
     }
     fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it("resolves a declared icon from exact source content without materializing a build", async () => {
+    const panelDir = path.join(workspaceRoot, "panels", "icon-only");
+    const iconText = '<svg xmlns="http://www.w3.org/2000/svg"/>';
+    fs.mkdirSync(path.join(panelDir, "assets"), { recursive: true });
+    fs.writeFileSync(
+      path.join(panelDir, "package.json"),
+      JSON.stringify({
+        name: "@workspace-panels/icon-only",
+        version: "0.1.0",
+        vibestudio: { title: "Icon only", icon: "./assets/icon.svg" },
+      })
+    );
+    fs.writeFileSync(path.join(panelDir, "assets", "icon.svg"), iconText);
+
+    const base = fakeWorkspaceSource(workspaceRoot);
+    const readFile = vi.fn(async (stateHash: string, filePath: string) => {
+      if (filePath !== "panels/icon-only/assets/icon.svg") return null;
+      const body = Buffer.from(iconText, "utf8");
+      return {
+        content: { kind: "text" as const, text: iconText },
+        stateHash,
+        contentHash: createHash("sha256").update(body).digest("hex"),
+        mode: 0o100644,
+        size: body.byteLength,
+      };
+    });
+    const materializeForBuild = vi.fn(async () => ({ sourceRoot: workspaceRoot }));
+    const source = { ...base, readFile, materializeForBuild };
+    const { initBuildSystemV2 } = await import("./index.js");
+    buildSystem = await initBuildSystemV2(workspaceRoot, source, []);
+    materializeForBuild.mockClear();
+
+    const [first, concurrent] = await Promise.all([
+      buildSystem.getUnitIcon("panels/icon-only", "assets/icon.svg"),
+      buildSystem.getUnitIcon("panels/icon-only", "assets/icon.svg"),
+    ]);
+    const cached = await buildSystem.getUnitIcon("panels/icon-only", "assets/icon.svg");
+
+    expect(first).toMatchObject({
+      source: "panels/icon-only",
+      path: "assets/icon.svg",
+      stateHash: TEST_STATE,
+      contentType: "image/svg+xml",
+    });
+    expect(first?.body.toString("utf8")).toBe(iconText);
+    expect(concurrent).toBe(first);
+    expect(cached).toBe(first);
+    expect(readFile).toHaveBeenCalledOnce();
+    expect(materializeForBuild).not.toHaveBeenCalled();
+    await expect(
+      buildSystem.getUnitIcon("panels/icon-only", "assets/not-the-icon.svg")
+    ).resolves.toBeNull();
+    expect(readFile).toHaveBeenCalledOnce();
   });
 
   it("keeps authority analysis cold until publication validation needs it", async () => {

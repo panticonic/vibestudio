@@ -52,6 +52,14 @@ export interface StateChangedUnit {
   kind: GraphNode["kind"];
 }
 
+export interface WorkspaceStateFile {
+  content: { kind: "text"; text: string } | { kind: "bytes"; base64: string };
+  stateHash: string;
+  contentHash: string;
+  mode: number;
+  size: number;
+}
+
 export interface WorkspaceStateSource {
   /** Stable identity of the semantic workspace that owns these exact states. */
   readonly workspaceId: string;
@@ -64,6 +72,8 @@ export interface WorkspaceStateSource {
   unitHashes(stateHash: string, relPaths: string[]): Promise<Record<string, string | null>>;
   /** Resolve a semantic context's exact working frontier to workspace content. */
   resolveContextState(contextId: string): Promise<string>;
+  /** Read one file without materializing or building its owning unit. */
+  readFile(stateHash: string, filePath: string): Promise<WorkspaceStateFile | null>;
   /** Exact semantic coordinate paired with a previously resolved content view. */
   executionStateForContent?(stateHash: string): ExecutionSourceStateRef | null;
   /**

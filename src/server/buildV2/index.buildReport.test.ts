@@ -80,6 +80,7 @@ function fakeSource(
         })
       ),
     resolveContextState: async () => CANDIDATE_VIEW,
+    readFile: async () => null,
     executionStateForContent: (stateHash) => ({
       kind: "event",
       eventId: `event:${stateHash}`,

@@ -68,6 +68,7 @@ describe("StateTransitionTrigger — multi-repo group push", () => {
       unitHashes: async (stateHash, relPaths) =>
         Object.fromEntries(relPaths.map((relPath) => [relPath, `h:${relPath}:${stateHash}`])),
       resolveContextState: async () => "state:0",
+      readFile: async () => null,
       executionStateForContent: (stateHash) => ({
         kind: "event",
         eventId: `event:${stateHash}`,
@@ -137,6 +138,7 @@ describe("StateTransitionTrigger — multi-repo group push", () => {
       unitHashes: async (stateHash, relPaths) =>
         Object.fromEntries(relPaths.map((relPath) => [relPath, `h:${relPath}:${stateHash}`])),
       resolveContextState: async () => "state:X",
+      readFile: async () => null,
       executionStateForContent: (stateHash) => ({
         kind: "event",
         eventId: `event:${stateHash}`,

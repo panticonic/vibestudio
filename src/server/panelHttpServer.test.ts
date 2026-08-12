@@ -259,6 +259,7 @@ describe("PanelHttpServer build cache", () => {
     server.setCallbacks({
       onBuildComplete,
       getBuild: vi.fn(),
+      getUnitIcon: vi.fn(async () => null),
       getBuildByKey: vi.fn(() => buildResult),
     });
 
@@ -347,24 +348,23 @@ describe("PanelHttpServer build cache", () => {
     expect(response.headersWritten?.["Cache-Control"]).toBe("public, max-age=31536000, immutable");
   });
 
-  it("serves a panel or worker image icon from its immutable build", async () => {
+  it("serves a declared unit icon without requesting a runtime build", async () => {
     const server = new PanelHttpServer();
-    const iconBuild = {
-      ...buildResult,
-      artifacts: [
-        ...buildResult.artifacts,
-        {
-          path: "assets/icon.svg",
-          role: "asset",
-          contentType: "image/svg+xml",
-          encoding: "utf8",
-          content: '<svg xmlns="http://www.w3.org/2000/svg"/>',
-        },
-      ],
-    } as import("./buildV2/buildStore.js").BuildResult;
-    const getBuild = vi.fn(async () => iconBuild);
+    const body = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"/>');
+    const contentHash = createHash("sha256").update(body).digest("hex");
+    const getBuild = vi.fn(async () => buildResult);
+    const getUnitIcon = vi.fn(async () => ({
+      source: "workers/mail",
+      path: "assets/icon.svg",
+      stateHash: `state:${"a".repeat(64)}`,
+      effectiveVersion: "ev-1",
+      contentHash,
+      contentType: "image/svg+xml",
+      body,
+    }));
     server.setCallbacks({
       getBuild,
+      getUnitIcon,
       getBuildByKey: vi.fn(() => null),
     });
 
@@ -373,10 +373,21 @@ describe("PanelHttpServer build cache", () => {
       "/__vibestudio/unit-icon?source=workers%2Fmail&path=assets%2Ficon.svg"
     );
 
-    expect(getBuild).toHaveBeenCalledWith("workers/mail");
+    expect(getUnitIcon).toHaveBeenCalledWith("workers/mail", "assets/icon.svg");
+    expect(getBuild).not.toHaveBeenCalled();
     expect(response.statusCodeWritten).toBe(200);
     expect(response.headersWritten?.["Content-Type"]).toBe("image/svg+xml");
+    expect(response.headersWritten?.["ETag"]).toBe(`"${contentHash}"`);
+    expect(response.headersWritten?.["Cache-Control"]).toBe("private, no-cache");
     expect(String(response.body)).toContain("<svg");
+
+    const revalidated = await handlePanelRequest(
+      server,
+      "/__vibestudio/unit-icon?source=workers%2Fmail&path=assets%2Ficon.svg",
+      { "if-none-match": `W/"${contentHash}"` }
+    );
+    expect(revalidated.statusCodeWritten).toBe(304);
+    expect(revalidated.body).toBeUndefined();
   });
 
   it("does not synthesize build refs from panel context ids", async () => {
@@ -385,6 +396,7 @@ describe("PanelHttpServer build cache", () => {
     server.setCallbacks({
       onBuildComplete: vi.fn(),
       getBuild,
+      getUnitIcon: vi.fn(async () => null),
       getBuildByKey: vi.fn(() => buildResult),
     });
 
@@ -402,6 +414,7 @@ describe("PanelHttpServer build cache", () => {
     server.setCallbacks({
       onBuildComplete: vi.fn(),
       getBuild,
+      getUnitIcon: vi.fn(async () => null),
       getBuildByKey: vi.fn(() => buildResult),
     });
 
@@ -421,6 +434,7 @@ describe("PanelHttpServer build cache", () => {
     server.setCallbacks({
       onBuildComplete: vi.fn(),
       getBuild,
+      getUnitIcon: vi.fn(async () => null),
       getBuildByKey: vi.fn(() => buildResult),
     });
 
@@ -439,6 +453,7 @@ describe("PanelHttpServer build cache", () => {
     server.setCallbacks({
       onBuildComplete: vi.fn(),
       getBuild: vi.fn(async () => buildResult),
+      getUnitIcon: vi.fn(async () => null),
       getBuildByKey: vi.fn(() => buildResult),
     });
     server.primeBuild("panels/my-app", undefined, getBuild);
@@ -460,6 +475,7 @@ describe("PanelHttpServer build cache", () => {
       getBuild: vi.fn(async () => {
         throw new Error("broken build");
       }),
+      getUnitIcon: vi.fn(async () => null),
       getBuildByKey: vi.fn(() => null),
     });
 
@@ -476,7 +492,12 @@ describe("PanelHttpServer build cache", () => {
     const server = new PanelHttpServer();
     const getBuild = vi.fn(async () => buildResult);
     const getBuildByKey = vi.fn(() => buildResult);
-    server.setCallbacks({ onBuildComplete: vi.fn(), getBuild, getBuildByKey });
+    server.setCallbacks({
+      onBuildComplete: vi.fn(),
+      getBuild,
+      getUnitIcon: vi.fn(async () => null),
+      getBuildByKey,
+    });
 
     const response = await handlePanelRequest(
       server,
@@ -496,6 +517,7 @@ describe("PanelHttpServer build cache", () => {
     server.setCallbacks({
       onBuildComplete: vi.fn(),
       getBuild: vi.fn(async () => buildResult),
+      getUnitIcon: vi.fn(async () => null),
       getBuildByKey,
     });
 
@@ -522,6 +544,7 @@ describe("PanelHttpServer build cache", () => {
     server.setCallbacks({
       onBuildComplete: vi.fn(),
       getBuild: vi.fn(async () => buildResult),
+      getUnitIcon: vi.fn(async () => null),
       getBuildByKey,
     });
 
@@ -569,6 +592,7 @@ describe("PanelHttpServer build cache", () => {
     server.setCallbacks({
       onBuildComplete: vi.fn(),
       getBuild: vi.fn(async () => activated),
+      getUnitIcon: vi.fn(async () => null),
       getBuildByKey: vi.fn(() => activated),
     });
 

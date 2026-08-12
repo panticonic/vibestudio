@@ -640,6 +640,7 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
 
       panelHttpServer.setCallbacks({
         getBuild: (source, ref) => buildSystem.getBuild(source, ref),
+        getUnitIcon: (source, artifactPath) => buildSystem.getUnitIcon(source, artifactPath),
         getBuildByKey: (buildKey) => buildSystem.getBuildByKey(buildKey),
         onBuildComplete: (source, error) => {
           eventService.emit("build:complete", { source, ...(error ? { error } : {}) });

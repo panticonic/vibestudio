@@ -106,6 +106,7 @@ import {
   ExecutionRootProviderRegistry,
   executionArtifactRefFromBuild,
 } from "../executionRootProviders.js";
+import { assertUnitIconSize, declaredUnitIconPath } from "./unitIcon.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -289,6 +290,16 @@ export interface BuildReportProgress {
   readonly phase: "bundling" | "typechecking";
 }
 
+export interface ResolvedUnitIcon {
+  source: string;
+  path: string;
+  stateHash: string;
+  effectiveVersion: string;
+  contentHash: string;
+  contentType: string;
+  body: Buffer;
+}
+
 export interface BuildSystemV2 {
   /**
    * Get build result for a panel/worker/extension/library.
@@ -310,6 +321,9 @@ export interface BuildSystemV2 {
     ref?: string,
     options?: BuildUnitOptions & { library?: false | undefined }
   ): Promise<BuildResult>;
+
+  /** Resolve the declared icon directly from exact workspace content. */
+  getUnitIcon(source: string, artifactPath: string): Promise<ResolvedUnitIcon | null>;
 
   /** Resolve a build unit at `main`, a `ctx:*` context selector, or `state:*`. */
   resolveBuildUnit(unitPath: string, ref?: string): Promise<BuildUnitResolution | null>;
@@ -1691,6 +1705,86 @@ export async function initBuildSystemV2(
     return report;
   };
 
+  // An icon is presentation data, not an executable build. Resolve all requests
+  // in one browser wave against one exact head view, then retain immutable file
+  // results by state. This keeps the canonical manifest/path/size validation
+  // while avoiding source materialization, bundling, and typechecking.
+  const MAX_UNIT_ICONS = 256;
+  const unitIconCache = new Map<string, ResolvedUnitIcon>();
+  const unitIconFlights = new Map<string, Promise<ResolvedUnitIcon | null>>();
+  let unitIconViewFlight: Promise<GraphView & { stateHash: string }> | null = null;
+  const currentUnitIconView = (): Promise<GraphView & { stateHash: string }> => {
+    if (unitIconViewFlight) return unitIconViewFlight;
+    unitIconViewFlight = (async () => {
+      const fresh = await source.ensureFresh();
+      await trigger.whenSettled();
+      const snapshot = currentState();
+      if (snapshot.stateHash === fresh.stateHash) {
+        return { graph: snapshot.graph, evMap: snapshot.evMap, stateHash: snapshot.stateHash };
+      }
+      const view = await viewAt(fresh.stateHash);
+      return { ...view, stateHash: fresh.stateHash };
+    })().finally(() => {
+      unitIconViewFlight = null;
+    });
+    return unitIconViewFlight;
+  };
+  const cacheUnitIcon = (key: string, icon: ResolvedUnitIcon): ResolvedUnitIcon => {
+    unitIconCache.delete(key);
+    unitIconCache.set(key, icon);
+    while (unitIconCache.size > MAX_UNIT_ICONS) {
+      const oldest = unitIconCache.keys().next().value as string | undefined;
+      if (oldest === undefined) break;
+      unitIconCache.delete(oldest);
+    }
+    return icon;
+  };
+  const getUnitIcon = async (
+    requestedSource: string,
+    requestedPath: string
+  ): Promise<ResolvedUnitIcon | null> => {
+    const view = await currentUnitIconView();
+    const node = view.graph
+      .allNodes()
+      .find((candidate) => candidate.relativePath === requestedSource);
+    if (!node) return null;
+    const declaredPath = declaredUnitIconPath(node.manifest);
+    if (!declaredPath || declaredPath !== requestedPath) return null;
+
+    const key = `${view.stateHash}\0${node.relativePath}\0${declaredPath}`;
+    const cached = unitIconCache.get(key);
+    if (cached) return cacheUnitIcon(key, cached);
+    const existing = unitIconFlights.get(key);
+    if (existing) return existing;
+
+    const flight = (async () => {
+      const file = await source.readFile(view.stateHash, `${node.relativePath}/${declaredPath}`);
+      if (!file) return null;
+      const declaredIcon = assertPresent(node.manifest.icon);
+      assertUnitIconSize(declaredIcon, file.size);
+      const body =
+        file.content.kind === "text"
+          ? Buffer.from(file.content.text, "utf8")
+          : Buffer.from(file.content.base64, "base64");
+      if (body.byteLength !== file.size) {
+        throw new Error(`Workspace icon size mismatch for ${node.relativePath}/${declaredPath}`);
+      }
+      return cacheUnitIcon(key, {
+        source: node.relativePath,
+        path: declaredPath,
+        stateHash: view.stateHash,
+        effectiveVersion: assertPresent(view.evMap[node.name]),
+        contentHash: file.contentHash,
+        contentType: buildStore.contentTypeForPath(declaredPath),
+        body,
+      });
+    })().finally(() => {
+      unitIconFlights.delete(key);
+    });
+    unitIconFlights.set(key, flight);
+    return flight;
+  };
+
   const getBuild = async function getBuild(
     unitPath: string,
     ref?: string,
@@ -1829,6 +1923,7 @@ export async function initBuildSystemV2(
 
   const buildSystem: BuildSystemV2 = {
     getBuild,
+    getUnitIcon,
     bindRuntimeImage,
 
     async resolveBuildUnit(

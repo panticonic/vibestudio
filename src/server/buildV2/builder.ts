@@ -63,6 +63,7 @@ import {
   ensureExtensionRuntimeDeps,
 } from "./externalDeps.js";
 import { collectTransitiveInternalDeps, getBuildSourceProvider } from "./buildSource.js";
+import { assertUnitIconSize, declaredUnitIconPath } from "./unitIcon.js";
 import { PANEL_CSP_META } from "@vibestudio/shared/constants";
 import { EXTENSION_RUNTIME_ABI_VERSION } from "@vibestudio/shared/extensionRuntimeAbi";
 import { getAdapter } from "./adapters/index.js";
@@ -1957,8 +1958,6 @@ function bundleArtifacts(bundle: string): BuildArtifacts {
   };
 }
 
-const MAX_UNIT_ICON_BYTES = 1024 * 1024;
-
 /**
  * Materialize a manifest image icon into the immutable build. Emoji icons have
  * no artifact; they remain presentation metadata. A missing or oversized image
@@ -1969,10 +1968,9 @@ function manifestIconArtifact(
   manifest: Record<string, unknown>,
   sourcePath: string
 ): BuildArtifactInput | null {
-  const icon = manifest["icon"];
-  if (typeof icon !== "string" || !icon.startsWith("./")) return null;
-
-  const artifactPath = icon.slice(2);
+  const artifactPath = declaredUnitIconPath(manifest);
+  if (!artifactPath) return null;
+  const icon = assertPresent(manifest["icon"] as string | undefined);
   const sourceRoot = path.resolve(sourcePath);
   const iconPath = path.resolve(sourceRoot, artifactPath);
   if (!iconPath.startsWith(`${sourceRoot}${path.sep}`)) {
@@ -1980,9 +1978,7 @@ function manifestIconArtifact(
   }
   const stat = fs.statSync(iconPath);
   if (!stat.isFile()) throw new Error(`vibestudio.icon is not a file: ${icon}`);
-  if (stat.size > MAX_UNIT_ICON_BYTES) {
-    throw new Error(`vibestudio.icon exceeds ${MAX_UNIT_ICON_BYTES} bytes: ${icon}`);
-  }
+  assertUnitIconSize(icon, stat.size);
 
   const bytes = fs.readFileSync(iconPath);
   const isSvg = path.extname(iconPath).toLowerCase() === ".svg";

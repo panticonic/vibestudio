@@ -21,6 +21,7 @@ import type { CdpBridge } from "./cdpBridge.js";
 import { PANEL_BOOTSTRAP_SCRIPT } from "./panelBootstrapScript.js";
 import { assertPresent } from "../lintHelpers";
 import { TransportDerivativeCache } from "./buildV2/transportDerivativeCache.js";
+import type { ResolvedUnitIcon } from "./buildV2/index.js";
 
 const log = createDevLogger("PanelHttpServer");
 
@@ -96,6 +97,9 @@ export interface PanelHttpCallbacks {
 
   /** Build trigger */
   getBuild(source: string, ref?: string): Promise<BuildResult>;
+
+  /** Declared icon bytes from the exact workspace content state. */
+  getUnitIcon(source: string, artifactPath: string): Promise<ResolvedUnitIcon | null>;
 
   /** Resolve an already-built immutable artifact selected by runtime activation. */
   getBuildByKey(buildKey: string): BuildResult | null;
@@ -458,28 +462,31 @@ export class PanelHttpServer {
         return;
       }
       try {
-        const build = await this.callbacks?.getBuild(source);
-        const artifact = build?.artifacts.find(
-          (candidate) => candidate.role === "asset" && candidate.path === artifactPath
-        );
-        if (!artifact) {
+        const icon = await this.callbacks?.getUnitIcon(source, artifactPath);
+        if (!icon) {
           res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
           res.end("Unit icon not found");
           return;
         }
-        const body =
-          artifact.encoding === "base64"
-            ? Buffer.from(artifact.content, "base64")
-            : Buffer.from(artifact.content, "utf8");
-        res.writeHead(200, {
-          "Content-Type": artifact.contentType,
-          "Content-Length": body.byteLength,
-          "Cache-Control": "no-cache",
+        const etag = `"${icon.contentHash}"`;
+        const headers = {
+          "Cache-Control": "private, no-cache",
+          ETag: etag,
           "X-Content-Type-Options": "nosniff",
+        };
+        if (requestAcceptsEtag(req, etag)) {
+          res.writeHead(304, headers);
+          res.end();
+          return;
+        }
+        res.writeHead(200, {
+          ...headers,
+          "Content-Type": icon.contentType,
+          "Content-Length": icon.body.byteLength,
         });
-        res.end(body);
+        res.end(icon.body);
       } catch (error) {
-        log.warn(`Unit icon build failed for ${source}: ${String(error)}`);
+        log.warn(`Unit icon resolution failed for ${source}: ${String(error)}`);
         res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
         res.end("Unit icon unavailable");
       }
@@ -1114,4 +1121,15 @@ export class PanelHttpServer {
     });
     res.end(DEFAULT_FAVICON_SVG);
   }
+}
+
+function requestAcceptsEtag(req: import("http").IncomingMessage, etag: string): boolean {
+  const header = req.headers["if-none-match"];
+  const values: string[] = Array.isArray(header) ? header : header ? [header] : [];
+  return values.some((value) =>
+    value.split(",").some((candidate) => {
+      const normalized = candidate.trim();
+      return normalized === "*" || normalized === etag || normalized === `W/${etag}`;
+    })
+  );
 }

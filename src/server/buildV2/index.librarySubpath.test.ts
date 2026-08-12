@@ -36,6 +36,9 @@ function fakeWorkspaceSource(
     async resolveContextState() {
       return TEST_STATE;
     },
+    async readFile() {
+      return null;
+    },
     executionStateForContent(stateHash) {
       return { kind: "event", eventId: `event:${stateHash}` };
     },
@@ -78,6 +81,9 @@ function fakeMultiStateWorkspaceSource(
     },
     async resolveContextState(contextId) {
       return heads[`ctx:${contextId}`] ?? TEST_STATE;
+    },
+    async readFile() {
+      return null;
     },
     executionStateForContent(stateHash) {
       return { kind: "event", eventId: `event:${stateHash}` };

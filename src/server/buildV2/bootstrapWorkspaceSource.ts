@@ -9,6 +9,8 @@ import type { BuildSourceProvider } from "./buildSource.js";
 import { discoverPackageGraph } from "./packageGraph.js";
 import type { BuildRecord, WorkspaceStateSource } from "./stateTrigger.js";
 
+const UTF8_DECODER = new TextDecoder("utf-8", { fatal: true });
+
 /**
  * The immutable identity captured before semantic workspace initialization.
  *
@@ -94,6 +96,38 @@ export class BootstrapWorkspaceSource implements WorkspaceStateSource, BuildSour
 
   async resolveContextState(_contextId: string): Promise<string> {
     throw new Error("Bootstrap workspace source has no semantic contexts");
+  }
+
+  async readFile(stateHash: string, filePath: string) {
+    await this.requireSnapshot(stateHash);
+    const normalized = normalizeRelativePath(filePath);
+    const absolutePath = path.resolve(this.sourceRoot, ...normalized.split("/"));
+    const sourceRoot = `${path.resolve(this.sourceRoot)}${path.sep}`;
+    if (!absolutePath.startsWith(sourceRoot)) {
+      throw new Error(`Bootstrap workspace path escapes its source: ${filePath}`);
+    }
+    let bytes: Buffer;
+    let stat: Awaited<ReturnType<typeof fs.stat>>;
+    try {
+      [bytes, stat] = await Promise.all([fs.readFile(absolutePath), fs.stat(absolutePath)]);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+      throw error;
+    }
+    if (!stat.isFile()) return null;
+    let content: { kind: "text"; text: string } | { kind: "bytes"; base64: string };
+    try {
+      content = { kind: "text", text: UTF8_DECODER.decode(bytes) };
+    } catch {
+      content = { kind: "bytes", base64: bytes.toString("base64") };
+    }
+    return {
+      content,
+      stateHash,
+      contentHash: createHash("sha256").update(bytes).digest("hex"),
+      mode: stat.mode & 0o111 ? 0o100755 : 0o100644,
+      size: bytes.byteLength,
+    };
   }
 
   executionStateForContent(stateHash: string) {
