@@ -976,7 +976,7 @@ function OpenTabs(props: { selection: ImportSourceSelection }) {
               // Grow into the panel instead of stranding the list in a 360px
               // box with empty space below it.
               minHeight: 200,
-              maxHeight: "calc(100vh - 360px)",
+              maxHeight: "calc(100dvh - 360px)",
               overflowY: "auto",
               overscrollBehavior: "contain",
             }}

@@ -15,7 +15,7 @@ import "@radix-ui/themes/styles.css";
 import "@workspace/ui/foundation.css";
 import "@workspace/ui/themes/vibestudio.css";
 import { panel } from "@workspace/runtime";
-import { usePanelTheme, useStateArgs } from "@workspace/react";
+import { useIsMobile, usePanelTheme, useStateArgs } from "@workspace/react";
 import { ImportSourceRail, type ImportSourceSelection } from "./components/ImportSourceRail";
 import { MigrateTab } from "./components/MigrateTab";
 import { InspectTab } from "./components/InspectTab";
@@ -36,6 +36,7 @@ function useNow(intervalMs = 60_000): number {
 
 export default function BrowserImportInspector() {
   const theme = usePanelTheme();
+  const isMobile = useIsMobile();
   const stateArgs = useStateArgs<InspectorStateArgs>();
   const now = useNow();
   const [selection, setSelection] = useState<ImportSourceSelection | null>(null);
@@ -48,10 +49,17 @@ export default function BrowserImportInspector() {
 
   return (
     <Theme appearance={theme} accentColor="iris" radius="medium">
-      <Flex style={{ height: "100vh", width: "100%" }}>
+      <Flex direction={isMobile ? "column" : "row"} style={{ height: "100dvh", width: "100%" }}>
         <ImportSourceRail selected={selection} onSelect={setSelection} />
         <Box
-          style={{ flex: 1, minWidth: 0, height: "100%", display: "flex", flexDirection: "column" }}
+          style={{
+            flex: 1,
+            minWidth: 0,
+            minHeight: 0,
+            height: "100%",
+            display: "flex",
+            flexDirection: "column",
+          }}
         >
           <Tabs.Root
             value={tab}
