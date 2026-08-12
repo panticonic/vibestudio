@@ -1,6 +1,7 @@
 import type { TestAuthorityPolicy, TestCase } from "../types.js";
 import {
   findLastAgentMessage,
+  hasLoadedSkill,
   noIncompleteInvocations,
   successfulEvalCode,
   successfulEvalReturnValues,
@@ -32,6 +33,52 @@ function records(value: unknown, found: Record<string, unknown>[] = []): Record<
 
 function exactNumber(message: string, value: number): boolean {
   return new RegExp(`(?:^|\\D)${value}(?:\\D|$)`, "u").test(message);
+}
+
+function startupDiagnosisChecked(result: Parameters<typeof noIncompleteInvocations>[0]) {
+  if (!hasLoadedSkill(result, "server-logs")) {
+    return {
+      passed: false,
+      reason: "The vague incident did not route through server-log guidance",
+    };
+  }
+
+  const code = successfulEvalCode(result);
+  const boundedInspection =
+    /serverLog\.tail\(\s*[1-9]\d*/u.test(code) ||
+    /serverLog\.query\(\s*\{[\s\S]*?\blimit\s*:\s*[1-9]\d*/u.test(code);
+  if (!boundedInspection) {
+    return {
+      passed: false,
+      reason: "The startup diagnosis did not use one bounded host-log inspection",
+    };
+  }
+
+  const envelope = records(successfulEvalReturnValues(result)).find(
+    (item) =>
+      Array.isArray(item["records"]) &&
+      Number.isInteger(item["latestSeq"]) &&
+      typeof item["serverBootId"] === "string"
+  );
+  if (!envelope) {
+    return { passed: false, reason: "No coordinated server-log snapshot was observed" };
+  }
+
+  const final = findLastAgentMessage(result);
+  const bootId = String(envelope["serverBootId"]);
+  const latestSeq = Number(envelope["latestSeq"]);
+  if (
+    !final.includes(bootId) ||
+    !exactNumber(final, latestSeq) ||
+    !/(?:start|startup|boot|slow|delay|build|normal|warn|error|incident)/iu.test(final)
+  ) {
+    return {
+      passed: false,
+      reason:
+        "The final diagnosis did not preserve the observed boot/sequence coordinates and explain the startup evidence",
+    };
+  }
+  return noIncompleteInvocations(result);
 }
 
 function checked(
@@ -70,15 +117,7 @@ export const serverLogTests: TestCase[] = [
     prompt:
       "Something in this workspace seemed slow to start a moment ago. Can you check the recent server logs and tell me what happened?",
     validation: "agent-evidence",
-    validate: (result) => {
-      const code = successfulEvalCode(result);
-      if (!/serverLog\.(?:query|tail|stats)\b/u.test(code)) {
-        return { passed: false, reason: "No successful server-log inspection was observed" };
-      }
-      return successfulEvalReturnValues(result).length > 0
-        ? noIncompleteInvocations(result)
-        : { passed: false, reason: "Server-log inspection returned no observable evidence" };
-    },
+    validate: startupDiagnosisChecked,
   },
   {
     name: "server-log-query-stats",

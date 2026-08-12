@@ -189,19 +189,39 @@ describe("storage and discovery semantic validators", () => {
       {
         details: {
           success: true,
-          returnValue: { records: [{ level: "info", message: "startup complete" }] },
+          returnValue: {
+            records: [{ level: "info", message: "startup complete" }],
+            latestSeq: 41,
+            serverBootId: "boot:test-startup",
+          },
         },
       }
     );
+    const skill = invocation(
+      "docs_open",
+      { id: "server-logs" },
+      { details: { id: "server-logs", title: "Server logs" } }
+    );
 
     expect(test.validation).toBe("agent-evidence");
-    expect(test.validate(execution("Startup completed after one slow build.", [observed]))).toEqual(
-      {
-        passed: true,
-        reason: undefined,
-      }
-    );
+    expect(
+      test.validate(
+        execution(
+          "Startup completed after one slow build. Evidence: boot:test-startup at sequence 41.",
+          [skill, observed]
+        )
+      )
+    ).toEqual({ passed: true, reason: undefined });
     expect(test.validate(execution("Everything looks fine."))).toMatchObject({ passed: false });
+    expect(
+      test.validate(
+        execution("Startup looked normal at boot:test-startup sequence 41.", [observed])
+      )
+    ).toMatchObject({ passed: false, reason: expect.stringContaining("guidance") });
+    expect(test.validate(execution("Startup looked normal.", [skill, observed]))).toMatchObject({
+      passed: false,
+      reason: expect.stringContaining("coordinates"),
+    });
   });
 
   it("requires an identity-joined webhook lifecycle and final cleanup", () => {
