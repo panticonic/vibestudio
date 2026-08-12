@@ -4,7 +4,7 @@ import { Kbd, Flex, Text } from "@radix-ui/themes";
 import { CommandPalette, type CommandItem } from "@workspace/ui/command";
 import { setThemeModeAtom, setThemeConfigAtom } from "../state/themeAtoms";
 import { workspaceChooserDialogOpenAtom } from "../state/appModeAtoms";
-import { notification, panel, palette } from "../shell/client";
+import { hostCommands, notification, panel } from "../shell/client";
 import { useShellEvent } from "../shell/useShellEvent";
 import { useShellOverlay } from "../shell/useShellOverlay";
 
@@ -27,7 +27,7 @@ type PaletteAction =
 
 type PanelContribution = {
   panelId: string;
-  commands: { id: string; label: string; hint?: string; section?: string }[];
+  commands: { id: string; label: string; description?: string; group?: string }[];
 };
 
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
@@ -86,7 +86,7 @@ export function AppCommandPalette() {
     if (!open) return;
     setQuery("");
     let live = true;
-    void palette
+    void hostCommands
       .list()
       .then((list) => {
         if (live) setContributions(list as PanelContribution[]);
@@ -165,8 +165,8 @@ export function AppCommandPalette() {
         contribution.commands.map((command) => ({
           id: `${contribution.panelId}:${command.id}`,
           label: command.label,
-          hint: command.hint,
-          section: command.section ?? "Panel",
+          hint: command.description,
+          section: command.group ?? "Panel",
           value: { kind: "panel" as const, panelId: contribution.panelId, commandId: command.id },
         }))
       ),
@@ -191,7 +191,7 @@ export function AppCommandPalette() {
       action?.kind === "global"
         ? action.run()
         : action?.kind === "panel"
-          ? palette.run(action.panelId, action.commandId)
+          ? hostCommands.run(action.panelId, action.commandId)
           : undefined;
     if (operation) {
       void operation.catch((error: unknown) => {

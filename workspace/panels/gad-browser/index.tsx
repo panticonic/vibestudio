@@ -57,7 +57,7 @@ import type {
 import { formatRelativeTime } from "@vibestudio/git/formatting";
 import {
   useIsMobile,
-  usePaletteCommands,
+  useHostCommands,
   usePanelTheme,
   usePanelThemeConfig,
   useStateArgs,
@@ -1927,18 +1927,18 @@ export function App() {
     }
   }
 
-  // Contribute GAD actions to the app-level command palette (Cmd/Ctrl+K).
-  const paletteCommands = useMemo(
+  // Contribute GAD actions to the owning host.
+  const hostCommands = useMemo(
     () => [
-      { id: "gad-refresh", label: "Refresh workspace history", section: "Workspace History" },
-      { id: "gad-git-refresh", label: "Refresh repository sync", section: "Workspace History" },
-      { id: "gad-check-integrity", label: "Check workspace history", section: "Workspace History" },
-      { id: "gad-validate-hashes", label: "Validate stored data", section: "Workspace History" },
-      { id: "gad-replay-events", label: "Rebuild activity views", section: "Workspace History" },
+      { id: "gad-refresh", label: "Refresh workspace history", group: "Workspace History" },
+      { id: "gad-git-refresh", label: "Refresh repository sync", group: "Workspace History" },
+      { id: "gad-check-integrity", label: "Check workspace history", group: "Workspace History" },
+      { id: "gad-validate-hashes", label: "Validate stored data", group: "Workspace History" },
+      { id: "gad-replay-events", label: "Rebuild activity views", group: "Workspace History" },
     ],
     []
   );
-  usePaletteCommands(paletteCommands, (id) => {
+  useHostCommands(hostCommands, (id) => {
     if (id === "gad-refresh") void refresh();
     else if (id === "gad-git-refresh") void refreshGitStatus(true);
     else if (id === "gad-check-integrity") void checkIntegrity();

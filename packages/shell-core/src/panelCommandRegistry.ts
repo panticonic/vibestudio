@@ -1,20 +1,20 @@
 import type { RpcEventContext } from "@vibestudio/rpc";
-import type { PaletteCommand } from "@vibestudio/shared/types";
+import type { HostCommand } from "@vibestudio/shared/hostCommands";
 
-export interface PanelCommandContribution {
+export interface HostCommandContribution {
   panelId: string;
-  commands: PaletteCommand[];
+  commands: HostCommand[];
 }
 
-function isPaletteCommand(value: unknown): value is PaletteCommand {
-  const command = value as Partial<PaletteCommand> | null;
+function isHostCommand(value: unknown): value is HostCommand {
+  const command = value as Partial<HostCommand> | null;
   return (
     !!command &&
     typeof command === "object" &&
     typeof command.id === "string" &&
     typeof command.label === "string" &&
-    (command.hint === undefined || typeof command.hint === "string") &&
-    (command.section === undefined || typeof command.section === "string")
+    (command.description === undefined || typeof command.description === "string") &&
+    (command.group === undefined || typeof command.group === "string")
   );
 }
 
@@ -23,13 +23,13 @@ function isPaletteCommand(value: unknown): value is PaletteCommand {
  * Native and desktop shells consume the same runtime event; only their
  * presentation differs (touch action sheet versus searchable palette).
  */
-export class PanelCommandRegistry {
-  private readonly contributions = new Map<string, PaletteCommand[]>();
+export class HostCommandRegistry {
+  private readonly contributions = new Map<string, HostCommand[]>();
 
   accept(event: Pick<RpcEventContext, "caller" | "payload">): boolean {
     if (event.caller.callerKind !== "panel" && event.caller.callerKind !== "app") return false;
     const commands = (event.payload as { commands?: unknown } | null)?.commands;
-    if (!Array.isArray(commands) || !commands.every(isPaletteCommand)) return false;
+    if (!Array.isArray(commands) || !commands.every(isHostCommand)) return false;
 
     const panelId = event.caller.callerPanelId ?? event.caller.callerId;
     if (commands.length === 0) this.contributions.delete(panelId);
@@ -37,11 +37,11 @@ export class PanelCommandRegistry {
     return true;
   }
 
-  get(panelId: string): PaletteCommand[] {
+  get(panelId: string): HostCommand[] {
     return this.contributions.get(panelId) ?? [];
   }
 
-  list(focusedPanelId?: string | null): PanelCommandContribution[] {
+  list(focusedPanelId?: string | null): HostCommandContribution[] {
     return [...this.contributions]
       .map(([panelId, commands]) => ({ panelId, commands }))
       .sort((a, b) => (a.panelId === focusedPanelId ? -1 : b.panelId === focusedPanelId ? 1 : 0));

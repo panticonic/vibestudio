@@ -2,12 +2,13 @@ import { createBridgeAdapter } from "./bridgeAdapter";
 import type { RpcConnectionStatus, RpcEnvelope } from "@vibestudio/rpc";
 import type { WebRtcSession } from "@vibestudio/rpc/transports/webrtcClient";
 import type { PanelEntityId } from "@vibestudio/shared/panel/ids";
+import { HOST_COMMAND_CONTRIBUTION_EVENT } from "@vibestudio/shared/hostCommands";
 
 function createAdapter(overrides?: Partial<Parameters<typeof createBridgeAdapter>[0]>) {
   return createBridgeAdapter({
     panelManager: {} as never,
     transport: {} as never,
-    callbacks: { navigateToPanel: jest.fn() },
+    callbacks: { navigateToPanel: jest.fn(), deliverToShell: jest.fn() },
     deliverToPanel: jest.fn(),
     getPanelLease: jest.fn(),
     ...overrides,
@@ -44,7 +45,7 @@ function panelRequestEnvelope(requestId: string): RpcEnvelope {
   };
 }
 
-function shellContributionEnvelope(): RpcEnvelope {
+function shellContributionEnvelope(event = HOST_COMMAND_CONTRIBUTION_EVENT): RpcEnvelope {
   const caller = { callerId: "panel:forged", callerKind: "panel" as const };
   return {
     from: caller.callerId,
@@ -53,7 +54,7 @@ function shellContributionEnvelope(): RpcEnvelope {
     provenance: [caller],
     message: {
       type: "event",
-      event: "runtime:palette-contribution",
+      event,
       fromId: caller.callerId,
       payload: { commands: [{ id: "chat-actions", label: "Conversation actions" }] },
     },
@@ -78,7 +79,7 @@ describe("bridgeAdapter panel init", () => {
     const adapter = createAdapter({
       panelManager: panelManager as never,
       transport: {} as never,
-      callbacks: { navigateToPanel: jest.fn() },
+      callbacks: { navigateToPanel: jest.fn(), deliverToShell: jest.fn() },
       getPanelInit,
     });
 
@@ -95,7 +96,7 @@ describe("bridgeAdapter panel init", () => {
     const adapter = createAdapter({
       panelManager: panelManager as never,
       transport: {} as never,
-      callbacks: { navigateToPanel: jest.fn() },
+      callbacks: { navigateToPanel: jest.fn(), deliverToShell: jest.fn() },
     });
 
     await expect(adapter.handle("panel:tree/panel-a", "getPanelInit", [])).resolves.toEqual({
@@ -119,22 +120,24 @@ describe("bridgeAdapter CDP routing", () => {
 });
 
 describe("bridgeAdapter panel session relay", () => {
-  it("keeps ephemeral shell chrome events at the owning mobile host", async () => {
-    const handleShellEvent = jest.fn(() => true);
+  it("keeps every shell envelope at the owning mobile host", async () => {
+    const deliverToShell = jest.fn();
     const openPanelSession = jest.fn();
+    const contribution = shellContributionEnvelope();
+    const futureEvent = shellContributionEnvelope("runtime:future-shell-capability");
     const adapter = createAdapter({
       transport: { openPanelSession } as never,
-      callbacks: { navigateToPanel: jest.fn(), handleShellEvent },
+      callbacks: { navigateToPanel: jest.fn(), deliverToShell },
     });
 
     await expect(
-      adapter.handle("panel:tree/panel-a", "postEnvelope", [shellContributionEnvelope()])
+      adapter.handle("panel:tree/panel-a", "postEnvelope", [contribution])
     ).resolves.toBeUndefined();
-    expect(handleShellEvent).toHaveBeenCalledWith(
-      "panel:tree/panel-a",
-      "runtime:palette-contribution",
-      { commands: [{ id: "chat-actions", label: "Conversation actions" }] }
-    );
+    await expect(
+      adapter.handle("panel:tree/panel-a", "postEnvelope", [futureEvent])
+    ).resolves.toBeUndefined();
+    expect(deliverToShell).toHaveBeenNthCalledWith(1, "panel:tree/panel-a", contribution);
+    expect(deliverToShell).toHaveBeenNthCalledWith(2, "panel:tree/panel-a", futureEvent);
     expect(openPanelSession).not.toHaveBeenCalled();
   });
 
@@ -152,7 +155,7 @@ describe("bridgeAdapter panel session relay", () => {
         openPanelSession: jest.fn(async () => session),
         waitUntilConnected,
       } as never,
-      callbacks: { navigateToPanel: jest.fn() },
+      callbacks: { navigateToPanel: jest.fn(), deliverToShell: jest.fn() },
       deliverToPanel: jest.fn(),
       getPanelLease: jest.fn(() => ({
         runtimeEntityId: "panel:runtime-a" as PanelEntityId,
@@ -180,7 +183,7 @@ describe("bridgeAdapter panel session relay", () => {
     const adapter = createAdapter({
       panelManager: {} as never,
       transport: { openPanelSession } as never,
-      callbacks: { navigateToPanel: jest.fn() },
+      callbacks: { navigateToPanel: jest.fn(), deliverToShell: jest.fn() },
       deliverToPanel: jest.fn(),
       getPanelLease: jest.fn(() => ({
         runtimeEntityId: "panel:runtime-a" as PanelEntityId,
@@ -216,7 +219,7 @@ describe("bridgeAdapter panel session relay", () => {
     const adapter = createAdapter({
       panelManager: {} as never,
       transport: { openPanelSession } as never,
-      callbacks: { navigateToPanel: jest.fn() },
+      callbacks: { navigateToPanel: jest.fn(), deliverToShell: jest.fn() },
       deliverToPanel: jest.fn(),
       getPanelLease: jest.fn(() => ({
         runtimeEntityId: "panel:runtime-a" as PanelEntityId,
@@ -261,7 +264,7 @@ describe("bridgeAdapter panel session relay", () => {
     const adapter = createAdapter({
       panelManager: {} as never,
       transport: { openPanelSession } as never,
-      callbacks: { navigateToPanel: jest.fn() },
+      callbacks: { navigateToPanel: jest.fn(), deliverToShell: jest.fn() },
       deliverToPanel: jest.fn(),
       getPanelLease: jest.fn(() => lease),
     });
@@ -294,7 +297,7 @@ describe("bridgeAdapter panel session relay", () => {
     const adapter = createAdapter({
       panelManager: {} as never,
       transport: { openPanelSession: jest.fn(async () => session) } as never,
-      callbacks: { navigateToPanel: jest.fn() },
+      callbacks: { navigateToPanel: jest.fn(), deliverToShell: jest.fn() },
       deliverToPanel: jest.fn(),
       getPanelLease: jest.fn(() =>
         hasLease
@@ -398,7 +401,7 @@ describe("bridgeAdapter upload streams", () => {
     const adapter = createAdapter({
       panelManager: {} as never,
       transport: { openPanelSession: jest.fn(async () => session) } as never,
-      callbacks: { navigateToPanel: jest.fn() },
+      callbacks: { navigateToPanel: jest.fn(), deliverToShell: jest.fn() },
       deliverToPanel,
       getPanelLease: jest.fn(() => ({
         runtimeEntityId: "panel:runtime-a" as PanelEntityId,

@@ -44,9 +44,10 @@ import { loadPinnedPanelIds, savePinnedPanelIds } from "../shellCore/pinnedPanel
 import { resolveMobileBackAction } from "../shellCore/mobileBackNavigation";
 import { mobileNavigationLayout } from "../shellCore/mobileLayout";
 import {
-  contributedPanelCommandId,
-  presentMobilePanelCommands,
+  contributedHostCommandId,
+  presentMobileHostCommands,
 } from "../shellCore/mobilePanelCommands";
+import { HOST_COMMAND_RUN_EVENT } from "@vibestudio/shared/hostCommands";
 import { PANEL_UI_IDLE_SWEEP_MS } from "@vibestudio/shared/constants";
 import { parseHostConfig } from "../services/panelUrls";
 import {
@@ -105,6 +106,7 @@ import {
   ArrowLeft as ArrowLeftIcon,
   ArrowRight as ArrowRightIcon,
   Bell as BellIcon,
+  Command as HostCommandIcon,
   Copy as CopyIcon,
   CopyPlus as CopyPlusIcon,
   ExternalLink as ExternalLinkIcon,
@@ -361,7 +363,7 @@ export function MainScreen() {
     (panelId: string) => {
       webViewRefsMap.current.delete(panelId);
       webViewThemeSignaturesRef.current.delete(panelId);
-      shellClient?.panelCommands.clear(panelId);
+      shellClient?.hostCommands.clear(panelId);
       if (shellClient) {
         void shellClient.panels.unload(panelId).catch((error: unknown) =>
           pushToast({
@@ -1390,9 +1392,7 @@ export function MainScreen() {
           "archive",
         ]
       );
-      const contributedCommands = presentMobilePanelCommands(
-        shellClient.panelCommands.get(panelId)
-      );
+      const contributedCommands = presentMobileHostCommands(shellClient.hostCommands.get(panelId));
       const isPinned = pinnedPanelIds.has(panelId);
       showActionSheet({
         title: panel?.title ?? "Panel",
@@ -1400,7 +1400,7 @@ export function MainScreen() {
         items: [
           ...contributedCommands.map((command) => ({
             ...command,
-            icon: MessageCircleIcon,
+            icon: HostCommandIcon,
           })),
           ...commands.map((command) => {
             const presentation = PANEL_COMMAND_PRESENTATION[command.id];
@@ -1414,7 +1414,7 @@ export function MainScreen() {
           }),
         ],
         onSelect: (id) => {
-          const commandId = contributedPanelCommandId(id);
+          const commandId = contributedHostCommandId(id);
           if (!commandId) {
             performPanelCommand(id as PanelCommandId, panelId);
             return;
@@ -1422,13 +1422,13 @@ export function MainScreen() {
           const webView = webViewRefsMap.current.get(panelId);
           if (!webView) {
             pushToast({
-              title: "Conversation is not ready",
+              title: "Panel command is not ready",
               message: "Wait for the panel to finish loading, then try again.",
               tone: "warning",
             });
             return;
           }
-          webView.dispatchHostEvent("runtime:palette-run", { commandId });
+          webView.dispatchHostEvent(HOST_COMMAND_RUN_EVENT, { commandId });
         },
       });
     },

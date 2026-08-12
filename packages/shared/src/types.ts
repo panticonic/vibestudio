@@ -124,20 +124,6 @@ export interface PackageManifest {
 
 export type ThemeMode = "light" | "dark" | "system";
 export type ThemeAppearance = "light" | "dark";
-/**
- * A command a panel contributes to the app-level command palette. The shell
- * aggregates these across panels and dispatches the chosen one back to the
- * owning panel over the runtime bridge (`runtime:palette-run`).
- */
-export interface PaletteCommand {
-  /** Stable id, unique within the contributing panel. */
-  id: string;
-  label: string;
-  /** Optional secondary line. */
-  hint?: string;
-  /** Group label (e.g. the panel's name); items sharing one render together. */
-  section?: string;
-}
 
 export interface AppInfo {
   version: string;

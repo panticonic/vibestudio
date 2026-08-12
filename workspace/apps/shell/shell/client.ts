@@ -78,7 +78,11 @@ import {
 } from "@vibestudio/shared/panelChrome";
 import type { WorkspaceTemplatePin } from "@vibestudio/workspace-contracts/types";
 import { createTemplateManagementClient } from "@workspace/template-management";
-import { PanelCommandRegistry } from "@vibestudio/shell-core/panelCommandRegistry";
+import { HostCommandRegistry } from "@vibestudio/shell-core/panelCommandRegistry";
+import {
+  HOST_COMMAND_CONTRIBUTION_EVENT,
+  HOST_COMMAND_RUN_EVENT,
+} from "@vibestudio/shared/hostCommands";
 import { createBrowserSiteActions } from "./browserSiteActions";
 // Type for the shell transport bridge injected by the preload script
 type ShellTransportBridge = {
@@ -500,17 +504,17 @@ export const panel = {
 // =============================================================================
 // Panel commands (shared registry; desktop presents them in the command palette)
 // =============================================================================
-const panelCommandRegistry = new PanelCommandRegistry();
+const hostCommandRegistry = new HostCommandRegistry();
 
-rpc.on("runtime:palette-contribution", (event) => panelCommandRegistry.accept(event));
+rpc.on(HOST_COMMAND_CONTRIBUTION_EVENT, (event) => hostCommandRegistry.accept(event));
 
-export const palette = {
+export const hostCommands = {
   list: async () => {
     const focusedPanelId = await viewClient.getFocusedPanelId().catch(() => null);
-    return panelCommandRegistry.list(focusedPanelId);
+    return hostCommandRegistry.list(focusedPanelId);
   },
   run: (panelId: string, commandId: string) =>
-    rpc.emit(panelId, "runtime:palette-run", { commandId }),
+    rpc.emit(panelId, HOST_COMMAND_RUN_EVENT, { commandId }),
 };
 // =============================================================================
 // View Service

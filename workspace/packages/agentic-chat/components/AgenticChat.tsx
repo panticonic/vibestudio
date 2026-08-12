@@ -3,7 +3,7 @@ import { Theme } from "@radix-ui/themes";
 import { forwardRef, useEffect, useImperativeHandle } from "react";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { ChatLayout } from "./ChatLayout";
-import { ChatPaletteCommands } from "./ChatPaletteCommands";
+import { ChatHostCommands } from "./ChatPaletteCommands";
 import { ChatProvider } from "../context/ChatProvider";
 import { useAgenticChat } from "../hooks/useAgenticChat";
 import type {
@@ -173,7 +173,7 @@ export const AgenticChat = forwardRef<AgenticChatHandle, AgenticChatProps>(funct
         }}
       >
         <ChatProvider value={contextValue} inputValue={inputContextValue}>
-          <ChatPaletteCommands />
+          <ChatHostCommands />
           <ChatLayout
             features={features}
             renderMessage={renderMessage}

@@ -33,7 +33,7 @@ import { rpc } from "@workspace/runtime";
 // arg-spreading wrapper over the portable `rpc.expose`, kept local to the panel.
 const expose = (method: string, handler: (...args: any[]) => unknown | Promise<unknown>) =>
   rpc.expose(method, (request) => handler(...request.args));
-import { usePanelTheme, usePaletteCommands, usePanelThemeConfig } from "@workspace/react";
+import { useHostCommands, usePanelTheme, usePanelThemeConfig } from "@workspace/react";
 import { PanelChrome, Stack } from "@workspace/ui/layout";
 import "@workspace/ui/foundation.css";
 import "@workspace/ui/themes/vibestudio.css";
@@ -384,16 +384,16 @@ function App() {
   // Contribute testbench actions to the app command palette (Cmd/Ctrl+K).
   // Controlled tabs make tab-switching reachable; "Run all" mirrors the RPC
   // path and jumps to History, which refetches on mount so the run shows up.
-  const paletteCommands = useMemo(
+  const hostCommands = useMemo(
     () => [
-      { id: "tb-suites", label: "Show test suites", section: "Testbench" },
-      { id: "tb-history", label: "Show run history", section: "Testbench" },
-      { id: "tb-profiles", label: "Show profiles", section: "Testbench" },
-      { id: "tb-run-all", label: "Run all test suites", section: "Testbench" },
+      { id: "tb-suites", label: "Show test suites", group: "Testbench" },
+      { id: "tb-history", label: "Show run history", group: "Testbench" },
+      { id: "tb-profiles", label: "Show profiles", group: "Testbench" },
+      { id: "tb-run-all", label: "Run all test suites", group: "Testbench" },
     ],
     []
   );
-  usePaletteCommands(paletteCommands, (id) => {
+  useHostCommands(hostCommands, (id) => {
     if (id === "tb-suites") setActiveTab("suites");
     else if (id === "tb-history") setActiveTab("history");
     else if (id === "tb-profiles") setActiveTab("profiles");

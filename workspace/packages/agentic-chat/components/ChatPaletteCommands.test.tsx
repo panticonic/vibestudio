@@ -2,20 +2,20 @@
 
 import { act, render } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ChatPaletteCommands } from "./ChatPaletteCommands";
+import { ChatHostCommands } from "./ChatPaletteCommands";
 
-const palette = vi.hoisted(() => ({
-  commands: [] as Array<{ id: string; label: string; hint?: string; section: string }>,
+const host = vi.hoisted(() => ({
+  commands: [] as Array<{ id: string; label: string; description?: string; group: string }>,
   run: null as ((id: string) => void) | null,
 }));
 
 vi.mock("@workspace/react", () => ({
-  usePaletteCommands: (
-    commands: Array<{ id: string; label: string; hint?: string; section: string }>,
+  useHostCommands: (
+    commands: Array<{ id: string; label: string; description?: string; group: string }>,
     onRun: (id: string) => void
   ) => {
-    palette.commands = commands;
-    palette.run = onRun;
+    host.commands = commands;
+    host.run = onRun;
   },
 }));
 vi.mock("../context/ChatContext", () => ({
@@ -38,30 +38,28 @@ vi.mock("./ChatNativeActionsDialog", () => ({
 }));
 
 afterEach(() => {
-  palette.commands = [];
-  palette.run = null;
+  host.commands = [];
+  host.run = null;
   Reflect.deleteProperty(globalThis, "__vibestudioHostPlatform");
 });
 
-describe("ChatPaletteCommands native presentation", () => {
+describe("ChatHostCommands native presentation", () => {
   it("keeps the native-only conversation entry out of the desktop palette", () => {
-    render(<ChatPaletteCommands />);
-    expect(palette.commands.map((command) => command.id)).not.toContain(
-      "chat-conversation-actions"
-    );
+    render(<ChatHostCommands />);
+    expect(host.commands.map((command) => command.id)).not.toContain("chat-conversation-actions");
   });
 
   it("opens touch-oriented conversation controls from the contributed command", () => {
     Object.assign(globalThis, { __vibestudioHostPlatform: "mobile" });
-    const view = render(<ChatPaletteCommands />);
-    expect(palette.commands).toContainEqual({
+    const view = render(<ChatHostCommands />);
+    expect(host.commands).toContainEqual({
       id: "chat-conversation-actions",
       label: "Conversation actions",
-      hint: "People, agents, branches, and autonomy",
-      section: "Chat",
+      description: "People, agents, branches, and autonomy",
+      group: "Chat",
     });
 
-    act(() => palette.run?.("chat-conversation-actions"));
+    act(() => host.run?.("chat-conversation-actions"));
     expect(view.getByTestId("native-conversation-actions")).toBeTruthy();
   });
 });

@@ -31,7 +31,7 @@ import {
 } from "@radix-ui/react-icons";
 import { rpc } from "@workspace/runtime";
 import { EventsClient } from "@vibestudio/service-schemas/clients/eventsClient";
-import { useIsMobile, usePaletteCommands } from "@workspace/react";
+import { useHostCommands, useIsMobile } from "@workspace/react";
 import { AboutThemeRoot } from "@workspace/about-shared/ui";
 
 // ---------------------------------------------------------------------------
@@ -548,15 +548,14 @@ function ServerLogsPage() {
     });
   }, [scrollToBottom]);
 
-  // Palette command.
-  const paletteCommands = useMemo(
+  const hostCommands = useMemo(
     () => [
-      { id: "server-logs-follow", label: "Server Logs: toggle follow", section: "Server Logs" },
-      { id: "server-logs-clear", label: "Server Logs: clear view", section: "Server Logs" },
+      { id: "server-logs-follow", label: "Server Logs: toggle follow", group: "Server Logs" },
+      { id: "server-logs-clear", label: "Server Logs: clear view", group: "Server Logs" },
     ],
     []
   );
-  usePaletteCommands(paletteCommands, (id) => {
+  useHostCommands(hostCommands, (id) => {
     if (id === "server-logs-follow") toggleFollow();
     else if (id === "server-logs-clear") clearView();
   });

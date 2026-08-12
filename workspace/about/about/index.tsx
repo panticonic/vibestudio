@@ -16,7 +16,7 @@ import {
   Spinner,
 } from "@radix-ui/themes";
 import { rpc } from "@workspace/runtime";
-import { useIsMobile, usePaletteCommands } from "@workspace/react";
+import { useHostCommands, useIsMobile } from "@workspace/react";
 import { AboutThemeRoot, BrandMark } from "@workspace/about-shared/ui";
 import type { AppInfo } from "@workspace/about-shared/types";
 
@@ -57,12 +57,11 @@ function AboutPage() {
     loadInfo();
   }, [loadInfo]);
 
-  // Contribute a single action to the app-level command palette (Cmd/Ctrl+K).
-  const paletteCommands = useMemo(
-    () => [{ id: "about-reload-info", label: "Reload app info", section: "About" }],
+  const hostCommands = useMemo(
+    () => [{ id: "about-reload-info", label: "Reload app info", group: "About" }],
     []
   );
-  usePaletteCommands(paletteCommands, (id) => {
+  useHostCommands(hostCommands, (id) => {
     if (id === "about-reload-info") loadInfo();
   });
 

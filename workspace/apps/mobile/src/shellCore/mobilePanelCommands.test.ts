@@ -1,13 +1,13 @@
-import { contributedPanelCommandId, presentMobilePanelCommands } from "./mobilePanelCommands";
+import { contributedHostCommandId, presentMobileHostCommands } from "./mobilePanelCommands";
 
 describe("mobile contributed panel commands", () => {
   it("turns the focused panel's commands into discoverable native rows", () => {
-    const [item] = presentMobilePanelCommands([
+    const [item] = presentMobileHostCommands([
       {
         id: "chat/conversation-actions",
         label: "Conversation actions",
-        section: "Chat",
-        hint: "People, agents, branches, and autonomy",
+        group: "Chat",
+        description: "People, agents, branches, and autonomy",
       },
     ]);
 
@@ -16,11 +16,11 @@ describe("mobile contributed panel commands", () => {
       label: "Conversation actions",
       description: "Chat · People, agents, branches, and autonomy",
     });
-    expect(contributedPanelCommandId(item!.id)).toBe("chat/conversation-actions");
+    expect(contributedHostCommandId(item!.id)).toBe("chat/conversation-actions");
   });
 
   it("does not confuse durable panel actions with contributed commands", () => {
-    expect(contributedPanelCommandId("archive")).toBeNull();
-    expect(contributedPanelCommandId("contributed-panel-command:%E0%A4%A")).toBeNull();
+    expect(contributedHostCommandId("archive")).toBeNull();
+    expect(contributedHostCommandId("contributed-panel-command:%E0%A4%A")).toBeNull();
   });
 });

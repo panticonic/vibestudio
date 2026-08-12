@@ -13,6 +13,7 @@ import { EventService } from "@vibestudio/shared/eventsService";
 import { createEventsServiceDefinition } from "@vibestudio/service-schemas/bindings/eventsServiceDefinition";
 import { IpcDispatcher } from "./ipcDispatcher.js";
 import { createTestServiceDispatcher } from "@vibestudio/shared/serviceDispatcherTestUtils";
+import { HOST_COMMAND_CONTRIBUTION_EVENT } from "@vibestudio/shared/hostCommands";
 
 const ipcHandlers = new Map<string, (...args: never[]) => void>();
 const ipcInvokeHandlers = new Map<string, (...args: never[]) => unknown>();
@@ -729,8 +730,8 @@ describe("IpcDispatcher", () => {
     const message: RpcMessage = {
       type: "event",
       fromId: "panel-1",
-      event: "runtime:palette-contribution",
-      payload: { commands: [{ id: "open", label: "Open" }] },
+      event: "runtime:future-shell-capability",
+      payload: { value: true },
     };
     ipcHandlers.get("vibestudio:rpc:send")?.(
       { sender: panelWc } as never,
@@ -748,6 +749,30 @@ describe("IpcDispatcher", () => {
         message,
       })
     );
+  });
+
+  it("never falls through to a server session when the local shell is unavailable", () => {
+    const panelWc = makeWebContents(15);
+    const openPanelSession = vi.fn();
+    makeDispatcher({
+      resolve: () => ({ callerId: "panel-1", callerKind: "panel" }),
+      getShellWebContents: () => null,
+      getPanelRuntimeConnection: () => ({ runtimeEntityId: "entity-1", connectionId: "conn-1" }),
+      openPanelSession,
+    });
+
+    const message: RpcMessage = {
+      type: "event",
+      fromId: "panel-1",
+      event: HOST_COMMAND_CONTRIBUTION_EVENT,
+      payload: { commands: [{ id: "open", label: "Open" }] },
+    };
+    ipcHandlers.get("vibestudio:rpc:send")?.(
+      { sender: panelWc } as never,
+      rpcEnvelope("panel-1", "panel", message, undefined, "shell") as never
+    );
+
+    expect(openPanelSession).not.toHaveBeenCalled();
   });
 
   // §3.3: the ONLY recycle signal is a terminal isClosed(); transport status is

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { PanelCommandRegistry } from "./panelCommandRegistry";
+import { HostCommandRegistry } from "./panelCommandRegistry";
 
 function contribution(
   caller: { callerId: string; callerKind: "panel" | "app" | "worker"; callerPanelId?: string },
@@ -8,9 +8,9 @@ function contribution(
   return { caller, payload: { commands } };
 }
 
-describe("PanelCommandRegistry", () => {
+describe("HostCommandRegistry", () => {
   it("keys runtime panels by their durable visible slot", () => {
-    const registry = new PanelCommandRegistry();
+    const registry = new HostCommandRegistry();
     expect(
       registry.accept(
         contribution(
@@ -19,17 +19,17 @@ describe("PanelCommandRegistry", () => {
             callerKind: "panel",
             callerPanelId: "panel:tree/chat",
           },
-          [{ id: "new", label: "New conversation", section: "Chat" }]
+          [{ id: "new", label: "New conversation", group: "Chat" }]
         )
       )
     ).toBe(true);
     expect(registry.get("panel:tree/chat")).toEqual([
-      { id: "new", label: "New conversation", section: "Chat" },
+      { id: "new", label: "New conversation", group: "Chat" },
     ]);
   });
 
   it("orders the focused panel first and clears empty contributions", () => {
-    const registry = new PanelCommandRegistry();
+    const registry = new HostCommandRegistry();
     registry.accept(
       contribution({ callerId: "panel:a", callerKind: "panel" }, [{ id: "a", label: "A" }])
     );
@@ -45,7 +45,7 @@ describe("PanelCommandRegistry", () => {
   });
 
   it("rejects unattributed or malformed contributions", () => {
-    const registry = new PanelCommandRegistry();
+    const registry = new HostCommandRegistry();
     expect(
       registry.accept(
         contribution({ callerId: "worker:untrusted", callerKind: "worker" }, [

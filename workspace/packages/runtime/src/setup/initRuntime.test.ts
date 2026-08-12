@@ -3,6 +3,10 @@ import type { EnvelopeRpcTransport, RpcEnvelope } from "@vibestudio/rpc";
 import { initRuntime } from "./initRuntime.js";
 import { setStateArgs } from "../panel/stateArgs.js";
 import { DEFAULT_THEME_CONFIG } from "../types.js";
+import {
+  HOST_COMMAND_CONTRIBUTION_EVENT,
+  HOST_COMMAND_RUN_EVENT,
+} from "@vibestudio/shared/hostCommands";
 
 const g = globalThis as typeof globalThis & {
   __vibestudioEntityId?: string;
@@ -629,16 +633,16 @@ describe("initRuntime", () => {
       fs: {} as never,
     });
     const onRun = vi.fn();
-    runtime.onPaletteRun(onRun);
+    runtime.onHostCommandRun(onRun);
 
-    runtime.registerPaletteCommands([{ id: "open", label: "Open" }]);
+    runtime.registerHostCommands([{ id: "open", label: "Open" }]);
     await vi.waitFor(() => {
       expect(
         sent.some(
           (envelope) =>
             envelope.target === "shell" &&
             envelope.message.type === "event" &&
-            envelope.message.event === "runtime:palette-contribution" &&
+            envelope.message.event === HOST_COMMAND_CONTRIBUTION_EVENT &&
             JSON.stringify(envelope.message.payload) ===
               JSON.stringify({ commands: [{ id: "open", label: "Open" }] })
         )
@@ -653,20 +657,20 @@ describe("initRuntime", () => {
       message: {
         type: "event",
         fromId: "shell",
-        event: "runtime:palette-run",
+        event: HOST_COMMAND_RUN_EVENT,
         payload: { commandId: "open" },
       },
     });
     expect(onRun).toHaveBeenCalledWith("open");
 
-    runtime.unregisterPaletteCommands();
+    runtime.unregisterHostCommands();
     await vi.waitFor(() => {
       expect(
         sent.some(
           (envelope) =>
             envelope.target === "shell" &&
             envelope.message.type === "event" &&
-            envelope.message.event === "runtime:palette-contribution" &&
+            envelope.message.event === HOST_COMMAND_CONTRIBUTION_EVENT &&
             JSON.stringify(envelope.message.payload) === JSON.stringify({ commands: [] })
         )
       ).toBe(true);

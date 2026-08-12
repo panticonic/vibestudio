@@ -57,6 +57,7 @@ export const Workflow = icon("Workflow", "◇");
 
 // Actions
 export const Archive = icon("Archive", "▣");
+export const Command = icon("Command", "⌘");
 export const Copy = icon("Copy", "⧉");
 export const CopyPlus = icon("CopyPlus", "⧉+");
 export const ExternalLink = icon("ExternalLink", "↗");

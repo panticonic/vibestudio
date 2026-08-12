@@ -1,4 +1,5 @@
 import type { PanelRegistry } from "@vibestudio/shared/panelRegistry";
+import type { RpcEnvelope } from "@vibestudio/rpc";
 import { decodePanelStateArgs } from "@vibestudio/shared/panelStateArgs";
 import type { ThemeAppearance } from "@vibestudio/shared/types";
 import type { WorkspaceConfig } from "@vibestudio/workspace-contracts/types";
@@ -79,8 +80,9 @@ import {
   saveMobileShellStartupSnapshot,
   type MobileShellStartupSnapshot,
 } from "./shellStartupSnapshot";
-import type { PaletteCommand, Panel } from "@vibestudio/shared/types";
-import { PanelCommandRegistry } from "@vibestudio/shell-core/panelCommandRegistry";
+import type { Panel } from "@vibestudio/shared/types";
+import { HOST_COMMAND_CONTRIBUTION_EVENT, type HostCommand } from "@vibestudio/shared/hostCommands";
+import { HostCommandRegistry } from "@vibestudio/shell-core/panelCommandRegistry";
 
 export type { MobileAccountProfile, MobileAccountProfileUpdate } from "./accountProfileClient";
 
@@ -224,7 +226,7 @@ class MobilePanels implements PanelHost {
       onPanelsChanged?: () => void;
       getSelfUserId: () => string | null;
       navigateToPanel: (panelId: string) => void;
-      onPanelCommandContribution: (panelId: string, payload: unknown) => void;
+      deliverToShell: (panelId: string, envelope: RpcEnvelope) => void;
       clientSessionId: string;
     }
   ) {
@@ -278,11 +280,7 @@ class MobilePanels implements PanelHost {
         getPanelInit: (panelId) => this.getPanelInit(panelId),
         callbacks: {
           navigateToPanel: this.deps.navigateToPanel,
-          handleShellEvent: (panelId, event, payload) => {
-            if (event !== "runtime:palette-contribution") return false;
-            this.deps.onPanelCommandContribution(panelId, payload);
-            return true;
-          },
+          deliverToShell: this.deps.deliverToShell,
         },
         deliverToPanel: (panelId, envelope) => this.deliverToPanel(panelId, envelope),
         getPanelLease: (panelId) => this.runtimeConnectionBySlot.get(panelId),
@@ -943,9 +941,23 @@ export class ShellClient {
   serverUrl: string;
   private facade: PanelAssetFacade | null = null;
   private statusUnsub: (() => void) | null = null;
-  private readonly panelCommandRegistry = new PanelCommandRegistry();
-  readonly panelCommands: {
-    get(panelId: string): PaletteCommand[];
+  private readonly hostCommandRegistry = new HostCommandRegistry();
+  private readonly localShellEventHandlers = new Map<
+    string,
+    (panelId: string, payload: unknown) => void
+  >([
+    [
+      HOST_COMMAND_CONTRIBUTION_EVENT,
+      (panelId, payload) => {
+        this.hostCommandRegistry.accept({
+          caller: { callerId: panelId, callerKind: "panel", callerPanelId: panelId },
+          payload,
+        });
+      },
+    ],
+  ]);
+  readonly hostCommands: {
+    get(panelId: string): HostCommand[];
     clear(panelId: string): void;
   };
   private navigationListeners = new Set<(panelId: string) => void>();
@@ -972,9 +984,9 @@ export class ShellClient {
     // Remote is WebRTC: the client re-pairs to the stored shell credential's
     // signaling room (no server URL, no native WS grant) — see mobileTransport.ts.
     this.transport = new MobileRpcClient({});
-    this.panelCommands = {
-      get: (panelId) => this.panelCommandRegistry.get(panelId),
-      clear: (panelId) => this.panelCommandRegistry.clear(panelId),
+    this.hostCommands = {
+      get: (panelId) => this.hostCommandRegistry.get(panelId),
+      clear: (panelId) => this.hostCommandRegistry.clear(panelId),
     };
     this.accountProfileClient = new MobileAccountProfileClient(this.transport);
     if (config.onStatusChange) {
@@ -1001,12 +1013,7 @@ export class ShellClient {
       navigateToPanel: (panelId) => {
         for (const listener of this.navigationListeners) listener(panelId);
       },
-      onPanelCommandContribution: (panelId, payload) => {
-        this.panelCommandRegistry.accept({
-          caller: { callerId: panelId, callerKind: "panel", callerPanelId: panelId },
-          payload,
-        });
-      },
+      deliverToShell: (panelId, envelope) => this.deliverToLocalShell(panelId, envelope),
     });
     const userNotificationStore = createGadServiceClient(this.transport);
     const channelClients = new Map<string, ReturnType<typeof createDurableObjectServiceClient>>();
@@ -1354,7 +1361,21 @@ export class ShellClient {
     })();
     this.statusUnsub?.();
     this.statusUnsub = null;
-    this.panelCommandRegistry.clear();
+    this.hostCommandRegistry.clear();
+  }
+
+  private deliverToLocalShell(panelId: string, envelope: RpcEnvelope): void {
+    if (envelope.message.type !== "event") {
+      throw new Error(`The local mobile shell accepts events only (from ${panelId})`);
+    }
+    const handler = this.localShellEventHandlers.get(envelope.message.event);
+    if (!handler) {
+      console.warn(
+        `[mobile-shell] Ignored unsupported local shell event ${envelope.message.event} from ${panelId}`
+      );
+      return;
+    }
+    handler(panelId, envelope.message.payload);
   }
 }
 export type MobilePanelsClient = InstanceType<typeof MobilePanels>;

@@ -82,7 +82,7 @@ import {
   panel, // panel.slotId / entityId / parentId / env;
   // panel.getTheme() / onThemeChange() / getInfo();
   // panel.focusPanel() / onFocus() / onConnectionError() / reopen();
-  // panel.registerPaletteCommands() / onPaletteRun();
+  // panel.registerHostCommands() / onHostCommandRun();
   // panel.stateArgs.{ get, set, setForPanel }
 
   // RPC

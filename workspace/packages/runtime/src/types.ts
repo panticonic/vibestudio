@@ -2,16 +2,9 @@ import type { Buffer } from "buffer";
 
 export { DEFAULT_THEME_CONFIG } from "@vibestudio/shared/theme";
 export type { ThemeConfig } from "@vibestudio/shared/theme";
+export type { HostCommand } from "@vibestudio/shared/hostCommands";
 
 export type ThemeAppearance = "light" | "dark";
-
-/** A command a panel contributes to the app-level command palette. */
-export interface PaletteCommand {
-  id: string;
-  label: string;
-  hint?: string;
-  section?: string;
-}
 
 export interface FileStats {
   isFile(): boolean;

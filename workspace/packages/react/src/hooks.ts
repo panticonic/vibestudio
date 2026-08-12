@@ -6,7 +6,7 @@
 import { useState, useEffect, useMemo, useRef } from "react";
 import * as runtime from "@workspace/runtime";
 import { Rpc } from "@workspace/runtime";
-import type { PanelHandle, PaletteCommand } from "@workspace/runtime";
+import type { HostCommand, PanelHandle } from "@workspace/runtime";
 
 /**
  * Get the panel API object.
@@ -26,50 +26,47 @@ export function usePanel() {
 }
 
 /**
- * Contribute commands to the app-level command palette and handle the shell
- * dispatching one back. Registers `commands` on mount / whenever they change,
- * wires `onRun(commandId)`, and unregisters on unmount.
+ * Contribute commands to the owning application shell and handle a selection.
+ * Each host presents the commands idiomatically (for example, a desktop
+ * command palette or native mobile action sheet).
  *
  * @example
  * ```tsx
- * usePaletteCommands(
- *   [{ id: "new", label: "New pane", section: "Terminal" }],
+ * useHostCommands(
+ *   [{ id: "new", label: "New pane", group: "Terminal" }],
  *   (id) => { if (id === "new") openPane(); }
  * );
  * ```
  */
-export function usePaletteCommands(
-  commands: PaletteCommand[],
-  onRun: (commandId: string) => void
-): void {
+export function useHostCommands(commands: HostCommand[], onRun: (commandId: string) => void): void {
   // Keep the latest handler in a ref so re-registration only tracks `commands`.
   const onRunRef = useRef(onRun);
   onRunRef.current = onRun;
 
   // Re-register whenever the command set's identity changes.
   const key = useMemo(
-    () => JSON.stringify(commands.map((c) => [c.id, c.label, c.hint, c.section])),
+    () => JSON.stringify(commands.map((c) => [c.id, c.label, c.description, c.group])),
     [commands]
   );
 
   useEffect(() => {
-    // Palette registration must never crash a host that lacks palette support
+    // Registration must never crash a host that lacks host-command support
     // (headless runtimes or tests rendering a panel without a
     // connected bridge). The runtime's own calls are already fire-and-forget;
     // this guards the access path itself.
     let unsubscribe: () => void = () => {};
     try {
-      runtime.panel.registerPaletteCommands(commands);
-      unsubscribe = runtime.panel.onPaletteRun((commandId) => onRunRef.current(commandId));
+      runtime.panel.registerHostCommands(commands);
+      unsubscribe = runtime.panel.onHostCommandRun((commandId) => onRunRef.current(commandId));
     } catch {
-      // No palette-capable host — contribute nothing, silently.
+      // No command-capable host — contribute nothing, silently.
     }
     return () => {
       try {
         unsubscribe();
-        runtime.panel.unregisterPaletteCommands();
+        runtime.panel.unregisterHostCommands();
       } catch {
-        // ignore teardown on a host without palette support
+        // ignore teardown on a host without host-command support
       }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps

@@ -16,8 +16,8 @@ import type { MobileRpcClient } from "./mobileTransport";
 
 export interface BridgeAdapterCallbacks {
   navigateToPanel(panelId: string): void;
-  /** Consume an event addressed to this panel's local owning shell. */
-  handleShellEvent?(panelId: string, event: string, payload: unknown): boolean;
+  /** Deliver an envelope to this panel's local owning shell. */
+  deliverToShell(panelId: string, envelope: RpcEnvelope): void;
 }
 
 type PanelLease = { runtimeEntityId: PanelEntityId; connectionId: string };
@@ -243,15 +243,11 @@ export function createBridgeAdapter(deps: {
           return null;
         case "postEnvelope": {
           const [envelope] = args as [RpcEnvelope];
-          if (
-            envelope.target === "shell" &&
-            envelope.message.type === "event" &&
-            deps.callbacks.handleShellEvent?.(
-              panelId,
-              envelope.message.event,
-              envelope.message.payload
-            )
-          ) {
+          // `shell` is the WebView's local owning host. The target decision is
+          // independent of event names: no shell envelope may fall through to
+          // a server-backed panel session.
+          if (envelope.target === "shell") {
+            deps.callbacks.deliverToShell(panelId, envelope);
             return;
           }
           // Send over the panel's dedicated "panel" session; replies + events

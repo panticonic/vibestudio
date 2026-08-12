@@ -59,6 +59,7 @@
     "./fsService": "./src/fsService.ts",
     "./gadRuntimeMethods": "./src/gadRuntimeMethods.ts",
     "./hostConfig": "./src/hostConfig.ts",
+    "./hostCommands": "./src/hostCommands.ts",
     "./hostApprovalCopy": "./src/hostApprovalCopy.ts",
     "./hostTargets": "./src/hostTargets.ts",
     "./httpUrl": "./src/httpUrl.ts",

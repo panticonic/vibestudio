@@ -1,11 +1,11 @@
 /**
- * Contributes the chat panel's commands to the app-level command palette
- * (Cmd/Ctrl+K). Lives inside `<ChatProvider>` so it can read the live delivery
+ * Contributes the chat panel's commands to its owning application host. Lives
+ * inside `<ChatProvider>` so it can read the live delivery
  * state and actions straight from the chat context — the single place that has
- * them — and registers ONE state-aware command set (two `usePaletteCommands`
+ * them — and registers ONE state-aware command set (two `useHostCommands`
  * calls in the same panel would clobber each other's registration).
  *
- * The set is state-aware on purpose: the palette only offers what is actually
+ * The set is state-aware on purpose: the host only offers what is actually
  * actionable right now (flush only while something is queued/in-flight, cancel
  * only with queued messages, undo only inside the undo window), so the delivery
  * model — the same "now vs. next", "nothing happens invisibly" semantics as the
@@ -15,17 +15,17 @@
  * separate retriable outbox entry.
  */
 import { useMemo, useState } from "react";
-import { usePaletteCommands } from "@workspace/react";
+import { useHostCommands } from "@workspace/react";
 import { getVibestudioHostPlatform } from "@workspace/react/responsive";
 import { useChatContext } from "../context/ChatContext";
 import { deriveActiveOutbox } from "./Outbox";
 import { ChatNativeActionsDialog } from "./ChatNativeActionsDialog";
 
-type ChatCommand = { id: string; label: string; hint?: string; section: string };
+type ChatCommand = { id: string; label: string; description?: string; group: string };
 
 const SECTION = "Chat";
 
-export function ChatPaletteCommands() {
+export function ChatHostCommands() {
   const [nativeActionsOpen, setNativeActionsOpen] = useState(false);
   const nativeHost = getVibestudioHostPlatform() === "mobile";
   const {
@@ -55,35 +55,35 @@ export function ChatPaletteCommands() {
       cmds.push({
         id: "chat-conversation-actions",
         label: "Conversation actions",
-        hint: "People, agents, branches, and autonomy",
-        section: SECTION,
+        description: "People, agents, branches, and autonomy",
+        group: SECTION,
       });
     }
     if (onNewConversation) {
-      cmds.push({ id: "chat-new-conversation", label: "New conversation", section: SECTION });
+      cmds.push({ id: "chat-new-conversation", label: "New conversation", group: SECTION });
     }
     if (canFlush) {
       cmds.push({
         id: "chat-flush",
         label: "Send queued now & interrupt",
-        hint: "Esc",
-        section: SECTION,
+        description: "Esc",
+        group: SECTION,
       });
     }
     if (queuedCount > 0) {
       cmds.push({
         id: "chat-cancel-queued",
         label: queuedCount > 1 ? `Cancel ${queuedCount} queued messages` : "Cancel queued message",
-        section: SECTION,
+        group: SECTION,
       });
     }
     if (canUndo) {
-      cmds.push({ id: "chat-undo", label: "Undo last send action", section: SECTION });
+      cmds.push({ id: "chat-undo", label: "Undo last send action", group: SECTION });
     }
     return cmds;
   }, [nativeHost, onNewConversation, canFlush, queuedCount, canUndo]);
 
-  usePaletteCommands(commands, (id) => {
+  useHostCommands(commands, (id) => {
     switch (id) {
       case "chat-conversation-actions":
         setNativeActionsOpen(true);

@@ -1,19 +1,19 @@
-import type { PaletteCommand } from "@vibestudio/shared/types";
+import type { HostCommand } from "@vibestudio/shared/hostCommands";
 
 const CONTRIBUTED_COMMAND_PREFIX = "contributed-panel-command:";
 
-export interface MobileContributedPanelCommand {
+export interface MobileContributedHostCommand {
   id: string;
   label: string;
   description?: string;
 }
 
 /** Present renderer-contributed commands as native action-sheet rows. */
-export function presentMobilePanelCommands(
-  commands: readonly PaletteCommand[]
-): MobileContributedPanelCommand[] {
+export function presentMobileHostCommands(
+  commands: readonly HostCommand[]
+): MobileContributedHostCommand[] {
   return commands.map((command) => {
-    const description = [command.section, command.hint].filter(Boolean).join(" · ");
+    const description = [command.group, command.description].filter(Boolean).join(" · ");
     return {
       id: `${CONTRIBUTED_COMMAND_PREFIX}${encodeURIComponent(command.id)}`,
       label: command.label,
@@ -22,7 +22,7 @@ export function presentMobilePanelCommands(
   });
 }
 
-export function contributedPanelCommandId(actionSheetId: string): string | null {
+export function contributedHostCommandId(actionSheetId: string): string | null {
   if (!actionSheetId.startsWith(CONTRIBUTED_COMMAND_PREFIX)) return null;
   try {
     return decodeURIComponent(actionSheetId.slice(CONTRIBUTED_COMMAND_PREFIX.length));

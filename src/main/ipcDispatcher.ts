@@ -681,28 +681,32 @@ export class IpcDispatcher {
   }
 
   /**
-   * Relay one envelope from a panel webview onto its dedicated panel-principal
-   * session — requests, routed DO calls, events, and streams all ride it.
+   * Route one envelope from a panel webview. The owning shell is always local;
+   * every other target rides the panel's dedicated panel-principal session.
    * server→panel messages return via the session's onMessage (see
    * {@link ensurePanelSession}). A relay failure surfaces as an error response so
    * the panel's pending request rejects rather than hanging.
    */
   private relayPanelEnvelope(sender: WebContents, callerId: string, envelope: RpcEnvelope): void {
-    // The desktop shell is an Electron-local target, not a WebRTC/server
-    // runtime. Panel events addressed to it (currently command-palette
-    // contributions) must use the local renderer bridge. Sending them through
-    // the panel's remote session races shell startup and produces a real,
-    // silently lost event because the server quite correctly has no `shell`
-    // WebSocket target for this host.
-    if (envelope.target === "shell" && envelope.message.type === "event") {
+    // `shell` names the panel's local owning host, never a server target. Keep
+    // this decision independent of the event name so new shell capabilities
+    // cannot accidentally acquire a second, remote route.
+    if (envelope.target === "shell") {
+      if (envelope.message.type !== "event") {
+        this.rejectRequestEnvelope(sender, envelope, "The local shell accepts events only");
+        log.warn(`Rejected non-event envelope addressed to local shell from ${callerId}`);
+        return;
+      }
       const shell = this.deps.getShellWebContents();
       if (shell && !shell.isDestroyed()) {
         shell.send(
           "vibestudio:rpc:message",
           stampEnvelopeCaller(envelope, { callerId, callerKind: "panel" })
         );
-        return;
+      } else {
+        log.warn(`Dropped local shell event from ${callerId}: shell renderer is unavailable`);
       }
+      return;
     }
     void this.ensurePanelSession(sender, callerId)
       .then((session) => {

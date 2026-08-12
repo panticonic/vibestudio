@@ -72,7 +72,7 @@ vi.mock("@workspace/runtime", () => ({
 
 vi.mock("@workspace/react", () => ({
   useIsMobile: () => false,
-  usePaletteCommands: () => undefined,
+  useHostCommands: () => undefined,
   usePanelTheme: () => "dark",
   usePanelThemeConfig: () => ({}),
   useStateArgs: () => ({}),

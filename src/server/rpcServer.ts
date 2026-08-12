@@ -2657,15 +2657,9 @@ export class RpcServer {
 
     {
       const eventMessage = message as RpcEvent;
-      // Palette contributions are ephemeral UI state. Panels can legitimately
-      // unregister while the shell is already shutting down (and can boot a
-      // fraction before the shell target is reachable), so an undeliverable
-      // contribution is a normal lifecycle race rather than an RPC failure.
-      // Keep the diagnostic available at verbose level without turning normal
-      // panel teardown into a warning or a perceived transport incident.
-      const logEventDrop =
-        eventMessage.event === "runtime:palette-contribution" ? log.verbose : log.warn;
-      logEventDrop("relay event drop", {
+      // Host-local targets must be consumed before this server relay. Reaching
+      // this path is therefore always diagnostic, including host commands.
+      log.warn("relay event drop", {
         callerId: client.caller.runtime.id,
         callerKind: client.caller.runtime.kind,
         targetId,
