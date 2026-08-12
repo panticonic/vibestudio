@@ -1,10 +1,10 @@
 {
-  "name": "@workspace-panels/gad-browser",
+  "name": "@workspace-about/testbench",
   "version": "0.1.0",
   "private": true,
   "type": "module",
   "vibestudio": {
-    "title": "Workspace History",
+    "title": "Testbench",
     "icon": "./assets/icon.svg",
     "entry": "index.tsx",
     "exposeModules": [
@@ -39,7 +39,7 @@
           "evidence": "intentional-broad"
         },
         {
-          "capability": "governance.read",
+          "capability": "runtime.inspect",
           "resource": {
             "kind": "prefix",
             "prefix": ""
@@ -49,6 +49,15 @@
         },
         {
           "capability": "subagents.create",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          },
+          "tier": "gated",
+          "evidence": "intentional-broad"
+        },
+        {
+          "capability": "workspace.runtime-state.manage",
           "resource": {
             "kind": "prefix",
             "prefix": ""
@@ -82,23 +91,27 @@
           },
           "tier": "gated",
           "evidence": "intentional-broad"
+        },
+        {
+          "capability": "workspace-service:testkit-driver",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          },
+          "tier": "gated",
+          "evidence": "intentional-broad"
         }
       ]
     }
   },
   "dependencies": {
-    "@vibestudio/git": "workspace:*",
-    "@vibestudio/service-schemas": "workspace:*",
     "@workspace/runtime": "workspace:*",
     "@workspace/react": "workspace:*",
+    "@workspace/testkit": "workspace:*",
     "@workspace/ui": "workspace:*",
     "@radix-ui/themes": "^3.2.1",
     "@radix-ui/react-icons": "^1.3.2",
     "react": "^19.2.0",
     "react-dom": "^19.2.0"
-  },
-  "devDependencies": {
-    "@testing-library/react": "^16.1.0",
-    "vitest": "^3.2.2"
   }
 }

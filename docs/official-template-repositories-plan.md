@@ -225,7 +225,7 @@ base pin—is the compatibility boundary.
 | `vibestudio-template-google-workspace` | `packages/google-workspace`, `packages/gmail`, `skills/google-workspace`, `skills/google-drive`, and `workers/gmail-agent`. Generic credential and GitHub machinery remains in `packages/integrations`. |
 
 **Developer tools belong to base.** Vibestudio is a place where people build
-things; the development surface (`panels/development`, `panels/testbench`,
+things; the development surface (`about/testbench`,
 the system-test workers and skill, `packages/testkit`, type-check and test
 extensions) is core, not an optional outcome. This is a deliberate choice
 against "smallest useful base," priced: base acquisition happens on every

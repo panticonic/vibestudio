@@ -1,7 +1,7 @@
 /**
- * Diff-review deep-link target consumed by the gad-browser panel.
+ * Diff-review deep-link target consumed by Workspace History.
  *
- * The approval card's "open in gad-browser" escape hatch launches (or navigates)
+ * The approval card's "open in Workspace History" escape hatch launches (or navigates)
  * this panel with a `diffTarget` state-arg naming a file at two tree states. The
  * panel renders a real two-state compare view (the shared `@workspace/ui`
  * `DiffViewer`) for the target, with the whole changed-file set of the entry
@@ -19,7 +19,7 @@ import type { DiffChangedFile, DiffFileKind, DiffReviewEntry } from "@workspace/
  */
 export type DiffTargetFile = DiffChangedFile;
 
-/** Parsed, validated deep-link target (mirror of the shell's `GadBrowserTarget`). */
+/** Parsed, validated deep-link target (mirror of the shell's `WorkspaceHistoryTarget`). */
 export interface DiffTarget {
   repoPath: string;
   path: string;

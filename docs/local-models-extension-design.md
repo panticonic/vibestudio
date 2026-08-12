@@ -184,7 +184,7 @@ llama.cpp / model ecosystem (researched 2026-07-07):
 │    └─ ServerSupervisor ──┬─ utility server (best backend, CPU recovery, LFM2.5)│      │
 │                          └─ main server  (best backend, router mode, user models)    │
 │                                                                                      │
-│  workspace/panels/local-models  (React) ── extensions.use("local-models").*          │
+│  workspace/about/local-models  (React) ── extensions.use("local-models").*           │
 └──────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -378,7 +378,7 @@ interface LocalModelsApi {
   getHardwareProfile(refresh?: boolean): Promise<HardwareProfile>;
   restartServer(which: "utility" | "main"): Promise<void>;
   tailServerLog(which): Response;             // streaming
-  openConfigPanel(): Promise<{ openPanel: { source: "panels/local-models" } }>;
+  openConfigPanel(): Promise<{ openPanel: { source: "about/local-models" } }>;
 }
 ```
 
@@ -697,7 +697,7 @@ change**:
 
 ---
 
-## 9. The panel: `workspace/panels/local-models/`
+## 9. The panel: `workspace/about/local-models/`
 
 React (`default` template), talks to the extension via
 `extensions.use("@workspace-extensions/local-models")`; opened from the picker's

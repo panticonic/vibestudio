@@ -511,7 +511,7 @@ the provenance log splits **by ownership, mirroring the two approval systems**:
   answerable. The host records its own decisions; no host→userland write, no boundary
   inversion.
 - **Unified view:** the "governance" UX is a **read-only union** — the host log (approvals +
-  membership, queryable host-side) plus the GAD agent-approval projection (via `gad-browser`).
+  membership, queryable host-side) plus the GAD agent-approval projection (via Workspace History).
   A governance panel presents them as one timeline; neither store writes into the other.
 
 **Capture point:** every resolve/submit handler in `shellApprovalService.ts` reads
@@ -558,8 +558,8 @@ binding later; the metadata path is the lowest-friction start.
 
 **Query surface:** GAD's existing read API (`readLog`, `query`/`rawSql` read-only CTE guard,
 `recall`) answers "every approval by user X", "who approved credential use for
-`github-repos` last week", "all denies in workspace Y". The existing `gad-browser` panel
-(`workspace/panels/gad-browser`) gains a Governance view.
+`github-repos` last week", "all denies in workspace Y". The existing Workspace History panel
+(`workspace/about/workspace-history`) gains a Governance view.
 
 **Surface it live:** add `resolvedBy: {userId, handle}` to the `PendingApproval` resolution
 event so other connected users see _who_ acted — turning the shared queue into a visibly
@@ -724,7 +724,7 @@ DO envelope + IPC; intra-workspace broadcast kept; exact per-member-device push 
 **WP5 — Approval provenance.** Resolver identity comes from authenticated service context and
 all human verdict paths use a single settlement coordinator; **host-owned exact-schema SQLite
 governance ledger** (approvals + membership events, + GAD projection for the agent-approval
-half); `resolvedBy` on resolution events; unified `gad-browser` + host-log Governance view.
+half); `resolvedBy` on resolution events; unified Workspace History + host-log Governance view.
 
 **WP6 — Handles & personalization.** Account `handle`/`displayName`/`avatar`; retire
 hardcoded `@user`; principal-derived channel handles with live profile projection;
@@ -856,4 +856,4 @@ Every claim above is grounded in a seven-track code investigation. Primary ancho
   `docs/stage0-unified-log-spec.md` (append/fork/replay contract),
   `docs/provenance-aware-diff-merge-plan.md` (semantic graph + on-behalf-of), `packages/shared/src/approvals.ts`
   (host approval identity), `src/server/services/mainAdvanceApproval.ts`,
-  `credentialService.ts:3895`, `workspace/panels/gad-browser`.
+  `credentialService.ts:3895`, `workspace/about/workspace-history`.

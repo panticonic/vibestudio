@@ -1111,7 +1111,7 @@ export class UpstreamEngine {
       opened: false,
       ...(normalized ? { repoPath: normalized } : {}),
       openPanel: {
-        source: "panels/gad-browser",
+        source: "about/workspace-history",
         name: "Git upstreams",
         ...(normalized ? { stateArgs: { gitRepo: normalized } } : { stateArgs: { gitRepo: "" } }),
       },

@@ -78,7 +78,7 @@ import {
 interface StateArgs {
   branchId?: string;
   gitRepo?: string;
-  /** Diff-review escape-hatch target (open in gad-browser). See `diffTarget.ts`. */
+  /** Diff-review escape-hatch target (open in Workspace History). See `diffTarget.ts`. */
   diffTarget?: unknown;
 }
 
@@ -1326,7 +1326,7 @@ function GitTab({
 
 /**
  * Banner shown when the panel is deep-linked from the approval card's "open in
- * gad-browser" escape hatch. Names the repo/path and both tree states. The
+ * Workspace History" escape hatch. Names the repo/path and both tree states. The
  * Compare tab renders a real two-state diff of the target; this banner also
  * offers the Files-tab focus filter as the fallback for browsing the file in
  * its tree context (and when content can't be fetched for the diff).
@@ -1379,7 +1379,7 @@ function DiffTargetBanner({
 /**
  * Two-state compare view for a diff-review target. Reuses the shared
  * `@workspace/ui` `DiffViewer` — the exact renderer the approval card uses — so
- * gad-browser inherits its client-side line diffing, best-effort shiki
+ * Workspace History inherits its client-side line diffing, best-effort shiki
  * highlighting, and binary/oversized degradation for free. File contents are
  * fetched lazily by content hash through the panel's `blobstore` client (the
  * same read surface the shell's approval card uses). Above the diff, per-side
@@ -1641,7 +1641,7 @@ export function App() {
   const appTheme = usePanelThemeConfig();
   const isMobile = useIsMobile();
   const stateArgs = useStateArgs<StateArgs>();
-  // Diff-review deep link (approval card → "open in gad-browser"). gad-browser
+  // Diff-review deep link (approval card → "open in Workspace History"). This panel
   // has no two-state compare view; the deepest link it supports is landing on
   // the Files tab filtered to the target path at the new state, plus a banner
   // naming both states. A real side-by-side compare is a noted follow-up.

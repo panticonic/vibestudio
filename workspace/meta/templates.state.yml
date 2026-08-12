@@ -70,6 +70,10 @@ repositories:
     contributions:
       - nodeId: t-899f070e8551
         subtreeDigest: v1-sha256:11bd655ae857c8739cb82cfd49d2d47490df78d22a926ec9bcc9f5a435e56df8
+  about/local-models:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:d235e9d2020364ee655095a1c21dd3523b31eb52d1d460e5824c527a995404e1
   about/new:
     contributions:
       - nodeId: t-899f070e8551
@@ -86,6 +90,14 @@ repositories:
     contributions:
       - nodeId: t-899f070e8551
         subtreeDigest: v1-sha256:73e05771d258211ec9eeebabd1e6845ff87fb41cea71cd793bc857e9d1bff0f9
+  about/testbench:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:4d2323a6801807f402d4fd87ee5f25da0e578b530885f07c14b2ae86ac9da748
+  about/workspace-history:
+    contributions:
+      - nodeId: t-899f070e8551
+        subtreeDigest: v1-sha256:33fbba0adc43d08d587e1ca813daa1358a8916339603f4471dd25f35a6945876
   apps/mobile:
     contributions:
       - nodeId: t-899f070e8551
@@ -278,26 +290,10 @@ repositories:
     contributions:
       - nodeId: t-899f070e8551
         subtreeDigest: v1-sha256:fa2991ec9da1d3aa3935601236bf64b78b2b0cea536807ef6ccd7f8e08a4ee17
-  panels/development:
-    contributions:
-      - nodeId: t-899f070e8551
-        subtreeDigest: v1-sha256:ab2f9991b05669d51600b394ef0ed2419e0d0b8b784a3177de154c39730af129
-  panels/gad-browser:
-    contributions:
-      - nodeId: t-899f070e8551
-        subtreeDigest: v1-sha256:33fbba0adc43d08d587e1ca813daa1358a8916339603f4471dd25f35a6945876
-  panels/local-models:
-    contributions:
-      - nodeId: t-899f070e8551
-        subtreeDigest: v1-sha256:d235e9d2020364ee655095a1c21dd3523b31eb52d1d460e5824c527a995404e1
   panels/terminal:
     contributions:
       - nodeId: t-899f070e8551
         subtreeDigest: v1-sha256:a26e0236080a400bb89e91a988297999393c6294cc9cd29cfddb9157bc3ccb1b
-  panels/testbench:
-    contributions:
-      - nodeId: t-899f070e8551
-        subtreeDigest: v1-sha256:4d2323a6801807f402d4fd87ee5f25da0e578b530885f07c14b2ae86ac9da748
   projects/default:
     contributions:
       - nodeId: t-899f070e8551

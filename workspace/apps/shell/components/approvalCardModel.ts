@@ -61,23 +61,23 @@ export type ApprovalCardIntentBody =
   // and the result comes back down as an updated `blobResults` prop.
   | { type: "fetch-blob"; hash: string; refresh?: boolean }
   // Diff-review escape hatch: the reviewer wants to inspect a file in the
-  // gad-browser panel (the only surface with a real file-inspection view).
-  // The chrome coordinator opens/focuses gad-browser with this target as
+  // Workspace History (the only surface with a real file-inspection view).
+  // The chrome coordinator opens/focuses it with this target as
   // launch state-args. Emitted both for degraded (binary/oversized) rows and
   // as a quiet secondary action on normal file headers.
-  | { type: "open-in-gad-browser"; target: GadBrowserTarget };
+  | { type: "open-in-workspace-history"; target: WorkspaceHistoryTarget };
 export type ApprovalCardIntent = { approvalId: string } & ApprovalCardIntentBody;
 
 /**
- * Deep-link target for the "open in gad-browser" escape hatch. Carries the
+ * Deep-link target for the "open in Workspace History" escape hatch. Carries the
  * repo + focused path + the two content hashes and two tree states named in the
- * diff-review payload, so the gad-browser panel can render a real two-state
+ * diff-review payload, so Workspace History can render a real two-state
  * compare view for the file. `files` carries the entry's whole changed-file set
  * so the panel can step across every file the reviewer was sent for; `binary` /
  * `tooLarge` mirror the host degrade flags of the focused file. Mirrors the
  * per-file fields of a `DiffReviewEntry` (and the panel's `DiffTarget`).
  */
-export interface GadBrowserTarget {
+export interface WorkspaceHistoryTarget {
   repoPath: string;
   path: string;
   oldHash?: string;

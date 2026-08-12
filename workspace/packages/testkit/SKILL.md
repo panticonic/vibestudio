@@ -105,6 +105,6 @@ Every test must clean up panels, page clients, workers, temporary data, and
 supervisors it owns. Keep state only when the user or harness explicitly asks
 for it.
 
-The `panels/testbench` UI can run suites and inspect saved runs and profiles.
+The `about/testbench` UI can run suites and inspect saved runs and profiles.
 Use it when a human needs live progress or flamegraph inspection; direct eval
 is simpler for automation.

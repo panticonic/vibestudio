@@ -73,7 +73,7 @@ describe("DiffViewer", () => {
   });
 
   it("degrades binary and oversized files to diffstat-only with an escape hatch", async () => {
-    const onOpenInGadBrowser = vi.fn();
+    const onOpenInWorkspaceHistory = vi.fn();
     const fetchContent = vi.fn<DiffContentFetcher>(async () => "");
     const entry: DiffReviewEntry = {
       repoPath: "packages/demo",
@@ -85,7 +85,7 @@ describe("DiffViewer", () => {
         { path: "huge.log", kind: "added", newHash: "big", tooLarge: true },
       ],
     };
-    renderViewer(entry, fetchContent, { onOpenInGadBrowser });
+    renderViewer(entry, fetchContent, { onOpenInWorkspaceHistory });
 
     // Degraded rows never fetch content.
     expect(fetchContent).not.toHaveBeenCalled();
@@ -96,31 +96,31 @@ describe("DiffViewer", () => {
     const pngHeader = screen.getByRole("button", { name: /logo\.png/ });
     expect((pngHeader as HTMLButtonElement).disabled).toBe(true);
 
-    fireEvent.click(screen.getAllByRole("button", { name: /Open in gad-browser/ })[0]!);
-    expect(onOpenInGadBrowser).toHaveBeenCalledTimes(1);
-    expect(onOpenInGadBrowser.mock.calls[0]?.[0].path).toBe("logo.png");
+    fireEvent.click(screen.getAllByRole("button", { name: /Open in Workspace History/ })[0]!);
+    expect(onOpenInWorkspaceHistory).toHaveBeenCalledTimes(1);
+    expect(onOpenInWorkspaceHistory.mock.calls[0]?.[0].path).toBe("logo.png");
   });
 
   it("offers a quiet secondary escape hatch on normal file headers", () => {
-    const onOpenInGadBrowser = vi.fn();
+    const onOpenInWorkspaceHistory = vi.fn();
     const fetchContent = vi.fn<DiffContentFetcher>(async () => "x\n");
-    renderViewer(CHANGED_ENTRY, fetchContent, { onOpenInGadBrowser });
+    renderViewer(CHANGED_ENTRY, fetchContent, { onOpenInWorkspaceHistory });
 
     // The secondary action is present without expanding, and fetches nothing.
     const openButton = screen.getByRole("button", {
-      name: /Open src\/util\.txt in gad-browser/,
+      name: /Open src\/util\.txt in Workspace History/,
     });
     fireEvent.click(openButton);
     expect(fetchContent).not.toHaveBeenCalled();
-    expect(onOpenInGadBrowser).toHaveBeenCalledTimes(1);
-    expect(onOpenInGadBrowser.mock.calls[0]?.[0].path).toBe("src/util.txt");
-    expect(onOpenInGadBrowser.mock.calls[0]?.[1].repoPath).toBe("packages/demo");
+    expect(onOpenInWorkspaceHistory).toHaveBeenCalledTimes(1);
+    expect(onOpenInWorkspaceHistory.mock.calls[0]?.[0].path).toBe("src/util.txt");
+    expect(onOpenInWorkspaceHistory.mock.calls[0]?.[1].repoPath).toBe("packages/demo");
   });
 
   it("omits the secondary escape hatch when no handler is supplied", () => {
     const fetchContent = vi.fn<DiffContentFetcher>(async () => "x\n");
     renderViewer(CHANGED_ENTRY, fetchContent);
-    expect(screen.queryByRole("button", { name: /in gad-browser/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /in Workspace History/ })).toBeNull();
   });
 
   it("keeps rendering (never throws) while a fetch is still pending", async () => {

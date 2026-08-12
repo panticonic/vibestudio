@@ -34,7 +34,10 @@ const shellClient = vi.hoisted(() => ({
     Promise.resolve({ revision: 1, nodes: [], nextCursor: null })
   ),
   observe: vi.fn((slotId: string) =>
-    Promise.resolve({ slotId, source: slotId === "gadb" ? "panels/gad-browser" : "panels/chat" })
+    Promise.resolve({
+      slotId,
+      source: slotId === "gadb" ? "about/workspace-history" : "panels/chat",
+    })
   ),
   navigate: vi.fn(() => Promise.resolve(null)),
   createPanel: vi.fn(() => Promise.resolve(null)),
@@ -571,27 +574,27 @@ describe("ConsentApprovalBar coordinator", () => {
     newState: "state:b",
   };
 
-  it("creates a gad-browser panel with the target on an open-in-gad-browser intent", async () => {
+  it("creates Workspace History with the target on an inspection intent", async () => {
     shellClient.getTreePage.mockResolvedValueOnce({ revision: 1, nodes: [], nextCursor: null });
     shellClient.listPending.mockResolvedValueOnce([diffApproval("d1")]);
     mountBar();
     await waitFor(() => expect(overlay.options?.open).toBe(true));
 
     emit({
-      type: "open-in-gad-browser",
+      type: "open-in-workspace-history",
       target: gadTarget,
       approvalId: "d1",
     } as unknown as ApprovalCardIntent);
 
     await waitFor(() => {
-      expect(shellClient.createPanel).toHaveBeenCalledWith("panels/gad-browser", {
+      expect(shellClient.createPanel).toHaveBeenCalledWith("about/workspace-history", {
         stateArgs: { diffTarget: gadTarget },
       });
     });
     expect(shellClient.navigate).not.toHaveBeenCalled();
   });
 
-  it("reuses and focuses an existing gad-browser panel instead of creating one", async () => {
+  it("reuses and focuses an existing Workspace History panel instead of creating one", async () => {
     shellClient.getTreePage.mockResolvedValueOnce({
       revision: 1,
       nodes: [{ slotId: "other" }, { slotId: "gadb" }],
@@ -602,13 +605,13 @@ describe("ConsentApprovalBar coordinator", () => {
     await waitFor(() => expect(overlay.options?.open).toBe(true));
 
     emit({
-      type: "open-in-gad-browser",
+      type: "open-in-workspace-history",
       target: gadTarget,
       approvalId: "d1",
     } as unknown as ApprovalCardIntent);
 
     await waitFor(() => {
-      expect(shellClient.navigate).toHaveBeenCalledWith("gadb", "panels/gad-browser", {
+      expect(shellClient.navigate).toHaveBeenCalledWith("gadb", "about/workspace-history", {
         stateArgs: { diffTarget: gadTarget },
       });
       expect(shellClient.navigateToId).toHaveBeenCalledWith("gadb");
@@ -616,14 +619,14 @@ describe("ConsentApprovalBar coordinator", () => {
     expect(shellClient.createPanel).not.toHaveBeenCalled();
   });
 
-  it("does not navigate another owner's gad-browser panel", async () => {
+  it("does not navigate another owner's Workspace History panel", async () => {
     shellClient.getTreePage.mockResolvedValueOnce({ revision: 1, nodes: [], nextCursor: null });
     shellClient.listPending.mockResolvedValueOnce([diffApproval("d1")]);
     mountBar();
     await waitFor(() => expect(overlay.options?.open).toBe(true));
 
     emit({
-      type: "open-in-gad-browser",
+      type: "open-in-workspace-history",
       target: gadTarget,
       approvalId: "d1",
     } as unknown as ApprovalCardIntent);

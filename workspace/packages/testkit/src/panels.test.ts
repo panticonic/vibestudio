@@ -28,7 +28,7 @@ describe("testkit panel helpers", () => {
   it("delegates readiness to the runtime's boot-ready open operation", async () => {
     const { openPanel } = await import("./panels.js");
 
-    await openPanel("panels/testbench");
+    await openPanel("about/testbench");
 
     expect(mocks.runtimeOpenPanel).toHaveBeenCalledOnce();
   });

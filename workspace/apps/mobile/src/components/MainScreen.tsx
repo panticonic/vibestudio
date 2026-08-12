@@ -610,7 +610,7 @@ export function MainScreen() {
     async (file: DiffReviewFile, entry: DiffReviewEntry) => {
       if (!shellClient) return;
       try {
-        await shellClient.panels.createRootPanel("panels/gad-browser", {
+        await shellClient.panels.createRootPanel("about/workspace-history", {
           focus: true,
           stateArgs: {
             diffTarget: {

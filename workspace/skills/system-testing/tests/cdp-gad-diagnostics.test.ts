@@ -116,7 +116,7 @@ describe("cdp-gad diagnostics validators", () => {
           name: "eval",
           arguments: {
             code: `
-              const handle = await openPanel("panels/testbench", { focus: false });
+              const handle = await openPanel("about/testbench", { focus: false });
               const beforeAttemptId = (await handle.snapshot()).attemptId;
               const page = await handle.cdp.page();
               const report = await page.profile(async () => {
@@ -158,7 +158,7 @@ describe("cdp-gad diagnostics validators", () => {
         name: "eval",
         arguments: {
           code: `
-              const handle = await openPanel("panels/testbench", { focus: false });
+              const handle = await openPanel("about/testbench", { focus: false });
               const beforeAttemptId = (await handle.snapshot()).attemptId;
               const page = await handle.cdp.page();
               const report = await page.profile(async () => { await handle.reload(); });
@@ -605,7 +605,7 @@ describe("cdp-gad diagnostics validators", () => {
 describe("cdp-gad diagnostics prompts", () => {
   it("stay goal-level instead of encoding implementation details", () => {
     const brittleDetails = [
-      "panels/testbench",
+      "about/testbench",
       "Unknown build unit",
       "Do not use a data: URL",
       "page.evaluate",

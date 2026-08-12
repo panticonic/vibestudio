@@ -250,14 +250,14 @@ describe("local-models extension", () => {
     });
 
     await expect(api.capabilities()).resolves.toEqual({
-      managementPanel: { source: "panels/local-models" },
+      managementPanel: { source: "about/local-models" },
       serverLogs: {
         utility: {
-          source: "panels/local-models",
+          source: "about/local-models",
           stateArgs: { openLog: "utility" },
         },
         main: {
-          source: "panels/local-models",
+          source: "about/local-models",
           stateArgs: { openLog: "main" },
         },
       },

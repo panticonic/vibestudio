@@ -49,7 +49,7 @@ export type SetupActionTarget =
   | { via: "owner-skill" }
   | { via: "about-page"; page: "credentials" | "permissions" }
   | { via: "model-settings" }
-  | { via: "panel"; path: "panels/local-models" | "about/browser-import-inspector" }
+  | { via: "panel"; path: "about/local-models" | "about/browser-import-inspector" }
   | { via: "shell-navigation"; target: ShellNavigationTarget }
   | { via: "conversation" };
 
@@ -164,8 +164,8 @@ export const onboardingCatalog: readonly OnboardingCapabilityDefinition[] = [
     scope: "server",
     tier: "direct",
     actions: {
-      setup: { via: "panel", path: "panels/local-models" },
-      change: { via: "panel", path: "panels/local-models" },
+      setup: { via: "panel", path: "about/local-models" },
+      change: { via: "panel", path: "about/local-models" },
     },
     visibility: "secondary",
     setup: {
@@ -442,7 +442,7 @@ function parseActionTarget(value: unknown, label: string): SetupActionTarget {
       via,
       path: oneOf(
         source["path"],
-        ["panels/local-models", "about/browser-import-inspector"] as const,
+        ["about/local-models", "about/browser-import-inspector"] as const,
         `${label}.path`
       ),
     };

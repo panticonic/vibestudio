@@ -252,12 +252,12 @@ A read-only "Governance" surface unions:
 
 - the host governance log — approval resolutions **and** membership events (queried host-side
   via a new `governance.list({filter})` read RPC), and
-- the GAD agent-approval projection (via the existing `gad-browser` panel /
+- the GAD agent-approval projection (via the existing Workspace History panel /
   `trajectory_approvals` read path).
 
 Neither store writes the other. The panel presents one time-ordered, filterable timeline
 ("all approvals by @alice", "all credential denies this week", "who approved `github-repos`",
-"who invited @dave"). `gad-browser` (`workspace/panels/gad-browser`) gains a Governance tab for
+"who invited @dave"). Workspace History (`workspace/about/workspace-history`) gains a Governance tab for
 the agent half; a small host-fed panel/section renders the host-log half.
 
 ---
@@ -311,7 +311,7 @@ the agent half; a small host-fed panel/section renders the host-log half.
 | hub/WP2 membership services                            | emit `MembershipGovernanceRecord` on invite/revoke/add/remove/role-change                                                                                                              |
 | `workspace/workers/workspace-source/GadWorkspaceDO.ts` | `projectApproval` reads account into `resolved_by_json`; `approval.resolved.v1` carries `actor.metadata.userId`                                                                        |
 | `src/server/services/governanceService.ts`             | **new** — `governance.list` read RPC (host-side; approvals + membership)                                                                                                               |
-| `workspace/panels/gad-browser/*`                       | Governance view (union of host log + GAD projection)                                                                                                                                   |
+| `workspace/about/workspace-history/*`                  | Governance view (union of host log + GAD projection)                                                                                                                                   |
 | `pushMetrics.ts`                                       | keep counters; they are metrics, not the record (no longer the only one)                                                                                                               |
 
 ---

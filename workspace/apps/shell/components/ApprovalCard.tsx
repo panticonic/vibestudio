@@ -521,9 +521,9 @@ export function ApprovalCard({
                 entries={diffReview}
                 fetchContent={fetchContent}
                 appearance={appearance}
-                onOpenInGadBrowser={(file, entry) =>
+                onOpenInWorkspaceHistory={(file, entry) =>
                   emitForApproval({
-                    type: "open-in-gad-browser",
+                    type: "open-in-workspace-history",
                     target: {
                       repoPath: entry.repoPath,
                       path: file.path,
@@ -533,7 +533,7 @@ export function ApprovalCard({
                       newState: entry.newState,
                       binary: file.binary,
                       tooLarge: file.tooLarge,
-                      // Ship the whole changed-file set so gad-browser can step
+                      // Ship the whole changed-file set so Workspace History can step
                       // across every file of the entry, not just the focused one.
                       files: entry.changedFiles,
                     },
@@ -689,12 +689,12 @@ function DiffReviewSection({
   entries,
   fetchContent,
   appearance,
-  onOpenInGadBrowser,
+  onOpenInWorkspaceHistory,
 }: {
   entries: DiffReviewEntry[];
   fetchContent: DiffContentFetcher;
   appearance: "light" | "dark";
-  onOpenInGadBrowser: ComponentProps<typeof DiffViewer>["onOpenInGadBrowser"];
+  onOpenInWorkspaceHistory: ComponentProps<typeof DiffViewer>["onOpenInWorkspaceHistory"];
 }) {
   // Line totals are shown only when EVERY entry carries them — the host omits
   // insertions/deletions for any entry with a skipped (binary/oversized/
@@ -759,7 +759,7 @@ function DiffReviewSection({
               entry={entry}
               fetchContent={fetchContent}
               appearance={appearance}
-              onOpenInGadBrowser={onOpenInGadBrowser}
+              onOpenInWorkspaceHistory={onOpenInWorkspaceHistory}
             />
           </Box>
         ))}

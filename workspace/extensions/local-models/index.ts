@@ -1120,14 +1120,14 @@ export async function activate(ctx: Ctx) {
 
     async capabilities(): Promise<LocalModelsCapabilities> {
       return {
-        managementPanel: { source: "panels/local-models" },
+        managementPanel: { source: "about/local-models" },
         serverLogs: {
           utility: {
-            source: "panels/local-models",
+            source: "about/local-models",
             stateArgs: { openLog: "utility" },
           },
           main: {
-            source: "panels/local-models",
+            source: "about/local-models",
             stateArgs: { openLog: "main" },
           },
         },

@@ -6,7 +6,7 @@
  * (`GovernanceLog`), which unions approval-provenance resolutions and
  * membership-governance events (invite/revoke/add/remove/role-change). This is
  * a pure READ surface: the log is host-owned (INV-2) and single-writer; the
- * `gad-browser` Governance view stitches these host records together with the
+ * The Workspace History Governance view stitches these host records together with the
  * userland GAD agent-approval projection for one timeline.
  *
  * The query parser lives in host-core because both the hub RPC surface and this

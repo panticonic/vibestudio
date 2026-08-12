@@ -1,6 +1,6 @@
 /**
  * DiffViewer — the shared, reusable diff-review surface for the approval prompt
- * (and any other panel, e.g. gad-browser, that wants the same viewer). It takes
+ * (and any other panel, e.g. Workspace History, that wants the same viewer). It takes
  * one host-computed batch entry (repo + per-file change list) plus a lazy
  * content fetcher, and renders:
  *
@@ -12,7 +12,7 @@
  * Guardrails (provenance-aware-diff-merge-plan §9): file contents are fetched only by the
  * content hashes named in the payload, lazily on expand. Binary/oversized files
  * render diffstat-only; callers that have a real file-inspection surface may
- * opt into an "open in gad-browser" action. Highlighting is best-effort — plain
+ * opt into an "open in Workspace History" action. Highlighting is best-effort — plain
  * text never blocks review. Crucially, this component renders NO decision
  * controls: the host's Allow/Deny buttons live outside it and are never gated
  * on any fetch or highlight completing.
@@ -43,17 +43,17 @@ export interface DiffViewerProps {
   /** Drives shiki theme selection; defaults to light. */
   appearance?: HighlightAppearance;
   /**
-   * Escape hatch into gad-browser's file-inspection surface. Rendered as the
+   * Escape hatch into Workspace History's file-inspection surface. Rendered as the
    * primary action on degraded (binary/oversized) rows — which can't render
    * inline — and as a quiet secondary icon on normal file headers, for
    * reviewers who want full context beyond the unified diff. When omitted, the
    * degraded row simply explains why it can't render inline and normal headers
    * carry no extra action (the shell may leave this unimplemented for now).
    */
-  onOpenInGadBrowser?: (file: DiffChangedFile, entry: DiffReviewEntry) => void;
+  onOpenInWorkspaceHistory?: (file: DiffChangedFile, entry: DiffReviewEntry) => void;
   /**
    * Paths to expand on first render (inline files only — degraded rows can't
-   * expand). Lets a host deep-link straight into an open diff, e.g. gad-browser
+   * expand). Lets a host deep-link straight into an open diff, e.g. Workspace History
    * pre-expanding the file the reviewer was sent to. Changes are additive: a
    * later value merges in without collapsing what the reviewer has open.
    */
@@ -73,7 +73,7 @@ export function DiffViewer({
   entry,
   fetchContent,
   appearance = "light",
-  onOpenInGadBrowser,
+  onOpenInWorkspaceHistory,
   initialExpanded,
 }: DiffViewerProps) {
   const files = entry.changedFiles;
@@ -146,7 +146,7 @@ export function DiffViewer({
             appearance={appearance}
             fetchContent={fetchContent}
             onToggle={() => toggle(file.path)}
-            onOpenInGadBrowser={onOpenInGadBrowser}
+            onOpenInWorkspaceHistory={onOpenInWorkspaceHistory}
           />
         ))}
         {files.length === 0 ? (
@@ -182,7 +182,7 @@ function DiffFileRow({
   appearance,
   fetchContent,
   onToggle,
-  onOpenInGadBrowser,
+  onOpenInWorkspaceHistory,
 }: {
   file: DiffChangedFile;
   entry: DiffReviewEntry;
@@ -190,7 +190,7 @@ function DiffFileRow({
   appearance: HighlightAppearance;
   fetchContent: DiffContentFetcher;
   onToggle: () => void;
-  onOpenInGadBrowser?: (file: DiffChangedFile, entry: DiffReviewEntry) => void;
+  onOpenInWorkspaceHistory?: (file: DiffChangedFile, entry: DiffReviewEntry) => void;
 }) {
   const degraded = Boolean(file.binary || file.tooLarge);
   const badge = KIND_BADGE[file.kind];
@@ -244,15 +244,15 @@ function DiffFileRow({
         </button>
         {/* Quiet secondary escape hatch on NORMAL rows — degraded rows carry the
             primary action in their body note instead, so we skip it here. */}
-        {onOpenInGadBrowser && !degraded ? (
-          <Tooltip content="Open in gad-browser">
+        {onOpenInWorkspaceHistory && !degraded ? (
+          <Tooltip content="Open in Workspace History">
             <IconButton
               size="1"
               variant="ghost"
               color="gray"
-              data-diff-open-gad-browser=""
-              aria-label={`Open ${file.path} in gad-browser`}
-              onClick={() => onOpenInGadBrowser(file, entry)}
+              data-diff-open-workspace-history=""
+              aria-label={`Open ${file.path} in Workspace History`}
+              onClick={() => onOpenInWorkspaceHistory(file, entry)}
               style={{ flexShrink: 0, margin: "0 6px" }}
             >
               <ExternalLinkIcon />
@@ -262,7 +262,11 @@ function DiffFileRow({
       </Flex>
 
       {degraded ? (
-        <DegradedFileNote file={file} entry={entry} onOpenInGadBrowser={onOpenInGadBrowser} />
+        <DegradedFileNote
+          file={file}
+          entry={entry}
+          onOpenInWorkspaceHistory={onOpenInWorkspaceHistory}
+        />
       ) : expanded ? (
         <DiffFileBody diff={diff} />
       ) : null}
@@ -273,11 +277,11 @@ function DiffFileRow({
 function DegradedFileNote({
   file,
   entry,
-  onOpenInGadBrowser,
+  onOpenInWorkspaceHistory,
 }: {
   file: DiffChangedFile;
   entry: DiffReviewEntry;
-  onOpenInGadBrowser?: (file: DiffChangedFile, entry: DiffReviewEntry) => void;
+  onOpenInWorkspaceHistory?: (file: DiffChangedFile, entry: DiffReviewEntry) => void;
 }) {
   const reason = file.binary ? "Binary file" : "File too large to render inline";
   return (
@@ -285,15 +289,15 @@ function DegradedFileNote({
       <Text size="1" color="gray">
         {reason} — diffstat only.
       </Text>
-      {onOpenInGadBrowser ? (
+      {onOpenInWorkspaceHistory ? (
         <Button
           size="1"
           variant="soft"
           color="gray"
-          onClick={() => onOpenInGadBrowser(file, entry)}
+          onClick={() => onOpenInWorkspaceHistory(file, entry)}
         >
           <ExternalLinkIcon />
-          Open in gad-browser
+          Open in Workspace History
         </Button>
       ) : null}
     </Flex>

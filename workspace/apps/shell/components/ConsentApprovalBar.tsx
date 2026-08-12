@@ -38,7 +38,7 @@ import {
   type ApprovalTone,
   type BlobResult,
   type CallerInfo,
-  type GadBrowserTarget,
+  type WorkspaceHistoryTarget,
 } from "./approvalCardModel";
 import type { OverlayThemeInfo } from "../overlay/types";
 
@@ -56,9 +56,9 @@ export const APPROVAL_OVERLAY_HOST_ID = "app-approval-host";
  */
 const APPROVAL_RECONCILE_INTERVAL_MS = 5_000;
 
-/** Workspace source path of the gad-browser panel (the file-inspection surface
+/** Workspace source path of Workspace History (the file-inspection surface
  *  the diff-review escape hatch deep-links into). */
-const GAD_BROWSER_SOURCE = "panels/gad-browser";
+const WORKSPACE_HISTORY_SOURCE = "about/workspace-history";
 
 export function ConsentApprovalBar() {
   const [pendingAccess, setPendingAccess] = useState<PendingApproval[]>([]);
@@ -434,10 +434,10 @@ export function ConsentApprovalBar() {
         setSubmittingApprovalIds(new Set(submittingApprovalIdsRef.current));
       });
   };
-  // Diff-review escape hatch: reuse the open gad-browser panel if one exists
+  // Diff-review escape hatch: reuse Workspace History if one exists
   // (navigate it to the new target + focus), otherwise create one. The target
   // rides along as launch state-args the panel consumes on mount/param-change.
-  const openInGadBrowser = (target: GadBrowserTarget) => {
+  const openInWorkspaceHistory = (target: WorkspaceHistoryTarget) => {
     const stateArgs = { diffTarget: target };
     void (async () => {
       try {
@@ -455,7 +455,7 @@ export function ConsentApprovalBar() {
           });
           for (const node of page.nodes) {
             const observation = await panel.observe(node.slotId);
-            if (observation.source === GAD_BROWSER_SOURCE) {
+            if (observation.source === WORKSPACE_HISTORY_SOURCE) {
               existingId = node.slotId;
               break;
             }
@@ -464,13 +464,13 @@ export function ConsentApprovalBar() {
           if (!cursor) break;
         }
         if (existingId) {
-          await panel.navigate(existingId, GAD_BROWSER_SOURCE, { stateArgs });
+          await panel.navigate(existingId, WORKSPACE_HISTORY_SOURCE, { stateArgs });
           navigateToId(existingId);
         } else {
-          await panel.createPanel(GAD_BROWSER_SOURCE, { stateArgs });
+          await panel.createPanel(WORKSPACE_HISTORY_SOURCE, { stateArgs });
         }
       } catch (err: unknown) {
-        console.error("[ConsentApprovalBar] open-in-gad-browser failed:", err);
+        console.error("[ConsentApprovalBar] open-in-workspace-history failed:", err);
       }
     })();
   };
@@ -570,8 +570,8 @@ export function ConsentApprovalBar() {
       case "fetch-blob":
         fetchBlob(intent.hash, intent.refresh);
         return;
-      case "open-in-gad-browser":
-        openInGadBrowser(intent.target);
+      case "open-in-workspace-history":
+        openInWorkspaceHistory(intent.target);
         return;
     }
   };

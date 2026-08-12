@@ -61,7 +61,7 @@ describe("onboarding catalog", () => {
       (entry) => entry.id === "configuration.local-models"
     );
     expect(localModels?.ownerSkillPath).toBeUndefined();
-    expect(localModels?.actions?.setup).toEqual({ via: "panel", path: "panels/local-models" });
+    expect(localModels?.actions?.setup).toEqual({ via: "panel", path: "about/local-models" });
   });
 
   it("composes and validates declarations from installed owner skills", () => {
