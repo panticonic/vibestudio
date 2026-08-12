@@ -68,11 +68,11 @@ function ModelChoice({
       asChild
       size="2"
       variant={selected ? "surface" : "classic"}
+      data-surface-tone={selected ? "selected" : undefined}
       style={{
         flex: "1 1 210px",
         minWidth: 0,
         cursor: "pointer",
-        outline: selected ? "2px solid var(--accent-8)" : undefined,
       }}
     >
       <button type="button" onClick={onSelect} aria-pressed={selected}>

@@ -14,9 +14,9 @@ export function AgentTypeCard({ agent, selected, onSelect }: AgentTypeCardProps)
     <Card
       asChild
       variant={selected ? "surface" : "classic"}
+      data-surface-tone={selected ? "selected" : undefined}
       style={{
         cursor: "pointer",
-        outline: selected ? "2px solid var(--accent-8)" : undefined,
       }}
     >
       <button type="button" onClick={onSelect}>

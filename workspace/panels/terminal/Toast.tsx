@@ -43,12 +43,12 @@ export function Toast(props: { toast: PaneToast | null; onDismiss?(): void }) {
   return (
     <Card
       size="1"
+      data-surface-tone={props.toast.severity === "error" ? "error" : "info"}
       style={{
         position: "absolute",
         right: "var(--space-3)",
         bottom: "var(--space-3)",
         zIndex: 10,
-        background: "var(--gray-1)",
         boxShadow: "var(--shadow-4)",
         transition: "opacity 150ms, transform 150ms",
       }}

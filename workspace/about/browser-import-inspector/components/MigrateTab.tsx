@@ -389,11 +389,10 @@ function Stepper(props: {
           <Card
             key={step.key}
             asChild
+            data-surface-tone={active ? "selected" : undefined}
             style={{
               flex: 1,
               cursor: "pointer",
-              outline: active ? "1px solid var(--accent-a8)" : undefined,
-              background: active ? "var(--accent-a2)" : undefined,
             }}
           >
             <button type="button" onClick={() => props.onStep(step.key)} disabled={props.busy}>
@@ -615,20 +614,16 @@ function ProgressCard(props: {
   const running = !isTerminalImportPhase(props.job.phase);
   const status = importStatusPresentation(props.job.phase);
   const title = props.mode === "preview" ? "Review" : status.heading;
+  const surfaceTone =
+    props.mode !== "import"
+      ? undefined
+      : props.job.phase === "complete"
+        ? "success"
+        : props.job.phase === "partial"
+          ? "warning"
+          : undefined;
   return (
-    <Card
-      style={{
-        flexShrink: 0,
-        background:
-          props.mode === "import"
-            ? props.job.phase === "complete"
-              ? "var(--green-a2)"
-              : props.job.phase === "partial"
-                ? "var(--amber-a2)"
-                : undefined
-            : undefined,
-      }}
-    >
+    <Card data-surface-tone={surfaceTone} style={{ flexShrink: 0 }}>
       <Flex justify="between" align="center" gap="2">
         <Flex align="center" gap="2">
           <Heading size="2">{title}</Heading>

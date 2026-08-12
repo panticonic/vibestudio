@@ -513,9 +513,8 @@ export function FormRenderer({
                       key={option.value}
                       size="1"
                       asChild
+                      data-surface-tone={selected ? "selected" : undefined}
                       style={{
-                        borderColor: selected ? "var(--accent-8)" : undefined,
-                        background: selected ? "var(--accent-a3)" : undefined,
                         opacity: isEnabled ? 1 : 0.6,
                       }}
                     >

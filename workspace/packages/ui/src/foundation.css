@@ -69,6 +69,16 @@
  * variables without fighting selector specificity.
  */
 .radix-themes:where(.light, .light-theme) {
+  --card-selected-surface: var(--accent-a3);
+  --card-selected-border: var(--accent-a7);
+  --card-info-surface: var(--blue-a3);
+  --card-info-border: var(--blue-a6);
+  --card-success-surface: var(--green-a3);
+  --card-success-border: var(--green-a6);
+  --card-warning-surface: var(--amber-a3);
+  --card-warning-border: var(--amber-a6);
+  --card-error-surface: var(--red-a3);
+  --card-error-border: var(--red-a6);
   --tool-surface-gray-background: var(--gray-3);
   --tool-surface-gray-border: var(--gray-a6);
   --tool-surface-blue-background: var(--blue-a3);
@@ -82,6 +92,16 @@
 }
 
 .radix-themes:where(.dark, .dark-theme) {
+  --card-selected-surface: var(--accent-a2);
+  --card-selected-border: var(--accent-a5);
+  --card-info-surface: var(--blue-a2);
+  --card-info-border: var(--blue-a5);
+  --card-success-surface: var(--green-a2);
+  --card-success-border: var(--green-a5);
+  --card-warning-surface: var(--amber-a2);
+  --card-warning-border: var(--amber-a5);
+  --card-error-surface: var(--red-a2);
+  --card-error-border: var(--red-a5);
   --tool-surface-gray-background: var(--color-panel);
   --tool-surface-gray-border: var(--gray-a4);
   --tool-surface-blue-background: var(--color-panel);
@@ -92,6 +112,37 @@
   --tool-surface-amber-border: var(--amber-a4);
   --tool-surface-red-background: var(--color-panel);
   --tool-surface-red-border: var(--red-a4);
+}
+
+/*
+ * Radix surface Cards paint their visible fill on ::before. Stateful panels
+ * opt into this semantic attribute instead of setting an element background
+ * that the pseudo-element would cover. Appearance-specific tokens above keep
+ * light states legible without making the equivalent dark surfaces shout.
+ */
+.rt-Card[data-surface-tone="selected"] {
+  --card-background-color: var(--card-selected-surface);
+  --base-card-surface-box-shadow: 0 0 0 1px var(--card-selected-border);
+}
+
+.rt-Card[data-surface-tone="info"] {
+  --card-background-color: var(--card-info-surface);
+  --base-card-surface-box-shadow: 0 0 0 1px var(--card-info-border);
+}
+
+.rt-Card[data-surface-tone="success"] {
+  --card-background-color: var(--card-success-surface);
+  --base-card-surface-box-shadow: 0 0 0 1px var(--card-success-border);
+}
+
+.rt-Card[data-surface-tone="warning"] {
+  --card-background-color: var(--card-warning-surface);
+  --base-card-surface-box-shadow: 0 0 0 1px var(--card-warning-border);
+}
+
+.rt-Card[data-surface-tone="error"] {
+  --card-background-color: var(--card-error-surface);
+  --base-card-surface-box-shadow: 0 0 0 1px var(--card-error-border);
 }
 
 /* One global scrollbar treatment for the Chromium/WebKit targets we ship. */

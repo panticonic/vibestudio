@@ -1712,10 +1712,6 @@
   justify-content: center;
   width: 36px;
 }
-.first-agent-setup-status {
-  background: color-mix(in srgb, var(--accent-a2) 45%, var(--color-panel-solid));
-  border-color: var(--accent-a5);
-}
 .first-agent-setup-status-icon {
   align-items: center;
   background: var(--accent-a4);
