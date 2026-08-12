@@ -25,6 +25,12 @@ Read only references relevant to the target and change.
 
 ## Invariants
 
+- Build production-ready systems. Apps are trusted workspace infrastructure,
+  not throwaway prototypes: design for real use from the start with proper state
+  persistence, error handling, principled authority, and tested edge cases. Do
+  not populate apps with hardcoded demo or fake data — build real empty states,
+  real data-entry flows, and real persistence. Do not leave any 'prototype'
+  UI element stubs without implemented functionality.
 - `@workspace-apps/<name>` maps to `apps/<name>`. Identity comes from the
   package manifest and approved build, not display path.
 - Give each app a semantic `vibestudio.icon` per the [icon
@@ -38,9 +44,12 @@ Read only references relevant to the target and change.
 - Electron layout hosts declare `panel-hosting`. React Native pairing must work
   in the shipped bootstrap before a workspace bundle exists. Terminal apps run
   only as explicitly activated supervised processes.
-- Put durable shared data behind a manifest-declared worker or DO service with
-  explicit RPC authority. Use version-controlled project files when content
-  benefits from history and collaboration.
+- Treat an app that creates or changes user data as requiring durable storage
+  unless the user explicitly describes that data as disposable. Put that data
+  in a Durable Object service that owns SQLite for live interactive data.
+  Use version-controlled project files when content benefits from history and
+  collaboration; client component state and process memory are presentation
+  state, not persistence.
 - Use `usePanelTheme()` and responsive layouts. Shared client behavior needs
   focused evidence in every affected target.
 - Panel commands are generic and host-local: panels own command meaning; apps

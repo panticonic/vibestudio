@@ -50,6 +50,11 @@ purpose, workflow, ownership, invariants, and diagnostics.
 
 ## Core rules
 
+- Build production-ready systems. Workspace units are durable infrastructure,
+  not throwaway prototypes: design for real use from the start with proper state
+  persistence, schema migrations, error surfaces, principled authority, and
+  tested edge cases. Do not populate applications with hardcoded demo or fake
+  data — build real empty states, real data-entry flows, and real persistence.
 - Use workspace-root-relative paths. Never put host checkout paths in workspace
   source or tool arguments.
 - Use structured read/edit/write/move/copy and semantic VCS tools for managed
@@ -72,10 +77,13 @@ purpose, workflow, ownership, invariants, and diagnostics.
 
 ## Persistence and programmable surfaces
 
-Use Durable Object SQLite for transactional shared application state. Use
+Treat an application that creates or changes user data as requiring durable
+storage unless the user explicitly describes that data as disposable. Use
+Durable Object SQLite for transactional shared application state. Use
 version-controlled files under `projects/` for content benefiting from history,
-diffing, and collaboration. Never keep meaningful shared state only in panel
-state args, eval scope, or process memory.
+diffing, and collaboration. Panel state args, eval scope, component state, and
+process memory are presentation or scratch state, never the sole home of
+meaningful application data.
 
 Expose application operations as narrow, app-shaped RPC methods with explicit
 receiver contracts. Use channels and structured events when collaboration is
