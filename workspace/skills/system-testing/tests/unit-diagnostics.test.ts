@@ -197,6 +197,29 @@ describe("workspace unit diagnostics semantic validators", () => {
   const listTest = unitDiagnosticsTests.find(
     (candidate) => candidate.name === "unit-list-inspect"
   )!;
+  const logsTest = unitDiagnosticsTests.find(
+    (candidate) => candidate.name === "unit-diagnostics-error-buffer"
+  )!;
+
+  const identity = { kind: "extension", entityId: "extension:status:1" };
+  const health = {
+    entity: {
+      identity,
+      source: "extensions/status",
+      status: "running",
+    },
+    state: "healthy",
+    summary: "ready",
+    logs: [
+      { identity, timestamp: 1, level: "info", message: "ready" },
+      { identity, timestamp: 2, level: "warn", message: "slow poll" },
+    ],
+    errors: [{ identity, timestamp: 3, level: "error", message: "old failure" }],
+    dropped: { entries: 0, errors: 0 },
+    capacity: { entries: 100, errors: 50 },
+  };
+  const healthCode =
+    "const units = await runtime.supervision.list(); const health = await runtime.supervision.health(units[0].identity, { limit: 20, errorLimit: 10 }); return health;";
 
   it("accepts natural prose backed by list and detail inspection evidence", () => {
     expect(
@@ -220,5 +243,59 @@ describe("workspace unit diagnostics semantic validators", () => {
         )
       )
     ).toMatchObject({ passed: false });
+  });
+
+  it("joins bounded log and error buffers to one exact supervised unit", () => {
+    expect(
+      logsTest.validate(
+        execution(
+          healthCode,
+          health,
+          "extensions/status has 2 recent logs and 1 entry in its separate error buffer."
+        )
+      )
+    ).toEqual({ passed: true, reason: undefined });
+  });
+
+  it("rejects prose that is not backed by a unit health packet", () => {
+    expect(
+      logsTest.validate(
+        execution(
+          healthCode,
+          { source: "extensions/status", logs: 2, errors: 1 },
+          "extensions/status has 2 logs and 1 error."
+        )
+      )
+    ).toMatchObject({ passed: false, reason: expect.stringContaining("health packet") });
+  });
+
+  it("rejects diagnostic records from a different unit identity", () => {
+    expect(
+      logsTest.validate(
+        execution(
+          healthCode,
+          {
+            ...health,
+            errors: [
+              {
+                identity: { kind: "extension", entityId: "extension:other:1" },
+                timestamp: 3,
+                level: "error",
+                message: "foreign failure",
+              },
+            ],
+          },
+          "extensions/status has 2 logs and 1 error."
+        )
+      )
+    ).toMatchObject({ passed: false, reason: expect.stringContaining("identity-consistent") });
+  });
+
+  it("rejects a report that omits one observed buffer count", () => {
+    expect(
+      logsTest.validate(
+        execution(healthCode, health, "extensions/status has 2 recent logs and looks healthy.")
+      )
+    ).toMatchObject({ passed: false, reason: expect.stringContaining("exact buffer counts") });
   });
 });

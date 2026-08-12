@@ -6,6 +6,7 @@ import {
   successfulEvalCode,
   successfulEvalReturnValues,
 } from "./_helpers.js";
+import { walkRecords } from "./_scenario-evidence.js";
 
 function semanticUnitInspection(
   result: Parameters<typeof noIncompleteInvocations>[0],
@@ -24,6 +25,96 @@ function semanticUnitInspection(
     return {
       passed: false,
       reason: "Final response did not report the observed unit diagnostics semantically",
+    };
+  }
+  return noIncompleteInvocations(result);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function sameIdentity(value: unknown, expected: Record<string, unknown>): boolean {
+  return (
+    isRecord(value) &&
+    value["kind"] === expected["kind"] &&
+    value["entityId"] === expected["entityId"]
+  );
+}
+
+function labeledCount(final: string, label: "log" | "error", count: number): boolean {
+  if (count === 0 && new RegExp(`\\bno\\s+(?:recent\\s+)?${label}s?\\b`, "iu").test(final)) {
+    return true;
+  }
+  return (
+    new RegExp(`\\b${label}s?\\b[^\\d\\n]{0,24}\\b${count}\\b`, "iu").test(final) ||
+    new RegExp(`\\b${count}\\b[^\\d\\n]{0,24}\\b${label}s?\\b`, "iu").test(final)
+  );
+}
+
+function unitDiagnosticLogInspection(result: Parameters<typeof noIncompleteInvocations>[0]) {
+  const code = successfulEvalCode(result);
+  if (
+    !/runtime\.supervision\.list/iu.test(code) ||
+    !/runtime\.supervision\.health/iu.test(code) ||
+    !/\blimit\s*:\s*[1-9]\d*/u.test(code) ||
+    !/\berrorLimit\s*:\s*[1-9]\d*/u.test(code)
+  ) {
+    return {
+      passed: false,
+      reason: "The unit-log investigation did not perform one bounded exact-unit health read",
+    };
+  }
+
+  const packet = walkRecords(successfulEvalReturnValues(result)).find((record) => {
+    const entity = record["entity"];
+    const logs = record["logs"];
+    const errors = record["errors"];
+    const dropped = record["dropped"];
+    const capacity = record["capacity"];
+    if (
+      !isRecord(entity) ||
+      !isRecord(entity["identity"]) ||
+      typeof entity["source"] !== "string" ||
+      !Array.isArray(logs) ||
+      !Array.isArray(errors) ||
+      !isRecord(dropped) ||
+      !isRecord(capacity)
+    ) {
+      return false;
+    }
+    const identity = entity["identity"];
+    return (
+      logs.every((entry) => isRecord(entry) && sameIdentity(entry["identity"], identity)) &&
+      errors.every((entry) => isRecord(entry) && sameIdentity(entry["identity"], identity)) &&
+      Number.isInteger(dropped["entries"]) &&
+      Number.isInteger(dropped["errors"]) &&
+      Number.isInteger(capacity["entries"]) &&
+      Number.isInteger(capacity["errors"])
+    );
+  });
+  if (!packet) {
+    return {
+      passed: false,
+      reason:
+        "No identity-consistent unit health packet with separate log/error buffers was observed",
+    };
+  }
+
+  const entity = packet["entity"] as Record<string, unknown>;
+  const identity = entity["identity"] as Record<string, unknown>;
+  const logs = packet["logs"] as unknown[];
+  const errors = packet["errors"] as unknown[];
+  const final = findLastAgentMessage(result);
+  if (
+    (!final.includes(String(entity["source"])) && !final.includes(String(identity["entityId"]))) ||
+    !labeledCount(final, "log", logs.length) ||
+    !labeledCount(final, "error", errors.length)
+  ) {
+    return {
+      passed: false,
+      reason:
+        "The final response did not identify the observed unit and report both exact buffer counts",
     };
   }
   return noIncompleteInvocations(result);
@@ -169,12 +260,7 @@ export const unitDiagnosticsTests: TestCase[] = [
     category: "unit-diagnostics",
     prompt:
       "For one running workspace unit, summarize a bounded slice of its recent persisted logs and its separate error buffer.",
-    validate: (result) =>
-      semanticUnitInspection(
-        result,
-        [/runtime\.supervision\.health/iu, /\b(?:limit|errorLimit)\s*:/u],
-        [/log/iu, /error/iu, /\d/u]
-      ),
+    validate: unitDiagnosticLogInspection,
   },
   {
     name: "unit-versions",
