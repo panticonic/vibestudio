@@ -21,6 +21,17 @@ describe("composeSystemPrompt", () => {
     );
   });
 
+  it("defines the evidence boundary for a completed executable-source repair", () => {
+    expect(VIBESTUDIO_BASE_SYSTEM_PROMPT).toContain(
+      "A managed executable-source repair is complete only after"
+    );
+    expect(VIBESTUDIO_BASE_SYSTEM_PROMPT).toContain("exact affected unit builds successfully");
+    expect(VIBESTUDIO_BASE_SYSTEM_PROMPT).toContain("`vcs` reports a clean working state");
+    expect(VIBESTUDIO_BASE_SYSTEM_PROMPT).toContain(
+      "Publish the committed event only when the requested workflow includes advancing protected main"
+    );
+  });
+
   it("appends Vibestudio, workspace, skills, and channel prompts by default", () => {
     const prompt = composeSystemPrompt({
       workspacePrompt: "WORKSPACE",
