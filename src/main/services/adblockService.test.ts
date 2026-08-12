@@ -6,18 +6,23 @@ import { createAdblockService } from "./adblockService.js";
 
 function createManager() {
   return {
-    getConfig: vi.fn(() => ({})),
+    getConfig: vi.fn(() => ({
+      enabled: true,
+      lists: { ads: true, privacy: true, annoyances: false, social: false },
+      customLists: [],
+      whitelist: [],
+    })),
     setEnabled: vi.fn(),
     setListEnabled: vi.fn(),
     addCustomList: vi.fn(),
     removeCustomList: vi.fn(),
     addToWhitelist: vi.fn(),
     removeFromWhitelist: vi.fn(),
-    getStats: vi.fn(() => ({ blockedRequests: 0 })),
+    getStats: vi.fn(() => ({ blockedRequests: 0, blockedElements: 0 })),
     resetStats: vi.fn(),
     rebuildEngine: vi.fn(),
     isActive: vi.fn(() => true),
-    getStatsForPanel: vi.fn(() => ({ blockedRequests: 0 })),
+    getStatsForPanel: vi.fn(() => ({ blockedRequests: 0, blockedElements: 0 })),
     isEnabledForPanel: vi.fn(() => true),
     setEnabledForPanel: vi.fn(),
     resetStatsForPanel: vi.fn(),
@@ -75,7 +80,12 @@ describe("createAdblockService", () => {
 
     await expect(
       dispatcher.dispatch({ caller: adblockPanelCaller() }, "adblock", "getConfig", [])
-    ).resolves.toEqual({});
+    ).resolves.toEqual({
+      enabled: true,
+      lists: { ads: true, privacy: true, annoyances: false, social: false },
+      customLists: [],
+      whitelist: [],
+    });
     await expect(
       dispatcher.dispatch({ caller: adblockPanelCaller() }, "adblock", "setEnabled", [false])
     ).resolves.toBe(true);

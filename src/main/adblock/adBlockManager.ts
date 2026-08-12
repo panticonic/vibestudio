@@ -18,37 +18,13 @@ import { parse } from "tldts";
 import { getCentralConfigDirectory } from "../paths.js";
 import { createDevLogger } from "@vibestudio/dev-log";
 import { deleteDynamicProperty } from "../../lintHelpers";
+import type {
+  AdBlockConfig,
+  AdBlockListConfig,
+  AdBlockStats,
+} from "@vibestudio/service-schemas/adblock";
 
 const log = createDevLogger("AdBlock");
-
-/**
- * Configuration for which filter lists are enabled.
- */
-export interface AdBlockListConfig {
-  ads: boolean; // EasyList
-  privacy: boolean; // EasyPrivacy
-  annoyances: boolean; // Fanboy's Annoyances
-  social: boolean; // Fanboy's Social
-}
-
-/**
- * Full ad block configuration.
- */
-export interface AdBlockConfig {
-  enabled: boolean;
-  lists: AdBlockListConfig;
-  customLists: string[]; // URLs to custom filter lists
-  whitelist: string[]; // Domains to whitelist
-  lastUpdated?: number; // Timestamp of last filter list update (ms since epoch)
-}
-
-/**
- * Statistics about ad blocking activity.
- */
-export interface AdBlockStats {
-  blockedRequests: number;
-  blockedElements: number;
-}
 
 /**
  * Default configuration with sensible defaults.

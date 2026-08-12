@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
 import type { ServiceMethodSchemas } from "@vibestudio/shared/typedServiceClient";
+import { adblockMethods } from "./adblock.js";
 import { appMethods } from "./app.js";
 import { accountMethods } from "./account.js";
 import { authMethods } from "./auth.js";
@@ -32,6 +33,7 @@ import { externalOpenMethods } from "./externalOpen.js";
 import { fsMethods } from "./fs.js";
 import { gitInteropMethods } from "./gitInterop.js";
 import { hostLifecycleMethods } from "./hostLifecycle.js";
+import { hostPerformanceMethods } from "./hostPerformance.js";
 import { hubControlMethods } from "./hubControl.js";
 import { serverLogMethods } from "./serverLog.js";
 import { menuMethods } from "./menu.js";
@@ -74,6 +76,7 @@ type ServiceTable = {
 };
 
 const serviceTables: ServiceTable[] = [
+  { service: "adblock", file: "adblock.ts", methods: adblockMethods },
   { service: "attachedHosts", file: "attachedHosts.ts", methods: attachedHostsMethods },
   { service: "account", file: "account.ts", methods: accountMethods },
   { service: "app", file: "app.ts", methods: appMethods },
@@ -122,6 +125,7 @@ const serviceTables: ServiceTable[] = [
   { service: "fs", file: "fs.ts", methods: fsMethods },
   { service: "gitInterop", file: "gitInterop.ts", methods: gitInteropMethods },
   { service: "hostLifecycle", file: "hostLifecycle.ts", methods: hostLifecycleMethods },
+  { service: "hostPerformance", file: "hostPerformance.ts", methods: hostPerformanceMethods },
   { service: "hubControl", file: "hubControl.ts", methods: hubControlMethods },
   { service: "serverLog", file: "serverLog.ts", methods: serverLogMethods },
   { service: "menu", file: "menu.ts", methods: menuMethods },
