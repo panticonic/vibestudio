@@ -40,6 +40,11 @@ import {
   truncateHead,
   type TruncationResult,
 } from "./truncate.js";
+import {
+  canonicalReceiptPath,
+  createWorkspaceReadReceipt,
+  type WorkspaceReadReceipt,
+} from "./workspace-read-receipt.js";
 const readLocationSchema = Type.Union([
   Type.Object({
     path: Type.String({ description: "Path to the file to read (relative or absolute)" }),
@@ -125,6 +130,8 @@ export interface ReadToolDetails {
   suggestions?: string[];
   encoding?: "text" | "base64";
   contentHash?: string;
+  /** Exact whole-file state that edit/apply_patch can use as an optimistic precondition. */
+  receipt?: WorkspaceReadReceipt;
   byteRange?: {
     start: number;
     end: number;
@@ -367,7 +374,11 @@ export function createReadTool(
             code: "invalid_artifact_reference",
           });
         }
-        if (input.encoding === "base64" || input.byteOffset !== undefined || input.byteLimit !== undefined) {
+        if (
+          input.encoding === "base64" ||
+          input.byteOffset !== undefined ||
+          input.byteLimit !== undefined
+        ) {
           throw Object.assign(new Error("Artifact resources are JSON text; use offset and limit"), {
             code: "invalid_artifact_read_options",
           });
@@ -427,25 +438,37 @@ export function createReadTool(
               ],
               signal ? { signal } : undefined
             );
-            return formatBoundedBytesResult(bounded, path);
+            return withReadReceipt(
+              formatBoundedBytesResult(bounded, path),
+              path,
+              cwd,
+              bounded.contentHash,
+              bounded.totalBytes
+            );
           }
           const rawBytes = await retryTransientRuntimeFs(() => fs.readFile(absolutePath), signal);
           const bytes = typeof rawBytes === "string" ? encodeUtf8(rawBytes) : rawBytes;
           const start = Math.min(byteOffset ?? 0, bytes.length);
           const selected = bytes.subarray(start, start + (byteLimit ?? DEFAULT_MAX_BYTES));
           const end = start + selected.length;
-          return formatBoundedBytesResult(
-            {
-              base64: bytesToBase64(selected),
-              contentHash: sha256Hex(bytes),
-              totalBytes: bytes.length,
-              maxBytes: byteLimit ?? DEFAULT_MAX_BYTES,
-              start,
-              end,
-              truncated: end < bytes.length,
-              ...(end < bytes.length ? { nextOffset: end } : {}),
-            },
-            path
+          return withReadReceipt(
+            formatBoundedBytesResult(
+              {
+                base64: bytesToBase64(selected),
+                contentHash: sha256Hex(bytes),
+                totalBytes: bytes.length,
+                maxBytes: byteLimit ?? DEFAULT_MAX_BYTES,
+                start,
+                end,
+                truncated: end < bytes.length,
+                ...(end < bytes.length ? { nextOffset: end } : {}),
+              },
+              path
+            ),
+            path,
+            cwd,
+            sha256Hex(bytes),
+            bytes.length
           );
         } catch (err) {
           const recovered = await recoverReadFailure(fs, path, absolutePath, signal);
@@ -480,7 +503,13 @@ export function createReadTool(
             ],
             signal ? { signal } : undefined
           );
-          const result = formatBoundedTextResult(bounded, path);
+          const result = withReadReceipt(
+            formatBoundedTextResult(bounded, path),
+            path,
+            cwd,
+            bounded.contentHash,
+            bounded.totalBytes
+          );
           return attachReadMemory(
             result,
             bounded.text,
@@ -540,6 +569,11 @@ export function createReadTool(
               originalDimensions: { width: resized.originalWidth, height: resized.originalHeight },
               dimensions: { width: resized.width, height: resized.height },
               wasResized: resized.wasResized,
+              receipt: createWorkspaceReadReceipt(
+                canonicalReceiptPath(path, cwd),
+                sha256Hex(raw),
+                raw.byteLength
+              ),
             },
           };
         }
@@ -547,7 +581,13 @@ export function createReadTool(
       // --- Text branch -------------------------------------------------------------------
       const textContent = typeof raw === "string" ? raw : decodeUtf8(raw);
       return attachReadMemory(
-        formatTextResult(textContent, path, offset, limit),
+        withReadReceipt(
+          formatTextResult(textContent, path, offset, limit),
+          path,
+          cwd,
+          sha256Hex(typeof raw === "string" ? encodeUtf8(raw) : raw),
+          typeof raw === "string" ? utf8ByteLength(raw) : raw.byteLength
+        ),
         textContent,
         sha256Hex(new TextEncoder().encode(textContent)),
         0,
@@ -555,6 +595,23 @@ export function createReadTool(
         path,
         signal
       );
+    },
+  };
+}
+
+function withReadReceipt(
+  result: ReadResult,
+  path: string,
+  cwd: string,
+  contentHash: string,
+  byteLength: number
+): ReadResult {
+  return {
+    ...result,
+    details: {
+      ...result.details,
+      contentHash,
+      receipt: createWorkspaceReadReceipt(canonicalReceiptPath(path, cwd), contentHash, byteLength),
     },
   };
 }

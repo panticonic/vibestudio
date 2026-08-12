@@ -9,7 +9,12 @@ import {
 } from "@vibestudio/shared/runtime/entitySpec";
 import { resolveToolFileInRepository, resolveToolRepository } from "../semantic-file-resolution.js";
 import { differingTextEdits, generateDiffString } from "./edit-diff.js";
-import { canonicalBase64Bytes, encodeUtf8Base64 } from "./portable-bytes.js";
+import {
+  base64ToBytes,
+  canonicalBase64Bytes,
+  encodeUtf8Base64,
+  utf8ByteLength,
+} from "./portable-bytes.js";
 import {
   resolveToolWorkingState,
   toVcsPath,
@@ -18,6 +23,11 @@ import {
   type ToolEditingVcs,
   type ToolMutationContext,
 } from "./tool-vcs.js";
+import {
+  assertWorkspaceReadReceipt,
+  workspaceReadReceiptSchema,
+  type WorkspaceReadReceipt,
+} from "./workspace-read-receipt.js";
 
 const expectedHash = Type.Optional(
   Type.String({
@@ -25,6 +35,7 @@ const expectedHash = Type.Optional(
     description: "Expected current content hash. Supply it to reject stale edits.",
   })
 );
+const receipt = Type.Optional(workspaceReadReceiptSchema);
 const mode = Type.Optional(
   Type.Integer({
     minimum: 0,
@@ -43,6 +54,7 @@ const patchOperationSchema = Type.Union([
       kind: Type.Literal("replace"),
       path,
       expectedHash,
+      receipt,
       mode,
       replacements: Type.Array(
         Type.Object(
@@ -62,6 +74,7 @@ const patchOperationSchema = Type.Union([
       kind: Type.Literal("write"),
       path,
       expectedHash,
+      receipt,
       mode,
       content: Type.String(),
     },
@@ -72,13 +85,14 @@ const patchOperationSchema = Type.Union([
       kind: Type.Literal("write_binary"),
       path,
       expectedHash,
+      receipt,
       mode,
       base64: Type.String({ description: "Complete file bytes encoded as canonical base64." }),
     },
     { additionalProperties: false }
   ),
   Type.Object(
-    { kind: Type.Literal("delete"), path, expectedHash },
+    { kind: Type.Literal("delete"), path, expectedHash, receipt },
     { additionalProperties: false }
   ),
   Type.Object(
@@ -86,6 +100,7 @@ const patchOperationSchema = Type.Union([
       kind: Type.Literal("chmod"),
       path,
       expectedHash,
+      receipt,
       mode: Type.Integer({ minimum: 0, maximum: 0o777 }),
     },
     { additionalProperties: false }
@@ -110,19 +125,39 @@ export type ApplyPatchOperation =
       kind: "replace";
       path: string;
       expectedHash?: string;
+      receipt?: WorkspaceReadReceipt;
       mode?: number;
       replacements: Array<{ oldText: string; newText: string }>;
     }
-  | { kind: "write"; path: string; expectedHash?: string; mode?: number; content: string }
+  | {
+      kind: "write";
+      path: string;
+      expectedHash?: string;
+      receipt?: WorkspaceReadReceipt;
+      mode?: number;
+      content: string;
+    }
   | {
       kind: "write_binary";
       path: string;
       expectedHash?: string;
+      receipt?: WorkspaceReadReceipt;
       mode?: number;
       base64: string;
     }
-  | { kind: "delete"; path: string; expectedHash?: string }
-  | { kind: "chmod"; path: string; expectedHash?: string; mode: number };
+  | {
+      kind: "delete";
+      path: string;
+      expectedHash?: string;
+      receipt?: WorkspaceReadReceipt;
+    }
+  | {
+      kind: "chmod";
+      path: string;
+      expectedHash?: string;
+      receipt?: WorkspaceReadReceipt;
+      mode: number;
+    };
 
 export interface ApplyPatchToolInput {
   operations: ApplyPatchOperation[];
@@ -252,7 +287,7 @@ export function createApplyPatchTool(
     name: "apply_patch",
     label: "apply_patch",
     description:
-      "Atomically mutate multiple managed workspace files in one semantic work unit, or perform a binary write, deletion, or mode change. Use edit for ordinary changes confined to one text file. Every path must name a file inside an existing repository, including its top-level section and repository name (for example projects/app/README.md); workspace-root files and bare section paths are not managed repositories. Replacements are exact preconditions: the tool never guesses a fuzzy match. Each path may appear once. Use expectedHash from read/provenance when stale-write protection matters. All operations are validated before anything changes; move_file and copy_file remain the identity-preserving structural tools.",
+      "Atomically mutate multiple managed workspace files in one semantic work unit, or perform a binary write, deletion, or mode change. Use edit for ordinary changes confined to one text file. Every path must name a file inside an existing repository, including its top-level section and repository name (for example projects/app/README.md); workspace-root files and bare section paths are not managed repositories. Replacements are exact preconditions: the tool never guesses a fuzzy match. Each path may appear once. Pass each file's read receipt when stale-write protection matters; a conflict returns a fresh receipt and bounded current excerpts. All operations are validated before anything changes; move_file and copy_file remain the identity-preserving structural tools.",
     parameters: applyPatchSchema,
     cancellationMode: "settle",
     execute: async (
@@ -288,6 +323,24 @@ export function createApplyPatchTool(
             repository,
             route.repoRelPath
           );
+          assertWorkspaceReadReceipt(operation.receipt, {
+            path: canonicalPath,
+            contentHash: file?.contentHash,
+            byteLength: file
+              ? file.content.kind === "text"
+                ? utf8ByteLength(file.content.text)
+                : base64ToBytes(file.content.base64).byteLength
+              : undefined,
+            ...(file?.content.kind === "text"
+              ? {
+                  text: file.content.text,
+                  anchors:
+                    operation.kind === "replace"
+                      ? operation.replacements.map((replacement) => replacement.oldText)
+                      : [],
+                }
+              : {}),
+          });
           assertExpectedHash(operation, file?.contentHash, canonicalPath);
           return { operation, canonicalPath, route, repository, file };
         })
@@ -390,9 +443,7 @@ export function createApplyPatchTool(
                       repositoryId: file.repositoryId,
                       fileId: file.fileId,
                       base64:
-                        content.kind === "text"
-                          ? encodeUtf8Base64(content.text)
-                          : content.base64,
+                        content.kind === "text" ? encodeUtf8Base64(content.text) : content.base64,
                       ...(operation.mode !== undefined && operation.mode !== file.mode
                         ? { mode: operation.mode }
                         : {}),

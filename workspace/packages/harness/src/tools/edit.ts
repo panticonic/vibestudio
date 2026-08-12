@@ -16,7 +16,7 @@ import {
   splitRepoPath,
 } from "@vibestudio/shared/runtime/entitySpec";
 import type { RuntimeFs } from "./runtime-fs.js";
-import { decodeUtf8 } from "./portable-bytes.js";
+import { base64ToBytes, decodeUtf8, encodeUtf8, utf8ByteLength } from "./portable-bytes.js";
 import { resolveToolFile } from "../semantic-file-resolution.js";
 import {
   resolveToolWorkingState,
@@ -36,6 +36,11 @@ import {
   restoreLineEndings,
   stripBom,
 } from "./edit-diff.js";
+import {
+  assertWorkspaceReadReceipt,
+  workspaceReadReceiptSchema,
+} from "./workspace-read-receipt.js";
+import { sha256Hex } from "@vibestudio/content-addressing";
 
 const editSchema = Type.Object({
   path: Type.String({ description: "Path to the file to edit (relative or absolute)" }),
@@ -44,6 +49,7 @@ const editSchema = Type.Object({
     description: "Exact text to find and replace (must match exactly)",
   }),
   newText: Type.String({ description: "New text to replace the old text with" }),
+  receipt: Type.Optional(workspaceReadReceiptSchema),
   intent: Type.Optional(
     Type.String({
       minLength: 1,
@@ -81,7 +87,7 @@ export function createEditTool(
     name: "edit",
     label: "edit",
     description:
-      'Replace exact text in a file. Every call must include path, oldText, and newText together; oldText must match exactly (including whitespace). Use write instead when replacing the whole file. To undo a managed semantic change, use vcs({ operation: "revert", changeIds: [...] }); editing the bytes back creates unrelated new intent.',
+      'Replace text in one file. Every call must include path, oldText, and newText together. Pass the receipt returned by read to reject a stale edit with a fresh receipt and bounded current excerpts. Use write instead when replacing the whole file. To undo a managed semantic change, use vcs({ operation: "revert", changeIds: [...] }); editing the bytes back creates unrelated new intent.',
     parameters: editSchema,
     cancellationMode: "settle",
     execute: async (_toolCallId, input, signal) => {
@@ -100,6 +106,7 @@ export function createEditTool(
         useVcs && workingHead ? await resolveToolFile(vcs, workingHead, relPath) : null;
       const base = exactFile;
       if (!base && scratch === null) {
+        assertWorkspaceReadReceipt(input.receipt, { path: relPath });
         return {
           content: [
             {
@@ -113,6 +120,11 @@ export function createEditTool(
         };
       }
       if (base && base.content.kind !== "text") {
+        assertWorkspaceReadReceipt(input.receipt, {
+          path: relPath,
+          contentHash: base.contentHash,
+          byteLength: base64ToBytes(base.content.base64).byteLength,
+        });
         return {
           content: [
             {
@@ -136,6 +148,13 @@ export function createEditTool(
           : scratch
             ? decodeUtf8(scratch)
             : "";
+      assertWorkspaceReadReceipt(input.receipt, {
+        path: relPath,
+        contentHash: base?.contentHash ?? sha256Hex(encodeUtf8(sourceContent)),
+        byteLength: utf8ByteLength(sourceContent),
+        text: sourceContent,
+        anchors: [oldText],
+      });
       const { bom, text: content } = stripBom(sourceContent);
       const matchResult = fuzzyFindText(content, oldText);
       if (!matchResult.found) {

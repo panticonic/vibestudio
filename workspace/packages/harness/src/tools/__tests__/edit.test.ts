@@ -51,8 +51,7 @@ describe("canonical edit tool", () => {
   it("uses unchanged replacement context only for matching, not authorship", async () => {
     const vcs = new StubVcs({
       files: {
-        "meta/a.ts":
-          'export const value = "baseline";\nexport const neighbor = "untouched";\n',
+        "meta/a.ts": 'export const value = "baseline";\nexport const neighbor = "untouched";\n',
       },
     });
     const tool = createEditTool(CWD, vcs, authority);
@@ -81,9 +80,7 @@ describe("canonical edit tool", () => {
       newText: "goodbye",
     });
 
-    expect(vcs.read("meta/a.ts")).toBe(
-      "keep — dash  \nsay goodbye world\r\ntail\n"
-    );
+    expect(vcs.read("meta/a.ts")).toBe("keep — dash  \nsay goodbye world\r\ntail\n");
     expect(vcs.lastEditInput?.changes[0]).toMatchObject({
       kind: "text-edit",
       edits: [{ start: 18, end: 25, text: "goodbye" }],
@@ -101,5 +98,47 @@ describe("canonical edit tool", () => {
     });
     await expect(fs.readFile(".tmp/note.txt", "utf8")).resolves.toBe("after");
     expect(result.details.storage).toBe("scratch");
+  });
+
+  it("rejects a stale read receipt without mutating and returns current evidence", async () => {
+    const vcs = new StubVcs({
+      files: { "meta/a.ts": "export const currentValue = 2;\n" },
+    });
+    const tool = createEditTool(CWD, vcs, authority);
+
+    const failure = await tool
+      .execute("invocation:stale-receipt", {
+        path: "meta/a.ts",
+        oldText: "currentValue = 1",
+        newText: "currentValue = 3",
+        receipt: {
+          protocol: "workspace-read-receipt.v1",
+          path: "meta/a.ts",
+          contentHash: "f".repeat(64),
+          byteLength: 31,
+        },
+      } as never)
+      .then(
+        () => {
+          throw new Error("Expected stale receipt to fail");
+        },
+        (error: unknown) => error as { code: string; errorData: Record<string, unknown> }
+      );
+
+    expect(failure).toMatchObject({
+      code: "WorkspaceReadConflict",
+      errorData: {
+        reason: "content-changed",
+        currentReceipt: {
+          protocol: "workspace-read-receipt.v1",
+          path: "meta/a.ts",
+        },
+        closestCurrentExcerpts: [
+          expect.objectContaining({ text: expect.stringContaining("currentValue = 2") }),
+        ],
+        recovery: { action: "reobserve" },
+      },
+    });
+    expect(vcs.lastEditInput).toBeUndefined();
   });
 });

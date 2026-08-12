@@ -148,4 +148,55 @@ describe("apply_patch", () => {
     });
     expect(vcs.lastEditInput).toBeUndefined();
   });
+
+  it("validates every read receipt before applying any operation", async () => {
+    const vcs = new StubVcs({
+      files: {
+        "meta/a.ts": "export const currentValue = 2;\n",
+        "meta/b.ts": "unchanged\n",
+      },
+    });
+    const tool = createApplyPatchTool("/", vcs, authority);
+
+    const failure = await tool
+      .execute("invocation:receipt-conflict", {
+        operations: [
+          { kind: "write", path: "meta/b.ts", content: "would mutate\n" },
+          {
+            kind: "replace",
+            path: "meta/a.ts",
+            receipt: {
+              protocol: "workspace-read-receipt.v1",
+              path: "meta/a.ts",
+              contentHash: "f".repeat(64),
+              byteLength: 31,
+            },
+            replacements: [{ oldText: "currentValue = 1", newText: "currentValue = 3" }],
+          },
+        ],
+      } as never)
+      .then(
+        () => {
+          throw new Error("Expected stale receipt to fail");
+        },
+        (error: unknown) => error as { code: string; errorData: Record<string, unknown> }
+      );
+
+    expect(failure).toMatchObject({
+      code: "WorkspaceReadConflict",
+      errorData: {
+        reason: "content-changed",
+        currentReceipt: {
+          protocol: "workspace-read-receipt.v1",
+          path: "meta/a.ts",
+        },
+        closestCurrentExcerpts: [
+          expect.objectContaining({ text: expect.stringContaining("currentValue = 2") }),
+        ],
+        recovery: { action: "reobserve" },
+      },
+    });
+    expect(vcs.lastEditInput).toBeUndefined();
+    expect(vcs.read("meta/b.ts")).toBe("unchanged\n");
+  });
 });

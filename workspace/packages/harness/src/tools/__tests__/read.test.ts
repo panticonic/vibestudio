@@ -39,6 +39,12 @@ describe("createReadTool", () => {
     const result = await tool.execute("call-1", { path: "hello.txt" });
     expect(result.content[0]).toMatchObject({ type: "text", text: "hello\nworld" });
     expect(result.details.path).toBe("hello.txt");
+    expect(result.details.receipt).toEqual({
+      protocol: "workspace-read-receipt.v1",
+      path: "hello.txt",
+      contentHash: expect.stringMatching(/^[0-9a-f]{64}$/u),
+      byteLength: 11,
+    });
     expect(readFile).toHaveBeenCalledWith(`${CWD}/hello.txt`, "utf8");
   });
 
@@ -132,6 +138,12 @@ describe("createReadTool", () => {
       'change {"kind":"change","changeId":"change:value"}'
     );
     expect(result.details).toMatchObject({
+      receipt: {
+        protocol: "workspace-read-receipt.v1",
+        path: "packages/example/src/value.ts",
+        contentHash: "b".repeat(64),
+        byteLength: 18,
+      },
       displayedRange: {
         coordinateKind: "utf16",
         start: 6,
@@ -441,6 +453,12 @@ describe("createReadTool", () => {
     });
     expect(result.details).toMatchObject({
       encoding: "base64",
+      receipt: {
+        protocol: "workspace-read-receipt.v1",
+        path: "value.bin",
+        contentHash: "c".repeat(64),
+        byteLength: 6,
+      },
       size: 3,
       originalSize: 6,
       byteRange: { start: 1, end: 4, totalBytes: 6, nextOffset: 4 },
@@ -584,6 +602,12 @@ describe("createReadTool", () => {
       path: screenshotPath,
       mimeType: "image/png",
       originalSize: pngBytes.length,
+      receipt: {
+        protocol: "workspace-read-receipt.v1",
+        path: ".tmp/panel-capture-123",
+        contentHash: expect.stringMatching(/^[0-9a-f]{64}$/u),
+        byteLength: pngBytes.length,
+      },
     });
     expect(readFile).toHaveBeenCalledWith(screenshotPath, undefined);
   });
