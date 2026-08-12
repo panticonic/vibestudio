@@ -106,6 +106,7 @@ async function loadWithMocks(): Promise<{
   writeUnit(workspaceRoot, "packages/mid", "@workspace/mid", {
     "@workspace/lib": "workspace:*",
   });
+  writeUnit(workspaceRoot, "packages/isolated", "@workspace/isolated");
   writeUnit(workspaceRoot, "panels/app", "@workspace-panels/app", {
     "@workspace/mid": "workspace:*",
   });
@@ -235,7 +236,7 @@ describe("BuildSystemV2 — explicit build reports", () => {
       kind: "package",
       status: "ok",
       diagnostics: [],
-      builds: [{ target: "library:panel", exportPath: ".", diagnostics: [] }],
+      builds: [{ target: "library:panel", exportPath: ".", diagnosticIndexes: [] }],
     });
     expect(first.builds.every((build) => !("artifacts" in build))).toBe(true);
 
@@ -307,7 +308,7 @@ describe("BuildSystemV2 — explicit build reports", () => {
       unitName: "@workspace-panels/app",
       status: "ok",
       diagnostics: [],
-      builds: [{ target: "runtime", diagnostics: [] }],
+      builds: [{ target: "runtime", diagnosticIndexes: [] }],
     });
     expect(buildCalls).toEqual([
       expect.objectContaining({ name: "@workspace-panels/app", stateRef: CANDIDATE_VIEW }),
@@ -351,18 +352,33 @@ describe("BuildSystemV2 — explicit build reports", () => {
       builds: [
         {
           target: "runtime",
-          diagnostics: [
-            expect.objectContaining({
-              severity: "error",
-              message: expect.stringContaining("mock build failed: @workspace-panels/app"),
-            }),
-          ],
+          diagnosticIndexes: [0],
         },
       ],
     });
     expect(buildSystem.getUnitDiagnostics("@workspace-panels/app")).toEqual(
       expect.arrayContaining([expect.objectContaining({ severity: "error" })])
     );
+  });
+
+  it("stores a repeated multi-target diagnostic once and references it by index", async () => {
+    typecheckDiagnostics = (unitRelativePath) => [
+      {
+        source: "tsc",
+        severity: "error",
+        file: `${unitRelativePath}/index.ts`,
+        line: 1,
+        column: 1,
+        message: "one source defect",
+      },
+    ];
+    env = await loadWithMocks();
+
+    const report = await env.buildSystem.getBuildReport("@workspace/isolated", CANDIDATE_VIEW);
+
+    expect(report.diagnostics).toHaveLength(1);
+    expect(report.builds.length).toBeGreaterThan(1);
+    expect(report.builds.every((build) => build.diagnosticIndexes[0] === 0)).toBe(true);
   });
 
   it("includes authority errors in the same report consumed by protected-main validation", async () => {

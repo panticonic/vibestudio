@@ -95,7 +95,10 @@ import {
   type WorkspaceStateSource,
 } from "./stateTrigger.js";
 import type { ProtectedPublicationEvent } from "@vibestudio/shared/protectedPublicationEvents";
-import { collectTransitiveExternalDeps } from "./externalDeps.js";
+import {
+  collectTransitiveExternalDeps,
+  prepareExternalDependencyEnvironment,
+} from "./externalDeps.js";
 import { ABOUT_SOURCE_PREFIX, isAboutSource } from "@vibestudio/workspace-contracts/aboutNamespace";
 import { assertPresent } from "../../lintHelpers";
 import { onBuildProviderChange, resolveBuildProvider } from "./buildProviderRegistry.js";
@@ -156,7 +159,8 @@ export interface UnitBuildTarget {
   target: UnitBuildTargetKind;
   exportPath?: string;
   buildKey?: string;
-  diagnostics: BuildDiagnostic[];
+  /** Indexes into UnitBuildReport.diagnostics. */
+  diagnosticIndexes: number[];
 }
 
 export interface UnitBuildReport {
@@ -164,7 +168,7 @@ export interface UnitBuildReport {
   unitName?: string;
   kind: GraphNode["kind"] | "content";
   status: "ok" | "failed" | "skipped";
-  /** All target diagnostics in one agent-actionable list. */
+  /** Unique target diagnostics in one agent-actionable list. */
   diagnostics: BuildDiagnostic[];
   builds: UnitBuildTarget[];
 }
@@ -1470,7 +1474,10 @@ export async function initBuildSystemV2(
       | { target: "runtime" }
       | { target: "library:panel" | "library:worker"; exportPath: string },
     onProgress?: (progress: BuildReportProgress) => void
-  ): Promise<{ target: UnitBuildTarget; reusable: boolean }> => {
+  ): Promise<{
+    target: Omit<UnitBuildTarget, "diagnosticIndexes"> & { diagnostics: BuildDiagnostic[] };
+    reusable: boolean;
+  }> => {
     const libraryTarget: LibraryBuildTarget | null =
       spec.target === "library:panel"
         ? "panel"
@@ -1526,6 +1533,13 @@ export async function initBuildSystemV2(
       // TypeScript and its virtual standard-library payload are build-report
       // dependencies, not server-bootstrap dependencies.
       const { typecheckUnit } = await import("./typecheckFold.js");
+      const dependencyEnvironment = await prepareExternalDependencyEnvironment(
+        node,
+        graphAtView,
+        workspaceRoot,
+        sourceRoot,
+        appNodeModuleRoots
+      );
       let authorityEnvironment: ExactWorkspaceAuthorityEnvironment | undefined;
       try {
         authorityEnvironment = await authorityEnvironmentAt(
@@ -1548,7 +1562,7 @@ export async function initBuildSystemV2(
         node.relativePath,
         sourceRoot,
         internalDeps.map((u) => ({ name: u.name, relativePath: u.relativePath })),
-        appNodeModuleRoots,
+        dependencyEnvironment.nodePaths,
         {
           manifest: {
             ...node.manifest,
@@ -1668,7 +1682,10 @@ export async function initBuildSystemV2(
       };
     }
 
-    const outcomes: Array<{ target: UnitBuildTarget; reusable: boolean }> = [];
+    const outcomes: Array<{
+      target: Omit<UnitBuildTarget, "diagnosticIndexes"> & { diagnostics: BuildDiagnostic[] };
+      reusable: boolean;
+    }> = [];
     if (node.kind === "package") {
       const targets = libraryTargetsForDependents(node.name, view.graph);
       const exports = packageExportPaths(node);
@@ -1692,8 +1709,25 @@ export async function initBuildSystemV2(
       );
     }
 
-    const builds = outcomes.map((outcome) => outcome.target);
-    const diagnostics = builds.flatMap((build) => build.diagnostics);
+    const diagnostics: BuildDiagnostic[] = [];
+    const diagnosticIndex = new Map<string, number>();
+    const builds: UnitBuildTarget[] = outcomes.map(({ target }) => {
+      const diagnosticIndexes = target.diagnostics.map((diagnostic) => {
+        const key = JSON.stringify(diagnostic);
+        const existing = diagnosticIndex.get(key);
+        if (existing !== undefined) return existing;
+        const index = diagnostics.length;
+        diagnostics.push(diagnostic);
+        diagnosticIndex.set(key, index);
+        return index;
+      });
+      return {
+        target: target.target,
+        ...(target.exportPath ? { exportPath: target.exportPath } : {}),
+        ...(target.buildKey ? { buildKey: target.buildKey } : {}),
+        diagnosticIndexes,
+      };
+    });
     const failed = hasErrors(diagnostics);
     return {
       report: { ...base, status: failed ? "failed" : "ok", diagnostics, builds },

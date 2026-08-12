@@ -169,6 +169,11 @@ export function frameworkEntryModule(framework: string): string | null {
   );
 }
 
+/** Workspace package that supplies one framework's generated-entry contract. */
+export function frameworkModule(framework: string): string | null {
+  return FRAMEWORK_MODULES.find((contract) => contract.framework === framework)?.module ?? null;
+}
+
 /**
  * Detect a unit's framework from its dependencies: the first framework whose
  * counterpart module is declared wins; null when none matches (vanilla).

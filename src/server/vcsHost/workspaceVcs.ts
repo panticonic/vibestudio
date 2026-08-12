@@ -1622,6 +1622,17 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
           path.join(sourceRoot, ...unit.relativePath.split("/"))
         );
       }
+      const sharedTypes = await resolveTreePath(this.deps.blobsDir, stateHash, "types");
+      if (sharedTypes) {
+        if (sharedTypes.kind !== "dir") {
+          throw new Error(`build support types is not a directory at ${stateHash}`);
+        }
+        await materializeTree(
+          this.deps.blobsDir,
+          sharedTypes.treeHash,
+          path.join(sourceRoot, "types")
+        );
+      }
     });
     return { sourceRoot };
   }

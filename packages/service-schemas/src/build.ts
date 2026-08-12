@@ -395,7 +395,8 @@ export const unitBuildTargetSchema = z
     target: z.enum(["runtime", "library:panel", "library:worker"]),
     exportPath: z.string().optional(),
     buildKey: z.string().optional(),
-    diagnostics: z.array(buildDiagnosticSchema),
+    /** Indexes into the report's one canonical diagnostics array. */
+    diagnosticIndexes: z.array(z.number().int().nonnegative()),
   })
   .strict();
 export type UnitBuildTargetWire = z.infer<typeof unitBuildTargetSchema>;
@@ -410,6 +411,7 @@ export const unitBuildReportSchema = z
     unitName: z.string().optional(),
     kind: z.string(),
     status: z.enum(["ok", "failed", "skipped"]),
+    /** Unique diagnostics for the whole report; targets refer to these by index. */
     diagnostics: z.array(buildDiagnosticSchema),
     builds: z.array(unitBuildTargetSchema),
   })

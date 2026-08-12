@@ -74,6 +74,10 @@ export function collectTransitiveExternalDeps(
     if (visited.has(node.name)) return;
     visited.add(node.name);
     walkDeps(node.dependencies, { walkWorkspaceDeps: true });
+    for (const dependency of node.internalDeps) {
+      const child = graph.tryGet(dependency);
+      if (child) walkNode(child);
+    }
   }
 
   walkNode(unit);
@@ -138,6 +142,10 @@ export function collectTransitiveDependencyOverrides(
     visited.add(node.name);
     record(node.dependencyOverrides, node.name);
     walkDeps(node.dependencies, { walkWorkspaceDeps: true });
+    for (const dependency of node.internalDeps) {
+      const child = graph.tryGet(dependency);
+      if (child) walkNode(child);
+    }
   }
 
   walkNode(unit);
@@ -790,6 +798,46 @@ export async function ensureExternalDeps(
     overrides,
     patches,
   });
+}
+
+export interface ExternalDependencyEnvironment {
+  nodeModulesDir: string;
+  nodePaths: string[];
+  externalDeps: Record<string, string>;
+  dependencyOverrides: Record<string, string>;
+  dependencyPatches: ExternalDependencyPatch[];
+}
+
+/**
+ * Provision the one dependency environment shared by bundling and typechecking.
+ * Keeping this closure canonical prevents the compiler from reporting modules
+ * that the bundler can resolve, or falling through to an ambient checkout.
+ */
+export async function prepareExternalDependencyEnvironment(
+  unit: GraphNode,
+  graph: PackageGraph,
+  workspaceRoot: string,
+  sourceRoot: string,
+  appNodeModules: string[] = []
+): Promise<ExternalDependencyEnvironment> {
+  const externalDeps = collectTransitiveExternalDeps(unit, graph, workspaceRoot, appNodeModules);
+  const dependencyOverrides = collectTransitiveDependencyOverrides(
+    unit,
+    graph,
+    workspaceRoot,
+    appNodeModules
+  );
+  const dependencyPatches = collectTransitiveDependencyPatches(unit, graph, sourceRoot);
+  const nodeModulesDir = await ensureExternalDeps(externalDeps, dependencyOverrides, {
+    patches: dependencyPatches,
+  });
+  return {
+    nodeModulesDir,
+    nodePaths: [...(nodeModulesDir ? [nodeModulesDir] : []), ...appNodeModules],
+    externalDeps,
+    dependencyOverrides,
+    dependencyPatches,
+  };
 }
 
 export async function ensureExtensionRuntimeDeps(

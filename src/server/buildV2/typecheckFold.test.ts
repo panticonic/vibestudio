@@ -32,7 +32,9 @@ describe("typecheckUnit (push build-gate fold-in)", () => {
       [
         `import { greet } from "@workspace/greeter";`,
         `import { extValue } from "ext-pkg";`,
+        `import { hostValue } from "leaky-host";`,
         `export const message: string = greet(extValue);`,
+        `export const hostMessage: string = hostValue;`,
       ].join("\n")
     );
 
@@ -61,6 +63,25 @@ describe("typecheckUnit (push build-gate fold-in)", () => {
     await fsp.writeFile(
       path.join(nodeModules, "ext-pkg/index.d.ts"),
       `export declare const extValue: string;`
+    );
+
+    // Product/ambient source can be pulled through node_modules by an export
+    // that points at TypeScript. Its internal defect is not owned by the exact
+    // workspace unit and must not leak into the report.
+    await fsp.mkdir(path.join(nodeModules, "leaky-host"), { recursive: true });
+    await fsp.writeFile(
+      path.join(nodeModules, "leaky-host/package.json"),
+      JSON.stringify({ name: "leaky-host", version: "1.0.0", exports: "./index.ts" })
+    );
+    await fsp.writeFile(
+      path.join(nodeModules, "leaky-host/index.ts"),
+      `export const hostValue: string = 42;`
+    );
+
+    await fsp.mkdir(path.join(sourceRoot, "types"), { recursive: true });
+    await fsp.writeFile(
+      path.join(sourceRoot, "types/assets.d.ts"),
+      `declare module "*.css" { const classes: string; export default classes; }`
     );
   });
 
@@ -103,6 +124,24 @@ describe("typecheckUnit (push build-gate fold-in)", () => {
       );
     } finally {
       await fsp.rm(brokenPath, { force: true });
+    }
+  });
+
+  it("keeps ambient product-source defects out of an exact unit report", async () => {
+    const diags = await typecheckUnit("panels/hello", sourceRoot, deps, [nodeModules]);
+    expect(diags.some((diagnostic) => diagnostic.file.includes("leaky-host"))).toBe(false);
+  });
+
+  it("loads exact workspace-wide asset declarations for side-effect CSS imports", async () => {
+    const sourcePath = path.join(sourceRoot, "panels/hello/with-style.ts");
+    const stylePath = path.join(sourceRoot, "panels/hello/styles.css");
+    await fsp.writeFile(sourcePath, `import "./styles.css"; export const styled = true;`);
+    await fsp.writeFile(stylePath, `.root { color: red; }`);
+    try {
+      const diags = await typecheckUnit("panels/hello", sourceRoot, deps, [nodeModules]);
+      expect(diags.filter((diagnostic) => diagnostic.file.endsWith("with-style.ts"))).toEqual([]);
+    } finally {
+      await Promise.all([fsp.rm(sourcePath, { force: true }), fsp.rm(stylePath, { force: true })]);
     }
   });
 

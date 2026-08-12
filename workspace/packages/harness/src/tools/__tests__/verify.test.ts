@@ -21,7 +21,7 @@ describe("context-exact verify tool", () => {
       kind: "package",
       status: "ok" as const,
       diagnostics: [],
-      builds: [{ target: "library:worker" as const, diagnostics: [] }],
+      builds: [{ target: "library:worker" as const, diagnosticIndexes: [] }],
     });
     const controller = new AbortController();
     const tool = createVerifyTool(callMain, () => "context-7");
@@ -87,7 +87,7 @@ describe("context-exact verify tool", () => {
           message: "Cannot find name 'missing'",
         },
       ],
-      builds: [],
+      builds: [{ target: "runtime" as const, diagnosticIndexes: [0] }],
     });
     const result = await createVerifyTool(callMain, () => "context-7").execute("call-build", {
       operation: "build",
@@ -97,12 +97,48 @@ describe("context-exact verify tool", () => {
     expect(result.isError).toBe(true);
     expect(result.content[0]).toMatchObject({
       type: "text",
-      text: expect.stringContaining("panels/editor/index.tsx:4:9"),
+      text: expect.stringContaining("1 diagnostic"),
     });
+    expect((result.content[0] as { text: string }).text).not.toContain("Cannot find name");
     expect(result.details).toMatchObject({
       operation: "build",
       report: { diagnostics: [{ source: "tsc", severity: "error" }] },
     });
+  });
+
+  it("bounds the one canonical diagnostic array and remaps target references", async () => {
+    const diagnostics = Array.from({ length: 45 }, (_, index) => ({
+      source: "tsc" as const,
+      severity: "error" as const,
+      file: `panels/editor/file-${index}.ts`,
+      line: index + 1,
+      column: 1,
+      message: index === 0 ? "x".repeat(3_000) : `failure ${index}`,
+    }));
+    const { callMain } = rpcResult({
+      repoPath: "panels/editor",
+      kind: "panel",
+      status: "failed" as const,
+      diagnostics,
+      builds: [{ target: "runtime" as const, diagnosticIndexes: [0, 39, 40, 44] }],
+    });
+
+    const result = await createVerifyTool(callMain, () => "context-7").execute("call-build", {
+      operation: "build",
+      target: "panels/editor",
+    });
+
+    expect(result.details).toMatchObject({
+      truncatedDiagnostics: 5,
+      truncatedDiagnosticText: 1_000,
+      report: {
+        diagnostics: expect.arrayContaining([
+          expect.objectContaining({ message: expect.stringMatching(/\[truncated\]$/u) }),
+        ]),
+        builds: [{ target: "runtime", diagnosticIndexes: [0, 39] }],
+      },
+    });
+    expect((result.details as { report: UnitBuildReportWire }).report.diagnostics).toHaveLength(40);
   });
 
   it("runs one focused test selection through the approved extension", async () => {

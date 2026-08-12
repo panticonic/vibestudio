@@ -58,6 +58,12 @@ function toBuildDiagnostic(
   };
 }
 
+function belongsToExactSource(file: string, sourceRoot: string): boolean {
+  if (!path.isAbsolute(file)) return true;
+  const relative = path.relative(path.resolve(sourceRoot), path.resolve(file));
+  return relative === "" || (!relative.startsWith(`..${path.sep}`) && relative !== "..");
+}
+
 /**
  * Type-check a single unit's materialized sources and return BuildDiagnostics.
  * Typecheck failures are build failures. A broken typecheck engine or an
@@ -135,9 +141,25 @@ export async function typecheckUnit(
     for (const [relPath, content] of files) {
       service.updateFile(path.resolve(unitDir, relPath), content);
     }
+    const sharedTypesDir = path.join(sourceRoot, "types");
+    try {
+      const sharedTypes = await loadSourceFiles(createDiskFileSource(sharedTypesDir), ".");
+      for (const [relPath, content] of sharedTypes) {
+        if (relPath.endsWith(".d.ts")) {
+          service.updateFile(path.resolve(sharedTypesDir, relPath), content);
+        }
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
     const result = service.check();
     const diagnostics = result.diagnostics
       .filter((d) => d.severity === "error" || d.severity === "warning")
+      // Exact reports own exact workspace source. Diagnostics originating in
+      // ambient/product source reached through host node_modules are not
+      // actionable by the unit; any incompatibility at the import site remains
+      // attached to the exact caller and is retained.
+      .filter((d) => belongsToExactSource(d.file, sourceRoot))
       .map((d) => toBuildDiagnostic(d, sourceRoot, unitRelativePath));
     if (authority) {
       try {

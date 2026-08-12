@@ -67,6 +67,7 @@ export type VerifyToolDetails =
       status: UnitBuildReportWire["status"];
       report: UnitBuildReportWire;
       truncatedDiagnostics: number;
+      truncatedDiagnosticText: number;
     }
   | {
       operation: "test";
@@ -77,7 +78,9 @@ export type VerifyToolDetails =
       truncatedErrors: number;
     };
 
-const MAX_DIAGNOSTICS = 100;
+const MAX_DIAGNOSTICS = 40;
+const MAX_DIAGNOSTIC_MESSAGE_CHARS = 2_000;
+const MAX_DIAGNOSTIC_CONTEXT_CHARS = 1_000;
 const MAX_TEST_FILES = 100;
 const MAX_ERRORS_PER_FILE = 20;
 const MAX_ERROR_CHARS = 4_000;
@@ -125,6 +128,7 @@ export function createVerifyTool(
             status: report.status,
             report: bounded.report,
             truncatedDiagnostics: bounded.truncatedDiagnostics,
+            truncatedDiagnosticText: bounded.truncatedDiagnosticText,
           },
           isError: failed,
         };
@@ -167,20 +171,32 @@ export function createVerifyTool(
 function boundBuildReport(report: UnitBuildReportWire): {
   report: UnitBuildReportWire;
   truncatedDiagnostics: number;
+  truncatedDiagnosticText: number;
 } {
-  let remaining = MAX_DIAGNOSTICS;
-  let total = report.diagnostics.length;
-  const diagnostics = report.diagnostics.slice(0, remaining);
-  remaining -= diagnostics.length;
-  const builds = report.builds.map((build) => {
-    total += build.diagnostics.length;
-    const selected = build.diagnostics.slice(0, remaining);
-    remaining -= selected.length;
-    return { ...build, diagnostics: selected };
-  });
+  let truncatedDiagnosticText = 0;
+  const clamp = (value: string | undefined, limit: number): string | undefined => {
+    if (value === undefined || value.length <= limit) return value;
+    truncatedDiagnosticText += value.length - limit;
+    return `${value.slice(0, limit)}… [truncated]`;
+  };
+  const diagnostics = report.diagnostics.slice(0, MAX_DIAGNOSTICS).map((diagnostic) => ({
+    ...diagnostic,
+    message: clamp(diagnostic.message, MAX_DIAGNOSTIC_MESSAGE_CHARS)!,
+    ...(diagnostic.lineText === undefined
+      ? {}
+      : { lineText: clamp(diagnostic.lineText, MAX_DIAGNOSTIC_CONTEXT_CHARS) }),
+    ...(diagnostic.suggestion === undefined
+      ? {}
+      : { suggestion: clamp(diagnostic.suggestion, MAX_DIAGNOSTIC_CONTEXT_CHARS) }),
+  }));
+  const builds = report.builds.map((build) => ({
+    ...build,
+    diagnosticIndexes: build.diagnosticIndexes.filter((index) => index < diagnostics.length),
+  }));
   return {
     report: { ...report, diagnostics, builds },
-    truncatedDiagnostics: Math.max(0, total - MAX_DIAGNOSTICS),
+    truncatedDiagnostics: Math.max(0, report.diagnostics.length - MAX_DIAGNOSTICS),
+    truncatedDiagnosticText,
   };
 }
 
@@ -216,18 +232,12 @@ function boundTestReport(report: TestRunResult): {
 }
 
 function renderBuild(target: string, report: UnitBuildReportWire): string {
-  const diagnostics = [
-    ...report.diagnostics,
-    ...report.builds.flatMap((build) => build.diagnostics),
-  ];
-  const lines = diagnostics.map(
-    (diagnostic) =>
-      `${diagnostic.file}:${diagnostic.line}:${diagnostic.column} [${diagnostic.source}/${diagnostic.severity}] ${diagnostic.message}`
+  return (
+    `Build ${report.status} for ${target} (${report.kind}; ` +
+    `${report.builds.length} target${report.builds.length === 1 ? "" : "s"}; ` +
+    `${report.diagnostics.length} diagnostic${report.diagnostics.length === 1 ? "" : "s"}). ` +
+    "Structured diagnostics are in details.report.diagnostics."
   );
-  return [
-    `Build ${report.status} for ${target} (${report.kind}; ${report.builds.length} target${report.builds.length === 1 ? "" : "s"}).`,
-    ...lines,
-  ].join("\n");
 }
 
 function renderTests(

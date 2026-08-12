@@ -57,12 +57,10 @@ import {
 } from "./buildStore.js";
 import { computeBuildKey } from "./effectiveVersion.js";
 import {
-  collectTransitiveDependencyOverrides,
-  collectTransitiveDependencyPatches,
-  collectTransitiveExternalDeps,
   dependencyPatchesForExternalRoots,
   ensureExternalDeps,
   ensureExtensionRuntimeDeps,
+  prepareExternalDependencyEnvironment,
   type ExternalDependencyPatch,
 } from "./externalDeps.js";
 import { collectTransitiveInternalDeps, getBuildSourceProvider } from "./buildSource.js";
@@ -281,8 +279,8 @@ function formatBytes(bytes: number): string {
  * Resolve a graph node inside a materialized source root.
  *
  * Graph nodes may have been discovered from a different checkout than the one
- * used for this build, so absolute `node.path` is only a fallback. The stable
- * coordinate is `relativePath`.
+ * used for this build. The stable coordinate is `relativePath`; resolving from
+ * absolute `node.path` would mix mutable checkout content into an exact build.
  */
 function sourcePathForNode(node: GraphNode, sourceRoot: string): string {
   return path.join(sourceRoot, node.relativePath);
@@ -377,12 +375,19 @@ function createWorkspaceResolvePlugin(
         const node = graph.tryGet(parsed.packageName);
         if (!node) return null;
 
-        const extractedPath = sourcePathForNode(node, sourceRoot);
-        const sourcePath = fs.existsSync(path.join(extractedPath, "package.json"))
-          ? extractedPath
-          : node.path;
+        const sourcePath = sourcePathForNode(node, sourceRoot);
         const pkgJsonPath = path.join(sourcePath, "package.json");
-        if (!fs.existsSync(pkgJsonPath)) return null;
+        if (!fs.existsSync(pkgJsonPath)) {
+          return {
+            errors: [
+              {
+                text:
+                  `Internal package ${parsed.packageName} is missing from the exact build closure. ` +
+                  `Declare the dependency that owns this generated/runtime import.`,
+              },
+            ],
+          };
+        }
 
         const pkgJson = JSON.parse(fs.readFileSync(pkgJsonPath, "utf-8")) as {
           main?: string;
@@ -1882,24 +1887,15 @@ async function prepareBuildEnv(
 
   const sourcePath = sourcePathForNode(node, sourceRoot);
 
-  const externalDeps = collectTransitiveExternalDeps(node, graph, workspaceRoot, _appNodeModules);
-  const dependencyOverrides = collectTransitiveDependencyOverrides(
+  const dependencyEnvironment = await prepareExternalDependencyEnvironment(
     node,
     graph,
     workspaceRoot,
+    sourceRoot,
     _appNodeModules
   );
-  const dependencyPatches = collectTransitiveDependencyPatches(node, graph, sourceRoot);
-  const nodeModulesDir = await ensureExternalDeps(externalDeps, dependencyOverrides, {
-    patches: dependencyPatches,
-  });
-  const nodePaths = nodeModulesDir ? [nodeModulesDir] : [];
-
-  // App's node_modules for @vibestudio/* packages (workspace:* deps).
-  // These are skipped by ensureExternalDeps and must be found via nodePaths.
-  if (_appNodeModules.length > 0) {
-    nodePaths.push(..._appNodeModules);
-  }
+  const { externalDeps, dependencyOverrides, dependencyPatches, nodeModulesDir, nodePaths } =
+    dependencyEnvironment;
 
   const resolveDir = pickResolveDir(nodePaths, workspaceRoot);
 

@@ -326,6 +326,7 @@ function declaredExportSubpaths(exports: Record<string, unknown>): string[] {
 }
 
 import type { TemplateConfig } from "./templateResolver.js";
+import { frameworkModule } from "./platformModules.js";
 import { assertPresent } from "../../lintHelpers";
 
 function scanTemplates(dir: string, workspaceRoot: string): GraphNode[] {
@@ -428,6 +429,22 @@ function finalizePackageGraph(graph: PackageGraph): PackageGraph {
       if (!graph.has(depName) || node.internalDeps.includes(depName)) continue;
       node.internalDeps.push(depName);
       recordInternalDepSpecError(node, depName, depSpec);
+    }
+  }
+
+  // A template owns the framework module imported by its generated entry.
+  // Model that edge in the graph so source materialization, external peers,
+  // effective versions, bundling, and typechecking all consume one closure.
+  for (const node of graph.allNodes()) {
+    if (node.kind !== "template" || typeof node.manifest.framework !== "string") continue;
+    const moduleName = frameworkModule(node.manifest.framework);
+    if (!moduleName) continue;
+    if (graph.has(moduleName)) {
+      if (!node.internalDeps.includes(moduleName)) node.internalDeps.push(moduleName);
+    } else {
+      console.warn(
+        `[PackageGraph] ${node.name} requires framework module ${moduleName}, which is not in the workspace`
+      );
     }
   }
 

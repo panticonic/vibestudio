@@ -72,9 +72,7 @@ function makeBuildSystem(): BuildSystemV2 {
       kind: "extension",
       status: "ok" as const,
       diagnostics: [],
-      builds: [
-        { target: "runtime", status: "ok" as const, buildKey: "build-key", diagnostics: [] },
-      ],
+      builds: [{ target: "runtime", buildKey: "build-key", diagnosticIndexes: [] }],
     })),
     getEffectiveVersion: vi.fn(),
     getExternalDeps: vi.fn(),
