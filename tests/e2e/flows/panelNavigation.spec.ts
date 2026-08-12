@@ -90,7 +90,13 @@ async function navigatePanel(
 async function panelSurfaceState(
   app: ElectronApplication,
   panelId: string
-): Promise<{ text: string; alertCount: number; alertText: string }> {
+): Promise<{
+  text: string;
+  alertCount: number;
+  alertText: string;
+  controlReady: boolean;
+  initialLoading: boolean;
+}> {
   const text = await getPanelText(app, panelId);
   const alertState = await app.evaluate(async (_electron, id) => {
     const testApi = (
@@ -99,18 +105,35 @@ async function panelSurfaceState(
       }
     ).__testApi;
     if (!testApi) throw new Error("Test API not available");
-    return testApi.executePanelScript<{ count: number; text: string }>(
+    return testApi.executePanelScript<{
+      count: number;
+      text: string;
+      controlReady: boolean;
+      initialLoading: boolean;
+    }>(
       id,
       `(() => {
         const alerts = Array.from(document.querySelectorAll('[role="alert"]'));
         return {
           count: alerts.length,
           text: alerts.map((alert) => alert.textContent ?? "").join("\\n").trim(),
+          controlReady: Boolean(
+            document.querySelector('[aria-label="Permission view"], [aria-label="Enable Ad Blocking"]')
+          ),
+          initialLoading: Boolean(
+            document.querySelector('[aria-label="Loading permissions"], [aria-label="Loading ad block settings"]')
+          ),
         };
       })()`
     );
   }, panelId);
-  return { text, alertCount: alertState.count, alertText: alertState.text };
+  return {
+    text,
+    alertCount: alertState.count,
+    alertText: alertState.text,
+    controlReady: alertState.controlReady,
+    initialLoading: alertState.initialLoading,
+  };
 }
 
 async function severePanelDiagnostics(
@@ -201,12 +224,10 @@ test.describe("Panel navigation convergence", () => {
         {
           source: "about/adblock",
           readyText: "Enable Ad Blocking",
-          pendingText: "Loading ad blocking settings",
         },
         {
           source: "about/permissions",
           readyText: "Lasting access you granted to apps and agents",
-          pendingText: "Loading saved permissions",
         },
       ]) {
         await navigatePanel(testApp.app, initialPanelId, surface.source);
@@ -226,7 +247,8 @@ test.describe("Panel navigation convergence", () => {
                     alertCount: -1,
                     alertText: "",
                     hasReadyText: false,
-                    hasPendingText: false,
+                    controlReady: false,
+                    initialLoading: false,
                     diagnostics: await severePanelDiagnostics(testApp!.app, initialPanelId),
                   };
                 }
@@ -237,7 +259,8 @@ test.describe("Panel navigation convergence", () => {
                   alertCount: state.alertCount,
                   alertText: state.alertText,
                   hasReadyText: state.text.includes(surface.readyText),
-                  hasPendingText: state.text.includes(surface.pendingText),
+                  controlReady: state.controlReady,
+                  initialLoading: state.initialLoading,
                   diagnostics: await severePanelDiagnostics(testApp!.app, initialPanelId),
                 };
               } catch (error) {
@@ -247,7 +270,8 @@ test.describe("Panel navigation convergence", () => {
                   alertCount: -1,
                   alertText: "",
                   hasReadyText: false,
-                  hasPendingText: false,
+                  controlReady: false,
+                  initialLoading: false,
                   diagnostics: [
                     {
                       type: "probe-error",
@@ -265,7 +289,8 @@ test.describe("Panel navigation convergence", () => {
             alertCount: 0,
             alertText: "",
             hasReadyText: true,
-            hasPendingText: false,
+            controlReady: true,
+            initialLoading: false,
             diagnostics: expect.any(Array),
           });
       }

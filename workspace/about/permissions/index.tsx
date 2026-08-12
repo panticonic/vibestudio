@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Badge,
   Button,
@@ -822,6 +822,7 @@ function PermissionsPage() {
   >("catalog");
   const [domain, setDomain] = useState<DomainId>("sharing");
   const [loading, setLoading] = useState(true);
+  const [initialized, setInitialized] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [revokingId, setRevokingId] = useState<string | null>(null);
   const [safety, setSafety] = useState<AuthoritySafetyStatus>({
@@ -830,8 +831,10 @@ function PermissionsPage() {
     pendingAcquisitionCount: 0,
   });
   const [statusMessage, setStatusMessage] = useState("");
+  const loadGenerationRef = useRef(0);
 
   const load = useCallback(async () => {
+    const generation = ++loadGenerationRef.current;
     setLoading(true);
     setError(null);
     try {
@@ -852,16 +855,26 @@ function PermissionsPage() {
       setMissions(nextMissions);
       setUnits(nextUnits);
       setDecisions(nextDecisions);
-      setMissionRuns(
-        Object.fromEntries(
-          await Promise.all(
-            nextMissions.map(async (mission) => [
+      setInitialized(true);
+      void Promise.all(
+        nextMissions.map(
+          async (mission) =>
+            [
               mission.missionId,
               await callMissions<MissionRunRecord[]>("listRuns", [mission.missionId]),
-            ])
-          )
+            ] as const
         )
-      );
+      )
+        .then((runs) => {
+          if (loadGenerationRef.current === generation) {
+            setMissionRuns(Object.fromEntries(runs));
+          }
+        })
+        .catch((err) =>
+          console.warn(
+            `Couldn't refresh mission runs: ${err instanceof Error ? err.message : String(err)}`
+          )
+        );
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -1080,8 +1093,15 @@ function PermissionsPage() {
           </Callout.Text>
         </Callout.Root>
       ) : null}
-      {loading && grants.length === 0 ? (
-        <Flex justify="center" align="center" gap="2" py="6">
+      {loading && !initialized ? (
+        <Flex
+          justify="center"
+          align="center"
+          gap="2"
+          py="6"
+          role="status"
+          aria-label="Loading permissions"
+        >
           <Spinner />
           <Text color="gray">Loading saved permissions…</Text>
         </Flex>
