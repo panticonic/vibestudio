@@ -184,15 +184,26 @@ describe("storage and discovery semantic validators", () => {
     const observed = invocation(
       "eval",
       {
-        code: "return await services.serverLog.query({ limit: 30 });",
+        code: `
+          const earlier = await rpc.call("main", "serverLog.tail", [10]);
+          const current = await rpc.call("main", "serverLog.query", [{ limit: 30 }]);
+          return { earlier, current };
+        `,
       },
       {
         details: {
           success: true,
           returnValue: {
-            records: [{ level: "info", message: "startup complete" }],
-            latestSeq: 41,
-            serverBootId: "boot:test-startup",
+            earlier: {
+              records: [{ level: "info", message: "server launching" }],
+              latestSeq: 12,
+              serverBootId: "boot:test-startup",
+            },
+            current: {
+              records: [{ level: "info", message: "startup complete" }],
+              latestSeq: 41,
+              serverBootId: "boot:test-startup",
+            },
           },
         },
       }

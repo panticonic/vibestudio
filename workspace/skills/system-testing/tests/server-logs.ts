@@ -46,7 +46,11 @@ function startupDiagnosisChecked(result: Parameters<typeof noIncompleteInvocatio
   const code = successfulEvalCode(result);
   const boundedInspection =
     /serverLog\.tail\(\s*[1-9]\d*/u.test(code) ||
-    /serverLog\.query\(\s*\{[\s\S]*?\blimit\s*:\s*[1-9]\d*/u.test(code);
+    /serverLog\.query\(\s*\{[\s\S]*?\blimit\s*:\s*[1-9]\d*/u.test(code) ||
+    /rpc\.call\(\s*["']main["']\s*,\s*["']serverLog\.tail["']\s*,\s*\[\s*[1-9]\d*/u.test(code) ||
+    /rpc\.call\(\s*["']main["']\s*,\s*["']serverLog\.query["']\s*,\s*\[\s*\{[\s\S]*?\blimit\s*:\s*[1-9]\d*/u.test(
+      code
+    );
   if (!boundedInspection) {
     return {
       passed: false,
@@ -54,22 +58,23 @@ function startupDiagnosisChecked(result: Parameters<typeof noIncompleteInvocatio
     };
   }
 
-  const envelope = records(successfulEvalReturnValues(result)).find(
+  const envelopes = records(successfulEvalReturnValues(result)).filter(
     (item) =>
       Array.isArray(item["records"]) &&
       Number.isInteger(item["latestSeq"]) &&
       typeof item["serverBootId"] === "string"
   );
-  if (!envelope) {
+  if (envelopes.length === 0) {
     return { passed: false, reason: "No coordinated server-log snapshot was observed" };
   }
 
   const final = findLastAgentMessage(result);
-  const bootId = String(envelope["serverBootId"]);
-  const latestSeq = Number(envelope["latestSeq"]);
   if (
-    !final.includes(bootId) ||
-    !exactNumber(final, latestSeq) ||
+    !envelopes.some(
+      (envelope) =>
+        final.includes(String(envelope["serverBootId"])) &&
+        exactNumber(final, Number(envelope["latestSeq"]))
+    ) ||
     !/(?:start|startup|boot|slow|delay|build|normal|warn|error|incident)/iu.test(final)
   ) {
     return {
