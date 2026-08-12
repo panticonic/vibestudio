@@ -180,16 +180,18 @@ export interface TestCase {
    */
   orchestrate?: (context: TestOrchestrationContext) => Promise<TestExecutionResult>;
   /**
-   * Opt into harness validation. Agentic tasks deliberately omit this: their
-   * completion report is the outcome signal and their trajectory is the
-   * diagnostic evidence. Harness validation belongs to deterministic tests and
+   * Select validation beyond the ordinary agent completion report.
+   *
+   * `agent-evidence` keeps the natural agent-goal contract and additionally
+   * gates success on independently observed outcome facts. It must not encode
+   * one preferred tool choreography. `harness` is reserved for deterministic
    * protocol probes whose result is produced or observed by the harness itself.
    */
-  validation?: "harness";
+  validation?: "agent-evidence" | "harness";
   /**
-   * Validator for deterministic/harness protocol evidence. Existing agentic
-   * scenario assessments may remain while the catalog is migrated, but they
-   * are not pass/fail gates unless `validation` is `"harness"`.
+   * Validator for objective agent outcome evidence or deterministic harness
+   * protocol evidence. Existing agentic scenario assessments remain
+   * non-scoring unless `validation` is `"agent-evidence"`.
    */
   validate: (result: TestExecutionResult) => TestResult;
 }
@@ -242,7 +244,7 @@ export interface TestExecutionResult {
 
 export interface ValidationFailureProvenance {
   testName: string;
-  validator: "harness" | "agent-completion-report";
+  validator: "harness" | "agent-evidence" | "agent-completion-report";
   phase: "validation";
   stack?: string;
   inputProjection: SystemTestJsonValue;

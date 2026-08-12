@@ -353,10 +353,21 @@ export class TestRunner {
       }
       validationInputProjection = projectValidationInput(validationExecution);
       enterPhase("validation");
-      let result =
-        test.validation === "harness"
-          ? test.validate(validationExecution)
-          : validateAgentCompletionReport(validationExecution);
+      let result: TestResult;
+      if (test.validation === "harness") {
+        result = test.validate(validationExecution);
+      } else {
+        result = validateAgentCompletionReport(validationExecution);
+        if (result.passed && test.validation === "agent-evidence") {
+          const evidence = test.validate(validationExecution);
+          result = evidence.passed
+            ? {
+                passed: true,
+                details: { ...(result.details ?? {}), ...(evidence.details ?? {}) },
+              }
+            : evidence;
+        }
+      }
       if (test.validation !== "harness") {
         const inspections = findSystemTestImplementationInspections(validationExecution);
         if (inspections.length > 0) {

@@ -805,6 +805,70 @@ describe("TestRunner", () => {
     );
   });
 
+  it("gates a natural agent completion on independent outcome evidence", async () => {
+    const messages = [
+      {
+        id: "prompt-agent-evidence",
+        senderId: "headless",
+        kind: "message",
+        complete: true,
+        content: "fix the visible problem",
+      },
+      {
+        id: "answer-agent-evidence",
+        senderId: "agent",
+        senderMetadata: { type: "agent" },
+        kind: "message",
+        complete: true,
+        content: "The problem is fixed.",
+      },
+    ] satisfies ChatMessage[];
+    const snapshot = {
+      channelId: "chat-agent-evidence",
+      messages,
+      invocations: [],
+      debugEvents: [],
+      cleanupErrors: [],
+      participants: {},
+      connected: true,
+      duration: 10,
+    };
+    const session = {
+      channelId: "chat-agent-evidence",
+      messages,
+      sendAndWait: vi.fn(async () => messages[1]),
+      captureModelExecutionEvidence: vi.fn(async () => modelEvidence()),
+      snapshot: vi.fn(() => snapshot),
+      close: vi.fn(async () => undefined),
+    };
+    const runner = {
+      modelRef: TEST_MODEL,
+      spawn: vi.fn(async () => session),
+      collectDiagnostics: vi.fn(async () => ({
+        channelDelivery: { deliveryLifecycle: { latencyHistogram: [] } },
+      })),
+    } as unknown as HeadlessRunner;
+    const validate = vi.fn(() => ({
+      passed: false,
+      reason: "The saved workspace still contains the original defect",
+    }));
+
+    const { result } = await new TestRunner(runner).runOne({
+      name: "agent-evidence",
+      category: "test",
+      description: "objective agent outcome",
+      prompt: "Fix the visible problem.",
+      validation: "agent-evidence",
+      validate,
+    });
+
+    expect(validate).toHaveBeenCalledOnce();
+    expect(result).toEqual({
+      passed: false,
+      reason: "The saved workspace still contains the original defect",
+    });
+  });
+
   it("shares one timeout budget across every orchestrated phase", async () => {
     let now = 10_000;
     const dateNow = vi.spyOn(Date, "now").mockImplementation(() => now);

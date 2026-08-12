@@ -46,4 +46,13 @@ describe("agent-goal prompt contract", () => {
     } as unknown as TestCase;
     expect(() => assertSystemTestDeclaration(test)).toThrow(/no deterministic validator/u);
   });
+
+  it("keeps agent-evidence cases on the natural goal contract", () => {
+    const test: TestCase = {
+      ...agentCase("Using exactly one eval call, return exactly { ok: true }."),
+      validation: "agent-evidence",
+      validate: () => ({ passed: true }),
+    };
+    expect(() => assertSystemTestDeclaration(test)).toThrow(/user outcome/u);
+  });
 });

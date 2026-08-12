@@ -1,10 +1,6 @@
 import type { ChatMessage } from "@workspace/agentic-core";
 import { serializeSystemTestStack, type SystemTestJsonValue } from "./structured-error.js";
-import type {
-  TestCase,
-  TestExecutionResult,
-  ValidationFailureProvenance,
-} from "./types.js";
+import type { TestCase, TestExecutionResult, ValidationFailureProvenance } from "./types.js";
 
 const MAX_INVOCATIONS = 40;
 const MAX_SHAPE_DEPTH = 6;
@@ -45,7 +41,12 @@ export function validationFailureProvenance(input: {
   const stack = serializeSystemTestStack(input.error);
   return {
     testName: input.test.name,
-    validator: input.test.validation === "harness" ? "harness" : "agent-completion-report",
+    validator:
+      input.test.validation === "harness"
+        ? "harness"
+        : input.test.validation === "agent-evidence"
+          ? "agent-evidence"
+          : "agent-completion-report",
     phase: "validation",
     ...(stack ? { stack } : {}),
     inputProjection: input.inputProjection,
