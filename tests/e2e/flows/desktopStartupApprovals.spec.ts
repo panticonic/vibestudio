@@ -290,7 +290,10 @@ async function credentialApprovalActionStyles(
   });
 }
 
-async function capabilityApprovalUiSnapshot(testApp: TestApp): Promise<{
+async function capabilityApprovalUiSnapshot(
+  testApp: TestApp,
+  approvalId?: string
+): Promise<{
   text: string;
   buttons: string[];
   role: string | null;
@@ -298,13 +301,25 @@ async function capabilityApprovalUiSnapshot(testApp: TestApp): Promise<{
   describedByText: string;
   keyboardShortcuts: string | null;
 } | null> {
-  return testApp.app.evaluate(async ({ webContents }) => {
-    for (const contents of webContents.getAllWebContents()) {
+  return testApp.app.evaluate(async ({ webContents }, requestedApprovalId) => {
+    const candidates = webContents
+      .getAllWebContents()
+      .sort(
+        (left, right) =>
+          Number(!left.getURL().includes("overlaySurface=")) -
+          Number(!right.getURL().includes("overlaySurface="))
+      );
+    for (const contents of candidates) {
       if (contents.isDestroyed()) continue;
       try {
         const snapshot = await contents.executeJavaScript(
           `(() => {
-            const card = document.querySelector(".approval-card");
+            const requestedApprovalId = ${JSON.stringify(requestedApprovalId)};
+            const card = requestedApprovalId
+              ? Array.from(document.querySelectorAll("[data-approval-card]")).find(
+                  (element) => element.getAttribute("data-approval-id") === requestedApprovalId
+                )
+              : document.querySelector(".approval-card");
             if (!(card instanceof HTMLElement)) return null;
             return {
               text: card.innerText,
@@ -327,7 +342,7 @@ async function capabilityApprovalUiSnapshot(testApp: TestApp): Promise<{
       }
     }
     return null;
-  });
+  }, approvalId ?? null);
 }
 
 async function hostedShellHasApprovalUi(testApp: TestApp): Promise<boolean> {
@@ -1668,7 +1683,7 @@ test.describe("Desktop Startup Approvals", () => {
     await expect
       .poll(
         async () => {
-          rendered = await capabilityApprovalUiSnapshot(testApp!);
+          rendered = await capabilityApprovalUiSnapshot(testApp!, networkApproval!.approvalId);
           return rendered?.text ?? "";
         },
         { timeout: 45_000, intervals: [250, 500, 1000, 2000] }
@@ -1692,7 +1707,9 @@ test.describe("Desktop Startup Approvals", () => {
     });
     expect(rendered?.describedByText.length).toBeGreaterThan(0);
 
-    expect(await clickShellButton(testApp, /^Connect once$/)).toBe(true);
+    expect(await clickShellButton(testApp, /^Connect once$/, networkApproval.approvalId)).toBe(
+      true
+    );
     await expect
       .poll(
         async () =>

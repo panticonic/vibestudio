@@ -126,7 +126,12 @@ function ToggleRow({
           {description}
         </Text>
       </Flex>
-      <Switch checked={checked} onCheckedChange={onCheckedChange} disabled={disabled} />
+      <Switch
+        aria-label={label}
+        checked={checked}
+        onCheckedChange={onCheckedChange}
+        disabled={disabled}
+      />
     </Flex>
   );
 }
