@@ -6,6 +6,8 @@ import {
 } from "./workspace-repo-fixture.js";
 
 const BUILDABLE = { kind: "buildable-package", section: "packages" } as const;
+const BUILDABLE_EXTENSION = { kind: "buildable-extension", section: "extensions" } as const;
+const BUILDABLE_APP = { kind: "buildable-app", section: "apps" } as const;
 const BUILDABLE_WORKER = { kind: "buildable-worker", section: "workers" } as const;
 const CREATED_PANEL = { kind: "created-repository", section: "panels" } as const;
 const PANEL_WITH_DERIVED = {
@@ -819,6 +821,47 @@ describe("WorkspaceRepoFixtureLifecycle", () => {
     expect(fake.revert).not.toHaveBeenCalled();
     expect(fake.createContext).toHaveBeenCalledTimes(1);
     expect(fake.destroyContext).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    {
+      label: "extension",
+      fixture: BUILDABLE_EXTENSION,
+      repoName: "system-test-extension",
+      repoPath: "extensions/system-test-extension",
+      packageName: "@workspace-extensions/system-test-extension",
+      expectedFiles: ["SKILL.md", "assets/icon.svg", "index.test.ts", "index.ts", "package.json"],
+    },
+    {
+      label: "app",
+      fixture: BUILDABLE_APP,
+      repoName: "system-test-app",
+      repoPath: "apps/system-test-app",
+      packageName: "@workspace-apps/system-test-app",
+      expectedFiles: ["assets/icon.svg", "index.test.ts", "index.ts", "package.json"],
+    },
+  ])("seeds a buildable trusted $label with a focused failing test", async (scenario) => {
+    const fake = createPort();
+    const fixture = new WorkspaceRepoFixtureLifecycle(
+      fake.port,
+      `trusted-${scenario.label}-test`,
+      scenario.repoName,
+      scenario.fixture
+    );
+
+    const state = await fixture.prepare();
+
+    expect(state).toMatchObject({
+      repoPath: scenario.repoPath,
+      seedFilePaths: scenario.expectedFiles,
+    });
+    const seededText = fake.putText.mock.calls.map(([text]) => text).join("\n");
+    expect(seededText).toContain(`"name": "${scenario.packageName}"`);
+    expect(seededText).toContain('expect(startupLabel()).toBe("ready")');
+    expect(seededText).toMatch(/startupLabel\(\): string \{ return "(?:waiting|booting)"; \}/u);
+    expect(seededText).toContain("assets/icon.svg");
+
+    await fixture.cleanup(state);
   });
 
   it("seeds a worker fixture under worker discovery with a runnable Durable Object manifest", async () => {

@@ -40,6 +40,10 @@ workspace source must select a typed repository fixture:
 - `CONTENT_WORKSPACE_REPO_FIXTURE` owns an empty `projects/...` content repo.
 - `BUILDABLE_PACKAGE_WORKSPACE_REPO_FIXTURE` owns a `packages/...` repo seeded
   with the canonical minimal manifest and source entry.
+- `BUILDABLE_EXTENSION_WORKSPACE_REPO_FIXTURE` owns an `extensions/...` repo
+  with a trusted extension manifest, source, icon, and focused failing test.
+- `BUILDABLE_APP_WORKSPACE_REPO_FIXTURE` owns an `apps/...` repo with a terminal
+  app manifest, source, icon, and focused failing test.
 
 The harness imports that repository as one exact snapshot into a fresh task
 context. Setup does not publish it. A fixture that never reached main disappears

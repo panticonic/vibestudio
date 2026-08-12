@@ -35,6 +35,7 @@ export { selfDevelopmentTests } from "./tests/self-development.js";
 export { docsDiscoveryTests } from "./tests/docs-discovery.js";
 export { webhookTests } from "./tests/webhooks.js";
 export { extensionSurfaceTests } from "./tests/extensions-surface.js";
+export { trustedUnitAuthoringTests } from "./tests/trusted-unit-authoring.js";
 export { harnessToolTests } from "./tests/harness-tools.js";
 export { credentialTests } from "./tests/credentials.js";
 export { agentOrchestrationTests } from "./tests/agent-orchestration.js";
@@ -74,6 +75,7 @@ import { selfDevelopmentTests as _selfDevelopment } from "./tests/self-developme
 import { docsDiscoveryTests as _docsDiscovery } from "./tests/docs-discovery.js";
 import { webhookTests as _webhooks } from "./tests/webhooks.js";
 import { extensionSurfaceTests as _extensionSurface } from "./tests/extensions-surface.js";
+import { trustedUnitAuthoringTests as _trustedUnitAuthoring } from "./tests/trusted-unit-authoring.js";
 import { harnessToolTests as _harnessTools } from "./tests/harness-tools.js";
 import { credentialTests as _credentials } from "./tests/credentials.js";
 import { agentOrchestrationTests as _agentOrchestration } from "./tests/agent-orchestration.js";
@@ -134,6 +136,7 @@ export function allTests(): TestCase[] {
     ..._serverLogs,
     ..._webhooks,
     ..._extensionSurface,
+    ..._trustedUnitAuthoring,
     ..._harnessTools,
     ..._mobile,
     ..._deliveryHardening,

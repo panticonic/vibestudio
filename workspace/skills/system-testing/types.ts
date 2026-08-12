@@ -27,6 +27,16 @@ export const BUILDABLE_PACKAGE_WORKSPACE_REPO_FIXTURE = {
   section: "packages",
 } as const satisfies WorkspaceRepoCreationScope;
 
+export const BUILDABLE_EXTENSION_WORKSPACE_REPO_FIXTURE = {
+  kind: "buildable-extension",
+  section: "extensions",
+} as const satisfies WorkspaceRepoCreationScope;
+
+export const BUILDABLE_APP_WORKSPACE_REPO_FIXTURE = {
+  kind: "buildable-app",
+  section: "apps",
+} as const satisfies WorkspaceRepoCreationScope;
+
 export const BUILDABLE_WORKER_WORKSPACE_REPO_FIXTURE = {
   kind: "buildable-worker",
   section: "workers",

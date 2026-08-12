@@ -20,7 +20,13 @@ interface FixtureBlobstore {
   putText(text: string): Promise<{ digest: string; size: number }>;
 }
 
-export type WorkspaceRepoSection = "projects" | "packages" | "workers" | "panels";
+export type WorkspaceRepoSection =
+  | "projects"
+  | "packages"
+  | "workers"
+  | "panels"
+  | "extensions"
+  | "apps";
 
 export const SIZABLE_HISTORY_FIXTURE_REVISIONS = 36;
 
@@ -37,6 +43,8 @@ export type WorkspaceRepoCreationScope =
   | { kind: "content"; section: "projects" }
   | { kind: "historical-content"; section: "projects" }
   | { kind: "buildable-package"; section: "packages" }
+  | { kind: "buildable-extension"; section: "extensions" }
+  | { kind: "buildable-app"; section: "apps" }
   | { kind: "buildable-worker"; section: "workers" }
   | { kind: "buildable-regular-worker"; section: "workers" }
   | { kind: "created-repository"; section: WorkspaceRepoSection }
@@ -918,6 +926,12 @@ function repositorySeedFiles(
   if (fixture.kind === "historical-content") {
     return historicalPolicyFiles(0);
   }
+  if (fixture.kind === "buildable-extension") {
+    return buildableExtensionFiles(repoName);
+  }
+  if (fixture.kind === "buildable-app") {
+    return buildableAppFiles(repoName);
+  }
   if (fixture.kind === "buildable-worker") {
     return [
       {
@@ -1083,6 +1097,131 @@ function repositorySeedFiles(
   ];
 }
 
+function fixtureIcon(): string {
+  return [
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">',
+    '  <path fill="currentColor" d="M5 4h14v16H5z"/>',
+    '  <path fill="#fff" d="M8 8h8v2H8zm0 4h5v2H8z"/>',
+    "</svg>",
+    "",
+  ].join("\n");
+}
+
+function buildableExtensionFiles(repoName: string): Array<{ path: string; content: string }> {
+  return [
+    {
+      path: "package.json",
+      content: `${JSON.stringify(
+        {
+          name: `@workspace-extensions/${repoName}`,
+          version: "0.0.0",
+          private: true,
+          type: "module",
+          vibestudio: {
+            displayName: `System Test ${repoName}`,
+            icon: "./assets/icon.svg",
+            entry: "index.ts",
+            extension: {
+              activationEvents: ["onInvoke"],
+              methodAuthority: { status: { effect: { kind: "open" } } },
+            },
+            authority: { requests: [], provides: [] },
+          },
+          devDependencies: { vitest: "^3.2.4" },
+        },
+        null,
+        2
+      )}\n`,
+    },
+    { path: "assets/icon.svg", content: fixtureIcon() },
+    {
+      path: "index.ts",
+      content: [
+        'export function startupLabel(): string { return "waiting"; }',
+        "",
+        "export async function activate() {",
+        "  return { status: () => ({ label: startupLabel() }) };",
+        "}",
+        "",
+      ].join("\n"),
+    },
+    {
+      path: "index.test.ts",
+      content: [
+        'import { describe, expect, it } from "vitest";',
+        'import { startupLabel } from "./index.js";',
+        "",
+        'describe("startupLabel", () => {',
+        '  it("reports readiness", () => expect(startupLabel()).toBe("ready"));',
+        "});",
+        "",
+      ].join("\n"),
+    },
+    {
+      path: "SKILL.md",
+      content: [
+        "---",
+        `name: ${repoName}`,
+        "description: Disposable status extension used to exercise trusted extension editing.",
+        "---",
+        "",
+        "# Status extension",
+        "",
+        "Keep the status result and its focused unit test aligned. Use the normal extension",
+        "development workflow and context-aware verification surface.",
+        "",
+      ].join("\n"),
+    },
+  ];
+}
+
+function buildableAppFiles(repoName: string): Array<{ path: string; content: string }> {
+  return [
+    {
+      path: "package.json",
+      content: `${JSON.stringify(
+        {
+          name: `@workspace-apps/${repoName}`,
+          version: "0.0.0",
+          private: true,
+          type: "module",
+          vibestudio: {
+            displayName: `System Test ${repoName}`,
+            icon: "./assets/icon.svg",
+            app: { target: "terminal", entry: "index.ts" },
+            authority: { requests: [], provides: [] },
+          },
+          devDependencies: { vitest: "^3.2.4" },
+        },
+        null,
+        2
+      )}\n`,
+    },
+    { path: "assets/icon.svg", content: fixtureIcon() },
+    {
+      path: "index.ts",
+      content: [
+        'export function startupLabel(): string { return "booting"; }',
+        "",
+        "console.log(startupLabel());",
+        "",
+      ].join("\n"),
+    },
+    {
+      path: "index.test.ts",
+      content: [
+        'import { describe, expect, it } from "vitest";',
+        'import { startupLabel } from "./index.js";',
+        "",
+        'describe("startupLabel", () => {',
+        '  it("reports readiness", () => expect(startupLabel()).toBe("ready"));',
+        "});",
+        "",
+      ].join("\n"),
+    },
+  ];
+}
+
 interface HistoricalContentRevision {
   revision: number;
   files: Array<{ path: string; content: string }>;
@@ -1099,8 +1238,7 @@ function historicalContentRevisions(): HistoricalContentRevision[] {
         files: historicalPolicyFiles(revision),
         intent:
           "Extend the archive window from 14 to 21 days because delayed regional exports can arrive through day 18; a three-day buffer prevents premature deletion",
-        message:
-          "Extend archive window to 21 days for regional exports arriving through day 18",
+        message: "Extend archive window to 21 days for regional exports arriving through day 18",
       };
     }
     if (revision === 11) {
