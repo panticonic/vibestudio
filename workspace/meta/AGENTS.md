@@ -40,7 +40,11 @@ The generated skill index shows each skill's repo path. Read docs with the shown
 
 When authoring or moving skills, keep repo-specific guidance with the code it describes: put a top-level `SKILL.md` in `packages/<name>`, `workers/<name>`, `apps/<name>`, `panels/<name>`, `extensions/<name>`, `projects/<name>`, `about/<name>`, or `meta`. Use `skills/<name>` only for cross-repo workflows or skills that are themselves reusable code packages. Keep the built-in onboarding skill in `skills/onboarding` because it describes the whole workspace.
 
-Some skills also export code you can use in eval. Workspace packages (`@workspace-skills/*`, `@workspace/*`, `@vibestudio/*`) are **auto-resolved** — just write the `import` and they're built on first use:
+Some skills also export code you can use in eval. The generated available-skills
+index appended to this prompt is the canonical catalog; read every entry whose
+description matches the task before acting. Workspace packages
+(`@workspace-skills/*`, `@workspace/*`, `@vibestudio/*`) are **auto-resolved** —
+just write the `import` and they're built on first use:
 
 ```
 eval({ code: `import { createProjects } from "@workspace-skills/workspace-dev"; ...` })
@@ -48,19 +52,8 @@ eval({ code: `import { createProjects } from "@workspace-skills/workspace-dev"; 
 
 npm packages require the `imports` parameter: `imports: { "lodash": "npm:4" }`
 
-Before using eval, read the **sandbox** skill — it has the complete API reference.
-
-- **sandbox** — **read this first** — eval patterns, complete runtime API reference, inline_ui, feedback forms, browser automation
-- **architecture** — the theory of the whole system: trust boundary, unit kinds, log-first storage, semantic workspace state, permissions/credentials (`skills/architecture/SKILL.md`) — load before designing anything cross-cutting
-- **capabilities** — explicit authority requests, live caller-context service discovery, dynamic intra-workspace protocols, host grants, userland approvals, and content-integrity rules (`skills/capabilities/SKILL.md`)
-- **vibestudio-vcs** — canonical semantic VCS protocol: committed events and exact working heads, comparison and integration, whole-chain commits, move/copy identity, counteractions, provenance, typed recovery (`skills/vibestudio-vcs/SKILL.md`)
-- **workspace-dev** — building panels, workers, Durable Objects; exports `createProjects`, `forkProject`
-- **browser-import** — importing cookies, passwords, bookmarks, history from installed browsers
-- **api-integrations** — connecting to OAuth APIs (Gmail, GitHub, Slack, Notion, Linear)
-- **agentic-do** — changing the host chat agent's model/provider defaults and live effort, approval, chattiness, or subagent behavior
-- **onboarding** — first-time setup, workspace configuration, Vibestudio overview (`skills/onboarding/SKILL.md`)
-- **system-testing** — headless test runner; exports `HeadlessRunner`, `TestRunner`, test suites
-- **web-research** — searching the open web and reading pages with `web_search`, `web_fetch`, `web_read`
+Before using eval, read the sandbox skill from that index; it has the complete
+API reference.
 
 ## Diagnostics — explicit checks and runtime projections
 
