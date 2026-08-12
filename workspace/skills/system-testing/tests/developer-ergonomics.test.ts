@@ -283,9 +283,9 @@ describe("developer ergonomics scenarios", () => {
       "capture",
       "eval",
       {
-        code: "const bytes = await page.screenshot(); const path = 'scratch/capture'; await fs.writeFile(path, bytes); return { path };",
+        code: "const bytes = await page.screenshot(); const path = 'scratch/capture'; await fs.writeFile(path, bytes); return { screenshotPath: path };",
       },
-      { returnValue: { path: "scratch/capture" } }
+      { returnValue: { screenshotPath: "scratch/capture" } }
     );
     const read = call(
       "read",

@@ -187,12 +187,13 @@ function normalizedFilePath(value: unknown): string | null {
 function screenshotPaths(call: InvocationCardPayloadLike): Set<string> {
   const paths = new Set<string>();
   for (const record of records(call)) {
-    const direct = normalizedFilePath(record["path"] ?? record["screenshot"]);
-    if (direct) paths.add(direct);
+    for (const [key, value] of Object.entries(record)) {
+      if (!/(?:path|file|screenshot)$/iu.test(key)) continue;
+      const candidate = normalizedFilePath(value);
+      if (candidate) paths.add(candidate);
+    }
     const returned = record["returnValue"];
-    const returnedPath = isRecord(returned)
-      ? normalizedFilePath(returned["path"] ?? returned["screenshot"])
-      : normalizedFilePath(returned);
+    const returnedPath = normalizedFilePath(returned);
     if (returnedPath) paths.add(returnedPath);
   }
   return paths;
