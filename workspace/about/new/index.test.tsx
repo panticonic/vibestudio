@@ -108,6 +108,20 @@ describe("new panel launcher", () => {
             },
           ],
         },
+        {
+          name: "about",
+          path: "about",
+          isUnit: false,
+          children: [
+            {
+              name: "about",
+              path: "about/about",
+              isUnit: true,
+              children: [],
+              launchable: { type: "app", title: "About Vibestudio" },
+            },
+          ],
+        },
       ],
     });
   });
@@ -118,6 +132,16 @@ describe("new panel launcher", () => {
     expect(await screen.findByText("Terminal")).toBeTruthy();
     expect(await screen.findByText("Example Docs")).toBeTruthy();
     expect(screen.getAllByRole("option").length).toBeGreaterThanOrEqual(3);
+  });
+
+  it("keeps about pages searchable without letting them crowd apps out of the idle list", async () => {
+    render(<AboutPanelRoot />);
+
+    expect(await findRow("Terminal")).toBeTruthy();
+    expect(screen.queryByText("About Vibestudio", { selector: ".launcher-title" })).toBeNull();
+
+    fireEvent.change(screen.getByRole("combobox"), { target: { value: "about" } });
+    expect(await findRow("About Vibestudio")).toBeTruthy();
   });
 
   it("treats an empty canonical history as a normal empty result", async () => {

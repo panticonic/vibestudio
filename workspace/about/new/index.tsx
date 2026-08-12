@@ -519,17 +519,23 @@ function NewPanelPage() {
     return () => clearTimeout(timer);
   }, [historyReviewPending, historyRefreshEpoch]);
 
-  const baseSuggestions = useMemo(
-    () =>
-      buildLauncherSuggestions({
-        value,
-        panels: panelGroups ? [...panelGroups.panels, ...panelGroups.about] : [],
-        panelUsage,
-        browserSuggestions,
-        browserUrl,
-      }),
-    [browserSuggestions, browserUrl, panelGroups, panelUsage, value]
-  );
+  const baseSuggestions = useMemo(() => {
+    // The idle list is a starting surface for apps, not an index of settings
+    // and utility pages. About pages remain available as soon as the user
+    // searches for one.
+    const panelCatalog = panelGroups
+      ? parsedInput.query.trim()
+        ? [...panelGroups.panels, ...panelGroups.about]
+        : panelGroups.panels
+      : [];
+    return buildLauncherSuggestions({
+      value,
+      panels: panelCatalog,
+      panelUsage,
+      browserSuggestions,
+      browserUrl,
+    });
+  }, [browserSuggestions, browserUrl, panelGroups, panelUsage, parsedInput.query, value]);
 
   const groups = useMemo(
     () =>

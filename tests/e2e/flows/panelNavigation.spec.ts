@@ -19,6 +19,7 @@ import {
   approvePendingStartupUnits,
   removeManagedTestWorkspace,
   startPanelDiagnostics,
+  typePanelText,
   type TestApp,
 } from "../../setup/electronSetup";
 
@@ -175,6 +176,9 @@ test.describe("Panel navigation convergence", () => {
           intervals: [250, 500, 1_000],
         })
         .toContain("Jump to a panel, revisit a page, or ask an agent.");
+      // Utility pages are searchable, but intentionally stay out of the idle
+      // app suggestions.
+      await typePanelText(testApp.app, initialPanelId, "About Vibestudio");
       await expect
         .poll(
           async () => {

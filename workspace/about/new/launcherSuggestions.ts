@@ -148,7 +148,7 @@ export function buildLauncherSuggestions(input: {
             other.url.replace(/\/$/, "") === candidate.browser.url.replace(/\/$/, "")
         )
     )
-    .slice(0, input.limit ?? 10);
+    .slice(0, input.limit ?? 20);
 }
 
 export const LAUNCHER_GROUP_LABELS: Record<LauncherSuggestion["kind"], string> = {

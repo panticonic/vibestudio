@@ -50,6 +50,21 @@ describe("launcher suggestions", () => {
     expect(suggestions.some((item) => item.kind === "history")).toBe(true);
   });
 
+  it("shows up to twenty suggestions by default", () => {
+    const suggestions = buildLauncherSuggestions({
+      value: "",
+      panels: Array.from({ length: 25 }, (_, index) => ({
+        path: `panels/app-${index}`,
+        title: `App ${index}`,
+      })),
+      panelUsage: {},
+      browserSuggestions: [],
+      browserUrl: null,
+    });
+
+    expect(suggestions).toHaveLength(20);
+  });
+
   it("prefers sentence-like chat unless a destination is an exact or prefix match", () => {
     expect(isLikelyAgentPrompt("Please investigate this issue for me")).toBe(true);
     const prompt = buildLauncherSuggestions({
