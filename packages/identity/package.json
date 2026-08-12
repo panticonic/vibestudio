@@ -7,6 +7,7 @@
     "buildProfile": "source-only"
   },
   "exports": {
+    "./accountProfileDraft": "./src/accountProfileDraft.ts",
     "./identityDb": "./src/identityDb.ts",
     "./identitySchema": "./src/identitySchema.ts",
     "./membership": "./src/membership.ts",

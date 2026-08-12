@@ -66,6 +66,7 @@ export const PinOff = icon("PinOff", "⤓");
 export const Power = icon("Power", "⏻");
 export const Settings = icon("Settings", "⚙");
 export const Settings2 = icon("Settings2", "⚙");
+export const Share2 = icon("Share2", "↥");
 export const Unplug = icon("Unplug", "⏚");
 export const User = icon("User", "◕");
 

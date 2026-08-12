@@ -3,7 +3,6 @@ import {
   AccessibilityInfo,
   ActivityIndicator,
   Animated,
-  Dimensions,
   Easing,
   KeyboardAvoidingView,
   Modal,
@@ -15,6 +14,7 @@ import {
   Text,
   TextInput,
   View,
+  useWindowDimensions,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import ReactNativeHapticFeedback from "react-native-haptic-feedback";
@@ -232,6 +232,7 @@ export function ApprovalSheet({
   onOpenDiffFile,
 }: ApprovalSheetProps) {
   const colors = useAtomValue(themeColorsAtom);
+  const { height: viewportHeight } = useWindowDimensions();
   const [browseIndex, setBrowseIndex] = useState(0);
   useEffect(() => {
     setBrowseIndex((idx) => {
@@ -269,7 +270,7 @@ export function ApprovalSheet({
   const [pendingAction, setPendingAction] = useState<PendingAction | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [minimized, setMinimized] = useState(false);
-  const translateY = useRef(new Animated.Value(Dimensions.get("window").height)).current;
+  const translateY = useRef(new Animated.Value(viewportHeight)).current;
   const backdropOpacity = useRef(new Animated.Value(0)).current;
   const dragOffset = useRef(0);
 
@@ -464,6 +465,8 @@ export function ApprovalSheet({
                 {
                   backgroundColor: colors.surfaceRaised,
                   borderColor: colors.border,
+                  maxHeight: viewportHeight * 0.9,
+                  minHeight: viewportHeight * 0.4,
                   shadowColor: colors.shadow,
                   transform: [{ translateY }],
                 },
@@ -3245,8 +3248,6 @@ const styles = StyleSheet.create({
     borderTopLeftRadius: radius.xl,
     borderTopRightRadius: radius.xl,
     borderWidth: hairline,
-    maxHeight: Dimensions.get("window").height * 0.9,
-    minHeight: Dimensions.get("window").height * 0.4,
     overflow: "hidden",
   },
   accentStripe: {

@@ -46,6 +46,7 @@ export type PanelCommandId =
   | "stop"
   | "focus-address"
   | "copy-address"
+  | "share-address"
   | "copy-panel-id"
   | "open-external"
   | "duplicate"
@@ -84,6 +85,8 @@ export interface PanelCommandContext {
 export interface PanelCommandDefinition {
   id: PanelCommandId;
   label: string;
+  /** Canonical, renderer-neutral explanation shown by discoverability surfaces. */
+  description: string;
   shortcut?: string;
   visible: boolean;
   enabled: boolean;
@@ -164,6 +167,7 @@ export function getPanelCommandDefinitions(
     {
       id: "back",
       label: "Back",
+      description: "Go back in this panel's history",
       shortcut: "Alt+Left",
       visible: true,
       enabled: Boolean(chrome?.canGoBack),
@@ -171,6 +175,7 @@ export function getPanelCommandDefinitions(
     {
       id: "forward",
       label: "Forward",
+      description: "Go forward in this panel's history",
       shortcut: "Alt+Right",
       visible: true,
       enabled: Boolean(chrome?.canGoForward),
@@ -178,6 +183,7 @@ export function getPanelCommandDefinitions(
     {
       id: "reload-panel",
       label: "Reload",
+      description: "Reload the panel",
       shortcut: "Cmd/Ctrl+R",
       visible: true,
       enabled: Boolean(chrome),
@@ -185,12 +191,14 @@ export function getPanelCommandDefinitions(
     {
       id: "reload-view",
       label: "Reload View",
+      description: "Reload the current view",
       visible: true,
       enabled: Boolean(chrome),
     },
     {
       id: "force-reload-view",
       label: "Force Reload View",
+      description: "Reload the view, bypassing caches",
       shortcut: "Cmd/Ctrl+Shift+R",
       visible: true,
       enabled: Boolean(chrome),
@@ -198,12 +206,14 @@ export function getPanelCommandDefinitions(
     {
       id: "rebuild-panel",
       label: "Rebuild Panel",
+      description: "Rebuild the panel from source",
       visible: isPanel,
       enabled: isPanel,
     },
     {
       id: "stop",
       label: "Stop Loading",
+      description: "Stop loading the current page",
       shortcut: "Esc",
       visible: true,
       enabled: Boolean(chrome?.isLoading),
@@ -211,6 +221,7 @@ export function getPanelCommandDefinitions(
     {
       id: "focus-address",
       label: context.addressBarVisible ? "Focus Address" : "Show Address Bar",
+      description: "Edit this panel's address",
       shortcut: "Cmd/Ctrl+L",
       visible: true,
       enabled: true,
@@ -218,42 +229,56 @@ export function getPanelCommandDefinitions(
     {
       id: "copy-address",
       label: "Copy Address",
+      description: "Copy this panel's address",
+      visible: true,
+      enabled: hasAddress,
+    },
+    {
+      id: "share-address",
+      label: "Share",
+      description: "Share this panel using another app",
       visible: true,
       enabled: hasAddress,
     },
     {
       id: "copy-panel-id",
       label: "Copy Panel ID",
+      description: "Copy this panel's durable identifier",
       visible: true,
       enabled: true,
     },
     {
       id: "open-external",
       label: "Open in System Browser",
+      description: "Open this page in the system browser",
       visible: isBrowser,
       enabled: Boolean(chrome?.resolvedUrl && /^https?:\/\//i.test(chrome.resolvedUrl)),
     },
     {
       id: "duplicate",
       label: "Duplicate",
+      description: "Open another copy as a new root panel",
       visible: true,
       enabled: Boolean(chrome),
     },
     {
       id: "open-child-beside",
       label: "Open Child Panel Beside",
+      description: "Show an existing child beside this panel",
       visible: (context.childCount ?? 0) > 0,
       enabled: (context.childCount ?? 0) > 0,
     },
     {
       id: "add-child",
       label: "Create New Child Panel Beside",
+      description: "Create and show a child beside this panel",
       visible: true,
       enabled: Boolean(chrome),
     },
     {
       id: "add-child-below",
       label: "Create New Child Panel Below",
+      description: "Create a child below this panel",
       visible: Boolean(context.presentation?.canSplitBelow),
       enabled: Boolean(chrome && context.presentation?.canSplitBelow),
     },
@@ -261,18 +286,21 @@ export function getPanelCommandDefinitions(
       id: "open-in-new-column",
       label:
         context.presentation?.kind === "stacked" ? "Move Pane to New Column" : "Open in New Column",
+      description: "Give this panel its own column",
       visible: context.presentation?.kind !== "solo",
       enabled: Boolean(chrome),
     },
     {
       id: "close-pane",
       label: "Close Pane",
+      description: "Close this local view without archiving the panel",
       visible: Boolean(context.presentation),
       enabled: Boolean(context.presentation),
     },
     {
       id: "toggle-pin",
       label: context.isPinned ? "Unpin Panel" : "Pin Panel",
+      description: "Pinned panels stay loaded in the background",
       visible: true,
       // Pinnable even when unloaded: callers build `chrome` from the registry
       // entry, so this stays enabled for panels that only exist in the tree.
@@ -281,12 +309,14 @@ export function getPanelCommandDefinitions(
     {
       id: "unload",
       label: "Unload",
+      description: "Free memory; reload next time the panel opens",
       visible: true,
       enabled: Boolean(chrome),
     },
     {
       id: "archive",
       label: "Archive Panel",
+      description: "Remove this panel and its descendants from the active tree",
       shortcut: "Cmd/Ctrl+W",
       visible: true,
       enabled: Boolean(chrome),

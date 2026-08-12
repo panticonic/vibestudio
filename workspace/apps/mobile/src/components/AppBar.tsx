@@ -166,7 +166,15 @@ export function AppBar({
       ]}
     >
       {!addressBarVisible ? (
-        <View style={styles.content}>
+        <View
+          style={[
+            styles.content,
+            {
+              paddingLeft: Math.max(spacing.xs, insets.left),
+              paddingRight: Math.max(spacing.xs, insets.right),
+            },
+          ]}
+        >
           <IconButton icon={Menu} onPress={onMenuPress} label="Open panel drawer" />
           <Pressable
             onPress={onToggleAddressBar}
@@ -236,7 +244,15 @@ export function AppBar({
           />
         </View>
       ) : (
-        <View style={styles.content}>
+        <View
+          style={[
+            styles.content,
+            {
+              paddingLeft: Math.max(spacing.xs, insets.left),
+              paddingRight: Math.max(spacing.xs, insets.right),
+            },
+          ]}
+        >
           <IconButton
             icon={ArrowLeft}
             onPress={onBack}
@@ -314,6 +330,10 @@ export function AppBar({
               }}
               style={({ pressed }) => [
                 styles.suggestionRow,
+                {
+                  paddingLeft: Math.max(spacing.lg, insets.left),
+                  paddingRight: Math.max(spacing.lg, insets.right),
+                },
                 pressed && { backgroundColor: colors.surfaceSunken },
               ]}
               accessibilityRole="button"
@@ -392,7 +412,6 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     height: 56,
-    paddingHorizontal: spacing.xs,
     gap: spacing.xxs,
   },
   pill: {
@@ -448,7 +467,6 @@ const styles = StyleSheet.create({
   suggestionRow: {
     minHeight: touchTarget,
     justifyContent: "center",
-    paddingHorizontal: spacing.lg,
     paddingVertical: spacing.xs,
   },
   suggestionContent: {

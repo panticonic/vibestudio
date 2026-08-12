@@ -1,4 +1,4 @@
-import { Linking, Platform } from "react-native";
+import { Linking, Platform, Share } from "react-native";
 import Clipboard from "@react-native-clipboard/clipboard";
 import { requireApprovedAppCapability } from "./appCapabilities";
 
@@ -23,4 +23,12 @@ export async function readClipboardImageOrText(): Promise<string> {
 export async function openExternalUrl(url: string): Promise<void> {
   requireApprovedAppCapability("open-external", "external URL open");
   await Linking.openURL(url);
+}
+
+/** Present the device-native share sheet for text the user explicitly selected. */
+export async function shareText(value: string, title?: string): Promise<void> {
+  await Share.share(
+    { title, message: value },
+    { dialogTitle: title ? `Share ${title}` : "Share from Vibestudio", subject: title }
+  );
 }

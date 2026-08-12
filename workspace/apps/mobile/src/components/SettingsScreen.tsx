@@ -209,6 +209,7 @@ export function SettingsScreen({ navigation }: SettingsScreenProps) {
       <ScrollView
         style={styles.scrollView}
         contentContainerStyle={styles.content}
+        automaticallyAdjustKeyboardInsets
         keyboardShouldPersistTaps="handled"
       >
         <View style={styles.headerRow}>

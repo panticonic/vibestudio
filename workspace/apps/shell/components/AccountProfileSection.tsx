@@ -1,49 +1,27 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { Box, Button, Callout, Flex, Spinner, Text, TextField } from "@radix-ui/themes";
 import { CheckCircledIcon, ExclamationTriangleIcon } from "@radix-ui/react-icons";
-import { isValidHandle } from "@vibestudio/identity/types";
+import {
+  accountProfileDraftFor,
+  accountProfileDraftIsDirty,
+  accountProfileInitials,
+  EMPTY_ACCOUNT_PROFILE_DRAFT,
+  normalizedAccountProfileColor,
+  validateAccountProfileDraft,
+  type AccountProfileDraft,
+} from "@vibestudio/identity/accountProfileDraft";
 import {
   ACCOUNT_AVATAR_DATA_URI_PATTERN,
   MAX_AVATAR_DATA_URI_BYTES,
 } from "@vibestudio/service-schemas/account";
 import { account, type ShellAccountProfile } from "../shell/client";
 
-const COLOR_PATTERN = /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/;
-
 interface AccountProfileSectionProps {
   active: boolean;
 }
 
-interface ProfileDraft {
-  displayName: string;
-  handle: string;
-  color: string;
-}
-
-const EMPTY_DRAFT: ProfileDraft = { displayName: "", handle: "", color: "" };
-
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-function draftFor(profile: ShellAccountProfile): ProfileDraft {
-  return {
-    displayName: profile.displayName,
-    handle: profile.handle,
-    color: profile.color ?? "",
-  };
-}
-
-function initials(draft: ProfileDraft): string {
-  const source = draft.displayName.trim() || draft.handle.trim();
-  return (
-    source
-      .split(/\s+/)
-      .map((part) => part[0])
-      .join("")
-      .slice(0, 2)
-      .toUpperCase() || "?"
-  );
 }
 
 async function avatarDataUriFromFile(file: File): Promise<string> {
@@ -98,7 +76,7 @@ async function avatarDataUriFromFile(file: File): Promise<string> {
 
 export function AccountProfileSection({ active }: AccountProfileSectionProps) {
   const [profile, setProfile] = useState<ShellAccountProfile | null>(null);
-  const [draft, setDraft] = useState<ProfileDraft>(EMPTY_DRAFT);
+  const [draft, setDraft] = useState<AccountProfileDraft>(EMPTY_ACCOUNT_PROFILE_DRAFT);
   const [avatarDraft, setAvatarDraft] = useState<string | null | undefined>(undefined);
   const avatarInputRef = useRef<HTMLInputElement>(null);
   const [loading, setLoading] = useState(false);
@@ -109,7 +87,7 @@ export function AccountProfileSection({ active }: AccountProfileSectionProps) {
 
   const applyProfile = useCallback((next: ShellAccountProfile) => {
     setProfile(next);
-    setDraft(draftFor(next));
+    setDraft(accountProfileDraftFor(next));
     setAvatarDraft(undefined);
   }, []);
 
@@ -136,31 +114,14 @@ export function AccountProfileSection({ active }: AccountProfileSectionProps) {
     };
   }, [active, loadProfile]);
 
-  const validationError = useMemo(() => {
-    const displayName = draft.displayName.trim();
-    const handle = draft.handle.trim();
-    const color = draft.color.trim();
-    if (!displayName) return "Display name is required.";
-    if (displayName.length > 200) return "Display name must be 200 characters or fewer.";
-    if (!isValidHandle(handle)) {
-      return "Handle must start with a letter, use at most 64 letters, numbers, _ or -, and cannot be reserved.";
-    }
-    if (color && !COLOR_PATTERN.test(color)) {
-      return "Color must be a 3, 4, 6, or 8 digit hex value, including #.";
-    }
-    return null;
-  }, [draft]);
+  const validationError = useMemo(() => validateAccountProfileDraft(draft), [draft]);
 
-  const normalizedColor = draft.color.trim();
+  const normalizedColor = normalizedAccountProfileColor(draft);
   const previewAvatar = avatarDraft === undefined ? profile?.avatar : (avatarDraft ?? undefined);
   const dirty =
-    profile !== null &&
-    (draft.displayName !== profile.displayName ||
-      draft.handle !== profile.handle ||
-      normalizedColor !== (profile.color ?? "") ||
-      avatarDraft !== undefined);
+    profile !== null && accountProfileDraftIsDirty(profile, draft, avatarDraft !== undefined);
 
-  const updateDraft = (patch: Partial<ProfileDraft>) => {
+  const updateDraft = (patch: Partial<AccountProfileDraft>) => {
     setDraft((current) => ({ ...current, ...patch }));
     setError(null);
     setSuccess(null);
@@ -175,7 +136,7 @@ export function AccountProfileSection({ active }: AccountProfileSectionProps) {
       const next = await account.updateProfile({
         displayName: draft.displayName.trim(),
         handle: draft.handle.trim(),
-        color: normalizedColor || null,
+        color: normalizedColor,
         ...(avatarDraft !== undefined ? { avatar: avatarDraft } : {}),
       });
       applyProfile(next);
@@ -225,7 +186,7 @@ export function AccountProfileSection({ active }: AccountProfileSectionProps) {
                 style={{ width: "100%", height: "100%", objectFit: "cover" }}
               />
             ) : (
-              initials(draft)
+              accountProfileInitials(draft)
             )}
           </Box>
         ) : null}

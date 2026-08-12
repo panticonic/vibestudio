@@ -36,8 +36,8 @@ import { savePinnedPanelIds } from "../shellCore/pinnedPanels";
 import { PanelTreeItem } from "./PanelTreeItem";
 import { VibestudioLogo } from "./VibestudioLogo";
 import { isBrowserPanelSource } from "@vibestudio/shared/panelChrome";
-import { type PanelCommandId } from "@vibestudio/shared/panelCommands";
-import { copyToClipboard, openExternalUrl } from "../services/nativeCapabilities";
+import { getPanelCommandDefinitions, type PanelCommandId } from "@vibestudio/shared/panelCommands";
+import { copyToClipboard, openExternalUrl, shareText } from "../services/nativeCapabilities";
 import {
   buildMobilePanelForestRows,
   presentMobilePanelRow,
@@ -56,6 +56,7 @@ import {
   PinOff,
   Search,
   Settings,
+  Share2,
   X,
   type IconComponent,
 } from "../design/icons";
@@ -65,15 +66,14 @@ interface PanelDrawerProps {
   onSelectPanel: (panelId: string) => void;
 }
 
-/** Icons + short explanations for the shared panel commands (discoverability). */
-const COMMAND_PRESENTATION: Partial<
-  Record<PanelCommandId, { icon: IconComponent; description: string }>
-> = {
-  "copy-address": { icon: Copy, description: "Copy this panel's address" },
-  "open-external": { icon: ExternalLink, description: "Open in your device browser" },
-  duplicate: { icon: CopyPlus, description: "Open another copy as a new root panel" },
-  "toggle-pin": { icon: Pin, description: "Pinned panels stay loaded in the background" },
-  archive: { icon: Archive, description: "Remove from the tree (recoverable on desktop)" },
+/** Native icon choices for renderer-neutral shared panel commands. */
+const COMMAND_PRESENTATION: Partial<Record<PanelCommandId, { icon: IconComponent }>> = {
+  "copy-address": { icon: Copy },
+  "share-address": { icon: Share2 },
+  "open-external": { icon: ExternalLink },
+  duplicate: { icon: CopyPlus },
+  "toggle-pin": { icon: Pin },
+  archive: { icon: Archive },
 };
 
 function findPanelById(panels: MobilePanelTreeNode[], panelId: string): MobilePanelTreeNode | null {
@@ -405,6 +405,18 @@ export function PanelDrawer({ onSelectPanel }: PanelDrawerProps) {
             });
           });
           return;
+        case "share-address":
+          void shellClient.panels
+            .observe(panelId)
+            .then((observation) => shareText(observation.source, observation.title || "Panel"))
+            .catch((error: unknown) =>
+              pushToast({
+                title: "Could not share panel",
+                message: error instanceof Error ? error.message : "Try again.",
+                tone: "danger",
+              })
+            );
+          return;
         case "open-external":
           void shellClient.panels.observe(panelId).then((observation) => {
             if (!isBrowserPanelSource(observation.source)) return;
@@ -448,19 +460,26 @@ export function PanelDrawer({ onSelectPanel }: PanelDrawerProps) {
       const panel = findPanelById(panelRoots, panelId);
       if (!panel) return;
       const isPinned = pinnedPanelIds.has(panelId);
-      const commands: Array<{ id: PanelCommandId; label: string }> = [
-        { id: "copy-address", label: "Copy address" },
-        { id: "open-external", label: "Open externally" },
-        { id: "duplicate", label: "Duplicate" },
-        { id: "toggle-pin", label: isPinned ? "Unpin" : "Pin" },
-        { id: "archive", label: "Archive" },
+      const commandIds: PanelCommandId[] = [
+        "copy-address",
+        "share-address",
+        ...(isBrowserPanelSource(panel.source ?? "") ? (["open-external"] as const) : []),
+        "duplicate",
+        "toggle-pin",
+        "archive",
       ];
+      const definitions = getPanelCommandDefinitions({ isPinned });
+      const commands = commandIds.map((id) => {
+        const definition = definitions.find((candidate) => candidate.id === id);
+        if (!definition) throw new Error(`Missing panel command definition: ${id}`);
+        return definition;
+      });
       const items: ActionSheetItem[] = commands.map((command) => {
         const presentation = COMMAND_PRESENTATION[command.id];
         return {
           id: command.id,
           label: command.label,
-          description: presentation?.description,
+          description: command.description,
           icon: command.id === "toggle-pin" && isPinned ? PinOff : presentation?.icon,
           tone: command.id === "archive" ? "danger" : "default",
         };

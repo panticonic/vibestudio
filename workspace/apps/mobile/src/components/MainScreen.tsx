@@ -11,6 +11,7 @@ import {
   Pressable,
 } from "react-native";
 import { useNavigation, DrawerActions } from "@react-navigation/native";
+import { useDrawerStatus } from "@react-navigation/drawer";
 import type { TemplateInstallResolution } from "@vibestudio/shared/authority/unitInstallReview";
 import { useAtom, useAtomValue, useSetAtom } from "jotai";
 import { ConnectionBar } from "./ConnectionBar";
@@ -39,6 +40,7 @@ import {
 } from "../state/navigationAtoms";
 import { addWebViewEntry, sweepIdleWebViews, type WebViewEntry } from "./webViewStack";
 import { loadPinnedPanelIds, savePinnedPanelIds } from "../shellCore/pinnedPanels";
+import { resolveMobileBackAction } from "../shellCore/mobileBackNavigation";
 import { PANEL_UI_IDLE_SWEEP_MS } from "@vibestudio/shared/constants";
 import { parseHostConfig } from "../services/panelUrls";
 import {
@@ -51,7 +53,7 @@ import {
   handleMobileAppLifecycleEvent,
   type AppLifecyclePayload,
 } from "../services/appUpdatePrompt";
-import { copyToClipboard, openExternalUrl } from "../services/nativeCapabilities";
+import { copyToClipboard, openExternalUrl, shareText } from "../services/nativeCapabilities";
 import { resetToNativeBootstrap } from "../services/auth";
 import { clearShellCredential } from "../services/mobileCredentials";
 import {
@@ -106,29 +108,29 @@ import {
   PinOff as PinOffIcon,
   Power as PowerIcon,
   RefreshCw as RefreshCwIcon,
+  Share2 as ShareIcon,
   Square as SquareIcon,
   type IconComponent,
 } from "../design/icons";
 import { Button, EmptyState } from "./ui/primitives";
 
-/** Icons + one-line explanations for panel commands (discoverability). */
-const PANEL_COMMAND_PRESENTATION: Partial<
-  Record<PanelCommandId, { icon?: IconComponent; description?: string }>
-> = {
-  back: { icon: ArrowLeftIcon, description: "Go back in this panel's history" },
-  forward: { icon: ArrowRightIcon, description: "Go forward in this panel's history" },
-  "reload-panel": { icon: RefreshCwIcon, description: "Reload the panel" },
-  "reload-view": { icon: RefreshCwIcon, description: "Reload the view" },
-  "force-reload-view": { icon: RefreshCwIcon, description: "Reload, bypassing caches" },
-  "rebuild-panel": { icon: RefreshCwIcon, description: "Rebuild the panel from source" },
-  stop: { icon: SquareIcon, description: "Stop loading" },
-  "copy-address": { icon: CopyIcon, description: "Copy this panel's address" },
-  "open-external": { icon: ExternalLinkIcon, description: "Open in your device browser" },
-  duplicate: { icon: CopyPlusIcon, description: "Open another copy as a new root panel" },
-  "toggle-pin": { icon: PinIcon, description: "Pinned panels stay loaded in the background" },
-  unload: { icon: PowerIcon, description: "Free memory; reloads next time you open it" },
-  archive: { icon: ArchiveIcon, description: "Remove from the tree (recoverable on desktop)" },
-  "focus-address": { icon: Link2Icon, description: "Edit the address" },
+/** Native icon choices for renderer-neutral shared panel commands. */
+const PANEL_COMMAND_PRESENTATION: Partial<Record<PanelCommandId, { icon?: IconComponent }>> = {
+  back: { icon: ArrowLeftIcon },
+  forward: { icon: ArrowRightIcon },
+  "reload-panel": { icon: RefreshCwIcon },
+  "reload-view": { icon: RefreshCwIcon },
+  "force-reload-view": { icon: RefreshCwIcon },
+  "rebuild-panel": { icon: RefreshCwIcon },
+  stop: { icon: SquareIcon },
+  "copy-address": { icon: CopyIcon },
+  "share-address": { icon: ShareIcon },
+  "open-external": { icon: ExternalLinkIcon },
+  duplicate: { icon: CopyPlusIcon },
+  "toggle-pin": { icon: PinIcon },
+  unload: { icon: PowerIcon },
+  archive: { icon: ArchiveIcon },
+  "focus-address": { icon: Link2Icon },
 };
 
 const PANEL_MATERIALIZE_TIMEOUT_MS = 45_000;
@@ -149,6 +151,7 @@ function smokePhase(phase: string, extra?: Record<string, unknown>): void {
 
 export function MainScreen() {
   const navigation = useNavigation();
+  const drawerStatus = useDrawerStatus();
   const shellClient = useAtomValue(shellClientAtom);
   const panelTreeRevision = useAtomValue(panelTreeRevisionAtom);
   const setPanelTreeRevision = useSetAtom(panelTreeRevisionAtom);
@@ -1268,6 +1271,25 @@ export function MainScreen() {
           }
           return;
         }
+        case "share-address": {
+          const address =
+            panelId === activePanelId
+              ? activeChromeState?.editableAddress
+              : panel
+                ? getCurrentSnapshot(panel).source
+                : undefined;
+          if (address) {
+            void shareText(address, panel?.title ?? activePanelTitle ?? "Panel").catch(
+              (error: unknown) =>
+                pushToast({
+                  title: "Could not share panel",
+                  message: error instanceof Error ? error.message : "Try again.",
+                  tone: "danger",
+                })
+            );
+          }
+          return;
+        }
         case "open-external": {
           const url =
             panelId === activePanelId
@@ -1316,6 +1338,7 @@ export function MainScreen() {
       activatePanel,
       activeChromeState,
       activePanelId,
+      activePanelTitle,
       pushToast,
       refreshTree,
       shellClient,
@@ -1344,6 +1367,7 @@ export function MainScreen() {
           "rebuild-panel",
           "stop",
           "copy-address",
+          "share-address",
           "open-external",
           "duplicate",
           "toggle-pin",
@@ -1360,7 +1384,7 @@ export function MainScreen() {
           return {
             id: command.id,
             label: command.label,
-            description: presentation?.description,
+            description: command.description,
             icon: command.id === "toggle-pin" && isPinned ? PinOffIcon : presentation?.icon,
             tone: command.id === "archive" ? ("danger" as const) : ("default" as const),
           };
@@ -1791,23 +1815,42 @@ export function MainScreen() {
   useEffect(() => {
     if (Platform.OS !== "android") return;
     const onBackPress = () => {
-      if (activePanelId && webViewNavigation[activePanelId]?.canGoBack) {
-        pendingHistoryIntentByPanel.current.set(
-          activePanelId,
-          requireBrowserNavigationIntent("back")
-        );
-        webViewRefsMap.current.get(activePanelId)?.goBack();
-        return true;
+      const action = resolveMobileBackAction({
+        drawerOpen: drawerStatus === "open",
+        addressBarVisible,
+        browserCanGoBack: Boolean(activePanelId && webViewNavigation[activePanelId]?.canGoBack),
+        parentPanelId: activePanelParentId,
+      });
+      switch (action) {
+        case "close-address":
+          setAddressBarVisible(false);
+          return true;
+        case "browser-back":
+          if (!activePanelId) return false;
+          pendingHistoryIntentByPanel.current.set(
+            activePanelId,
+            requireBrowserNavigationIntent("back")
+          );
+          webViewRefsMap.current.get(activePanelId)?.goBack();
+          return true;
+        case "parent-panel":
+          if (!activePanelParentId) return false;
+          activatePanel(activePanelParentId);
+          return true;
+        case "system":
+          return false;
       }
-      if (activePanelParentId) {
-        activatePanel(activePanelParentId);
-        return true;
-      }
-      return false;
     };
     const subscription = BackHandler.addEventListener("hardwareBackPress", onBackPress);
     return () => subscription.remove();
-  }, [activePanelId, activePanelParentId, activatePanel, webViewNavigation]);
+  }, [
+    activePanelId,
+    activePanelParentId,
+    activatePanel,
+    addressBarVisible,
+    drawerStatus,
+    webViewNavigation,
+  ]);
   const handleRepair = useCallback(() => {
     Alert.alert(
       "Re-pair this device?",

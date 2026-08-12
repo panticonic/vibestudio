@@ -105,6 +105,10 @@ describe("panelCommands", () => {
     expect(commands.map((command) => command.id)).not.toContain("back");
     expect(commands.map((command) => command.id)).not.toContain("open-external");
     expect(commands.find((command) => command.id === "archive")?.shortcut).toBe("Cmd/Ctrl+W");
+    expect(commands.find((command) => command.id === "copy-address")?.description).toBe(
+      "Copy this panel's address"
+    );
+    expect(commands.find((command) => command.id === "share-address")?.enabled).toBe(true);
   });
 
   it("exposes a single friendly reload and capability-aware pane actions", () => {

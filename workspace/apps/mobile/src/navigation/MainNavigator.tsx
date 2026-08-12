@@ -7,12 +7,14 @@
  */
 
 import React, { useCallback } from "react";
+import { useWindowDimensions } from "react-native";
 import { createDrawerNavigator } from "@react-navigation/drawer";
 import { useAtomValue, useSetAtom } from "jotai";
 import { MainScreen } from "../components/MainScreen";
 import { PanelDrawer } from "../components/PanelDrawer";
 import { activePanelIdAtom } from "../state/navigationAtoms";
 import { shellClientAtom } from "../state/shellClientAtom";
+import { mobileDrawerWidth } from "../shellCore/mobileLayout";
 
 export type DrawerParamList = {
   PanelContent: undefined;
@@ -21,12 +23,14 @@ export type DrawerParamList = {
 const Drawer = createDrawerNavigator<DrawerParamList>();
 
 export function MainNavigator() {
+  const { width } = useWindowDimensions();
+
   return (
     <Drawer.Navigator
       screenOptions={{
         headerShown: false,
         drawerType: "front",
-        drawerStyle: { width: 280 },
+        drawerStyle: { width: mobileDrawerWidth(width) },
         swipeEnabled: true,
         swipeEdgeWidth: 50,
       }}
