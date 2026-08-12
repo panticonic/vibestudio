@@ -86,10 +86,11 @@ export interface WorkspaceDeclarations {
 }
 
 /**
- * Validate the joined view: every DO-backed service/route must reference a
- * declared singleton. Worker-backed services additionally must have a
- * matching worker-backed route (declared in `routes[]`) on the same source
- * and path.
+ * Validate the joined view: every DO-backed route must reference a declared
+ * singleton because a route has no factory key input. DO-backed services may
+ * omit one and resolve as factories. Worker-backed services must have a
+ * matching worker-backed route (declared in `routes[]`) on the same source and
+ * path.
  *
  * Throws on the first error with a message naming the offending entry.
  */

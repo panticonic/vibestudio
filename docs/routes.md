@@ -123,9 +123,8 @@ const api = await workers.resolveService("example.stateless.v1");
 DO-backed services come in two flavours:
 
 - **Singleton-backed** — a matching `singletonObjects` row exists. Callers
-  MAY omit `objectKey`; the row's `key` is used. Callers MAY still pass an
-  explicit `objectKey` to fan out to additional instances (e.g. forked
-  channels).
+  MAY omit `objectKey`; the row's `key` is used. A caller cannot override that
+  identity with a different key.
 - **Factory** — no matching `singletonObjects` row. Callers MUST pass an
   explicit `objectKey`; resolving without one throws. There is no implicit
   default key.

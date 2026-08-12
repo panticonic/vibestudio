@@ -546,9 +546,10 @@ export interface WorkspaceConfig {
     approvalLevel?: number;
   };
   /**
-   * Stable DO singletons. Any `services[]` / `routes[]` entry referencing a
-   * `durableObject.className` MUST have a matching `(source, className)` row
-   * here. Workspace load fails otherwise.
+   * Stable DO singleton identities. A matching `(source, className)` row gives
+   * a DO-backed service its fixed default object key and is required for a
+   * DO-backed route. A DO-backed service without a row is a factory whose
+   * callers provide an explicit object key.
    */
   singletonObjects?: WorkspaceSingletonObjectDecl[];
   /** Workspace-authored service declarations. */

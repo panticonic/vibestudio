@@ -253,7 +253,8 @@ Declare worker registry dependencies and Build V2-owned override or patch
 policy according to [external dependency resolution](DEPENDENCIES.md). Never
 use top-level package-manager resolution fields in a worker package.
 
-**Durable Object-backed service** — add to `workspace/meta/vibestudio.yml`:
+**Singleton Durable Object-backed service** — when callers should resolve one
+fixed default object, add both declarations to `workspace/meta/vibestudio.yml`:
 
 ```yaml
 singletonObjects:
@@ -313,10 +314,12 @@ if (svc.kind !== "worker") throw new Error("Expected worker service");
 await gatewayFetch(`${svc.routeBasePath}/jobs`, { method: "POST", body: JSON.stringify(payload) });
 ```
 
-A `services[].durableObject` or `routes[].durableObject` referencing a DO
-class with no matching `singletonObjects` row is rejected at workspace-load
-time. Stateless service routes are live only while the canonical worker
-instance is running.
+A `routes[].durableObject` declaration requires a matching `singletonObjects`
+row because an HTTP route has no object-key input. A
+`services[].durableObject` declaration without a matching row is a factory;
+callers must pass an explicit `objectKey` to `workers.resolveService`.
+Stateless service routes are live only while the canonical worker instance is
+running.
 
 ## Durable Object-backed App Databases
 
@@ -457,9 +460,11 @@ otherwise-synchronous eval code. Do not recreate a synchronous registry or a
 root-barrel import to make lazy code convenient; that silently folds parsers,
 schema libraries, and runtime catalogs back into every activation.
 
-Declare it. A `singletonObjects` row gives the service a default object key
-(`main` below); omit the singleton only when the service is intentionally a
-factory and every caller will pass an explicit `objectKey`.
+Choose the service's object identity deliberately. A `singletonObjects` row
+gives it one fixed default object key (`main` below). Use that for one
+workspace-wide coordination atom. Omit the row for a factory service and have
+every caller pass the appropriate per-project, per-account, or per-document
+`objectKey`.
 
 ```yaml
 singletonObjects:

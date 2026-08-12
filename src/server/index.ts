@@ -552,8 +552,8 @@ async function main() {
   );
 
   // Parse workspace declarations (singletonObjects + services + routes).
-  // Validation (every DO-backed service/route has a matching singleton row)
-  // runs eagerly here — bad workspaces fail fast at startup with a clear msg.
+  // Validation joins DO-backed routes to singletons and worker-backed services
+  // to routes. DO-backed services without singletons remain valid factories.
   const { buildWorkspaceDeclarations } = await import("@vibestudio/workspace/singletonRegistry");
   const { resolveWorkspaceService } = await import("./workspaceServices.js");
   const {
