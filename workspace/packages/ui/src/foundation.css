@@ -155,8 +155,38 @@
 }
 
 @media (pointer: coarse) {
-  .app-touch-target {
-    min-width: 44px;
+  /* Radix's compact sizes are useful in dense desktop panels, but their
+     24–32px hit areas are too small once the same panel is hosted on a phone.
+     Keep desktop density intact and establish one touch-input policy for every
+     panel that consumes the shared foundation. */
+  .app-touch-target,
+  .radix-themes :where(.rt-BaseButton, .rt-SelectTrigger, .rt-SegmentedControlItem),
+  .radix-themes :where(.rt-TextFieldRoot, .rt-TextAreaRoot) {
     min-height: 44px;
+  }
+
+  .app-touch-target,
+  .radix-themes .rt-IconButton {
+    min-width: 44px;
+  }
+
+  .radix-themes :where(.rt-TextFieldInput, .rt-TextAreaInput) {
+    min-height: 42px;
+  }
+
+  /* A switch should retain its familiar visual proportions while exposing the
+     same forgiving hit area as the surrounding controls. */
+  .radix-themes .rt-SwitchRoot {
+    position: relative;
+  }
+
+  .radix-themes .rt-SwitchRoot::after {
+    content: "";
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 44px;
+    height: 44px;
+    transform: translate(-50%, -50%);
   }
 }
