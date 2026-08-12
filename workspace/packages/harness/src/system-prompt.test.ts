@@ -14,7 +14,7 @@ describe("composeSystemPrompt", () => {
       "Use the focused file tools for ordinary discovery, reading, and authoring"
     );
     expect(VIBESTUDIO_BASE_SYSTEM_PROMPT).toContain(
-      "`apply_patch` for a coherent multi-file change, whole binary write"
+      "`apply_patch` when multiple files must change atomically"
     );
     expect(VIBESTUDIO_BASE_SYSTEM_PROMPT).toContain(
       "Do not emulate managed file authoring through generic `eval`"

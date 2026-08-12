@@ -15,6 +15,7 @@ import type {
 import { driveMerge, renderCompareReview, renderMergeReview } from "../merge-driver.js";
 import { semanticRootSchema } from "./provenance.js";
 import { resolveToolFile } from "../semantic-file-resolution.js";
+import { base64ToBytes } from "./portable-bytes.js";
 import {
   resolveToolWorkingState,
   toVcsPath,
@@ -539,7 +540,7 @@ export function createWorkspaceVcsTool(
         const contentLength =
           file.content.kind === "text"
             ? file.content.text.length
-            : Buffer.from(file.content.base64, "base64").byteLength;
+            : base64ToBytes(file.content.base64).byteLength;
         const start = command.start ?? 0;
         const end = command.end ?? contentLength;
         if (end < start || end > contentLength) {

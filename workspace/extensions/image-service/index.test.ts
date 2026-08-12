@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { Buffer } from "node:buffer";
 import { loadPhoton } from "./image/photon.js";
 import { detectMimeFromBytes } from "./image/mime.js";
 
@@ -35,6 +36,25 @@ describe("@workspace-extensions/image-service", () => {
     await expect(service.detectMimeType(new Uint8Array([0x47, 0x49, 0x46, 0x38, 0x37, 0x61]))).resolves.toBe("image/gif");
     await expect(service.detectMimeType(new TextEncoder().encode('<svg xmlns="http://www.w3.org/2000/svg" />'))).resolves.toBe("image/svg+xml");
     await expect(service.detectMimeType(new Uint8Array([0x00, 0x01, 0x02]))).resolves.toBeNull();
+  });
+
+  it("does not depend on a Node-global Buffer in the extension worker", async () => {
+    const input = await photonPng();
+    const original = globalThis.Buffer;
+    Reflect.deleteProperty(globalThis, "Buffer");
+    try {
+      const service = await api();
+      await expect(
+        service.detectMimeType({ __bin: true, data: TINY_PNG_BASE64 })
+      ).resolves.toBe("image/png");
+      await expect(service.resize(input, "image/png", undefined)).resolves.toMatchObject({
+        mimeType: "image/png",
+        width: 1,
+        height: 1,
+      });
+    } finally {
+      globalThis.Buffer = original;
+    }
   });
 
   it("resizes tiny PNGs without changing dimensions", async () => {

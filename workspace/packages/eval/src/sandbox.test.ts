@@ -718,6 +718,28 @@ return fs.readFileSync("/tmp/a");`,
     });
   });
 
+  it("honors a structured failure's declared cross-tool classification", async () => {
+    const result = await executeSandbox(
+      `const error = new Error("target connection closed");
+       error.errorData = {
+         code: "cdp_target_closed",
+         failureKind: "infrastructure",
+         recovery: "reacquire-page"
+       };
+       throw error;`,
+      { syntax: "typescript" }
+    );
+
+    expect(result).toMatchObject({
+      success: false,
+      failureKind: "infrastructure",
+      failureCode: "cdp_target_closed",
+      errorData: {
+        recovery: "reacquire-page",
+      },
+    });
+  });
+
   it("classifies a generated scaffold build-gate failure as infrastructure", async () => {
     const result = await executeSandbox(
       `const error = new Error("publication failed");

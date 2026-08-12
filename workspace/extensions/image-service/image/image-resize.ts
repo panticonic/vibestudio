@@ -5,6 +5,7 @@
  * Uses photon-node (Rust→WASM) for Lanczos3 resampling and tries both PNG and
  * JPEG encodings to stay under maxBytes. Server-side only.
  */
+import { Buffer } from "node:buffer";
 import { loadPhoton } from "./photon.js";
 
 /** Minimal local copy of pi-ai's `ImageContent` shape so we don't need to

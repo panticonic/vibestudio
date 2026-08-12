@@ -45,6 +45,25 @@ describe("agent file visibility", () => {
     expect(found.content[0]).toMatchObject({ text: "public/index.ts" });
   });
 
+  it("decodes visibility frontmatter without a Node Buffer global", async () => {
+    const originalBuffer = globalThis.Buffer;
+    vi.stubGlobal("Buffer", undefined);
+    try {
+      const fs = new StubFs({
+        files: {
+          "/skills/internal/SKILL.md": new TextEncoder().encode(
+            "---\nname: internal\nagentVisible: false\n---\n# Internal\n"
+          ),
+        },
+      });
+      const visibility = createAgentFileVisibility("/", fs);
+
+      await expect(visibility.isHidden("/skills/internal/SKILL.md")).resolves.toBe(true);
+    } finally {
+      vi.stubGlobal("Buffer", originalBuffer);
+    }
+  });
+
   it("filters hidden skill results returned by the host search service", async () => {
     const fs = new StubFs({ files });
     const visibility = createAgentFileVisibility("/", fs);

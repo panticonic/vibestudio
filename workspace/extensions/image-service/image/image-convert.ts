@@ -10,6 +10,7 @@
  *
  * Server-side only — depends on photon.ts which uses Node fs.
  */
+import { Buffer } from "node:buffer";
 import { loadPhoton } from "./photon.js";
 
 export interface ConvertedImage {

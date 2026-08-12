@@ -224,11 +224,8 @@ export function formatEvalResult(result: EvalRunResult): AgentToolResult<EvalRun
   if (!result.success) parts.push(`[eval] Error: ${result.error ?? "unknown error"}`);
   if (!result.success && result.errorData !== undefined) {
     parts.push(
-      `[eval] Failure data:\n${clampText(
-        safeStringify(result.errorData),
-        MAX_RETURN_CHARS,
-        "$lastLargeErrorData"
-      )}`
+      `[eval] Structured failure${result.failureCode ? `: ${result.failureCode}` : ""}. ` +
+        "See details.errorData for the typed recovery data."
     );
   }
   if (result.console) {

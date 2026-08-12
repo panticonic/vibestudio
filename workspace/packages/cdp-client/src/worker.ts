@@ -314,15 +314,27 @@ export class CdpConnection {
     });
     ws.addEventListener("error", () => {
       this.disconnect(
-        new Error(
-          "CDP target connection failed. Inspect the panel diagnostics and acquire a new page if the target still exists."
+        new CdpError(
+          "CDP target connection failed. Inspect the panel diagnostics and acquire a new page if the target still exists.",
+          {
+            code: "cdp_target_connection_failed",
+            operation: "connect",
+            failureKind: "infrastructure",
+            recovery: "inspect-panel-and-reacquire-page",
+          }
         )
       );
     });
     ws.addEventListener("close", () => {
       this.disconnect(
-        new Error(
-          "CDP target connection closed. The panel may have been closed, or its runtime may have been replaced by handle.navigate() or handle.rebuild(). If the panel still exists, obtain a fresh page with await handle.cdp.page(); do not reuse the cached page."
+        new CdpError(
+          "CDP target connection closed. The panel may have been closed, or its runtime may have been replaced by handle.navigate() or handle.rebuild(). If the panel still exists, obtain a fresh page with await handle.cdp.page(); do not reuse the cached page.",
+          {
+            code: "cdp_target_closed",
+            operation: "connection",
+            failureKind: "infrastructure",
+            recovery: "reacquire-page",
+          }
         )
       );
     });
@@ -348,15 +360,28 @@ export class CdpConnection {
       const reason =
         this.closeError?.message ??
         "CDP connection is closed. Obtain a fresh page before sending more commands.";
-      return Promise.reject(new Error(`Cannot send ${method}: ${reason}`));
+      return Promise.reject(
+        new CdpError(`Cannot send ${method}: ${reason}`, {
+          code: "cdp_target_closed",
+          operation: method,
+          failureKind: "infrastructure",
+          recovery: "reacquire-page",
+        })
+      );
     }
     const id = this.nextId++;
     const message = params ? { id, method, params } : { id, method };
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
-        const error = new Error(
+        const error = new CdpError(
           `CDP command timed out after ${this.commandTimeoutMs}ms: ${method}. ` +
-            "The target connection was closed; acquire a fresh page and inspect panel diagnostics."
+            "The target connection was closed; acquire a fresh page and inspect panel diagnostics.",
+          {
+            code: "cdp_command_timeout",
+            operation: method,
+            failureKind: "infrastructure",
+            recovery: "inspect-panel-and-reacquire-page",
+          }
         );
         this.disconnect(error);
         try {
@@ -379,8 +404,14 @@ export class CdpConnection {
   close(): void {
     if (this.closed) return;
     this.disconnect(
-      new Error(
-        "CDP connection closed by the client. Create a new connection before sending more commands."
+      new CdpError(
+        "CDP connection closed by the client. Create a new connection before sending more commands.",
+        {
+          code: "cdp_target_closed",
+          operation: "close",
+          failureKind: "user-code",
+          recovery: "reacquire-page",
+        }
       )
     );
     this.ws.close();
@@ -753,13 +784,55 @@ function formatRuntimeException(details: RuntimeExceptionDetails): string {
  * (Playwright-style) and the underlying reason; `.locator` holds the rendered
  * locator string and `.cause` the original error.
  */
+export interface CdpFailureData {
+  code:
+    | "cdp_target_connection_failed"
+    | "cdp_target_closed"
+    | "cdp_command_timeout"
+    | "cdp_evaluation_failed"
+    | "cdp_locator_operation_failed"
+    | "cdp_locator_not_actionable"
+    | "cdp_locator_state_mismatch";
+  operation: string;
+  failureKind: "user-code" | "infrastructure";
+  recovery:
+    | "correct-page-function"
+    | "reobserve-locator"
+    | "reacquire-page"
+    | "inspect-panel-and-reacquire-page";
+  locator?: string;
+}
+
 export class CdpError extends Error {
   readonly locator?: string;
-  constructor(message: string, options?: { cause?: unknown; locator?: string }) {
+  readonly code: CdpFailureData["code"];
+  readonly errorKind: "application" | "infrastructure";
+  readonly errorData: CdpFailureData;
+  constructor(
+    message: string,
+    options: {
+      cause?: unknown;
+      locator?: string;
+      code?: CdpFailureData["code"];
+      operation?: string;
+      failureKind?: CdpFailureData["failureKind"];
+      recovery?: CdpFailureData["recovery"];
+    } = {}
+  ) {
     super(message);
     this.name = "CdpError";
-    this.locator = options?.locator;
-    if (options?.cause !== undefined) (this as { cause?: unknown }).cause = options.cause;
+    this.locator = options.locator;
+    this.code = options.code ?? "cdp_locator_operation_failed";
+    const failureKind = options.failureKind ?? "user-code";
+    this.errorKind = failureKind === "infrastructure" ? "infrastructure" : "application";
+    this.errorData = {
+      code: this.code,
+      operation: options.operation ?? "locator",
+      failureKind,
+      recovery: options.recovery ?? "reobserve-locator",
+      ...(options.locator ? { locator: options.locator } : {}),
+    };
+    if (options.cause !== undefined) (this as { cause?: unknown }).cause = options.cause;
   }
 }
 
@@ -1058,7 +1131,11 @@ class WorkerCdpPage {
       returnByValue: true,
     })) as { result?: { value?: unknown }; exceptionDetails?: RuntimeExceptionDetails };
     if (result.exceptionDetails) {
-      throw new Error(formatRuntimeException(result.exceptionDetails));
+      throw new CdpError(formatRuntimeException(result.exceptionDetails), {
+        code: "cdp_evaluation_failed",
+        operation: "Runtime.evaluate",
+        recovery: "correct-page-function",
+      });
     }
     return result.result?.value;
   }
@@ -1083,9 +1160,16 @@ class WorkerCdpPage {
     try {
       return await this.evaluate(expr);
     } catch (err) {
+      if (err instanceof CdpError && err.errorData.failureKind === "infrastructure") throw err;
       const where = describeLocator(descriptor);
       const detail = err instanceof Error ? err.message : String(err);
-      throw new CdpError(`${op} failed on ${where}: ${detail}`, { cause: err, locator: where });
+      throw new CdpError(`${op} failed on ${where}: ${detail}`, {
+        cause: err,
+        locator: where,
+        code: "cdp_locator_operation_failed",
+        operation: op,
+        recovery: "reobserve-locator",
+      });
     }
   }
 
@@ -1263,7 +1347,12 @@ class WorkerCdpPage {
           : "";
       throw new CdpError(
         `not actionable (${probe.reason ?? "timeout"}) after ${timeout}ms: ${where}.${candidateHint}`,
-        { locator: where }
+        {
+          locator: where,
+          code: "cdp_locator_not_actionable",
+          operation: "click",
+          recovery: "reobserve-locator",
+        }
       );
     }
     return { x: probe.x, y: probe.y };
@@ -1348,7 +1437,12 @@ class WorkerCdpPage {
         const where = describeLocator(descriptor);
         throw new CdpError(
           `${checked ? "check" : "uncheck"} did not update ${where}'s checked state`,
-          { locator: where }
+          {
+            locator: where,
+            code: "cdp_locator_state_mismatch",
+            operation: checked ? "check" : "uncheck",
+            recovery: "reobserve-locator",
+          }
         );
       }
     } finally {

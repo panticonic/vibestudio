@@ -185,6 +185,9 @@ function structuredFailureKind(error: unknown): SandboxFailureKind | undefined {
   const errorData = (error as { errorData?: unknown }).errorData;
   if (!errorData || typeof errorData !== "object") return undefined;
   const data = errorData as Record<string, unknown>;
+  if (data["failureKind"] === "infrastructure" || data["failureKind"] === "user-code") {
+    return data["failureKind"];
+  }
   const vcsError = data["vcsError"];
   // createProjects owns every byte of a newly generated scaffold. If its exact,
   // immediate protected push fails the build gate, that is a template/build

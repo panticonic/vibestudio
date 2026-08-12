@@ -110,4 +110,42 @@ describe("apply_patch", () => {
     ).rejects.toMatchObject({ code: "PatchPreconditionFailed" });
     expect(vcs.lastEditInput).toBeUndefined();
   });
+
+  it("returns bounded current context when an exact replacement is stale", async () => {
+    const vcs = new StubVcs({
+      files: {
+        "meta/a.ts": ["export function save() {", "  return submitCurrentValue();", "}"].join("\n"),
+      },
+    });
+    const tool = createApplyPatchTool("/", vcs, authority);
+
+    const failure = await tool
+      .execute("invocation:not-found", {
+        operations: [
+          {
+            kind: "replace",
+            path: "meta/a.ts",
+            replacements: [{ oldText: "return submitOldValue();", newText: "return done;" }],
+          },
+        ],
+      } as never)
+      .then(
+        () => {
+          throw new Error("Expected the stale exact replacement to fail");
+        },
+        (error: unknown) => error as { errorData: Record<string, unknown> }
+      );
+
+    expect(failure.errorData).toMatchObject({
+      code: "PatchPreconditionFailed",
+      reason: "not-found",
+      currentHash: expect.any(String),
+      requestedText: "return submitOldValue();",
+      closestCurrentExcerpts: [
+        expect.objectContaining({ text: expect.stringContaining("submitCurrentValue") }),
+      ],
+      remediation: expect.stringContaining("Re-read"),
+    });
+    expect(vcs.lastEditInput).toBeUndefined();
+  });
 });

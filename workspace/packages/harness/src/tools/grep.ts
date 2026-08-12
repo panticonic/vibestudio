@@ -18,7 +18,6 @@
 import { Type, type Static } from "@sinclair/typebox";
 import type { AgentTool } from "@workspace/pi-core";
 import path from "node:path";
-import { Buffer } from "node:buffer";
 import type { RpcCaller } from "@vibestudio/rpc";
 import type { RuntimeFs } from "./runtime-fs.js";
 import { resolveToCwd } from "./path-utils.js";
@@ -32,6 +31,7 @@ import {
 } from "./truncate.js";
 import { walkSearchFiles } from "./search-walk.js";
 import type { AgentFileVisibility } from "./agent-file-visibility.js";
+import { decodeUtf8 } from "./portable-bytes.js";
 
 // ---------------------------------------------------------------------------
 // RE2 loader — preferred linear-time matcher. Falls back to `RegExp` when
@@ -417,7 +417,7 @@ export function createGrepTool(
         if (signal?.aborted) {
           throw new Error("Operation aborted");
         }
-        let raw: string | Buffer;
+        let raw: string | Uint8Array;
         try {
           raw = await fs.readFile(filePath);
         } catch (error) {
@@ -435,7 +435,7 @@ export function createGrepTool(
           });
           nextProgressAt += PROGRESS_EVERY_FILES;
         }
-        const text = typeof raw === "string" ? raw : Buffer.from(raw).toString("utf-8");
+        const text = typeof raw === "string" ? raw : decodeUtf8(raw);
         const lines = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
         const relativePath = formatPath(filePath);
         const matches: string[][] = [];

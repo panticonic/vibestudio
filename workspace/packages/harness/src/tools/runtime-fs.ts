@@ -12,8 +12,6 @@
  * Mirrors the shape in `workspace/packages/runtime/src/types.ts`.
  */
 
-import type { Buffer } from "node:buffer";
-
 export interface FileStats {
   isFile(): boolean;
   isDirectory(): boolean;
@@ -55,7 +53,7 @@ export interface RuntimeFs {
   };
   mktemp(prefix?: string): Promise<string>;
   mkdtemp(prefix?: string): Promise<string>;
-  readFile(path: string, encoding?: BufferEncoding): Promise<string | Buffer>;
+  readFile(path: string, encoding?: string): Promise<string | Uint8Array>;
   writeFile(path: string, data: string | Uint8Array): Promise<void>;
   readdir(path: string): Promise<string[]>;
   readdir(path: string, options: { withFileTypes: true }): Promise<Dirent[]>;

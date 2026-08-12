@@ -16,6 +16,7 @@ import {
 import { semanticVcsPathAdmission } from "@vibestudio/shared/vcs/pathAdmission";
 import type { RuntimeFs } from "./runtime-fs.js";
 import { resolveToolFile } from "../semantic-file-resolution.js";
+import { decodeBase64Utf8, encodeUtf8Base64 } from "./portable-bytes.js";
 import {
   resolveToolWorkingState,
   toVcsPath,
@@ -146,7 +147,7 @@ export function createWriteTool(
         existing?.content.kind === "text"
           ? existing.content.text
           : existing?.content.kind === "bytes"
-            ? Buffer.from(existing.content.base64, "base64").toString("utf8")
+            ? decodeBase64Utf8(existing.content.base64)
             : undefined;
       if (existingText === content) {
         return {
@@ -188,7 +189,7 @@ export function createWriteTool(
                   kind: "binary-replace",
                   repositoryId: existing.repositoryId,
                   fileId: existing.fileId,
-                  base64: Buffer.from(content, "utf8").toString("base64"),
+                  base64: encodeUtf8Base64(content),
                 }
               : {
                   kind: "file-create",

@@ -238,7 +238,7 @@ describe("formatEvalResult (shared by the eval tool's execute + the agent's defe
     expect(out.isError).toBe(true);
   });
 
-  it("renders structured failure data and preserves it on tool details", () => {
+  it("references structured failure data once and preserves it on tool details", () => {
     const result: EvalRunResult = {
       success: false,
       console: "",
@@ -253,8 +253,8 @@ describe("formatEvalResult (shared by the eval tool's execute + the agent's defe
     const out = formatEvalResult(result);
     const text = textOf(out);
 
-    expect(text).toContain("[eval] Failure data:");
-    expect(text).toContain('"committedEventId": "event:committed"');
+    expect(text).toContain("[eval] Structured failure: scaffold_publication_failed");
+    expect(text).not.toContain('"committedEventId": "event:committed"');
     expect(out.details).toBe(result);
   });
 

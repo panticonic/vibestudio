@@ -10,7 +10,6 @@
 import { Type, type Static } from "@sinclair/typebox";
 import type { AgentTool } from "@workspace/pi-core";
 import type { TextContent, ImageContent } from "@workspace/pi-ai";
-import { Buffer } from "node:buffer";
 import type { RuntimeFs } from "./runtime-fs.js";
 import type { RpcCaller } from "@vibestudio/rpc";
 import { createExtensionProxy } from "@vibestudio/extension";
@@ -21,6 +20,13 @@ import type { VcsReadMemoryResult } from "@vibestudio/service-schemas/vcs";
 import { toVcsPath, toolContextId, type ToolVcs, type ToolWorkspaceContext } from "./tool-vcs.js";
 import { renderReadMemoryBlock } from "./read-memory.js";
 import type { AgentFileVisibility } from "./agent-file-visibility.js";
+import {
+  base64ToBytes,
+  bytesToBase64,
+  decodeUtf8,
+  encodeUtf8,
+  utf8ByteLength,
+} from "./portable-bytes.js";
 import {
   DEFAULT_MAX_BYTES,
   DEFAULT_MAX_LINES,
@@ -374,13 +380,13 @@ export function createReadTool(
             return formatBoundedBytesResult(bounded, path);
           }
           const rawBytes = await retryTransientRuntimeFs(() => fs.readFile(absolutePath), signal);
-          const bytes = Buffer.from(rawBytes);
+          const bytes = typeof rawBytes === "string" ? encodeUtf8(rawBytes) : rawBytes;
           const start = Math.min(byteOffset ?? 0, bytes.length);
           const selected = bytes.subarray(start, start + (byteLimit ?? DEFAULT_MAX_BYTES));
           const end = start + selected.length;
           return formatBoundedBytesResult(
             {
-              base64: selected.toString("base64"),
+              base64: bytesToBase64(selected),
               contentHash: sha256Hex(bytes),
               totalBytes: bytes.length,
               maxBytes: byteLimit ?? DEFAULT_MAX_BYTES,
@@ -443,7 +449,7 @@ export function createReadTool(
           throw err;
         }
       }
-      let raw: string | Buffer;
+      let raw: string | Uint8Array;
       try {
         raw = await retryTransientRuntimeFs(
           () => fs.readFile(absolutePath, shouldSniffMedia ? undefined : "utf8"),
@@ -479,7 +485,7 @@ export function createReadTool(
             details: {
               path: absolutePath,
               mimeType: resized.mimeType,
-              size: Buffer.byteLength(resized.data, "base64"),
+              size: base64ToBytes(resized.data).byteLength,
               originalSize: raw.byteLength,
               originalDimensions: { width: resized.originalWidth, height: resized.originalHeight },
               dimensions: { width: resized.width, height: resized.height },
@@ -489,7 +495,7 @@ export function createReadTool(
         }
       }
       // --- Text branch -------------------------------------------------------------------
-      const textContent = typeof raw === "string" ? raw : Buffer.from(raw).toString("utf-8");
+      const textContent = typeof raw === "string" ? raw : decodeUtf8(raw);
       return attachReadMemory(
         formatTextResult(textContent, path, offset, limit),
         textContent,
@@ -623,7 +629,7 @@ function formatBoundedTextResult(bounded: FsReadTextResult, displayPath: string)
     totalLines: bounded.totalLines,
     totalBytes: bounded.totalBytes,
     outputLines,
-    outputBytes: Buffer.byteLength(bounded.text, "utf8"),
+    outputBytes: utf8ByteLength(bounded.text),
     lastLinePartial: false,
     firstLineExceedsLimit: bounded.firstLineExceedsLimit,
     maxLines: bounded.maxLines,
@@ -738,7 +744,7 @@ function formatTextResult(
   let outputText: string;
   let details: ReadToolDetails = {};
   if (truncation.firstLineExceedsLimit) {
-    const firstLineSize = formatSize(Buffer.byteLength(allLines[startLine] ?? "", "utf-8"));
+    const firstLineSize = formatSize(utf8ByteLength(allLines[startLine] ?? ""));
     outputText = `[Line ${startLineDisplay} is ${firstLineSize}, exceeds ${formatSize(DEFAULT_MAX_BYTES)} limit. Use offset=${startLineDisplay + 1} to skip past it.]`;
     details = { truncation };
   } else if (truncation.truncated) {

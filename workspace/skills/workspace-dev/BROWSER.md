@@ -223,6 +223,12 @@ role locator misses, `CdpError` reports the available names for that role.
 If the accessible name exists under another role, the error reports those
 role/name pairs as well; use the rendered role rather than guessing from text.
 
+Automation failures are structured as `CdpError.errorData` with `code`,
+`operation`, `failureKind`, and `recovery`. A locator miss directs the caller to
+re-observe current roles/names. A command timeout or closed target directs the
+caller to inspect panel diagnostics and acquire a fresh page from the stable
+panel handle; the old page connection is no longer reusable.
+
 Controls repeated for collection items must have item-specific accessible
 names. Treat repeated `"Mark task as completed"` buttons as an accessibility
 defect and repair the app to expose names such as

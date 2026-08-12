@@ -1,8 +1,8 @@
 import ignore, { type Ignore } from "ignore";
 import path from "node:path";
-import { Buffer } from "node:buffer";
 import type { Dirent, RuntimeFs } from "./runtime-fs.js";
 import type { AgentFileVisibility } from "./agent-file-visibility.js";
+import { decodeUtf8 } from "./portable-bytes.js";
 
 const HARD_SKIP_DIRECTORIES = new Set([".git", ".gad", "node_modules"]);
 
@@ -39,7 +39,7 @@ async function addIgnoreFile(
   root: string,
   filename: string
 ): Promise<void> {
-  let raw: string | Buffer;
+  let raw: string | Uint8Array;
   try {
     raw = await fs.readFile(path.join(directory, filename));
   } catch (error) {
@@ -48,7 +48,7 @@ async function addIgnoreFile(
   }
   const relativeDirectory = path.relative(root, directory).replace(/\\/gu, "/");
   const prefix = relativeDirectory ? `${relativeDirectory}/` : "";
-  const rules = (typeof raw === "string" ? raw : Buffer.from(raw).toString("utf8"))
+  const rules = (typeof raw === "string" ? raw : decodeUtf8(raw))
     .split(/\r?\n/gu)
     .map((line) => scopedIgnorePattern(line, prefix))
     .filter((line): line is string => line !== null);

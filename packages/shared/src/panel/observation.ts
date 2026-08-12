@@ -63,6 +63,16 @@ export interface PanelRuntimeFailure {
   details?: Record<string, unknown>;
 }
 
+export interface PanelOperationRecovery {
+  sameInputRetry: "not-useful" | "reobserve-first";
+  nextAction: "repair-and-rebuild" | "observe-and-reacquire";
+}
+
+export type PanelOperationFailureData = PanelRuntimeFailure & {
+  failureKind: "user-code" | "infrastructure";
+  recovery: PanelOperationRecovery;
+};
+
 export interface PanelBootObservation {
   phase: "loading" | "booting" | "ready" | "failed";
   runtimeEntityId?: string | null;
@@ -378,6 +388,8 @@ export function panelFailureFromError(error: unknown): PanelRuntimeFailure | nul
 
 export class PanelOperationError extends Error {
   readonly code = PANEL_OPERATION_ERROR_CODE;
+  readonly errorKind = "application";
+  readonly errorData: PanelOperationFailureData;
 
   constructor(
     public readonly failure: PanelRuntimeFailure,
@@ -385,6 +397,23 @@ export class PanelOperationError extends Error {
   ) {
     super(`${failure.stage}: ${failure.message}`);
     this.name = "PanelOperationError";
+    const repairRequired = new Set<PanelFailureCode>([
+      "unit_not_found",
+      "ref_not_found",
+      "manifest_invalid",
+      "dependency_resolution_failed",
+      "compile_failed",
+      "build_identity_invalid",
+      "asset_unavailable",
+      "entry_threw",
+    ]).has(failure.code);
+    this.errorData = {
+      ...failure,
+      failureKind: repairRequired ? "user-code" : "infrastructure",
+      recovery: repairRequired
+        ? { sameInputRetry: "not-useful", nextAction: "repair-and-rebuild" }
+        : { sameInputRetry: "reobserve-first", nextAction: "observe-and-reacquire" },
+    };
     if (cause !== undefined) {
       Object.defineProperty(this, "cause", {
         value: cause,

@@ -302,10 +302,31 @@ export class CdpConnection {
   close(): void;
 }
 
-/** Error thrown by locator actions/reads; the message names the target locator. */
+export interface CdpFailureData {
+  code:
+    | "cdp_target_connection_failed"
+    | "cdp_target_closed"
+    | "cdp_command_timeout"
+    | "cdp_evaluation_failed"
+    | "cdp_locator_operation_failed"
+    | "cdp_locator_not_actionable"
+    | "cdp_locator_state_mismatch";
+  operation: string;
+  failureKind: "user-code" | "infrastructure";
+  recovery:
+    | "correct-page-function"
+    | "reobserve-locator"
+    | "reacquire-page"
+    | "inspect-panel-and-reacquire-page";
+  locator?: string;
+}
+
+/** Structured error thrown by CDP evaluation, connection, and locator operations. */
 export class CdpError extends Error {
   readonly locator?: string;
-  constructor(message: string, options?: { cause?: unknown; locator?: string });
+  readonly code: CdpFailureData["code"];
+  readonly errorKind: "application" | "infrastructure";
+  readonly errorData: CdpFailureData;
 }
 
 export interface Browser {

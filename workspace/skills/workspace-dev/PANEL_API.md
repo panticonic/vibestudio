@@ -97,10 +97,15 @@ try {
   if (error instanceof PanelOperationError) {
     console.error(error.failure.code, error.failure.stage);
     console.error(error.failure.message, error.failure.provenance);
+    console.error(error.errorData.recovery);
   }
   throw error;
 }
 ```
+
+`PanelOperationError.errorData.recovery` is the retry contract. Source- and
+build-correctable failures report `repair-and-rebuild`; runtime/host failures
+report `observe-and-reacquire`. Do not blindly repeat the same lifecycle call.
 
 ## Discovery and creation
 

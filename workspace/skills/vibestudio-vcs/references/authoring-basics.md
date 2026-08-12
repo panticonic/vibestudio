@@ -70,11 +70,13 @@ historical reads at an explicitly selected state still use `vcs.readFile`.
 
 ## Author one coherent local step
 
-Use `apply_patch` when batching exact text replacements, whole text/binary
-writes, deletes, or mode changes into one atomic work unit. Use focused `write`
-and `edit` tools for a single ordinary text file. They compile to the same
-semantic edit operation. Use direct `vcs.edit` when repository creation or a
-lower-level stable-identity batch is required.
+Use `edit` for ordinary changes confined to one text file. Use `apply_patch`
+when several files must change atomically, or for a whole binary write,
+deletion, or mode change. Its exact replacement strings are preconditions, not
+fuzzy search instructions: a mismatch changes nothing and returns the current
+content hash plus bounded nearby excerpts for re-observation. Both tools compile
+to the same semantic edit operation. Use direct `vcs.edit` when repository
+creation or a lower-level stable-identity batch is required.
 The focused `edit` tool treats unchanged oldText/newText surroundings as match
 anchors: only actual differing UTF-16 ranges become authored edits, so a
 neighboring unchanged line retains its existing provenance.

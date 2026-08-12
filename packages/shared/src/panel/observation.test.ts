@@ -34,6 +34,13 @@ describe("panel observation failures", () => {
     } catch (error) {
       expect(error).toBeInstanceOf(PanelOperationError);
       expect((error as PanelOperationError).failure).toEqual(failure);
+      expect((error as PanelOperationError).errorData).toMatchObject({
+        code: "unit_not_found",
+        diagnosticId: failure.diagnosticId,
+        failureKind: "user-code",
+        recovery: { sameInputRetry: "not-useful", nextAction: "repair-and-rebuild" },
+      });
+      expect((error as PanelOperationError).errorKind).toBe("application");
     }
   });
 

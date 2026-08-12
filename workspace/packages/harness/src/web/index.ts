@@ -18,7 +18,7 @@
  * and the credentialed fetcher attaches auth based on URL audience.
  */
 import type { AgentTool } from "@workspace/pi-core";
-import { Buffer } from "node:buffer";
+import { base64ToBytes } from "@vibestudio/rpc";
 import { searchDuckDuckGo } from "./duckduckgo.js";
 import { searchTavily } from "./tavily.js";
 import { searchBrave } from "./brave.js";
@@ -381,7 +381,7 @@ async function readUtf8BlobRange(rpc: WebToolsDeps["rpc"], digest: string, offse
     ]);
     if (range === null)
         return null;
-    return decodeUtf8BlobRange(Buffer.from(range.bytesBase64, "base64"));
+    return decodeUtf8BlobRange(base64ToBytes(range.bytesBase64));
 }
 function decodeUtf8BlobRange(bytes: Uint8Array): {
     text: string;

@@ -1,6 +1,6 @@
-import { Buffer } from "node:buffer";
 import path from "node:path";
 import type { RuntimeFs } from "./runtime-fs.js";
+import { decodeUtf8 } from "./portable-bytes.js";
 
 export interface AgentFileVisibility {
   isHidden(absolutePath: string): Promise<boolean>;
@@ -33,7 +33,7 @@ export function createAgentFileVisibility(cwd: string, fs: RuntimeFs): AgentFile
           .filter((entry) => entry.isDirectory())
           .map(async (entry): Promise<string | null> => {
             const root = path.join(skillsRoot, entry.name);
-            let source: string | Buffer;
+            let source: string | Uint8Array;
             try {
               source = await fs.readFile(path.join(root, "SKILL.md"));
             } catch (error) {
@@ -66,8 +66,8 @@ export function createAgentFileVisibility(cwd: string, fs: RuntimeFs): AgentFile
   };
 }
 
-function hasHiddenAgentFrontmatter(source: string | Buffer): boolean {
-  const text = typeof source === "string" ? source : Buffer.from(source).toString("utf8");
+function hasHiddenAgentFrontmatter(source: string | Uint8Array): boolean {
+  const text = typeof source === "string" ? source : decodeUtf8(source);
   const frontmatter = /^\uFEFF?---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/u.exec(text)?.[1];
   return Boolean(frontmatter && /^agentVisible\s*:\s*false\s*(?:#.*)?$/imu.test(frontmatter));
 }

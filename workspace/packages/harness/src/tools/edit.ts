@@ -16,6 +16,7 @@ import {
   splitRepoPath,
 } from "@vibestudio/shared/runtime/entitySpec";
 import type { RuntimeFs } from "./runtime-fs.js";
+import { decodeUtf8 } from "./portable-bytes.js";
 import { resolveToolFile } from "../semantic-file-resolution.js";
 import {
   resolveToolWorkingState,
@@ -132,7 +133,9 @@ export function createEditTool(
           : ""
         : typeof scratch === "string"
           ? scratch
-          : (scratch?.toString("utf8") ?? "");
+          : scratch
+            ? decodeUtf8(scratch)
+            : "";
       const { bom, text: content } = stripBom(sourceContent);
       const matchResult = fuzzyFindText(content, oldText);
       if (!matchResult.found) {

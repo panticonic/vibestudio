@@ -1,6 +1,5 @@
 /** Atomic multi-file mutation tool over the semantic workspace VCS. */
 
-import { Buffer } from "node:buffer";
 import { Type } from "@sinclair/typebox";
 import type { AgentTool, AgentToolResult } from "@workspace/pi-core";
 import type { VcsEditChange, VcsWorkingMutationResult } from "@vibestudio/service-schemas/vcs";
@@ -10,6 +9,7 @@ import {
 } from "@vibestudio/shared/runtime/entitySpec";
 import { resolveToolFileInRepository, resolveToolRepository } from "../semantic-file-resolution.js";
 import { differingTextEdits, generateDiffString } from "./edit-diff.js";
+import { canonicalBase64Bytes, encodeUtf8Base64 } from "./portable-bytes.js";
 import {
   resolveToolWorkingState,
   toVcsPath,
@@ -155,8 +155,14 @@ function assertExpectedHash(
 }
 
 function canonicalBase64(value: string, canonicalPath: string): string {
-  const bytes = Buffer.from(value, "base64");
-  const normalized = bytes.toString("base64");
+  let normalized: string;
+  try {
+    normalized = canonicalBase64Bytes(value).base64;
+  } catch {
+    throw patchFailure("InvalidPatch", `Invalid base64 content for ${canonicalPath}`, {
+      path: canonicalPath,
+    });
+  }
   if (value.replace(/=+$/u, "") !== normalized.replace(/=+$/u, "")) {
     throw patchFailure("InvalidPatch", `Invalid base64 content for ${canonicalPath}`, {
       path: canonicalPath,
@@ -168,7 +174,8 @@ function canonicalBase64(value: string, canonicalPath: string): string {
 function replaceExactly(
   content: string,
   replacements: Array<{ oldText: string; newText: string }>,
-  canonicalPath: string
+  canonicalPath: string,
+  currentHash: string
 ): string {
   let next = content;
   for (const [index, replacement] of replacements.entries()) {
@@ -177,7 +184,16 @@ function replaceExactly(
       throw patchFailure(
         "PatchPreconditionFailed",
         `Replacement ${index + 1} was not found in ${canonicalPath}`,
-        { path: canonicalPath, replacement: index + 1, reason: "not-found" }
+        {
+          path: canonicalPath,
+          replacement: index + 1,
+          reason: "not-found",
+          currentHash,
+          requestedText: boundedText(replacement.oldText, 500),
+          closestCurrentExcerpts: closestCurrentExcerpts(content, replacement.oldText),
+          remediation:
+            "Re-read the current file, then submit an exact replacement from those bytes.",
+        }
       );
     }
     if (next.indexOf(replacement.oldText, first + replacement.oldText.length) >= 0) {
@@ -193,6 +209,40 @@ function replaceExactly(
   return next;
 }
 
+function boundedText(value: string, limit: number): string {
+  return value.length <= limit ? value : `${value.slice(0, limit)}…`;
+}
+
+function closestCurrentExcerpts(
+  content: string,
+  requested: string
+): Array<{ startLine: number; endLine: number; text: string }> {
+  const tokens = new Set(
+    (requested.match(/[A-Za-z0-9_-]{4,}/gu) ?? []).map((token) => token.toLowerCase())
+  );
+  if (tokens.size === 0) return [];
+  const lines = content.split("\n");
+  return lines
+    .map((_line, index) => {
+      const endIndex = Math.min(lines.length, index + 3);
+      const text = lines.slice(index, endIndex).join("\n");
+      const found = new Set(
+        (text.match(/[A-Za-z0-9_-]{4,}/gu) ?? []).map((token) => token.toLowerCase())
+      );
+      const score = [...tokens].reduce((count, token) => count + (found.has(token) ? 1 : 0), 0);
+      return { score, startLine: index + 1, endLine: endIndex, text: boundedText(text, 800) };
+    })
+    .filter((candidate) => candidate.score > 0)
+    .sort((left, right) => right.score - left.score || left.startLine - right.startLine)
+    .filter(
+      (candidate, index, candidates) =>
+        candidates.findIndex((other) => Math.abs(other.startLine - candidate.startLine) <= 2) ===
+        index
+    )
+    .slice(0, 3)
+    .map(({ startLine, endLine, text }) => ({ startLine, endLine, text }));
+}
+
 export function createApplyPatchTool(
   cwd: string,
   vcs: ToolEditingVcs,
@@ -202,7 +252,7 @@ export function createApplyPatchTool(
     name: "apply_patch",
     label: "apply_patch",
     description:
-      "Atomically mutate one or more managed workspace files in a single semantic work unit. Every path must name a file inside an existing repository, including its top-level section and repository name (for example projects/app/README.md); workspace-root files and bare section paths are not managed repositories. Supports exact multi-replacement edits, whole text or binary writes, deletion, and mode changes. Each path may appear once. Use expectedHash from read/provenance when stale-write protection matters. Operations are all validated before anything changes; move_file and copy_file remain the identity-preserving structural tools.",
+      "Atomically mutate multiple managed workspace files in one semantic work unit, or perform a binary write, deletion, or mode change. Use edit for ordinary changes confined to one text file. Every path must name a file inside an existing repository, including its top-level section and repository name (for example projects/app/README.md); workspace-root files and bare section paths are not managed repositories. Replacements are exact preconditions: the tool never guesses a fuzzy match. Each path may appear once. Use expectedHash from read/provenance when stale-write protection matters. All operations are validated before anything changes; move_file and copy_file remain the identity-preserving structural tools.",
     parameters: applyPatchSchema,
     cancellationMode: "settle",
     execute: async (
@@ -269,7 +319,12 @@ export function createApplyPatchTool(
               }
             );
           }
-          const next = replaceExactly(file.content.text, operation.replacements, canonicalPath);
+          const next = replaceExactly(
+            file.content.text,
+            operation.replacements,
+            canonicalPath,
+            file.contentHash
+          );
           if (next !== file.content.text) {
             changes.push({
               kind: "text-edit",
@@ -336,7 +391,7 @@ export function createApplyPatchTool(
                       fileId: file.fileId,
                       base64:
                         content.kind === "text"
-                          ? Buffer.from(content.text, "utf8").toString("base64")
+                          ? encodeUtf8Base64(content.text)
                           : content.base64,
                       ...(operation.mode !== undefined && operation.mode !== file.mode
                         ? { mode: operation.mode }
