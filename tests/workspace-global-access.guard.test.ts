@@ -16,16 +16,14 @@ import * as path from "node:path";
  * global singleton in a panel, the per-object map in eval).
  *
  * The allowlist is the EXHAUSTIVE set of files that legitimately touch the
- * global require: the sandbox engine that IMPLEMENTS it, a shim that INSTALLS
- * it, and a panel-only lazy library loader (sync fast-path for an already-loaded
- * shared module, NOT a per-owner runtime grab). Any NEW entry must be justified
- * here — that review is the whole point of the guard.
+ * global require: the sandbox engine that IMPLEMENTS it and a shim that INSTALLS
+ * it. Any NEW entry must be justified here — that review is the whole point of
+ * the guard.
  */
 const ALLOWLIST = new Set([
   "eval/src/sandbox.ts", // sandbox engine — implements the require
   "eval/src/execute.ts", // sandbox engine — implements the require
   "agentic-core/src/message-type-doctor.ts", // installs a shim require (diagnostics/util)
-  "runtime/src/panel/cdpAutomation.ts", // panel-only lazy CDP client loader
 ]);
 
 // The property-ACCESS form, `(...)["__vibestudioRequire__"]` — deliberately NOT a
