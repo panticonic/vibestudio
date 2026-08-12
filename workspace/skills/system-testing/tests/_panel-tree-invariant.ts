@@ -1,4 +1,3 @@
-import { panelTree, type PanelRuntimeTree } from "@workspace/runtime/worker";
 import type { ChatMessage } from "@workspace/agentic-core";
 import type { SessionSnapshot } from "@workspace/agentic-session";
 import type { TestExecutionResult, TestOrchestrationContext } from "../types.js";
@@ -21,7 +20,10 @@ export interface PanelTreeInvariantEvidence {
   remainingCreatedIds: string[];
 }
 
-type TreeReader = Pick<PanelRuntimeTree, "roots" | "children" | "get">;
+type TreeReader = Pick<
+  TestOrchestrationContext["runner"]["panelTreeClient"],
+  "roots" | "children" | "get"
+>;
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -29,7 +31,7 @@ function errorMessage(error: unknown): string {
 
 /** Read the complete visible tree through its bounded public pages. */
 export async function snapshotVisiblePanelTree(
-  tree: TreeReader = panelTree
+  tree: TreeReader
 ): Promise<Map<string, VisiblePanelNode>> {
   const nodes = new Map<string, VisiblePanelNode>();
   const parents: Array<string | null> = [null];
@@ -104,7 +106,7 @@ export async function orchestratePanelGoal(
   context: TestOrchestrationContext,
   prompt: string,
   phase: string,
-  tree: TreeReader = panelTree
+  tree: TreeReader = context.runner.panelTreeClient
 ): Promise<TestExecutionResult> {
   const startedAt = Date.now();
   const cleanupErrors: string[] = [];

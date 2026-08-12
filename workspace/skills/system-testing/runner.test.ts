@@ -23,6 +23,7 @@ const mocks = vi.hoisted(() => ({
     })),
   },
   gad: {},
+  panelTree: {},
   blobstore: { putText: vi.fn() },
   vcs: {
     status: vi.fn(),
@@ -40,9 +41,10 @@ vi.mock("@workspace/agentic-session", () => ({
   HeadlessSession: { createWithAgent: mocks.createWithAgent },
 }));
 
-vi.mock("@workspace/runtime/worker", () => ({
+vi.mock("@workspace/runtime", () => ({
   gad: mocks.gad,
   blobstore: mocks.blobstore,
+  panelTree: mocks.panelTree,
   rpc: mocks.rpc,
   vcs: mocks.vcs,
 }));

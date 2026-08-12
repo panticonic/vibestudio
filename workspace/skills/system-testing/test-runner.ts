@@ -353,10 +353,25 @@ export class TestRunner {
       }
       validationInputProjection = projectValidationInput(validationExecution);
       enterPhase("validation");
-      const result =
+      let result =
         test.validation === "harness"
           ? test.validate(validationExecution)
           : validateAgentCompletionReport(validationExecution);
+      if (test.validation !== "harness") {
+        const inspections = findSystemTestImplementationInspections(validationExecution);
+        if (inspections.length > 0) {
+          execution.diagnostics = {
+            ...(execution.diagnostics ?? {}),
+            systemTestImplementationInspection: { invocations: inspections },
+          };
+          result = {
+            passed: false,
+            reason:
+              "Agent inspected system-test implementation instead of solving the user goal through product surfaces",
+            details: { invocations: inspections },
+          };
+        }
+      }
       outcome = { result, execution };
     } catch (err) {
       const duration = Date.now() - startTime;
@@ -846,6 +861,7 @@ interface InvocationLike {
   failureCode?: unknown;
   error?: unknown;
   result?: unknown;
+  arguments?: unknown;
   execution?: {
     status?: unknown;
     terminalOutcome?: unknown;
@@ -857,6 +873,46 @@ interface InvocationLike {
     result?: unknown;
     isError?: unknown;
   };
+}
+
+export interface SystemTestImplementationInspection {
+  id: string | null;
+  name: string;
+  arguments: string;
+}
+
+/** Exact anti-cheating boundary for ordinary agent-goal scenarios. */
+export function findSystemTestImplementationInspections(
+  execution: TestExecutionResult
+): SystemTestImplementationInspection[] {
+  const found: SystemTestImplementationInspection[] = [];
+  const seen = new Set<string>();
+  const inspect = (invocation: InvocationLike | undefined) => {
+    if (!invocation || typeof invocation !== "object") return;
+    const name = asString(invocation.name) ?? asString(invocation.method) ?? "(unknown)";
+    if (!["read", "grep", "find", "ls"].includes(name)) return;
+    const args = invocation.arguments;
+    const serialized = args === undefined ? "" : safeJson(args);
+    if (!/skills[\/]system-testing(?:[\/]|\b)/u.test(serialized)) return;
+    const id = asString(invocation.id) ?? null;
+    const key = id ?? `${name}:${serialized}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    found.push({ id, name, arguments: clip(serialized, 500) });
+  };
+
+  for (const message of execution.messages) {
+    if (message.contentType !== "invocation") continue;
+    inspect(
+      ((message as { invocation?: unknown }).invocation ?? parseJson(message.content)) as
+        | InvocationLike
+        | undefined
+    );
+  }
+  for (const invocation of execution.snapshot?.invocations ?? []) {
+    inspect(invocation as InvocationLike);
+  }
+  return found;
 }
 
 function collectToolFailures(execution: TestExecutionResult): ToolFailureSummary[] {

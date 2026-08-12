@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  SIZABLE_HISTORY_FIXTURE_REVISIONS,
   WorkspaceRepoFixtureLifecycle,
   type WorkspaceRepoFixturePort,
 } from "./workspace-repo-fixture.js";
@@ -12,6 +13,7 @@ const PANEL_WITH_DERIVED = {
   section: "panels",
 } as const;
 const CONTENT = { kind: "content", section: "projects" } as const;
+const HISTORICAL_CONTENT = { kind: "historical-content", section: "projects" } as const;
 
 function event(eventId: string) {
   return { kind: "event" as const, eventId };
@@ -80,6 +82,15 @@ function createPort() {
         contextId: input.contextId,
         eventId: "event:import",
         workUnitId: "work:import",
+        applicationId: "application:import",
+        externalSnapshot: {
+          sourceKind: input.source.kind,
+          sourceUri: input.source.kind === "git" ? input.source.url : input.source.uri,
+          snapshotRevision:
+            input.source.kind === "git" ? input.source.commit : input.source.snapshotRevision,
+          snapshotDigest: `snapshot:${"a".repeat(64)}`,
+          targetRepositoryIds: ["repository:fixture"],
+        },
         importedRepositoryIds: ["repository:fixture"],
       };
     }
@@ -720,6 +731,49 @@ describe("WorkspaceRepoFixtureLifecycle", () => {
     expect(fake.putText).toHaveBeenCalledWith(
       "# system-test-content\n\nDisposable system-test project.\n"
     );
+  });
+
+  it("seeds a sizable first-parent history with decisions that disappear from current text", async () => {
+    const fake = createPort();
+    const fixture = new WorkspaceRepoFixtureLifecycle(
+      fake.port,
+      "historical-memory-test",
+      "system-test-history",
+      HISTORICAL_CONTENT
+    );
+
+    const state = await fixture.prepare();
+
+    expect(state).toMatchObject({
+      repositoryId: "repository:fixture",
+      repoPath: "projects/system-test-history",
+      seedFilePaths: ["README.md", "src/retention-policy.ts"],
+    });
+    expect(fake.importSnapshot).toHaveBeenCalledTimes(SIZABLE_HISTORY_FIXTURE_REVISIONS + 1);
+    expect(fake.importSnapshot.mock.calls[6]?.[0]).toMatchObject({
+      intentSummary: expect.stringContaining("delayed regional exports can arrive through day 18"),
+      message: "Extend archive window for delayed regional exports",
+    });
+    expect(fake.importSnapshot.mock.calls[11]?.[0]).toMatchObject({
+      intentSummary: expect.stringContaining("Retire the Harbor Lantern rollout codename"),
+      message: "Retire the Harbor Lantern rollout codename",
+    });
+    const finalImport = fake.importSnapshot.mock.calls.at(-1)?.[0];
+    expect(finalImport).toMatchObject({
+      repositories: [
+        expect.objectContaining({
+          repositoryId: "repository:fixture",
+          repoPath: "projects/system-test-history",
+        }),
+      ],
+    });
+    const seededText = fake.putText.mock.calls.map(([text]) => text).join("\n");
+    expect(seededText).toContain('rolloutCodename = "Harbor Lantern"');
+    expect(seededText).toContain("archiveWindowDays = 21");
+    expect(seededText).toContain(`policyRevision = ${SIZABLE_HISTORY_FIXTURE_REVISIONS}`);
+
+    await fixture.cleanup(state);
+    expect(fake.destroyContext).toHaveBeenCalledWith("context:1");
   });
 
   it("imports a buildable snapshot with exact CAS-backed file metadata", async () => {

@@ -3,6 +3,7 @@ import type { HeadlessSession, SessionSnapshot } from "@workspace/agentic-sessio
 import {
   BUILDABLE_PACKAGE_WORKSPACE_REPO_FIXTURE,
   CONTENT_WORKSPACE_REPO_FIXTURE,
+  HISTORICAL_CONTENT_WORKSPACE_REPO_FIXTURE,
   type TestCase,
   type TestExecutionResult,
   type TestOrchestrationContext,
@@ -271,6 +272,20 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
+function requireHistoricalAnswer(
+  result: TestExecutionResult,
+  patterns: RegExp[]
+): ReturnType<typeof noIncompleteInvocations> {
+  const final = findLastAgentMessage(result);
+  if (!patterns.every((pattern) => pattern.test(final))) {
+    return {
+      passed: false,
+      reason: "The completion report did not explain the requested historical decision",
+    };
+  }
+  return noIncompleteInvocations(result);
+}
+
 export const vcsAdvancedTests: TestCase[] = [
   {
     name: "vcs-read-injected-memory",
@@ -284,6 +299,28 @@ export const vcsAdvancedTests: TestCase[] = [
       if (!hasAgentResponse(result)) return { passed: false, reason: "No agent response received" };
       return requireInjectedReadMemory(result);
     },
+  },
+  {
+    name: "vcs-sizable-history-memory-recall",
+    description:
+      "Recover a retired project fact and its rationale from a sizable semantic history",
+    category: "vcs-advanced",
+    workspaceRepoFixture: HISTORICAL_CONTENT_WORKSPACE_REPO_FIXTURE,
+    prompt:
+      "The disposable historical project no longer names its rollout codename. What was that codename, why was it retired, and which recorded evidence supports the answer?",
+    validate: (result) =>
+      requireHistoricalAnswer(result, [/Harbor Lantern/iu, /retir/iu, /Retention Service/iu]),
+  },
+  {
+    name: "vcs-sizable-history-edited-file-context",
+    description:
+      "Explain a current edited-file value using an older decision in a sizable semantic history",
+    category: "vcs-advanced",
+    workspaceRepoFixture: HISTORICAL_CONTENT_WORKSPACE_REPO_FIXTURE,
+    prompt:
+      "Review src/retention-policy.ts in the disposable historical project. Why is archiveWindowDays 21 rather than 14, and did the later history reverse that decision? Ground the answer in the workspace's recorded evidence.",
+    validate: (result) =>
+      requireHistoricalAnswer(result, [/21/u, /14/u, /day 18|regional export/iu]),
   },
   {
     name: "vcs-explicit-move-copy",

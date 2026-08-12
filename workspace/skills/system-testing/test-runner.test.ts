@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ChatMessage } from "@workspace/agentic-core";
-import { TestRunner, validateAgentCompletionReport } from "./test-runner.js";
+import {
+  findSystemTestImplementationInspections,
+  TestRunner,
+  validateAgentCompletionReport,
+} from "./test-runner.js";
 import type { TestExecutionResult, TestSuiteResult, TestSuiteResultEntry } from "./types.js";
 import type { HeadlessRunner } from "./runner.js";
 import { CONTENT_WORKSPACE_REPO_FIXTURE, type TestCase } from "./types.js";
@@ -1492,5 +1496,49 @@ describe("validateAgentCompletionReport", () => {
       passed: false,
       reason: expect.stringContaining("conflicting"),
     });
+  });
+});
+
+describe("system-test implementation boundary", () => {
+  it("detects agent reads of harness implementation without matching ordinary workspace files", () => {
+    const execution = {
+      duration: 1,
+      messages: [
+        {
+          id: "read-fixture",
+          senderId: "agent",
+          kind: "message",
+          contentType: "invocation",
+          complete: true,
+          content: "",
+          invocation: {
+            id: "call:fixture",
+            name: "read",
+            arguments: { path: "skills/system-testing/workspace-repo-fixture.ts" },
+          },
+        },
+        {
+          id: "read-product",
+          senderId: "agent",
+          kind: "message",
+          contentType: "invocation",
+          complete: true,
+          content: "",
+          invocation: {
+            id: "call:product",
+            name: "read",
+            arguments: { path: "projects/example/src/index.ts" },
+          },
+        },
+      ],
+    } as unknown as TestExecutionResult;
+
+    expect(findSystemTestImplementationInspections(execution)).toEqual([
+      {
+        id: "call:fixture",
+        name: "read",
+        arguments: '{"path":"skills/system-testing/workspace-repo-fixture.ts"}',
+      },
+    ]);
   });
 });

@@ -28,5 +28,8 @@ Treat recall as discovery, not proof. Follow message evidence through trajectory
 inspectors and managed-source facts through [Vibestudio
 VCS](../vibestudio-vcs/SKILL.md). Search indexes and read-time summaries are
 rebuildable projections; their exact causal roots are the continuation surface.
+For a file whose relevant text was later removed, page the file target returned
+by `provenance` with its exact `historyNextCursor` in `historyAfter`; do not put
+a history cursor in adjacency `after`.
 
 `memory_recall` is an agent tool, not a portable panel, worker, or VCS API.

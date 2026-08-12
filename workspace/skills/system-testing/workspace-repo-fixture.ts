@@ -22,6 +22,8 @@ interface FixtureBlobstore {
 
 export type WorkspaceRepoSection = "projects" | "packages" | "workers" | "panels";
 
+export const SIZABLE_HISTORY_FIXTURE_REVISIONS = 36;
+
 /**
  * A repository fixture either seeds one exact source repository, asks the task
  * to create the only repository in a declared section, or seeds a panel and
@@ -33,6 +35,7 @@ export type WorkspaceRepoSection = "projects" | "packages" | "workers" | "panels
  */
 export type WorkspaceRepoCreationScope =
   | { kind: "content"; section: "projects" }
+  | { kind: "historical-content"; section: "projects" }
   | { kind: "buildable-package"; section: "packages" }
   | { kind: "buildable-worker"; section: "workers" }
   | { kind: "buildable-regular-worker"; section: "workers" }
@@ -172,16 +175,18 @@ export class WorkspaceRepoFixtureLifecycle {
       const seedFiles = repositorySeedFiles(this.repoName, this.fixture).sort((left, right) =>
         left.path < right.path ? -1 : left.path > right.path ? 1 : 0
       );
-      const files = await Promise.all(
-        seedFiles.map(async (file) => {
-          const stored = await this.port.blobstore.putText(file.content);
-          return {
-            path: file.path,
-            contentHash: stored.digest,
-            mode: 0o644,
-          };
-        })
-      );
+      const storeFiles = async (sourceFiles: Array<{ path: string; content: string }>) =>
+        Promise.all(
+          sourceFiles.map(async (file) => {
+            const stored = await this.port.blobstore.putText(file.content);
+            return {
+              path: file.path,
+              contentHash: stored.digest,
+              mode: 0o644,
+            };
+          })
+        );
+      let files = await storeFiles(seedFiles);
       const snapshotRevision = `fixture:${sha256HexSyncText(JSON.stringify({ repoPath, files }))}`;
       const importCommandId = this.command("import");
       const source = {
@@ -221,6 +226,44 @@ export class WorkspaceRepoFixtureLifecycle {
         recordedSnapshot.targetRepositoryIds[0] !== repositoryId
       ) {
         throw new Error("Fixture import did not record its exact command and source snapshot");
+      }
+
+      if (this.fixture.kind === "historical-content") {
+        let expectedWorkingHead = { kind: "event" as const, eventId: imported.eventId };
+        for (const revision of historicalContentRevisions()) {
+          const revisionFiles = revision.files.sort((left, right) =>
+            left.path < right.path ? -1 : left.path > right.path ? 1 : 0
+          );
+          files = await storeFiles(revisionFiles);
+          const revisionSource = {
+            kind: "generated" as const,
+            uri: `system-test://${this.testName}/${this.repoName}/history`,
+            snapshotRevision: `fixture:history:${String(revision.revision).padStart(2, "0")}:${sha256HexSyncText(
+              JSON.stringify({ repoPath, files })
+            )}`,
+          };
+          const next = await this.port.vcs.importSnapshot({
+            contextId,
+            commandId: this.command(`history-${String(revision.revision).padStart(2, "0")}`),
+            expectedWorkingHead,
+            intentSummary: revision.intent,
+            source: revisionSource,
+            repositories: [{ repositoryId, repoPath, files }],
+            message: revision.message,
+          });
+          if (
+            next.importedRepositoryIds.length !== 1 ||
+            next.importedRepositoryIds[0] !== repositoryId ||
+            next.externalSnapshot.snapshotRevision !== revisionSource.snapshotRevision ||
+            next.externalSnapshot.targetRepositoryIds.length !== 1 ||
+            next.externalSnapshot.targetRepositoryIds[0] !== repositoryId
+          ) {
+            throw new Error(
+              `Historical fixture revision ${revision.revision} did not preserve its exact repository and snapshot identity`
+            );
+          }
+          expectedWorkingHead = { kind: "event", eventId: next.eventId };
+        }
       }
       return {
         ...this.fixture,
@@ -872,6 +915,9 @@ function repositorySeedFiles(
       },
     ];
   }
+  if (fixture.kind === "historical-content") {
+    return historicalPolicyFiles(0);
+  }
   if (fixture.kind === "buildable-worker") {
     return [
       {
@@ -1031,6 +1077,80 @@ function repositorySeedFiles(
       content: [
         'export const fixtureValue = "baseline";',
         'export const fixtureNeighbor = "untouched";',
+        "",
+      ].join("\n"),
+    },
+  ];
+}
+
+interface HistoricalContentRevision {
+  revision: number;
+  files: Array<{ path: string; content: string }>;
+  intent: string;
+  message: string;
+}
+
+function historicalContentRevisions(): HistoricalContentRevision[] {
+  return Array.from({ length: SIZABLE_HISTORY_FIXTURE_REVISIONS }, (_, index) => {
+    const revision = index + 1;
+    if (revision === 6) {
+      return {
+        revision,
+        files: historicalPolicyFiles(revision),
+        intent:
+          "Extend the archive window from 14 to 21 days because delayed regional exports can arrive through day 18; a three-day buffer prevents premature deletion",
+        message: "Extend archive window for delayed regional exports",
+      };
+    }
+    if (revision === 11) {
+      return {
+        revision,
+        files: historicalPolicyFiles(revision),
+        intent:
+          "Retire the Harbor Lantern rollout codename after launch so support and audit records consistently use the public Retention Service name",
+        message: "Retire the Harbor Lantern rollout codename",
+      };
+    }
+    return {
+      revision,
+      files: historicalPolicyFiles(revision),
+      intent: `Record retention-policy audit checkpoint ${revision} without changing the approved archive window`,
+      message: `Record retention-policy audit checkpoint ${revision}`,
+    };
+  });
+}
+
+function historicalPolicyFiles(revision: number): Array<{ path: string; content: string }> {
+  const archiveWindowDays = revision < 6 ? 14 : 21;
+  const codename =
+    revision < 11
+      ? [
+          "/** Temporary internal rollout label; never expose this in product copy. */",
+          'export const rolloutCodename = "Harbor Lantern";',
+          "",
+        ]
+      : [];
+  return [
+    {
+      path: "README.md",
+      content: [
+        "# Retention Service",
+        "",
+        "A deliberately history-rich system-test project.",
+        `Audit checkpoint: ${revision}.`,
+        "",
+      ].join("\n"),
+    },
+    {
+      path: "src/retention-policy.ts",
+      content: [
+        ...codename,
+        `export const archiveWindowDays = ${archiveWindowDays};`,
+        `export const policyRevision = ${revision};`,
+        "",
+        "export function shouldArchive(ageDays: number): boolean {",
+        "  return ageDays > archiveWindowDays;",
+        "}",
         "",
       ].join("\n"),
     },

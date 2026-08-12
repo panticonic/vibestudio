@@ -93,6 +93,12 @@ const provenanceSchema = Type.Object({
         "Exact nextCursor from the preceding provenance result. Reuse it only with that result's unchanged target.",
     })
   ),
+  historyAfter: Type.Optional(
+    Type.String({
+      description:
+        "Exact historyNextCursor from the preceding provenance result for the same file target. This pages file history independently from adjacency after.",
+    })
+  ),
 });
 
 export type ProvenanceToolInput = Static<typeof provenanceSchema>;
@@ -327,6 +333,10 @@ export function createProvenanceTool(
     parameters: provenanceSchema,
     execute: async (_toolCallId, input) => {
       const cursor = typeof input.after === "string" && input.after ? input.after : undefined;
+      const historyCursor =
+        typeof input.historyAfter === "string" && input.historyAfter
+          ? input.historyAfter
+          : undefined;
       if (input.target && typeof input.target === "object") {
         const root = parseRoot(input.target);
         const [inspection, neighbors, history] = await Promise.all([
@@ -337,7 +347,12 @@ export function createProvenanceTool(
             ...(cursor ? { cursor } : {}),
           }),
           root.kind === "file"
-            ? deps.vcs.history({ root, direction: "past", limit: 5 })
+            ? deps.vcs.history({
+                root,
+                direction: "past",
+                limit: 5,
+                ...(historyCursor ? { cursor: historyCursor } : {}),
+              })
             : Promise.resolve(undefined),
         ]);
         return toolResult(rootLabel(root), inspection, neighbors, history, {
@@ -356,7 +371,12 @@ export function createProvenanceTool(
         const [inspection, history] = await Promise.all([
           deps.vcs.inspect({ node: page.root, edgeLimit: 1 }),
           page.root.kind === "file"
-            ? deps.vcs.history({ root: page.root, direction: "past", limit: 5 })
+            ? deps.vcs.history({
+                root: page.root,
+                direction: "past",
+                limit: 5,
+                ...(historyCursor ? { cursor: historyCursor } : {}),
+              })
             : Promise.resolve(undefined),
         ]);
         return toolResult(page.label, inspection, page.result, history, {

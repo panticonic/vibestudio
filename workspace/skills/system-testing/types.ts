@@ -17,6 +17,11 @@ export const CONTENT_WORKSPACE_REPO_FIXTURE = {
   section: "projects",
 } as const satisfies WorkspaceRepoCreationScope;
 
+export const HISTORICAL_CONTENT_WORKSPACE_REPO_FIXTURE = {
+  kind: "historical-content",
+  section: "projects",
+} as const satisfies WorkspaceRepoCreationScope;
+
 export const BUILDABLE_PACKAGE_WORKSPACE_REPO_FIXTURE = {
   kind: "buildable-package",
   section: "packages",

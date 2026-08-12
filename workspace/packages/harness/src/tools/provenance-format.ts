@@ -18,11 +18,9 @@ export interface ProvenanceBlockInput {
 }
 
 function historyCall(history: CanonicalProvenanceHistory): string {
-  return `vcs.history(${JSON.stringify({
-    root: history.root,
-    direction: "past",
-    cursor: history.nextCursor,
-    limit: 5,
+  return `provenance(${JSON.stringify({
+    target: history.root,
+    historyAfter: history.nextCursor,
   })})`;
 }
 
