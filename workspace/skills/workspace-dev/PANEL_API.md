@@ -456,7 +456,8 @@ compile error, or throwing entry module.
 | `stateArgs.get()` / `stateArgs.set()`           | Validated host-owned application state args                                                                                    |
 | `archive()` / `unload()`                        | Durable subtree removal or live-runtime release                                                                                 |
 | `tree()` / `state()` / `routes()` / `setMode()` | Optional workspace `_agent` application inspection                                                                             |
-| `cdp` / `click(selector)`                       | Approval-gated CDP automation                                                                                                  |
+| `cdp.session()` / `cdp.page()`                  | Generation-fenced multi-step automation or a one-off canonical CDP page                                                        |
+| `click(selector)`                               | Approval-gated one-off CDP convenience                                                                                          |
 
 `navigate()`, `reload()`, `rebuild()`, and `focus()` return
 `Promise<PanelObservation>`, not another `PanelHandle`. Keep using the original
@@ -476,9 +477,10 @@ whose commit may already have succeeded.
 are prepared before the current history entry is replaced. A preparation
 failure does not pretend that the old attempt was replaced. The panel-tree id
 and handle remain stable, while runtime entity, build key, and CDP endpoint are
-incarnation-scoped. Create one fresh CDP page after either operation resolves;
-more generally, replace the page whenever a lifecycle result changes
-`runtimeEntityId`.
+incarnation-scoped. For multi-step automation, keep one `cdp.session()` and call
+`session.refresh()` after either operation. Continue only with the returned
+session and page; its `current`, `reconnected`, or `replaced` status explains
+whether the immutable generation changed, and it never replays an action.
 
 ## Snapshot provenance
 

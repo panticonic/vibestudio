@@ -486,7 +486,8 @@ const state = await same.stateArgs.set({ mode: "review" });
 // Use null to remove a key: await same.stateArgs.set({ mode: null });
 await same.call.someExposedMethod();
 
-const page = await same.cdp.page();
+const session = await same.cdp.session();
+const page = session.page;
 await page.title();
 page.url(); // string, synchronous like Playwright
 await same.click("button");
@@ -499,16 +500,23 @@ There is no separate handle lease/load status. `observe().phase === "ready"` is
 the sole positive readiness answer. `snapshot()` returns
 `{ panelId, attemptId, runtimeEntityId, buildKey, capturedAt, document }`.
 
-`same.cdp.page()` returns the canonical Playwright-style page driven by our
-workerd-native CDP client (`@workspace/cdp-client`). It is the single
-browser-automation surface — there is no separate compatibility tier,
-and you do not import or install any `playwright*` package. The page exposes
+`same.cdp.session()` returns a `panel-cdp-session.v1` lease containing the
+canonical Playwright-style page and its immutable attempt/runtime/build
+generation. Use `session.refresh()` after rebuild or navigation and continue
+with the returned session; the status is `current`, `reconnected`, or
+`replaced`, and no uncertain action is replayed.
+
+`same.cdp.page()` returns the same canonical Playwright-style page without a
+generation lease for one-off work. Both are driven by our workerd-native CDP
+client (`@workspace/cdp-client`). This is one browser-automation surface —
+there is no separate compatibility tier, and you do not import or install any
+`playwright*` package. The page exposes
 locators (`page.locator`, `page.getByRole`, `page.getByText`, `page.getByLabel`,
 …), auto-waiting actions (`click`, `fill`, `check`, `selectOption`, …), reads
 (`innerText`, `count`, `isVisible`, `getAttribute`, …), and page-level methods
 (`goto`, `screenshot`, `waitForSelector`, `evaluate`, …). For protocol-level
 work, `import { CdpConnection } from "@workspace/cdp-client"` and connect with
-`(await same.cdp.getCdpEndpoint())`. There is no second page-acquisition API.
+`(await same.cdp.getCdpEndpoint())`.
 
 `openPanel`/`panelTree`/`PanelHandle` are part of the portable runtime surface
 from `@workspace/runtime`; they work from server-side eval, panels, workers, and

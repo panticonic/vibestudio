@@ -83,9 +83,8 @@ describe("panel debugging guidance", () => {
     expect(loop).toContain("Never call `createProjects` again");
     expect(loop).toContain("ref: `ctx:${ctx.contextId}`");
     expect(loop).toContain("requestedRef");
-    expect(loop).toContain(
-      "const page = await scope.panel.cdp.page(); // fresh after runtime replacement"
-    );
+    expect(loop).toContain("const refreshed = await scope.panelSession.refresh()");
+    expect(loop).toContain("const page = scope.panelSession.page");
     expect(loop).toContain("await page.screenshot({ fullPage: true })");
   });
 });

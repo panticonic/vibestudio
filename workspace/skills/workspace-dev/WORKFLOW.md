@@ -248,10 +248,11 @@ console.log(capture.document.text);
 attempt at the panel's active build ref, then waits for the application boot
 handshake. It does not create work, commit an event, publish main, or affect
 child panels. The stable panel id remains valid, but CDP endpoints belong to
-runtime incarnations. After `rebuild()` or `navigate()` resolves, obtain a fresh
-page with `await myApp.cdp.page()` rather than reusing the earlier page object.
-More generally, replace the page whenever a lifecycle result changes
-`runtimeEntityId`.
+runtime incarnations. For multi-step automation acquire one
+`let session = await myApp.cdp.session()`. After `rebuild()` or `navigate()`
+resolves, call `session = (await session.refresh()).session` and continue with
+`session.page`. The refresh receipt distinguishes an unchanged generation, a
+reconnected page, and a replaced runtime without replaying an uncertain action.
 
 | Method       | Completion                                                                              |
 | ------------ | --------------------------------------------------------------------------------------- |
