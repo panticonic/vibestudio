@@ -119,7 +119,7 @@ export async function openPanel(source: string, opts: OpenPanelOptions = {}): Pr
   return handle;
 }
 
-/** Open a panel, run `fn`, always close the panel afterwards. */
+/** Open a panel, run `fn`, always archive the panel afterwards. */
 export async function withPanel<T>(
   source: string,
   fn: (handle: PanelHandle) => Promise<T>,
@@ -130,12 +130,12 @@ export async function withPanel<T>(
     return await fn(handle);
   } finally {
     // Console history belongs to the live panel endpoint. Snapshot it before
-    // closing while preserving it in the test's final supervision report.
+    // archiving while preserving it in the test's final supervision report.
     await activeTestContext()?.supervisor.capturePanel(handle.id);
     try {
-      await handle.close();
+      await handle.archive();
     } catch {
-      // Panel may already be gone (e.g. the test closed it) — fine.
+      // Panel may already be gone (e.g. the test archived it) — fine.
     }
   }
 }

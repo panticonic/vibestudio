@@ -304,7 +304,7 @@ await scope.myApp.setMode("fixture");
 Use bounded `panelTree.roots()` and `panelTree.children()` reads from agent
 eval. `roots({ limit })` is scoped to the current verified caller. Use
 `rootOwners()` plus `rootsForOwner(ownerUserId, ...)` for a cross-owner
-inventory; visibility is unchanged. Close stale children explicitly; do not
+inventory; visibility is unchanged. Archive stale children explicitly; do not
 materialize the entire tree.
 
 ```ts
@@ -319,14 +319,14 @@ const page = await panelTree.children(scope.myApp.id, { limit: 100 });
 for (const { handle } of page.entries) {
   console.log(handle.id, handle.kind, handle.source);
 }
-await page.entries[0]?.handle.close();
+await page.entries[0]?.handle.archive();
 ```
 
 Reuse an existing handle instead of opening duplicates. Scalar handle fields
 are last-observed descriptors; call `handle.observe()` whenever live state
 matters. Across warm eval cells, keep the handle in `scope`; keep its stable ID
 beside it for cold recovery. After an explicit kernel restart, rediscover a
-lost handle with `getPanelHandle(id)`. Close temporary
+lost handle with `getPanelHandle(id)`. Archive temporary
 inspection, browser, diagnostic, and child panels in `finally`.
 
 ## Browser panels
@@ -341,7 +341,7 @@ try {
   const page = await sitePanel.cdp.page();
   await page.title();
 } finally {
-  await sitePanel.close();
+  await sitePanel.archive();
 }
 ```
 

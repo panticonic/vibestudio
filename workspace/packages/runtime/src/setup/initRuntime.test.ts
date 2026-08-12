@@ -508,7 +508,7 @@ describe("initRuntime", () => {
     });
 
     const parent = runtime.parent;
-    await parent.close();
+    await parent.archive();
     await parent.navigate("panels/next", { contextId: "ctx-next" });
     await parent.stateArgs.set({ mode: "fixture" });
 

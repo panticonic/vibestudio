@@ -175,7 +175,8 @@ into a focused measurement before claiming a result.
 5. Run focused tests and repeat the same profile. Expand only across the
    plausible blast radius.
 
-Close every raw page/inspector, opened panel/entity, managed test instance, and
-owned ephemeral server. Report before/after values, exact boundary, state, and
+Close every raw page/inspector, archive every opened panel, retire every opened
+entity, stop every managed test instance, and terminate every owned ephemeral
+server. Report before/after values, exact boundary, state, and
 remaining bottlenecks. A faster internal phase isn't a win unless the
 user-visible completion boundary improves without changing behavior.

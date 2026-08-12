@@ -43,8 +43,8 @@ rendering:
 2. Acquire its canonical CDP page through the panel handle.
 3. Wait for the real content condition and extract only the needed data.
 4. Store large readable text by digest.
-5. Close the page and temporary panel in `finally`, unless the user asked to
-   keep it.
+5. Close the page connection and archive the temporary panel in `finally`,
+   unless the user asked to keep it.
 
 Read [browser automation](../sandbox/BROWSER_AUTOMATION.md) for the page API.
 Never batch-open browser panels when ordinary fetches suffice, bypass a paywall,

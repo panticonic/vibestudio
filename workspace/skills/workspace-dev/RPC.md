@@ -108,7 +108,7 @@ child.source; // Panel path or URL
 child.call.method(args); // Call exposed RPC method
 child.on("event", handler); // Listen for events
 child.emit("event", payload); // Emit event to child
-child.close(); // Close the panel
+child.archive(); // Archive the panel subtree
 ```
 
 ## Parent PanelHandle Methods

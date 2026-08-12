@@ -1111,14 +1111,10 @@ export function createPanelRuntime(options: CreatePanelRuntimeOptions): PanelRun
       options.onReload?.(id);
       return result;
     },
-    close: async (id) => {
+    archive: async (id) => {
       const result = await closePanel(id);
       options.onClose?.(id);
       return result;
-    },
-    archive: async (id) => {
-      await closePanel(id);
-      options.onClose?.(id);
     },
     unload: (id) => options.rpc.call<PanelLifecycleResult>("main", "panelRuntime.unloadSlot", [id]),
     setTitle: (id, title, titleOptions) =>

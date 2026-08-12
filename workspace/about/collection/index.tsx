@@ -591,7 +591,7 @@ export default function CollectionPanel() {
                       variant="soft"
                       color="red"
                       aria-label="Close panel"
-                      onClick={() => void act(() => node.handle.close())}
+                      onClick={() => void act(() => node.handle.archive())}
                     >
                       <Cross2Icon />
                     </IconButton>

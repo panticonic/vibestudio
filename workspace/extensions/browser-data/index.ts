@@ -653,7 +653,7 @@ async function openTabsAsPanels(
 
   const archiveEmptyContainer = async (id: string, title: string) => {
     try {
-      await panelRuntime.getPanelHandle(id).close();
+      await panelRuntime.getPanelHandle(id).archive();
     } catch (error) {
       skipped.push({
         url: "(collection)",

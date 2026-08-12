@@ -44,9 +44,9 @@ perspective:
   if (observed.phase !== "ready") throw new Error(`Unexpected phase: ${observed.phase}`);
   if (child.parentId !== root.id) throw new Error("Panel was not created as a child");
 
-  // Close the temporary root when the whole headless workflow is done; closing
-  // it owns/cleans its descendants. Do not close an inherited user panel.
-  if (!inherited) await root.close();
+  // Archive the temporary root when the whole headless workflow is done; it
+  // owns/cleans its descendants. Do not archive an inherited user panel.
+  if (!inherited) await root.archive();
   ```
 
 - When the user points at "this panel", "the parent panel", or another visible
@@ -766,7 +766,7 @@ try {
   await handle.write(new TextEncoder().encode("H"), 0, 1, 0);
   console.log({ bytesRead, text: new TextDecoder().decode(buffer) });
 } finally {
-  await handle.close();
+  await handle.archive();
   await fs.rm(path, { force: true });
 }
 ```

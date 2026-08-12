@@ -1,5 +1,6 @@
 import { BUILDABLE_PACKAGE_WORKSPACE_REPO_FIXTURE, type TestCase } from "../types.js";
 import { PANEL_AUTOMATION_RESOURCE } from "../panel-authority.js";
+import { orchestratePanelGoal } from "./_panel-tree-invariant.js";
 import {
   failedToolCalls,
   findLastAgentMessage,
@@ -134,6 +135,9 @@ function scopedTestVerification(result: Parameters<typeof findLastAgentMessage>[
   return noIncompleteInvocations(result);
 }
 
+const STATE_ARGS_IMMEDIATE_PROMPT =
+  "Use a disposable Help panel to check whether a small change to its launch state becomes observable immediately. Keep the investigation out of the way and summarize the before-and-after state you actually see.";
+
 function atomicPatchBuildVerification(result: Parameters<typeof findLastAgentMessage>[0]) {
   const patch = getToolCalls(result).find((call) => {
     if (
@@ -223,8 +227,13 @@ export const agenticRuntimeTests: TestCase[] = [
         },
       ],
     },
-    prompt:
-      "Open a disposable parent panel and a Help child panel without stealing focus. Give the child a small initial launch state, observe it, update it, and observe it again immediately. Close both panels and summarize what changed.",
+    prompt: STATE_ARGS_IMMEDIATE_PROMPT,
+    orchestrate: (context) =>
+      orchestratePanelGoal(
+        context,
+        STATE_ARGS_IMMEDIATE_PROMPT,
+        "inspect immediate panel launch-state visibility"
+      ),
     validate: (result) =>
       semanticEval(
         result,

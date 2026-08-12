@@ -16,6 +16,22 @@ import {
   PANEL_AUTOMATION_RESOURCE,
   PANEL_RUNTIME_SUPERVISION_AUTHORITY,
 } from "../panel-authority.js";
+import { orchestratePanelGoal } from "./_panel-tree-invariant.js";
+
+const WORKSPACE_RELOAD_PROFILE_PROMPT =
+  "Profile a real reload of a small disposable workspace panel. I want a bounded report that makes clear the reload actually happened and separates overall latency, loading, network activity, and page responsiveness costs.";
+
+const BROWSER_CLICK_PROFILE_PROMPT =
+  "Profile one click on a tiny disposable browser page whose visible state changes when clicked. Give me a bounded latency report covering the overall action, runtime work, network activity, page responsiveness, and the final visible state without collecting unrelated data that would distort the measurement.";
+
+const BROWSER_AUTOMATION_PROMPT =
+  "On a tiny disposable browser page, click an element, capture and inspect what the page actually rendered, and evaluate a value from it. Report the exact visible status after the click and what succeeded.";
+
+const BROWSER_CONSOLE_PROMPT =
+  "Inspect a tiny disposable browser page. Check both its live and retained console evidence along with its visible document state, then report what you observe.";
+
+const PANEL_STATE_PROMPT =
+  "Open a workspace panel with a small initial launch state, change that state, and inspect what the panel exposes immediately afterward. Tell me whether the change is visible.";
 
 interface ToolFailureLike {
   name: string;
@@ -563,8 +579,13 @@ export const cdpGadDiagnosticTests: TestCase[] = [
       PANEL_RUNTIME_SUPERVISION_AUTHORITY,
     ]),
     resources: [PANEL_AUTOMATION_RESOURCE],
-    prompt:
-      "Read skills/performance/SKILL.md, then open a small disposable workspace panel without focusing it. Acquire its canonical CDP page, capture the panel attempt id before the action, and use page.profile to measure handle.reload() while awaiting networkidle on the same page. Capture the attempt id afterward and return both ids plus report version, elapsedMs, navigation load timing, network requestCount, and page long-task count. The evidence must demonstrate a real reload rather than a no-op. Close the panel and page connection you own, then report what the profile showed.",
+    prompt: WORKSPACE_RELOAD_PROFILE_PROMPT,
+    orchestrate: (context) =>
+      orchestratePanelGoal(
+        context,
+        WORKSPACE_RELOAD_PROFILE_PROMPT,
+        "profile a workspace-panel reload"
+      ),
     validate: (result) =>
       checked(
         result,
@@ -588,8 +609,13 @@ export const cdpGadDiagnosticTests: TestCase[] = [
     category: "cdp-gad-diagnostics",
     authorityPolicy: panelControlAuthorityPolicy("inspect-cdp-performance-page"),
     resources: [PANEL_AUTOMATION_RESOURCE],
-    prompt:
-      "Read skills/performance/SKILL.md, then profile one deterministic click on a tiny disposable browser page with the canonical page.profile API. Await a visible State: clicked completion inside the measured action, do not enable JavaScript coverage for this latency run, and return the visible status plus report version, elapsedMs, runtime taskDurationMs, network requestCount, and page long-task count. Close every temporary page and panel you own, then report what the measured evidence actually showed.",
+    prompt: BROWSER_CLICK_PROFILE_PROMPT,
+    orchestrate: (context) =>
+      orchestratePanelGoal(
+        context,
+        BROWSER_CLICK_PROFILE_PROMPT,
+        "profile one visible browser interaction"
+      ),
     validate: (result) =>
       checked(
         result,
@@ -610,8 +636,13 @@ export const cdpGadDiagnosticTests: TestCase[] = [
     category: "cdp-gad-diagnostics",
     authorityPolicy: panelControlAuthorityPolicy("inspect-cdp-click-page"),
     resources: [PANEL_AUTOMATION_RESOURCE],
-    prompt:
-      "On a tiny disposable browser page, use the canonical automation client to click an element, capture a screenshot to an opaque temporary file, read that file as image content, evaluate a value, and report the exact visible status text after the click along with what actually succeeded.",
+    prompt: BROWSER_AUTOMATION_PROMPT,
+    orchestrate: (context) =>
+      orchestratePanelGoal(
+        context,
+        BROWSER_AUTOMATION_PROMPT,
+        "inspect an interactive browser page"
+      ),
     validate: (result) => {
       const base = checked(
         result,
@@ -633,8 +664,13 @@ export const cdpGadDiagnosticTests: TestCase[] = [
     category: "cdp-gad-diagnostics",
     authorityPolicy: panelControlAuthorityPolicy("inspect-cdp-console-page"),
     resources: [PANEL_AUTOMATION_RESOURCE],
-    prompt:
-      "Inspect a tiny disposable browser page with the canonical CDP client. Check its live console events, retained console history and errors, and visible DOM state, then report the observed results.",
+    prompt: BROWSER_CONSOLE_PROMPT,
+    orchestrate: (context) =>
+      orchestratePanelGoal(
+        context,
+        BROWSER_CONSOLE_PROMPT,
+        "inspect browser console and document evidence"
+      ),
     validate: (result) =>
       checked(
         result,
@@ -648,8 +684,9 @@ export const cdpGadDiagnosticTests: TestCase[] = [
     category: "cdp-gad-diagnostics",
     authorityPolicy: panelControlAuthorityPolicy("inspect-stateargs-page"),
     resources: [PANEL_AUTOMATION_RESOURCE],
-    prompt:
-      "Open a workspace panel, change its state, and inspect the resulting snapshot through the panel automation surface. Tell me whether the changed state was visible.",
+    prompt: PANEL_STATE_PROMPT,
+    orchestrate: (context) =>
+      orchestratePanelGoal(context, PANEL_STATE_PROMPT, "inspect a panel state change"),
     validate: (result) =>
       checked(
         result,

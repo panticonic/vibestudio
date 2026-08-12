@@ -367,7 +367,7 @@ code, `panelTree` is imported directly from `@workspace/runtime`; it is not
 > panel node, so `await getParent()` returns `null`. If the workflow needs a
 > child, create an owned root first and parent the target explicitly:
 > `const root = await openPanel("about/new", { parentId: null });` then
-> `const child = await openPanel(source, { parentId: root.id });`. Close `root`
+> `const child = await openPanel(source, { parentId: root.id });`. Archive `root`
 > when done to clean the subtree. Do not throw merely because `getParent()` is
 > null, and do not use the truthiness of the compatibility `parent` handle.
 
@@ -415,10 +415,10 @@ try {
   const before = await handle.stateArgs.get();
   const afterSet = await handle.stateArgs.set({ mode: "live" });
   const after = await handle.stateArgs.get();
-  await handle.close();
+  await handle.archive();
   console.log({ before, afterSet, after });
 } finally {
-  await root.close();
+  await root.archive();
 }
 ```
 
@@ -463,7 +463,7 @@ explicitly means the current chat where the agent is responding.
 
 `openPanel()` creates a panel owned by the workflow. Handles
 from `list`/`roots`/`children`/`get` are existing panels; do not call
-`handle.navigate`, `handle.reload`, or `handle.close` unless requested. Inside
+`handle.navigate`, `handle.reload`, or `handle.archive` unless requested. Inside
 the current panel, prefer `reopen({ contextId, stateArgs })` for
 self-replacement of state/files. `contextId` does not select code provenance;
 pass an explicit `ref` on ref-capable navigation APIs when code should come from

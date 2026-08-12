@@ -40,7 +40,7 @@ vi.mock("@workspace/agentic-session", () => ({
   HeadlessSession: { createWithAgent: mocks.createWithAgent },
 }));
 
-vi.mock("@workspace/runtime", () => ({
+vi.mock("@workspace/runtime/worker", () => ({
   gad: mocks.gad,
   blobstore: mocks.blobstore,
   rpc: mocks.rpc,
@@ -360,7 +360,8 @@ describe("HeadlessRunner", () => {
     expect(SYSTEM_TEST_AGENT_PROMPT).not.toContain("Task completed.");
     expect(SYSTEM_TEST_AGENT_PROMPT).toContain("exact error or unexpected result");
     expect(SYSTEM_TEST_AGENT_PROMPT).toContain("there is no initial visible panel ancestor");
-    expect(SYSTEM_TEST_AGENT_PROMPT).toContain("create an owned root panel explicitly");
+    expect(SYSTEM_TEST_AGENT_PROMPT).toContain("leave the tree as you found it");
+    expect(SYSTEM_TEST_AGENT_PROMPT).toContain("Never archive a panel that predated the task");
     expect(SYSTEM_TEST_AGENT_PROMPT).not.toContain("smallest relevant canonical workspace docs");
   });
 

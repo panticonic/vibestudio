@@ -28,7 +28,7 @@ await page.getByRole("button", { name: "Sign in" }).click();
 
 The handle owns the panel target; the page owns one automation connection to a
 runtime incarnation. `await page.close()` disconnects that client without
-closing the panel. `await handle.close()` closes an owned panel. Browser
+archiving the panel. `await handle.archive()` archives an owned panel subtree. Browser
 navigation and reload keep the page connected while the target survives.
 Workspace-panel `handle.navigate()` and `handle.rebuild()` replace the runtime
 incarnation and disconnect the old page; acquire one fresh page from the same

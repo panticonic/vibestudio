@@ -273,11 +273,10 @@ export interface PanelHandle<
   parent(): PanelHandle | null;
   navigate(source: string, options?: PanelNavigateOptions): Promise<PanelObservation>;
   reload(options?: PanelWaitOptions): Promise<PanelObservation>;
-  close(): Promise<PanelLifecycleResult>;
-
   /** One bounded post-mortem packet: observation, console history, and ready document. */
   diagnose(): Promise<PanelDiagnosticsResult>;
-  archive(): Promise<void>;
+  /** Durably archive this panel and its subtree, retiring their live runtimes. */
+  archive(): Promise<PanelLifecycleResult>;
   unload(): Promise<PanelLifecycleResult>;
   /** Set this slot's display title without loading its runtime. */
   setTitle(title: string, options?: PanelSetTitleOptions): Promise<void>;

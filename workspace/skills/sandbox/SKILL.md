@@ -104,8 +104,8 @@ integrations](../api-integrations/SKILL.md) for setup and egress rules.
 ## Completion rules
 
 - Bound eval results; store large reports or handles in scope or files.
-- Close temporary panels, CDP clients, workers, and other resources in `finally`
-  unless the user asked to keep them.
+- Archive temporary panels and close temporary CDP clients, workers, and other
+  resources in `finally` unless the user asked to keep them.
 - Let protected operations use their normal authority flow — never add preflight
   calls, retries, or alternate transports just to avoid approval.
 - Treat optional missing packages as separate optional probes; don't let one

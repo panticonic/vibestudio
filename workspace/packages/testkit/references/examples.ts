@@ -43,7 +43,7 @@ export async function smokePanel(
 ): Promise<RunSummary> {
   const s = suite(`smoke:${source}`).test("opens cleanly", async (t) => {
     const handle = await openPanel(source);
-    t.defer(() => handle.close().then(() => undefined));
+    t.defer(() => handle.archive().then(() => undefined));
     if (expectedText) await waitForText(handle, expectedText);
     expect((await panelText(handle)).length, "rendered text").toBeGreaterThan(0);
   });
@@ -75,7 +75,7 @@ export async function profilePanelWorkload(
   try {
     return await profilePanel(handle, () => workload(handle));
   } finally {
-    await handle.close().catch(() => undefined);
+    await handle.archive().catch(() => undefined);
   }
 }
 

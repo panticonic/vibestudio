@@ -26,7 +26,7 @@ export const panelLifecycle = suite("panel-lifecycle", {
     const root = await openPanel(TARGET_PANEL_SOURCE, { parentId: null, focus: false });
     t.defer(async () => {
       await t.supervisor.capturePanel(root.id);
-      await root.close();
+      await root.archive();
     });
     const located = await waitFor(
       async () => {
@@ -47,7 +47,7 @@ export const panelLifecycle = suite("panel-lifecycle", {
     const handle = await openPanel(TARGET_PANEL_SOURCE);
     t.defer(async () => {
       await t.supervisor.capturePanel(handle.id);
-      await handle.close();
+      await handle.archive();
     });
     expect((await panelTree.path(handle.id)) !== null, "opened panel present").toBeTruthy();
   })
@@ -55,7 +55,7 @@ export const panelLifecycle = suite("panel-lifecycle", {
     const handle = await openPanel(TARGET_PANEL_SOURCE);
     t.defer(async () => {
       await t.supervisor.capturePanel(handle.id);
-      await handle.close();
+      await handle.archive();
     });
     expect((await handle.observe()).phase, "panel phase").toBe("ready");
     const text = await waitFor(async () => (await panelText(handle)) || undefined, {
@@ -69,7 +69,7 @@ export const panelLifecycle = suite("panel-lifecycle", {
       const handle = await openPanel(TARGET_PANEL_SOURCE);
       t.defer(async () => {
         await t.supervisor.capturePanel(handle.id);
-        await handle.close();
+        await handle.archive();
       });
 
       const before = await handle.observe();
@@ -101,10 +101,10 @@ export const panelLifecycle = suite("panel-lifecycle", {
       expect(afterAutomation.phase, "automated panel phase").toBe("ready");
     }
   )
-  .test("closing a panel removes it from the tree", async (t) => {
+  .test("archiving a panel removes it from the tree", async (t) => {
     const handle = await openPanel(TARGET_PANEL_SOURCE);
     await t.supervisor.capturePanel(handle.id);
-    await handle.close();
+    await handle.archive();
     await waitFor(
       async () => {
         return (await panelTree.path(handle.id)) === null || undefined;

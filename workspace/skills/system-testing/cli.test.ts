@@ -21,7 +21,7 @@ const mocks = vi.hoisted(() => ({
   listUnits: vi.fn(),
 }));
 
-vi.mock("@workspace/runtime", () => ({
+vi.mock("@workspace/runtime/worker", () => ({
   rpc: { call: mocks.rpcCall },
   workers: { resolveService: mocks.resolveService },
   workspace: { units: { list: mocks.listUnits } },

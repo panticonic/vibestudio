@@ -206,7 +206,7 @@ provenance.
 
 When `contextId` is omitted, panel reservation mints a fresh context and
 atomically records it as a lifecycle child of the verified creator's context.
-The creator may inspect, automate, rebuild, or close that panel without a
+The creator may inspect, automate, rebuild, or archive that panel without a
 foreign-context approval, and destroying the creator context recursively
 retires the panel context. When an installed extension performs the creation,
 the extension remains the lifecycle deputy while the host-verified root
@@ -449,7 +449,7 @@ compile error, or throwing entry module.
 | `focus(opts?)`                                  | Assign/present the panel and wait for ready                                                                                    |
 | `children()` / `parent()`                       | Tree relationships                                                                                                             |
 | `stateArgs.get()` / `stateArgs.set()`           | Validated host-owned application state args                                                                                    |
-| `close()` / `archive()` / `unload()`            | Explicit lifecycle/resource operations                                                                                         |
+| `archive()` / `unload()`                        | Durable subtree removal or live-runtime release                                                                                 |
 | `tree()` / `state()` / `routes()` / `setMode()` | Optional workspace `_agent` application inspection                                                                             |
 | `cdp` / `click(selector)`                       | Approval-gated CDP automation                                                                                                  |
 
@@ -561,6 +561,6 @@ and stack; locator failures add the exact rendered locator. See
 
 ## Ownership
 
-Close temporary panels in `finally`. Reuse an existing handle rather than
+Archive temporary panels in `finally`. Reuse an existing handle rather than
 opening duplicates. Leave a panel open only when the user asked to keep it or it
 is the primary deliverable being inspected.

@@ -53,7 +53,7 @@ import {
 
 const greeting = suite("greeting").test("renders", async (t) => {
   const panel = await openPanel("panels/my-app");
-  t.defer(() => panel.close());
+  t.defer(() => panel.archive());
   await waitForText(panel, "Hello");
   expect(await panelText(panel), "panel text").toContain("Hello");
 });

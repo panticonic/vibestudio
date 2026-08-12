@@ -59,7 +59,8 @@ purpose, workflow, ownership, invariants, and diagnostics.
   `@workspace/runtime`; see [sandbox eval](../sandbox/EVAL.md).
 - Retain mutating receipts in `scope` before awaiting a later step — eval is not
   transactional.
-- Reuse handles and close temporary panels, pages, workers, and diagnostics.
+- Reuse handles, archive temporary panels, and close temporary pages, workers,
+  and diagnostics.
   After an eval-kernel restart, reacquire a lost handle from its retained stable
   ID.
 - Give every panel and worker a semantic manifest icon from the [shared

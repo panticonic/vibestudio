@@ -72,7 +72,7 @@ Reconnect grace does not preserve readiness, and mobile-held or failed host
 states reject immediately with structured host failures.
 
 Existing panel handles are non-owned; do not call `handle.navigate`,
-`handle.reload`, or `handle.close` unless requested. Use
+`handle.reload`, or `handle.archive` unless requested. Use
 `handle.navigate(source, opts)` or `panelTree.navigate(id, source, opts)` only
 when replacing that specific slot is the requested behavior. Clean up temporary
 panels opened by the worker.

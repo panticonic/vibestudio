@@ -92,7 +92,7 @@ target. The boundary is exact:
   or other class instance cannot be reconstructed after kernel restart; retain
   stable identity alongside it and reacquire only after `[kernel] Restarted`
   reports that exact live value as lost.
-- `await handle.close()` closes an owned panel and therefore invalidates page
+- `await handle.archive()` removes an owned panel subtree and therefore invalidates page
   clients connected to that target.
 - A handle obtained from `panelTree` is non-owned unless the current workflow
   created it. Disconnecting your `page` is safe; closing the handle is not.
@@ -108,7 +108,7 @@ addressed `panelTree.get` for existing panels. Use `rootOwners()` and
 `rootsForOwner(ownerUserId)` when explicitly inspecting another ownership
 band. Existing handles
 are non-owned: do not call `handle.navigate`, `handle.reload`, or
-`handle.close` on them unless requested. Do not call `handle.cdp.navigate(url)`
+`handle.archive` on them unless requested. Do not call `handle.cdp.navigate(url)`
 or `page.goto(url)` on the current chat panel, a parent chat panel, or another
 workspace panel unless the requested task is to replace that exact panel. Open a
 browser panel for arbitrary URLs, login flows, scraping, and browser navigation.
@@ -116,7 +116,7 @@ browser panel for arbitrary URLs, login flows, scraping, and browser navigation.
 ```ts
 // Later, when an owned temporary panel is no longer needed:
 await scope.page?.close();
-await scope.browser?.close();
+await scope.browser?.archive();
 delete scope.browser;
 delete scope.page;
 ```
@@ -392,7 +392,7 @@ panel, call `observe()` and require `phase === "ready"` before custom RPC or
 | `handle.cdp.goBack()` / `goForward()`              | Browser-panel Chromium history                                                    |
 | `handle.cdp.reload()`                              | Browser-panel Chromium page reload                                                |
 | `handle.cdp.stop()`                                | Stop loading                                                                      |
-| `handle.close()`                                   | Close the panel                                                                   |
+| `handle.archive()`                                 | Archive the panel and its subtree                                                 |
 
 Opening panels, CDP, and structural operations prompt on first use per requester
 entity and target panel/root. Privileged shell/about targets use a severe

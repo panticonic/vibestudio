@@ -42,8 +42,7 @@ export interface PanelHandleHostOps {
   parent?(id: string, parentId: string | null): PanelHandle | null;
   navigate?(id: string, source: string, options?: PanelNavigateOptions): Promise<PanelObservation>;
   reload?(id: string, options?: PanelWaitOptions): Promise<PanelObservation>;
-  close?(id: string): Promise<PanelLifecycleResult>;
-  archive?(id: string): Promise<void>;
+  archive?(id: string): Promise<PanelLifecycleResult>;
   unload?(id: string): Promise<PanelLifecycleResult>;
   setTitle?(id: string, title: string, options?: PanelSetTitleOptions): Promise<void>;
   movePanel?(id: string, newParentId: string | null, placement?: PanelTreePlacement): Promise<void>;
@@ -219,13 +218,9 @@ export function createPanelHandle<
       if (!ops?.reload) throw new Error("reload is not available for this handle");
       return lifecycle(() => ops.reload!(metadata.id, waitOptions));
     },
-    close: async () => {
-      if (!ops?.close) throw new Error("close is not available for this handle");
-      return ops.close(metadata.id);
-    },
     archive: async () => {
       if (!ops?.archive) throw new Error("archive is not available for this handle");
-      await ops.archive(metadata.id);
+      return ops.archive(metadata.id);
     },
     unload: async () => {
       if (!ops?.unload) throw new Error("unload is not available for this handle");
@@ -318,7 +313,6 @@ export function createNoPanelHandle(): PanelHandle {
     parent: () => null,
     navigate: noParent,
     reload: noParent,
-    close: noParent,
     archive: noParent,
     unload: noParent,
     setTitle: noParent,
@@ -420,7 +414,6 @@ export function createNonPanelRuntimeHandle(options: {
     parent: () => options.parent?.() ?? null,
     navigate: unavailable,
     reload: unavailable,
-    close: unavailable,
     archive: unavailable,
     unload: unavailable,
     setTitle: unavailable,

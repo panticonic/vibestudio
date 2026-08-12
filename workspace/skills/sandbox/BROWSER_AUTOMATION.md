@@ -116,7 +116,7 @@ const page = await handle.cdp.page();
 
 `openPanel()` returns only at application boot-ready. Existing-panel handles are
 non-owned: observe first, and do not call `handle.navigate`,
-`handle.reload`, or `handle.close` on them unless requested. Do not call
+`handle.reload`, or `handle.archive` on them unless requested. Do not call
 `handle.cdp.navigate(url)` or `page.goto(url)` on the current chat panel, a
 parent chat panel, or any workspace panel discovered from `panelTree` unless
 the requested task is to replace that exact panel. Open a browser panel for web
@@ -132,19 +132,19 @@ behind the exact context-boundary decision.
 
 The panel slot is durably created before application readiness settles. If
 `openPanel()` throws `PanelOperationError`, use
-`error.failure.provenance.panelId` to inspect or close that committed slot;
+`error.failure.provenance.panelId` to inspect or archive that committed slot;
 blindly repeating `openPanel()` creates a duplicate.
 
 ## Panel Ownership
 
 Panels opened by the workflow are owned by it. Hold handles in your component's
-state; close temporary owned panels when the workflow is done:
+state; archive temporary owned panels when the workflow is done:
 
 ```ts
-await browser?.close();
+await browser?.archive();
 ```
 
-Do not close panels discovered with `panelTree.*` unless requested.
+Do not archive panels discovered with `panelTree.*` unless requested.
 
 ## Reconnection by Panel ID
 
@@ -447,7 +447,7 @@ options are rejected instead of ignored.
 
 ```typescript
 await page.close(); // disconnect this automation client; panel remains open
-await browser.close(); // close the owned browser panel handle
+await browser.archive(); // archive the owned browser panel and its subtree
 ```
 
 ### Not supported
@@ -492,7 +492,7 @@ The handle also has direct navigation methods (no page object needed):
 | `handle.cdp.goForward()`                           | Navigate forward                                                           |
 | `handle.cdp.reload()`                              | Reload page                                                                |
 | `handle.cdp.stop()`                                | Stop loading                                                               |
-| `handle.close()`                                   | Close browser panel                                                        |
+| `handle.archive()`                                 | Archive browser panel and its subtree                                       |
 
 ## Examples
 

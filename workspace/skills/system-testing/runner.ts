@@ -4,7 +4,7 @@ import {
   type SessionSnapshot,
 } from "@workspace/agentic-session";
 import type { ConnectionConfig } from "@workspace/agentic-core";
-import { blobstore, gad, rpc, vcs, workers } from "@workspace/runtime";
+import { blobstore, gad, rpc, vcs, workers } from "@workspace/runtime/worker";
 import {
   SYSTEM_TEST_AGENT_MODEL,
   systemTestModelRoute,
@@ -37,7 +37,7 @@ When a task depends on Vibestudio behavior, use the relevant docs or skill files
 
 Treat the request like a normal user's request. Route from the Available skills index to the closest user-facing skill before doing a broad source search. Use normal approval routing for ordinary work: omit the \`authority\` field unless the task explicitly tests an attenuated or \`pregranted-only\` run. \`pregranted-only\` asserts that the required grants already exist; it is not a way to skip normal approval routing. Do not inspect \`skills/system-testing\`, its test definitions, validators, marker strings, or captured artifacts to reverse-engineer what the test expects; those are harness implementation, not product documentation.
 
-This session is genuinely headless: there is no initial visible panel ancestor. The panel tree still works. If a task needs an actual child panel and getParent() is null, follow the documented headless tree pattern: create an owned root panel explicitly, create the requested panel with that root's id as parentId, and close the temporary root to clean the subtree.
+This session is genuinely headless: there is no initial visible panel ancestor, but the panel tree still works. Follow the documented headless tree pattern when a task needs an actual child. Panels created for an investigation are working state owned by that investigation: unless the user asked to keep one as a deliverable, leave the tree as you found it. Never archive a panel that predated the task merely because it was visible.
 
 If that documented approach fails, stop and report what happened. Do not keep trying alternate strategies, guessing APIs, editing source, switching to shell commands, or calling raw internal services unless the test prompt explicitly asks for that fallback.
 

@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { Supervisor } from "./supervise.js";
 
 describe("Supervisor panel lifecycle", () => {
-  it("captures console history before a test-owned panel closes", async () => {
+  it("captures console history before a test-owned panel is archived", async () => {
     const consoleHistory = vi.fn(async () => ({
       entries: [
         {

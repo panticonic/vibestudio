@@ -610,7 +610,7 @@ describe("PanelHandle", () => {
 
     expect(handle.parent()).toBeNull();
     await expect(handle.call["anything"]!()).rejects.toThrow("No parent panel");
-    await expect(handle.close()).rejects.toThrow("No parent panel");
+    await expect(handle.archive()).rejects.toThrow("No parent panel");
     await expect(handle.stateArgs.set({ mode: "fixture" })).rejects.toThrow("No parent panel");
     await expect(handle.emit("event", {})).rejects.toThrow("No parent panel");
   });
