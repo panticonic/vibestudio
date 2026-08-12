@@ -249,11 +249,9 @@ exact provider EV, caller-context visibility, and grant. Never use
 `workspace-service:*` in an installed-unit request or add the service to a generated
 host authority catalog.
 
-Worker packages may declare simple string overrides in top-level `overrides`.
-BuildV2 forwards those overrides, plus overrides from transitive workspace
-packages, into generated external-deps installs. Prefer package-local overrides
-for broken or missing transitive npm versions; changing an override invalidates
-the dependency cache.
+Declare worker registry dependencies and Build V2-owned override or patch
+policy according to [external dependency resolution](DEPENDENCIES.md). Never
+use top-level package-manager resolution fields in a worker package.
 
 **Durable Object-backed service** — add to `workspace/meta/vibestudio.yml`:
 

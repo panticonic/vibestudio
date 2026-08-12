@@ -1,6 +1,6 @@
 ---
 name: workspace-dev
-description: Create, develop, verify, and diagnose workspace panels, workers, Durable Objects, packages, and repo-local skills.
+description: Create, develop, verify, and diagnose workspace panels, workers, Durable Objects, packages, external dependency policy, and repo-local skills.
 ---
 
 # Workspace development
@@ -13,6 +13,7 @@ development](../extensiondev/SKILL.md) for trusted Node services.
 | Task | Reference |
 | --- | --- |
 | Development loop | [WORKFLOW.md](WORKFLOW.md) |
+| External dependencies, overrides, and patches | [DEPENDENCIES.md](DEPENDENCIES.md) |
 | Build, inspect, polish a panel | [PANEL_DEBUG_LOOP.md](PANEL_DEBUG_LOOP.md) |
 | Panel lifecycle, observation, failure diagnosis, host commands | [PANEL_API.md](PANEL_API.md) |
 | Workers, DOs, service-backed data, agent workers | [WORKERS.md](WORKERS.md) |

@@ -29,15 +29,15 @@ External extensions clone into the same tree at install time. There is no per-us
     "extension": {
       "activationEvents": ["*"],
       "dependencyMode": "auto"
+    },
+    "dependencyResolution": {
+      "overrides": {
+        "problem-dependency": "1.2.3"
+      }
     }
   },
   "dependencies": {
     "@workspace/runtime": "workspace:*"
-  },
-  "pnpm": {
-    "overrides": {
-      "problem-dependency": "1.2.3"
-    }
   }
 }
 ```
@@ -54,16 +54,14 @@ External extensions clone into the same tree at install time. There is no per-us
 | `vibestudio.extension`                  | Block presence marks the unit as an extension. Must be the only kind-block (no `vibestudio.worker` or `vibestudio.panel` alongside it).                |
 | `vibestudio.extension.activationEvents` | Exactly `["*"]` (start with the workspace) or `["onInvoke"]` (build after approval, start on first use).                                               |
 
-### Dependency overrides
+### External dependencies
 
-Extensions may declare package-local dependency pins with top-level `overrides`
-in their `package.json`. BuildV2 forwards simple string overrides from the
-extension and its transitive workspace packages into generated external-deps and
-extension-runtime dependency installs. Use this for broken transitive npm
-versions, missing registry versions, or urgent security pins.
-
-Overrides are part of the runtime dependency cache key, so changing one creates
-a fresh install.
+Declare external packages and all Build V2-owned override or patch policy as
+described in [workspace dependency resolution](../workspace-dev/DEPENDENCIES.md).
+Do not use package-manager resolution fields. Extension patches affect the
+build dependency environment and, when a declared root remains external, the
+derived runtime install. Dependency policy is part of both cache identities, so
+changing an override or patch creates a fresh environment.
 
 ### Optional fields
 

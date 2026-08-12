@@ -15,6 +15,7 @@ docs and the `extensions` runtime API; this skill is for authoring one.
 | Task | Reference |
 | --- | --- |
 | Package manifest, `activate(ctx)`, API, authority | [AUTHORING.md](AUTHORING.md) |
+| External dependencies, overrides, and patches | [workspace dependency resolution](../workspace-dev/DEPENDENCIES.md) |
 | Optional HTTP fetch handler | [FETCH.md](FETCH.md) |
 | Build, publish, inspect, reload | [DEV_LOOP.md](DEV_LOOP.md) |
 

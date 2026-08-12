@@ -13,6 +13,7 @@ and DOs are sandboxed services, extensions are trusted Node services.
 | Task | Reference |
 | --- | --- |
 | Package, manifest, source, dependencies, panel commands | [AUTHORING.md](AUTHORING.md) |
+| External dependencies, overrides, and patches | [workspace dependency resolution](../workspace-dev/DEPENDENCIES.md) |
 | Electron, React Native, or terminal contracts | [TARGETS.md](TARGETS.md) |
 | Capability declarations | [CAPABILITIES.md](CAPABILITIES.md) |
 | Semantic development and diagnostics | [DEV_LOOP.md](DEV_LOOP.md) |
