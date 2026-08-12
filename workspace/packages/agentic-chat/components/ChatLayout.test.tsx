@@ -34,8 +34,10 @@ vi.mock("./ChatMessageArea", () => ({
 vi.mock("./LazyChatFeedbackArea", () => ({
   LazyChatFeedbackArea: () => <div data-testid="feedback-area" />,
 }));
-vi.mock("./Outbox", () => ({ Outbox: () => null }));
-vi.mock("./PendingDeliveryQueue", () => ({ PendingDeliveryQueue: () => null }));
+vi.mock("./Outbox", () => ({ Outbox: () => <div data-testid="stock-outbox" /> }));
+vi.mock("./PendingDeliveryQueue", () => ({
+  PendingDeliveryQueue: () => <div data-testid="stock-pending-delivery" />,
+}));
 vi.mock("./ChatDebugConsole", () => ({ ChatDebugConsole: () => null }));
 vi.mock("./ChatInput", () => ({
   ChatInput: (props: {
@@ -83,6 +85,12 @@ describe("ChatLayout sizing", () => {
     const renderHeader = vi.fn((defaultContent: ReactNode) => (
       <div data-testid="product-header">{defaultContent}</div>
     ));
+    const renderDeliveryStatus = vi.fn((defaultContent: ReactNode) => (
+      <div data-testid="product-delivery-status">{defaultContent}</div>
+    ));
+    const renderComposer = vi.fn((defaultContent: ReactNode) => (
+      <div data-testid="product-composer">{defaultContent}</div>
+    ));
     const { getByTestId, queryByTestId } = render(
       <ChatLayout
         features={{ feedback: false, inlineUi: false, actionBar: false, clientEval: false }}
@@ -91,6 +99,8 @@ describe("ChatLayout sizing", () => {
         renderInvocation={renderInvocation}
         renderEmptyState={renderEmptyState}
         renderHeader={renderHeader}
+        renderDeliveryStatus={renderDeliveryStatus}
+        renderComposer={renderComposer}
         composerPlaceholder="Issue a bridge directive…"
         composerDefaultMentions={["engineering", "navigation"]}
         composerDisabled
@@ -112,6 +122,29 @@ describe("ChatLayout sizing", () => {
     expect(getByTestId("composer").dataset["defaultMentions"]).toBe("engineering,navigation");
     expect(getByTestId("composer").dataset["disabled"]).toBe("true");
     expect(getByTestId("product-header").contains(getByTestId("stock-header"))).toBe(true);
+    expect(
+      getByTestId("product-delivery-status").contains(getByTestId("stock-pending-delivery"))
+    ).toBe(true);
+    expect(getByTestId("product-delivery-status").contains(getByTestId("stock-outbox"))).toBe(true);
+    expect(getByTestId("product-composer").contains(getByTestId("composer"))).toBe(true);
     expect(renderHeader).toHaveBeenCalledOnce();
+    expect(renderDeliveryStatus).toHaveBeenCalledOnce();
+    expect(renderComposer).toHaveBeenCalledOnce();
+  });
+
+  it("lets products elide delivery status and the composer without changing capabilities", () => {
+    const { queryByTestId, getByTestId } = render(
+      <ChatLayout
+        features={fullFeatures}
+        renderDeliveryStatus={() => null}
+        renderComposer={() => null}
+      />
+    );
+
+    expect(getByTestId("message-area")).toBeTruthy();
+    expect(getByTestId("feedback-area")).toBeTruthy();
+    expect(queryByTestId("stock-pending-delivery")).toBeNull();
+    expect(queryByTestId("stock-outbox")).toBeNull();
+    expect(queryByTestId("composer")).toBeNull();
   });
 });

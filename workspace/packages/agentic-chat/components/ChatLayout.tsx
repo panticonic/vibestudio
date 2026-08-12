@@ -28,6 +28,10 @@ export interface ChatLayoutProps extends Pick<
   composerDisabled?: boolean;
   /** Replace, wrap, or elide the stock conversation header. */
   renderHeader?: (defaultContent: React.ReactNode) => React.ReactNode;
+  /** Replace, wrap, or elide the stock pending-delivery and outbox surfaces. */
+  renderDeliveryStatus?: (defaultContent: React.ReactNode) => React.ReactNode;
+  /** Replace, wrap, or elide the stock composer. */
+  renderComposer?: (defaultContent: React.ReactNode) => React.ReactNode;
 }
 
 /**
@@ -59,8 +63,23 @@ export const ChatLayout = React.memo(function ChatLayout({
   composerDefaultMentions,
   composerDisabled,
   renderHeader,
+  renderDeliveryStatus,
+  renderComposer,
 }: ChatLayoutProps) {
   const defaultHeader = <ChatHeader />;
+  const defaultDeliveryStatus = (
+    <>
+      <PendingDeliveryQueue />
+      <Outbox />
+    </>
+  );
+  const defaultComposer = (
+    <ChatInput
+      placeholder={composerPlaceholder}
+      defaultMentions={composerDefaultMentions}
+      disabled={composerDisabled}
+    />
+  );
   return (
     <>
       <Flex
@@ -90,13 +109,8 @@ export const ChatLayout = React.memo(function ChatLayout({
           features={features}
         />
         {features.feedback ? <LazyChatFeedbackArea /> : null}
-        <PendingDeliveryQueue />
-        <Outbox />
-        <ChatInput
-          placeholder={composerPlaceholder}
-          defaultMentions={composerDefaultMentions}
-          disabled={composerDisabled}
-        />
+        {renderDeliveryStatus ? renderDeliveryStatus(defaultDeliveryStatus) : defaultDeliveryStatus}
+        {renderComposer ? renderComposer(defaultComposer) : defaultComposer}
       </Flex>
       <ChatDebugConsole />
     </>

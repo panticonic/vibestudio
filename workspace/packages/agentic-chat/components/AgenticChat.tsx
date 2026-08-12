@@ -86,6 +86,10 @@ export interface AgenticChatProps {
   renderEmptyState?: ChatMessageAreaProps["renderEmptyState"];
   /** Replace, wrap, or elide the stock conversation header. */
   renderHeader?: ChatLayoutProps["renderHeader"];
+  /** Replace, wrap, or elide the stock pending-delivery and outbox surfaces. */
+  renderDeliveryStatus?: ChatLayoutProps["renderDeliveryStatus"];
+  /** Replace, wrap, or elide the stock composer. */
+  renderComposer?: ChatLayoutProps["renderComposer"];
   /** Product-specific prompt shown when the composer is empty. */
   composerPlaceholder?: string;
   /** Recipients used when composer text contains no explicit @mention. */
@@ -128,6 +132,8 @@ export const AgenticChat = forwardRef<AgenticChatHandle, AgenticChatProps>(funct
     renderInvocation,
     renderEmptyState,
     renderHeader,
+    renderDeliveryStatus,
+    renderComposer,
     composerPlaceholder,
     composerDefaultMentions,
     composerDisabled,
@@ -196,6 +202,8 @@ export const AgenticChat = forwardRef<AgenticChatHandle, AgenticChatProps>(funct
             renderInvocation={renderInvocation}
             renderEmptyState={renderEmptyState}
             renderHeader={renderHeader}
+            renderDeliveryStatus={renderDeliveryStatus}
+            renderComposer={renderComposer}
             composerPlaceholder={composerPlaceholder}
             composerDefaultMentions={composerDefaultMentions}
             composerDisabled={composerDisabled}
