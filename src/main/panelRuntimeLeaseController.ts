@@ -1376,5 +1376,4 @@ export class PanelPresentationController {
     if (!contents || typeof contents.id !== "number" || contents.isDestroyed?.()) return;
     this.deps.cdpHost.registerTarget?.(panelId, contents.id);
   }
-
 }

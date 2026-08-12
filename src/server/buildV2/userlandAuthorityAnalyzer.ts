@@ -207,10 +207,7 @@ function isPublicNamespace(
   );
 }
 
-function propertyCall(
-  call: ts.CallExpression,
-  name: string
-): ts.PropertyAccessExpression | null {
+function propertyCall(call: ts.CallExpression, name: string): ts.PropertyAccessExpression | null {
   if (!ts.isPropertyAccessExpression(call.expression) || call.expression.name.text !== name) {
     return null;
   }

@@ -2459,13 +2459,7 @@ async function buildPanel(
       sourceStateHash,
       sourcemap,
       authority,
-      executableModules: executableModulesFromMetafile(
-        metafile,
-        outdir,
-        sourceRoot,
-        node,
-        graph
-      ),
+      executableModules: executableModulesFromMetafile(metafile, outdir, sourceRoot, node, graph),
       ...(node.kind === "panel" && extractedManifest.stateArgs
         ? { stateArgsSchema: extractedManifest.stateArgs }
         : {}),
