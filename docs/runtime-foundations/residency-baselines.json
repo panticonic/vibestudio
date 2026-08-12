@@ -51,6 +51,16 @@
       "value": 11633,
       "direction": "advisory",
       "rationale": "Descriptive product builtin implementation footprint"
+    },
+    "mainServiceCompositionFiles": {
+      "value": 3,
+      "direction": "advisory",
+      "rationale": "Main-process service files that compose other typed services; growth deserves facade-ownership review"
+    },
+    "mainInlineServiceMethodTables": {
+      "value": 0,
+      "direction": "stay-zero",
+      "rationale": "Electron service implementations consume shared schemas instead of privately defining public host contracts"
     }
   }
 }

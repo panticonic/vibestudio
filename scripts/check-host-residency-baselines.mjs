@@ -57,6 +57,14 @@ const walkTypeScript = (relativeRoot) => {
 const lineTotal = (files) =>
   files.reduce((total, file) => total + fs.readFileSync(file, "utf8").split(/\r?\n/u).length, 0);
 
+const mainServiceFiles = walkTypeScript("src/main/services");
+const mainServiceCompositionFiles = mainServiceFiles.filter((file) =>
+  /\bcreateTypedServiceClient\s*\(/u.test(fs.readFileSync(file, "utf8"))
+);
+const mainInlineServiceMethodTableFiles = mainServiceFiles.filter((file) =>
+  /\bdefineServiceMethods\s*\(/u.test(fs.readFileSync(file, "utf8"))
+);
+
 const catalogClasses = new Set(PRODUCT_BUILTIN_CATALOG.map((entry) => entry.className));
 const internalIndex = fs.readFileSync(path.join(root, "src/server/internalDOs/index.ts"), "utf8");
 const internalExports = [
@@ -88,6 +96,8 @@ const computed = {
   ]),
   serverIndexLines: sourceLines("src/server/index.ts"),
   builtinTreeLines: lineTotal(walkTypeScript("packages/builtin")),
+  mainServiceCompositionFiles: mainServiceCompositionFiles.length,
+  mainInlineServiceMethodTables: mainInlineServiceMethodTableFiles.length,
 };
 
 if (process.argv.includes("--measure")) {
@@ -98,6 +108,14 @@ if (process.argv.includes("--measure")) {
           kernelMethods: census.decisions.size,
           kernelServices: census.services.size,
           ...computed,
+        },
+        details: {
+          mainServiceCompositionFiles: mainServiceCompositionFiles.map((file) =>
+            path.relative(root, file)
+          ),
+          mainInlineServiceMethodTableFiles: mainInlineServiceMethodTableFiles.map((file) =>
+            path.relative(root, file)
+          ),
         },
       },
       null,
@@ -126,6 +144,20 @@ for (const [name, value] of Object.entries(observed)) {
 const gatedCount = Object.values(measurements).filter(
   (measurement) => measurement.direction === "stay-zero"
 ).length;
+const advisoryMovements = Object.entries(observed).flatMap(([name, value]) => {
+  const measurement = measurements[name];
+  if (measurement?.direction !== "advisory" || measurement.value === value) return [];
+  return [{ name, baseline: measurement.value, observed: value }];
+});
 console.log(
   `Host residency invariants OK (${census.decisions.size} methods, ${census.services.size} services; ${gatedCount} structural zero-invariants checked, ${Object.keys(measurements).length - gatedCount} measurements advisory).`
 );
+if (advisoryMovements.length > 0) {
+  console.log(`Advisory movement since ${baseline.recordedAt} (reported, not quota-gated):`);
+  for (const movement of advisoryMovements) {
+    const delta = movement.observed - movement.baseline;
+    console.log(
+      `  ${movement.name}: ${movement.baseline} -> ${movement.observed} (${delta > 0 ? "+" : ""}${delta})`
+    );
+  }
+}
