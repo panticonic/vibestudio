@@ -12,11 +12,13 @@ Creation is a durable phase. Store its receipt before doing anything else:
 ```ts
 import { createProjects } from "@workspace-skills/workspace-dev";
 
-scope.created = await createProjects([{
-  projectType: "panel",
-  name,
-  title,
-}]);
+scope.created = await createProjects([
+  {
+    projectType: "panel",
+    name,
+    title,
+  },
+]);
 scope.panelSource = scope.created[0].created; // already `panels/name`
 return scope.created;
 ```
@@ -69,8 +71,8 @@ reported kernel restart, recover the same panel with
 
 ## 4. Capture and visually read the flawed state
 
-Acquire one generation-fenced session for the current runtime incarnation, use native screenshot
-bytes, and return a file reference. Omit an exact `authority.requests` list for
+Acquire one generation-fenced session for the current runtime incarnation and
+return the panel handle's native screenshot result directly. Omit an exact `authority.requests` list for
 ordinary eval; if intentionally attenuating, `cdp.page()` requires the exact
 `panel.inspect` request documented in `BROWSER.md`.
 
@@ -80,14 +82,13 @@ const page = scope.panelSession.page;
 const roles = await Promise.all(
   (await page.getByRole("button").all()).map((item) => item.inspect())
 );
-const bytes = await page.screenshot({ fullPage: true });
-const path = await fs.mktemp("panel-before-ux-fix");
-await fs.writeFile(path, bytes);
-return { screenshot: `file:${path}`, roles };
+console.log(roles);
+return await scope.panel.cdp.screenshot({ format: "png" });
 ```
 
-Pass the returned file reference to `read`. Do not infer the visual defect from
-source/DOM text alone, and do not convert image bytes to base64 text.
+Eval attaches this canonical screenshot result as image content. No temp file,
+filesystem write authority, or follow-up `read` call is needed. Do not infer the
+visual defect from source/DOM text alone.
 
 ## 5. Repair UX, rebuild the same panel, and reacquire the page
 

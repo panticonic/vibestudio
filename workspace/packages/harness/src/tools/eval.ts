@@ -7,6 +7,7 @@
  */
 import { Type, type Static } from "@sinclair/typebox";
 import type { AgentTool, AgentToolResult } from "@workspace/pi-core";
+import type { ImageContent } from "@workspace/pi-ai";
 import {
   createEvalExecutor,
   evalAuthorityInputSchema,
@@ -203,6 +204,7 @@ export function normalizeEvalToolSource(params: {
  */
 export function formatEvalResult(result: EvalRunResult): AgentToolResult<EvalRunResult> {
   const parts: string[] = [];
+  const returnedImage = result.success ? imageContentFromEvalReturn(result.returnValue) : null;
   const kernelEvent = result.kernel?.event;
   if (kernelEvent?.kind === "restarted") {
     if (kernelEvent.recovery.status === "complete") {
@@ -235,18 +237,72 @@ export function formatEvalResult(result: EvalRunResult): AgentToolResult<EvalRun
   }
   if (result.success && result.returnValue !== undefined) {
     parts.push(
-      `[eval] Return value:\n${clampText(safeStringify(result.returnValue), MAX_RETURN_CHARS, "$lastLargeReturn")}`
+      returnedImage
+        ? `[eval] Return value: attached ${returnedImage.summary}.`
+        : `[eval] Return value:\n${clampText(safeStringify(result.returnValue), MAX_RETURN_CHARS, "$lastLargeReturn")}`
     );
   }
   const keys = result.scopeKeys ?? [];
   parts.push(
     keys.length ? `[scope] keys: ${keys.join(", ")} (${keys.length} total)` : "[scope] (empty)"
   );
+  const details = returnedImage
+    ? {
+        ...result,
+        returnValue: {
+          protocol: "eval-image-result.v1",
+          attached: true,
+          mimeType: returnedImage.content.mimeType,
+          ...returnedImage.dimensions,
+        },
+      }
+    : result;
   return {
-    content: [{ type: "text", text: parts.join("\n") || "[eval] (no output)" }],
-    details: result,
+    content: [
+      { type: "text", text: parts.join("\n") || "[eval] (no output)" },
+      ...(returnedImage ? [returnedImage.content] : []),
+    ],
+    details,
     isError: !result.success,
   } as AgentToolResult<EvalRunResult>;
+}
+
+function imageContentFromEvalReturn(value: unknown): {
+  content: ImageContent;
+  summary: string;
+  dimensions: { width?: number; height?: number };
+} | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const candidate = value as Record<string, unknown>;
+  const data = candidate["data"];
+  const mimeType = candidate["mimeType"];
+  if (
+    typeof data !== "string" ||
+    data.length === 0 ||
+    (mimeType !== "image/png" &&
+      mimeType !== "image/jpeg" &&
+      mimeType !== "image/gif" &&
+      mimeType !== "image/webp")
+  ) {
+    return null;
+  }
+  const width =
+    typeof candidate["width"] === "number" && Number.isFinite(candidate["width"])
+      ? candidate["width"]
+      : undefined;
+  const height =
+    typeof candidate["height"] === "number" && Number.isFinite(candidate["height"])
+      ? candidate["height"]
+      : undefined;
+  const dimensions = {
+    ...(width === undefined ? {} : { width }),
+    ...(height === undefined ? {} : { height }),
+  };
+  return {
+    content: { type: "image", mimeType, data },
+    summary: `${mimeType}${width !== undefined && height !== undefined ? ` image (${width}×${height})` : " image"}`,
+    dimensions,
+  };
 }
 
 export function createEvalTool(
@@ -258,7 +314,7 @@ export function createEvalTool(
     name: "eval",
     label: "eval",
     description:
-      'Execute TypeScript/JS in your persistent notebook sandbox (a per-agent EvalDO, not the visible panel). The live heap—including objects with methods, module singletons, and client handles—is retained for 30 minutes after the latest cell. Calls have no implicit wall deadline. Omit timeoutMs for ordinary work and lifecycle calls; never add a generic 120000/300000 safety timeout. A whole-cell deadline cancels the notebook operation and hides which nested wait stalled. Bound a specific wait with that API’s AbortSignal/timeout instead, and reserve eval timeoutMs for deliberately non-settling code or an explicit end-to-end deadline. Split intentionally bounded workflows when useful and keep live working objects in `scope`; store stable IDs and exact serializable data there for recovery, or durable records in `db`. An unavoidable process restart is reported explicitly as `[kernel] Restarted` with exact restored/lost scope keys—reacquire lost handles from stable IDs before continuing. Set reset:true to clear scope/db atomically before this call; never call eval.reset from inside the running eval. The live runtime is self-describing: call `await help()` to list bindings or `await help("workers")` (and the analogous binding name) before guessing an API or return shape. Call workspace services via `rpc`/`services`; `chat.channelId` is only the channel where this agent is responding; for visible panel perspective use `parent`/`getParent()` and `panelTree` plus target panel stateArgs. `return` sends a bounded value back; console output is captured. Very large console, error-data, and return payloads are windowed with stable recovery pointers to `scope.$lastLargeConsole`, `scope.$lastLargeErrorData`, and `scope.$lastLargeReturn`, so prefer compact summaries and store large artifacts in scope/blobstore.',
+      'Execute TypeScript/JS in your persistent notebook sandbox (a per-agent EvalDO, not the visible panel). The live heap—including objects with methods, module singletons, and client handles—is retained for 30 minutes after the latest cell. Calls have no implicit wall deadline. Omit timeoutMs for ordinary work and lifecycle calls; never add a generic 120000/300000 safety timeout. A whole-cell deadline cancels the notebook operation and hides which nested wait stalled. Bound a specific wait with that API’s AbortSignal/timeout instead, and reserve eval timeoutMs for deliberately non-settling code or an explicit end-to-end deadline. Split intentionally bounded workflows when useful and keep live working objects in `scope`; store stable IDs and exact serializable data there for recovery, or durable records in `db`. An unavoidable process restart is reported explicitly as `[kernel] Restarted` with exact restored/lost scope keys—reacquire lost handles from stable IDs before continuing. Set reset:true to clear scope/db atomically before this call; never call eval.reset from inside the running eval. The live runtime is self-describing: call `await help()` to list bindings or `await help("workers")` (and the analogous binding name) before guessing an API or return shape. Call workspace services via `rpc`/`services`; `chat.channelId` is only the channel where this agent is responding; for visible panel perspective use `parent`/`getParent()` and `panelTree` plus target panel stateArgs. `return` sends a bounded value back; console output is captured. Returning the exact result of `await handle.cdp.screenshot()` attaches native image content directly and requires no temp-file write. `page.consoleEvents()` returns the live event array; `await handle.cdp.consoleHistory()` returns `{ entries, errors, dropped, capacity }`. Very large console, error-data, and other return payloads are windowed with stable recovery pointers to `scope.$lastLargeConsole`, `scope.$lastLargeErrorData`, and `scope.$lastLargeReturn`, so prefer compact summaries and store large artifacts in scope/blobstore.',
     parameters: evalToolParameters,
     execute: async (toolCallId, params): Promise<AgentToolResult<EvalRunResult>> => {
       // Some model transports materialize an optional string as "". Treat an

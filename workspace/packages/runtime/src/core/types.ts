@@ -173,7 +173,9 @@ export interface CdpAutomation {
   session(): Promise<PanelCdpSession>;
   /**
    * Historical console messages captured by the Electron host from panel
-   * creation time. This is separate from live CDP console events.
+   * creation time. Returns `{ entries, errors, dropped, capacity }`, not an
+   * array; use `result.errors` or filter `result.entries`. This is separate
+   * from the live array returned by `page.consoleEvents()`.
    */
   consoleHistory(options?: PanelConsoleHistoryOptions): Promise<PanelConsoleHistoryResult>;
   getCdpEndpoint(): Promise<CdpEndpoint>;
@@ -183,7 +185,10 @@ export interface CdpAutomation {
   reload(): Promise<void>;
   stop(): Promise<void>;
   click(selector: string): Promise<void>;
-  /** One-RPC host capture, including hidden/unslotted panels. */
+  /**
+   * One-RPC host capture, including hidden/unslotted panels. Returning this
+   * exact value from eval attaches native image content without filesystem IO.
+   */
   screenshot(options?: PanelScreenshotOptions): Promise<PanelScreenshotResult>;
 }
 

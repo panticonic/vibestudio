@@ -195,12 +195,16 @@ interface FsReadBytesResult {
   nextOffset?: number;
 }
 interface ImageServiceApi {
-  detectMimeType(bytes: Uint8Array): Promise<string | null>;
+  detectMimeType(bytes: BinaryEnvelope): Promise<string | null>;
   resize(
-    bytes: Uint8Array,
+    bytes: BinaryEnvelope,
     mimeType: string,
     opts: { maxWidth: number; maxHeight: number }
   ): Promise<ImageResizeResult>;
+}
+interface BinaryEnvelope {
+  __bin: true;
+  data: string;
 }
 const IMAGE_SERVICE_EXTENSION = "@workspace-extensions/image-service";
 
@@ -547,9 +551,13 @@ export function createReadTool(
         imageService &&
         (isLikelyImagePath(path) || hasSupportedImageMagic(raw))
       ) {
-        const mimeType = await imageService.detectMimeType(raw);
+        // Extension arguments cross a JSON RPC boundary. Preserve bytes in
+        // the runtime's canonical binary envelope instead of relying on a
+        // Uint8Array's in-process prototype surviving serialization.
+        const binary = { __bin: true, data: bytesToBase64(raw) } as const;
+        const mimeType = await imageService.detectMimeType(binary);
         if (mimeType?.startsWith("image/")) {
-          const resized = await imageService.resize(raw, mimeType, {
+          const resized = await imageService.resize(binary, mimeType, {
             maxWidth: 2000,
             maxHeight: 2000,
           });

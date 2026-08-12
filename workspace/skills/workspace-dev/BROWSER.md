@@ -290,8 +290,18 @@ await page.locator('input[name="email"]').fill("user@example.com");
 ```
 
 `page.screenshot()` returns `Uint8Array` and has no filesystem `path` option.
-Persist a screenshot for visual inspection with an opaque context-local temp
-path, then pass the returned file reference directly to the `read` tool:
+When a panel handle is available, prefer the one-call host capture and return
+its exact result from eval; eval attaches it as native image content and the
+operation remains read-only:
+
+```ts
+return await handle.cdp.screenshot({ format: "png" });
+```
+
+For a standalone CDP page with no panel handle, persist its byte screenshot for
+visual inspection with an opaque context-local temp path, then pass the returned
+file reference directly to `read`. Creating that temp file is a write, so do not
+attenuate the eval cell to `authority.effects: "read-only"`:
 
 ```ts
 const bytes = await page.screenshot({ fullPage: true });

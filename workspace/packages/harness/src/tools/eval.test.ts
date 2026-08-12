@@ -44,6 +44,9 @@ describe("formatEvalResult (shared by the eval tool's execute + the agent's defe
     expect(tool.description).toContain("await help()");
     expect(tool.description).toContain('await help("workers")');
     expect(tool.description).toContain("before guessing an API or return shape");
+    expect(tool.description).toContain("handle.cdp.screenshot()");
+    expect(tool.description).toContain("page.consoleEvents()");
+    expect(tool.description).toContain("{ entries, errors, dropped, capacity }");
   });
 
   it("documents the warm notebook contract and makes a cold restart impossible to miss", () => {
@@ -227,6 +230,29 @@ describe("formatEvalResult (shared by the eval tool's execute + the agent's defe
     // The untruncated result is preserved on `details` for the harness.
     expect(out.details).toBe(result);
     expect(out.isError).toBe(false);
+  });
+
+  it("projects a canonical panel screenshot as native image content without base64 text", () => {
+    const data = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB";
+    const out = formatEvalResult({
+      success: true,
+      console: "",
+      returnValue: { data, mimeType: "image/png", width: 1280, height: 720 },
+    });
+
+    expect(textOf(out)).toContain("attached image/png image (1280×720)");
+    expect(textOf(out)).not.toContain(data);
+    expect(out.content[1]).toEqual({ type: "image", mimeType: "image/png", data });
+    expect(out.details).toMatchObject({
+      returnValue: {
+        protocol: "eval-image-result.v1",
+        attached: true,
+        mimeType: "image/png",
+        width: 1280,
+        height: 720,
+      },
+    });
+    expect(JSON.stringify(out.details)).not.toContain(data);
   });
 
   it("formats a failure: error line, no return value", () => {

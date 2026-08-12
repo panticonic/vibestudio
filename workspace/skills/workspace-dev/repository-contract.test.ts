@@ -85,7 +85,8 @@ describe("panel debugging guidance", () => {
     expect(loop).toContain("requestedRef");
     expect(loop).toContain("const refreshed = await scope.panelSession.refresh()");
     expect(loop).toContain("const page = scope.panelSession.page");
-    expect(loop).toContain("await page.screenshot({ fullPage: true })");
+    expect(loop).toContain('return await scope.panel.cdp.screenshot({ format: "png" })');
+    expect(loop).toContain("No temp file");
   });
 });
 

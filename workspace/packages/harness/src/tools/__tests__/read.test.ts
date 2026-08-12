@@ -571,7 +571,11 @@ describe("createReadTool", () => {
     const rpc = {
       call: vi.fn().mockImplementation((_target: string, method: string, args: unknown[]) => {
         if (method === "extensions.streamingMethods") return Promise.resolve([]);
-        const [, extensionMethod] = args;
+        const [, extensionMethod, extensionArgs] = args;
+        expect(extensionArgs?.[0]).toEqual({
+          __bin: true,
+          data: Buffer.from(pngBytes).toString("base64"),
+        });
         if (extensionMethod === "detectMimeType") return Promise.resolve("image/png");
         if (extensionMethod === "resize") {
           return Promise.resolve({
