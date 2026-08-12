@@ -1,10 +1,22 @@
-import type { TestCase } from "../types.js";
+import type { TestAuthorityPolicy, TestCase } from "../types.js";
 import {
   findLastAgentMessage,
   noIncompleteInvocations,
   successfulEvalCode,
   successfulEvalReturnValues,
 } from "./_helpers.js";
+
+const serverLogReadAuthority: TestAuthorityPolicy = {
+  authority: [
+    {
+      ruleId: "inspect-server-host-logs",
+      capability: { kind: "exact", key: "server-logs.read" },
+      resource: { kind: "exact", key: "server-logs.read" },
+      tier: "gated",
+      decision: "once",
+    },
+  ],
+};
 
 function records(value: unknown, found: Record<string, unknown>[] = []): Record<string, unknown>[] {
   if (Array.isArray(value)) {
@@ -54,6 +66,7 @@ export const serverLogTests: TestCase[] = [
     description:
       "Use recent host logs to distinguish a concrete startup incident from normal activity",
     category: "server-logs",
+    authorityPolicy: serverLogReadAuthority,
     prompt:
       "Something in this workspace seemed slow to start a moment ago. Can you check the recent server logs and tell me what happened?",
     validation: "agent-evidence",
@@ -71,6 +84,7 @@ export const serverLogTests: TestCase[] = [
     name: "server-log-query-stats",
     description: "Query recent server host logs bounded and report log statistics",
     category: "server-logs",
+    authorityPolicy: serverLogReadAuthority,
     prompt:
       "Inspect a bounded recent sample of the server's own host logs at warning level or higher, and summarize both what the sample contains and the overall log statistics.",
     validate: (result) =>
@@ -119,6 +133,7 @@ export const serverLogTests: TestCase[] = [
     name: "server-log-tail",
     description: "Tail the newest server host log entries",
     category: "server-logs",
+    authorityPolicy: serverLogReadAuthority,
     prompt:
       "Look at only the newest few entries in the server's host-log tail. Tell me how many you observed and the severity of the newest entry.",
     validate: (result) =>
