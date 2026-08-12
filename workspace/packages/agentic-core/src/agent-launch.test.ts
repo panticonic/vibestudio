@@ -222,6 +222,37 @@ describe("agent launch primitive", () => {
     ]);
   });
 
+  it.each([
+    [
+      "subscribeChannel",
+      () =>
+        subscribeAgentToChannel(
+          makeRpc(async () => ({ ok: true })),
+          "target-1",
+          {
+            channelId: "ch-1",
+            contextId: "ctx-1",
+          }
+        ),
+    ],
+    [
+      "initFromTrajectoryFork",
+      () =>
+        initAgentFromTrajectoryFork(
+          makeRpc(async () => ({ ok: true, participantId: "" })),
+          "target-1",
+          {
+            parentLogId: "log-parent",
+            seq: 42,
+            taskChannelId: "task-1",
+            contextId: "ctx-child",
+          }
+        ),
+    ],
+  ])("rejects %s results without a participant identity", async (operation, invoke) => {
+    await expect(invoke()).rejects.toThrow(`${operation} returned no participant identity`);
+  });
+
   it("unsubscribes through the deterministic target without resolving or reactivating it", async () => {
     const rpc = makeRpc();
 
@@ -305,6 +336,17 @@ describe("agent launch primitive", () => {
       idempotencyKey: "subagent-seed:run-1",
       senderMetadata: { type: "headless", name: "Subagent task" },
     });
+  });
+
+  it("refuses to build an unaddressed agent task seed", () => {
+    expect(() =>
+      buildAgentTaskSeedEvent({
+        senderParticipantId: "parent-participant",
+        childParticipantId: "",
+        messageId: "subagent-seed:run-1",
+        task: "audit this",
+      })
+    ).toThrow("Agent task seed requires a child participant identity");
   });
 
   it("subscribes a handle target directly", async () => {

@@ -24,7 +24,7 @@ export interface AgentEntityHandle {
 
 export interface AgentSubscriptionResult {
   ok: boolean;
-  participantId?: string;
+  participantId: string;
 }
 
 export interface AgentEntityCreateInput {
@@ -90,7 +90,7 @@ export interface AgentTaskSeedInput {
   senderParticipantId: string;
   task: string;
   messageId: string;
-  childParticipantId?: string | null;
+  childParticipantId: string;
   displayName?: string;
   senderMetadata?: Record<string, unknown>;
   createdAt?: string;
@@ -106,6 +106,22 @@ export interface AgentTaskSeedChannel {
 
 function targetIdFor(handleOrTargetId: AgentEntityHandle | string): string {
   return typeof handleOrTargetId === "string" ? handleOrTargetId : handleOrTargetId.targetId;
+}
+
+function requireAgentSubscriptionResult(
+  operation: "subscribeChannel" | "initFromTrajectoryFork",
+  result: unknown
+): AgentSubscriptionResult {
+  if (
+    !result ||
+    typeof result !== "object" ||
+    typeof (result as { ok?: unknown }).ok !== "boolean" ||
+    typeof (result as { participantId?: unknown }).participantId !== "string" ||
+    !(result as { participantId: string }).participantId.trim()
+  ) {
+    throw new Error(`${operation} returned no participant identity`);
+  }
+  return result as AgentSubscriptionResult;
 }
 
 type AgentEntityCreateSpec = Extract<RuntimeEntityCreateSpec, { kind: "do" }>;
@@ -149,14 +165,17 @@ export async function subscribeAgentToChannel(
   handleOrTargetId: AgentEntityHandle | string,
   input: AgentChannelSubscriptionInput
 ): Promise<AgentSubscriptionResult> {
-  return rpc.call<AgentSubscriptionResult>(targetIdFor(handleOrTargetId), "subscribeChannel", [
-    {
-      channelId: input.channelId,
-      contextId: input.contextId,
-      config: toSubscriptionConfig(input.config),
-      replay: input.replay,
-    },
-  ]);
+  return requireAgentSubscriptionResult(
+    "subscribeChannel",
+    await rpc.call<unknown>(targetIdFor(handleOrTargetId), "subscribeChannel", [
+      {
+        channelId: input.channelId,
+        contextId: input.contextId,
+        config: toSubscriptionConfig(input.config),
+        replay: input.replay,
+      },
+    ])
+  );
 }
 
 /**
@@ -166,8 +185,8 @@ export async function subscribeAgentToChannel(
 export async function unsubscribeAgentFromChannel(
   rpc: AgentLaunchRpc,
   input: AgentChannelUnsubscriptionInput
-): Promise<AgentSubscriptionResult> {
-  return rpc.call<AgentSubscriptionResult>(
+): Promise<{ ok: boolean }> {
+  return rpc.call<{ ok: boolean }>(
     doTargetId({
       source: input.source,
       className: input.className,
@@ -183,10 +202,9 @@ export async function initAgentFromTrajectoryFork(
   handleOrTargetId: AgentEntityHandle | string,
   input: AgentTrajectoryForkInput
 ): Promise<AgentSubscriptionResult> {
-  return rpc.call<AgentSubscriptionResult>(
-    targetIdFor(handleOrTargetId),
+  return requireAgentSubscriptionResult(
     "initFromTrajectoryFork",
-    [
+    await rpc.call<unknown>(targetIdFor(handleOrTargetId), "initFromTrajectoryFork", [
       {
         parentLogId: input.parentLogId,
         seq: input.seq,
@@ -194,7 +212,7 @@ export async function initAgentFromTrajectoryFork(
         contextId: input.contextId,
         config: toSubscriptionConfig(input.config),
       },
-    ]
+    ])
   );
 }
 
@@ -261,6 +279,9 @@ export async function createSubagentContext(
 export function buildAgentTaskSeedEvent(
   input: AgentTaskSeedInput
 ): AgenticEvent<"message.completed"> {
+  if (!input.childParticipantId.trim()) {
+    throw new Error("Agent task seed requires a child participant identity");
+  }
   const displayName = input.displayName ?? "Subagent task";
   const senderMetadata = input.senderMetadata ?? {};
   return {
@@ -284,9 +305,7 @@ export function buildAgentTaskSeedEvent(
       ],
       outcome: "completed",
       tier: "primary",
-      ...(input.childParticipantId
-        ? { to: [{ kind: "participant" as const, participantId: input.childParticipantId }] }
-        : {}),
+      to: [{ kind: "participant" as const, participantId: input.childParticipantId }],
     },
     createdAt: input.createdAt ?? new Date().toISOString(),
   };

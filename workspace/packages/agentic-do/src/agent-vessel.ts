@@ -6255,7 +6255,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       }
 
       // 5) Bring the child online on the task channel.
-      let childParticipantId: string | null = null;
+      let childParticipantId: string;
       if (mode === "fork") {
         const childSubscription = await initAgentFromTrajectoryFork(this.rpc, childHandle, {
           parentLogId,
@@ -6264,7 +6264,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
           contextId,
           config: childConfig,
         });
-        childParticipantId = childSubscription.participantId ?? null;
+        childParticipantId = childSubscription.participantId;
       } else {
         const childSubscription = await subscribeAgentToChannel(this.rpc, childHandle, {
           channelId: taskChannelId,
@@ -6272,7 +6272,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
           config: childConfig,
           replay: false,
         });
-        childParticipantId = childSubscription.participantId ?? null;
+        childParticipantId = childSubscription.participantId;
       }
       this.subagentRuns.setChildParticipantId(runId, childParticipantId);
       const effectiveChildSettings = await this.rpc.call<Record<string, unknown>>(
@@ -6703,6 +6703,9 @@ export abstract class AgentVesselBase extends DurableObjectBase {
 
   private async publishSubagentSeed(run: SubagentRunRow, task: string): Promise<void> {
     if (!task.trim()) return;
+    if (!run.childParticipantId) {
+      throw new Error(`subagent ${run.runId} has no child participant identity`);
+    }
     const participantId =
       this.subscriptions.getParticipantId(run.taskChannelId) ?? this.participantId();
     const messageId = `subagent-seed:${run.runId}`;
