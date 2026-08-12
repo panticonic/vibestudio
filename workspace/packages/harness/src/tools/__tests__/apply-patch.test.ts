@@ -12,6 +12,8 @@ describe("apply_patch", () => {
     expect(tool.description).toContain("top-level section and repository name");
     expect(tool.description).toContain("projects/app/README.md");
     expect(tool.description).toContain("workspace-root files");
+    expect(tool.description).toContain('{ kind: "replace", path, replacements:');
+    expect(tool.description).toContain("omit optional fields instead of sending null");
   });
 
   it("applies a multi-file content, presence, and mode transaction", async () => {

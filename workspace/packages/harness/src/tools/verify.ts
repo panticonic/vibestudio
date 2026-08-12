@@ -159,7 +159,12 @@ export function createVerifyTool(
             })
           : undefined;
         return {
-          content: [{ type: "text", text: renderBuild(command.target, bounded.report) }],
+          content: [
+            {
+              type: "text",
+              text: renderBuild(command.target, bounded.report, receipt.diagnostics),
+            },
+          ],
           details: {
             operation: "build",
             target: command.target,
@@ -347,11 +352,19 @@ function boundTestReport(report: TestRunResult): {
   };
 }
 
-function renderBuild(target: string, report: UnitBuildReportWire): string {
+function renderBuild(
+  target: string,
+  report: UnitBuildReportWire,
+  diagnostics: BuildVerificationReceipt["diagnostics"]
+): string {
+  const diagnosticSummary =
+    diagnostics.total === diagnostics.retained
+      ? `${diagnostics.total} diagnostic${diagnostics.total === 1 ? "" : "s"}`
+      : `${diagnostics.total} diagnostics; ${diagnostics.retained} retained`;
   return (
     `Build ${report.status} for ${target} (${report.kind}; ` +
     `${report.builds.length} target${report.builds.length === 1 ? "" : "s"}; ` +
-    `${report.diagnostics.length} diagnostic${report.diagnostics.length === 1 ? "" : "s"}). ` +
+    `${diagnosticSummary}). ` +
     "Structured diagnostics are in details.report.diagnostics; exact reusable evidence is in details.receipt."
   );
 }

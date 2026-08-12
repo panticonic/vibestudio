@@ -179,6 +179,10 @@ describe("context-exact verify tool", () => {
       },
     });
     expect((result.details as { report: UnitBuildReportWire }).report.diagnostics).toHaveLength(40);
+    expect(result.content[0]).toMatchObject({
+      type: "text",
+      text: expect.stringContaining("45 diagnostics; 40 retained"),
+    });
   });
 
   it("runs one focused test selection through the approved extension", async () => {
