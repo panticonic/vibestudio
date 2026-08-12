@@ -42,7 +42,6 @@ export interface PersistedLayout {
 export const MIN_COLUMN_WIDTH = 460;
 export const PREFERRED_COLUMN_WIDTH = 560;
 export const MIN_PANE_HEIGHT = 160;
-export const SINGLE_COLUMN_BREAKPOINT = 1100;
 export const COLUMN_DIVIDER_WIDTH = 7;
 /** Reserved shell chrome above each native pane; kept thin for drop targeting. */
 export const PANE_DROP_HANDLE_HEIGHT = 5;

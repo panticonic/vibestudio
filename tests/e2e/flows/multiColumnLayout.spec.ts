@@ -3,8 +3,8 @@
  *
  * Verifies in a real Electron run that the multi-column shell layout keeps the
  * native WebContentsView slots in lockstep with the DOM pane surfaces:
- *   1. Cmd/Ctrl-click on a tree row opens a second panel beside the first
- *      (two simultaneous surfaces, distinct native slot ids).
+ *   1. Normal focused child creation opens a second panel beside the first at
+ *      the default 1200px desktop width (two simultaneous native surfaces).
  *   2. Divider drags settle with each native slot's bounds matching its DOM
  *      surface box within 1 px (measured through the main-process test API).
  *   3. Window shrink parks a column (edge tab, slot cleared); clicking the edge
@@ -231,7 +231,7 @@ async function sendShellMouseDrag(
 const POLL = { timeout: 60_000, intervals: [250, 500, 1_000] };
 
 test.describe("Multi-column panel layout", () => {
-  test("native slots track panes across open-beside, drags, parking, close, and keyboard", async () => {
+  test("native slots track panes across child creation, drags, parking, close, and keyboard", async () => {
     test.setTimeout(600_000);
     const workspacePath = createManagedTestWorkspace({
       configureSource: (sourceRoot) => configureInitialPanel(sourceRoot, "about/about"),
@@ -296,8 +296,9 @@ test.describe("Multi-column panel layout", () => {
       }
       const panel1 = readiness.panelId;
 
-      // Wide window so two ≥460px columns fit beside the sidebar.
-      await setWindowSize(app, 1600, 1000);
+      // Exercise the application's default desktop width. With the 232px tree,
+      // the remaining viewport fits two 460px columns and their divider.
+      await setWindowSize(app, 1200, 800);
 
       let wcId = 0;
       await expect
@@ -326,27 +327,25 @@ test.describe("Multi-column panel layout", () => {
             }
           ).__testApi;
           if (!testApi) throw new Error("Test API not available");
-          return testApi.createPanel(args.parentId, args.source, { focus: false });
+          return testApi.createPanel(args.parentId, args.source, { focus: true });
         },
         { parentId: panel1, source: "about/adblock" }
       );
       const panel2 = created.id;
 
-      await test.step("open second panel beside the first via Ctrl-click on its tree row", async () => {
+      await test.step("normal child creation opens beside its parent at the default width", async () => {
         try {
           await expect
             .poll(async () => {
-              const surfaces = await getSurfaceRects(app, wcId);
-              if (surfaces.length >= 2) return true;
-              // Retry the idempotent user action until the layout converges:
-              // Ctrl-click the second panel's tree row (guarded on <2 panes so a
-              // slow frame cannot open a third column).
-              const tree = await getPanelTree(app);
-              const title = tree.find((panel) => panel.id === panel2)?.title;
-              if (title) {
-                await clickTreeRowForPanel(app, wcId, title, { ctrlKey: true }).catch(() => false);
-              }
-              return false;
+              if ((await getSurfaceRects(app, wcId)).length !== 2) return false;
+              // Residency changes intentionally clear native surfaces for a
+              // 150ms transition. Require the two-pane state to survive that
+              // handoff rather than accepting its initial pre-effect frame.
+              await new Promise((resolve) => setTimeout(resolve, 200));
+              return (
+                (await getSurfaceRects(app, wcId)).length === 2 &&
+                (await surfacesMatchNativeBounds(app, wcId))
+              );
             }, POLL)
             .toBe(true);
         } catch (error) {
@@ -426,6 +425,9 @@ test.describe("Multi-column panel layout", () => {
 
       // ---- Scenario 2: divider drag keeps native bounds in lockstep ------
       await test.step("column divider drag settles with native bounds matching DOM within 1px", async () => {
+        // Give the divider room to move beyond both columns' minima.
+        await setWindowSize(app, 1600, 1000);
+        await expect.poll(() => surfacesMatchNativeBounds(app, wcId), POLL).toBe(true);
         const before = await getSurfaceRects(app, wcId);
         const leftBefore = before.reduce((min, s) => Math.min(min, s.rect.width), Infinity);
         const separator = await shellEval<ShellRect | null>(
@@ -463,7 +465,7 @@ test.describe("Multi-column panel layout", () => {
 
       // ---- Scenario 3: park via window shrink, un-park via edge tab ------
       await test.step("window shrink parks a column and clears its slot; edge tab rebinds it", async () => {
-        await setWindowSize(app, 780, 900); // below SINGLE_COLUMN_BREAKPOINT (1100)
+        await setWindowSize(app, 780, 900); // only one actual column minimum fits
 
         let parkedPanelId = "";
         await expect

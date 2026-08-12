@@ -13,7 +13,6 @@ import {
 import {
   MIN_COLUMN_WIDTH,
   MIN_PANE_HEIGHT,
-  SINGLE_COLUMN_BREAKPOINT,
   mintColumnId,
   mintPaneId,
   nativeSlotIdForPane,
@@ -326,7 +325,7 @@ describe("show-panel (rule 1)", () => {
 });
 
 describe("open-child (rule 2)", () => {
-  it("side (default): opens a new column right of the parent when it fits", () => {
+  it("side (default): opens a new column right of the parent", () => {
     const layout = layoutOf(["A"]);
     const next = applyLayoutAction(
       layout,
@@ -340,42 +339,43 @@ describe("open-child (rule 2)", () => {
     assertInvariants(next);
   });
 
-  it("side: replaces in the parent's pane when the fit test fails (D4)", () => {
-    // Two columns at min width already consume 920; adding 460 more exceeds 1000.
+  it("side preserves the requested logical column when not every column fits", () => {
     const layout = layoutOf(["A"], ["D"]);
     const next = applyLayoutAction(
       layout,
       { type: "open-child", panelId: "B", parentId: "A" },
       makeEnv({ viewportWidth: 1000 })
     );
-    expect(next.columns).toHaveLength(2);
-    expect(paneAt(next, 0, 0).panelId).toBe("B");
-    expect(paneAt(next, 1, 0).panelId).toBe("D");
+    expect(next.columns).toHaveLength(3);
+    expect(next.columns.map((column) => column.panes[0]?.panelId)).toEqual(["A", "B", "D"]);
     assertInvariants(next);
   });
 
-  it("side: fit test respects per-panel min widths from hints", () => {
+  it("side preserves per-panel minimum widths for residency", () => {
     const layout = layoutOf(["A"]);
     const env = makeEnv({ viewportWidth: 1000, minWidths: { B: 700 } });
-    // 460 + 700 > 1000 → replace.
     const next = applyLayoutAction(
       layout,
       { type: "open-child", panelId: "B", parentId: "A" },
       env
     );
-    expect(next.columns).toHaveLength(1);
-    expect(paneAt(next, 0, 0).panelId).toBe("B");
+    expect(next.columns).toHaveLength(2);
+    expect(computeViewport(next, env)).toEqual({
+      residentColumnIds: [next.columns[1]!.id],
+      parkedLeft: [next.columns[0]!.id],
+      parkedRight: [],
+    });
   });
 
-  it("narrow viewport (< SINGLE_COLUMN_BREAKPOINT) always replaces (rule 7)", () => {
+  it("narrow viewports park the parent instead of replacing it", () => {
     const layout = layoutOf(["A"]);
     const next = applyLayoutAction(
       layout,
       { type: "open-child", panelId: "B", parentId: "A" },
-      makeEnv({ viewportWidth: SINGLE_COLUMN_BREAKPOINT - 1 })
+      makeEnv({ viewportWidth: 700 })
     );
-    expect(next.columns).toHaveLength(1);
-    expect(paneAt(next, 0, 0).panelId).toBe("B");
+    expect(next.columns).toHaveLength(2);
+    expect(next.columns.map((column) => column.panes[0]?.panelId)).toEqual(["A", "B"]);
   });
 
   it("replace disposition replaces in the parent's pane", () => {
@@ -442,15 +442,15 @@ describe("open-child (rule 2)", () => {
     expect(paneAt(next, 1, 0).panelId).toBe("B");
   });
 
-  it("split-below falls all the way to replace when neither direction fits", () => {
+  it("split-below falls back to a parked side column when vertical space is unavailable", () => {
     const layout = layoutOf(["A"]);
     const next = applyLayoutAction(
       layout,
       { type: "open-child", panelId: "B", parentId: "A", hint: { disposition: "split-below" } },
       makeEnv({ viewportHeight: 300, viewportWidth: 500 })
     );
-    expect(next.columns).toHaveLength(1);
-    expect(colAt(next, 0).panes.map((p) => p.panelId)).toEqual(["B"]);
+    expect(next.columns).toHaveLength(2);
+    expect(next.columns.map((column) => column.panes[0]?.panelId)).toEqual(["A", "B"]);
   });
 
   it("is idempotent: re-delivered open-child focuses, never duplicates (rule 9)", () => {
@@ -467,7 +467,7 @@ describe("open-child (rule 2)", () => {
 });
 
 describe("present-panel", () => {
-  it("lets an agent place an existing tree panel beside an explicit anchor when it fits", () => {
+  it("lets an agent place an existing tree panel beside an explicit anchor", () => {
     const layout = layoutOf(["A"]);
     const next = applyLayoutAction(
       layout,
@@ -487,16 +487,21 @@ describe("present-panel", () => {
     expect(next.columns[1]?.widthFr).toBeGreaterThan(next.columns[0]?.widthFr ?? 0);
   });
 
-  it("uses the focused pane as the anchor and replaces when side placement does not fit", () => {
+  it("uses the focused pane as the anchor and parks it when side placement does not fit", () => {
     const layout = layoutOf(["A"]);
+    const env = makeEnv({ viewportWidth: 700 });
     const next = applyLayoutAction(
       layout,
       { type: "present-panel", panelId: "B", hint: { disposition: "side" } },
-      makeEnv({ viewportWidth: 700 })
+      env
     );
 
-    expect(next.columns).toHaveLength(1);
-    expect(next.columns[0]?.panes[0]?.panelId).toBe("B");
+    expect(next.columns).toHaveLength(2);
+    expect(computeViewport(next, env)).toEqual({
+      residentColumnIds: [next.columns[1]!.id],
+      parkedLeft: [next.columns[0]!.id],
+      parkedRight: [],
+    });
   });
 
   it("uses and retains a focus-time minimum width override", () => {
@@ -518,8 +523,9 @@ describe("present-panel", () => {
     expect(columnMinWidth(next.columns[1]!, env)).toBe(700);
   });
 
-  it("uses a focus-time minimum width override in the side-placement fit test", () => {
+  it("uses a focus-time minimum width override in viewport residency", () => {
     const layout = layoutOf(["A"]);
+    const env = makeEnv({ viewportWidth: 1000 });
     const next = applyLayoutAction(
       layout,
       {
@@ -528,14 +534,15 @@ describe("present-panel", () => {
         anchorPanelId: "A",
         hint: { disposition: "side", minWidth: 700 },
       },
-      makeEnv({ viewportWidth: 1000 })
+      env
     );
 
-    expect(next.columns).toHaveLength(1);
-    expect(next.columns[0]?.panes[0]).toMatchObject({
+    expect(next.columns).toHaveLength(2);
+    expect(next.columns[1]?.panes[0]).toMatchObject({
       panelId: "B",
       minWidthOverride: 700,
     });
+    expect(computeViewport(next, env).residentColumnIds).toEqual([next.columns[1]!.id]);
   });
 
   it("clears a presentation override when ordinary navigation replaces the pane", () => {
@@ -863,12 +870,11 @@ describe("computeViewport (§3.1 / D10)", () => {
     expect(vp.parkedRight).toEqual([]);
   });
 
-  it("anchors on a middle focused column, extending right first", () => {
+  it("anchors on a middle focused column and prefers its left neighbor on a tie", () => {
     const layout = layoutOf(["A"], ["B"], ["C"], ["D"]);
     layout.focusedPaneId = "pane-1-0";
     const vp = computeViewport(layout, makeEnv({ viewportWidth: 1200 }));
-    expect(vp.residentColumnIds).toContain("col-1");
-    expect(vp.residentColumnIds).toHaveLength(2);
+    expect(vp.residentColumnIds).toEqual(["col-0", "col-1"]);
     expect([...vp.parkedLeft, ...vp.residentColumnIds, ...vp.parkedRight]).toEqual([
       "col-0",
       "col-1",
@@ -884,13 +890,24 @@ describe("computeViewport (§3.1 / D10)", () => {
     expect(vp.parkedRight).toEqual(["col-1"]);
   });
 
-  it("below SINGLE_COLUMN_BREAKPOINT only the focused column is resident", () => {
+  it("shows two columns whenever their actual minimum widths fit", () => {
+    const layout = layoutOf(["A"], ["B"]);
+    layout.focusedPaneId = "pane-1-0";
+    const vp = computeViewport(layout, makeEnv({ viewportWidth: 939 }));
+    expect(vp).toEqual({
+      residentColumnIds: ["col-0", "col-1"],
+      parkedLeft: [],
+      parkedRight: [],
+    });
+  });
+
+  it("keeps a focused child beside its preceding parent when another column is parked", () => {
     const layout = layoutOf(["A"], ["B"], ["C"]);
     layout.focusedPaneId = "pane-1-0";
-    const vp = computeViewport(layout, makeEnv({ viewportWidth: SINGLE_COLUMN_BREAKPOINT - 1 }));
+    const vp = computeViewport(layout, makeEnv({ viewportWidth: 967 }));
     expect(vp).toEqual({
-      residentColumnIds: ["col-1"],
-      parkedLeft: ["col-0"],
+      residentColumnIds: ["col-0", "col-1"],
+      parkedLeft: [],
       parkedRight: ["col-2"],
     });
   });

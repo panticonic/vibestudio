@@ -73,6 +73,22 @@ interface PanelStackProps {
   onRegisterPaneChromeCommand?: (handler: (command: PaneChromeCommand) => void) => void;
 }
 
+const DEFAULT_DESKTOP_SIDEBAR_WIDTH = 232;
+const MIN_DESKTOP_SIDEBAR_WIDTH = 200;
+const SIDEBAR_WIDTH_STORAGE_KEY = "panel-tree-sidebar-width";
+
+function readPersistedSidebarWidth(): number {
+  if (typeof window === "undefined") return DEFAULT_DESKTOP_SIDEBAR_WIDTH;
+  try {
+    const stored = Number.parseFloat(localStorage.getItem(SIDEBAR_WIDTH_STORAGE_KEY) ?? "");
+    if (!Number.isFinite(stored)) return DEFAULT_DESKTOP_SIDEBAR_WIDTH;
+    const maxWidth = Math.max(MIN_DESKTOP_SIDEBAR_WIDTH, window.innerWidth - 200);
+    return Math.round(Math.min(maxWidth, Math.max(MIN_DESKTOP_SIDEBAR_WIDTH, stored)));
+  } catch {
+    return DEFAULT_DESKTOP_SIDEBAR_WIDTH;
+  }
+}
+
 function reportPanelCommandError(action: string, error: unknown): void {
   const message = error instanceof Error ? error.message : String(error);
   void notification.show({ type: "error", title: `${action} failed`, message, ttl: 8_000 });
@@ -196,7 +212,7 @@ export const PanelStack = memo(function PanelStack({
   const [findOpen, setFindOpen] = useState(false);
   const [findText, setFindText] = useState("");
   const [findResult, setFindResult] = useState({ activeMatchOrdinal: 0, matches: 0 });
-  const [sidebarWidth, setSidebarWidth] = useState<number>(260);
+  const [sidebarWidth, setSidebarWidth] = useState<number>(readPersistedSidebarWidth);
   const [isResizingSidebar, setIsResizingSidebar] = useState(false);
   const [isResizeHover, setIsResizeHover] = useState(false);
   const [viewportWidth, setViewportWidth] = useState(() =>
@@ -205,6 +221,14 @@ export const PanelStack = memo(function PanelStack({
   const containerRef = useRef<HTMLDivElement | null>(null);
   const resizePointerIdRef = useRef<number | null>(null);
   const isMobile = useIsMobile();
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(SIDEBAR_WIDTH_STORAGE_KEY, String(sidebarWidth));
+    } catch {
+      // A storage failure should not disable resizing for the current session.
+    }
+  }, [sidebarWidth]);
 
   // Lazy data hooks — chrome, breadcrumbs, and commands follow the focused pane.
   const { panels: rootPanels, loading: rootLoading } = useRootPanels();
@@ -643,8 +667,8 @@ export const PanelStack = memo(function PanelStack({
       if (!containerRef.current) return;
       const rect = containerRef.current.getBoundingClientRect();
       const nextWidth = event.clientX - rect.left;
-      const maxWidth = Math.max(240, rect.width - 200);
-      const clamped = Math.min(maxWidth, Math.max(180, nextWidth));
+      const maxWidth = Math.max(MIN_DESKTOP_SIDEBAR_WIDTH, rect.width - 200);
+      const clamped = Math.min(maxWidth, Math.max(MIN_DESKTOP_SIDEBAR_WIDTH, nextWidth));
       setSidebarWidth(clamped);
     };
 

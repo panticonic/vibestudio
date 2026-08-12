@@ -8,7 +8,6 @@ import {
   MIN_PANE_HEIGHT,
   PARKED_EDGE_TAB_WIDTH,
   PREFERRED_COLUMN_WIDTH,
-  SINGLE_COLUMN_BREAKPOINT,
   mintColumnId,
   mintPaneId,
 } from "./types";
@@ -190,40 +189,46 @@ export function computeViewport(
   const focusedLoc = layout.focusedPaneId ? findPane(layout, layout.focusedPaneId) : null;
   const focusIndex = focusedLoc ? focusedLoc.columnIndex : 0;
 
-  if (env.viewportWidth < SINGLE_COLUMN_BREAKPOINT) {
-    return {
-      residentColumnIds: columns.slice(focusIndex, focusIndex + 1).map((c) => c.id),
-      parkedLeft: columns.slice(0, focusIndex).map((c) => c.id),
-      parkedRight: columns.slice(focusIndex + 1).map((c) => c.id),
-    };
-  }
-
   const minWidths = columns.map((column) => columnMinWidth(column, env));
-  const minWidthAt = (index: number): number => minWidths[index] ?? MIN_COLUMN_WIDTH;
-  // Contiguous run anchored on the focused column: always contains it, then
-  // greedily extends right, then left, while the run still fits at min widths.
-  let start = focusIndex;
-  let end = focusIndex;
+  const cumulativeMinWidths = [0];
+  for (const minWidth of minWidths) {
+    cumulativeMinWidths.push((cumulativeMinWidths.at(-1) ?? 0) + minWidth);
+  }
   const requiredWidth = (candidateStart: number, candidateEnd: number): number => {
-    let width = 0;
-    for (let index = candidateStart; index <= candidateEnd; index += 1) {
-      width += minWidthAt(index);
-    }
+    let width =
+      (cumulativeMinWidths[candidateEnd + 1] ?? 0) - (cumulativeMinWidths[candidateStart] ?? 0);
     width += Math.max(0, candidateEnd - candidateStart) * COLUMN_DIVIDER_WIDTH;
     if (candidateStart > 0) width += PARKED_EDGE_TAB_WIDTH;
     if (candidateEnd < columns.length - 1) width += PARKED_EDGE_TAB_WIDTH;
     return width;
   };
-  while (end + 1 < columns.length && requiredWidth(start, end + 1) <= env.viewportWidth) {
-    end += 1;
-  }
-  while (start > 0 && requiredWidth(start - 1, end) <= env.viewportWidth) {
-    start -= 1;
+
+  // Choose the largest contiguous run containing the focused column. On an
+  // equal-size tie, keep more columns to its left: a newly created child is
+  // inserted immediately to its parent's right, so this retains the semantic
+  // parent/child pair without storing a second presentation anchor.
+  let bestStart = focusIndex;
+  let bestEnd = focusIndex;
+  for (let candidateStart = 0; candidateStart <= focusIndex; candidateStart += 1) {
+    for (let candidateEnd = focusIndex; candidateEnd < columns.length; candidateEnd += 1) {
+      if (requiredWidth(candidateStart, candidateEnd) > env.viewportWidth) continue;
+      const candidateCount = candidateEnd - candidateStart + 1;
+      const bestCount = bestEnd - bestStart + 1;
+      const candidateRightSpan = candidateEnd - focusIndex;
+      const bestRightSpan = bestEnd - focusIndex;
+      if (
+        candidateCount > bestCount ||
+        (candidateCount === bestCount && candidateRightSpan < bestRightSpan)
+      ) {
+        bestStart = candidateStart;
+        bestEnd = candidateEnd;
+      }
+    }
   }
   return {
-    residentColumnIds: columns.slice(start, end + 1).map((c) => c.id),
-    parkedLeft: columns.slice(0, start).map((c) => c.id),
-    parkedRight: columns.slice(end + 1).map((c) => c.id),
+    residentColumnIds: columns.slice(bestStart, bestEnd + 1).map((c) => c.id),
+    parkedLeft: columns.slice(0, bestStart).map((c) => c.id),
+    parkedRight: columns.slice(bestEnd + 1).map((c) => c.id),
   };
 }
 
@@ -379,22 +384,6 @@ function applyShowPanel(
   return next;
 }
 
-function horizontalFits(
-  next: PanelLayout,
-  childPanelId: string,
-  env: LayoutEnv,
-  hint?: PanelPlacementHint
-): boolean {
-  if (env.viewportWidth < SINGLE_COLUMN_BREAKPOINT) return false; // rule 7
-  const columnsMin = next.columns.reduce((sum, column) => sum + columnMinWidth(column, env), 0);
-  return (
-    columnsMin +
-      Math.max(MIN_COLUMN_WIDTH, env.minWidthOf(childPanelId), hint?.minWidth ?? 0) +
-      next.columns.length * COLUMN_DIVIDER_WIDTH <=
-    env.viewportWidth
-  );
-}
-
 export function canSplitColumnVertically(
   column: LayoutColumn,
   viewportHeight: number,
@@ -474,13 +463,10 @@ function applyHintedPlacement(
     return insertPaneBelow(next, anchor, panelId, hint);
   }
 
-  // 2d: side (default, and split-below fallthrough) — beside if it fits, else replace (D4).
-  if (horizontalFits(next, panelId, env, hint)) {
-    return insertColumnAfter(next, anchor.columnIndex, panelId, hint);
-  }
-  setPanePanel(anchor.pane, panelId, hint);
-  next.focusedPaneId = anchor.pane.id;
-  return next;
+  // 2d: side (default, and split-below fallthrough) always creates the
+  // requested logical column. Viewport residency independently decides which
+  // contiguous columns can be shown and parks the rest.
+  return insertColumnAfter(next, anchor.columnIndex, panelId, hint);
 }
 
 /** Rule 3: explicit open-beside — always honored (may exceed the fit limit). */
