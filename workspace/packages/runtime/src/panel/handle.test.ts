@@ -685,10 +685,8 @@ describe("PanelHandle", () => {
     const connect = vi.fn(async () => ({
       contexts: () => [{ pages: () => [page] }],
     }));
-    (globalThis as any).__vibestudioRequireAsync__ = vi.fn(async (id: string) => {
-      if (id === "@workspace/cdp-client") return { BrowserImpl: { connect } };
-      throw new Error(`unexpected module: ${id}`);
-    });
+    const loadCdpClient = vi.fn(() => ({ BrowserImpl: { connect } }));
+    vi.doMock("@workspace/cdp-client", loadCdpClient);
     const rpcCall = vi.fn(async () => ({
       wsEndpoint: "ws://server/cdp/panel-1",
       token: "token-1",
@@ -701,9 +699,7 @@ describe("PanelHandle", () => {
     expect(rpcCall).toHaveBeenCalledWith("main", "panelCdp.getCdpEndpoint", ["panel-1"]);
     expect(locator).toHaveBeenCalledWith("button.submit");
     expect(click).toHaveBeenCalledWith();
-    expect((globalThis as any).__vibestudioRequireAsync__).toHaveBeenCalledWith(
-      "@workspace/cdp-client"
-    );
+    expect(loadCdpClient).toHaveBeenCalledOnce();
   });
 
   it("loads the canonical CDP page client only when requested", async () => {
@@ -711,13 +707,8 @@ describe("PanelHandle", () => {
     const connect = vi.fn(async () => ({
       contexts: () => [{ pages: () => [page] }],
     }));
-    (globalThis as any).__vibestudioRequire__ = vi.fn(() => {
-      throw new Error("not in map");
-    });
-    (globalThis as any).__vibestudioRequireAsync__ = vi.fn(async (id: string) => {
-      if (id === "@workspace/cdp-client") return { BrowserImpl: { connect } };
-      throw new Error(`unexpected module: ${id}`);
-    });
+    const loadCdpClient = vi.fn(() => ({ BrowserImpl: { connect } }));
+    vi.doMock("@workspace/cdp-client", loadCdpClient);
     const rpcCall = vi.fn(async () => ({
       wsEndpoint: "ws://server/cdp/panel-1",
       token: "token-1",
@@ -727,32 +718,18 @@ describe("PanelHandle", () => {
 
     await expect(getPanelHandle("panel-1", "browser").cdp.page()).resolves.toBe(page);
 
-    expect((globalThis as any).__vibestudioRequireAsync__).toHaveBeenNthCalledWith(
-      1,
-      "@workspace/cdp-client"
-    );
+    expect(loadCdpClient).toHaveBeenCalledOnce();
   });
 
-  it("reports CDP module-loader failures instead of leaking the workerd Function error", async () => {
-    (globalThis as any).__vibestudioRequire__ = vi.fn(() => {
-      throw new Error("canonical CDP bundle was unavailable");
-    });
+  it("reports an invalid canonical CDP package surface", async () => {
+    vi.doMock("@workspace/cdp-client", () => ({ BrowserImpl: null }));
     const rpcCall = createRpcCall();
     const { _initPanelHandleBridge, getPanelHandle } = await import("./handle.js");
     _initPanelHandleBridge({ call: rpcCall, on: vi.fn() } as never);
-    const NativeFunction = globalThis.Function;
-    globalThis.Function = new Proxy(NativeFunction, {
-      construct() {
-        throw new TypeError("Function is not a constructor");
-      },
-    });
-    try {
-      await expect(getPanelHandle("panel-1", "browser").cdp.page()).rejects.toThrow(
-        /canonical CDP bundle was unavailable/
-      );
-    } finally {
-      globalThis.Function = NativeFunction;
-    }
+
+    await expect(getPanelHandle("panel-1", "browser").cdp.page()).rejects.toThrow(
+      /module does not expose BrowserImpl\.connect/
+    );
   });
 
   it("routes CDP operations through rpc for workspace and self handles", async () => {

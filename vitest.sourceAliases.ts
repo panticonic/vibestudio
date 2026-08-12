@@ -20,7 +20,12 @@ export function workspaceSourceAliases(repoRoot: string): Alias[] {
     (a, b) => b[0].length - a[0].length
   )) {
     const sourcePath = sourcePaths[0];
-    if (!sourcePath) continue;
+    // TypeScript paths may intentionally point at a package's curated public
+    // declarations. Those mappings constrain type checking; they are not
+    // executable module aliases. Passing one to Vite makes esbuild parse the
+    // declaration file as runtime source instead of selecting the package's
+    // implementation through a broader source alias or its exports map.
+    if (!sourcePath || /\.d\.[cm]?ts$/.test(sourcePath)) continue;
 
     if (importPath.includes("*") && sourcePath.includes("*")) {
       aliases.push({
