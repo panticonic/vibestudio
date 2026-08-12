@@ -53,8 +53,6 @@ function recordingRpc(): {
   const callImpl = async (target: string, method: string, args: unknown[]): Promise<unknown> => {
     captured.push({ target, method, args });
     switch (method) {
-      case "workspace.recurring.list":
-        return [];
       case "workspace.getActive":
         return "test-ws";
       case "workspace.getConfig":
@@ -158,7 +156,6 @@ describe("workspace service ↔ client contract", () => {
     await client.getConfig();
     await client.setInitPanels([{ source: "panels/chat" }]);
     await client.setConfigField("title", "Test");
-    await client.recurring.list();
 
     const service = makeService();
     for (const { method } of captured) {
@@ -182,7 +179,6 @@ describe("workspace service ↔ client contract", () => {
       client.getConfig(),
       client.setInitPanels([]),
       client.setConfigField("title", "Test"),
-      client.recurring.list(),
     ]);
 
     // The server should have a method handler for each captured wire name.
@@ -292,41 +288,6 @@ describe("workspace service handler", () => {
     expect(setConfigField).toHaveBeenCalledWith("title", "Test", panelCtx);
   });
 
-  it("recurring.list returns declarative scheduled job diagnostics", async () => {
-    const jobs = [
-      {
-        name: "news-briefing",
-        target: {
-          source: "workers/news-agent",
-          className: "NewsAgentWorker",
-          objectKey: "news",
-          method: "runScheduledJob",
-        },
-        args: [{ job: "briefing" }],
-        schedule: { intervalMs: 86_400_000, atMinutes: 480 },
-        specHash: "hash",
-        status: "scheduled" as const,
-        nextRunAt: 20_000,
-        lastRunAt: null,
-        lastStartedAt: null,
-        lastSucceededAt: null,
-        lastFailedAt: null,
-        lastError: null,
-        lastDurationMs: null,
-        failCount: 0,
-        backoffUntil: null,
-      },
-    ];
-    const service = createWorkspaceService({
-      workspace: makeWorkspace(),
-      contextFiles: unavailableContextFiles,
-      getConfig: () => makeConfig(),
-      setConfigField: vi.fn(),
-      listRecurringJobs: vi.fn(() => jobs),
-    });
-
-    await expect(service.handler(shellCtx, "recurring.list", [])).resolves.toEqual(jobs);
-  });
 });
 
 // ─── Agent resource loading: getAgentsMd / listSkills / readSkill ────────────

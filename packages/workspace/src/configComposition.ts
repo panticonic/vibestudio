@@ -92,9 +92,6 @@ function declarationKey(section: string, value: Record<string, unknown>): string
       return `${String(value["source"])}${String(value["path"])}`;
     case "singletonObjects":
       return `${String(value["source"])}/${String(value["className"])}/${String(value["key"])}`;
-    case "recurring":
-    case "heartbeats":
-      return String(value["name"]);
     default:
       throw new Error(`Unsupported layered declaration section ${section}`);
   }
@@ -106,8 +103,6 @@ const KEYED_SECTIONS = new Set([
   "services",
   "routes",
   "singletonObjects",
-  "recurring",
-  "heartbeats",
 ]);
 
 /**
@@ -505,8 +500,6 @@ export function composeWorkspaceConfig(
     "services",
     "routes",
     "singletonObjects",
-    "recurring",
-    "heartbeats",
   ] as const) {
     const values = layerArraySection(section, layers, top, disabled);
     if (values) resolved[section] = values;

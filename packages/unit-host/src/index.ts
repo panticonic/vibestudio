@@ -537,14 +537,6 @@ export interface UnitChangeReview<ApprovalEntry> {
   >;
   /** Identity key per repo path, so acceptance can name exact versions. */
   identityKeysByRepo?: ReadonlyMap<string, string>;
-  /**
-   * Unattended charters this publication adds or changes — scheduled jobs and
-   * agent heartbeats. They have no source identity and no manifest, so they are
-   * not units; they do act without anyone opening anything, so they ride the
-   * same review rather than vanishing into a config-file summary
-   * (docs/template-install-unit-approval-ux-plan.md §8).
-   */
-  charters?: import("@vibestudio/shared/approvals").InstallReviewCharter[];
 }
 
 export interface UnitChangeApprovalProvider<ApprovalEntry = unknown> {

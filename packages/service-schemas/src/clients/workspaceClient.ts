@@ -12,7 +12,7 @@ import type { workspaceMethods, WorkspaceTreeNode } from "../workspace.js";
 import { WORKSPACE_METHOD_NAMES } from "./generated/runtimeClientMethods.js";
 
 export type { InitPanelEntry, WorkspaceConfig } from "@vibestudio/workspace-contracts/types";
-export type { WorkspaceEntry, WorkspaceRecurringJobStatus } from "../workspace.js";
+export type { WorkspaceEntry } from "../workspace.js";
 
 type WorkspaceTypedClient = TypedServiceClient<typeof workspaceMethods>;
 

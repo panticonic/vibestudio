@@ -71,22 +71,30 @@ export function compileMissionExposure(
   charter: MissionCharter,
   knownServiceMethods: readonly string[]
 ): CompiledExecutionExposure {
-  const exactMethods = charter.toolExposure.services.filter((entry) => !entry.endsWith(".*"));
+  if (charter.execution.kind === "method") {
+    return {
+      serviceMethods: [],
+      userlandServices: { discovery: "bound", bindings: [] },
+      network: { mode: "none" },
+    };
+  }
+  const toolExposure = charter.execution.toolExposure;
+  const exactMethods = toolExposure.services.filter((entry) => !entry.endsWith(".*"));
   const serviceMethods = [
     ...exactMethods,
     ...knownServiceMethods.filter((method) =>
-      charter.toolExposure.services.some(
+      toolExposure.services.some(
         (entry) => entry.endsWith(".*") && method.startsWith(entry.slice(0, -1))
       )
     ),
   ].sort(compareUtf16CodeUnits);
   const uniqueMethods = [...new Set(serviceMethods)];
   const userlandServices =
-    charter.toolExposure.workspaceServiceDiscovery === "live-declarations"
+    toolExposure.workspaceServiceDiscovery === "live-declarations"
       ? ({ discovery: "live-declarations", bindings: [] } as const)
       : ({
           discovery: "bound",
-          bindings: [...charter.toolExposure.userlandServices]
+          bindings: [...toolExposure.userlandServices]
             .map((binding) => ({ ...binding }))
             .sort((a, b) => {
               const byName = compareUtf16CodeUnits(a.name, b.name);
@@ -94,12 +102,12 @@ export function compileMissionExposure(
             }),
         } as const);
   const network =
-    charter.toolExposure.evalNetwork === "declared-origins"
+    toolExposure.evalNetwork === "declared-origins"
       ? ({
           mode: "declared-origins",
-          origins: [...new Set(charter.toolExposure.declaredOrigins)].sort(compareUtf16CodeUnits),
+          origins: [...new Set(toolExposure.declaredOrigins)].sort(compareUtf16CodeUnits),
         } as const)
-      : ({ mode: charter.toolExposure.evalNetwork } as { mode: "none" } | { mode: "unrestricted" });
+      : ({ mode: toolExposure.evalNetwork } as { mode: "none" } | { mode: "unrestricted" });
   return { serviceMethods: uniqueMethods, userlandServices, network };
 }
 

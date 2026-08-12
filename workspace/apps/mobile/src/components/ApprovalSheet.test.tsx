@@ -92,7 +92,6 @@ const missionReview: PendingApproval = {
   networkSummary: "No network access",
   lineageSummary: "Workspace content",
   charter: {
-    agentBindingId: "briefing-agent",
     taskSpec: "Prepare a morning briefing.",
     harness: { unit: "workers/briefing", ev: "ev-harness-123" },
     skills: [],

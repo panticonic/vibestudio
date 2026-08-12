@@ -1716,11 +1716,6 @@ function InstallReviewDetails({
           ))}
         </View>
       ) : null}
-      {approval.charters?.map((charter) => (
-        <Text key={charter.name} style={[styles.helperText, { color: colors.textSecondary }]}>
-          {charter.name} — {charter.schedule}. {charter.purpose}
-        </Text>
-      ))}
     </>
   );
 }
@@ -2916,7 +2911,16 @@ function MissionDeveloperDetails({ approval }: { approval: PendingMissionReviewA
             value={`${approval.charter.harness.unit}@${approval.charter.harness.ev}`}
             code
           />
-          <DetailRow icon={Settings2} label="Model" value={approval.charter.model.modelId} code />
+          <DetailRow
+            icon={Settings2}
+            label="Execution"
+            value={
+              approval.charter.execution.kind === "agent"
+                ? `agent:${approval.charter.execution.target.className}`
+                : `${approval.charter.execution.target.className}.${approval.charter.execution.method}`
+            }
+            code
+          />
         </View>
       ) : null}
     </View>

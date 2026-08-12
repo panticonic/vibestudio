@@ -326,58 +326,6 @@ export type WorkspaceServiceDecl = {
 );
 
 /**
- * One declarative scheduled job ("cron") in `workspace/meta/vibestudio.yml`'s
- * `recurring:` section. The server's RecurringRegistry dispatches `method` on
- * the target DO on schedule. Editing the list is a gated meta write: newly
- * declared or changed jobs surface in the meta-push approval as scheduled-job
- * entries before they ever run.
- */
-export interface WorkspaceRecurringDecl {
-  /** Unique job name within the workspace, e.g. "news-briefing-default". */
-  name: string;
-  /** Target Durable Object. `objectKey` defaults to the job name. */
-  target: { source: string; className: string; objectKey?: string };
-  /** DO method to invoke on schedule. */
-  method: string;
-  /** JSON-serializable arguments passed to the method. */
-  args?: unknown[];
-  /**
-   * Cadence: `every` is a duration ("30m", "6h", "1d"); optional `at` is a
-   * local-time anchor "HH:MM" for day-multiple intervals (e.g. daily at 08:00).
-   */
-  schedule: { every: string; at?: string };
-}
-
-export interface WorkspaceHeartbeatDecl {
-  name: string;
-  target: { source: string; className: string; objectKey?: string };
-  channel?: {
-    mode?: "subscribed" | "fixed";
-    id?: string;
-    handle?: string;
-  };
-  schedule: {
-    every: string;
-    jitter?: string;
-    at?: string;
-    activeHours?: { start: string; end: string; timezone?: "local" | string };
-  };
-  context?: {
-    mode?: "heartbeat" | "full" | "isolated";
-    promptFile?: string;
-    includeWorkspacePrompt?: boolean;
-    includeSkillIndex?: boolean;
-    tokenBudget?: number;
-  };
-  behavior?: {
-    skipWhenBusy?: boolean;
-    delivery?: "none" | "channel" | "last-contact";
-    ackToken?: string;
-    failureBackoff?: { base?: string; max?: string };
-  };
-}
-
-/**
  * Extension declaration in `workspace/meta/vibestudio.yml`. The declared list is
  * the single source of truth for which extensions a workspace uses and the only
  * install/remove surface. Editing it (a gated meta write) triggers the joint
@@ -564,17 +512,6 @@ export interface WorkspaceConfig {
    * extensions (reconciliation removes any left in the registry).
    */
   extensions?: WorkspaceExtensionDecl[];
-  /**
-   * Declarative scheduled jobs ("cron"). The RecurringRegistry syncs this
-   * list on startup and after approved meta pushes; absent or empty removes
-   * all scheduled jobs.
-   */
-  recurring?: WorkspaceRecurringDecl[];
-  /**
-   * Agent-owned heartbeat declarations. The workspace reconciler configures
-   * target DOs; target agents own scheduling and model turns.
-   */
-  heartbeats?: WorkspaceHeartbeatDecl[];
   /**
    * Declarative privileged frontend app set for this workspace. Absent or
    * empty means no apps; the reconciler removes anything not declared here.

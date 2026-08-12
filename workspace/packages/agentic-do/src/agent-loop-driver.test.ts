@@ -84,6 +84,7 @@ async function makeHarness(opts: {
   gadFault?: (method: string) => Error | null;
   onGadCall?: (method: string) => void;
   channelPublish?: ChannelCallPort["publish"];
+  onTurnClosed?: NonNullable<DriverDeps["onTurnClosed"]>;
 }) {
   const gad = opts.gad ?? (await createTestDO(GadWorkspaceDO, { __objectKey: "gad" }));
   const driverHost =
@@ -163,6 +164,7 @@ async function makeHarness(opts: {
     onEphemeral: (emit) => ephemerals.push(emit),
     now: () => (now += 7),
     scheduleAlarm: (at) => alarms.push(at),
+    ...(opts.onTurnClosed ? { onTurnClosed: opts.onTurnClosed } : {}),
     executorOverride: (descriptor) => {
       const override = opts.executorOverride?.(descriptor);
       if (override) return override;
@@ -305,6 +307,57 @@ function deferred<T>() {
 }
 
 describe("AgentLoopDriver", () => {
+  it("reports only the exact automation turn's final assistant message", async () => {
+    const closed: Parameters<NonNullable<DriverDeps["onTurnClosed"]>>[0][] = [];
+    let attempt = 0;
+    const harness = await makeHarness({
+      script: { model: [], tool: [] },
+      onTurnClosed: (input) => {
+        closed.push(input);
+      },
+      executorOverride: (descriptor) => {
+        if (descriptor.kind !== "model_call") return null;
+        return {
+          kind: "model_call",
+          async execute() {
+            attempt += 1;
+            if (attempt === 1) return textReply("first run complete");
+            throw new Error(rawInvalidToolSchemaError());
+          },
+        } satisfies EffectExecutor;
+      },
+    });
+
+    await harness.driver.handleIncoming(
+      CHANNEL,
+      promptIncoming("automation-one", "first", {
+        origin: "scheduled",
+        automationRunId: "run-one",
+      })
+    );
+    await settle(harness.driver);
+    await harness.driver.handleIncoming(
+      CHANNEL,
+      promptIncoming("automation-two", "second", {
+        origin: "scheduled",
+        automationRunId: "run-two",
+      })
+    );
+    await settle(harness.driver);
+
+    expect(closed).toEqual([
+      expect.objectContaining({
+        metadata: expect.objectContaining({ automationRunId: "run-one" }),
+        finalMessage: "first run complete",
+      }),
+      expect.objectContaining({
+        metadata: expect.objectContaining({ automationRunId: "run-two" }),
+        reason: "work_failed",
+      }),
+    ]);
+    expect(closed[1]).not.toHaveProperty("finalMessage");
+  });
+
   it("deduplicates a replayed structured observation by source envelope", async () => {
     const harness = await makeHarness({ script: { model: [textReply("done")], tool: [] } });
     const incoming = observationIncoming("observation-replayed");
@@ -1900,7 +1953,7 @@ describe("AgentLoopDriver", () => {
 
     await harness.driver.handleIncoming(
       CHANNEL,
-      promptIncoming("env-heartbeat", "background check", { origin: "heartbeat" })
+      promptIncoming("env-scheduled", "background check", { origin: "scheduled" })
     );
     await settle(harness.driver, 8);
 

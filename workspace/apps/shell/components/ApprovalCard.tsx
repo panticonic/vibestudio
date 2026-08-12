@@ -1092,7 +1092,9 @@ function MissionReviewBody({
         <summary>For developers</summary>
         <Code size="1">
           {approval.closureDigest} · {approval.charter.harness.unit}@{approval.charter.harness.ev} ·{" "}
-          {approval.charter.model.modelId}
+          {approval.charter.execution.kind === "agent"
+            ? `agent:${approval.charter.execution.target.className}`
+            : `${approval.charter.execution.target.className}.${approval.charter.execution.method}`}
         </Code>
       </details>
     </Flex>

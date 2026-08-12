@@ -58,12 +58,6 @@ function sourceOf(value: unknown): string | null {
   return typeof source === "string" ? source : null;
 }
 
-function targetSourceOf(value: unknown): string | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  const target = (value as { target?: unknown }).target;
-  return sourceOf(target);
-}
-
 function selectedRecords<T>(
   values: readonly T[] | undefined,
   selected: ReadonlySet<string>,
@@ -165,12 +159,6 @@ function projectManifest(
         : {}),
       ...(selectedRecords(config.extensions, selected)
         ? { extensions: selectedRecords(config.extensions, selected) }
-        : {}),
-      ...(selectedRecords(config.recurring, selected, targetSourceOf)
-        ? { recurring: selectedRecords(config.recurring, selected, targetSourceOf) }
-        : {}),
-      ...(selectedRecords(config.heartbeats, selected, targetSourceOf)
-        ? { heartbeats: selectedRecords(config.heartbeats, selected, targetSourceOf) }
         : {}),
       ...(selectedRecords(config.apps, selected)
         ? { apps: selectedRecords(config.apps, selected) }
@@ -315,8 +303,6 @@ function runtimeReferences(config: WorkspaceConfig): Array<[owner: string, targe
   for (const item of config.singletonObjects ?? []) add(item.source, item.source);
   for (const item of config.services ?? []) add(item.source, item.source);
   for (const item of config.routes ?? []) add(item.source, item.source);
-  for (const item of config.recurring ?? []) add(item.target.source, item.target.source);
-  for (const item of config.heartbeats ?? []) add(item.target.source, item.target.source);
   for (const target of Object.values(config.hostTargets ?? {})) {
     if (!target) continue;
     for (const extension of target.requiresExtensions ?? []) add(target.app, extension);

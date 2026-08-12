@@ -141,9 +141,6 @@ export interface CommonDeps {
   getGatewayPort?: () => number | null;
   /** Materialize a context's working folder; backs `workspace.ensureContextFolder`. */
   ensureContextFolder?: (contextId: string) => Promise<{ dir: string }>;
-  listRecurringJobs?: () =>
-    | Promise<import("./services/workspaceService.js").WorkspaceRecurringJobStatus[]>
-    | import("./services/workspaceService.js").WorkspaceRecurringJobStatus[];
   approvalQueue?: ApprovalQueue;
   getEffectiveVersion?: (source: string) => Promise<string | undefined>;
   /** Register a listener that runs after a title is durable in WorkspaceDO. */
@@ -388,7 +385,6 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
           },
         },
         recordContextIngestion: deps.recordContextIngestion,
-        listRecurringJobs: deps.listRecurringJobs,
         hasAppCapability: deps.hasAppCapability,
         ensureContextFolder: deps.ensureContextFolder,
       })

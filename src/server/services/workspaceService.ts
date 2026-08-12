@@ -21,12 +21,6 @@ import {
   WORKSPACE_PREPARED_CONFIG_CAPABILITY,
 } from "@vibestudio/service-schemas/workspace";
 import { parseWorkspaceConfigContentWithId } from "@vibestudio/workspace/configParser";
-import type {
-  WorkspaceHeartbeatSelector,
-  WorkspaceHeartbeatStatus,
-  WorkspaceHeartbeatTickResult,
-  WorkspaceRecurringJobStatus,
-} from "@vibestudio/service-schemas/workspace";
 import type { ContextIngestionRecorder } from "./contextIntegrityStore.js";
 import type { WorkspaceTreeScanner } from "../vcsHost/workspaceTreeScanner.js";
 import { parseSkillFrontmatter } from "../vcsHost/workspaceSkills.js";
@@ -35,13 +29,6 @@ import { isAuthorizedChrome } from "./chromeTrust.js";
 // Wire data types live in the shared schema module (single source of truth
 // for server registration and typed clients). Re-exported here because many
 // server-side modules import them from this file.
-export type {
-  WorkspaceHeartbeatSelector,
-  WorkspaceHeartbeatStatus,
-  WorkspaceHeartbeatTickResult,
-  WorkspaceRecurringJobStatus,
-} from "@vibestudio/service-schemas/workspace";
-
 export type { SkillEntry } from "../vcsHost/workspaceSkills.js";
 
 export interface WorkspaceServiceDeps {
@@ -78,14 +65,6 @@ export interface WorkspaceServiceDeps {
   };
   /** Durably advance a model session's content latch before read bytes are returned. */
   recordContextIngestion?: ContextIngestionRecorder;
-  /** List declarative scheduled jobs from meta/vibestudio.yml with durable run state. */
-  listRecurringJobs?: () => Promise<WorkspaceRecurringJobStatus[]> | WorkspaceRecurringJobStatus[];
-  listHeartbeats?: () => Promise<WorkspaceHeartbeatStatus[]> | WorkspaceHeartbeatStatus[];
-  runHeartbeatNow?: (
-    selector: WorkspaceHeartbeatSelector
-  ) => Promise<WorkspaceHeartbeatTickResult> | WorkspaceHeartbeatTickResult;
-  pauseHeartbeat?: (selector: WorkspaceHeartbeatSelector) => Promise<{ ok: true }> | { ok: true };
-  resumeHeartbeat?: (selector: WorkspaceHeartbeatSelector) => Promise<{ ok: true }> | { ok: true };
   hasAppCapability?: (callerId: string, capability: AppCapability) => boolean;
   /**
    * Materialize a context's working folder (idempotent) and return its absolute
@@ -402,45 +381,6 @@ export function createWorkspaceService(deps: WorkspaceServiceDeps): ServiceDefin
         };
       },
 
-      "recurring.list": () => (deps.listRecurringJobs ? deps.listRecurringJobs() : []),
-
-      "heartbeats.list": () => (deps.listHeartbeats ? deps.listHeartbeats() : []),
-
-      "heartbeats.runNow": (_ctx, [name]) => {
-        if (!deps.runHeartbeatNow) {
-          throw new ServiceError(
-            "workspace",
-            "heartbeats.runNow",
-            "Heartbeat controls are unavailable",
-            "ENOENT"
-          );
-        }
-        return deps.runHeartbeatNow(name);
-      },
-
-      "heartbeats.pause": (_ctx, [name]) => {
-        if (!deps.pauseHeartbeat) {
-          throw new ServiceError(
-            "workspace",
-            "heartbeats.pause",
-            "Heartbeat controls are unavailable",
-            "ENOENT"
-          );
-        }
-        return deps.pauseHeartbeat(name);
-      },
-
-      "heartbeats.resume": (_ctx, [name]) => {
-        if (!deps.resumeHeartbeat) {
-          throw new ServiceError(
-            "workspace",
-            "heartbeats.resume",
-            "Heartbeat controls are unavailable",
-            "ENOENT"
-          );
-        }
-        return deps.resumeHeartbeat(name);
-      },
     }),
   };
 }

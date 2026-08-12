@@ -1,42 +1,71 @@
 import { createHash } from "node:crypto";
 import type { ResourceScope } from "@vibestudio/rpc";
-import { compareUtf16CodeUnits } from "@vibestudio/content-addressing";
 import { canonicalJson } from "../canonicalJson.js";
 import { normalizeWorkspaceRepoPath } from "../runtime/entitySpec.js";
 
 export type MissionState = "draft" | "active" | "needs-reapproval" | "paused" | "retired";
 
-export type MissionEventFilter =
-  | { kind: "all" }
+export interface MissionTarget {
+  source: string;
+  className: string;
+  objectKey: string;
+}
+
+export interface MissionToolExposure {
+  services: readonly string[];
+  userlandServices: readonly {
+    name: string;
+    provider: string;
+    providerEv: string;
+    upgradePolicy: "pinned" | "follow-head";
+  }[];
+  workspaceServiceDiscovery: "bound" | "live-declarations";
+  evalNetwork: "none" | "declared-origins" | "unrestricted";
+  declaredOrigins: readonly string[];
+}
+
+export type MissionExecution =
   | {
-      kind: "field-equals";
-      path: readonly [string, ...string[]];
-      value: string | number | boolean | null;
+      kind: "method";
+      target: MissionTarget;
+      method: string;
+      args: readonly unknown[];
+    }
+  | {
+      kind: "agent";
+      target: MissionTarget;
+      prompt: string;
+      conversation: { mode: "continue"; channelId: string; contextId: string } | { mode: "fresh" };
+      toolExposure: MissionToolExposure;
+      declaredLineageClasses: readonly (
+        | "none"
+        | "web"
+        | "email"
+        | "channel-external"
+        | "external"
+      )[];
+    };
+
+/**
+ * One schedule representation for both people and code. `anchorAt` is an epoch
+ * millisecond alignment point: the next occurrence is the first
+ * `anchorAt + n * everyMs` strictly after now. Omitting it makes activation
+ * the cadence origin. This avoids cron's implicit host timezone and DST rules.
+ */
+export type MissionTrigger =
+  | { kind: "manual" }
+  | {
+      kind: "schedule";
+      everyMs: number;
+      anchorAt?: number;
+      jitterMs?: number;
     };
 
 export interface MissionCharter {
-  agentBindingId: string;
-  taskSpec: string;
+  summary: string;
   harness: { unit: string; ev: string };
-  skills: readonly { path: string; contentHash: string }[];
-  toolExposure: {
-    services: readonly string[];
-    userlandServices: readonly {
-      name: string;
-      provider: string;
-      providerEv: string;
-      upgradePolicy: "pinned" | "follow-head";
-    }[];
-    workspaceServiceDiscovery: "bound" | "live-declarations";
-    evalNetwork: "none" | "declared-origins" | "unrestricted";
-    declaredOrigins: readonly string[];
-  };
-  model: { modelId: string; params: Record<string, unknown> };
-  declaredLineageClasses: readonly ("none" | "web" | "email" | "channel-external" | "external")[];
-  trigger:
-    | { kind: "manual" }
-    | { kind: "cron"; cron: string }
-    | { kind: "event"; event: { source: string; filter: MissionEventFilter } };
+  execution: MissionExecution;
+  trigger: MissionTrigger;
 }
 
 export interface MissionRecord {
@@ -52,6 +81,8 @@ export interface MissionRecord {
   seeded?: boolean;
   permissions: readonly MissionPermission[];
   standingRestrictions: readonly MissionStandingRestriction[];
+  nextRunAt?: number;
+  lastRunAt?: number;
 }
 
 export interface MissionPermission {
@@ -65,102 +96,158 @@ export interface MissionStandingRestriction {
   resourceKey: string;
 }
 
+export type MissionRunStatus = "starting" | "running" | "succeeded" | "failed" | "skipped";
+
 export interface MissionRunRecord {
   runId: string;
   missionId: string;
   closureDigest: string;
-  sessionId: string;
+  trigger: "manual" | "scheduled";
+  status: MissionRunStatus;
   startedAt: number;
   finishedAt?: number;
-  outcome?: string;
+  sessionId?: string;
+  channelId?: string;
+  contextId?: string;
+  executorId?: string;
+  finalMessage?: string;
+  error?: string;
 }
 
 const HEX64 = /^[0-9a-f]{64}$/;
+const MIN_SCHEDULE_INTERVAL_MS = 60_000;
+const MAX_CHARTER_BYTES = 128 * 1_024;
 
 export function validateMissionCharter(charter: MissionCharter): void {
-  if (
-    !charter.agentBindingId ||
-    !charter.taskSpec ||
-    !charter.harness.unit ||
-    !HEX64.test(charter.harness.ev)
-  ) {
-    throw new Error("Mission charter requires an agent, task text, and an exact harness EV");
+  if (new TextEncoder().encode(canonicalJson(charter)).byteLength > MAX_CHARTER_BYTES) {
+    throw new Error(`Automation charter exceeds ${MAX_CHARTER_BYTES} bytes`);
+  }
+  if (!charter.summary.trim() || !charter.harness.unit || !HEX64.test(charter.harness.ev)) {
+    throw new Error("Automation charter requires a summary and an exact harness EV");
   }
   try {
     normalizeWorkspaceRepoPath(charter.harness.unit);
   } catch {
     throw new Error(
-      `Mission harness must name one canonical workspace repo: ${JSON.stringify(charter.harness.unit)}`
+      `Automation harness must name one canonical workspace repo: ${JSON.stringify(charter.harness.unit)}`
     );
   }
+  validateTarget(charter.execution.target);
+  if (charter.execution.target.source !== charter.harness.unit) {
+    throw new Error("Automation harness unit must equal the execution target source");
+  }
+  if (charter.execution.kind === "method") {
+    if (!/^[A-Za-z_$][A-Za-z0-9_$]*$/u.test(charter.execution.method)) {
+      throw new Error("Automation method must be one canonical RPC method name");
+    }
+  } else {
+    validateAgentExecution(charter.execution);
+  }
+  if (charter.trigger.kind === "schedule") {
+    if (
+      !Number.isSafeInteger(charter.trigger.everyMs) ||
+      charter.trigger.everyMs < MIN_SCHEDULE_INTERVAL_MS
+    ) {
+      throw new Error("Automation schedule everyMs must be an integer of at least one minute");
+    }
+    if (
+      charter.trigger.anchorAt !== undefined &&
+      (!Number.isSafeInteger(charter.trigger.anchorAt) || charter.trigger.anchorAt < 0)
+    ) {
+      throw new Error("Automation schedule anchorAt must be a non-negative epoch millisecond");
+    }
+    if (
+      charter.trigger.jitterMs !== undefined &&
+      (!Number.isSafeInteger(charter.trigger.jitterMs) ||
+        charter.trigger.jitterMs < 0 ||
+        charter.trigger.jitterMs >= charter.trigger.everyMs)
+    ) {
+      throw new Error("Automation schedule jitterMs must be smaller than everyMs");
+    }
+  }
+}
+
+function validateTarget(target: MissionTarget): void {
+  if (!target.source || !target.className || !target.objectKey) {
+    throw new Error("Automation execution target requires source, className, and objectKey");
+  }
+  try {
+    normalizeWorkspaceRepoPath(target.source);
+  } catch {
+    throw new Error(
+      `Automation target must name one canonical workspace repo: ${JSON.stringify(target.source)}`
+    );
+  }
+}
+
+function validateAgentExecution(execution: Extract<MissionExecution, { kind: "agent" }>): void {
+  if (!execution.prompt.trim()) {
+    throw new Error("Agent automation requires prompt text");
+  }
+  if (
+    execution.conversation.mode === "continue" &&
+    (!execution.conversation.channelId || !execution.conversation.contextId)
+  ) {
+    throw new Error("A continuing agent automation requires a channel and context");
+  }
   const serviceSet = new Set<string>();
-  for (const service of charter.toolExposure.services) {
+  for (const service of execution.toolExposure.services) {
     if (!service || service === "*" || service.includes("\0") || serviceSet.has(service)) {
-      throw new Error(`Invalid or duplicate mission service exposure ${JSON.stringify(service)}`);
+      throw new Error(
+        `Invalid or duplicate automation service exposure ${JSON.stringify(service)}`
+      );
     }
     serviceSet.add(service);
   }
-  const skillSet = new Set<string>();
-  for (const skill of charter.skills) {
-    if (!skill.path || !HEX64.test(skill.contentHash) || skillSet.has(skill.path)) {
-      throw new Error(`Invalid or duplicate mission skill ${JSON.stringify(skill.path)}`);
+  for (const binding of execution.toolExposure.userlandServices) {
+    if (!binding.name || !binding.provider) {
+      throw new Error("Automation userland bindings must be resolved");
     }
-    skillSet.add(skill.path);
-  }
-  for (const binding of charter.toolExposure.userlandServices) {
-    if (!binding.name || !binding.provider)
-      throw new Error("Mission userland bindings must be resolved");
     if (binding.upgradePolicy === "pinned" && !HEX64.test(binding.providerEv)) {
-      throw new Error(`Pinned mission provider ${binding.provider} requires an exact EV`);
+      throw new Error(`Pinned automation provider ${binding.provider} requires an exact EV`);
     }
     if (binding.upgradePolicy === "follow-head" && binding.providerEv !== "@follow-head") {
-      throw new Error(`Follow-head mission provider ${binding.provider} must use @follow-head`);
+      throw new Error(`Follow-head automation provider ${binding.provider} must use @follow-head`);
     }
   }
   if (
-    charter.toolExposure.workspaceServiceDiscovery === "live-declarations" &&
-    charter.toolExposure.userlandServices.length > 0
+    execution.toolExposure.workspaceServiceDiscovery === "live-declarations" &&
+    execution.toolExposure.userlandServices.length > 0
   ) {
     throw new Error(
-      "Live workspace-service discovery cannot be combined with pinned mission bindings"
+      "Live workspace-service discovery cannot be combined with pinned automation bindings"
     );
   }
   if (
-    charter.toolExposure.evalNetwork === "declared-origins" &&
-    charter.toolExposure.declaredOrigins.length === 0
+    execution.toolExposure.evalNetwork === "declared-origins" &&
+    execution.toolExposure.declaredOrigins.length === 0
   ) {
-    throw new Error("Declared-origins mission network exposure requires at least one origin");
+    throw new Error("Declared-origins automation network exposure requires at least one origin");
   }
-  for (const origin of charter.toolExposure.declaredOrigins) {
+  for (const origin of execution.toolExposure.declaredOrigins) {
     const parsed = new URL(origin);
-    if (parsed.origin !== origin)
-      throw new Error(`Mission network origin is not canonical: ${origin}`);
+    if (parsed.origin !== origin) {
+      throw new Error(`Automation network origin is not canonical: ${origin}`);
+    }
   }
   if (
-    charter.declaredLineageClasses.length === 0 ||
-    new Set(charter.declaredLineageClasses).size !== charter.declaredLineageClasses.length
+    execution.declaredLineageClasses.length === 0 ||
+    new Set(execution.declaredLineageClasses).size !== execution.declaredLineageClasses.length
   ) {
-    throw new Error("Mission charter requires distinct declared data-flow classes");
+    throw new Error("Agent automation requires distinct declared data-flow classes");
   }
-  if (charter.trigger.kind === "event") {
-    if (!/^[a-z][a-z0-9.-]{0,127}$/u.test(charter.trigger.event.source)) {
-      throw new Error("Mission event source is not canonical");
-    }
-    const filter = charter.trigger.event.filter;
-    if (
-      filter.kind === "field-equals" &&
-      (filter.path.length === 0 ||
-        filter.path.some(
-          (part) =>
-            !/^[A-Za-z_][A-Za-z0-9_-]{0,63}$/u.test(part) ||
-            part === "__proto__" ||
-            part === "prototype" ||
-            part === "constructor"
-        ))
-    ) {
-      throw new Error("Mission event filter contains an invalid field path");
-    }
-  }
+}
+
+/** First scheduled occurrence strictly after `now`. */
+export function missionNextRunAt(
+  trigger: Extract<MissionTrigger, { kind: "schedule" }>,
+  now: number,
+  cadenceOrigin = now
+): number {
+  const anchorAt = trigger.anchorAt ?? cadenceOrigin;
+  if (anchorAt > now) return anchorAt;
+  const elapsed = now - anchorAt;
+  return anchorAt + (Math.floor(elapsed / trigger.everyMs) + 1) * trigger.everyMs;
 }
 
 /**
@@ -173,54 +260,17 @@ export function missionClosureDigest(
   standingRestrictions: readonly MissionStandingRestriction[]
 ): string {
   validateMissionCharter(charter);
-  const hash = createHash("sha256");
-  const part = (value: string) => hash.update(value, "utf8").update("\0", "utf8");
-  part("mission-closure-v2");
-  part("agent");
-  part(charter.agentBindingId);
-  part(sha256(canonicalJson(charter.taskSpec)));
-  part("harness");
-  part(charter.harness.unit);
-  part(charter.harness.ev);
-  for (const skill of [...charter.skills].sort((a, b) => compareUtf16CodeUnits(a.path, b.path))) {
-    part("skill");
-    part(skill.path);
-    part(skill.contentHash);
-  }
-  part(sha256(canonicalJson(charter.toolExposure)));
-  part(sha256(canonicalJson(charter.model)));
-  part(sha256(canonicalJson(charter.declaredLineageClasses)));
-  part(sha256(canonicalJson(charter.trigger)));
-  part("authority");
-  part(sha256(canonicalJson(permissions)));
-  part(sha256(canonicalJson(standingRestrictions)));
-  return hash.digest("hex");
+  return createHash("sha256")
+    .update("automation-closure-v3\0", "utf8")
+    .update(canonicalJson({ charter, permissions, standingRestrictions }), "utf8")
+    .digest("hex");
 }
 
 export function missionAllowsService(charter: MissionCharter, qualifiedMethod: string): boolean {
-  return charter.toolExposure.services.some(
+  if (charter.execution.kind !== "agent") return false;
+  return charter.execution.toolExposure.services.some(
     (entry) =>
       entry === qualifiedMethod ||
       (entry.endsWith(".*") && qualifiedMethod.startsWith(entry.slice(0, -1)))
   );
-}
-
-export function missionEventMatches(filter: MissionEventFilter, payload: unknown): boolean {
-  if (filter.kind === "all") return true;
-  let value = payload;
-  for (const part of filter.path) {
-    if (
-      value === null ||
-      typeof value !== "object" ||
-      !Object.prototype.hasOwnProperty.call(value, part)
-    ) {
-      return false;
-    }
-    value = (value as Record<string, unknown>)[part];
-  }
-  return Object.is(value, filter.value);
-}
-
-function sha256(value: string): string {
-  return createHash("sha256").update(value, "utf8").digest("hex");
 }

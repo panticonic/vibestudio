@@ -559,7 +559,6 @@ export interface AuthorityChallengePresentation {
     /** Exact post-settlement rendezvous, minted by the host operation. */
     landingToken?: string;
     units: readonly import("./approvals.js").ReviewedUnit[];
-    charters?: import("./approvals.js").InstallReviewCharter[];
     unchangedPartCount?: number;
     template?: import("./approvals.js").PendingUnitInstallReviewApproval["template"];
     /** Previously admitted declarations, keyed by repo path (differential review). */

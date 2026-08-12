@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { MissionCharter } from "./mission.js";
+import type { MissionCharter, MissionToolExposure } from "./mission.js";
 import {
   compileMissionExposure,
   compiledExposureAllowsService,
@@ -7,29 +7,32 @@ import {
   compiledExposureNetworkRedirectPolicy,
 } from "./reviewedExecutionClosure.js";
 
-function charter(overrides: Partial<MissionCharter["toolExposure"]> = {}): MissionCharter {
+function charter(overrides: Partial<MissionToolExposure> = {}): MissionCharter {
   return {
-    agentBindingId: "agent",
-    taskSpec: "task",
+    summary: "task",
     harness: { unit: "workers/agent", ev: "a".repeat(64) },
-    skills: [],
-    toolExposure: {
-      services: ["docs.*", "runtime.describe"],
-      userlandServices: [
-        {
-          name: "mail",
-          provider: "extensions/mail",
-          providerEv: "b".repeat(64),
-          upgradePolicy: "pinned",
-        },
-      ],
-      workspaceServiceDiscovery: "bound",
-      evalNetwork: "declared-origins",
-      declaredOrigins: ["https://api.example.test"],
-      ...overrides,
+    execution: {
+      kind: "agent",
+      target: { source: "workers/agent", className: "Agent", objectKey: "agent" },
+      prompt: "task",
+      conversation: { mode: "fresh" },
+      toolExposure: {
+        services: ["docs.*", "runtime.describe"],
+        userlandServices: [
+          {
+            name: "mail",
+            provider: "extensions/mail",
+            providerEv: "b".repeat(64),
+            upgradePolicy: "pinned",
+          },
+        ],
+        workspaceServiceDiscovery: "bound",
+        evalNetwork: "declared-origins",
+        declaredOrigins: ["https://api.example.test"],
+        ...overrides,
+      },
+      declaredLineageClasses: ["none"],
     },
-    model: { modelId: "model", params: {} },
-    declaredLineageClasses: ["none"],
     trigger: { kind: "manual" },
   };
 }
@@ -56,37 +59,28 @@ describe("compiled reviewed-execution exposure", () => {
         providerEv: "b".repeat(64),
       })
     ).toBe(true);
-    expect(
-      compiledExposureAllowsUserlandService(exposure, {
-        name: "mail",
-        provider: "extensions/mail",
-        providerEv: "c".repeat(64),
-      })
-    ).toBe(false);
     expect(compiledExposureNetworkRedirectPolicy(exposure, "https://api.example.test")).toBe(
       "allow-without-redirects"
     );
     expect(compiledExposureNetworkRedirectPolicy(exposure, "https://other.test")).toBe("deny");
   });
 
-  it("makes live discovery and unrestricted egress explicit compiled states", () => {
-    const exposure = compileMissionExposure(
-      charter({
-        userlandServices: [],
-        workspaceServiceDiscovery: "live-declarations",
-        evalNetwork: "unrestricted",
-        declaredOrigins: [],
-      }),
-      ["workers.resolveService"]
-    );
-    expect(compiledExposureAllowsService(exposure, "workers.resolveService")).toBe(true);
-    expect(
-      compiledExposureAllowsUserlandService(exposure, {
-        name: "anything",
-        provider: "extensions/anything",
-        providerEv: "head",
-      })
-    ).toBe(true);
-    expect(compiledExposureNetworkRedirectPolicy(exposure, "https://anywhere.test")).toBe("allow");
+  it("compiles method automation to no agent-session exposure", () => {
+    const value: MissionCharter = {
+      summary: "refresh cache",
+      harness: { unit: "workers/cache", ev: "c".repeat(64) },
+      execution: {
+        kind: "method",
+        target: { source: "workers/cache", className: "CacheDO", objectKey: "main" },
+        method: "refresh",
+        args: [],
+      },
+      trigger: { kind: "manual" },
+    };
+    expect(compileMissionExposure(value, ["docs.read"])).toEqual({
+      serviceMethods: [],
+      userlandServices: { discovery: "bound", bindings: [] },
+      network: { mode: "none" },
+    });
   });
 });

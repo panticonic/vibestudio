@@ -194,9 +194,7 @@ function normalizePercent(value: number): number {
 }
 
 function isUnattendedModelRequest(request: ModelCallEffect["request"]): boolean {
-  return (
-    request.turnMetadata?.origin === "heartbeat" || request.turnMetadata?.origin === "scheduled"
-  );
+  return request.turnMetadata?.origin === "scheduled";
 }
 
 function modelFailureOutcome(
@@ -1469,7 +1467,7 @@ function systemPromptForPolicy(
     return appendPromptFile(workspacePrompt, policy?.promptFileContent);
   }
   const parts = [
-    "You are running an unattended agent heartbeat. Inspect the provided heartbeat prompt and recent relevant context, then act only when useful. Keep the turn concise and avoid user-facing chatter unless delivery explicitly requires it.",
+    "You are running a reviewed unattended automation. Follow its prompt using the relevant context, finish with a concise result, and avoid unrelated user-facing chatter.",
   ];
   if (policy.includeWorkspacePrompt !== false && workspacePrompt) {
     parts.push(workspacePrompt);
@@ -1495,7 +1493,7 @@ function modelContextForPolicy(
     return buildModelContext(state, contextThroughSeq);
   }
   const entries = state.entries.filter((entry) => entry.seq <= contextThroughSeq);
-  const targetOrigin = state.openTurn?.metadata?.origin ?? "heartbeat";
+  const targetOrigin = state.openTurn?.metadata?.origin ?? "scheduled";
   let startIndex = -1;
   for (let i = entries.length - 1; i >= 0; i -= 1) {
     const entry = entries[i];

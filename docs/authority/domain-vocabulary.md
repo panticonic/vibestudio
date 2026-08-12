@@ -182,22 +182,22 @@ destination outside the workspace belongs here, regardless of its API family.
 
 ### Accounts & sign-ins (`accounts`)
 
-| Capability                    | Verb   | Action copy (draft)                    |
-| ----------------------------- | ------ | -------------------------------------- |
-| `accounts.connect`            | manage | connect an account                     |
-| `accounts.disconnect`         | manage | disconnect an account                  |
-| `account-providers.configure` | manage | set up a sign-in provider              |
-| `account-providers.delete`    | manage | remove a sign-in provider              |
-| `account.profile.read`        | see    | see your profile                       |
-| `account.profile.update`      | act    | change your profile                    |
-| `credential.use`              | act    | use a saved sign-in                    |
-| `credentials.connect`         | manage | save a new sign-in                     |
-| `credentials.audit.read`      | see    | see how saved sign-ins were used       |
-| `browser-passwords.read`      | see    | see saved website passwords            |
-| `browser-passwords.manage`    | manage | change saved website passwords         |
-| `browser-passwords.delete`    | act    | delete a saved website password        |
-| `protected-input.submit`      | act    | fill in a protected field              |
-| `browser-form-fill.manage`    | act    | fill a form with saved details         |
+| Capability                    | Verb   | Action copy (draft)              |
+| ----------------------------- | ------ | -------------------------------- |
+| `accounts.connect`            | manage | connect an account               |
+| `accounts.disconnect`         | manage | disconnect an account            |
+| `account-providers.configure` | manage | set up a sign-in provider        |
+| `account-providers.delete`    | manage | remove a sign-in provider        |
+| `account.profile.read`        | see    | see your profile                 |
+| `account.profile.update`      | act    | change your profile              |
+| `credential.use`              | act    | use a saved sign-in              |
+| `credentials.connect`         | manage | save a new sign-in               |
+| `credentials.audit.read`      | see    | see how saved sign-ins were used |
+| `browser-passwords.read`      | see    | see saved website passwords      |
+| `browser-passwords.manage`    | manage | change saved website passwords   |
+| `browser-passwords.delete`    | act    | delete a saved website password  |
+| `protected-input.submit`      | act    | fill in a protected field        |
+| `browser-form-fill.manage`    | act    | fill a form with saved details   |
 
 `browser-passwords.*` sits here, not in `web`: the object of anxiety is the
 credential, not the browsing.
@@ -216,28 +216,26 @@ credential, not the browsing.
 
 ### Apps & automation (`automation`)
 
-| Capability                       | Verb       | Action copy (draft)                    |
-| -------------------------------- | ---------- | -------------------------------------- |
-| `workspace-units.manage`         | manage     | install, update, or remove apps        |
-| `workspace-units.publish`        | act        | publish an app version                 |
-| `runtime.supervision.manage`     | manage     | start, stop, restart, or restore an app |
-| `workspace-panels.manage`        | manage     | add or remove panels                   |
-| `workspace.runtime-state.manage` | act        | rearrange panels and views             |
-| `automations.register`           | manage     | set up an automation                   |
-| `automations.control`            | act        | start or stop an automation            |
-| `subagents.create`               | act        | start a helper agent                   |
-| `runtime.code-execution.manage`  | act        | run code in the workspace              |
-| `code-runner.reset`              | act        | reset the code runner                  |
-| `eval.reset`                     | act        | reset a code-execution session         |
-| `workspaces.create`              | act        | create a workspace                     |
-| `workspaces.delete`              | act        | delete a workspace                     |
-| `workspace.configure`            | manage     | change workspace settings              |
-| `workspace.dependencies.inspect` | see        | look at installed dependencies         |
-| `workspace.dependencies.install` | act        | install dependencies                   |
-| `workspace.build-cache.manage`   | act        | clear or rebuild build caches          |
-| `workspace.heartbeats.pause`     | act        | pause background activity              |
-| `workspace.heartbeats.resume`    | act        | resume background activity             |
-| `workspace-service:<name>`       | (declared) | (declared by the service, see §5.9)    |
+| Capability                          | Verb       | Action copy (draft)                     |
+| ----------------------------------- | ---------- | --------------------------------------- |
+| `workspace-units.manage`            | manage     | install, update, or remove apps         |
+| `workspace-units.publish`           | act        | publish an app version                  |
+| `runtime.supervision.manage`        | manage     | start, stop, restart, or restore an app |
+| `workspace-panels.manage`           | manage     | add or remove panels                    |
+| `workspace.runtime-state.manage`    | act        | rearrange panels and views              |
+| `missions.edit` / `missions.review` | manage     | define and review an automation         |
+| `missions.run` / `missions.pause`   | act        | run or pause an automation              |
+| `subagents.create`                  | act        | start a helper agent                    |
+| `runtime.code-execution.manage`     | act        | run code in the workspace               |
+| `code-runner.reset`                 | act        | reset the code runner                   |
+| `eval.reset`                        | act        | reset a code-execution session          |
+| `workspaces.create`                 | act        | create a workspace                      |
+| `workspaces.delete`                 | act        | delete a workspace                      |
+| `workspace.configure`               | manage     | change workspace settings               |
+| `workspace.dependencies.inspect`    | see        | look at installed dependencies          |
+| `workspace.dependencies.install`    | act        | install dependencies                    |
+| `workspace.build-cache.manage`      | act        | clear or rebuild build caches           |
+| `workspace-service:<name>`          | (declared) | (declared by the service, see §5.9)     |
 
 `subagents.create` is the confused-deputy pivot; its card copy must always
 name what the helper will be able to do (inherited profile, see
@@ -313,7 +311,7 @@ attacker-controlled copy.
 ### Infra-only capabilities (no domain)
 
 A small set is `⛔` infra-plumbing that never renders in user surfaces and
-must never be promptable: `workspace-state.*` (slot/panel/entity/heartbeat
+must never be promptable: `workspace-state.*` (slot/panel/entity
 records), `context.boundary`, `tier`, `open`, `build.gc`/`build.recompute`
 internals not already grouped above. The audit must verify each is closed to
 userland principals rather than categorized. If one of these ever becomes

@@ -506,9 +506,11 @@ function promoteDeferredHead(state: AgentState, ctx: StepContext): StepOutput {
 }
 
 function turnClosedItem(
-  turnId: string,
+  turn: Pick<OpenTurn, "turnId" | "metadata"> | string,
   opts: { reason?: string; summary?: string } = {}
 ): AppendItem {
+  const turnId = typeof turn === "string" ? turn : turn.turnId;
+  const metadata = typeof turn === "string" ? undefined : turn.metadata;
   return {
     envelopeId: ids.turnClosed(turnId),
     payloadKind: "turn.closed",
@@ -516,6 +518,7 @@ function turnClosedItem(
       protocol: AGENTIC_PROTOCOL_VERSION,
       ...(opts.reason ? { reason: opts.reason } : {}),
       ...(opts.summary ? { summary: opts.summary } : {}),
+      ...(metadata ? { metadata } : {}),
     },
     causality: { turnId },
     publish: true,
@@ -661,7 +664,7 @@ function interruptCleanupItems(state: AgentState, reason: string): AppendItem[] 
   }
   if (state.openTurn) {
     items.push(
-      turnClosedItem(state.openTurn.turnId, {
+      turnClosedItem(state.openTurn, {
         reason: reason === "forked" ? "forked" : "user_interrupted",
       })
     );
@@ -888,7 +891,7 @@ function modelRetryLimitItems(turn: OpenTurn): AppendItem[] {
       },
       publish: true,
     },
-    turnClosedItem(turn.turnId, { reason: "model_retry_limit_exceeded" }),
+    turnClosedItem(turn, { reason: "model_retry_limit_exceeded" }),
   ];
 }
 
@@ -933,7 +936,7 @@ function nextModelCall(
 }
 
 function isUnattendedTurn(turn: OpenTurn): boolean {
-  return turn.metadata?.origin === "heartbeat" || turn.metadata?.origin === "scheduled";
+  return turn.metadata?.origin === "scheduled";
 }
 
 function fallbackNoticeItem(
@@ -1168,6 +1171,7 @@ function commandStep(state: AgentState, command: Command, ctx: StepContext): Ste
               protocol: AGENTIC_PROTOCOL_VERSION,
               reason: "work_failed",
               summary: "Agent prompt infrastructure failed before model execution.",
+              ...(turnMetadata(command) ? { metadata: turnMetadata(command) } : {}),
             },
             causality: { turnId },
             publish: shouldPublishTurnLifecycle(turnMetadata(command)),
@@ -1508,7 +1512,7 @@ function eventStep(state: AgentState, envelope: LogEnvelope, ctx: StepContext): 
     }
     // no tool calls
     if (state.steeringQueue.length > 0) return nextModelCall(state, 0, ctx);
-    return { append: [turnClosedItem(turn.turnId)], effects: [] };
+    return { append: [turnClosedItem(turn)], effects: [] };
   }
 
   // After-turn promotion: a closed turn drains exactly ONE deferred head into a
@@ -1541,7 +1545,7 @@ function eventStep(state: AgentState, envelope: LogEnvelope, ctx: StepContext): 
       );
     }
     if (turn.failedOverToFallback && isProviderLevelFailureCode(payload["code"])) {
-      return { append: [turnClosedItem(turn.turnId, { reason: "work_failed" })], effects: [] };
+      return { append: [turnClosedItem(turn, { reason: "work_failed" })], effects: [] };
     }
     if (typeof payload["resetAt"] === "string" && payload["resetAt"].trim()) {
       return {
@@ -1555,7 +1559,7 @@ function eventStep(state: AgentState, envelope: LogEnvelope, ctx: StepContext): 
       };
     }
     if (payload["recoverable"] !== true) {
-      return { append: [turnClosedItem(turn.turnId, { reason: "work_failed" })], effects: [] };
+      return { append: [turnClosedItem(turn, { reason: "work_failed" })], effects: [] };
     }
     if (!wakeGuardSatisfied(state)) return EMPTY; // guard: invocations first
     return nextModelCall(state, 0, ctx);
@@ -1584,10 +1588,7 @@ function eventStep(state: AgentState, envelope: LogEnvelope, ctx: StepContext): 
         // response waiter observe a response-less terminal turn before the
         // promoted input could be synthesized.
         const deferred = state.deferredPostTurnQueue[0];
-        if (
-          deferred?.artifactsReady &&
-          Object.keys(state.pendingPromptPreparations).length === 0
-        ) {
+        if (deferred?.artifactsReady && Object.keys(state.pendingPromptPreparations).length === 0) {
           const recv = promotedRecvItem(deferred, state.lastSeq);
           const afterRecv = projectAppend(state, [recv], ctx.now);
           const next = nextModelCall(afterRecv, 1, ctx, [deferred.sourceMessageId]);
@@ -1608,7 +1609,7 @@ function eventStep(state: AgentState, envelope: LogEnvelope, ctx: StepContext): 
       }
       if (completedToolBatchTerminates(state, String(causality["invocationId"] ?? ""))) {
         return {
-          append: [turnClosedItem(turn.turnId, { reason: "tool_terminated" })],
+          append: [turnClosedItem(turn, { reason: "tool_terminated" })],
           effects: [],
         };
       }
@@ -1650,7 +1651,7 @@ function eventStep(state: AgentState, envelope: LogEnvelope, ctx: StepContext): 
             infrastructureFailure.invocationId,
             infrastructureFailure.code
           ),
-          turnClosedItem(turn.turnId, { reason: "work_failed" }),
+          turnClosedItem(turn, { reason: "work_failed" }),
         ],
         effects: [],
       };
@@ -1729,6 +1730,10 @@ function eventStep(state: AgentState, envelope: LogEnvelope, ctx: StepContext): 
         payload["turnTriggerEnvelopeId"] ?? details["turnTriggerEnvelopeId"] ?? triggerEnvelopeId
       );
       const reason = String(payload["reason"] ?? details["reason"] ?? "prompt setup failed");
+      const metadata =
+        payload["metadata"] && typeof payload["metadata"] === "object"
+          ? (payload["metadata"] as AgentTurnMetadata)
+          : undefined;
       const turnId =
         state.openTurn?.turnId ??
         ids.turnId(state.channelId, turnTriggerEnvelopeId, ctx.selfRef.id);
@@ -1758,9 +1763,9 @@ function eventStep(state: AgentState, envelope: LogEnvelope, ctx: StepContext): 
       if (state.openTurn) return { append: [diagnostic], effects: [] };
       return {
         append: [
-          turnOpenedItem(turnId, undefined, triggerEnvelopeId),
+          turnOpenedItem(turnId, metadata, triggerEnvelopeId),
           diagnostic,
-          turnClosedItem(turnId, { reason: "work_failed" }),
+          turnClosedItem({ turnId, metadata }, { reason: "work_failed" }),
         ],
         effects: [],
       };
@@ -1801,6 +1806,14 @@ function effectFailedStep(
       (candidate) => ids.promptArtifactsEffect(candidate.triggerEnvelopeId) === incoming.effectId
     );
     if (!preparation) return EMPTY;
+    const promptMetadata =
+      state.pendingPrompt?.envelopeId === preparation.triggerEnvelopeId
+        ? state.pendingPrompt.metadata
+        : (state.steeringQueue.find((entry) => entry.envelopeId === preparation.triggerEnvelopeId)
+            ?.metadata ??
+          state.deferredPostTurnQueue.find(
+            (entry) => entry.envelopeId === preparation.triggerEnvelopeId
+          )?.metadata);
     return {
       append: [
         {
@@ -1812,11 +1825,13 @@ function effectFailedStep(
             triggerEnvelopeId: preparation.triggerEnvelopeId,
             turnTriggerEnvelopeId: preparation.turnTriggerEnvelopeId,
             reason: incoming.error.message,
+            ...(promptMetadata ? { metadata: promptMetadata } : {}),
             details: {
               kind: "prompt.artifacts_failed",
               triggerEnvelopeId: preparation.triggerEnvelopeId,
               turnTriggerEnvelopeId: preparation.turnTriggerEnvelopeId,
               reason: incoming.error.message,
+              ...(promptMetadata ? { metadata: promptMetadata } : {}),
             },
           },
           publish: false,
@@ -1868,7 +1883,7 @@ function effectFailedStep(
         },
         publish: true,
       });
-      append.push(turnClosedItem(turn.turnId, { reason: "work_failed" }));
+      append.push(turnClosedItem(turn, { reason: "work_failed" }));
     }
     return { append, effects: [] };
   }
@@ -1896,7 +1911,7 @@ function effectFailedStep(
         publish: true,
       });
     }
-    if (turn) append.push(turnClosedItem(turn.turnId, { reason: "work_failed" }));
+    if (turn) append.push(turnClosedItem(turn, { reason: "work_failed" }));
     return { append, effects: [] };
   }
 
@@ -1963,7 +1978,7 @@ function effectFailedStep(
         causality: { messageId: messageId as never, turnId: turn.turnId },
         publish: true,
       });
-      append.push(turnClosedItem(turn.turnId, { reason: "work_failed" }));
+      append.push(turnClosedItem(turn, { reason: "work_failed" }));
     }
     return { append, effects: [] };
   }

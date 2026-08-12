@@ -43,20 +43,6 @@ export {
 } from "./custom-cards.js";
 export type { CustomMessageHandle } from "./custom-cards.js";
 export { FeedbackIngest, formatFeedbackNote } from "./feedback-ingest.js";
-export { AgentHeartbeatLoop } from "./agent-heartbeat-loop.js";
-export type {
-  AgentHeartbeatLoopDeps,
-  HeartbeatDecision,
-  HeartbeatEvaluationContext,
-  HeartbeatStartOptions,
-  HeartbeatState,
-  HeartbeatStatus,
-  HeartbeatTickResult,
-  HeartbeatTrigger,
-  HeartbeatTurnRequest,
-} from "./agent-heartbeat-loop.js";
-export { RecurringScheduler } from "./recurring-scheduler.js";
-export type { RecurringJob, RecurringSchedulerDeps } from "./recurring-scheduler.js";
 export { installMessageTypes } from "./ui-install.js";
 export type { ActionBarSpec, InstallMessageTypesOptions, MessageTypeSpec } from "./ui-install.js";
 // Registration-time renderer lint (re-exported so agent workers don't need a

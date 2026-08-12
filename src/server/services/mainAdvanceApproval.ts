@@ -882,7 +882,6 @@ export function createMainAdvanceApprovalGate(deps: {
           )
       );
       const units = approvals.flatMap(({ approval }) => approval.units);
-      const charters = approvals.flatMap(({ approval }) => approval.charters ?? []);
       const unchangedPartCount = approvals.reduce(
         (total, { approval }) => total + (approval.unchangedCount ?? 0),
         0
@@ -1004,13 +1003,13 @@ export function createMainAdvanceApprovalGate(deps: {
 
       const template = await recognizeFor(candidate.stateHash);
 
-      // Nothing changed about what any part can do, and no charter arrived:
+      // Nothing changed about what any part can do:
       // this is an ordinary content advance, not a permission decision. A
       // template operation is never that, even when it lands nothing but
       // effective-version churn — an upgrade that changes no declared authority
       // is still a decision about foreign code, and §5.4 gives it one line
       // rather than no card at all.
-      if (!template && !metaChanged && units.length === 0 && charters.length === 0) {
+      if (!template && !metaChanged && units.length === 0) {
         await approveWorkspaceMainAdvance(deps, candidate);
         return {
           prepare: async () => {
@@ -1071,7 +1070,6 @@ export function createMainAdvanceApprovalGate(deps: {
         ...(template ? { template: template.template } : {}),
         ...(sections ? { sections } : {}),
         units,
-        ...(charters.length > 0 ? { charters } : {}),
         unchangedPartCount,
         previousRequests,
         previouslyCleared,
@@ -1290,7 +1288,6 @@ function presentedInstallReview(input: InstallReviewPresentation): InstallReview
     ...(input.reportsLanding ? { reportsLanding: true } : {}),
     ...(input.landingToken ? { landingToken: input.landingToken } : {}),
     units: input.units,
-    ...(input.charters ? { charters: input.charters } : {}),
     ...(input.template ? { template: input.template } : {}),
     ...(input.previousRequests ? { previousRequests: input.previousRequests } : {}),
     ...(input.previouslyCleared ? { previouslyCleared: input.previouslyCleared } : {}),

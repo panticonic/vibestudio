@@ -4538,20 +4538,21 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/missions/MissionsDO.ts:finishSession",
+      "id": "direct:packages/builtin/src/missions/MissionsDO.ts:finishRun",
       "rpcPlane": "workspace-do",
       "owner": "packages/builtin/src/missions/MissionsDO.ts",
       "source": "vibestudio/internal",
-      "method": "finishSession",
+      "method": "finishRun",
       "resourceDerivation": {
         "kind": "direct-target",
         "owner": "packages/builtin/src/missions/MissionsDO.ts"
       },
       "authorityPrincipals": [
+        "code",
         "host"
       ],
       "sensitivity": "write",
-      "tier": "gated",
+      "tier": "open",
       "sessionAdmission": "codeOnly",
       "capability": "missions.run",
       "authenticatedFacts": [
@@ -4592,11 +4593,13 @@
       "authorityPrincipals": [
         "code",
         "host",
+        "mission",
+        "session",
         "user"
       ],
       "sensitivity": "read",
       "tier": "open",
-      "sessionAdmission": "codeOnly",
+      "sessionAdmission": "family",
       "capability": "missions.read",
       "authenticatedFacts": [
         "session",
@@ -4636,11 +4639,13 @@
       "authorityPrincipals": [
         "code",
         "host",
+        "mission",
+        "session",
         "user"
       ],
       "sensitivity": "read",
       "tier": "open",
-      "sessionAdmission": "codeOnly",
+      "sessionAdmission": "family",
       "capability": "missions.read",
       "authenticatedFacts": [
         "session",
@@ -4680,11 +4685,59 @@
       "authorityPrincipals": [
         "code",
         "host",
+        "mission",
+        "session",
         "user"
       ],
       "sensitivity": "read",
       "tier": "open",
-      "sessionAdmission": "codeOnly",
+      "sessionAdmission": "family",
+      "capability": "missions.read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user-relay",
+        "runtime-entity",
+        "exact-code-artifact",
+        "owner-chain",
+        "agent-binding",
+        "audience-bound-attestation"
+      ],
+      "currentOutcomes": {
+        "allowed": "schema-declared direct-RPC requirement satisfied",
+        "denied": "missing attested facts or requirement failure is EACCES"
+      },
+      "predicates": [
+        "live-owner-service-relationship",
+        "exact-resource-scope",
+        "next-dispatch-revocation"
+      ],
+      "r3aRequirement": "catalog-schema",
+      "r3b": {
+        "review": "schema-authority",
+        "change": null
+      },
+      "parityAssertion": "generated-census:direct-authority"
+    },
+    {
+      "id": "direct:packages/builtin/src/missions/MissionsDO.ts:overview",
+      "rpcPlane": "workspace-do",
+      "owner": "packages/builtin/src/missions/MissionsDO.ts",
+      "source": "vibestudio/internal",
+      "method": "overview",
+      "resourceDerivation": {
+        "kind": "direct-target",
+        "owner": "packages/builtin/src/missions/MissionsDO.ts"
+      },
+      "authorityPrincipals": [
+        "code",
+        "host",
+        "mission",
+        "session",
+        "user"
+      ],
+      "sensitivity": "read",
+      "tier": "open",
+      "sessionAdmission": "family",
       "capability": "missions.read",
       "authenticatedFacts": [
         "session",
@@ -4772,6 +4825,51 @@
       "tier": "open",
       "sessionAdmission": "codeOnly",
       "capability": "reviewed-closure.propose-revision",
+      "authenticatedFacts": [
+        "session",
+        "acting-user-relay",
+        "runtime-entity",
+        "exact-code-artifact",
+        "owner-chain",
+        "agent-binding",
+        "audience-bound-attestation"
+      ],
+      "currentOutcomes": {
+        "allowed": "schema-declared direct-RPC requirement satisfied",
+        "denied": "missing attested facts or requirement failure is EACCES"
+      },
+      "predicates": [
+        "live-owner-service-relationship",
+        "exact-resource-scope",
+        "next-dispatch-revocation"
+      ],
+      "r3aRequirement": "catalog-schema",
+      "r3b": {
+        "review": "schema-authority",
+        "change": null
+      },
+      "parityAssertion": "generated-census:direct-authority"
+    },
+    {
+      "id": "direct:packages/builtin/src/missions/MissionsDO.ts:proposeDraft",
+      "rpcPlane": "workspace-do",
+      "owner": "packages/builtin/src/missions/MissionsDO.ts",
+      "source": "vibestudio/internal",
+      "method": "proposeDraft",
+      "resourceDerivation": {
+        "kind": "direct-target",
+        "owner": "packages/builtin/src/missions/MissionsDO.ts"
+      },
+      "authorityPrincipals": [
+        "code",
+        "mission",
+        "session",
+        "user"
+      ],
+      "sensitivity": "write",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "capability": "missions.edit",
       "authenticatedFacts": [
         "session",
         "acting-user-relay",
@@ -4930,17 +5028,19 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/missions/MissionsDO.ts:startSession",
+      "id": "direct:packages/builtin/src/missions/MissionsDO.ts:runNow",
       "rpcPlane": "workspace-do",
       "owner": "packages/builtin/src/missions/MissionsDO.ts",
       "source": "vibestudio/internal",
-      "method": "startSession",
+      "method": "runNow",
       "resourceDerivation": {
         "kind": "direct-target",
         "owner": "packages/builtin/src/missions/MissionsDO.ts"
       },
       "authorityPrincipals": [
-        "host"
+        "code",
+        "host",
+        "user"
       ],
       "sensitivity": "write",
       "tier": "gated",
@@ -6574,132 +6674,6 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:heartbeatList",
-      "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
-      "source": "vibestudio/internal",
-      "method": "heartbeatList",
-      "resourceDerivation": {
-        "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
-      },
-      "authorityPrincipals": [
-        "host"
-      ],
-      "sensitivity": "read",
-      "tier": "gated",
-      "sessionAdmission": "family",
-      "capability": "workspace.runtime-state.manage",
-      "authenticatedFacts": [
-        "session",
-        "acting-user-relay",
-        "runtime-entity",
-        "exact-code-artifact",
-        "owner-chain",
-        "agent-binding",
-        "audience-bound-attestation"
-      ],
-      "currentOutcomes": {
-        "allowed": "schema-declared direct-RPC requirement satisfied",
-        "denied": "missing attested facts or requirement failure is EACCES"
-      },
-      "predicates": [
-        "live-owner-service-relationship",
-        "exact-resource-scope",
-        "next-dispatch-revocation"
-      ],
-      "r3aRequirement": "catalog-schema",
-      "r3b": {
-        "review": "schema-authority",
-        "change": null
-      },
-      "parityAssertion": "generated-census:direct-authority"
-    },
-    {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:heartbeatRegister",
-      "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
-      "source": "vibestudio/internal",
-      "method": "heartbeatRegister",
-      "resourceDerivation": {
-        "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
-      },
-      "authorityPrincipals": [
-        "host"
-      ],
-      "sensitivity": "write",
-      "tier": "gated",
-      "sessionAdmission": "family",
-      "capability": "workspace.runtime-state.manage",
-      "authenticatedFacts": [
-        "session",
-        "acting-user-relay",
-        "runtime-entity",
-        "exact-code-artifact",
-        "owner-chain",
-        "agent-binding",
-        "audience-bound-attestation"
-      ],
-      "currentOutcomes": {
-        "allowed": "schema-declared direct-RPC requirement satisfied",
-        "denied": "missing attested facts or requirement failure is EACCES"
-      },
-      "predicates": [
-        "live-owner-service-relationship",
-        "exact-resource-scope",
-        "next-dispatch-revocation"
-      ],
-      "r3aRequirement": "catalog-schema",
-      "r3b": {
-        "review": "schema-authority",
-        "change": null
-      },
-      "parityAssertion": "generated-census:direct-authority"
-    },
-    {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:heartbeatRemove",
-      "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
-      "source": "vibestudio/internal",
-      "method": "heartbeatRemove",
-      "resourceDerivation": {
-        "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
-      },
-      "authorityPrincipals": [
-        "host"
-      ],
-      "sensitivity": "write",
-      "tier": "gated",
-      "sessionAdmission": "family",
-      "capability": "workspace.runtime-state.manage",
-      "authenticatedFacts": [
-        "session",
-        "acting-user-relay",
-        "runtime-entity",
-        "exact-code-artifact",
-        "owner-chain",
-        "agent-binding",
-        "audience-bound-attestation"
-      ],
-      "currentOutcomes": {
-        "allowed": "schema-declared direct-RPC requirement satisfied",
-        "denied": "missing attested facts or requirement failure is EACCES"
-      },
-      "predicates": [
-        "live-owner-service-relationship",
-        "exact-resource-scope",
-        "next-dispatch-revocation"
-      ],
-      "r3aRequirement": "catalog-schema",
-      "r3b": {
-        "review": "schema-authority",
-        "change": null
-      },
-      "parityAssertion": "generated-census:direct-authority"
-    },
-    {
       "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:lifecycleCompleteEpoch",
       "rpcPlane": "workspace-do",
       "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
@@ -7489,300 +7463,6 @@
         "code",
         "host",
         "user"
-      ],
-      "sensitivity": "write",
-      "tier": "gated",
-      "sessionAdmission": "family",
-      "capability": "workspace.runtime-state.manage",
-      "authenticatedFacts": [
-        "session",
-        "acting-user-relay",
-        "runtime-entity",
-        "exact-code-artifact",
-        "owner-chain",
-        "agent-binding",
-        "audience-bound-attestation"
-      ],
-      "currentOutcomes": {
-        "allowed": "schema-declared direct-RPC requirement satisfied",
-        "denied": "missing attested facts or requirement failure is EACCES"
-      },
-      "predicates": [
-        "live-owner-service-relationship",
-        "exact-resource-scope",
-        "next-dispatch-revocation"
-      ],
-      "r3aRequirement": "catalog-schema",
-      "r3b": {
-        "review": "schema-authority",
-        "change": null
-      },
-      "parityAssertion": "generated-census:direct-authority"
-    },
-    {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:recurringDue",
-      "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
-      "source": "vibestudio/internal",
-      "method": "recurringDue",
-      "resourceDerivation": {
-        "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
-      },
-      "authorityPrincipals": [
-        "host"
-      ],
-      "sensitivity": "read",
-      "tier": "gated",
-      "sessionAdmission": "family",
-      "capability": "workspace.runtime-state.manage",
-      "authenticatedFacts": [
-        "session",
-        "acting-user-relay",
-        "runtime-entity",
-        "exact-code-artifact",
-        "owner-chain",
-        "agent-binding",
-        "audience-bound-attestation"
-      ],
-      "currentOutcomes": {
-        "allowed": "schema-declared direct-RPC requirement satisfied",
-        "denied": "missing attested facts or requirement failure is EACCES"
-      },
-      "predicates": [
-        "live-owner-service-relationship",
-        "exact-resource-scope",
-        "next-dispatch-revocation"
-      ],
-      "r3aRequirement": "catalog-schema",
-      "r3b": {
-        "review": "schema-authority",
-        "change": null
-      },
-      "parityAssertion": "generated-census:direct-authority"
-    },
-    {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:recurringList",
-      "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
-      "source": "vibestudio/internal",
-      "method": "recurringList",
-      "resourceDerivation": {
-        "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
-      },
-      "authorityPrincipals": [
-        "host"
-      ],
-      "sensitivity": "read",
-      "tier": "gated",
-      "sessionAdmission": "family",
-      "capability": "workspace.runtime-state.manage",
-      "authenticatedFacts": [
-        "session",
-        "acting-user-relay",
-        "runtime-entity",
-        "exact-code-artifact",
-        "owner-chain",
-        "agent-binding",
-        "audience-bound-attestation"
-      ],
-      "currentOutcomes": {
-        "allowed": "schema-declared direct-RPC requirement satisfied",
-        "denied": "missing attested facts or requirement failure is EACCES"
-      },
-      "predicates": [
-        "live-owner-service-relationship",
-        "exact-resource-scope",
-        "next-dispatch-revocation"
-      ],
-      "r3aRequirement": "catalog-schema",
-      "r3b": {
-        "review": "schema-authority",
-        "change": null
-      },
-      "parityAssertion": "generated-census:direct-authority"
-    },
-    {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:recurringMarkFailed",
-      "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
-      "source": "vibestudio/internal",
-      "method": "recurringMarkFailed",
-      "resourceDerivation": {
-        "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
-      },
-      "authorityPrincipals": [
-        "host"
-      ],
-      "sensitivity": "write",
-      "tier": "gated",
-      "sessionAdmission": "family",
-      "capability": "workspace.runtime-state.manage",
-      "authenticatedFacts": [
-        "session",
-        "acting-user-relay",
-        "runtime-entity",
-        "exact-code-artifact",
-        "owner-chain",
-        "agent-binding",
-        "audience-bound-attestation"
-      ],
-      "currentOutcomes": {
-        "allowed": "schema-declared direct-RPC requirement satisfied",
-        "denied": "missing attested facts or requirement failure is EACCES"
-      },
-      "predicates": [
-        "live-owner-service-relationship",
-        "exact-resource-scope",
-        "next-dispatch-revocation"
-      ],
-      "r3aRequirement": "catalog-schema",
-      "r3b": {
-        "review": "schema-authority",
-        "change": null
-      },
-      "parityAssertion": "generated-census:direct-authority"
-    },
-    {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:recurringMarkRun",
-      "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
-      "source": "vibestudio/internal",
-      "method": "recurringMarkRun",
-      "resourceDerivation": {
-        "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
-      },
-      "authorityPrincipals": [
-        "host"
-      ],
-      "sensitivity": "write",
-      "tier": "gated",
-      "sessionAdmission": "family",
-      "capability": "workspace.runtime-state.manage",
-      "authenticatedFacts": [
-        "session",
-        "acting-user-relay",
-        "runtime-entity",
-        "exact-code-artifact",
-        "owner-chain",
-        "agent-binding",
-        "audience-bound-attestation"
-      ],
-      "currentOutcomes": {
-        "allowed": "schema-declared direct-RPC requirement satisfied",
-        "denied": "missing attested facts or requirement failure is EACCES"
-      },
-      "predicates": [
-        "live-owner-service-relationship",
-        "exact-resource-scope",
-        "next-dispatch-revocation"
-      ],
-      "r3aRequirement": "catalog-schema",
-      "r3b": {
-        "review": "schema-authority",
-        "change": null
-      },
-      "parityAssertion": "generated-census:direct-authority"
-    },
-    {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:recurringMarkSucceeded",
-      "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
-      "source": "vibestudio/internal",
-      "method": "recurringMarkSucceeded",
-      "resourceDerivation": {
-        "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
-      },
-      "authorityPrincipals": [
-        "host"
-      ],
-      "sensitivity": "write",
-      "tier": "gated",
-      "sessionAdmission": "family",
-      "capability": "workspace.runtime-state.manage",
-      "authenticatedFacts": [
-        "session",
-        "acting-user-relay",
-        "runtime-entity",
-        "exact-code-artifact",
-        "owner-chain",
-        "agent-binding",
-        "audience-bound-attestation"
-      ],
-      "currentOutcomes": {
-        "allowed": "schema-declared direct-RPC requirement satisfied",
-        "denied": "missing attested facts or requirement failure is EACCES"
-      },
-      "predicates": [
-        "live-owner-service-relationship",
-        "exact-resource-scope",
-        "next-dispatch-revocation"
-      ],
-      "r3aRequirement": "catalog-schema",
-      "r3b": {
-        "review": "schema-authority",
-        "change": null
-      },
-      "parityAssertion": "generated-census:direct-authority"
-    },
-    {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:recurringNextWakeAt",
-      "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
-      "source": "vibestudio/internal",
-      "method": "recurringNextWakeAt",
-      "resourceDerivation": {
-        "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
-      },
-      "authorityPrincipals": [
-        "host"
-      ],
-      "sensitivity": "read",
-      "tier": "gated",
-      "sessionAdmission": "family",
-      "capability": "workspace.runtime-state.manage",
-      "authenticatedFacts": [
-        "session",
-        "acting-user-relay",
-        "runtime-entity",
-        "exact-code-artifact",
-        "owner-chain",
-        "agent-binding",
-        "audience-bound-attestation"
-      ],
-      "currentOutcomes": {
-        "allowed": "schema-declared direct-RPC requirement satisfied",
-        "denied": "missing attested facts or requirement failure is EACCES"
-      },
-      "predicates": [
-        "live-owner-service-relationship",
-        "exact-resource-scope",
-        "next-dispatch-revocation"
-      ],
-      "r3aRequirement": "catalog-schema",
-      "r3b": {
-        "review": "schema-authority",
-        "change": null
-      },
-      "parityAssertion": "generated-census:direct-authority"
-    },
-    {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:recurringSync",
-      "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
-      "source": "vibestudio/internal",
-      "method": "recurringSync",
-      "resourceDerivation": {
-        "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
-      },
-      "authorityPrincipals": [
-        "host"
       ],
       "sensitivity": "write",
       "tier": "gated",
@@ -9418,6 +9098,48 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
+      "id": "direct:workspace/packages/agentic-do/src/agent-vessel.ts:runAutomationTurn",
+      "rpcPlane": "workspace-do",
+      "owner": "workspace/packages/agentic-do/src/agent-vessel.ts",
+      "source": "packages/agentic-do",
+      "method": "runAutomationTurn",
+      "resourceDerivation": {
+        "kind": "direct-target",
+        "owner": "workspace/packages/agentic-do/src/agent-vessel.ts"
+      },
+      "authorityPrincipals": [
+        "code",
+        "host"
+      ],
+      "sensitivity": "write",
+      "tier": "open",
+      "capability": "rpc:runAutomationTurn",
+      "authenticatedFacts": [
+        "session",
+        "acting-user-relay",
+        "runtime-entity",
+        "exact-code-artifact",
+        "owner-chain",
+        "agent-binding",
+        "audience-bound-delegation"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared direct-RPC scenarios retain their current behavior",
+        "denied": "missing attested facts or requirement failure is EACCES"
+      },
+      "predicates": [
+        "live-owner-service-relationship",
+        "exact-resource-scope",
+        "next-dispatch-revocation"
+      ],
+      "r3aRequirement": "anyOf(capability(host,rpc:runAutomationTurn),allOf(capability(code,rpc:runAutomationTurn),workspace-member))",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "parityAssertion": "generated-census:direct-authority"
+    },
+    {
       "id": "direct:workspace/packages/agentic-do/src/agent-vessel.ts:settleReadyWork",
       "rpcPlane": "workspace-do",
       "owner": "workspace/packages/agentic-do/src/agent-vessel.ts",
@@ -9702,47 +9424,6 @@
       "r3b": {
         "review": "host-only-static-work-capability-read",
         "change": "Exposes only the receiver's fixed supported durable-work queue names to the host activation hook; it reads no semantic or user data."
-      },
-      "parityAssertion": "generated-census:direct-authority"
-    },
-    {
-      "id": "direct:workspace/workers/explorer-agent/index.ts:runScheduledJob",
-      "rpcPlane": "workspace-do",
-      "owner": "workspace/workers/explorer-agent/index.ts",
-      "source": "workers/explorer-agent",
-      "method": "runScheduledJob",
-      "resourceDerivation": {
-        "kind": "direct-target",
-        "owner": "workspace/workers/explorer-agent/index.ts"
-      },
-      "authorityPrincipals": [
-        "host"
-      ],
-      "sensitivity": "write",
-      "tier": "open",
-      "capability": "rpc:runScheduledJob",
-      "authenticatedFacts": [
-        "session",
-        "acting-user-relay",
-        "runtime-entity",
-        "exact-code-artifact",
-        "owner-chain",
-        "agent-binding",
-        "audience-bound-delegation"
-      ],
-      "currentOutcomes": {
-        "allowed": "declared direct-RPC scenarios retain their current behavior",
-        "denied": "missing attested facts or requirement failure is EACCES"
-      },
-      "predicates": [
-        "live-owner-service-relationship",
-        "exact-resource-scope",
-        "next-dispatch-revocation"
-      ],
-      "r3aRequirement": "capability(host,rpc:runScheduledJob)",
-      "r3b": {
-        "review": "unchanged-parity",
-        "change": null
       },
       "parityAssertion": "generated-census:direct-authority"
     },
@@ -39339,96 +39020,6 @@
       "parityAssertion": "generated-census:host-authority"
     },
     {
-      "id": "host:workspace-state.heartbeatRegister",
-      "rpcPlane": "host-service",
-      "owner": "workspace-state",
-      "method": "heartbeatRegister",
-      "tier": "gated",
-      "sessionAdmission": "codeOnly",
-      "residency": "supervision",
-      "mechanismFamily": "workspace-state.lifecycle",
-      "reviewRationale": "The durable heartbeat row schedules and supervises a reviewed recurring runtime",
-      "resourceDerivation": {
-        "kind": "literal",
-        "key": "service:workspace-state.heartbeatRegister"
-      },
-      "authorityPrincipals": [
-        "host",
-        "code"
-      ],
-      "sensitivity": "write",
-      "authenticatedFacts": [
-        "session",
-        "acting-user",
-        "device",
-        "runtime-entity",
-        "exact-code-artifact-when-code-originated",
-        "workspace-membership",
-        "agent-binding-when-agent-originated"
-      ],
-      "currentOutcomes": {
-        "allowed": "declared caller scenarios retain their existing allow/approval flow",
-        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
-      },
-      "predicates": [
-        "live-session",
-        "live-workspace-membership",
-        "exact-resource-scope"
-      ],
-      "r3aRequirement": "anyOf(capability(host,service:workspace-state.heartbeatRegister),allOf(capability(code,service:workspace-state.heartbeatRegister),workspace-member))",
-      "r3b": {
-        "review": "unchanged-parity",
-        "change": null
-      },
-      "capability": "service:workspace-state.heartbeatRegister",
-      "parityAssertion": "generated-census:host-authority"
-    },
-    {
-      "id": "host:workspace-state.heartbeatRemove",
-      "rpcPlane": "host-service",
-      "owner": "workspace-state",
-      "method": "heartbeatRemove",
-      "tier": "gated",
-      "sessionAdmission": "codeOnly",
-      "residency": "supervision",
-      "mechanismFamily": "workspace-state.lifecycle",
-      "reviewRationale": "Removing the durable heartbeat row retires a reviewed recurring runtime schedule",
-      "resourceDerivation": {
-        "kind": "literal",
-        "key": "service:workspace-state.heartbeatRemove"
-      },
-      "authorityPrincipals": [
-        "host",
-        "code"
-      ],
-      "sensitivity": "destructive",
-      "authenticatedFacts": [
-        "session",
-        "acting-user",
-        "device",
-        "runtime-entity",
-        "exact-code-artifact-when-code-originated",
-        "workspace-membership",
-        "agent-binding-when-agent-originated"
-      ],
-      "currentOutcomes": {
-        "allowed": "declared caller scenarios retain their existing allow/approval flow",
-        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
-      },
-      "predicates": [
-        "live-session",
-        "live-workspace-membership",
-        "exact-resource-scope"
-      ],
-      "r3aRequirement": "anyOf(capability(host,service:workspace-state.heartbeatRemove),allOf(capability(code,service:workspace-state.heartbeatRemove),workspace-member))",
-      "r3b": {
-        "review": "unchanged-parity",
-        "change": null
-      },
-      "capability": "service:workspace-state.heartbeatRemove",
-      "parityAssertion": "generated-census:host-authority"
-    },
-    {
       "id": "host:workspace-state.lifecycleLeaseClear",
       "rpcPlane": "host-service",
       "owner": "workspace-state",
@@ -41257,190 +40848,6 @@
       "parityAssertion": "generated-census:host-authority"
     },
     {
-      "id": "host:workspace.heartbeats.list",
-      "rpcPlane": "host-service",
-      "owner": "workspace",
-      "method": "heartbeats.list",
-      "tier": "open",
-      "sessionAdmission": "family",
-      "residency": "supervision",
-      "mechanismFamily": "workspace.heartbeat-supervision",
-      "reviewRationale": "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family",
-      "resourceDerivation": {
-        "kind": "literal",
-        "key": "service:workspace.heartbeats.list"
-      },
-      "authorityPrincipals": [
-        "user",
-        "code",
-        "host"
-      ],
-      "sensitivity": "read",
-      "authenticatedFacts": [
-        "session",
-        "acting-user",
-        "device",
-        "runtime-entity",
-        "exact-code-artifact-when-code-originated",
-        "workspace-membership",
-        "agent-binding-when-agent-originated"
-      ],
-      "currentOutcomes": {
-        "allowed": "declared caller scenarios retain their existing allow/approval flow",
-        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
-      },
-      "predicates": [
-        "live-session",
-        "live-workspace-membership",
-        "exact-resource-scope"
-      ],
-      "r3aRequirement": "anyOf(capability(host,service:workspace.heartbeats.list),allOf(capability(user,service:workspace.heartbeats.list),workspace-member),allOf(capability(code,service:workspace.heartbeats.list),workspace-member))",
-      "r3b": {
-        "review": "unchanged-parity",
-        "change": null
-      },
-      "capability": "service:workspace.heartbeats.list",
-      "parityAssertion": "generated-census:host-authority"
-    },
-    {
-      "id": "host:workspace.heartbeats.pause",
-      "rpcPlane": "host-service",
-      "owner": "workspace",
-      "method": "heartbeats.pause",
-      "tier": "gated",
-      "sessionAdmission": "family",
-      "residency": "supervision",
-      "mechanismFamily": "workspace.heartbeat-supervision",
-      "reviewRationale": "G3: state change exceeds the calling task's scratch; §2 default {code, session} family",
-      "resourceDerivation": {
-        "kind": "literal",
-        "key": "service:workspace.heartbeats.pause"
-      },
-      "authorityPrincipals": [
-        "user",
-        "code",
-        "host"
-      ],
-      "sensitivity": "write",
-      "authenticatedFacts": [
-        "session",
-        "acting-user",
-        "device",
-        "runtime-entity",
-        "exact-code-artifact-when-code-originated",
-        "workspace-membership",
-        "agent-binding-when-agent-originated"
-      ],
-      "currentOutcomes": {
-        "allowed": "declared caller scenarios retain their existing allow/approval flow",
-        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
-      },
-      "predicates": [
-        "live-session",
-        "live-workspace-membership",
-        "exact-resource-scope"
-      ],
-      "r3aRequirement": "anyOf(capability(host,service:workspace.heartbeats.pause),allOf(capability(user,service:workspace.heartbeats.pause),workspace-member),allOf(capability(code,service:workspace.heartbeats.pause),workspace-member))",
-      "r3b": {
-        "review": "unchanged-parity",
-        "change": null
-      },
-      "capability": "service:workspace.heartbeats.pause",
-      "parityAssertion": "generated-census:host-authority"
-    },
-    {
-      "id": "host:workspace.heartbeats.resume",
-      "rpcPlane": "host-service",
-      "owner": "workspace",
-      "method": "heartbeats.resume",
-      "tier": "gated",
-      "sessionAdmission": "family",
-      "residency": "supervision",
-      "mechanismFamily": "workspace.heartbeat-supervision",
-      "reviewRationale": "G3: state change exceeds the calling task's scratch; §2 default {code, session} family",
-      "resourceDerivation": {
-        "kind": "literal",
-        "key": "service:workspace.heartbeats.resume"
-      },
-      "authorityPrincipals": [
-        "user",
-        "code",
-        "host"
-      ],
-      "sensitivity": "write",
-      "authenticatedFacts": [
-        "session",
-        "acting-user",
-        "device",
-        "runtime-entity",
-        "exact-code-artifact-when-code-originated",
-        "workspace-membership",
-        "agent-binding-when-agent-originated"
-      ],
-      "currentOutcomes": {
-        "allowed": "declared caller scenarios retain their existing allow/approval flow",
-        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
-      },
-      "predicates": [
-        "live-session",
-        "live-workspace-membership",
-        "exact-resource-scope"
-      ],
-      "r3aRequirement": "anyOf(capability(host,service:workspace.heartbeats.resume),allOf(capability(user,service:workspace.heartbeats.resume),workspace-member),allOf(capability(code,service:workspace.heartbeats.resume),workspace-member))",
-      "r3b": {
-        "review": "unchanged-parity",
-        "change": null
-      },
-      "capability": "service:workspace.heartbeats.resume",
-      "parityAssertion": "generated-census:host-authority"
-    },
-    {
-      "id": "host:workspace.heartbeats.runNow",
-      "rpcPlane": "host-service",
-      "owner": "workspace",
-      "method": "heartbeats.runNow",
-      "tier": "gated",
-      "sessionAdmission": "family",
-      "residency": "supervision",
-      "mechanismFamily": "workspace.heartbeat-supervision",
-      "reviewRationale": "G3: state change exceeds the calling task's scratch; §2 default {code, session} family",
-      "resourceDerivation": {
-        "kind": "literal",
-        "key": "service:workspace.heartbeats.runNow"
-      },
-      "authorityPrincipals": [
-        "user",
-        "code",
-        "host"
-      ],
-      "sensitivity": "write",
-      "authenticatedFacts": [
-        "session",
-        "acting-user",
-        "device",
-        "runtime-entity",
-        "exact-code-artifact-when-code-originated",
-        "workspace-membership",
-        "agent-binding-when-agent-originated"
-      ],
-      "currentOutcomes": {
-        "allowed": "declared caller scenarios retain their existing allow/approval flow",
-        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
-      },
-      "predicates": [
-        "live-session",
-        "live-workspace-membership",
-        "exact-resource-scope"
-      ],
-      "r3aRequirement": "anyOf(capability(host,service:workspace.heartbeats.runNow),allOf(capability(user,service:workspace.heartbeats.runNow),workspace-member),allOf(capability(code,service:workspace.heartbeats.runNow),workspace-member))",
-      "r3b": {
-        "review": "unchanged-parity",
-        "change": null
-      },
-      "capability": "service:workspace.heartbeats.runNow",
-      "parityAssertion": "generated-census:host-authority"
-    },
-    {
       "id": "host:workspace.listSkills",
       "rpcPlane": "host-service",
       "owner": "workspace",
@@ -41530,52 +40937,6 @@
         "change": null
       },
       "capability": "service:workspace.readSkill",
-      "parityAssertion": "generated-census:host-authority"
-    },
-    {
-      "id": "host:workspace.recurring.list",
-      "rpcPlane": "host-service",
-      "owner": "workspace",
-      "method": "recurring.list",
-      "tier": "open",
-      "sessionAdmission": "family",
-      "residency": "protected-write",
-      "mechanismFamily": "workspace.semantic-read",
-      "reviewRationale": "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family",
-      "resourceDerivation": {
-        "kind": "literal",
-        "key": "service:workspace.recurring.list"
-      },
-      "authorityPrincipals": [
-        "user",
-        "code",
-        "host"
-      ],
-      "sensitivity": "read",
-      "authenticatedFacts": [
-        "session",
-        "acting-user",
-        "device",
-        "runtime-entity",
-        "exact-code-artifact-when-code-originated",
-        "workspace-membership",
-        "agent-binding-when-agent-originated"
-      ],
-      "currentOutcomes": {
-        "allowed": "declared caller scenarios retain their existing allow/approval flow",
-        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
-      },
-      "predicates": [
-        "live-session",
-        "live-workspace-membership",
-        "exact-resource-scope"
-      ],
-      "r3aRequirement": "anyOf(capability(host,service:workspace.recurring.list),allOf(capability(user,service:workspace.recurring.list),workspace-member),allOf(capability(code,service:workspace.recurring.list),workspace-member))",
-      "r3b": {
-        "review": "unchanged-parity",
-        "change": null
-      },
-      "capability": "service:workspace.recurring.list",
       "parityAssertion": "generated-census:host-authority"
     },
     {

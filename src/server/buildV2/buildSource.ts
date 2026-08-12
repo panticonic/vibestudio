@@ -23,7 +23,8 @@ export interface BuildSourceProvider {
   /**
    * Ensure the sources for the given units (the build target plus its
    * transitive internal deps) exist on disk at the given workspace state.
-   * Returns a root directory containing each unit at its `relativePath`.
+   * Returns a root directory containing each unit at its `relativePath` plus
+   * exact workspace-wide declaration support such as `types/*.d.ts`.
    */
   materializeForBuild(
     units: GraphNode[],

@@ -6218,46 +6218,6 @@ export const HOST_AUTHORITY_METHODS = {
       },
     },
   },
-  "workspace-state.heartbeatRegister": {
-    tier: {
-      tier: "gated",
-      session: "codeOnly",
-      residency: "supervision",
-      family: "workspace-state.lifecycle",
-      rationale: "The durable heartbeat row schedules and supervises a reviewed recurring runtime",
-    },
-    capability: "workspace.runtime-state.manage",
-    presentation: {
-      title: "Manage running workspace services",
-      action: "manage apps, panels, background tasks, and scheduled work that's currently running",
-      description: "Maintain running workspace apps, panels, background tasks, and scheduled work",
-      group: "workspace",
-      authorityCategory: {
-        domain: "automation",
-        verb: "manage",
-      },
-    },
-  },
-  "workspace-state.heartbeatRemove": {
-    tier: {
-      tier: "gated",
-      session: "codeOnly",
-      residency: "supervision",
-      family: "workspace-state.lifecycle",
-      rationale: "Removing the durable heartbeat row retires a reviewed recurring runtime schedule",
-    },
-    capability: "workspace.runtime-state.manage",
-    presentation: {
-      title: "Manage running workspace services",
-      action: "manage apps, panels, background tasks, and scheduled work that's currently running",
-      description: "Maintain running workspace apps, panels, background tasks, and scheduled work",
-      group: "workspace",
-      authorityCategory: {
-        domain: "automation",
-        verb: "manage",
-      },
-    },
-  },
   "workspace-state.lifecycleLeaseClear": {
     tier: {
       tier: "open",
@@ -6894,80 +6854,6 @@ export const HOST_AUTHORITY_METHODS = {
     capability: null,
     presentation: null,
   },
-  "workspace.heartbeats.list": {
-    tier: {
-      tier: "open",
-      session: "family",
-      residency: "supervision",
-      family: "workspace.heartbeat-supervision",
-      rationale: "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family",
-    },
-    capability: null,
-    presentation: null,
-  },
-  "workspace.heartbeats.pause": {
-    tier: {
-      tier: "gated",
-      session: "family",
-      residency: "supervision",
-      family: "workspace.heartbeat-supervision",
-      rationale:
-        "G3: state change exceeds the calling task's scratch; §2 default {code, session} family",
-    },
-    capability: "automations.control",
-    presentation: {
-      title: "Pause recurring workspace tasks",
-      action: "pause recurring workspace tasks",
-      description: "Allows {requesterKind} to pause recurring workspace tasks.",
-      group: "workspace",
-      authorityCategory: {
-        domain: "automation",
-        verb: "act",
-      },
-    },
-  },
-  "workspace.heartbeats.resume": {
-    tier: {
-      tier: "gated",
-      session: "family",
-      residency: "supervision",
-      family: "workspace.heartbeat-supervision",
-      rationale:
-        "G3: state change exceeds the calling task's scratch; §2 default {code, session} family",
-    },
-    capability: "automations.control",
-    presentation: {
-      title: "Resume recurring workspace tasks",
-      action: "resume recurring workspace tasks",
-      description: "Allows {requesterKind} to resume recurring workspace tasks.",
-      group: "workspace",
-      authorityCategory: {
-        domain: "automation",
-        verb: "act",
-      },
-    },
-  },
-  "workspace.heartbeats.runNow": {
-    tier: {
-      tier: "gated",
-      session: "family",
-      residency: "supervision",
-      family: "workspace.heartbeat-supervision",
-      rationale:
-        "G3: state change exceeds the calling task's scratch; §2 default {code, session} family",
-    },
-    capability: "automations.control",
-    presentation: {
-      title: "Run recurring workspace tasks now",
-      action: "run recurring workspace tasks now",
-      description: "Allows {requesterKind} to run recurring workspace tasks now.",
-      group: "workspace",
-      authorityCategory: {
-        domain: "automation",
-        verb: "act",
-      },
-    },
-  },
   "workspace.listSkills": {
     tier: {
       tier: "open",
@@ -6980,17 +6866,6 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: null,
   },
   "workspace.readSkill": {
-    tier: {
-      tier: "open",
-      session: "family",
-      residency: "protected-write",
-      family: "workspace.semantic-read",
-      rationale: "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family",
-    },
-    capability: null,
-    presentation: null,
-  },
-  "workspace.recurring.list": {
     tier: {
       tier: "open",
       session: "family",
@@ -7178,10 +7053,6 @@ export const HOST_CAPABILITY_CATEGORIES = {
   "approvals.read": {
     domain: "safety",
     verb: "manage",
-  },
-  "automations.control": {
-    domain: "automation",
-    verb: "act",
   },
   "browser-form-fill.manage": {
     domain: "accounts",
@@ -7598,16 +7469,6 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
     authorityCategory: {
       domain: "safety",
       verb: "manage",
-    },
-  },
-  "automations.control": {
-    title: "Pause recurring workspace tasks",
-    action: "pause recurring workspace tasks",
-    description: "Allows {requesterKind} to pause recurring workspace tasks.",
-    group: "workspace",
-    authorityCategory: {
-      domain: "automation",
-      verb: "act",
     },
   },
   "browser-form-fill.manage": {

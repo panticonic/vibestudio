@@ -16,6 +16,7 @@ import {
   ids,
   outcomeEvents,
   type AgentLoopConfig,
+  type AgentTurnMetadata,
   type AgentState,
   type AppendItem,
   type EffectDescriptor,
@@ -87,6 +88,24 @@ function assertDeferralMatchesEffect(kind: EffectKind, reason: EffectDeferral["r
       break;
   }
   throw new Error(`Effect ${kind} cannot defer for ${reason}`);
+}
+
+function assistantMessageText(blocks: unknown[]): string | undefined {
+  const text = blocks
+    .flatMap((raw) => {
+      if (!raw || typeof raw !== "object") return [];
+      const block = raw as Record<string, unknown>;
+      const value =
+        typeof block["content"] === "string"
+          ? block["content"]
+          : typeof block["text"] === "string"
+            ? block["text"]
+            : undefined;
+      return value ? [value] : [];
+    })
+    .join("\n")
+    .trim();
+  return text || undefined;
 }
 
 /** Typed failure code for a deferred eval whose durable run is irrecoverably
@@ -205,12 +224,13 @@ export interface DriverDeps {
   now(): number;
   scheduleAlarm(atMs: number): void;
   notifyWorkReady?(): void;
-  /** Live fan-out for GAD-created channel publication rows. The trajectory log
-   *  append is authoritative; this only wakes channel subscribers in-process. */
-  onHeartbeatOutcome?(input: {
+  onTurnClosed?(input: {
     channelId: string;
-    descriptor: EffectDescriptor;
-    outcome: EffectOutcome;
+    turnId: string;
+    metadata: AgentTurnMetadata;
+    reason?: string;
+    summary?: string;
+    finalMessage?: string;
   }): void | Promise<void>;
   /** Compaction trigger thresholds. The vessel sizes `triggerBytes` relative
    *  to the model context window (the deleted CompactionTrigger used ~0.8× the
@@ -374,7 +394,7 @@ function withModelProvenance(descriptor: EffectDescriptor, items: AppendItem[]):
 function isUnattendedModelRequest(descriptor: EffectDescriptor): boolean {
   if (descriptor.kind !== "model_call") return false;
   const origin = descriptor.request.turnMetadata?.origin;
-  return origin === "heartbeat" || origin === "scheduled";
+  return origin === "scheduled";
 }
 
 function ensureScheduledModelResumeSchema(sql: SqlStorage): void {
@@ -1148,6 +1168,28 @@ export class AgentLoopDriver {
       ),
     } as LogEnvelope;
     await this.runStep(loop, { type: "event-appended", envelope: semanticEnvelope }, retries);
+    if (semanticEnvelope.payloadKind === "turn.closed") {
+      const payload = semanticEnvelope.payload as Record<string, unknown>;
+      const metadata = payload["metadata"];
+      if (metadata && typeof metadata === "object" && !Array.isArray(metadata)) {
+        const turnId = String(semanticEnvelope.causality?.turnId ?? "");
+        const finalEntry = [...loop.state.entries]
+          .reverse()
+          .find(
+            (entry) => entry.kind === "assistant" && entry.messageId.startsWith(`m:${turnId}:`)
+          );
+        await this.deps.onTurnClosed?.({
+          channelId: loop.channelId,
+          turnId,
+          metadata: metadata as AgentTurnMetadata,
+          ...(typeof payload["reason"] === "string" ? { reason: payload["reason"] } : {}),
+          ...(typeof payload["summary"] === "string" ? { summary: payload["summary"] } : {}),
+          ...(finalEntry?.kind === "assistant"
+            ? { finalMessage: assistantMessageText(finalEntry.blocks) }
+            : {}),
+        });
+      }
+    }
   }
 
   private async ingestCommandAlreadyJournaled(
@@ -1686,16 +1728,6 @@ export class AgentLoopDriver {
       loop.state = applyEvent(loop.state, envelope);
     }
     this.foldCache.write(loop.state);
-    if (
-      row.descriptor.kind === "model_call" &&
-      row.descriptor.request.turnMetadata?.origin === "heartbeat"
-    ) {
-      await this.deps.onHeartbeatOutcome?.({
-        channelId: loop.channelId,
-        descriptor: row.descriptor,
-        outcome,
-      });
-    }
     for (const envelope of envelopes) {
       await this.runEventCascade(loop, envelope, APPEND_RETRIES);
     }
@@ -1982,7 +2014,8 @@ export class AgentLoopDriver {
   markDeferredEvalStartAttempted(channelId: string, effectId: string): void {
     const row = this.outbox.getForChannel(channelId, effectId);
     if (!row || !isDeferredEvalRow(row)) return;
-    if ((row.descriptor as DeferredEvalDescriptorMarker).deferredEvalStartAttempted === true) return;
+    if ((row.descriptor as DeferredEvalDescriptorMarker).deferredEvalStartAttempted === true)
+      return;
     this.outbox.updateDescriptor(row.branchId, row.effectId, {
       ...row.descriptor,
       deferredEvalStartAttempted: true,

@@ -48,8 +48,9 @@ the `meta` repository:
 4. If validation succeeds, replace the live `workspaceConfig` object in place.
 5. Refresh derived registries that long-lived services close over.
 6. Reconcile side tables that are not computed on every lookup.
-7. Notify section-specific managers such as extensions, apps, recurring jobs,
-   heartbeats, shared remotes, and route dispatch.
+7. Notify section-specific managers such as extensions, apps, shared remotes,
+   and route dispatch. Reviewed automations live in the Automations service,
+   not workspace configuration.
 
 If parsing or validation fails, the live runtime keeps the previous manifest.
 Do not partially apply individual sections.
@@ -81,7 +82,7 @@ The write path is:
    host approval-gates the atomic protected-ref CAS; explicit builds and
    post-publication projections remain separate;
 7. let the normal main-event reaction reload the manifest and reconcile
-   services, routes, apps, extensions, jobs, trust, and remotes.
+   services, routes, apps, extensions, trust, and remotes.
 
 Service-specific authorization may happen before authoring. `vcs.push` still
 performs the canonical protected-main approval and audit flow; no service gets a
@@ -102,8 +103,6 @@ push whose exact published event changes the `meta` repository:
 - `extensions`: reconciled by `ExtensionHost`.
 - `apps` and `hostTargets`: app declarations are reconciled by `AppHost`; host
   target preference lookups read the live config.
-- `recurring` and `heartbeats`: registry managers reload from the live config
-  and sync durable schedule state.
 - `trust`: re-seeds the process trust registry after the manifest is applied.
 - shared remotes: synced after meta reload from the live config.
 

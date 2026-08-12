@@ -29,49 +29,59 @@ function semanticUnitInspection(
   return noIncompleteInvocations(result);
 }
 
-function scheduleInspectionChecked(result: Parameters<typeof noIncompleteInvocations>[0]) {
+function automationInspectionChecked(result: Parameters<typeof noIncompleteInvocations>[0]) {
   const evalCalls = getToolCalls(result).filter((call) => call.name === "eval");
   const code = successfulEvalCode(result);
   if (
     evalCalls.length !== 1 ||
-    !code.includes("workspace.recurring.list") ||
-    !code.includes("workspace.heartbeats.list")
+    !code.includes("vibestudio.missions.v1") ||
+    !/\boverview\b/u.test(code)
   ) {
     return {
       passed: false,
-      reason: "Expected exactly one successful eval inspecting recurring jobs and heartbeats",
+      reason: "Expected exactly one successful eval reading the automation overview",
     };
   }
   const allEvalCode = getToolCalls(result)
     .filter((call) => call.name === "eval")
     .map((call) => (typeof call.arguments?.["code"] === "string" ? call.arguments["code"] : ""))
     .join("\n");
-  if (/heartbeats\.(?:runNow|pause|resume)|recurring\.(?:runNow|pause|resume)/u.test(allEvalCode)) {
-    return { passed: false, reason: "Schedule inspection probe attempted a mutating operation" };
+  if (
+    /\b(?:runNow|pause|resume|retire|requestReview|createDraft|proposeDraft|edit)\b/u.test(
+      allEvalCode
+    )
+  ) {
+    return { passed: false, reason: "Automation inspection probe attempted a mutating operation" };
   }
-  if (!successfulEvalReturnValues(result).some(isExactScheduleCounts)) {
+  if (!successfulEvalReturnValues(result).some(isExactAutomationCounts)) {
     return {
       passed: false,
-      reason:
-        "Schedule inspection eval did not return exact nonnegative recurring/heartbeat counts",
+      reason: "Automation inspection eval did not return the exact bounded overview counts",
     };
   }
   const final = findLastAgentMessage(result);
-  if (!/recurring/iu.test(final) || !/heartbeat/iu.test(final) || !/\d/u.test(final)) {
-    return { passed: false, reason: "Final response did not report both observed schedule counts" };
+  if (
+    !/automation/iu.test(final) ||
+    !/active/iu.test(final) ||
+    !/fail/iu.test(final) ||
+    !/\d/u.test(final)
+  ) {
+    return {
+      passed: false,
+      reason: "Final response did not report the observed automation counts",
+    };
   }
   return noIncompleteInvocations(result);
 }
 
-function isExactScheduleCounts(value: unknown): boolean {
+function isExactAutomationCounts(value: unknown): boolean {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const record = value as Record<string, unknown>;
   return (
-    Object.keys(record).sort().join(",") === "heartbeats,recurring" &&
-    Number.isSafeInteger(record["recurring"]) &&
-    (record["recurring"] as number) >= 0 &&
-    Number.isSafeInteger(record["heartbeats"]) &&
-    (record["heartbeats"] as number) >= 0
+    Object.keys(record).sort().join(",") === "active,automations,failedLast24Hours,running" &&
+    ["active", "automations", "failedLast24Hours", "running"].every(
+      (key) => Number.isSafeInteger(record[key]) && (record[key] as number) >= 0
+    )
   );
 }
 
@@ -116,11 +126,25 @@ export const unitDiagnosticsTests: TestCase[] = [
       ),
   },
   {
-    name: "schedule-surfaces-readonly",
-    description: "Inspect recurring jobs and agent heartbeats without mutating them",
+    name: "automation-overview-readonly",
+    description: "Inspect the canonical automation ledger without mutating it",
     category: "unit-diagnostics",
     prompt:
-      "What recurring jobs and agent heartbeats are configured in this workspace? Report only their counts and do not pause, resume, or run anything.",
-    validate: scheduleInspectionChecked,
+      "How many automations are configured, active, running, or failed in the last 24 hours? Inspect the automation overview, report only those counts, and do not change or run anything.",
+    authorityPolicy: {
+      authority: [
+        {
+          ruleId: "read-automation-overview",
+          capability: { kind: "exact", key: "workspace-service:missions" },
+          resource: {
+            kind: "prefix",
+            prefix: "do:vibestudio/internal:MissionsDO:",
+          },
+          tier: "gated",
+          decision: "once",
+        },
+      ],
+    },
+    validate: automationInspectionChecked,
   },
 ];

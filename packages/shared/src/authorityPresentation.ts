@@ -21,8 +21,6 @@ export type CapabilityRequesterKind =
   | "panel"
   | "worker"
   | "extension"
-  | "scheduled-job"
-  | "agent-heartbeat"
   | "durable-object";
 
 export type CapabilityPresentationResolver = (

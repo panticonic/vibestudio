@@ -233,28 +233,6 @@ export class WorkspaceDOTestable extends WorkspaceDO {
       )
     `);
     sql.exec(`
-      CREATE TABLE IF NOT EXISTS recurring_jobs (
-        name TEXT PRIMARY KEY,
-        source TEXT NOT NULL,
-        class_name TEXT NOT NULL,
-        object_key TEXT NOT NULL,
-        method TEXT NOT NULL,
-        args_json TEXT NOT NULL,
-        interval_ms INTEGER NOT NULL,
-        at_minutes INTEGER,
-        spec_hash TEXT NOT NULL,
-        next_run_at INTEGER NOT NULL,
-        last_run_at INTEGER,
-        fail_count INTEGER NOT NULL DEFAULT 0,
-        backoff_until INTEGER,
-        last_started_at INTEGER,
-        last_succeeded_at INTEGER,
-        last_failed_at INTEGER,
-        last_error TEXT,
-        last_duration_ms INTEGER
-      )
-    `);
-    sql.exec(`
       CREATE TABLE IF NOT EXISTS context_edges (
         context_id       TEXT NOT NULL,
         owner_context_id TEXT NOT NULL,
@@ -268,24 +246,5 @@ export class WorkspaceDOTestable extends WorkspaceDO {
       `CREATE INDEX IF NOT EXISTS idx_context_edges_owner ON context_edges(owner_context_id, kind)`
     );
     sql.exec(`CREATE INDEX IF NOT EXISTS idx_context_edges_child ON context_edges(context_id)`);
-    sql.exec(`
-      CREATE TABLE IF NOT EXISTS heartbeat_registry (
-        name TEXT NOT NULL,
-        source TEXT NOT NULL,
-        class_name TEXT NOT NULL,
-        object_key TEXT NOT NULL,
-        channel_id TEXT,
-        participant_handle TEXT,
-        kind TEXT NOT NULL,
-        status TEXT NOT NULL,
-        next_run_at INTEGER,
-        last_wake_at INTEGER,
-        last_action_summary TEXT,
-        last_error TEXT,
-        spec_hash TEXT,
-        updated_at INTEGER NOT NULL,
-        PRIMARY KEY (name, source, class_name, object_key)
-      )
-    `);
   }
 }

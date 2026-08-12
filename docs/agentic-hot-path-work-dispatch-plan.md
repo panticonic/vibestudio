@@ -5,8 +5,8 @@
 **Scope:** alarm scheduling, channel delivery, agent inbox processing, agent
 effect execution, and recovery
 **Supersedes when implemented:** the execution-lifetime portions of
-`ws1-agent-loop-spec.md`, `ws2-channel-spec.md`, and
-`agent-heartbeats-design.md` that make a DO alarm the primary dispatcher
+`ws1-agent-loop-spec.md` and `ws2-channel-spec.md` that make a DO alarm the
+primary dispatcher
 
 **Revision history.**
 
@@ -167,7 +167,7 @@ These exist and work. Reuse the _shape_; carry forward none of the _state_.
 | Rev 1 proposed to build                          | Already in tree                                                                                                                                                                                                                                                                          |
 | ------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `acceptChannelBatch` as a "local-inbox-only RPC" | `onChannelEnvelope` (agent-vessel.ts:1962-1981) already validates the caller, inserts into an inbox with a deterministic delivery key, advances no reasoning, and schedules a wake. The delta is batching, incarnation fencing, exact acknowledgement (§8.3), and hint-instead-of-alarm. |
-| A durable-work claim protocol                    | `EffectOutbox` (effect-outbox.ts) with `due`, `claimReady`, `releaseLease`, `recordFailure`, `maxAttempts`, `backoffMs`, and `inspectEffectOutbox`. It lacks a host-wide worker-generation adoption protocol; §6 adds it.                                               |
+| A durable-work claim protocol                    | `EffectOutbox` (effect-outbox.ts) with `due`, `claimReady`, `releaseLease`, `recordFailure`, `maxAttempts`, `backoffMs`, and `inspectEffectOutbox`. It lacks a host-wide worker-generation adoption protocol; §6 adds it.                                                                |
 | Typed effect executors                           | `EffectExecutor<D>` (effect-executors/types.ts:195-213) already takes a frozen descriptor, `AbortSignal`, narrow ports, and an ephemeral sink, returning an outcome or `{deferred: true}`.                                                                                               |
 | A long-running host→DO call shape                | `DODispatch.dispatchHeld` (doDispatch.ts:399), used by `EvalDO.executeRun` with a 300 s coarse progress report.                                                                                                                                                                          |
 | A durable registry of live owners                | `entities` (workspaceDO.ts:442-460) with `status`, already consulted by `alarmSet` to refuse inactive objects. This is the basis for recovery scanning (§7.3).                                                                                                                           |
@@ -862,17 +862,17 @@ establish the following:
 
 The effect-level probes complete the matrix:
 
-| Gate item                                       | Evidence and result                                                                                                                                                                                            |
-| ----------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| same-agent ordinary methods and alarm admission | the real-workerd held-call probe admits both while the first call remains active; ordinary methods share the `onChannelEnvelope` / `onMethodCall` dispatch path                                                |
-| concurrent SQLite access                        | both held calls read and write their own rows concurrently                                                                                                                                                     |
-| bounded ephemeral streaming                     | `emitEphemeral` is synchronous; delta storage is capped at 256 events and signal delivery at four pending batches, so a slow stream cannot backpressure terminal settlement                                    |
-| cancellation, including ignored signal          | `agent-loop-driver.test.ts` proves `releaseActivation` returns immediately, aborts the signal, and rejects a non-cooperative runner's late result                                                              |
-| completion versus deferred parking              | the deferred-delivery and duplicate-delivery race tests prove one durable terminal and a harmless late duplicate                                                                                               |
-| lifecycle prepare during execution              | the real-workerd probe admits `__lifecycle/prepare` in under one second                                                                                                                                        |
+| Gate item                                       | Evidence and result                                                                                                                                                                                                            |
+| ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| same-agent ordinary methods and alarm admission | the real-workerd held-call probe admits both while the first call remains active; ordinary methods share the `onChannelEnvelope` / `onMethodCall` dispatch path                                                                |
+| concurrent SQLite access                        | both held calls read and write their own rows concurrently                                                                                                                                                                     |
+| bounded ephemeral streaming                     | `emitEphemeral` is synchronous; delta storage is capped at 256 events and signal delivery at four pending batches, so a slow stream cannot backpressure terminal settlement                                                    |
+| cancellation, including ignored signal          | `agent-loop-driver.test.ts` proves `releaseActivation` returns immediately, aborts the signal, and rejects a non-cooperative runner's late result                                                                              |
+| completion versus deferred parking              | the deferred-delivery and duplicate-delivery race tests prove one durable terminal and a harmless late duplicate                                                                                                               |
+| lifecycle prepare during execution              | the real-workerd probe admits `__lifecycle/prepare` in under one second                                                                                                                                                        |
 | restart/code replacement and detached work      | replacement adopts a new worker generation and releases the prior generation's claims; the waitUntil probe establishes that workerd runs event-owned continuation after return, but correctness does not rely on detached work |
-| concurrent held effects                         | two held calls execute concurrently on one object in the real-workerd probe                                                                                                                                    |
-| live authority                                  | the protected-port probe revokes authority after execution starts and verifies the operation re-evaluates and rejects at use time                                                                              |
+| concurrent held effects                         | two held calls execute concurrently on one object in the real-workerd probe                                                                                                                                                    |
+| live authority                                  | the protected-port probe revokes authority after execution starts and verifies the operation re-evaluates and rejects at use time                                                                                              |
 
 **Gate A decision (2026-07-25): Option A — held execution RPC.** All nine
 criteria pass. Effects retain the Agent DO fold and narrow capability ports, but
@@ -1007,9 +1007,8 @@ lease generation; no kind has two dispatchers at any commit.
    comments in §2.5 M4 disproves.
 5. Retain only explicit deadline, retry, ready-generation replay, and
    recovery-scan paths.
-6. Update `ws1-agent-loop-spec.md`, `ws2-channel-spec.md`,
-   `agent-heartbeats-design.md`, and `agentic-architecture.md` to the landed
-   model.
+6. Update `ws1-agent-loop-spec.md`, `ws2-channel-spec.md`, and
+   `agentic-architecture.md` to the landed model.
 
 Exit gate: code search and architecture tests find no external I/O loop inside
 channel or agent alarms, and no scheduler that awaits a dispatch.

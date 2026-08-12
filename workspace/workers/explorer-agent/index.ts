@@ -4,12 +4,11 @@ import { driveMerge, type ParticipantDescriptor } from "@workspace/harness";
 import type { AgentTool } from "@workspace/pi-core";
 import { defaultPolicies } from "@workspace/agent-loop";
 import type { RespondPolicy, StepPolicy } from "@workspace/agent-loop";
-import { rpc } from "@workspace/runtime/worker";
 import { rpcErrorDataOf } from "@vibestudio/rpc";
 import { canonicalJson, sha256HexSyncText } from "@vibestudio/content-addressing";
 import { vcsMethods, type VcsStatusResult } from "@vibestudio/service-schemas/vcs";
 import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
-import { EXPLORER_SYSTEM_PROMPT, SCHEDULED_SWEEP_PROMPT } from "./prompts.js";
+import { EXPLORER_SYSTEM_PROMPT } from "./prompts.js";
 import {
   buildCardState,
   findingsCardKey,
@@ -56,9 +55,8 @@ function str(value: unknown): string {
  * The explorer agent: a silent agent variant that agentically tests the workspace's
  * own capability surface. It inherits silence + the `say` tool from
  * `SilentAgentWorker`, and adds (a) the explorer system prompt (the oracle loop —
- * full methodology in `workers/explorer-agent/SKILL.md`), (b) a recurring
- * autonomous sweep driven by the `vibestudio.yml recurring:` registry, and (c)
- * a `report_finding` tool that durably logs findings (commit + push) and
+ * full methodology in `workers/explorer-agent/SKILL.md`), and (b) a
+ * `report_finding` tool that durably logs findings (commit + push) and
  * aggregates them into a findings card in the connected chat panel.
  *
  * Runs as a `do` caller with the full `services.*` surface (NOT read-only) — the
@@ -147,25 +145,6 @@ export class ExplorerAgentWorker extends SilentAgentWorker {
       ...(await super.getLoopTools(channelId, execution)),
       this.createReportFindingTool(channelId, execution?.rpc ?? this.rpc),
     ];
-  }
-
-  /**
-   * Recurring autonomous sweep: kick a self-initiated turn in every subscribed
-   * channel so the agent runs its loop without a user message. Wired via the
-   * `vibestudio.yml recurring:` registry (server/harness caller only).
-   */
-  @rpc({ principals: ["host"], effect: { kind: "open" }, tier: "open", sensitivity: "write" })
-  async runScheduledJob(_args: unknown): Promise<{ ok: boolean; channels: number }> {
-    const channelIds = this.subscriptions.listChannelIds();
-    for (const channelId of channelIds) {
-      if (!this.subscriptions.getParticipantId(channelId)) continue;
-      await this.submitAgentInitiatedTurn(
-        channelId,
-        { content: SCHEDULED_SWEEP_PROMPT },
-        { mode: "sequential", steeringId: `explorer-sweep:${channelId}:${Date.now()}` }
-      );
-    }
-    return { ok: true, channels: channelIds.length };
   }
 
   // ── report_finding ────────────────────────────────────────────────────────

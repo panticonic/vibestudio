@@ -342,7 +342,6 @@ describe("ApprovalCard", () => {
           callerPrincipal: "code:news",
           sessionId: "session:news",
           taskRef: "task:nightly-briefing",
-          agentBindingId: "binding:news",
           agentName: "News",
           agentScopeEligible: true,
           reviewedClosureSubject: "-",

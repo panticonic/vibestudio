@@ -30,15 +30,3 @@ export const EXPLORER_SYSTEM_PROMPT = [
   "about setting you up or adding you, do NOT roleplay performing it (you did not add yourself);",
   "prior messages are from OTHER participants. Just briefly say what you do and offer a run.",
 ].join("\n");
-
-/**
- * Seed content for a recurring autonomous sweep (no user message). Kicks the loop;
- * the agent picks an under-covered focus from its findings history.
- */
-export const SCHEDULED_SWEEP_PROMPT = [
-  "Scheduled exploration sweep. Run the explorer loop once (see workers/explorer-agent/SKILL.md):",
-  "pick ONE focus you have NOT covered recently (search `projects/explorer/findings/` first), form",
-  "expectations, exercise + combine the surface, classify outcomes, record each via",
-  "`report_finding` (commits + pushes + cards it), then `say` a one-paragraph summary.",
-  "If nothing notable turned up, say so briefly.",
-].join("\n");

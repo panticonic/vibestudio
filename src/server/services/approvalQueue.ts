@@ -368,7 +368,6 @@ export interface UnitInstallReviewQueueRequest extends ApprovalQueueRequestBase 
   /** The units this operation lands, as their producers describe them. */
   units: ReviewedUnit[];
   template?: PendingUnitInstallReviewApproval["template"];
-  charters?: PendingUnitInstallReviewApproval["charters"];
   /** Parts updated with no declared-authority change; shown as one line (§5.4). */
   unchangedPartCount?: number;
   configWrite?: PendingUnitInstallReviewApproval["configWrite"];
@@ -1114,7 +1113,6 @@ export function createApprovalQueue(deps: {
       description: req.description,
       units,
       template: req.template ?? null,
-      charters: req.charters ?? null,
       unchangedPartCount: req.unchangedPartCount ?? 0,
       previousRequests: sortedMap(req.previousRequests, (requests) => requests),
       previouslyCleared: sortedMap(req.previouslyCleared, (keys) => [...keys].sort()),
@@ -1291,7 +1289,6 @@ export function createApprovalQueue(deps: {
         parts,
         summary: summarizeParts(parts),
         unchangedPartCount: req.unchangedPartCount ?? 0,
-        ...(req.charters?.length ? { charters: req.charters } : {}),
         configWrite: req.configWrite ?? null,
       } satisfies PendingUnitInstallReviewApproval;
       const copy = getApprovalCopy(approval);

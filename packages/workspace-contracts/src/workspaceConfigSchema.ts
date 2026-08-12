@@ -300,72 +300,6 @@ const WorkspaceServiceSchema = z.union([
     .strict(),
 ]);
 
-const WorkspaceRecurringSchema = z
-  .object({
-    name: z.string(),
-    target: z
-      .object({ source: z.string(), className: z.string(), objectKey: z.string().optional() })
-      .strict(),
-    method: z.string(),
-    args: z.array(WorkspaceJsonValueSchema).optional(),
-    schedule: z.object({ every: z.string(), at: z.string().optional() }).strict(),
-  })
-  .strict();
-
-const WorkspaceHeartbeatSchema = z
-  .object({
-    name: z.string(),
-    target: z
-      .object({ source: z.string(), className: z.string(), objectKey: z.string().optional() })
-      .strict(),
-    channel: z
-      .object({
-        mode: z.enum(["subscribed", "fixed"]).optional(),
-        id: z.string().optional(),
-        handle: z.string().optional(),
-      })
-      .strict()
-      .optional(),
-    schedule: z
-      .object({
-        every: z.string(),
-        jitter: z.string().optional(),
-        at: z.string().optional(),
-        activeHours: z
-          .object({
-            start: z.string(),
-            end: z.string(),
-            timezone: z.string().optional(),
-          })
-          .strict()
-          .optional(),
-      })
-      .strict(),
-    context: z
-      .object({
-        mode: z.enum(["heartbeat", "full", "isolated"]).optional(),
-        promptFile: z.string().optional(),
-        includeWorkspacePrompt: z.boolean().optional(),
-        includeSkillIndex: z.boolean().optional(),
-        tokenBudget: z.number().optional(),
-      })
-      .strict()
-      .optional(),
-    behavior: z
-      .object({
-        skipWhenBusy: z.boolean().optional(),
-        delivery: z.enum(["none", "channel", "last-contact"]).optional(),
-        ackToken: z.string().optional(),
-        failureBackoff: z
-          .object({ base: z.string().optional(), max: z.string().optional() })
-          .strict()
-          .optional(),
-      })
-      .strict()
-      .optional(),
-  })
-  .strict();
-
 /** Canonical structural contract for resolved `meta/vibestudio.yml` configuration. */
 export const WorkspaceConfigSchema = z
   .object({
@@ -423,8 +357,6 @@ export const WorkspaceConfigSchema = z
       )
       .optional(),
     extensions: z.array(WorkspaceSourceRefSchema).optional(),
-    recurring: z.array(WorkspaceRecurringSchema).optional(),
-    heartbeats: z.array(WorkspaceHeartbeatSchema).optional(),
     apps: z.array(WorkspaceSourceRefSchema).optional(),
     providers: z
       .object({

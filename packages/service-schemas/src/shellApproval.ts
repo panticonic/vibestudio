@@ -11,7 +11,6 @@ import type {
   PendingApproval,
   PendingMissionReviewApproval,
   PendingUnitInstallReviewApproval,
-  InstallReviewCharter,
 } from "@vibestudio/shared/approvals";
 import type {
   InstallReviewOrigin,
@@ -294,16 +293,6 @@ const installReviewPartSchema = z
   })
   .strict() satisfies z.ZodType<InstallReviewPart>;
 
-const installReviewCharterSchema = z
-  .object({
-    kind: z.enum(["scheduled-job", "agent-heartbeat"]),
-    name: z.string(),
-    schedule: z.string(),
-    purpose: z.string(),
-    change: z.enum(["added", "removed", "changed"]),
-  })
-  .strict() satisfies z.ZodType<InstallReviewCharter>;
-
 export const pendingUnitInstallReviewApprovalSchema = z
   .object({
     ...pendingApprovalBaseShape,
@@ -333,7 +322,6 @@ export const pendingUnitInstallReviewApprovalSchema = z
       })
       .strict(),
     unchangedPartCount: z.number().int().nonnegative(),
-    charters: z.array(installReviewCharterSchema).optional(),
     configWrite: z
       .object({ repoPath: z.string(), summary: z.string() })
       .strict()

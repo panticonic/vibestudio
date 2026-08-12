@@ -551,20 +551,6 @@ export function InstallReview({
         </Text>
       ) : null}
 
-      {/* Unattended charters cost money and act without being opened, which is
-          exactly what a person wants to know before accepting. */}
-      {approval.charters && approval.charters.length > 0 ? (
-        <Flex direction="column" gap="1" className="install-review-charters">
-          <Text size="1" weight="medium">
-            {COPY.sections.charters}
-          </Text>
-          {approval.charters.map((charter) => (
-            <Text key={charter.name} size="1" color="gray">
-              {charter.name} — {charter.schedule}. {charter.purpose}
-            </Text>
-          ))}
-        </Flex>
-      ) : null}
     </Flex>
   );
 

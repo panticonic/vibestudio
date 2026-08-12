@@ -67,7 +67,14 @@
     "WebhookStoreDO": { "provides": [], "requests": [], "methodScopedRequests": [] },
     "MissionsDO": {
       "provides": [],
-      "requests": [],
+      "requests": [
+        {
+          "capability": "reviewed-closure.bind-session",
+          "resource": { "kind": "prefix", "prefix": "mission:" },
+          "tier": "gated",
+          "evidence": "bounded-dynamic"
+        }
+      ],
       "methodScopedRequests": [
         {
           "capability": "reviewed-closure.activate",
@@ -92,7 +99,7 @@
         },
         {
           "capability": "reviewed-closure.bind-session",
-          "methods": ["startSession"],
+          "methods": ["runNow"],
           "resource": { "kind": "prefix", "prefix": "mission:" },
           "tier": "gated",
           "evidence": "bounded-dynamic"

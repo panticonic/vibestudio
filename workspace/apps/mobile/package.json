@@ -103,15 +103,6 @@
           "evidence": "intentional-broad"
         },
         {
-          "capability": "automations.control",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          },
-          "tier": "gated",
-          "evidence": "intentional-broad"
-        },
-        {
           "capability": "clipboard",
           "resource": {
             "kind": "prefix",

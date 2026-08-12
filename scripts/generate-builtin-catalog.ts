@@ -86,6 +86,7 @@ const entries = PRODUCT_BUILTINS.map((entry) => {
       : {}),
     durableObject: entry.durableObject,
     workerd: entry.workerd,
+    residentCapabilityRequests: entry.residentCapabilityRequests,
     hostCapabilityRequests: entry.hostCapabilityRequests,
     directMethods,
   };
@@ -182,7 +183,7 @@ const executionCatalog = {
       entry.className,
       {
         provides: [],
-        requests: [],
+        requests: entry.residentCapabilityRequests,
         methodScopedRequests: entry.hostCapabilityRequests,
       },
     ])
@@ -197,10 +198,7 @@ const outputs = new Map<string, string>([
   ["packages/shared/src/productBuiltinCatalog.generated.ts", generatedTs],
   ["packages/shared/src/productBuiltinCatalog.node.generated.mjs", generatedMjs],
   ["src/server/internalDOs/index.ts", generatedIndex],
-  [
-    "src/server/internalDOs/internalDoExecutionCatalog.json",
-    generatedExecutionCatalog,
-  ],
+  ["src/server/internalDOs/internalDoExecutionCatalog.json", generatedExecutionCatalog],
 ]);
 for (const [relative, content] of outputs) {
   const target = path.join(root, relative);

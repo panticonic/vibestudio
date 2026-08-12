@@ -70,53 +70,6 @@ import { startEventLoopResponsivenessMonitor } from "../eventLoopResponsiveness.
 // __filename is available natively in CJS and via the esbuild banner shim in ESM.
 declare const __filename: string;
 
-type HeartbeatRegistryControlRow = {
-  name: string;
-  source: string;
-  className: string;
-  objectKey: string;
-  channelId?: string | null;
-  participantHandle?: string | null;
-};
-
-type HeartbeatControlSelector =
-  | string
-  | {
-      name?: string;
-      target?: { source?: string; className?: string; objectKey?: string };
-      channelId?: string;
-      participantHandle?: string;
-    };
-
-function resolveHeartbeatRegistryRow(
-  rows: HeartbeatRegistryControlRow[],
-  selector: HeartbeatControlSelector
-): HeartbeatRegistryControlRow | null {
-  if (typeof selector === "string") {
-    const matches = rows.filter((row) => row.name === selector);
-    if (matches.length > 1) {
-      throw new Error(`Ambiguous heartbeat selector: ${JSON.stringify(selector)}`);
-    }
-    return matches[0] ?? null;
-  }
-  const matches = rows.filter((row) => {
-    if (selector.name && row.name !== selector.name) return false;
-    if (selector.channelId && row.channelId !== selector.channelId) return false;
-    if (selector.participantHandle && row.participantHandle !== selector.participantHandle) {
-      return false;
-    }
-    const target = selector.target;
-    if (target?.source && row.source !== target.source) return false;
-    if (target?.className && row.className !== target.className) return false;
-    if (target?.objectKey && row.objectKey !== target.objectKey) return false;
-    return true;
-  });
-  if (matches.length > 1) {
-    throw new Error(`Ambiguous heartbeat selector: ${JSON.stringify(selector)}`);
-  }
-  return matches[0] ?? null;
-}
-
 // =============================================================================
 // Phase A: Synchronous preamble — parse CLI args OR inherit env vars
 // =============================================================================
@@ -1720,13 +1673,6 @@ async function main() {
       })
     );
   };
-  const { createRecurringMetaChangeProvider } = await import("./services/recurringRegistry.js");
-  const recurringMetaChangeProvider = createRecurringMetaChangeProvider({
-    workspaceId,
-    getCurrentRecurring: () => workspaceConfig.recurring ?? [],
-    getCurrentHeartbeats: () => workspaceConfig.heartbeats ?? [],
-    readWorkspaceFileAtState,
-  });
   // Create ContextFolderManager before core services. Context folders are
   // disposable projections of GAD-owned semantic contexts.
   const { ContextFolderManager } = await import("@vibestudio/shared/contextFolderManager");
@@ -1985,8 +1931,6 @@ async function main() {
               return;
             }
             void reconcileDeclaredWorkspaceUnits(nextConfig, "meta-change");
-            recurringRegistryInstance?.notifyChanged();
-            heartbeatDeclarationRegistryInstance?.notifyChanged();
             syncDeclaredRemotesForSource().catch((err: unknown) =>
               console.warn("[GitRemotes] Failed to sync declared remotes after meta change:", err)
             );
@@ -2771,7 +2715,6 @@ async function main() {
       getProviders: () => [
         ...trustedUnitHosts(),
         buildUnitChangeApprovalProvider,
-        recurringMetaChangeProvider,
       ],
       resolveUnitOrigins,
       // Descriptive relationship state lets the gate attribute newly arriving
@@ -3621,14 +3564,6 @@ async function main() {
     }
   };
 
-  // Declarative scheduled jobs from vibestudio.yml `recurring:`. Managed service
-  // below; the meta-change reload hook pokes it after approved config changes.
-  let recurringRegistryInstance:
-    | import("./services/recurringRegistry.js").RecurringRegistry
-    | null = null;
-  let heartbeatDeclarationRegistryInstance:
-    | import("./services/recurringRegistry.js").HeartbeatDeclarationRegistry
-    | null = null;
   const { UnitSupervisor } = await import("./services/unitSupervisor.js");
   const unitSupervisor = new UnitSupervisor();
   let runtimeServiceInternal: import("./services/runtimeService.js").RuntimeServiceInternal | null =
@@ -3673,9 +3608,6 @@ async function main() {
           },
           isEntityTitleExplicit: (entityId) => entityTitleService.isExplicit(entityId),
           onAlarmChanged: () => alarmDriverInstance?.notifyChanged(),
-          onHeartbeatRegistryChanged: () => {
-            setTimeout(() => heartbeatDeclarationRegistryInstance?.notifyChanged(), 0);
-          },
           onSlotStateChanged: notifySlotStateListeners,
         });
       },
@@ -5799,52 +5731,6 @@ async function main() {
     });
   }
 
-  {
-    container.registerManaged({
-      name: "recurringRegistry",
-      dependencies: ["workerdWorkspace", "doDispatch"],
-      async start(resolve) {
-        const { RecurringRegistry } = await import("./services/recurringRegistry.js");
-        const registry = new RecurringRegistry({
-          doDispatch: assertPresent(resolve<import("./doDispatch.js").DODispatch>("doDispatch")),
-          workspaceId,
-          loadRecurring: () => workspaceConfig.recurring ?? [],
-        });
-        recurringRegistryInstance = registry;
-        await registry.start();
-        return registry;
-      },
-      async stop(instance: import("./services/recurringRegistry.js").RecurringRegistry | null) {
-        instance?.stop();
-        recurringRegistryInstance = null;
-      },
-    });
-  }
-
-  {
-    container.registerManaged({
-      name: "heartbeatDeclarationRegistry",
-      dependencies: ["workerdWorkspace", "doDispatch"],
-      async start(resolve) {
-        const { HeartbeatDeclarationRegistry } = await import("./services/recurringRegistry.js");
-        const registry = new HeartbeatDeclarationRegistry({
-          doDispatch: assertPresent(resolve<import("./doDispatch.js").DODispatch>("doDispatch")),
-          workspaceId,
-          loadHeartbeats: () => workspaceConfig.heartbeats ?? [],
-        });
-        heartbeatDeclarationRegistryInstance = registry;
-        await registry.start();
-        return registry;
-      },
-      async stop(
-        instance: import("./services/recurringRegistry.js").HeartbeatDeclarationRegistry | null
-      ) {
-        instance?.stop();
-        heartbeatDeclarationRegistryInstance = null;
-      },
-    });
-  }
-
   // ===========================================================================
   // Panel services, workspace info, PanelHttpServer, FS RPC
   // (extracted to panelRuntimeRegistration.ts)
@@ -5924,137 +5810,6 @@ async function main() {
       dir: await contextFolderManager.ensureContextFolder(contextId),
     }),
     resolveCallerContext: (callerId: string) => getEntityStore().resolveContext(callerId),
-    listRecurringJobs: () => recurringRegistryInstance?.listJobs() ?? [],
-    listHeartbeats: async () => {
-      const doDispatch = container.get<import("./doDispatch.js").DODispatch>("doDispatch");
-      const { INTERNAL_DO_SOURCE } = await import("./internalDOs/internalDoLoader.js");
-      const rows = (await doDispatch.dispatch(
-        { source: INTERNAL_DO_SOURCE, className: "WorkspaceDO", objectKey: workspaceId },
-        "heartbeatList"
-      )) as Array<{
-        name: string;
-        source: string;
-        className: string;
-        objectKey: string;
-        channelId?: string | null;
-        participantHandle?: string | null;
-        kind: "declarative" | "code-owned";
-        status: "running" | "paused" | "stopped";
-        nextRunAt?: number | null;
-        lastWakeAt?: number | null;
-        lastActionSummary?: string | null;
-        lastError?: string | null;
-        specHash?: string | null;
-        updatedAt: number;
-      }>;
-      return rows.map((row) => ({
-        name: row.name,
-        target: { source: row.source, className: row.className, objectKey: row.objectKey },
-        channelId: row.channelId ?? null,
-        participantHandle: row.participantHandle ?? null,
-        kind: row.kind,
-        status: row.status,
-        nextRunAt: row.nextRunAt ?? null,
-        lastWakeAt: row.lastWakeAt ?? null,
-        lastActionSummary: row.lastActionSummary ?? null,
-        lastError: row.lastError ?? null,
-        specHash: row.specHash ?? null,
-        updatedAt: row.updatedAt,
-      }));
-    },
-    runHeartbeatNow: async (
-      selector:
-        | string
-        | {
-            name?: string;
-            target?: { source?: string; className?: string; objectKey?: string };
-            channelId?: string;
-            participantHandle?: string;
-          }
-    ) => {
-      const doDispatch = container.get<import("./doDispatch.js").DODispatch>("doDispatch");
-      const { INTERNAL_DO_SOURCE } = await import("./internalDOs/internalDoLoader.js");
-      const rows = (await doDispatch.dispatch(
-        { source: INTERNAL_DO_SOURCE, className: "WorkspaceDO", objectKey: workspaceId },
-        "heartbeatList"
-      )) as Array<{
-        name: string;
-        source: string;
-        className: string;
-        objectKey: string;
-        channelId?: string | null;
-        participantHandle?: string | null;
-      }>;
-      const row = resolveHeartbeatRegistryRow(rows, selector);
-      if (!row) throw new Error(`Unknown heartbeat: ${JSON.stringify(selector)}`);
-      return doDispatch.dispatch(
-        { source: row.source, className: row.className, objectKey: row.objectKey },
-        "runHeartbeatNow",
-        row.name
-      );
-    },
-    pauseHeartbeat: async (
-      selector:
-        | string
-        | {
-            name?: string;
-            target?: { source?: string; className?: string; objectKey?: string };
-            channelId?: string;
-            participantHandle?: string;
-          }
-    ) => {
-      const doDispatch = container.get<import("./doDispatch.js").DODispatch>("doDispatch");
-      const { INTERNAL_DO_SOURCE } = await import("./internalDOs/internalDoLoader.js");
-      const rows = (await doDispatch.dispatch(
-        { source: INTERNAL_DO_SOURCE, className: "WorkspaceDO", objectKey: workspaceId },
-        "heartbeatList"
-      )) as Array<{
-        name: string;
-        source: string;
-        className: string;
-        objectKey: string;
-        channelId?: string | null;
-        participantHandle?: string | null;
-      }>;
-      const row = resolveHeartbeatRegistryRow(rows, selector);
-      if (!row) throw new Error(`Unknown heartbeat: ${JSON.stringify(selector)}`);
-      return doDispatch.dispatch(
-        { source: row.source, className: row.className, objectKey: row.objectKey },
-        "pauseHeartbeat",
-        row.name
-      ) as Promise<{ ok: true }>;
-    },
-    resumeHeartbeat: async (
-      selector:
-        | string
-        | {
-            name?: string;
-            target?: { source?: string; className?: string; objectKey?: string };
-            channelId?: string;
-            participantHandle?: string;
-          }
-    ) => {
-      const doDispatch = container.get<import("./doDispatch.js").DODispatch>("doDispatch");
-      const { INTERNAL_DO_SOURCE } = await import("./internalDOs/internalDoLoader.js");
-      const rows = (await doDispatch.dispatch(
-        { source: INTERNAL_DO_SOURCE, className: "WorkspaceDO", objectKey: workspaceId },
-        "heartbeatList"
-      )) as Array<{
-        name: string;
-        source: string;
-        className: string;
-        objectKey: string;
-        channelId?: string | null;
-        participantHandle?: string | null;
-      }>;
-      const row = resolveHeartbeatRegistryRow(rows, selector);
-      if (!row) throw new Error(`Unknown heartbeat: ${JSON.stringify(selector)}`);
-      return doDispatch.dispatch(
-        { source: row.source, className: row.className, objectKey: row.objectKey },
-        "resumeHeartbeat",
-        row.name
-      ) as Promise<{ ok: true }>;
-    },
     approvalQueue,
     registerEntityTitlePersistedListener: (
       listener: (
@@ -6654,11 +6409,9 @@ async function main() {
     entityCache,
     restoreRuntimes: async (records) => {
       type RuntimeTarget = { source: string; className: string; objectKey: string };
-      const [lifecycle, alarms, recurring, heartbeats, durableWorkOwners] = await Promise.all([
+      const [lifecycle, alarms, durableWorkOwners] = await Promise.all([
         dispatchWorkspaceDO<RuntimeTarget[]>("lifecycleListResumeTargets"),
         dispatchWorkspaceDO<RuntimeTarget[]>("alarmListScheduled"),
-        dispatchWorkspaceDO<RuntimeTarget[]>("recurringList"),
-        dispatchWorkspaceDO<RuntimeTarget[]>("heartbeatList"),
         dispatchWorkspaceDO<import("@vibestudio/shared/durableWork").DurableWorkReadyHint[]>(
           "durableWorkOwnerList"
         ),
@@ -6667,8 +6420,6 @@ async function main() {
         [
           ...lifecycle,
           ...alarms,
-          ...recurring,
-          ...heartbeats,
           ...durableWorkOwners.map((entry) => entry.owner),
         ].map((target) => `${target.source}\0${target.className}\0${target.objectKey}`)
       );

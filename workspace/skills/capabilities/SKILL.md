@@ -125,8 +125,9 @@ integrity latch on reads. Never accept caller-supplied content class, copy
 content to disguise origin, or invent/parse lineage-set coordinates. Use
 `contextIntegrity.explain` for bounded diagnostics from the current session.
 
-A mission is an immutable authority closure over exact harness, skills,
-services, model, trigger, and network policy. Change closure inputs through a
+A mission is an immutable automation authority closure over its exact harness,
+execution target, action or prompt, conversation policy, service exposure,
+trigger, expected content lineage, and network policy. Change closure inputs through a
 reviewed revision; preserve caller, owner, session, and context lineage through
 every leg. Standing restrictions are durable denies, not suggestions.
 

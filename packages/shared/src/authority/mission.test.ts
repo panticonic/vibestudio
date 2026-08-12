@@ -2,33 +2,51 @@ import { describe, expect, it } from "vitest";
 import {
   missionAllowsService,
   missionClosureDigest,
-  missionEventMatches,
+  missionNextRunAt,
   type MissionCharter,
 } from "./mission.js";
 
 const hex = "a".repeat(64);
 const charter = (): MissionCharter => ({
-  agentBindingId: "agent-backup",
-  taskSpec: "Back up the project",
+  summary: "Back up the project",
   harness: { unit: "workers/system-agent", ev: hex },
-  skills: [{ path: "workspace/skills/backup", contentHash: "b".repeat(64) }],
-  toolExposure: {
-    services: ["logs.query", "notification.*"],
-    userlandServices: [],
-    workspaceServiceDiscovery: "bound",
-    evalNetwork: "none",
-    declaredOrigins: [],
+  execution: {
+    kind: "agent",
+    target: {
+      source: "workers/system-agent",
+      className: "SystemAgent",
+      objectKey: "backup",
+    },
+    prompt: "Back up the project",
+    conversation: { mode: "fresh" },
+    toolExposure: {
+      services: ["logs.query", "notification.*"],
+      userlandServices: [],
+      workspaceServiceDiscovery: "bound",
+      evalNetwork: "none",
+      declaredOrigins: [],
+    },
+    declaredLineageClasses: ["none"],
   },
-  model: { modelId: "openai-codex:gpt-5.3-codex-spark", params: { reasoningEffort: "medium" } },
-  declaredLineageClasses: ["none"],
-  trigger: { kind: "cron", cron: "0 2 * * *" },
+  trigger: { kind: "schedule", everyMs: 86_400_000, anchorAt: 1_000 },
 });
 const closure = (value: MissionCharter): string => missionClosureDigest(value, [], []);
 
-describe("mission closure", () => {
-  it("changes for behavioral edits but not registry identity", () => {
+describe("automation closure", () => {
+  it("changes for execution and schedule edits", () => {
     const first = closure(charter());
-    expect(closure({ ...charter(), trigger: { kind: "cron", cron: "0 3 * * *" } })).not.toBe(first);
+    expect(closure({ ...charter(), trigger: { kind: "schedule", everyMs: 3_600_000 } })).not.toBe(
+      first
+    );
+    const current = charter();
+    if (current.execution.kind !== "agent") throw new Error("fixture");
+    const execution = current.execution;
+    expect(
+      closure({
+        ...current,
+        execution: { ...execution, prompt: "Back up and verify the project" },
+      })
+    ).not.toBe(first);
   });
 
   it("changes when approved allows or standing denies change", () => {
@@ -58,76 +76,34 @@ describe("mission closure", () => {
   it("enforces structural method exposure and rejects global wildcards", () => {
     expect(missionAllowsService(charter(), "notification.post")).toBe(true);
     expect(missionAllowsService(charter(), "credential.delete")).toBe(false);
+    const current = charter();
+    if (current.execution.kind !== "agent") throw new Error("fixture");
+    const execution = current.execution;
     expect(() =>
       closure({
-        ...charter(),
-        toolExposure: { ...charter().toolExposure, services: ["*"] },
+        ...current,
+        execution: {
+          ...execution,
+          toolExposure: { ...execution.toolExposure, services: ["*"] },
+        },
       })
     ).toThrow(/Invalid/);
-    expect(() =>
-      closure({
-        ...charter(),
-        toolExposure: {
-          ...charter().toolExposure,
-          workspaceServiceDiscovery: "live-declarations",
-          userlandServices: [
-            {
-              name: "notes",
-              provider: "workers/notes",
-              providerEv: "b".repeat(64),
-              upgradePolicy: "pinned",
-            },
-          ],
-        },
-      })
-    ).toThrow(/cannot be combined/);
   });
 
-  it("uses the same canonical repo identity as sealed harness code", () => {
+  it("pins the execution source to the reviewed harness", () => {
+    const current = charter();
     expect(() =>
       closure({
-        ...charter(),
-        harness: { ...charter().harness, unit: "workspace/workers/system-agent" },
+        ...current,
+        harness: { ...current.harness, unit: "workers/other" },
       })
-    ).toThrow(/canonical workspace repo/);
+    ).toThrow(/must equal/);
   });
 
-  it("uses a closed data-only event filter grammar", () => {
-    expect(() =>
-      closure({
-        ...charter(),
-        trigger: {
-          kind: "event",
-          event: {
-            source: "workspace.file.changed",
-            filter: { kind: "field-equals", path: ["repo", "kind"], value: "worker" },
-          },
-        },
-      })
-    ).not.toThrow();
-    expect(() =>
-      closure({
-        ...charter(),
-        trigger: {
-          kind: "event",
-          event: {
-            source: "workspace.file.changed",
-            filter: { kind: "field-equals", path: ["__proto__"], value: true },
-          },
-        },
-      })
-    ).toThrow(/invalid field path/);
-    expect(
-      missionEventMatches(
-        { kind: "field-equals", path: ["repo", "kind"], value: "worker" },
-        { repo: { kind: "worker" } }
-      )
-    ).toBe(true);
-    expect(
-      missionEventMatches(
-        { kind: "field-equals", path: ["repo", "kind"], value: "worker" },
-        Object.create({ repo: { kind: "worker" } }) as unknown
-      )
-    ).toBe(false);
+  it("computes one aligned occurrence without catch-up bursts", () => {
+    const trigger = { kind: "schedule", everyMs: 1_000, anchorAt: 500 } as const;
+    expect(missionNextRunAt(trigger, 499)).toBe(500);
+    expect(missionNextRunAt(trigger, 500)).toBe(1_500);
+    expect(missionNextRunAt(trigger, 4_999)).toBe(5_500);
   });
 });

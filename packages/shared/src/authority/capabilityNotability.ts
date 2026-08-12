@@ -178,8 +178,6 @@ const REVIEWED_NOTABILITY: readonly NotabilityEntry[] = [
   { key: "workspace-service:missions", notability: "everyday" },
   { key: "workspace-service:testkit-driver", notability: "everyday" },
   { key: "workspace-service:browser.data", notability: "everyday" },
-  { key: "automations.register", notability: "headline" },
-  { key: "automations.control", notability: "headline" },
   { key: "missions.", notability: "headline" },
   { key: "subagents.create", notability: "headline" },
   { key: "extensions.reload", notability: "headline" },

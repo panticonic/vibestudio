@@ -55,11 +55,6 @@ export const WORKSPACE_METHOD_NAMES = [
   "sourceTree",
   "ensureContextFolder",
   "findUnitForPath",
-  "recurring.list",
-  "heartbeats.list",
-  "heartbeats.runNow",
-  "heartbeats.pause",
-  "heartbeats.resume",
 ] as const;
 
 export const BLOBSTORE_METHOD_NAMES = [

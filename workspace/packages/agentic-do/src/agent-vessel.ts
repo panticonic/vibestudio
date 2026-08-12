@@ -1416,7 +1416,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
       configFor: (channelId) => this.loopConfig(channelId),
       policiesFor: (channelId) => this.getStepPolicies(channelId),
       onEphemeral: (emit) => this.emitEphemeral(emit),
-      onHeartbeatOutcome: (input) => this.onHeartbeatOutcome(input),
+      onTurnClosed: (input) => this.onTurnClosed(input),
       now: () => Date.now(),
       // Idle-history budget before a fold-shrinking compaction. Kept well
       // below typical model context windows so context never grows to the
@@ -1434,11 +1434,33 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     return this._driver;
   }
 
-  protected onHeartbeatOutcome(_input: {
+  protected async onTurnClosed(input: {
     channelId: string;
-    descriptor: import("@workspace/agent-loop").EffectDescriptor;
-    outcome: EffectOutcome;
-  }): void | Promise<void> {}
+    turnId: string;
+    metadata: AgentTurnMetadata;
+    reason?: string;
+    summary?: string;
+    finalMessage?: string;
+  }): Promise<void> {
+    const runId = input.metadata.automationRunId;
+    if (!runId) return;
+    const service = await this.rpc.call<{
+      kind: "durable-object" | "worker";
+      targetId?: string;
+    }>("main", "workers.resolveService", ["vibestudio.missions.v1"]);
+    if (service.kind !== "durable-object" || !service.targetId) {
+      throw new Error("The automation ledger must resolve to a Durable Object");
+    }
+    const failed = Boolean(input.reason && input.reason !== "tool_terminated");
+    await this.rpc.call(service.targetId, "finishRun", [
+      {
+        runId,
+        outcome: failed ? "failed" : "succeeded",
+        ...(input.finalMessage ? { finalMessage: input.finalMessage } : {}),
+        ...(failed ? { error: input.summary ?? input.reason ?? "Automation turn failed" } : {}),
+      },
+    ]);
+  }
 
   protected registerAgentAlarmSource(source: AgentAlarmSource): void {
     this.alarmSources.set(source.id, source);
@@ -2603,6 +2625,42 @@ export abstract class AgentVesselBase extends DurableObjectBase {
     replay?: boolean;
   }): Promise<{ ok: boolean; participantId: string }> {
     return this.subscribeChannel(opts);
+  }
+
+  /**
+   * Canonical unattended prompt ingress. The automation registry owns the
+   * schedule and run ledger; the agent vessel owns only the ordinary durable
+   * turn. `runId` is carried through the journal so the terminal turn can
+   * close the exact ledger row without polling the conversation.
+   */
+  @rpc({
+    principals: ["host", "code"],
+    effect: { kind: "open" },
+    tier: "open",
+    sensitivity: "write",
+  })
+  async runAutomationTurn(input: {
+    channelId: string;
+    runId: string;
+    prompt: string;
+  }): Promise<void> {
+    if (!this.subscriptions.listChannelIds().includes(input.channelId)) {
+      throw new Error(`Automation channel ${input.channelId} is not subscribed`);
+    }
+    if (!input.runId || !input.prompt.trim()) {
+      throw new Error("Automation turn requires a run id and prompt");
+    }
+    await this.submitAgentInitiatedTurn(
+      input.channelId,
+      { content: input.prompt },
+      {
+        mode: "sequential",
+        steeringId: `automation:${input.runId}`,
+        origin: "scheduled",
+        automationRunId: input.runId,
+        delivery: "channel",
+      }
+    );
   }
 
   private async ingestSubscriptionReplay(
@@ -5555,6 +5613,7 @@ export abstract class AgentVesselBase extends DurableObjectBase {
   ): Promise<void> {
     const metadata: AgentTurnMetadata = {
       origin: opts?.origin ?? "agent-initiated",
+      ...(opts?.automationRunId ? { automationRunId: opts.automationRunId } : {}),
       ...(opts?.contextPolicy ? { contextPolicy: opts.contextPolicy } : {}),
       ...(opts?.delivery ? { delivery: opts.delivery } : {}),
       ...(opts?.ackToken ? { ackToken: opts.ackToken } : {}),

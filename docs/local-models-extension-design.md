@@ -13,7 +13,7 @@ Status: committed design. This lands as **one big-bang change**: extension, prov
 integration, fallback semantics, picker redesign, and panel ship together in a single
 PR — no phases, no feature flags, no deferred halves, no optional variants. Every
 open point below has a committed resolution; §12 lists the risks and how each is
-handled *inside* this change. Companion reading: `EXTENSIONS.md`, `PANEL_SYSTEM.md`,
+handled _inside_ this change. Companion reading: `EXTENSIONS.md`, `PANEL_SYSTEM.md`,
 `docs/ws1-agent-loop-spec.md`, `docs/credential-system.md`,
 `docs/multi-user-wp1-hub-control-plane.md`.
 
@@ -33,7 +33,7 @@ handled *inside* this change. Companion reading: `EXTENSIONS.md`, `PANEL_SYSTEM.
 4. **Great configuration UX** — a `local-models` panel for the model library,
    downloads, server status, and hardware profile.
 5. **Honest availability in the picker** — the model selection UI knows which
-   providers are *actually usable right now* (credentialed cloud, running local) and
+   providers are _actually usable right now_ (credentialed cloud, running local) and
    says so, instead of listing 200 models it can't call.
 6. **Guaranteed floor** — LFM2.5-2.6B (~1.56 GB GGUF Q4_K_M) is installed by
    default and available on demand. It uses the fastest
@@ -60,7 +60,7 @@ awkward, this change refactors the current shape — journal schema, catalog typ
 executor resolution, picker component — rather than adding parallel paths beside it.
 Code quality and user experience are the only two currencies; backward compatibility
 and migration shims buy neither. Concretely, this change refactors: model resolution
-(§6.2 — journaled `modelSpec` replaces registry lookups *for all providers*), model
+(§6.2 — journaled `modelSpec` replaces registry lookups _for all providers_), model
 auth (§6.3 — an explicit per-model auth mode replaces the implicit
 everything-needs-a-credential assumption), availability (§7.1 — one worker-computed
 source replaces the chat panel's private heuristic), and the model picker (§7.2 —
@@ -104,7 +104,7 @@ Codebase (paths verified 2026-07-07):
   `workspace/packages/agentic-do/src/effect-executors/model-call.ts`
   (`executeModelCall`, `:560`): resolves the model via pi-ai `getModel(provider, id)`
   (`:582`, **aborts on miss**, `:648-656`), resolves a credential by base URL
-  (`:610`; missing credential → turn *suspends* with a connect card,
+  (`:610`; missing credential → turn _suspends_ with a connect card,
   `agent-vessel.ts:866-910`), then calls `stream()` (`:691-698`) with an optional
   `request.modelBaseUrl` override.
 - **Credential egress**: pi-ai gets a sentinel apiKey; a patched `fetch` reroutes
@@ -202,14 +202,14 @@ when first demanded. Both prefer the fastest installed engine that passed its sm
 test; if the accelerated utility process fails, its supervisor relaunches it on the
 universal CPU engine:
 
-| | **Utility server** | **Main server** |
-|---|---|---|
-| Purpose | LFM2.5 fallback, loaded on demand | User's model library |
-| Build | Best validated backend; automatic CPU degradation after failure | Best validated backend (CUDA/Metal/Vulkan/ROCm, or CPU) |
-| Models | `LFM2.5-2.6B` pinned, single-model mode | Router mode over the library, load-on-demand, `--models-max 1` (configurable) |
-| Footprint | 0 when cold (the default); model weights plus its 128K context state while loaded | 0 when cold; whatever the loaded model needs (auto-fit) |
+|           | **Utility server**                                                                                                 | **Main server**                                                                                                                                                                             |
+| --------- | ------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Purpose   | LFM2.5 fallback, loaded on demand                                                                                  | User's model library                                                                                                                                                                        |
+| Build     | Best validated backend; automatic CPU degradation after failure                                                    | Best validated backend (CUDA/Metal/Vulkan/ROCm, or CPU)                                                                                                                                     |
+| Models    | `LFM2.5-2.6B` pinned, single-model mode                                                                            | Router mode over the library, load-on-demand, `--models-max 1` (configurable)                                                                                                               |
+| Footprint | 0 when cold (the default); model weights plus its 128K context state while loaded                                  | 0 when cold; whatever the loaded model needs (auto-fit)                                                                                                                                     |
 | Lifecycle | **Cold until the first fallback `ensureLoaded`**; restarts with backoff while in use, then stops after 15 min idle | Starts on the first non-fallback `ensureLoaded`; weights load on demand via `ensureLoaded` (§6.3), then the server stops after 15 min idle — llama.cpp's router has no native idle TTL (§2) |
-| Port | `127.0.0.1:<utilityPort>` | `127.0.0.1:<mainPort>` |
+| Port      | `127.0.0.1:<utilityPort>`                                                                                          | `127.0.0.1:<mainPort>`                                                                                                                                                                      |
 
 On a low-powered machine (no GPU, ≤8 GB RAM) the main server is simply never
 provisioned unless the user adds a model; the utility server is the local provider,
@@ -235,9 +235,9 @@ Manifest (`package.json`):
     "entry": "index.ts",
     "extension": {
       "activationEvents": ["*"],
-      "streamingMethods": ["downloadModel", "tailServerLog"]
-    }
-  }
+      "streamingMethods": ["downloadModel", "tailServerLog"],
+    },
+  },
 }
 ```
 
@@ -247,7 +247,7 @@ Probed once at activation, cached in extension storage, re-probed on demand
 (panel "Re-detect" button) and on OS/driver-version change:
 
 - **GPU**: NVIDIA via `nvidia-smi --query-gpu=name,memory.total,driver_version
-  --format=csv` (also yields the CUDA-runtime ceiling → pick the cuda-12.4 vs 13.3
+--format=csv` (also yields the CUDA-runtime ceiling → pick the cuda-12.4 vs 13.3
   build); AMD via `rocm-smi` else Vulkan; any-vendor fallback `vulkaninfo --summary`;
   Apple via `system_profiler`/Metal (unified memory). Multi-GPU: prefer the discrete
   device (e.g. RTX 4060 over an iGPU like the Radeon 760M).
@@ -259,13 +259,18 @@ Output is a `HardwareProfile` (persisted, versioned):
 
 ```ts
 interface HardwareProfile {
-  os: "linux" | "darwin" | "win32"; arch: "x64" | "arm64";
-  gpus: Array<{ vendor: "nvidia"|"amd"|"intel"|"apple"; name: string;
-                vramMB: number; backend: "cuda-12.4"|"cuda-13.3"|"vulkan"|"rocm"|"metal";
-                discrete: boolean }>;
+  os: "linux" | "darwin" | "win32";
+  arch: "x64" | "arm64";
+  gpus: Array<{
+    vendor: "nvidia" | "amd" | "intel" | "apple";
+    name: string;
+    vramMB: number;
+    backend: "cuda-12.4" | "cuda-13.3" | "vulkan" | "rocm" | "metal";
+    discrete: boolean;
+  }>;
   cpu: { cores: number; features: string[] };
   ramMB: number;
-  chosenBackend: string;        // asset selector for the main server build
+  chosenBackend: string; // asset selector for the main server build
   tier: "gpu-large" | "gpu-mid" | "gpu-small" | "cpu-strong" | "cpu-min";
 }
 ```
@@ -307,7 +312,7 @@ offload up to ~9 B Q4_K_M, partial offload to ~14 B; a GPU-less 8 GB laptop is
   recording `{ pid, ports, bootId }` in `owner.json` and the per-install api-key in
   `auth.key` (0600). The key is machine-global by design: per-workspace extension
   storage (`{userData}/extensions/storage/<workspaceId>/…`, `EXTENSIONS.md:46`)
-  cannot back a secret that attached instances from *other* workspaces must present
+  cannot back a secret that attached instances from _other_ workspaces must present
   to the owner's servers. Non-owner instances attach:
   they health-check `owner.json`, use the owner's servers directly, and forward
   mutations (downloads, config changes, restarts) to the owner's loopback admin
@@ -341,18 +346,18 @@ offload up to ~9 B Q4_K_M, partial offload to ~14 B; a GPU-less 8 GB laptop is
   (1/2/4/8/16 s within 60 s window, mirroring the host's `processManager` policy).
   The **main server** lands in `error` state with the log tail after 5 failures; the
   **utility server** is exempt from the failure cap — it is the availability floor
-  (§5), so *once in use* it restarts forever with backoff clamped at 60 s (a crash
+  (§5), so _once in use_ it restarts forever with backoff clamped at 60 s (a crash
   mid-fallback must not drop the floor), surfacing repeated failures through
   `ctx.health` and the panel instead of giving up. A cold utility that has never been
   demanded simply stays stopped.
 - Utility server flags:
   `llama-server -m <lfm2.5.gguf> --port <p> --host 127.0.0.1
-  --api-key-file <root>/auth.key -c 32768 --jinja -np 1` — launched with the
+--api-key-file <root>/auth.key -c 32768 --jinja -np 1` — launched with the
   fastest smoke-tested engine, then with the CPU recovery build if accelerated
   execution fails. The key always rides `--api-key-file`, never a
   raw `--api-key` argument: `/proc/<pid>/cmdline` is world-readable on Linux, and a
   key on the command line would leak machine-wide — defeating the very thing it
-  guards (inference *and* the admin endpoint).
+  guards (inference _and_ the admin endpoint).
 - Main server flags: router mode (`--models-dir`/preset INI generated from the
   library, `--models-max 1` default) with per-model `-c`/`-ngl` from auto-fit
   (`--fit` at load; `llama-fit-params` for the estimator shown in the panel), plus
@@ -365,19 +370,19 @@ offload up to ~9 B Q4_K_M, partial offload to ~14 B; a GPU-less 8 GB laptop is
 
 ```ts
 interface LocalModelsApi {
-  status(): Promise<LocalModelsStatus>;       // servers, engine, hardware, fallback readiness
-  listModels(): Promise<LocalModelEntry[]>;   // → catalog entries (§6.1)
+  status(): Promise<LocalModelsStatus>; // servers, engine, hardware, fallback readiness
+  listModels(): Promise<LocalModelEntry[]>; // → catalog entries (§6.1)
   ensureLoaded(modelId: string): Promise<{ baseUrl: string }>; // request-path start/load (§6.3)
   getLoopbackAuth(): Promise<{ apiKey: string }>; // do-kind callers only (§6.3); never in catalog/journal
   // library management (panel)
   searchCatalog(q): Promise<CatalogHit[]>;
-  downloadModel(req): Response;               // streaming progress
+  downloadModel(req): Response; // streaming progress
   removeModel(modelId): Promise<void>;
   setModelConfig(modelId, cfg): Promise<void>;
   // engine/server management (panel)
   getHardwareProfile(refresh?: boolean): Promise<HardwareProfile>;
   restartServer(which: "utility" | "main"): Promise<void>;
-  tailServerLog(which): Response;             // streaming
+  tailServerLog(which): Response; // streaming
   openConfigPanel(): Promise<{ openPanel: { source: "about/local-models" } }>;
 }
 ```
@@ -393,11 +398,11 @@ model-settings worker subscribes and rebuilds its snapshot), `download.progress`
 The fallback is a **lazy floor, not a warm guarantee**: it loads on first demand and
 is never kept resident. This is the deliberate default — a machine that never falls
 back to local should never pay RAM, CPU, or a 1.56 GB download for a model it does not
-use. The floor is a *promise that it will be there when needed*, not a running process.
+use. The floor is a _promise that it will be there when needed_, not a running process.
 
 First activation (after the standard extension install approval, whose prompt copy
-should say: *"downloads the llama.cpp inference engine (~50–300 MB) from GitHub, and
-runs local inference servers on demand"*):
+should say: _"downloads the llama.cpp inference engine (~50–300 MB) from GitHub, and
+runs local inference servers on demand"_):
 
 1. Probe hardware → `HardwareProfile` (seconds).
 2. Download + smoke-test the CPU engine (and the GPU engine, if any) in the same pass,
@@ -416,7 +421,7 @@ Steady-state invariants:
 
 - Neither server runs until demanded. The utility server starts on the first fallback
   `ensureLoaded`; the main server on the first non-fallback `ensureLoaded`. Once a
-  server *is* running, the supervisor keeps it healthy — the utility server is exempt
+  server _is_ running, the supervisor keeps it healthy — the utility server is exempt
   from the main server's failure cap and restarts forever **while it is in use** (a
   crash mid-fallback must not drop the floor). After 15 minutes without use, either
   server stops and releases its model RAM/VRAM; on-demand cold start returns it to
@@ -425,7 +430,7 @@ Steady-state invariants:
   it (the panel offers "replace fallback model" instead, gated on the replacement
   being downloaded and smoke-tested first).
 - `status().fallback = { ready: boolean, warm: boolean, modelRef: "local:lfm2.5-2.6b",
-  reason? }` is the single source of truth consumed by fallback selection (§8):
+reason? }` is the single source of truth consumed by fallback selection (§8):
   `ready` = downloaded and loadable on demand; `warm` = currently serving.
 
 ---
@@ -455,10 +460,10 @@ because the catalog is now the single model authority (§6.2):
 ```ts
 interface ModelCatalogEntry {
   // ...existing...
-  auth: "url-bound" | "loopback";      // explicit auth mode (§6.3)
-  availability: ModelAvailability;     // §7 — live status, not credential presence
-  modelSpec: PiModelSpec;              // the pi-ai Model this entry materializes to (§6.2)
-  capabilities: { tools: boolean };    // §6.4 — gates tool schemas at config time
+  auth: "url-bound" | "loopback"; // explicit auth mode (§6.3)
+  availability: ModelAvailability; // §7 — live status, not credential presence
+  modelSpec: PiModelSpec; // the pi-ai Model this entry materializes to (§6.2)
+  capabilities: { tools: boolean }; // §6.4 — gates tool schemas at config time
 }
 ```
 
@@ -502,7 +507,7 @@ replace the resolution model outright (pre-release; the old path has no tenure):
   longer depends on whichever pi-ai registry version happens to be installed — the
   exact descriptor the turn ran with (identity, compat, limits) is part of the
   journaled request. The catalog becomes the single authority on what a model
-  *is*; pi-ai's generated registry is reduced to one *input* to `buildModelCatalog()`.
+  _is_; pi-ai's generated registry is reduced to one _input_ to `buildModelCatalog()`.
   One deliberate exception: for `local:*` models the journaled `baseUrl` records
   what the turn ran against, but the **live** endpoint wins at execution time
   (§6.3) — loopback ports can move across owner takeover, and a journaled port must
@@ -517,10 +522,10 @@ turn when none exists (`agent-vessel.ts:866-910`, `model-call.ts:610-635`). That
 implicit assumption becomes an explicit property of the model: the catalog entry —
 and therefore the journaled `modelSpec` — carries `auth: "url-bound" | "loopback"`.
 
-- `auth: "loopback"` (all `local:*` models): the credential *system* is skipped — no
+- `auth: "loopback"` (all `local:*` models): the credential _system_ is skipped — no
   stored credential, no audience matching, no suspended turns. But pi-ai still
   requires a non-empty `options.apiKey` (its handler throws `No API key for
-  provider` otherwise, `openai-completions.js:72-74`), so the executor resolves the
+provider` otherwise, `openai-completions.js:72-74`), so the executor resolves the
   loopback api-key **at call time** through a new executor dep backed by the
   extension's `getLoopbackAuth()` (cached per DO boot) and passes it as `apiKey`.
   There is no "executor" caller kind — the extensions service is reachable by
@@ -528,11 +533,11 @@ and therefore the journaled `modelSpec` — carries `auth: "url-bound" | "loopba
   (`packages/extension-host/src/service.ts:493`) — so the extension enforces the
   restriction itself via `ctx.invocation.current()`: `getLoopbackAuth()` refuses
   panels, apps, and workers outright, and among `do`-kind callers it additionally
-  checks the caller id against an agent-vessel allowlist, because *every* workspace
+  checks the caller id against an agent-vessel allowlist, because _every_ workspace
   DO presents `callerKind: "do"` (`runtime/src/worker/durable-base.ts:389`) — kind
   alone is too broad. The residual exposure is stated, not hidden: workspace DOs
   are trusted first-party units (`docs/trusted-workspace-units.md`), and the key's
-  threat model is foreign local *processes*, not intra-workspace code — the
+  threat model is foreign local _processes_, not intra-workspace code — the
   caller-id allowlist is defense in depth, not a security boundary. The key exists
   in exactly two places: the
   machine-global root (`auth.key`, 0600, §4.3) and the headers of in-flight
@@ -562,7 +567,7 @@ machine as the extension host, so the runtime's plain `fetch` reaches
 end-to-end including SSE. If the runtime turns out to block raw loopback, the fix
 lands **inside this same change** — a gateway-forwarded route (`/_local-models/…` →
 loopback) — which also covers remote-attach scenarios where panels run on a different
-device than the server (`baseUrl` is resolved *server-side*, where the DOs run, so
+device than the server (`baseUrl` is resolved _server-side_, where the DOs run, so
 remote panels work unchanged either way).
 
 ### 6.4 llama-server compat profile
@@ -589,7 +594,7 @@ source, not the sink.
 ```ts
 type ModelAvailability =
   | { state: "ready"; detail?: "running" | "credentialed" }
-  | { state: "startable"; detail: "will-load-on-use" }      // local, not currently loaded
+  | { state: "startable"; detail: "will-load-on-use" } // local, not currently loaded
   | { state: "needs-setup"; detail: "no-credential" | "credential-expired" | "not-installed" }
   | { state: "starting" }
   | { state: "downloading"; progress: number; phase: "active" | "queued" | "paused" }
@@ -616,7 +621,7 @@ header (`workspace/packages/model-catalog/src/catalog.ts:1-7`) promises a snapsh
 with "no credentials, no connection state," and the chat panel computes connection
 status locally "so it stays scoped to this panel's own credentials"
 (`panels/chat/index.tsx:449-451`). What moves into the shared snapshot is
-availability *states*, not credential material or audiences. Availability is
+availability _states_, not credential material or audiences. Availability is
 non-secret workspace state; credential authorization remains bound to the acting
 user and caller. Sharing that state is required for non-panel consumers (fallback
 logic, agent config, CLI) to reason about usability. Both comments are rewritten as
@@ -625,7 +630,7 @@ part of this change; per the Design stance, the old boundary has no tenure.
 ### 7.2 Picker UX (`ModelPicker.tsx` is rewritten, not patched)
 
 The component is rebuilt around availability as its primary axis — grouping changes
-from *Connected / Recommended / All* to **status-first**:
+from _Connected / Recommended / All_ to **status-first**:
 
 ```
 ┌ Search ─────────────────────────────┐
@@ -647,7 +652,7 @@ from *Connected / Recommended / All* to **status-first**:
 - `error`/`downloading` states render inline (spinner + %, red dot + tooltip with the
   supervisor message and a "Open Local Models" action).
 - The current selection shows a status dot in the closed trigger too, so a picked
-  model that has become unavailable is visible *before* sending a message.
+  model that has become unavailable is visible _before_ sending a message.
 - `pickDefaultModel` (`agentConfigDraft.ts:71`) prefers `ready` > `startable` >
   everything else.
 
@@ -672,8 +677,8 @@ Selection-time (deterministic and simple):
    **`local:lfm2.5-2.6b` whenever it is present in the catalog** (the extension always
    advertises the floor entry, even before download, as `startable`). The snapshot's
    existing `defaultModelSource: "fallback"` marker lets the chat panel render a
-   banner: *"No cloud provider connected — using LFM2.5 (local). Answers will be
-   simpler. [Connect a provider]"*. Honest expectation-setting still matters for a
+   banner: _"No cloud provider connected — using LFM2.5 (local). Answers will be
+   simpler. [Connect a provider]"_. Honest expectation-setting still matters for a
    compact on-device model.
 2. New-workspace default: if no credential exists at all, the default agent config
    points at the local fallback from the start — first-run chat works with zero
@@ -689,8 +694,8 @@ change**:
   model"** action pre-wired to the fallback ref. This is a decision, not a deferral:
   swapping a frontier model for a 2.6 B model mid-conversation is a quality cliff a
   present human should approve — and approval costs exactly one click.
-- **Unattended turns** (heartbeats, scheduled agents — nobody there to click,
-  `docs/agent-heartbeats-design.md`): the loop **automatically retries the turn on
+- **Unattended automation turns** (nobody there to click; see
+  `docs/authority/mission-governance-ux.md`): the loop **automatically retries the turn on
   the fallback ref**, journals the switch as part of the turn record, and the
   transcript renders a visible "continued on local fallback" notice. Background work
   never silently dies because a cloud key expired overnight.
@@ -740,7 +745,7 @@ details are expandable.
   `github.com/ggml-org` (engine) and `huggingface.co` (models). Both redirect to
   CDN hosts (`release-assets.githubusercontent.com` / `objects.githubusercontent.com`
   for GitHub assets; `cdn-lfs*.hf.co` / xet CAS hosts for HF), so enforcement pins
-  the *initial* URL and verifies every downloaded byte against the checksum regime
+  the _initial_ URL and verifies every downloaded byte against the checksum regime
   below — it does not pretend the redirect chain is a fixed hostname set. Downloads
   use the extension's ambient Node networking (routing them through the credentialed
   userland path would re-trigger capability authorization for raw egress,
@@ -807,7 +812,7 @@ to end** — no mocked servers.
    (risk #4) against the pinned build.
 4. **Fallback semantics** — zero credentials → default resolves to the local ref and
    the turn succeeds (the offline first-run path); credential revoked mid-suite → an
-   unattended heartbeat turn auto-fails-over and journals the switch; an interactive
+   unattended automation turn auto-fails-over and journals the switch; an interactive
    failure carries the retry-local action.
 5. **Crash/chaos** — `SIGKILL` the utility server mid-stream → executor surfaces a
    classified model error, supervisor restarts within backoff budget, the next turn
@@ -852,10 +857,10 @@ off or ships half-enabled. The order below only sequences local verification:
 
 ## 12. Known risks (handled inside this change — none are gates)
 
-| # | Risk | Resolution inside this change |
-|---|---|---|
-| 1 | Agent DO runtime can't `fetch` loopback (incl. SSE) | Verified as the first task of build step 2. If blocked, the gateway-forwarded route (`/_local-models/…` → loopback) is implemented as part of this change — and buys remote-attach support for free. |
-| 2 | A GGUF advertises tools but its embedded template/parser contract cannot complete and replay a structured call | Locked by the add-time runtime probe and e2e test §11.2·3; reject the artifact as incompatible. Vibestudio never silently replaces model-owned templates. |
-| 3 | Router-mode rough edges on the pinned build (load latency, eviction, stability) | Router mode is the committed topology. Rough edges are resolved by choosing the pin: bump the build tag until §11.2·6 passes. The build tag is an implementation detail, not a design fork. |
-| 4 | Exact `llamaServerCompat` knobs (usage reporting, tool-call streaming shape) | Locked by e2e test §11.2·3 against the pinned build; re-validated on every pin bump. |
-| 5 | Multi-GPU hosts (discrete + iGPU) | Decided: discrete GPU only, pinned via `--device`; the panel shows which device was chosen. |
+| #   | Risk                                                                                                           | Resolution inside this change                                                                                                                                                                        |
+| --- | -------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | Agent DO runtime can't `fetch` loopback (incl. SSE)                                                            | Verified as the first task of build step 2. If blocked, the gateway-forwarded route (`/_local-models/…` → loopback) is implemented as part of this change — and buys remote-attach support for free. |
+| 2   | A GGUF advertises tools but its embedded template/parser contract cannot complete and replay a structured call | Locked by the add-time runtime probe and e2e test §11.2·3; reject the artifact as incompatible. Vibestudio never silently replaces model-owned templates.                                            |
+| 3   | Router-mode rough edges on the pinned build (load latency, eviction, stability)                                | Router mode is the committed topology. Rough edges are resolved by choosing the pin: bump the build tag until §11.2·6 passes. The build tag is an implementation detail, not a design fork.          |
+| 4   | Exact `llamaServerCompat` knobs (usage reporting, tool-call streaming shape)                                   | Locked by e2e test §11.2·3 against the pinned build; re-validated on every pin bump.                                                                                                                 |
+| 5   | Multi-GPU hosts (discrete + iGPU)                                                                              | Decided: discrete GPU only, pinned via `--device`; the panel shows which device was chosen.                                                                                                          |

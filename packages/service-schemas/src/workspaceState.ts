@@ -100,23 +100,6 @@ export const AlarmSetSchema = LifecycleKeySchema.extend({
   wakeAt: z.number(),
 });
 
-export const HeartbeatRegistryRowSchema = z.object({
-  name: z.string().min(1),
-  source: z.string().min(1),
-  className: z.string().min(1),
-  objectKey: z.string().min(1),
-  channelId: z.string().nullable().optional(),
-  participantHandle: z.string().nullable().optional(),
-  kind: z.enum(["declarative", "code-owned"]),
-  status: z.enum(["running", "paused", "stopped"]),
-  nextRunAt: z.number().nullable().optional(),
-  lastWakeAt: z.number().nullable().optional(),
-  lastActionSummary: z.string().nullable().optional(),
-  lastError: z.string().nullable().optional(),
-  specHash: z.string().nullable().optional(),
-  updatedAt: z.number(),
-});
-
 export const PanelSearchResultSchema = z
   .object({
     id: z.string(),
@@ -928,40 +911,6 @@ export const workspaceStateMethods = defineServiceMethods({
     },
     args: z.tuple([LifecycleKeySchema]),
     description: "Clear a Durable Object's pending server-driven alarm.",
-    authority: WORKSPACE_STATE_LIFECYCLE_POLICY,
-    access: { sensitivity: "destructive" },
-    returns: z.void(),
-  },
-  heartbeatRegister: {
-    agentFacing: false,
-    capability: "workspace.runtime-state.manage",
-    presentation: WORKSPACE_RUNTIME_STATE_PRESENTATION,
-    tier: {
-      tier: "gated",
-      session: "codeOnly",
-      residency: "supervision",
-      family: "workspace-state.lifecycle",
-      rationale: "The durable heartbeat row schedules and supervises a reviewed recurring runtime",
-    },
-    args: z.tuple([HeartbeatRegistryRowSchema]),
-    description: "Register or update an agent heartbeat registry row.",
-    authority: WORKSPACE_STATE_LIFECYCLE_POLICY,
-    access: { sensitivity: "write" },
-    returns: z.void(),
-  },
-  heartbeatRemove: {
-    agentFacing: false,
-    capability: "workspace.runtime-state.manage",
-    presentation: WORKSPACE_RUNTIME_STATE_PRESENTATION,
-    tier: {
-      tier: "gated",
-      session: "codeOnly",
-      residency: "supervision",
-      family: "workspace-state.lifecycle",
-      rationale: "Removing the durable heartbeat row retires a reviewed recurring runtime schedule",
-    },
-    args: z.tuple([z.object({ name: z.string().min(1) })]),
-    description: "Remove an agent heartbeat registry row.",
     authority: WORKSPACE_STATE_LIFECYCLE_POLICY,
     access: { sensitivity: "destructive" },
     returns: z.void(),

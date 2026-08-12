@@ -618,11 +618,6 @@ Authority principals: `code`, `host`, `user`
 | `workspace.sourceTree` | Return the workspace source tree, annotating units, launchables, and skills. |
 | `workspace.ensureContextFolder` | Materialize a context's working folder on the server host (idempotent) and return its absolute path. Used by launch orchestrators (e.g. the shell extension) to place context-scoped terminal sessions inside a real VCS-branched working tree. |
 | `workspace.findUnitForPath` | Resolve a workspace-relative path to its owning unit and the path relative to that unit, or null if no unit owns it. |
-| `workspace.recurring.list` | List declarative scheduled jobs from meta/vibestudio.yml with their durable run state (next/last run, failures, backoff). |
-| `workspace.heartbeats.list` | List registered heartbeats with their schedule, channel binding, and run state. |
-| `workspace.heartbeats.runNow` | Trigger a heartbeat tick immediately for the selected heartbeat. |
-| `workspace.heartbeats.pause` | Pause the selected heartbeat so it stops ticking until resumed. |
-| `workspace.heartbeats.resume` | Resume a paused heartbeat so it resumes its schedule. |
 
 ## `workspace-state`
 

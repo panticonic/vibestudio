@@ -1183,9 +1183,9 @@ describe("agent-loop core lifecycle", () => {
     expect(closed.payload).toMatchObject({ reason: "model_retry_limit_exceeded" });
   });
 
-  it("auto-failover: heartbeat provider failure continues once on local fallback", () => {
+  it("auto-failover: scheduled provider failure continues once on local fallback", () => {
     const s = scenario({ fallback: true });
-    prompt(s, "env-1", "background check", { origin: "heartbeat" });
+    prompt(s, "env-1", "background check", { origin: "scheduled" });
 
     resolveEffect(s, ids.modelEffect(msg0), {
       kind: "model",
@@ -1384,7 +1384,7 @@ describe("agent-loop core lifecycle", () => {
       modelSpec: fallbackModelSpec,
       modelAuth: "loopback",
     });
-    prompt(s, "env-1", "background check", { origin: "heartbeat" });
+    prompt(s, "env-1", "background check", { origin: "scheduled" });
 
     resolveEffect(s, ids.modelEffect(msg0), {
       kind: "model",

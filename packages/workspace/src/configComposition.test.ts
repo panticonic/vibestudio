@@ -69,19 +69,13 @@ describe("workspace template manifest composition", () => {
 
   it("applies disable before workspace redeclarations", () => {
     const config = composeWorkspaceConfig(
-      top(
-        'disable: ["recurring/digest"]\nrecurring:\n  - name: local\n    schedule: { every: 1h }\n    target: { source: workers/jobs, className: Jobs }\n    method: run\n'
-      ),
+      top('disable: ["apps/apps/shell"]\napps:\n  - source: apps/history\n'),
       [
-        layer(
-          "t-a",
-          "base",
-          "recurring:\n  - name: digest\n    schedule: { every: 1h }\n    target: { source: workers/jobs, className: Jobs }\n    method: run\n"
-        ),
+        layer("t-a", "base", "apps:\n  - source: apps/shell\n"),
       ],
       "ws"
     );
-    expect(config.recurring?.map((entry) => entry.name)).toEqual(["local"]);
+    expect(config.apps?.map((entry) => entry.source)).toEqual(["apps/history"]);
   });
 
   it("rejects template trust and provider grants at the fragment boundary", () => {

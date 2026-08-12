@@ -1,11 +1,12 @@
 {
-  "name": "@workspace-about/permissions",
+  "name": "@workspace-about/automations",
   "version": "0.1.0",
   "private": true,
+  "type": "module",
   "vibestudio": {
-    "title": "Permissions",
+    "title": "Automations",
     "icon": "./assets/icon.svg",
-    "description": "Review and revoke saved app and agent permissions",
+    "description": "Supervise schedules, runs, conversations, results, and errors",
     "hiddenInLauncher": false,
     "autoArchiveWhenEmpty": true,
     "authority": {
@@ -15,10 +16,10 @@
           "capability": "context.boundary",
           "resource": {
             "kind": "prefix",
-            "prefix": ""
+            "prefix": "context"
           },
           "tier": "critical",
-          "evidence": "intentional-broad"
+          "evidence": "bounded-dynamic"
         },
         {
           "capability": "context.materialize",
@@ -30,7 +31,7 @@
           "evidence": "intentional-broad"
         },
         {
-          "capability": "governance.read",
+          "capability": "missions.edit",
           "resource": {
             "kind": "prefix",
             "prefix": ""
@@ -39,7 +40,7 @@
           "evidence": "intentional-broad"
         },
         {
-          "capability": "permissions.read",
+          "capability": "missions.pause",
           "resource": {
             "kind": "prefix",
             "prefix": ""
@@ -48,12 +49,21 @@
           "evidence": "intentional-broad"
         },
         {
-          "capability": "permissions.revoke",
+          "capability": "missions.retire",
           "resource": {
             "kind": "prefix",
             "prefix": ""
           },
           "tier": "critical",
+          "evidence": "intentional-broad"
+        },
+        {
+          "capability": "missions.run",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          },
+          "tier": "gated",
           "evidence": "intentional-broad"
         },
         {
@@ -75,6 +85,15 @@
           "evidence": "intentional-broad"
         },
         {
+          "capability": "workspace-service:missions",
+          "resource": {
+            "kind": "prefix",
+            "prefix": ""
+          },
+          "tier": "gated",
+          "evidence": "intentional-broad"
+        },
+        {
           "capability": "workspace-service:models",
           "resource": {
             "kind": "prefix",
@@ -88,7 +107,9 @@
   },
   "dependencies": {
     "@workspace/runtime": "workspace:*",
-    "@workspace/about-shared": "workspace:*"
-  },
-  "type": "module"
+    "@workspace/about-shared": "workspace:*",
+    "@radix-ui/themes": "^3.2.1",
+    "@radix-ui/react-icons": "^1.3.2",
+    "react": "^19.2.0"
+  }
 }

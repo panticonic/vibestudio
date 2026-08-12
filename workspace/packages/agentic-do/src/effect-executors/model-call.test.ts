@@ -602,7 +602,7 @@ describe("modelCallExecutor", () => {
 
     await expect(
       modelCallExecutor.execute({
-        descriptor: descriptor({ turnMetadata: { origin: "heartbeat" } }),
+        descriptor: descriptor({ turnMetadata: { origin: "scheduled" } }),
         state: initialAgentState({ channelId: "channel-1", config }),
         signal: new AbortController().signal,
         deps: deps(),

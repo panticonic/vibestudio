@@ -421,12 +421,7 @@ export interface UnitApprovalCommit {
   timestamp: number;
 }
 
-/**
- * The four kinds of executable unit a review presents. Scheduled jobs and agent
- * heartbeats are deliberately absent: they are unattended charters, not units
- * with a source identity and a manifest, and they are reviewed as charters
- * alongside the parts (docs/template-install-unit-approval-ux-plan.md §8).
- */
+/** The four kinds of executable unit a review presents. */
 export type ReviewedUnitKind = "extension" | "app" | "panel" | "worker";
 
 /**
@@ -480,26 +475,6 @@ export interface ReviewedUnit {
 }
 
 /**
- * An unattended charter arriving with a publication — a scheduled job or an
- * agent heartbeat.
- *
- * These have no source identity and no manifest, so they are not parts. They do
- * act without anyone opening anything and they cost money, which is exactly what
- * a reasonable person wants to know before accepting, so they ride the same
- * review as a plainly-worded behavioral fact rather than disappearing into a
- * config-file summary.
- */
-export interface InstallReviewCharter {
-  kind: "scheduled-job" | "agent-heartbeat";
-  name: string;
-  /** `every hour at :05` — the schedule in words, never a cron string. */
-  schedule: string;
-  /** One sentence: what it does when it wakes up. */
-  purpose: string;
-  change: "added" | "removed" | "changed";
-}
-
-/**
  * The one review every arrival of code shares
  * (docs/template-install-unit-approval-ux-plan.md §7).
  *
@@ -527,7 +502,6 @@ export interface PendingUnitInstallReviewApproval extends PendingApprovalBase {
    * because digest churn is not a decision anyone can evaluate (U7, §5.4).
    */
   unchangedPartCount: number;
-  charters?: InstallReviewCharter[];
   /** Present when the same publication writes workspace config. */
   configWrite?: { repoPath: string; summary: string } | null;
 }

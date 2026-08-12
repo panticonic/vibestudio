@@ -91,15 +91,6 @@
           "evidence": "intentional-broad"
         },
         {
-          "capability": "automations.control",
-          "resource": {
-            "kind": "prefix",
-            "prefix": ""
-          },
-          "tier": "gated",
-          "evidence": "intentional-broad"
-        },
-        {
           "capability": "browser-form-fill.manage",
           "resource": {
             "kind": "prefix",

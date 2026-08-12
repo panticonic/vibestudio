@@ -4,64 +4,79 @@ import type { ServiceAuthorityPolicy } from "@vibestudio/shared/serviceAuthority
 import { AuthorityResourceScopeSchema } from "./build.js";
 
 const hex64 = z.string().regex(/^[0-9a-f]{64}$/);
-const eventField = z
-  .string()
-  .regex(/^[A-Za-z_][A-Za-z0-9_-]{0,63}$/)
-  .refine(
-    (value) => value !== "__proto__" && value !== "prototype" && value !== "constructor",
-    "reserved event field"
-  );
-const missionEventFilterSchema = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("all") }).strict(),
+const missionTargetSchema = z
+  .object({
+    source: z.string().min(1).max(512),
+    className: z.string().min(1).max(128),
+    objectKey: z.string().min(1).max(512),
+  })
+  .strict();
+const missionToolExposureSchema = z
+  .object({
+    services: z.array(z.string().min(1).max(256)).max(256),
+    userlandServices: z
+      .array(
+        z
+          .object({
+            name: z.string().min(1).max(256),
+            provider: z.string().min(1).max(512),
+            providerEv: z.string().min(1).max(128),
+            upgradePolicy: z.enum(["pinned", "follow-head"]),
+          })
+          .strict()
+      )
+      .max(64),
+    workspaceServiceDiscovery: z.enum(["bound", "live-declarations"]),
+    evalNetwork: z.enum(["none", "declared-origins", "unrestricted"]),
+    declaredOrigins: z.array(z.string().max(2_048)).max(64),
+  })
+  .strict();
+const missionExecutionSchema = z.discriminatedUnion("kind", [
   z
     .object({
-      kind: z.literal("field-equals"),
-      path: z.array(eventField).nonempty(),
-      value: z.union([z.string(), z.number(), z.boolean(), z.null()]),
+      kind: z.literal("method"),
+      target: missionTargetSchema,
+      method: z.string().min(1).max(128),
+      args: z.array(z.unknown()).max(64),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("agent"),
+      target: missionTargetSchema,
+      prompt: z.string().min(1).max(24_000),
+      conversation: z.discriminatedUnion("mode", [
+        z
+          .object({
+            mode: z.literal("continue"),
+            channelId: z.string().min(1),
+            contextId: z.string().min(1),
+          })
+          .strict(),
+        z.object({ mode: z.literal("fresh") }).strict(),
+      ]),
+      toolExposure: missionToolExposureSchema,
+      declaredLineageClasses: z
+        .array(z.enum(["none", "web", "email", "channel-external", "external"]))
+        .min(1)
+        .max(5),
     })
     .strict(),
 ]);
 
 export const missionCharterSchema = z
   .object({
-    agentBindingId: z.string().min(1),
-    taskSpec: z.string().min(1),
-    harness: z.object({ unit: z.string().min(1), ev: hex64 }).strict(),
-    skills: z.array(z.object({ path: z.string().min(1), contentHash: hex64 }).strict()),
-    toolExposure: z
-      .object({
-        services: z.array(z.string().min(1)),
-        userlandServices: z.array(
-          z
-            .object({
-              name: z.string().min(1),
-              provider: z.string().min(1),
-              providerEv: z.string().min(1),
-              upgradePolicy: z.enum(["pinned", "follow-head"]),
-            })
-            .strict()
-        ),
-        workspaceServiceDiscovery: z.enum(["bound", "live-declarations"]),
-        evalNetwork: z.enum(["none", "declared-origins", "unrestricted"]),
-        declaredOrigins: z.array(z.string()),
-      })
-      .strict(),
-    model: z.object({ modelId: z.string().min(1), params: z.record(z.unknown()) }).strict(),
-    declaredLineageClasses: z
-      .array(z.enum(["none", "web", "email", "channel-external", "external"]))
-      .min(1),
+    summary: z.string().min(1).max(4_000),
+    harness: z.object({ unit: z.string().min(1).max(512), ev: hex64 }).strict(),
+    execution: missionExecutionSchema,
     trigger: z.discriminatedUnion("kind", [
       z.object({ kind: z.literal("manual") }).strict(),
-      z.object({ kind: z.literal("cron"), cron: z.string().min(1) }).strict(),
       z
         .object({
-          kind: z.literal("event"),
-          event: z
-            .object({
-              source: z.string().regex(/^[a-z][a-z0-9.-]{0,127}$/),
-              filter: missionEventFilterSchema,
-            })
-            .strict(),
+          kind: z.literal("schedule"),
+          everyMs: z.number().int().min(60_000),
+          anchorAt: z.number().int().nonnegative().optional(),
+          jitterMs: z.number().int().nonnegative().optional(),
         })
         .strict(),
     ]),
@@ -94,6 +109,8 @@ export const missionRecordSchema = z
     seeded: z.boolean().optional(),
     permissions: z.array(missionPermissionSchema),
     standingRestrictions: z.array(missionStandingRestrictionSchema),
+    nextRunAt: z.number().int().nonnegative().optional(),
+    lastRunAt: z.number().int().nonnegative().optional(),
   })
   .strict();
 
@@ -102,67 +119,190 @@ export const missionRunRecordSchema = z
     runId: z.string().min(1),
     missionId: z.string().min(1),
     closureDigest: hex64,
-    sessionId: z.string().min(1),
+    trigger: z.enum(["manual", "scheduled"]),
+    status: z.enum(["starting", "running", "succeeded", "failed", "skipped"]),
     startedAt: z.number().int().nonnegative(),
     finishedAt: z.number().int().nonnegative().optional(),
-    outcome: z.string().optional(),
+    sessionId: z.string().min(1).optional(),
+    channelId: z.string().min(1).optional(),
+    contextId: z.string().min(1).optional(),
+    executorId: z.string().min(1).optional(),
+    finalMessage: z.string().optional(),
+    error: z.string().optional(),
   })
   .strict();
 
-// Workspace UI is code-origin. The method tier table marks these methods
-// `codeOnly`, which admits trusted workspace panels while excluding eval/agent
-// execution sessions. Gated mission mutations still require their mapped
-// semantic capability.
+const missionRunCursorSchema = z
+  .object({
+    startedAt: z.number().int().nonnegative(),
+    runId: z.string().min(1),
+  })
+  .strict();
+
+const missionOverviewCursorSchema = z
+  .object({
+    updatedAt: z.number().int().nonnegative(),
+    missionId: z.string().min(1),
+  })
+  .strict();
+
+const missionOverviewOptionsSchema = z
+  .object({
+    limit: z.number().int().min(1).max(50).optional(),
+    cursor: missionOverviewCursorSchema.optional(),
+    filter: z.enum(["all", "attention", "active", "paused", "drafts"]).optional(),
+    query: z.string().max(200).optional(),
+  })
+  .strict();
+
+const missionRunPageSchema = z
+  .object({
+    items: z.array(missionRunRecordSchema),
+    nextCursor: missionRunCursorSchema.optional(),
+  })
+  .strict();
+
+const missionOverviewSchema = z
+  .object({
+    generatedAt: z.number().int().nonnegative(),
+    stats: z
+      .object({
+        total: z.number().int().nonnegative(),
+        active: z.number().int().nonnegative(),
+        running: z.number().int().nonnegative(),
+        failedLast24Hours: z.number().int().nonnegative(),
+        awaitingReview: z.number().int().nonnegative(),
+      })
+      .strict(),
+    items: z.array(
+      z
+        .object({
+          automation: missionRecordSchema,
+          recentRuns: z.array(missionRunRecordSchema),
+          totalRuns: z.number().int().nonnegative(),
+          activeRuns: z.number().int().nonnegative(),
+          failedRunsSince: z.number().int().nonnegative(),
+        })
+        .strict()
+    ),
+    nextCursor: missionOverviewCursorSchema.optional(),
+    attention: z.array(
+      z
+        .object({
+          missionId: z.string().min(1),
+          missionName: z.string().min(1),
+          run: missionRunRecordSchema,
+        })
+        .strict()
+    ),
+  })
+  .strict();
+
+const createInputSchema = z
+  .object({
+    name: z.string().min(1).max(200),
+    charter: missionCharterSchema,
+    permissions: z.array(missionPermissionSchema).max(256),
+    standingRestrictions: z.array(missionStandingRestrictionSchema).max(256).optional(),
+  })
+  .strict();
+
+const READERS: ServiceAuthorityPolicy = {
+  principals: ["user", "code", "session", "mission", "host"],
+};
 const USER_CODE_HOST: ServiceAuthorityPolicy = { principals: ["user", "code", "host"] };
+const AGENT_PROPOSAL: ServiceAuthorityPolicy = {
+  principals: ["user", "code", "session", "mission"],
+};
+const HOST_CODE: ServiceAuthorityPolicy = { principals: ["host", "code"] };
 const HOST: ServiceAuthorityPolicy = { principals: ["host"] };
 
 export const missionsMethods = defineServiceMethods({
+  overview: {
+    capability: "missions.read",
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "identity",
+      family: "mission.read",
+      rationale: "Authenticated users and their agents read a bounded automation and run summary",
+    },
+    description:
+      "Page visible automations with bounded recent runs, global aggregate counts, server-side filtering, and recent failures.",
+    args: z.tuple([missionOverviewOptionsSchema]),
+    returns: missionOverviewSchema,
+    authority: READERS,
+    access: { sensitivity: "read" },
+  },
   list: {
     capability: "missions.read",
     tier: {
       tier: "open",
-      session: "codeOnly",
+      session: "family",
       residency: "identity",
       family: "mission.read",
-      rationale:
-        "Human governance read; mission sessions cannot inspect or rewrite their own charter",
+      rationale: "Authenticated users and their agents read automation definitions and status",
     },
-    description: "List durable automation charters and their approval state.",
+    description: "List durable automations and their current schedule state.",
     args: z.tuple([]),
     returns: z.array(missionRecordSchema),
-    authority: USER_CODE_HOST,
+    authority: READERS,
     access: { sensitivity: "read" },
   },
   get: {
     capability: "missions.read",
     tier: {
       tier: "open",
-      session: "codeOnly",
+      session: "family",
       residency: "identity",
       family: "mission.read",
-      rationale:
-        "Human governance read; mission sessions cannot inspect or rewrite their own charter",
+      rationale: "Authenticated users and their agents read one automation definition",
     },
-    description: "Read one durable automation charter.",
+    description: "Read one durable automation.",
     args: z.tuple([z.string()]),
     returns: missionRecordSchema.nullable(),
-    authority: USER_CODE_HOST,
+    authority: READERS,
     access: { sensitivity: "read" },
   },
   listRuns: {
     capability: "missions.read",
     tier: {
       tier: "open",
-      session: "codeOnly",
+      session: "family",
       residency: "identity",
       family: "mission.read",
-      rationale: "Human governance read of the durable mission run timeline",
+      rationale: "Authenticated users and their agents read the durable run ledger",
     },
-    description: "List the durable run timeline for one visible mission.",
-    args: z.tuple([z.string()]),
-    returns: z.array(missionRunRecordSchema),
-    authority: USER_CODE_HOST,
+    description: "Page through run history, conversation links, final messages, and errors.",
+    args: z.tuple([
+      z.string(),
+      z
+        .object({
+          limit: z.number().int().min(1).max(100).optional(),
+          cursor: missionRunCursorSchema.optional(),
+        })
+        .strict(),
+    ]),
+    returns: missionRunPageSchema,
+    authority: READERS,
     access: { sensitivity: "read" },
+  },
+  proposeDraft: {
+    capability: "missions.edit",
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "identity",
+      family: "mission.create",
+      rationale: "An inert automation draft grants nothing and schedules nothing",
+    },
+    description:
+      "Propose an inert automation draft. Agents should use this method, then direct the user to Automations for review.",
+    args: z.tuple([createInputSchema]),
+    returns: missionRecordSchema,
+    authority: AGENT_PROPOSAL,
+    access: { sensitivity: "write" },
+    agentFacing: true,
   },
   createDraft: {
     capability: "missions.edit",
@@ -171,32 +311,21 @@ export const missionsMethods = defineServiceMethods({
       session: "codeOnly",
       residency: "identity",
       family: "mission.create",
-      rationale: "Mission authoring is a human governance surface; drafts remain inert",
+      rationale: "Human-authored automation drafts remain inert until review",
     },
     presentation: {
       title: "Create an automation draft",
       action: "create an automation draft",
       description: "Allows {requesterKind} to create an automation draft.",
       group: "runtime",
-      authorityCategory: {
-        domain: "safety",
-        verb: "manage",
-      },
+      authorityCategory: { domain: "safety", verb: "manage" },
     },
-    description: "Create an inert mission draft; this grants and schedules nothing.",
-    args: z.tuple([
-      z
-        .object({
-          name: z.string().min(1),
-          charter: missionCharterSchema,
-          permissions: z.array(missionPermissionSchema),
-          standingRestrictions: z.array(missionStandingRestrictionSchema).optional(),
-        })
-        .strict(),
-    ]),
+    description: "Create an inert automation draft.",
+    args: z.tuple([createInputSchema]),
     returns: missionRecordSchema,
     authority: USER_CODE_HOST,
     access: { sensitivity: "write" },
+    agentFacing: false,
   },
   edit: {
     capability: "missions.edit",
@@ -205,20 +334,16 @@ export const missionsMethods = defineServiceMethods({
       session: "codeOnly",
       residency: "identity",
       family: "mission.mutate",
-      rationale:
-        "Mission charter edits lapse authority and are restricted to the governance surface",
+      rationale: "Automation edits lapse the reviewed closure",
     },
     presentation: {
       title: "Change an automation",
       action: "change an automation",
       description: "Allows {requesterKind} to change an automation.",
       group: "runtime",
-      authorityCategory: {
-        domain: "safety",
-        verb: "manage",
-      },
+      authorityCategory: { domain: "safety", verb: "manage" },
     },
-    description: "Edit a mission; charter changes lapse its active authority.",
+    description: "Edit an automation; behavior changes require review again.",
     args: z.tuple([
       z.string(),
       z
@@ -233,6 +358,7 @@ export const missionsMethods = defineServiceMethods({
     returns: missionRecordSchema,
     authority: USER_CODE_HOST,
     access: { sensitivity: "write" },
+    agentFacing: false,
   },
   requestReview: {
     capability: "missions.review",
@@ -241,65 +367,40 @@ export const missionsMethods = defineServiceMethods({
       session: "codeOnly",
       residency: "grant-authority",
       family: "mission.control",
-      rationale:
-        "Opening an inert draft in the canonical review queue grants nothing; only that queue can ratify it",
+      rationale: "Opening an inert draft in the approval queue grants nothing by itself",
     },
-    description: "Open the canonical approval-queue review for an inert mission closure.",
+    description: "Review and activate the exact automation closure.",
     args: z.tuple([z.string()]),
     returns: missionRecordSchema,
     authority: USER_CODE_HOST,
     access: { sensitivity: "admin" },
+    agentFacing: false,
   },
-  pause: {
-    capability: "missions.pause",
+  runNow: {
+    capability: "missions.run",
     tier: {
       tier: "gated",
       session: "codeOnly",
       residency: "grant-authority",
       family: "mission.control",
-      rationale: "Pausing automation is a human governance action",
+      rationale: "A manual run executes the already reviewed closure",
     },
     presentation: {
-      title: "Pause an automation",
-      action: "pause an automation",
-      description: "Allows {requesterKind} to pause an automation.",
+      title: "Run an automation now",
+      action: "run an automation now",
+      description: "Starts one run of an already reviewed automation.",
       group: "runtime",
-      authorityCategory: {
-        domain: "safety",
-        verb: "manage",
-      },
+      authorityCategory: { domain: "automation", verb: "act" },
     },
-    description: "Pause an active mission without changing its charter.",
+    description: "Start one manual run of an active automation.",
     args: z.tuple([z.string()]),
-    returns: missionRecordSchema,
+    returns: missionRunRecordSchema,
     authority: USER_CODE_HOST,
     access: { sensitivity: "write" },
+    agentFacing: false,
   },
-  resume: {
-    capability: "missions.pause",
-    tier: {
-      tier: "gated",
-      session: "codeOnly",
-      residency: "grant-authority",
-      family: "mission.control",
-      rationale: "Resuming automation is a human governance action",
-    },
-    presentation: {
-      title: "Resume an automation",
-      action: "resume an automation",
-      description: "Allows {requesterKind} to resume an automation.",
-      group: "runtime",
-      authorityCategory: {
-        domain: "safety",
-        verb: "manage",
-      },
-    },
-    description: "Resume a paused mission only if its approved closure still matches.",
-    args: z.tuple([z.string()]),
-    returns: missionRecordSchema,
-    authority: USER_CODE_HOST,
-    access: { sensitivity: "write" },
-  },
+  pause: lifecycleMethod("Pause", "pause", "missions.pause"),
+  resume: lifecycleMethod("Resume", "resume", "missions.pause"),
   retire: {
     capability: "missions.retire",
     tier: {
@@ -307,90 +408,46 @@ export const missionsMethods = defineServiceMethods({
       session: "codeOnly",
       residency: "grant-authority",
       family: "mission.retire",
-      rationale: "Retirement permanently ends the mission identity and revokes standing allows",
+      rationale: "Retirement permanently ends the automation identity",
     },
     presentation: {
       title: "Remove an automation",
       action: "remove an automation",
       description: "Allows {requesterKind} to remove an automation.",
       group: "runtime",
-      authorityCategory: {
-        domain: "safety",
-        verb: "manage",
-      },
+      authorityCategory: { domain: "safety", verb: "manage" },
     },
-    description: "Retire a mission permanently and revoke its standing allows.",
+    description: "Retire an automation permanently.",
     args: z.tuple([z.string()]),
     returns: missionRecordSchema,
     authority: USER_CODE_HOST,
     access: { sensitivity: "destructive" },
+    agentFacing: false,
   },
-  startSession: {
+  finishRun: {
     capability: "missions.run",
     tier: {
-      tier: "gated",
-      session: "codeOnly",
-      residency: "grant-authority",
-      family: "mission.create",
-      rationale: "Host-only trigger handoff for an already approved closure",
-    },
-    presentation: {
-      title: "Start an automation run",
-      action: "start an automation run",
-      description: "Allows {requesterKind} to start an automation run.",
-      group: "runtime",
-      authorityCategory: {
-        domain: "safety",
-        verb: "manage",
-      },
-    },
-    description: "Host-only trigger handoff that stamps an active mission onto a new session.",
-    args: z.tuple([
-      z
-        .object({
-          missionId: z.string(),
-          sessionId: z.string(),
-          taskRef: z.string(),
-          runId: z.string(),
-        })
-        .strict(),
-    ]),
-    returns: z
-      .object({
-        missionId: z.string(),
-        closureDigest: hex64,
-        harness: z.object({ unit: z.string(), ev: hex64 }).strict(),
-      })
-      .strict(),
-    authority: HOST,
-    access: { sensitivity: "write" },
-  },
-  finishSession: {
-    capability: "missions.run",
-    tier: {
-      tier: "gated",
+      tier: "open",
       session: "codeOnly",
       residency: "grant-authority",
       family: "mission.control",
-      rationale: "Host-only mission lifecycle closure",
+      rationale: "Only the executor recorded on the active run can terminalize it",
     },
-    presentation: {
-      title: "Finish an automation run",
-      action: "finish an automation run",
-      description: "Allows {requesterKind} to finish an automation run.",
-      group: "runtime",
-      authorityCategory: {
-        domain: "safety",
-        verb: "manage",
-      },
-    },
-    description: "Host-only lifecycle close for a mission session and run.",
+    description: "Executor callback that records the terminal turn summary.",
     args: z.tuple([
-      z.object({ sessionId: z.string(), runId: z.string(), outcome: z.string() }).strict(),
+      z
+        .object({
+          runId: z.string().min(1),
+          outcome: z.enum(["succeeded", "failed"]),
+          finalMessage: z.string().optional(),
+          error: z.string().optional(),
+        })
+        .strict(),
     ]),
     returns: z.void(),
-    authority: HOST,
+    authority: HOST_CODE,
     access: { sensitivity: "write" },
+    agentFacing: false,
   },
   proposeAuthorityRevision: {
     capability: "reviewed-closure.propose-revision",
@@ -399,11 +456,9 @@ export const missionsMethods = defineServiceMethods({
       session: "codeOnly",
       residency: "grant-authority",
       family: "mission.control",
-      rationale:
-        "Host reports one denied request to the closure's cataloged source-document owner; the proposal itself grants nothing.",
+      rationale: "Host records an inert revision proposal after a denied operation",
     },
-    description:
-      "Record an inert source-document revision proposal after a reviewed closure denies an operation.",
+    description: "Record an inert authority revision proposal.",
     args: z.tuple([
       z
         .object({
@@ -420,3 +475,29 @@ export const missionsMethods = defineServiceMethods({
     agentFacing: false,
   },
 });
+
+function lifecycleMethod(title: string, action: string, capability: string) {
+  return {
+    capability,
+    tier: {
+      tier: "gated" as const,
+      session: "codeOnly" as const,
+      residency: "grant-authority" as const,
+      family: "mission.control",
+      rationale: `${title} is a human automation governance action`,
+    },
+    presentation: {
+      title: `${title} an automation`,
+      action: `${action} an automation`,
+      description: `Allows {requesterKind} to ${action} an automation.`,
+      group: "runtime" as const,
+      authorityCategory: { domain: "safety" as const, verb: "manage" as const },
+    },
+    description: `${title} an automation without changing its reviewed charter.`,
+    args: z.tuple([z.string()]),
+    returns: missionRecordSchema,
+    authority: USER_CODE_HOST,
+    access: { sensitivity: "write" as const },
+    agentFacing: false,
+  };
+}

@@ -41,11 +41,9 @@ const AGENT_SCOPE_OFFERABLE = new Set<string>([
   "subagents.create",
   "context.relationships.record",
   "context.materialize",
-  "automations.control",
   "workspace.configure",
   "workspace-units.publish",
   "workspace-units.manage",
-  "automations.register",
   "workspace-panels.manage",
 ]);
 

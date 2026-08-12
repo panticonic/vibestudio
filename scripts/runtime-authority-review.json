@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "censusDigest": "sha256:1c525649e080adface55fd5ea2c813f9ecd9569d82b0d97c9c08a55d350b54d4",
+  "censusDigest": "sha256:7c6adff2cf1d28edba335552b2a1a6845851048c395a53d021921e8ddd5a294c",
   "decisions": {
     "host:view.getBrowserPageIdentity": {
       "review": "exact-native-browser-page-identity-read",

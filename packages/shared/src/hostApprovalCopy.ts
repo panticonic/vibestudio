@@ -379,7 +379,6 @@ export const HOST_APPROVAL_COPY = {
       needsFromWorkspace: "What it needs from the rest of your workspace",
       repairs: (count: number) =>
         `Also changes ${count} part${count === 1 ? "" : "s"} already in your workspace`,
-      charters: "Also runs on its own",
       reviewChanges: "Review changes",
       /** Shown above the list once it is long enough to need narrowing (§7.2). */
       filterAll: "All",
@@ -751,14 +750,6 @@ const HOST_SEMANTIC_CAPABILITY_DEFS: readonly SemanticCapabilityRow[] = [
     group: "workspace",
   },
   {
-    prefix: "automations.register",
-    authorityCategory: { domain: "automation", verb: "manage" },
-    title: "Register automations",
-    action: "register workspace automations",
-    description: "Register automations provided by this workspace",
-    group: "runtime",
-  },
-  {
     prefix: "workspace-panels.manage",
     authorityCategory: { domain: "automation", verb: "manage" },
     title: "Manage workspace panels",
@@ -886,14 +877,6 @@ const HOST_SEMANTIC_CAPABILITY_DEFS: readonly SemanticCapabilityRow[] = [
     title: "View workspace settings",
     action: "view workspace settings",
     description: "Read the settings used by this workspace",
-    group: "workspace",
-  },
-  {
-    prefix: "automations.register",
-    authorityCategory: { domain: "automation", verb: "manage" },
-    title: "Schedule workspace automations",
-    action: "schedule workspace automations",
-    description: "Register recurring or event-driven workspace work",
     group: "workspace",
   },
   {

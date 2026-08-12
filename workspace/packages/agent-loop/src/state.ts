@@ -131,7 +131,7 @@ export interface AgentLoopConfig {
 }
 
 export interface AgentTurnContextPolicy {
-  mode?: "full" | "heartbeat" | "isolated";
+  mode?: "full" | "isolated";
   includeWorkspacePrompt?: boolean;
   includeSkillIndex?: boolean;
   promptFile?: string;
@@ -140,7 +140,9 @@ export interface AgentTurnContextPolicy {
 }
 
 export interface AgentTurnMetadata {
-  origin?: "agent-initiated" | "heartbeat" | "scheduled";
+  origin?: "agent-initiated" | "scheduled";
+  /** Durable automation ledger row completed by this exact turn. */
+  automationRunId?: string;
   contextPolicy?: AgentTurnContextPolicy;
   delivery?: "none" | "channel" | "last-contact";
   ackToken?: string;

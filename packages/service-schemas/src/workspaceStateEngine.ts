@@ -4,7 +4,6 @@ import { defineServiceMethods, type MethodSchema } from "@vibestudio/shared/type
 import type { ServiceAuthorityPolicy } from "@vibestudio/shared/serviceAuthority";
 import { AuthorityResourceScopeSchema, UnitAuthorityManifestSchema } from "./build.js";
 import {
-  HeartbeatRegistryRowSchema,
   LifecycleKeySchema,
   LifecycleLeaseSchema,
   workspaceStateMethods,
@@ -173,30 +172,6 @@ const alarmClaimSchema = LifecycleKeySchema.extend({
   testPolicy: testPolicySchema.optional(),
 });
 
-const recurringJobSchema = z
-  .object({
-    name: z.string().min(1),
-    source: z.string().min(1),
-    className: z.string().min(1),
-    objectKey: z.string().min(1),
-    method: z.string().min(1),
-    argsJson: z.string(),
-    intervalMs: z.number().int().positive(),
-    atMinutes: z.number().int().min(0).max(1439).nullable().optional(),
-    specHash: z.string().min(1),
-    initialNextRunAt: z.number().int().nonnegative(),
-    lastRunAt: z.number().int().nonnegative().nullable().optional(),
-    nextRunAt: z.number().int().nonnegative().optional(),
-    failCount: z.number().int().nonnegative().optional(),
-    backoffUntil: z.number().int().nonnegative().nullable().optional(),
-    lastStartedAt: z.number().int().nonnegative().nullable().optional(),
-    lastSucceededAt: z.number().int().nonnegative().nullable().optional(),
-    lastFailedAt: z.number().int().nonnegative().nullable().optional(),
-    lastError: z.string().nullable().optional(),
-    lastDurationMs: z.number().int().nonnegative().nullable().optional(),
-  })
-  .strict();
-
 const contextEdgeKindSchema = z.enum(["lifecycle", "lineage"]);
 const ownerEdgeSchema = z
   .object({
@@ -339,92 +314,6 @@ const rawWorkspaceStateEngineMethods = defineServiceMethods({
         .strict(),
     ]),
     returns: z.array(alarmClaimSchema),
-  },
-  recurringSync: {
-    ...internal("write"),
-    args: z.tuple([z.object({ jobs: z.array(recurringJobSchema) }).strict()]),
-    returns: z.void(),
-  },
-  recurringDue: {
-    ...internal("read"),
-    args: z.tuple([z.number().int().nonnegative()]),
-    returns: z.array(recurringJobSchema),
-  },
-  recurringMarkRun: {
-    ...internal("write"),
-    args: z.tuple([
-      z
-        .object({
-          name: z.string().min(1),
-          lastRunAt: z.number().int().nonnegative(),
-          nextRunAt: z.number().int().nonnegative(),
-        })
-        .strict(),
-    ]),
-    returns: z.void(),
-  },
-  recurringMarkSucceeded: {
-    ...internal("write"),
-    args: z.tuple([
-      z
-        .object({
-          name: z.string().min(1),
-          finishedAt: z.number().int().nonnegative(),
-          durationMs: z.number().int().nonnegative(),
-        })
-        .strict(),
-    ]),
-    returns: z.void(),
-  },
-  recurringMarkFailed: {
-    ...internal("write"),
-    args: z.tuple([
-      z
-        .object({
-          name: z.string().min(1),
-          failedAt: z.number().int().nonnegative(),
-          nextRunAt: z.number().int().nonnegative(),
-          failCount: z.number().int().positive(),
-          error: z.string(),
-          durationMs: z.number().int().nonnegative(),
-        })
-        .strict(),
-    ]),
-    returns: z.void(),
-  },
-  recurringNextWakeAt: {
-    ...internal("read"),
-    args: z.tuple([]),
-    returns: z.number().int().nonnegative().nullable(),
-  },
-  recurringList: {
-    ...internal("read"),
-    args: z.tuple([]),
-    returns: z.array(recurringJobSchema),
-  },
-  heartbeatRegister: {
-    ...internal("write"),
-    args: z.tuple([HeartbeatRegistryRowSchema]),
-    returns: z.void(),
-  },
-  heartbeatRemove: {
-    ...internal("write"),
-    args: z.tuple([
-      z
-        .object({
-          name: z.string().min(1),
-          source: z.string().min(1).optional(),
-          className: z.string().min(1).optional(),
-          objectKey: z.string().min(1).optional(),
-        })
-        .strict(),
-    ]),
-    returns: z.void(),
-  },
-  heartbeatList: {
-    ...internal("read"),
-    args: z.tuple([]),
-    returns: z.array(HeartbeatRegistryRowSchema),
   },
   lifecycleListLeases: {
     ...internal("read"),

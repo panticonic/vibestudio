@@ -21,7 +21,6 @@ export interface UnitApprovalQueueLike {
     units: ReviewedUnit[];
     origins?: ReadonlyMap<string, InstallReviewOrigin>;
     reportsLanding?: boolean;
-    charters?: PendingUnitInstallReviewApproval["charters"];
     configWrite?: PendingUnitInstallReviewApproval["configWrite"];
   }): { approvalId: string; decision: Promise<ApprovalQueueDecision> };
   listPending(): PendingApproval[];

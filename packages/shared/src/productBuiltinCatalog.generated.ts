@@ -514,6 +514,7 @@ export const PRODUCT_BUILTIN_CATALOG = [
       staticAuthorityProjection: true,
       unsafeEval: false,
     },
+    residentCapabilityRequests: [],
     hostCapabilityRequests: [
       {
         capability: "development.native.execute",
@@ -2253,58 +2254,6 @@ export const PRODUCT_BUILTIN_CATALOG = [
           },
         },
       },
-      heartbeatRegister: {
-        capability: "workspace.runtime-state.manage",
-        tier: "gated",
-        session: "codeOnly",
-        sensitivity: "write",
-        principals: ["host", "code"],
-        presentation: {
-          title: "Manage running workspace services",
-          action:
-            "manage apps, panels, background tasks, and scheduled work that's currently running",
-          description:
-            "Maintain running workspace apps, panels, background tasks, and scheduled work",
-          group: "workspace",
-          authorityCategory: {
-            domain: "automation",
-            verb: "manage",
-          },
-        },
-        effect: {
-          kind: "host-capability",
-          capability: "workspace.runtime-state.manage",
-          resource: {
-            kind: "receiver-object",
-          },
-        },
-      },
-      heartbeatRemove: {
-        capability: "workspace.runtime-state.manage",
-        tier: "gated",
-        session: "codeOnly",
-        sensitivity: "destructive",
-        principals: ["host", "code"],
-        presentation: {
-          title: "Manage running workspace services",
-          action:
-            "manage apps, panels, background tasks, and scheduled work that's currently running",
-          description:
-            "Maintain running workspace apps, panels, background tasks, and scheduled work",
-          group: "workspace",
-          authorityCategory: {
-            domain: "automation",
-            verb: "manage",
-          },
-        },
-        effect: {
-          kind: "host-capability",
-          capability: "workspace.runtime-state.manage",
-          resource: {
-            kind: "receiver-object",
-          },
-        },
-      },
     },
     durableObject: {
       keyVersion: 1,
@@ -2317,6 +2266,7 @@ export const PRODUCT_BUILTIN_CATALOG = [
       staticAuthorityProjection: true,
       unsafeEval: false,
     },
+    residentCapabilityRequests: [],
     hostCapabilityRequests: [],
     directMethods: {
       entityActivate: {
@@ -2649,156 +2599,6 @@ export const PRODUCT_BUILTIN_CATALOG = [
         tier: "gated",
         session: "family",
         sensitivity: "write",
-        principals: ["host"],
-        presentation: null,
-        effect: {
-          kind: "host-capability",
-          capability: "workspace.runtime-state.manage",
-          resource: {
-            kind: "receiver-object",
-          },
-        },
-      },
-      recurringSync: {
-        capability: "workspace.runtime-state.manage",
-        tier: "gated",
-        session: "family",
-        sensitivity: "write",
-        principals: ["host"],
-        presentation: null,
-        effect: {
-          kind: "host-capability",
-          capability: "workspace.runtime-state.manage",
-          resource: {
-            kind: "receiver-object",
-          },
-        },
-      },
-      recurringDue: {
-        capability: "workspace.runtime-state.manage",
-        tier: "gated",
-        session: "family",
-        sensitivity: "read",
-        principals: ["host"],
-        presentation: null,
-        effect: {
-          kind: "host-capability",
-          capability: "workspace.runtime-state.manage",
-          resource: {
-            kind: "receiver-object",
-          },
-        },
-      },
-      recurringMarkRun: {
-        capability: "workspace.runtime-state.manage",
-        tier: "gated",
-        session: "family",
-        sensitivity: "write",
-        principals: ["host"],
-        presentation: null,
-        effect: {
-          kind: "host-capability",
-          capability: "workspace.runtime-state.manage",
-          resource: {
-            kind: "receiver-object",
-          },
-        },
-      },
-      recurringMarkSucceeded: {
-        capability: "workspace.runtime-state.manage",
-        tier: "gated",
-        session: "family",
-        sensitivity: "write",
-        principals: ["host"],
-        presentation: null,
-        effect: {
-          kind: "host-capability",
-          capability: "workspace.runtime-state.manage",
-          resource: {
-            kind: "receiver-object",
-          },
-        },
-      },
-      recurringMarkFailed: {
-        capability: "workspace.runtime-state.manage",
-        tier: "gated",
-        session: "family",
-        sensitivity: "write",
-        principals: ["host"],
-        presentation: null,
-        effect: {
-          kind: "host-capability",
-          capability: "workspace.runtime-state.manage",
-          resource: {
-            kind: "receiver-object",
-          },
-        },
-      },
-      recurringNextWakeAt: {
-        capability: "workspace.runtime-state.manage",
-        tier: "gated",
-        session: "family",
-        sensitivity: "read",
-        principals: ["host"],
-        presentation: null,
-        effect: {
-          kind: "host-capability",
-          capability: "workspace.runtime-state.manage",
-          resource: {
-            kind: "receiver-object",
-          },
-        },
-      },
-      recurringList: {
-        capability: "workspace.runtime-state.manage",
-        tier: "gated",
-        session: "family",
-        sensitivity: "read",
-        principals: ["host"],
-        presentation: null,
-        effect: {
-          kind: "host-capability",
-          capability: "workspace.runtime-state.manage",
-          resource: {
-            kind: "receiver-object",
-          },
-        },
-      },
-      heartbeatRegister: {
-        capability: "workspace.runtime-state.manage",
-        tier: "gated",
-        session: "family",
-        sensitivity: "write",
-        principals: ["host"],
-        presentation: null,
-        effect: {
-          kind: "host-capability",
-          capability: "workspace.runtime-state.manage",
-          resource: {
-            kind: "receiver-object",
-          },
-        },
-      },
-      heartbeatRemove: {
-        capability: "workspace.runtime-state.manage",
-        tier: "gated",
-        session: "family",
-        sensitivity: "write",
-        principals: ["host"],
-        presentation: null,
-        effect: {
-          kind: "host-capability",
-          capability: "workspace.runtime-state.manage",
-          resource: {
-            kind: "receiver-object",
-          },
-        },
-      },
-      heartbeatList: {
-        capability: "workspace.runtime-state.manage",
-        tier: "gated",
-        session: "family",
-        sensitivity: "read",
         principals: ["host"],
         presentation: null,
         effect: {
@@ -4935,6 +4735,7 @@ export const PRODUCT_BUILTIN_CATALOG = [
       staticAuthorityProjection: true,
       unsafeEval: false,
     },
+    residentCapabilityRequests: [],
     hostCapabilityRequests: [],
     directMethods: {
       upsertDownloadRecord: {
@@ -5813,6 +5614,7 @@ export const PRODUCT_BUILTIN_CATALOG = [
       staticAuthorityProjection: true,
       unsafeEval: true,
     },
+    residentCapabilityRequests: [],
     hostCapabilityRequests: [
       {
         capability: "external.open",
@@ -6098,6 +5900,7 @@ export const PRODUCT_BUILTIN_CATALOG = [
       staticAuthorityProjection: true,
       unsafeEval: false,
     },
+    residentCapabilityRequests: [],
     hostCapabilityRequests: [],
     directMethods: {
       create: {
@@ -6180,12 +5983,27 @@ export const PRODUCT_BUILTIN_CATALOG = [
     principals: ["host", "user", "code"],
     protocols: ["vibestudio.missions.v1"],
     methods: {
+      overview: {
+        capability: "missions.read",
+        tier: "open",
+        session: "family",
+        sensitivity: "read",
+        principals: ["user", "code", "session", "mission", "host"],
+        presentation: null,
+        effect: {
+          kind: "host-capability",
+          capability: "missions.read",
+          resource: {
+            kind: "receiver-object",
+          },
+        },
+      },
       list: {
         capability: "missions.read",
         tier: "open",
-        session: "codeOnly",
+        session: "family",
         sensitivity: "read",
-        principals: ["user", "code", "host"],
+        principals: ["user", "code", "session", "mission", "host"],
         presentation: null,
         effect: {
           kind: "host-capability",
@@ -6198,9 +6016,9 @@ export const PRODUCT_BUILTIN_CATALOG = [
       get: {
         capability: "missions.read",
         tier: "open",
-        session: "codeOnly",
+        session: "family",
         sensitivity: "read",
-        principals: ["user", "code", "host"],
+        principals: ["user", "code", "session", "mission", "host"],
         presentation: null,
         effect: {
           kind: "host-capability",
@@ -6213,13 +6031,28 @@ export const PRODUCT_BUILTIN_CATALOG = [
       listRuns: {
         capability: "missions.read",
         tier: "open",
-        session: "codeOnly",
+        session: "family",
         sensitivity: "read",
-        principals: ["user", "code", "host"],
+        principals: ["user", "code", "session", "mission", "host"],
         presentation: null,
         effect: {
           kind: "host-capability",
           capability: "missions.read",
+          resource: {
+            kind: "receiver-object",
+          },
+        },
+      },
+      proposeDraft: {
+        capability: "missions.edit",
+        tier: "open",
+        session: "family",
+        sensitivity: "write",
+        principals: ["user", "code", "session", "mission"],
+        presentation: null,
+        effect: {
+          kind: "host-capability",
+          capability: "missions.edit",
           resource: {
             kind: "receiver-object",
           },
@@ -6283,6 +6116,30 @@ export const PRODUCT_BUILTIN_CATALOG = [
         effect: {
           kind: "host-capability",
           capability: "missions.review",
+          resource: {
+            kind: "receiver-object",
+          },
+        },
+      },
+      runNow: {
+        capability: "missions.run",
+        tier: "gated",
+        session: "codeOnly",
+        sensitivity: "write",
+        principals: ["user", "code", "host"],
+        presentation: {
+          title: "Run an automation now",
+          action: "run an automation now",
+          description: "Starts one run of an already reviewed automation.",
+          group: "runtime",
+          authorityCategory: {
+            domain: "automation",
+            verb: "act",
+          },
+        },
+        effect: {
+          kind: "host-capability",
+          capability: "missions.run",
           resource: {
             kind: "receiver-object",
           },
@@ -6360,46 +6217,13 @@ export const PRODUCT_BUILTIN_CATALOG = [
           },
         },
       },
-      startSession: {
+      finishRun: {
         capability: "missions.run",
-        tier: "gated",
+        tier: "open",
         session: "codeOnly",
         sensitivity: "write",
-        principals: ["host"],
-        presentation: {
-          title: "Start an automation run",
-          action: "start an automation run",
-          description: "Allows {requesterKind} to start an automation run.",
-          group: "runtime",
-          authorityCategory: {
-            domain: "safety",
-            verb: "manage",
-          },
-        },
-        effect: {
-          kind: "host-capability",
-          capability: "missions.run",
-          resource: {
-            kind: "receiver-object",
-          },
-        },
-      },
-      finishSession: {
-        capability: "missions.run",
-        tier: "gated",
-        session: "codeOnly",
-        sensitivity: "write",
-        principals: ["host"],
-        presentation: {
-          title: "Finish an automation run",
-          action: "finish an automation run",
-          description: "Allows {requesterKind} to finish an automation run.",
-          group: "runtime",
-          authorityCategory: {
-            domain: "safety",
-            verb: "manage",
-          },
-        },
+        principals: ["host", "code"],
+        presentation: null,
         effect: {
           kind: "host-capability",
           capability: "missions.run",
@@ -6435,6 +6259,17 @@ export const PRODUCT_BUILTIN_CATALOG = [
       staticAuthorityProjection: true,
       unsafeEval: false,
     },
+    residentCapabilityRequests: [
+      {
+        capability: "reviewed-closure.bind-session",
+        resource: {
+          kind: "prefix",
+          prefix: "mission:",
+        },
+        tier: "gated",
+        evidence: "bounded-dynamic",
+      },
+    ],
     hostCapabilityRequests: [
       {
         capability: "reviewed-closure.activate",
@@ -6468,7 +6303,7 @@ export const PRODUCT_BUILTIN_CATALOG = [
       },
       {
         capability: "reviewed-closure.bind-session",
-        methods: ["startSession"],
+        methods: ["runNow"],
         resource: {
           kind: "prefix",
           prefix: "mission:",
@@ -6478,12 +6313,27 @@ export const PRODUCT_BUILTIN_CATALOG = [
       },
     ],
     directMethods: {
+      overview: {
+        capability: "missions.read",
+        tier: "open",
+        session: "family",
+        sensitivity: "read",
+        principals: ["user", "code", "session", "mission", "host"],
+        presentation: null,
+        effect: {
+          kind: "host-capability",
+          capability: "missions.read",
+          resource: {
+            kind: "receiver-object",
+          },
+        },
+      },
       list: {
         capability: "missions.read",
         tier: "open",
-        session: "codeOnly",
+        session: "family",
         sensitivity: "read",
-        principals: ["user", "code", "host"],
+        principals: ["user", "code", "session", "mission", "host"],
         presentation: null,
         effect: {
           kind: "host-capability",
@@ -6496,9 +6346,9 @@ export const PRODUCT_BUILTIN_CATALOG = [
       get: {
         capability: "missions.read",
         tier: "open",
-        session: "codeOnly",
+        session: "family",
         sensitivity: "read",
-        principals: ["user", "code", "host"],
+        principals: ["user", "code", "session", "mission", "host"],
         presentation: null,
         effect: {
           kind: "host-capability",
@@ -6511,13 +6361,28 @@ export const PRODUCT_BUILTIN_CATALOG = [
       listRuns: {
         capability: "missions.read",
         tier: "open",
-        session: "codeOnly",
+        session: "family",
         sensitivity: "read",
-        principals: ["user", "code", "host"],
+        principals: ["user", "code", "session", "mission", "host"],
         presentation: null,
         effect: {
           kind: "host-capability",
           capability: "missions.read",
+          resource: {
+            kind: "receiver-object",
+          },
+        },
+      },
+      proposeDraft: {
+        capability: "missions.edit",
+        tier: "open",
+        session: "family",
+        sensitivity: "write",
+        principals: ["user", "code", "session", "mission"],
+        presentation: null,
+        effect: {
+          kind: "host-capability",
+          capability: "missions.edit",
           resource: {
             kind: "receiver-object",
           },
@@ -6581,6 +6446,30 @@ export const PRODUCT_BUILTIN_CATALOG = [
         effect: {
           kind: "host-capability",
           capability: "missions.review",
+          resource: {
+            kind: "receiver-object",
+          },
+        },
+      },
+      runNow: {
+        capability: "missions.run",
+        tier: "gated",
+        session: "codeOnly",
+        sensitivity: "write",
+        principals: ["user", "code", "host"],
+        presentation: {
+          title: "Run an automation now",
+          action: "run an automation now",
+          description: "Starts one run of an already reviewed automation.",
+          group: "runtime",
+          authorityCategory: {
+            domain: "automation",
+            verb: "act",
+          },
+        },
+        effect: {
+          kind: "host-capability",
+          capability: "missions.run",
           resource: {
             kind: "receiver-object",
           },
@@ -6658,46 +6547,13 @@ export const PRODUCT_BUILTIN_CATALOG = [
           },
         },
       },
-      startSession: {
+      finishRun: {
         capability: "missions.run",
-        tier: "gated",
+        tier: "open",
         session: "codeOnly",
         sensitivity: "write",
-        principals: ["host"],
-        presentation: {
-          title: "Start an automation run",
-          action: "start an automation run",
-          description: "Allows {requesterKind} to start an automation run.",
-          group: "runtime",
-          authorityCategory: {
-            domain: "safety",
-            verb: "manage",
-          },
-        },
-        effect: {
-          kind: "host-capability",
-          capability: "missions.run",
-          resource: {
-            kind: "receiver-object",
-          },
-        },
-      },
-      finishSession: {
-        capability: "missions.run",
-        tier: "gated",
-        session: "codeOnly",
-        sensitivity: "write",
-        principals: ["host"],
-        presentation: {
-          title: "Finish an automation run",
-          action: "finish an automation run",
-          description: "Allows {requesterKind} to finish an automation run.",
-          group: "runtime",
-          authorityCategory: {
-            domain: "safety",
-            verb: "manage",
-          },
-        },
+        principals: ["host", "code"],
+        presentation: null,
         effect: {
           kind: "host-capability",
           capability: "missions.run",
@@ -6825,6 +6681,7 @@ export const PRODUCT_BUILTIN_CATALOG = [
       staticAuthorityProjection: true,
       unsafeEval: false,
     },
+    residentCapabilityRequests: [],
     hostCapabilityRequests: [
       {
         capability: "connected-client.transport",

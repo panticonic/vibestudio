@@ -72,13 +72,6 @@ describe("ExplorerAgentWorker", () => {
     expect(worker.respondPolicy()).toBe("mentioned-or-followup");
   });
 
-  it("runScheduledJob is a no-op with no subscriptions", async () => {
-    const { instance } = await createTestDO(TestExplorerAgentWorker);
-    const worker = instance as TestExplorerAgentWorker;
-    const result = await worker.runScheduledJob({ job: "sweep" });
-    expect(result).toEqual({ ok: true, channels: 0 });
-  });
-
   it("exposes report_finding alongside the inherited say tool", async () => {
     const { instance } = await createTestDO(TestExplorerAgentWorker);
     const worker = instance as TestExplorerAgentWorker;

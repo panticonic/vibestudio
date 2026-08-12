@@ -409,9 +409,6 @@ export class AcquisitionCoordinator {
           description:
             presentation.description ?? `Requests permission to ${input.renderedAction}.`,
           units: [...presentation.installReview.units],
-          ...(presentation.installReview.charters
-            ? { charters: presentation.installReview.charters }
-            : {}),
           ...(presentation.installReview.template
             ? { template: presentation.installReview.template }
             : {}),

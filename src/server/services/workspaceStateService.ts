@@ -63,7 +63,6 @@ export interface WorkspaceStateServiceDeps {
    * can re-arm its timer. Called after `alarmSet`/`alarmClear` persist.
    */
   onAlarmChanged?: () => void;
-  onHeartbeatRegistryChanged?: () => void;
   /**
    * Notify listeners that a tree query cache must be invalidated after a
    * durable slot mutation, regardless of which client initiated it.
@@ -332,15 +331,6 @@ export function createWorkspaceStateService(deps: WorkspaceStateServiceDeps): Se
         await dispatch<undefined>("alarmClear", [input]);
         deps.onAlarmChanged?.();
       },
-      heartbeatRegister: async (_ctx, [input]) => {
-        await dispatch<undefined>("heartbeatRegister", [input]);
-        if (isHeartbeatCodeOwnedRegistration(input)) {
-          deps.onHeartbeatRegistryChanged?.();
-        }
-      },
-      heartbeatRemove: async (_ctx, [input]) => {
-        await dispatch<undefined>("heartbeatRemove", [input]);
-      },
     }),
   };
 }
@@ -355,10 +345,4 @@ function assertOwnLifecycleKey(
   if (caller.runtime.kind !== "do" || caller.runtime.id !== ownerId) {
     throw new Error(`${caller.runtime.id} cannot ${verb} ${ownerId}`);
   }
-}
-
-function isHeartbeatCodeOwnedRegistration(input: unknown): boolean {
-  return (
-    !!input && typeof input === "object" && (input as { kind?: unknown }).kind === "code-owned"
-  );
 }

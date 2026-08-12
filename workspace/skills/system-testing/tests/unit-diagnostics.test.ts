@@ -6,7 +6,7 @@ import { unitDiagnosticsTests } from "./unit-diagnostics.js";
 function execution(
   code: string,
   returnValue: unknown,
-  final = "The workspace has 2 recurring jobs and 1 configured agent heartbeat."
+  final = "The workspace has 4 automations: 2 active, 1 running, and 1 failed in the last 24 hours."
 ): TestExecutionResult {
   return {
     duration: 0,
@@ -42,52 +42,80 @@ function execution(
   } as TestExecutionResult;
 }
 
-const scheduleTest = unitDiagnosticsTests.find(
-  (candidate) => candidate.name === "schedule-surfaces-readonly"
+const automationTest = unitDiagnosticsTests.find(
+  (candidate) => candidate.name === "automation-overview-readonly"
 )!;
 
-describe("schedule surface system test validator", () => {
+describe("automation overview system test validator", () => {
   const readCode =
-    "const recurring = await workspace.recurring.list(); const heartbeats = await workspace.heartbeats.list(); return { recurring: recurring.length, heartbeats: heartbeats.length };";
+    "const service = await workers.resolveService('vibestudio.missions.v1'); const overview = await rpc.call(service.targetId, 'overview', [{}]); return { automations: overview.stats.total, active: overview.stats.active, running: overview.stats.running, failedLast24Hours: overview.stats.failedLast24Hours };";
 
-  it("requires both typed read-only surfaces and exact bounded counts", () => {
-    expect(scheduleTest.validate(execution(readCode, { recurring: 2, heartbeats: 1 }))).toEqual({
-      passed: true,
+  it("requires the canonical read-only surface and exact bounded counts", () => {
+    expect(
+      automationTest.validate(
+        execution(readCode, { automations: 4, active: 2, running: 1, failedLast24Hours: 1 })
+      )
+    ).toEqual({ passed: true });
+  });
+
+  it("pregrants only the canonical automation service read", () => {
+    expect(automationTest.authorityPolicy).toEqual({
+      authority: [
+        {
+          ruleId: "read-automation-overview",
+          capability: { kind: "exact", key: "workspace-service:missions" },
+          resource: {
+            kind: "prefix",
+            prefix: "do:vibestudio/internal:MissionsDO:",
+          },
+          tier: "gated",
+          decision: "once",
+        },
+      ],
     });
   });
 
-  it("rejects prose-only schedule claims", () => {
+  it("rejects prose-only automation claims", () => {
     expect(
-      scheduleTest.validate(execution("return { recurring: 2, heartbeats: 1 };", {}))
+      automationTest.validate(
+        execution("return { automations: 4, active: 2, running: 1, failedLast24Hours: 1 };", {})
+      )
     ).toMatchObject({
       passed: false,
-      reason: "Expected exactly one successful eval inspecting recurring jobs and heartbeats",
+      reason: "Expected exactly one successful eval reading the automation overview",
     });
   });
 
-  it("rejects schedule mutation attempts", () => {
+  it("rejects automation mutation attempts", () => {
     expect(
-      scheduleTest.validate(
-        execution(`${readCode}\nawait workspace.heartbeats.runNow('news');`, {
-          recurring: 2,
-          heartbeats: 1,
+      automationTest.validate(
+        execution(`${readCode}\nawait rpc.call(service.targetId, 'runNow', ['id']);`, {
+          automations: 4,
+          active: 2,
+          running: 1,
+          failedLast24Hours: 1,
         })
       )
     ).toMatchObject({
       passed: false,
-      reason: "Schedule inspection probe attempted a mutating operation",
+      reason: "Automation inspection probe attempted a mutating operation",
     });
   });
 
-  it("rejects raw or extra schedule data", () => {
+  it("rejects raw or extra automation data", () => {
     expect(
-      scheduleTest.validate(
-        execution(readCode, { recurring: 2, heartbeats: 1, jobs: [{ name: "news" }] })
+      automationTest.validate(
+        execution(readCode, {
+          automations: 4,
+          active: 2,
+          running: 1,
+          failedLast24Hours: 1,
+          definitions: [{ name: "news" }],
+        })
       )
     ).toMatchObject({
       passed: false,
-      reason:
-        "Schedule inspection eval did not return exact nonnegative recurring/heartbeat counts",
+      reason: "Automation inspection eval did not return the exact bounded overview counts",
     });
   });
 });

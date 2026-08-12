@@ -29,6 +29,15 @@ interface BuiltinBase {
     staticAuthorityProjection: boolean;
     unsafeEval: boolean;
   };
+  /** Static authority ceiling for work that has no inbound RPC authority
+   * parent, notably durable-object alarms. Direct RPC execution is narrowed
+   * independently by hostCapabilityRequests below. */
+  residentCapabilityRequests: readonly {
+    capability: string;
+    resource: { kind: "prefix"; prefix: string };
+    tier: "gated" | "critical";
+    evidence: "bounded-dynamic" | "intentional-broad";
+  }[];
   hostCapabilityRequests: readonly {
     capability: string;
     methods: readonly string[];
@@ -85,6 +94,7 @@ export const PRODUCT_BUILTINS = [
       staticAuthorityProjection: true,
       unsafeEval: false,
     },
+    residentCapabilityRequests: [],
     hostCapabilityRequests: [
       {
         capability: "development.native.execute",
@@ -153,6 +163,7 @@ export const PRODUCT_BUILTINS = [
       staticAuthorityProjection: true,
       unsafeEval: false,
     },
+    residentCapabilityRequests: [],
     hostCapabilityRequests: [],
   },
   {
@@ -182,6 +193,7 @@ export const PRODUCT_BUILTINS = [
       staticAuthorityProjection: true,
       unsafeEval: false,
     },
+    residentCapabilityRequests: [],
     hostCapabilityRequests: [],
   },
   {
@@ -199,6 +211,7 @@ export const PRODUCT_BUILTINS = [
       staticAuthorityProjection: true,
       unsafeEval: true,
     },
+    residentCapabilityRequests: [],
     hostCapabilityRequests: [
       {
         capability: "external.open",
@@ -225,6 +238,7 @@ export const PRODUCT_BUILTINS = [
       staticAuthorityProjection: true,
       unsafeEval: false,
     },
+    residentCapabilityRequests: [],
     hostCapabilityRequests: [],
     directMethods: webhookEngineMethods,
   },
@@ -255,6 +269,14 @@ export const PRODUCT_BUILTINS = [
       staticAuthorityProjection: true,
       unsafeEval: false,
     },
+    residentCapabilityRequests: [
+      {
+        capability: "reviewed-closure.bind-session",
+        resource: { kind: "prefix", prefix: "mission:" },
+        tier: "gated",
+        evidence: "bounded-dynamic",
+      },
+    ],
     hostCapabilityRequests: [
       {
         capability: "reviewed-closure.activate",
@@ -279,7 +301,7 @@ export const PRODUCT_BUILTINS = [
       },
       {
         capability: "reviewed-closure.bind-session",
-        methods: ["startSession"],
+        methods: ["runNow"],
         resource: { kind: "prefix", prefix: "mission:" },
         tier: "gated",
         evidence: "bounded-dynamic",
@@ -313,6 +335,7 @@ export const PRODUCT_BUILTINS = [
       staticAuthorityProjection: true,
       unsafeEval: false,
     },
+    residentCapabilityRequests: [],
     hostCapabilityRequests: [
       {
         capability: "connected-client.transport",
