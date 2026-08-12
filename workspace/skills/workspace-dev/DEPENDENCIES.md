@@ -166,6 +166,23 @@ whose roots were bundled stays out of the runtime install while still affecting
 the build environment. Runtime dependency caches and sealed recipes preserve
 the same patch inputs for reconstruction after eviction.
 
+### Checkout validation limitation
+
+Runtime Build V2 isolates each unit closure and can therefore build independent
+patched and unpatched consumers of the same exact transitive package. The
+checkout-wide TypeScript and Vitest commands still merge userland requirements
+into one validation install, so they cannot represent both identities at once.
+Current `@earendil-works/pi-ai` consumers all enter through the canonical
+`@workspace/pi-ai` adapter and do not create that split.
+
+Do not address this by preferring root `node_modules`, conditionally aliasing
+one test, or applying the patch checkout-wide. A complete validation design
+needs policy-owned TypeScript/Vitest projects, an explicit rule for integration
+tests that cross policy closures, and script-enabled runtime projections for
+tests that load native dependencies. Until that design lands, treat a second
+independent unpatched consumer as a validation-architecture blocker even
+though its isolated runtime Build V2 build is valid.
+
 ## Diagnose and verify
 
 Run an exact Build V2 report for the consuming unit. A root `pnpm install` does
