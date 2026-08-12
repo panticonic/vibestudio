@@ -386,46 +386,6 @@ export class HeadlessRunner {
   }
 
   /**
-   * Create a runner view whose ordinary headless session is itself the model
-   * under test. This keeps model-behavior scenarios direct: a more capable
-   * supervisor cannot pre-solve the task and feed the subject an answer.
-   */
-  forModelSubject(model: string): HeadlessRunner {
-    if (!model.trim()) throw new TypeError("model must be non-empty");
-    if (this.workspaceRepoFixture) {
-      throw new Error("Model-subject runner views do not own repository fixtures");
-    }
-    const modelPolicy: ModelPolicyState = {
-      primaryModel: model,
-      activeModel: model,
-      fallbackModel: null,
-      fallbackThinkingLevel: null,
-      fallbackOn: null,
-      fallbackScope: null,
-      activations: [],
-    };
-    return new HeadlessRunner(
-      this.contextId,
-      { model, ...(this.shared.thinkingLevel ? { thinkingLevel: this.shared.thinkingLevel } : {}) },
-      {
-        sessions: this.shared.sessions,
-        testNames: this.shared.testNames,
-        sessionPolicies: this.shared.sessionPolicies,
-        modelPolicy,
-        ...(this.shared.thinkingLevel ? { thinkingLevel: this.shared.thinkingLevel } : {}),
-      },
-      this.testName,
-      null,
-      this.testAuthorityPolicy
-        ? {
-            ...this.testAuthorityPolicy,
-            agent: { model, approvalLevel: 2, fallback: "disabled" },
-          }
-        : null
-    );
-  }
-
-  /**
    * Create one exact task context. Seeded variants commit their typed source
    * repository only on that local line; task-created variants deliberately
    * begin with no repository and derive ownership from the task's work.

@@ -209,32 +209,6 @@ describe("HeadlessRunner", () => {
     ]);
   });
 
-  it("can make the model under test the direct headless subject", async () => {
-    const root = new HeadlessRunner("ctx-test").forTest("local-model-subject", {
-      authorityPolicy: { authority: [] },
-    });
-    const subject = root.forModelSubject("local:lfm2.5-2.6b");
-
-    await subject.spawn();
-
-    const config = mocks.createWithAgent.mock.calls[0]![0] as {
-      extraConfig: Record<string, unknown>;
-      testPolicy: { agent: Record<string, unknown> };
-    };
-    expect(config.extraConfig).toMatchObject({ model: "local:lfm2.5-2.6b" });
-    expect(config.extraConfig).not.toHaveProperty("fallbackModel");
-    expect(config.testPolicy.agent).toEqual({
-      model: "local:lfm2.5-2.6b",
-      approvalLevel: 2,
-      fallback: "disabled",
-    });
-    expect(subject.modelPolicySnapshot()).toMatchObject({
-      primaryModel: "local:lfm2.5-2.6b",
-      activeModel: "local:lfm2.5-2.6b",
-      fallbackModel: null,
-    });
-  });
-
   it("fault-aborts one exact agent vessel through the hidden runtime harness seam", async () => {
     const runner = new HeadlessRunner("ctx-test");
     mocks.rpc.call.mockResolvedValue({ aborted: true });
