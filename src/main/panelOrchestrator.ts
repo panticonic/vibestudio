@@ -151,7 +151,7 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
       waitForBrowserSessionPartition:
         deps.waitForBrowserSessionPartition ??
         (() => Promise.reject(new Error("Browser environment is unavailable"))),
-      pinStore: deps.pinStore,
+      hasRetentionIntent: (panelId) => deps.pinStore?.has(panelId) ?? false,
       ...(deps.getResidentPanelIds ? { getResidentPanelIds: deps.getResidentPanelIds } : {}),
       ...(deps.getNativeBinding ? { getNativeBinding: deps.getNativeBinding } : {}),
       ...(deps.attachNativeBinding ? { attachNativeBinding: deps.attachNativeBinding } : {}),

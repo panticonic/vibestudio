@@ -11,7 +11,7 @@ function createHarness(
 ) {
   const state = {
     focusedPanelId: null as string | null,
-    pinned: new Set<string>(),
+    retained: new Set<string>(),
     keepLoaded: new Set<string>(),
     panels: new Set<string>(),
     resident: new Set<string>(),
@@ -26,7 +26,7 @@ function createHarness(
     now: () => Date.now(),
     getFocusedPanelId: () => state.focusedPanelId,
     getResidentPanelIds: () => [...state.resident],
-    isPinned: (panelId) => state.pinned.has(panelId),
+    hasRetentionIntent: (panelId) => state.retained.has(panelId),
     isKeepLoaded: (panelId) => state.keepLoaded.has(panelId),
     panelExists: (panelId) => state.panels.has(panelId),
     unload,
@@ -58,7 +58,7 @@ describe("PanelResourcePolicy", () => {
       harness.authority.track(panelId);
     }
     harness.state.focusedPanelId = "focused";
-    harness.state.pinned.add("pinned");
+    harness.state.retained.add("pinned");
     harness.state.keepLoaded.add("automated");
     harness.authority.start();
 
@@ -68,17 +68,17 @@ describe("PanelResourcePolicy", () => {
     expect(harness.unload).toHaveBeenCalledWith("idle", "idle-timeout");
   });
 
-  it("keeps original activity while pinned so unpinning is effective on the next sweep", async () => {
+  it("keeps original activity while retained so releasing intent applies on the next sweep", async () => {
     const harness = createHarness({ idleUnloadMs: 100 });
     harness.state.panels.add("panel-1");
-    harness.state.pinned.add("panel-1");
+    harness.state.retained.add("panel-1");
     harness.authority.track("panel-1");
     harness.authority.start();
 
     await vi.advanceTimersByTimeAsync(200);
     expect(harness.unload).not.toHaveBeenCalled();
 
-    harness.state.pinned.delete("panel-1");
+    harness.state.retained.delete("panel-1");
     await vi.advanceTimersByTimeAsync(50);
     expect(harness.unload).toHaveBeenCalledWith("panel-1", "idle-timeout");
   });
@@ -101,10 +101,10 @@ describe("PanelResourcePolicy", () => {
     expect(harness.unload).toHaveBeenCalledWith("loaded", "idle-timeout");
   });
 
-  it("evicts the oldest unprotected panel while retaining the new and pinned panels", async () => {
+  it("evicts the oldest unprotected panel while retaining the new and retained panels", async () => {
     const harness = createHarness({ maximumLoadedPanels: 2 });
     for (const panelId of ["pinned", "old", "new"]) harness.state.panels.add(panelId);
-    harness.state.pinned.add("pinned");
+    harness.state.retained.add("pinned");
     harness.authority.track("pinned");
     vi.setSystemTime(1);
     harness.authority.track("old");

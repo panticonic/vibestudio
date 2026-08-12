@@ -19,7 +19,7 @@ export interface PanelResourcePolicyDeps {
    * on screen; residency protects it from idle sweep and cap eviction (§5.3).
    */
   getResidentPanelIds(): string[];
-  isPinned(panelId: string): boolean;
+  hasRetentionIntent(panelId: string): boolean;
   isKeepLoaded(panelId: string): boolean;
   panelExists(panelId: string): boolean;
   unload(panelId: string, reason: PanelResourceUnloadReason): Promise<void>;
@@ -28,8 +28,8 @@ export interface PanelResourcePolicyDeps {
 
 /**
  * Owns client-local panel resource retention. Its ledger contains only loaded,
- * lease-assigned panels; focus, pins, and automation leases protect entries
- * without changing their last-activity timestamp.
+ * lease-assigned panels; focus, product retention intent, and automation leases
+ * protect entries without changing their last-activity timestamp.
  */
 export class PanelResourcePolicy {
   private readonly resources = new Map<string, { lastUsedAt: number }>();
@@ -101,7 +101,7 @@ export class PanelResourcePolicy {
 
   private protectionPredicates() {
     return {
-      isPinned: (panelId: string) => this.deps.isPinned(panelId),
+      hasRetentionIntent: (panelId: string) => this.deps.hasRetentionIntent(panelId),
       isKeepLoaded: (panelId: string) => this.deps.isKeepLoaded(panelId),
     };
   }

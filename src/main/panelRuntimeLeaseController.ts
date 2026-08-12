@@ -28,7 +28,6 @@ import {
 import { getCurrentSnapshot } from "@vibestudio/shared/panel/accessors";
 import { asPanelEntityId, asPanelSlotId } from "@vibestudio/shared/panel/ids";
 import { assertPresent } from "../lintHelpers";
-import type { PanelPinStoreApi } from "./panelPinStore.js";
 import { PanelResourcePolicy } from "./panelResourcePolicy.js";
 import type {
   PanelBootObservation,
@@ -60,7 +59,8 @@ export interface PanelPresentationControllerDeps {
   gatewayPort: number;
   gatewayBasePath?: string;
   waitForBrowserSessionPartition: () => Promise<string>;
-  pinStore?: PanelPinStoreApi;
+  /** Product-owned intent to retain a panel's native runtime resources. */
+  hasRetentionIntent?: (panelId: string) => boolean;
   /**
    * Panel ids currently bound to native slots (resident in the shell's
    * column viewport); the GC protects them alongside the focused panel (§5.3).
@@ -164,7 +164,7 @@ export class PanelPresentationController {
       now: () => Date.now(),
       getFocusedPanelId: () => this.deps.registry.getFocusedPanelId(),
       getResidentPanelIds: () => this.deps.getResidentPanelIds?.() ?? [],
-      isPinned: (panelId) => this.deps.pinStore?.has(panelId) ?? false,
+      hasRetentionIntent: (panelId) => this.deps.hasRetentionIntent?.(panelId) ?? false,
       isKeepLoaded: (panelId) => Boolean(this.deps.registry.getRuntimeLease(panelId)?.keepLoaded),
       panelExists: (panelId) => Boolean(this.deps.registry.getPanel(panelId)),
       unload: async (panelId) => {

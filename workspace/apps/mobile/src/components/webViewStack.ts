@@ -54,7 +54,7 @@ export function addWebViewEntry(
     selectCapEvictionVictims(toSnapshots(nextEntries), {
       cap,
       protectedIds,
-      isPinned: opts.isPinned,
+      hasRetentionIntent: opts.isPinned,
       isKeepLoaded: opts.isKeepLoaded,
     })
   );
@@ -83,7 +83,7 @@ export function sweepIdleWebViews(
     now: opts.now,
     idleMs: PANEL_UI_IDLE_UNLOAD_MS,
     protectedIds: opts.activePanelId ? [opts.activePanelId] : [],
-    isPinned: opts.isPinned,
+    hasRetentionIntent: opts.isPinned,
     isKeepLoaded: opts.isKeepLoaded,
   });
   if (victims.length === 0) return entries;

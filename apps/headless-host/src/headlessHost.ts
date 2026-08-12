@@ -522,9 +522,9 @@ export class HeadlessHost implements PanelHost {
   }
 
   /**
-   * Snapshot of currently loaded slots for the shared GC selectors. No pins
-   * apply on a headless host; `keepLoaded` (active CDP/automation) is the only
-   * protection beyond the cap/idle policy.
+   * Snapshot of currently loaded slots for the shared GC selectors. Headless
+   * has no product retention intent; `keepLoaded` (active CDP/automation) is
+   * the only protection beyond the cap/idle policy.
    */
   private loadedSlotSnapshots(now: number): LoadedPanelSnapshot[] {
     return this.pages!.slots().map((slotId) => ({
@@ -539,11 +539,11 @@ export class HeadlessHost implements PanelHost {
   private async enforcePanelCap(): Promise<void> {
     if (!this.pages) return;
     // Evict down to maxPanels-1 to leave room for the incoming panel, via the
-    // same selector desktop/mobile use (unpinned-oldest-first; keepLoaded-safe).
+    // same selector desktop/mobile use (unretained-oldest-first; keepLoaded-safe).
     const victims = selectCapEvictionVictims(this.loadedSlotSnapshots(Date.now()), {
       cap: Math.max(0, this.config.maxPanels - 1),
       protectedIds: [],
-      isPinned: () => false,
+      hasRetentionIntent: () => false,
       isKeepLoaded: this.gcIsKeepLoaded,
     });
     for (const slotId of victims) await this.releaseAndUnload(slotId, "panel cap");
@@ -571,7 +571,7 @@ export class HeadlessHost implements PanelHost {
       now,
       idleMs: this.config.idleUnloadMs,
       protectedIds: [],
-      isPinned: () => false,
+      hasRetentionIntent: () => false,
       isKeepLoaded: this.gcIsKeepLoaded,
     });
     for (const slotId of victims) void this.releaseAndUnload(slotId, "idle");

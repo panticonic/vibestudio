@@ -9,7 +9,7 @@ import {
 } from "../constants.js";
 
 const NONE = {
-  isPinned: () => false,
+  hasRetentionIntent: () => false,
   isKeepLoaded: () => false,
 };
 
@@ -47,13 +47,13 @@ describe("selectIdlePanelVictims", () => {
     expect(victims).toEqual(["bg"]);
   });
 
-  it("excludes pinned panels (hard exclusion) regardless of age", () => {
+  it("excludes product-retained panels (hard exclusion) regardless of age", () => {
     const loaded = [snap("pinned", now - 9_999), snap("plain", now - 9_999)];
     const victims = selectIdlePanelVictims(loaded, {
       now,
       idleMs,
       protectedIds: [],
-      isPinned: (id) => id === "pinned",
+      hasRetentionIntent: (id) => id === "pinned",
       isKeepLoaded: () => false,
     });
     expect(victims).toEqual(["plain"]);
@@ -65,7 +65,7 @@ describe("selectIdlePanelVictims", () => {
       now,
       idleMs,
       protectedIds: [],
-      isPinned: () => false,
+      hasRetentionIntent: () => false,
       isKeepLoaded: (id) => id === "automated",
     });
     expect(victims).toEqual(["plain"]);
@@ -84,7 +84,7 @@ describe("selectIdlePanelVictims", () => {
       now,
       idleMs,
       protectedIds: ["active"],
-      isPinned: (id) => id === "pinned",
+      hasRetentionIntent: (id) => id === "pinned",
       isKeepLoaded: (id) => id === "automated",
     });
     expect(new Set(victims)).toEqual(new Set(["idle-a", "idle-b"]));
@@ -109,20 +109,20 @@ describe("selectCapEvictionVictims", () => {
     expect(victims).toEqual(["oldest"]);
   });
 
-  it("evicts the oldest UNPINNED panel before any pinned one", () => {
-    // P1 is pinned and the oldest; the oldest unpinned should still go first.
+  it("evicts the oldest unretained panel before any retained one", () => {
+    // P1 is retained and the oldest; the oldest unretained should still go first.
     const loaded = [snap("P1", 10), snap("u-old", 20), snap("u-new", 30)];
     const victims = selectCapEvictionVictims(loaded, {
       cap: 2,
       protectedIds: [],
-      isPinned: (id) => id === "P1",
+      hasRetentionIntent: (id) => id === "P1",
       isKeepLoaded: () => false,
     });
     expect(victims).toEqual(["u-old"]);
   });
 
-  it("falls back to pinned (oldest first) only when all others are pinned/protected", () => {
-    // Worked example from §4.2: cap=5, all 5 loaded are pinned, opening a 6th.
+  it("falls back to retained panels only when all others are retained or protected", () => {
+    // Worked example from §4.2: cap=5, all 5 loaded are retained, opening a 6th.
     const loaded = [
       snap("p1", 10),
       snap("p2", 20),
@@ -134,10 +134,10 @@ describe("selectCapEvictionVictims", () => {
     const victims = selectCapEvictionVictims(loaded, {
       cap: 5,
       protectedIds: ["incoming"],
-      isPinned: (id) => id.startsWith("p"),
+      hasRetentionIntent: (id) => id.startsWith("p"),
       isKeepLoaded: () => false,
     });
-    // Must evict exactly one — the oldest pinned, since the 6th must render.
+    // Must evict exactly one — the oldest retained panel, since the 6th must render.
     expect(victims).toEqual(["p1"]);
   });
 
@@ -157,7 +157,7 @@ describe("selectCapEvictionVictims", () => {
     const victims = selectCapEvictionVictims(loaded, {
       cap: 2,
       protectedIds: [],
-      isPinned: () => false,
+      hasRetentionIntent: () => false,
       isKeepLoaded: (id) => id === "automated",
     });
     expect(victims).toEqual(["plain-old"]);
@@ -165,7 +165,7 @@ describe("selectCapEvictionVictims", () => {
 
   it("worked example §4.2: cap=5 with one pinned, opening a 6th protected panel", () => {
     const loaded = [
-      snap("P1", 10), // pinned
+      snap("P1", 10), // retained
       snap("a", 20),
       snap("b", 30),
       snap("c", 40),
@@ -175,10 +175,10 @@ describe("selectCapEvictionVictims", () => {
     const victims = selectCapEvictionVictims(loaded, {
       cap: 5,
       protectedIds: ["incoming"],
-      isPinned: (id) => id === "P1",
+      hasRetentionIntent: (id) => id === "P1",
       isKeepLoaded: () => false,
     });
-    // The oldest UNPINNED (a) goes; P1 survives.
+    // The oldest unretained panel (a) goes; P1 survives.
     expect(victims).toEqual(["a"]);
   });
 });
