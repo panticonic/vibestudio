@@ -43,6 +43,7 @@ import { WorkspaceCreationDescriptorSchema } from "@vibestudio/workspace-contrac
 import type { WorkspaceEntry } from "@vibestudio/shared/types";
 import { createWorkspaceId } from "@vibestudio/shared/centralData";
 import { WORKSPACE_SYSTEM_EPOCH } from "@vibestudio/shared/vcs/systemEpoch";
+import { canonicalSnapshotDigest, sha256Hex } from "@vibestudio/content-addressing";
 import type {
   CentralDataManager,
   EphemeralWorkspaceCleanupRecord,
@@ -375,12 +376,7 @@ export function initWorkspace(name: string, opts?: WorkspaceCreationOptions): vo
   try {
     fs.mkdirSync(stagedSourceRoot, { recursive: true });
     if (templateSrc) {
-      for (const dir of WORKSPACE_SOURCE_DIRS) {
-        const src = path.join(templateSrc, dir);
-        if (fs.existsSync(src)) {
-          copyDirRecursive(src, path.join(stagedSourceRoot, dir));
-        }
-      }
+      copyStableWorkspaceSource(templateSrc, stagedSourceRoot);
     }
 
     for (const dir of WORKSPACE_SOURCE_DIRS) {
@@ -478,6 +474,71 @@ function copyDirRecursive(src: string, dest: string): void {
       fs.copyFileSync(srcPath, destPath);
     }
   }
+}
+
+/**
+ * Copy one coherent generation of a local workspace source.
+ *
+ * Development templates and workspace forks are live directories. The
+ * destination is already staged and atomically published by initWorkspace,
+ * but atomic publication alone cannot prevent the staging copy from combining
+ * files from two source generations. Address exactly the file set admitted by
+ * copyDirRecursive before and after the copy, and address the staged bytes as
+ * well. Any observed mutation fails the initialization before publication.
+ */
+function copyStableWorkspaceSource(sourceRoot: string, destinationRoot: string): void {
+  const before = workspaceSourceDigest(sourceRoot);
+  for (const dir of WORKSPACE_SOURCE_DIRS) {
+    const source = path.join(sourceRoot, dir);
+    if (fs.existsSync(source)) {
+      copyDirRecursive(source, path.join(destinationRoot, dir));
+    }
+  }
+  const copied = workspaceSourceDigest(destinationRoot);
+  const after = workspaceSourceDigest(sourceRoot);
+  if (before !== copied || before !== after) {
+    throw new Error(
+      "Workspace source changed while the managed workspace was being initialized; " +
+        "refusing to publish a mixed-generation copy"
+    );
+  }
+}
+
+function workspaceSourceDigest(sourceRoot: string): string {
+  const files: Array<{
+    path: string;
+    mode: 0o100644 | 0o100755;
+    size: number;
+    contentHash: string;
+  }> = [];
+
+  const visit = (absoluteDir: string, relativeSegments: string[]): void => {
+    for (const entry of fs.readdirSync(absoluteDir, { withFileTypes: true })) {
+      if (entry.isDirectory()) {
+        if (entry.name === ".git" || entry.name === "node_modules" || entry.name === ".cache") {
+          continue;
+        }
+        visit(path.join(absoluteDir, entry.name), [...relativeSegments, entry.name]);
+        continue;
+      }
+      if (!entry.isFile() || entry.name.endsWith(".tsbuildinfo")) continue;
+      const absolutePath = path.join(absoluteDir, entry.name);
+      const bytes = fs.readFileSync(absolutePath);
+      const stats = fs.statSync(absolutePath);
+      files.push({
+        path: [...relativeSegments, entry.name].join("/"),
+        mode: (stats.mode & 0o111) !== 0 ? 0o100755 : 0o100644,
+        size: bytes.byteLength,
+        contentHash: sha256Hex(bytes),
+      });
+    }
+  };
+
+  for (const dir of WORKSPACE_SOURCE_DIRS) {
+    const source = path.join(sourceRoot, dir);
+    if (fs.existsSync(source)) visit(source, [dir]);
+  }
+  return canonicalSnapshotDigest(files);
 }
 
 export { WORKSPACE_SOURCE_DIRS, WORKSPACE_STATE_DIRS };

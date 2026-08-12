@@ -517,6 +517,46 @@ describe("initWorkspace", () => {
     expect(fs.readdirSync(workspacesDir)).toEqual([]);
   });
 
+  it("rejects a template that changes during copying instead of publishing mixed source", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-loader-"));
+    tempRoots.push(root);
+    process.env["XDG_CONFIG_HOME"] = path.join(root, "xdg");
+    const templateRoot = path.join(root, "workspace-template");
+    writeConfig(templateRoot, "workers:\n  - workers/example\n");
+    fs.mkdirSync(path.join(templateRoot, "workers", "example"), { recursive: true });
+    fs.writeFileSync(path.join(templateRoot, "workers", "example", "package.json"), "{}");
+    fs.writeFileSync(
+      path.join(templateRoot, "workers", "example", "index.ts"),
+      "export const generation = 1;\n"
+    );
+
+    const originalCopyFile = fs.copyFileSync;
+    let mutated = false;
+    const copyFile = vi.spyOn(fs, "copyFileSync").mockImplementation((source, destination, mode) => {
+      originalCopyFile(source, destination, mode);
+      if (!mutated && String(source).endsWith(path.join("meta", "vibestudio.yml"))) {
+        mutated = true;
+        fs.writeFileSync(
+          path.join(templateRoot, "workers", "example", "index.ts"),
+          "export const generation = 2;\n"
+        );
+      }
+    });
+
+    try {
+      expect(() => initWorkspace("changing-template", { templateDir: templateRoot })).toThrow(
+        /changed while the managed workspace was being initialized.*mixed-generation/u
+      );
+    } finally {
+      copyFile.mockRestore();
+    }
+
+    const workspacesDir = path.join(process.env["XDG_CONFIG_HOME"], "vibestudio", "workspaces");
+    expect(mutated).toBe(true);
+    expect(fs.existsSync(path.join(workspacesDir, "changing-template"))).toBe(false);
+    expect(fs.readdirSync(workspacesDir)).toEqual([]);
+  });
+
   it("removes staging state when the atomic publish rename fails", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-loader-"));
     tempRoots.push(root);

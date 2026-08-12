@@ -3,7 +3,34 @@ import {
   type TestCase,
   type TestExecutionResult,
 } from "../types.js";
-import { getToolCalls, noIncompleteInvocations, successfulEvalCode } from "./_helpers.js";
+import {
+  findLastAgentMessage,
+  getToolCalls,
+  noIncompleteInvocations,
+  successfulEvalCode,
+} from "./_helpers.js";
+
+const FIXTURE_HEADING = /\bsystem-test-local-model-download-and-task-[a-z0-9]{8}\b/iu;
+
+function localModelRef(value: unknown): string | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const model = (value as Record<string, unknown>)["model"];
+  return typeof model === "string" && model.startsWith("local:") ? model : null;
+}
+
+function strings(value: unknown, found: string[] = []): string[] {
+  if (typeof value === "string") {
+    found.push(value);
+    return found;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) strings(item, found);
+    return found;
+  }
+  if (!value || typeof value !== "object") return found;
+  for (const child of Object.values(value as Record<string, unknown>)) strings(child, found);
+  return found;
+}
 
 function requireLocalModelTask(result: TestExecutionResult) {
   const code = successfulEvalCode(result);
@@ -16,21 +43,51 @@ function requireLocalModelTask(result: TestExecutionResult) {
       reason: "The trajectory did not inspect the bundled local-model lifecycle",
     };
   }
-  const localChild = getToolCalls(result).some((call) => {
+  const localLaunches = getToolCalls(result).flatMap((call) => {
     if (
       call.name !== "spawn_subagent" ||
       call.execution?.status !== "complete" ||
       call.execution.isError === true
     ) {
-      return false;
+      return [];
     }
-    const launch = JSON.stringify({ arguments: call.arguments, subagent: call.subagent });
-    return /"model"\s*:\s*"local:[^"]+"/u.test(launch);
+    const argumentConfig = call.arguments?.["config"];
+    const model = localModelRef(argumentConfig) ?? localModelRef(call.subagent?.launchConfig);
+    return model ? [{ runId: call.id, model }] : [];
   });
-  if (!localChild) {
+  if (localLaunches.length === 0) {
     return {
       passed: false,
       reason: "No completed subagent launch carried an exact local model reference",
+    };
+  }
+
+  const completed = localLaunches.flatMap((launch) => {
+    const task = result.messages.find(
+      (message) =>
+        message.task?.id === launch.runId &&
+        message.task.execution.status === "complete" &&
+        message.task.execution.terminalOutcome === "success" &&
+        message.task.execution.isError !== true &&
+        localModelRef(message.task.subagent?.launchConfig) === launch.model
+    )?.task;
+    if (!task) return [];
+    const report = strings(task.execution.result).join("\n");
+    const heading = report.match(FIXTURE_HEADING)?.[0];
+    return heading ? [{ heading }] : [];
+  });
+  if (completed.length === 0) {
+    return {
+      passed: false,
+      reason:
+        "The local-model subagent did not complete successfully with the disposable README heading",
+    };
+  }
+  const final = findLastAgentMessage(result);
+  if (!completed.some(({ heading }) => final.toLowerCase().includes(heading.toLowerCase()))) {
+    return {
+      passed: false,
+      reason: "The parent response did not report the heading observed by the local-model child",
     };
   }
   return noIncompleteInvocations(result);
