@@ -2,15 +2,16 @@ import * as fs from "node:fs";
 import { describe, expect, it } from "vitest";
 
 describe("onboarding skill template handoff", () => {
-  it("routes optional official outcomes through the canonical Templates workflow", () => {
-    const skill = fs.readFileSync(new URL("SKILL.md", import.meta.url), "utf8");
+  it("routes selected registry outcomes through Templates", () => {
+    const skill = fs
+      .readFileSync(new URL("SKILL.md", import.meta.url), "utf8")
+      .replace(/\s+/gu, " ");
 
-    expect(skill).toContain("current verified template\nregistry");
-    expect(skill).toContain("does not\nmaintain a second list of official repository URLs");
-    expect(skill).not.toContain("vibestudio-template-examples.git");
-    expect(skill).toContain("single reviewed `add` workflow");
-    expect(skill).toContain("`Review & add`");
+    expect(skill).toContain("Template-registry discovery is user-initiated");
     expect(skill).toContain("resolveOnboardingTemplateSelection");
-    expect(skill).toContain("Never\nguess a tag or commit");
+    expect(skill).toContain("exact registry-bound selection");
+    expect(skill).toContain("[Templates](../templates/SKILL.md)");
+    expect(skill).toContain("Templates remains the sole install/update path");
+    expect(skill).not.toContain("vibestudio-template-examples.git");
   });
 });

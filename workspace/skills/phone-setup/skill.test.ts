@@ -2,22 +2,21 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 describe("phone setup skill", () => {
-  it("documents the executable service boundary without inventing a skill package", () => {
-    const markdown = readFileSync(new URL("./SKILL.md", import.meta.url), "utf8");
+  it("routes provisioning through the live desktop service", () => {
+    const markdown = readFileSync(new URL("./SKILL.md", import.meta.url), "utf8").replace(
+      /\s+/gu,
+      " "
+    );
 
     expect(markdown).toContain('workers.resolveService("vibestudio.phone-provisioning.v1")');
-    expect(markdown).toContain("discovery.devices.filter");
-    expect(markdown).toContain("deviceId: ready[0].deviceId");
-    expect(markdown).toContain('extensions.invoke("mobile-debug", "listDevices", [])');
-    expect(markdown).toContain("do not try to map it from the");
-    expect(markdown).toMatch(/is\s+not an adb serial/u);
-    expect(markdown).toContain("Reuse `phone.targetId`");
-    expect(markdown).toContain("This skill is documentation, not an importable code package");
-    expect(markdown).toContain("no such runtime package exists");
-    expect(markdown).toContain("Do not add an eval-level `authority`");
-    expect(markdown).toContain('approvals: "pregranted-only"');
-    expect(markdown).toContain("Allow USB debugging?");
-    expect(markdown).toContain("Trust This Computer");
-    expect(markdown).toContain("Pairing timed out after delivery");
+    expect(markdown).toContain("open its live docs");
+    expect(markdown).toContain("Preserve returned provider and device IDs exactly");
+    expect(markdown).toContain("adb, Xcode, and the phone are attached to the user's desktop");
+    expect(markdown).toContain("Never expose a pairing secret");
+    expect(markdown).toContain("A hub device ID");
+    expect(markdown).toContain("adb serial");
+    expect(markdown).toContain("keep those identities separate");
+    expect(markdown).toContain("mobile-debug.verifyWorkspaceReady");
+    expect(markdown).toContain("shell's Devices surface");
   });
 });
