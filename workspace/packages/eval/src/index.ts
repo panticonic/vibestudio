@@ -33,6 +33,7 @@ export {
   compileModule,
 } from "./sandbox.js";
 export type {
+  SandboxImportLoader,
   SandboxOptions,
   SandboxResult,
   CompileResult,

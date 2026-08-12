@@ -15,7 +15,6 @@ export type {
   ToolProvider,
   ToolProviderDeps,
   ChatSandboxValue,
-  SandboxConfig,
   ChatContextValue,
   ChatInputContextValue,
   PrimaryActionIntent,
@@ -42,12 +41,13 @@ export { useAgenticChat } from "./hooks/useAgenticChat";
 export type { UseAgenticChatOptions } from "./hooks/useAgenticChat";
 export type { UseAgenticChatResult } from "./hooks/useAgenticChat";
 export {
-  AGENTIC_CHAT_UI_FEATURES,
-  DEFAULT_AGENTIC_CHAT_UI_FEATURES,
-  resolveAgenticChatUiFeatures,
+  AGENTIC_CHAT_FEATURES,
+  FULL_AGENTIC_CHAT_FEATURES,
+  composeAgenticChatMethods,
+  resolveAgenticChatFeatures,
   selectAgenticChatTranscriptMessages,
 } from "./features";
-export type { AgenticChatUiFeature, ResolvedAgenticChatUiFeatures } from "./features";
+export type { AgenticChatFeature, ResolvedAgenticChatFeatures } from "./features";
 export { useChannelSignals } from "./hooks/useChannelSignals";
 export type { ChannelSignal, UseChannelSignalsOptions } from "./hooks/useChannelSignals";
 

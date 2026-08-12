@@ -29,7 +29,7 @@ vi.mock("@workspace/tool-ui", () => ({
 
 import { useAgenticChat } from "./useAgenticChat";
 import type { ChatContextValue, ConnectionConfig } from "../types";
-import type { AgenticChatUiFeature } from "../features";
+import { FULL_AGENTIC_CHAT_FEATURES, type AgenticChatFeature } from "../features";
 
 function createClient(
   channelConfig: { title?: string; titleExplicit?: boolean } = {}
@@ -67,21 +67,24 @@ function createRpcCall() {
 function Probe({
   config,
   onContext,
-  uiFeatures,
+  features = FULL_AGENTIC_CHAT_FEATURES,
+  loadDynamicImports = true,
 }: {
   config: ConnectionConfig;
   onContext?: (value: ChatContextValue) => void;
-  uiFeatures?: readonly AgenticChatUiFeature[];
+  features?: readonly AgenticChatFeature[];
+  loadDynamicImports?: boolean;
 }) {
   const { contextValue } = useAgenticChat({
     config,
     channelName: "chat-title-test",
     metadata: { name: "Chat Panel", type: "panel", handle: "alice" },
-    sandbox: {
-      rpc: config.rpc,
-      loadImport: vi.fn(async () => ({ bundle: "", format: "cjs" as const })),
-    },
-    uiFeatures,
+    ...(loadDynamicImports
+      ? {
+          importLoader: vi.fn(async () => ({ bundle: "", format: "cjs" as const })),
+        }
+      : {}),
+    features,
   });
   onContext?.(contextValue);
   return null;
@@ -164,7 +167,7 @@ describe("useAgenticChat set_title", () => {
     unmount();
   });
 
-  it("advertises the existing full UI method surface by default", async () => {
+  it("advertises the explicit full feature surface", async () => {
     const client = createClient();
     let methods: Record<string, MethodDefinition> | undefined;
     pubsubMock.connectViaRpc.mockImplementation(
@@ -194,13 +197,14 @@ describe("useAgenticChat set_title", () => {
         "ui_prompt",
         "inline_ui",
         "load_action_bar",
+        "client_eval",
       ])
     );
 
     unmount();
   });
 
-  it("does not advertise browser-owned UI methods when no UI features are selected", async () => {
+  it("does not advertise feature-owned methods when no features are selected", async () => {
     const client = createClient();
     let methods: Record<string, MethodDefinition> | undefined;
     pubsubMock.connectViaRpc.mockImplementation(
@@ -219,10 +223,9 @@ describe("useAgenticChat set_title", () => {
       },
     };
 
-    const { unmount } = render(<Probe config={config} uiFeatures={[]} />);
+    const { unmount } = render(<Probe config={config} features={[]} loadDynamicImports={false} />);
 
     await waitFor(() => expect(methods).toBeDefined());
-    expect(methods?.["client_eval"]).toBeDefined();
     for (const name of [
       "feedback_form",
       "feedback_custom",
@@ -230,6 +233,7 @@ describe("useAgenticChat set_title", () => {
       "ui_prompt",
       "inline_ui",
       "load_action_bar",
+      "client_eval",
     ]) {
       expect(methods?.[name]).toBeUndefined();
     }

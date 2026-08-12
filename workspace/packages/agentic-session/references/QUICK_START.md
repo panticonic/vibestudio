@@ -26,6 +26,7 @@ await session.close();
 ```
 
 This automatically:
+
 - Creates a unique channel and subscribes the DO agent
 - Configures full-auto approval (no human in the loop)
 - Projects the durable channel title into the session report
@@ -85,7 +86,9 @@ const manager = new ConnectionManager({
 
 const client = await manager.connect({
   channelId: "existing-channel",
-  methods: { /* your custom methods */ },
+  methods: {
+    /* your custom methods */
+  },
   contextId,
 });
 
@@ -126,16 +129,6 @@ const session = await HeadlessSession.createWithAgent({
 });
 ```
 
-## SandboxConfig Factories (optional)
-
-A `SandboxConfig` is only needed if you want the session's local chat-sandbox
-helpers; it is **not** required for the agent's `eval`, which runs server-side in
-the agent's `EvalDO`.
-
-| Factory | Context |
-|---------|---------|
-| `createPanelSandboxConfig(rpc)` | Panel (browser) |
-
-It provides an `rpc` bridge and routes `loadImport` through `build.getBuild` /
-`build.getBuildNpm` RPC calls. Non-panel contexts (worker/DO/Node) need no
-SandboxConfig — the agent's `eval` runs server-side in its `EvalDO`.
+Headless sessions require no browser sandbox or import loader. The agent's
+`eval` runs server-side in its `EvalDO`; build-backed panel import loading is a
+separate browser capability owned by `@workspace/agentic-chat` hosts.

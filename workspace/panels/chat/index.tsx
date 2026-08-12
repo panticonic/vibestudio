@@ -25,6 +25,7 @@ import { usePanelTheme, usePanelThemeConfig } from "@workspace/react/theme";
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Button, Callout, Flex, Spinner, Text, Theme } from "@radix-ui/themes";
 import { ErrorBoundary } from "@workspace/agentic-chat/error-boundary";
+import { FULL_AGENTIC_CHAT_FEATURES } from "@workspace/agentic-chat/features";
 import type {
   ConnectionConfig,
   AgenticChatActions,
@@ -34,7 +35,7 @@ import type {
 import "@workspace/ui/foundation.css";
 import "@workspace/ui/themes/vibestudio.css";
 import { unsubscribeAgentFromChannel } from "@workspace/agentic-core/agent-launch";
-import { createPanelSandboxConfig } from "@workspace/agentic-core/sandbox-factory";
+import { createPanelImportLoader } from "@workspace/agentic-core/panel-import-loader";
 import type {
   AvailableAgent,
   ModelCatalog,
@@ -1313,8 +1314,7 @@ export default function ChatPanel() {
     [handleForkSwitch, handleOpenForkPanel, readForkCursors, markForkRead, handleExternalFork]
   );
 
-  // Sandbox config — provides RPC and import loading to agentic-chat.
-  const sandboxConfig = useMemo(() => createPanelSandboxConfig(rpc), []);
+  const importLoader = useMemo(() => createPanelImportLoader(rpc), []);
 
   const panelMetadata = useMemo(
     () => ({
@@ -1407,7 +1407,8 @@ export default function ChatPanel() {
           initialPrompt={initialPromptCaptured.current}
           forceInitialPrompt={stateArgs.forceInitialPrompt}
           forkNav={forkNav}
-          sandbox={sandboxConfig}
+          features={FULL_AGENTIC_CHAT_FEATURES}
+          importLoader={importLoader}
           initialActionBarFile={stateArgs.actionBarFile ?? undefined}
           initialActionBarProps={stateArgs.actionBarProps ?? undefined}
           initialActionBarMaxHeight={stateArgs.actionBarMaxHeight ?? undefined}

@@ -51,10 +51,7 @@ function method(
     manager,
     executeSandbox,
     definition: buildClientEvalMethod({
-      sandbox: {
-        rpc: { call: vi.fn(async () => undefined) },
-        loadImport: vi.fn(async () => ({ bundle: "", format: "cjs" as const })),
-      },
+      importLoader: vi.fn(async () => ({ bundle: "", format: "cjs" as const })),
       executeSandbox,
       loadSourceFile:
         overrides.loadSourceFile ??

@@ -6,7 +6,7 @@
 @workspace/agentic-core          ← shared business logic, no React
   - typed agentic event → ChannelViewState reducer
   - ChannelViewState → ChatMessage / InvocationCard / ApprovalCard / InlineUiCard selectors
-  - connection primitives and sandbox factories
+  - connection primitives and the panel import-loader factory
   - types: ChatMessage, ChatParticipantMetadata, ConnectionConfig, etc.
 
 @workspace/agentic-chat          ← thin React adapter
@@ -25,9 +25,7 @@
   - Uses the same agent worker prompt and tool surface as panel sessions;
     UI tools naturally drop out because no panel is advertising them.
   - The agent's `eval` runs server-side in its own per-channel EvalDO, so it
-    works with no panel and no session-side sandbox. The optional SandboxConfig
-    here only backs local chat-sandbox helpers (e.g. callMethod), not the
-    agent's eval.
+    works with no panel and needs no session-side sandbox.
 ```
 
 ## What Lives Where
@@ -40,8 +38,8 @@
 - `TypedEmitter` — lightweight typed event emitter
 - `chatMessagesFromChannelView` — single selector that projects messages,
   invocation cards, inline UI, and related transcript models
-- Headless-safe types: `ChatMessage`, `ChatParticipantMetadata`, `ConnectionConfig`, `SandboxConfig`, `ToolProviderDeps`, etc.
-- `createPanelSandboxConfig(rpc)` — panel SandboxConfig factory
+- Headless-safe types: `ChatMessage`, `ChatParticipantMetadata`, `ConnectionConfig`, `ToolProviderDeps`, etc.
+- `createPanelImportLoader(rpc)` — build-backed dynamic import loader for panel-authored UI/eval
 
 **agentic-session** (no React, no browser APIs):
 
@@ -58,13 +56,14 @@
 
 ## Composing browser-owned surfaces
 
-`AgenticChat` keeps its existing full UI by default. A host that needs a
-smaller product or game surface selects the browser-owned capabilities for the
-participant's lifetime:
+Every `AgenticChat` host explicitly selects its browser-owned capabilities for
+the participant's lifetime. Conventional chat hosts use
+`FULL_AGENTIC_CHAT_FEATURES`; smaller products and games select only what they
+present:
 
 ```tsx
 <AgenticChat
-  uiFeatures={["feedback"]}
+  features={["feedback"]}
   renderInvocation={({ payload }, defaultContent) =>
     payload.name === "game_action" ? <GameMove payload={payload} /> : defaultContent
   }
@@ -77,8 +76,11 @@ The selection is a capability boundary, not a CSS visibility switch. Omitting
 Omitting `inline-ui` removes `inline_ui`, skips component compilation, and
 hides historical inline-UI cards from the stock transcript. Omitting
 `action-bar` similarly removes `load_action_bar` and its stock presentation.
-Pass `uiFeatures={[]}` for none of these browser-owned surfaces. Remount the
+Omitting `client-eval` removes `client_eval`. Pass `features={[]}` for none of
+these browser-owned capabilities. Remount the
 participant to change the selection because channel methods are fixed at join.
+Supply `importLoader={createPanelImportLoader(rpc)}` only when authored UI or
+client evaluation needs build-backed dynamic package loading.
 
 `renderInvocation` can replace, wrap, or return `null` for each invocation; its
 second argument is the complete default renderer. `renderMessage` and
@@ -158,6 +160,4 @@ synchronous in-DO SQLite `db`) in its own storage and survives across turns
 regardless of whether any panel or headless session is connected.
 
 Because of this, HeadlessSession registers no `eval` method and creates no scope
-manager — there is nothing scope-related for it to persist on teardown. The
-optional `SandboxConfig` passed to a session only backs local chat-sandbox
-helpers (e.g. `callMethod`); it is not what gives the agent eval.
+manager — there is nothing scope-related for it to persist on teardown.

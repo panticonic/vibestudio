@@ -1,7 +1,12 @@
 import { z } from "zod";
-import type { SandboxOptions, SandboxResult, ScopeManager } from "@workspace/eval";
+import type {
+  SandboxImportLoader,
+  SandboxOptions,
+  SandboxResult,
+  ScopeManager,
+} from "@workspace/eval";
 import type { MethodDefinition, MethodExecutionContext } from "@workspace/pubsub";
-import type { ChatSandboxValue, SandboxConfig } from "../../types";
+import type { ChatSandboxValue } from "../../types";
 
 const MAX_RESULT_CHARS = 100_000;
 const PREVIEW_CHARS = 20_000;
@@ -9,7 +14,7 @@ const LAST_RETURN_KEY = "$lastClientEvalReturn";
 const LAST_CONSOLE_KEY = "$lastClientEvalConsole";
 
 export interface ClientEvalDependencies {
-  sandbox: SandboxConfig;
+  importLoader?: SandboxImportLoader;
   executeSandbox: (code: string, options?: SandboxOptions) => Promise<SandboxResult>;
   loadSourceFile: (path: string) => Promise<string>;
   getChat: () => ChatSandboxValue;
@@ -224,7 +229,7 @@ APIs and workspace packages with static imports. \`return\` sends a value back;
             ? { deadline: { atMs: Date.now() + args.timeoutMs, timeoutMs: args.timeoutMs } }
             : {}),
           imports: args.imports,
-          loadImport: dependencies.sandbox.loadImport,
+          ...(dependencies.importLoader ? { loadImport: dependencies.importLoader } : {}),
           sourcePath: path ?? args.sourcePath,
           loadSourceFile: path || args.sourcePath ? dependencies.loadSourceFile : undefined,
           bindings: {

@@ -30,7 +30,7 @@ export interface ChatProviderProps {
  * ```tsx
  * const { contextValue, inputContextValue } = useAgenticChat({ config, channelName, tools });
  * <ChatProvider value={contextValue} inputValue={inputContextValue}>
- *   <ChatLayout />
+ *   <ChatLayout features={features} />
  * </ChatProvider>
  * ```
  */
@@ -42,12 +42,7 @@ export function ChatProvider({ value, inputValue, children }: ChatProviderProps)
       onNewConversation: value.onNewConversation,
       childTranscript: value.childTranscript,
     }),
-    [
-      value.editPendingMessage,
-      value.forkState,
-      value.onNewConversation,
-      value.childTranscript,
-    ]
+    [value.editPendingMessage, value.forkState, value.onNewConversation, value.childTranscript]
   );
   const composerRuntime = useMemo<ChatComposerRuntimeValue>(
     () => ({

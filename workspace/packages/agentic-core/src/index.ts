@@ -6,7 +6,7 @@
 // package provides:
 // - Pi message/event type re-exports (single import surface for consumers)
 // - The signal event envelope used by transient structured channel payloads
-// - The sandbox config factory
+// - The panel import loader factory
 // - Connection management primitives
 // =============================================================================
 
@@ -23,7 +23,6 @@ export type {
   ConnectProviderResult,
   ModelSetupResult,
   ChatSandboxValue,
-  SandboxConfig,
   ToolProviderDeps,
   ToolProvider,
   NewConversationOptions,
@@ -99,8 +98,8 @@ export { TypedEmitter } from "./emitter.js";
 export { ConnectionManager } from "./connection.js";
 export type { ConnectionStatus, ClientParticipantMetadata } from "./connection.js";
 
-// --- SandboxConfig Factories ---
-export { createPanelSandboxConfig } from "./sandbox-factory.js";
+// --- Panel dynamic import loading ---
+export { createPanelImportLoader } from "./panel-import-loader.js";
 
 // --- Signal Event Envelope (typed structured channel payloads) ---
 export { parseSignalEvent } from "./signal-event-envelope.js";

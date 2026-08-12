@@ -1,4 +1,5 @@
 import { scheduleBackgroundStages } from "./scheduleBackgroundWork";
+import type { ResolvedAgenticChatFeatures } from "../features";
 
 async function preloadStage(label: string, imports: Array<Promise<unknown>>): Promise<void> {
   const results = await Promise.allSettled(imports);
@@ -8,14 +9,15 @@ async function preloadStage(label: string, imports: Array<Promise<unknown>>): Pr
   }
 }
 
-function preloadInteractiveSurfaces(): Promise<void> {
-  return preloadStage("interactive surfaces", [
+function preloadInteractiveSurfaces(features: ResolvedAgenticChatFeatures): Promise<void> {
+  const imports: Array<Promise<unknown>> = [
     import("../components/RichMessageContent"),
     import("../components/AgentDialog"),
-    import("../components/ChatActionBar"),
-    import("../components/ChatFeedbackArea"),
     import("../components/AgentDebugConsole"),
-  ]);
+  ];
+  if (features.actionBar) imports.push(import("../components/ChatActionBar"));
+  if (features.feedback) imports.push(import("../components/ChatFeedbackArea"));
+  return preloadStage("interactive surfaces", imports);
 }
 
 function preloadHeavyToolchains(): Promise<void> {
@@ -38,9 +40,9 @@ function preloadHeavyToolchains(): Promise<void> {
  * use should find them in the module cache instead of paying a first-use
  * network and parse pause.
  */
-export function scheduleChatCapabilityWarmup(): () => void {
+export function scheduleChatCapabilityWarmup(features: ResolvedAgenticChatFeatures): () => void {
   return scheduleBackgroundStages(
-    [preloadInteractiveSurfaces, preloadHeavyToolchains],
+    [() => preloadInteractiveSurfaces(features), preloadHeavyToolchains],
     (error, stage) => {
       console.debug(`[AgenticChat] Background warmup stage ${stage + 1} failed`, error);
     }

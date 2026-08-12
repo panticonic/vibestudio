@@ -11,7 +11,7 @@ import { PendingDeliveryQueue } from "./PendingDeliveryQueue";
 import { ChatInput } from "./ChatInput";
 import { ChatDebugConsole } from "./ChatDebugConsole";
 import type { ChatMessageAreaProps } from "./ChatMessageArea";
-import { DEFAULT_AGENTIC_CHAT_UI_FEATURES, type ResolvedAgenticChatUiFeatures } from "../features";
+import type { ResolvedAgenticChatFeatures } from "../features";
 import "../styles.css";
 
 export interface ChatLayoutProps extends Pick<
@@ -19,7 +19,7 @@ export interface ChatLayoutProps extends Pick<
   "renderMessage" | "renderInlineGroup" | "renderInvocation"
 > {
   /** Resolved browser-owned capabilities to mount in the stock layout. */
-  uiFeatures?: ResolvedAgenticChatUiFeatures;
+  features: ResolvedAgenticChatFeatures;
 }
 
 /**
@@ -36,7 +36,7 @@ export interface ChatLayoutProps extends Pick<
  * ```tsx
  * <ChatProvider value={chatState}>
  *   <MyCustomHeader />
- *   <ChatMessageArea />
+ *   <ChatMessageArea features={features} />
  *   <ChatInput />
  * </ChatProvider>
  * ```
@@ -45,7 +45,7 @@ export const ChatLayout = React.memo(function ChatLayout({
   renderMessage,
   renderInlineGroup,
   renderInvocation,
-  uiFeatures = DEFAULT_AGENTIC_CHAT_UI_FEATURES,
+  features,
 }: ChatLayoutProps) {
   return (
     <>
@@ -67,14 +67,14 @@ export const ChatLayout = React.memo(function ChatLayout({
         <ChatHeader />
         <ChatConnectionErrorBanner />
         <ChatDirtyRepoWarnings />
-        {uiFeatures.actionBar ? <LazyChatActionBar /> : null}
+        {features.actionBar ? <LazyChatActionBar /> : null}
         <ChatMessageArea
           renderMessage={renderMessage}
           renderInlineGroup={renderInlineGroup}
           renderInvocation={renderInvocation}
-          uiFeatures={uiFeatures}
+          features={features}
         />
-        {uiFeatures.feedback ? <LazyChatFeedbackArea /> : null}
+        {features.feedback ? <LazyChatFeedbackArea /> : null}
         <PendingDeliveryQueue />
         <Outbox />
         <ChatInput />

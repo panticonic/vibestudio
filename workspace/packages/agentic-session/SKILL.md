@@ -17,19 +17,19 @@ method or keep a sandbox alive for the agent to evaluate code.
 
 ## Files
 
-| Document | Content |
-|----------|---------|
+| Document                                                 | Content                                                                |
+| -------------------------------------------------------- | ---------------------------------------------------------------------- |
 | [references/ARCHITECTURE.md](references/ARCHITECTURE.md) | Package layout, ConnectionManager vs HeadlessSession, what lives where |
-| [references/QUICK_START.md](references/QUICK_START.md) | Getting started: create a session, send messages, drive an agent |
-| [references/API.md](references/API.md) | Full API reference for HeadlessSession |
+| [references/QUICK_START.md](references/QUICK_START.md)   | Getting started: create a session, send messages, drive an agent       |
+| [references/API.md](references/API.md)                   | Full API reference for HeadlessSession                                 |
 
 ## Packages
 
-| Package | Purpose | React? |
-|---------|---------|--------|
-| `@workspace/agentic-core` | ConnectionManager, types, pure functions, channel-view reducer/selectors, panel SandboxConfig factory | No |
-| `@workspace/agentic-session` | HeadlessSession, channel helpers, RPC sandbox factory | No |
-| `@workspace/agentic-chat` | React adapter (useChatCore, useAgenticChat) | Yes |
+| Package                      | Purpose                                                                                               | React? |
+| ---------------------------- | ----------------------------------------------------------------------------------------------------- | ------ |
+| `@workspace/agentic-core`    | ConnectionManager, types, pure functions, channel-view reducer/selectors, panel import-loader factory | No     |
+| `@workspace/agentic-session` | HeadlessSession and channel helpers                                                                   | No     |
+| `@workspace/agentic-chat`    | React adapter (useChatCore, useAgenticChat)                                                           | Yes    |
 
 ## When to Use What
 
@@ -50,15 +50,15 @@ Object, set `config.clientId` to `rpc.selfId`. That value is the authorized
 PubSub participant id for connectionless runtime callers; arbitrary labels are
 rejected when the session subscribes to the channel.
 
-| Capability | Panel | Headless |
-|------------|-------|----------|
-| eval | Yes | Yes — runs server-side in the agent's EvalDO; no panel/sandbox needed |
-| scope / db persistence | Yes | Yes — held in the agent's EvalDO, not the session |
-| set_title | Yes | Yes |
-| inline_ui | Yes | No — no panel to render the component |
-| load_action_bar | Yes | No — no panel-local top bar to render |
-| feedback_form / feedback_custom | Yes | No — no panel to render the form |
-| Tool approval UI | Yes | No — headless uses full-auto approval |
+| Capability                      | Panel | Headless                                                              |
+| ------------------------------- | ----- | --------------------------------------------------------------------- |
+| eval                            | Yes   | Yes — runs server-side in the agent's EvalDO; no panel/sandbox needed |
+| scope / db persistence          | Yes   | Yes — held in the agent's EvalDO, not the session                     |
+| set_title                       | Yes   | Yes                                                                   |
+| inline_ui                       | Yes   | No — no panel to render the component                                 |
+| load_action_bar                 | Yes   | No — no panel-local top bar to render                                 |
+| feedback_form / feedback_custom | Yes   | No — no panel to render the form                                      |
+| Tool approval UI                | Yes   | No — headless uses full-auto approval                                 |
 
 `eval` and its persistent `scope`/`db` are agent-worker capabilities, not session
 capabilities: the agent runs eval in its own per-channel `EvalDO` server-side, so

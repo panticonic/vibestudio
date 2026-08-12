@@ -7,7 +7,7 @@
     ".": "./src/index.ts",
     "./agent-launch": "./src/agent-launch.ts",
     "./provisional-agent-lifecycle": "./src/provisional-agent-lifecycle.ts",
-    "./sandbox-factory": "./src/sandbox-factory.ts",
+    "./panel-import-loader": "./src/panel-import-loader.ts",
     "./subagent-prompt": "./src/subagent-prompt.ts"
   },
   "dependencies": {

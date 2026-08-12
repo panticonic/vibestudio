@@ -17,12 +17,16 @@ import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient"
 import { fsMethods } from "@vibestudio/service-schemas/fs";
 import type {
   ChannelConfig,
-  MethodDefinition,
   MethodExecutionContext,
   PubSubClient,
 } from "@workspace/pubsub";
 import { ScopeManager } from "@workspace/eval/scope";
-import type { SandboxOptions, SandboxResult, ScopeBlobBackend } from "@workspace/eval";
+import type {
+  SandboxImportLoader,
+  SandboxOptions,
+  SandboxResult,
+  ScopeBlobBackend,
+} from "@workspace/eval";
 import type { ActiveFeedbackSchema, FeedbackResult } from "@workspace/tool-ui";
 import {
   AGENTIC_EVENT_PAYLOAD_KIND,
@@ -35,6 +39,7 @@ import { useForkLineage } from "./useForkLineage";
 import { useDeferredAgent } from "./useDeferredAgent";
 import { useChatFeedback } from "./features/useChatFeedback";
 import { useChatTools } from "./features/useChatTools";
+import { buildClientEvalMethod } from "./features/clientEval";
 import { useChatDebug } from "./features/useChatDebug";
 import { useInlineUi } from "./features/useInlineUi";
 import { useActionBar } from "./features/useActionBar";
@@ -43,7 +48,6 @@ import type {
   ConnectionConfig,
   AgenticChatActions,
   ToolProvider,
-  SandboxConfig,
   ChatSandboxValue,
   ChatParticipantMetadata,
   ClientParticipantMetadata,
@@ -66,10 +70,10 @@ import { scheduleBackgroundWork } from "../utils/scheduleBackgroundWork";
 import { sendSandboxText, type SandboxSendOptions } from "./sandboxSend";
 import { connectionRetryDelayMs, isTransientConnectionFailure } from "./connectionRetry";
 import {
-  resolveAgenticChatUiFeatures,
-  selectAgenticChatMethods,
-  type AgenticChatUiFeature,
-  type ResolvedAgenticChatUiFeatures,
+  composeAgenticChatMethods,
+  resolveAgenticChatFeatures,
+  type AgenticChatFeature,
+  type ResolvedAgenticChatFeatures,
 } from "../features";
 
 const NO_INLINE_UI_MESSAGES: ChatContextValue["messages"] = [];
@@ -191,8 +195,8 @@ export interface UseAgenticChatOptions {
   /** Panel-supplied fork navigation + review overlay handlers (enables the fork
    *  switcher, inline fork rows, and subagent review). Absent ⇒ no fork UI. */
   forkNav?: ForkNavHandlers;
-  /** Sandbox config — provides RPC and import loading (keeps agentic-chat runtime-agnostic) */
-  sandbox: SandboxConfig;
+  /** Optional build-backed loader for imports used by authored UI and client evaluation. */
+  importLoader?: SandboxImportLoader;
   /** Context-relative TSX file to load into the panel-local action bar on mount */
   initialActionBarFile?: string;
   /** Props for initialActionBarFile */
@@ -208,17 +212,16 @@ export interface UseAgenticChatOptions {
   /** Changes when the host resolves a workspace review that blocked connection. */
   connectionRetrySignal?: number;
   /**
-   * Browser-owned UI capabilities exposed by this participant. Omit for the
-   * full default surface; pass an empty array for a conversation with none.
-   * Fixed for the lifetime of the mounted participant.
+   * Browser-owned capabilities exposed by this participant. Explicit and fixed
+   * for the lifetime of the mounted participant.
    */
-  uiFeatures?: readonly AgenticChatUiFeature[];
+  features: readonly AgenticChatFeature[];
 }
 
 export interface UseAgenticChatResult {
   contextValue: ChatContextValue;
   inputContextValue: ChatInputContextValue;
-  uiFeatures: ResolvedAgenticChatUiFeatures;
+  features: ResolvedAgenticChatFeatures;
 }
 
 export function useAgenticChat({
@@ -238,22 +241,19 @@ export function useAgenticChat({
   initialPrompt,
   forceInitialPrompt,
   forkNav,
-  sandbox,
+  importLoader,
   initialActionBarFile,
   initialActionBarProps,
   initialActionBarMaxHeight,
   onActionBarFileChange,
   connectionRetrySignal,
-  uiFeatures: requestedUiFeatures,
+  features: requestedFeatures,
 }: UseAgenticChatOptions): UseAgenticChatResult {
-  const [uiFeatures] = useState(() => resolveAgenticChatUiFeatures(requestedUiFeatures));
+  const [features] = useState(() => resolveAgenticChatFeatures(requestedFeatures));
   const metadata = useMemo<ClientParticipantMetadata>(
     () => metadataOption ?? { name: channelName, type: "panel" },
     [channelName, metadataOption]
   );
-  // --- Sandbox config ref (stable access in callbacks) ---
-  const sandboxRef = useRef(sandbox);
-  sandboxRef.current = sandbox;
   // --- Core (durable channel trajectory events -> transcript view model) ---
   // Agent-managing hosts route initialPrompt through the deferred pre-send queue
   // below so it waits for the first agent. Hosts without onAddAgent keep the
@@ -291,16 +291,14 @@ export function useAgenticChat({
   const scopeBlobBackend = useMemo<ScopeBlobBackend>(
     () => ({
       putText: (valueJson: string) =>
-        sandboxRef.current.rpc.call("main", "blobstore.putText", [valueJson]) as Promise<{
+        config.rpc.call("main", "blobstore.putText", [valueJson]) as Promise<{
           digest: string;
           size: number;
         }>,
       getText: (digest: string) =>
-        sandboxRef.current.rpc.call("main", "blobstore.getText", [digest]) as Promise<
-          string | null
-        >,
+        config.rpc.call("main", "blobstore.getText", [digest]) as Promise<string | null>,
     }),
-    []
+    [config.rpc]
   );
   const scopeManager = useMemo(
     () =>
@@ -545,34 +543,33 @@ export function useAgenticChat({
       },
       contextId: contextId ?? "",
       channelId: channelName,
-      rpc: sandbox.rpc,
+      rpc: config.rpc,
     }),
-    [contextId, channelName, sandbox.rpc, core.clientRef, metadata, publishTypedAgenticEvent]
+    [contextId, channelName, config.rpc, core.clientRef, metadata, publishTypedAgenticEvent]
   );
-  // --- Bound executeSandbox with loadImport wired ---
+  // --- Bound executeSandbox with optional host import loading wired ---
   const boundExecuteSandbox = useCallback(
     async (code: string, opts: SandboxOptions = {}): Promise<SandboxResult> => {
       const { executeSandbox } = await import("@workspace/eval/sandbox");
       return executeSandbox(code, {
         ...opts,
-        loadImport: opts.loadImport ?? sandboxRef.current.loadImport,
+        ...(opts.loadImport || !importLoader ? {} : { loadImport: importLoader }),
       });
     },
-    []
+    [importLoader]
   );
-  const loadSourceFile = useCallback(async (path: string) => {
-    const fsClient = createTypedServiceClient("fs", fsMethods, (svc, method, args) =>
-      sandboxRef.current.rpc.call("main", `${svc}.${method}`, args)
-    );
-    return (await fsClient.readFile(path, "utf8")) as string;
-  }, []);
-  const loadImport = useCallback<NonNullable<SandboxOptions["loadImport"]>>(
-    (specifier, ref, externals) => sandboxRef.current.loadImport(specifier, ref, externals),
-    []
+  const loadSourceFile = useCallback(
+    async (path: string) => {
+      const fsClient = createTypedServiceClient("fs", fsMethods, (service, method, args) =>
+        config.rpc.call("main", `${service}.${method}`, args)
+      );
+      return (await fsClient.readFile(path, "utf8")) as string;
+    },
+    [config.rpc]
   );
   const feedback = useChatFeedback({
     chat,
-    loadImport,
+    loadImport: importLoader,
     clientRef: core.clientRef,
     connected: core.connected,
   });
@@ -581,33 +578,31 @@ export function useAgenticChat({
     tools,
     contextId: contextId ?? "",
     executeSandbox: boundExecuteSandbox,
-    sandbox,
-    loadSourceFile,
     chat,
     scopeManager,
   });
   const debug = useChatDebug();
   const inlineUi = useInlineUi({
-    messages: uiFeatures.inlineUi ? core.messages : NO_INLINE_UI_MESSAGES,
+    messages: features.inlineUi ? core.messages : NO_INLINE_UI_MESSAGES,
     loadSourceFile,
-    loadImport,
+    loadImport: importLoader,
   });
   const messageTypes = useMessageTypeRegistry({
     client: core.client,
     messages: core.messages,
     definitions: core.messageTypes,
     loadSourceFile,
-    loadImport,
+    loadImport: importLoader,
   });
   const [actionBarData, setActionBarData] = useState<ActionBarData | null>(null);
   const actionBar = useActionBar({
-    data: uiFeatures.actionBar ? actionBarData : null,
+    data: features.actionBar ? actionBarData : null,
     loadSourceFile,
-    loadImport,
+    loadImport: importLoader,
   });
   const lastLoadedActionBarKeyRef = useRef<string | null>(null);
   useEffect(() => {
-    if (!uiFeatures.actionBar) return;
+    if (!features.actionBar) return;
     const canonical = core.canonicalActionBar;
     if (!canonical?.source) return;
     const next: ActionBarData = {
@@ -625,7 +620,7 @@ export function useAgenticChat({
         canonical.maxHeight
       );
     }
-  }, [core.canonicalActionBar, uiFeatures.actionBar]);
+  }, [core.canonicalActionBar, features.actionBar]);
   const publishActionBarContext = useCallback(
     async (
       action: "loaded" | "cleared",
@@ -774,7 +769,7 @@ export function useAgenticChat({
     [onActionBarFileChange]
   );
   useEffect(() => {
-    if (!uiFeatures.actionBar || !core.connected || !initialActionBarFile) return;
+    if (!features.actionBar || !core.connected || !initialActionBarFile) return;
     const loadKey = actionBarLoadKey(
       initialActionBarFile,
       initialActionBarProps,
@@ -799,7 +794,7 @@ export function useAgenticChat({
     initialActionBarProps,
     initialActionBarMaxHeight,
     loadActionBarFromFile,
-    uiFeatures.actionBar,
+    features.actionBar,
   ]);
   // --- Stable refs for connection effect (avoids unstable object deps) ---
   const feedbackRef = useRef(feedback);
@@ -829,141 +824,153 @@ export function useAgenticChat({
       let transientAttempt = 0;
       for (;;) {
         try {
-          const feedbackMethods = feedbackRef.current.buildFeedbackMethods();
           const toolMethods = chatToolsRef.current.buildToolMethods();
-          const availableMethods: Record<string, MethodDefinition> = {
-            ...feedbackMethods,
-            ...toolMethods,
-            confirm: {
-              description: "Ask the user to approve or deny a requested agent action.",
-              parameters: z
-                .object({
-                  question: z.string(),
-                  details: z.unknown().optional(),
-                })
-                .passthrough(),
-              execute: async (args: unknown, ctx: MethodExecutionContext) => {
-                const input = args as { question?: unknown; details?: unknown };
-                const question =
-                  typeof input.question === "string" && input.question.trim()
-                    ? input.question
-                    : "Allow this action?";
-                if (typeof document === "undefined" || !document.hasFocus()) {
-                  actionsRef.current?.onAttentionRequired?.("Chat needs your approval", question);
-                }
-                const fb = feedbackRef.current;
-                return new Promise<{ granted: boolean; details?: unknown }>((resolve) => {
-                  let settled = false;
-                  const finish = (granted: boolean) => {
-                    if (settled) return;
-                    settled = true;
-                    fb.removeFeedback(ctx.callId);
-                    resolve({ granted, details: input.details });
-                  };
-                  fb.addFeedback({
-                    type: "schema",
-                    callId: ctx.callId,
-                    title: question,
-                    fields: [
-                      ...(input.details
-                        ? ([
-                            {
-                              key: "__details",
-                              type: "readonly",
-                              label: "Details",
-                              default:
-                                typeof input.details === "string"
-                                  ? input.details
-                                  : JSON.stringify(input.details, null, 2),
-                            },
-                          ] as ActiveFeedbackSchema["fields"])
-                        : []),
-                      {
-                        key: "approval",
-                        type: "buttonGroup",
-                        submitOnSelect: true,
-                        buttons: [
-                          { value: "deny", label: "Deny", color: "gray" },
-                          { value: "allow", label: "Allow", color: "green" },
-                        ],
-                      },
-                    ],
-                    values: {},
-                    hideSubmit: true,
-                    dismissible: false,
-                    createdAt: Date.now(),
-                    complete: (result: FeedbackResult) => {
-                      if (result.type === "submit") {
-                        const values = (result.value ?? {}) as Record<string, unknown>;
-                        finish(values["approval"] === "allow");
-                      } else {
-                        finish(false);
+          const methods = composeAgenticChatMethods(
+            toolMethods,
+            features.feedback
+              ? {
+                  ...feedbackRef.current.buildFeedbackMethods(),
+                  confirm: {
+                    description: "Ask the user to approve or deny a requested agent action.",
+                    parameters: z
+                      .object({
+                        question: z.string(),
+                        details: z.unknown().optional(),
+                      })
+                      .passthrough(),
+                    execute: async (args: unknown, ctx: MethodExecutionContext) => {
+                      const input = args as { question?: unknown; details?: unknown };
+                      const question =
+                        typeof input.question === "string" && input.question.trim()
+                          ? input.question
+                          : "Allow this action?";
+                      if (typeof document === "undefined" || !document.hasFocus()) {
+                        actionsRef.current?.onAttentionRequired?.(
+                          "Chat needs your approval",
+                          question
+                        );
                       }
+                      const fb = feedbackRef.current;
+                      return new Promise<{ granted: boolean; details?: unknown }>((resolve) => {
+                        let settled = false;
+                        const finish = (granted: boolean) => {
+                          if (settled) return;
+                          settled = true;
+                          fb.removeFeedback(ctx.callId);
+                          resolve({ granted, details: input.details });
+                        };
+                        fb.addFeedback({
+                          type: "schema",
+                          callId: ctx.callId,
+                          title: question,
+                          fields: [
+                            ...(input.details
+                              ? ([
+                                  {
+                                    key: "__details",
+                                    type: "readonly",
+                                    label: "Details",
+                                    default:
+                                      typeof input.details === "string"
+                                        ? input.details
+                                        : JSON.stringify(input.details, null, 2),
+                                  },
+                                ] as ActiveFeedbackSchema["fields"])
+                              : []),
+                            {
+                              key: "approval",
+                              type: "buttonGroup",
+                              submitOnSelect: true,
+                              buttons: [
+                                { value: "deny", label: "Deny", color: "gray" },
+                                { value: "allow", label: "Allow", color: "green" },
+                              ],
+                            },
+                          ],
+                          values: {},
+                          hideSubmit: true,
+                          dismissible: false,
+                          createdAt: Date.now(),
+                          complete: (result: FeedbackResult) => {
+                            if (result.type === "submit") {
+                              const values = (result.value ?? {}) as Record<string, unknown>;
+                              finish(values["approval"] === "allow");
+                            } else {
+                              finish(false);
+                            }
+                          },
+                        });
+                      });
                     },
-                  });
-                });
-              },
-            },
-            inspect_card: {
-              description:
-                "Inspect a custom message card in this conversation: wire payload, renderer registry status " +
-                "(ready / load stage / error), definition metadata, and full update history. Use this when a " +
-                "card you published is not rendering, looks wrong, or a user reports a stuck spinner — it " +
-                "returns exactly what the user's 'Copy details' button shows. Parameters: { messageId: string }.",
-              parameters: z.object({
-                messageId: z.string().describe("The custom message id (custom.started messageId)"),
-              }),
-              execute: async (args: unknown) => {
-                const { messageId } = args as { messageId?: string };
-                if (!messageId) return { ok: false, error: "Missing messageId" };
-                const snapshot = cardInspectionRef.current;
-                const message = snapshot.messages.find(
-                  (item) => item.custom?.messageId === messageId
-                );
-                if (!message?.custom) {
-                  const known = snapshot.messages
-                    .filter((item) => item.custom)
-                    .map((item) => `${item.custom!.typeId}:${item.custom!.messageId}`);
+                  },
+                }
+              : undefined,
+            {
+              inspect_card: {
+                description:
+                  "Inspect a custom message card in this conversation: wire payload, renderer registry status " +
+                  "(ready / load stage / error), definition metadata, and full update history. Use this when a " +
+                  "card you published is not rendering, looks wrong, or a user reports a stuck spinner — it " +
+                  "returns exactly what the user's 'Copy details' button shows. Parameters: { messageId: string }.",
+                parameters: z.object({
+                  messageId: z
+                    .string()
+                    .describe("The custom message id (custom.started messageId)"),
+                }),
+                execute: async (args: unknown) => {
+                  const { messageId } = args as { messageId?: string };
+                  if (!messageId) return { ok: false, error: "Missing messageId" };
+                  const snapshot = cardInspectionRef.current;
+                  const message = snapshot.messages.find(
+                    (item) => item.custom?.messageId === messageId
+                  );
+                  if (!message?.custom) {
+                    const known = snapshot.messages
+                      .filter((item) => item.custom)
+                      .map((item) => `${item.custom!.typeId}:${item.custom!.messageId}`);
+                    return {
+                      ok: false,
+                      error: `No custom message "${messageId}" in this channel view.`,
+                      knownCards: known,
+                    };
+                  }
                   return {
-                    ok: false,
-                    error: `No custom message "${messageId}" in this channel view.`,
-                    knownCards: known,
+                    ok: true,
+                    details: customInspectorPayload(
+                      message.custom,
+                      snapshot.registry.get(message.custom.typeId)
+                    ),
                   };
-                }
-                return {
-                  ok: true,
-                  details: customInspectorPayload(
-                    message.custom,
-                    snapshot.registry.get(message.custom.typeId)
-                  ),
-                };
+                },
+              },
+              persist_agent_model: {
+                description: "Persist an agent model choice for panel reload/recovery",
+                parameters: z.object({
+                  participantId: z.string().describe("Agent participant id"),
+                  model: z.string().describe("Model in provider:model format"),
+                }),
+                execute: async (args: unknown) => {
+                  const { participantId, model } = args as {
+                    participantId?: unknown;
+                    model?: unknown;
+                  };
+                  if (typeof participantId !== "string" || participantId.length === 0) {
+                    return { ok: false, error: "Missing participantId" };
+                  }
+                  if (typeof model !== "string" || model.length === 0) {
+                    return { ok: false, error: "Missing model" };
+                  }
+                  const persist = actionsRef.current?.onPersistAgentModel;
+                  if (!persist) return { ok: false, error: "Persist agent model is not available" };
+                  await persist(channelName, participantId, model);
+                  return { ok: true };
+                },
               },
             },
-            persist_agent_model: {
-              description: "Persist an agent model choice for panel reload/recovery",
-              parameters: z.object({
-                participantId: z.string().describe("Agent participant id"),
-                model: z.string().describe("Model in provider:model format"),
-              }),
-              execute: async (args: unknown) => {
-                const { participantId, model } = args as {
-                  participantId?: unknown;
-                  model?: unknown;
-                };
-                if (typeof participantId !== "string" || participantId.length === 0) {
-                  return { ok: false, error: "Missing participantId" };
-                }
-                if (typeof model !== "string" || model.length === 0) {
-                  return { ok: false, error: "Missing model" };
-                }
-                const persist = actionsRef.current?.onPersistAgentModel;
-                if (!persist) return { ok: false, error: "Persist agent model is not available" };
-                await persist(channelName, participantId, model);
-                return { ok: true };
-              },
-            },
-            inline_ui: {
-              description: `Render a persistent interactive UI component inline in the chat.
+            features.inlineUi
+              ? {
+                  inline_ui: {
+                    description: `Render a persistent interactive UI component inline in the chat.
 
 **Contrast with other tools:**
 - \`eval\`: Agent-triggered side-effects. Runs code immediately, returns result.
@@ -1043,88 +1050,97 @@ export default function App({ props, chat, scope }) {
   );
 }
 \`\`\``,
-              parameters: z.object({
-                id: z
-                  .string()
-                  .trim()
-                  .min(1)
-                  .optional()
-                  .describe(
-                    "Stable component ID. Reusing it updates and bumps the existing card; omit it to create a new card."
-                  ),
-                code: z
-                  .string()
-                  .optional()
-                  .describe("TSX source code for the component. Provide either code or path."),
-                path: z
-                  .string()
-                  .optional()
-                  .describe(
-                    "Context-relative TSX file to render instead of inline code. Supports static relative imports."
-                  ),
-                imports: z
-                  .record(z.string(), z.string())
-                  .optional()
-                  .describe("On-demand package builds. Same semantics as eval imports."),
-                props: z
-                  .record(z.unknown())
-                  .optional()
-                  .describe("Props passed to the component as { props }"),
-              }),
-              execute: async (args: unknown) => {
-                const {
-                  id: requestedId,
-                  code,
-                  path,
-                  imports,
-                  props,
-                } = args as {
-                  id?: string;
-                  code?: string;
-                  path?: string;
-                  imports?: Record<string, string>;
-                  props?: Record<string, unknown>;
-                };
-                const trimmedPath = path?.trim();
-                if (trimmedPath) {
-                  await loadSourceFile(trimmedPath);
-                } else if (!code) {
-                  return { ok: false, error: "Missing code or path" };
-                }
-                if (imports && Object.keys(imports).length > 0) {
-                  const { executeSandbox } = await import("@workspace/eval/sandbox");
-                  await executeSandbox("", { imports, loadImport });
-                }
-                const client = core.clientRef.current;
-                if (!client) return { ok: false, error: "Not connected" };
-                const id = requestedId?.trim() || crypto.randomUUID();
-                const source = trimmedPath
-                  ? { type: "file" as const, path: trimmedPath }
-                  : { type: "code" as const, code: code! };
-                const eventPayload: AgenticEvent<"ui.inline_rendered">["payload"] = {
-                  protocol: AGENTIC_PROTOCOL_VERSION,
-                  uiType: "inline",
-                  id,
-                  source,
-                };
-                if (imports !== undefined) eventPayload.imports = imports;
-                if (props !== undefined) eventPayload.props = props;
-                await publishTypedAgenticEvent(
-                  {
-                    kind: "ui.inline_rendered",
-                    actor: actorForClient(client, metadata),
-                    payload: eventPayload,
-                    createdAt: new Date().toISOString(),
+                    parameters: z.object({
+                      id: z
+                        .string()
+                        .trim()
+                        .min(1)
+                        .optional()
+                        .describe(
+                          "Stable component ID. Reusing it updates and bumps the existing card; omit it to create a new card."
+                        ),
+                      code: z
+                        .string()
+                        .optional()
+                        .describe(
+                          "TSX source code for the component. Provide either code or path."
+                        ),
+                      path: z
+                        .string()
+                        .optional()
+                        .describe(
+                          "Context-relative TSX file to render instead of inline code. Supports static relative imports."
+                        ),
+                      imports: z
+                        .record(z.string(), z.string())
+                        .optional()
+                        .describe("On-demand package builds. Same semantics as eval imports."),
+                      props: z
+                        .record(z.unknown())
+                        .optional()
+                        .describe("Props passed to the component as { props }"),
+                    }),
+                    execute: async (args: unknown) => {
+                      const {
+                        id: requestedId,
+                        code,
+                        path,
+                        imports,
+                        props,
+                      } = args as {
+                        id?: string;
+                        code?: string;
+                        path?: string;
+                        imports?: Record<string, string>;
+                        props?: Record<string, unknown>;
+                      };
+                      const trimmedPath = path?.trim();
+                      if (trimmedPath) {
+                        await loadSourceFile(trimmedPath);
+                      } else if (!code) {
+                        return { ok: false, error: "Missing code or path" };
+                      }
+                      if (imports && Object.keys(imports).length > 0) {
+                        const { executeSandbox } = await import("@workspace/eval/sandbox");
+                        await executeSandbox("", {
+                          imports,
+                          ...(importLoader ? { loadImport: importLoader } : {}),
+                        });
+                      }
+                      const client = core.clientRef.current;
+                      if (!client) return { ok: false, error: "Not connected" };
+                      const id = requestedId?.trim() || crypto.randomUUID();
+                      const source = trimmedPath
+                        ? { type: "file" as const, path: trimmedPath }
+                        : { type: "code" as const, code: code! };
+                      const eventPayload: AgenticEvent<"ui.inline_rendered">["payload"] = {
+                        protocol: AGENTIC_PROTOCOL_VERSION,
+                        uiType: "inline",
+                        id,
+                        source,
+                      };
+                      if (imports !== undefined) eventPayload.imports = imports;
+                      if (props !== undefined) eventPayload.props = props;
+                      await publishTypedAgenticEvent(
+                        {
+                          kind: "ui.inline_rendered",
+                          actor: actorForClient(client, metadata),
+                          payload: eventPayload,
+                          createdAt: new Date().toISOString(),
+                        },
+                        // The component ID is intentionally reusable. Event idempotency
+                        // remains unique so a later render is reduced as an update.
+                        { idempotencyKey: `ui:inline:${id}:${crypto.randomUUID()}` }
+                      );
+                      return { ok: true, id };
+                    },
                   },
-                  // The component ID is intentionally reusable. Event idempotency
-                  // remains unique so a later render is reduced as an update.
-                  { idempotencyKey: `ui:inline:${id}:${crypto.randomUUID()}` }
-                );
-                return { ok: true, id };
-              },
-            },
-            load_action_bar: {
-              description: `Load, replace, or clear a compact persistent action bar at the top of this chat panel.
+                }
+              : undefined,
+            features.actionBar
+              ? {
+                  load_action_bar: {
+                    description: `Load, replace, or clear a compact persistent action bar at the top of this chat panel.
 
 Use this for small always-available controls or status for the current workflow.
 The TSX source is read from a file in this panel's current filesystem context.
@@ -1138,177 +1154,201 @@ loaded file replaces any previous action bar for this panel only. Other panels
 connected to this channel may be in different filesystem contexts.
 Keep it compact; the panel clamps the rendered height to a small scrollable area.
 Use package imports available to inline_ui plus relative imports for local helper files.`,
-              parameters: z.object({
-                path: z
-                  .string()
-                  .optional()
-                  .describe("Context-relative TSX file to load. Required unless clear is true."),
-                imports: z
-                  .record(z.string(), z.string())
-                  .optional()
-                  .describe("On-demand package builds. Same semantics as eval imports."),
-                props: z
-                  .record(z.unknown())
-                  .optional()
-                  .describe("Props passed to the component as { props }"),
-                maxHeight: z
-                  .number()
-                  .optional()
-                  .describe(
-                    "Preferred maximum height in pixels. Defaults to 180 and is clamped between 64 and 360."
-                  ),
-                clear: z.boolean().optional().describe("When true, remove the current action bar."),
-              }),
-              execute: async (args: unknown) => {
-                const { path, imports, props, maxHeight, clear } = args as {
-                  path?: string;
-                  imports?: Record<string, string>;
-                  props?: Record<string, unknown>;
-                  maxHeight?: number;
-                  clear?: boolean;
-                };
-                if (clear) {
-                  await clearActionBar();
-                  return { ok: true, cleared: true };
-                }
-                if (!path) return { ok: false, error: "Missing path" };
-                return loadActionBarFromFile({ path, imports, props, maxHeight });
-              },
-            },
-            // ui_prompt — serves VibestudioExtensionUIContext (select/confirm/input/editor)
-            // from workspace/packages/harness. The agent worker forwards extension UI calls
-            // via ui_prompt { kind, ...params }; we render them through the
-            // existing feedback_form (ActiveFeedbackSchema) machinery and return
-            // primitive results (string | boolean | undefined) directly.
-            ui_prompt: {
-              description:
-                "Prompt the panel user for a select/confirm/input/editor response (used by Vibestudio extension UI bridge).",
-              parameters: z
-                .object({
-                  kind: z.enum(["select", "confirm", "input", "editor"]),
-                  title: z.string(),
-                  message: z.string().optional(),
-                  options: z.array(z.string()).optional(),
-                  placeholder: z.string().optional(),
-                  prefill: z.string().optional(),
-                })
-                .passthrough(),
-              execute: async (args: unknown, ctx: MethodExecutionContext) => {
-                const { kind, title, message, options, placeholder, prefill } = args as {
-                  kind: "select" | "confirm" | "input" | "editor";
-                  title: string;
-                  message?: string;
-                  options?: string[];
-                  placeholder?: string;
-                  prefill?: string;
-                };
-                if (typeof document === "undefined" || !document.hasFocus()) {
-                  actionsRef.current?.onAttentionRequired?.("Chat is waiting for you", title);
-                }
-                // Build FieldDefinition[] and an initial values map based on kind.
-                let fields: ActiveFeedbackSchema["fields"];
-                let initialValues: ActiveFeedbackSchema["values"] = {};
-                let resolveKey: "choice" | "answer" | "value";
-                let hideSubmit = false;
-                if (kind === "select") {
-                  const opts = options ?? [];
-                  resolveKey = "choice";
-                  fields = [
-                    {
-                      key: "choice",
-                      type: "select",
-                      label: title,
-                      required: true,
-                      options: opts.map((o) => ({ value: o, label: o })),
-                      submitOnSelect: true,
-                    },
-                  ];
-                  hideSubmit = true;
-                } else if (kind === "confirm") {
-                  resolveKey = "answer";
-                  fields = [
-                    ...(message
-                      ? ([
-                          { key: "__msg", type: "readonly", label: "", default: message },
-                        ] as ActiveFeedbackSchema["fields"])
-                      : []),
-                    {
-                      key: "answer",
-                      type: "buttonGroup",
-                      submitOnSelect: true,
-                      buttons: [
-                        { value: "no", label: "No", color: "gray" },
-                        { value: "yes", label: "Yes", color: "green" },
-                      ],
-                    },
-                  ];
-                  hideSubmit = true;
-                } else if (kind === "input") {
-                  resolveKey = "value";
-                  fields = [
-                    {
-                      key: "value",
-                      type: "string",
-                      label: title,
-                      placeholder: placeholder ?? "",
-                    },
-                  ];
-                } else {
-                  resolveKey = "value";
-                  fields = [
-                    {
-                      key: "value",
-                      type: "textarea",
-                      label: title,
-                      default: prefill ?? "",
-                      maxHeight: 320,
-                    },
-                  ];
-                }
-                void ctx;
-                const fb = feedbackRef.current;
-                return new Promise<string | boolean | undefined>((resolve) => {
-                  let settled = false;
-                  const finish = (value: string | boolean | undefined, historyResult: unknown) => {
-                    if (settled) return;
-                    settled = true;
-                    fb.removeFeedback(ctx.callId);
-                    void historyResult;
-                    resolve(value);
-                  };
-                  const entry: ActiveFeedbackSchema = {
-                    type: "schema",
-                    callId: ctx.callId,
-                    title,
-                    fields,
-                    values: initialValues,
-                    hideSubmit,
-                    createdAt: Date.now(),
-                    complete: (result: FeedbackResult) => {
-                      if (result.type === "submit") {
-                        const values = (result.value ?? {}) as Record<string, unknown>;
-                        const raw = values[resolveKey];
-                        if (kind === "confirm") {
-                          finish(raw === "yes" || raw === true, raw);
-                        } else if (kind === "select") {
-                          finish(typeof raw === "string" ? raw : undefined, raw);
-                        } else {
-                          // input or editor
-                          finish(typeof raw === "string" ? raw : undefined, raw);
-                        }
-                      } else if (result.type === "cancel") {
-                        finish(kind === "confirm" ? false : undefined, null);
-                      } else {
-                        finish(kind === "confirm" ? false : undefined, null);
+                    parameters: z.object({
+                      path: z
+                        .string()
+                        .optional()
+                        .describe(
+                          "Context-relative TSX file to load. Required unless clear is true."
+                        ),
+                      imports: z
+                        .record(z.string(), z.string())
+                        .optional()
+                        .describe("On-demand package builds. Same semantics as eval imports."),
+                      props: z
+                        .record(z.unknown())
+                        .optional()
+                        .describe("Props passed to the component as { props }"),
+                      maxHeight: z
+                        .number()
+                        .optional()
+                        .describe(
+                          "Preferred maximum height in pixels. Defaults to 180 and is clamped between 64 and 360."
+                        ),
+                      clear: z
+                        .boolean()
+                        .optional()
+                        .describe("When true, remove the current action bar."),
+                    }),
+                    execute: async (args: unknown) => {
+                      const { path, imports, props, maxHeight, clear } = args as {
+                        path?: string;
+                        imports?: Record<string, string>;
+                        props?: Record<string, unknown>;
+                        maxHeight?: number;
+                        clear?: boolean;
+                      };
+                      if (clear) {
+                        await clearActionBar();
+                        return { ok: true, cleared: true };
                       }
+                      if (!path) return { ok: false, error: "Missing path" };
+                      return loadActionBarFromFile({ path, imports, props, maxHeight });
                     },
-                  };
-                  fb.addFeedback(entry);
-                });
-              },
-            },
-          };
-          const methods = selectAgenticChatMethods(availableMethods, uiFeatures);
+                  },
+                }
+              : undefined,
+            features.feedback
+              ? {
+                  // ui_prompt — serves VibestudioExtensionUIContext (select/confirm/input/editor)
+                  // from workspace/packages/harness. The agent worker forwards extension UI calls
+                  // via ui_prompt { kind, ...params }; we render them through the
+                  // existing feedback_form (ActiveFeedbackSchema) machinery and return
+                  // primitive results (string | boolean | undefined) directly.
+                  ui_prompt: {
+                    description:
+                      "Prompt the panel user for a select/confirm/input/editor response (used by Vibestudio extension UI bridge).",
+                    parameters: z
+                      .object({
+                        kind: z.enum(["select", "confirm", "input", "editor"]),
+                        title: z.string(),
+                        message: z.string().optional(),
+                        options: z.array(z.string()).optional(),
+                        placeholder: z.string().optional(),
+                        prefill: z.string().optional(),
+                      })
+                      .passthrough(),
+                    execute: async (args: unknown, ctx: MethodExecutionContext) => {
+                      const { kind, title, message, options, placeholder, prefill } = args as {
+                        kind: "select" | "confirm" | "input" | "editor";
+                        title: string;
+                        message?: string;
+                        options?: string[];
+                        placeholder?: string;
+                        prefill?: string;
+                      };
+                      if (typeof document === "undefined" || !document.hasFocus()) {
+                        actionsRef.current?.onAttentionRequired?.("Chat is waiting for you", title);
+                      }
+                      // Build FieldDefinition[] and an initial values map based on kind.
+                      let fields: ActiveFeedbackSchema["fields"];
+                      let initialValues: ActiveFeedbackSchema["values"] = {};
+                      let resolveKey: "choice" | "answer" | "value";
+                      let hideSubmit = false;
+                      if (kind === "select") {
+                        const opts = options ?? [];
+                        resolveKey = "choice";
+                        fields = [
+                          {
+                            key: "choice",
+                            type: "select",
+                            label: title,
+                            required: true,
+                            options: opts.map((o) => ({ value: o, label: o })),
+                            submitOnSelect: true,
+                          },
+                        ];
+                        hideSubmit = true;
+                      } else if (kind === "confirm") {
+                        resolveKey = "answer";
+                        fields = [
+                          ...(message
+                            ? ([
+                                { key: "__msg", type: "readonly", label: "", default: message },
+                              ] as ActiveFeedbackSchema["fields"])
+                            : []),
+                          {
+                            key: "answer",
+                            type: "buttonGroup",
+                            submitOnSelect: true,
+                            buttons: [
+                              { value: "no", label: "No", color: "gray" },
+                              { value: "yes", label: "Yes", color: "green" },
+                            ],
+                          },
+                        ];
+                        hideSubmit = true;
+                      } else if (kind === "input") {
+                        resolveKey = "value";
+                        fields = [
+                          {
+                            key: "value",
+                            type: "string",
+                            label: title,
+                            placeholder: placeholder ?? "",
+                          },
+                        ];
+                      } else {
+                        resolveKey = "value";
+                        fields = [
+                          {
+                            key: "value",
+                            type: "textarea",
+                            label: title,
+                            default: prefill ?? "",
+                            maxHeight: 320,
+                          },
+                        ];
+                      }
+                      void ctx;
+                      const fb = feedbackRef.current;
+                      return new Promise<string | boolean | undefined>((resolve) => {
+                        let settled = false;
+                        const finish = (
+                          value: string | boolean | undefined,
+                          historyResult: unknown
+                        ) => {
+                          if (settled) return;
+                          settled = true;
+                          fb.removeFeedback(ctx.callId);
+                          void historyResult;
+                          resolve(value);
+                        };
+                        const entry: ActiveFeedbackSchema = {
+                          type: "schema",
+                          callId: ctx.callId,
+                          title,
+                          fields,
+                          values: initialValues,
+                          hideSubmit,
+                          createdAt: Date.now(),
+                          complete: (result: FeedbackResult) => {
+                            if (result.type === "submit") {
+                              const values = (result.value ?? {}) as Record<string, unknown>;
+                              const raw = values[resolveKey];
+                              if (kind === "confirm") {
+                                finish(raw === "yes" || raw === true, raw);
+                              } else if (kind === "select") {
+                                finish(typeof raw === "string" ? raw : undefined, raw);
+                              } else {
+                                // input or editor
+                                finish(typeof raw === "string" ? raw : undefined, raw);
+                              }
+                            } else if (result.type === "cancel") {
+                              finish(kind === "confirm" ? false : undefined, null);
+                            } else {
+                              finish(kind === "confirm" ? false : undefined, null);
+                            }
+                          },
+                        };
+                        fb.addFeedback(entry);
+                      });
+                    },
+                  },
+                }
+              : undefined,
+            features.clientEval
+              ? {
+                  client_eval: buildClientEvalMethod({
+                    importLoader,
+                    executeSandbox: boundExecuteSandbox,
+                    loadSourceFile,
+                    getChat: () => chat,
+                    scopeManager,
+                  }),
+                }
+              : undefined
+          );
           await core.connectToChannel({
             channelId: channelName,
             methods,
@@ -1355,7 +1395,12 @@ Use package imports available to inline_ui plus relative imports for local helpe
     publishTypedAgenticEvent,
     connectionAttempt,
     connectionRetrySignal,
-    uiFeatures,
+    features,
+    importLoader,
+    boundExecuteSandbox,
+    loadSourceFile,
+    chat,
+    scopeManager,
   ]);
   // --- Wrap platform actions ---
   const handleAddAgent = useCallback(
@@ -1615,5 +1660,5 @@ Use package imports available to inline_ui plus relative imports for local helpe
       metadata,
     ]
   );
-  return { contextValue, inputContextValue, uiFeatures };
+  return { contextValue, inputContextValue, features };
 }

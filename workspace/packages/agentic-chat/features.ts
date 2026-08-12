@@ -9,54 +9,56 @@ import type { ChatMessage } from "@workspace/agentic-core";
  * the stock layout. The selection is fixed for the lifetime of a mounted chat
  * participant because changing its method surface requires a new channel join.
  */
-export const AGENTIC_CHAT_UI_FEATURES = ["feedback", "inline-ui", "action-bar"] as const;
+export const AGENTIC_CHAT_FEATURES = [
+  "feedback",
+  "inline-ui",
+  "action-bar",
+  "client-eval",
+] as const;
 
-export type AgenticChatUiFeature = (typeof AGENTIC_CHAT_UI_FEATURES)[number];
+export type AgenticChatFeature = (typeof AGENTIC_CHAT_FEATURES)[number];
 
-export interface ResolvedAgenticChatUiFeatures {
+export interface ResolvedAgenticChatFeatures {
   readonly feedback: boolean;
   readonly inlineUi: boolean;
   readonly actionBar: boolean;
+  readonly clientEval: boolean;
 }
 
-export const DEFAULT_AGENTIC_CHAT_UI_FEATURES: ResolvedAgenticChatUiFeatures = Object.freeze({
-  feedback: true,
-  inlineUi: true,
-  actionBar: true,
-});
+/** Explicit preset for hosts that want every stock AgenticChat capability. */
+export const FULL_AGENTIC_CHAT_FEATURES: readonly AgenticChatFeature[] = AGENTIC_CHAT_FEATURES;
 
-export function resolveAgenticChatUiFeatures(
-  features: readonly AgenticChatUiFeature[] | undefined
-): ResolvedAgenticChatUiFeatures {
-  if (features === undefined) return DEFAULT_AGENTIC_CHAT_UI_FEATURES;
+export function resolveAgenticChatFeatures(
+  features: readonly AgenticChatFeature[]
+): ResolvedAgenticChatFeatures {
   const selected = new Set(features);
   return Object.freeze({
     feedback: selected.has("feedback"),
     inlineUi: selected.has("inline-ui"),
     actionBar: selected.has("action-bar"),
+    clientEval: selected.has("client-eval"),
   });
 }
 
-const UI_METHOD_FEATURE = {
-  feedback_form: "feedback",
-  feedback_custom: "feedback",
-  confirm: "feedback",
-  ui_prompt: "feedback",
-  inline_ui: "inlineUi",
-  load_action_bar: "actionBar",
-} as const satisfies Record<string, keyof ResolvedAgenticChatUiFeatures>;
-
-/** Keep non-UI methods and only the browser-owned UI methods selected for this join. */
-export function selectAgenticChatMethods(
-  methods: Record<string, MethodDefinition>,
-  features: ResolvedAgenticChatUiFeatures
+/**
+ * Compose independently owned method groups and reject ambiguous ownership.
+ * A duplicate method is a feature-boundary defect, so it fails before joining
+ * the channel instead of relying on object-spread order.
+ */
+export function composeAgenticChatMethods(
+  ...groups: Array<Record<string, MethodDefinition> | undefined>
 ): Record<string, MethodDefinition> {
-  return Object.fromEntries(
-    Object.entries(methods).filter(([name]) => {
-      const feature = UI_METHOD_FEATURE[name as keyof typeof UI_METHOD_FEATURE];
-      return feature === undefined || features[feature];
-    })
-  );
+  const methods: Record<string, MethodDefinition> = {};
+  for (const group of groups) {
+    if (!group) continue;
+    for (const [name, definition] of Object.entries(group)) {
+      if (Object.hasOwn(methods, name)) {
+        throw new Error(`AgenticChat method ${JSON.stringify(name)} has multiple owners`);
+      }
+      methods[name] = definition;
+    }
+  }
+  return methods;
 }
 
 /**
@@ -66,7 +68,7 @@ export function selectAgenticChatMethods(
  */
 export function selectAgenticChatTranscriptMessages(
   messages: ChatMessage[],
-  features: ResolvedAgenticChatUiFeatures
+  features: ResolvedAgenticChatFeatures
 ): ChatMessage[] {
   return features.inlineUi
     ? messages

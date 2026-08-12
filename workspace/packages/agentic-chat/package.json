@@ -6,6 +6,7 @@
     ".": "./index.ts",
     "./chat": "./components/AgenticChat.tsx",
     "./error-boundary": "./components/ErrorBoundary.tsx",
+    "./features": "./features.ts",
     "./types": "./types.ts",
     "./styles.css": "./styles.css"
   },

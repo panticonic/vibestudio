@@ -15,11 +15,11 @@ vi.mock("./ChatMessageArea", () => ({
     renderMessage?: unknown;
     renderInlineGroup?: unknown;
     renderInvocation?: unknown;
-    uiFeatures?: { inlineUi: boolean };
+    features: { inlineUi: boolean };
   }) => (
     <div
       data-testid="message-area"
-      data-inline-ui={String(props.uiFeatures?.inlineUi)}
+      data-inline-ui={String(props.features.inlineUi)}
       data-render-message={String(props.renderMessage !== undefined)}
       data-render-inline-group={String(props.renderInlineGroup !== undefined)}
       data-render-invocation={String(props.renderInvocation !== undefined)}
@@ -35,15 +35,22 @@ vi.mock("./ChatDebugConsole", () => ({ ChatDebugConsole: () => null }));
 vi.mock("./ChatInput", () => ({ ChatInput: () => <div data-testid="composer" /> }));
 
 describe("ChatLayout sizing", () => {
+  const fullFeatures = {
+    feedback: true,
+    inlineUi: true,
+    actionBar: true,
+    clientEval: true,
+  } as const;
+
   it("fills its AgenticChat host so embedded composers remain visible", () => {
-    const { container, getByTestId } = render(<ChatLayout />);
+    const { container, getByTestId } = render(<ChatLayout features={fullFeatures} />);
     const root = container.querySelector<HTMLElement>(".agentic-chat-root");
     expect(root?.style.height).toBe("100%");
     expect(getByTestId("composer")).toBeTruthy();
   });
 
-  it("mounts the full browser-owned UI surface by default", () => {
-    const { getByTestId } = render(<ChatLayout />);
+  it("mounts every explicitly selected browser-owned UI surface", () => {
+    const { getByTestId } = render(<ChatLayout features={fullFeatures} />);
 
     expect(getByTestId("action-bar")).toBeTruthy();
     expect(getByTestId("feedback-area")).toBeTruthy();
@@ -56,7 +63,7 @@ describe("ChatLayout sizing", () => {
     const renderInvocation = vi.fn();
     const { getByTestId, queryByTestId } = render(
       <ChatLayout
-        uiFeatures={{ feedback: false, inlineUi: false, actionBar: false }}
+        features={{ feedback: false, inlineUi: false, actionBar: false, clientEval: false }}
         renderMessage={renderMessage}
         renderInlineGroup={renderInlineGroup}
         renderInvocation={renderInvocation}

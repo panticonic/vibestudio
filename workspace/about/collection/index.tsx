@@ -32,8 +32,9 @@ import {
 import { contextId, panel, panelTree, rpc, type PanelHandle } from "@workspace/runtime";
 import { recoveryCoordinator } from "@workspace/runtime/internal/diagnostics";
 import { usePanelTheme, useStateArgs } from "@workspace/react";
-import { createPanelSandboxConfig, launchAgentIntoChannel } from "@workspace/agentic-core";
+import { createPanelImportLoader, launchAgentIntoChannel } from "@workspace/agentic-core";
 import type { AgenticChatHandle } from "@workspace/agentic-chat";
+import { FULL_AGENTIC_CHAT_FEATURES } from "@workspace/agentic-chat/features";
 import type { ConnectionConfig } from "@workspace/agentic-chat/types";
 import {
   buildCollectionAgentSystemPrompt,
@@ -429,7 +430,7 @@ export default function CollectionPanel() {
     () => ({ clientId: panel.slotId, rpc, recoveryCoordinator }),
     []
   );
-  const sandbox = useMemo(() => createPanelSandboxConfig(rpc), []);
+  const importLoader = useMemo(() => createPanelImportLoader(rpc), []);
 
   return (
     <Theme appearance={theme} accentColor="iris" radius="medium" style={{ height: "100dvh" }}>
@@ -669,7 +670,8 @@ export default function CollectionPanel() {
                   ]}
                   initialPrompt={initialPrompt.current}
                   forceInitialPrompt={Boolean(stateArgs.startupTask)}
-                  sandbox={sandbox}
+                  features={FULL_AGENTIC_CHAT_FEATURES}
+                  importLoader={importLoader}
                 />
               </Suspense>
             ) : (

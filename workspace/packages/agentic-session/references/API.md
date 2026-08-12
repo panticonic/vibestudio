@@ -27,13 +27,11 @@ HeadlessSession.createWithAgent(config: HeadlessWithAgentConfig): Promise<Headle
 interface HeadlessSessionConfig {
   config: ConnectionConfig; // { clientId, rpc }, where rpc is the full portable RpcClient
   metadata?: ChatParticipantMetadata; // defaults to { name: "Headless Client", type: "headless", handle: "headless" }
-  sandbox?: SandboxConfig; // optional; only backs local chat-sandbox helpers (callMethod, etc.) — NOT the agent's eval
 }
 ```
 
-`sandbox` is optional and does not enable or disable the agent's eval. The agent
-evaluates code in its own server-side `EvalDO` whether or not a session sandbox
-is provided.
+The headless client has no browser sandbox configuration. The agent evaluates
+code in its own server-side `EvalDO`.
 
 When passing `config: { clientId, rpc }`, `rpc` must be the normal runtime
 client shape used by panels/workers/eval: it includes `selfId`,

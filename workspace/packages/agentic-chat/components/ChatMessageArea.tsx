@@ -9,11 +9,7 @@ import { MessageList } from "./MessageList";
 import { deriveActiveOutbox } from "./Outbox";
 import { SignalPills } from "./SignalPills";
 import { pendingReviewNotice } from "@vibestudio/shared/authority/reviewPending";
-import {
-  DEFAULT_AGENTIC_CHAT_UI_FEATURES,
-  selectAgenticChatTranscriptMessages,
-  type ResolvedAgenticChatUiFeatures,
-} from "../features";
+import { selectAgenticChatTranscriptMessages, type ResolvedAgenticChatFeatures } from "../features";
 
 export interface ChatMessageAreaProps {
   /** Override default message card rendering */
@@ -27,7 +23,7 @@ export interface ChatMessageAreaProps {
   /** Override individual invocation rendering while retaining the stock group. */
   renderInvocation?: import("./InlineGroup").InvocationRenderer;
   /** Resolved browser-owned features for the stock transcript. */
-  uiFeatures?: ResolvedAgenticChatUiFeatures;
+  features: ResolvedAgenticChatFeatures;
 }
 
 /**
@@ -38,8 +34,8 @@ export function ChatMessageArea({
   renderMessage,
   renderInlineGroup,
   renderInvocation,
-  uiFeatures = DEFAULT_AGENTIC_CHAT_UI_FEATURES,
-}: ChatMessageAreaProps = {}) {
+  features,
+}: ChatMessageAreaProps) {
   const {
     connected,
     messages,
@@ -83,7 +79,7 @@ export function ChatMessageArea({
   // anything here either — otherwise a transiently-pending historical message
   // would vanish from BOTH places mid-replay.
   const transcriptMessages = useMemo(() => {
-    const featureVisibleMessages = selectAgenticChatTranscriptMessages(messages, uiFeatures);
+    const featureVisibleMessages = selectAgenticChatTranscriptMessages(messages, features);
     if (!connected) return featureVisibleMessages;
     const hiddenIds = new Set(
       deriveActiveOutbox(featureVisibleMessages, selfId, participants).map((message) => message.id)
@@ -91,7 +87,7 @@ export function ChatMessageArea({
     return hiddenIds.size > 0
       ? featureVisibleMessages.filter((message) => !hiddenIds.has(message.id))
       : featureVisibleMessages;
-  }, [connected, messages, selfId, participants, uiFeatures.inlineUi]);
+  }, [connected, messages, selfId, participants, features.inlineUi]);
 
   // Empty-transcript surface. While the spawned agent is starting, show an
   // accurate status (the pre-send queue below the composer shows the spinner

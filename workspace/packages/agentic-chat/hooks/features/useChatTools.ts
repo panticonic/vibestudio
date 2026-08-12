@@ -13,17 +13,14 @@ import type { ToolApprovalProps } from "@workspace/tool-ui";
 import type { SandboxOptions, SandboxResult } from "@workspace/eval";
 import type { ScopeManager } from "@workspace/eval";
 import type { PubSubClient } from "@workspace/pubsub";
-import type { ToolProvider, ChatSandboxValue, SandboxConfig } from "../../types";
+import type { ToolProvider, ChatSandboxValue } from "../../types";
 import type { ChatParticipantMetadata } from "@workspace/agentic-core";
-import { buildClientEvalMethod } from "./clientEval";
 
 interface UseChatToolsOptions {
   clientRef: React.RefObject<PubSubClient<ChatParticipantMetadata> | null>;
   tools?: ToolProvider;
   contextId: string;
   executeSandbox: (code: string, options?: SandboxOptions) => Promise<SandboxResult>;
-  sandbox: SandboxConfig;
-  loadSourceFile: (path: string) => Promise<string>;
   chat: ChatSandboxValue;
   scopeManager: ScopeManager;
 }
@@ -40,8 +37,6 @@ export function useChatTools({
   tools,
   contextId,
   executeSandbox,
-  sandbox,
-  loadSourceFile,
   chat,
   scopeManager,
 }: UseChatToolsOptions): ChatToolsState {
@@ -57,20 +52,8 @@ export function useChatTools({
         scope: scopeManager.current,
         scopes: scopeManager.api,
       }) ?? {};
-    if ("client_eval" in provided) {
-      throw new Error("client_eval is reserved by AgenticChat");
-    }
-    return {
-      ...provided,
-      client_eval: buildClientEvalMethod({
-        sandbox,
-        executeSandbox,
-        loadSourceFile,
-        getChat: () => chat,
-        scopeManager,
-      }),
-    };
-  }, [tools, clientRef, contextId, executeSandbox, sandbox, loadSourceFile, chat, scopeManager]);
+    return provided;
+  }, [tools, clientRef, contextId, executeSandbox, chat, scopeManager]);
 
   const toolApprovalValue: ToolApprovalProps = useMemo(
     () => ({

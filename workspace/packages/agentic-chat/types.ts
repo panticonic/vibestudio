@@ -9,7 +9,6 @@ export type {
   AgenticChatActions,
   ChatSandboxValue,
   ChatMethodResult,
-  SandboxConfig,
   ToolProviderDeps,
   ToolProvider,
   NewConversationOptions,
