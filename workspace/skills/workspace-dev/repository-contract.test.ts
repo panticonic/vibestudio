@@ -70,7 +70,10 @@ describe("canonical executable repository contracts", () => {
 
 describe("panel debugging guidance", () => {
   it("keeps the bounded loop explicit about context refs and durable phase receipts", () => {
-    const skill = fs.readFileSync(path.join(workspaceRoot, "skills/workspace-dev/SKILL.md"), "utf8");
+    const skill = fs.readFileSync(
+      path.join(workspaceRoot, "skills/workspace-dev/SKILL.md"),
+      "utf8"
+    );
     const loop = fs.readFileSync(
       path.join(workspaceRoot, "skills/workspace-dev/PANEL_DEBUG_LOOP.md"),
       "utf8"
@@ -80,7 +83,43 @@ describe("panel debugging guidance", () => {
     expect(loop).toContain("Never call `createProjects` again");
     expect(loop).toContain("ref: `ctx:${ctx.contextId}`");
     expect(loop).toContain("requestedRef");
-    expect(loop).toContain("const page = await scope.panel.cdp.page(); // fresh after runtime replacement");
+    expect(loop).toContain(
+      "const page = await scope.panel.cdp.page(); // fresh after runtime replacement"
+    );
     expect(loop).toContain("await page.screenshot({ fullPage: true })");
+  });
+});
+
+describe("host command guidance", () => {
+  it("keeps panel authoring and app hosting discoverable from their skills", () => {
+    const skill = fs.readFileSync(
+      path.join(workspaceRoot, "skills/workspace-dev/SKILL.md"),
+      "utf8"
+    );
+    const panelApi = fs.readFileSync(
+      path.join(workspaceRoot, "skills/workspace-dev/PANEL_API.md"),
+      "utf8"
+    );
+    const runtimeApi = fs.readFileSync(
+      path.join(workspaceRoot, "skills/sandbox/RUNTIME_API.md"),
+      "utf8"
+    );
+    const appSkill = fs.readFileSync(path.join(workspaceRoot, "skills/appdev/SKILL.md"), "utf8");
+    const appAuthoring = fs.readFileSync(
+      path.join(workspaceRoot, "skills/appdev/AUTHORING.md"),
+      "utf8"
+    );
+
+    expect(skill).toContain("PANEL_API.md#host-commands");
+    expect(panelApi).toContain("## Host commands");
+    expect(panelApi).toContain('import { useHostCommands } from "@workspace/react"');
+    expect(panelApi).toContain("Registration is a complete replacement");
+    expect(panelApi).toContain("exactly once per panel runtime");
+    expect(runtimeApi).toContain("registerHostCommands");
+    expect(runtimeApi).toContain("onHostCommandRun");
+    expect(appSkill).toContain("AUTHORING.md#hosting-panel-contributed-commands");
+    expect(appAuthoring).toContain("## Hosting panel-contributed commands");
+    expect(appAuthoring).toContain('target: "shell"');
+    expect(appAuthoring).toContain("unknown future shell event");
   });
 });

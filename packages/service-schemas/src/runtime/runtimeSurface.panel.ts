@@ -25,6 +25,9 @@ const PANEL_MEMBERS = [
   "focusPanel",
   "getTheme",
   "onThemeChange",
+  "registerHostCommands",
+  "unregisterHostCommands",
+  "onHostCommandRun",
   "onFocus",
   "onConnectionError",
   "onChildCreated",
@@ -87,7 +90,7 @@ export const panelRuntimeSurface: RuntimeSurface = {
     // Panel-only namespaces.
     panel: namespaceEntry(
       PANEL_MEMBERS,
-      "Panel-only affordances: identity (entityId/slotId/parentId/env), semantic display title (setTitle(title, { explicit? })), introspection (getInfo/getTheme/onThemeChange/onFocus/onConnectionError), lifecycle (focusPanel/onChildCreated/reopen), and stateArgs (get/set/setForPanel)."
+      "Panel-only affordances: identity (entityId/slotId/parentId/env), semantic display title (setTitle(title, { explicit? })), introspection (getInfo/getTheme/onThemeChange/onFocus/onConnectionError), host-local command contribution (registerHostCommands/unregisterHostCommands/onHostCommandRun), lifecycle (focusPanel/onChildCreated/reopen), and stateArgs (get/set/setForPanel)."
     ),
     journal: namespaceEntry(
       ["Journal", "with", "current"],

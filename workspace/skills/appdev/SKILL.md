@@ -17,15 +17,15 @@ from panels, workers, and extensions:
 
 ## Files
 
-| Document                               | Content                                                                                         |
-| -------------------------------------- | ----------------------------------------------------------------------------------------------- |
-| [AUTHORING.md](AUTHORING.md)           | Package layout, manifest shape, source paths, dependencies, and declaration rules               |
-| [TARGETS.md](TARGETS.md)               | Electron, React Native, and terminal target contracts                                           |
-| [CAPABILITIES.md](CAPABILITIES.md)     | Capability declarations and what each app capability unlocks                                    |
-| [DEV_LOOP.md](DEV_LOOP.md)             | Semantic source, explicit context checks, publication, approval, reload, and debugging workflow |
-| [MOBILE.md](MOBILE.md)                 | Native mobile host bootstrap, pairing, principal grants, and RN build artifacts                 |
-| [REMOTE_CLIENTS.md](REMOTE_CLIENTS.md) | Server pairing, remote shells, terminal-client direction, and credential model                  |
-| [TESTING.md](TESTING.md)               | Focused checks and smoke scenarios for app changes                                              |
+| Document                               | Content                                                                                                  |
+| -------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| [AUTHORING.md](AUTHORING.md)           | Package layout, manifest shape, source paths, dependencies, declaration rules, and panel-command hosting |
+| [TARGETS.md](TARGETS.md)               | Electron, React Native, and terminal target contracts                                                    |
+| [CAPABILITIES.md](CAPABILITIES.md)     | Capability declarations and what each app capability unlocks                                             |
+| [DEV_LOOP.md](DEV_LOOP.md)             | Semantic source, explicit context checks, publication, approval, reload, and debugging workflow          |
+| [MOBILE.md](MOBILE.md)                 | Native mobile host bootstrap, pairing, principal grants, and RN build artifacts                          |
+| [REMOTE_CLIENTS.md](REMOTE_CLIENTS.md) | Server pairing, remote shells, terminal-client direction, and credential model                           |
+| [TESTING.md](TESTING.md)               | Focused checks and smoke scenarios for app changes                                                       |
 
 ## Critical Rules
 
@@ -79,6 +79,11 @@ from panels, workers, and extensions:
     a conversational or collaborative dimension, integrate it with the workspace
     channel/messaging system using `addAgentToChannel`. Every meaningful app
     surface should be programmable by agents as a first-class concern.
+12. **Keep panel commands generic and host-local** — when an app hosts panels,
+    follow [AUTHORING.md#hosting-panel-contributed-commands](AUTHORING.md#hosting-panel-contributed-commands).
+    The panel owns command semantics and execution; the app owns only native
+    presentation and local routing. Never forward `target: "shell"` to a server
+    session or add feature-specific command behavior to generic shell code.
 
 ## Quick Start
 
