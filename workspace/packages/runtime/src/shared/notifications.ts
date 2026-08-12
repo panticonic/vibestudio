@@ -14,7 +14,6 @@ type NotificationAction = {
 };
 
 type NotificationShowOptions = {
-  id?: string;
   type?: "info" | "success" | "warning" | "error" | "consent";
   title: string;
   message?: string;
@@ -64,17 +63,17 @@ export function createNotificationClient(rpc: NotificationRpc): NotificationClie
         if (onClick) handlers.set(id, onClick);
         return { ...action, id };
       });
-      const id = handlers.size > 0 ? (opts.id ?? makeNotificationId()) : opts.id;
-      if (id && handlers.size > 0) {
+      const id = await rpc.call<string>("main", "notification.show", [
+        { type: "info", ...opts, actions },
+      ]);
+      if (handlers.size > 0) {
         actionHandlers.set(id, handlers);
         if (opts.ttl && opts.ttl > 0) {
           setTimeout(() => actionHandlers.delete(id), opts.ttl + 1000);
         }
         ensureActionSubscription();
       }
-      return rpc.call<string>("main", "notification.show", [
-        { type: "info", ...opts, id, actions },
-      ]);
+      return id;
     },
     async dismiss(id) {
       actionHandlers.delete(id);
@@ -89,10 +88,6 @@ function parseNotificationAction(payload: unknown): { id: string; actionId: stri
   return typeof record["id"] === "string" && typeof record["actionId"] === "string"
     ? { id: record["id"], actionId: record["actionId"] }
     : undefined;
-}
-
-function makeNotificationId(): string {
-  return `notif-${globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`}`;
 }
 
 function actionIdFor(label: string, index: number): string {

@@ -99,6 +99,26 @@ CLI eval has no chat binding; use `vibestudio channel send` when a workflow must
 post to a conversation. Linked-agent sessions cannot run eval. Read
 [EVAL.md](EVAL.md) for bindings, imports, cancellation, and persistent scope.
 
+## Notify a connected user
+
+A paired direct session can show a transient notification in shell chrome:
+
+```bash
+vibestudio agent call notification.show \
+  '[{"type":"info","title":"Build finished","message":"The requested build is ready."}]'
+```
+
+The host returns an opaque id derived from the verified caller and fresh
+entropy. Callers cannot choose or reuse notification ids; only the creating
+runtime may dismiss one. User actions are reported exclusively by an
+authenticated shell and are not an agent operation.
+
+Notifications reach only live shell sessions for the caller's verified account.
+Acceptance does not prove that a person saw the banner, and the notification is
+not durable. Keep normal progress and completion in the conversation; reserve
+shell notifications for brief, time-sensitive attention while the user is
+connected.
+
 ## Observe frontend work
 
 For panel changes, inspect the panel in the same context and build as the source:

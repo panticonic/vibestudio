@@ -196,11 +196,25 @@ const id = await notifications.show({
   title: "Notification test",
   message: "notification-show-marker",
 });
+
+// The host issued this opaque id. Retain it only if this runtime may dismiss
+// the notification later.
+await notifications.dismiss(id);
 ```
 
 `type` may be `info`, `success`, `warning`, `error`, or `consent`. The runtime
 client defaults an omitted `type` to `info`; notification text belongs in
-`message`.
+`message`. Notification ids are derived from the verified caller and fresh host
+entropy; callers cannot provide, reuse, or impersonate an id. Only the runtime
+that created a notification can dismiss it, and only an authenticated shell can
+report a user click.
+
+This is a transient shell-chrome surface, delivered only to live sessions for
+the caller's verified account. A returned id confirms host acceptance, not that
+a person saw the notification. Keep ordinary progress and completion in the
+conversation; use a notification only for brief attention that is useful while
+the user is connected. Notification callbacks belong to the creating runtime's
+live heap and are not a durable workflow or approval mechanism.
 
 ## Webhook Subscriptions
 

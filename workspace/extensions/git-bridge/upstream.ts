@@ -1307,7 +1307,6 @@ export class UpstreamEngine {
   ): Promise<void> {
     const remote = `${upstream.remote}/${upstream.branch}`;
     await this.ctx.notifications.show({
-      id: `git-upstream:${encodeURIComponent(repo)}`,
       type: "warning",
       title: `Push to ${remote} failed`,
       message: reason,

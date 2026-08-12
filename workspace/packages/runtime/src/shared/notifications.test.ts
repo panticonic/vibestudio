@@ -5,8 +5,8 @@ import { createNotificationClient } from "./notifications.js";
 function makeRpc() {
   const directListeners = new Set<(event: { payload: unknown }) => void>();
   const rpc = {
-    call: vi.fn(async (_target: string, method: string, args: unknown[]) => {
-      if (method === "notification.show") return (args[0] as { id?: string }).id ?? "n1";
+    call: vi.fn(async (_target: string, method: string, _args: unknown[]) => {
+      if (method === "notification.show") return "n1";
       return undefined;
     }),
     on: vi.fn((_event: string, listener: (event: { payload: unknown }) => void) => {
@@ -37,10 +37,10 @@ describe("notification client", () => {
     expect(fixture.rpc.on).toHaveBeenCalledWith("notification:action", expect.any(Function));
     expect(fixture.rpc.call).toHaveBeenCalledWith("main", "notification.show", [
       expect.objectContaining({
-        id,
         actions: [expect.objectContaining({ id: "reveal", label: "Reveal" })],
       }),
     ]);
+    expect(id).toBe("n1");
     const shown = fixture.rpc.call.mock.calls.find(
       (call) => call[1] === "notification.show"
     )?.[2][0] as {
@@ -52,7 +52,7 @@ describe("notification client", () => {
     await vi.waitFor(() => expect(onClick).toHaveBeenCalledTimes(1));
   });
 
-  it("generates stable action IDs when callers only provide labels", async () => {
+  it("uses the host-issued notification ID with stable action IDs", async () => {
     const fixture = makeRpc();
     const onClick = vi.fn();
     const client = createNotificationClient(fixture.rpc as unknown as RpcClient);

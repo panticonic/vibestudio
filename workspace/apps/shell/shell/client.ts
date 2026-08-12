@@ -1013,11 +1013,8 @@ export const directEvents = {
 // =============================================================================
 import type { NotificationPayload } from "@vibestudio/shared/events";
 export const notification = {
-  show: (
-    opts: Omit<NotificationPayload, "id"> & {
-      id?: string;
-    }
-  ) => notificationClient.show(opts),
+  show: (opts: Omit<NotificationPayload, "id" | "sourcePanelId" | "iconDataUrl">) =>
+    notificationClient.show(opts),
   reportAction: (id: string, actionId: string) => notificationClient.reportAction(id, actionId),
   dismiss: (id: string) => notificationClient.dismiss(id),
 };

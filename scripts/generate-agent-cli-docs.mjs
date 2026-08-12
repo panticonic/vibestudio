@@ -155,6 +155,7 @@ function renderService(def) {
   );
   lines.push("| Method | Description |", "|--------|-------------|");
   for (const [methodName, method] of Object.entries(def.methods)) {
+    if (method.agentFacing === false) continue;
     const effectiveAuthority = method.authority ?? def.authority;
     if (!authorityPrincipals(effectiveAuthority).includes("user")) continue;
     lines.push(`| \`${def.name}.${methodName}\` | ${escapeTableCell(method.description ?? "")} |`);

@@ -1160,7 +1160,6 @@ export default function ChatPanel() {
       onOpenLocalModels: handleOpenLocalModels,
       onAttentionRequired: (title, message) => {
         void notifications.show({
-          id: `chat-attention:${channelName ?? "pending"}`,
           type: "warning",
           title,
           message,

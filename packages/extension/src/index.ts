@@ -322,7 +322,6 @@ export interface ExtensionWorkspaceLike {
 
 export interface ExtensionNotificationsLike {
   show(notification: {
-    id?: string;
     type?: string;
     title?: string;
     message?: string;

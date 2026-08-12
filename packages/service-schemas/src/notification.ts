@@ -7,7 +7,10 @@ import type { NotificationPayload } from "@vibestudio/shared/events";
 import type { MethodAccessDescriptor } from "@vibestudio/shared/serviceAuthority";
 import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
 
-export type NotificationShowRequest = Omit<NotificationPayload, "id"> & { id?: string };
+export type NotificationShowRequest = Omit<
+  NotificationPayload,
+  "id" | "sourcePanelId" | "iconDataUrl"
+>;
 
 // Access descriptors carry sensitivity metadata beside the compositional
 // principal requirements declared by the service or method.
@@ -91,35 +94,35 @@ export const NotificationHistoryItemSchema = z.object({
     .describe("Detail rows associated with the prior notification."),
 });
 
-export const NotificationShowRequestSchema = z.object({
-  id: z.string().optional().describe("Caller-supplied id; auto-generated when omitted."),
-  type: z
-    .enum(["info", "success", "warning", "error", "consent"])
-    .describe("Notification severity/kind; 'consent' drives an approval prompt."),
-  title: z.string().describe("Notification title."),
-  message: z.string().optional().describe("Notification body message."),
-  consent: z
-    .object({
-      provider: z.string(),
-      scopes: z.array(z.string()),
-      callerId: z.string(),
-      callerTitle: z.string(),
-      callerKind: z.enum(["panel", "app", "worker", "do"]),
-    })
-    .optional()
-    .describe("Consent request details shown for 'consent'-type notifications."),
-  ttl: z.number().optional().describe("Auto-dismiss timeout in milliseconds."),
-  actions: z
-    .array(NotificationActionSchema)
-    .optional()
-    .describe("Action buttons offered to the user."),
-  details: z.array(NotificationDetailSchema).optional().describe("Expandable detail rows."),
-  history: z
-    .array(NotificationHistoryItemSchema)
-    .optional()
-    .describe("Prior related notifications shown as history."),
-  sourcePanelId: z.string().optional().describe("Panel id that originated the notification."),
-}) satisfies z.ZodType<NotificationShowRequest>;
+export const NotificationShowRequestSchema = z
+  .object({
+    type: z
+      .enum(["info", "success", "warning", "error", "consent"])
+      .describe("Notification severity/kind; 'consent' drives an approval prompt."),
+    title: z.string().describe("Notification title."),
+    message: z.string().optional().describe("Notification body message."),
+    consent: z
+      .object({
+        provider: z.string(),
+        scopes: z.array(z.string()),
+        callerId: z.string(),
+        callerTitle: z.string(),
+        callerKind: z.enum(["panel", "app", "worker", "do"]),
+      })
+      .optional()
+      .describe("Consent request details shown for 'consent'-type notifications."),
+    ttl: z.number().optional().describe("Auto-dismiss timeout in milliseconds."),
+    actions: z
+      .array(NotificationActionSchema)
+      .optional()
+      .describe("Action buttons offered to the user."),
+    details: z.array(NotificationDetailSchema).optional().describe("Expandable detail rows."),
+    history: z
+      .array(NotificationHistoryItemSchema)
+      .optional()
+      .describe("Prior related notifications shown as history."),
+  })
+  .strict() satisfies z.ZodType<NotificationShowRequest>;
 
 export const notificationMethods = defineServiceMethods({
   show: {
@@ -131,7 +134,7 @@ export const notificationMethods = defineServiceMethods({
       rationale: "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family",
     },
     description:
-      "Show a notification in the shell chrome; returns its id (auto-generated when not supplied).",
+      "Show a notification in the shell chrome; returns a host-issued id attributed to the verified caller.",
     args: z.tuple([NotificationShowRequestSchema]),
     returns: z.string(),
     access: WRITE_ACCESS,
@@ -146,13 +149,14 @@ export const notificationMethods = defineServiceMethods({
       rationale: "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family",
     },
     description:
-      "Dismiss the notification with the given id, rejecting any pending waitForAction for it.",
+      "Dismiss a notification previously issued to this caller, rejecting any pending waitForAction for it.",
     args: z.tuple([z.string()]),
     returns: z.void(),
     access: WRITE_ACCESS,
     examples: [{ args: ["notif-123"] }],
   },
   reportAction: {
+    agentFacing: false,
     tier: {
       tier: "open",
       session: "family",
@@ -161,7 +165,7 @@ export const notificationMethods = defineServiceMethods({
       rationale: "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family",
     },
     description:
-      "Report that the user took an action on a notification, emitting an event and resolving any pending waitForAction.",
+      "Shell-only: report a user action on an addressed notification and resolve its pending waitForAction.",
     args: z.tuple([z.string(), z.string()]),
     returns: z.void(),
     access: WRITE_ACCESS,

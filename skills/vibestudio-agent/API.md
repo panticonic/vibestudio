@@ -153,7 +153,6 @@ Authority principals: `code`, `host`, `user`
 
 | Method | Description |
 |--------|-------------|
-| `credentials.storeCredential` | Persist a URL-bound credential (label, audience, injection, secret material); userland callers are prompted to approve it before it is stored, and the returned summary never echoes the secret. |
 | `credentials.connect` | Run a connection flow (OAuth2/OAuth1a/API-key/SSH/browser-session) to obtain and store a credential; interactive flows open a browser sign-in. |
 | `credentials.configureClient` | Store (versioned) OAuth client configuration — authorize/token URLs and client fields such as client id/secret; userland callers are prompted to submit the material, and secrets are never returned in the status. |
 | `credentials.requestCredentialInput` | Prompt the user to enter exactly one secret field, then store the resulting credential; the submitted secret is never returned in the summary. |
@@ -166,8 +165,6 @@ Authority principals: `code`, `host`, `user`
 | `credentials.inspectStoredCredentials` | List administrator-facing credential summaries with runtime usage metadata; secret material is never included. |
 | `credentials.revokeCredential` | Revoke a stored credential by id (marks it revoked and best-effort revokes the upstream provider token); requires critical account-disconnection authority bound to the exact credential id. |
 | `credentials.resolveCredential` | Locate a stored credential by url/provider/id and authorize its use for the caller, returning a summary or null when nothing matches. |
-| `credentials.proxyFetch` | Forward an outbound HTTP request through the egress proxy, injecting the resolved credential; returns status, ordered header pairs, final URL, and a base64 body. |
-| `credentials.proxyGitHttp` | Forward a Git smart-HTTP request through the egress proxy with credential injection; the request/response bodies are base64-encoded. |
 | `credentials.completeCapture` | Complete a pending server-initiated session credential capture (`credential:capture-request` event) with the captured material or an error; callable only by the attached desktop shell. |
 | `credentials.audit` | Query the credential egress audit log (optionally filtered by provider/connection/caller/since, paged by limit/after). |
 
@@ -350,9 +347,8 @@ Authority principals: `code`, `host`, `user`
 
 | Method | Description |
 |--------|-------------|
-| `notification.show` | Show a notification in the shell chrome; returns its id (auto-generated when not supplied). |
-| `notification.dismiss` | Dismiss the notification with the given id, rejecting any pending waitForAction for it. |
-| `notification.reportAction` | Report that the user took an action on a notification, emitting an event and resolving any pending waitForAction. |
+| `notification.show` | Show a notification in the shell chrome; returns a host-issued id attributed to the verified caller. |
+| `notification.dismiss` | Dismiss a notification previously issued to this caller, rejecting any pending waitForAction for it. |
 
 ## `panelCdp`
 
@@ -452,7 +448,6 @@ Authority principals: `code`, `host`, `user`
 | `runtime.reserveEntity` | Reserve a code-backed entity's stable durable identity and context without waiting for its immutable runtime image. Omitted contextId deterministically creates a fresh lifecycle-owned context; an explicit contextId shares that existing context. Reserved entities are non-executable until activateReservedEntity completes. |
 | `runtime.activateReservedEntity` | Prepare and atomically activate the immutable runtime image for a previously reserved code-backed entity. |
 | `runtime.retireEntity` | Retire a single entity, firing cleanup hooks. With removeContext, also delete the context folder when no other live entity shares the context. |
-| `runtime.recoverExecution` | Recover one unavailable Durable Object execution. restore-exact never changes its sealed identity; replace-incarnation atomically selects code from the entity's current semantic context while preserving its durable storage. |
 | `runtime.listEntities` | List exact live runtime instances (id, kind, source, key, contextId, title, createdAt). For declared source and build readiness use build.listUnits. |
 | `runtime.resolveContext` | Return the contextId for an entity (or null if unknown). Cached read; falls back to DO. |
 | `runtime.listContexts` | List durable semantic workspace contexts, optionally restricted to an exact id prefix. This is domain-neutral workflow discovery; context contents remain subject to their ordinary VCS read authority. |
@@ -555,10 +550,6 @@ Authority principals: `code`, `host`, `user`
 
 | Method | Description |
 |--------|-------------|
-| `webhookIngress.createSubscription` | Create an owner-scoped public webhook subscription targeting a method in the caller's own source. Omitted maxBodyBytes uses the relay ceiling (1500000) for relay delivery and the configured host ceiling for direct delivery (16777216 bytes by default). In agent eval, use agent.describe().identity for target.source, target.className, and target.objectKey. |
-| `webhookIngress.listSubscriptions` | List the caller's active webhook subscriptions (secrets redacted). Pass includeRevoked:true only for audit/history views. |
-| `webhookIngress.revokeSubscription` | Revoke one caller-owned webhook subscription idempotently. |
-| `webhookIngress.rotateSecret` | Rotate a caller-owned subscription secret, generating a strong secret when one is omitted. |
 
 ## `workerdInspector`
 
@@ -627,31 +618,6 @@ Authority principals: `code`, `host`, `user`
 
 | Method | Description |
 |--------|-------------|
-| `workspace-state.panelTree.rootGroups` | Low-level owner-band census; this returns owners and counts, not panels. Runtime eval should use panelTree.rootOwners(). |
-| `workspace-state.panelTree.rootsForCaller` | Low-level transport behind runtime panelTree.roots(); read one bounded root-panel page scoped to the verified caller subject. |
-| `workspace-state.panelTree.page` | Advanced exact-group sibling page. Runtime eval should prefer roots(), rootsForOwner(), or children(); direct calls require {kind:'roots', ownerUserId} or {kind:'children', parentSlotId}. |
-| `workspace-state.panelTree.path` | Read the bounded root-to-slot path for one open panel. |
-| `workspace-state.panelTree.detail` | Read the current runtime detail for one open panel without its siblings/history. |
-| `workspace-state.panelTree.search` | Keyset-page full-text title matches with their ancestor breadcrumbs. |
-| `workspace-state.slot.get` | Get a single slot row by id. |
-| `workspace-state.slot.historyRelative` | Read the adjacent history entry relative to a slot's current cursor. |
-| `workspace-state.slot.historyEntry` | Read one exact history entry belonging to a slot. |
-| `workspace-state.entity.resolveActive` | Resolve a single active entity record by id. |
-| `workspace-state.entity.resolve` | Resolve an entity record by id, including a preparing reservation. |
-| `workspace-state.slot.resolveByEntity` | Resolve the OPEN slot id whose current entity is the given runtime-entity (nav) id, or null. Durable nav→slot mapping used to nest launches under the owning panel's tree slot. |
-| `workspace-state.slot.create` | Create a new slot row. |
-| `workspace-state.slot.commitPreparedNavigation` | Commit prepared panel history and publish the slot's desired runtime entity for presentation reconciliation. |
-| `workspace-state.slot.updateCurrentStateArgs` | Mutate the stateArgs for a slot's current history entry. |
-| `workspace-state.slot.move` | Atomically reparent a slot and place it using stable sibling anchors. |
-| `workspace-state.slot.close` | Atomically close a subtree and enqueue its runtime cleanup without materializing descendants. |
-| `workspace-state.slot.closeCleanupPage` | Read one bounded page of durable post-close runtime cleanup work. |
-| `workspace-state.slot.closeCleanupAck` | Acknowledge successfully completed post-close cleanup items. |
-| `workspace-state.panel.search` | FTS5 search over panel entities. |
-| `workspace-state.panel.sourceUsage` | Durable source-level panel launch frequency for launcher ranking. |
-| `workspace-state.panel.index` | Upsert a panel's search-metadata row. |
-| `workspace-state.panel.updateTitle` | Update the searchable title for a panel entity. |
-| `workspace-state.panel.incrementAccess` | Bump the access counter for a panel entity. |
-| `workspace-state.panel.rebuildIndex` | Rebuild the panel-search index from active panel entities. |
 
 ## `workspacePresence`
 

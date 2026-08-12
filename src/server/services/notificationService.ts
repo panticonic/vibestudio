@@ -6,22 +6,20 @@
  * for blocking consent flows.
  */
 
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import type { EventService } from "@vibestudio/shared/eventsService";
 import type { NotificationPayload } from "@vibestudio/shared/events";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import { notificationMethods } from "@vibestudio/service-schemas/notification";
+import type { VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 
 /**
  * Internal interface for server-side code to push notifications
  * and wait for user actions (e.g., OAuth consent approval).
  */
 export interface NotificationServiceInternal {
-  show(
-    notification: Omit<NotificationPayload, "id"> & { id?: string },
-    targetUserId?: string
-  ): string;
+  show(notification: Omit<NotificationPayload, "id">, targetUserId?: string): string;
   dismiss(id: string, targetUserId?: string): void;
   waitForAction(id: string, timeoutMs?: number): Promise<string>;
 }
@@ -53,15 +51,40 @@ export function createNotificationService(deps: { eventService: EventService }):
     }
   >();
 
+  type NotificationOwner =
+    | { kind: "caller"; runtimeKey: string; targetUserId?: string }
+    | { kind: "host"; targetUserId?: string };
+  const notificationOwners = new Map<string, NotificationOwner>();
+
+  const callerRuntimeKey = (caller: VerifiedCaller): string =>
+    `${caller.runtime.kind}\0${caller.runtime.id}`;
+
+  const callerNotificationId = (caller: VerifiedCaller): string => {
+    const callerDigest = createHash("sha256")
+      .update(callerRuntimeKey(caller))
+      .digest("hex")
+      .slice(0, 16);
+    return `notif-${caller.runtime.kind}-${callerDigest}-${randomUUID()}`;
+  };
+
+  const assertCallerOwns = (id: string, caller: VerifiedCaller): void => {
+    const owner = notificationOwners.get(id);
+    if (owner?.kind !== "caller" || owner.runtimeKey !== callerRuntimeKey(caller)) {
+      throw new Error("Notification does not belong to this caller");
+    }
+  };
+
   const internal: NotificationServiceInternal = {
     show(opts, targetUserId) {
-      const id = opts.id ?? `notif-${randomUUID()}`;
+      const id = `notif-host-${randomUUID()}`;
       const payload: NotificationPayload = { ...opts, id };
+      notificationOwners.set(id, { kind: "host", ...(targetUserId ? { targetUserId } : {}) });
       emit("notification:show", payload, targetUserId);
       return id;
     },
 
     dismiss(id, targetUserId) {
+      notificationOwners.delete(id);
       emit("notification:dismiss", { id }, targetUserId);
       // Also reject any pending waitForAction
       const pending = pendingActions.get(id);
@@ -92,13 +115,37 @@ export function createNotificationService(deps: { eventService: EventService }):
     handler: defineServiceHandler("notification", notificationMethods, {
       show: (ctx, [opts]) => {
         const targetUserId = ctx.caller.subject?.userId;
-        return internal.show(opts, targetUserId);
+        const id = callerNotificationId(ctx.caller);
+        const payload: NotificationPayload = {
+          ...opts,
+          id,
+          ...(ctx.caller.runtime.kind === "panel" ? { sourcePanelId: ctx.caller.runtime.id } : {}),
+        };
+        notificationOwners.set(id, {
+          kind: "caller",
+          runtimeKey: callerRuntimeKey(ctx.caller),
+          ...(targetUserId ? { targetUserId } : {}),
+        });
+        emit("notification:show", payload, targetUserId);
+        return id;
       },
       dismiss: (ctx, [id]) => {
+        assertCallerOwns(id, ctx.caller);
         internal.dismiss(id, ctx.caller.subject?.userId);
       },
       reportAction: (ctx, [id, actionId]) => {
+        if (ctx.caller.runtime.kind !== "shell") {
+          throw new Error("Only a shell can report a notification action");
+        }
         const targetUserId = ctx.caller.subject?.userId;
+        const owner = notificationOwners.get(id);
+        if (
+          owner?.targetUserId &&
+          owner.targetUserId !== "system" &&
+          owner.targetUserId !== targetUserId
+        ) {
+          throw new Error("Notification does not belong to this user");
+        }
         // Emit action event for any listeners
         emit("notification:action", { id, actionId }, targetUserId);
         // Resolve any pending waitForAction promise
@@ -108,6 +155,7 @@ export function createNotificationService(deps: { eventService: EventService }):
           pending.resolve(actionId);
           pendingActions.delete(id);
         }
+        notificationOwners.delete(id);
       },
       signalUserInbox: (_ctx, [userId]) =>
         eventService.emitToUser(userId, "user-notifications-changed", {

@@ -281,7 +281,7 @@ interface ApprovalQueueLike {
 }
 
 interface NotificationServiceLike {
-  show(notification: Omit<NotificationPayload, "id"> & { id?: string }): string;
+  show(notification: Omit<NotificationPayload, "id">): string;
 }
 
 export interface ExtensionHostDeps {
@@ -414,7 +414,6 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
           { attempts, error, timestamp: Date.now() },
         ];
         this.deps.notificationService?.show({
-          id: `extension-crash-${encodeURIComponent(name)}`,
           type: "error",
           title: "Extension stopped",
           message: `${name} failed ${attempts} times and will not restart until reloaded.`,
@@ -503,7 +502,6 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
       },
       notifyUnresolved: (sources) => {
         this.deps.notificationService?.show({
-          id: `extensions-unresolved-${encodeURIComponent(sources.join(","))}`,
           type: "error",
           title: "Unknown extensions declared",
           message: `meta/vibestudio.yml declares extensions that don't exist: ${sources.join(", ")}.`,
@@ -553,7 +551,6 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
         }
         this.deps.onWorkspaceUnitsChanged?.("extension-status");
         this.deps.notificationService?.show({
-          id: `extensions-pending-approval-${names.join(",")}`,
           type: "info",
           title: "Extensions need approval",
           message: `${names.join(", ")} ${names.length === 1 ? "is" : "are"} declared but not approved. They will be offered again on next startup or when meta is edited.`,

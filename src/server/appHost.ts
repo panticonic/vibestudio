@@ -306,7 +306,7 @@ interface ApprovalQueueLike {
 }
 
 interface NotificationServiceLike {
-  show(notification: Omit<NotificationPayload, "id"> & { id?: string }): string;
+  show(notification: Omit<NotificationPayload, "id">): string;
 }
 
 export interface AppHostDeps {
@@ -459,7 +459,6 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
       },
       notifyUnresolved: (sources) => {
         this.deps.notificationService?.show({
-          id: `apps-unresolved-${encodeURIComponent(sources.join(","))}`,
           type: "error",
           title: "Unknown apps declared",
           message: `meta/vibestudio.yml declares apps that don't exist: ${sources.join(", ")}.`,
@@ -1729,7 +1728,6 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
         : []),
     ];
     this.deps.notificationService?.show({
-      id: `app-update-${encodeURIComponent(entry.name)}`,
       type: "info",
       title: targetCopy.title,
       message: `${entry.name}: ${targetCopy.message}`,
@@ -1747,7 +1745,6 @@ export class AppHost implements UnitChangeApprovalProvider<ReviewedUnit> {
       ? ` (${diagnostic.phase}${diagnostic.target ? `, ${diagnostic.target}` : ""})`
       : "";
     this.deps.notificationService?.show({
-      id: `app-update-error-${encodeURIComponent(entry.name)}`,
       type: "error",
       title: "App update failed",
       message: `${entry.name}: ${message}${detail}`,

@@ -3,7 +3,7 @@ import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import { createNotificationService } from "./notificationService.js";
 
 describe("server notification service", () => {
-  it("scopes transient runtime notifications to the caller's verified account", async () => {
+  it("issues a caller-attributed id and scopes the notification to the verified account", async () => {
     const eventService = {
       emit: vi.fn(),
       emitToUser: vi.fn(() => true),
@@ -22,8 +22,69 @@ describe("server notification service", () => {
       id,
       type: "info",
       title: "Private notice",
+      sourcePanelId: "panel:alice",
     });
+    expect(id).toMatch(/^notif-panel-[0-9a-f]{16}-/u);
     expect(eventService.emit).not.toHaveBeenCalled();
+  });
+
+  it("rejects caller-provided ids and cross-caller dismissal", async () => {
+    const eventService = {
+      emit: vi.fn(),
+      emitToUser: vi.fn(() => true),
+    };
+    const service = createNotificationService({ eventService: eventService as never }).definition;
+    const alice = createVerifiedCaller("panel:alice", "panel", null, null, {
+      userId: "usr_alice",
+      handle: "alice",
+    });
+    const bob = createVerifiedCaller("panel:bob", "panel", null, null, {
+      userId: "usr_bob",
+      handle: "bob",
+    });
+
+    await expect(
+      service.handler({ caller: alice }, "show", [{ id: "chosen", type: "info", title: "Spoofed" }])
+    ).rejects.toThrow();
+
+    const id = await service.handler({ caller: alice }, "show", [{ type: "info", title: "Owned" }]);
+    await expect(service.handler({ caller: bob }, "dismiss", [id])).rejects.toThrow(
+      "Notification does not belong to this caller"
+    );
+    await expect(service.handler({ caller: alice }, "dismiss", [id])).resolves.toBeUndefined();
+  });
+
+  it("accepts user actions only from the shell belonging to the addressed account", async () => {
+    const eventService = {
+      emit: vi.fn(),
+      emitToUser: vi.fn(() => true),
+    };
+    const result = createNotificationService({ eventService: eventService as never });
+    const panel = createVerifiedCaller("panel:alice", "panel", null, null, {
+      userId: "usr_alice",
+      handle: "alice",
+    });
+    const aliceShell = createVerifiedCaller("shell:alice", "shell", null, null, {
+      userId: "usr_alice",
+      handle: "alice",
+    });
+    const bobShell = createVerifiedCaller("shell:bob", "shell", null, null, {
+      userId: "usr_bob",
+      handle: "bob",
+    });
+    const id = await result.definition.handler({ caller: panel }, "show", [
+      { type: "info", title: "Actionable" },
+    ]);
+
+    await expect(
+      result.definition.handler({ caller: panel }, "reportAction", [id, "open"])
+    ).rejects.toThrow("Only a shell");
+    await expect(
+      result.definition.handler({ caller: bobShell }, "reportAction", [id, "open"])
+    ).rejects.toThrow("does not belong to this user");
+    await expect(
+      result.definition.handler({ caller: aliceShell }, "reportAction", [id, "open"])
+    ).resolves.toBeUndefined();
   });
 
   it("routes an opaque durable-inbox nudge only to the requested verified account", async () => {
