@@ -53,6 +53,16 @@ export const GAD_WORKSPACE_SERVICE_PROTOCOL = "vibestudio.gad.workspace.v1";
 /** Shared wire contract implemented by the manifest-declared workspace source provider. */
 export const VCS_SERVICE_PROTOCOL = "vibestudio.vcs.v1";
 
+/** JSON arrays turn `undefined` into `null`, which changes an omitted optional
+ * RPC argument into an explicit (and usually invalid) value. Preserve the
+ * JavaScript call contract by removing only omitted trailing arguments before
+ * crossing the wire; interior positions remain exact. */
+function omitTrailingUndefined(args: unknown[]): unknown[] {
+  let length = args.length;
+  while (length > 0 && args[length - 1] === undefined) length -= 1;
+  return length === args.length ? args : args.slice(0, length);
+}
+
 export function doTargetId(ref: DORefParam): string {
   return `do:${ref.source}:${ref.className}:${ref.objectKey}`;
 }
@@ -122,7 +132,7 @@ export function createDurableObjectServiceClient(
     resolve,
     async call<T = unknown>(method: string, ...args: unknown[]): Promise<T> {
       const service = await resolve();
-      return rpc.call<T>(service.targetId, method, args);
+      return rpc.call<T>(service.targetId, method, omitTrailingUndefined(args));
     },
     async callWithOptions<T = unknown>(
       method: string,
@@ -130,7 +140,7 @@ export function createDurableObjectServiceClient(
       options: RpcCallOptionsLike
     ): Promise<T> {
       const service = await resolve(options);
-      return rpc.call<T>(service.targetId, method, args, options);
+      return rpc.call<T>(service.targetId, method, omitTrailingUndefined(args), options);
     },
   };
 }

@@ -9,6 +9,21 @@ function rpcCall(mock: unknown): RpcCallerLike["call"] {
 }
 
 describe("createDurableObjectServiceClient", () => {
+  it("omits trailing undefined arguments before JSON transport", async () => {
+    const call = vi.fn(async <T = unknown>(target: string, method: string, _args: unknown[]) => {
+      if (target === "main" && method === "workers.resolveService") {
+        return { kind: "durable-object", targetId: "do:vcs" } as T;
+      }
+      if (target === "do:vcs" && method === "search") return [] as T;
+      throw new Error(`unexpected call ${target}.${method}`);
+    });
+    const client = createDurableObjectServiceClient({ call: rpcCall(call) }, "vcs");
+
+    await client.call("search", "taskflow", 20, undefined);
+
+    expect(call).toHaveBeenLastCalledWith("do:vcs", "search", ["taskflow", 20]);
+  });
+
   it("retries service resolution after a transient failure", async () => {
     let fail = true;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
