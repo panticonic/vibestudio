@@ -57,6 +57,7 @@
     "generate:vcs-skill-release": "node --import tsx scripts/generate-vcs-skill-release.mjs",
     "check:vcs-skill-release": "node --import tsx scripts/generate-vcs-skill-release.mjs --check",
     "check:build-artifacts": "node scripts/check-build-artifacts.mjs",
+    "check:native-host-dependencies": "node scripts/native-host-dependencies.mjs",
     "check:host-boundary": "node scripts/check-host-workspace-imports.mjs",
     "check:package-dependencies": "node scripts/check-package-dependencies.mjs",
     "check:userland-package-manager-boundary": "node scripts/check-userland-package-manager-boundary.mjs",

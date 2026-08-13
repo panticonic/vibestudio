@@ -170,6 +170,7 @@ async function runServer(
   // environment, so an ephemeral server can never mistake the developer's
   // ordinary CLI credential for its own.
   const { bootstrapInstanceCli } = await import("./bootstrapInstanceCli.js");
+  await run(process.execPath, ["scripts/native-host-dependencies.mjs", "--repair"], { env });
   await run(process.execPath, ["build.mjs", "--source-server-prereqs"], { env });
   const configuredReadyFile = optionValue(forwarded, "--ready-file");
   const readyFile =
@@ -206,6 +207,7 @@ async function runServer(
 }
 
 async function runDesktop(forwarded: string[], env: NodeJS.ProcessEnv): Promise<number> {
+  await run(process.execPath, ["scripts/native-host-dependencies.mjs", "--repair"], { env });
   await run(process.execPath, ["build.mjs"], { env });
   // Preserve the existing non-blocking developer typecheck, but make it an
   // owned child of this instance instead of a leaked shell background job.

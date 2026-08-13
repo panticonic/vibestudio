@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { NODE_ESM_COMPAT_BANNER, SERVER_ESM_BANNER } from "./build-artifact-contracts.mjs";
+import { assertHostNativeDependencies } from "./native-host-dependencies.mjs";
 
 const repoRoot = path.resolve(new URL("..", import.meta.url).pathname);
 
@@ -299,6 +300,8 @@ for (const smoke of executableSmokes) {
   runExecutableSmoke(smoke);
 }
 
+assertHostNativeDependencies({ cwd: repoRoot });
+
 if (process.env.NODE_ENV === "production") {
   const maps = fs
     .readdirSync(path.join(repoRoot, "dist"), { recursive: true })
@@ -309,5 +312,5 @@ if (process.env.NODE_ENV === "production") {
 }
 
 console.log(
-  `[build-artifacts] ${contracts.length} contracts checked, ${importSmokes.length} import smokes and ${executableSmokes.length} executable smokes passed.`
+  `[build-artifacts] ${contracts.length} contracts checked, ${importSmokes.length} import smokes, ${executableSmokes.length} executable smokes, and 3 host runtime contracts passed.`
 );

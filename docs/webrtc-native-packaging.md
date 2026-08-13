@@ -50,9 +50,11 @@ node-datachannel's install runs `prebuild-install -r napi`
 ```
 
 If a prebuilt is unavailable for a triple, `prebuild-install` falls back to a
-source build (`cmake-js`), which needs CMake + a C++17 toolchain. Keep that path
-loud in CI (do not silence install failures) so a missing prebuild is caught at
-build time, not at first DTLS connection.
+source build (`cmake-js`), which needs CMake + a C++17 toolchain. The host build
+contract loads every installed native runtime dependency, so a missing binary
+fails the build rather than the first DTLS connection. Developer startup repairs
+only an unavailable declared native package with `pnpm rebuild`, then runs the
+same contract before starting Electron or the server.
 
 ## 2. esbuild — keep it external (do not bundle the addon)
 
@@ -119,11 +121,11 @@ Validate `node-datachannel` prebuilt resolution (and the source-build fallback)
 across all shipped targets so an ARM/mobile-class triple gap (plan §12) is caught
 in CI, not in the field:
 
-| OS      | Arch         |
-| ------- | ------------ |
-| macOS   | x64, arm64   |
-| Windows | x64, arm64   |
-| Linux   | x64, arm64   |
+| OS      | Arch       |
+| ------- | ---------- |
+| macOS   | x64, arm64 |
+| Windows | x64, arm64 |
+| Linux   | x64, arm64 |
 
 For each: clean install, assert the `.node` loads
 (`require("node-datachannel").PeerConnection` is a function), and run a minimal
