@@ -4,6 +4,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse as parseYaml } from "yaml";
+import developmentBaseConfig from "../src/dev/developmentBaseConfig.cjs";
 
 const defaultAppRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -122,8 +123,7 @@ function userlandUnitManifestPaths(userlandRoot) {
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {
-  const userlandRoot = process.env.VIBESTUDIO_USERLAND_ROOT;
-  if (!userlandRoot) throw new Error("VIBESTUDIO_USERLAND_ROOT must name the exact Base checkout");
+  const userlandRoot = developmentBaseConfig.requireDevelopmentBaseCheckout(defaultAppRoot);
   const errors = collectUserlandPackageManagerBoundaryErrors(defaultAppRoot, userlandRoot);
   if (errors.length > 0) {
     console.error("Userland package-manager boundary check failed:");

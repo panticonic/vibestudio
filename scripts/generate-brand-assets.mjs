@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import developmentBaseConfig from "../src/dev/developmentBaseConfig.cjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "..");
@@ -193,10 +194,7 @@ const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-brand-"));
 try {
   const brandDir = path.join(repoRoot, "build-resources", "brand");
   const linuxDir = path.join(repoRoot, "build-resources", "icons");
-  const exactUserlandRoot = process.env.VIBESTUDIO_USERLAND_ROOT;
-  if (!exactUserlandRoot) {
-    throw new Error("VIBESTUDIO_USERLAND_ROOT must name the exact Base checkout to update");
-  }
+  const exactUserlandRoot = developmentBaseConfig.requireDevelopmentBaseCheckout(repoRoot);
   const workspaceUiAssetsDir = path.join(exactUserlandRoot, "packages", "ui", "src", "assets");
   const mobileWorkspaceAssets = path.join(exactUserlandRoot, "apps", "mobile", "src", "assets");
   const mobileHostAssets = path.join(repoRoot, "apps", "mobile", "assets");

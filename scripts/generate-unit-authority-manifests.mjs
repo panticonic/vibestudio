@@ -11,6 +11,7 @@ import {
   inferUnitTransportCapabilities,
   inferWorkspacePackageReferences,
 } from "@vibestudio/shared/unitAuthorityInference";
+import developmentBaseConfig from "../src/dev/developmentBaseConfig.cjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const syntaxServices = new Map();
@@ -27,11 +28,7 @@ function parseSource(file, source) {
   if (!parsed) throw new Error(`TypeScript did not parse ${file}`);
   return parsed;
 }
-const userlandRootArgument = process.env.VIBESTUDIO_USERLAND_ROOT;
-if (!userlandRootArgument) {
-  throw new Error("VIBESTUDIO_USERLAND_ROOT must name the exact Base checkout to inspect");
-}
-const workspaceRoot = path.resolve(userlandRootArgument);
+const workspaceRoot = developmentBaseConfig.requireDevelopmentBaseCheckout(root);
 const serverMatrix = JSON.parse(
   fs.readFileSync(
     path.join(root, "src/server/services/__serviceAuthorityMatrix.golden.json"),

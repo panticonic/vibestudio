@@ -6,14 +6,11 @@ import { fileURLToPath } from "node:url";
 import * as esbuild from "esbuild";
 import { tsImport } from "tsx/esm/api";
 import { zodToJsonSchema as convertZodToJsonSchema } from "zod-to-json-schema";
+import developmentBaseConfig from "../src/dev/developmentBaseConfig.cjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "..");
-const userlandRootArgument = process.env.VIBESTUDIO_USERLAND_ROOT;
-if (!userlandRootArgument) {
-  throw new Error("VIBESTUDIO_USERLAND_ROOT must name the exact Base checkout to update");
-}
-const userlandRoot = path.resolve(userlandRootArgument);
+const userlandRoot = developmentBaseConfig.requireDevelopmentBaseCheckout(repoRoot);
 const gadCatalogPath = path.join(
   repoRoot,
   "packages/service-schemas/src/runtime/generated/gadRuntimeCatalog.json"

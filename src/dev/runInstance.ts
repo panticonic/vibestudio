@@ -16,6 +16,7 @@ import {
   unregisterDevInstance,
   type DevInstanceRecord,
 } from "./instanceRegistry.js";
+import { selectDevelopmentBaseCheckout } from "./developmentBaseConfig.js";
 
 const require = createRequire(import.meta.url);
 const tsxCli = require.resolve("tsx/cli");
@@ -99,11 +100,13 @@ function removeRetiredInstanceCaches(root: string, instanceId: string): void {
 function extractInstance(argv: string[]): {
   instanceId?: string;
   baseCheckout?: string;
+  productionBase: boolean;
   forwarded: string[];
 } {
   const forwarded: string[] = [];
   let instanceId: string | undefined;
   let baseCheckout: string | undefined;
+  let productionBase = false;
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index]!;
     if (arg === "--instance") {
@@ -134,11 +137,17 @@ function extractInstance(argv: string[]): {
       if (!baseCheckout) throw new Error("--base-checkout requires a path");
       continue;
     }
+    if (arg === "--production-base") {
+      if (productionBase) throw new Error("--production-base may only be specified once");
+      productionBase = true;
+      continue;
+    }
     forwarded.push(arg);
   }
   return {
     ...(instanceId ? { instanceId } : {}),
     ...(baseCheckout ? { baseCheckout } : {}),
+    productionBase,
     forwarded,
   };
 }
@@ -293,6 +302,7 @@ async function main(): Promise<void> {
                    to give parallel CLI commands a stable target
   --base-checkout <path>
                    Boot a fresh dev workspace from this checkout's committed HEAD
+  --production-base Ignore the configured checkout and boot the pinned Base release
 `);
     const env = { ...process.env, NODE_ENV: "development" };
     await run(process.execPath, ["build.mjs", "--source-server-prereqs"], { env });
@@ -306,7 +316,10 @@ async function main(): Promise<void> {
   const disposable = hasFlag(parsed.forwarded, "--ephemeral");
   const id = parsed.instanceId ?? (disposable ? generatedInstanceId(mode) : "source");
   const root = disposable ? createEphemeralInstanceRoot(id) : persistentInstanceRoot(repoRoot, id);
-  const baseCheckout = parsed.baseCheckout ?? process.env["VIBESTUDIO_USERLAND_ROOT"]?.trim();
+  const baseCheckout = selectDevelopmentBaseCheckout(repoRoot, {
+    ...(parsed.baseCheckout ? { explicitCheckout: parsed.baseCheckout } : {}),
+    productionBase: parsed.productionBase,
+  });
   const developmentBase = baseCheckout
     ? await inspectDevelopmentBase(baseCheckout, repoRoot)
     : undefined;
@@ -347,6 +360,9 @@ async function main(): Promise<void> {
 
   console.log(`[instance:${id}] ${instance.lifecycle} ${mode} state: ${root}`);
   console.log(`[instance:${id}] CLI: pnpm cli --instance ${id} <command>`);
+  if (parsed.productionBase) {
+    console.log(`[instance:${id}] Base: canonical pinned production release`);
+  }
   if (developmentBase) {
     console.log(
       `[instance:${id}] Base candidate: ${developmentBase.pin.commit} from ${developmentBase.checkout}`

@@ -13,6 +13,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { z } from "zod";
 import { zodToJsonSchema } from "zod-to-json-schema";
+import developmentBaseConfig from "../src/dev/developmentBaseConfig.cjs";
 
 import {
   vcsErrorSchema,
@@ -44,7 +45,9 @@ function absolute(userlandRoot, relativePath) {
 }
 
 function read(userlandRoot, relativePath, overrides = new Map()) {
-  return overrides.get(relativePath) ?? fs.readFileSync(absolute(userlandRoot, relativePath), "utf8");
+  return (
+    overrides.get(relativePath) ?? fs.readFileSync(absolute(userlandRoot, relativePath), "utf8")
+  );
 }
 
 function stableJson(value, compact = false) {
@@ -293,7 +296,9 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
     const rootFlag = process.argv.indexOf("--userland-root");
     runReleaseGate({
       userlandRoot:
-        rootFlag >= 0 ? process.argv[rootFlag + 1] : process.env.VIBESTUDIO_USERLAND_ROOT,
+        rootFlag >= 0
+          ? process.argv[rootFlag + 1]
+          : developmentBaseConfig.requireDevelopmentBaseCheckout(repoRoot),
       checkOnly: process.argv.includes("--check"),
     });
   } catch (error) {

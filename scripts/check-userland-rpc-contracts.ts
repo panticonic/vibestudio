@@ -13,13 +13,9 @@ import {
 import type { ServiceMethodSchemas } from "@vibestudio/shared/typedServiceClient";
 import { collectWorkspaceRpcCatalog } from "../src/server/buildV2/workspaceRpcCatalog.js";
 import { workspaceRpcSchema } from "../src/server/buildV2/workspaceRpcSchemas.js";
+import { requireDevelopmentBaseCheckout } from "../src/dev/developmentBaseConfig.js";
 
-const userlandRootArgument = process.env.VIBESTUDIO_USERLAND_ROOT;
-if (!userlandRootArgument) {
-  throw new Error("VIBESTUDIO_USERLAND_ROOT must name the exact Base checkout to inspect");
-}
-
-const userlandRoot = path.resolve(userlandRootArgument);
+const userlandRoot = requireDevelopmentBaseCheckout(process.cwd());
 const rootRealPath = fs.realpathSync(userlandRoot);
 
 interface DurableClassDeclaration {

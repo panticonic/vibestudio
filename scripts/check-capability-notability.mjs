@@ -14,13 +14,10 @@ import { fileURLToPath } from "node:url";
 import fs from "node:fs";
 import path from "node:path";
 import { parse as parseYaml } from "yaml";
+import developmentBaseConfig from "../src/dev/developmentBaseConfig.cjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const userlandRootArgument = process.env.VIBESTUDIO_USERLAND_ROOT;
-if (!userlandRootArgument) {
-  throw new Error("VIBESTUDIO_USERLAND_ROOT must name the exact Base checkout to inspect");
-}
-const userlandRoot = path.resolve(userlandRootArgument);
+const userlandRoot = developmentBaseConfig.requireDevelopmentBaseCheckout(root);
 
 const { reviewedCapabilityNotability } = await import(
   path.join(root, "packages/shared/src/authority/capabilityNotability.ts")
@@ -84,10 +81,7 @@ visitPackageManifests(userlandRoot);
 // review classification belongs beside the service's action and presentation.
 // This is the same declaration the live build and install review consume.
 const workspaceServiceDeclarationGaps = [];
-for (const relativeConfigPath of [
-  "meta/template.yml",
-  "meta/vibestudio.yml",
-]) {
+for (const relativeConfigPath of ["meta/template.yml", "meta/vibestudio.yml"]) {
   const workspaceConfigPath = path.join(userlandRoot, relativeConfigPath);
   const workspaceConfig = parseYaml(fs.readFileSync(workspaceConfigPath, "utf8"));
   for (const service of workspaceConfig.services ?? []) {

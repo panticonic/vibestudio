@@ -3,19 +3,16 @@ import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import developmentBaseConfig from "../src/dev/developmentBaseConfig.cjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const userlandRoot = process.env.VIBESTUDIO_USERLAND_ROOT;
-if (!userlandRoot) throw new Error("VIBESTUDIO_USERLAND_ROOT must name the exact Base checkout");
+const userlandRoot = developmentBaseConfig.requireDevelopmentBaseCheckout(root);
 const sourceDir = path.join(path.resolve(userlandRoot), "panels/terminal");
 const outDir = path.join(root, ".tmp/terminal-input-jig");
 const port = Number(process.env.PORT || 49321);
 
 await fs.promises.mkdir(outDir, { recursive: true });
-await fs.promises.copyFile(
-  path.join(sourceDir, "inputJig.html"),
-  path.join(outDir, "index.html")
-);
+await fs.promises.copyFile(path.join(sourceDir, "inputJig.html"), path.join(outDir, "index.html"));
 
 await esbuild.build({
   entryPoints: [path.join(sourceDir, "inputJig.tsx")],

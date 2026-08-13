@@ -1,8 +1,4 @@
 import path from "node:path";
+import { requireDevelopmentBaseCheckout } from "../src/dev/developmentBaseConfig.js";
 
-const configuredRoot = process.env["VIBESTUDIO_USERLAND_ROOT"];
-if (!configuredRoot) {
-  throw new Error("VIBESTUDIO_USERLAND_ROOT must name the exact Base checkout under test");
-}
-
-export const exactUserlandRoot = path.resolve(configuredRoot);
+export const exactUserlandRoot = path.resolve(requireDevelopmentBaseCheckout(process.cwd()));

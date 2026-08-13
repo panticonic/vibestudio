@@ -123,11 +123,54 @@ mode concurrently with other native-input work.
 
 ```bash
 pnpm bootstrap        # install the complete host and userland workspace graph
+pnpm dev:base setup   # clone and remember the external Base checkout (one time)
 pnpm dev             # build + start Electron in the source developer instance
+pnpm dev:production  # fresh disposable instance using the pinned production Base
 pnpm dev:webrtc      # build + start a local hub, then connect to a routed child over WebRTC
 pnpm cli --help      # run the CLI live from TypeScript
 pnpm server:live --help
 ```
+
+#### Host and Base co-development
+
+Base is an external repository because it is independently publishable userland,
+but normal development does not require repeatedly passing its path or publishing
+it. Configure it once per host clone:
+
+```bash
+pnpm dev:base setup
+```
+
+The command clones the canonical Base repository into the sibling
+`../vibestudio-workspace-base` directory when it is absent, then records its
+canonical path in this repository's local Git configuration under
+`vibestudio.baseCheckout`. The setting is untracked, shared by this clone's Git
+worktrees, and resolved by every Base-aware developer command: `pnpm dev`,
+`pnpm server:live`, userland and browser tests, type checks, generators, Metro,
+smoke tests, and commit checks. It is deliberately not an ambient `.env` file.
+Once setup has completed, no command or commit requires the checkout path again.
+
+Base candidates use their committed local `HEAD` as an exact reproducible
+identity. Edit and commit Base locally, then restart `pnpm dev`; no push, tag, or
+publication is required. Host-only edits use the same configured Base commit and
+likewise require no Base publication.
+
+To exercise the shipped experience instead, run `pnpm dev:production`. It
+ignores (but does not change) the local development selection, creates a fresh
+disposable instance, and acquires the exact Base release pinned by the host.
+`pnpm server:production` provides the corresponding headless server workflow.
+
+Useful configuration commands:
+
+```bash
+pnpm dev:base status             # show the configured checkout, HEAD, and cleanliness
+pnpm dev:base use /other/base    # select an existing Base checkout
+pnpm dev:base path               # print the selected checkout for scripts/editors
+pnpm dev:base clear              # return pnpm dev to the published Base release
+```
+
+`--base-checkout PATH` and `VIBESTUDIO_USERLAND_ROOT=PATH` remain explicit,
+single-command overrides. They do not change the stored selection.
 
 See [docs/cli.md](docs/cli.md). (The published npm packages above replace the old
 `pnpm link --global` flow; `pnpm dev` / `pnpm cli` remain the dev workflow.)

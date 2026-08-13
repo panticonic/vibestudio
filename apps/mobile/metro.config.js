@@ -2,13 +2,11 @@ const { getDefaultConfig, mergeConfig } = require("@react-native/metro-config");
 const fs = require("fs");
 const path = require("path");
 const { createNativeBoundary } = require("./metroNativeBoundary.cjs");
+const developmentBaseConfig = require("../../src/dev/developmentBaseConfig.cjs");
 
 const projectRoot = __dirname;
 const monorepoRoot = path.resolve(projectRoot, "..", "..");
-const exactUserlandRoot = process.env.VIBESTUDIO_USERLAND_ROOT;
-if (!exactUserlandRoot) {
-  throw new Error("VIBESTUDIO_USERLAND_ROOT must name the exact Base checkout Metro will bundle");
-}
+const exactUserlandRoot = developmentBaseConfig.requireDevelopmentBaseCheckout(monorepoRoot);
 const workspaceAppRoot = process.env.VIBESTUDIO_WORKSPACE_APP_ROOT
   ? path.resolve(process.env.VIBESTUDIO_WORKSPACE_APP_ROOT)
   : path.resolve(exactUserlandRoot, "apps", "mobile");
@@ -66,7 +64,11 @@ const config = {
         return { type: "sourceFile", filePath: nodeBuiltinPolyfills[moduleName] };
       }
       // 0. Ensure a single copy of react is used (local if installed, else hoisted root)
-      if (moduleName === "react" || moduleName === "react/jsx-runtime" || moduleName === "react/jsx-dev-runtime") {
+      if (
+        moduleName === "react" ||
+        moduleName === "react/jsx-runtime" ||
+        moduleName === "react/jsx-dev-runtime"
+      ) {
         const localPath = path.resolve(projectRoot, "node_modules", moduleName);
         try {
           require.resolve(localPath);

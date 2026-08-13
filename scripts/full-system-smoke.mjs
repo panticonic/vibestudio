@@ -19,6 +19,7 @@ import { wsClientTransport } from "@vibestudio/rpc/transports/wsClient";
 import { serverRpcWsUrl } from "@vibestudio/shared/connect";
 import { parseHubReadyPayload } from "./cli/lib/hub-ready.mjs";
 import { createServerInvocation, serverEntryArg } from "./cli/lib/server-entry.mjs";
+import developmentBaseConfig from "../src/dev/developmentBaseConfig.cjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const defaultResultsRoot = path.join(repoRoot, "test-results", "full-system-smoke");
@@ -26,9 +27,7 @@ const wranglerBin = path.join(repoRoot, "node_modules", ".bin", "wrangler");
 const signalingDir = path.join(repoRoot, "apps", "signaling");
 
 function requireExactUserlandRoot() {
-  const value = process.env.VIBESTUDIO_USERLAND_ROOT;
-  if (!value) throw new Error("VIBESTUDIO_USERLAND_ROOT must name the exact Base checkout");
-  return path.resolve(value);
+  return developmentBaseConfig.requireDevelopmentBaseCheckout(repoRoot);
 }
 
 function parseArgs(argv) {
@@ -920,10 +919,7 @@ async function main() {
         "run",
         "--config",
         "vitest.userland.config.ts",
-        path.join(
-          requireExactUserlandRoot(),
-          "workers/pubsub-channel/channel-do.test.ts"
-        ),
+        path.join(requireExactUserlandRoot(), "workers/pubsub-channel/channel-do.test.ts"),
       ],
       { resultsDir }
     );

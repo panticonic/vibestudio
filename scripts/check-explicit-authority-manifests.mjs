@@ -1,14 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import developmentBaseConfig from "../src/dev/developmentBaseConfig.cjs";
 import { parseUnitAuthorityManifest } from "../packages/shared/src/authorityManifest.ts";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const userlandRootArgument = process.env.VIBESTUDIO_USERLAND_ROOT;
-if (!userlandRootArgument) {
-  throw new Error("VIBESTUDIO_USERLAND_ROOT must name the exact Base checkout to inspect");
-}
-const workspaceRoot = path.resolve(userlandRootArgument);
+const workspaceRoot = developmentBaseConfig.requireDevelopmentBaseCheckout(root);
 const executableRoots = new Set(["about", "apps", "extensions", "panels", "workers"]);
 const failures = [];
 
@@ -23,7 +20,9 @@ for (const rootName of executableRoots) {
     try {
       packageJson = JSON.parse(fs.readFileSync(file, "utf8"));
     } catch (error) {
-      failures.push(`${path.relative(root, file)}: ${error instanceof Error ? error.message : error}`);
+      failures.push(
+        `${path.relative(root, file)}: ${error instanceof Error ? error.message : error}`
+      );
       continue;
     }
     if (packageJson.vibestudio === undefined) continue;
@@ -33,7 +32,9 @@ for (const rootName of executableRoots) {
         `${packageJson.name ?? path.relative(workspaceRoot, file)} vibestudio.authority`
       );
     } catch (error) {
-      failures.push(`${path.relative(root, file)}: ${error instanceof Error ? error.message : error}`);
+      failures.push(
+        `${path.relative(root, file)}: ${error instanceof Error ? error.message : error}`
+      );
     }
   }
 }

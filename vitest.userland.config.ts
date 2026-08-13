@@ -5,13 +5,10 @@ import { discoveredUserlandSourceAliases, workspaceSourceAliases } from "./vites
 import { userlandDependencyAliases } from "./vitest.userlandProjection";
 import { prepareUserlandDependencyProjection } from "./scripts/lib/userland-dependency-projection";
 import { exactPairTests } from "./vitest.exactPairTests";
+import { requireDevelopmentBaseCheckout } from "./src/dev/developmentBaseConfig";
 
 export default defineConfig(async () => {
-  const workspaceRootArgument = process.env["VIBESTUDIO_USERLAND_ROOT"];
-  if (!workspaceRootArgument) {
-    throw new Error("VIBESTUDIO_USERLAND_ROOT must name the exact Base checkout under test");
-  }
-  const workspaceRoot = path.resolve(workspaceRootArgument);
+  const workspaceRoot = requireDevelopmentBaseCheckout(__dirname);
   const workspaceGlob = path.relative(__dirname, workspaceRoot).replaceAll(path.sep, "/");
   const projectedDependencies = await userlandDependencyAliases(__dirname, workspaceRoot);
   const dependencyProjection = await prepareUserlandDependencyProjection({

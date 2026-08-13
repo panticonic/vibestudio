@@ -6,15 +6,18 @@ import {
   prepareUserlandDependencyProjection,
   type UserlandDependencyProjection,
 } from "./lib/userland-dependency-projection.js";
+import { requireDevelopmentBaseCheckout } from "../src/dev/developmentBaseConfig.js";
 
 const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const workspaceArgumentIndex = process.argv.indexOf("--workspace-root");
-const workspaceArgument =
-  workspaceArgumentIndex >= 0 ? process.argv[workspaceArgumentIndex + 1] : undefined;
-if (!workspaceArgument) {
-  throw new Error("type-check-userland requires --workspace-root DIR");
+if (workspaceArgumentIndex >= 0 && !process.argv[workspaceArgumentIndex + 1]) {
+  throw new Error("--workspace-root requires a directory");
 }
-const workspaceRoot = path.resolve(workspaceArgument);
+const workspaceRoot = path.resolve(
+  workspaceArgumentIndex >= 0
+    ? process.argv[workspaceArgumentIndex + 1]!
+    : requireDevelopmentBaseCheckout(appRoot)
+);
 const compiler = path.join(appRoot, "node_modules", "typescript", "bin", "tsc");
 const projection = await prepareUserlandDependencyProjection({
   appRoot,

@@ -24,13 +24,10 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import developmentBaseConfig from "../src/dev/developmentBaseConfig.cjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const userlandRootArgument = process.env.VIBESTUDIO_USERLAND_ROOT;
-if (!userlandRootArgument) {
-  throw new Error("VIBESTUDIO_USERLAND_ROOT must name the exact Base checkout to update");
-}
-const userlandRoot = path.resolve(userlandRootArgument);
+const userlandRoot = developmentBaseConfig.requireDevelopmentBaseCheckout(root);
 const check = process.argv.includes("--check");
 
 const { productSeedSourceDigest, writeProductSeedSourceRecord } = await import(
