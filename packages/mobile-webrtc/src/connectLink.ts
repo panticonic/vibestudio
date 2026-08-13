@@ -14,9 +14,13 @@
 // same URL doesn't re-run pairing), bounded by a short TTL.
 
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { parseConnectLink, type ConnectLink } from "@vibestudio/shared/connect";
+import {
+  connectPairingFromLink,
+  parseConnectLink,
+  type ConnectLink,
+} from "@vibestudio/shared/connect";
 
-export { parseConnectLink };
+export { connectPairingFromLink, parseConnectLink };
 export type { ConnectLink };
 
 const CONSUMED_CONNECT_LINK_KEY = "vibestudio:connect:consumed-url";

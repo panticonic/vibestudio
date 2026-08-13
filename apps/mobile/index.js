@@ -28,6 +28,7 @@ import {
 import Clipboard from "@react-native-clipboard/clipboard";
 import { Camera, useCameraDevice, useCodeScanner } from "react-native-vision-camera";
 import {
+  connectPairingFromLink,
   parseConnectLink,
   isConnectLink,
   markConnectLinkConsumed,
@@ -72,15 +73,11 @@ function parseConnectDeepLink(rawUrl) {
   const parsed = parseConnectLink(rawUrl);
   if (parsed.kind === "error") throw new Error(parsed.reason);
   // New WebRTC pairing payload: a signaling rendezvous room + the server's pinned
-  // DTLS fingerprint + a one-time pairing code (no server origin URL anymore).
-  return {
-    room: parsed.room,
-    fp: parsed.fp,
-    code: parsed.code,
-    sig: parsed.sig,
-    v: parsed.v,
-    ice: parsed.ice,
-  };
+  // DTLS fingerprint + a one-time pairing code (no server origin URL anymore),
+  // plus the link's expiry. Project it rather than retyping the field list —
+  // omitting one field here fails validation only after the server has issued a
+  // credential, which reads as pairing hanging.
+  return connectPairingFromLink(parsed);
 }
 
 /** Pairing reach is transport data, not a display identity. */

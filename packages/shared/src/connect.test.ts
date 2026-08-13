@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   type ConnectPairing,
+  connectPairingFromLink,
   createConnectDeepLink,
   createConnectPairUrl,
   DEFAULT_SIGNAL_URL,
@@ -34,6 +35,31 @@ function replaceConnectParam(link: string, key: string, value: string): string {
 }
 
 describe("connect deep links (WebRTC pairing grammar)", () => {
+  it("round-trips every field the grammar defines", () => {
+    const pairing = {
+      room: "room-1234-5678",
+      // Canonical (uppercase) form, since encoding normalizes the fingerprint.
+      fp: "A".repeat(64),
+      code: "abcdefghijklmnopqrstuvwxyzABCDEF",
+      sig: "wss://signal.example/",
+      v: 2 as const,
+      ice: "all" as const,
+      exp: Date.now() + 600_000,
+    };
+
+    const parsed = parseConnectLink(createConnectDeepLink(pairing));
+    if (parsed.kind !== "ok") throw new Error(parsed.reason);
+    const projected = connectPairingFromLink(parsed);
+
+    // Every field survives, and the parse tag does not leak into the pairing.
+    // Retyping this projection by hand is how `exp` went missing on the device,
+    // where the loss only surfaced after the server had issued a credential.
+    expect(projected).toEqual(pairing);
+    expect(Object.keys(projected).sort()).toEqual(Object.keys(pairing).sort());
+    expect(projected).not.toHaveProperty("kind");
+    expect(parseConnectLink(createConnectDeepLink(projected))).toMatchObject({ kind: "ok" });
+  });
+
   it("round-trips a pairing link", () => {
     const link = createConnectDeepLink(PAIR);
     expect(parseConnectLink(link)).toEqual({

@@ -100,6 +100,20 @@ export function createConnectLink(
   return `vibestudio://connect?${params}`;
 }
 
+/**
+ * The pairing carried by a parsed link, without the parse result's own tag.
+ *
+ * Callers used to retype the field list to strip `kind`, and every one of them
+ * silently dropped `exp` when pairing links gained an expiry — which made the
+ * pairing fail validation on the device after the server had already issued a
+ * credential. Deriving the projection from the parse result means a field added
+ * to the grammar cannot be missed here again.
+ */
+export function connectPairingFromLink(link: { kind: "ok" } & ConnectPairing): ConnectPairing {
+  const { kind: _kind, ...pairing } = link;
+  return pairing;
+}
+
 export function createConnectDeepLink(pairing: ConnectPairing): string {
   return createConnectLink(pairing, "scheme");
 }
