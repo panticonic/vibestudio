@@ -54,9 +54,9 @@ export const contentTrustMethods = defineServiceMethods({
       rationale: "An exact content-addressed vouch changes future context classification",
     },
     presentation: {
-      title: "Trust this exact outside content",
-      action: "trust this exact outside content",
-      description: "Allows {requesterKind} to trust this exact outside content.",
+      title: "Remember this outside content as safe",
+      action: "mark this exact outside content as safe",
+      description: "Remember this outside content so it won't need review again.",
       group: "approvals",
       authorityCategory: {
         domain: "safety",

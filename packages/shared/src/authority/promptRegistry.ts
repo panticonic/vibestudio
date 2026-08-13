@@ -18,7 +18,7 @@ export const AUTHORITY_PROMPT_REGISTRY = {
     push: "permission",
   },
   "permission.outside": {
-    banner: "This task has read outside content: {source}.",
+    banner: "This task includes content from an outside source: {source}.",
     title: "Allow {agent} to {action}?",
     body: "{agent} wants to {action} while working on this task.",
     actions: ["Allow for this task", "Just once", "Don't allow"],

@@ -209,7 +209,7 @@ export function getApprovalRiskTone(approval: PendingApproval): ApprovalRiskTone
 }
 
 export function getApprovalCategoryLabel(approval: PendingApproval): string {
-  if (approval.kind === "mission-review") return "Mission review";
+  if (approval.kind === "mission-review") return "Automation review";
   if (approval.kind === "browser-permission") {
     return "Website permission";
   }
@@ -363,17 +363,17 @@ export function getStandardApprovalDecisionActions(
     {
       decision: "task",
       label: "Allow for this task",
-      description: "Allow while the agent works on this task.",
+      description: "Allow while this app works on the current task.",
     },
     {
       decision: "mission",
-      label: "Allow for this mission",
-      description: "Allow until this reviewed automation changes or ends.",
+      label: "Allow for this automation",
+      description: "Allow until this automated task finishes or is changed.",
     },
     {
       decision: "agent",
       label: `Always for ${agentName}`,
-      description: "Save this exact access for this agent until you remove it.",
+      description: `Always allow this for ${agentName}. You can change it in Permissions.`,
     },
     ...(copy.version ? [{ decision: "version" as const, ...copy.version }] : []),
     {
@@ -383,8 +383,8 @@ export function getStandardApprovalDecisionActions(
     },
     {
       decision: "lock",
-      label: "Don't allow and don't ask again",
-      description: "Keep this agent from asking for this access again. Change it in Permissions.",
+      label: "Don't allow and stop asking",
+      description: "Block this app from requesting this again. You can change it in Permissions.",
     },
   ];
   const allowed = new Set(getAllowedStandardApprovalDecisions(approval));
@@ -455,7 +455,7 @@ function buildCredentialActionCopy(approval: PendingCredentialApproval): Approva
     },
     session: {
       label: HOST_APPROVAL_COPY.actions.credentialUse.sessionLabel,
-      description: `Keep using ${formatCredentialUseTarget(approval)} until you restart.`,
+      description: `Keep using ${formatCredentialUseTarget(approval)} until you close Vibestudio.`,
     },
     version: {
       label: trustVersionLabel(approval),
@@ -474,12 +474,12 @@ const CAPABILITY_ACTION_HANDLERS: Record<
       "workspace-source-change:"
     );
     if (isWorkspaceSourceChange) {
-      const destination = approval.resource?.value ?? "this workspace source tree";
+      const destination = approval.resource?.value ?? "this workspace";
       return {
         once: HOST_APPROVAL_COPY.actions.workspaceSource.once,
         session: {
           label: HOST_APPROVAL_COPY.actions.workspaceSource.sessionLabel,
-          description: `Allow code updates to ${destination} until you restart.`,
+          description: `Allow updates to ${destination} until you close Vibestudio.`,
         },
         version: {
           label: trustVersionLabel(approval),
@@ -499,8 +499,8 @@ const CAPABILITY_ACTION_HANDLERS: Record<
       version: {
         label: trustVersionLabel(approval),
         description: isMeta
-          ? `Allow ${trustSubject(approval)} to edit workspace config.`
-          : `Allow ${trustSubject(approval)} to write to this repository.`,
+          ? `Allow ${trustSubject(approval)} to edit workspace settings.`
+          : `Allow ${trustSubject(approval)} to save changes to this project.`,
       },
       denyDescription: isMeta
         ? HOST_APPROVAL_COPY.actions.workspaceConfig.deny
@@ -513,7 +513,7 @@ const CAPABILITY_ACTION_HANDLERS: Record<
       session: HOST_APPROVAL_COPY.actions.sharedRemote.session,
       version: {
         label: trustVersionLabel(approval),
-        description: `Allow ${trustSubject(approval)} to change shared remotes.`,
+        description: `Allow ${trustSubject(approval)} to change publishing destinations.`,
       },
       denyDescription: HOST_APPROVAL_COPY.actions.sharedRemote.deny,
     };
@@ -524,7 +524,7 @@ const CAPABILITY_ACTION_HANDLERS: Record<
       session: HOST_APPROVAL_COPY.actions.projectImport.session,
       version: {
         label: trustVersionLabel(approval),
-        description: `Allow ${trustSubject(approval)} to import project repos.`,
+        description: `Allow ${trustSubject(approval)} to import projects.`,
       },
       denyDescription: HOST_APPROVAL_COPY.actions.projectImport.deny,
     };
@@ -535,7 +535,7 @@ const CAPABILITY_ACTION_HANDLERS: Record<
       once: HOST_APPROVAL_COPY.actions.network.once,
       session: {
         label: HOST_APPROVAL_COPY.actions.network.originLabel,
-        description: `Allow internet requests to ${destination} until you restart.`,
+        description: `Allow internet requests to ${destination} until you close Vibestudio.`,
       },
       version: {
         label: networkTrustLabel(approval),
@@ -550,7 +550,7 @@ const CAPABILITY_ACTION_HANDLERS: Record<
       once: HOST_APPROVAL_COPY.actions.cors.once,
       session: {
         label: HOST_APPROVAL_COPY.actions.cors.originLabel,
-        description: `Allow reading data from ${destination} until you restart.`,
+        description: `Allow reading data from ${destination} until you close Vibestudio.`,
       },
       version: {
         label: corsTrustLabel(approval),
@@ -594,7 +594,7 @@ function buildCapabilityActionCopy(approval: PendingCapabilityApproval): Approva
     once: HOST_APPROVAL_COPY.actions.generic.once,
     session: {
       label: HOST_APPROVAL_COPY.actions.generic.session.label,
-      description: `Allow requests for ${target} until you restart.`,
+      description: `Allow requests for ${target} until you close Vibestudio.`,
     },
     version: {
       label: trustVersionLabel(approval),

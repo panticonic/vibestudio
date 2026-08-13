@@ -29,8 +29,8 @@ export const AUTHORITY_DOMAINS = {
     description: "The Vibestudio application and the machine it runs on",
   },
   safety: {
-    label: "Safety controls",
-    description: "Approvals, permissions, and audit — the controls themselves",
+    label: "Permissions and safety",
+    description: "Your permission choices and the controls that enforce them",
   },
 } as const;
 

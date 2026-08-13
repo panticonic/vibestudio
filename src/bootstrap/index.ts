@@ -777,7 +777,7 @@ function appendPairConfirmation(parent: HTMLElement, link: string): void {
 
   const title = document.createElement("div");
   title.className = "title";
-  title.textContent = "Trust this server?";
+  title.textContent = "Connect to this server?";
 
   const meta = document.createElement("div");
   meta.className = "meta";

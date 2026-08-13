@@ -483,7 +483,7 @@ async function clickShellButton(
               (label.test("Add to workspace")
                 ? scope.querySelector("button[data-approval-action='accept-install-review']")
                 : null)
-                ?? (label.test("Trust this version") || label.test("Trust version")
+                ?? (label.test("Remember for this version") || label.test("Trust version") || label.test("Trust this version")
                   ? scope.querySelector("button[data-approval-decision='version']")
                   : label.test("Use this session")
                     ? scope.querySelector("button[data-approval-decision='session']")
@@ -1698,8 +1698,8 @@ test.describe("Desktop Startup Approvals", () => {
       ])
     );
     expect(rendered?.buttons).not.toContain("Always for AI Chat");
-    expect(rendered?.buttons).not.toContain("Don't allow and don't ask again");
-    expect(rendered?.buttons).not.toContain("Trust this version");
+    expect(rendered?.buttons).not.toContain("Don't allow and stop asking");
+    expect(rendered?.buttons).not.toContain("Remember for this version");
     expect(rendered).toMatchObject({
       role: "dialog",
       labelledByText: "Connect to example.com",

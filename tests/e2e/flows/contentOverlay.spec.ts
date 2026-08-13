@@ -340,7 +340,7 @@ test.describe("Content overlay", () => {
     expect(probe?.text).toContain("Allow for this task");
     expect(probe?.text).toContain("Always for News");
     expect(probe?.text).toContain("Don't allow");
-    expect(probe?.text).not.toContain("Trust this version");
+    expect(probe?.text).not.toContain("Remember for this version");
 
     // The surface is a separate WebContentsView. Verify that an intent emitted
     // by it reaches the hosted shell document that owns the coordinator before

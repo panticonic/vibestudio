@@ -154,7 +154,7 @@ describe("approval flow e2e", () => {
         { id: "once", title: "Use once" },
         { id: "deny", title: "Don't allow" },
         { id: "open", title: "Open" },
-        { id: "version", title: "Trust this version" },
+        { id: "version", title: "Remember for this version" },
       ]),
     });
     await harness.mobileTransport.call("main", RPC_METHODS.shellApproval.resolve, [

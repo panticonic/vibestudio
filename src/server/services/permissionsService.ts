@@ -70,7 +70,7 @@ export function createPermissionsService(deps: {
             kind: "credential-use",
             callerLabel: grant.scope === "agent" ? grant.agentId : grant.repoPath,
             scopeLabel:
-              grant.scope === "agent" ? "Trusted for this agent" : "Trusted for this code version",
+              grant.scope === "agent" ? "Remembered for this agent" : "Remembered for this version",
             capability: `Credential ${grant.use}: ${grant.action}`,
             resource: grant.resource,
             ...(grant.scope === "version"
@@ -367,11 +367,11 @@ function savedAuthorityGrant(
     scopeLabel:
       grant.effect === "deny"
         ? sessionScoped
-          ? "Blocked for this session"
-          : "Blocked for this code version"
+          ? "Blocked until you close Vibestudio"
+          : "Blocked for this version"
         : sessionScoped
-          ? "Allowed for this session"
-          : "Trusted for this code version",
+          ? "Allowed until you close Vibestudio"
+          : "Remembered for this version",
     capability: describeCapability(grant.capability).title,
     resource: authorityResourceLabel(grant.resource),
     ...(code ? { repoPath: code.repoPath, effectiveVersion: code.effectiveVersion } : {}),

@@ -255,9 +255,9 @@ describe("approvalCopy", () => {
           value: "panels/spectrolite",
         },
       },
-      category: "Workspace code update",
+      category: "Workspace update",
       title: "Update panels/spectrolite",
-      summaryIncludes: "Saves code changes",
+      summaryIncludes: "Saves changes",
     },
     {
       name: "client-config",
@@ -446,7 +446,7 @@ describe("approvalCopy", () => {
     expect(getRequesterCategoryLabel("eval")).toBe("Agent");
     expect(getRequesterCategoryLabel("worker")).toBe("Background task");
     expect(getRequesterCategoryLabel("durable-object")).toBe("Service");
-    expect(getRequesterCategoryLabel("internal-service")).toBe("System service");
+    expect(getRequesterCategoryLabel("internal-service")).toBe("Built-in service");
     expect(getRequesterCategoryLabel("unknown")).toBe("Requester");
   });
 
@@ -540,7 +540,7 @@ describe("approvalCopy", () => {
       getStandardActionCopy(capability as Extract<PendingApproval, { kind: "capability" }>).once
         .label
     ).toBe("Open once");
-    expect(getStandardActionCopy(workspaceSourceChange).once.label).toBe("Commit once");
+    expect(getStandardActionCopy(workspaceSourceChange).once.label).toBe("Update once");
     expect(getStandardActionCopy(workspaceSourceChange).session!.description).toContain(
       "panels/spectrolite"
     );
@@ -548,15 +548,15 @@ describe("approvalCopy", () => {
     expect(getStandardActionCopy(networkEgress).session!.label).toBe("Allow this site");
     expect(getStandardActionCopy(networkEgress).session!.description).toContain("localhost:42531");
     expect(getStandardActionCopy(networkEgress).version!.label).toBe(
-      "Trust this version with internet access"
+      "Allow all internet access for this version"
     );
     expect(getStandardActionCopy(evalNetworkEgress).version!.label).toBe(
-      "Trust this agent with internet access"
+      "Allow all internet access for this agent"
     );
-    expect(getStandardActionCopy(evalCredential).version!.label).toBe("Trust this agent");
+    expect(getStandardActionCopy(evalCredential).version!.label).toBe("Remember for this agent");
     expect(getStandardActionCopy(evalCredential).version!.description).toContain("this agent");
     expect(getStandardActionCopy(evalCredential).version!.description).toContain(
-      "Every eval still receives its own code review"
+      "Each automated run is still reviewed before it can start"
     );
   });
 
