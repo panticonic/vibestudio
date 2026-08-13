@@ -87,7 +87,7 @@ import type {
   BuildProviderInput,
 } from "@vibestudio/shared/buildProvider";
 import { collectWorkspaceRpcCatalog } from "./workspaceRpcCatalog.js";
-import { workspaceRpcSchema } from "./workspaceRpcSchemas.js";
+import { unknownWorkspaceRpcSchemaMessage, workspaceRpcSchema } from "./workspaceRpcSchemas.js";
 import { createPanelBundleReport } from "./panelBundleReport.js";
 import { generatePanelEntry } from "./panelEntryProtocol.js";
 import { createSharedStyleDedupePlugin } from "./sharedStyleDedupe.js";
@@ -2906,7 +2906,11 @@ async function buildWorker(
         const schema = workspaceRpcSchema(entry.rpcSchema);
         if (!schema) {
           throw new Error(
-            `${node.relativePath}:${entry.className} names unknown workspace RPC schema ${entry.rpcSchema}`
+            unknownWorkspaceRpcSchemaMessage({
+              repoPath: node.relativePath,
+              className: entry.className,
+              rpcSchema: entry.rpcSchema,
+            })
           );
         }
         return [entry.className, schema];

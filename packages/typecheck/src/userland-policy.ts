@@ -10,7 +10,6 @@ export const USERLAND_TYPECHECK_BASELINE = Object.freeze({
   noUncheckedIndexedAccess: true,
   noImplicitReturns: true,
   noFallthroughCasesInSwitch: true,
-  noPropertyAccessFromIndexSignature: true,
   allowUnusedLabels: false,
   allowUnreachableCode: false,
   forceConsistentCasingInFileNames: true,

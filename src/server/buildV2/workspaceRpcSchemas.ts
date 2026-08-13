@@ -43,6 +43,18 @@ export function workspaceRpcSchema(protocol: string): ServiceMethodSchemas | und
   return (WORKSPACE_RPC_SCHEMAS as Record<string, ServiceMethodSchemas>)[protocol];
 }
 
+export function unknownWorkspaceRpcSchemaMessage(input: {
+  repoPath: string;
+  className: string;
+  rpcSchema: string;
+}): string {
+  return (
+    `${input.repoPath}:${input.className} names unknown workspace RPC schema ${input.rpcSchema}. ` +
+    "Application-defined protocols belong in meta/vibestudio.yml services[].protocols and must omit " +
+    "package.json#vibestudio.durable.classes[].rpcSchema; rpcSchema is reserved for host-reviewed built-in contracts."
+  );
+}
+
 /** Digest the host-owned authority surface that affects static userland folds. */
 export function workspaceRpcSchemaVersion(): string {
   return sha256Canonical(

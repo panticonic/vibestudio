@@ -15,7 +15,7 @@ import type { GraphNode, PackageGraph } from "./packageGraph.js";
 import type { BuildSourceProvider } from "./buildSource.js";
 import { collectTransitiveInternalDeps } from "./buildSource.js";
 import { collectWorkspaceRpcCatalog, type WorkspaceRpcMethodDoc } from "./workspaceRpcCatalog.js";
-import { workspaceRpcSchema } from "./workspaceRpcSchemas.js";
+import { unknownWorkspaceRpcSchemaMessage, workspaceRpcSchema } from "./workspaceRpcSchemas.js";
 
 export const USERLAND_AUTHORITY_ANALYZER_VERSION = "userland-authority-v2";
 
@@ -332,7 +332,11 @@ export async function resolveProviderRpcCatalog(
       : undefined;
     if (classManifest.rpcSchema && !schema) {
       throw new Error(
-        `${input.provider.relativePath}:${input.className} names unknown workspace RPC schema ${classManifest.rpcSchema}`
+        unknownWorkspaceRpcSchemaMessage({
+          repoPath: input.provider.relativePath,
+          className: input.className,
+          rpcSchema: classManifest.rpcSchema,
+        })
       );
     }
     const methods = (

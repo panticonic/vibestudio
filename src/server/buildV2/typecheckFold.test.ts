@@ -154,7 +154,6 @@ describe("typecheckUnit (push build-gate fold-in)", () => {
         compilerOptions: {
           strict: false,
           noUncheckedIndexedAccess: false,
-          noPropertyAccessFromIndexSignature: false,
         },
       })
     );
@@ -178,6 +177,26 @@ describe("typecheckUnit (push build-gate fold-in)", () => {
       );
     } finally {
       await Promise.all([fsp.rm(configPath, { force: true }), fsp.rm(unsafePath, { force: true })]);
+    }
+  });
+
+  it("does not impose index-signature access syntax on workspace source", async () => {
+    const sourcePath = path.join(sourceRoot, "panels/hello/css-module-shape.ts");
+    await fsp.writeFile(
+      sourcePath,
+      [
+        "declare const styles: Record<string, string>;",
+        "declare function useClassName(value: string | undefined): void;",
+        "useClassName(styles.app);",
+      ].join("\n")
+    );
+    try {
+      const diags = await typecheckUnit("panels/hello", sourceRoot, deps, [nodeModules]);
+      expect(diags.filter((diagnostic) => diagnostic.file.endsWith("css-module-shape.ts"))).toEqual(
+        []
+      );
+    } finally {
+      await fsp.rm(sourcePath, { force: true });
     }
   });
 
