@@ -136,7 +136,6 @@
     "@vibestudio/identity": "workspace:*",
     "@vibestudio/rpc": "workspace:*",
     "@vibestudio/sqlite": "workspace:*",
-    "@vibestudio/trajectory-identity": "workspace:*",
     "@vibestudio/typecheck": "workspace:*",
     "@vibestudio/types": "workspace:*",
     "@vibestudio/workspace-contracts": "workspace:*",

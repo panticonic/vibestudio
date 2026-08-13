@@ -587,12 +587,6 @@ importers:
       '@vibestudio/shared':
         specifier: workspace:*
         version: link:../shared
-      '@vibestudio/trajectory-identity':
-        specifier: workspace:*
-        version: link:../trajectory-identity
-      '@vibestudio/workspace-contracts':
-        specifier: workspace:*
-        version: link:../workspace-contracts
       sql.js:
         specifier: ^1.14.0
         version: 1.14.1
@@ -718,9 +712,6 @@ importers:
       '@vibestudio/content-addressing':
         specifier: workspace:*
         version: link:../content-addressing
-      '@vibestudio/types':
-        specifier: workspace:*
-        version: link:../types
       '@vibestudio/vcs-path-policy':
         specifier: workspace:*
         version: link:../vcs-path-policy
@@ -807,10 +798,6 @@ importers:
         version: 7.0.2
 
   packages/rpc:
-    dependencies:
-      '@vibestudio/types':
-        specifier: workspace:*
-        version: link:../types
     devDependencies:
       typescript:
         specifier: 7.0.2
@@ -839,9 +826,6 @@ importers:
       '@vibestudio/shell-core':
         specifier: workspace:*
         version: link:../shell-core
-      '@vibestudio/vcs-path-policy':
-        specifier: workspace:*
-        version: link:../vcs-path-policy
       '@vibestudio/workspace-contracts':
         specifier: workspace:*
         version: link:../workspace-contracts
@@ -875,9 +859,6 @@ importers:
       '@vibestudio/sqlite':
         specifier: workspace:*
         version: link:../sqlite
-      '@vibestudio/trajectory-identity':
-        specifier: workspace:*
-        version: link:../trajectory-identity
       '@vibestudio/typecheck':
         specifier: workspace:*
         version: link:../typecheck
@@ -970,9 +951,6 @@ importers:
 
   packages/unit-host:
     dependencies:
-      '@vibestudio/rpc':
-        specifier: workspace:*
-        version: link:../rpc
       '@vibestudio/shared':
         specifier: workspace:*
         version: link:../shared
