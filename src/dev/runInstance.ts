@@ -17,6 +17,8 @@ import {
   type DevInstanceRecord,
 } from "./instanceRegistry.js";
 import { selectDevelopmentBaseCheckout } from "./developmentBaseConfig.js";
+import { prepareDevelopmentBaseCheckpoint } from "./developmentBaseCheckpoint.js";
+import { developmentInstanceEnvironment } from "./developmentInstanceEnvironment.js";
 
 const require = createRequire(import.meta.url);
 const tsxCli = require.resolve("tsx/cli");
@@ -152,15 +154,24 @@ function extractInstance(argv: string[]): {
   };
 }
 
-async function inspectDevelopmentBase(checkoutArgument: string, repoRoot: string) {
+async function inspectDevelopmentBase(
+  checkoutArgument: string,
+  repoRoot: string,
+  checkpointTarget: string
+) {
   const checkout = fs.realpathSync(path.resolve(checkoutArgument));
   const { readBaseTemplateRelease } = await import("@vibestudio/workspace/baseTemplateRelease");
   const { GitClient } = await import("@vibestudio/git");
   const { sha256Hex } = await import("@vibestudio/content-addressing");
   const { inspectRootTemplateCheckout } = await import("../server/acquireRootTemplateSnapshot.js");
   const url = readBaseTemplateRelease(repoRoot).baseTemplate.url;
-  const inspected = await inspectRootTemplateCheckout({
+  const checkpoint = await prepareDevelopmentBaseCheckpoint({
     checkout,
+    target: checkpointTarget,
+    gitClient: new GitClient(),
+  });
+  const inspected = await inspectRootTemplateCheckout({
+    checkout: checkpoint.checkout,
     url,
     git: new GitClient(),
     sink: {
@@ -169,7 +180,7 @@ async function inspectDevelopmentBase(checkoutArgument: string, repoRoot: string
       },
     },
   });
-  return { checkout, ...inspected };
+  return { ...checkpoint, ...inspected };
 }
 
 function hasFlag(argv: readonly string[], name: string): boolean {
@@ -301,7 +312,7 @@ async function main(): Promise<void> {
   --ephemeral      Use an isolated temporary instance; combine with --instance
                    to give parallel CLI commands a stable target
   --base-checkout <path>
-                   Boot a fresh dev workspace from this checkout's committed HEAD
+                   Boot from the checkout's visible worktree via a private checkpoint
   --production-base Ignore the configured checkout and boot the pinned Base release
 `);
     const env = { ...process.env, NODE_ENV: "development" };
@@ -316,13 +327,6 @@ async function main(): Promise<void> {
   const disposable = hasFlag(parsed.forwarded, "--ephemeral");
   const id = parsed.instanceId ?? (disposable ? generatedInstanceId(mode) : "source");
   const root = disposable ? createEphemeralInstanceRoot(id) : persistentInstanceRoot(repoRoot, id);
-  const baseCheckout = selectDevelopmentBaseCheckout(repoRoot, {
-    ...(parsed.baseCheckout ? { explicitCheckout: parsed.baseCheckout } : {}),
-    productionBase: parsed.productionBase,
-  });
-  const developmentBase = baseCheckout
-    ? await inspectDevelopmentBase(baseCheckout, repoRoot)
-    : undefined;
   fs.mkdirSync(root, { recursive: true, mode: 0o700 });
   const instance = registerDevInstance({
     id,
@@ -333,57 +337,61 @@ async function main(): Promise<void> {
     lifecycle: disposable ? "ephemeral" : "persistent",
     startedAt: Date.now(),
   });
-  // Only the lock owner may mutate this instance's readiness marker. Once the
-  // new generation is registered, concurrent CLI readers reject the old
-  // generation even in the brief interval before this unlink.
-  if (mode === "server") clearDevInstanceReady(instance);
-  const env: NodeJS.ProcessEnv = {
-    ...process.env,
-    NODE_ENV: "development",
-    VIBESTUDIO_APP_ROOT: repoRoot,
-    VIBESTUDIO_INSTANCE_ROOT: root,
-    VIBESTUDIO_INSTANCE: id,
-    // Exactly one persistent developer instance may opt into checkout-host
-    // co-development. Every named/ephemeral peer owns only its materialized
-    // semantic workspace state.
-    VIBESTUDIO_SOURCE_INSTANCE: id === "source" && !disposable ? "1" : "0",
-    ...(developmentBase
-      ? {
-          VIBESTUDIO_DEV_ROOT_TEMPLATE: JSON.stringify(developmentBase.pin),
-          VIBESTUDIO_DEV_ROOT_TEMPLATE_CHECKOUT: developmentBase.checkout,
-        }
-      : {}),
-  };
-  process.env["VIBESTUDIO_INSTANCE_ROOT"] = root;
-  process.env["VIBESTUDIO_INSTANCE"] = id;
-  process.env["VIBESTUDIO_SOURCE_INSTANCE"] = env["VIBESTUDIO_SOURCE_INSTANCE"];
-
-  console.log(`[instance:${id}] ${instance.lifecycle} ${mode} state: ${root}`);
-  console.log(`[instance:${id}] CLI: pnpm cli --instance ${id} <command>`);
-  if (parsed.productionBase) {
-    console.log(`[instance:${id}] Base: canonical pinned production release`);
-  }
-  if (developmentBase) {
-    console.log(
-      `[instance:${id}] Base candidate: ${developmentBase.pin.commit} from ${developmentBase.checkout}`
-    );
-    if (developmentBase.untrackedPaths.length > 0) {
-      console.log(
-        `[instance:${id}] Base candidate excludes ${developmentBase.untrackedPaths.length} untracked path(s).`
-      );
-    }
-  }
-  if (!disposable) {
-    removeRetiredInstanceCaches(root, id);
-    await prunePersistentInstanceBuildCache(root, id);
-  }
+  const checkpointTarget = path.join(root, "development-base-checkpoints", instance.generationId);
   try {
+    const baseCheckout = selectDevelopmentBaseCheckout(repoRoot, {
+      ...(parsed.baseCheckout ? { explicitCheckout: parsed.baseCheckout } : {}),
+      productionBase: parsed.productionBase,
+    });
+    const developmentBase = baseCheckout
+      ? await inspectDevelopmentBase(baseCheckout, repoRoot, checkpointTarget)
+      : undefined;
+    const sourceCoupled = id === "source" && !disposable;
+    const env = developmentInstanceEnvironment({
+      parent: process.env,
+      repoRoot,
+      instanceRoot: root,
+      instanceId: id,
+      sourceCoupled,
+      ...(developmentBase ? { base: developmentBase } : {}),
+    });
+    process.env["VIBESTUDIO_INSTANCE_ROOT"] = root;
+    process.env["VIBESTUDIO_INSTANCE"] = id;
+
+    // Only the lock owner may mutate this instance's readiness marker. Once
+    // registered, concurrent CLI readers reject an older generation.
+    if (mode === "server") clearDevInstanceReady(instance);
+    console.log(`[instance:${id}] ${instance.lifecycle} ${mode} state: ${root}`);
+    console.log(`[instance:${id}] CLI: pnpm cli --instance ${id} <command>`);
+    if (parsed.productionBase) {
+      console.log(`[instance:${id}] Base: canonical pinned production release`);
+    }
+    if (developmentBase) {
+      console.log(
+        `[instance:${id}] Base candidate: ${developmentBase.pin.commit} from ${developmentBase.sourceCheckout}`
+      );
+      if (developmentBase.temporary) {
+        console.log(
+          `[instance:${id}] Base development checkpoint includes ${developmentBase.changedPaths.length} worktree change(s).`
+        );
+      }
+      if (id === "source" && !disposable) {
+        console.log(
+          `[instance:${id}] Base write-back: protected publications -> ${developmentBase.sourceCheckout}`
+        );
+      }
+    }
+    if (!disposable) {
+      removeRetiredInstanceCaches(root, id);
+      await prunePersistentInstanceBuildCache(root, id);
+    }
     process.exitCode =
       mode === "server"
         ? await runServer(parsed.forwarded, env, instance)
         : await runDesktop(parsed.forwarded, env);
   } finally {
     if (!disposable) await prunePersistentInstanceBuildCache(root, id);
+    fs.rmSync(checkpointTarget, { recursive: true, force: true });
     const cleanupError = disposable ? removeEphemeralInstanceRoot(root) : null;
     if (cleanupError) {
       // Preserve the registry record and root together: the stale supervisor

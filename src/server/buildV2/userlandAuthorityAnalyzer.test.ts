@@ -192,6 +192,25 @@ describe("userland authority facts", () => {
     expect(facts.some((fact) => fact.origin.package?.name === "example-client")).toBe(true);
   });
 
+  it("attributes first-party executable bytes to the consumer", () => {
+    const facts = analyze("export const value = 1;", [
+      {
+        moduleId: "panel-entry.mjs",
+        contentDigest: "d".repeat(64),
+        package: { kind: "first-party" },
+        format: "mjs",
+        source: `
+          declare const workers: { resolveService(query: string): Promise<{ targetId: string }> };
+          void workers.resolveService("example.notes.v1");
+        `,
+      },
+    ]);
+
+    const executableFact = facts.find((fact) => fact.origin.file.includes("000000/module.js"));
+    expect(executableFact?.origin).toMatchObject({ unitName: "consumer" });
+    expect(executableFact?.origin.package).toBeUndefined();
+  });
+
   it("retains workspace-package provenance for executable dependency bytes", () => {
     const facts = analyze("export const value = 1;", [
       {

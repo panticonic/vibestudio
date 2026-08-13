@@ -150,10 +150,20 @@ worktrees, and resolved by every Base-aware developer command: `pnpm dev`,
 smoke tests, and commit checks. It is deliberately not an ambient `.env` file.
 Once setup has completed, no command or commit requires the checkout path again.
 
-Base candidates use their committed local `HEAD` as an exact reproducible
-identity. Edit and commit Base locally, then restart `pnpm dev`; no push, tag, or
-publication is required. Host-only edits use the same configured Base commit and
-likewise require no Base publication.
+`pnpm dev` snapshots the checkout's visible worktree into an instance-owned
+checkpoint. Tracked and untracked non-ignored edits are included; you do not
+need to commit, push, tag, or publish Base before starting or restarting the
+app. The developer checkout itself is never staged or committed by this
+process.
+
+The default `source` developer instance is a two-way co-development session.
+Its initial semantic workspace comes from that worktree checkpoint, and every
+reviewed publication to protected `main` is projected back to the configured
+Base checkout. The projection is a three-way merge against the publication's
+exact previous state: checkout-only edits are preserved, identical edits
+coalesce, and overlapping edits reject the entire write-back before any file is
+touched. Named, disposable, system-test, and candidate-pair instances never
+write to the configured checkout.
 
 To exercise the shipped experience instead, run `pnpm dev:production`. It
 ignores (but does not change) the local development selection, creates a fresh

@@ -311,7 +311,12 @@ describe("userland authority fold", () => {
     });
     expect(diagnostics).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ message: expect.stringContaining("workspace-service:notes") }),
+        expect.objectContaining({
+          message: expect.stringContaining("workspace-service:notes"),
+          suggestion: expect.stringContaining(
+            '"capability":"workspace-service:notes","resource":{"kind":"exact","key":"do:workers/notes:NotesDO:main"}'
+          ),
+        }),
         expect.objectContaining({ message: expect.stringContaining("notes.delete") }),
       ])
     );

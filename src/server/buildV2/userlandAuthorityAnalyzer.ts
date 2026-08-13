@@ -681,6 +681,9 @@ export function analyzeWorkspaceServiceCalls(
   const executableModules = input.executableModules ?? [];
   if (executableModules.length > 0) {
     const executableRoot = path.resolve(input.sourceRoot, ".vibestudio-authority-executable");
+    const consumerName =
+      input.units.find((unit) => unit.relativePath === input.unitRelativePath)?.name ??
+      input.unitRelativePath;
     const service = new TypeCheckService({
       panelPath: executableRoot,
       workspaceContext: null,
@@ -698,8 +701,15 @@ export function analyzeWorkspaceServiceCalls(
           module.source
         );
         return {
-          name: module.package.kind === "external" ? module.package.name : "external-module",
-          relativePath,
+          name: module.package.kind === "first-party" ? consumerName : module.package.name,
+          // First-party executable bytes are part of the consumer itself. Give
+          // them the synthetic consumer root so fact attribution does not turn
+          // them into a fictitious dependency package. Real workspace and
+          // external dependencies retain their exact per-module roots below.
+          relativePath:
+            module.package.kind === "first-party"
+              ? ".vibestudio-authority-executable"
+              : relativePath,
           package:
             module.package.kind === "external"
               ? {

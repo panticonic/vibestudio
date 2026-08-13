@@ -3,9 +3,15 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { hostRefBasisDigest } from "@vibestudio/shared/vcs/publication";
-import { ensureLayout, mirrorWorktreeTree, putBytes } from "../services/blobstoreService.js";
+import {
+  ensureLayout,
+  getBytes,
+  mirrorWorktreeTree,
+  putBytes,
+} from "../services/blobstoreService.js";
 import { createProtectedRefStore } from "../services/protectedRefStore.js";
 import { createWorkspaceSemanticPort } from "../workspaceSourceProvider.js";
+import { createDevelopmentCheckoutPublicationObserver } from "../developmentCheckoutProjection.js";
 import { WorkspaceVcs } from "./workspaceVcs.js";
 
 describe("WorkspaceVcs protected publication notification", () => {
@@ -107,6 +113,94 @@ describe("WorkspaceVcs protected publication notification", () => {
       expect.stringContaining("protected publication source mirror failed"),
       expect.anything()
     );
+  });
+
+  it("settles a protected publication only after the external development checkout is updated", async () => {
+    root = await fsp.mkdtemp(path.join(os.tmpdir(), "vcs-publication-writeback-"));
+    const blobsDir = path.join(root, "blobs");
+    const checkout = path.join(root, "base-checkout");
+    const repositoryRoot = path.join(checkout, "packages/demo");
+    ensureLayout(blobsDir);
+    await fsp.mkdir(repositoryRoot, { recursive: true });
+    await fsp.writeFile(path.join(repositoryRoot, "index.ts"), "before\n");
+    const beforeHash = (await putBytes(blobsDir, Buffer.from("before\n"))).digest;
+    const afterHash = (await putBytes(blobsDir, Buffer.from("after\n"))).digest;
+    const beforeState = (
+      await mirrorWorktreeTree(blobsDir, [
+        { path: "index.ts", contentHash: beforeHash, mode: 0o100644 },
+      ])
+    ).stateHash;
+    const afterState = (
+      await mirrorWorktreeTree(blobsDir, [
+        { path: "index.ts", contentHash: afterHash, mode: 0o100644 },
+      ])
+    ).stateHash;
+    const refs = createProtectedRefStore({
+      statePath: path.join(root, "refs"),
+      gate: async () => undefined,
+    });
+    const vcs = new WorkspaceVcs({
+      workspaceId: "workspace:test",
+      blobsDir,
+      workspaceRoot: path.join(root, "semantic-source"),
+      contextProjectionsRoot: path.join(root, ".context-projections", "v5"),
+      buildSourcesRoot: path.join(root, "build-sources"),
+      refs,
+    });
+    await vcs.attachGad(
+      createWorkspaceSemanticPort({ dispatch: async () => undefined as never } as never, {
+        source: "test/provider",
+        className: "TestProvider",
+        objectKey: "test",
+      })
+    );
+    const observer = createDevelopmentCheckoutPublicationObserver({
+      destinationRoot: checkout,
+      inspectRepository: async () => {
+        const inspected = await vcs.contentProjection.localState(repositoryRoot, { exact: true });
+        return {
+          files: inspected.files.map((file) => ({
+            path: file.path,
+            contentHash: file.contentHash,
+            executable: (file.mode & 0o111) !== 0,
+          })),
+          skippedPaths: [],
+        };
+      },
+      readState: async (stateHash) =>
+        (await vcs.contentProjection.listStateFiles(stateHash)).map((file) => ({
+          path: file.path,
+          contentHash: file.content_hash,
+          executable: (file.mode & 0o111) !== 0,
+        })),
+      readBlob: (contentHash) => getBytes(blobsDir, contentHash),
+    });
+    vcs.onProtectedPublication(async (event) => {
+      await observer.observe(event);
+    });
+
+    await refs.updateMains({
+      entries: [{ repoPath: "packages/demo", expectedOld: null, next: beforeState }],
+      evidence: {
+        publicationId: "publication:seed",
+        previousEventId: "event:genesis",
+        publishedEventId: "event:seed",
+        hostRefsBasisDigest: hostRefBasisDigest([]),
+      },
+    });
+    await refs.updateMains({
+      entries: [{ repoPath: "packages/demo", expectedOld: beforeState, next: afterState }],
+      evidence: {
+        publicationId: "publication:edit",
+        previousEventId: "event:seed",
+        publishedEventId: "event:edit",
+        hostRefsBasisDigest: hostRefBasisDigest([
+          { repoPath: "packages/demo", contentRoot: beforeState },
+        ]),
+      },
+    });
+
+    expect(await fsp.readFile(path.join(repositoryRoot, "index.ts"), "utf8")).toBe("after\n");
   });
 
   it("serializes every protected-main author while allowing one authoring lease to publish", async () => {

@@ -552,6 +552,18 @@ export async function authorityDiagnosticsForProgram(input: {
     );
     if (covered) continue;
     const origin = effect.origin;
+    const suggestedRequest = {
+      capability: effect.capability,
+      resource: effect.resource,
+      tier: effect.tier,
+      evidence:
+        effect.resource.kind === "exact"
+          ? ("exact" as const)
+          : effect.resource.kind === "prefix" && effect.resource.prefix === ""
+            ? ("intentional-broad" as const)
+            : ("bounded-dynamic" as const),
+      ...(effect.packageName ? { packages: [effect.packageName] } : {}),
+    };
     userlandDiagnostics.push({
       source: "authority",
       severity: "error",
@@ -559,8 +571,7 @@ export async function authorityDiagnosticsForProgram(input: {
       line: origin.line,
       column: origin.column,
       message: `Calling ${effect.serviceName ?? "the workspace service"}${effect.method ? `.${effect.method}` : ""} requires '${effect.capability}' at ${effect.tier} tier, but consumer '${consumerName}' does not request a covering authority scope${effect.packageName ? ` for dependency package '${effect.packageName}'` : ""}.`,
-      suggestion:
-        "Add the narrowest reviewed request for this provider capability and receiver resource, or remove/narrow the call. A request is not a grant.",
+      suggestion: `Add ${JSON.stringify(suggestedRequest)} to package.json#vibestudio.authority.requests, or remove/narrow the call. A request is not a grant.`,
     });
   }
   return [...hostDiagnostics, ...userlandDiagnostics];

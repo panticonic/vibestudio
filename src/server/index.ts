@@ -48,6 +48,7 @@ import {
   sealAndDrainDurableObjectRelays,
 } from "./workerdRpcRelay.js";
 import { resolveHttpRuntimeCaller } from "./httpRuntimeIdentity.js";
+import { createDevelopmentCheckoutPublicationObserver } from "./developmentCheckoutProjection.js";
 import { getProductBootManifest } from "./internalDOs/productBootManifest.js";
 import {
   AppliedWorkspaceUnitDeclarations,
@@ -76,20 +77,39 @@ declare const __filename: string;
 function developmentRootTemplateSelection(): {
   pin: WorkspaceTemplatePin;
   checkout: string;
+  writeback: string | null;
 } | null {
   const rawPin = process.env["VIBESTUDIO_DEV_ROOT_TEMPLATE"]?.trim();
   const rawCheckout = process.env["VIBESTUDIO_DEV_ROOT_TEMPLATE_CHECKOUT"]?.trim();
-  if (!rawPin && !rawCheckout) return null;
+  const rawWriteback = process.env["VIBESTUDIO_DEV_ROOT_TEMPLATE_WRITEBACK"]?.trim();
+  if (!rawPin && !rawCheckout && !rawWriteback) return null;
   if (process.env["NODE_ENV"] !== "development") {
     throw new Error("Local root-template selection is available only in development launches");
   }
   if (!rawPin || !rawCheckout) {
     throw new Error("Local root-template selection requires both an exact pin and checkout path");
   }
+  if (rawWriteback && process.env["VIBESTUDIO_SOURCE_INSTANCE"] !== "1") {
+    throw new Error("Base checkout write-back is restricted to the source development instance");
+  }
   const checkout = fs.realpathSync(path.resolve(rawCheckout));
+  const writeback = rawWriteback ? fs.realpathSync(path.resolve(rawWriteback)) : null;
+  if (writeback) {
+    const gitMarker = path.join(writeback, ".git");
+    let marker: fs.Stats;
+    try {
+      marker = fs.lstatSync(gitMarker);
+    } catch {
+      throw new Error(`Base checkout write-back target is not a Git checkout: ${writeback}`);
+    }
+    if (!marker.isDirectory() && !marker.isFile()) {
+      throw new Error(`Base checkout write-back target has invalid Git metadata: ${writeback}`);
+    }
+  }
   return {
     pin: WorkspaceTemplatePinSchema.parse(JSON.parse(rawPin)) as WorkspaceTemplatePin,
     checkout,
+    writeback,
   };
 }
 
@@ -1412,7 +1432,8 @@ async function main() {
   // through it); the approval gate is late-bound below once the main-advance
   // approval machinery exists — advances before that point fail closed.
   const { createProtectedRefStore } = await import("./services/protectedRefStore.js");
-  const { collectTreeReachableDigests, putBytes } = await import("./services/blobstoreService.js");
+  const { collectTreeReachableDigests, getBytes, putBytes } =
+    await import("./services/blobstoreService.js");
   let mainRefGate: import("./services/protectedRefStore.js").RefGate | null = null;
   const protectedRefStore = createProtectedRefStore({
     statePath: layout.refsDir,
@@ -1906,8 +1927,46 @@ async function main() {
   //  - meta/ changes reload workspace config from the exact published state
   //    and reconcile declared units
   //  - any change invalidates the tree scanner cache
-  //  - pnpm dev mode persists protected publications back to the template
-  //    checkout through an exact previous-state guard
+  //  - the default pnpm dev instance persists protected publications back to
+  //    its configured Base checkout through an exact previous-state guard
+  const developmentCheckoutObserver = developmentRootTemplate?.writeback
+    ? createDevelopmentCheckoutPublicationObserver({
+        destinationRoot: developmentRootTemplate.writeback,
+        inspectRepository: async (repoPath) => {
+          const repositoryRoot = path.join(
+            developmentRootTemplate.writeback!,
+            ...repoPath.split("/")
+          );
+          try {
+            const stat = await fs.promises.lstat(repositoryRoot);
+            if (!stat.isDirectory()) return { files: [], skippedPaths: [repoPath] };
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+              return { files: [], skippedPaths: [] };
+            }
+            throw error;
+          }
+          const inspected = await workspaceVcs.contentProjection.localState(repositoryRoot, {
+            exact: true,
+          });
+          return {
+            files: inspected.files.map((file) => ({
+              path: file.path,
+              contentHash: file.contentHash,
+              executable: (file.mode & 0o111) !== 0,
+            })),
+            skippedPaths: inspected.skipped.map((entry) => entry.path),
+          };
+        },
+        readState: async (stateHash) =>
+          (await workspaceVcs.contentProjection.listStateFiles(stateHash)).map((file) => ({
+            path: file.path,
+            contentHash: file.content_hash,
+            executable: (file.mode & 0o111) !== 0,
+          })),
+        readBlob: (contentHash) => getBytes(layout.blobsDir, contentHash),
+      })
+    : null;
   let initialWorkspaceUnitReconcileComplete = false;
   let pendingStartupMetaConfigReload = false;
   let latestMetaConfigReloadSeq = 0;
@@ -1920,7 +1979,7 @@ async function main() {
       console.error("[SchemaGate] Failed to commit published schema descriptors:", error);
     }
   });
-  workspaceVcs.onProtectedPublication((event) => {
+  workspaceVcs.onProtectedPublication(async (event) => {
     treeScanner.invalidate();
     if (event.changedPaths.some((changed) => changed.startsWith("meta/"))) {
       const reloadSeq = ++latestMetaConfigReloadSeq;
@@ -1947,6 +2006,26 @@ async function main() {
           }
         })();
       });
+    }
+    if (developmentCheckoutObserver) {
+      try {
+        const result = await developmentCheckoutObserver.observe(event);
+        if (result.conflicts.length > 0) {
+          console.warn(
+            "[DevelopmentCheckout] Publication was not written back because the Base checkout has overlapping edits:",
+            result.conflicts
+          );
+        } else if (result.changedPathCount > 0) {
+          console.log(
+            `[DevelopmentCheckout] Wrote ${result.changedPathCount} published path(s) back to ${developmentRootTemplate!.writeback}`
+          );
+        }
+      } catch (error) {
+        console.warn(
+          "[DevelopmentCheckout] Publication write-back failed:",
+          error instanceof Error ? error.message : String(error)
+        );
+      }
     }
   });
   // ===========================================================================
