@@ -87,7 +87,7 @@
     "type-check:host": "node_modules/typescript/bin/tsc --noEmit && pnpm type-check:workerd-programs",
     "type-check:workerd-programs": "node_modules/typescript/bin/tsc -p src/server/workerdPrograms/tsconfig.json",
     "type-check:userland": "tsx scripts/type-check-userland.ts",
-    "type-check:mobile": "pnpm --dir apps/mobile type-check",
+    "type-check:mobile": "pnpm type-check:userland",
     "type-check:watch": "node_modules/typescript/bin/tsc --noEmit --watch --preserveWatchOutput",
     "test": "pnpm run check:package-dependencies && pnpm run check:agent-docs && pnpm run check:unit-authority && pnpm run check:base-template-release && pnpm run check:execution-root-providers && node scripts/check-runtime-foundation-evidence.mjs --start host && pnpm run test:host && pnpm run check:ledger-evidence",
     "test:pair": "pnpm check:runtime-docs && pnpm check:pair-authority && pnpm type-check:userland && pnpm test:userland",
