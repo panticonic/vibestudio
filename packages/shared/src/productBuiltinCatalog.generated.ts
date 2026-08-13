@@ -144,6 +144,31 @@ export const PRODUCT_BUILTIN_CATALOG = [
           },
         },
       },
+      "panelTree.search": {
+        capability: "workspace.runtime-state.inspect",
+        tier: "open",
+        session: "family",
+        sensitivity: "read",
+        principals: ["user", "code", "host"],
+        presentation: {
+          title: "Inspect running workspace services",
+          action:
+            "inspect apps, panels, background tasks, and scheduled work that's currently running",
+          description: "Read the current structure and status of running workspace services",
+          group: "workspace",
+          authorityCategory: {
+            domain: "automation",
+            verb: "see",
+          },
+        },
+        effect: {
+          kind: "host-capability",
+          capability: "workspace.runtime-state.inspect",
+          resource: {
+            kind: "receiver-object",
+          },
+        },
+      },
       "slot.get": {
         capability: "workspace.runtime-state.inspect",
         tier: "open",
@@ -823,6 +848,225 @@ export const PRODUCT_BUILTIN_CATALOG = [
         tier: "gated",
         session: "family",
         sensitivity: "destructive",
+        principals: ["user", "code", "host"],
+        presentation: {
+          title: "Manage running workspace services",
+          action:
+            "manage apps, panels, background tasks, and scheduled work that's currently running",
+          description:
+            "Maintain running workspace apps, panels, background tasks, and scheduled work",
+          group: "workspace",
+          authorityCategory: {
+            domain: "automation",
+            verb: "manage",
+          },
+        },
+        effect: {
+          kind: "host-capability",
+          capability: "workspace.runtime-state.manage",
+          resource: {
+            kind: "receiver-object",
+          },
+        },
+      },
+      "panel.search": {
+        capability: "workspace.runtime-state.inspect",
+        tier: "open",
+        session: "family",
+        sensitivity: "read",
+        principals: ["user", "code", "host"],
+        presentation: {
+          title: "Inspect running workspace services",
+          action:
+            "inspect apps, panels, background tasks, and scheduled work that's currently running",
+          description: "Read the current structure and status of running workspace services",
+          group: "workspace",
+          authorityCategory: {
+            domain: "automation",
+            verb: "see",
+          },
+        },
+        effect: {
+          kind: "host-capability",
+          capability: "workspace.runtime-state.inspect",
+          resource: {
+            kind: "receiver-object",
+          },
+        },
+      },
+      "panel.sourceUsage": {
+        capability: "workspace.runtime-state.inspect",
+        tier: "open",
+        session: "family",
+        sensitivity: "read",
+        principals: ["user", "code", "host"],
+        presentation: {
+          title: "Inspect running workspace services",
+          action:
+            "inspect apps, panels, background tasks, and scheduled work that's currently running",
+          description: "Read the current structure and status of running workspace services",
+          group: "workspace",
+          authorityCategory: {
+            domain: "automation",
+            verb: "see",
+          },
+        },
+        effect: {
+          kind: "host-capability",
+          capability: "workspace.runtime-state.inspect",
+          resource: {
+            kind: "receiver-object",
+          },
+        },
+      },
+      "panel.index": {
+        capability: "workspace.runtime-state.manage",
+        tier: "gated",
+        session: "family",
+        sensitivity: "write",
+        principals: ["user", "code", "host"],
+        presentation: {
+          title: "Manage running workspace services",
+          action:
+            "manage apps, panels, background tasks, and scheduled work that's currently running",
+          description:
+            "Maintain running workspace apps, panels, background tasks, and scheduled work",
+          group: "workspace",
+          authorityCategory: {
+            domain: "automation",
+            verb: "manage",
+          },
+        },
+        effect: {
+          kind: "host-capability",
+          capability: "workspace.runtime-state.manage",
+          resource: {
+            kind: "receiver-object",
+          },
+        },
+      },
+      "panel.updateTitle": {
+        capability: "workspace.runtime-state.manage",
+        tier: "gated",
+        session: "family",
+        sensitivity: "write",
+        principals: ["user", "code", "host"],
+        presentation: {
+          title: "Manage running workspace services",
+          action:
+            "manage apps, panels, background tasks, and scheduled work that's currently running",
+          description:
+            "Maintain running workspace apps, panels, background tasks, and scheduled work",
+          group: "workspace",
+          authorityCategory: {
+            domain: "automation",
+            verb: "manage",
+          },
+        },
+        prepared: {
+          resolver: "workspace-state.panel.updateTitle.contextBoundary",
+          contextBoundary: {
+            operation: "updatePanelState",
+            targetArgument: 0,
+          },
+          leaves: [
+            {
+              capability: "context.boundary",
+              requirement: {
+                kind: "any",
+                requirements: [
+                  {
+                    kind: "capability",
+                    principal: "host",
+                    capability: "context.boundary",
+                  },
+                  {
+                    kind: "all",
+                    requirements: [
+                      {
+                        kind: "capability",
+                        principal: "user",
+                        capability: "context.boundary",
+                      },
+                      {
+                        kind: "relationship",
+                        name: "workspace-member",
+                      },
+                    ],
+                  },
+                  {
+                    kind: "all",
+                    requirements: [
+                      {
+                        kind: "capability",
+                        principal: "code",
+                        capability: "context.boundary",
+                      },
+                      {
+                        kind: "relationship",
+                        name: "workspace-member",
+                      },
+                    ],
+                  },
+                  {
+                    kind: "all",
+                    requirements: [
+                      {
+                        kind: "capability",
+                        principal: "session",
+                        capability: "context.boundary",
+                      },
+                      {
+                        kind: "relationship",
+                        name: "workspace-member",
+                      },
+                    ],
+                  },
+                ],
+              },
+              tier: "gated",
+            },
+          ],
+        },
+        effect: {
+          kind: "host-capability",
+          capability: "workspace.runtime-state.manage",
+          resource: {
+            kind: "receiver-object",
+          },
+        },
+      },
+      "panel.incrementAccess": {
+        capability: "workspace.runtime-state.manage",
+        tier: "gated",
+        session: "family",
+        sensitivity: "write",
+        principals: ["user", "code", "host"],
+        presentation: {
+          title: "Manage running workspace services",
+          action:
+            "manage apps, panels, background tasks, and scheduled work that's currently running",
+          description:
+            "Maintain running workspace apps, panels, background tasks, and scheduled work",
+          group: "workspace",
+          authorityCategory: {
+            domain: "automation",
+            verb: "manage",
+          },
+        },
+        effect: {
+          kind: "host-capability",
+          capability: "workspace.runtime-state.manage",
+          resource: {
+            kind: "receiver-object",
+          },
+        },
+      },
+      "panel.rebuildIndex": {
+        capability: "workspace.runtime-state.manage",
+        tier: "gated",
+        session: "family",
+        sensitivity: "write",
         principals: ["user", "code", "host"],
         presentation: {
           title: "Manage running workspace services",

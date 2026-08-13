@@ -105,10 +105,10 @@ export const reviewedClosureMethods = defineServiceMethods({
     description: "Activate one digest-bound reviewed execution closure.",
     capability: ACTIVATE,
     presentation: {
-      title: "Activate reviewed automation",
-      action: "activate reviewed automation",
+      title: "Start an automated task",
+      action: "start an automated task you reviewed",
       description:
-        "Allows {requesterKind} to activate the exact automation authority closure you reviewed.",
+        "Start running the automated task exactly as you reviewed and approved it.",
       group: "runtime",
       authorityCategory: { domain: "safety", verb: "manage" },
     },
@@ -143,9 +143,9 @@ export const reviewedClosureMethods = defineServiceMethods({
       rationale: "Kernel suspension closes session admission and revokes standing allows.",
     },
     presentation: {
-      title: "Pause reviewed automation",
-      action: "pause reviewed automation",
-      description: "Allows {requesterKind} to pause reviewed automation.",
+      title: "Pause an automated task",
+      action: "pause an automated task",
+      description: "Pause a running automated task. It can be resumed later.",
       group: "runtime",
       authorityCategory: { domain: "safety", verb: "manage" },
     },
@@ -165,9 +165,9 @@ export const reviewedClosureMethods = defineServiceMethods({
       rationale: "Kernel retirement permanently revokes the closure and its standing grants.",
     },
     presentation: {
-      title: "Retire reviewed automation",
-      action: "retire reviewed automation",
-      description: "Allows {requesterKind} to retire reviewed automation.",
+      title: "Stop an automated task permanently",
+      action: "permanently stop an automated task",
+      description: "Permanently stop an automated task and remove its permissions.",
       group: "runtime",
       authorityCategory: { domain: "safety", verb: "manage" },
     },
@@ -180,10 +180,10 @@ export const reviewedClosureMethods = defineServiceMethods({
   bindSession: {
     capability: "reviewed-closure.bind-session",
     presentation: {
-      title: "Use reviewed automation authority",
-      action: "use reviewed automation authority",
+      title: "Use an automated task's permissions",
+      action: "use the permissions granted to an automated task",
       description:
-        "Allows {requesterKind} to bind a running automation to its exact reviewed authority closure.",
+        "Connect a running automation to the exact permissions you approved for it.",
       group: "runtime",
       authorityCategory: { domain: "safety", verb: "manage" },
     },

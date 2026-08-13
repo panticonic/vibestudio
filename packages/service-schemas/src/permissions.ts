@@ -187,10 +187,10 @@ export const permissionsMethods = defineServiceMethods({
       rationale: "G4: privacy or live authority-map read; §2 default {code, session} family",
     },
     presentation: {
-      title: "View workspace authority safety status",
-      action: "view workspace authority safety status",
+      title: "View workspace safety status",
+      action: "view workspace safety status",
       description:
-        "Allows {requesterKind} to view whether workspace authority is locked and how much agent work it affects.",
+        "Check whether the workspace safety lock is on and what it affects.",
       group: "approvals",
       authorityCategory: {
         domain: "safety",
@@ -249,10 +249,10 @@ export const permissionsMethods = defineServiceMethods({
         "C2: suspends or restores protected authority workspace-wide; §2 default {code, session} family",
     },
     presentation: {
-      title: "Change the workspace authority lock",
-      action: "change the workspace authority lock",
+      title: "Change the workspace safety lock",
+      action: "turn the workspace safety lock on or off",
       description:
-        "Allows {requesterKind} to stop or restore protected authority across the workspace.",
+        "Lock or unlock the workspace to stop or resume all automated work.",
       group: "approvals",
       authorityCategory: {
         domain: "safety",

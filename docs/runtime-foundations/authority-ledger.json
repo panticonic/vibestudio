@@ -27924,6 +27924,327 @@
       "parityAssertion": "generated-census:host-authority"
     },
     {
+      "id": "host:workspace-state.panel.incrementAccess",
+      "rpcPlane": "host-service",
+      "owner": "workspace-state",
+      "method": "panel.incrementAccess",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "residency": "supervision",
+      "mechanismFamily": "workspace-state.lifecycle",
+      "reviewRationale": "Panel access bookkeeping routed to the Base presentation owner",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:workspace-state.panel.incrementAccess"
+      },
+      "authorityPrincipals": [
+        "user",
+        "code",
+        "host"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:workspace-state.panel.incrementAccess),allOf(capability(user,service:workspace-state.panel.incrementAccess),workspace-member),allOf(capability(code,service:workspace-state.panel.incrementAccess),workspace-member))",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:workspace-state.panel.incrementAccess",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:workspace-state.panel.index",
+      "rpcPlane": "host-service",
+      "owner": "workspace-state",
+      "method": "panel.index",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "residency": "supervision",
+      "mechanismFamily": "workspace-state.lifecycle",
+      "reviewRationale": "Panel lifecycle bookkeeping on the already-authorized workspace-state operation",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:workspace-state.panel.index"
+      },
+      "authorityPrincipals": [
+        "user",
+        "code",
+        "host"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:workspace-state.panel.index),allOf(capability(user,service:workspace-state.panel.index),workspace-member),allOf(capability(code,service:workspace-state.panel.index),workspace-member))",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:workspace-state.panel.index",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:workspace-state.panel.rebuildIndex",
+      "rpcPlane": "host-service",
+      "owner": "workspace-state",
+      "method": "panel.rebuildIndex",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "residency": "supervision",
+      "mechanismFamily": "workspace-state.lifecycle",
+      "reviewRationale": "Presentation index rebuild routed to the Base presentation owner",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:workspace-state.panel.rebuildIndex"
+      },
+      "authorityPrincipals": [
+        "user",
+        "code",
+        "host"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:workspace-state.panel.rebuildIndex),allOf(capability(user,service:workspace-state.panel.rebuildIndex),workspace-member),allOf(capability(code,service:workspace-state.panel.rebuildIndex),workspace-member))",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:workspace-state.panel.rebuildIndex",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:workspace-state.panel.search",
+      "rpcPlane": "host-service",
+      "owner": "workspace-state",
+      "method": "panel.search",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "supervision",
+      "mechanismFamily": "workspace-state.lifecycle",
+      "reviewRationale": "Workspace-member panel-index read routed to the Base presentation owner",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:workspace-state.panel.search"
+      },
+      "authorityPrincipals": [
+        "user",
+        "code",
+        "host"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:workspace-state.panel.search),allOf(capability(user,service:workspace-state.panel.search),workspace-member),allOf(capability(code,service:workspace-state.panel.search),workspace-member))",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:workspace-state.panel.search",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:workspace-state.panel.sourceUsage",
+      "rpcPlane": "host-service",
+      "owner": "workspace-state",
+      "method": "panel.sourceUsage",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "supervision",
+      "mechanismFamily": "workspace-state.lifecycle",
+      "reviewRationale": "Workspace-member aggregate panel usage read routed to the Base presentation owner",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:workspace-state.panel.sourceUsage"
+      },
+      "authorityPrincipals": [
+        "user",
+        "code",
+        "host"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:workspace-state.panel.sourceUsage),allOf(capability(user,service:workspace-state.panel.sourceUsage),workspace-member),allOf(capability(code,service:workspace-state.panel.sourceUsage),workspace-member))",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:workspace-state.panel.sourceUsage",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:workspace-state.panel.updateTitle",
+      "rpcPlane": "host-service",
+      "owner": "workspace-state",
+      "method": "panel.updateTitle",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "residency": "transport",
+      "mechanismFamily": "workspace-state.builtin-rpc",
+      "reviewRationale": "Slot-bound presentation update routed to the Base presentation owner",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "workspace.runtime-state.manage"
+      },
+      "authorityPrincipals": [
+        "user",
+        "code",
+        "host"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"workspace.runtime-state.manage\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"workspace.runtime-state.manage\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"workspace.runtime-state.manage\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"workspace.runtime-state.manage\"}]}",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:workspace-state.panel.updateTitle",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:workspace-state.panel.updateTitle#capability:context.boundary",
+      "rpcPlane": "host-service",
+      "owner": "workspace-state",
+      "method": "panel.updateTitle",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "residency": "transport",
+      "mechanismFamily": "workspace-state.builtin-rpc",
+      "reviewRationale": "Slot-bound presentation update routed to the Base presentation owner",
+      "capability": "context.boundary",
+      "resourceDerivation": {
+        "kind": "prepared",
+        "resolver": "workspace-state.panel.updateTitle.contextBoundary"
+      },
+      "authorityPrincipals": [
+        "code",
+        "host",
+        "session",
+        "user"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "schema-owned-authority-preparation"
+      ],
+      "currentOutcomes": {
+        "allowed": "prepared authority leaf selected and satisfied",
+        "denied": "missing prepared authority leaf fails before handler entry"
+      },
+      "predicates": [
+        "live-session",
+        "exact-prepared-resource",
+        "registered-preparer"
+      ],
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"context.boundary\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
+      "r3b": {
+        "review": "schema-owned-prepared-leaf",
+        "change": null
+      },
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
       "id": "host:workspace-state.panelTree.detail",
       "rpcPlane": "host-service",
       "owner": "workspace-state",
@@ -28151,6 +28472,52 @@
         "change": "Adds an open, read-only keyset page over roots owned by the server-verified caller subject, or the ownerless workspace band for subjectless infrastructure. The request is capped at 200 rows, accepts no owner identity, returns only tree-list metadata, and leaves the existing cross-owner root discovery and explicit owner query path unchanged."
       },
       "capability": "service:workspace-state.panelTree.rootsForCaller",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:workspace-state.panelTree.search",
+      "rpcPlane": "host-service",
+      "owner": "workspace-state",
+      "method": "panelTree.search",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "transport",
+      "mechanismFamily": "workspace-state.builtin-rpc",
+      "reviewRationale": "Bounded presentation search routed through the existing workspace-state boundary",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:workspace-state.panelTree.search"
+      },
+      "authorityPrincipals": [
+        "user",
+        "code",
+        "host"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:workspace-state.panelTree.search),allOf(capability(user,service:workspace-state.panelTree.search),workspace-member),allOf(capability(code,service:workspace-state.panelTree.search),workspace-member))",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:workspace-state.panelTree.search",
       "parityAssertion": "generated-census:host-authority"
     },
     {

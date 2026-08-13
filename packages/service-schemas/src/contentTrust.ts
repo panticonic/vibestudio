@@ -80,9 +80,9 @@ export const contentTrustMethods = defineServiceMethods({
         "A future-content trust policy changes the authority meaning of content that has not yet been observed",
     },
     presentation: {
-      title: "Always trust matching outside content",
-      action: "always trust matching outside content",
-      description: "Allows {requesterKind} to always trust matching outside content.",
+      title: "Always allow matching outside content",
+      action: "skip reviews for outside content matching a pattern",
+      description: "Automatically allow future outside content from the same source.",
       group: "approvals",
       authorityCategory: {
         domain: "safety",
@@ -114,9 +114,9 @@ export const contentTrustMethods = defineServiceMethods({
         "Revocation changes which external content may enter future internal-context sessions",
     },
     presentation: {
-      title: "Remove a content-trust decision",
-      action: "remove a content-trust decision",
-      description: "Allows {requesterKind} to remove a content-trust decision.",
+      title: "Undo a content safety decision",
+      action: "remove a previous decision about outside content",
+      description: "Undo a decision you made about outside content, so it will be reviewed again.",
       group: "approvals",
       authorityCategory: {
         domain: "safety",

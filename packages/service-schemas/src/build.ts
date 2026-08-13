@@ -688,10 +688,10 @@ export const buildMethods = defineServiceMethods({
         "G5: external package acquisition is gated; installed code and explicitly approved eval sessions share the reviewed code family",
     },
     presentation: {
-      title: "Inspect installed packages for an app, panel, worker, or extension",
-      action: "inspect installed packages for an app, panel, worker, or extension",
+      title: "View installed software for an app or extension",
+      action: "view installed software packages for an app, panel, or extension",
       description:
-        "Allows {requesterKind} to inspect installed packages for an app, panel, worker, or extension.",
+        "See what software libraries are installed for an app, panel, or extension.",
       group: "workspace",
       authorityCategory: {
         domain: "automation",
@@ -868,10 +868,10 @@ export const buildMethods = defineServiceMethods({
         "G5: host infrastructure plumbing; §2 durable code identity or host approval plumbing",
     },
     presentation: {
-      title: "Rebuild workspace apps, panels, workers, and extensions",
-      action: "rebuild workspace apps, panels, workers, and extensions",
+      title: "Rebuild workspace apps and extensions",
+      action: "rebuild workspace apps, panels, and extensions",
       description:
-        "Allows {requesterKind} to rebuild workspace apps, panels, workers, and extensions.",
+        "Rebuild all apps, panels, and extensions in your workspace from their source code.",
       group: "workspace",
       authorityCategory: {
         domain: "automation",

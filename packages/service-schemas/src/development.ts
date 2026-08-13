@@ -736,10 +736,10 @@ export const developmentMethods = defineReceiverServiceMethods({
       rationale: "Base-owned workflow selects one explicit sibling checkout for exact comparison",
     },
     presentation: {
-      title: "Review a template checkout exchange",
-      action: "review a template checkout exchange",
+      title: "Review template changes",
+      action: "review incoming or outgoing template changes",
       description:
-        "Allows {requesterKind} to compare one selected Git checkout with this exact development context.",
+        "Compare template changes to see what would be added, updated, or removed.",
       group: "runtime",
       authorityCategory: { domain: "automation", verb: "act" },
     },
@@ -768,10 +768,10 @@ export const developmentMethods = defineReceiverServiceMethods({
       rationale: "Base-owned workflow applies only one exact previously reviewed exchange",
     },
     presentation: {
-      title: "Apply a template checkout exchange",
-      action: "apply a template checkout exchange",
+      title: "Apply template changes",
+      action: "apply reviewed template changes",
       description:
-        "Allows {requesterKind} to apply the reviewed projection and record exact receipts.",
+        "Apply the template changes you just reviewed.",
       group: "runtime",
       authorityCategory: { domain: "automation", verb: "act" },
     },

@@ -732,10 +732,10 @@ export const runtimeMethods = defineServiceMethods({
         "Exact recovery is restricted by the receiver to interactive trusted chrome; expected-digest matching prevents stale actions",
     },
     presentation: {
-      title: "Recover a runtime execution",
-      action: "recover a runtime execution",
+      title: "Recover a running task",
+      action: "recover a running task that stopped unexpectedly",
       description:
-        "Allows {requesterKind} to restore an exact retained execution or explicitly replace one unavailable incarnation.",
+        "Restore a task that stopped unexpectedly, or replace it with a current version.",
       group: "runtime",
       authorityCategory: { domain: "automation", verb: "manage" },
     },
@@ -999,9 +999,9 @@ export const runtimeMethods = defineServiceMethods({
     description:
       "Fork one runtime's exact semantic context into one owned child context without materializing a host checkout.",
     presentation: {
-      title: "Fork a semantic workspace",
-      action: "fork a semantic workspace",
-      description: "Allows {requesterKind} to create one exact owned semantic child workspace.",
+      title: "Create a workspace copy",
+      action: "create a copy of a workspace",
+      description: "Create an independent copy of a workspace for a task to work in.",
       group: "runtime",
       authorityCategory: { domain: "files", verb: "act" },
     },
@@ -1038,10 +1038,10 @@ export const runtimeMethods = defineServiceMethods({
     description:
       "Drop one exact semantic-only context and remove its generic lifecycle ownership record.",
     presentation: {
-      title: "Delete a semantic workspace",
-      action: "delete a semantic workspace",
+      title: "Delete a workspace copy",
+      action: "delete a workspace copy",
       description:
-        "Allows {requesterKind} to permanently remove one exact owned semantic workspace.",
+        "Permanently remove a workspace copy that is no longer needed.",
       group: "runtime",
       authorityCategory: { domain: "files", verb: "manage" },
     },
@@ -1099,9 +1099,9 @@ export const runtimeMethods = defineServiceMethods({
         "G3: state change exceeds the calling task's scratch; §2 default {code, session} family",
     },
     presentation: {
-      title: "Link related task workspaces",
-      action: "link related task workspaces",
-      description: "Allows {requesterKind} to link related task workspaces.",
+      title: "Link related tasks together",
+      action: "link related tasks so they can share work",
+      description: "Connect related tasks so they can coordinate and share progress.",
       group: "runtime",
       authorityCategory: {
         domain: "files",
@@ -1141,9 +1141,9 @@ export const runtimeMethods = defineServiceMethods({
         "G3: state change exceeds the calling task's scratch; §2 default {code, session} family",
     },
     presentation: {
-      title: "Create a workspace for a subagent",
-      action: "create a workspace for a subagent",
-      description: "Allows {requesterKind} to create a workspace for a subagent.",
+      title: "Create a workspace for a helper agent",
+      action: "create a workspace for a helper agent",
+      description: "Set up a workspace so a helper agent can work on part of a task.",
       group: "runtime",
       authorityCategory: {
         domain: "automation",
@@ -1299,9 +1299,9 @@ export const runtimeMethods = defineServiceMethods({
         "Restarts one exact driver-owned execution without changing its durable product state.",
     },
     presentation: {
-      title: "Restart a workspace component",
-      action: "restart a workspace component",
-      description: "Allows {requesterKind} to restart one exact workspace component.",
+      title: "Restart a workspace app or service",
+      action: "restart a workspace app or service",
+      description: "Restart an app or service running in your workspace.",
       group: "runtime",
       authorityCategory: { domain: "automation", verb: "manage" },
     },
@@ -1322,10 +1322,10 @@ export const runtimeMethods = defineServiceMethods({
         "Generic activation of one exact admitted release through its owning executable-unit driver.",
     },
     presentation: {
-      title: "Start a workspace component",
-      action: "start a workspace component",
+      title: "Start a workspace app or service",
+      action: "start a workspace app or service",
       description:
-        "Allows {requesterKind} to start one exact approved version of a workspace component.",
+        "Start an approved version of an app or service in your workspace.",
       group: "runtime",
       authorityCategory: { domain: "automation", verb: "manage" },
     },
@@ -1346,10 +1346,10 @@ export const runtimeMethods = defineServiceMethods({
         "Materializes one immutable release selector through the owning driver without selecting or launching it.",
     },
     presentation: {
-      title: "Prepare a new component version",
-      action: "prepare a new version of a workspace component",
+      title: "Prepare a new app version",
+      action: "prepare a new version of a workspace app or service",
       description:
-        "Allows {requesterKind} to stage one exact new version of a workspace component without starting it.",
+        "Get a new version of an app or service ready without starting it yet.",
       group: "runtime",
       authorityCategory: { domain: "automation", verb: "manage" },
     },
@@ -1369,9 +1369,9 @@ export const runtimeMethods = defineServiceMethods({
       rationale: "Retires one exact driver-owned execution and its owned native resources.",
     },
     presentation: {
-      title: "Stop a workspace component",
-      action: "stop a workspace component",
-      description: "Allows {requesterKind} to stop one exact workspace component.",
+      title: "Stop a workspace app or service",
+      action: "stop a workspace app or service",
+      description: "Stop an app or service running in your workspace.",
       group: "runtime",
       authorityCategory: { domain: "automation", verb: "manage" },
     },

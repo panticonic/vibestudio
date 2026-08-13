@@ -456,10 +456,10 @@ export const developmentNativeMethods = defineServiceMethods({
     description: "Plan one explicit three-way exchange with a selected sibling Git checkout.",
     capability: "development.native.execute",
     presentation: {
-      title: "Inspect a template checkout exchange",
-      action: "inspect a template checkout exchange",
+      title: "Inspect template changes",
+      action: "inspect incoming or outgoing template changes",
       description:
-        "Allows {requesterKind} to read one selected Git checkout and compare it with an exact semantic template repository.",
+        "Read and compare template files to prepare a list of changes.",
       group: "runtime",
       authorityCategory: { domain: "automation", verb: "act" },
     },
@@ -491,10 +491,10 @@ export const developmentNativeMethods = defineServiceMethods({
     description: "Apply one previously reviewed exact template checkout exchange.",
     capability: "development.native.execute",
     presentation: {
-      title: "Apply a template checkout exchange",
-      action: "apply a template checkout exchange",
+      title: "Apply template changes",
+      action: "apply reviewed template changes",
       description:
-        "Allows {requesterKind} to write the reviewed projection to a selected checkout or import it into one semantic context.",
+        "Write the reviewed template changes to your workspace or export them.",
       group: "runtime",
       authorityCategory: { domain: "automation", verb: "act" },
     },

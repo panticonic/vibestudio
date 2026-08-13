@@ -539,9 +539,9 @@ export const gitInteropMethods = defineServiceMethods({
         "G1: external-system effect or listening surface; §2 default {code, session} family",
     },
     presentation: {
-      title: "Change the shared Git remote",
-      action: "change the shared Git remote",
-      description: "Allows {requesterKind} to change the shared Git remote.",
+      title: "Change the shared publishing destination",
+      action: "change where this project publishes to",
+      description: "Change the online repository this project shares its changes with.",
       group: "files",
       authorityCategory: {
         domain: "sharing",
@@ -576,9 +576,9 @@ export const gitInteropMethods = defineServiceMethods({
         "G1: external-system effect or listening surface; §2 default {code, session} family",
     },
     presentation: {
-      title: "Remove the shared Git remote",
-      action: "remove the shared Git remote",
-      description: "Allows {requesterKind} to remove the shared Git remote.",
+      title: "Remove the shared publishing destination",
+      action: "remove the shared publishing destination",
+      description: "Stop sharing this project's changes with an online repository.",
       group: "files",
       authorityCategory: {
         domain: "sharing",
@@ -606,9 +606,9 @@ export const gitInteropMethods = defineServiceMethods({
         "G1: external-system effect or listening surface; §2 default {code, session} family",
     },
     presentation: {
-      title: "Change the upstream Git repository",
-      action: "change the upstream Git repository",
-      description: "Allows {requesterKind} to change the upstream Git repository.",
+      title: "Change the upstream repository",
+      action: "change which repository this project syncs with",
+      description: "Change the upstream repository this project downloads updates from.",
       group: "files",
       authorityCategory: {
         domain: "sharing",
@@ -643,9 +643,9 @@ export const gitInteropMethods = defineServiceMethods({
         "G1: external-system effect or listening surface; §2 default {code, session} family",
     },
     presentation: {
-      title: "Remove the upstream Git remote",
-      action: "remove the upstream Git remote",
-      description: "Allows {requesterKind} to remove the upstream Git remote.",
+      title: "Remove the upstream repository link",
+      action: "remove the upstream repository link",
+      description: "Stop downloading updates from the upstream repository.",
       group: "files",
       authorityCategory: {
         domain: "sharing",
@@ -672,9 +672,9 @@ export const gitInteropMethods = defineServiceMethods({
         "G1: external-system effect or listening surface; §2 default {code, session} family",
     },
     presentation: {
-      title: "Disconnect the upstream Git repository",
-      action: "disconnect the upstream Git repository",
-      description: "Allows {requesterKind} to disconnect the upstream Git repository.",
+      title: "Disconnect from the upstream repository",
+      action: "disconnect from the upstream repository",
+      description: "Disconnect this project from its upstream repository entirely.",
       group: "files",
       authorityCategory: {
         domain: "sharing",
@@ -705,9 +705,9 @@ export const gitInteropMethods = defineServiceMethods({
         "G1: external-system effect or listening surface; §2 default {code, session} family",
     },
     presentation: {
-      title: "Change automatic Git pushing",
-      action: "change automatic Git pushing",
-      description: "Allows {requesterKind} to change automatic Git pushing.",
+      title: "Change automatic publishing",
+      action: "turn automatic publishing on or off",
+      description: "Choose whether changes are automatically uploaded to the shared repository.",
       group: "files",
       authorityCategory: {
         domain: "sharing",

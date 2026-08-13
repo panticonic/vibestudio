@@ -1773,10 +1773,9 @@ export const HOST_AUTHORITY_METHODS = {
     },
     capability: "workspace.dependencies.inspect",
     presentation: {
-      title: "Inspect installed packages for an app, panel, worker, or extension",
-      action: "inspect installed packages for an app, panel, worker, or extension",
-      description:
-        "Allows {requesterKind} to inspect installed packages for an app, panel, worker, or extension.",
+      title: "View installed software for an app or extension",
+      action: "view installed software packages for an app, panel, or extension",
+      description: "See what software libraries are installed for an app, panel, or extension.",
       group: "workspace",
       authorityCategory: {
         domain: "automation",
@@ -1909,10 +1908,10 @@ export const HOST_AUTHORITY_METHODS = {
     },
     capability: "workspace.build-cache.manage",
     presentation: {
-      title: "Rebuild workspace apps, panels, workers, and extensions",
-      action: "rebuild workspace apps, panels, workers, and extensions",
+      title: "Rebuild workspace apps and extensions",
+      action: "rebuild workspace apps, panels, and extensions",
       description:
-        "Allows {requesterKind} to rebuild workspace apps, panels, workers, and extensions.",
+        "Rebuild all apps, panels, and extensions in your workspace from their source code.",
       group: "workspace",
       authorityCategory: {
         domain: "automation",
@@ -1931,9 +1930,9 @@ export const HOST_AUTHORITY_METHODS = {
     },
     capability: "content.trust.policy.manage",
     presentation: {
-      title: "Always trust matching outside content",
-      action: "always trust matching outside content",
-      description: "Allows {requesterKind} to always trust matching outside content.",
+      title: "Always allow matching outside content",
+      action: "skip reviews for outside content matching a pattern",
+      description: "Automatically allow future outside content from the same source.",
       group: "approvals",
       authorityCategory: {
         domain: "safety",
@@ -1963,9 +1962,9 @@ export const HOST_AUTHORITY_METHODS = {
     },
     capability: "content.trust.policy.manage",
     presentation: {
-      title: "Remove a content-trust decision",
-      action: "remove a content-trust decision",
-      description: "Allows {requesterKind} to remove a content-trust decision.",
+      title: "Undo a content safety decision",
+      action: "remove a previous decision about outside content",
+      description: "Undo a decision you made about outside content, so it will be reviewed again.",
       group: "approvals",
       authorityCategory: {
         domain: "safety",
@@ -1994,9 +1993,9 @@ export const HOST_AUTHORITY_METHODS = {
     },
     capability: "content.trust.vouch",
     presentation: {
-      title: "Trust this exact outside content",
-      action: "trust this exact outside content",
-      description: "Allows {requesterKind} to trust this exact outside content.",
+      title: "Remember this outside content as safe",
+      action: "mark this exact outside content as safe",
+      description: "Remember this outside content so it won't need review again.",
       group: "approvals",
       authorityCategory: {
         domain: "safety",
@@ -2485,10 +2484,9 @@ export const HOST_AUTHORITY_METHODS = {
     },
     capability: "development.native.execute",
     presentation: {
-      title: "Apply a template checkout exchange",
-      action: "apply a template checkout exchange",
-      description:
-        "Allows {requesterKind} to write the reviewed projection to a selected checkout or import it into one semantic context.",
+      title: "Apply template changes",
+      action: "apply reviewed template changes",
+      description: "Write the reviewed template changes to your workspace or export them.",
       group: "runtime",
       authorityCategory: {
         domain: "automation",
@@ -2638,10 +2636,9 @@ export const HOST_AUTHORITY_METHODS = {
     },
     capability: "development.native.execute",
     presentation: {
-      title: "Inspect a template checkout exchange",
-      action: "inspect a template checkout exchange",
-      description:
-        "Allows {requesterKind} to read one selected Git checkout and compare it with an exact semantic template repository.",
+      title: "Inspect template changes",
+      action: "inspect incoming or outgoing template changes",
+      description: "Read and compare template files to prepare a list of changes.",
       group: "runtime",
       authorityCategory: {
         domain: "automation",
@@ -4360,10 +4357,9 @@ export const HOST_AUTHORITY_METHODS = {
     },
     capability: "permissions.read",
     presentation: {
-      title: "View workspace authority safety status",
-      action: "view workspace authority safety status",
-      description:
-        "Allows {requesterKind} to view whether workspace authority is locked and how much agent work it affects.",
+      title: "View workspace safety status",
+      action: "view workspace safety status",
+      description: "Check whether the workspace safety lock is on and what it affects.",
       group: "approvals",
       authorityCategory: {
         domain: "safety",
@@ -4382,10 +4378,9 @@ export const HOST_AUTHORITY_METHODS = {
     },
     capability: "permissions.revoke",
     presentation: {
-      title: "Change the workspace authority lock",
-      action: "change the workspace authority lock",
-      description:
-        "Allows {requesterKind} to stop or restore protected authority across the workspace.",
+      title: "Change the workspace safety lock",
+      action: "turn the workspace safety lock on or off",
+      description: "Lock or unlock the workspace to stop or resume all automated work.",
       group: "approvals",
       authorityCategory: {
         domain: "safety",
@@ -4716,10 +4711,9 @@ export const HOST_AUTHORITY_METHODS = {
     },
     capability: "reviewed-closure.activate",
     presentation: {
-      title: "Activate reviewed automation",
-      action: "activate reviewed automation",
-      description:
-        "Allows {requesterKind} to activate the exact automation authority closure you reviewed.",
+      title: "Start an automated task",
+      action: "start an automated task you reviewed",
+      description: "Start running the automated task exactly as you reviewed and approved it.",
       group: "runtime",
       authorityCategory: {
         domain: "safety",
@@ -4738,10 +4732,9 @@ export const HOST_AUTHORITY_METHODS = {
     },
     capability: "reviewed-closure.bind-session",
     presentation: {
-      title: "Use reviewed automation authority",
-      action: "use reviewed automation authority",
-      description:
-        "Allows {requesterKind} to bind a running automation to its exact reviewed authority closure.",
+      title: "Use an automated task's permissions",
+      action: "use the permissions granted to an automated task",
+      description: "Connect a running automation to the exact permissions you approved for it.",
       group: "runtime",
       authorityCategory: {
         domain: "safety",
@@ -4770,9 +4763,9 @@ export const HOST_AUTHORITY_METHODS = {
     },
     capability: "reviewed-closure.retire",
     presentation: {
-      title: "Retire reviewed automation",
-      action: "retire reviewed automation",
-      description: "Allows {requesterKind} to retire reviewed automation.",
+      title: "Stop an automated task permanently",
+      action: "permanently stop an automated task",
+      description: "Permanently stop an automated task and remove its permissions.",
       group: "runtime",
       authorityCategory: {
         domain: "safety",
@@ -4790,9 +4783,9 @@ export const HOST_AUTHORITY_METHODS = {
     },
     capability: "reviewed-closure.suspend",
     presentation: {
-      title: "Pause reviewed automation",
-      action: "pause reviewed automation",
-      description: "Allows {requesterKind} to pause reviewed automation.",
+      title: "Pause an automated task",
+      action: "pause an automated task",
+      description: "Pause a running automated task. It can be resumed later.",
       group: "runtime",
       authorityCategory: {
         domain: "safety",
@@ -4868,9 +4861,9 @@ export const HOST_AUTHORITY_METHODS = {
     },
     capability: "subagents.create",
     presentation: {
-      title: "Create a workspace for a subagent",
-      action: "create a workspace for a subagent",
-      description: "Allows {requesterKind} to create a workspace for a subagent.",
+      title: "Create a workspace for a helper agent",
+      action: "create a workspace for a helper agent",
+      description: "Set up a workspace so a helper agent can work on part of a task.",
       group: "runtime",
       authorityCategory: {
         domain: "automation",
@@ -4901,10 +4894,9 @@ export const HOST_AUTHORITY_METHODS = {
     },
     capability: "context.semantic.drop",
     presentation: {
-      title: "Delete a semantic workspace",
-      action: "delete a semantic workspace",
-      description:
-        "Allows {requesterKind} to permanently remove one exact owned semantic workspace.",
+      title: "Delete a workspace copy",
+      action: "delete a workspace copy",
+      description: "Permanently remove a workspace copy that is no longer needed.",
       group: "runtime",
       authorityCategory: {
         domain: "files",
@@ -4935,9 +4927,9 @@ export const HOST_AUTHORITY_METHODS = {
     },
     capability: "context.semantic.fork",
     presentation: {
-      title: "Fork a semantic workspace",
-      action: "fork a semantic workspace",
-      description: "Allows {requesterKind} to create one exact owned semantic child workspace.",
+      title: "Create a workspace copy",
+      action: "create a copy of a workspace",
+      description: "Create an independent copy of a workspace for a task to work in.",
       group: "runtime",
       authorityCategory: {
         domain: "files",
@@ -4990,9 +4982,9 @@ export const HOST_AUTHORITY_METHODS = {
     },
     capability: "context.relationships.record",
     presentation: {
-      title: "Link related task workspaces",
-      action: "link related task workspaces",
-      description: "Allows {requesterKind} to link related task workspaces.",
+      title: "Link related tasks together",
+      action: "link related tasks so they can share work",
+      description: "Connect related tasks so they can coordinate and share progress.",
       group: "runtime",
       authorityCategory: {
         domain: "files",
@@ -5011,10 +5003,10 @@ export const HOST_AUTHORITY_METHODS = {
     },
     capability: "runtime.execution.recover",
     presentation: {
-      title: "Recover a runtime execution",
-      action: "recover a runtime execution",
+      title: "Recover a running task",
+      action: "recover a running task that stopped unexpectedly",
       description:
-        "Allows {requesterKind} to restore an exact retained execution or explicitly replace one unavailable incarnation.",
+        "Restore a task that stopped unexpectedly, or replace it with a current version.",
       group: "runtime",
       authorityCategory: {
         domain: "automation",
@@ -5080,10 +5072,9 @@ export const HOST_AUTHORITY_METHODS = {
     },
     capability: "runtime.supervision.manage",
     presentation: {
-      title: "Start a workspace component",
-      action: "start a workspace component",
-      description:
-        "Allows {requesterKind} to start one exact approved version of a workspace component.",
+      title: "Start a workspace app or service",
+      action: "start a workspace app or service",
+      description: "Start an approved version of an app or service in your workspace.",
       group: "runtime",
       authorityCategory: {
         domain: "automation",
@@ -5159,10 +5150,9 @@ export const HOST_AUTHORITY_METHODS = {
     },
     capability: "runtime.supervision.manage",
     presentation: {
-      title: "Prepare a new component version",
-      action: "prepare a new version of a workspace component",
-      description:
-        "Allows {requesterKind} to stage one exact new version of a workspace component without starting it.",
+      title: "Prepare a new app version",
+      action: "prepare a new version of a workspace app or service",
+      description: "Get a new version of an app or service ready without starting it yet.",
       group: "runtime",
       authorityCategory: {
         domain: "automation",
@@ -5205,9 +5195,9 @@ export const HOST_AUTHORITY_METHODS = {
     },
     capability: "runtime.supervision.manage",
     presentation: {
-      title: "Restart a workspace component",
-      action: "restart a workspace component",
-      description: "Allows {requesterKind} to restart one exact workspace component.",
+      title: "Restart a workspace app or service",
+      action: "restart a workspace app or service",
+      description: "Restart an app or service running in your workspace.",
       group: "runtime",
       authorityCategory: {
         domain: "automation",
@@ -5225,9 +5215,9 @@ export const HOST_AUTHORITY_METHODS = {
     },
     capability: "runtime.supervision.manage",
     presentation: {
-      title: "Stop a workspace component",
-      action: "stop a workspace component",
-      description: "Allows {requesterKind} to stop one exact workspace component.",
+      title: "Stop a workspace app or service",
+      action: "stop a workspace app or service",
+      description: "Stop an app or service running in your workspace.",
       group: "runtime",
       authorityCategory: {
         domain: "automation",
@@ -6737,9 +6727,9 @@ export const HOST_AUTHORITY_METHODS = {
     },
     capability: "workspace.runtime-state.manage",
     presentation: {
-      title: "Manage running workspace services",
-      action: "manage apps, panels, background tasks, and scheduled work that's currently running",
-      description: "Maintain running workspace apps, panels, background tasks, and scheduled work",
+      title: "Manage running apps and tasks",
+      action: "manage apps, panels, and scheduled tasks that are currently running",
+      description: "Start, stop, or check on apps and tasks running in your workspace",
       group: "workspace",
       authorityCategory: {
         domain: "automation",
@@ -6758,9 +6748,9 @@ export const HOST_AUTHORITY_METHODS = {
     },
     capability: "workspace.runtime-state.manage",
     presentation: {
-      title: "Manage running workspace services",
-      action: "manage apps, panels, background tasks, and scheduled work that's currently running",
-      description: "Maintain running workspace apps, panels, background tasks, and scheduled work",
+      title: "Manage running apps and tasks",
+      action: "manage apps, panels, and scheduled tasks that are currently running",
+      description: "Start, stop, or check on apps and tasks running in your workspace",
       group: "workspace",
       authorityCategory: {
         domain: "automation",
@@ -6779,9 +6769,9 @@ export const HOST_AUTHORITY_METHODS = {
     },
     capability: "workspace.runtime-state.inspect",
     presentation: {
-      title: "Inspect running workspace services",
-      action: "inspect apps, panels, background tasks, and scheduled work that's currently running",
-      description: "Read the current structure and status of running workspace services",
+      title: "View running apps and tasks",
+      action: "view apps, panels, and scheduled tasks that are currently running",
+      description: "See what apps and tasks are currently running in your workspace",
       group: "workspace",
       authorityCategory: {
         domain: "automation",
@@ -6800,9 +6790,9 @@ export const HOST_AUTHORITY_METHODS = {
     },
     capability: "workspace.runtime-state.inspect",
     presentation: {
-      title: "Inspect running workspace services",
-      action: "inspect apps, panels, background tasks, and scheduled work that's currently running",
-      description: "Read the current structure and status of running workspace services",
+      title: "View running apps and tasks",
+      action: "view apps, panels, and scheduled tasks that are currently running",
+      description: "See what apps and tasks are currently running in your workspace",
       group: "workspace",
       authorityCategory: {
         domain: "automation",
@@ -6821,9 +6811,9 @@ export const HOST_AUTHORITY_METHODS = {
     },
     capability: "workspace.runtime-state.manage",
     presentation: {
-      title: "Manage running workspace services",
-      action: "manage apps, panels, background tasks, and scheduled work that's currently running",
-      description: "Maintain running workspace apps, panels, background tasks, and scheduled work",
+      title: "Manage running apps and tasks",
+      action: "manage apps, panels, and scheduled tasks that are currently running",
+      description: "Start, stop, or check on apps and tasks running in your workspace",
       group: "workspace",
       authorityCategory: {
         domain: "automation",
@@ -6842,9 +6832,130 @@ export const HOST_AUTHORITY_METHODS = {
     },
     capability: "workspace.runtime-state.manage",
     presentation: {
-      title: "Manage running workspace services",
-      action: "manage apps, panels, background tasks, and scheduled work that's currently running",
-      description: "Maintain running workspace apps, panels, background tasks, and scheduled work",
+      title: "Manage running apps and tasks",
+      action: "manage apps, panels, and scheduled tasks that are currently running",
+      description: "Start, stop, or check on apps and tasks running in your workspace",
+      group: "workspace",
+      authorityCategory: {
+        domain: "automation",
+        verb: "manage",
+      },
+    },
+  },
+  "workspace-state.panel.incrementAccess": {
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "supervision",
+      family: "workspace-state.lifecycle",
+      rationale: "Panel access bookkeeping routed to the Base presentation owner",
+    },
+    capability: "workspace.runtime-state.manage",
+    presentation: {
+      title: "Manage running apps and tasks",
+      action: "manage apps, panels, and scheduled tasks that are currently running",
+      description: "Start, stop, or check on apps and tasks running in your workspace",
+      group: "workspace",
+      authorityCategory: {
+        domain: "automation",
+        verb: "manage",
+      },
+    },
+  },
+  "workspace-state.panel.index": {
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "supervision",
+      family: "workspace-state.lifecycle",
+      rationale: "Panel lifecycle bookkeeping on the already-authorized workspace-state operation",
+    },
+    capability: "workspace.runtime-state.manage",
+    presentation: {
+      title: "Manage running apps and tasks",
+      action: "manage apps, panels, and scheduled tasks that are currently running",
+      description: "Start, stop, or check on apps and tasks running in your workspace",
+      group: "workspace",
+      authorityCategory: {
+        domain: "automation",
+        verb: "manage",
+      },
+    },
+  },
+  "workspace-state.panel.rebuildIndex": {
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "supervision",
+      family: "workspace-state.lifecycle",
+      rationale: "Presentation index rebuild routed to the Base presentation owner",
+    },
+    capability: "workspace.runtime-state.manage",
+    presentation: {
+      title: "Manage running apps and tasks",
+      action: "manage apps, panels, and scheduled tasks that are currently running",
+      description: "Start, stop, or check on apps and tasks running in your workspace",
+      group: "workspace",
+      authorityCategory: {
+        domain: "automation",
+        verb: "manage",
+      },
+    },
+  },
+  "workspace-state.panel.search": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "supervision",
+      family: "workspace-state.lifecycle",
+      rationale: "Workspace-member panel-index read routed to the Base presentation owner",
+    },
+    capability: "workspace.runtime-state.inspect",
+    presentation: {
+      title: "View running apps and tasks",
+      action: "view apps, panels, and scheduled tasks that are currently running",
+      description: "See what apps and tasks are currently running in your workspace",
+      group: "workspace",
+      authorityCategory: {
+        domain: "automation",
+        verb: "see",
+      },
+    },
+  },
+  "workspace-state.panel.sourceUsage": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "supervision",
+      family: "workspace-state.lifecycle",
+      rationale:
+        "Workspace-member aggregate panel usage read routed to the Base presentation owner",
+    },
+    capability: "workspace.runtime-state.inspect",
+    presentation: {
+      title: "View running apps and tasks",
+      action: "view apps, panels, and scheduled tasks that are currently running",
+      description: "See what apps and tasks are currently running in your workspace",
+      group: "workspace",
+      authorityCategory: {
+        domain: "automation",
+        verb: "see",
+      },
+    },
+  },
+  "workspace-state.panel.updateTitle": {
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "transport",
+      family: "workspace-state.builtin-rpc",
+      rationale: "Slot-bound presentation update routed to the Base presentation owner",
+    },
+    capability: "workspace.runtime-state.manage",
+    presentation: {
+      title: "Manage running apps and tasks",
+      action: "manage apps, panels, and scheduled tasks that are currently running",
+      description: "Start, stop, or check on apps and tasks running in your workspace",
       group: "workspace",
       authorityCategory: {
         domain: "automation",
@@ -6863,9 +6974,9 @@ export const HOST_AUTHORITY_METHODS = {
     },
     capability: "workspace.runtime-state.inspect",
     presentation: {
-      title: "Inspect running workspace services",
-      action: "inspect apps, panels, background tasks, and scheduled work that's currently running",
-      description: "Read the current structure and status of running workspace services",
+      title: "View running apps and tasks",
+      action: "view apps, panels, and scheduled tasks that are currently running",
+      description: "See what apps and tasks are currently running in your workspace",
       group: "workspace",
       authorityCategory: {
         domain: "automation",
@@ -6884,9 +6995,9 @@ export const HOST_AUTHORITY_METHODS = {
     },
     capability: "workspace.runtime-state.inspect",
     presentation: {
-      title: "Inspect running workspace services",
-      action: "inspect apps, panels, background tasks, and scheduled work that's currently running",
-      description: "Read the current structure and status of running workspace services",
+      title: "View running apps and tasks",
+      action: "view apps, panels, and scheduled tasks that are currently running",
+      description: "See what apps and tasks are currently running in your workspace",
       group: "workspace",
       authorityCategory: {
         domain: "automation",
@@ -6905,9 +7016,9 @@ export const HOST_AUTHORITY_METHODS = {
     },
     capability: "workspace.runtime-state.inspect",
     presentation: {
-      title: "Inspect running workspace services",
-      action: "inspect apps, panels, background tasks, and scheduled work that's currently running",
-      description: "Read the current structure and status of running workspace services",
+      title: "View running apps and tasks",
+      action: "view apps, panels, and scheduled tasks that are currently running",
+      description: "See what apps and tasks are currently running in your workspace",
       group: "workspace",
       authorityCategory: {
         domain: "automation",
@@ -6926,9 +7037,9 @@ export const HOST_AUTHORITY_METHODS = {
     },
     capability: "workspace.runtime-state.inspect",
     presentation: {
-      title: "Inspect running workspace services",
-      action: "inspect apps, panels, background tasks, and scheduled work that's currently running",
-      description: "Read the current structure and status of running workspace services",
+      title: "View running apps and tasks",
+      action: "view apps, panels, and scheduled tasks that are currently running",
+      description: "See what apps and tasks are currently running in your workspace",
       group: "workspace",
       authorityCategory: {
         domain: "automation",
@@ -6947,9 +7058,29 @@ export const HOST_AUTHORITY_METHODS = {
     },
     capability: "workspace.runtime-state.inspect",
     presentation: {
-      title: "Inspect running workspace services",
-      action: "inspect apps, panels, background tasks, and scheduled work that's currently running",
-      description: "Read the current structure and status of running workspace services",
+      title: "View running apps and tasks",
+      action: "view apps, panels, and scheduled tasks that are currently running",
+      description: "See what apps and tasks are currently running in your workspace",
+      group: "workspace",
+      authorityCategory: {
+        domain: "automation",
+        verb: "see",
+      },
+    },
+  },
+  "workspace-state.panelTree.search": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "transport",
+      family: "workspace-state.builtin-rpc",
+      rationale: "Bounded presentation search routed through the existing workspace-state boundary",
+    },
+    capability: "workspace.runtime-state.inspect",
+    presentation: {
+      title: "View running apps and tasks",
+      action: "view apps, panels, and scheduled tasks that are currently running",
+      description: "See what apps and tasks are currently running in your workspace",
       group: "workspace",
       authorityCategory: {
         domain: "automation",
@@ -6968,9 +7099,9 @@ export const HOST_AUTHORITY_METHODS = {
     },
     capability: "workspace.runtime-state.manage",
     presentation: {
-      title: "Manage running workspace services",
-      action: "manage apps, panels, background tasks, and scheduled work that's currently running",
-      description: "Maintain running workspace apps, panels, background tasks, and scheduled work",
+      title: "Manage running apps and tasks",
+      action: "manage apps, panels, and scheduled tasks that are currently running",
+      description: "Start, stop, or check on apps and tasks running in your workspace",
       group: "workspace",
       authorityCategory: {
         domain: "automation",
@@ -6988,9 +7119,9 @@ export const HOST_AUTHORITY_METHODS = {
     },
     capability: "workspace.runtime-state.manage",
     presentation: {
-      title: "Manage running workspace services",
-      action: "manage apps, panels, background tasks, and scheduled work that's currently running",
-      description: "Maintain running workspace apps, panels, background tasks, and scheduled work",
+      title: "Manage running apps and tasks",
+      action: "manage apps, panels, and scheduled tasks that are currently running",
+      description: "Start, stop, or check on apps and tasks running in your workspace",
       group: "workspace",
       authorityCategory: {
         domain: "automation",
@@ -7008,9 +7139,9 @@ export const HOST_AUTHORITY_METHODS = {
     },
     capability: "workspace.runtime-state.manage",
     presentation: {
-      title: "Manage running workspace services",
-      action: "manage apps, panels, background tasks, and scheduled work that's currently running",
-      description: "Maintain running workspace apps, panels, background tasks, and scheduled work",
+      title: "Manage running apps and tasks",
+      action: "manage apps, panels, and scheduled tasks that are currently running",
+      description: "Start, stop, or check on apps and tasks running in your workspace",
       group: "workspace",
       authorityCategory: {
         domain: "automation",
@@ -7029,9 +7160,9 @@ export const HOST_AUTHORITY_METHODS = {
     },
     capability: "workspace.runtime-state.manage",
     presentation: {
-      title: "Manage running workspace services",
-      action: "manage apps, panels, background tasks, and scheduled work that's currently running",
-      description: "Maintain running workspace apps, panels, background tasks, and scheduled work",
+      title: "Manage running apps and tasks",
+      action: "manage apps, panels, and scheduled tasks that are currently running",
+      description: "Start, stop, or check on apps and tasks running in your workspace",
       group: "workspace",
       authorityCategory: {
         domain: "automation",
@@ -7050,9 +7181,9 @@ export const HOST_AUTHORITY_METHODS = {
     },
     capability: "workspace.runtime-state.manage",
     presentation: {
-      title: "Manage running workspace services",
-      action: "manage apps, panels, background tasks, and scheduled work that's currently running",
-      description: "Maintain running workspace apps, panels, background tasks, and scheduled work",
+      title: "Manage running apps and tasks",
+      action: "manage apps, panels, and scheduled tasks that are currently running",
+      description: "Start, stop, or check on apps and tasks running in your workspace",
       group: "workspace",
       authorityCategory: {
         domain: "automation",
@@ -7071,9 +7202,9 @@ export const HOST_AUTHORITY_METHODS = {
     },
     capability: "workspace.runtime-state.manage",
     presentation: {
-      title: "Manage running workspace services",
-      action: "manage apps, panels, background tasks, and scheduled work that's currently running",
-      description: "Maintain running workspace apps, panels, background tasks, and scheduled work",
+      title: "Manage running apps and tasks",
+      action: "manage apps, panels, and scheduled tasks that are currently running",
+      description: "Start, stop, or check on apps and tasks running in your workspace",
       group: "workspace",
       authorityCategory: {
         domain: "automation",
@@ -7092,9 +7223,9 @@ export const HOST_AUTHORITY_METHODS = {
     },
     capability: "workspace.runtime-state.inspect",
     presentation: {
-      title: "Inspect running workspace services",
-      action: "inspect apps, panels, background tasks, and scheduled work that's currently running",
-      description: "Read the current structure and status of running workspace services",
+      title: "View running apps and tasks",
+      action: "view apps, panels, and scheduled tasks that are currently running",
+      description: "See what apps and tasks are currently running in your workspace",
       group: "workspace",
       authorityCategory: {
         domain: "automation",
@@ -7113,9 +7244,9 @@ export const HOST_AUTHORITY_METHODS = {
     },
     capability: "workspace.runtime-state.inspect",
     presentation: {
-      title: "Inspect running workspace services",
-      action: "inspect apps, panels, background tasks, and scheduled work that's currently running",
-      description: "Read the current structure and status of running workspace services",
+      title: "View running apps and tasks",
+      action: "view apps, panels, and scheduled tasks that are currently running",
+      description: "See what apps and tasks are currently running in your workspace",
       group: "workspace",
       authorityCategory: {
         domain: "automation",
@@ -7134,9 +7265,9 @@ export const HOST_AUTHORITY_METHODS = {
     },
     capability: "workspace.runtime-state.inspect",
     presentation: {
-      title: "Inspect running workspace services",
-      action: "inspect apps, panels, background tasks, and scheduled work that's currently running",
-      description: "Read the current structure and status of running workspace services",
+      title: "View running apps and tasks",
+      action: "view apps, panels, and scheduled tasks that are currently running",
+      description: "See what apps and tasks are currently running in your workspace",
       group: "workspace",
       authorityCategory: {
         domain: "automation",
@@ -7155,9 +7286,9 @@ export const HOST_AUTHORITY_METHODS = {
     },
     capability: "workspace.runtime-state.manage",
     presentation: {
-      title: "Manage running workspace services",
-      action: "manage apps, panels, background tasks, and scheduled work that's currently running",
-      description: "Maintain running workspace apps, panels, background tasks, and scheduled work",
+      title: "Manage running apps and tasks",
+      action: "manage apps, panels, and scheduled tasks that are currently running",
+      description: "Start, stop, or check on apps and tasks running in your workspace",
       group: "workspace",
       authorityCategory: {
         domain: "automation",
@@ -7176,9 +7307,9 @@ export const HOST_AUTHORITY_METHODS = {
     },
     capability: "workspace.runtime-state.inspect",
     presentation: {
-      title: "Inspect running workspace services",
-      action: "inspect apps, panels, background tasks, and scheduled work that's currently running",
-      description: "Read the current structure and status of running workspace services",
+      title: "View running apps and tasks",
+      action: "view apps, panels, and scheduled tasks that are currently running",
+      description: "See what apps and tasks are currently running in your workspace",
       group: "workspace",
       authorityCategory: {
         domain: "automation",
@@ -7197,9 +7328,9 @@ export const HOST_AUTHORITY_METHODS = {
     },
     capability: "workspace.runtime-state.manage",
     presentation: {
-      title: "Manage running workspace services",
-      action: "manage apps, panels, background tasks, and scheduled work that's currently running",
-      description: "Maintain running workspace apps, panels, background tasks, and scheduled work",
+      title: "Manage running apps and tasks",
+      action: "manage apps, panels, and scheduled tasks that are currently running",
+      description: "Start, stop, or check on apps and tasks running in your workspace",
       group: "workspace",
       authorityCategory: {
         domain: "automation",
@@ -7446,6 +7577,7 @@ export const HOST_METHOD_MANIFEST_DEPENDENCIES = {
   "shellApproval.submitCredentialInput": ["protected-input.submit"],
   "shellApproval.submitSecretInput": ["protected-input.submit"],
   "workerdInspector.getEndpoint": ["runtime.inspect"],
+  "workspace-state.panel.updateTitle": ["context.boundary"],
   "workspace-state.slot.close": ["context.boundary"],
   "workspace-state.slot.commitPreparedNavigation": ["context.boundary"],
   "workspace-state.slot.create": ["context.boundary"],
@@ -7955,9 +8087,9 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
     },
   },
   "content.trust.policy.manage": {
-    title: "Always trust matching outside content",
-    action: "always trust matching outside content",
-    description: "Allows {requesterKind} to always trust matching outside content.",
+    title: "Always allow matching outside content",
+    action: "skip reviews for outside content matching a pattern",
+    description: "Automatically allow future outside content from the same source.",
     group: "approvals",
     authorityCategory: {
       domain: "safety",
@@ -7965,9 +8097,9 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
     },
   },
   "content.trust.vouch": {
-    title: "Trust this exact outside content",
-    action: "trust this exact outside content",
-    description: "Allows {requesterKind} to trust this exact outside content.",
+    title: "Remember this outside content as safe",
+    action: "mark this exact outside content as safe",
+    description: "Remember this outside content so it won't need review again.",
     group: "approvals",
     authorityCategory: {
       domain: "safety",
@@ -7995,9 +8127,9 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
     },
   },
   "context.relationships.record": {
-    title: "Link related task workspaces",
-    action: "link related task workspaces",
-    description: "Allows {requesterKind} to link related task workspaces.",
+    title: "Link related tasks together",
+    action: "link related tasks so they can share work",
+    description: "Connect related tasks so they can coordinate and share progress.",
     group: "runtime",
     authorityCategory: {
       domain: "files",
@@ -8005,9 +8137,9 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
     },
   },
   "context.semantic.drop": {
-    title: "Delete a semantic workspace",
-    action: "delete a semantic workspace",
-    description: "Allows {requesterKind} to permanently remove one exact owned semantic workspace.",
+    title: "Delete a workspace copy",
+    action: "delete a workspace copy",
+    description: "Permanently remove a workspace copy that is no longer needed.",
     group: "runtime",
     authorityCategory: {
       domain: "files",
@@ -8015,9 +8147,9 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
     },
   },
   "context.semantic.fork": {
-    title: "Fork a semantic workspace",
-    action: "fork a semantic workspace",
-    description: "Allows {requesterKind} to create one exact owned semantic child workspace.",
+    title: "Create a workspace copy",
+    action: "create a copy of a workspace",
+    description: "Create an independent copy of a workspace for a task to work in.",
     group: "runtime",
     authorityCategory: {
       domain: "files",
@@ -8046,10 +8178,9 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
     },
   },
   "development.native.execute": {
-    title: "Apply a template checkout exchange",
-    action: "apply a template checkout exchange",
-    description:
-      "Allows {requesterKind} to write the reviewed projection to a selected checkout or import it into one semantic context.",
+    title: "Apply template changes",
+    action: "apply reviewed template changes",
+    description: "Write the reviewed template changes to your workspace or export them.",
     group: "runtime",
     authorityCategory: {
       domain: "automation",
@@ -8248,10 +8379,9 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
     },
   },
   "reviewed-closure.activate": {
-    title: "Activate reviewed automation",
-    action: "activate reviewed automation",
-    description:
-      "Allows {requesterKind} to activate the exact automation authority closure you reviewed.",
+    title: "Start an automated task",
+    action: "start an automated task you reviewed",
+    description: "Start running the automated task exactly as you reviewed and approved it.",
     group: "runtime",
     authorityCategory: {
       domain: "safety",
@@ -8259,10 +8389,9 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
     },
   },
   "reviewed-closure.bind-session": {
-    title: "Use reviewed automation authority",
-    action: "use reviewed automation authority",
-    description:
-      "Allows {requesterKind} to bind a running automation to its exact reviewed authority closure.",
+    title: "Use an automated task's permissions",
+    action: "use the permissions granted to an automated task",
+    description: "Connect a running automation to the exact permissions you approved for it.",
     group: "runtime",
     authorityCategory: {
       domain: "safety",
@@ -8270,9 +8399,9 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
     },
   },
   "reviewed-closure.retire": {
-    title: "Retire reviewed automation",
-    action: "retire reviewed automation",
-    description: "Allows {requesterKind} to retire reviewed automation.",
+    title: "Stop an automated task permanently",
+    action: "permanently stop an automated task",
+    description: "Permanently stop an automated task and remove its permissions.",
     group: "runtime",
     authorityCategory: {
       domain: "safety",
@@ -8280,9 +8409,9 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
     },
   },
   "reviewed-closure.suspend": {
-    title: "Pause reviewed automation",
-    action: "pause reviewed automation",
-    description: "Allows {requesterKind} to pause reviewed automation.",
+    title: "Pause an automated task",
+    action: "pause an automated task",
+    description: "Pause a running automated task. It can be resumed later.",
     group: "runtime",
     authorityCategory: {
       domain: "safety",
@@ -8290,10 +8419,9 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
     },
   },
   "runtime.execution.recover": {
-    title: "Recover a runtime execution",
-    action: "recover a runtime execution",
-    description:
-      "Allows {requesterKind} to restore an exact retained execution or explicitly replace one unavailable incarnation.",
+    title: "Recover a running task",
+    action: "recover a running task that stopped unexpectedly",
+    description: "Restore a task that stopped unexpectedly, or replace it with a current version.",
     group: "runtime",
     authorityCategory: {
       domain: "automation",
@@ -8311,10 +8439,9 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
     },
   },
   "runtime.supervision.manage": {
-    title: "Start a workspace component",
-    action: "start a workspace component",
-    description:
-      "Allows {requesterKind} to start one exact approved version of a workspace component.",
+    title: "Start a workspace app or service",
+    action: "start a workspace app or service",
+    description: "Start an approved version of an app or service in your workspace.",
     group: "runtime",
     authorityCategory: {
       domain: "automation",
@@ -8544,10 +8671,9 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
     },
   },
   "workspace.dependencies.inspect": {
-    title: "Inspect installed packages for an app, panel, worker, or extension",
-    action: "inspect installed packages for an app, panel, worker, or extension",
-    description:
-      "Allows {requesterKind} to inspect installed packages for an app, panel, worker, or extension.",
+    title: "View installed software for an app or extension",
+    action: "view installed software packages for an app, panel, or extension",
+    description: "See what software libraries are installed for an app, panel, or extension.",
     group: "workspace",
     authorityCategory: {
       domain: "automation",
@@ -8595,9 +8721,9 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
     },
   },
   "workspace.runtime-state.inspect": {
-    title: "Inspect running workspace services",
-    action: "inspect apps, panels, background tasks, and scheduled work that's currently running",
-    description: "Read the current structure and status of running workspace services",
+    title: "View running apps and tasks",
+    action: "view apps, panels, and scheduled tasks that are currently running",
+    description: "See what apps and tasks are currently running in your workspace",
     group: "workspace",
     authorityCategory: {
       domain: "automation",
@@ -8605,9 +8731,9 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
     },
   },
   "workspace.runtime-state.manage": {
-    title: "Manage running workspace services",
-    action: "manage apps, panels, background tasks, and scheduled work that's currently running",
-    description: "Maintain running workspace apps, panels, background tasks, and scheduled work",
+    title: "Manage running apps and tasks",
+    action: "manage apps, panels, and scheduled tasks that are currently running",
+    description: "Start, stop, or check on apps and tasks running in your workspace",
     group: "workspace",
     authorityCategory: {
       domain: "automation",
