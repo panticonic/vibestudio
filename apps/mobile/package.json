@@ -64,20 +64,5 @@
     "jest": "^29.7.0",
     "react-test-renderer": "19.0.0",
     "typescript": "7.0.2"
-  },
-  "jest": {
-    "preset": "react-native",
-    "moduleNameMapper": {
-      "^jotai$": "<rootDir>/../../node_modules/jotai",
-      "^jotai/(.*)$": "<rootDir>/../../node_modules/jotai/$1",
-      "^react$": "<rootDir>/../../node_modules/react",
-      "^react/(.*)$": "<rootDir>/../../node_modules/react/$1",
-      "^react-native$": "<rootDir>/../../node_modules/react-native",
-      "^react-test-renderer$": "<rootDir>/../../node_modules/react-test-renderer",
-      "^@vibestudio/mobile-webrtc$": "<rootDir>/../../packages/mobile-webrtc/src/index.ts",
-      "^@vibestudio/rpc$": "<rootDir>/../../packages/rpc/src/index.ts",
-      "^@vibestudio/rpc/(.*)$": "<rootDir>/../../packages/rpc/src/$1",
-      "^(\\.{1,2}/.*)\\.js$": "$1"
-    }
   }
 }
