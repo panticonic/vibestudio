@@ -420,6 +420,9 @@ function buildConnectLinkFromLog(loggedLink) {
   if (parsed.kind !== "ok") {
     throw new Error(`Server logged an invalid pairing link: ${parsed.reason}`);
   }
+  // Carry every field the grammar defines. Listing them by hand is why the
+  // expiry went missing when pairing links gained one: the rebuilt link got
+  // `exp=undefined`, and the next parse rejected the smoke's own link.
   return createConnectDeepLink({
     room: parsed.room,
     fp: parsed.fp,
@@ -427,6 +430,7 @@ function buildConnectLinkFromLog(loggedLink) {
     sig: parsed.sig,
     v: parsed.v,
     ice: parsed.ice,
+    exp: parsed.exp,
   });
 }
 
