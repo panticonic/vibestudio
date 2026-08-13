@@ -522,6 +522,24 @@ describe("EvalDO cancellation + forced recovery", () => {
 
     instance.retainExecutionRoot("root-run", "@workspace/example", artifact);
     instance.retainExecutionRoot("root-run", "@workspace/example", artifact);
+    await instance.startRun({ runId: "conflicting-run", code: "return 1" });
+    expect(() =>
+      instance.retainExecutionRoot(
+        "conflicting-run",
+        "@workspace/example",
+        executionArtifact("d")
+      )
+    ).toThrow(
+      expect.objectContaining({
+        code: "eval_module_execution_conflict",
+        errorKind: "application",
+        errorData: expect.objectContaining({
+          code: "eval_module_execution_conflict",
+          moduleSpecifier: "@workspace/example",
+          failureKind: "user-code",
+        }),
+      })
+    );
     expect(instance.listRetainedExecutionRoots()).toEqual([
       {
         runId: "root-run",

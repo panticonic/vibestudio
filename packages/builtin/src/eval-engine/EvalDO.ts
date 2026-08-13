@@ -2190,8 +2190,17 @@ export class EvalDO extends DurableObjectBase {
         JSON.parse(String(existing["artifact_json"])) as ExecutionArtifactRefV1
       );
       if (retained.executionDigest !== artifact.executionDigest) {
-        throw new Error(
-          `eval module ${moduleSpecifier} is already retained at a different execution`
+        throw Object.assign(
+          new Error(`eval module ${moduleSpecifier} is already retained at a different execution`),
+          {
+            code: "eval_module_execution_conflict",
+            errorKind: "application" as const,
+            errorData: {
+              code: "eval_module_execution_conflict",
+              moduleSpecifier,
+              failureKind: "user-code" as const,
+            },
+          }
         );
       }
       return;
