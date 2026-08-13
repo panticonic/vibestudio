@@ -1,7 +1,8 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { DatabaseSync } from "node:sqlite";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { DerivedCacheCoordinator, derivedCacheDatabasePath } from "./derivedCache.js";
 
 const roots: string[] = [];
@@ -43,6 +44,30 @@ describe("DerivedCacheCoordinator", () => {
       lease.release();
       owner.close();
       collector.close();
+    }
+  });
+
+  it("re-fences a live entry after its lease row is swept", async () => {
+    vi.useFakeTimers();
+    const root = cacheRoot();
+    put(root, "active", 64 * 1024);
+    const owner = new DerivedCacheCoordinator(derivedCacheDatabasePath(root));
+    const collector = new DerivedCacheCoordinator(derivedCacheDatabasePath(root));
+    const lease = owner.acquire(root, "active");
+    const database = new DatabaseSync(derivedCacheDatabasePath(root));
+    try {
+      database.exec("DELETE FROM cache_leases");
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      const result = await collector.prune(root, { targetBytes: 0, freeFloorBytes: 0 });
+      expect(result.removedEntries).toBe(0);
+      expect(fs.existsSync(path.join(root, "active"))).toBe(true);
+    } finally {
+      lease.release();
+      database.close();
+      owner.close();
+      collector.close();
+      vi.useRealTimers();
     }
   });
 

@@ -10,7 +10,7 @@ export const runtimeFoundationEvidence = Object.freeze({
       path: "src/server/universalDoHost.test.ts",
     },
     "execution.panel": {
-      path: "src/server/panelRuntimeRegistration.test.ts",
+      path: "src/main/panelOrchestrator.test.ts",
     },
     "execution.eval-do": {
       path: "src/server/services/evalService.test.ts",

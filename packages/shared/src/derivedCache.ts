@@ -410,10 +410,24 @@ export class DerivedCacheCoordinator {
   }
 
   private heartbeat(leaseId: string): void {
+    const owned = this.leases.get(leaseId);
+    if (!owned) return;
     try {
-      this.db
-        .prepare("UPDATE cache_leases SET expires_at = ? WHERE lease_id = ? AND owner_id = ?")
-        .run(Date.now() + LEASE_TTL_MS, leaseId, this.ownerId);
+      this.transaction(() => {
+        const renewed = this.db
+          .prepare("UPDATE cache_leases SET expires_at = ? WHERE lease_id = ? AND owner_id = ?")
+          .run(Date.now() + LEASE_TTL_MS, leaseId, this.ownerId);
+        if (renewed.changes > 0) return;
+        // A sweep can treat a live owner whose event loop stalled past the TTL
+        // as crashed. Re-fence while holding the same writer lock used by prune,
+        // but only if prune has not already committed the entry to trash.
+        if (!fs.existsSync(entryPath(owned.root, owned.key))) return;
+        this.db
+          .prepare(
+            "INSERT INTO cache_leases(lease_id, root, key, owner_id, expires_at) VALUES (?, ?, ?, ?, ?)"
+          )
+          .run(leaseId, owned.root, owned.key, this.ownerId, Date.now() + LEASE_TTL_MS);
+      });
     } catch {
       // A transient busy database is retried by the next heartbeat. The lease
       // remains fenced for several heartbeat intervals.

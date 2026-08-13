@@ -4,6 +4,7 @@ import type { Panel } from "@vibestudio/shared/types";
 import { getCurrentSnapshot } from "@vibestudio/shared/panel/accessors";
 import { asPanelEntityId, asPanelSlotId } from "@vibestudio/shared/panel/ids";
 import type { PanelRuntimeLease } from "@vibestudio/shared/panel/panelLease";
+import { ledgerTest } from "../../tests/helpers/ledgerTest.js";
 import { PanelOrchestrator } from "./panelOrchestrator.js";
 
 type PanelViewWebContents = Pick<
@@ -1704,7 +1705,7 @@ describe("PanelOrchestrator.applyBuildComplete", () => {
 });
 
 describe("PanelOrchestrator.rebuildPanel", () => {
-  it("replaces and presents only the named panel incarnation", async () => {
+  ledgerTest("execution.panel", async () => {
     const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
     const child = makePanel("panel:tree/child", [], {
       snapshot: {
