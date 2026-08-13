@@ -88,7 +88,7 @@ export function parseWorkspaceConfigContentWithId(content: string, id: string): 
 export function validateResolvedWorkspaceConfig(config: WorkspaceConfig): WorkspaceConfig {
   if (config.systemEpoch !== WORKSPACE_SYSTEM_EPOCH) {
     throw new Error(
-      `meta/vibestudio.yml: systemEpoch ${config.systemEpoch} is incompatible with host runtime ABI ${WORKSPACE_SYSTEM_EPOCH}; a supported workspace-source upgrade is required`
+      `meta/vibestudio.yml: systemEpoch ${config.systemEpoch} is incompatible with host runtime ABI ${WORKSPACE_SYSTEM_EPOCH}; recreate this pre-release workspace from the current Base`
     );
   }
   validateDeclaredUnits(config);

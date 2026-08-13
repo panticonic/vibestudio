@@ -425,8 +425,7 @@ function workspacePackageJsonCandidates(
 }
 
 function workspacePackageRoots(workspaceRoot: string): string[] {
-  const repoRoot = path.dirname(workspaceRoot);
-  return [path.join(workspaceRoot, "packages"), path.join(repoRoot, "packages")];
+  return [path.join(workspaceRoot, "packages")];
 }
 
 /**

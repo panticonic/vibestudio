@@ -1788,13 +1788,7 @@ export class WorkspaceDO extends DurableObjectBase {
         .exec(
           `SELECT s.slot_id, s.parent_slot_id, s.owner_user_id, s.sort_key, s.created_at,
                   history.options,
-                  s.slot_id AS title,
                   history.source AS source,
-                  CASE
-                    WHEN history.source LIKE 'browser:%' THEN 'browser'
-                    WHEN history.source IS NOT NULL THEN 'workspace'
-                    ELSE NULL
-                  END AS surface_kind,
                   e.context_id,
                   e.id AS runtime_entity_id,
                   e.source_effective_version AS effective_version,
@@ -1818,11 +1812,9 @@ export class WorkspaceDO extends DurableObjectBase {
         owner_user_id: string | null;
         sort_key: number;
         created_at: number;
-        title: string;
         child_count: number;
         options: string | null;
         source: string | null;
-        surface_kind: "workspace" | "browser" | null;
         context_id: string | null;
         runtime_entity_id: string | null;
         effective_version: string | null;
@@ -1835,22 +1827,19 @@ export class WorkspaceDO extends DurableObjectBase {
         revision,
         group: input.group,
         nodes: visible.map((row) => {
-          const placement = this.panelTreePlacementHint(row.options);
           return {
             slotId: row.slot_id as WorkspacePanelTreePage["nodes"][number]["slotId"],
             parentSlotId:
               row.parent_slot_id as WorkspacePanelTreePage["nodes"][number]["parentSlotId"],
             ownerUserId: row.owner_user_id,
-            title: row.title,
             createdAt: row.created_at,
             childCount: row.child_count,
             ...(row.source === null ? {} : { source: row.source }),
-            ...(row.surface_kind === null ? {} : { kind: row.surface_kind }),
+            ...(row.options === null ? {} : { options: row.options }),
             ...(row.context_id === null ? {} : { contextId: row.context_id }),
             ...(row.runtime_entity_id === null ? {} : { runtimeEntityId: row.runtime_entity_id }),
             ...(row.effective_version === null ? {} : { effectiveVersion: row.effective_version }),
             ...(row.build_key === null ? {} : { buildKey: row.build_key }),
-            ...(placement ? { placement } : {}),
           };
         }),
         nextCursor:
@@ -1940,13 +1929,8 @@ export class WorkspaceDO extends DurableObjectBase {
             WHERE parent.closed_at IS NULL
          )
          SELECT path.slot_id, path.parent_slot_id, path.owner_user_id, path.created_at,
-                path.depth, path.slot_id AS title,
+                path.depth,
                 history.options, history.source,
-                CASE
-                  WHEN history.source LIKE 'browser:%' THEN 'browser'
-                  WHEN history.source IS NOT NULL THEN 'workspace'
-                  ELSE NULL
-                END AS surface_kind,
                 entity.context_id, entity.id AS runtime_entity_id,
                 entity.source_effective_version AS effective_version,
                 entity.active_build_key AS build_key,
@@ -1966,11 +1950,9 @@ export class WorkspaceDO extends DurableObjectBase {
       parent_slot_id: string | null;
       owner_user_id: string | null;
       created_at: number;
-      title: string;
       child_count: number;
       options: string | null;
       source: string | null;
-      surface_kind: "workspace" | "browser" | null;
       context_id: string | null;
       runtime_entity_id: string | null;
       effective_version: string | null;
@@ -1980,65 +1962,22 @@ export class WorkspaceDO extends DurableObjectBase {
     return {
       revision: this.panelTreeRevision(),
       nodes: rows.map((row) => {
-        const placement = this.panelTreePlacementHint(row.options);
         return {
           slotId: row.slot_id as WorkspacePanelTreePath["nodes"][number]["slotId"],
           parentSlotId:
             row.parent_slot_id as WorkspacePanelTreePath["nodes"][number]["parentSlotId"],
           ownerUserId: row.owner_user_id,
-          title: row.title,
           createdAt: row.created_at,
           childCount: row.child_count,
           ...(row.source === null ? {} : { source: row.source }),
-          ...(row.surface_kind === null ? {} : { kind: row.surface_kind }),
+          ...(row.options === null ? {} : { options: row.options }),
           ...(row.context_id === null ? {} : { contextId: row.context_id }),
           ...(row.runtime_entity_id === null ? {} : { runtimeEntityId: row.runtime_entity_id }),
           ...(row.effective_version === null ? {} : { effectiveVersion: row.effective_version }),
           ...(row.build_key === null ? {} : { buildKey: row.build_key }),
-          ...(placement ? { placement } : {}),
         };
       }),
     };
-  }
-
-  private panelTreePlacementHint(optionsJson: string | null): {
-    disposition?: "side" | "side-if-room" | "replace" | "split-below";
-    preferredWidth?: number;
-    minWidth?: number;
-  } | null {
-    if (!optionsJson) return null;
-    try {
-      const value = JSON.parse(optionsJson) as { placement?: unknown };
-      if (!value.placement || typeof value.placement !== "object") return null;
-      const raw = value.placement as Record<string, unknown>;
-      const disposition =
-        raw["disposition"] === "side" ||
-        raw["disposition"] === "side-if-room" ||
-        raw["disposition"] === "replace" ||
-        raw["disposition"] === "split-below"
-          ? raw["disposition"]
-          : undefined;
-      const preferredWidth =
-        typeof raw["preferredWidth"] === "number" &&
-        Number.isFinite(raw["preferredWidth"]) &&
-        raw["preferredWidth"] > 0
-          ? raw["preferredWidth"]
-          : undefined;
-      const minWidth =
-        typeof raw["minWidth"] === "number" &&
-        Number.isFinite(raw["minWidth"]) &&
-        raw["minWidth"] > 0
-          ? raw["minWidth"]
-          : undefined;
-      if (!disposition && preferredWidth === undefined && minWidth === undefined) return null;
-      return {
-        ...(disposition ? { disposition } : {}),
-        ...(preferredWidth !== undefined ? { preferredWidth } : {}),
-        ...(minWidth !== undefined ? { minWidth } : {}),
-      };
-    } catch {
-      return null;
-    }
   }
 
   @schemaRpc()

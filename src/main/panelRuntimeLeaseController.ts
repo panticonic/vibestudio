@@ -122,7 +122,6 @@ export class PanelPresentationController {
     { runtimeEntityId: string; connectionId: string; ownerToken?: object }
   >();
   private readonly stateArgsPushUnsubs = new Map<string, () => void>();
-  private readonly explicitTitlePanelIds = new Set<string>();
   private readonly attemptBySlot = new Map<string, PresentationAttempt>();
   private readonly progressBySlot = new Map<string, Promise<void>>();
   private readonly presentationBySlot = new Map<string, PanelPresentationSnapshot>();
@@ -305,10 +304,6 @@ export class PanelPresentationController {
     return this.connectionBySlot.get(panelId);
   }
 
-  isTitleExplicit(panelId: string): boolean {
-    return this.explicitTitlePanelIds.has(panelId);
-  }
-
   refreshActivity(panelId: string): void {
     this.resources.refreshActivity(panelId);
   }
@@ -488,27 +483,6 @@ export class PanelPresentationController {
         );
       }
     }
-  }
-
-  applyServerPanelTitleUpdate(update: {
-    panelId: string;
-    title: string | null;
-    explicit?: boolean;
-  }): Promise<void> {
-    const panel = this.deps.registry.getPanel(update.panelId);
-    if (!panel) return Promise.resolve();
-    if (!update.explicit && this.explicitTitlePanelIds.has(update.panelId)) {
-      return Promise.resolve();
-    }
-    if (update.title === null) {
-      if (update.explicit) this.explicitTitlePanelIds.delete(update.panelId);
-      return this.deps.shellCore
-        .refreshSlotEntity(asPanelSlotId(update.panelId))
-        .then(() => undefined);
-    }
-    if (update.explicit) this.explicitTitlePanelIds.add(update.panelId);
-    if (panel.title !== update.title) this.deps.registry.updateTitle(update.panelId, update.title);
-    return Promise.resolve();
   }
 
   async handleLeaseChanged(event: PanelRuntimeLeaseChangedEvent): Promise<void> {

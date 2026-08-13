@@ -375,6 +375,7 @@ export const panelMethods = defineServiceMethods({
       url: z.string().url(),
       secure: z.boolean(),
       title: z.string(),
+      cookieCount: z.number().int().nonnegative(),
     }),
     access: READ_ACCESS,
   },

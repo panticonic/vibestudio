@@ -1077,9 +1077,10 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       const fresh = await this.ensureFresh();
       timings.ensureFreshMs = performance.now() - spanStartedAt;
       timings.totalMs = performance.now() - activationStartedAt;
-      if (fresh.stateHash !== receipt.initializedStateHash) {
+      const protectedMain = this.deps.refs.readMainSemanticState();
+      if (protectedMain?.eventId !== receipt.initializedEventId) {
         throw new Error(
-          `Workspace source receipt ${receipt.initializedStateHash} does not match protected source ${fresh.stateHash}`
+          `Workspace source receipt event ${receipt.initializedEventId} does not match protected main ${protectedMain?.eventId ?? "absent"}`
         );
       }
       return { ...fresh, initialized: true, timings };
@@ -1547,7 +1548,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
 
   private async ensureFreshUncoalesced(): Promise<{ stateHash: string }> {
     const view = await this.repositories.workspaceView();
-    const semanticState = this.deps.refs.readMainSemanticState?.() ?? null;
+    const semanticState = this.deps.refs.readMainSemanticState();
     if (semanticState) this.semanticStateByContent.set(view.stateHash, semanticState);
     return view;
   }

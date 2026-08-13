@@ -23,6 +23,7 @@ const INVITE_KEYS = new Set([
   "v",
   "ice",
   "code",
+  "exp",
   "deepLink",
   "pairUrl",
   "expiresInMs",
@@ -108,10 +109,13 @@ function parseInvite(value, label, ready) {
       throw new Error(`${label}.${field} does not match the ready file`);
     }
   }
-  for (const field of ["expiresInMs", "expiresAt"]) {
+  for (const field of ["exp", "expiresInMs", "expiresAt"]) {
     if (!Number.isSafeInteger(invite[field]) || invite[field] <= 0) {
       throw new Error(`${label}.${field} must be a positive integer`);
     }
+  }
+  if (invite.exp !== invite.expiresAt) {
+    throw new Error(`${label}.exp must match expiresAt`);
   }
 
   for (const [field, prefix] of [
@@ -128,6 +132,7 @@ function parseInvite(value, label, ready) {
       parsed.room !== invite.room ||
       normalizeFingerprint(parsed.fp) !== normalizeFingerprint(invite.fp) ||
       parsed.code !== invite.code ||
+      parsed.exp !== invite.exp ||
       parsed.sig !== signaling.url ||
       parsed.v !== invite.v ||
       parsed.ice !== invite.ice

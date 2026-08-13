@@ -11,6 +11,7 @@ import {
   ImportHostSummarySchema,
 } from "@vibestudio/browser-contracts/import";
 import { requirementForPrincipals } from "@vibestudio/shared/authorization";
+import type { ServiceAuthorityPolicy } from "@vibestudio/shared/serviceAuthority";
 
 export const BROWSER_ENVIRONMENT_BROKER_AUTHORITY_PREFIX = "browserEnvironment.broker";
 
@@ -36,6 +37,10 @@ function brokerPolicy(method: string, presentation: CapabilityPresentation) {
   };
 }
 
+const reviewedProviderAuthority = {
+  authority: { principals: ["host", "code"] } satisfies ServiceAuthorityPolicy,
+};
+
 const DownloadRecordSchema = z.object({
   id: z.string(),
   environmentKey: z.string(),
@@ -57,6 +62,47 @@ const ImportSummarySchema = z.object({
   warnings: z.array(z.string()),
 });
 
+export const BrowserPublicImportDataTypeSchema = z.enum([
+  "bookmarks",
+  "history",
+  "searchEngines",
+  "favicons",
+]);
+export const BrowserSensitiveImportDataTypeSchema = z.enum(["cookies", "passwords", "formFill"]);
+
+const PublicImportCategoryProgressSchema = ImportCategoryProgressSchema.extend({
+  dataType: BrowserPublicImportDataTypeSchema,
+});
+const PublicImportSummarySchema = z
+  .object({
+    dataTypes: z.array(PublicImportCategoryProgressSchema),
+    warnings: z.array(z.string()),
+  })
+  .strict();
+const SensitiveImportDataTypesSchema = z
+  .array(BrowserSensitiveImportDataTypeSchema)
+  .min(1)
+  .max(3)
+  .refine((dataTypes) => new Set(dataTypes).size === dataTypes.length, {
+    message: "Sensitive browser import data types must be unique",
+  });
+const SensitiveImportCountSchema = z
+  .object({
+    dataType: BrowserSensitiveImportDataTypeSchema,
+    read: z.number().int().nonnegative(),
+    stored: z.number().int().nonnegative(),
+    skipped: z.number().int().nonnegative(),
+    errors: z.number().int().nonnegative(),
+  })
+  .strict();
+const SensitiveImportStatusSchema = z
+  .object({
+    operationId: z.string().min(1).max(200),
+    state: z.enum(["running", "complete", "cancelled", "failed"]),
+    counts: z.array(SensitiveImportCountSchema),
+    error: z.string().optional(),
+  })
+  .strict();
 const ImportCategoryBreakdownSchema = z.object({
   dataType: BrowserImportDataTypeSchema,
   groupedBy: z.enum(["site", "kind"]),
@@ -82,12 +128,12 @@ const ImportProviderFrameSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("heartbeat") }),
   z.object({
     type: z.literal("batch"),
-    dataType: BrowserImportDataTypeSchema,
+    dataType: BrowserPublicImportDataTypeSchema,
     batchIndex: z.number().int().nonnegative(),
     items: z.array(z.unknown()),
   }),
-  z.object({ type: z.literal("progress"), progress: ImportCategoryProgressSchema }),
-  z.object({ type: z.literal("complete"), summary: ImportSummarySchema }),
+  z.object({ type: z.literal("progress"), progress: PublicImportCategoryProgressSchema }),
+  z.object({ type: z.literal("complete"), summary: PublicImportSummarySchema }),
   z.object({ type: z.literal("error"), message: z.string() }),
 ]);
 
@@ -159,6 +205,25 @@ export const browserEnvironmentMethods = defineServiceMethods({
       authorityCategory: { domain: "web", verb: "see" },
     }),
   },
+  previewSensitiveImport: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "browserEnvironment.control",
+      rationale:
+        "Returns aggregate review counts for protected browser categories without returning records or values.",
+    },
+    description: "Preview selected sensitive browser categories using aggregate counts only.",
+    args: z.tuple([z.string().min(1), SensitiveImportDataTypesSchema]),
+    returns: ImportSummarySchema.extend({
+      breakdowns: z.array(ImportCategoryBreakdownSchema),
+      openTabCount: z.number().int().nonnegative(),
+      localDataSetCount: z.number().int().nonnegative(),
+    }),
+    access: { sensitivity: "read" },
+    ...reviewedProviderAuthority,
+  },
   startImportRead: {
     tier: {
       tier: "open",
@@ -168,8 +233,8 @@ export const browserEnvironmentMethods = defineServiceMethods({
       rationale:
         "Starts a streamed read of an external browser profile for import; gated by authority principals.",
     },
-    description: "Start a bounded, cancellable read from an opaque browser source.",
-    args: z.tuple([z.string().min(1), z.array(BrowserImportDataTypeSchema).min(1)]),
+    description: "Start a bounded, cancellable read of non-sensitive browser data.",
+    args: z.tuple([z.string().min(1), z.array(BrowserPublicImportDataTypeSchema).min(1)]),
     returns: z.string().min(1),
     access: { sensitivity: "read" },
     ...brokerPolicy("startImportRead", {
@@ -179,6 +244,50 @@ export const browserEnvironmentMethods = defineServiceMethods({
       group: "network",
       authorityCategory: { domain: "web", verb: "see" },
     }),
+  },
+  startSensitiveImport: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "browserEnvironment.create",
+      rationale:
+        "Runs credential-bearing browser import entirely in the trusted host and returns aggregate counts only; gated by authority principals.",
+    },
+    description:
+      "Import selected sensitive browser data directly into the host vault without exposing plaintext frames.",
+    args: z.tuple([z.string().min(1), SensitiveImportDataTypesSchema, z.string().min(1).max(200)]),
+    returns: SensitiveImportStatusSchema,
+    access: { sensitivity: "write" },
+    ...reviewedProviderAuthority,
+  },
+  observeSensitiveImport: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "browserEnvironment.read",
+      rationale: "Reads aggregate progress from the durable host import ledger.",
+    },
+    description: "Observe aggregate progress or the terminal receipt for a sensitive import.",
+    args: z.tuple([z.string().min(1).max(200)]),
+    returns: SensitiveImportStatusSchema,
+    access: { sensitivity: "read" },
+    ...reviewedProviderAuthority,
+  },
+  cancelSensitiveImport: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "browserEnvironment.retire",
+      rationale: "Records durable cancellation and stops the active host import reader.",
+    },
+    description: "Cancel a sensitive import and return its durable terminal status.",
+    args: z.tuple([z.string().min(1).max(200)]),
+    returns: SensitiveImportStatusSchema,
+    access: { sensitivity: "write" },
+    ...reviewedProviderAuthority,
   },
   nextImportFrame: {
     tier: {
@@ -237,55 +346,6 @@ export const browserEnvironmentMethods = defineServiceMethods({
       title: "View browser tabs available to import",
       action: "view browser tabs available to import",
       description: "Allows {requesterKind} to view browser tabs available for import.",
-      group: "network",
-      authorityCategory: { domain: "web", verb: "see" },
-    }),
-  },
-  flushCookieProjection: {
-    tier: {
-      tier: "open",
-      session: "family",
-      residency: "native-effect",
-      family: "browserEnvironment.control",
-      rationale:
-        "Host maintenance proceeds directly; installed code requires the method's gated browser-environment capability.",
-    },
-    description: "Flush local cookie changes and reconcile the canonical browser jar.",
-    args: z.tuple([z.array(z.string().url()).max(50)]),
-    returns: z.object({ revision: z.number().int().nonnegative() }),
-    access: { sensitivity: "write" },
-    ...brokerPolicy("flushCookieProjection", {
-      title: "Synchronize website cookies",
-      action: "synchronize website cookies",
-      description: "Allows {requesterKind} to reconcile website cookies with the browser host.",
-      group: "network",
-      authorityCategory: { domain: "web", verb: "manage" },
-    }),
-  },
-  getCookieProjectionDiagnostics: {
-    tier: {
-      tier: "open",
-      session: "family",
-      residency: "native-effect",
-      family: "browserEnvironment.read",
-      rationale:
-        "Host diagnostics proceed directly; installed code requires the method's gated browser-environment capability.",
-    },
-    description: "Read cookie-projection convergence diagnostics for this browser host.",
-    args: z.tuple([]),
-    returns: z.object({
-      revision: z.number().int().nonnegative(),
-      hostId: z.string(),
-      converged: z.boolean(),
-      mismatchCount: z.number().int().nonnegative(),
-      outboxDepth: z.number().int().nonnegative(),
-      lastError: z.string().optional(),
-    }),
-    access: { sensitivity: "read" },
-    ...brokerPolicy("getCookieProjectionDiagnostics", {
-      title: "View cookie synchronization diagnostics",
-      action: "view cookie synchronization diagnostics",
-      description: "Allows {requesterKind} to inspect website cookie synchronization status.",
       group: "network",
       authorityCategory: { domain: "web", verb: "see" },
     }),

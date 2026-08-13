@@ -42,7 +42,8 @@ import {
   completeFreshMobilePairing,
   loadShellCredential,
   clearShellCredential,
-  makeShellTokenProvider,
+  makeFreshShellTokenProvider,
+  makeReturningShellTokenProvider,
   activateApprovedWorkspaceApp as activateApprovedWorkspaceAppShared,
 } from "@vibestudio/mobile-webrtc";
 import { launchGateView } from "@vibestudio/shared/bootstrapLaunchGate";
@@ -108,7 +109,7 @@ async function activateApprovedWorkspaceApp(connection, options = {}) {
 /** Fresh pairing: redeem the code, capture + persist the issued device credential. */
 async function pairViaWebRtc(pairing) {
   smokePhase("embedded-pairing-start");
-  const tokenProvider = makeShellTokenProvider(pairing, null);
+  const tokenProvider = makeFreshShellTokenProvider(pairing);
   let pairedCredential = null;
   let pairingContext = null;
   const connection = await establishWebRtcConnection(pairing, tokenProvider, {
@@ -127,7 +128,7 @@ async function pairViaWebRtc(pairing) {
     controlPairing: pairing,
     persistConnection: persistStoredMobileConnection,
     connectWorkspace: async (workspacePairing, credential) => {
-      const workspaceTokenProvider = makeShellTokenProvider(workspacePairing, credential);
+      const workspaceTokenProvider = makeReturningShellTokenProvider(credential);
       return establishWebRtcConnection(workspacePairing, workspaceTokenProvider, {
         onPaired: async (nextCredential) => {
           workspaceTokenProvider.setCredential(nextCredential);

@@ -6,10 +6,12 @@ import {
   WorkspaceConfigTopLayerSchema,
 } from "@vibestudio/workspace-contracts/workspaceConfigSchema";
 import type {
+  WorkspaceConfig,
   WorkspaceTemplateDeclaration,
   WorkspaceTemplatePresentation,
 } from "@vibestudio/workspace-contracts/types";
 import { normalizeTemplateGitUrl, TEMPLATE_SOURCE_MANIFEST_PATH } from "./templateCoordinates.js";
+import { composeWorkspaceConfig } from "./configComposition.js";
 
 type ParsedTopLayer = ReturnType<typeof WorkspaceConfigTopLayerSchema.parse>;
 export type ParsedTemplateFragment = ReturnType<typeof WorkspaceConfigFragmentSchema.parse>;
@@ -120,7 +122,11 @@ export function sanitizeTemplateManifest(top: ParsedTopLayer): ParsedTemplateFra
             section,
             Object.fromEntries(
               Object.entries(repositories).map(([repo, upstream]) => {
-                const { authorEmail: _authorEmail, authorName: _authorName, ...portable } = upstream;
+                const {
+                  authorEmail: _authorEmail,
+                  authorName: _authorName,
+                  ...portable
+                } = upstream;
                 return [repo, portable];
               })
             ),
@@ -142,11 +148,33 @@ export function sanitizeTemplateManifest(top: ParsedTopLayer): ParsedTemplateFra
 /** Flatten one dependency-free root manifest into the exact host runtime form. */
 export function rootRuntimeFromTemplateManifest(
   manifest: ParsedTemplateManifest
-): Omit<ParsedTopLayer, "template" | "templates" | "disable"> {
+): Omit<WorkspaceConfig, "id"> {
   if (manifest.dependencies.length > 0) {
     throw new Error("A root runtime cannot be generated from a template with dependencies");
   }
-  const { template: _template, templates: _templates, disable: _disable, ...runtime } = manifest.top;
+  const authoredUpstreams = Object.fromEntries(
+    Object.entries(manifest.top.git?.upstreams ?? {}).flatMap(([section, repositories]) => {
+      const authored = Object.fromEntries(
+        Object.entries(repositories).filter(
+          ([, upstream]) => upstream.authorName !== undefined || upstream.authorEmail !== undefined
+        )
+      );
+      return Object.keys(authored).length > 0 ? [[section, authored]] : [];
+    })
+  );
+  const composed = composeWorkspaceConfig(
+    WorkspaceConfigTopLayerSchema.parse({
+      systemEpoch: manifest.top.systemEpoch,
+      ...(manifest.top.providers ? { providers: manifest.top.providers } : {}),
+      ...(manifest.top.trust ? { trust: manifest.top.trust } : {}),
+      ...(Object.keys(authoredUpstreams).length > 0
+        ? { git: { upstreams: authoredUpstreams } }
+        : {}),
+    }),
+    [{ nodeId: "root", alias: "root", ancestors: [], config: manifest.fragment }],
+    "root"
+  );
+  const { id: _id, ...runtime } = composed;
   return runtime;
 }
 
@@ -163,7 +191,9 @@ export function parseTemplateManifestContent(
   const repositories = uniqueSortedPaths(authoring.repositories, "template.repositories");
   const files = uniqueSortedPaths(authoring.files, "template.files");
   for (const file of files) {
-    if (repositories.some((repository) => file === repository || file.startsWith(`${repository}/`))) {
+    if (
+      repositories.some((repository) => file === repository || file.startsWith(`${repository}/`))
+    ) {
       throw new Error(`template.files path ${file} is already owned by a declared repository`);
     }
   }
@@ -182,16 +212,17 @@ export function parseTemplateManifestContent(
   if (top.templates?.overrides && Object.keys(top.templates.overrides).length > 0) {
     throw new Error("template manifests cannot impose exact template overrides");
   }
-  if (top.templates?.registry) {
+  const dependencies = (top.templates?.use ?? []).map((declaration) => ({
+    ...declaration,
+    url: normalizeTemplateGitUrl(declaration.url),
+  }));
+  if (top.templates?.registry && dependencies.length > 0) {
     throw new Error("template manifests cannot replace the workspace template registry");
   }
   const fragment = sanitizeTemplateManifest(top);
   return {
     top,
-    dependencies: (top.templates?.use ?? []).map((declaration) => ({
-      ...declaration,
-      url: normalizeTemplateGitUrl(declaration.url),
-    })),
+    dependencies,
     fragment,
     fragmentYaml: canonicalTemplateYaml(fragment),
     inventory: { repositories, files },

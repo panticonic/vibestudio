@@ -198,6 +198,9 @@ describe("effectiveVersion", () => {
   });
 
   describe("computeBuildKey", () => {
+    beforeEach(() => setBuildRootConfig({ appRoot: process.cwd() }));
+    afterEach(() => setBuildRootConfig(null));
+
     it("invalidates every build key when generated wrapper protocol output changes", () => {
       for (const sourcemap of [true, false]) {
         const before = computeBuildKey("unit-a", "ev1", sourcemap, "protocol-a");
@@ -229,9 +232,9 @@ describe("effectiveVersion", () => {
         fs.writeFileSync(path.join(rootB, "dist", "server.mjs"), "console.log('new server');\n");
         fs.writeFileSync(path.join(rootB, "dist", "main.cjs"), "console.log('new main');\n");
 
-        process.env["VIBESTUDIO_APP_ROOT"] = rootA;
+        setBuildRootConfig({ appRoot: rootA });
         const first = computeBuildKey("unit-a", "ev1", true);
-        process.env["VIBESTUDIO_APP_ROOT"] = rootB;
+        setBuildRootConfig({ appRoot: rootB });
         expect(computeBuildKey("unit-a", "ev1", true)).toBe(first);
       } finally {
         if (previousAppRoot === undefined) delete process.env["VIBESTUDIO_APP_ROOT"];
@@ -353,7 +356,7 @@ describe("effectiveVersion", () => {
       expect(computeBuildKey("unit-a", "ev1", true)).not.toBe(before);
     });
 
-    it("lets VIBESTUDIO_APP_ROOT override the injected app root", () => {
+    it("does not let ambient environment override the injected app root", () => {
       const injected = path.join(root, "injected");
       const overridden = path.join(root, "override");
       writeRootFiles(injected, '{"name":"injected"}', "lock\n", "ws\n");
@@ -362,8 +365,8 @@ describe("effectiveVersion", () => {
       setBuildRootConfig({ appRoot: injected });
       process.env["VIBESTUDIO_APP_ROOT"] = overridden;
       const info = getRootDependencyFingerprintInfo();
-      expect(info.rootSource).toBe("env");
-      expect(info.root).toBe(overridden);
+      expect(info.rootSource).toBe("injected");
+      expect(info.root).toBe(injected);
     });
 
     it("handles missing files deterministically and distinctly from present-empty", () => {

@@ -8,6 +8,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  createConnectDeepLink,
+  createConnectPairUrl,
+  PAIRING_PROTOCOL_VERSION,
+} from "@vibestudio/shared/connect";
 
 class FakeChild extends EventEmitter {
   stdout = new PassThrough();
@@ -37,22 +42,29 @@ const CUSTOM_CODE = fixedCode("PAIRING_CUSTOM_CODE");
 const REMOTE_CODE = fixedCode("PAIRING_REMOTE_CODE");
 const SERVER_ID = `srv_${"S".repeat(24)}`;
 const SERVER_BOOT_ID = `boot_${"B".repeat(24)}`;
-
+const PAIRING_EXPIRES_AT = 4_000_000_000_000;
 function invite(room: string, fp: string, sig: string, code: string) {
-  const params =
-    `room=${encodeURIComponent(room)}&fp=${encodeURIComponent(fp)}&code=${encodeURIComponent(code)}` +
-    `&sig=${encodeURIComponent(sig)}&v=2&ice=all`;
+  const pairing = {
+    room,
+    fp,
+    code,
+    sig,
+    v: PAIRING_PROTOCOL_VERSION,
+    ice: "all" as const,
+    exp: PAIRING_EXPIRES_AT,
+  };
   return {
     room,
     fp,
     sig,
     code,
-    v: 2 as const,
+    exp: pairing.exp,
+    v: PAIRING_PROTOCOL_VERSION,
     ice: "all" as const,
-    deepLink: `vibestudio://connect?${params}`,
-    pairUrl: `https://vibestudio.app/pair#${params}`,
+    deepLink: createConnectDeepLink(pairing),
+    pairUrl: createConnectPairUrl(pairing),
     expiresInMs: 60_000,
-    expiresAt: 2_000_000_000_000,
+    expiresAt: PAIRING_EXPIRES_AT,
     serverId: SERVER_ID,
     serverBootId: SERVER_BOOT_ID,
   };
@@ -118,7 +130,12 @@ describe("pair-server runner", () => {
     expect(output).toContain("wss://signal.vibestudio.dev");
     expect(output).toMatch(new RegExp(`Pair code:\\s+${READY_CODE}`));
     expect(output).toContain(
-      `https://vibestudio.app/pair#room=room-ready-7f3a9c2b&fp=4f8b2a1c9d7e6f5a4b3c2d1e0f9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a&code=${READY_CODE}&sig=wss%3A%2F%2Fsignal.vibestudio.dev&v=2&ice=all`
+      invite(
+        "room-ready-7f3a9c2b",
+        "4f8b2a1c9d7e6f5a4b3c2d1e0f9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a",
+        "wss://signal.vibestudio.dev",
+        READY_CODE
+      ).pairUrl
     );
     expect(output).toContain("Pair from test.");
 
@@ -158,7 +175,12 @@ describe("pair-server runner", () => {
       const output = logText(logSpy);
       expect(output).toMatch(new RegExp(`Pair code:\\s+${CUSTOM_CODE}`));
       expect(output).toContain(
-        `https://vibestudio.app/pair#room=room-custom-1a2b3c4d&fp=aa11bb22cc33dd44ee55ff66aa77bb88cc99dd00ee11ff22aa33bb44cc55dd66&code=${CUSTOM_CODE}&sig=ws%3A%2F%2F127.0.0.1%3A8787&v=2&ice=all`
+        invite(
+          "room-custom-1a2b3c4d",
+          "aa11bb22cc33dd44ee55ff66aa77bb88cc99dd00ee11ff22aa33bb44cc55dd66",
+          "ws://127.0.0.1:8787",
+          CUSTOM_CODE
+        ).pairUrl
       );
       child.emit("exit", 0, null);
       expect(fs.existsSync(readyDir)).toBe(true);
@@ -254,7 +276,12 @@ describe("pair-server runner", () => {
     expect(output).toContain("wss://signal.example.org");
     expect(output).toMatch(new RegExp(`Pair code:\\s+${REMOTE_CODE}`));
     expect(output).toContain(
-      `https://vibestudio.app/pair#room=room-remote-9z8y7x6w&fp=11aa22bb33cc44dd55ee66ff77001122334455667788990011223344556677ab&code=${REMOTE_CODE}&sig=wss%3A%2F%2Fsignal.example.org&v=2&ice=all`
+      invite(
+        "room-remote-9z8y7x6w",
+        "11aa22bb33cc44dd55ee66ff77001122334455667788990011223344556677ab",
+        "wss://signal.example.org",
+        REMOTE_CODE
+      ).pairUrl
     );
 
     child.emit("exit", 0, null);
@@ -406,12 +433,10 @@ describe("pair-server runner", () => {
     );
     const valid = hubReady(current);
     expect(parseHubReadyPayload(valid)).toEqual(valid);
-    expect(() =>
-      parseHubReadyPayload({ ...valid, connectUrl: valid.gatewayUrl })
-    ).toThrow(/unsupported fields/);
-    expect(() => parseHubReadyPayload({ ...valid, buildId: "not-a-digest" })).toThrow(
-      /buildId/
+    expect(() => parseHubReadyPayload({ ...valid, connectUrl: valid.gatewayUrl })).toThrow(
+      /unsupported fields/
     );
+    expect(() => parseHubReadyPayload({ ...valid, buildId: "not-a-digest" })).toThrow(/buildId/);
     expect(() =>
       parseHubReadyPayload({
         ...valid,
@@ -430,6 +455,12 @@ describe("pair-server runner", () => {
         rootInvite: { ...current, room: "room-different" },
       })
     ).toThrow(/does not match the invite coordinates/);
+    expect(() =>
+      parseHubReadyPayload({
+        ...valid,
+        rootInvite: { ...current, exp: current.exp + 1 },
+      })
+    ).toThrow(/exp must match expiresAt/);
   });
 
   it("uses the live TypeScript server entry when requested", async () => {

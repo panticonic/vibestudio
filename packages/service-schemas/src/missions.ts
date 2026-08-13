@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
+import { defineReceiverServiceMethods } from "@vibestudio/shared/typedServiceClient";
 import type { ServiceAuthorityPolicy } from "@vibestudio/shared/serviceAuthority";
 import { AuthorityResourceScopeSchema } from "./build.js";
 
@@ -258,7 +258,7 @@ const AGENT_PROPOSAL: ServiceAuthorityPolicy = {
 const HOST_CODE: ServiceAuthorityPolicy = { principals: ["host", "code"] };
 const HOST: ServiceAuthorityPolicy = { principals: ["host"] };
 
-export const missionsMethods = defineServiceMethods({
+export const missionsMethods = defineReceiverServiceMethods({
   overview: {
     capability: "missions.read",
     tier: {

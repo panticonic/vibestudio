@@ -855,9 +855,9 @@ export default {};`;
 
 function createFsShimPlugin(options: {
   runtimeBacked: boolean;
-  resolveDir?: string;
+  resolveDir: string;
 }): esbuild.Plugin {
-  const resolveDir = options.resolveDir ?? process.cwd();
+  const resolveDir = options.resolveDir;
   return {
     name: "fs-shim",
     setup(build) {
@@ -934,7 +934,7 @@ export const rmSync = unavailable;
 export const statSync = unavailable;
 export const lstatSync = unavailable;
 export default { promises, readFile, writeFile, readdir, stat, lstat, mkdir, rmdir, unlink, rename, copyFile, access, appendFile, chmod, chown, symlink, readlink, realpath, truncate, utimes, rm, open, link, mkdtemp, watch, cp, constants, existsSync, readFileSync, writeFileSync, mkdirSync, rmSync, statSync, lstatSync };`;
-          return { loader: "js", resolveDir: process.cwd(), contents };
+          return { loader: "js", resolveDir, contents };
         }
         // The runtime SDK exports `fs` as a Proxy object with async methods
         // (see platformModules.RUNTIME_MODULE for the contract).
@@ -1026,11 +1026,12 @@ export default pathe;`,
   };
 }
 
-function createCryptoShimPlugin(
-  options: { includeNodePrefix?: boolean; resolveDir?: string } = {}
-): esbuild.Plugin {
+function createCryptoShimPlugin(options: {
+  includeNodePrefix?: boolean;
+  resolveDir: string;
+}): esbuild.Plugin {
   const includeNodePrefix = options.includeNodePrefix ?? true;
-  const resolveDir = options.resolveDir ?? process.cwd();
+  const resolveDir = options.resolveDir;
   return {
     name: "crypto-shim",
     setup(build) {
@@ -1133,7 +1134,7 @@ function isPanelEntryCssOutput(outputPath: string): boolean {
 }
 
 function relativeBuildOutputPath(outdir: string, outputPath: string): string {
-  return path.relative(outdir, path.resolve(outputPath)).replace(/\\/g, "/");
+  return path.relative(outdir, path.resolve(outdir, outputPath)).replace(/\\/g, "/");
 }
 
 function relativeModuleSpecifier(fromDir: string, targetPath: string): string {
@@ -2249,6 +2250,10 @@ async function buildPanel(
   // Build esbuild options with adapter-driven JSX settings
   const esbuildOptions: esbuild.BuildOptions = {
     entryPoints,
+    // Make every metafile path relative to this build's owned directory. Asset
+    // collection and executable-provenance capture must not depend on the
+    // server process launch directory.
+    absWorkingDir: outdir,
     bundle: true,
     platform: "browser",
     target: "es2022",
@@ -2320,7 +2325,7 @@ async function buildPanel(
       ? outputPaths.find(
           (outputPath) =>
             outputPath.endsWith(".css") &&
-            path.resolve(metafile?.outputs[outputPath]?.entryPoint ?? "") ===
+            path.resolve(outdir, metafile?.outputs[outputPath]?.entryPoint ?? "") ===
               path.resolve(sharedStyleEntryPath)
         )
       : undefined;
@@ -2363,7 +2368,10 @@ async function buildPanel(
     ];
     let sharedStyleMetadata: BuildMetadata["sharedStyles"];
     if (sharedStyleOutputPath) {
-      const sharedStyleContent = fs.readFileSync(path.resolve(sharedStyleOutputPath), "utf8");
+      const sharedStyleContent = fs.readFileSync(
+        path.resolve(outdir, sharedStyleOutputPath),
+        "utf8"
+      );
       const digest = createHash("sha256").update(sharedStyleContent).digest("hex");
       const sharedStyleArtifactPath = `shared-style-${digest}.css`;
       // Keep the shared URL relative to the two-segment panel source. An
@@ -2400,10 +2408,7 @@ async function buildPanel(
     // Collect assets (chunks, images, etc.)
     if (metafile) {
       for (const outputPath of Object.keys(metafile.outputs)) {
-        // esbuild metafile keys are relative to absWorkingDir (defaults to
-        // process.cwd()), NOT relative to outdir.  path.resolve uses CWD,
-        // matching esbuild's convention.
-        const absPath = path.resolve(outputPath);
+        const absPath = path.resolve(outdir, outputPath);
 
         // Skip main bundle and CSS
         const relativeName = path.relative(outdir, absPath).replace(/\\/g, "/");

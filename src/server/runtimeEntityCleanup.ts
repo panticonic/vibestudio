@@ -7,7 +7,6 @@ import type { WorkerdManager } from "./workerdManager.js";
 import type { EgressProxy } from "./services/egressProxy.js";
 import type { ApprovalQueue } from "./services/approvalQueue.js";
 import type { CredentialSessionGrantStore } from "./services/credentialSessionGrants.js";
-import type { EntityTitleService } from "./services/entityTitleService.js";
 
 export interface RuntimeEntityCleanupDeps {
   panelRuntimeCoordinator?: PanelRuntimeCoordinator | null;
@@ -16,7 +15,7 @@ export interface RuntimeEntityCleanupDeps {
   credentialSessionGrantStore: Pick<CredentialSessionGrantStore, "dropForCaller">;
   tokenManager: Pick<TokenManager, "revokeToken">;
   connectionGrants?: Pick<ConnectionGrantService, "revokeForPrincipal">;
-  entityTitleService?: Pick<EntityTitleService, "clear">;
+  clearPresentationTitle?(entityId: string): Promise<void>;
   resourceHandles?: {
     revokeReceiver(
       workspaceId: string,
@@ -62,7 +61,7 @@ export async function cleanupRuntimeEntity(
   await attempt(() => deps.getFsService()?.closeHandlesForCaller(record.id));
   await attempt(() => deps.getWebhookIngress()?.internal?.revokeForCaller?.(record.id));
   await attempt(() => deps.tokenManager.revokeToken(record.id));
-  await attempt(() => deps.entityTitleService?.clear(record.id));
+  await attempt(() => deps.clearPresentationTitle?.(record.id));
   const workerdManager = deps.getWorkerdManager();
   if (record.kind === "worker") {
     await attempt(() => workerdManager?.stopWorker(record.id));

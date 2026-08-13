@@ -14,6 +14,7 @@ const controlPairing = {
   v: 2 as const,
   ice: "all" as const,
   code: "c".repeat(32),
+  exp: 2_000_000_000_000,
 };
 const workspaceReach = {
   room: "workspace-b-2222",

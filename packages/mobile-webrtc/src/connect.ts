@@ -30,7 +30,7 @@ import {
   parseStoredMobileConnection,
   replaceMobileConnectionCredential,
   type ShellCredential,
-  type ShellPairing,
+  type FreshShellPairing,
   type StoredMobileConnection,
   type StoredShellPairing,
 } from "./storedCredential.js";
@@ -39,7 +39,7 @@ import { resumeMobileConnection } from "./resumeConnection.js";
 
 export type {
   ShellCredential,
-  ShellPairing,
+  FreshShellPairing,
   StoredMobileConnection,
   StoredPairedMobileConnection,
   StoredRoutedMobileConnection,
@@ -132,17 +132,27 @@ async function closeAfterFailure(
  * every (re)open switches to `refresh:<deviceId>:<refreshToken>`. The transport
  * re-invokes `getToken` on each session (re)open, so this is read live.
  */
-export function makeShellTokenProvider(
-  pairing: ShellPairing,
-  initialCredential: ShellCredential | null
-): ShellTokenProvider {
-  let credential = initialCredential;
+export function makeFreshShellTokenProvider(pairing: FreshShellPairing): ShellTokenProvider {
+  let credential: ShellCredential | null = null;
   return {
     getToken() {
-      if (credential) return `refresh:${credential.deviceId}:${credential.refreshToken}`;
-      return pairing.code ?? "";
+      return credential
+        ? `refresh:${credential.deviceId}:${credential.refreshToken}`
+        : pairing.code;
     },
     setCredential(next) {
+      credential = next;
+    },
+  };
+}
+
+export function makeReturningShellTokenProvider(
+  initialCredential: ShellCredential
+): ShellTokenProvider {
+  let credential: ShellCredential | null = initialCredential;
+  return {
+    getToken: () => (credential ? `refresh:${credential.deviceId}:${credential.refreshToken}` : ""),
+    setCredential: (next) => {
       credential = next;
     },
   };
@@ -243,7 +253,7 @@ function registerReconnectTriggers(transport: WebRtcTransport): () => void {
  * reconnect triggers.
  */
 export async function establishWebRtcConnection(
-  pairing: ShellPairing,
+  pairing: StoredShellPairing,
   tokenProvider: ShellTokenProvider,
   handlers: WebRtcConnectionHandlers = {}
 ): Promise<WebRtcConnection> {
@@ -326,7 +336,7 @@ export async function reconnectViaWebRtc(
     pairing = stored.workspacePairing;
   }
   const initialCredential = stored.credential;
-  const tokenProvider = makeShellTokenProvider(pairing, initialCredential);
+  const tokenProvider = makeReturningShellTokenProvider(initialCredential);
   const persistFailure: { current: Error | null } = { current: null };
   const connection = await establishWebRtcConnection(pairing, tokenProvider, {
     onPaired: async (credential) => {

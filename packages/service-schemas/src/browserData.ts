@@ -1,6 +1,6 @@
 import { z } from "zod";
 import {
-  defineServiceMethods,
+  defineReceiverServiceMethods,
   type MethodSchema,
   type ServiceMethodSchemas,
 } from "@vibestudio/shared/typedServiceClient";
@@ -117,6 +117,7 @@ const passwordRowSchema = z
     times_used: z.number().int().nonnegative(),
   })
   .strict();
+const passwordSummarySchema = passwordRowSchema.omit({ password: true }).strict();
 const formFillTypes = [
   "name",
   "given-name",
@@ -249,9 +250,6 @@ const cookieMutationRequestSchema = z
       ])
     ),
   })
-  .strict();
-const cookieSnapshotSchema = z
-  .object({ revision: z.number().int().nonnegative(), cookies: z.array(storedCookieSchema) })
   .strict();
 const searchEngineInputSchema = z
   .object({
@@ -428,7 +426,7 @@ const destroy = (args: z.ZodType<unknown[]>, returns: z.ZodType, description: st
  * download-control, cookie-projection, and export orchestration deliberately do
  * not appear here; those remain native brokerage concerns.
  */
-export const browserDataMethods = defineServiceMethods({
+export const browserDataMethods = defineReceiverServiceMethods({
   upsertDownloadRecord: write(
     z.tuple([browserDownloadRecordSchema]),
     voidResult,
@@ -492,11 +490,30 @@ export const browserDataMethods = defineServiceMethods({
     "Delete history visits in a time range."
   ),
   clearAllHistory: destroy(z.tuple([]), voidResult, "Delete all browsing history."),
-  getPasswords: read(z.tuple([]), z.array(passwordRowSchema), "Read saved passwords.", true),
+  listPasswordSummaries: read(
+    z.tuple([]),
+    z.array(passwordSummarySchema),
+    "List saved-password metadata without password material.",
+    true
+  ),
+  listPasswordSummariesPage: read(
+    z.tuple([z.number().int().nonnegative(), z.number().int().min(1).max(100)]),
+    z
+      .object({ items: z.array(passwordSummarySchema), total: z.number().int().nonnegative() })
+      .strict(),
+    "List one bounded saved-password metadata page.",
+    true
+  ),
   getPasswordForSite: read(
     z.tuple([text]),
     z.array(passwordRowSchema),
     "Read passwords matching one site.",
+    true
+  ),
+  listPasswordsPage: read(
+    z.tuple([z.number().int().nonnegative(), z.number().int().min(1).max(100)]),
+    z.object({ items: z.array(passwordRowSchema), total: z.number().int().nonnegative() }).strict(),
+    "Read one bounded decrypted-password export page.",
     true
   ),
   addPassword: write(z.tuple([passwordInputSchema]), id, "Add a saved password."),
@@ -509,12 +526,29 @@ export const browserDataMethods = defineServiceMethods({
   addNeverSave: write(z.tuple([text]), voidResult, "Add a password never-save origin."),
   isNeverSave: read(z.tuple([text]), z.boolean(), "Check a password never-save origin."),
   getNeverSaveOrigins: read(z.tuple([]), z.array(text), "List password never-save origins."),
+  getNeverSaveOriginsPage: read(
+    z.tuple([z.number().int().nonnegative(), z.number().int().min(1).max(100)]),
+    z.object({ items: z.array(text), total: z.number().int().nonnegative() }).strict(),
+    "List one bounded password never-save page."
+  ),
   removeNeverSave: destroy(z.tuple([text]), voidResult, "Remove a password never-save origin."),
   updateLastUsed: write(z.tuple([id]), voidResult, "Update password last-used metadata."),
   getFormFillSuggestions: read(
     z.tuple([formFillQuerySchema]),
     z.array(formFillRowSchema),
     "Read form-fill suggestions.",
+    true
+  ),
+  listFormFillValues: read(
+    z.tuple([]),
+    z.array(formFillRowSchema),
+    "List protected form-fill values for host-native management and explicit export.",
+    true
+  ),
+  listFormFillValuesPage: read(
+    z.tuple([z.number().int().nonnegative(), z.number().int().min(1).max(100)]),
+    z.object({ items: z.array(formFillRowSchema), total: z.number().int().nonnegative() }).strict(),
+    "List one bounded protected form-fill page.",
     true
   ),
   addFormFillValue: write(
@@ -545,17 +579,35 @@ export const browserDataMethods = defineServiceMethods({
     z.object({ revision: z.number().int().nonnegative() }).strict(),
     "Apply an exact cookie mutation batch."
   ),
-  getCookieSnapshot: read(
-    z.tuple([
-      z.object({ sinceRevision: z.number().int().nonnegative().optional() }).strict().optional(),
-    ]),
-    cookieSnapshotSchema,
-    "Read a cookie snapshot."
+  listCookieOrigins: read(
+    z.tuple([]),
+    z.object({ revision: z.number().int().nonnegative(), origins: z.array(text) }).strict(),
+    "List cookie origins without cookie values."
+  ),
+  listCookieOriginsPage: read(
+    z.tuple([z.number().int().nonnegative(), z.number().int().min(1).max(100)]),
+    z
+      .object({
+        items: z.array(text),
+        total: z.number().int().nonnegative(),
+        revision: z.number().int().nonnegative(),
+      })
+      .strict(),
+    "List one bounded cookie-origin page."
   ),
   getCookiesForOrigin: read(
     z.tuple([text]),
     z.array(storedCookieSchema),
-    "Read cookies for one origin."
+    "Read decrypted cookies for one exact origin.",
+    true
+  ),
+  listCookiesPage: read(
+    z.tuple([z.number().int().nonnegative(), z.number().int().min(1).max(100)]),
+    z
+      .object({ items: z.array(storedCookieSchema), total: z.number().int().nonnegative() })
+      .strict(),
+    "Read one bounded decrypted-cookie export page.",
+    true
   ),
   clearCookiesForOrigin: destroy(
     z.tuple([text]),
@@ -667,25 +719,32 @@ export const browserDataMethods = defineServiceMethods({
 });
 
 const BROWSER_VAULT_METHOD_NAMES = new Set([
-  "getPasswords",
+  "listPasswordSummaries",
+  "listPasswordSummariesPage",
   "getPasswordForSite",
+  "listPasswordsPage",
   "addPassword",
   "updatePassword",
   "deletePassword",
   "addNeverSave",
   "isNeverSave",
   "getNeverSaveOrigins",
+  "getNeverSaveOriginsPage",
   "removeNeverSave",
   "updateLastUsed",
   "getFormFillSuggestions",
+  "listFormFillValues",
+  "listFormFillValuesPage",
   "addFormFillValue",
   "updateFormFillValue",
   "markFormFillValueUsed",
   "deleteFormFillValue",
   "clearFormFillValues",
   "applyCookieMutations",
-  "getCookieSnapshot",
+  "listCookieOrigins",
+  "listCookieOriginsPage",
   "getCookiesForOrigin",
+  "listCookiesPage",
   "clearCookiesForOrigin",
   "clearAllCookies",
   "endBrowserSession",
@@ -697,9 +756,23 @@ const BROWSER_VAULT_METHOD_NAMES = new Set([
 
 function selectBrowserMethods(vault: boolean): ServiceMethodSchemas {
   return Object.fromEntries(
-    Object.entries(browserDataMethods).filter(
-      ([name]) => BROWSER_VAULT_METHOD_NAMES.has(name) === vault
-    )
+    Object.entries(browserDataMethods)
+      .filter(([name]) => BROWSER_VAULT_METHOD_NAMES.has(name) === vault)
+      .map(([name, method]) => [
+        name,
+        vault
+          ? {
+              ...method,
+              authority: { principals: ["host"] },
+              directEffect: {
+                kind: "host-capability" as const,
+                capability: method.capability!,
+                resource: { kind: "receiver-object" as const },
+              },
+              agentFacing: false,
+            }
+          : method,
+      ])
   );
 }
 

@@ -22,7 +22,6 @@ function createHarness(
     applyPanelExecutionActivated: vi.fn(async () => {}),
     applyPanelExecutionFailed: vi.fn(),
     applyServerPanelStateArgsUpdate: vi.fn(),
-    applyServerPanelTitleUpdate: vi.fn(),
     recoverShellSnapshot: vi.fn(async () => undefined),
     createBrowserUrlPanel: vi.fn(async () => ({ panelId: "panel:tree/browser" })),
   };
@@ -286,41 +285,6 @@ describe("createServerEventBridge", () => {
 
     expect(panelOrchestrator.recoverShellSnapshot).not.toHaveBeenCalled();
     expect(eventService.emit).toHaveBeenCalledWith("panel-tree-invalidated", snapshot);
-  });
-
-  it("applies server panel title updates without forwarding raw events", () => {
-    const { handle, eventService, panelOrchestrator } = createHarness();
-
-    handle("panel-title-updated", {
-      panelId: "panel:tree/panel-1",
-      title: "New title",
-      explicit: true,
-    });
-
-    expect(panelOrchestrator.applyServerPanelTitleUpdate).toHaveBeenCalledWith({
-      panelId: "panel:tree/panel-1",
-      title: "New title",
-      explicit: true,
-    });
-    expect(eventService.emit).not.toHaveBeenCalled();
-  });
-
-  it("accepts a durable clear-title event", async () => {
-    const { handle, panelOrchestrator, eventService } = createHarness();
-
-    handle("panel-title-updated", {
-      panelId: "panel:tree/panel-1",
-      title: null,
-      explicit: true,
-    });
-    await Promise.resolve();
-
-    expect(panelOrchestrator.applyServerPanelTitleUpdate).toHaveBeenCalledWith({
-      panelId: "panel:tree/panel-1",
-      title: null,
-      explicit: true,
-    });
-    expect(eventService.emit).not.toHaveBeenCalled();
   });
 
   it("opens OAuth browser panels through the native panel orchestrator", async () => {

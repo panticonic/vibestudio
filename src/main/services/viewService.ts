@@ -89,40 +89,36 @@ export function createViewService(
       vm.setThemeCss(css);
       return;
     },
-    syncNativePanelSlots: (ctx, [request]) => {
+    connectNativePanelAdapter: (ctx, [hello]) => {
       const vm = deps.getViewManager();
       assertNativePanelSlotHost(
         vm,
         ctx.caller.runtime.id,
         ctx.caller.runtime.kind,
-        "syncNativePanelSlots"
+        "connectNativePanelAdapter"
+      );
+      return vm.connectNativePanelAdapter(ctx.caller.runtime.id, hello);
+    },
+    applyNativePanelSurfaces: async (ctx, [snapshot]) => {
+      const vm = deps.getViewManager();
+      assertNativePanelSlotHost(
+        vm,
+        ctx.caller.runtime.id,
+        ctx.caller.runtime.kind,
+        "applyNativePanelSurfaces"
       );
       const previousPanelIds = new Set(vm.getDeclaredPanelSlotIds());
-      const result = vm.syncPanelSlots(ctx.caller.runtime.id, request);
-      const currentPanelIds = new Set(vm.getDeclaredPanelSlotIds());
-      for (const panelId of previousPanelIds) {
-        if (!currentPanelIds.has(panelId)) deps.panelOrchestrator?.onNativeSlotCleared(panelId);
-      }
-      for (const panelId of currentPanelIds) {
-        if (!previousPanelIds.has(panelId)) deps.panelOrchestrator?.onNativeSlotDeclared(panelId);
+      const result = await vm.applyNativePanelSurfaces(ctx.caller.runtime.id, snapshot);
+      if (result.accepted) {
+        const currentPanelIds = new Set(vm.getDeclaredPanelSlotIds());
+        for (const panelId of previousPanelIds) {
+          if (!currentPanelIds.has(panelId)) deps.panelOrchestrator?.onNativeSlotCleared(panelId);
+        }
+        for (const panelId of currentPanelIds) {
+          if (!previousPanelIds.has(panelId)) deps.panelOrchestrator?.onNativeSlotDeclared(panelId);
+        }
       }
       return result;
-    },
-    setHostedShellReady: (ctx, [request]) => {
-      const vm = deps.getViewManager();
-      assertNativePanelSlotHost(
-        vm,
-        ctx.caller.runtime.id,
-        ctx.caller.runtime.kind,
-        "setHostedShellReady"
-      );
-      const previousPanelIds = vm.getDeclaredPanelSlotIds();
-      vm.setHostedShellReady(ctx.caller.runtime.id, request.ready, request.rendererInstanceId);
-      const retainedPanelIds = new Set(vm.getDeclaredPanelSlotIds());
-      for (const panelId of previousPanelIds) {
-        if (!retainedPanelIds.has(panelId)) deps.panelOrchestrator?.onNativeSlotCleared(panelId);
-      }
-      return;
     },
     setShellOverlay: (ctx, [active]) => {
       const vm = deps.getViewManager();

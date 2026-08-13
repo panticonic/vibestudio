@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { setUserDataPath } from "@vibestudio/env-paths";
 
 import { buildUnit } from "./builder.js";
+import { setBuildRootConfig } from "./effectiveVersion.js";
 import { setBuildSourceProvider, workingTreeSourceProvider } from "./buildSource.js";
 beforeAll(() => setBuildSourceProvider(workingTreeSourceProvider()));
 afterAll(() => setBuildSourceProvider(null));
@@ -29,6 +30,10 @@ describe("buildUnit extension builds", () => {
   beforeEach(() => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-extension-build-"));
     workspaceRoot = path.join(root, "workspace");
+    setBuildRootConfig({
+      appRoot: path.resolve(__dirname, "../../.."),
+      workspaceRoot,
+    });
     setUserDataPath(path.join(root, "state"));
     setBuildExecutionIdentityContext({
       workspaceId: "workspace:test",
@@ -37,6 +42,7 @@ describe("buildUnit extension builds", () => {
   });
 
   afterEach(() => {
+    setBuildRootConfig(null);
     fs.rmSync(root, { recursive: true, force: true });
   });
 

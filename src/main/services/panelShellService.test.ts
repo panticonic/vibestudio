@@ -9,7 +9,10 @@ import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 const appCtx: ServiceContext = { caller: createVerifiedCaller("@workspace-apps/shell", "app") };
 const panelCtx: ServiceContext = { caller: createVerifiedCaller("panel:chat", "panel") };
 
-function createServiceHarness(appCapabilities: string[] = []) {
+function createServiceHarness(
+  appCapabilities: string[] = [],
+  browserFailure?: "summary" | "clear"
+) {
   const setCurrentTheme = vi.fn();
   const broadcastTheme = vi.fn();
   const setCurrentThemeConfig = vi.fn();
@@ -68,6 +71,23 @@ function createServiceHarness(appCapabilities: string[] = []) {
     bounds: { x: 0, y: 0, width: 100, height: 100 },
     capabilities: appCapabilities,
   }));
+  const getCookieSiteSummary = vi.fn(async (origin: string) => {
+    if (browserFailure === "summary") {
+      throw new Error("Vault path /private/browser-secret could not be read");
+    }
+    return { origin, cookieCount: 3, revision: 1 };
+  });
+  const clearData = vi.fn(async () => {
+    if (browserFailure === "clear") {
+      throw new Error("Native partition /private/session-secret could not be cleared");
+    }
+  });
+  const getWebContents = vi.fn(() => ({
+    isDestroyed: () => false,
+    getURL: () => "https://example.com/page",
+    getTitle: () => "Example",
+    session: { clearData },
+  }));
   const serverClient = {
     call: vi.fn(),
     callAs: vi.fn(),
@@ -92,8 +112,11 @@ function createServiceHarness(appCapabilities: string[] = []) {
         id: "panel-1",
         title: "Panel 1",
         children: [],
-        snapshots: [{ source: "about/new", contextId: "ctx-1", options: {} }],
-        currentIndex: 0,
+        snapshot: {
+          source: browserFailure ? "browser:https://example.com/page" : "about/new",
+          contextId: "ctx-1",
+          options: {},
+        },
         artifacts: {},
       })),
       getSerializablePanelTree: vi.fn(() => []),
@@ -104,11 +127,13 @@ function createServiceHarness(appCapabilities: string[] = []) {
     panelView: {
       markBrowserNavigationIntent,
     } as never,
+    browserVault: { getCookieSiteSummary } as never,
     getViewManager: () =>
       ({
         getViewInfo,
         reload,
         forceReload,
+        getWebContents,
       }) as never,
   });
 
@@ -135,10 +160,31 @@ function createServiceHarness(appCapabilities: string[] = []) {
     getFocusedPanelId,
     readPanelProjection,
     serverClient,
+    getCookieSiteSummary,
+    clearData,
   };
 }
 
 describe("PanelShellService", () => {
+  it("keeps native site-data diagnostics out of shell-visible errors", async () => {
+    const nativeLog = vi.spyOn(console, "error").mockImplementation(() => {});
+    const summary = createServiceHarness(["panel-hosting"], "summary");
+    await expect(
+      summary.service.handler(appCtx, "getBrowserPageIdentity", ["panel-1"])
+    ).rejects.toThrow("Site data summary is unavailable");
+
+    const clear = createServiceHarness(["panel-hosting"], "clear");
+    await expect(
+      clear.service.handler(appCtx, "clearNativeBrowserSiteData", [
+        "panel-1",
+        "https://example.com",
+      ])
+    ).rejects.toThrow("Site data could not be cleared");
+
+    expect(nativeLog).toHaveBeenCalledTimes(2);
+    nativeLog.mockRestore();
+  });
+
   it("keeps passive materialization and focus persistence separate from navigation", async () => {
     const harness = createServiceHarness(["panel-hosting"]);
 

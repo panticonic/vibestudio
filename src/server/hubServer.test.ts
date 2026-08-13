@@ -810,6 +810,7 @@ describe("hub RPC pairing surfacing (§5)", () => {
         fp: "AA".repeat(32),
         sig: "wss://signal.example/",
         code: "R".repeat(32),
+        exp: 2_000_000_000_000,
         v: 2 as const,
         ice: "all" as const,
       };

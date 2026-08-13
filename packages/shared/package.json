@@ -24,6 +24,7 @@
     "./authority/*": "./src/authority/*.ts",
     "./bootstrapApprovals": "./src/bootstrapApprovals.ts",
     "./bootstrapLaunchGate": "./src/bootstrapLaunchGate.ts",
+    "./browserDataProviderAuthority": "./src/browserDataProviderAuthority.ts",
     "./buildProvider": "./src/buildProvider.ts",
     "./canonicalKey": "./src/canonicalKey.ts",
     "./canonicalJson": "./src/canonicalJson.ts",

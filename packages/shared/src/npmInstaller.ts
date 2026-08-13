@@ -38,21 +38,22 @@ function createRequireFromRoot(root: string): NodeRequire {
   return createRequire(pathToFileURL(requireBase).href);
 }
 
-export function resolveBundledNpmCliPath(appRoot = process.env["VIBESTUDIO_APP_ROOT"]): string {
-  const roots = [appRoot, process.cwd()].filter((p): p is string => !!p);
-  for (const root of roots) {
-    try {
-      const requireFromRoot = createRequireFromRoot(root);
-      const npmPackageJson = requireFromRoot.resolve("npm/package.json");
-      const npmCli = path.join(path.dirname(npmPackageJson), "bin", "npm-cli.js");
-      if (fs.existsSync(npmCli)) return npmCli;
-    } catch {
-      // Try next root.
-    }
+export function resolveBundledNpmCliPath(appRoot: string | undefined): string {
+  if (!appRoot) {
+    throw new Error("Bundled npm CLI resolution requires the exact Vibestudio application root");
+  }
+
+  try {
+    const requireFromRoot = createRequireFromRoot(appRoot);
+    const npmPackageJson = requireFromRoot.resolve("npm/package.json");
+    const npmCli = path.join(path.dirname(npmPackageJson), "bin", "npm-cli.js");
+    if (fs.existsSync(npmCli)) return npmCli;
+  } catch {
+    // Report the stable application-dependency contract below.
   }
 
   throw new Error(
-    "Bundled npm CLI not found. Ensure the app declares npm as a runtime dependency."
+    `Bundled npm CLI not found under application root ${appRoot}. Ensure the app declares npm as a runtime dependency.`
   );
 }
 
@@ -67,7 +68,7 @@ export async function runNpmInstall(
   const timeout = options.timeout ?? DEFAULT_NPM_INSTALL_TIMEOUT_MS;
   const ignoreScripts = options.ignoreScripts ?? true;
   const cacheDir = options.cacheDir ?? path.join(getSharedDerivedDataPath(), "npm-cache");
-  const npmCli = resolveBundledNpmCliPath();
+  const npmCli = resolveBundledNpmCliPath(process.env["VIBESTUDIO_APP_ROOT"]);
 
   const discardPartialInstall = (): void => {
     // npm may leave a structurally plausible but only partly extracted tree

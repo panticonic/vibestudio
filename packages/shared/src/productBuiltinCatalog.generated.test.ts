@@ -19,7 +19,7 @@ describe("generated product builtin catalog", () => {
   });
 
   it("derives direct authority from the typed catalog", () => {
-    expect(productBuiltinMethodCapability(source, "BrowserVaultDO", "getPasswords")).toBe(
+    expect(productBuiltinMethodCapability(source, "BrowserVaultDO", "listPasswordSummaries")).toBe(
       "browser-data.read"
     );
     expect(productBuiltinMethodCapability(source, "WorkspaceDO", "entityListExecutionRoots")).toBe(
@@ -31,12 +31,12 @@ describe("generated product builtin catalog", () => {
     expect(productBuiltinMethodCapability(source, "WebhookStoreDO", "create")).toBe(
       "webhooks.manage"
     );
-    expect(productBuiltinMethodPolicy(source, "BrowserVaultDO", "getPasswords")).toEqual({
+    expect(productBuiltinMethodPolicy(source, "BrowserVaultDO", "listPasswordSummaries")).toEqual({
       capability: "browser-data.read",
       tier: "gated",
       session: "family",
       sensitivity: "read",
-      principals: ["host", "user", "code"],
+      principals: ["host"],
       presentation: null,
       effect: {
         kind: "host-capability",

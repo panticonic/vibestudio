@@ -5,6 +5,7 @@ import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
 import {
   developmentExecutionSnapshotSchema,
   developmentClientExecutorSchema,
+  developmentPairSelectionSchema,
   developmentRecipeSchema,
   developmentRunSchema,
   developmentSessionSchema,
@@ -15,6 +16,46 @@ import { vcsImportSnapshotResultSchema, vcsStateNodeRefSchema } from "./vcs.js";
 
 const nonEmpty = z.string().min(1);
 const sha256 = z.string().regex(/^[0-9a-f]{64}$/u);
+const templateExchangePathSchema = z
+  .object({
+    path: nonEmpty,
+    status: z.enum(["equal", "update", "delete", "target-changed", "conflict"]),
+    baseline: sha256.nullable(),
+    source: sha256.nullable(),
+    target: sha256.nullable(),
+  })
+  .strict();
+const templateExchangePlanSchema = z
+  .object({
+    format: z.literal("vibestudio-template-exchange-plan/1"),
+    direction: z.enum(["export", "import"]),
+    workspace: nonEmpty,
+    checkout: nonEmpty,
+    source: nonEmpty,
+    target: nonEmpty,
+    manifestDigest: sha256,
+    baselineDigest: sha256.nullable(),
+    projection: z.array(nonEmpty),
+    paths: z.array(templateExchangePathSchema),
+    conflicts: z.array(nonEmpty),
+    untouched: z.array(nonEmpty),
+    operationId: sha256,
+  })
+  .strict();
+const templateExchangeReceiptSchema = z
+  .object({
+    format: z.literal("vibestudio-template-exchange-receipt/1"),
+    operationId: sha256,
+    direction: z.enum(["export", "import"]),
+    manifestDigest: sha256,
+    baselineBefore: sha256.nullable(),
+    baselineAfter: sha256,
+    written: z.array(z.object({ path: nonEmpty, digest: sha256, mode: z.number().int() }).strict()),
+    deleted: z.array(nonEmpty),
+    preserved: z.array(nonEmpty),
+    completedAt: nonEmpty,
+  })
+  .strict();
 const nativePrincipals: ServiceAuthorityPolicy = { principals: ["host", "code"] };
 const nativeExecuteAuthority = {
   requirement: requirementForPrincipals(["host", "code"], "development.native.execute"),
@@ -36,6 +77,15 @@ const nativeBuildExecuteAuthority = {
     index: 0,
     path: ["run", "runId"] as const,
     prefix: "development-build:",
+  },
+};
+const templateExchangeAuthority = {
+  ...nativeExecuteAuthority,
+  resource: {
+    kind: "argument" as const,
+    index: 0,
+    path: ["checkout"] as const,
+    prefix: "template-checkout:",
   },
 };
 
@@ -393,6 +443,7 @@ export const developmentNativeMethods = defineServiceMethods({
           session: developmentSessionSchema,
           runId: nonEmpty,
           recipe: developmentRecipeSchema,
+          pair: developmentPairSelectionSchema,
           target: developmentTargetSchema,
         })
         .strict(),
@@ -400,6 +451,81 @@ export const developmentNativeMethods = defineServiceMethods({
     returns: preparedNativeBuildSchema,
     authority: nativePrincipals,
     access: { sensitivity: "read" },
+  },
+  prepareTemplateExchange: {
+    description: "Plan one explicit three-way exchange with a selected sibling Git checkout.",
+    capability: "development.native.execute",
+    presentation: {
+      title: "Inspect a template checkout exchange",
+      action: "inspect a template checkout exchange",
+      description:
+        "Allows {requesterKind} to read one selected Git checkout and compare it with an exact semantic template repository.",
+      group: "runtime",
+      authorityCategory: { domain: "automation", verb: "act" },
+    },
+    tier: {
+      tier: "gated",
+      session: "codeOnly",
+      residency: "native-effect",
+      family: "development-native.template-exchange",
+      rationale:
+        "Reads only the explicitly selected sibling checkout and an exact semantic snapshot",
+    },
+    args: z.tuple([
+      z
+        .object({
+          direction: z.enum(["export", "import"]),
+          checkout: nonEmpty,
+          contextId: nonEmpty,
+          repositoryId: nonEmpty,
+          expectedWorkingHead: vcsStateNodeRefSchema,
+          idempotencyKey: nonEmpty,
+        })
+        .strict(),
+    ]),
+    returns: z.object({ intentDigest: sha256, plan: templateExchangePlanSchema }).strict(),
+    authority: templateExchangeAuthority,
+    access: { sensitivity: "read" },
+  },
+  applyTemplateExchange: {
+    description: "Apply one previously reviewed exact template checkout exchange.",
+    capability: "development.native.execute",
+    presentation: {
+      title: "Apply a template checkout exchange",
+      action: "apply a template checkout exchange",
+      description:
+        "Allows {requesterKind} to write the reviewed projection to a selected checkout or import it into one semantic context.",
+      group: "runtime",
+      authorityCategory: { domain: "automation", verb: "act" },
+    },
+    tier: {
+      tier: "gated",
+      session: "codeOnly",
+      residency: "native-effect",
+      family: "development-native.template-exchange",
+      rationale: "Applies only a prior exact plan and returns external and semantic receipts",
+    },
+    args: z.tuple([
+      z.object({ operationId: sha256, intentDigest: sha256, checkout: nonEmpty }).strict(),
+    ]),
+    returns: z.discriminatedUnion("direction", [
+      z
+        .object({
+          direction: z.literal("export"),
+          exchange: templateExchangeReceiptSchema,
+          imported: z.null(),
+        })
+        .strict(),
+      z
+        .object({
+          direction: z.literal("import"),
+          exchange: templateExchangeReceiptSchema,
+          imported: vcsImportSnapshotResultSchema,
+        })
+        .strict(),
+    ]),
+    authority: templateExchangeAuthority,
+    access: { sensitivity: "write" },
   },
   beginBuild: {
     description: "Begin execution of one exact prepared native build handle.",

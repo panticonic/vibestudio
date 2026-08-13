@@ -7,6 +7,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import { setUserDataPath } from "@vibestudio/env-paths";
 
 import { buildUnit, initBuilder } from "./builder.js";
+import { setBuildRootConfig } from "./effectiveVersion.js";
 import { setBuildSourceProvider, workingTreeSourceProvider } from "./buildSource.js";
 import { setBuildExecutionIdentityContext } from "./buildStore.js";
 beforeAll(() => {
@@ -34,6 +35,10 @@ describe("buildUnit app builds", () => {
   beforeEach(() => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-app-build-"));
     workspaceRoot = path.join(root, "workspace");
+    setBuildRootConfig({
+      appRoot: path.resolve(__dirname, "../../.."),
+      workspaceRoot,
+    });
     setUserDataPath(path.join(root, "state"));
     setBuildExecutionIdentityContext({
       workspaceId: "workspace:test",
@@ -43,6 +48,7 @@ describe("buildUnit app builds", () => {
   });
 
   afterEach(() => {
+    setBuildRootConfig(null);
     clearBuildProvidersForTests();
     fs.rmSync(root, { recursive: true, force: true });
   });

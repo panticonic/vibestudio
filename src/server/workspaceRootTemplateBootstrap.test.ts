@@ -87,6 +87,17 @@ function fixture(rootSnapshot: ExactGitSnapshot) {
 }
 
 describe("WorkspaceRootTemplateBootstrap", () => {
+  it("rejects a descriptorless workspace before userland startup", async () => {
+    const rootSnapshot = snapshot([]);
+    const fx = fixture(rootSnapshot);
+    fs.rmSync(path.join(fx.statePath, "workspace-creation/v1.json"));
+
+    await expect(fx.bootstrap.prepareSource()).rejects.toThrow(
+      /missing its current creation descriptor/
+    );
+    expect(fx.acquire).not.toHaveBeenCalled();
+  });
+
   it("acquires the pin and creates complete installed lineage before initialization", async () => {
     const runtime = canonicalTemplateYaml({
       systemEpoch: WORKSPACE_SYSTEM_EPOCH,
@@ -105,6 +116,13 @@ describe("WorkspaceRootTemplateBootstrap", () => {
             name: "Base",
             repositories: ["extensions/template-composer"],
             files: ["README.md"],
+          },
+          templates: {
+            use: [],
+            registry: {
+              url: "git+https://github.com/panticonic/vibestudio-template-registry.git",
+              ref: "refs/heads/main",
+            },
           },
           extensions: [{ source: "extensions/template-composer" }],
         }),
@@ -125,6 +143,9 @@ describe("WorkspaceRootTemplateBootstrap", () => {
     expect(fx.acquire).toHaveBeenCalledExactlyOnceWith(fx.pin);
     expect(fs.existsSync(path.join(fx.sourcePath, "meta/templates.state.yml"))).toBe(true);
     expect(fs.existsSync(path.join(fx.sourcePath, "meta/templates/workspace.yml"))).toBe(true);
+    expect(
+      fs.readFileSync(path.join(fx.sourcePath, "meta/templates/workspace.yml"), "utf8")
+    ).toContain("vibestudio-template-registry.git");
   });
 
   it("rejects container-root files instead of inventing an owner", () => {

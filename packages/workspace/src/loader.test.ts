@@ -48,6 +48,17 @@ function writeBaseRelease(appRoot: string): void {
   );
 }
 
+const exactRoot = {
+  url: "git+https://example.test/base.git",
+  ref: "refs/tags/v1",
+  commit: "a".repeat(40),
+  snapshot: `v1-sha256:${"b".repeat(64)}` as const,
+};
+
+function exactCreation(workspaceId: string) {
+  return { rootTemplate: exactRoot, workspaceId };
+}
+
 afterEach(() => {
   if (originalXdgConfigHome === undefined) {
     delete process.env["XDG_CONFIG_HOME"];
@@ -335,244 +346,6 @@ describe("initWorkspace", () => {
     expect(fs.readdirSync(path.join(workspaceDir, "source/panels"))).toEqual([]);
   });
 
-  (process.platform === "linux" ? it : it.skip)(
-    "copies canonical app units from the workspace template",
-    () => {
-      const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-loader-"));
-      tempRoots.push(root);
-      process.env["XDG_CONFIG_HOME"] = path.join(root, "xdg");
-      const templateRoot = path.join(root, "workspace-template");
-      writeConfig(
-        templateRoot,
-        [
-          "extensions:",
-          "  - source: extensions/react-native",
-          "apps:",
-          "  - source: apps/shell",
-          "  - source: apps/mobile",
-          "initPanels: []",
-          "",
-        ].join("\n")
-      );
-      fs.mkdirSync(path.join(templateRoot, "apps", "shell"), { recursive: true });
-      fs.writeFileSync(
-        path.join(templateRoot, "apps", "shell", "package.json"),
-        JSON.stringify({
-          name: "@workspace-apps/shell",
-          version: "0.1.0",
-          vibestudio: {
-            app: {
-              target: "electron",
-              renderer: "index.tsx",
-              capabilities: ["panel-hosting", "incoming-pair-links"],
-            },
-          },
-        })
-      );
-      fs.writeFileSync(
-        path.join(templateRoot, "apps", "shell", "index.tsx"),
-        "export const templateShell = true;\n"
-      );
-      fs.mkdirSync(path.join(templateRoot, "apps", "mobile"), { recursive: true });
-      fs.writeFileSync(
-        path.join(templateRoot, "apps", "mobile", "package.json"),
-        JSON.stringify({
-          name: "@workspace-apps/mobile",
-          version: "0.1.0",
-          vibestudio: {
-            app: {
-              target: "react-native",
-              renderer: "App.tsx",
-              rnComponentName: "Vibestudio",
-              rnHostAbi: "rn-host-2",
-              capabilities: ["notifications", "camera", "keychain", "clipboard", "open-external"],
-            },
-          },
-        })
-      );
-      fs.writeFileSync(
-        path.join(templateRoot, "apps", "mobile", "App.tsx"),
-        "export const templateMobile = true;\n"
-      );
-      fs.mkdirSync(path.join(templateRoot, "extensions", "react-native"), { recursive: true });
-      fs.writeFileSync(
-        path.join(templateRoot, "extensions", "react-native", "package.json"),
-        JSON.stringify({
-          name: "@workspace-extensions/react-native",
-          version: "0.1.0",
-          vibestudio: {
-            extension: {
-              activationEvents: ["*"],
-              streamingMethods: ["buildArtifact"],
-              contributes: { buildTargets: ["react-native"] },
-            },
-          },
-        })
-      );
-      fs.writeFileSync(
-        path.join(templateRoot, "extensions", "react-native", "index.ts"),
-        "export const templateProvider = true;\n"
-      );
-      fs.writeFileSync(
-        path.join(templateRoot, "extensions", "react-native", "tsconfig.tsbuildinfo"),
-        "generated compiler cache\n"
-      );
-
-      initWorkspace("fresh-app-ws", { templateDir: templateRoot });
-
-      const sourceRoot = path.join(
-        process.env["XDG_CONFIG_HOME"],
-        "vibestudio",
-        "workspaces",
-        "fresh-app-ws",
-        "source"
-      );
-      const config = loadWorkspaceConfig(sourceRoot);
-
-      expect(resolveDeclaredApps(config)).toEqual([
-        { source: "apps/shell", ref: "main" },
-        {
-          source: "apps/mobile",
-          ref: "main",
-        },
-      ]);
-      expect(resolveDeclaredExtensions(config)).toEqual([
-        { source: "extensions/react-native", ref: "main" },
-      ]);
-      expect(fs.existsSync(path.join(sourceRoot, "apps", "shell", ".git"))).toBe(false);
-      expect(fs.existsSync(path.join(sourceRoot, "apps", "mobile", ".git"))).toBe(false);
-      expect(fs.existsSync(path.join(sourceRoot, "extensions", "react-native", ".git"))).toBe(
-        false
-      );
-      expect(
-        fs.existsSync(path.join(sourceRoot, "extensions", "react-native", "tsconfig.tsbuildinfo"))
-      ).toBe(false);
-      expect(
-        JSON.parse(fs.readFileSync(path.join(sourceRoot, "apps", "shell", "package.json"), "utf-8"))
-      ).toMatchObject({
-        name: "@workspace-apps/shell",
-        vibestudio: {
-          app: {
-            target: "electron",
-            renderer: "index.tsx",
-            capabilities: expect.arrayContaining(["panel-hosting", "incoming-pair-links"]),
-          },
-        },
-      });
-      expect(
-        JSON.parse(
-          fs.readFileSync(path.join(sourceRoot, "apps", "mobile", "package.json"), "utf-8")
-        )
-      ).toMatchObject({
-        name: "@workspace-apps/mobile",
-        vibestudio: {
-          app: {
-            target: "react-native",
-            renderer: "App.tsx",
-            rnComponentName: "Vibestudio",
-            rnHostAbi: "rn-host-2",
-            capabilities: expect.arrayContaining([
-              "notifications",
-              "camera",
-              "keychain",
-              "clipboard",
-              "open-external",
-            ]),
-          },
-        },
-      });
-      expect(
-        fs.readFileSync(path.join(sourceRoot, "apps", "shell", "index.tsx"), "utf-8")
-      ).toContain("templateShell");
-      expect(
-        fs.readFileSync(path.join(sourceRoot, "apps", "mobile", "App.tsx"), "utf-8")
-      ).toContain("templateMobile");
-      expect(
-        JSON.parse(
-          fs.readFileSync(
-            path.join(sourceRoot, "extensions", "react-native", "package.json"),
-            "utf-8"
-          )
-        )
-      ).toMatchObject({
-        name: "@workspace-extensions/react-native",
-        vibestudio: {
-          extension: {
-            streamingMethods: ["buildArtifact"],
-            contributes: { buildTargets: ["react-native"] },
-          },
-        },
-      });
-      const providerSource = fs.readFileSync(
-        path.join(sourceRoot, "extensions", "react-native", "index.ts"),
-        "utf-8"
-      );
-      expect(providerSource).toContain("templateProvider");
-    }
-  );
-
-  (process.platform === "linux" ? it : it.skip)("requires a template or fork", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-loader-"));
-    tempRoots.push(root);
-    process.env["XDG_CONFIG_HOME"] = path.join(root, "xdg");
-
-    expect(() => initWorkspace("missing-template")).toThrow(/requires a templateDir or forkFrom/);
-  });
-
-  it("publishes only a fully validated workspace and removes its staging directory on failure", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-loader-"));
-    tempRoots.push(root);
-    process.env["XDG_CONFIG_HOME"] = path.join(root, "xdg");
-    const templateRoot = path.join(root, "invalid-template");
-    writeConfig(templateRoot, "initPanels: [\n");
-
-    expect(() => initWorkspace("invalid-workspace", { templateDir: templateRoot })).toThrow();
-
-    const workspacesDir = path.join(process.env["XDG_CONFIG_HOME"], "vibestudio", "workspaces");
-    expect(fs.existsSync(path.join(workspacesDir, "invalid-workspace"))).toBe(false);
-    expect(fs.readdirSync(workspacesDir)).toEqual([]);
-  });
-
-  it("rejects a template that changes during copying instead of publishing mixed source", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-loader-"));
-    tempRoots.push(root);
-    process.env["XDG_CONFIG_HOME"] = path.join(root, "xdg");
-    const templateRoot = path.join(root, "workspace-template");
-    writeConfig(templateRoot, "workers:\n  - workers/example\n");
-    fs.mkdirSync(path.join(templateRoot, "workers", "example"), { recursive: true });
-    fs.writeFileSync(path.join(templateRoot, "workers", "example", "package.json"), "{}");
-    fs.writeFileSync(
-      path.join(templateRoot, "workers", "example", "index.ts"),
-      "export const generation = 1;\n"
-    );
-
-    const originalCopyFile = fs.copyFileSync;
-    let mutated = false;
-    const copyFile = vi.spyOn(fs, "copyFileSync").mockImplementation((source, destination, mode) => {
-      originalCopyFile(source, destination, mode);
-      if (!mutated && String(source).endsWith(path.join("meta", "vibestudio.yml"))) {
-        mutated = true;
-        fs.writeFileSync(
-          path.join(templateRoot, "workers", "example", "index.ts"),
-          "export const generation = 2;\n"
-        );
-      }
-    });
-
-    try {
-      expect(() => initWorkspace("changing-template", { templateDir: templateRoot })).toThrow(
-        /changed while the managed workspace was being initialized.*mixed-generation/u
-      );
-    } finally {
-      copyFile.mockRestore();
-    }
-
-    const workspacesDir = path.join(process.env["XDG_CONFIG_HOME"], "vibestudio", "workspaces");
-    expect(mutated).toBe(true);
-    expect(fs.existsSync(path.join(workspacesDir, "changing-template"))).toBe(false);
-    expect(fs.readdirSync(workspacesDir)).toEqual([]);
-  });
-
   it("removes staging state when the atomic publish rename fails", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-loader-"));
     tempRoots.push(root);
@@ -584,7 +357,7 @@ describe("initWorkspace", () => {
     });
 
     try {
-      expect(() => initWorkspace("rename-failure", { templateDir: templateRoot })).toThrow(
+      expect(() => initWorkspace("rename-failure", exactCreation("ws_rename_failure"))).toThrow(
         /injected rename failure/
       );
     } finally {
@@ -631,7 +404,7 @@ describe("initWorkspace", () => {
 
     expect(() =>
       createAndRegisterWorkspace("registration-failure", centralData, {
-        templateDir: templateRoot,
+        rootTemplate: exactRoot,
       })
     ).toThrow(/injected registry failure/);
 
@@ -645,7 +418,7 @@ describe("initWorkspace", () => {
     process.env["XDG_CONFIG_HOME"] = path.join(root, "xdg");
     const templateRoot = path.join(root, "template");
     writeConfig(templateRoot, "initPanels: []\n");
-    initWorkspace("delete-failure", { templateDir: templateRoot });
+    initWorkspace("delete-failure", exactCreation("ws_delete_failure"));
     const workspaceDir = path.join(
       process.env["XDG_CONFIG_HOME"],
       "vibestudio",
@@ -681,7 +454,7 @@ describe("initWorkspace", () => {
     process.env["XDG_CONFIG_HOME"] = path.join(root, "xdg");
     const templateRoot = path.join(root, "template");
     writeConfig(templateRoot, "initPanels: []\n");
-    initWorkspace("delete-rename-failure", { templateDir: templateRoot });
+    initWorkspace("delete-rename-failure", exactCreation("ws_delete_rename_failure"));
     const workspaceDir = path.join(
       process.env["XDG_CONFIG_HOME"],
       "vibestudio",
@@ -726,7 +499,7 @@ describe("initWorkspace", () => {
     writeConfig(templateRoot, "initPanels: []\n");
     const centralData = new CentralDataManager({ databasePath: path.join(root, "identity.db") });
     const workspace = createAndRegisterWorkspace("cleanup-retry", centralData, {
-      templateDir: templateRoot,
+      rootTemplate: exactRoot,
     });
     const workspacesDir = path.join(process.env["XDG_CONFIG_HOME"], "vibestudio", "workspaces");
     const originalRmSync = fs.rmSync.bind(fs);
@@ -768,7 +541,7 @@ describe("initWorkspace", () => {
     process.env["XDG_CONFIG_HOME"] = path.join(root, "xdg");
     const templateRoot = path.join(root, "template");
     writeConfig(templateRoot, "initPanels: []\n");
-    initWorkspace("dev-deadbeef", { templateDir: templateRoot });
+    initWorkspace("dev-deadbeef", exactCreation("ws_dev_deadbeef"));
     const workspaceDir = path.join(
       process.env["XDG_CONFIG_HOME"],
       "vibestudio",
@@ -808,7 +581,7 @@ describe("initWorkspace", () => {
     process.env["XDG_CONFIG_HOME"] = path.join(root, "xdg");
     const templateRoot = path.join(root, "template");
     writeConfig(templateRoot, "initPanels: []\n");
-    initWorkspace("dev-deadbeef", { templateDir: templateRoot });
+    initWorkspace("dev-deadbeef", exactCreation("ws_dev_deadbeef"));
     const workspaceDir = path.join(
       process.env["XDG_CONFIG_HOME"],
       "vibestudio",
@@ -844,7 +617,7 @@ describe("initWorkspace", () => {
     const databasePath = path.join(root, "identity.db");
     const centralData = new CentralDataManager({ databasePath });
     const entry = createAndRegisterWorkspace("full-lifecycle", centralData, {
-      templateDir: templateRoot,
+      rootTemplate: exactRoot,
     });
     const db = new DatabaseSync(databasePath);
     db.prepare(

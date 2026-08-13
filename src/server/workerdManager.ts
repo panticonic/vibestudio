@@ -47,6 +47,7 @@ import { assertPresent } from "../lintHelpers";
 import { RuntimeImageStore, type RuntimeImageRecord } from "./runtimeImageStore.js";
 import { canonicalJson } from "@vibestudio/shared/canonicalJson";
 import type { WorkerdProgramSources } from "./workerdProgramLoader.js";
+import { resolveRequiredAppRoot } from "./appRoot.js";
 import {
   destroyWorkerdConnections,
   getWorkerdConnectionDispatcher,
@@ -150,11 +151,7 @@ function scopeTracksProtectedMain(scopeRef: string | undefined): boolean {
 // utility process). build.mjs injects __filename into the ESM bundle, while
 // CJS provides it natively. Avoid spelling import.meta here: esbuild warns
 // whenever import.meta appears in CJS output, even behind typeof guards.
-const requireFromUrl: string =
-  typeof __filename !== "undefined" && __filename
-    ? pathToFileURL(__filename).href
-    : pathToFileURL(process.cwd() + "/").href;
-const moduleDir: string = typeof __dirname !== "undefined" && __dirname ? __dirname : process.cwd();
+const requireFromUrl = pathToFileURL(path.join(resolveRequiredAppRoot(), "package.json")).href;
 
 const require = createRequire(requireFromUrl);
 
@@ -626,30 +623,9 @@ export class WorkerdManager {
       .prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'do_maintenance'`)
       .get() as { sql?: string } | undefined;
     if (!maintenanceSchema?.sql?.includes("'destroy'")) {
-      this.doMaintenanceDb.exec(`
-        BEGIN IMMEDIATE;
-        DROP INDEX IF EXISTS do_maintenance_one_open_target;
-        ALTER TABLE do_maintenance RENAME TO do_maintenance_v1;
-        CREATE TABLE do_maintenance (
-          operation_id TEXT PRIMARY KEY,
-          kind TEXT NOT NULL CHECK (kind IN ('reset', 'restore', 'destroy')),
-          target_id TEXT NOT NULL,
-          source TEXT NOT NULL,
-          class_name TEXT NOT NULL,
-          object_key TEXT NOT NULL,
-          intent TEXT NOT NULL,
-          backup_operation_id TEXT,
-          step TEXT NOT NULL,
-          status TEXT NOT NULL CHECK (status IN ('open', 'complete')),
-          created_at INTEGER NOT NULL,
-          updated_at INTEGER NOT NULL
-        );
-        INSERT INTO do_maintenance SELECT * FROM do_maintenance_v1;
-        DROP TABLE do_maintenance_v1;
-        CREATE UNIQUE INDEX do_maintenance_one_open_target
-          ON do_maintenance(target_id) WHERE status = 'open';
-        COMMIT;
-      `);
+      throw new Error(
+        "Durable Object maintenance state is not from the current system epoch; recreate this pre-release instance"
+      );
     }
     this.doSchemaDescriptorDb = new DatabaseSync(layout.durableObjectSchemaDescriptorsDb);
     this.doSchemaDescriptorDb.exec(`
@@ -894,109 +870,9 @@ export class WorkerdManager {
     // Avoid the `node_modules/.bin/workerd` shim: it shells out to the real
     // binary with execFileSync(), which leaves the actual child process outside
     // our process tree and breaks restart/shutdown determinism.
-    const candidates = [
-      path.join(
-        process.cwd(),
-        "node_modules",
-        "@cloudflare",
-        "workerd-linux-64",
-        "bin",
-        `workerd${maybeExeExtension}`
-      ),
-      path.join(
-        process.cwd(),
-        "node_modules",
-        "@cloudflare",
-        "workerd-linux-arm64",
-        "bin",
-        `workerd${maybeExeExtension}`
-      ),
-      path.join(
-        process.cwd(),
-        "node_modules",
-        "@cloudflare",
-        "workerd-darwin-64",
-        "bin",
-        `workerd${maybeExeExtension}`
-      ),
-      path.join(
-        process.cwd(),
-        "node_modules",
-        "@cloudflare",
-        "workerd-darwin-arm64",
-        "bin",
-        `workerd${maybeExeExtension}`
-      ),
-      path.join(
-        process.cwd(),
-        "node_modules",
-        "@cloudflare",
-        "workerd-windows-64",
-        "bin",
-        `workerd${maybeExeExtension}`
-      ),
-      path.join(
-        moduleDir,
-        "..",
-        "..",
-        "node_modules",
-        "@cloudflare",
-        "workerd-linux-64",
-        "bin",
-        `workerd${maybeExeExtension}`
-      ),
-      path.join(
-        moduleDir,
-        "..",
-        "..",
-        "node_modules",
-        "@cloudflare",
-        "workerd-linux-arm64",
-        "bin",
-        `workerd${maybeExeExtension}`
-      ),
-      path.join(
-        moduleDir,
-        "..",
-        "..",
-        "node_modules",
-        "@cloudflare",
-        "workerd-darwin-64",
-        "bin",
-        `workerd${maybeExeExtension}`
-      ),
-      path.join(
-        moduleDir,
-        "..",
-        "..",
-        "node_modules",
-        "@cloudflare",
-        "workerd-darwin-arm64",
-        "bin",
-        `workerd${maybeExeExtension}`
-      ),
-      path.join(
-        moduleDir,
-        "..",
-        "..",
-        "node_modules",
-        "@cloudflare",
-        "workerd-windows-64",
-        "bin",
-        `workerd${maybeExeExtension}`
-      ),
-    ];
-
-    for (const candidate of candidates) {
-      if (fs.existsSync(candidate)) {
-        this.workerdBinary = candidate;
-        return candidate;
-      }
-    }
-
-    // Fall back to PATH
-    this.workerdBinary = "workerd";
-    return "workerd";
+    throw new Error(
+      `The exact host dependency graph has no workerd binary for ${platformKey}; refusing PATH or cwd fallback resolution`
+    );
   }
 
   // =========================================================================
@@ -2213,8 +2089,7 @@ export class WorkerdManager {
       }
 
       // Manifest-declared provider bindings for this internal DO class
-      // (meta/vibestudio.yml `providers.*` → e.g. EVAL_ENGINE_SOURCE for EvalDO,
-      // BROWSER_DATA_BROKER_SOURCE for BrowserVaultDO). Injected here so internal
+      // (meta/vibestudio.yml `providers.*` → e.g. EVAL_ENGINE_SOURCE for EvalDO). Injected here so internal
       // DOs consume workspace unit identities only through the manifest.
       const internalEnv = this.requireWorkspaceProvider(
         `internal Durable Object environment for ${className}`

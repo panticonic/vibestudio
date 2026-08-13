@@ -33,17 +33,26 @@ function makeViewManager(capabilities: string[] = [], opts: { id?: string; sourc
           }
         : null
     ),
-    setHostedShellReady: vi.fn(),
-    syncPanelSlots: vi.fn(
-      (
-        _: string,
-        request: { revision: number; slots: unknown[] }
-      ): {
-        revision: number;
-        slots: Record<string, { status: "bound" }>;
-      } => ({
-        revision: request.revision,
-        slots: { "panel-stack:primary": { status: "bound" } },
+    connectNativePanelAdapter: vi.fn(() => ({
+      accepted: true,
+      handshake: {
+        protocolVersion: 1,
+        hostGeneration: "host-1",
+        shellGeneration: "shell-1",
+        sealedLaunchIdentity: appId,
+      },
+    })),
+    applyNativePanelSurfaces: vi.fn<(...args: unknown[]) => Promise<unknown>>(() =>
+      Promise.resolve({
+        accepted: true,
+        observation: {
+          protocolVersion: 1,
+          hostGeneration: "host-1",
+          shellGeneration: "shell-1",
+          desiredRevision: 1,
+          observationRevision: 1,
+          surfaces: [],
+        },
       })
     ),
     getPanelIdForNativeSlot: vi.fn(() => "panel-1"),
@@ -73,14 +82,15 @@ describe("view service", () => {
     const vm = makeViewManager(["panel-hosting"]);
     const service = createViewService({ getViewManager: () => vm as never });
     const request = {
-      rendererInstanceId: "renderer-test",
+      protocolVersion: 1 as const,
+      hostGeneration: "host-1",
+      shellGeneration: "shell-1",
       revision: 1,
-      slots: [
+      surfaces: [
         {
-          nativeSlotId: "panel-stack:primary",
-          bindingId: "binding-test",
-          bindingSequence: 1,
-          panelId: "panel-1",
+          surfaceId: "panel-stack:primary",
+          materialization: { runtimeEntityId: "panel-1", leaseConnectionId: "binding-test" },
+          visible: true,
           bounds: { x: 10, y: 20, width: 300, height: 200 },
           focused: true,
         },
@@ -90,15 +100,12 @@ describe("view service", () => {
     await expect(
       service.handler(
         { caller: createVerifiedCaller("@workspace-apps/shell", "app") },
-        "syncNativePanelSlots",
+        "applyNativePanelSurfaces",
         [request]
       )
-    ).resolves.toEqual({
-      revision: 1,
-      slots: { "panel-stack:primary": { status: "bound" } },
-    });
+    ).resolves.toMatchObject({ accepted: true });
 
-    expect(vm.syncPanelSlots).toHaveBeenCalledWith("@workspace-apps/shell", request);
+    expect(vm.applyNativePanelSurfaces).toHaveBeenCalledWith("@workspace-apps/shell", request);
   });
 
   it("rejects unauthorized panel-hosting app sources for native panel slots", async () => {
@@ -110,62 +117,47 @@ describe("view service", () => {
     const service = createViewService({ getViewManager: () => vm as never });
 
     await expect(
-      service.handler({ caller: createVerifiedCaller(callerId, "app") }, "syncNativePanelSlots", [
-        {
-          rendererInstanceId: "renderer-test",
-          revision: 1,
-          slots: [],
-        },
-      ])
+      service.handler(
+        { caller: createVerifiedCaller(callerId, "app") },
+        "applyNativePanelSurfaces",
+        [
+          {
+            protocolVersion: 1,
+            hostGeneration: "host-1",
+            shellGeneration: "shell-1",
+            revision: 1,
+            surfaces: [],
+          },
+        ]
+      )
     ).rejects.toThrow(/cannot place native panel slots/);
 
-    expect(vm.syncPanelSlots).not.toHaveBeenCalled();
-  });
-
-  it("returns revisioned observed state to the hosted shell", async () => {
-    const vm = makeViewManager(["panel-hosting"]);
-    vm.syncPanelSlots.mockReturnValue({ revision: 2, slots: {} });
-    const service = createViewService({ getViewManager: () => vm as never });
-    const request = {
-      rendererInstanceId: "renderer-test",
-      revision: 2,
-      slots: [],
-    };
-
-    await expect(
-      service.handler(
-        { caller: createVerifiedCaller("@workspace-apps/shell", "app") },
-        "syncNativePanelSlots",
-        [request]
-      )
-    ).resolves.toEqual({ revision: 2, slots: {} });
-
-    expect(vm.syncPanelSlots).toHaveBeenCalledWith("@workspace-apps/shell", request);
+    expect(vm.applyNativePanelSurfaces).not.toHaveBeenCalled();
   });
 
   it("does not project a stale desired snapshot", async () => {
     const vm = makeViewManager(["panel-hosting"]);
-    vm.syncPanelSlots.mockImplementation(() => {
-      throw new Error("stale native panel snapshot revision 1");
-    });
+    vm.applyNativePanelSurfaces.mockResolvedValue({ accepted: false, reason: "stale-revision" });
     const onNativeSlotCleared = vi.fn();
     const service = createViewService({
       getViewManager: () => vm as never,
       panelOrchestrator: { onNativeSlotCleared } as never,
     });
     const request = {
-      rendererInstanceId: "renderer-test",
+      protocolVersion: 1 as const,
+      hostGeneration: "host-1",
+      shellGeneration: "shell-1",
       revision: 1,
-      slots: [],
+      surfaces: [],
     };
 
     await expect(
       service.handler(
         { caller: createVerifiedCaller("@workspace-apps/shell", "app") },
-        "syncNativePanelSlots",
+        "applyNativePanelSurfaces",
         [request]
       )
-    ).rejects.toThrow(/stale native panel snapshot/);
+    ).resolves.toEqual({ accepted: false, reason: "stale-revision" });
     expect(onNativeSlotCleared).not.toHaveBeenCalled();
   });
 
@@ -174,11 +166,13 @@ describe("view service", () => {
     const service = createViewService({ getViewManager: () => vm as never });
 
     await expect(
-      service.handler({ caller: createVerifiedCaller("shell", "shell") }, "setHostedShellReady", [
-        { ready: true, rendererInstanceId: "renderer-test" },
-      ])
+      service.handler(
+        { caller: createVerifiedCaller("shell", "shell") },
+        "connectNativePanelAdapter",
+        [{ sealedLaunchIdentity: "shell", supportedProtocolVersions: [1] }]
+      )
     ).rejects.toThrow(/cannot place native panel slots/);
 
-    expect(vm.setHostedShellReady).not.toHaveBeenCalled();
+    expect(vm.connectNativePanelAdapter).not.toHaveBeenCalled();
   });
 });

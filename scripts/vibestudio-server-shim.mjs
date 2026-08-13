@@ -1,9 +1,8 @@
 #!/usr/bin/env node
 // `vibestudio-server` bin for the npm-published packages. Pins VIBESTUDIO_APP_ROOT
-// to the installed package root so getAppRoot()/getPackagesDir()/template lookup
-// resolve against the package rather than the user's shell cwd (the standalone
-// server otherwise defaults VIBESTUDIO_APP_ROOT to process.cwd() — see
-// src/server/index.ts:506), then runs the bundled headless server.
+// to the installed package root so every artifact lookup has one exact source,
+// then runs the bundled headless server. The server itself never infers this
+// identity from the user's shell working directory.
 import { spawn } from "node:child_process";
 import * as path from "node:path";
 import process from "node:process";

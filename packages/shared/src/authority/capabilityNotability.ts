@@ -88,11 +88,6 @@ const REVIEWED_NOTABILITY: readonly NotabilityEntry[] = [
   // it in the OS crosses out of the workspace and remains prominent.
   { key: "service:browserEnvironment.cancelDownload", notability: "everyday" },
   { key: "service:browserEnvironment.cancelImportRead", notability: "everyday" },
-  { key: "service:browserEnvironment.flushCookieProjection", notability: "everyday" },
-  {
-    key: "service:browserEnvironment.getCookieProjectionDiagnostics",
-    notability: "everyday",
-  },
   { key: "service:browserEnvironment.getImportHost", notability: "headline" },
   { key: "service:browserEnvironment.listDownloads", notability: "everyday" },
   { key: "service:browserEnvironment.listImportOpenTabs", notability: "headline" },
@@ -104,6 +99,10 @@ const REVIEWED_NOTABILITY: readonly NotabilityEntry[] = [
   { key: "service:browserEnvironment.resumeDownload", notability: "everyday" },
   { key: "service:browserEnvironment.revealDownload", notability: "headline" },
   { key: "service:browserEnvironment.startImportRead", notability: "headline" },
+  // This is the sealed host write boundary for cookies, passwords, and form
+  // fill. The Base provider owns the one user-facing import intent, but the
+  // underlying capability remains explicitly headline-worthy in host reviews.
+  { key: "service:browserEnvironment.startSensitiveImport", notability: "headline" },
   { key: "runtime.code-execution.manage", notability: "headline" },
   { key: "runtime.execution.recover", notability: "headline" },
   { key: "runtime.supervision.manage", notability: "headline" },
@@ -128,7 +127,6 @@ const REVIEWED_NOTABILITY: readonly NotabilityEntry[] = [
   { key: "mobile.provision", notability: "headline" },
   { key: "mobile.devices.read", notability: "everyday" },
   { key: "connections.approve", notability: "headline" },
-  { key: "connected-client.transport", notability: "headline" },
   { key: "remote-client.connect", notability: "headline" },
   { key: "remote-client.clear", notability: "everyday" },
   { key: "remote-client.read", notability: "everyday" },

@@ -27,6 +27,7 @@ import type {
   NativeDevelopmentTerminalSnapshot,
   NativeDevelopmentToolId,
 } from "./nativeDevelopmentExecutor.js";
+import type { TemplateRepositoryExchangeExecutor } from "./templateRepositoryExchangeExecutor.js";
 
 export interface ExactNativeDevelopmentController {
   describeTool(toolId: NativeDevelopmentToolId): Promise<{
@@ -117,6 +118,7 @@ export function createDevelopmentNativeService(deps: {
   attachedHostParentId?: string;
   attachedHostAuthorityCeiling?: readonly CapabilityScope[];
   takeLogs?: (runId: string) => Array<{ stream: "stdout" | "stderr"; line: string }>;
+  templateExchange?: Pick<TemplateRepositoryExchangeExecutor, "prepare" | "apply">;
 }): ServiceDefinition {
   const plans = new Map<string, PreparedDevelopmentBuild>();
   const builds = new Map<string, NativeBuildState>();
@@ -382,11 +384,12 @@ export function createDevelopmentNativeService(deps: {
       resizeTerminal: async (_ctx, [input]) => {
         await deps.native.resizeTerminal(input);
       },
-      prepareBuild: async (ctx, [{ session, runId, recipe, target }]) => {
+      prepareBuild: async (ctx, [{ session, runId, recipe, pair, target }]) => {
         const plan = await deps.executor.prepareExact({
           session,
           runId,
           recipe: recipe as DevelopmentRecipe,
+          pair,
         });
         assertRecipeTarget(plan.recipe.target, target);
         if (needsClientExecutor(target)) {
@@ -411,6 +414,22 @@ export function createDevelopmentNativeService(deps: {
         }
         plans.set(runId, plan);
         return { runId, snapshot: plan.snapshot, recipe: plan.recipe };
+      },
+      prepareTemplateExchange: async (_ctx, [input]) => {
+        if (!deps.templateExchange) {
+          throw Object.assign(new Error("Template repository exchange is unavailable"), {
+            code: "EEXECUTOR_UNAVAILABLE",
+          });
+        }
+        return deps.templateExchange.prepare(input);
+      },
+      applyTemplateExchange: async (ctx, [input]) => {
+        if (!deps.templateExchange) {
+          throw Object.assign(new Error("Template repository exchange is unavailable"), {
+            code: "EEXECUTOR_UNAVAILABLE",
+          });
+        }
+        return deps.templateExchange.apply({ ...input, ingress: semanticIngress(ctx) });
       },
       beginBuild: async (_ctx, [{ run }]) => {
         const plan = requirePlan(run);

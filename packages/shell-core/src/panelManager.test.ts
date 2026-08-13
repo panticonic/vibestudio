@@ -8,7 +8,6 @@ import { PanelLifecycleAggregateError, PanelManager } from "./panelManager.js";
 import { PanelNavigationCommitError } from "./panelNavigationTransaction.js";
 import { canonicalEntityId, runtimeEntitySource } from "@vibestudio/shared/runtime/entitySpec";
 import type { PanelEntityId, PanelSlotId } from "@vibestudio/shared/panel/ids";
-import type { PanelSearchIndex } from "@vibestudio/shared/panelSearchTypes";
 import type {
   EntityRecord,
   RuntimeEntityCreateSpec,
@@ -98,12 +97,7 @@ function createWorkspaceMemory() {
       return null;
     }
   };
-  const slotRow = (slot: MemSlot): SlotRow => ({
-    ...slot,
-    current_entity_title: slot.current_entity_id
-      ? (entities.get(slot.current_entity_id)?.displayTitle ?? null)
-      : null,
-  });
+  const slotRow = (slot: MemSlot): SlotRow => ({ ...slot });
   const historyRows = (slotId: PanelSlotId): SlotHistoryRow[] =>
     (history.get(slotId) ?? []).map((row, cursor) => ({
       slot_id: slotId,
@@ -171,7 +165,6 @@ function createWorkspaceMemory() {
         slotId: slot.slot_id,
         parentSlotId: slot.parent_slot_id,
         ownerUserId: slot.owner_user_id,
-        title: slotRow(slot).current_entity_title ?? slot.slot_id,
         source:
           historyRows(slot.slot_id).find((entry) => entry.entry_key === slot.current_entry_key)
             ?.source ?? "",
@@ -196,7 +189,6 @@ function createWorkspaceMemory() {
           slotId: current.slot_id,
           parentSlotId: current.parent_slot_id,
           ownerUserId: current.owner_user_id,
-          title: slotRow(current).current_entity_title ?? current.slot_id,
           createdAt: current.created_at,
           childCount: 0,
         });
@@ -212,9 +204,6 @@ function createWorkspaceMemory() {
       return slot && currentHistory && entity
         ? { revision, slot: slotRow(slot), currentHistory, entity: entityRecord(entity) }
         : null;
-    },
-    async searchPanelTree() {
-      return { revision, hits: [], nextCursor: null };
     },
     async getSlot(slotId): Promise<SlotRow | null> {
       const s = slots.get(slotId);
@@ -556,53 +545,6 @@ describe("PanelManager", () => {
     expect(mem.state.slots.size).toBe(2);
   });
 
-  it("does not finish browser creation before the panel is searchable", async () => {
-    const registry = new PanelRegistry({});
-    const { deps } = makeManagerDeps("/tmp/workspace");
-    let releaseIndex!: () => void;
-    const indexBlocked = new Promise<void>((resolve) => {
-      releaseIndex = resolve;
-    });
-    const indexed = new Map<string, { title: string; path?: string }>();
-    const indexPanel = vi.fn(async (panel: { id: string; title: string; path?: string }) => {
-      await indexBlocked;
-      indexed.set(panel.id, panel);
-    });
-    const searchIndex: PanelSearchIndex = {
-      indexPanel,
-      async search(query) {
-        return [...indexed]
-          .filter(([, panel]) => `${panel.title} ${panel.path ?? ""}`.includes(query))
-          .map(([id, panel]) => ({ id, title: panel.title, relevance: 0, accessCount: 0 }));
-      },
-      incrementAccessCount: vi.fn(),
-      updateTitle: vi.fn(),
-      rebuildIndex: vi.fn(),
-    };
-    const manager = new PanelManager({
-      registry,
-      ...deps,
-      searchIndex,
-      allowMissingManifests: true,
-    });
-
-    let creationSettled = false;
-    const creation = manager
-      .createBrowser(null, "https://example.com/", { addAsRoot: true })
-      .finally(() => {
-        creationSettled = true;
-      });
-    await vi.waitFor(() => expect(indexPanel).toHaveBeenCalledOnce());
-    expect(creationSettled).toBe(false);
-
-    releaseIndex();
-    const created = await creation;
-
-    await expect(searchIndex.search("example.com", 10)).resolves.toEqual([
-      expect.objectContaining({ id: created.panelId, title: "example.com" }),
-    ]);
-  });
-
   it("projects one root when concurrent first reads resolve together", async () => {
     const sourceRegistry = new PanelRegistry({});
     const { deps } = makeManagerDeps("/tmp/workspace");
@@ -642,7 +584,7 @@ describe("PanelManager", () => {
     expect(projectedRegistry.getRootPanels().map((panel) => panel.id)).toEqual([created.panelId]);
   });
 
-  it("uses the server-owned icon when refreshing native presentation", async () => {
+  it("does not consume product presentation from raw workspace-state detail", async () => {
     const sourceRegistry = new PanelRegistry({});
     const { deps } = makeManagerDeps("/tmp/workspace");
     const sourceManager = new PanelManager({
@@ -665,7 +607,7 @@ describe("PanelManager", () => {
     });
     await projectedManager.refreshPanel(created.panelId);
 
-    expect(projectedRegistry.getPanel(created.panelId)?.icon).toBe("💬");
+    expect(projectedRegistry.getPanel(created.panelId)?.icon).toBeUndefined();
   });
 
   it("places an external panel in an explicitly shared orchestration context", async () => {
@@ -767,17 +709,6 @@ describe("PanelManager", () => {
   it("falls back to the manifest title when no label is given", async () => {
     const { registry, manager } = namedPanelWorkspace();
     const created = await manager.create("panels/named", { isRoot: true, addAsRoot: true });
-    expect(registry.getPanel(created.panelId)?.title).toBe("Named Panel");
-  });
-
-  it("normalizes titles and restores the source fallback when a title is cleared", async () => {
-    const { registry, manager } = namedPanelWorkspace();
-    const created = await manager.create("panels/named", { isRoot: true, addAsRoot: true });
-
-    await manager.updateTitle(created.panelId, "  Support\tInbox  ");
-    expect(registry.getPanel(created.panelId)?.title).toBe("Support Inbox");
-
-    await manager.updateTitle(created.panelId, "   ");
     expect(registry.getPanel(created.panelId)?.title).toBe("Named Panel");
   });
 
@@ -1104,7 +1035,7 @@ describe("PanelManager", () => {
     expect(getCurrentSnapshot(registry.getPanel(created.panelId)!).placement).toBeUndefined();
   });
 
-  it("updates live navigation state and resolved URL through the shared manager", async () => {
+  it("updates navigation state without adopting presentation titles", async () => {
     const workspacePath = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-panel-manager-"));
     tempDirs.push(workspacePath);
 
@@ -1134,7 +1065,7 @@ describe("PanelManager", () => {
     });
 
     const panel = registry.getPanel(created.panelId)!;
-    expect(panel.title).toBe("Docs");
+    expect(panel.title).toBe("Initial Title");
     expect(panel.navigation).toEqual({
       url: "https://example.com/docs",
       pageTitle: "Docs",

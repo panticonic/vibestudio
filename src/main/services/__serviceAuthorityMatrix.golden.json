@@ -850,65 +850,12 @@
           }
         }
       },
-      "flushCookieProjection": {
+      "cancelSensitiveImport": {
         "authority": {
-          "requirement": {
-            "kind": "any",
-            "requirements": [
-              {
-                "kind": "capability",
-                "principal": "host",
-                "capability": "service:browserEnvironment.flushCookieProjection"
-              },
-              {
-                "kind": "all",
-                "requirements": [
-                  {
-                    "kind": "capability",
-                    "principal": "code",
-                    "capability": "service:browserEnvironment.flushCookieProjection"
-                  },
-                  {
-                    "kind": "relationship",
-                    "name": "workspace-member"
-                  }
-                ]
-              },
-              {
-                "kind": "all",
-                "requirements": [
-                  {
-                    "kind": "capability",
-                    "principal": "session",
-                    "capability": "service:browserEnvironment.flushCookieProjection"
-                  },
-                  {
-                    "kind": "relationship",
-                    "name": "workspace-member"
-                  }
-                ]
-              }
-            ]
-          },
-          "resource": {
-            "kind": "literal",
-            "key": "service:browserEnvironment.flushCookieProjection"
-          },
-          "prepared": {
-            "resolver": "browserEnvironment.broker.flushCookieProjection",
-            "leaves": [
-              {
-                "capability": "service:browserEnvironment.flushCookieProjection",
-                "requirement": {
-                  "kind": "selected",
-                  "principals": [
-                    "code"
-                  ]
-                },
-                "tier": "gated"
-              }
-            ]
-          }
+          "principals": [
+            "host",
+            "code"
+          ]
         },
         "access": {
           "sensitivity": "write"
@@ -917,102 +864,11 @@
           "tier": "open",
           "session": "family",
           "residency": "native-effect",
-          "family": "browserEnvironment.control",
-          "rationale": "Host maintenance proceeds directly; installed code requires the method's gated browser-environment capability."
+          "family": "browserEnvironment.retire",
+          "rationale": "Records durable cancellation and stops the active host import reader."
         },
-        "capability": "service:browserEnvironment.flushCookieProjection",
-        "presentation": {
-          "title": "Synchronize website cookies",
-          "action": "synchronize website cookies",
-          "description": "Allows {requesterKind} to reconcile website cookies with the browser host.",
-          "group": "network",
-          "authorityCategory": {
-            "domain": "web",
-            "verb": "manage"
-          }
-        }
-      },
-      "getCookieProjectionDiagnostics": {
-        "authority": {
-          "requirement": {
-            "kind": "any",
-            "requirements": [
-              {
-                "kind": "capability",
-                "principal": "host",
-                "capability": "service:browserEnvironment.getCookieProjectionDiagnostics"
-              },
-              {
-                "kind": "all",
-                "requirements": [
-                  {
-                    "kind": "capability",
-                    "principal": "code",
-                    "capability": "service:browserEnvironment.getCookieProjectionDiagnostics"
-                  },
-                  {
-                    "kind": "relationship",
-                    "name": "workspace-member"
-                  }
-                ]
-              },
-              {
-                "kind": "all",
-                "requirements": [
-                  {
-                    "kind": "capability",
-                    "principal": "session",
-                    "capability": "service:browserEnvironment.getCookieProjectionDiagnostics"
-                  },
-                  {
-                    "kind": "relationship",
-                    "name": "workspace-member"
-                  }
-                ]
-              }
-            ]
-          },
-          "resource": {
-            "kind": "literal",
-            "key": "service:browserEnvironment.getCookieProjectionDiagnostics"
-          },
-          "prepared": {
-            "resolver": "browserEnvironment.broker.getCookieProjectionDiagnostics",
-            "leaves": [
-              {
-                "capability": "service:browserEnvironment.getCookieProjectionDiagnostics",
-                "requirement": {
-                  "kind": "selected",
-                  "principals": [
-                    "code"
-                  ]
-                },
-                "tier": "gated"
-              }
-            ]
-          }
-        },
-        "access": {
-          "sensitivity": "read"
-        },
-        "tier": {
-          "tier": "open",
-          "session": "family",
-          "residency": "native-effect",
-          "family": "browserEnvironment.read",
-          "rationale": "Host diagnostics proceed directly; installed code requires the method's gated browser-environment capability."
-        },
-        "capability": "service:browserEnvironment.getCookieProjectionDiagnostics",
-        "presentation": {
-          "title": "View cookie synchronization diagnostics",
-          "action": "view cookie synchronization diagnostics",
-          "description": "Allows {requesterKind} to inspect website cookie synchronization status.",
-          "group": "network",
-          "authorityCategory": {
-            "domain": "web",
-            "verb": "see"
-          }
-        }
+        "capability": null,
+        "presentation": null
       },
       "getImportHost": {
         "authority": {
@@ -1424,6 +1280,26 @@
           }
         }
       },
+      "observeSensitiveImport": {
+        "authority": {
+          "principals": [
+            "host",
+            "code"
+          ]
+        },
+        "access": {
+          "sensitivity": "read"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "browserEnvironment.read",
+          "rationale": "Reads aggregate progress from the durable host import ledger."
+        },
+        "capability": null,
+        "presentation": null
+      },
       "openDownload": {
         "authority": {
           "requirement": {
@@ -1670,6 +1546,26 @@
           }
         }
       },
+      "previewSensitiveImport": {
+        "authority": {
+          "principals": [
+            "host",
+            "code"
+          ]
+        },
+        "access": {
+          "sensitivity": "read"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "browserEnvironment.control",
+          "rationale": "Returns aggregate review counts for protected browser categories without returning records or values."
+        },
+        "capability": null,
+        "presentation": null
+      },
       "resumeDownload": {
         "authority": {
           "requirement": {
@@ -1915,6 +1811,26 @@
             "verb": "see"
           }
         }
+      },
+      "startSensitiveImport": {
+        "authority": {
+          "principals": [
+            "host",
+            "code"
+          ]
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "browserEnvironment.create",
+          "rationale": "Runs credential-bearing browser import entirely in the trusted host and returns aggregate counts only; gated by authority principals."
+        },
+        "capability": null,
+        "presentation": null
       }
     }
   },
@@ -2608,6 +2524,23 @@
       ]
     },
     "methods": {
+      "applyNativePanelSurfaces": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "view.mutate",
+          "rationale": "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family"
+        },
+        "capability": null,
+        "presentation": null
+      },
       "browserForceReload": {
         "authority": {
           "inherits": true
@@ -2723,6 +2656,23 @@
           "residency": "native-effect",
           "family": "panel.control",
           "rationale": "Clears Electron session storage for an origin that is still displayed by the selected browser panel."
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "connectNativePanelAdapter": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "view.control",
+          "rationale": "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family"
         },
         "capability": null,
         "presentation": null
@@ -3096,23 +3046,6 @@
         "capability": null,
         "presentation": null
       },
-      "setHostedShellReady": {
-        "authority": {
-          "inherits": true
-        },
-        "access": {
-          "sensitivity": "write"
-        },
-        "tier": {
-          "tier": "open",
-          "session": "family",
-          "residency": "native-effect",
-          "family": "view.mutate",
-          "rationale": "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family"
-        },
-        "capability": null,
-        "presentation": null
-      },
       "setNativeBrowserZoom": {
         "authority": {
           "inherits": true
@@ -3245,23 +3178,6 @@
           "residency": "native-effect",
           "family": "panel.control",
           "rationale": "P-panels: dismisses the in-page find session; core mutually inspectable workspace UX."
-        },
-        "capability": null,
-        "presentation": null
-      },
-      "syncNativePanelSlots": {
-        "authority": {
-          "inherits": true
-        },
-        "access": {
-          "sensitivity": "write"
-        },
-        "tier": {
-          "tier": "open",
-          "session": "family",
-          "residency": "native-effect",
-          "family": "view.control",
-          "rationale": "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family"
         },
         "capability": null,
         "presentation": null

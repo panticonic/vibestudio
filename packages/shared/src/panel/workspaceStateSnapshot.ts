@@ -1,9 +1,8 @@
 import type { EntityRecord } from "../runtime/entitySpec.js";
 import type { PanelEntityId, PanelSlotId } from "./ids.js";
 import type {
-  PanelTreePage,
   PanelTreePageInput,
-  PanelTreePath,
+  PanelTreeNode,
   PanelTreePlacement,
   PanelTreeRootGroupPage,
   PanelTreeRootGroupPageInput,
@@ -16,7 +15,6 @@ export interface WorkspacePanelTreeSlot {
   slot_id: PanelSlotId;
   parent_slot_id: PanelSlotId | null;
   current_entity_id: PanelEntityId | null;
-  current_entity_title?: string | null;
   current_entry_key: string | null;
   current_history_cursor?: number | null;
   history_count?: number;
@@ -42,7 +40,6 @@ export interface WorkspacePanelTreeHistoryRow {
 /** Addressed runtime detail for one panel; bounded independently of tree size/history length. */
 export interface WorkspacePanelDetail {
   revision: number;
-  icon?: string;
   slot: WorkspacePanelTreeSlot;
   currentHistory: WorkspacePanelTreeHistoryRow;
   entity: EntityRecord;
@@ -66,9 +63,21 @@ export interface WorkspacePanelCloseCleanupPageInput {
 }
 
 /** Query-first tree contracts exposed by durable workspace state. */
-export type WorkspacePanelTreePage = PanelTreePage;
+export type WorkspacePanelTreeNode = Omit<
+  PanelTreeNode,
+  "title" | "icon" | "kind" | "ref" | "placement"
+> & { options?: string | null };
+export interface WorkspacePanelTreePage {
+  revision: number;
+  group: import("./treeIndex.js").PanelTreeGroup;
+  nodes: WorkspacePanelTreeNode[];
+  nextCursor: string | null;
+}
 export type WorkspacePanelTreePageInput = PanelTreePageInput;
-export type WorkspacePanelTreePath = PanelTreePath;
+export interface WorkspacePanelTreePath {
+  revision: number;
+  nodes: WorkspacePanelTreeNode[];
+}
 export type WorkspacePanelTreeRootGroupPage = PanelTreeRootGroupPage;
 export type WorkspacePanelTreeRootGroupPageInput = PanelTreeRootGroupPageInput;
 export type WorkspacePanelTreeSearchInput = PanelTreeSearchInput;

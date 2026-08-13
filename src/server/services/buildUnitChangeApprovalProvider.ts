@@ -101,7 +101,13 @@ export function createBuildUnitChangeApprovalProvider(deps: {
     }
 
     const previousAuthority = previous
-      ? authorityReviewFromManifest(previous.manifest.authority, previous.unitName)
+      ? authorityReviewFromManifest(
+          previous.manifest.authority,
+          previous.unitName,
+          { requests: [], serviceRequests: [], provides: [] },
+          deps.describeCapability,
+          candidate.kind
+        )
       : { requests: [], serviceRequests: [], provides: [] };
     const authority = authorityReviewFromManifest(
       manifest.authority,

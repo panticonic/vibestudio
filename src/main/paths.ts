@@ -11,57 +11,6 @@ import {
 } from "@vibestudio/shared/runtimePaths";
 import { isDev } from "./utils.js";
 
-// Derive __dirname in a way that works in CJS builds
-// esbuild should inject __dirname when bundling to CJS, but we also inject fallbacks via banner
-declare const __dirname: string | undefined;
-declare const __filename: string | undefined;
-// These are injected by our build banner as fallbacks (see build.mjs)
-declare const __injected_dirname__: string | undefined;
-declare const __injected_filename__: string | undefined;
-
-const __dirnameResolved: string = (() => {
-  const DEBUG = process.env["VIBESTUDIO_DEBUG_PATHS"] === "1";
-
-  // Check for bundler-injected __dirname first (CJS context)
-  if (typeof __dirname === "string" && __dirname) {
-    if (DEBUG) console.log("[paths] Using bundler __dirname:", __dirname);
-    return __dirname;
-  }
-
-  // Check for our banner-injected fallback
-  if (typeof __injected_dirname__ === "string" && __injected_dirname__) {
-    if (DEBUG) console.log("[paths] Using banner-injected __dirname:", __injected_dirname__);
-    return __injected_dirname__;
-  }
-
-  // Check for bundler-injected __filename and derive dirname
-  if (typeof __filename === "string" && __filename) {
-    const dir = path.dirname(__filename);
-    if (DEBUG) console.log("[paths] Derived from __filename:", dir);
-    return dir;
-  }
-
-  // Check for our banner-injected __filename fallback
-  if (typeof __injected_filename__ === "string" && __injected_filename__) {
-    const dir = path.dirname(__injected_filename__);
-    if (DEBUG) console.log("[paths] Derived from banner __filename:", dir);
-    return dir;
-  }
-
-  // Final fallback: use process.cwd() and look for dist/ directory
-  // This handles edge cases where bundler doesn't inject __dirname
-  const cwd = process.cwd();
-  const distPath = path.join(cwd, "dist");
-  if (fs.existsSync(path.join(distPath, "main.cjs"))) {
-    console.warn("[paths] Using fallback __dirname detection from cwd:", distPath);
-    return distPath;
-  }
-
-  // Last resort - assume we're in the dist directory relative to cwd
-  console.warn("[paths] Could not determine __dirname, using cwd:", cwd);
-  return cwd;
-})();
-
 /**
  * Get the central Vibestudio config directory based on the platform.
  * This directory is used for app-wide configuration.
@@ -146,36 +95,12 @@ export function getAppRoot(): string {
   const DEBUG = process.env["VIBESTUDIO_DEBUG_PATHS"] === "1";
 
   if (isDev()) {
-    // Development: __dirnameResolved is dist/ (where main.cjs lives), walk up to monorepo root
-    const root = path.resolve(__dirnameResolved, "..");
-
-    if (DEBUG) {
-      console.log("[paths] getAppRoot: __dirnameResolved =", __dirnameResolved);
-      console.log("[paths] getAppRoot: computed root =", root);
+    const configured = process.env["VIBESTUDIO_APP_ROOT"];
+    if (!configured) {
+      throw new Error("Development Electron startup requires an explicit VIBESTUDIO_APP_ROOT");
     }
-
-    // Validate the resolved root by checking for expected files
-    const packageJsonPath = path.join(root, "package.json");
-    if (!fs.existsSync(packageJsonPath)) {
-      if (DEBUG) console.log("[paths] getAppRoot: package.json not found at", packageJsonPath);
-
-      // Try alternative: maybe we're already at root or in a different structure
-      if (fs.existsSync(path.join(__dirnameResolved, "package.json"))) {
-        console.warn(`[paths] getAppRoot: Using __dirname directly as root: ${__dirnameResolved}`);
-        return __dirnameResolved;
-      }
-      // Walk up further if needed
-      const parentRoot = path.resolve(root, "..");
-      if (fs.existsSync(path.join(parentRoot, "package.json"))) {
-        console.warn(`[paths] getAppRoot: Using parent of expected root: ${parentRoot}`);
-        return parentRoot;
-      }
-      console.warn(`[paths] getAppRoot: Could not validate root path, using ${root}`);
-    } else if (DEBUG) {
-      console.log("[paths] getAppRoot: validated root:", root);
-    }
-
-    return root;
+    if (DEBUG) console.log("[paths] getAppRoot (development):", configured);
+    return configured;
   }
   // Production
   try {

@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { rpcMethodAuthority } from "@vibestudio/rpc";
 import type { ResidentChannelDeliveryInput } from "@vibestudio/shared/residentSession";
-import { DurableObjectBase, rpc, type AlarmSchedule } from "./index.js";
+import { defineReceiverServiceMethods } from "@vibestudio/shared/typedServiceClient";
+import { z } from "zod";
+import { DurableObjectBase, rpc, schemaRpc, type AlarmSchedule } from "./index.js";
 import { createTestDO, createTestDirectAuthority } from "./test-utils.js";
 
 class AlarmProbeDO extends DurableObjectBase {
@@ -50,11 +52,44 @@ class AlarmProbeDO extends DurableObjectBase {
   }
 }
 
+class OpenSchemaProbeDO extends DurableObjectBase {
+  static override rpcMethods = defineReceiverServiceMethods({
+    inspect: {
+      args: z.tuple([]),
+      returns: z.string(),
+      authority: { principals: ["host"] },
+      tier: { tier: "open", session: "family", rationale: "Open typed receiver test." },
+      access: { sensitivity: "read" },
+    },
+  });
+
+  protected createTables(): void {}
+
+  @schemaRpc()
+  inspect(): string {
+    return "ready";
+  }
+
+  inspectAuthority() {
+    return this.rpcAuthorityDeclaration("inspect", OpenSchemaProbeDO.rpcMethods["inspect"]);
+  }
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
 });
 
 describe("DurableObjectBase alarm dispatch", () => {
+  it("accepts an explicitly open typed receiver without a ceremonial capability", async () => {
+    const { instance } = await createTestDO(OpenSchemaProbeDO);
+
+    expect(instance.inspectAuthority()).toMatchObject({
+      effect: { kind: "open" },
+      tier: "open",
+      sensitivity: "read",
+    });
+  });
+
   it("attributes outbound RPC to the concrete durable object entity", async () => {
     const { instance } = await createTestDO(AlarmProbeDO, {
       WORKER_SOURCE: "workers/alarm-probe",

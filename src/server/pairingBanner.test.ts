@@ -8,6 +8,7 @@ describe("server pairing banner", () => {
       room: "11111111-2222-3333-4444-555555555555",
       fp: "AA".repeat(32),
       code: "A".repeat(32),
+      exp: 2_000_000_000_000,
       sig: "wss://signal.example/",
       v: 2,
       ice: "all",

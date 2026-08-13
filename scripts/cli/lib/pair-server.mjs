@@ -544,7 +544,7 @@ function buildServerArgs(options, config = {}) {
   if (options.bootstrapWorkspace) {
     args.push("--bootstrap-workspace", options.bootstrapWorkspace);
   }
-  if (options.appRoot) args.push("--app-root", options.appRoot);
+  args.push("--app-root", options.appRoot ?? repoRoot);
   if (options.readyFile) args.push("--ready-file", path.resolve(options.readyFile));
   if (config.requireMobileReady) args.push("--require-mobile-ready");
   if (config.requireElectronReady) args.push("--require-electron-ready");

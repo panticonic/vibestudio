@@ -13,7 +13,7 @@ describe("product builtin direct authority", () => {
       capability: "workspace-service:workspace.state",
       methodCapability: "workspace.runtime-state.manage",
       methodTier: "gated",
-      principals: ["host", "user", "code"],
+      principals: ["host"],
       declaredBy: "vibestudio/internal",
       presentation: { domain: "computer", verb: "manage" },
     });

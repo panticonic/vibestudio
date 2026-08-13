@@ -71,6 +71,36 @@ function approvalStore() {
 }
 
 describe("createBuildUnitChangeApprovalProvider", () => {
+  it("uses the workspace resolver for both sides of an authority diff", async () => {
+    const buildSystem = {
+      listBuildUnitIdentities: vi.fn(async (ref?: string) => [
+        identity({
+          stateHash: ref ? state : previousState,
+          effectiveVersion: ref ? "ev-new" : "ev-old",
+          manifest: manifest(ref ? "provider.effect.next" : "provider.effect.previous"),
+        }),
+      ]),
+    };
+    const describeCapability = vi.fn((capability: string) => ({
+      title: capability,
+      action: `use ${capability}`,
+      description: `Use ${capability}`,
+      group: "runtime",
+      authorityCategory: { domain: "automation" as const, verb: "act" as const },
+    }));
+    const provider = createBuildUnitChangeApprovalProvider({
+      getBuildSystem: () => buildSystem as never,
+      admissionStore: approvalStore() as never,
+      describeCapability,
+    });
+
+    await expect(provider.unitChangeApprovalForCommit(state)).resolves.toMatchObject({
+      units: [{ authority: { requests: [{ capability: "provider.effect.next" }] } }],
+    });
+    expect(describeCapability).toHaveBeenCalledWith("provider.effect.previous", "panel");
+    expect(describeCapability).toHaveBeenCalledWith("provider.effect.next", "panel");
+  });
+
   it("uses a manifest title when a unit has no separate display name", async () => {
     const buildSystem = {
       listBuildUnitIdentities: vi.fn(async (ref?: string) =>

@@ -10,6 +10,7 @@ import {
   type DevelopmentRecipe,
   type DevelopmentRun,
   type DevelopmentSession,
+  type DevelopmentPairSelection,
 } from "@vibestudio/service-schemas/development";
 import { canonicalJson } from "@vibestudio/content-addressing";
 import { domainHash } from "@vibestudio/shared/execution/identity";
@@ -45,7 +46,10 @@ interface ExactToolchain {
 export interface PreparedDevelopmentBuild {
   version: 1;
   runId: string;
-  sourcePlan: ExactRepositorySnapshotPlan;
+  sourcePlans: {
+    host: ExactRepositorySnapshotPlan;
+    base: ExactRepositorySnapshotPlan;
+  };
   snapshot: DevelopmentExecutionSnapshot;
   recipe: DevelopmentRecipe;
   executables: {
@@ -117,6 +121,7 @@ export class DevelopmentExecutor {
     session: DevelopmentSession;
     runId: string;
     recipe: DevelopmentRecipe;
+    pair: DevelopmentPairSelection;
   }): Promise<PreparedDevelopmentBuild> {
     if (process.platform === "win32") {
       throw Object.assign(
@@ -137,22 +142,56 @@ export class DevelopmentExecutor {
         { code: "EEXECUTOR_UNAVAILABLE" }
       );
     }
-    const [sourcePlan, toolchain] = await Promise.all([
+    const [hostSourcePlan, baseSourcePlan, toolchain] = await Promise.all([
       this.deps.planSource({
         contextId: input.session.contextId,
-        repositoryId: input.session.repository.repositoryId,
+        repositoryId: input.pair.hostRepositoryId,
         requiredFiles: recipe.install.lockfiles,
+      }),
+      this.deps.planSource({
+        contextId: input.session.contextId,
+        repositoryId: input.pair.baseRepositoryId,
+        requiredFiles: ["meta/template.yml", "meta/vibestudio.yml", "pnpm-lock.yaml"],
       }),
       this.toolchain(),
     ]);
-    if (sourcePlan.repoPath !== input.session.repository.repoPath) {
-      throw Object.assign(new Error("Development repository identity changed while preparing"), {
-        code: "EIDENTITYDRIFT",
-      });
+    if (
+      hostSourcePlan.repositoryId !== input.pair.hostRepositoryId ||
+      baseSourcePlan.repositoryId !== input.pair.baseRepositoryId
+    ) {
+      throw Object.assign(
+        new Error("Development pair repository identity changed while preparing"),
+        {
+          code: "EIDENTITYDRIFT",
+        }
+      );
+    }
+    const selectedRepository = input.session.repository.repositoryId;
+    const selectedSide =
+      input.pair.kind === "host-only"
+        ? input.pair.hostRepositoryId
+        : input.pair.kind === "base-only"
+          ? input.pair.baseRepositoryId
+          : selectedRepository;
+    if (
+      selectedRepository !== selectedSide ||
+      (input.pair.kind === "combined" &&
+        selectedRepository !== input.pair.hostRepositoryId &&
+        selectedRepository !== input.pair.baseRepositoryId)
+    ) {
+      throw Object.assign(
+        new Error("Development session does not own the selected pair candidate"),
+        {
+          code: "EIDENTITYDRIFT",
+        }
+      );
     }
     const lockfileDigest = domainHash(
       "vibestudio/development-lockfiles/v1",
-      canonicalJson(sourcePlan.requiredFiles)
+      canonicalJson({
+        host: hostSourcePlan.requiredFiles,
+        base: baseSourcePlan.requiredFiles,
+      })
     );
     const { reviewDigest, ...reviewedRecipeBody } = recipe;
     if (
@@ -168,17 +207,27 @@ export class DevelopmentExecutor {
       "vibestudio/development-environment/v1",
       canonicalJson(recipe.declaredEnvironment)
     );
+    const component = (plan: ExactRepositorySnapshotPlan) => ({
+      repositoryId: plan.repositoryId,
+      repoPath: plan.repoPath,
+      repositoryState: plan.sourceState,
+      repositoryManifestDigest: plan.repositoryManifestDigest,
+      materializedTreeDigest: plan.materializedTreeDigest,
+      contentRoot: plan.contentRoot,
+      sourcePlanDigest: plan.planDigest,
+    });
+    const host = component(hostSourcePlan);
+    const base = component(baseSourcePlan);
+    const pairBody = { kind: input.pair.kind, host, base };
+    const pair = {
+      ...pairBody,
+      pairDigest: domainHash("vibestudio/development-pair/v1", canonicalJson(pairBody)),
+    };
     const snapshotBase = {
       version: 1 as const,
       sessionId: input.session.sessionId,
       contextId: input.session.contextId,
-      repositoryId: input.session.repository.repositoryId,
-      repoPath: input.session.repository.repoPath,
-      repositoryState: sourcePlan.sourceState,
-      repositoryManifestDigest: sourcePlan.repositoryManifestDigest,
-      materializedTreeDigest: sourcePlan.materializedTreeDigest,
-      contentRoot: sourcePlan.contentRoot,
-      sourcePlanDigest: sourcePlan.planDigest,
+      pair,
       recipeDigest,
       toolchain: {
         executorId: toolchain.executorId,
@@ -197,7 +246,7 @@ export class DevelopmentExecutor {
     return {
       version: 1,
       runId: input.runId,
-      sourcePlan,
+      sourcePlans: { host: hostSourcePlan, base: baseSourcePlan },
       snapshot,
       recipe,
       executables: {
@@ -213,9 +262,13 @@ export class DevelopmentExecutor {
     const runRoot = this.runRoot(plan.runId);
     await this.claimRunRoot(runRoot, plan.runId, plan.snapshot.snapshotDigest);
     const sourceRoot = path.join(runRoot, "source");
+    const baseRoot = path.join(runRoot, "base");
     await fs.rm(sourceRoot, { recursive: true, force: true });
+    await fs.rm(baseRoot, { recursive: true, force: true });
     await fs.mkdir(sourceRoot, { recursive: true, mode: 0o700 });
-    await this.deps.materializeSource(plan.sourcePlan, sourceRoot);
+    await fs.mkdir(baseRoot, { recursive: true, mode: 0o700 });
+    await this.deps.materializeSource(plan.sourcePlans.host, sourceRoot);
+    await this.deps.materializeSource(plan.sourcePlans.base, baseRoot);
     await this.projectExactToolchain(plan, runRoot);
     const attempt = (this.attempts.get(plan.runId) ?? 0) + 1;
     this.attempts.set(plan.runId, attempt);
@@ -237,7 +290,7 @@ export class DevelopmentExecutor {
       fs.mkdir(home, { recursive: true, mode: 0o700 }),
       fs.mkdir(store, { recursive: true, mode: 0o700 }),
     ]);
-    const environment = this.executionEnvironment(run.recipe, home);
+    const environment = this.executionEnvironment(run.recipe, home, path.join(runRoot, "base"));
 
     for (const command of run.recipe.commands) {
       if (command.id === "build-host") {
@@ -453,9 +506,9 @@ export class DevelopmentExecutor {
     const effectiveVersion = domainHash(
       "vibestudio/development-source-effective-version/v1",
       canonicalJson({
-        repositoryId: run.snapshot.repositoryId,
-        state: run.snapshot.repositoryState,
-        contentRoot: run.snapshot.contentRoot,
+        pairDigest: run.snapshot.pair.pairDigest,
+        host: run.snapshot.pair.host,
+        base: run.snapshot.pair.base,
       })
     );
     const build = await putBuild(
@@ -465,10 +518,10 @@ export class DevelopmentExecutor {
         kind: "template",
         name: `development:${run.runId}`,
         buildKey: run.snapshot.snapshotDigest,
-        sourcePath: run.snapshot.repoPath,
+        sourcePath: run.snapshot.pair.host.repoPath,
         ev: effectiveVersion,
-        sourceStateHash: run.snapshot.contentRoot,
-        sourceState: run.snapshot.repositoryState,
+        sourceStateHash: run.snapshot.pair.host.contentRoot,
+        sourceState: run.snapshot.pair.host.repositoryState,
         sourcemap: false,
         authority: { requests: [], provides: [] },
         details: { kind: "generic" },
@@ -569,12 +622,17 @@ export class DevelopmentExecutor {
     child.kill(signal);
   }
 
-  private executionEnvironment(recipe: DevelopmentRecipe, home: string): NodeJS.ProcessEnv {
+  private executionEnvironment(
+    recipe: DevelopmentRecipe,
+    home: string,
+    baseRoot: string
+  ): NodeJS.ProcessEnv {
     const nodeDir = path.dirname(process.execPath);
     return {
       ...recipe.declaredEnvironment,
       HOME: home,
       USERPROFILE: home,
+      VIBESTUDIO_USERLAND_ROOT: baseRoot,
       PATH:
         process.platform === "win32"
           ? `${nodeDir};${path.join(process.env["SystemRoot"] ?? "C:\\Windows", "System32")}`

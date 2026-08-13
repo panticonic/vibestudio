@@ -9,7 +9,7 @@ import { gitCheckoutsPath } from "@vibestudio/workspace/gitCheckouts";
  * Declared on-disk contract for one workspace's host state directory.
  *
  * Every path rooted directly at `statePath` belongs here so renames, cleanup,
- * backup, and migration code have one greppable source of truth. Components
+ * backup, and current-generation lifecycle code have one greppable source of truth. Components
  * handed one of these dedicated directories continue to own their internal
  * files.
  */
@@ -46,7 +46,6 @@ export function stateLayout(statePath: string) {
       grantsDb: path.join(authority, "grants.db"),
       reviewedClosuresDb: path.join(authority, "reviewed-closures.db"),
       resourceHandlesDb: path.join(authority, "resource-handles.db"),
-      approvedUnitVersionsFile: path.join(authority, "approved-unit-versions.json"),
       conduitBlessingsFile: path.join(authority, "conduit-blessings.json"),
     },
     development: {

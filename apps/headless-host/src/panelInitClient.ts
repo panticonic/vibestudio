@@ -52,15 +52,6 @@ export class PanelInitClient {
       registry: new PanelRegistry({}),
       workspaceState,
       runtime,
-      // The headless host never surfaces search UI; keep index ops as no-ops
-      // so transient hosting doesn't churn the workspace search state.
-      searchIndex: {
-        indexPanel: async () => undefined,
-        search: async () => [],
-        incrementAccessCount: async () => undefined,
-        updateTitle: async () => undefined,
-        rebuildIndex: async () => undefined,
-      },
       viewState: { load: () => ({ collapsedIds: [] }), save: () => undefined },
       metadataResolver: {
         getPanelMetadata: (source) =>

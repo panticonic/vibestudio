@@ -208,6 +208,7 @@ export function createBuildService(deps: {
         return {
           source: node.unitPath,
           title: node.manifest.title ?? node.unitName,
+          icon: node.manifest.icon,
           description: node.manifest.description,
           hiddenInLauncher: node.manifest.hiddenInLauncher ?? false,
           stateArgs: node.manifest.stateArgs,

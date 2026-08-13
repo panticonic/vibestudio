@@ -21,7 +21,6 @@ import type { ApprovalQueue } from "./services/approvalQueue.js";
 import { assertPresent } from "../lintHelpers";
 import { isBrowserPanelSource } from "@vibestudio/shared/panelChrome";
 import { isPanelEntityId } from "@vibestudio/shared/panel/ids";
-import { resolveOwningPanelSlot } from "@vibestudio/shared/panel/owningPanelSlot";
 import type { SlotRow } from "@vibestudio/shell-core/workspaceStateClient";
 import type { AppCapability } from "@vibestudio/shared/unitManifest";
 import type { ContextIngestionRecorder } from "./services/contextIntegrityStore.js";
@@ -143,14 +142,6 @@ export interface CommonDeps {
   ensureContextFolder?: (contextId: string) => Promise<{ dir: string }>;
   approvalQueue?: ApprovalQueue;
   getEffectiveVersion?: (source: string) => Promise<string | undefined>;
-  /** Register a listener that runs after a title is durable in WorkspaceDO. */
-  registerEntityTitlePersistedListener?: (
-    listener: (
-      entityId: string,
-      title: string | undefined,
-      origin: "set" | "set-explicit" | "mirror" | "clear"
-    ) => void | Promise<void>
-  ) => () => void;
   /**
    * Register a listener fired whenever the authoritative panel slot/history tree
    * changes (any client). The panel-tree bridge uses it to re-sync its in-memory
@@ -208,54 +199,6 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
       });
     };
     registerSlotStateListener(schedulePanelTreeInvalidation);
-    deps.registerEntityTitlePersistedListener?.(async (entityId, title, origin) => {
-      const serverCaller = { caller: createHostCaller("server") };
-      const slotIdForEntity = async (id: string): Promise<string | undefined> => {
-        const slotId = (await deps.dispatcher.dispatch(
-          serverCaller,
-          "workspace-state",
-          "slot.resolveByEntity",
-          [id]
-        )) as string | null;
-        return slotId ?? undefined;
-      };
-      const directPanelSlot = await slotIdForEntity(entityId);
-      if (directPanelSlot) {
-        schedulePanelTreeInvalidation();
-        eventService.emit("panel-title-updated", {
-          panelId: directPanelSlot,
-          title: title ?? null,
-          explicit: origin === "set-explicit",
-        });
-        return;
-      }
-
-      const owningSlot = await resolveOwningPanelSlot(entityId, {
-        isOpenSlot: async (id) => {
-          const slot = (await deps.dispatcher.dispatch(
-            serverCaller,
-            "workspace-state",
-            "slot.get",
-            [id]
-          )) as { closed_at?: number | null } | null;
-          return Boolean(slot && slot.closed_at == null);
-        },
-        resolveOpenSlotForEntity: slotIdForEntity,
-        resolveParentId: async (id) => deps.entityCache?.resolveActive(id)?.parentId,
-      });
-      if (!owningSlot) return;
-
-      // A worker/DO may be the active runtime behind a panel-owned
-      // execution. Its title is useful as the panel's inferred label, but
-      // must go through the canonical panel write so the next persisted
-      // event updates every client consistently.
-      if (!title) return;
-      await deps.dispatcher.dispatch(serverCaller, "workspace-state", "panel.updateTitle", [
-        owningSlot,
-        title,
-        { explicit: false },
-      ]);
-    });
   }
 
   const requestPanelMetadataForServices = async (
@@ -268,14 +211,13 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
       "panelTree.detail",
       [panelId]
     )) as {
-      slot: { current_entity_title?: string | null };
       currentHistory: { source: string; context_id: string };
       entity: { id: string };
     } | null;
     if (!detail) return null;
     return {
       id: panelId,
-      title: detail.slot.current_entity_title ?? panelId,
+      title: panelId,
       source: detail.currentHistory.source,
       kind: isBrowserPanelSource(detail.currentHistory.source) ? "browser" : "workspace",
       runtimeEntityId: detail.entity.id,

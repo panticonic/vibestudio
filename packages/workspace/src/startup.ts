@@ -14,6 +14,8 @@ export interface ResolveLocalWorkspaceStartupOpts {
   name?: string;
   init?: boolean;
   requireExplicitSelection?: boolean;
+  /** Authoritative hub identity for a child workspace created on this disk. */
+  workspaceId?: string;
 }
 
 export interface LocalWorkspaceStartup {
@@ -51,6 +53,7 @@ export function resolveLocalWorkspaceStartup(
       wsDir: opts.wsDir,
       appRoot: opts.appRoot,
       init: opts.init,
+      workspaceId: opts.workspaceId,
     });
     return {
       resolved,
@@ -65,6 +68,7 @@ export function resolveLocalWorkspaceStartup(
           name: opts.name,
           appRoot: opts.appRoot,
           init: opts.init,
+          workspaceId: opts.workspaceId,
         });
     return { resolved, isEphemeral: false };
   }
@@ -89,6 +93,7 @@ export function resolveLocalWorkspaceStartup(
       name: "default",
       appRoot: opts.appRoot,
       init: true,
+      workspaceId: opts.workspaceId,
     }),
     isEphemeral: false,
   };

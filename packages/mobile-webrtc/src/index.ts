@@ -30,7 +30,8 @@ export {
 } from "./storedCredential.js";
 export {
   randomRequestId,
-  makeShellTokenProvider,
+  makeFreshShellTokenProvider,
+  makeReturningShellTokenProvider,
   persistStoredMobileConnection,
   loadShellCredential,
   clearShellCredential,
@@ -46,7 +47,7 @@ export type {
   MobileHubWorkspaceRoute,
 } from "./hubControlClient.js";
 export type {
-  ShellPairing,
+  FreshShellPairing,
   StoredShellPairing,
   ShellCredential,
   StoredMobileConnection,

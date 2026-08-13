@@ -13,6 +13,7 @@
 
 import * as path from "path";
 import * as fs from "fs";
+import { resolveRequiredAppRoot } from "./appRoot.js";
 import { createServerLogStore } from "./services/serverLogStore.js";
 import type { AppCapability } from "@vibestudio/shared/unitManifest";
 import { GIT_INTEROP_PROVIDER_METHOD_NAMES } from "@vibestudio/service-schemas/gitInterop";
@@ -100,10 +101,11 @@ vibestudio-server — Headless and standalone Vibestudio server
 Usage:
   vibestudio-server [options]
   pnpm server:live [options]
-  node dist/server.mjs [options]
+  node dist/server.mjs --app-root <path> [options]
 
 Options:
-  --app-root <path>        Application root directory (default: cwd)
+  --app-root <path>        Exact application root directory (required unless
+                           VIBESTUDIO_APP_ROOT is set by the launcher)
   --bootstrap-workspace <name>
                            Register and use an existing workspace for first-run pairing
   --ready-file <path>      Write structured readiness JSON to this file
@@ -287,8 +289,7 @@ if (args.help) {
 const serverLogStore = createServerLogStore();
 const serverLogStartedAt = Date.now();
 serverLogStore.installConsoleCapture();
-process.env["VIBESTUDIO_APP_ROOT"] =
-  args.appRoot ?? process.env["VIBESTUDIO_APP_ROOT"] ?? process.cwd();
+process.env["VIBESTUDIO_APP_ROOT"] = resolveRequiredAppRoot({ argument: args.appRoot });
 if (args.logLevel) process.env["VIBESTUDIO_LOG_LEVEL"] = args.logLevel;
 // A boot identity is immutable process state, not a live view of the shared
 // checkout's latest build marker. Capture it before asynchronous startup so a
@@ -335,7 +336,7 @@ async function main() {
   // happens through paired clients. The flags below are a private contract for
   // Electron and hub-managed child runtimes after a workspace has been selected.
 
-  const appRoot = process.env["VIBESTUDIO_APP_ROOT"] ?? process.cwd();
+  const appRoot = process.env["VIBESTUDIO_APP_ROOT"]!;
   const processRole = process.env["VIBESTUDIO_PROCESS_ROLE"] ?? "hub";
   if (processRole !== "hub" && processRole !== "workspace-child") {
     throw new Error(
@@ -396,6 +397,7 @@ async function main() {
       name: wsName,
       init: args.init,
       requireExplicitSelection: isWorkspaceServer,
+      workspaceId,
     });
     // Managed directory names are storage coordinates, not workspace
     // identities. In particular, ephemeral children use a randomized disk
@@ -460,21 +462,22 @@ async function main() {
     await import("@vibestudio/shared/productBuiltinCatalog.generated");
   const { discoverPackageGraph: discoverAuthorityPackageGraph } =
     await import("./buildV2/packageGraph.js");
-  const capabilityServiceCatalog = [
-    ...PRODUCT_BUILTIN_CATALOG.flatMap((entry) =>
-      entry.kind === "service"
-        ? [
-            {
-              name: entry.name,
-              title: entry.title,
-              action: entry.action,
-              description: entry.description,
-              presentation: entry.presentation,
-              source: "vibestudio/internal",
-            },
-          ]
-        : []
-    ),
+  const productBuiltinCapabilityServices = PRODUCT_BUILTIN_CATALOG.flatMap((entry) =>
+    entry.kind === "service"
+      ? [
+          {
+            name: entry.name,
+            title: entry.title,
+            action: entry.action,
+            description: entry.description,
+            presentation: entry.presentation,
+            source: "vibestudio/internal",
+          },
+        ]
+      : []
+  );
+  let capabilityServiceCatalog = [
+    ...productBuiltinCapabilityServices,
     ...(workspaceConfig.services ?? []),
   ];
   // Authority presentation is used while projecting every build-unit catalog
@@ -515,7 +518,6 @@ async function main() {
     resolveHostTargetRequiredExtensions,
     WORKSPACE_EXTENSION_PROVIDER_NAMES,
     workspaceProviderExtensionPackageName,
-    workspaceExtensionRepoPath,
   } = await import("@vibestudio/workspace/configParser");
   const { setWorkspaceAppTrust } = await import("@vibestudio/shared/chromeTrust");
   const restartBoundManifestChanges = (
@@ -610,10 +612,6 @@ async function main() {
       if (providers?.cdpClient?.source)
         env["EVAL_CDP_CLIENT_SOURCE"] = providers.cdpClient.source.trim();
       return env;
-    }
-    if (className === "BrowserVaultDO") {
-      const declared = workspaceConfig.providers?.browserData?.extension;
-      return declared ? { BROWSER_DATA_BROKER_SOURCE: workspaceExtensionRepoPath(declared) } : {};
     }
     return {};
   };
@@ -957,6 +955,12 @@ async function main() {
   );
   let resolvedDoDispatchForTitles: import("./doDispatch.js").DODispatch | null = null;
   let presentationDispatch: ((method: string, args: unknown[]) => Promise<unknown>) | null = null;
+  const dispatchWorkspacePresentation = (method: string, args: unknown[]): Promise<unknown> => {
+    if (!presentationDispatch) {
+      throw new Error("workspace.presentation is not available");
+    }
+    return presentationDispatch(method, args);
+  };
   let developmentDispatch: ((method: string, args: unknown[]) => Promise<unknown>) | null = null;
   developmentRunRootProvider.bind({
     id: "development-run",
@@ -969,12 +973,6 @@ async function main() {
         { epoch },
       ])) as import("@vibestudio/shared/execution/retention").ExecutionRoot[];
     },
-  });
-  // EntityTitleService is a synchronous host projection of Base-owned titles.
-  // Its single durable writer is installed when workspace-presentation starts.
-  const { createEntityTitleService } = await import("./services/entityTitleService.js");
-  const entityTitleService = createEntityTitleService({
-    getPresentationDispatch: () => presentationDispatch,
   });
   const { createApprovalQueue } = await import("./services/approvalQueue.js");
   const { resolveApprovalCallerTitle, resolveApprovalRequester } =
@@ -992,7 +990,6 @@ async function main() {
   };
   const approvalRequesterDeps = {
     entityCache,
-    getTitle: (id: string) => entityTitleService.getTitle(id),
     getIcon: getWorkspaceUnitIcon,
   };
   const { InstallReviewSelectionStore } = await import("./services/installReviewSelections.js");
@@ -1317,7 +1314,9 @@ async function main() {
       credentialSessionGrantStore,
       tokenManager,
       connectionGrants,
-      entityTitleService,
+      clearPresentationTitle: async (entityId: string) => {
+        await dispatchWorkspacePresentation("setEntityTitle", [entityId, null]);
+      },
       resourceHandles: userlandResourceHandles,
       workspaceId,
       getFsService: () => {
@@ -1347,7 +1346,6 @@ async function main() {
       },
     });
   };
-  const buildDependencyWorkspaceRoot = resolveDependencyWorkspaceRoot(workspacePath);
   if (process.env["VIBESTUDIO_DOGFOOD"] === "1") {
     console.warn(
       "[Dogfood] VIBESTUDIO_DOGFOOD git-fast-forward mirroring is unavailable under the GAD vcs; " +
@@ -1445,12 +1443,26 @@ async function main() {
     },
   });
   await rootTemplateBootstrap.prepareSource();
+  // A freshly created external-root workspace initially contains only its
+  // creation descriptor. Bootstrap must materialize the exact Base snapshot
+  // before dependency discovery can require package/workspace metadata. Keep
+  // the strict active-workspace boundary; order its validation after the
+  // semantic source actually exists.
+  const buildDependencyWorkspaceRoot = resolveDependencyWorkspaceRoot(workspacePath);
   const { parseWorkspaceConfigContentWithId } = await import("@vibestudio/workspace/configParser");
   const materializedWorkspaceConfig = parseWorkspaceConfigContentWithId(
     fs.readFileSync(path.join(workspacePath, "meta", "vibestudio.yml"), "utf8"),
     workspaceId
   );
   replaceWorkspaceConfig(workspaceConfig, materializedWorkspaceConfig);
+  capabilityServiceCatalog = [
+    ...productBuiltinCapabilityServices,
+    ...(workspaceConfig.services ?? []),
+  ];
+  // Root acquisition can surface a host approval before source materializes.
+  // If presentation happened to inspect userland capability declarations,
+  // discard that descriptor-only graph so all later reviews derive from Base.
+  cachedAuthorityCapabilities = null;
   const workspaceDecls = buildWorkspaceDeclarations(workspaceConfig);
   const resolvedWorkspaceSource = resolveWorkspaceService(
     workspaceDecls,
@@ -1481,8 +1493,8 @@ async function main() {
     workspaceId,
     extractMainToSource: false,
   });
-  // Set only by the trusted one-time import from the host-shipped workspace
-  // template. Protected main is mutable and must never be substituted here.
+  // Set only by the trusted one-time import from the exact promoted Base
+  // snapshot. Protected main is mutable and must never be substituted here.
   let productSeedStateHash: string | null = null;
   let trustedBootstrapStateHash: string | null = null;
   const readWorkspaceFileAtState = async (
@@ -1517,7 +1529,9 @@ async function main() {
       isBootstrapRepository: async (repoPath) => {
         const stateHash = trustedBootstrapStateHash;
         if (!stateHash) return false;
-        return (await readWorkspaceFileAtState(stateHash, `${repoPath}/package.json`)) !== null;
+        return (
+          (await bootstrapWorkspaceSource.readFile(stateHash, `${repoPath}/package.json`)) !== null
+        );
       },
       hostBuildVersion: () => serverVersion,
       admittedOriginKeys: () => unitAdmissionStore.admittedOriginKeys(),
@@ -1627,7 +1641,7 @@ async function main() {
       const owner =
         active.find((e) => e.kind === "panel") ?? active.find((e) => e.kind === "app") ?? active[0];
       if (!owner) return undefined;
-      return entityTitleService.getTitle(owner.id) ?? owner.source.repoPath ?? owner.id;
+      return owner.source.repoPath ?? owner.id;
     },
   };
 
@@ -2613,7 +2627,7 @@ async function main() {
         // The one ungated publication owes a review. Record the root template
         // it landed so the review can head with where the code came from —
         // URL and human ref only, never a commit id (§7.1, §7.6.3).
-        const pin = rootTemplateBootstrap.readDescriptor()?.rootTemplate ?? null;
+        const pin = rootTemplateBootstrap.readDescriptor().rootTemplate;
         workspaceCreationReview.markPending(
           pin ? { url: pin.url, ref: pin.ref, version: pin.ref } : undefined
         );
@@ -3410,6 +3424,54 @@ async function main() {
     null;
 
   {
+    const { createBrowserVaultNativeService } =
+      await import("./services/browserVaultNativeService.js");
+    let browserVaultNativeDefinition:
+      | import("@vibestudio/shared/serviceDefinition").ServiceDefinition
+      | null = null;
+    container.registerManaged({
+      name: "browser-vault-native",
+      dependencies: ["workerdWorkspace", "doDispatch"],
+      async start(resolve) {
+        browserVaultNativeDefinition = createBrowserVaultNativeService({
+          doDispatch: assertPresent(resolve<import("./doDispatch.js").DODispatch>("doDispatch")),
+          workspaceId,
+        });
+      },
+      getServiceDefinition() {
+        if (!browserVaultNativeDefinition) {
+          throw new Error("browser-vault-native service not initialized");
+        }
+        return browserVaultNativeDefinition;
+      },
+    });
+  }
+
+  {
+    const { createShellBrowserPrivacyService } =
+      await import("./services/shellBrowserPrivacyService.js");
+    let shellBrowserPrivacyDefinition:
+      | import("@vibestudio/shared/serviceDefinition").ServiceDefinition
+      | null = null;
+    container.registerManaged({
+      name: "shell-browser-privacy",
+      dependencies: ["workerdWorkspace", "doDispatch"],
+      async start(resolve) {
+        shellBrowserPrivacyDefinition = createShellBrowserPrivacyService({
+          doDispatch: assertPresent(resolve<import("./doDispatch.js").DODispatch>("doDispatch")),
+          workspaceId,
+        });
+      },
+      getServiceDefinition() {
+        if (!shellBrowserPrivacyDefinition) {
+          throw new Error("shell-browser-privacy service not initialized");
+        }
+        return shellBrowserPrivacyDefinition;
+      },
+    });
+  }
+
+  {
     const { createWorkspaceStateService } = await import("./services/workspaceStateService.js");
     let workspaceStateDefinition:
       | import("@vibestudio/shared/serviceDefinition").ServiceDefinition
@@ -3451,18 +3513,10 @@ async function main() {
           );
         };
         presentationDispatch = dispatchPresentation;
-        // Now that doDispatch is up, the title cache can talk to the DO.
-        // Hydrate so synchronous getTitle() lookups (used by approvalQueue
-        // when building a PendingApproval) see existing titles from previous
-        // sessions. Best-effort — failures keep an empty cache until the
-        // first explicit write.
         resolvedDoDispatchForTitles = doDispatch;
-        void entityTitleService.hydrate();
         workspaceStateDefinition = createWorkspaceStateService({
           doDispatch,
           workspaceId,
-          presentationDispatch: dispatchPresentation,
-          getUnitIcon: getWorkspaceUnitIcon,
           panelAccess: (
             await import("./services/createPanelAccessPermissionDeps.js")
           ).createPanelAccessPermissionDeps({
@@ -3471,12 +3525,6 @@ async function main() {
             lifecycleContextStore,
             getAppHost: () => appHostForGateway,
           }),
-          // Base owns durable titles. This callback mirrors an accepted write
-          // into the host's short-lived authority/presentation cache.
-          onPanelTitleChanged: (entityId, title, explicit) => {
-            entityTitleService.mirrorCachedTitle(entityId, title, { explicit });
-          },
-          isEntityTitleExplicit: (entityId) => entityTitleService.isExplicit(entityId),
           onAlarmChanged: () => alarmDriverInstance?.notifyChanged(),
           onSlotStateChanged: notifySlotStateListeners,
         });
@@ -3809,8 +3857,13 @@ async function main() {
           contextBoundary: contextBoundaryDeps,
           hasAppCapability: (callerId, capability) =>
             appHostForGateway?.hasAppCapability(callerId, capability) ?? false,
-          setEntityTitle: (entityId, title, options) =>
-            entityTitleService.setTitle(entityId, title, options),
+          setEntityTitle: async (entityId, title, options) => {
+            await dispatchWorkspacePresentation("setEntityTitle", [
+              entityId,
+              title ?? null,
+              options ?? {},
+            ]);
+          },
           onExecutionRecovery: (event) => {
             const active = entityCache.resolveActive(event.entityId);
             runtimeDiagnostics.record({
@@ -4011,10 +4064,8 @@ async function main() {
   // Child ingress is armed exclusively by authenticated hub control requests.
   // Exact transport ownership is injected from the advertised workspace's
   // hub-owned reach tree, outside resettable semantic/runtime state.
-  let webrtcPairing: Omit<
-    import("@vibestudio/shared/connect").ConnectPairing,
-    "code" | "room"
-  > | null = null;
+  let webrtcPairing: Omit<import("@vibestudio/shared/connect").ReconnectReach, "room"> | null =
+    null;
   let webrtcIngress: import("./webrtcIngress.js").WebRtcIngress | null = null;
   const { RoutedRoomStore, replaceRoutedRoom, routedRoomKey } =
     await import("./hostCore/routedRoomStore.js");
@@ -4124,6 +4175,7 @@ async function main() {
   panelRuntimeCoordinatorForCleanup = panelRuntimeCoordinator;
   const { wireDevelopmentNative } = await import("./bootstrap/developmentNative.js");
   await wireDevelopmentNative({
+    appRoot,
     container,
     workspaceId,
     workspaceVcs,
@@ -4251,7 +4303,6 @@ async function main() {
             "panelTreeDetail",
             slotId
           )) as {
-            slot: { current_entity_title?: string | null };
             currentHistory: { source: string; context_id: string };
             entity: { id: string };
           } | null;
@@ -4332,7 +4383,7 @@ async function main() {
             contextBoundary.operation,
             {
               id: slotId,
-              title: detail.slot.current_entity_title ?? slotId,
+              title: slotId,
               source: detail.currentHistory.source,
               kind: isOpenPanelBrowserUrl(detail.currentHistory.source) ? "browser" : "workspace",
               runtimeEntityId: detail.entity.id,
@@ -4512,17 +4563,34 @@ async function main() {
     },
   });
   {
-    const { createConnectedClientTransportService } =
-      await import("./services/connectedClientTransportService.js");
+    const { createPhoneNativeEndpointService } =
+      await import("./services/phoneNativeEndpointService.js");
     container.registerRpc(
-      createConnectedClientTransportService({
+      createPhoneNativeEndpointService({
         getUserConnections: (userId) =>
           assertPresent(rpcServerForGateway).getUserConnections(userId),
         getClientBridge: (callerId) => assertPresent(rpcServerForGateway).getClientBridge(callerId),
       })
     );
   }
-
+  {
+    const { workspaceProviderExtensionRepoPath } =
+      await import("@vibestudio/workspace/configParser");
+    const { createBrowserPrivacyPresentationService } =
+      await import("./services/browserPrivacyPresentationService.js");
+    const browserDataBrokerRepoPath = workspaceProviderExtensionRepoPath(
+      workspaceConfig,
+      "browserData"
+    );
+    container.registerRpc(
+      createBrowserPrivacyPresentationService({
+        browserDataBrokerRepoPath,
+        getAuthorizingShell: (principalId) =>
+          assertPresent(rpcServerForGateway).getAuthorizingShell(principalId),
+        getClientBridge: (callerId) => assertPresent(rpcServerForGateway).getClientBridge(callerId),
+      })
+    );
+  }
   // Revocation invalidates identity immediately, while RpcServer keeps only an
   // already-running request alive long enough to queue its response. Routed
   // reach can then be removed at that exact transport retirement boundary.
@@ -5703,22 +5771,6 @@ async function main() {
     }),
     resolveCallerContext: (callerId: string) => getEntityStore().resolveContext(callerId),
     approvalQueue,
-    registerEntityTitlePersistedListener: (
-      listener: (
-        entityId: string,
-        title: string | undefined,
-        origin: "set" | "set-explicit" | "mirror" | "clear"
-      ) => void | Promise<void>
-    ) =>
-      entityTitleService.onPersisted((entityId, title, origin) => {
-        void Promise.resolve(listener(entityId, title, origin)).catch((error: unknown) => {
-          console.warn(
-            `[entityTitleService] persisted panel title listener failed: ${
-              error instanceof Error ? error.message : String(error)
-            }`
-          );
-        });
-      }),
     registerSlotStateListener: (listener: () => void) => {
       slotStateListeners.add(listener);
       return () => slotStateListeners.delete(listener);
@@ -5732,7 +5784,6 @@ async function main() {
     supervisor: unitSupervisor,
     entityCache,
     diagnostics: runtimeDiagnostics,
-    titleFor: (entityId) => entityTitleService.getTitle(entityId),
     restartPanel: async (_ctx, entity) => {
       const slotId = (await dispatcher.dispatch(
         { caller: createHostCaller("server") },

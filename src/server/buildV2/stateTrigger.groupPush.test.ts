@@ -4,7 +4,7 @@ import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { discoverPackageGraph } from "./packageGraph.js";
-import { computeEffectiveVersions } from "./effectiveVersion.js";
+import { computeEffectiveVersions, setBuildRootConfig } from "./effectiveVersion.js";
 import { setBuildSourceProvider, type BuildSourceProvider } from "./buildSource.js";
 import { StateTransitionTrigger, type WorkspaceStateSource } from "./stateTrigger.js";
 import type { ProtectedPublicationEvent } from "@vibestudio/shared/protectedPublicationEvents";
@@ -22,6 +22,7 @@ describe("StateTransitionTrigger — multi-repo group push", () => {
   beforeEach(() => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-grouppush-"));
     workspaceRoot = path.join(root, "workspace");
+    setBuildRootConfig({ appRoot: process.cwd(), workspaceRoot });
     for (const name of ["a", "b"]) {
       const dir = path.join(workspaceRoot, "packages", name);
       fs.mkdirSync(dir, { recursive: true });
@@ -37,6 +38,7 @@ describe("StateTransitionTrigger — multi-repo group push", () => {
     trigger?.stop();
     trigger = null;
     setBuildSourceProvider(null);
+    setBuildRootConfig(null);
     fs.rmSync(root, { recursive: true, force: true });
   });
 

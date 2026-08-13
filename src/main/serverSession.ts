@@ -38,6 +38,7 @@ import {
   parseSignalingEndpoint,
   serverAuthRouteUrl,
   type ConnectPairing,
+  type ReconnectReach,
 } from "@vibestudio/shared/connect";
 import {
   FRESH_REMOTE_STARTUP_CONNECTION_PHASES,
@@ -173,7 +174,7 @@ function buildServerInfo(
  * provider derived from the persisted device credential.
  */
 export function connectRemoteViaWebRtc(
-  pairing: ConnectPairing,
+  pairing: ReconnectReach,
   options: {
     /** The shell's caller id, e.g. `shell:<deviceId>`. */
     callerId: string;
@@ -440,26 +441,20 @@ async function establishRemoteSession(
   // the control and workspace dials are independent and run concurrently.
   phase("connect-server-and-workspace");
   const dials = await Promise.allSettled([
-    connectRemoteViaWebRtc(
-      { ...stored.controlPairing, code: "" },
-      {
-        callerId: `shell:${stored.deviceId}`,
-        getShellToken: auth,
-        onPaired: rotate,
-      }
-    ),
-    connectRemoteViaWebRtc(
-      { ...stored.workspacePairing, code: "" },
-      {
-        callerId: `shell:${stored.deviceId}`,
-        getShellToken: auth,
-        onPaired: rotate,
-        onConnectionStatusChanged: args.onConnectionStatusChanged,
-        onReconnectProgress: args.onReconnectProgress,
-        onRecovery: args.onRecovery,
-        onMainSessionTerminalClose: args.onMainSessionTerminalClose,
-      }
-    ),
+    connectRemoteViaWebRtc(stored.controlPairing, {
+      callerId: `shell:${stored.deviceId}`,
+      getShellToken: auth,
+      onPaired: rotate,
+    }),
+    connectRemoteViaWebRtc(stored.workspacePairing, {
+      callerId: `shell:${stored.deviceId}`,
+      getShellToken: auth,
+      onPaired: rotate,
+      onConnectionStatusChanged: args.onConnectionStatusChanged,
+      onReconnectProgress: args.onReconnectProgress,
+      onRecovery: args.onRecovery,
+      onMainSessionTerminalClose: args.onMainSessionTerminalClose,
+    }),
   ]);
   const [hubDial, workspaceDial] = dials;
   if (hubDial.status === "rejected" || workspaceDial.status === "rejected") {
@@ -616,27 +611,24 @@ async function establishFreshPairSession(
       return `refresh:${active.deviceId}:${active.refreshToken}`;
     };
     phase("connect-workspace");
-    workspaceClient = await connectRemoteViaWebRtc(
-      { ...currentStored.workspacePairing, code: "" },
-      {
-        callerId: `shell:${currentStored.deviceId}`,
-        getShellToken: auth,
-        onPaired: (credential) => {
-          if (!currentStored) return;
-          currentStored = {
-            ...currentStored,
-            deviceId: credential.deviceId,
-            refreshToken: credential.refreshToken,
-            rotatedAt: Date.now(),
-          };
-          saveDeviceCredential(currentStored);
-        },
-        onConnectionStatusChanged: args.onConnectionStatusChanged,
-        onReconnectProgress: args.onReconnectProgress,
-        onRecovery: args.onRecovery,
-        onMainSessionTerminalClose: args.onMainSessionTerminalClose,
-      }
-    );
+    workspaceClient = await connectRemoteViaWebRtc(currentStored.workspacePairing, {
+      callerId: `shell:${currentStored.deviceId}`,
+      getShellToken: auth,
+      onPaired: (credential) => {
+        if (!currentStored) return;
+        currentStored = {
+          ...currentStored,
+          deviceId: credential.deviceId,
+          refreshToken: credential.refreshToken,
+          rotatedAt: Date.now(),
+        };
+        saveDeviceCredential(currentStored);
+      },
+      onConnectionStatusChanged: args.onConnectionStatusChanged,
+      onReconnectProgress: args.onReconnectProgress,
+      onRecovery: args.onRecovery,
+      onMainSessionTerminalClose: args.onMainSessionTerminalClose,
+    });
     phase("prepare-workspace-session");
     const connection = await buildRemoteSessionConnection(
       workspaceClient,
@@ -665,7 +657,7 @@ async function establishFreshPairSession(
 }
 
 function storedReach(
-  reach: HubWorkspaceRoute["workspaceReach"] | Omit<ConnectPairing, "code">
+  reach: HubWorkspaceRoute["workspaceReach"] | ReconnectReach
 ): StoredRemote["controlPairing"] {
   const signaling = parseSignalingEndpoint(reach.sig);
   if (signaling.kind === "error") throw new Error(signaling.reason);

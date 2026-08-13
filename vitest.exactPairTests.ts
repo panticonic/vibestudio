@@ -1,6 +1,5 @@
 /** Host tests whose subject is the exact host/Base composition, not either repository alone. */
 export const exactPairTests = [
-  "tests/dogfood-server.test.ts",
   "tests/invocation-terminal-outcome.test.ts",
   "tests/mobile-native-asset-store.test.ts",
   "tests/mobile-script-ux.test.ts",

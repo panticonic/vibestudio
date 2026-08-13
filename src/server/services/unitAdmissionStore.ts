@@ -141,13 +141,6 @@ export class UnitAdmissionStore {
     this.writeState = opts.writeFileAtomic ?? writeFileAtomicSync;
     const layout = stateLayout(opts.statePath).authority;
     this.filePath = path.join(layout.root, "admitted-unit-versions.json");
-    // Cutover, not migration: the all-or-nothing schema has no reader here, and
-    // its file is removed rather than translated.
-    try {
-      fs.rmSync(layout.approvedUnitVersionsFile, { force: true });
-    } catch {
-      // A read-only state directory simply leaves the orphan in place.
-    }
     this.load();
   }
 
@@ -431,13 +424,9 @@ export class UnitAdmissionStore {
     }
     const parsed = JSON.parse(source) as Partial<AdmittedUnitVersionFile>;
     if (parsed.schemaVersion !== 4 || !Array.isArray(parsed.admissions)) {
-      // Cutover, not migration. An older file records admissions that were
-      // taken when admission still implied blanket authority, so re-reading it
-      // would leave units admitted and ungranted — running, but asking for
-      // things they were already allowed. Discarding it re-offers the creation
-      // review, which is the decision that mints clearance honestly.
-      fs.rmSync(this.filePath, { force: true });
-      return;
+      throw new Error(
+        "Unit admission state is not from the current system epoch; recreate this pre-release instance"
+      );
     }
     for (const admission of parsed.admissions) {
       if (!isAdmission(admission)) {

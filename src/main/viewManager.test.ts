@@ -117,9 +117,25 @@ import { ViewManager } from "./viewManager.js";
 function declareAndAttachPanelSlot(
   manager: ViewManager,
   ownerViewId: string,
-  request: Parameters<ViewManager["bindPanelSlot"]>[1]
+  request: Omit<
+    Parameters<ViewManager["bindPanelSlot"]>[1],
+    "rendererInstanceId" | "bindingSequence" | "operationSequence"
+  > &
+    Partial<
+      Pick<
+        Parameters<ViewManager["bindPanelSlot"]>[1],
+        "rendererInstanceId" | "bindingSequence" | "operationSequence"
+      >
+    >
 ) {
-  const result = manager.bindPanelSlot(ownerViewId, request);
+  const rendererInstanceId = request.rendererInstanceId ?? "renderer-test";
+  manager.setHostedShellReady(ownerViewId, true, rendererInstanceId);
+  const result = manager.bindPanelSlot(ownerViewId, {
+    bindingSequence: 1,
+    operationSequence: 1,
+    ...request,
+    rendererInstanceId,
+  });
   if (result.status === "bound") manager.attachDeclaredPanelSlot(request.panelId);
   return result;
 }
@@ -454,7 +470,10 @@ describe("ViewManager", () => {
       mockWindow.contentView.addChildView(panelView);
       vm.updatePanelSlot("@workspace-apps/shell", {
         nativeSlotId: "panel-stack:primary",
+        rendererInstanceId: "renderer-test",
         bindingId: "binding-test",
+        bindingSequence: 1,
+        operationSequence: 2,
         bounds: { x: 260, y: 32, width: 940, height: 768 },
       });
 
@@ -530,6 +549,70 @@ describe("ViewManager", () => {
           slots: [],
         })
       ).toThrow(/stale native panel snapshot revision/);
+    });
+
+    it("implements the generation-fenced panel-host protocol at the Electron boundary", async () => {
+      vm.createView({
+        id: "@workspace-apps/shell",
+        type: "app",
+        hostChrome: true,
+        appCapabilities: ["panel-hosting"],
+      });
+      vm.createView({ id: "panel-1", type: "panel" });
+      const connected = vm.connectNativePanelAdapter("@workspace-apps/shell", {
+        sealedLaunchIdentity: "@workspace-apps/shell",
+        supportedProtocolVersions: [1],
+      });
+      expect(connected.accepted).toBe(true);
+      if (!connected.accepted) throw new Error("expected Electron panel host handshake");
+      const desired = {
+        protocolVersion: 1 as const,
+        hostGeneration: connected.handshake.hostGeneration,
+        shellGeneration: connected.handshake.shellGeneration,
+        revision: 1,
+        surfaces: [
+          {
+            surfaceId: "slot-1",
+            materialization: {
+              runtimeEntityId: "panel-1",
+              leaseConnectionId: "lease-1",
+            },
+            visible: true,
+            focused: true,
+            bounds: { x: 10, y: 20, width: 300, height: 200 },
+          },
+        ],
+      };
+
+      await expect(
+        vm.applyNativePanelSurfaces("@workspace-apps/shell", desired)
+      ).resolves.toMatchObject({
+        accepted: true,
+        observation: {
+          desiredRevision: 1,
+          surfaces: [{ surfaceId: "slot-1" }],
+        },
+      });
+      await expect(
+        vm.applyNativePanelSurfaces("@workspace-apps/shell", desired)
+      ).resolves.toMatchObject({ accepted: true });
+      await expect(
+        vm.applyNativePanelSurfaces("@workspace-apps/shell", {
+          ...desired,
+          hostGeneration: "foreign-host",
+          revision: 2,
+        })
+      ).resolves.toEqual({ accepted: false, reason: "foreign-host-generation" });
+
+      const replacement = vm.connectNativePanelAdapter("@workspace-apps/shell", {
+        sealedLaunchIdentity: "@workspace-apps/shell",
+        supportedProtocolVersions: [1],
+      });
+      expect(replacement.accepted).toBe(true);
+      await expect(vm.applyNativePanelSurfaces("@workspace-apps/shell", desired)).resolves.toEqual({
+        accepted: false,
+        reason: "stale-shell-generation",
+      });
     });
 
     it("keeps an unbound panel hidden until hosted shell binds its measured slot", () => {
@@ -648,7 +731,10 @@ describe("ViewManager", () => {
       });
       vm.updatePanelSlot("@workspace-apps/shell", {
         nativeSlotId: request.nativeSlotId,
+        rendererInstanceId: "renderer-test",
         bindingId: "binding-new",
+        bindingSequence: 1,
+        operationSequence: 2,
         focused: true,
       });
 
@@ -674,7 +760,10 @@ describe("ViewManager", () => {
       expect(
         vm.updatePanelSlot("@workspace-apps/shell", {
           nativeSlotId: "panel-stack:primary",
+          rendererInstanceId: "renderer-test",
           bindingId: "binding-test",
+          bindingSequence: 1,
+          operationSequence: 2,
           bounds: { x: 12, y: 24, width: 320, height: 220 },
         })
       ).toEqual({ status: "updated" });
@@ -686,7 +775,11 @@ describe("ViewManager", () => {
         height: 220,
       });
 
-      vm.clearPanelSlot("@workspace-apps/shell", "panel-stack:primary", "binding-test");
+      vm.clearPanelSlot("@workspace-apps/shell", "panel-stack:primary", "binding-test", {
+        rendererInstanceId: "renderer-test",
+        bindingSequence: 1,
+        operationSequence: 3,
+      });
 
       expect(panelView.setVisible).toHaveBeenLastCalledWith(false);
       expect(vm.isPanelSlotted("panel-1")).toBe(false);
@@ -730,50 +823,76 @@ describe("ViewManager", () => {
         bounds: { x: 12, y: 24, width: 320, height: 220 },
       });
 
-      vm.clearPanelSlot("@workspace-apps/shell", "panel-stack:primary", "binding-old");
+      vm.clearPanelSlot("@workspace-apps/shell", "panel-stack:primary", "binding-old", {
+        rendererInstanceId: "renderer-test",
+        bindingSequence: 1,
+        operationSequence: 2,
+      });
 
       expect(vm.isPanelSlotted("panel-1")).toBe(true);
       expect(panelView.setVisible).not.toHaveBeenLastCalledWith(false);
       expect(
         vm.updatePanelSlot("@workspace-apps/shell", {
           nativeSlotId: "panel-stack:primary",
+          rendererInstanceId: "renderer-test",
           bindingId: "binding-new",
+          bindingSequence: 1,
+          operationSequence: 2,
           focused: true,
         })
       ).toEqual({ status: "updated" });
     });
 
-    it("rejects a bind delivered after its binding was already released", () => {
-      const panelView = vm.createView({ id: "panel-1", type: "panel" });
+    it("rejects reuse of a complete desired-state revision with different content", () => {
+      vm.createView({ id: "panel-1", type: "panel" });
       vm.createView({
         id: "@workspace-apps/shell",
         type: "app",
         hostChrome: true,
         appCapabilities: ["panel-hosting"],
       });
-      vm.setHostedShellReady("@workspace-apps/shell", true);
-
-      vm.clearPanelSlot("@workspace-apps/shell", "panel-stack:primary", "binding-a", {
-        bindingSequence: 1,
-        operationSequence: 2,
-      });
-      expect(
-        declareAndAttachPanelSlot(vm, "@workspace-apps/shell", {
-          nativeSlotId: "panel-stack:primary",
-          bindingId: "binding-a",
-          bindingSequence: 1,
-          operationSequence: 1,
-          panelId: "panel-1",
-          bounds: { x: 10, y: 20, width: 300, height: 200 },
-          focused: true,
+      vm.setHostedShellReady("@workspace-apps/shell", true, "renderer-test");
+      const first = {
+        rendererInstanceId: "renderer-test",
+        revision: 1,
+        slots: [
+          {
+            nativeSlotId: "panel-stack:primary",
+            bindingId: "binding-a",
+            bindingSequence: 1,
+            panelId: "panel-1",
+            bounds: { x: 10, y: 20, width: 300, height: 200 },
+            focused: true,
+          },
+        ],
+      };
+      expect(vm.syncPanelSlots("@workspace-apps/shell", first)).toMatchObject({ revision: 1 });
+      expect(() =>
+        vm.syncPanelSlots("@workspace-apps/shell", {
+          ...first,
+          slots: [],
         })
-      ).toEqual({
-        status: "missing",
-        reason: "stale native panel slot bind: panel-stack:primary",
-      });
+      ).toThrow(/stale native panel snapshot revision/);
+      expect(vm.isPanelSlotted("panel-1")).toBe(true);
+    });
 
+    it("accepts an empty complete snapshot as the sole clear operation", () => {
+      vm.createView({ id: "panel-1", type: "panel" });
+      vm.createView({
+        id: "@workspace-apps/shell",
+        type: "app",
+        hostChrome: true,
+        appCapabilities: ["panel-hosting"],
+      });
+      vm.setHostedShellReady("@workspace-apps/shell", true, "renderer-test");
+      expect(
+        vm.syncPanelSlots("@workspace-apps/shell", {
+          rendererInstanceId: "renderer-test",
+          revision: 1,
+          slots: [],
+        })
+      ).toEqual({ revision: 1, slots: {} });
       expect(vm.isPanelSlotted("panel-1")).toBe(false);
-      expect(panelView.setVisible).not.toHaveBeenCalledWith(true);
     });
 
     it("keeps the newest binding when an older claim is delivered late", () => {
@@ -847,6 +966,7 @@ describe("ViewManager", () => {
       // Cleanup from the superseded surface remains stale, but that is safe:
       // accepting the newer desired owner already removed its pixels.
       vm.clearPanelSlot("@workspace-apps/shell", "panel-stack:primary", "binding-old", {
+        rendererInstanceId: "renderer-test",
         bindingSequence: 1,
         operationSequence: 2,
       });
@@ -967,34 +1087,16 @@ describe("ViewManager", () => {
 
       // Clearing the slot detaches the listener; a late native focus event
       // must not resurrect focus state for an unbound slot.
-      vm.clearPanelSlot("@workspace-apps/shell", "panel-stack:pane-a", "binding-test");
+      vm.clearPanelSlot("@workspace-apps/shell", "panel-stack:pane-a", "binding-test", {
+        rendererInstanceId: "renderer-test",
+        bindingSequence: 1,
+        operationSequence: 2,
+      });
       expect(panelView.webContents.off).toHaveBeenCalledWith("focus", focusHandler);
       focusHandler?.();
       expect(focused).toHaveLength(1);
       expect(vm.getSlotBoundPanelIds()).toEqual([]);
       unsubscribe();
-    });
-
-    it("reports missing slots so the hosted shell can rebind", () => {
-      vm.createView({
-        id: "@workspace-apps/shell",
-        type: "app",
-        hostChrome: true,
-        appCapabilities: ["panel-hosting"],
-      });
-
-      vm.setHostedShellReady("@workspace-apps/shell", true);
-
-      expect(
-        vm.updatePanelSlot("@workspace-apps/shell", {
-          nativeSlotId: "panel-stack:primary",
-          bindingId: "binding-test",
-          bounds: { x: 12, y: 24, width: 320, height: 220 },
-        })
-      ).toEqual({
-        status: "missing",
-        reason: "unknown native panel slot: panel-stack:primary",
-      });
     });
 
     it("reasserts active slot surfaces when a hidden window is shown again", () => {
@@ -1265,7 +1367,11 @@ describe("ViewManager", () => {
       });
 
       vm.destroyView("panel-1");
-      vm.clearPanelSlot("@workspace-apps/shell", "panel-stack:primary", "binding-test");
+      vm.clearPanelSlot("@workspace-apps/shell", "panel-stack:primary", "binding-test", {
+        rendererInstanceId: "renderer-test",
+        bindingSequence: 1,
+        operationSequence: 2,
+      });
 
       const recreated = vm.createView({ id: "panel-1", type: "panel" });
 

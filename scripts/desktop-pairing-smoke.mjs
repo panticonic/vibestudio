@@ -291,6 +291,7 @@ function buildConnectDeepLinkFromLog(loggedLink) {
     sig: parsed.sig,
     v: parsed.v,
     ice: parsed.ice,
+    exp: parsed.exp,
   });
 }
 
@@ -431,14 +432,16 @@ async function waitForShellOverlayCleared(app, timeoutMs) {
 }
 
 async function collectShellSnapshots(app) {
-  return evaluateElectron(app, async ({ webContents }) => {
-    const snapshots = [];
-    for (const contents of webContents.getAllWebContents()) {
-      if (contents.isDestroyed()) continue;
-      const url = contents.getURL();
-      try {
-        const dom = await contents.executeJavaScript(
-          `(() => {
+  return evaluateElectron(
+    app,
+    async ({ webContents }) => {
+      const snapshots = [];
+      for (const contents of webContents.getAllWebContents()) {
+        if (contents.isDestroyed()) continue;
+        const url = contents.getURL();
+        try {
+          const dom = await contents.executeJavaScript(
+            `(() => {
             const text = document.body?.innerText ?? "";
             const buttons = Array.from(document.querySelectorAll("button"))
               .map((button) => button.textContent?.trim() ?? "")
@@ -460,32 +463,37 @@ async function collectShellSnapshots(app) {
               hasHostedShellChrome,
             };
           })()`,
-          true
-        );
-        snapshots.push({
-          id: contents.id,
-          url,
-          title: contents.getTitle(),
-          ...dom,
-        });
-      } catch {
-        // Ignore non-DOM webContents.
+            true
+          );
+          snapshots.push({
+            id: contents.id,
+            url,
+            title: contents.getTitle(),
+            ...dom,
+          });
+        } catch {
+          // Ignore non-DOM webContents.
+        }
       }
-    }
-    return snapshots;
-  }, undefined, "collecting shell snapshots");
+      return snapshots;
+    },
+    undefined,
+    "collecting shell snapshots"
+  );
 }
 
 async function clickDesktopButton(app, label) {
   try {
-    return await evaluateElectron(app, async ({ webContents }, labelSource) => {
-    const label = new RegExp(labelSource, "i");
-    const candidates = [];
-    for (const contents of webContents.getAllWebContents()) {
-      if (contents.isDestroyed()) continue;
-      try {
-        const priority = await contents.executeJavaScript(
-          `(() => {
+    return await evaluateElectron(
+      app,
+      async ({ webContents }, labelSource) => {
+        const label = new RegExp(labelSource, "i");
+        const candidates = [];
+        for (const contents of webContents.getAllWebContents()) {
+          if (contents.isDestroyed()) continue;
+          try {
+            const priority = await contents.executeJavaScript(
+              `(() => {
               const hasLaunchGateApproval = Boolean(document.querySelector('[data-bootstrap-launch-gate="true"]'));
               const hasHostedShellChrome = Boolean(
                 document.querySelector('[data-shell-top-chrome="titlebar"]')
@@ -496,19 +504,19 @@ async function clickDesktopButton(app, label) {
               if (hasHostedShellChrome) return 2;
               return 3;
             })()`,
-          true
-        );
-        candidates.push({ contents, priority });
-      } catch {
-        // Ignore non-DOM webContents.
-      }
-    }
-    candidates.sort((a, b) => a.priority - b.priority);
-    for (const { contents } of candidates) {
-      if (contents.isDestroyed()) continue;
-      try {
-        const clicked = await contents.executeJavaScript(
-          `(() => {
+              true
+            );
+            candidates.push({ contents, priority });
+          } catch {
+            // Ignore non-DOM webContents.
+          }
+        }
+        candidates.sort((a, b) => a.priority - b.priority);
+        for (const { contents } of candidates) {
+          if (contents.isDestroyed()) continue;
+          try {
+            const clicked = await contents.executeJavaScript(
+              `(() => {
               const label = new RegExp(${JSON.stringify(labelSource)}, "i");
               const button = Array.from(document.querySelectorAll("button"))
                 .find((item) => label.test(item.textContent?.trim() ?? ""));
@@ -516,27 +524,32 @@ async function clickDesktopButton(app, label) {
               button.click();
               return true;
             })()`,
-          true
-        );
-        if (clicked) return true;
-      } catch {
-        // Ignore non-DOM webContents.
-      }
-    }
-    return false;
-    }, label.source, "clicking a desktop button");
+              true
+            );
+            if (clicked) return true;
+          } catch {
+            // Ignore non-DOM webContents.
+          }
+        }
+        return false;
+      },
+      label.source,
+      "clicking a desktop button"
+    );
   } catch {
     return false;
   }
 }
 
 async function dismissConnectionDialog(app) {
-  return evaluateElectron(app, async ({ webContents }) => {
-    for (const contents of webContents.getAllWebContents()) {
-      if (contents.isDestroyed()) continue;
-      try {
-        const dismissed = await contents.executeJavaScript(
-          `(() => {
+  return evaluateElectron(
+    app,
+    async ({ webContents }) => {
+      for (const contents of webContents.getAllWebContents()) {
+        if (contents.isDestroyed()) continue;
+        try {
+          const dismissed = await contents.executeJavaScript(
+            `(() => {
               const dialog = document.querySelector('[role="dialog"]');
               const text = dialog?.textContent ?? "";
               if (!/paired devices/i.test(text) || !/Pair & relaunch/i.test(text)) return false;
@@ -546,44 +559,59 @@ async function dismissConnectionDialog(app) {
               cancel.click();
               return true;
             })()`,
-          true
-        );
-        if (dismissed) return true;
-      } catch {
-        // Ignore non-DOM webContents.
+            true
+          );
+          if (dismissed) return true;
+        } catch {
+          // Ignore non-DOM webContents.
+        }
       }
-    }
-    return false;
-  }, undefined, "dismissing the connection dialog");
+      return false;
+    },
+    undefined,
+    "dismissing the connection dialog"
+  );
 }
 
 async function getHostViewDebugInfo(app) {
-  return evaluateElectron(app, () => {
-    const testApi = globalThis.__testApi;
-    return testApi?.getHostViewDebugInfo?.() ?? null;
-  }, undefined, "reading host view diagnostics");
+  return evaluateElectron(
+    app,
+    () => {
+      const testApi = globalThis.__testApi;
+      return testApi?.getHostViewDebugInfo?.() ?? null;
+    },
+    undefined,
+    "reading host view diagnostics"
+  );
 }
 
 async function getPanelTree(app) {
-  return evaluateElectron(app, () => {
-    const testApi = globalThis.__testApi;
-    return testApi?.getPanelTree?.() ?? [];
-  }, undefined, "reading the panel tree");
+  return evaluateElectron(
+    app,
+    () => {
+      const testApi = globalThis.__testApi;
+      return testApi?.getPanelTree?.() ?? [];
+    },
+    undefined,
+    "reading the panel tree"
+  );
 }
 
 async function waitForRenderedPanel(app, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
   let latest = [];
   while (Date.now() < deadline) {
-    latest = await evaluateElectron(app, async ({ webContents }) => {
-      const inspections = [];
-      for (const contents of webContents.getAllWebContents()) {
-        if (contents.isDestroyed()) continue;
-        const url = contents.getURL();
-        if (!url.includes("/panels/")) continue;
-        try {
-          const dom = await contents.executeJavaScript(
-            `(() => {
+    latest = await evaluateElectron(
+      app,
+      async ({ webContents }) => {
+        const inspections = [];
+        for (const contents of webContents.getAllWebContents()) {
+          if (contents.isDestroyed()) continue;
+          const url = contents.getURL();
+          if (!url.includes("/panels/")) continue;
+          try {
+            const dom = await contents.executeJavaScript(
+              `(() => {
                 const body = document.body;
                 const text = body?.innerText?.replace(/\\s+/g, " ").trim() ?? "";
                 return {
@@ -600,74 +628,73 @@ async function waitForRenderedPanel(app, timeoutMs) {
                   ),
                 };
               })()`,
-            true
-          );
-          if (
-            /\bBuild Failed\b|\bfailed to build\b|Panel failed to start|A panel asset failed to load|The panel bundle could not be loaded|Panel asset bridge error|Workspace server unavailable/i.test(
-              dom.text
-            )
-          ) {
+              true
+            );
+            if (
+              /\bBuild Failed\b|\bfailed to build\b|Panel failed to start|A panel asset failed to load|The panel bundle could not be loaded|Panel asset bridge error|Workspace server unavailable/i.test(
+                dom.text
+              )
+            ) {
+              inspections.push({
+                url,
+                buildError: dom.text.slice(0, 800),
+              });
+              continue;
+            }
+            if (dom.hasHostChrome || dom.hasLaunchGateApproval || dom.readyState !== "complete") {
+              continue;
+            }
+
+            const image = await Promise.race([
+              contents.capturePage(),
+              new Promise((_, reject) =>
+                setTimeout(() => reject(new Error(`panel capture timed out: ${url}`)), 2_000)
+              ),
+            ]);
+            const size = image.getSize();
+            if (size.width < 200 || size.height < 120) continue;
+            const bitmap = image.toBitmap();
+            const step = Math.max(1, Math.floor(Math.min(size.width, size.height) / 180));
+            const buckets = new Map();
+            let sampled = 0;
+            let lumaSum = 0;
+            let lumaSquaredSum = 0;
+            for (let y = 0; y < size.height; y += step) {
+              for (let x = 0; x < size.width; x += step) {
+                const offset = (y * size.width + x) * 4;
+                const b = bitmap[offset] ?? 0;
+                const g = bitmap[offset + 1] ?? 0;
+                const r = bitmap[offset + 2] ?? 0;
+                const luma = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+                const bucket = `${r >> 4}:${g >> 4}:${b >> 4}`;
+                buckets.set(bucket, (buckets.get(bucket) ?? 0) + 1);
+                sampled += 1;
+                lumaSum += luma;
+                lumaSquaredSum += luma * luma;
+              }
+            }
+            const dominant = Math.max(...buckets.values());
+            const meanLuma = lumaSum / sampled;
+            const variance = Math.max(0, lumaSquaredSum / sampled - meanLuma * meanLuma);
             inspections.push({
               url,
-              buildError: dom.text.slice(0, 800),
+              text: dom.text.slice(0, 240),
+              childCount: dom.childCount,
+              width: size.width,
+              height: size.height,
+              uniqueBuckets: buckets.size,
+              dominantRatio: dominant / sampled,
+              lumaStdDev: Math.sqrt(variance),
             });
-            continue;
+          } catch {
+            // Ignore non-DOM and shutting-down webContents.
           }
-          if (
-            dom.hasHostChrome ||
-            dom.hasLaunchGateApproval ||
-            dom.readyState !== "complete"
-          ) {
-            continue;
-          }
-
-          const image = await Promise.race([
-            contents.capturePage(),
-            new Promise((_, reject) =>
-              setTimeout(() => reject(new Error(`panel capture timed out: ${url}`)), 2_000)
-            ),
-          ]);
-          const size = image.getSize();
-          if (size.width < 200 || size.height < 120) continue;
-          const bitmap = image.toBitmap();
-          const step = Math.max(1, Math.floor(Math.min(size.width, size.height) / 180));
-          const buckets = new Map();
-          let sampled = 0;
-          let lumaSum = 0;
-          let lumaSquaredSum = 0;
-          for (let y = 0; y < size.height; y += step) {
-            for (let x = 0; x < size.width; x += step) {
-              const offset = (y * size.width + x) * 4;
-              const b = bitmap[offset] ?? 0;
-              const g = bitmap[offset + 1] ?? 0;
-              const r = bitmap[offset + 2] ?? 0;
-              const luma = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-              const bucket = `${r >> 4}:${g >> 4}:${b >> 4}`;
-              buckets.set(bucket, (buckets.get(bucket) ?? 0) + 1);
-              sampled += 1;
-              lumaSum += luma;
-              lumaSquaredSum += luma * luma;
-            }
-          }
-          const dominant = Math.max(...buckets.values());
-          const meanLuma = lumaSum / sampled;
-          const variance = Math.max(0, lumaSquaredSum / sampled - meanLuma * meanLuma);
-          inspections.push({
-            url,
-            text: dom.text.slice(0, 240),
-            childCount: dom.childCount,
-            width: size.width,
-            height: size.height,
-            uniqueBuckets: buckets.size,
-            dominantRatio: dominant / sampled,
-            lumaStdDev: Math.sqrt(variance),
-          });
-        } catch {
-          // Ignore non-DOM and shutting-down webContents.
         }
-      }
-      return inspections;
-    }, undefined, "inspecting rendered panels");
+        return inspections;
+      },
+      undefined,
+      "inspecting rendered panels"
+    );
 
     const buildFailure = latest.find((entry) => entry.buildError);
     if (buildFailure) {

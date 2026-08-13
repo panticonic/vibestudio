@@ -918,6 +918,670 @@
       }
     }
   },
+  "browserPrivacyPresentation": {
+    "service": {
+      "principals": [
+        "code"
+      ]
+    },
+    "methods": {
+      "open": {
+        "authority": {
+          "principals": [
+            "code"
+          ]
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "browserPrivacyPresentation.open",
+          "rationale": "Routes one reviewed provider intent to the exact host-verified shell that owns the initiating panel; the route carries no protected data and has no independent user gate."
+        },
+        "capability": null,
+        "presentation": null
+      }
+    }
+  },
+  "browserVaultNative": {
+    "service": {
+      "principals": [
+        "host"
+      ]
+    },
+    "methods": {
+      "addCookiesBatch": {
+        "authority": {
+          "principals": [
+            "host"
+          ]
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "browserVaultNative.host",
+          "rationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service."
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "addFormFillBatch": {
+        "authority": {
+          "principals": [
+            "host"
+          ]
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "browserVaultNative.host",
+          "rationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service."
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "addFormFillValue": {
+        "authority": {
+          "principals": [
+            "host"
+          ]
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "browserVaultNative.host",
+          "rationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service."
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "addNeverSave": {
+        "authority": {
+          "principals": [
+            "host"
+          ]
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "browserVaultNative.host",
+          "rationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service."
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "addPassword": {
+        "authority": {
+          "principals": [
+            "host"
+          ]
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "browserVaultNative.host",
+          "rationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service."
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "addPasswordsBatch": {
+        "authority": {
+          "principals": [
+            "host"
+          ]
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "browserVaultNative.host",
+          "rationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service."
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "applyCookieMutations": {
+        "authority": {
+          "principals": [
+            "host"
+          ]
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "browserVaultNative.host",
+          "rationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service."
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "clearAllCookies": {
+        "authority": {
+          "principals": [
+            "host"
+          ]
+        },
+        "access": {
+          "sensitivity": "destructive"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "browserVaultNative.host",
+          "rationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service."
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "clearCookiesForOrigin": {
+        "authority": {
+          "principals": [
+            "host"
+          ]
+        },
+        "access": {
+          "sensitivity": "destructive"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "browserVaultNative.host",
+          "rationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service."
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "clearFormFillValues": {
+        "authority": {
+          "principals": [
+            "host"
+          ]
+        },
+        "access": {
+          "sensitivity": "destructive"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "browserVaultNative.host",
+          "rationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service."
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "deleteFormFillValue": {
+        "authority": {
+          "principals": [
+            "host"
+          ]
+        },
+        "access": {
+          "sensitivity": "destructive"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "browserVaultNative.host",
+          "rationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service."
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "deletePassword": {
+        "authority": {
+          "principals": [
+            "host"
+          ]
+        },
+        "access": {
+          "sensitivity": "destructive"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "browserVaultNative.host",
+          "rationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service."
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "endBrowserSession": {
+        "authority": {
+          "principals": [
+            "host"
+          ]
+        },
+        "access": {
+          "sensitivity": "destructive"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "browserVaultNative.host",
+          "rationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service."
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "getCookiesForOrigin": {
+        "authority": {
+          "principals": [
+            "host"
+          ]
+        },
+        "access": {
+          "sensitivity": "read"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "browserVaultNative.host",
+          "rationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service."
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "getCookieSiteSummary": {
+        "authority": {
+          "principals": [
+            "host"
+          ]
+        },
+        "access": {
+          "sensitivity": "read"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "browserVaultNative.host",
+          "rationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service."
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "getFormFillSuggestions": {
+        "authority": {
+          "principals": [
+            "host"
+          ]
+        },
+        "access": {
+          "sensitivity": "read"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "browserVaultNative.host",
+          "rationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service."
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "getNeverSaveOrigins": {
+        "authority": {
+          "principals": [
+            "host"
+          ]
+        },
+        "access": {
+          "sensitivity": "read"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "browserVaultNative.host",
+          "rationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service."
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "getNeverSaveOriginsPage": {
+        "authority": {
+          "principals": [
+            "host"
+          ]
+        },
+        "access": {
+          "sensitivity": "read"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "browserVaultNative.host",
+          "rationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service."
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "getPasswordForSite": {
+        "authority": {
+          "principals": [
+            "host"
+          ]
+        },
+        "access": {
+          "sensitivity": "read"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "browserVaultNative.host",
+          "rationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service."
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "isNeverSave": {
+        "authority": {
+          "principals": [
+            "host"
+          ]
+        },
+        "access": {
+          "sensitivity": "read"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "browserVaultNative.host",
+          "rationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service."
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "listCookieOrigins": {
+        "authority": {
+          "principals": [
+            "host"
+          ]
+        },
+        "access": {
+          "sensitivity": "read"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "browserVaultNative.host",
+          "rationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service."
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "listCookieOriginsPage": {
+        "authority": {
+          "principals": [
+            "host"
+          ]
+        },
+        "access": {
+          "sensitivity": "read"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "browserVaultNative.host",
+          "rationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service."
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "listCookiesPage": {
+        "authority": {
+          "principals": [
+            "host"
+          ]
+        },
+        "access": {
+          "sensitivity": "read"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "browserVaultNative.host",
+          "rationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service."
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "listFormFillValues": {
+        "authority": {
+          "principals": [
+            "host"
+          ]
+        },
+        "access": {
+          "sensitivity": "read"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "browserVaultNative.host",
+          "rationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service."
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "listFormFillValuesPage": {
+        "authority": {
+          "principals": [
+            "host"
+          ]
+        },
+        "access": {
+          "sensitivity": "read"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "browserVaultNative.host",
+          "rationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service."
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "listPasswordsPage": {
+        "authority": {
+          "principals": [
+            "host"
+          ]
+        },
+        "access": {
+          "sensitivity": "read"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "browserVaultNative.host",
+          "rationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service."
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "listPasswordSummaries": {
+        "authority": {
+          "principals": [
+            "host"
+          ]
+        },
+        "access": {
+          "sensitivity": "read"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "browserVaultNative.host",
+          "rationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service."
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "listPasswordSummariesPage": {
+        "authority": {
+          "principals": [
+            "host"
+          ]
+        },
+        "access": {
+          "sensitivity": "read"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "browserVaultNative.host",
+          "rationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service."
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "markFormFillValueUsed": {
+        "authority": {
+          "principals": [
+            "host"
+          ]
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "browserVaultNative.host",
+          "rationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service."
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "removeNeverSave": {
+        "authority": {
+          "principals": [
+            "host"
+          ]
+        },
+        "access": {
+          "sensitivity": "destructive"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "browserVaultNative.host",
+          "rationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service."
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "updateFormFillValue": {
+        "authority": {
+          "principals": [
+            "host"
+          ]
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "browserVaultNative.host",
+          "rationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service."
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "updateLastUsed": {
+        "authority": {
+          "principals": [
+            "host"
+          ]
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "browserVaultNative.host",
+          "rationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service."
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "updatePassword": {
+        "authority": {
+          "principals": [
+            "host"
+          ]
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "browserVaultNative.host",
+          "rationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service."
+        },
+        "capability": null,
+        "presentation": null
+      }
+    }
+  },
   "build": {
     "service": {
       "principals": [
@@ -1223,74 +1887,6 @@
           "authorityCategory": {
             "domain": "automation",
             "verb": "act"
-          }
-        }
-      }
-    }
-  },
-  "connectedClientTransport": {
-    "service": {
-      "principals": [
-        "code",
-        "host"
-      ]
-    },
-    "methods": {
-      "invoke": {
-        "authority": {
-          "principals": [
-            "code",
-            "host"
-          ]
-        },
-        "access": {
-          "sensitivity": "write"
-        },
-        "tier": {
-          "tier": "gated",
-          "session": "family",
-          "residency": "transport",
-          "family": "connectedClientTransport.control",
-          "rationale": "Carries one authenticated RPC frame to an exact live client endpoint on the caller's account; endpoint policy remains at the receiving client."
-        },
-        "capability": "connected-client.transport",
-        "presentation": {
-          "title": "Use a connected client",
-          "action": "send an authenticated request to a connected client",
-          "description": "Allows {requesterKind} to communicate with an exact connected client on the current account.",
-          "group": "runtime",
-          "authorityCategory": {
-            "domain": "computer",
-            "verb": "manage"
-          }
-        }
-      },
-      "list": {
-        "authority": {
-          "principals": [
-            "code",
-            "host"
-          ]
-        },
-        "access": {
-          "sensitivity": "read"
-        },
-        "tier": {
-          "tier": "gated",
-          "session": "family",
-          "residency": "transport",
-          "family": "connectedClientTransport.read",
-          "rationale": "Enumerates only live transport endpoints bound to the authenticated caller's account."
-        },
-        "capability": "connected-client.transport",
-        "presentation": {
-          "title": "Use a connected client",
-          "action": "send an authenticated request to a connected client",
-          "description": "Allows {requesterKind} to communicate with an exact connected client on the current account.",
-          "group": "runtime",
-          "authorityCategory": {
-            "domain": "computer",
-            "verb": "manage"
           }
         }
       }
@@ -2577,6 +3173,77 @@
       ]
     },
     "methods": {
+      "applyTemplateExchange": {
+        "authority": {
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "development.native.execute"
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "development.native.execute"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "development.native.execute"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              }
+            ]
+          },
+          "resource": {
+            "kind": "argument",
+            "index": 0,
+            "path": [
+              "checkout"
+            ],
+            "prefix": "template-checkout:"
+          }
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "gated",
+          "session": "codeOnly",
+          "residency": "native-effect",
+          "family": "development-native.template-exchange",
+          "rationale": "Applies only a prior exact plan and returns external and semantic receipts"
+        },
+        "capability": "development.native.execute",
+        "presentation": {
+          "title": "Apply a template checkout exchange",
+          "action": "apply a template checkout exchange",
+          "description": "Allows {requesterKind} to write the reviewed projection to a selected checkout or import it into one semantic context.",
+          "group": "runtime",
+          "authorityCategory": {
+            "domain": "automation",
+            "verb": "act"
+          }
+        }
+      },
       "beginBuild": {
         "authority": {
           "requirement": {
@@ -2879,6 +3546,77 @@
         },
         "capability": null,
         "presentation": null
+      },
+      "prepareTemplateExchange": {
+        "authority": {
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "development.native.execute"
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "development.native.execute"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "development.native.execute"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              }
+            ]
+          },
+          "resource": {
+            "kind": "argument",
+            "index": 0,
+            "path": [
+              "checkout"
+            ],
+            "prefix": "template-checkout:"
+          }
+        },
+        "access": {
+          "sensitivity": "read"
+        },
+        "tier": {
+          "tier": "gated",
+          "session": "codeOnly",
+          "residency": "native-effect",
+          "family": "development-native.template-exchange",
+          "rationale": "Reads only the explicitly selected sibling checkout and an exact semantic snapshot"
+        },
+        "capability": "development.native.execute",
+        "presentation": {
+          "title": "Inspect a template checkout exchange",
+          "action": "inspect a template checkout exchange",
+          "description": "Allows {requesterKind} to read one selected Git checkout and compare it with an exact semantic template repository.",
+          "group": "runtime",
+          "authorityCategory": {
+            "domain": "automation",
+            "verb": "act"
+          }
+        }
       },
       "readTerminal": {
         "authority": {
@@ -5853,6 +6591,91 @@
       }
     }
   },
+  "phoneNativeEndpoint": {
+    "service": {
+      "principals": [
+        "code"
+      ]
+    },
+    "methods": {
+      "desktops": {
+        "authority": {
+          "principals": [
+            "code"
+          ]
+        },
+        "access": {
+          "sensitivity": "read"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "transport",
+          "family": "phoneNativeEndpoint.transport",
+          "rationale": "Typed account-bound phone transport available only to the exact approved Base phone provider; the provider's public mobile capability is the sole user-facing gate."
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "devices": {
+        "authority": {
+          "principals": [
+            "code"
+          ]
+        },
+        "access": {
+          "sensitivity": "read"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "transport",
+          "family": "phoneNativeEndpoint.transport",
+          "rationale": "Typed account-bound phone transport available only to the exact approved Base phone provider; the provider's public mobile capability is the sole user-facing gate."
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "providers": {
+        "authority": {
+          "principals": [
+            "code"
+          ]
+        },
+        "access": {
+          "sensitivity": "read"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "transport",
+          "family": "phoneNativeEndpoint.transport",
+          "rationale": "Typed account-bound phone transport available only to the exact approved Base phone provider; the provider's public mobile capability is the sole user-facing gate."
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "provision": {
+        "authority": {
+          "principals": [
+            "code"
+          ]
+        },
+        "access": {
+          "sensitivity": "admin"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "transport",
+          "family": "phoneNativeEndpoint.transport",
+          "rationale": "Typed account-bound phone transport available only to the exact approved Base phone provider; the provider's public mobile capability is the sole user-facing gate."
+        },
+        "capability": null,
+        "presentation": null
+      }
+    }
+  },
   "presence": {
     "service": {
       "principals": [
@@ -6166,8 +6989,17 @@
           "family": "reviewedClosure.lifecycle",
           "rationale": "Kernel verifies and activates an exact compiled authority closure and atomically mints its standing grants."
         },
-        "capability": null,
-        "presentation": null
+        "capability": "reviewed-closure.activate",
+        "presentation": {
+          "title": "Activate reviewed automation",
+          "action": "activate reviewed automation",
+          "description": "Allows {requesterKind} to activate the exact automation authority closure you reviewed.",
+          "group": "runtime",
+          "authorityCategory": {
+            "domain": "safety",
+            "verb": "manage"
+          }
+        }
       },
       "bindSession": {
         "authority": {
@@ -6186,7 +7018,16 @@
           "rationale": "Kernel binds an execution session to one active digest-bound closure for hot-path enforcement."
         },
         "capability": "reviewed-closure.bind-session",
-        "presentation": null
+        "presentation": {
+          "title": "Use reviewed automation authority",
+          "action": "use reviewed automation authority",
+          "description": "Allows {requesterKind} to bind a running automation to its exact reviewed authority closure.",
+          "group": "runtime",
+          "authorityCategory": {
+            "domain": "safety",
+            "verb": "manage"
+          }
+        }
       },
       "finishSession": {
         "authority": {
@@ -9098,6 +9939,300 @@
       }
     }
   },
+  "shellBrowserPrivacy": {
+    "service": {
+      "principals": [
+        "user"
+      ]
+    },
+    "methods": {
+      "addFormFillValue": {
+        "authority": {
+          "principals": [
+            "user"
+          ]
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "shellBrowserPrivacy.manager",
+          "rationale": "The authenticated human shell manages its own workspace browser vault through a narrow typed surface."
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "clearAllCookies": {
+        "authority": {
+          "principals": [
+            "user"
+          ]
+        },
+        "access": {
+          "sensitivity": "destructive"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "shellBrowserPrivacy.manager",
+          "rationale": "The authenticated human shell manages its own workspace browser vault through a narrow typed surface."
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "clearCookiesForOrigin": {
+        "authority": {
+          "principals": [
+            "user"
+          ]
+        },
+        "access": {
+          "sensitivity": "destructive"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "shellBrowserPrivacy.manager",
+          "rationale": "The authenticated human shell manages its own workspace browser vault through a narrow typed surface."
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "clearFormFillValues": {
+        "authority": {
+          "principals": [
+            "user"
+          ]
+        },
+        "access": {
+          "sensitivity": "destructive"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "shellBrowserPrivacy.manager",
+          "rationale": "The authenticated human shell manages its own workspace browser vault through a narrow typed surface."
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "deleteFormFillValue": {
+        "authority": {
+          "principals": [
+            "user"
+          ]
+        },
+        "access": {
+          "sensitivity": "destructive"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "shellBrowserPrivacy.manager",
+          "rationale": "The authenticated human shell manages its own workspace browser vault through a narrow typed surface."
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "deletePassword": {
+        "authority": {
+          "principals": [
+            "user"
+          ]
+        },
+        "access": {
+          "sensitivity": "destructive"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "shellBrowserPrivacy.manager",
+          "rationale": "The authenticated human shell manages its own workspace browser vault through a narrow typed surface."
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "endBrowserSession": {
+        "authority": {
+          "principals": [
+            "user"
+          ]
+        },
+        "access": {
+          "sensitivity": "destructive"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "shellBrowserPrivacy.manager",
+          "rationale": "The authenticated human shell manages its own workspace browser vault through a narrow typed surface."
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "getCookieSiteSummary": {
+        "authority": {
+          "principals": [
+            "user"
+          ]
+        },
+        "access": {
+          "sensitivity": "read"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "shellBrowserPrivacy.manager",
+          "rationale": "The authenticated human shell manages its own workspace browser vault through a narrow typed surface."
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "getNeverSaveOriginsPage": {
+        "authority": {
+          "principals": [
+            "user"
+          ]
+        },
+        "access": {
+          "sensitivity": "read"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "shellBrowserPrivacy.manager",
+          "rationale": "The authenticated human shell manages its own workspace browser vault through a narrow typed surface."
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "getPasswordCountForSite": {
+        "authority": {
+          "principals": [
+            "user"
+          ]
+        },
+        "access": {
+          "sensitivity": "read"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "shellBrowserPrivacy.manager",
+          "rationale": "The authenticated human shell manages its own workspace browser vault through a narrow typed surface."
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "listCookieOriginsPage": {
+        "authority": {
+          "principals": [
+            "user"
+          ]
+        },
+        "access": {
+          "sensitivity": "read"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "shellBrowserPrivacy.manager",
+          "rationale": "The authenticated human shell manages its own workspace browser vault through a narrow typed surface."
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "listFormFillValuesPage": {
+        "authority": {
+          "principals": [
+            "user"
+          ]
+        },
+        "access": {
+          "sensitivity": "read"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "shellBrowserPrivacy.manager",
+          "rationale": "The authenticated human shell manages its own workspace browser vault through a narrow typed surface."
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "listPasswordSummariesPage": {
+        "authority": {
+          "principals": [
+            "user"
+          ]
+        },
+        "access": {
+          "sensitivity": "read"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "shellBrowserPrivacy.manager",
+          "rationale": "The authenticated human shell manages its own workspace browser vault through a narrow typed surface."
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "removeNeverSave": {
+        "authority": {
+          "principals": [
+            "user"
+          ]
+        },
+        "access": {
+          "sensitivity": "destructive"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "shellBrowserPrivacy.manager",
+          "rationale": "The authenticated human shell manages its own workspace browser vault through a narrow typed surface."
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "updateFormFillValue": {
+        "authority": {
+          "principals": [
+            "user"
+          ]
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "shellBrowserPrivacy.manager",
+          "rationale": "The authenticated human shell manages its own workspace browser vault through a narrow typed surface."
+        },
+        "capability": null,
+        "presentation": null
+      }
+    }
+  },
   "shellPresence": {
     "service": {
       "principals": [
@@ -10708,307 +11843,6 @@
           }
         }
       },
-      "panel.incrementAccess": {
-        "authority": {
-          "principals": [
-            "user",
-            "code",
-            "host"
-          ]
-        },
-        "access": {
-          "sensitivity": "write"
-        },
-        "tier": {
-          "tier": "gated",
-          "session": "family",
-          "residency": "supervision",
-          "family": "workspace-state.lifecycle",
-          "rationale": "G5: host infrastructure plumbing; §2 default {code, session} family"
-        },
-        "capability": "workspace.runtime-state.manage",
-        "presentation": {
-          "title": "Manage running workspace services",
-          "action": "manage apps, panels, background tasks, and scheduled work that's currently running",
-          "description": "Maintain running workspace apps, panels, background tasks, and scheduled work",
-          "group": "workspace",
-          "authorityCategory": {
-            "domain": "automation",
-            "verb": "manage"
-          }
-        }
-      },
-      "panel.index": {
-        "authority": {
-          "principals": [
-            "user",
-            "code",
-            "host"
-          ]
-        },
-        "access": {
-          "sensitivity": "write"
-        },
-        "tier": {
-          "tier": "gated",
-          "session": "family",
-          "residency": "supervision",
-          "family": "workspace-state.lifecycle",
-          "rationale": "G5: host infrastructure plumbing; §2 default {code, session} family"
-        },
-        "capability": "workspace.runtime-state.manage",
-        "presentation": {
-          "title": "Manage running workspace services",
-          "action": "manage apps, panels, background tasks, and scheduled work that's currently running",
-          "description": "Maintain running workspace apps, panels, background tasks, and scheduled work",
-          "group": "workspace",
-          "authorityCategory": {
-            "domain": "automation",
-            "verb": "manage"
-          }
-        }
-      },
-      "panel.rebuildIndex": {
-        "authority": {
-          "principals": [
-            "user",
-            "code",
-            "host"
-          ]
-        },
-        "access": {
-          "sensitivity": "write"
-        },
-        "tier": {
-          "tier": "gated",
-          "session": "family",
-          "residency": "supervision",
-          "family": "workspace-state.lifecycle",
-          "rationale": "G5: host infrastructure plumbing; §2 default {code, session} family"
-        },
-        "capability": "workspace.runtime-state.manage",
-        "presentation": {
-          "title": "Manage running workspace services",
-          "action": "manage apps, panels, background tasks, and scheduled work that's currently running",
-          "description": "Maintain running workspace apps, panels, background tasks, and scheduled work",
-          "group": "workspace",
-          "authorityCategory": {
-            "domain": "automation",
-            "verb": "manage"
-          }
-        }
-      },
-      "panel.search": {
-        "authority": {
-          "principals": [
-            "user",
-            "code",
-            "host"
-          ]
-        },
-        "access": {
-          "sensitivity": "read"
-        },
-        "tier": {
-          "tier": "open",
-          "session": "family",
-          "residency": "supervision",
-          "family": "workspace-state.lifecycle",
-          "rationale": "Workspace-member panel-index read; no C1-C4 or G1-G5 rule applies"
-        },
-        "capability": "workspace.runtime-state.inspect",
-        "presentation": {
-          "title": "Inspect running workspace services",
-          "action": "inspect apps, panels, background tasks, and scheduled work that's currently running",
-          "description": "Read the current structure and status of running workspace services",
-          "group": "workspace",
-          "authorityCategory": {
-            "domain": "automation",
-            "verb": "see"
-          }
-        }
-      },
-      "panel.sourceUsage": {
-        "authority": {
-          "principals": [
-            "user",
-            "code",
-            "host"
-          ]
-        },
-        "access": {
-          "sensitivity": "read"
-        },
-        "tier": {
-          "tier": "open",
-          "session": "family",
-          "residency": "supervision",
-          "family": "workspace-state.lifecycle",
-          "rationale": "Workspace-member aggregate panel usage read; no C1-C4 or G1-G5 rule applies"
-        },
-        "capability": "workspace.runtime-state.inspect",
-        "presentation": {
-          "title": "Inspect running workspace services",
-          "action": "inspect apps, panels, background tasks, and scheduled work that's currently running",
-          "description": "Read the current structure and status of running workspace services",
-          "group": "workspace",
-          "authorityCategory": {
-            "domain": "automation",
-            "verb": "see"
-          }
-        }
-      },
-      "panel.updateTitle": {
-        "authority": {
-          "principals": [
-            "user",
-            "code",
-            "host"
-          ],
-          "requirement": {
-            "kind": "any",
-            "requirements": [
-              {
-                "kind": "all",
-                "requirements": [
-                  {
-                    "kind": "capability",
-                    "principal": "user",
-                    "capability": "workspace.runtime-state.manage"
-                  },
-                  {
-                    "kind": "relationship",
-                    "name": "workspace-member"
-                  }
-                ]
-              },
-              {
-                "kind": "all",
-                "requirements": [
-                  {
-                    "kind": "capability",
-                    "principal": "code",
-                    "capability": "workspace.runtime-state.manage"
-                  },
-                  {
-                    "kind": "relationship",
-                    "name": "workspace-member"
-                  }
-                ]
-              },
-              {
-                "kind": "all",
-                "requirements": [
-                  {
-                    "kind": "capability",
-                    "principal": "session",
-                    "capability": "workspace.runtime-state.manage"
-                  },
-                  {
-                    "kind": "relationship",
-                    "name": "workspace-member"
-                  }
-                ]
-              },
-              {
-                "kind": "capability",
-                "principal": "host",
-                "capability": "workspace.runtime-state.manage"
-              }
-            ]
-          },
-          "resource": {
-            "kind": "literal",
-            "key": "workspace.runtime-state.manage"
-          },
-          "prepared": {
-            "resolver": "workspace-state.panel.updateTitle.contextBoundary",
-            "contextBoundary": {
-              "operation": "updatePanelState",
-              "targetArgument": 0
-            },
-            "leaves": [
-              {
-                "capability": "context.boundary",
-                "requirement": {
-                  "kind": "any",
-                  "requirements": [
-                    {
-                      "kind": "capability",
-                      "principal": "host",
-                      "capability": "context.boundary"
-                    },
-                    {
-                      "kind": "all",
-                      "requirements": [
-                        {
-                          "kind": "capability",
-                          "principal": "user",
-                          "capability": "context.boundary"
-                        },
-                        {
-                          "kind": "relationship",
-                          "name": "workspace-member"
-                        }
-                      ]
-                    },
-                    {
-                      "kind": "all",
-                      "requirements": [
-                        {
-                          "kind": "capability",
-                          "principal": "code",
-                          "capability": "context.boundary"
-                        },
-                        {
-                          "kind": "relationship",
-                          "name": "workspace-member"
-                        }
-                      ]
-                    },
-                    {
-                      "kind": "all",
-                      "requirements": [
-                        {
-                          "kind": "capability",
-                          "principal": "session",
-                          "capability": "context.boundary"
-                        },
-                        {
-                          "kind": "relationship",
-                          "name": "workspace-member"
-                        }
-                      ]
-                    }
-                  ]
-                },
-                "tier": "gated"
-              }
-            ]
-          }
-        },
-        "access": {
-          "sensitivity": "write"
-        },
-        "tier": {
-          "tier": "gated",
-          "session": "family",
-          "residency": "transport",
-          "family": "workspace-state.builtin-rpc",
-          "rationale": "Exact typed proxy to the builtin topology owner for one slot-bound presentation update"
-        },
-        "capability": "workspace.runtime-state.manage",
-        "presentation": {
-          "title": "Manage running workspace services",
-          "action": "manage apps, panels, background tasks, and scheduled work that's currently running",
-          "description": "Maintain running workspace apps, panels, background tasks, and scheduled work",
-          "group": "workspace",
-          "authorityCategory": {
-            "domain": "automation",
-            "verb": "manage"
-          }
-        }
-      },
       "panelTree.detail": {
         "authority": {
           "principals": [
@@ -11146,36 +11980,6 @@
           "residency": "identity",
           "family": "workspace-state.identity",
           "rationale": "Bounded durable root projection scoped by the server-verified subject instead of a caller-supplied owner id"
-        },
-        "capability": "workspace.runtime-state.inspect",
-        "presentation": {
-          "title": "Inspect running workspace services",
-          "action": "inspect apps, panels, background tasks, and scheduled work that's currently running",
-          "description": "Read the current structure and status of running workspace services",
-          "group": "workspace",
-          "authorityCategory": {
-            "domain": "automation",
-            "verb": "see"
-          }
-        }
-      },
-      "panelTree.search": {
-        "authority": {
-          "principals": [
-            "user",
-            "code",
-            "host"
-          ]
-        },
-        "access": {
-          "sensitivity": "read"
-        },
-        "tier": {
-          "tier": "open",
-          "session": "family",
-          "residency": "transport",
-          "family": "workspace-state.builtin-rpc",
-          "rationale": "Exact typed proxy to the builtin topology owner for one bounded indexed presentation query"
         },
         "capability": "workspace.runtime-state.inspect",
         "presentation": {

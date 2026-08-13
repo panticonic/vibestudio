@@ -62,10 +62,6 @@ const HOSTED_RUNTIME_FACADES = {
 
 const HOSTED_RUNTIME_DERIVED_METHODS = {
   "browserData.cancelDownload": ["browserEnvironment.cancelDownload"],
-  "browserData.flushCookieProjection": ["browserEnvironment.flushCookieProjection"],
-  "browserData.getCookieProjectionDiagnostics": [
-    "browserEnvironment.getCookieProjectionDiagnostics",
-  ],
   "browserData.listDownloads": ["browserEnvironment.listDownloads"],
   "browserData.openDownload": ["browserEnvironment.openDownload"],
   "browserData.pauseDownload": ["browserEnvironment.pauseDownload"],

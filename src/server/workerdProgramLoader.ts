@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { resolveRequiredAppRoot } from "./appRoot.js";
 
 export interface WorkerdProgramSources {
   readonly router: string;
@@ -22,12 +23,8 @@ export function getWorkerdProgramSources(): WorkerdProgramSources {
     return cached;
   }
 
-  const runtimeDir = typeof __dirname === "string" ? __dirname : process.cwd();
-  const appRoot = process.env["VIBESTUDIO_APP_ROOT"] ?? process.cwd();
-  const candidates = [
-    path.join(runtimeDir, "workerd-programs"),
-    path.resolve(appRoot, "dist/workerd-programs"),
-  ];
+  const appRoot = resolveRequiredAppRoot();
+  const candidates = [path.resolve(appRoot, "dist/workerd-programs")];
   for (const directory of candidates) {
     const loaded = readPrograms(directory);
     if (!loaded) continue;

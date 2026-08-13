@@ -13,7 +13,6 @@ type EntityDriverKind = Extract<RuntimeSupervisionKind, "panel" | "worker" | "do
 export function createEntityUnitDriver(input: {
   kind: EntityDriverKind;
   entityCache: Pick<EntityCache, "listActive" | "resolveActive">;
-  titleFor?(entityId: string): string | undefined;
   hasInspector?(entityId: string): boolean;
   logs(entity: EntityRecord, query?: UnitLogQuery): RuntimeSupervisionLogRecord[];
   restart(ctx: ServiceContext, entity: EntityRecord): Promise<void> | void;
@@ -26,7 +25,6 @@ export function createEntityUnitDriver(input: {
   const describe = (record: EntityRecord): RuntimeSupervisionDescription => ({
     identity: { kind: input.kind, entityId: record.id },
     source: record.source.repoPath,
-    ...(input.titleFor?.(record.id) ? { displayName: input.titleFor(record.id) } : {}),
     status: record.error ? "error" : "running",
     lastError: record.error ?? null,
     artifact: {

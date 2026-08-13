@@ -16,9 +16,7 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
       "verb": "manage"
     },
     "principals": [
-      "host",
-      "user",
-      "code"
+      "host"
     ],
     "protocols": [
       "vibestudio.workspace-state.v1"
@@ -137,34 +135,6 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         }
       },
       "panelTree.detail": {
-        "capability": "workspace.runtime-state.inspect",
-        "tier": "open",
-        "session": "family",
-        "sensitivity": "read",
-        "principals": [
-          "user",
-          "code",
-          "host"
-        ],
-        "presentation": {
-          "title": "Inspect running workspace services",
-          "action": "inspect apps, panels, background tasks, and scheduled work that's currently running",
-          "description": "Read the current structure and status of running workspace services",
-          "group": "workspace",
-          "authorityCategory": {
-            "domain": "automation",
-            "verb": "see"
-          }
-        },
-        "effect": {
-          "kind": "host-capability",
-          "capability": "workspace.runtime-state.inspect",
-          "resource": {
-            "kind": "receiver-object"
-          }
-        }
-      },
-      "panelTree.search": {
         "capability": "workspace.runtime-state.inspect",
         "tier": "open",
         "session": "family",
@@ -916,239 +886,6 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         "tier": "gated",
         "session": "family",
         "sensitivity": "destructive",
-        "principals": [
-          "user",
-          "code",
-          "host"
-        ],
-        "presentation": {
-          "title": "Manage running workspace services",
-          "action": "manage apps, panels, background tasks, and scheduled work that's currently running",
-          "description": "Maintain running workspace apps, panels, background tasks, and scheduled work",
-          "group": "workspace",
-          "authorityCategory": {
-            "domain": "automation",
-            "verb": "manage"
-          }
-        },
-        "effect": {
-          "kind": "host-capability",
-          "capability": "workspace.runtime-state.manage",
-          "resource": {
-            "kind": "receiver-object"
-          }
-        }
-      },
-      "panel.search": {
-        "capability": "workspace.runtime-state.inspect",
-        "tier": "open",
-        "session": "family",
-        "sensitivity": "read",
-        "principals": [
-          "user",
-          "code",
-          "host"
-        ],
-        "presentation": {
-          "title": "Inspect running workspace services",
-          "action": "inspect apps, panels, background tasks, and scheduled work that's currently running",
-          "description": "Read the current structure and status of running workspace services",
-          "group": "workspace",
-          "authorityCategory": {
-            "domain": "automation",
-            "verb": "see"
-          }
-        },
-        "effect": {
-          "kind": "host-capability",
-          "capability": "workspace.runtime-state.inspect",
-          "resource": {
-            "kind": "receiver-object"
-          }
-        }
-      },
-      "panel.sourceUsage": {
-        "capability": "workspace.runtime-state.inspect",
-        "tier": "open",
-        "session": "family",
-        "sensitivity": "read",
-        "principals": [
-          "user",
-          "code",
-          "host"
-        ],
-        "presentation": {
-          "title": "Inspect running workspace services",
-          "action": "inspect apps, panels, background tasks, and scheduled work that's currently running",
-          "description": "Read the current structure and status of running workspace services",
-          "group": "workspace",
-          "authorityCategory": {
-            "domain": "automation",
-            "verb": "see"
-          }
-        },
-        "effect": {
-          "kind": "host-capability",
-          "capability": "workspace.runtime-state.inspect",
-          "resource": {
-            "kind": "receiver-object"
-          }
-        }
-      },
-      "panel.index": {
-        "capability": "workspace.runtime-state.manage",
-        "tier": "gated",
-        "session": "family",
-        "sensitivity": "write",
-        "principals": [
-          "user",
-          "code",
-          "host"
-        ],
-        "presentation": {
-          "title": "Manage running workspace services",
-          "action": "manage apps, panels, background tasks, and scheduled work that's currently running",
-          "description": "Maintain running workspace apps, panels, background tasks, and scheduled work",
-          "group": "workspace",
-          "authorityCategory": {
-            "domain": "automation",
-            "verb": "manage"
-          }
-        },
-        "effect": {
-          "kind": "host-capability",
-          "capability": "workspace.runtime-state.manage",
-          "resource": {
-            "kind": "receiver-object"
-          }
-        }
-      },
-      "panel.updateTitle": {
-        "capability": "workspace.runtime-state.manage",
-        "tier": "gated",
-        "session": "family",
-        "sensitivity": "write",
-        "principals": [
-          "user",
-          "code",
-          "host"
-        ],
-        "presentation": {
-          "title": "Manage running workspace services",
-          "action": "manage apps, panels, background tasks, and scheduled work that's currently running",
-          "description": "Maintain running workspace apps, panels, background tasks, and scheduled work",
-          "group": "workspace",
-          "authorityCategory": {
-            "domain": "automation",
-            "verb": "manage"
-          }
-        },
-        "prepared": {
-          "resolver": "workspace-state.panel.updateTitle.contextBoundary",
-          "contextBoundary": {
-            "operation": "updatePanelState",
-            "targetArgument": 0
-          },
-          "leaves": [
-            {
-              "capability": "context.boundary",
-              "requirement": {
-                "kind": "any",
-                "requirements": [
-                  {
-                    "kind": "capability",
-                    "principal": "host",
-                    "capability": "context.boundary"
-                  },
-                  {
-                    "kind": "all",
-                    "requirements": [
-                      {
-                        "kind": "capability",
-                        "principal": "user",
-                        "capability": "context.boundary"
-                      },
-                      {
-                        "kind": "relationship",
-                        "name": "workspace-member"
-                      }
-                    ]
-                  },
-                  {
-                    "kind": "all",
-                    "requirements": [
-                      {
-                        "kind": "capability",
-                        "principal": "code",
-                        "capability": "context.boundary"
-                      },
-                      {
-                        "kind": "relationship",
-                        "name": "workspace-member"
-                      }
-                    ]
-                  },
-                  {
-                    "kind": "all",
-                    "requirements": [
-                      {
-                        "kind": "capability",
-                        "principal": "session",
-                        "capability": "context.boundary"
-                      },
-                      {
-                        "kind": "relationship",
-                        "name": "workspace-member"
-                      }
-                    ]
-                  }
-                ]
-              },
-              "tier": "gated"
-            }
-          ]
-        },
-        "effect": {
-          "kind": "host-capability",
-          "capability": "workspace.runtime-state.manage",
-          "resource": {
-            "kind": "receiver-object"
-          }
-        }
-      },
-      "panel.incrementAccess": {
-        "capability": "workspace.runtime-state.manage",
-        "tier": "gated",
-        "session": "family",
-        "sensitivity": "write",
-        "principals": [
-          "user",
-          "code",
-          "host"
-        ],
-        "presentation": {
-          "title": "Manage running workspace services",
-          "action": "manage apps, panels, background tasks, and scheduled work that's currently running",
-          "description": "Maintain running workspace apps, panels, background tasks, and scheduled work",
-          "group": "workspace",
-          "authorityCategory": {
-            "domain": "automation",
-            "verb": "manage"
-          }
-        },
-        "effect": {
-          "kind": "host-capability",
-          "capability": "workspace.runtime-state.manage",
-          "resource": {
-            "kind": "receiver-object"
-          }
-        }
-      },
-      "panel.rebuildIndex": {
-        "capability": "workspace.runtime-state.manage",
-        "tier": "gated",
-        "session": "family",
-        "sensitivity": "write",
         "principals": [
           "user",
           "code",
@@ -2730,524 +2467,13 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
     }
   },
   {
-    "kind": "service",
+    "kind": "engine",
     "name": "browser.vault",
     "source": "vibestudio/internal",
     "className": "BrowserVaultDO",
     "implementation": "@panticonic/builtin/browser-data",
     "sourceFile": "packages/builtin/src/browser-data/BrowserVaultDO.ts",
-    "builtinBecause": "recovery-path",
-    "title": "Browser vault",
-    "description": "Use protected browser credentials and cookie material.",
-    "action": "use protected browser credentials",
-    "presentation": {
-      "domain": "web",
-      "verb": "see"
-    },
-    "principals": [
-      "host",
-      "user",
-      "code"
-    ],
-    "protocols": [
-      "vibestudio.browser-vault.v1"
-    ],
-    "methods": {
-      "getPasswords": {
-        "capability": "browser-data.read",
-        "tier": "gated",
-        "session": "family",
-        "sensitivity": "read",
-        "principals": [
-          "host",
-          "user",
-          "code"
-        ],
-        "presentation": null,
-        "effect": {
-          "kind": "host-capability",
-          "capability": "browser-data.read",
-          "resource": {
-            "kind": "receiver-object"
-          }
-        }
-      },
-      "getPasswordForSite": {
-        "capability": "browser-data.read",
-        "tier": "gated",
-        "session": "family",
-        "sensitivity": "read",
-        "principals": [
-          "host",
-          "user",
-          "code"
-        ],
-        "presentation": null,
-        "effect": {
-          "kind": "host-capability",
-          "capability": "browser-data.read",
-          "resource": {
-            "kind": "receiver-object"
-          }
-        }
-      },
-      "addPassword": {
-        "capability": "browser-data.write",
-        "tier": "gated",
-        "session": "family",
-        "sensitivity": "write",
-        "principals": [
-          "host",
-          "user",
-          "code"
-        ],
-        "presentation": null,
-        "effect": {
-          "kind": "host-capability",
-          "capability": "browser-data.write",
-          "resource": {
-            "kind": "receiver-object"
-          }
-        }
-      },
-      "updatePassword": {
-        "capability": "browser-data.write",
-        "tier": "gated",
-        "session": "family",
-        "sensitivity": "write",
-        "principals": [
-          "host",
-          "user",
-          "code"
-        ],
-        "presentation": null,
-        "effect": {
-          "kind": "host-capability",
-          "capability": "browser-data.write",
-          "resource": {
-            "kind": "receiver-object"
-          }
-        }
-      },
-      "deletePassword": {
-        "capability": "browser-data.delete",
-        "tier": "gated",
-        "session": "family",
-        "sensitivity": "destructive",
-        "principals": [
-          "host",
-          "user",
-          "code"
-        ],
-        "presentation": null,
-        "effect": {
-          "kind": "host-capability",
-          "capability": "browser-data.delete",
-          "resource": {
-            "kind": "receiver-object"
-          }
-        }
-      },
-      "addNeverSave": {
-        "capability": "browser-data.write",
-        "tier": "gated",
-        "session": "family",
-        "sensitivity": "write",
-        "principals": [
-          "host",
-          "user",
-          "code"
-        ],
-        "presentation": null,
-        "effect": {
-          "kind": "host-capability",
-          "capability": "browser-data.write",
-          "resource": {
-            "kind": "receiver-object"
-          }
-        }
-      },
-      "isNeverSave": {
-        "capability": "browser-data.read",
-        "tier": "open",
-        "session": "family",
-        "sensitivity": "read",
-        "principals": [
-          "host",
-          "user",
-          "code"
-        ],
-        "presentation": null,
-        "effect": {
-          "kind": "host-capability",
-          "capability": "browser-data.read",
-          "resource": {
-            "kind": "receiver-object"
-          }
-        }
-      },
-      "getNeverSaveOrigins": {
-        "capability": "browser-data.read",
-        "tier": "open",
-        "session": "family",
-        "sensitivity": "read",
-        "principals": [
-          "host",
-          "user",
-          "code"
-        ],
-        "presentation": null,
-        "effect": {
-          "kind": "host-capability",
-          "capability": "browser-data.read",
-          "resource": {
-            "kind": "receiver-object"
-          }
-        }
-      },
-      "removeNeverSave": {
-        "capability": "browser-data.delete",
-        "tier": "gated",
-        "session": "family",
-        "sensitivity": "destructive",
-        "principals": [
-          "host",
-          "user",
-          "code"
-        ],
-        "presentation": null,
-        "effect": {
-          "kind": "host-capability",
-          "capability": "browser-data.delete",
-          "resource": {
-            "kind": "receiver-object"
-          }
-        }
-      },
-      "updateLastUsed": {
-        "capability": "browser-data.write",
-        "tier": "gated",
-        "session": "family",
-        "sensitivity": "write",
-        "principals": [
-          "host",
-          "user",
-          "code"
-        ],
-        "presentation": null,
-        "effect": {
-          "kind": "host-capability",
-          "capability": "browser-data.write",
-          "resource": {
-            "kind": "receiver-object"
-          }
-        }
-      },
-      "getFormFillSuggestions": {
-        "capability": "browser-data.read",
-        "tier": "gated",
-        "session": "family",
-        "sensitivity": "read",
-        "principals": [
-          "host",
-          "user",
-          "code"
-        ],
-        "presentation": null,
-        "effect": {
-          "kind": "host-capability",
-          "capability": "browser-data.read",
-          "resource": {
-            "kind": "receiver-object"
-          }
-        }
-      },
-      "addFormFillValue": {
-        "capability": "browser-data.write",
-        "tier": "gated",
-        "session": "family",
-        "sensitivity": "write",
-        "principals": [
-          "host",
-          "user",
-          "code"
-        ],
-        "presentation": null,
-        "effect": {
-          "kind": "host-capability",
-          "capability": "browser-data.write",
-          "resource": {
-            "kind": "receiver-object"
-          }
-        }
-      },
-      "updateFormFillValue": {
-        "capability": "browser-data.write",
-        "tier": "gated",
-        "session": "family",
-        "sensitivity": "write",
-        "principals": [
-          "host",
-          "user",
-          "code"
-        ],
-        "presentation": null,
-        "effect": {
-          "kind": "host-capability",
-          "capability": "browser-data.write",
-          "resource": {
-            "kind": "receiver-object"
-          }
-        }
-      },
-      "markFormFillValueUsed": {
-        "capability": "browser-data.write",
-        "tier": "gated",
-        "session": "family",
-        "sensitivity": "write",
-        "principals": [
-          "host",
-          "user",
-          "code"
-        ],
-        "presentation": null,
-        "effect": {
-          "kind": "host-capability",
-          "capability": "browser-data.write",
-          "resource": {
-            "kind": "receiver-object"
-          }
-        }
-      },
-      "deleteFormFillValue": {
-        "capability": "browser-data.delete",
-        "tier": "gated",
-        "session": "family",
-        "sensitivity": "destructive",
-        "principals": [
-          "host",
-          "user",
-          "code"
-        ],
-        "presentation": null,
-        "effect": {
-          "kind": "host-capability",
-          "capability": "browser-data.delete",
-          "resource": {
-            "kind": "receiver-object"
-          }
-        }
-      },
-      "clearFormFillValues": {
-        "capability": "browser-data.delete",
-        "tier": "gated",
-        "session": "family",
-        "sensitivity": "destructive",
-        "principals": [
-          "host",
-          "user",
-          "code"
-        ],
-        "presentation": null,
-        "effect": {
-          "kind": "host-capability",
-          "capability": "browser-data.delete",
-          "resource": {
-            "kind": "receiver-object"
-          }
-        }
-      },
-      "applyCookieMutations": {
-        "capability": "browser-data.write",
-        "tier": "gated",
-        "session": "family",
-        "sensitivity": "write",
-        "principals": [
-          "host",
-          "user",
-          "code"
-        ],
-        "presentation": null,
-        "effect": {
-          "kind": "host-capability",
-          "capability": "browser-data.write",
-          "resource": {
-            "kind": "receiver-object"
-          }
-        }
-      },
-      "getCookieSnapshot": {
-        "capability": "browser-data.read",
-        "tier": "open",
-        "session": "family",
-        "sensitivity": "read",
-        "principals": [
-          "host",
-          "user",
-          "code"
-        ],
-        "presentation": null,
-        "effect": {
-          "kind": "host-capability",
-          "capability": "browser-data.read",
-          "resource": {
-            "kind": "receiver-object"
-          }
-        }
-      },
-      "getCookiesForOrigin": {
-        "capability": "browser-data.read",
-        "tier": "open",
-        "session": "family",
-        "sensitivity": "read",
-        "principals": [
-          "host",
-          "user",
-          "code"
-        ],
-        "presentation": null,
-        "effect": {
-          "kind": "host-capability",
-          "capability": "browser-data.read",
-          "resource": {
-            "kind": "receiver-object"
-          }
-        }
-      },
-      "clearCookiesForOrigin": {
-        "capability": "browser-data.delete",
-        "tier": "gated",
-        "session": "family",
-        "sensitivity": "destructive",
-        "principals": [
-          "host",
-          "user",
-          "code"
-        ],
-        "presentation": null,
-        "effect": {
-          "kind": "host-capability",
-          "capability": "browser-data.delete",
-          "resource": {
-            "kind": "receiver-object"
-          }
-        }
-      },
-      "clearAllCookies": {
-        "capability": "browser-data.delete",
-        "tier": "gated",
-        "session": "family",
-        "sensitivity": "destructive",
-        "principals": [
-          "host",
-          "user",
-          "code"
-        ],
-        "presentation": null,
-        "effect": {
-          "kind": "host-capability",
-          "capability": "browser-data.delete",
-          "resource": {
-            "kind": "receiver-object"
-          }
-        }
-      },
-      "endBrowserSession": {
-        "capability": "browser-data.delete",
-        "tier": "gated",
-        "session": "family",
-        "sensitivity": "destructive",
-        "principals": [
-          "host",
-          "user",
-          "code"
-        ],
-        "presentation": null,
-        "effect": {
-          "kind": "host-capability",
-          "capability": "browser-data.delete",
-          "resource": {
-            "kind": "receiver-object"
-          }
-        }
-      },
-      "getCookieSiteSummary": {
-        "capability": "browser-data.read",
-        "tier": "open",
-        "session": "family",
-        "sensitivity": "read",
-        "principals": [
-          "host",
-          "user",
-          "code"
-        ],
-        "presentation": null,
-        "effect": {
-          "kind": "host-capability",
-          "capability": "browser-data.read",
-          "resource": {
-            "kind": "receiver-object"
-          }
-        }
-      },
-      "addCookiesBatch": {
-        "capability": "browser-data.write",
-        "tier": "gated",
-        "session": "family",
-        "sensitivity": "write",
-        "principals": [
-          "host",
-          "user",
-          "code"
-        ],
-        "presentation": null,
-        "effect": {
-          "kind": "host-capability",
-          "capability": "browser-data.write",
-          "resource": {
-            "kind": "receiver-object"
-          }
-        }
-      },
-      "addPasswordsBatch": {
-        "capability": "browser-data.write",
-        "tier": "gated",
-        "session": "family",
-        "sensitivity": "write",
-        "principals": [
-          "host",
-          "user",
-          "code"
-        ],
-        "presentation": null,
-        "effect": {
-          "kind": "host-capability",
-          "capability": "browser-data.write",
-          "resource": {
-            "kind": "receiver-object"
-          }
-        }
-      },
-      "addFormFillBatch": {
-        "capability": "browser-data.write",
-        "tier": "gated",
-        "session": "family",
-        "sensitivity": "write",
-        "principals": [
-          "host",
-          "user",
-          "code"
-        ],
-        "presentation": null,
-        "effect": {
-          "kind": "host-capability",
-          "capability": "browser-data.write",
-          "resource": {
-            "kind": "receiver-object"
-          }
-        }
-      }
-    },
+    "builtinBecause": "durable-data",
     "durableObject": {
       "keyVersion": 1,
       "objectKey": "browser-environment",
@@ -3262,15 +2488,30 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
     "residentCapabilityRequests": [],
     "hostCapabilityRequests": [],
     "directMethods": {
-      "getPasswords": {
+      "listPasswordSummaries": {
         "capability": "browser-data.read",
         "tier": "gated",
         "session": "family",
         "sensitivity": "read",
         "principals": [
-          "host",
-          "user",
-          "code"
+          "host"
+        ],
+        "presentation": null,
+        "effect": {
+          "kind": "host-capability",
+          "capability": "browser-data.read",
+          "resource": {
+            "kind": "receiver-object"
+          }
+        }
+      },
+      "listPasswordSummariesPage": {
+        "capability": "browser-data.read",
+        "tier": "gated",
+        "session": "family",
+        "sensitivity": "read",
+        "principals": [
+          "host"
         ],
         "presentation": null,
         "effect": {
@@ -3287,9 +2528,24 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         "session": "family",
         "sensitivity": "read",
         "principals": [
-          "host",
-          "user",
-          "code"
+          "host"
+        ],
+        "presentation": null,
+        "effect": {
+          "kind": "host-capability",
+          "capability": "browser-data.read",
+          "resource": {
+            "kind": "receiver-object"
+          }
+        }
+      },
+      "listPasswordsPage": {
+        "capability": "browser-data.read",
+        "tier": "gated",
+        "session": "family",
+        "sensitivity": "read",
+        "principals": [
+          "host"
         ],
         "presentation": null,
         "effect": {
@@ -3306,9 +2562,7 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         "session": "family",
         "sensitivity": "write",
         "principals": [
-          "host",
-          "user",
-          "code"
+          "host"
         ],
         "presentation": null,
         "effect": {
@@ -3325,9 +2579,7 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         "session": "family",
         "sensitivity": "write",
         "principals": [
-          "host",
-          "user",
-          "code"
+          "host"
         ],
         "presentation": null,
         "effect": {
@@ -3344,9 +2596,7 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         "session": "family",
         "sensitivity": "destructive",
         "principals": [
-          "host",
-          "user",
-          "code"
+          "host"
         ],
         "presentation": null,
         "effect": {
@@ -3363,9 +2613,7 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         "session": "family",
         "sensitivity": "write",
         "principals": [
-          "host",
-          "user",
-          "code"
+          "host"
         ],
         "presentation": null,
         "effect": {
@@ -3382,9 +2630,7 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         "session": "family",
         "sensitivity": "read",
         "principals": [
-          "host",
-          "user",
-          "code"
+          "host"
         ],
         "presentation": null,
         "effect": {
@@ -3401,9 +2647,24 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         "session": "family",
         "sensitivity": "read",
         "principals": [
-          "host",
-          "user",
-          "code"
+          "host"
+        ],
+        "presentation": null,
+        "effect": {
+          "kind": "host-capability",
+          "capability": "browser-data.read",
+          "resource": {
+            "kind": "receiver-object"
+          }
+        }
+      },
+      "getNeverSaveOriginsPage": {
+        "capability": "browser-data.read",
+        "tier": "open",
+        "session": "family",
+        "sensitivity": "read",
+        "principals": [
+          "host"
         ],
         "presentation": null,
         "effect": {
@@ -3420,9 +2681,7 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         "session": "family",
         "sensitivity": "destructive",
         "principals": [
-          "host",
-          "user",
-          "code"
+          "host"
         ],
         "presentation": null,
         "effect": {
@@ -3439,9 +2698,7 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         "session": "family",
         "sensitivity": "write",
         "principals": [
-          "host",
-          "user",
-          "code"
+          "host"
         ],
         "presentation": null,
         "effect": {
@@ -3458,9 +2715,41 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         "session": "family",
         "sensitivity": "read",
         "principals": [
-          "host",
-          "user",
-          "code"
+          "host"
+        ],
+        "presentation": null,
+        "effect": {
+          "kind": "host-capability",
+          "capability": "browser-data.read",
+          "resource": {
+            "kind": "receiver-object"
+          }
+        }
+      },
+      "listFormFillValues": {
+        "capability": "browser-data.read",
+        "tier": "gated",
+        "session": "family",
+        "sensitivity": "read",
+        "principals": [
+          "host"
+        ],
+        "presentation": null,
+        "effect": {
+          "kind": "host-capability",
+          "capability": "browser-data.read",
+          "resource": {
+            "kind": "receiver-object"
+          }
+        }
+      },
+      "listFormFillValuesPage": {
+        "capability": "browser-data.read",
+        "tier": "gated",
+        "session": "family",
+        "sensitivity": "read",
+        "principals": [
+          "host"
         ],
         "presentation": null,
         "effect": {
@@ -3477,9 +2766,7 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         "session": "family",
         "sensitivity": "write",
         "principals": [
-          "host",
-          "user",
-          "code"
+          "host"
         ],
         "presentation": null,
         "effect": {
@@ -3496,9 +2783,7 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         "session": "family",
         "sensitivity": "write",
         "principals": [
-          "host",
-          "user",
-          "code"
+          "host"
         ],
         "presentation": null,
         "effect": {
@@ -3515,9 +2800,7 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         "session": "family",
         "sensitivity": "write",
         "principals": [
-          "host",
-          "user",
-          "code"
+          "host"
         ],
         "presentation": null,
         "effect": {
@@ -3534,9 +2817,7 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         "session": "family",
         "sensitivity": "destructive",
         "principals": [
-          "host",
-          "user",
-          "code"
+          "host"
         ],
         "presentation": null,
         "effect": {
@@ -3553,9 +2834,7 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         "session": "family",
         "sensitivity": "destructive",
         "principals": [
-          "host",
-          "user",
-          "code"
+          "host"
         ],
         "presentation": null,
         "effect": {
@@ -3572,9 +2851,7 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         "session": "family",
         "sensitivity": "write",
         "principals": [
-          "host",
-          "user",
-          "code"
+          "host"
         ],
         "presentation": null,
         "effect": {
@@ -3585,15 +2862,30 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
           }
         }
       },
-      "getCookieSnapshot": {
+      "listCookieOrigins": {
         "capability": "browser-data.read",
         "tier": "open",
         "session": "family",
         "sensitivity": "read",
         "principals": [
-          "host",
-          "user",
-          "code"
+          "host"
+        ],
+        "presentation": null,
+        "effect": {
+          "kind": "host-capability",
+          "capability": "browser-data.read",
+          "resource": {
+            "kind": "receiver-object"
+          }
+        }
+      },
+      "listCookieOriginsPage": {
+        "capability": "browser-data.read",
+        "tier": "open",
+        "session": "family",
+        "sensitivity": "read",
+        "principals": [
+          "host"
         ],
         "presentation": null,
         "effect": {
@@ -3606,13 +2898,28 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
       },
       "getCookiesForOrigin": {
         "capability": "browser-data.read",
-        "tier": "open",
+        "tier": "gated",
         "session": "family",
         "sensitivity": "read",
         "principals": [
-          "host",
-          "user",
-          "code"
+          "host"
+        ],
+        "presentation": null,
+        "effect": {
+          "kind": "host-capability",
+          "capability": "browser-data.read",
+          "resource": {
+            "kind": "receiver-object"
+          }
+        }
+      },
+      "listCookiesPage": {
+        "capability": "browser-data.read",
+        "tier": "gated",
+        "session": "family",
+        "sensitivity": "read",
+        "principals": [
+          "host"
         ],
         "presentation": null,
         "effect": {
@@ -3629,9 +2936,7 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         "session": "family",
         "sensitivity": "destructive",
         "principals": [
-          "host",
-          "user",
-          "code"
+          "host"
         ],
         "presentation": null,
         "effect": {
@@ -3648,9 +2953,7 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         "session": "family",
         "sensitivity": "destructive",
         "principals": [
-          "host",
-          "user",
-          "code"
+          "host"
         ],
         "presentation": null,
         "effect": {
@@ -3667,9 +2970,7 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         "session": "family",
         "sensitivity": "destructive",
         "principals": [
-          "host",
-          "user",
-          "code"
+          "host"
         ],
         "presentation": null,
         "effect": {
@@ -3686,9 +2987,7 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         "session": "family",
         "sensitivity": "read",
         "principals": [
-          "host",
-          "user",
-          "code"
+          "host"
         ],
         "presentation": null,
         "effect": {
@@ -3705,9 +3004,7 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         "session": "family",
         "sensitivity": "write",
         "principals": [
-          "host",
-          "user",
-          "code"
+          "host"
         ],
         "presentation": null,
         "effect": {
@@ -3724,9 +3021,7 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         "session": "family",
         "sensitivity": "write",
         "principals": [
-          "host",
-          "user",
-          "code"
+          "host"
         ],
         "presentation": null,
         "effect": {
@@ -3743,9 +3038,7 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
         "session": "family",
         "sensitivity": "write",
         "principals": [
-          "host",
-          "user",
-          "code"
+          "host"
         ],
         "presentation": null,
         "effect": {

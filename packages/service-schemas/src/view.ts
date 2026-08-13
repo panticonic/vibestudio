@@ -10,6 +10,114 @@ import type { MethodAccessDescriptor } from "@vibestudio/shared/serviceAuthority
 import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
 import { panelMethods } from "./panel.js";
 
+/** Electron-local shell to native WebContents projection. Cross-client runtime
+ * ownership remains exclusively in panelRuntime. */
+export const NATIVE_PANEL_SURFACE_PROTOCOL_VERSION = 1 as const;
+const nativeSurfaceIdentity = z.string().min(1);
+const nativeSurfaceRevision = z.number().int().nonnegative();
+export const NativePanelAdapterHelloSchema = z
+  .object({
+    sealedLaunchIdentity: nativeSurfaceIdentity,
+    supportedProtocolVersions: z.array(z.literal(NATIVE_PANEL_SURFACE_PROTOCOL_VERSION)),
+  })
+  .strict();
+export type NativePanelAdapterHello = z.infer<typeof NativePanelAdapterHelloSchema>;
+export const NativePanelAdapterHandshakeSchema = z
+  .object({
+    protocolVersion: z.literal(NATIVE_PANEL_SURFACE_PROTOCOL_VERSION),
+    hostGeneration: nativeSurfaceIdentity,
+    shellGeneration: nativeSurfaceIdentity,
+    sealedLaunchIdentity: nativeSurfaceIdentity,
+  })
+  .strict();
+export type NativePanelAdapterHandshake = z.infer<typeof NativePanelAdapterHandshakeSchema>;
+export const NativePanelAdapterHandshakeResultSchema = z.discriminatedUnion("accepted", [
+  z.object({ accepted: z.literal(true), handshake: NativePanelAdapterHandshakeSchema }).strict(),
+  z.object({ accepted: z.literal(false), reason: z.literal("unsupported-protocol") }).strict(),
+]);
+export type NativePanelAdapterHandshakeResult = z.infer<
+  typeof NativePanelAdapterHandshakeResultSchema
+>;
+export const DesiredNativePanelSurfaceSchema = z
+  .object({
+    surfaceId: nativeSurfaceIdentity,
+    materialization: z
+      .object({ runtimeEntityId: nativeSurfaceIdentity, leaseConnectionId: nativeSurfaceIdentity })
+      .strict(),
+    visible: z.boolean(),
+    focused: z.boolean(),
+    bounds: z
+      .object({
+        x: z.number().finite(),
+        y: z.number().finite(),
+        width: z.number().finite().nonnegative(),
+        height: z.number().finite().nonnegative(),
+      })
+      .strict(),
+  })
+  .strict();
+export const NativePanelDesiredSnapshotSchema = z
+  .object({
+    protocolVersion: z.literal(NATIVE_PANEL_SURFACE_PROTOCOL_VERSION),
+    hostGeneration: nativeSurfaceIdentity,
+    shellGeneration: nativeSurfaceIdentity,
+    revision: nativeSurfaceRevision,
+    surfaces: z.array(DesiredNativePanelSurfaceSchema),
+  })
+  .strict();
+export type NativePanelDesiredSnapshot = z.infer<typeof NativePanelDesiredSnapshotSchema>;
+export const NativePanelObservedSnapshotSchema = z
+  .object({
+    protocolVersion: z.literal(NATIVE_PANEL_SURFACE_PROTOCOL_VERSION),
+    hostGeneration: nativeSurfaceIdentity,
+    shellGeneration: nativeSurfaceIdentity,
+    desiredRevision: nativeSurfaceRevision,
+    observationRevision: nativeSurfaceRevision,
+    surfaces: z.array(
+      z
+        .object({
+          surfaceId: nativeSurfaceIdentity,
+          nativeSurfaceId: nativeSurfaceIdentity,
+          materialization: z
+            .object({
+              runtimeEntityId: nativeSurfaceIdentity,
+              leaseConnectionId: nativeSurfaceIdentity,
+            })
+            .strict(),
+          visible: z.boolean(),
+          focused: z.boolean(),
+          bounds: z
+            .object({
+              x: z.number().finite(),
+              y: z.number().finite(),
+              width: z.number().finite().nonnegative(),
+              height: z.number().finite().nonnegative(),
+            })
+            .strict(),
+        })
+        .strict()
+    ),
+  })
+  .strict();
+export type NativePanelObservedSnapshot = z.infer<typeof NativePanelObservedSnapshotSchema>;
+export const NativePanelApplyResultSchema = z.discriminatedUnion("accepted", [
+  z.object({ accepted: z.literal(true), observation: NativePanelObservedSnapshotSchema }).strict(),
+  z
+    .object({
+      accepted: z.literal(false),
+      reason: z.enum([
+        "foreign-host-generation",
+        "invalid-desired-state",
+        "revision-conflict",
+        "stale-revision",
+        "stale-shell-generation",
+        "unsupported-protocol",
+      ]),
+    })
+    .strict(),
+]);
+export type NativePanelApplyResult = z.infer<typeof NativePanelApplyResultSchema>;
+
 // Access descriptors classify native window/view mutations. The Electron view
 // service definition separately declares the required principals.
 
@@ -26,9 +134,6 @@ const VIEW_THEME_ACCESS: MethodAccessDescriptor = {
   sensitivity: "write",
 };
 const VIEW_SLOT_BIND_ACCESS: MethodAccessDescriptor = {
-  sensitivity: "write",
-};
-const VIEW_SHELL_READY_ACCESS: MethodAccessDescriptor = {
   sensitivity: "write",
 };
 const VIEW_OVERLAY_TOGGLE_ACCESS: MethodAccessDescriptor = {
@@ -87,12 +192,6 @@ export const ShellOverlayRowSchema = z.object({
   type: z.string().describe("Row kind used by the shell to route activation/payload handling."),
   payload: z.unknown().optional().describe("Opaque data passed back when the row is activated."),
 });
-
-export const NativePanelSlotSyncResultSchema = z.union([
-  z.object({ status: z.enum(["bound", "updated"]) }),
-  z.object({ status: z.literal("missing"), reason: z.string() }),
-]);
-export type NativePanelSlotSyncResult = z.infer<typeof NativePanelSlotSyncResultSchema>;
 
 export const ContentOverlayThemeSchema = z.object({
   appearance: z.enum(["light", "dark"]).describe("Resolved light/dark appearance."),
@@ -165,7 +264,7 @@ export const coreViewMethods = defineServiceMethods({
     returns: z.void(),
     access: VIEW_THEME_ACCESS,
   },
-  syncNativePanelSlots: {
+  connectNativePanelAdapter: {
     tier: {
       tier: "open",
       session: "family",
@@ -174,37 +273,12 @@ export const coreViewMethods = defineServiceMethods({
       rationale:
         "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family",
     },
-    description:
-      "Converge the native adapter to one complete, generation-fenced workspace-shell snapshot.",
-    args: z.tuple([
-      z
-        .object({
-          rendererInstanceId: z.string().min(1).describe("Hosted shell document incarnation."),
-          revision: z.number().int().positive().describe("Monotonic desired-state revision."),
-          slots: z.array(
-            z
-              .object({
-                nativeSlotId: z.string().min(1),
-                bindingId: z.string().min(1),
-                bindingSequence: z.number().int().nonnegative(),
-                panelId: z.string().min(1),
-                bounds: ViewBoundsSchema,
-                focused: z.boolean(),
-              })
-              .strict()
-          ),
-        })
-        .strict(),
-    ]),
-    returns: z
-      .object({
-        revision: z.number().int().positive(),
-        slots: z.record(z.string(), NativePanelSlotSyncResultSchema),
-      })
-      .strict(),
+    description: "Negotiate one generation-fenced native panel-host session.",
+    args: z.tuple([NativePanelAdapterHelloSchema]),
+    returns: NativePanelAdapterHandshakeResultSchema,
     access: VIEW_SLOT_BIND_ACCESS,
   },
-  setHostedShellReady: {
+  applyNativePanelSurfaces: {
     tier: {
       tier: "open",
       session: "family",
@@ -213,16 +287,10 @@ export const coreViewMethods = defineServiceMethods({
       rationale:
         "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family",
     },
-    description:
-      "Mark the caller's hosted shell as ready (or not), which gates whether its owner view is shown.",
-    args: z.tuple([
-      z.object({
-        ready: z.boolean().describe("Whether the hosted shell has finished loading."),
-        rendererInstanceId: z.string().min(1).describe("Hosted shell document incarnation."),
-      }),
-    ]),
-    returns: z.void(),
-    access: VIEW_SHELL_READY_ACCESS,
+    description: "Converge the native adapter to one complete desired surface snapshot.",
+    args: z.tuple([NativePanelDesiredSnapshotSchema]),
+    returns: NativePanelApplyResultSchema,
+    access: VIEW_SLOT_BIND_ACCESS,
   },
   setShellOverlay: {
     tier: {

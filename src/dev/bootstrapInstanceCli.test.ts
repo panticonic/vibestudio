@@ -25,6 +25,7 @@ describe("bootstrapInstanceCliFromDevice", () => {
       fp: "AA".repeat(32),
       sig: "wss://signal.example/",
       code: "D".repeat(32),
+      exp: 2_000_000_000_000,
       v: 2 as const,
       ice: "all" as const,
     };
@@ -32,8 +33,8 @@ describe("bootstrapInstanceCliFromDevice", () => {
       ...pairing,
       deepLink: createConnectDeepLink(pairing),
       pairUrl: createConnectPairUrl(pairing),
-      expiresInMs: 60_000,
-      expiresAt: Date.now() + 60_000,
+      expiresInMs: pairing.exp - Date.now(),
+      expiresAt: pairing.exp,
       serverId,
       serverBootId,
     };
@@ -121,6 +122,7 @@ describe("bootstrapInstanceCliFromDevice", () => {
       fp: "AA".repeat(32),
       sig: "wss://signal.example/",
       code: "D".repeat(32),
+      exp: 2_000_000_000_000,
       v: 2 as const,
       ice: "all" as const,
     };
@@ -128,8 +130,8 @@ describe("bootstrapInstanceCliFromDevice", () => {
       ...pairing,
       deepLink: createConnectDeepLink(pairing),
       pairUrl: createConnectPairUrl(pairing),
-      expiresInMs: 60_000,
-      expiresAt: Date.now() + 60_000,
+      expiresInMs: pairing.exp - Date.now(),
+      expiresAt: pairing.exp,
       serverId,
       serverBootId,
     };

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createConnectDeepLink } from "@vibestudio/shared/connect";
 import { createVerifiedCaller, type ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import { remoteCredMethods } from "@vibestudio/service-schemas/remoteCred";
 import type { DeviceCredentialEntry, StoredRemote } from "./deviceCredentialStore.js";
@@ -230,9 +231,15 @@ describe("remoteCredService", () => {
     });
     expect(mocks.app.relaunch).not.toHaveBeenCalled();
 
-    const link =
-      `vibestudio://connect?room=room-abc&fp=${"AA".repeat(32)}` +
-      `&code=${"B".repeat(32)}&sig=wss%3A%2F%2Fsig.example%2F&v=2&ice=all`;
+    const link = createConnectDeepLink({
+      room: "room-abc",
+      fp: "AA".repeat(32),
+      code: "B".repeat(32),
+      exp: Date.now() + 60_000,
+      sig: "wss://sig.example/",
+      v: 2,
+      ice: "all",
+    });
     await expect(service.handler(shellCtx, "pair", [{ link }])).resolves.toEqual({ ok: true });
     expect(mocks.app.relaunch).toHaveBeenCalledWith({
       args: expect.arrayContaining([expect.stringMatching(/^vibestudio:\/\/connect\?/)]),

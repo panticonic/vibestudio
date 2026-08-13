@@ -149,11 +149,11 @@ describe("collectTransitiveExternalDeps", () => {
     });
   });
 
-  it("walks repo-root workspace package manifests that are outside the workspace graph", () => {
+  it("walks exact semantic workspace package manifests that are outside the workspace graph", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-extdeps-"));
     try {
       const workspaceRoot = path.join(root, "workspace");
-      const sharedDir = path.join(root, "packages", "shared");
+      const sharedDir = path.join(workspaceRoot, "packages", "shared");
       fs.mkdirSync(workspaceRoot, { recursive: true });
       fs.mkdirSync(sharedDir, { recursive: true });
       fs.writeFileSync(

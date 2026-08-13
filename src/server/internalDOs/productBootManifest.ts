@@ -1,3 +1,7 @@
+import * as fs from "node:fs";
+import * as path from "node:path";
+import { resolveRequiredAppRoot } from "../appRoot.js";
+
 /**
  * Stable identity of the installed Vibestudio host. Userland runtime labels
  * never manufacture this principal: only `createHostCaller` can attest that a
@@ -12,7 +16,7 @@ let cached: ProductBootManifest | undefined;
 
 export function getProductBootManifest(): ProductBootManifest {
   if (cached) return cached;
-  const appRoot = process.env["VIBESTUDIO_APP_ROOT"] ?? process.cwd();
+  const appRoot = resolveRequiredAppRoot();
   const fingerprintPath = path.join(appRoot, "dist", "host-build-fingerprint.json");
   let fingerprint: unknown;
   try {
@@ -35,5 +39,3 @@ export function getProductBootManifest(): ProductBootManifest {
   });
   return cached;
 }
-import * as fs from "node:fs";
-import * as path from "node:path";

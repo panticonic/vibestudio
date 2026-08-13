@@ -2,7 +2,7 @@ import { z } from "zod";
 import { requirementForPrincipals } from "@vibestudio/shared/authorization";
 import type { ServiceAuthorityPolicy } from "@vibestudio/shared/serviceAuthority";
 import {
-  defineServiceMethods,
+  defineReceiverServiceMethods,
   fixedPreparedAuthorityRequirement,
   selectedPreparedAuthorityRequirement,
 } from "@vibestudio/shared/typedServiceClient";
@@ -13,6 +13,46 @@ const nonEmpty = z.string().min(1);
 const sha256 = z.string().regex(/^[0-9a-f]{64}$/u);
 const diagnosticSchema = z
   .object({ code: nonEmpty, message: nonEmpty, at: z.number().int().nonnegative() })
+  .strict();
+const templateExchangePathSchema = z
+  .object({
+    path: nonEmpty,
+    status: z.enum(["equal", "update", "delete", "target-changed", "conflict"]),
+    baseline: sha256.nullable(),
+    source: sha256.nullable(),
+    target: sha256.nullable(),
+  })
+  .strict();
+export const developmentTemplateExchangePlanSchema = z
+  .object({
+    format: z.literal("vibestudio-template-exchange-plan/1"),
+    direction: z.enum(["export", "import"]),
+    workspace: nonEmpty,
+    checkout: nonEmpty,
+    source: nonEmpty,
+    target: nonEmpty,
+    manifestDigest: sha256,
+    baselineDigest: sha256.nullable(),
+    projection: z.array(nonEmpty),
+    paths: z.array(templateExchangePathSchema),
+    conflicts: z.array(nonEmpty),
+    untouched: z.array(nonEmpty),
+    operationId: sha256,
+  })
+  .strict();
+const developmentTemplateExchangeReceiptSchema = z
+  .object({
+    format: z.literal("vibestudio-template-exchange-receipt/1"),
+    operationId: sha256,
+    direction: z.enum(["export", "import"]),
+    manifestDigest: sha256,
+    baselineBefore: sha256.nullable(),
+    baselineAfter: sha256,
+    written: z.array(z.object({ path: nonEmpty, digest: sha256, mode: z.number().int() }).strict()),
+    deleted: z.array(nonEmpty),
+    preserved: z.array(nonEmpty),
+    completedAt: nonEmpty,
+  })
   .strict();
 
 export const developmentSessionModeSchema = z.enum(["semantic", "native-tool"]);
@@ -168,6 +208,21 @@ export const developmentClientExecutorSchema = z
   .strict();
 export type DevelopmentClientExecutor = z.infer<typeof developmentClientExecutorSchema>;
 
+export const developmentPairKindSchema = z.enum(["host-only", "base-only", "combined"]);
+export type DevelopmentPairKind = z.infer<typeof developmentPairKindSchema>;
+
+export const developmentPairSelectionSchema = z
+  .object({
+    kind: developmentPairKindSchema,
+    hostRepositoryId: nonEmpty,
+    baseRepositoryId: nonEmpty,
+  })
+  .strict()
+  .refine((value) => value.hostRepositoryId !== value.baseRepositoryId, {
+    message: "Host and Base candidates must be distinct repositories",
+  });
+export type DevelopmentPairSelection = z.infer<typeof developmentPairSelectionSchema>;
+
 export const developmentRecipeSchema = z
   .object({
     version: z.literal(1),
@@ -199,13 +254,34 @@ export const developmentExecutionSnapshotSchema = z
     version: z.literal(1),
     sessionId: nonEmpty,
     contextId: nonEmpty,
-    repositoryId: nonEmpty,
-    repoPath: nonEmpty,
-    repositoryState: vcsStateNodeRefSchema,
-    repositoryManifestDigest: sha256,
-    materializedTreeDigest: sha256,
-    contentRoot: z.string().regex(/^state:[0-9a-f]{64}$/u),
-    sourcePlanDigest: sha256,
+    pair: z
+      .object({
+        kind: developmentPairKindSchema,
+        host: z
+          .object({
+            repositoryId: nonEmpty,
+            repoPath: nonEmpty,
+            repositoryState: vcsStateNodeRefSchema,
+            repositoryManifestDigest: sha256,
+            materializedTreeDigest: sha256,
+            contentRoot: z.string().regex(/^state:[0-9a-f]{64}$/u),
+            sourcePlanDigest: sha256,
+          })
+          .strict(),
+        base: z
+          .object({
+            repositoryId: nonEmpty,
+            repoPath: nonEmpty,
+            repositoryState: vcsStateNodeRefSchema,
+            repositoryManifestDigest: sha256,
+            materializedTreeDigest: sha256,
+            contentRoot: z.string().regex(/^state:[0-9a-f]{64}$/u),
+            sourcePlanDigest: sha256,
+          })
+          .strict(),
+        pairDigest: sha256,
+      })
+      .strict(),
     recipeDigest: sha256,
     toolchain: z
       .object({
@@ -430,8 +506,20 @@ const adaptiveOpenAuthority = {
     ],
   },
 };
+const templateExchangeExecuteAuthority = {
+  requirement: requirementForPrincipals(
+    ["code", "user", "host"],
+    DEVELOPMENT_NATIVE_EXECUTE_CAPABILITY
+  ),
+  resource: {
+    kind: "argument" as const,
+    index: 0,
+    path: ["checkout"] as const,
+    prefix: "template-checkout:",
+  },
+};
 
-export const developmentMethods = defineServiceMethods({
+export const developmentMethods = defineReceiverServiceMethods({
   openSession: {
     tier: {
       tier: "open",
@@ -640,6 +728,83 @@ export const developmentMethods = defineServiceMethods({
     authority: DEVELOPMENT_PRINCIPALS,
     access: { sensitivity: "read" },
   },
+  planTemplateExchange: {
+    capability: DEVELOPMENT_NATIVE_EXECUTE_CAPABILITY,
+    tier: {
+      tier: "gated",
+      session: "family",
+      rationale: "Base-owned workflow selects one explicit sibling checkout for exact comparison",
+    },
+    presentation: {
+      title: "Review a template checkout exchange",
+      action: "review a template checkout exchange",
+      description:
+        "Allows {requesterKind} to compare one selected Git checkout with this exact development context.",
+      group: "runtime",
+      authorityCategory: { domain: "automation", verb: "act" },
+    },
+    description: "Plan a conflict-preserving import or export without changing either side.",
+    args: z.tuple([
+      z
+        .object({
+          sessionId: nonEmpty,
+          direction: z.enum(["export", "import"]),
+          checkout: nonEmpty,
+          idempotencyKey: nonEmpty,
+        })
+        .strict(),
+    ]),
+    returns: z
+      .object({ intentDigest: sha256, plan: developmentTemplateExchangePlanSchema })
+      .strict(),
+    authority: templateExchangeExecuteAuthority,
+    access: { sensitivity: "read" },
+  },
+  applyTemplateExchange: {
+    capability: DEVELOPMENT_NATIVE_EXECUTE_CAPABILITY,
+    tier: {
+      tier: "gated",
+      session: "family",
+      rationale: "Base-owned workflow applies only one exact previously reviewed exchange",
+    },
+    presentation: {
+      title: "Apply a template checkout exchange",
+      action: "apply a template checkout exchange",
+      description:
+        "Allows {requesterKind} to apply the reviewed projection and record exact receipts.",
+      group: "runtime",
+      authorityCategory: { domain: "automation", verb: "act" },
+    },
+    description: "Apply one reviewed exchange by exact operation identity.",
+    args: z.tuple([
+      z
+        .object({
+          sessionId: nonEmpty,
+          operationId: sha256,
+          intentDigest: sha256,
+          checkout: nonEmpty,
+        })
+        .strict(),
+    ]),
+    returns: z.discriminatedUnion("direction", [
+      z
+        .object({
+          direction: z.literal("export"),
+          exchange: developmentTemplateExchangeReceiptSchema,
+          imported: z.null(),
+        })
+        .strict(),
+      z
+        .object({
+          direction: z.literal("import"),
+          exchange: developmentTemplateExchangeReceiptSchema,
+          imported: vcsImportSnapshotResultSchema,
+        })
+        .strict(),
+    ]),
+    authority: templateExchangeExecuteAuthority,
+    access: { sensitivity: "write" },
+  },
   start: {
     capability: "development.native.execute",
     tier: {
@@ -667,6 +832,7 @@ export const developmentMethods = defineServiceMethods({
           sessionId: nonEmpty,
           runId: nonEmpty,
           recipeId: nonEmpty,
+          pair: developmentPairSelectionSchema,
           target: developmentTargetSchema,
         })
         .strict(),
@@ -1103,22 +1269,29 @@ export const developmentBuiltinMethods = Object.fromEntries(
     {
       ...method,
       capability:
-        (["start", "retry"].includes(name)
+        (["start", "retry", "planTemplateExchange", "applyTemplateExchange"].includes(name)
           ? `service:development.${name}`
           : "capability" in method
             ? method.capability
             : undefined) ?? `service:development.${name}`,
-      ...(["start", "retry"].includes(name)
+      ...(["start", "retry", "planTemplateExchange", "applyTemplateExchange"].includes(name)
         ? {
             tier: {
               ...method.tier,
               tier: "open" as const,
               rationale:
-                "Durable builtin bookkeeping is open; the exact downstream native build handle owns the gated execution effect",
+                "Durable Base workflow is open; the exact downstream native effect owns the gated execution authority",
             },
+            directEffect: { kind: "open" as const },
           }
         : {}),
-      ...(["openSession", "start", "retry"].includes(name)
+      ...([
+        "openSession",
+        "start",
+        "retry",
+        "planTemplateExchange",
+        "applyTemplateExchange",
+      ].includes(name)
         ? { authority: DEVELOPMENT_PRINCIPALS }
         : {}),
     },

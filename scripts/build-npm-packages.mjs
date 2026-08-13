@@ -7,8 +7,8 @@
 // The monorepo root stays private; this script synthesizes each package.json and
 // assembles its file tree. Host @vibestudio/* packages are vendored under
 // vendor/ and copied into node_modules by postinstall. @workspace/* packages are
-// not host dependencies; they ship only as first-run workspace template source
-// and are built by the runtime workspace build system. Userland dependencies
+// not host dependencies; userland is acquired from the exact external Base
+// release and built by the runtime workspace build system. Userland dependencies
 // include packages that require Node >=22.13, so the generated packages declare
 // the same floor.
 //
@@ -18,6 +18,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import { assertNoBundledUserlandSource } from "./packaged-userland-boundary.mjs";
 
 const repoRoot = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
 const outRoot = path.join(repoRoot, "dist-packages");
@@ -48,6 +49,8 @@ async function main() {
   rmrf(outRoot);
   stageServer();
   stageApp();
+  assertNoBundledUserlandSource(path.join(outRoot, "server"), "staged server npm package");
+  assertNoBundledUserlandSource(path.join(outRoot, "app"), "staged app npm package");
   console.log("\n✔ Staged dist-packages/{server,app}. Validate with:");
   console.log("    (cd dist-packages/server && npm publish --dry-run)");
   console.log("    (cd dist-packages/app && npm publish --dry-run)");
@@ -164,9 +167,9 @@ function stageApp() {
   }
 
   // Vendor the host's @vibestudio/* packages under vendor/ (copied into node_modules
-  // by the postinstall — see the server staging note). The managed workspace's
-  // @workspace/* packages are NOT host deps; they ship only as first-run template
-  // content under workspace/ (above).
+  // by the postinstall — see the server staging note). @workspace/* packages
+  // are NOT host deps. The exact Base pointer below is the only userland
+  // distribution input in the package.
   vendorVibestudioPackages(root);
   vendorExtensionHost(root);
   copyFile("scripts/vendor-install.mjs", path.join(root, "scripts/vendor-install.mjs"));

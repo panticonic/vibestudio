@@ -91,6 +91,14 @@ export function parseSystemTestLauncherArgs(argv: readonly string[]): LauncherAr
   };
 }
 
+/**
+ * Launcher help is local metadata. It must never provision, pair, reuse, or
+ * reclaim an instance merely to explain the command boundary.
+ */
+export function isLocalSystemTestHelpCommand(command: readonly string[]): boolean {
+  return command.length === 1 && (command[0] === "--help" || command[0] === "-h");
+}
+
 function canonicalRepoRoot(repoRoot: string): string {
   return fs.realpathSync(path.resolve(repoRoot));
 }
@@ -159,7 +167,7 @@ function resolveRunning(repoRoot: string, instanceId: string): DevInstanceRecord
  * Reclaim a managed ephemeral generation whose supervisor is provably dead.
  *
  * A SIGKILL or host crash cannot run runInstance's `finally`, so both the
- * copied workspace root and registry lock can survive. The managed marker is
+ * materialized workspace root and registry lock can survive. The managed marker is
  * the ownership proof: never infer permission to remove an arbitrary stale
  * developer instance merely from its name or dead PID.
  */

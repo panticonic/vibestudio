@@ -21,11 +21,11 @@ import {
   type PairedConnection,
 } from "@vibestudio/rpc/transports/pairedConnection";
 import type { RecoveryKind } from "@vibestudio/rpc/protocol/recoveryCoordinator";
-import type { ConnectPairing } from "@vibestudio/shared/connect";
+import type { ReconnectReach } from "@vibestudio/shared/connect";
 import type { CallerKind } from "@vibestudio/shared/serviceDispatcher";
 import { acquireWebRtcConnectionLock } from "./webrtcConnectionLock.js";
 
-export type CliWebRtcPairing = Omit<ConnectPairing, "code"> & { code?: string };
+export type CliWebRtcPairing = ReconnectReach;
 
 export interface WebRtcClientConfig {
   pairing: CliWebRtcPairing;

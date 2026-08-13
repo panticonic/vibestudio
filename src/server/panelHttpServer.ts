@@ -22,55 +22,36 @@ import { PANEL_BOOTSTRAP_SCRIPT } from "./panelBootstrapScript.js";
 import { assertPresent } from "../lintHelpers";
 import { TransportDerivativeCache } from "./buildV2/transportDerivativeCache.js";
 import type { ResolvedUnitIcon } from "./buildV2/index.js";
+import { resolveRequiredAppRoot } from "./appRoot.js";
 
 const log = createDevLogger("PanelHttpServer");
-
-declare const __dirname: string | undefined;
 
 // ---------------------------------------------------------------------------
 // Pre-compiled browser transport + context bootstrap
 // ---------------------------------------------------------------------------
 
 function loadBrowserTransport(): string {
-  const transportCandidates = [
-    typeof __dirname !== "undefined" && __dirname
-      ? path.join(__dirname, "browserTransport.js")
-      : null,
-    path.join(process.cwd(), "dist", "browserTransport.js"),
-    path.join(process.cwd(), "src", "server", "browserTransport.js"),
-  ].filter((candidate): candidate is string => Boolean(candidate));
-
-  for (const transportPath of transportCandidates) {
-    try {
-      return fs.readFileSync(transportPath, "utf-8");
-    } catch {
-      // Try the next runtime layout.
-    }
+  const transportPath = path.join(resolveRequiredAppRoot(), "dist", "browserTransport.js");
+  try {
+    return fs.readFileSync(transportPath, "utf-8");
+  } catch (error) {
+    throw new Error(
+      `Browser transport is unavailable at the exact host artifact path ${transportPath}: ${
+        error instanceof Error ? error.message : String(error)
+      }`
+    );
   }
-
-  log.info(`[PanelHttpServer] Browser transport not found, using inline stub`);
-  return `console.warn("[Vibestudio] Browser transport not available — panel RPC will not work.");`;
 }
 
 const BROWSER_TRANSPORT_JS = loadBrowserTransport();
 
 function loadBrandAsset(filename: string): Buffer | null {
-  const candidates = [
-    typeof __dirname !== "undefined" && __dirname
-      ? path.join(__dirname, "assets", "brand", filename)
-      : null,
-    path.join(process.cwd(), "dist", "assets", "brand", filename),
-    path.join(process.cwd(), "build-resources", "brand", filename),
-  ].filter((candidate): candidate is string => Boolean(candidate));
-
-  for (const assetPath of candidates) {
-    try {
-      return fs.readFileSync(assetPath);
-    } catch {
-      // Try the next runtime layout.
-    }
+  const assetPath = path.join(resolveRequiredAppRoot(), "dist", "assets", "brand", filename);
+  try {
+    return fs.readFileSync(assetPath);
+  } catch {
+    return null;
   }
-  return null;
 }
 
 const BRAND_FAVICON_ICO = loadBrandAsset("favicon.ico");

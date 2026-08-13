@@ -986,47 +986,16 @@ export const HOST_AUTHORITY_METHODS = {
       },
     },
   },
-  "browserEnvironment.flushCookieProjection": {
+  "browserEnvironment.cancelSensitiveImport": {
     tier: {
       tier: "open",
       session: "family",
       residency: "native-effect",
-      family: "browserEnvironment.control",
-      rationale:
-        "Host maintenance proceeds directly; installed code requires the method's gated browser-environment capability.",
+      family: "browserEnvironment.retire",
+      rationale: "Records durable cancellation and stops the active host import reader.",
     },
-    capability: "service:browserEnvironment.flushCookieProjection",
-    presentation: {
-      title: "Synchronize website cookies",
-      action: "synchronize website cookies",
-      description: "Allows {requesterKind} to reconcile website cookies with the browser host.",
-      group: "network",
-      authorityCategory: {
-        domain: "web",
-        verb: "manage",
-      },
-    },
-  },
-  "browserEnvironment.getCookieProjectionDiagnostics": {
-    tier: {
-      tier: "open",
-      session: "family",
-      residency: "native-effect",
-      family: "browserEnvironment.read",
-      rationale:
-        "Host diagnostics proceed directly; installed code requires the method's gated browser-environment capability.",
-    },
-    capability: "service:browserEnvironment.getCookieProjectionDiagnostics",
-    presentation: {
-      title: "View cookie synchronization diagnostics",
-      action: "view cookie synchronization diagnostics",
-      description: "Allows {requesterKind} to inspect website cookie synchronization status.",
-      group: "network",
-      authorityCategory: {
-        domain: "web",
-        verb: "see",
-      },
-    },
+    capability: null,
+    presentation: null,
   },
   "browserEnvironment.getImportHost": {
     tier: {
@@ -1132,6 +1101,17 @@ export const HOST_AUTHORITY_METHODS = {
       },
     },
   },
+  "browserEnvironment.observeSensitiveImport": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "browserEnvironment.read",
+      rationale: "Reads aggregate progress from the durable host import ledger.",
+    },
+    capability: null,
+    presentation: null,
+  },
   "browserEnvironment.openDownload": {
     tier: {
       tier: "open",
@@ -1194,6 +1174,18 @@ export const HOST_AUTHORITY_METHODS = {
         verb: "see",
       },
     },
+  },
+  "browserEnvironment.previewSensitiveImport": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "browserEnvironment.control",
+      rationale:
+        "Returns aggregate review counts for protected browser categories without returning records or values.",
+    },
+    capability: null,
+    presentation: null,
   },
   "browserEnvironment.resumeDownload": {
     tier: {
@@ -1258,6 +1250,18 @@ export const HOST_AUTHORITY_METHODS = {
       },
     },
   },
+  "browserEnvironment.startSensitiveImport": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "browserEnvironment.create",
+      rationale:
+        "Runs credential-bearing browser import entirely in the trusted host and returns aggregate counts only; gated by authority principals.",
+    },
+    capability: null,
+    presentation: null,
+  },
   "browserPermissions.request": {
     tier: {
       tier: "open",
@@ -1290,6 +1294,414 @@ export const HOST_AUTHORITY_METHODS = {
       family: "browserPermissions.control",
       rationale:
         "Verified-user read of that user's exact-origin browser grants; code and anonymous callers remain excluded.",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "browserPrivacyPresentation.open": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "browserPrivacyPresentation.open",
+      rationale:
+        "Routes one reviewed provider intent to the exact host-verified shell that owns the initiating panel; the route carries no protected data and has no independent user gate.",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "browserVaultNative.addCookiesBatch": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "browserVaultNative.host",
+      rationale:
+        "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service.",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "browserVaultNative.addFormFillBatch": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "browserVaultNative.host",
+      rationale:
+        "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service.",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "browserVaultNative.addFormFillValue": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "browserVaultNative.host",
+      rationale:
+        "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service.",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "browserVaultNative.addNeverSave": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "browserVaultNative.host",
+      rationale:
+        "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service.",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "browserVaultNative.addPassword": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "browserVaultNative.host",
+      rationale:
+        "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service.",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "browserVaultNative.addPasswordsBatch": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "browserVaultNative.host",
+      rationale:
+        "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service.",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "browserVaultNative.applyCookieMutations": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "browserVaultNative.host",
+      rationale:
+        "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service.",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "browserVaultNative.clearAllCookies": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "browserVaultNative.host",
+      rationale:
+        "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service.",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "browserVaultNative.clearCookiesForOrigin": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "browserVaultNative.host",
+      rationale:
+        "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service.",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "browserVaultNative.clearFormFillValues": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "browserVaultNative.host",
+      rationale:
+        "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service.",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "browserVaultNative.deleteFormFillValue": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "browserVaultNative.host",
+      rationale:
+        "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service.",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "browserVaultNative.deletePassword": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "browserVaultNative.host",
+      rationale:
+        "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service.",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "browserVaultNative.endBrowserSession": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "browserVaultNative.host",
+      rationale:
+        "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service.",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "browserVaultNative.getCookiesForOrigin": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "browserVaultNative.host",
+      rationale:
+        "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service.",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "browserVaultNative.getCookieSiteSummary": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "browserVaultNative.host",
+      rationale:
+        "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service.",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "browserVaultNative.getFormFillSuggestions": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "browserVaultNative.host",
+      rationale:
+        "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service.",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "browserVaultNative.getNeverSaveOrigins": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "browserVaultNative.host",
+      rationale:
+        "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service.",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "browserVaultNative.getNeverSaveOriginsPage": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "browserVaultNative.host",
+      rationale:
+        "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service.",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "browserVaultNative.getPasswordForSite": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "browserVaultNative.host",
+      rationale:
+        "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service.",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "browserVaultNative.isNeverSave": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "browserVaultNative.host",
+      rationale:
+        "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service.",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "browserVaultNative.listCookieOrigins": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "browserVaultNative.host",
+      rationale:
+        "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service.",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "browserVaultNative.listCookieOriginsPage": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "browserVaultNative.host",
+      rationale:
+        "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service.",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "browserVaultNative.listCookiesPage": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "browserVaultNative.host",
+      rationale:
+        "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service.",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "browserVaultNative.listFormFillValues": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "browserVaultNative.host",
+      rationale:
+        "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service.",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "browserVaultNative.listFormFillValuesPage": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "browserVaultNative.host",
+      rationale:
+        "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service.",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "browserVaultNative.listPasswordsPage": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "browserVaultNative.host",
+      rationale:
+        "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service.",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "browserVaultNative.listPasswordSummaries": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "browserVaultNative.host",
+      rationale:
+        "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service.",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "browserVaultNative.listPasswordSummariesPage": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "browserVaultNative.host",
+      rationale:
+        "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service.",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "browserVaultNative.markFormFillValueUsed": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "browserVaultNative.host",
+      rationale:
+        "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service.",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "browserVaultNative.removeNeverSave": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "browserVaultNative.host",
+      rationale:
+        "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service.",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "browserVaultNative.updateFormFillValue": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "browserVaultNative.host",
+      rationale:
+        "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service.",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "browserVaultNative.updateLastUsed": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "browserVaultNative.host",
+      rationale:
+        "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service.",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "browserVaultNative.updatePassword": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "browserVaultNative.host",
+      rationale:
+        "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service.",
     },
     capability: null,
     presentation: null,
@@ -1505,50 +1917,6 @@ export const HOST_AUTHORITY_METHODS = {
       authorityCategory: {
         domain: "automation",
         verb: "act",
-      },
-    },
-  },
-  "connectedClientTransport.invoke": {
-    tier: {
-      tier: "gated",
-      session: "family",
-      residency: "transport",
-      family: "connectedClientTransport.control",
-      rationale:
-        "Carries one authenticated RPC frame to an exact live client endpoint on the caller's account; endpoint policy remains at the receiving client.",
-    },
-    capability: "connected-client.transport",
-    presentation: {
-      title: "Use a connected client",
-      action: "send an authenticated request to a connected client",
-      description:
-        "Allows {requesterKind} to communicate with an exact connected client on the current account.",
-      group: "runtime",
-      authorityCategory: {
-        domain: "computer",
-        verb: "manage",
-      },
-    },
-  },
-  "connectedClientTransport.list": {
-    tier: {
-      tier: "gated",
-      session: "family",
-      residency: "transport",
-      family: "connectedClientTransport.read",
-      rationale:
-        "Enumerates only live transport endpoints bound to the authenticated caller's account.",
-    },
-    capability: "connected-client.transport",
-    presentation: {
-      title: "Use a connected client",
-      action: "send an authenticated request to a connected client",
-      description:
-        "Allows {requesterKind} to communicate with an exact connected client on the current account.",
-      group: "runtime",
-      authorityCategory: {
-        domain: "computer",
-        verb: "manage",
       },
     },
   },
@@ -2107,6 +2475,27 @@ export const HOST_AUTHORITY_METHODS = {
     capability: null,
     presentation: null,
   },
+  "developmentNative.applyTemplateExchange": {
+    tier: {
+      tier: "gated",
+      session: "codeOnly",
+      residency: "native-effect",
+      family: "development-native.template-exchange",
+      rationale: "Applies only a prior exact plan and returns external and semantic receipts",
+    },
+    capability: "development.native.execute",
+    presentation: {
+      title: "Apply a template checkout exchange",
+      action: "apply a template checkout exchange",
+      description:
+        "Allows {requesterKind} to write the reviewed projection to a selected checkout or import it into one semantic context.",
+      group: "runtime",
+      authorityCategory: {
+        domain: "automation",
+        verb: "act",
+      },
+    },
+  },
   "developmentNative.beginBuild": {
     tier: {
       tier: "gated",
@@ -2237,6 +2626,28 @@ export const HOST_AUTHORITY_METHODS = {
     },
     capability: null,
     presentation: null,
+  },
+  "developmentNative.prepareTemplateExchange": {
+    tier: {
+      tier: "gated",
+      session: "codeOnly",
+      residency: "native-effect",
+      family: "development-native.template-exchange",
+      rationale:
+        "Reads only the explicitly selected sibling checkout and an exact semantic snapshot",
+    },
+    capability: "development.native.execute",
+    presentation: {
+      title: "Inspect a template checkout exchange",
+      action: "inspect a template checkout exchange",
+      description:
+        "Allows {requesterKind} to read one selected Git checkout and compare it with an exact semantic template repository.",
+      group: "runtime",
+      authorityCategory: {
+        domain: "automation",
+        verb: "act",
+      },
+    },
   },
   "developmentNative.readTerminal": {
     tier: {
@@ -4003,6 +4414,54 @@ export const HOST_AUTHORITY_METHODS = {
       },
     },
   },
+  "phoneNativeEndpoint.desktops": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "transport",
+      family: "phoneNativeEndpoint.transport",
+      rationale:
+        "Typed account-bound phone transport available only to the exact approved Base phone provider; the provider's public mobile capability is the sole user-facing gate.",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "phoneNativeEndpoint.devices": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "transport",
+      family: "phoneNativeEndpoint.transport",
+      rationale:
+        "Typed account-bound phone transport available only to the exact approved Base phone provider; the provider's public mobile capability is the sole user-facing gate.",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "phoneNativeEndpoint.providers": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "transport",
+      family: "phoneNativeEndpoint.transport",
+      rationale:
+        "Typed account-bound phone transport available only to the exact approved Base phone provider; the provider's public mobile capability is the sole user-facing gate.",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "phoneNativeEndpoint.provision": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "transport",
+      family: "phoneNativeEndpoint.transport",
+      rationale:
+        "Typed account-bound phone transport available only to the exact approved Base phone provider; the provider's public mobile capability is the sole user-facing gate.",
+    },
+    capability: null,
+    presentation: null,
+  },
   "presence.getPanelActiveOwner": {
     tier: {
       tier: "gated",
@@ -4255,8 +4714,18 @@ export const HOST_AUTHORITY_METHODS = {
       rationale:
         "Kernel verifies and activates an exact compiled authority closure and atomically mints its standing grants.",
     },
-    capability: null,
-    presentation: null,
+    capability: "reviewed-closure.activate",
+    presentation: {
+      title: "Activate reviewed automation",
+      action: "activate reviewed automation",
+      description:
+        "Allows {requesterKind} to activate the exact automation authority closure you reviewed.",
+      group: "runtime",
+      authorityCategory: {
+        domain: "safety",
+        verb: "manage",
+      },
+    },
   },
   "reviewedClosure.bindSession": {
     tier: {
@@ -4268,7 +4737,17 @@ export const HOST_AUTHORITY_METHODS = {
         "Kernel binds an execution session to one active digest-bound closure for hot-path enforcement.",
     },
     capability: "reviewed-closure.bind-session",
-    presentation: null,
+    presentation: {
+      title: "Use reviewed automation authority",
+      action: "use reviewed automation authority",
+      description:
+        "Allows {requesterKind} to bind a running automation to its exact reviewed authority closure.",
+      group: "runtime",
+      authorityCategory: {
+        domain: "safety",
+        verb: "manage",
+      },
+    },
   },
   "reviewedClosure.finishSession": {
     tier: {
@@ -5035,6 +5514,186 @@ export const HOST_AUTHORITY_METHODS = {
       },
     },
   },
+  "shellBrowserPrivacy.addFormFillValue": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "shellBrowserPrivacy.manager",
+      rationale:
+        "The authenticated human shell manages its own workspace browser vault through a narrow typed surface.",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "shellBrowserPrivacy.clearAllCookies": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "shellBrowserPrivacy.manager",
+      rationale:
+        "The authenticated human shell manages its own workspace browser vault through a narrow typed surface.",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "shellBrowserPrivacy.clearCookiesForOrigin": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "shellBrowserPrivacy.manager",
+      rationale:
+        "The authenticated human shell manages its own workspace browser vault through a narrow typed surface.",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "shellBrowserPrivacy.clearFormFillValues": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "shellBrowserPrivacy.manager",
+      rationale:
+        "The authenticated human shell manages its own workspace browser vault through a narrow typed surface.",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "shellBrowserPrivacy.deleteFormFillValue": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "shellBrowserPrivacy.manager",
+      rationale:
+        "The authenticated human shell manages its own workspace browser vault through a narrow typed surface.",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "shellBrowserPrivacy.deletePassword": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "shellBrowserPrivacy.manager",
+      rationale:
+        "The authenticated human shell manages its own workspace browser vault through a narrow typed surface.",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "shellBrowserPrivacy.endBrowserSession": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "shellBrowserPrivacy.manager",
+      rationale:
+        "The authenticated human shell manages its own workspace browser vault through a narrow typed surface.",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "shellBrowserPrivacy.getCookieSiteSummary": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "shellBrowserPrivacy.manager",
+      rationale:
+        "The authenticated human shell manages its own workspace browser vault through a narrow typed surface.",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "shellBrowserPrivacy.getNeverSaveOriginsPage": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "shellBrowserPrivacy.manager",
+      rationale:
+        "The authenticated human shell manages its own workspace browser vault through a narrow typed surface.",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "shellBrowserPrivacy.getPasswordCountForSite": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "shellBrowserPrivacy.manager",
+      rationale:
+        "The authenticated human shell manages its own workspace browser vault through a narrow typed surface.",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "shellBrowserPrivacy.listCookieOriginsPage": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "shellBrowserPrivacy.manager",
+      rationale:
+        "The authenticated human shell manages its own workspace browser vault through a narrow typed surface.",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "shellBrowserPrivacy.listFormFillValuesPage": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "shellBrowserPrivacy.manager",
+      rationale:
+        "The authenticated human shell manages its own workspace browser vault through a narrow typed surface.",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "shellBrowserPrivacy.listPasswordSummariesPage": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "shellBrowserPrivacy.manager",
+      rationale:
+        "The authenticated human shell manages its own workspace browser vault through a narrow typed surface.",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "shellBrowserPrivacy.removeNeverSave": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "shellBrowserPrivacy.manager",
+      rationale:
+        "The authenticated human shell manages its own workspace browser vault through a narrow typed surface.",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "shellBrowserPrivacy.updateFormFillValue": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "shellBrowserPrivacy.manager",
+      rationale:
+        "The authenticated human shell manages its own workspace browser vault through a narrow typed surface.",
+    },
+    capability: null,
+    presentation: null,
+  },
   "shellPresence.heartbeat": {
     tier: {
       tier: "open",
@@ -5322,6 +5981,18 @@ export const HOST_AUTHORITY_METHODS = {
     capability: null,
     presentation: null,
   },
+  "view.applyNativePanelSurfaces": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "view.mutate",
+      rationale:
+        "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family",
+    },
+    capability: null,
+    presentation: null,
+  },
   "view.browserForceReload": {
     tier: {
       tier: "open",
@@ -5402,6 +6073,18 @@ export const HOST_AUTHORITY_METHODS = {
       family: "panel.control",
       rationale:
         "Clears Electron session storage for an origin that is still displayed by the selected browser panel.",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "view.connectNativePanelAdapter": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "view.control",
+      rationale:
+        "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family",
     },
     capability: null,
     presentation: null,
@@ -5655,18 +6338,6 @@ export const HOST_AUTHORITY_METHODS = {
     capability: null,
     presentation: null,
   },
-  "view.setHostedShellReady": {
-    tier: {
-      tier: "open",
-      session: "family",
-      residency: "native-effect",
-      family: "view.mutate",
-      rationale:
-        "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family",
-    },
-    capability: null,
-    presentation: null,
-  },
   "view.setNativeBrowserZoom": {
     tier: {
       tier: "open",
@@ -5759,18 +6430,6 @@ export const HOST_AUTHORITY_METHODS = {
       family: "panel.control",
       rationale:
         "P-panels: dismisses the in-page find session; core mutually inspectable workspace UX.",
-    },
-    capability: null,
-    presentation: null,
-  },
-  "view.syncNativePanelSlots": {
-    tier: {
-      tier: "open",
-      session: "family",
-      residency: "native-effect",
-      family: "view.control",
-      rationale:
-        "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family",
     },
     capability: null,
     presentation: null,
@@ -6190,127 +6849,6 @@ export const HOST_AUTHORITY_METHODS = {
       },
     },
   },
-  "workspace-state.panel.incrementAccess": {
-    tier: {
-      tier: "gated",
-      session: "family",
-      residency: "supervision",
-      family: "workspace-state.lifecycle",
-      rationale: "G5: host infrastructure plumbing; §2 default {code, session} family",
-    },
-    capability: "workspace.runtime-state.manage",
-    presentation: {
-      title: "Manage running workspace services",
-      action: "manage apps, panels, background tasks, and scheduled work that's currently running",
-      description: "Maintain running workspace apps, panels, background tasks, and scheduled work",
-      group: "workspace",
-      authorityCategory: {
-        domain: "automation",
-        verb: "manage",
-      },
-    },
-  },
-  "workspace-state.panel.index": {
-    tier: {
-      tier: "gated",
-      session: "family",
-      residency: "supervision",
-      family: "workspace-state.lifecycle",
-      rationale: "G5: host infrastructure plumbing; §2 default {code, session} family",
-    },
-    capability: "workspace.runtime-state.manage",
-    presentation: {
-      title: "Manage running workspace services",
-      action: "manage apps, panels, background tasks, and scheduled work that's currently running",
-      description: "Maintain running workspace apps, panels, background tasks, and scheduled work",
-      group: "workspace",
-      authorityCategory: {
-        domain: "automation",
-        verb: "manage",
-      },
-    },
-  },
-  "workspace-state.panel.rebuildIndex": {
-    tier: {
-      tier: "gated",
-      session: "family",
-      residency: "supervision",
-      family: "workspace-state.lifecycle",
-      rationale: "G5: host infrastructure plumbing; §2 default {code, session} family",
-    },
-    capability: "workspace.runtime-state.manage",
-    presentation: {
-      title: "Manage running workspace services",
-      action: "manage apps, panels, background tasks, and scheduled work that's currently running",
-      description: "Maintain running workspace apps, panels, background tasks, and scheduled work",
-      group: "workspace",
-      authorityCategory: {
-        domain: "automation",
-        verb: "manage",
-      },
-    },
-  },
-  "workspace-state.panel.search": {
-    tier: {
-      tier: "open",
-      session: "family",
-      residency: "supervision",
-      family: "workspace-state.lifecycle",
-      rationale: "Workspace-member panel-index read; no C1-C4 or G1-G5 rule applies",
-    },
-    capability: "workspace.runtime-state.inspect",
-    presentation: {
-      title: "Inspect running workspace services",
-      action: "inspect apps, panels, background tasks, and scheduled work that's currently running",
-      description: "Read the current structure and status of running workspace services",
-      group: "workspace",
-      authorityCategory: {
-        domain: "automation",
-        verb: "see",
-      },
-    },
-  },
-  "workspace-state.panel.sourceUsage": {
-    tier: {
-      tier: "open",
-      session: "family",
-      residency: "supervision",
-      family: "workspace-state.lifecycle",
-      rationale: "Workspace-member aggregate panel usage read; no C1-C4 or G1-G5 rule applies",
-    },
-    capability: "workspace.runtime-state.inspect",
-    presentation: {
-      title: "Inspect running workspace services",
-      action: "inspect apps, panels, background tasks, and scheduled work that's currently running",
-      description: "Read the current structure and status of running workspace services",
-      group: "workspace",
-      authorityCategory: {
-        domain: "automation",
-        verb: "see",
-      },
-    },
-  },
-  "workspace-state.panel.updateTitle": {
-    tier: {
-      tier: "gated",
-      session: "family",
-      residency: "transport",
-      family: "workspace-state.builtin-rpc",
-      rationale:
-        "Exact typed proxy to the builtin topology owner for one slot-bound presentation update",
-    },
-    capability: "workspace.runtime-state.manage",
-    presentation: {
-      title: "Manage running workspace services",
-      action: "manage apps, panels, background tasks, and scheduled work that's currently running",
-      description: "Maintain running workspace apps, panels, background tasks, and scheduled work",
-      group: "workspace",
-      authorityCategory: {
-        domain: "automation",
-        verb: "manage",
-      },
-    },
-  },
   "workspace-state.panelTree.detail": {
     tier: {
       tier: "open",
@@ -6403,27 +6941,6 @@ export const HOST_AUTHORITY_METHODS = {
       family: "workspace-state.identity",
       rationale:
         "Bounded durable root projection scoped by the server-verified subject instead of a caller-supplied owner id",
-    },
-    capability: "workspace.runtime-state.inspect",
-    presentation: {
-      title: "Inspect running workspace services",
-      action: "inspect apps, panels, background tasks, and scheduled work that's currently running",
-      description: "Read the current structure and status of running workspace services",
-      group: "workspace",
-      authorityCategory: {
-        domain: "automation",
-        verb: "see",
-      },
-    },
-  },
-  "workspace-state.panelTree.search": {
-    tier: {
-      tier: "open",
-      session: "family",
-      residency: "transport",
-      family: "workspace-state.builtin-rpc",
-      rationale:
-        "Exact typed proxy to the builtin topology owner for one bounded indexed presentation query",
     },
     capability: "workspace.runtime-state.inspect",
     presentation: {
@@ -6887,10 +7404,6 @@ export const HOST_AUTHORITY_METHODS = {
 export const HOST_METHOD_MANIFEST_DEPENDENCIES = {
   "browserEnvironment.cancelDownload": ["service:browserEnvironment.cancelDownload"],
   "browserEnvironment.cancelImportRead": ["service:browserEnvironment.cancelImportRead"],
-  "browserEnvironment.flushCookieProjection": ["service:browserEnvironment.flushCookieProjection"],
-  "browserEnvironment.getCookieProjectionDiagnostics": [
-    "service:browserEnvironment.getCookieProjectionDiagnostics",
-  ],
   "browserEnvironment.getImportHost": ["service:browserEnvironment.getImportHost"],
   "browserEnvironment.listDownloads": ["service:browserEnvironment.listDownloads"],
   "browserEnvironment.listImportOpenTabs": ["service:browserEnvironment.listImportOpenTabs"],
@@ -6930,7 +7443,6 @@ export const HOST_METHOD_MANIFEST_DEPENDENCIES = {
   "shellApproval.submitCredentialInput": ["protected-input.submit"],
   "shellApproval.submitSecretInput": ["protected-input.submit"],
   "workerdInspector.getEndpoint": ["runtime.inspect"],
-  "workspace-state.panel.updateTitle": ["context.boundary"],
   "workspace-state.slot.close": ["context.boundary"],
   "workspace-state.slot.commitPreparedNavigation": ["context.boundary"],
   "workspace-state.slot.create": ["context.boundary"],
@@ -6995,10 +7507,6 @@ export const HOST_CAPABILITY_CATEGORIES = {
   "code-runner.reset": {
     domain: "automation",
     verb: "act",
-  },
-  "connected-client.transport": {
-    domain: "computer",
-    verb: "manage",
   },
   "connections.approve": {
     domain: "computer",
@@ -7120,6 +7628,14 @@ export const HOST_CAPABILITY_CATEGORIES = {
     domain: "people",
     verb: "see",
   },
+  "reviewed-closure.activate": {
+    domain: "safety",
+    verb: "manage",
+  },
+  "reviewed-closure.bind-session": {
+    domain: "safety",
+    verb: "manage",
+  },
   "reviewed-closure.retire": {
     domain: "safety",
     verb: "manage",
@@ -7155,14 +7671,6 @@ export const HOST_CAPABILITY_CATEGORIES = {
   "service:browserEnvironment.cancelImportRead": {
     domain: "web",
     verb: "manage",
-  },
-  "service:browserEnvironment.flushCookieProjection": {
-    domain: "web",
-    verb: "manage",
-  },
-  "service:browserEnvironment.getCookieProjectionDiagnostics": {
-    domain: "web",
-    verb: "see",
   },
   "service:browserEnvironment.getImportHost": {
     domain: "web",
@@ -7433,17 +7941,6 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
       verb: "act",
     },
   },
-  "connected-client.transport": {
-    title: "Use a connected client",
-    action: "send an authenticated request to a connected client",
-    description:
-      "Allows {requesterKind} to communicate with an exact connected client on the current account.",
-    group: "runtime",
-    authorityCategory: {
-      domain: "computer",
-      verb: "manage",
-    },
-  },
   "connections.approve": {
     title: "Allow a new client connection",
     action: "allow a new client connection",
@@ -7546,10 +8043,10 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
     },
   },
   "development.native.execute": {
-    title: "Build exact workspace source",
-    action: "build exact workspace source",
+    title: "Apply a template checkout exchange",
+    action: "apply a template checkout exchange",
     description:
-      "Allows {requesterKind} to install frozen dependencies and execute one reviewed build closure.",
+      "Allows {requesterKind} to write the reviewed projection to a selected checkout or import it into one semantic context.",
     group: "runtime",
     authorityCategory: {
       domain: "automation",
@@ -7747,6 +8244,28 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
       verb: "see",
     },
   },
+  "reviewed-closure.activate": {
+    title: "Activate reviewed automation",
+    action: "activate reviewed automation",
+    description:
+      "Allows {requesterKind} to activate the exact automation authority closure you reviewed.",
+    group: "runtime",
+    authorityCategory: {
+      domain: "safety",
+      verb: "manage",
+    },
+  },
+  "reviewed-closure.bind-session": {
+    title: "Use reviewed automation authority",
+    action: "use reviewed automation authority",
+    description:
+      "Allows {requesterKind} to bind a running automation to its exact reviewed authority closure.",
+    group: "runtime",
+    authorityCategory: {
+      domain: "safety",
+      verb: "manage",
+    },
+  },
   "reviewed-closure.retire": {
     title: "Retire reviewed automation",
     action: "retire reviewed automation",
@@ -7836,26 +8355,6 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
     authorityCategory: {
       domain: "web",
       verb: "manage",
-    },
-  },
-  "service:browserEnvironment.flushCookieProjection": {
-    title: "Synchronize website cookies",
-    action: "synchronize website cookies",
-    description: "Allows {requesterKind} to reconcile website cookies with the browser host.",
-    group: "network",
-    authorityCategory: {
-      domain: "web",
-      verb: "manage",
-    },
-  },
-  "service:browserEnvironment.getCookieProjectionDiagnostics": {
-    title: "View cookie synchronization diagnostics",
-    action: "view cookie synchronization diagnostics",
-    description: "Allows {requesterKind} to inspect website cookie synchronization status.",
-    group: "network",
-    authorityCategory: {
-      domain: "web",
-      verb: "see",
     },
   },
   "service:browserEnvironment.getImportHost": {

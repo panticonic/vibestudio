@@ -153,12 +153,7 @@ async function createWorkerdHarness(
     getManifestRoutes: () => [],
     getManifestDoClasses: () => [],
     singletonRegistry: new SingletonRegistry([]),
-    getInternalDoEnv: (className): Record<string, string> => {
-      if (className === "BrowserVaultDO") {
-        return { BROWSER_DATA_BROKER_SOURCE: "extensions/browser-data" };
-      }
-      return {};
-    },
+    getInternalDoEnv: (): Record<string, string> => ({}),
   };
   manager.bindWorkspaceProvider(provider);
   const attestHostDoCall = createHostDoAuthorityAttester({
@@ -482,18 +477,18 @@ describe("internal storage DOs under workerd", () => {
       actionUrl: "https://example.com/session",
       realm: "",
     });
-    expect((await doDispatch.dispatch(ref, "getPasswords")) as unknown[]).toHaveLength(1);
+    expect((await doDispatch.dispatch(ref, "listPasswordSummaries")) as unknown[]).toHaveLength(1);
 
     // Internal quiesce is a graceful workerd stop (no per-facet abort exists);
     // the next dispatch lazily restarts workerd against fresh storage.
     const reset = await manager.resetDOStorage(ref, "exercise internal maintenance");
-    expect((await doDispatch.dispatch(ref, "getPasswords")) as unknown[]).toHaveLength(0);
+    expect((await doDispatch.dispatch(ref, "listPasswordSummaries")) as unknown[]).toHaveLength(0);
     expect(await manager.listDOStorageBackups(ref)).toEqual([
       expect.objectContaining({ operationId: reset.operationId }),
     ]);
 
     await manager.restoreDOStorageBackup(ref, reset.operationId, "restore the password");
-    expect((await doDispatch.dispatch(ref, "getPasswords")) as unknown[]).toHaveLength(1);
+    expect((await doDispatch.dispatch(ref, "listPasswordSummaries")) as unknown[]).toHaveLength(1);
   }, 60_000);
 
   // Manual empirical probe (~37s; opt-in via `.only` or removing `.skip`) behind
@@ -1025,6 +1020,9 @@ describe("internal storage DOs under workerd", () => {
     });
 
     expect(typeof id).toBe("number");
+    await expect(harness.callDurableObject(ref, "listPasswordSummaries")).resolves.toEqual([
+      expect.not.objectContaining({ password: expect.anything() }),
+    ]);
     await expect(
       harness.callDurableObject(ref, "getPasswordForSite", "https://example.com/login")
     ).resolves.toMatchObject([
@@ -1037,9 +1035,9 @@ describe("internal storage DOs under workerd", () => {
     ]);
 
     await harness.callDurableObject(ref, "updatePassword", id, { password: "updated secret" });
-    await expect(harness.callDurableObject(ref, "getPasswords")).resolves.toMatchObject([
-      { id, username: "ada", password: "updated secret" },
-    ]);
+    await expect(
+      harness.callDurableObject(ref, "getPasswordForSite", "https://example.com")
+    ).resolves.toMatchObject([{ id, username: "ada", password: "updated secret" }]);
   }, 30_000);
 
   it("supports BrowserVaultDO autofill password lookup semantics in real workerd storage", async () => {
@@ -1079,7 +1077,7 @@ describe("internal storage DOs under workerd", () => {
     ).resolves.toBe(true);
 
     await harness.callDurableObject(ref, "updateLastUsed", id);
-    await expect(harness.callDurableObject(ref, "getPasswords")).resolves.toMatchObject([
+    await expect(harness.callDurableObject(ref, "listPasswordSummaries")).resolves.toMatchObject([
       { id, times_used: 1 },
     ]);
   }, 30_000);
@@ -1113,7 +1111,9 @@ describe("internal storage DOs under workerd", () => {
         { sourceId: "chrome:test-source" }
       )
     ).resolves.toBe(1);
-    await expect(harness.callDurableObject(ref, "getPasswords")).resolves.toMatchObject([
+    await expect(
+      harness.callDurableObject(ref, "getPasswordForSite", "https://example.com")
+    ).resolves.toMatchObject([
       {
         origin_url: "https://example.com",
         username: "ada",

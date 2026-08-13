@@ -176,6 +176,7 @@ function pairing(code: string) {
     room: "room-1111-2222",
     fp: ISSUER_FP,
     code,
+    exp: 2_000_000_000_000,
     sig: "wss://signal.example/",
     v: 2 as const,
     ice: "all" as const,
@@ -183,10 +184,12 @@ function pairing(code: string) {
 }
 
 function pairingInvite(code = "P".repeat(32)) {
+  const expiresAt = Date.now() + 60_000;
   const coordinates = {
     room: "invite-room",
     fp: FP,
     code,
+    exp: expiresAt,
     sig: "wss://signal.example/",
     v: 2 as const,
     ice: "all" as const,
@@ -195,7 +198,7 @@ function pairingInvite(code = "P".repeat(32)) {
     ...coordinates,
     deepLink: createConnectDeepLink(coordinates),
     pairUrl: createConnectPairUrl(coordinates),
-    expiresAt: Date.now() + 60_000,
+    expiresAt,
     expiresInMs: 60_000,
     serverId: TEST_SERVER_ID,
     serverBootId: TEST_SERVER_BOOT_ID,

@@ -111,7 +111,7 @@ export interface ProtectedRefStoreDeps {
 }
 
 export interface ProtectedRefStore {
-  readMainSemanticState?(): { kind: "event"; eventId: string } | null;
+  readMainSemanticState(): { kind: "event"; eventId: string } | null;
   readMain(repoPath: string): MainRefRecord | null;
   listMains(): MainRefRecord[];
   updateMains(input: UpdateMainsInput): Promise<UpdateMainsResult>;

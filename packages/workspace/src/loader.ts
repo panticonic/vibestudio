@@ -12,11 +12,7 @@
 
 import fs from "node:fs";
 import * as path from "path";
-import {
-  getProfileDataPath,
-  getWorkspacesDir,
-  getWorkspaceDir,
-} from "@vibestudio/env-paths";
+import { getProfileDataPath, getWorkspacesDir, getWorkspaceDir } from "@vibestudio/env-paths";
 import YAML from "yaml";
 import dotenv from "dotenv";
 import { z } from "zod";
@@ -44,7 +40,6 @@ import { WorkspaceCreationDescriptorSchema } from "@vibestudio/workspace-contrac
 import type { WorkspaceEntry } from "@vibestudio/shared/types";
 import { createWorkspaceId } from "@vibestudio/shared/centralData";
 import { WORKSPACE_SYSTEM_EPOCH } from "@vibestudio/shared/vcs/systemEpoch";
-import { canonicalSnapshotDigest, sha256Hex } from "@vibestudio/content-addressing";
 import type {
   CentralDataManager,
   EphemeralWorkspaceCleanupRecord,
@@ -65,11 +60,9 @@ const WORKSPACE_DELETION_MARKER_VERSION = 1;
 const WORKSPACE_CREATION_DESCRIPTOR = "workspace-creation/v1.json";
 
 export interface WorkspaceCreationOptions {
-  templateDir?: string;
-  forkFrom?: string;
-  rootTemplate?: WorkspaceTemplatePin;
-  /** Allocated by the catalog owner; required for external-root descriptors. */
-  workspaceId?: string;
+  rootTemplate: WorkspaceTemplatePin;
+  /** Allocated by the catalog owner. */
+  workspaceId: string;
 }
 
 export const CentralConfigSchema = z
@@ -295,50 +288,16 @@ function validateWorkspaceName(name: string): void {
 /**
  * Initialize a new managed workspace directory.
  *
- * Source options (mutually exclusive, exactly one):
- * - `templateDir`: Import source dirs from an explicitly selected local directory
- * - `forkFrom`:   Copy source dirs from another managed workspace by name
- * - `rootTemplate`: Persist one exact root pin for pre-userland bootstrap
- *
- * Workspaces are always created from a template or an existing workspace fork.
+ * Persist one exact external root pin for pre-userland bootstrap.
  * Fails if the directory already exists on disk.
  */
-export function initWorkspace(name: string, opts?: WorkspaceCreationOptions): void {
+export function initWorkspace(name: string, opts: WorkspaceCreationOptions): void {
   validateWorkspaceName(name);
 
   const wsDir = getWorkspaceDir(name);
 
   if (fs.existsSync(wsDir)) {
     throw new Error(`Workspace directory already exists: ${wsDir}`);
-  }
-
-  // Resolve template source directory for template/fork
-  let templateSrc: string | null = null;
-  const sourceChoices = [
-    opts?.templateDir ? "templateDir" : null,
-    opts?.forkFrom ? "forkFrom" : null,
-    opts?.rootTemplate ? "rootTemplate" : null,
-  ].filter(Boolean);
-  if (sourceChoices.length > 1) {
-    throw new Error(
-      "Workspace creation accepts exactly one of templateDir, forkFrom, or rootTemplate"
-    );
-  } else if (opts?.templateDir) {
-    templateSrc = opts.templateDir;
-  } else if (opts?.forkFrom) {
-    validateWorkspaceName(opts.forkFrom);
-    templateSrc = path.join(getWorkspaceDir(opts.forkFrom), "source");
-    if (!fs.existsSync(path.join(templateSrc, WORKSPACE_CONFIG_FILE))) {
-      throw new Error(`Source workspace "${opts.forkFrom}" does not exist`);
-    }
-  }
-  if (!templateSrc && !opts?.rootTemplate) {
-    throw new Error(
-      "Workspace creation requires a templateDir or forkFrom workspace, or an exact rootTemplate"
-    );
-  }
-  if (opts?.rootTemplate && !opts.workspaceId) {
-    throw new Error("External-root workspace creation requires an allocated workspaceId");
   }
 
   const workspacesDir = getWorkspacesDir();
@@ -350,10 +309,6 @@ export function initWorkspace(name: string, opts?: WorkspaceCreationOptions): vo
 
   try {
     fs.mkdirSync(stagedSourceRoot, { recursive: true });
-    if (templateSrc) {
-      copyStableWorkspaceSource(templateSrc, stagedSourceRoot);
-    }
-
     for (const dir of WORKSPACE_SOURCE_DIRS) {
       fs.mkdirSync(path.join(stagedSourceRoot, dir), { recursive: true });
     }
@@ -364,53 +319,29 @@ export function initWorkspace(name: string, opts?: WorkspaceCreationOptions): vo
     }
 
     const stagedConfigPath = path.join(stagedSourceRoot, WORKSPACE_CONFIG_FILE);
-    if (opts?.rootTemplate) {
-      fs.mkdirSync(path.dirname(stagedConfigPath), { recursive: true });
-      const descriptor: WorkspaceCreationDescriptor = WorkspaceCreationDescriptorSchema.parse({
-        version: 1,
-        workspaceId: opts.workspaceId,
-        rootTemplate: opts.rootTemplate,
-      });
-      fs.writeFileSync(
-        stagedConfigPath,
-        YAML.stringify({
-          systemEpoch: WORKSPACE_SYSTEM_EPOCH,
-        }),
-        { encoding: "utf-8", mode: 0o600, flag: "wx" }
-      );
-      const descriptorPath = path.join(stagedStateRoot, WORKSPACE_CREATION_DESCRIPTOR);
-      fs.mkdirSync(path.dirname(descriptorPath), { recursive: true });
-      fs.writeFileSync(descriptorPath, `${JSON.stringify(descriptor, null, 2)}\n`, {
-        encoding: "utf-8",
-        mode: 0o600,
-        flag: "wx",
-      });
-    }
-    if (!fs.existsSync(stagedConfigPath)) {
-      throw new Error(
-        templateSrc
-          ? `Workspace template is missing ${WORKSPACE_CONFIG_FILE}: ${templateSrc}`
-          : `Workspace template is missing ${WORKSPACE_CONFIG_FILE}`
-      );
-    }
+    fs.mkdirSync(path.dirname(stagedConfigPath), { recursive: true });
+    const descriptor: WorkspaceCreationDescriptor = WorkspaceCreationDescriptorSchema.parse({
+      version: 1,
+      workspaceId: opts.workspaceId,
+      rootTemplate: opts.rootTemplate,
+    });
+    fs.writeFileSync(stagedConfigPath, YAML.stringify({ systemEpoch: WORKSPACE_SYSTEM_EPOCH }), {
+      encoding: "utf-8",
+      mode: 0o600,
+      flag: "wx",
+    });
+    const descriptorPath = path.join(stagedStateRoot, WORKSPACE_CREATION_DESCRIPTOR);
+    fs.mkdirSync(path.dirname(descriptorPath), { recursive: true });
+    fs.writeFileSync(descriptorPath, `${JSON.stringify(descriptor, null, 2)}\n`, {
+      encoding: "utf-8",
+      mode: 0o600,
+      flag: "wx",
+    });
 
     // Validate against the FINAL managed path before publishing. Parsing the
     // staged file directly would derive the temporary directory name as the
     // workspace id and would let malformed manifests become visible on disk.
-    if (opts?.rootTemplate) {
-      if (!opts.workspaceId) {
-        throw new Error("External root-template initialization requires a workspace id");
-      }
-      parseWorkspaceConfigContentWithId(
-        fs.readFileSync(stagedConfigPath, "utf-8"),
-        opts.workspaceId
-      );
-    } else {
-      parseWorkspaceConfigContent(
-        fs.readFileSync(stagedConfigPath, "utf-8"),
-        path.join(wsDir, "source")
-      );
-    }
+    parseWorkspaceConfigContentWithId(fs.readFileSync(stagedConfigPath, "utf-8"), opts.workspaceId);
 
     fs.renameSync(stagingDir, wsDir);
     published = true;
@@ -425,95 +356,6 @@ export function initWorkspace(name: string, opts?: WorkspaceCreationOptions): vo
     }
   }
   log.info(`[Workspace] Created managed workspace "${name}" at ${wsDir}`);
-}
-
-/**
- * Recursively copy semantic workspace source.
- *
- * Managed source is initialized from a live development checkout as well as
- * from packaged templates. TypeScript incremental metadata may therefore sit
- * beside source even though it is a generated cache; it must never become a
- * semantic file merely because workspace creation copied the checkout.
- */
-function copyDirRecursive(src: string, dest: string): void {
-  fs.mkdirSync(dest, { recursive: true });
-  for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
-    const srcPath = path.join(src, entry.name);
-    const destPath = path.join(dest, entry.name);
-    if (entry.isDirectory()) {
-      if (entry.name === ".git" || entry.name === "node_modules" || entry.name === ".cache")
-        continue;
-      copyDirRecursive(srcPath, destPath);
-    } else if (entry.isFile()) {
-      if (entry.name.endsWith(".tsbuildinfo")) continue;
-      fs.copyFileSync(srcPath, destPath);
-    }
-  }
-}
-
-/**
- * Copy one coherent generation of a local workspace source.
- *
- * Development templates and workspace forks are live directories. The
- * destination is already staged and atomically published by initWorkspace,
- * but atomic publication alone cannot prevent the staging copy from combining
- * files from two source generations. Address exactly the file set admitted by
- * copyDirRecursive before and after the copy, and address the staged bytes as
- * well. Any observed mutation fails the initialization before publication.
- */
-function copyStableWorkspaceSource(sourceRoot: string, destinationRoot: string): void {
-  const before = workspaceSourceDigest(sourceRoot);
-  for (const dir of WORKSPACE_SOURCE_DIRS) {
-    const source = path.join(sourceRoot, dir);
-    if (fs.existsSync(source)) {
-      copyDirRecursive(source, path.join(destinationRoot, dir));
-    }
-  }
-  const copied = workspaceSourceDigest(destinationRoot);
-  const after = workspaceSourceDigest(sourceRoot);
-  if (before !== copied || before !== after) {
-    throw new Error(
-      "Workspace source changed while the managed workspace was being initialized; " +
-        "refusing to publish a mixed-generation copy"
-    );
-  }
-}
-
-function workspaceSourceDigest(sourceRoot: string): string {
-  const files: Array<{
-    path: string;
-    mode: 0o100644 | 0o100755;
-    size: number;
-    contentHash: string;
-  }> = [];
-
-  const visit = (absoluteDir: string, relativeSegments: string[]): void => {
-    for (const entry of fs.readdirSync(absoluteDir, { withFileTypes: true })) {
-      if (entry.isDirectory()) {
-        if (entry.name === ".git" || entry.name === "node_modules" || entry.name === ".cache") {
-          continue;
-        }
-        visit(path.join(absoluteDir, entry.name), [...relativeSegments, entry.name]);
-        continue;
-      }
-      if (!entry.isFile() || entry.name.endsWith(".tsbuildinfo")) continue;
-      const absolutePath = path.join(absoluteDir, entry.name);
-      const bytes = fs.readFileSync(absolutePath);
-      const stats = fs.statSync(absolutePath);
-      files.push({
-        path: [...relativeSegments, entry.name].join("/"),
-        mode: (stats.mode & 0o111) !== 0 ? 0o100755 : 0o100644,
-        size: bytes.byteLength,
-        contentHash: sha256Hex(bytes),
-      });
-    }
-  };
-
-  for (const dir of WORKSPACE_SOURCE_DIRS) {
-    const source = path.join(sourceRoot, dir);
-    if (fs.existsSync(source)) visit(source, [dir]);
-  }
-  return canonicalSnapshotDigest(files);
 }
 
 export { WORKSPACE_SOURCE_DIRS, WORKSPACE_STATE_DIRS };
@@ -617,6 +459,8 @@ export interface ResolveWorkspaceOpts {
   appRoot?: string;
   /** Auto-create from template if workspace doesn't exist */
   init?: boolean;
+  /** Hub-allocated opaque identity for a newly created managed workspace. */
+  workspaceId?: string;
 }
 
 export interface ResolvedWorkspace {
@@ -679,7 +523,10 @@ export function resolveOrCreateWorkspace(opts: ResolveWorkspaceOpts): ResolvedWo
       throw new Error("External-root workspace creation requires the host app root");
     }
     const { baseTemplate } = readBaseTemplateRelease(opts.appRoot);
-    initWorkspace(name, { rootTemplate: baseTemplate, workspaceId: createWorkspaceId() });
+    initWorkspace(name, {
+      rootTemplate: baseTemplate,
+      workspaceId: opts.workspaceId ?? createWorkspaceId(),
+    });
     created = true;
     log.info(`[Workspace] Created "${name}" from exact external Base ${baseTemplate.commit}`);
   }
@@ -696,17 +543,13 @@ export function resolveOrCreateWorkspace(opts: ResolveWorkspaceOpts): ResolvedWo
 export function createAndRegisterWorkspace(
   name: string,
   centralData: CentralDataManager,
-  opts?: WorkspaceCreationOptions
+  opts: Pick<WorkspaceCreationOptions, "rootTemplate">
 ): WorkspaceEntry {
   if (centralData.hasWorkspace(name)) {
     throw new Error(`Workspace "${name}" already exists`);
   }
   const workspaceId = createWorkspaceId();
-  const resolvedOpts = {
-    ...resolveWorkspaceCreationOpts(opts),
-    workspaceId,
-  };
-  initWorkspace(name, resolvedOpts);
+  initWorkspace(name, { rootTemplate: opts.rootTemplate, workspaceId });
   try {
     return centralData.addWorkspace(name, workspaceId);
   } catch (error) {
@@ -982,10 +825,4 @@ function readWorkspaceDeletionMarker(trashRoot: string): WorkspaceDeletionMarker
     name: record["name"],
     workspaceId: record["workspaceId"],
   };
-}
-
-function resolveWorkspaceCreationOpts(opts?: WorkspaceCreationOptions): WorkspaceCreationOptions {
-  if (opts?.templateDir || opts?.forkFrom || opts?.rootTemplate) return opts;
-  const appRoot = process.env["VIBESTUDIO_APP_ROOT"] ?? process.cwd();
-  return { rootTemplate: readBaseTemplateRelease(appRoot).baseTemplate };
 }

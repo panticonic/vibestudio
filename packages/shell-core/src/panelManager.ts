@@ -8,7 +8,6 @@ import type {
   PanelSnapshot,
   ThemeAppearance,
 } from "@vibestudio/shared/types";
-import type { PanelSearchIndex } from "@vibestudio/shared/panelSearchTypes";
 import type { WorkspaceConfig } from "@vibestudio/workspace-contracts/types";
 import { loadPanelManifest } from "@vibestudio/shared/panelTypes";
 import { validateStateArgs } from "@vibestudio/shared/stateArgsValidator";
@@ -149,7 +148,6 @@ export interface ActivationClient {
 export interface LocalPanelViewState {
   collapsedIds: string[];
   focusedPanelId?: string | null;
-  panelTitles?: Record<string, { source: string; title: string }>;
 }
 
 export interface LocalPanelViewStateStore {
@@ -165,7 +163,6 @@ export interface PanelManagerDeps {
   viewState?: LocalPanelViewStateStore;
   serverInfo: PanelManagerServerInfo;
   workspacePath: string;
-  searchIndex?: PanelSearchIndex | null;
   workspaceConfig?: WorkspaceConfig;
   allowMissingManifests?: boolean;
   /**
@@ -208,13 +205,11 @@ export class PanelManager {
   private readonly viewState?: LocalPanelViewStateStore;
   private readonly serverInfo: PanelManagerServerInfo;
   private readonly workspacePath: string;
-  private readonly searchIndex: PanelSearchIndex | null;
   private readonly workspaceConfig?: WorkspaceConfig;
   private readonly allowMissingManifests: boolean;
   private readonly grantConnectionImpl?: (panelId: PanelEntityId) => Promise<{ token: string }>;
 
   private readonly collapsedIds = new Set<string>();
-  private readonly localPanelTitles = new Map<string, { source: string; title: string }>();
   private currentTheme: "light" | "dark" = "dark";
   private viewStateLoaded = false;
   /**
@@ -244,7 +239,6 @@ export class PanelManager {
     this.viewState = deps.viewState;
     this.serverInfo = deps.serverInfo;
     this.workspacePath = deps.workspacePath;
-    this.searchIndex = deps.searchIndex ?? null;
     this.workspaceConfig = deps.workspaceConfig;
     this.allowMissingManifests = deps.allowMissingManifests ?? false;
     this.grantConnectionImpl = deps.grantConnection;
@@ -473,8 +467,6 @@ export class PanelManager {
     this.registry.addPanel(panel, null, { addAsRoot: true });
     this.touchRuntimePanel(slotId);
 
-    await this.indexPanel(slotId, displayTitle, relativePath);
-
     return {
       panelId: slotId,
       contextId,
@@ -620,8 +612,6 @@ export class PanelManager {
     };
     this.registry.addPanel(panel, null, { addAsRoot: true });
     this.touchRuntimePanel(slotId);
-    await this.indexPanel(slotId, title, browserSource);
-
     return {
       panelId: slotId,
       contextId,
@@ -935,8 +925,6 @@ export class PanelManager {
       livePanel.navigation = { canGoBack: transition.cursor > 0, canGoForward: false };
     }
 
-    await this.indexPanel(slotId, title, nextSnapshot.source);
-
     return {
       panelId: slotId,
       contextId: nextSnapshot.contextId,
@@ -1020,47 +1008,11 @@ export class PanelManager {
     return result;
   }
 
-  async updateTitle(slotId: PanelSlotId, title: string | null): Promise<void> {
-    await this.ensureViewStateLoaded();
-    const livePanel = this.registry.getPanel(slotId);
-    const normalized = normalizePanelTitle(title);
-    if (livePanel) {
-      const source = getPanelSource(livePanel);
-      if (normalized) {
-        livePanel.title = normalized;
-        this.localPanelTitles.set(slotId, { source, title: normalized });
-      } else {
-        this.localPanelTitles.delete(slotId);
-        livePanel.title = this.titleFor(slotId, source);
-      }
-    }
-    this.searchIndex?.updateTitle(slotId, normalized ?? "");
-    await this.persistViewState();
-    this.registry.notifyPanelTreeUpdate(slotId);
-  }
-
   async updatePanelState(slotId: PanelSlotId, state: PanelNavigationState): Promise<void> {
     const livePanel = this.registry.getPanel(slotId);
     if (!livePanel) return;
 
     updatePanelNavigationState(livePanel, state);
-
-    if (state.pageTitle !== undefined) {
-      await this.ensureViewStateLoaded();
-      const normalized = normalizePanelTitle(state.pageTitle);
-      if (normalized) {
-        this.localPanelTitles.set(slotId, {
-          source: getPanelSource(livePanel),
-          title: normalized,
-        });
-        livePanel.title = normalized;
-      } else {
-        this.localPanelTitles.delete(slotId);
-        livePanel.title = this.titleFor(slotId, getPanelSource(livePanel));
-      }
-      this.searchIndex?.updateTitle(slotId, normalized ?? "");
-      await this.persistViewState();
-    }
 
     this.registry.notifyPanelTreeUpdate(slotId);
   }
@@ -1098,7 +1050,6 @@ export class PanelManager {
     await this.ensureViewStateLoaded();
     this.registry.updateSelectedPath(slotId);
     await this.persistViewState();
-    this.searchIndex?.incrementAccessCount(slotId);
     await this.activationClient?.markPanelActive(slotId);
   }
 
@@ -1202,24 +1153,11 @@ export class PanelManager {
       panel.executionDigest = entity?.activeExecutionDigest ?? null;
       panel.authorityRequests = entity?.activeAuthority?.requests;
       if (currentSnapshot) {
-        // A null durable title is a clear, not "leave the old local title in
-        // place". Drop the local fallback first so titleFor can select the
-        // manifest/metadata/browser fallback deterministically.
-        if (slot.current_entity_title == null) this.localPanelTitles.delete(slotId);
-        panel.title = this.titleFor(
-          slotId,
-          currentSnapshot.source,
-          slot.current_entity_title ?? undefined
-        );
-        const nextIcon = detail?.icon;
-        if (nextIcon) panel.icon = nextIcon;
-        else delete panel.icon;
+        panel.title = this.titleFor(slotId, currentSnapshot.source);
         this.registry.replaceCurrentSnapshot(slotId, currentSnapshot, {
           entries: [currentSnapshot],
           index: 0,
         });
-      } else if (slot.current_entity_title != null) {
-        panel.title = normalizePanelTitle(slot.current_entity_title) ?? panel.title;
       }
       if (panel.title !== previousTitle) {
         this.registry.notifyPanelTreeUpdate(slotId);
@@ -1291,19 +1229,10 @@ export class PanelManager {
     }
   }
 
-  private titleFor(
-    slotId: PanelSlotId,
-    source: string,
-    entityTitle?: string
-  ): string {
-    const normalizedEntityTitle = normalizePanelTitle(entityTitle);
-    if (normalizedEntityTitle) return normalizedEntityTitle;
+  private titleFor(slotId: PanelSlotId, source: string): string {
     const manifest = this.tryResolveManifestForSource(source);
     const manifestTitle = normalizePanelTitle(manifest?.title);
     if (manifestTitle) return manifestTitle;
-    const localTitle = this.localPanelTitles.get(slotId);
-    const normalizedLocalTitle = normalizePanelTitle(localTitle?.title);
-    if (localTitle?.source === source && normalizedLocalTitle) return normalizedLocalTitle;
     if (source.startsWith("browser:")) {
       try {
         return new URL(source.slice("browser:".length)).hostname;
@@ -1516,20 +1445,13 @@ export class PanelManager {
         const entity = detail.entity;
         const source = entity.source;
         const isBrowser = snapshot.source.startsWith("browser:");
-        const manifestIcon = detail.icon;
-        if (detail.slot.current_entity_title == null) this.localPanelTitles.delete(slotId);
         const preservesMaterializedView =
           panel?.runtimeEntityId === detail.slot.current_entity_id &&
           panel?.buildKey === (entity.activeBuildKey ?? null) &&
           panel?.executionDigest === (entity.activeExecutionDigest ?? null);
         const projected: Panel = {
           id: slotId,
-          title: this.titleFor(
-            slotId,
-            snapshot.source,
-            detail.slot.current_entity_title ?? undefined
-          ),
-          ...(manifestIcon ? { icon: manifestIcon } : {}),
+          title: this.titleFor(slotId, snapshot.source),
           runtimeEntityId: detail.slot.current_entity_id,
           effectiveVersion: source.effectiveVersion,
           buildKey: entity.activeBuildKey ?? null,
@@ -1610,31 +1532,12 @@ export class PanelManager {
     if (typeof state?.focusedPanelId === "string" && state.focusedPanelId) {
       this.registry.setFocusedPanelId(state.focusedPanelId);
     }
-    for (const [slotId, entry] of Object.entries(state?.panelTitles ?? {})) {
-      if (typeof entry?.source === "string" && typeof entry?.title === "string" && entry.title) {
-        this.localPanelTitles.set(slotId, { source: entry.source, title: entry.title });
-      }
-    }
   }
 
   private async persistViewState(): Promise<void> {
-    const panelTitles: NonNullable<LocalPanelViewState["panelTitles"]> = {};
-    for (const panel of this.registry.listPanels()) {
-      panelTitles[panel.panelId] = { source: panel.source, title: panel.title };
-    }
     await this.viewState?.save({
       collapsedIds: [...this.collapsedIds],
       focusedPanelId: this.registry.getFocusedPanelId(),
-      panelTitles,
     });
-  }
-
-  private async indexPanel(slotId: PanelSlotId, title: string, panelPath: string): Promise<void> {
-    if (!this.searchIndex) return;
-    try {
-      await this.searchIndex.indexPanel({ id: slotId, title, path: panelPath });
-    } catch (error) {
-      log.warn(`Failed to index panel ${slotId}:`, error);
-    }
   }
 }

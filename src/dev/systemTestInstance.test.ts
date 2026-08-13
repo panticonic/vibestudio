@@ -10,6 +10,7 @@ import {
 } from "./instanceRegistry.js";
 import {
   ensureSystemTestInstance,
+  isLocalSystemTestHelpCommand,
   parseSystemTestLauncherArgs,
   stopManagedSystemTestInstance,
 } from "./systemTestInstance.js";
@@ -68,6 +69,14 @@ describe("self-provisioning system-test instance", () => {
         "doctor",
       ])
     ).toThrow(/only be specified once/u);
+  });
+
+  it("recognizes only top-level launcher help as side-effect-free", () => {
+    expect(isLocalSystemTestHelpCommand(["--help"])).toBe(true);
+    expect(isLocalSystemTestHelpCommand(["-h"])).toBe(true);
+    expect(isLocalSystemTestHelpCommand(["run", "--help"])).toBe(false);
+    expect(isLocalSystemTestHelpCommand(["list", "--help"])).toBe(false);
+    expect(isLocalSystemTestHelpCommand([])).toBe(false);
   });
 
   it("reuses an explicitly selected ready server without taking ownership", async () => {

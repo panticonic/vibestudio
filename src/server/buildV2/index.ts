@@ -226,16 +226,16 @@ export interface BuildSystemRootOptions {
   workspaceIdStability?: "stable" | "ephemeral";
   /**
    * Host app root containing package.json/pnpm-lock.yaml/pnpm-workspace.yaml.
-   * Defaults to VIBESTUDIO_APP_ROOT, then dirname(workspaceRoot), for older tests.
+   * This is an explicit host construction input, never inferred from process state.
    */
-  appRoot?: string;
+  appRoot: string;
   /**
-   * Workspace dependency root containing the userland package/lock/workspace
-   * files that influence build cache identity. This can differ from the active
-   * managed workspace root in dev, where the app runs from a copied workspace
-   * under user data but dependencies are installed from <appRoot>/workspace.
+   * Exact semantic dependency root containing the userland package/lock/workspace
+   * files that influence build cache identity. Production requires the active
+   * materialized workspace root; isolated development may supply another exact
+   * materialized candidate explicitly.
    */
-  dependencyWorkspaceRoot?: string;
+  dependencyWorkspaceRoot: string;
   /**
    * Host-owned registries whose durable records resolve immutable build keys.
    * Collection is intentionally late-bound so the build system can start
@@ -537,7 +537,7 @@ export async function initBuildSystemV2(
   workspaceRoot: string,
   source: WorkspaceStateSource & BuildSourceProvider,
   appNodeModules: string | string[],
-  rootOptions: BuildSystemRootOptions = {}
+  rootOptions: BuildSystemRootOptions
 ): Promise<BuildSystemV2> {
   console.log("[BuildV2] Initializing...");
   const appNodeModuleRoots = Array.isArray(appNodeModules) ? appNodeModules : [appNodeModules];
@@ -562,9 +562,7 @@ export async function initBuildSystemV2(
     }
   };
   const authorityIndexManager = new AuthorityIndexManager();
-  const authorityAnalysisWorker = new AuthorityAnalysisWorkerClient(
-    rootOptions.appRoot ?? process.env["VIBESTUDIO_APP_ROOT"] ?? path.dirname(workspaceRoot)
-  );
+  const authorityAnalysisWorker = new AuthorityAnalysisWorkerClient(rootOptions.appRoot);
   const authorityEpoch = {
     analyzerVersion: "userland-authority-v6",
     rpcSchemaVersion: workspaceRpcSchemaVersion(),
@@ -1131,11 +1129,10 @@ export async function initBuildSystemV2(
 
   // Build cache identity depends on dependency manifests, not on where the
   // active managed workspace copy happens to live. Server startup passes these
-  // roots explicitly; defaults preserve direct test construction.
+  // roots explicitly.
   setBuildRootConfig({
-    appRoot:
-      rootOptions.appRoot ?? process.env["VIBESTUDIO_APP_ROOT"] ?? path.dirname(workspaceRoot),
-    workspaceRoot: rootOptions.dependencyWorkspaceRoot ?? workspaceRoot,
+    appRoot: rootOptions.appRoot,
+    workspaceRoot: rootOptions.dependencyWorkspaceRoot,
   });
 
   // Declare where @vibestudio/* platform packages live (workspace:* deps).

@@ -6,6 +6,7 @@ import {
 import { WorkspaceConfigTopLayerSchema } from "@vibestudio/workspace-contracts/workspaceConfigSchema";
 import type {
   WorkspaceConfig,
+  WorkspaceTemplateRegistryDeclaration,
   WorkspaceTemplatePin,
   WorkspaceTemplateState,
 } from "@vibestudio/workspace-contracts/types";
@@ -39,7 +40,8 @@ export interface PreparedRootTemplateMetadata {
 
 function workspaceSource(
   runtime: Omit<WorkspaceConfig, "id">,
-  pin: WorkspaceTemplatePin
+  pin: WorkspaceTemplatePin,
+  registry: WorkspaceTemplateRegistryDeclaration | undefined
 ): ReturnType<typeof WorkspaceConfigTopLayerSchema.parse> {
   const authoredUpstreams = Object.fromEntries(
     Object.entries(runtime.git?.upstreams ?? {}).flatMap(([section, repositories]) => {
@@ -60,6 +62,7 @@ function workspaceSource(
           ...(pin.credential ? { credential: pin.credential } : {}),
         },
       ],
+      ...(registry ? { registry } : {}),
     },
     ...(runtime.providers ? { providers: runtime.providers } : {}),
     ...(runtime.trust ? { trust: runtime.trust } : {}),
@@ -111,7 +114,7 @@ export function prepareRootTemplateMetadata(input: {
 
   const nodeId = canonicalTemplateNodeId(input.pin.url, input.pin.commit);
   const alias = templateAliasFromUrl(input.pin.url);
-  const source = workspaceSource(runtime, input.pin);
+  const source = workspaceSource(runtime, input.pin, manifest.top.templates?.registry);
   const composed = composeWorkspaceConfig(
     source,
     [{ nodeId, alias, ancestors: [], config: manifest.fragment }],

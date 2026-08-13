@@ -185,7 +185,7 @@ describe("template authoring contracts", () => {
     requiredParts: ["packages/shared"],
     dependencyParts: [],
     overlapParts: [],
-    manifest: "systemEpoch: 58\n",
+    manifest: "systemEpoch: 59\n",
     manifestDigest: `v1-sha256:${"a".repeat(64)}`,
     fingerprint: `v1-sha256:${"b".repeat(64)}`,
   };
@@ -263,7 +263,7 @@ describe("template authoring contracts", () => {
     const catalog = {
       version: 1 as const,
       revision: "2026-08-09.1",
-      systemEpoch: 58,
+      systemEpoch: 59,
       entries: [],
       coordinates: {
         url: "git+https://example.test/template-registry.git",

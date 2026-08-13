@@ -111,7 +111,6 @@ function getPanelState(manager: FormFillManager, wcId: number): TestPanelState {
 
 function createMockPasswordStore() {
   return {
-    getPasswords: vi.fn().mockReturnValue([]),
     getPasswordForSite: vi.fn().mockReturnValue([]),
     updatePasswordLastUsed: vi.fn(),
     updatePassword: vi.fn(),

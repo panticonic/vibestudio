@@ -44,7 +44,7 @@ function encodeConnectParams(pairing) {
     `v=${encodeURIComponent(String(pairing.v))}`,
     `ice=${encodeURIComponent(pairing.ice)}`
   ];
-  if (pairing.exp) params.push(`exp=${encodeURIComponent(String(pairing.exp))}`);
+  params.push(`exp=${encodeURIComponent(String(pairing.exp))}`);
   return params.join("&");
 }
 function createConnectLink(pairing, carrier = "scheme") {
@@ -161,7 +161,10 @@ function parseConnectLink(raw) {
   const sig = params.values.get("sig");
   const ice = params.values.get("ice");
   if (!room || !fp || !code || !sig || !ice) {
-    return { kind: "error", reason: "Deep link is missing `room`, `fp`, `code`, `sig`, or `ice`" };
+    return {
+      kind: "error",
+      reason: "Deep link is missing `room`, `fp`, `code`, `sig`, or `ice`"
+    };
   }
   if (!PAIRING_ROOM_PATTERN.test(room)) {
     return { kind: "error", reason: "Signaling room id has an unexpected format" };
@@ -179,7 +182,7 @@ function parseConnectLink(raw) {
   }
   const expRaw = params.values.get("exp");
   const exp = expRaw ? Number(expRaw) : void 0;
-  if (expRaw && (!Number.isFinite(exp) || (exp ?? 0) <= 0)) {
+  if (exp === void 0 || !Number.isSafeInteger(exp) || exp <= 0) {
     return { kind: "error", reason: "Pairing link expiry has an unexpected format" };
   }
   if (exp !== void 0 && exp <= Date.now()) {
@@ -196,7 +199,7 @@ function parseConnectLink(raw) {
     sig: sigParsed.url,
     v: PAIRING_PROTOCOL_VERSION,
     ice,
-    ...exp !== void 0 ? { exp } : {}
+    exp
   };
 }
 function resolveSignalingUrl(options = {}) {

@@ -10,6 +10,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import * as ts from "typescript/unstable/ast";
+import type { AuthorityRequirement } from "@vibestudio/rpc";
 import { usingTypeScriptProject } from "@vibestudio/typecheck";
 import { sha256Canonical } from "@vibestudio/shared/authority/invocationSnapshot";
 import type {
@@ -17,6 +18,24 @@ import type {
   UserlandCapabilityDefinition,
 } from "@vibestudio/shared/authorityManifest";
 import type { ServiceMethodSchemas } from "@vibestudio/shared/typedServiceClient";
+
+function authorityPrincipals(
+  authority: NonNullable<ServiceMethodSchemas[string]["authority"]>
+): string[] {
+  if ("principals" in authority) return [...authority.principals];
+  const principals = new Set<string>();
+  const visit = (requirement: AuthorityRequirement): void => {
+    if (requirement.kind === "capability") {
+      principals.add(requirement.principal);
+      return;
+    }
+    if (requirement.kind === "all" || requirement.kind === "any") {
+      for (const child of requirement.requirements) visit(child);
+    }
+  };
+  visit(authority.requirement);
+  return [...principals].sort();
+}
 
 export interface WorkspaceRpcMethodDoc {
   className: string;
@@ -315,9 +334,9 @@ export async function collectWorkspaceRpcCatalog(
                   `${input.provider}:${node.name.text}.${name} uses @schemaRpc without a manifest-bound typed receiver schema`
                 );
               }
+              const principals = schema.authority ? authorityPrincipals(schema.authority) : [];
               if (
-                !schema.authority ||
-                !("principals" in schema.authority) ||
+                principals.length === 0 ||
                 !schema.tier ||
                 !schema.access?.sensitivity ||
                 !schema.directEffect
@@ -325,7 +344,7 @@ export async function collectWorkspaceRpcCatalog(
                 throw new Error(`${label} has an incomplete typed receiver authority declaration`);
               }
               access = {
-                principals: [...schema.authority.principals],
+                principals,
                 tier: schema.tier.tier,
                 sensitivity: schema.access.sensitivity,
                 ...(schema.tier.session === "codeOnly" ? { codeOnly: true } : {}),

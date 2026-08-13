@@ -15,12 +15,8 @@ import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import type { EventService } from "@vibestudio/shared/eventsService";
 import type { ViewManager } from "../viewManager.js";
-import type {
-  BrowserDataClient,
-  FormFillType,
-  StoredFormFill,
-  StoredPassword,
-} from "@vibestudio/browser-data";
+import type { FormFillType, StoredFormFill, StoredPassword } from "@vibestudio/browser-data";
+import type { BrowserVaultNativeClient } from "../services/browserVaultNativeClient.js";
 import {
   AUTOFILL_WORLD_ID,
   getContentScript,
@@ -37,8 +33,7 @@ import { assertPresent } from "../../lintHelpers";
 const log = createDevLogger("Autofill");
 
 type FormFillStoreLike = Pick<
-  BrowserDataClient,
-  | "getPasswords"
+  BrowserVaultNativeClient,
   | "getPasswordForSite"
   | "updatePasswordLastUsed"
   | "updatePassword"
@@ -46,8 +41,6 @@ type FormFillStoreLike = Pick<
   | "addNeverSavePassword"
   | "isNeverSavePassword"
   | "deletePassword"
-  | "getNeverSavePasswordOrigins"
-  | "removeNeverSavePassword"
   | "getFormFillSuggestions"
   | "addFormFillValue"
   | "markFormFillValueUsed"

@@ -1,20 +1,18 @@
 import type { extensionsMethods } from "@vibestudio/service-schemas/extensions";
 import type {
-  ApplyCookieMutationsRequest,
   BrowserEnvironmentIdentity,
+  BrowserImportDataType,
   BrowserDownloadRecord,
   BrowserImportSelection,
   BrowserImportSource,
-  FormFillSuggestionQuery,
-  FormFillValueInput,
   ImportCategoryBreakdown,
+  ImportCategoryProgress,
   ImportedBrowserOpenTab,
   ImportHostSummary,
   ImportJobSnapshot,
   PageFavicon,
 } from "../environment.js";
 import type {
-  ImportedPassword,
   OpenTabsAsPanelsRequest,
   OpenTabsAsPanelsResult,
   RecordHistoryVisitRequest,
@@ -22,11 +20,8 @@ import type {
 } from "../types.js";
 import type {
   StoredBookmark,
-  StoredCookie,
-  StoredFormFill,
   StoredHistory,
   StoredPageFavicon,
-  StoredPassword,
   StoredSearchEngine,
 } from "../storage/types.js";
 import type { HistoryQuery } from "../types.js";
@@ -36,8 +31,6 @@ interface BrowserDataRpc {
 }
 
 type BrowserEnvironmentMethod =
-  | "flushCookieProjection"
-  | "getCookieProjectionDiagnostics"
   | "listDownloads"
   | "pauseDownload"
   | "resumeDownload"
@@ -53,12 +46,62 @@ export interface ImportPreview {
   localDataSetCount: number;
 }
 
+export type NonSensitiveBrowserImportDataType = Exclude<
+  BrowserImportDataType,
+  "cookies" | "passwords" | "formFill"
+>;
+export type NonSensitiveBrowserImportSelection = Omit<BrowserImportSelection, "dataTypes"> & {
+  dataTypes: NonSensitiveBrowserImportDataType[];
+};
+export type SensitiveBrowserImportDataType = Extract<
+  BrowserImportDataType,
+  "cookies" | "passwords" | "formFill"
+>;
+export interface SensitiveBrowserImportSelection {
+  hostId: string;
+  sourceId: string;
+  dataTypes: SensitiveBrowserImportDataType[];
+}
+export interface SensitiveBrowserImportRequest extends SensitiveBrowserImportSelection {
+  operationId: string;
+}
+export interface SensitiveBrowserImportCount {
+  dataType: SensitiveBrowserImportDataType;
+  read: number;
+  stored: number;
+  skipped: number;
+  errors: number;
+}
+export interface SensitiveBrowserImportStatus {
+  operationId: string;
+  state: "running" | "complete" | "cancelled" | "failed";
+  counts: SensitiveBrowserImportCount[];
+  error?: string;
+}
+export interface SensitiveBrowserImportPreview {
+  dataTypes: ImportCategoryProgress[];
+  warnings: string[];
+  breakdowns: ImportCategoryBreakdown[];
+  openTabCount: number;
+  localDataSetCount: number;
+}
+export type BrowserPrivacySection = "credentials" | "formFill" | "inspect" | "debug" | "export";
+
 export interface BrowserDataClient {
   getBrowserEnvironment(): Promise<BrowserEnvironmentIdentity>;
   listImportHosts(): Promise<ImportHostSummary[]>;
   listImportSources(hostId: string): Promise<BrowserImportSource[]>;
-  previewImport(selection: BrowserImportSelection): Promise<ImportPreview>;
-  startImport(selection: BrowserImportSelection): Promise<ImportJobSnapshot>;
+  previewImport(selection: NonSensitiveBrowserImportSelection): Promise<ImportPreview>;
+  previewSensitiveImport(
+    request: SensitiveBrowserImportSelection
+  ): Promise<SensitiveBrowserImportPreview>;
+  startImport(selection: NonSensitiveBrowserImportSelection): Promise<ImportJobSnapshot>;
+  startSensitiveImport(
+    request: SensitiveBrowserImportRequest
+  ): Promise<SensitiveBrowserImportStatus>;
+  observeSensitiveImport(operationId: string): Promise<SensitiveBrowserImportStatus>;
+  cancelSensitiveImport(operationId: string): Promise<SensitiveBrowserImportStatus>;
+  openBrowserPrivacyManager(section?: BrowserPrivacySection): Promise<void>;
   cancelImport(jobId: string): Promise<void>;
   getImportJob(jobId: string): Promise<ImportJobSnapshot | null>;
   listImportJobs(): Promise<ImportJobSnapshot[]>;
@@ -103,57 +146,9 @@ export interface BrowserDataClient {
   recordHistoryVisit(request: RecordHistoryVisitRequest): Promise<number>;
   updateHistoryTitle(request: UpdateHistoryTitleRequest): Promise<void>;
 
-  getPasswords(): Promise<StoredPassword[]>;
-  getPasswordForSite(url: string): Promise<StoredPassword[]>;
-  addPassword(password: {
-    url: string;
-    username: string;
-    password: string;
-    actionUrl?: string;
-    realm?: string;
-  }): Promise<number>;
-  updatePassword(id: number, partial: Partial<ImportedPassword>): Promise<void>;
-  deletePassword(id: number): Promise<void>;
-  updatePasswordLastUsed(id: number): Promise<void>;
-  addNeverSavePassword(origin: string): Promise<void>;
-  isNeverSavePassword(origin: string): Promise<boolean>;
-  getNeverSavePasswordOrigins(): Promise<string[]>;
-  removeNeverSavePassword(origin: string): Promise<void>;
-
-  getFormFillSuggestions(query: FormFillSuggestionQuery): Promise<StoredFormFill[]>;
-  addFormFillValue(value: FormFillValueInput): Promise<number>;
-  updateFormFillValue(
-    id: number,
-    partial: Partial<Pick<FormFillValueInput, "value" | "displayLabel" | "aliases">>
-  ): Promise<void>;
-  markFormFillValueUsed(id: number): Promise<void>;
-  deleteFormFillValue(id: number): Promise<void>;
-  clearFormFillValues(): Promise<number>;
-
   getSearchEngines(): Promise<StoredSearchEngine[]>;
   setDefaultEngine(id: number): Promise<void>;
 
-  applyCookieMutations(request: ApplyCookieMutationsRequest): Promise<{ revision: number }>;
-  getCookieSnapshot(query?: { sinceRevision?: number }): Promise<{
-    revision: number;
-    cookies: StoredCookie[];
-  }>;
-  getCookiesForOrigin(origin: string): Promise<StoredCookie[]>;
-  clearCookiesForOrigin(origin: string): Promise<number>;
-  clearAllCookies(): Promise<number>;
-  endBrowserSession(): Promise<number>;
-  getCookieSiteSummary(
-    origin: string
-  ): Promise<{ origin: string; cookieCount: number; revision: number }>;
-  flushCookieProjection(origins?: string[]): Promise<{ revision: number }>;
-  getCookieProjectionDiagnostics(): Promise<{
-    revision: number;
-    hostId: string;
-    converged: boolean;
-    mismatchCount: number;
-    outboxDepth: number;
-    lastError?: string;
-  }>;
   listDownloads(): Promise<BrowserDownloadRecord[]>;
   listDownloadRecords(hostId: string): Promise<BrowserDownloadRecord[]>;
   upsertDownloadRecord(record: BrowserDownloadRecord): Promise<void>;
@@ -167,8 +162,6 @@ export interface BrowserDataClient {
   getPageFavicon(pageUrl: string): Promise<StoredPageFavicon | null>;
 
   exportBookmarks(format: "html" | "json" | "chrome-json"): Promise<string>;
-  exportPasswords(format: "csv-chrome" | "csv-firefox" | "json"): Promise<string>;
-  exportCookies(format: "json" | "netscape-txt"): Promise<string>;
 }
 
 /** Canonical client for the manifest-declared browser environment provider. */
@@ -190,10 +183,9 @@ export function createBrowserDataClient(rpc: BrowserDataRpc): BrowserDataClient 
     callExtension("invokeProvider", "browserData", method, args);
   const callBrowserEnvironment = <T>(method: BrowserEnvironmentMethod, ...args: unknown[]) =>
     rpc.callService("browserEnvironment", method, args) as Promise<T>;
-  // BrowserVaultDO deliberately admits only its installed broker extension as
-  // a code caller. Panels therefore use the same broker for live and imported
-  // data; resolving the DO and relaying to it directly would lose that
-  // receiver relationship and fail with EACCES for panel principals.
+  // Workspace-visible browser product records stay on the installed provider.
+  // Protected records deliberately have no client methods here: their sealed
+  // import and no-data-return manager handoff are separate provider intents.
   const callData = <T>(method: string, ...args: unknown[]): Promise<T> =>
     callNative(method, ...args);
 
@@ -202,7 +194,12 @@ export function createBrowserDataClient(rpc: BrowserDataRpc): BrowserDataClient 
     listImportHosts: () => callNative("listImportHosts"),
     listImportSources: (hostId) => callNative("listImportSources", hostId),
     previewImport: (selection) => callNative("previewImport", selection),
+    previewSensitiveImport: (request) => callNative("previewSensitiveImport", request),
     startImport: (selection) => callNative("startImport", selection),
+    startSensitiveImport: (request) => callNative("startSensitiveImport", request),
+    observeSensitiveImport: (operationId) => callNative("observeSensitiveImport", operationId),
+    cancelSensitiveImport: (operationId) => callNative("cancelSensitiveImport", operationId),
+    openBrowserPrivacyManager: (section) => callNative("openBrowserPrivacyManager", section),
     cancelImport: (jobId) => callNative("cancelImport", jobId),
     getImportJob: (jobId) => callNative("getImportJob", jobId),
     listImportJobs: () => callNative("listImportJobs"),
@@ -225,34 +222,8 @@ export function createBrowserDataClient(rpc: BrowserDataRpc): BrowserDataClient 
       callData("searchHistoryForAutocomplete", { query, limit }),
     recordHistoryVisit: (request) => callData("recordHistoryVisit", request),
     updateHistoryTitle: (request) => callData("updateHistoryTitle", request),
-    getPasswords: () => callData("getPasswords"),
-    getPasswordForSite: (url) => callData("getPasswordForSite", url),
-    addPassword: (password) => callData("addPassword", password),
-    updatePassword: (id, partial) => callData("updatePassword", id, partial),
-    deletePassword: (id) => callData("deletePassword", id),
-    updatePasswordLastUsed: (id) => callData("updateLastUsed", id),
-    addNeverSavePassword: (origin) => callData("addNeverSave", origin),
-    isNeverSavePassword: (origin) => callData("isNeverSave", origin),
-    getNeverSavePasswordOrigins: () => callData("getNeverSaveOrigins"),
-    removeNeverSavePassword: (origin) => callData("removeNeverSave", origin),
-    getFormFillSuggestions: (query) => callData("getFormFillSuggestions", query),
-    addFormFillValue: (value) => callData("addFormFillValue", value),
-    updateFormFillValue: (id, partial) => callData("updateFormFillValue", id, partial),
-    markFormFillValueUsed: (id) => callData("markFormFillValueUsed", id),
-    deleteFormFillValue: (id) => callData("deleteFormFillValue", id),
-    clearFormFillValues: () => callData("clearFormFillValues"),
     getSearchEngines: () => callData("getSearchEngines"),
     setDefaultEngine: (id) => callData("setDefaultEngine", id),
-    applyCookieMutations: (request) => callData("applyCookieMutations", request),
-    getCookieSnapshot: (query) => callData("getCookieSnapshot", query ?? {}),
-    getCookiesForOrigin: (origin) => callData("getCookiesForOrigin", origin),
-    clearCookiesForOrigin: (origin) => callData("clearCookiesForOrigin", origin),
-    clearAllCookies: () => callData("clearAllCookies"),
-    endBrowserSession: () => callData("endBrowserSession"),
-    getCookieSiteSummary: (origin) => callData("getCookieSiteSummary", origin),
-    flushCookieProjection: (origins) =>
-      callBrowserEnvironment("flushCookieProjection", origins ?? []),
-    getCookieProjectionDiagnostics: () => callBrowserEnvironment("getCookieProjectionDiagnostics"),
     listDownloads: () => callBrowserEnvironment("listDownloads"),
     listDownloadRecords: (hostId) => callData("listDownloadRecords", hostId),
     upsertDownloadRecord: (record) => callData("upsertDownloadRecord", record),
@@ -264,7 +235,5 @@ export function createBrowserDataClient(rpc: BrowserDataRpc): BrowserDataClient 
     putPageFavicon: (favicon) => callData("putPageFavicon", favicon),
     getPageFavicon: (pageUrl) => callData("getPageFavicon", pageUrl),
     exportBookmarks: (format) => callNative("exportBookmarks", format),
-    exportPasswords: (format) => callNative("exportPasswords", format),
-    exportCookies: (format) => callNative("exportCookies", format),
   };
 }

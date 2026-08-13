@@ -468,7 +468,7 @@ let formFillManager: import("./autofill/formFillManager.js").FormFillManager | n
 const corsApprovalCache = new Set<string>();
 const pendingCorsApprovals = new Map<string, Promise<{ allowed: boolean; cacheable: boolean }>>();
 let browserDataStoreForCredentialCapture:
-  | import("@vibestudio/browser-data").BrowserDataClient
+  | import("./services/browserVaultNativeClient.js").BrowserVaultNativeClient
   | null = null;
 let browserCookieProjection:
   | import("./services/browserCookieProjection.js").BrowserCookieProjectionApi
@@ -488,6 +488,9 @@ let websiteNotificationBridge:
   | null = null;
 let browserImportHostProvider:
   | import("./services/browserImportHostProvider.js").BrowserImportHostProvider
+  | null = null;
+let browserPrivacyManager:
+  | import("./services/browserPrivacyManager.js").BrowserPrivacyManager
   | null = null;
 
 type AppCapability = import("@vibestudio/shared/unitManifest").AppCapability;
@@ -2302,7 +2305,6 @@ app.on("ready", async () => {
       "external-open:open",
       "browser-panel:open",
       "panel-tree-invalidated",
-      "panel-title-updated",
       "panel:runtimeLeaseChanged",
       "shell-approval:pending-changed",
       "credential:capture-request",
@@ -2645,6 +2647,9 @@ app.on("ready", async () => {
     const browserDataClient = createBrowserDataClient({
       callService: (service, method, args) => sc.call(service, method, args),
     });
+    const { createBrowserVaultNativeClient } =
+      await import("./services/browserVaultNativeClient.js");
+    const browserVault = createBrowserVaultNativeClient(sc);
     const { BrowserPermissionController } =
       await import("./services/browserPermissionController.js");
     const workspacePermissionController = new BrowserPermissionController({
@@ -2715,6 +2720,7 @@ app.on("ready", async () => {
         get panelView(): PanelView {
           return getPanelView();
         },
+        browserVault,
         getViewManager,
       })
     );
@@ -2757,13 +2763,34 @@ app.on("ready", async () => {
         async start() {
           const { BrowserImportHostProvider } =
             await import("./services/browserImportHostProvider.js");
-          browserImportHostProvider = new BrowserImportHostProvider({
-            hostId: `desktop:${cdpHostConnectionId}`,
-            displayName: "This device",
+          const { SensitiveBrowserImportLedger } =
+            await import("./services/sensitiveBrowserImportLedger.js");
+          const { BrowserPrivacyManager } = await import("./services/browserPrivacyManager.js");
+          browserPrivacyManager = new BrowserPrivacyManager({
+            vault: browserVault,
+            getProjection: () => browserCookieProjection,
+            preloadPath: path.join(__dirname, "browserPrivacyPreload.cjs"),
+            htmlPath: path.join(__dirname, "browserPrivacy.html"),
           });
-          browserDataStoreForCredentialCapture = browserDataClient;
+          browserImportHostProvider = new BrowserImportHostProvider(
+            {
+              hostId: `desktop:${cdpHostConnectionId}`,
+              displayName: "This device",
+            },
+            {
+              browserVault,
+              sensitiveImportLedger: new SensitiveBrowserImportLedger(
+                path.join(
+                  app.getPath("userData"),
+                  "browser-import",
+                  "sensitive-operation-ledger.json"
+                )
+              ),
+            }
+          );
+          browserDataStoreForCredentialCapture = browserVault;
           formFillManager = new FormFillManager({
-            formFillStore: browserDataClient,
+            formFillStore: browserVault,
             eventService,
             getViewManager,
             autofillOverlayPreloadPath: path.join(__dirname, "autofillOverlayPreload.cjs"),
@@ -2779,6 +2806,8 @@ app.on("ready", async () => {
         async stop() {
           browserImportHostProvider?.stop();
           browserImportHostProvider = null;
+          browserPrivacyManager?.destroy();
+          browserPrivacyManager = null;
           browserDataStoreForCredentialCapture = null;
           if (formFillManager) {
             formFillManager.destroy();
@@ -2792,6 +2821,7 @@ app.on("ready", async () => {
       electronContainer.registerManaged(
         createBrowserCookieProjectionService({
           browserDataClient,
+          browserVault,
           serverClient: sc,
           hostId: `desktop:${conn.workspaceId}`,
           outboxRoot: app.getPath("userData"),
@@ -2882,14 +2912,6 @@ app.on("ready", async () => {
       await import("@vibestudio/workspace/configParser");
     electronContainer.registerRpc(
       createBrowserEnvironmentService({
-        getProjection: () => browserCookieProjection,
-        waitForProjection: async () => {
-          await browserEnvironmentReadiness.wait();
-          if (!browserCookieProjection) {
-            throw new Error("Browser cookie projection is unavailable");
-          }
-          return browserCookieProjection;
-        },
         getDownloads: () => browserDownloadManager,
         getImportProvider: () => browserImportHostProvider,
         browserDataBrokerRepoPath: workspaceProviderExtensionRepoPath(
@@ -2898,6 +2920,12 @@ app.on("ready", async () => {
         ),
       })
     );
+    const { createDesktopBrowserPrivacyPresentation } =
+      await import("./services/desktopBrowserPrivacyPresentation.js");
+    const desktopBrowserPrivacyPresentation = createDesktopBrowserPrivacyPresentation({
+      getPrivacyManager: () => browserPrivacyManager,
+    });
+    electronContainer.registerRpc(desktopBrowserPrivacyPresentation);
     // Each local watch retains its server topics for exactly the lifetime of
     // its response. The bridge folds all retained topics into one server watch.
     {
@@ -2926,6 +2954,7 @@ app.on("ready", async () => {
     dispatcher.markInitialized();
     const { publishHostService } = await import("./hostServicePublisher.js");
     publishHostService(sc, dispatcher, desktopPhoneProvider);
+    publishHostService(sc, dispatcher, desktopBrowserPrivacyPresentation);
 
     // =========================================================================
     // Register ipcMain.handle handlers for __vibestudioShell (panel preload)

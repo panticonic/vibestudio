@@ -247,6 +247,39 @@ export function defineServiceMethods<const M extends ServiceMethodSchemas>(metho
 }
 
 /**
+ * Define a schema-backed Durable Object receiver. An open method is an open
+ * receiver effect; every non-open method consumes its declared userland
+ * capability against the exact receiver object. Handles and host capabilities
+ * remain explicit `directEffect` declarations and are never inferred.
+ */
+export function defineReceiverServiceMethods<const M extends ServiceMethodSchemas>(methods: M): M {
+  return Object.fromEntries(
+    Object.entries(methods).map(([name, method]) => {
+      if (method.directEffect) return [name, method];
+      if (method.tier?.tier === "open") {
+        return [name, { ...method, directEffect: { kind: "open" as const } }];
+      }
+      if (!method.capability) {
+        throw new Error(
+          `Non-open receiver method ${name} must declare a capability or an explicit directEffect`
+        );
+      }
+      return [
+        name,
+        {
+          ...method,
+          directEffect: {
+            kind: "userland-capability" as const,
+            capability: method.capability,
+            resource: { kind: "receiver-object" as const },
+          },
+        },
+      ];
+    })
+  ) as M;
+}
+
+/**
  * Relax trailing tuple elements that accept `undefined` into optional
  * parameters. Zod infers `z.tuple([A, B.optional()])` as `[A, B | undefined]`,
  * which would force callers to pass `undefined` explicitly.

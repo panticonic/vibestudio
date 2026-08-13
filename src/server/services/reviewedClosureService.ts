@@ -4,7 +4,6 @@ import {
   preparedAuthorityState,
 } from "@vibestudio/shared/serviceDefinition";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
-import { productBuiltinByIdentity } from "@vibestudio/shared/productBuiltinCatalog.generated";
 import {
   reviewedClosureActivationSchema,
   reviewedClosureMethods,
@@ -23,8 +22,8 @@ export function createReviewedClosureService(deps: {
     methods: reviewedClosureMethods,
     authorityPreparation: {
       "reviewedClosure.activate.presentation": (ctx, args) => {
-        requireBuiltinPublisher(ctx.caller.runtime.id);
         const input = reviewedClosureActivationSchema.parse(args[0]);
+        requireReviewedWorkspacePublisher(ctx.caller, input.body.issuer);
         return preparedAuthorityState([
           fixedPreparedAuthoritySelection({
             capability: ACTIVATE,
@@ -77,11 +76,24 @@ export function createReviewedClosureService(deps: {
   };
 }
 
-function requireBuiltinPublisher(runtimeId: string): void {
-  const match = /^do:([^:]+):([^:]+):/u.exec(runtimeId);
-  if (!match?.[1] || !match[2] || !productBuiltinByIdentity(match[1], match[2])) {
+function requireReviewedWorkspacePublisher(
+  caller: Parameters<ServiceDefinition["handler"]>[0]["caller"],
+  issuer: string
+): void {
+  const match = /^do:([^:]+):([^:]+):/u.exec(caller.runtime.id);
+  const source = match?.[1];
+  if (
+    !source ||
+    source === "vibestudio/internal" ||
+    issuer !== caller.runtime.id ||
+    caller.codeApproved !== true ||
+    caller.code?.repoPath !== source ||
+    !caller.code.effectiveVersion
+  ) {
     throw Object.assign(
-      new Error("Reviewed closure presentation must come from a cataloged builtin"),
+      new Error(
+        "Reviewed closure presentation requires the exact admitted workspace worker identity"
+      ),
       { code: "EACCES" }
     );
   }

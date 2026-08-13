@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
+import { defineReceiverServiceMethods } from "@vibestudio/shared/typedServiceClient";
 import type { ServiceAuthorityPolicy } from "@vibestudio/shared/serviceAuthority";
 
 const productPolicy: ServiceAuthorityPolicy = { principals: ["host", "user", "code"] };
@@ -38,7 +38,7 @@ const searchResultSchema = z
   })
   .strict();
 
-export const workspacePresentationMethods = defineServiceMethods({
+export const workspacePresentationMethods = defineReceiverServiceMethods({
   bindSlot: {
     ...method("write"),
     description: "Bind a shell slot to the presented panel and entity.",
@@ -54,26 +54,47 @@ export const workspacePresentationMethods = defineServiceMethods({
   indexPanel: {
     ...method("write"),
     description: "Index a panel manifest for workspace search.",
-    args: z.tuple([indexablePanelSchema, z.string().min(1).nullable()]),
+    args: z.tuple([
+      indexablePanelSchema,
+      z.string().min(1).nullable(),
+      z.object({ explicit: z.boolean().optional() }).strict().optional(),
+    ]),
     returns: z.string().min(1).nullable(),
   },
   updatePanelTitle: {
     ...method("write"),
     description: "Update a panel title and its search index entry.",
-    args: z.tuple([z.string().min(1), z.string().min(1), z.string()]),
+    args: z.tuple([
+      z.string().min(1),
+      z.string().min(1),
+      z.string(),
+      z.object({ explicit: z.boolean().optional() }).strict().optional(),
+    ]),
     returns: z.string().min(1),
   },
   setEntityTitle: {
     ...method("write"),
     description: "Set or clear the title associated with an entity.",
-    args: z.tuple([z.string().min(1), z.string().nullable()]),
+    args: z.tuple([
+      z.string().min(1),
+      z.string().nullable(),
+      z.object({ explicit: z.boolean().optional() }).strict().optional(),
+    ]),
     returns: z.void(),
   },
   listEntityTitles: {
     ...method("read"),
     description: "List the workspace's explicit entity titles.",
     args: z.tuple([]),
-    returns: z.array(z.object({ id: z.string(), title: z.string() }).strict()),
+    returns: z.array(
+      z.object({ id: z.string(), title: z.string(), explicit: z.boolean() }).strict()
+    ),
+  },
+  isEntityTitleExplicit: {
+    ...method("read"),
+    description: "Whether an entity title was explicitly selected by its owning runtime.",
+    args: z.tuple([z.string().min(1)]),
+    returns: z.boolean(),
   },
   titlesForSlots: {
     ...method("read"),

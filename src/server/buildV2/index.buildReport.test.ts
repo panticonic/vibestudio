@@ -185,7 +185,10 @@ async function loadWithMocks(): Promise<{
   const { discoverPackageGraph } = await import("./packageGraph.js");
   const buildStore = await import("./buildStore.js");
   const graph = discoverPackageGraph(workspaceRoot);
-  const buildSystem = await initBuildSystemV2(workspaceRoot, fakeSource(workspaceRoot, graph), []);
+  const buildSystem = await initBuildSystemV2(workspaceRoot, fakeSource(workspaceRoot, graph), [], {
+    appRoot: process.cwd(),
+    dependencyWorkspaceRoot: workspaceRoot,
+  });
   // Initialization only discovers/version-tracks units. Actual panel/worker
   // builds are demand-driven by their runtime access paths.
   expect(buildCalls).toEqual([]);

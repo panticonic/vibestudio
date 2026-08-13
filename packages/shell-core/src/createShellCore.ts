@@ -1,5 +1,4 @@
 import type { PanelRegistry } from "@vibestudio/shared/panelRegistry";
-import type { PanelSearchIndex, PanelSearchResult } from "@vibestudio/shared/panelSearchTypes";
 import type { WorkspaceConfig } from "@vibestudio/workspace-contracts/types";
 import {
   PanelManager,
@@ -8,6 +7,7 @@ import {
 } from "./panelManager.js";
 import type { ShellServiceCall } from "./workspaceStateClient.js";
 import { createRuntimeClient, createWorkspaceStateClient } from "./workspaceStateClient.js";
+import type { WorkspaceStateClient } from "./workspaceStateClient.js";
 
 export {
   createRuntimeClient,
@@ -28,30 +28,20 @@ export function createShellCore(deps: {
   workspacePath: string;
   workspaceConfig?: WorkspaceConfig;
   allowMissingManifests?: boolean;
+  /** Optional Base composition of raw topology with workspace.presentation facts. */
+  workspaceState?: WorkspaceStateClient;
 }): { panelManager: PanelManager } {
   const call = <T>(service: string, method: string, args: unknown[]) =>
     deps.call(service, method, args) as Promise<T>;
 
-  const workspaceState = createWorkspaceStateClient(deps.call);
+  const workspaceState = deps.workspaceState ?? createWorkspaceStateClient(deps.call);
   const runtime = createRuntimeClient(deps.call);
-
-  const searchIndex: PanelSearchIndex = {
-    indexPanel: (panel) => call<void>("workspace-state", "panel.index", [panel]),
-    search: (query, limit) =>
-      call<PanelSearchResult[]>("workspace-state", "panel.search", [query, limit]),
-    incrementAccessCount: (panelId) =>
-      call<void>("workspace-state", "panel.incrementAccess", [panelId]),
-    updateTitle: (panelId, title) =>
-      call<void>("workspace-state", "panel.updateTitle", [panelId, title]),
-    rebuildIndex: () => call<void>("workspace-state", "panel.rebuildIndex", []),
-  };
 
   return {
     panelManager: new PanelManager({
       registry: deps.registry,
       workspaceState,
       runtime,
-      searchIndex,
       activationClient: {
         markPanelActive: (panelId) => call<void>("presence", "markPanelActive", [panelId]),
       },

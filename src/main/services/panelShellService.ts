@@ -11,6 +11,7 @@ import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import { dialog } from "electron";
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import type { BrowserVaultNativeClient } from "./browserVaultNativeClient.js";
 
 function requirePanelHostingAppCapability(
   ctx: ServiceContext,
@@ -37,6 +38,7 @@ export interface PanelViewMethodDeps {
   panelOrchestrator: PanelOrchestrator;
   panelRegistry: PanelRegistry;
   panelView: PanelView;
+  browserVault: BrowserVaultNativeClient;
   getViewManager: () => ViewManager;
 }
 
@@ -163,10 +165,18 @@ export function buildPanelViewHandler(deps: PanelViewMethodDeps): ServiceHandler
       requirePanelHostingAppCapability(ctx, vm, "getBrowserPageIdentity");
       const page = currentBrowserPage(panelId, deps.panelRegistry, vm);
       const contents = vm.getWebContents(panelId);
-      return {
-        ...page,
-        title: contents?.getTitle() ?? "",
-      };
+      try {
+        return {
+          ...page,
+          title: contents?.getTitle() ?? "",
+          cookieCount: (await deps.browserVault.getCookieSiteSummary(page.origin)).cookieCount,
+        };
+      } catch (error) {
+        console.error("[PanelShellService] Site data summary failed", error);
+        throw new Error(
+          "Site data summary is unavailable. Try again after the page finishes loading."
+        );
+      }
     },
     setNativeBrowserZoom: async (ctx, [panelId, origin, zoomFactor]) => {
       const vm = deps.getViewManager();
@@ -192,10 +202,15 @@ export function buildPanelViewHandler(deps: PanelViewMethodDeps): ServiceHandler
       }
       const contents = vm.getWebContents(panelId);
       if (!contents || contents.isDestroyed()) throw new Error("Browser page is not loaded");
-      await contents.session.clearData({
-        origins: [origin],
-        dataTypes: ["cookies", "cache", "localStorage", "indexedDB", "serviceWorkers"],
-      });
+      try {
+        await contents.session.clearData({
+          origins: [origin],
+          dataTypes: ["cookies", "cache", "localStorage", "indexedDB", "serviceWorkers"],
+        });
+      } catch (error) {
+        console.error("[PanelShellService] Site data clear failed", error);
+        throw new Error("Site data could not be cleared. Check the page and try again.");
+      }
     },
     printBrowserPage: async (ctx, [panelId]) => {
       const vm = deps.getViewManager();

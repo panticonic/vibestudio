@@ -30,21 +30,16 @@ function makeDoCtx(key: { source: string; className: string; objectKey: string }
 }
 
 function makeService(opts: {
-  onPanelTitleChanged?: (entityId: string, title: string) => void;
-  isEntityTitleExplicit?: (entityId: string) => boolean;
   onSlotStateChanged?: (change?: SlotStateChange) => void;
-  getUnitIcon?: (source: string) => string | undefined;
   /**
    * Map of DO method → return value. The dispatcher uses this to drive
    * outcomes (e.g. simulating the entity-id WorkspaceDO returns from
    * `panelIndex` / `panelUpdateTitle`).
    */
   dispatchReturns?: Record<string, unknown>;
-  presentationReturns?: Record<string, unknown>;
   panelAccess?: Partial<PanelAccessPermissionDeps>;
 }) {
   const calls: Array<{ method: string; args: unknown[] }> = [];
-  const presentationCalls: Array<{ method: string; args: unknown[] }> = [];
   const doDispatch = {
     dispatch: async (_ref: unknown, method: string, ...args: unknown[]) => {
       calls.push({ method, args });
@@ -56,14 +51,6 @@ function makeService(opts: {
   const svc = createWorkspaceStateService({
     doDispatch: doDispatch as never,
     workspaceId: "test-workspace",
-    presentationDispatch: async (method, args) => {
-      presentationCalls.push({ method, args });
-      if (method === "titlesForSlots") return {};
-      if (method === "search") return { results: [], nextCursor: null };
-      if (method === "sourceUsage") return [];
-      return opts.presentationReturns?.[method];
-    },
-    ...(opts.getUnitIcon ? { getUnitIcon: opts.getUnitIcon } : {}),
     panelAccess: {
       contextExists: () => false,
       resolveCallerContext: async () => null,
@@ -72,19 +59,17 @@ function makeService(opts: {
       ...opts.panelAccess,
       controlsLifecycleContext: opts.panelAccess?.controlsLifecycleContext ?? (async () => false),
     },
-    ...(opts.onPanelTitleChanged ? { onPanelTitleChanged: opts.onPanelTitleChanged } : {}),
-    ...(opts.isEntityTitleExplicit ? { isEntityTitleExplicit: opts.isEntityTitleExplicit } : {}),
     ...(opts.onSlotStateChanged ? { onSlotStateChanged: opts.onSlotStateChanged } : {}),
   });
-  return { svc, calls, presentationCalls };
+  return { svc, calls };
 }
 
-describe("workspaceStateService — title mirror hooks", () => {
+describe("workspaceStateService — topology authority", () => {
   it("prepares exact context-boundary authority at the WorkspaceDO mutation surface", async () => {
     const { svc } = makeService({
       dispatchReturns: {
         panelTreeDetail: {
-          slot: { slot_id: "panel:target", current_entity_title: "Target" },
+          slot: { slot_id: "panel:target" },
           currentHistory: { source: "panels/target", context_id: "ctx-target" },
           entity: { id: "panel:target" },
         },
@@ -165,24 +150,23 @@ describe("workspaceStateService — title mirror hooks", () => {
     ]);
   });
 
-  it("enriches panel detail from the server-owned unit manifest", async () => {
+  it("returns raw panel detail without host presentation composition", async () => {
     const detail = {
       revision: 1,
-      slot: { slot_id: "panel:chat", current_entity_title: "Chat" },
+      slot: { slot_id: "panel:chat" },
       currentHistory: { source: "panels/chat", context_id: "ctx-chat" },
       entity: { id: "panel:chat" },
     };
     const { svc } = makeService({
       dispatchReturns: { panelTreeDetail: detail },
-      getUnitIcon: (source) => (source === "panels/chat" ? "💬" : undefined),
     });
 
     await expect(
       svc.handler(makeCtx() as never, "panelTree.detail", ["panel:chat"])
-    ).resolves.toEqual({ ...detail, icon: "💬" });
+    ).resolves.toEqual(detail);
   });
 
-  it("enriches tree rows before they cross into native shell presentation", async () => {
+  it("returns raw tree rows without host presentation composition", async () => {
     const page = {
       revision: 1,
       group: { kind: "roots" as const, ownerUserId: null },
@@ -201,17 +185,13 @@ describe("workspaceStateService — title mirror hooks", () => {
     };
     const { svc } = makeService({
       dispatchReturns: { panelTreePage: page },
-      getUnitIcon: (source) => (source === "panels/chat" ? "💬" : undefined),
     });
 
     await expect(
       svc.handler(makeCtx() as never, "panelTree.page", [
         { group: { kind: "roots", ownerUserId: null } },
       ])
-    ).resolves.toEqual({
-      ...page,
-      nodes: [{ ...page.nodes[0], title: "panel:chat", icon: "💬" }],
-    });
+    ).resolves.toEqual(page);
   });
 
   it("exposes lifecycle lease methods to DO callers", async () => {
@@ -281,134 +261,19 @@ describe("workspaceStateService — title mirror hooks", () => {
     expect(calls).toEqual([{ method: "alarmClear", args: [key] }]);
   });
 
-  it("fires onPanelTitleChanged with the DO-resolved entity id on panel.index", async () => {
-    const onPanelTitleChanged = vi.fn();
-    const { svc } = makeService({
-      onPanelTitleChanged,
-      dispatchReturns: {
-        panelTreeDetail: {
-          slot: { slot_id: "panel:abc" },
-          currentHistory: { source: "panels/chat" },
-          entity: { id: "entity:abc-current" },
-        },
-      },
-    });
-    const result = await svc.handler(makeCtx() as never, "panel.index", [
-      { id: "panel:abc", title: "Spectrolite — README" },
-    ]);
-    expect(onPanelTitleChanged).toHaveBeenCalledWith(
-      "entity:abc-current",
-      "Spectrolite — README",
-      false
+  it("exposes no product presentation methods", () => {
+    const { svc } = makeService({});
+    expect(Object.keys(svc.methods)).not.toEqual(
+      expect.arrayContaining([
+        "panelTree.search",
+        "panel.search",
+        "panel.sourceUsage",
+        "panel.index",
+        "panel.updateTitle",
+        "panel.incrementAccess",
+        "panel.rebuildIndex",
+      ])
     );
-    expect(result).toBe("entity:abc-current");
-  });
-
-  it("skips onPanelTitleChanged on panel.index when the input has no title", async () => {
-    const onPanelTitleChanged = vi.fn();
-    const { svc } = makeService({
-      onPanelTitleChanged,
-      dispatchReturns: { panelTreeDetail: null },
-    });
-    await svc.handler(makeCtx() as never, "panel.index", [{ id: "panel:abc", title: "" }]);
-    expect(onPanelTitleChanged).not.toHaveBeenCalled();
-  });
-
-  it("indexes source metadata without replacing an existing explicit title", async () => {
-    const onPanelTitleChanged = vi.fn();
-    const { svc, calls, presentationCalls } = makeService({
-      onPanelTitleChanged,
-      isEntityTitleExplicit: () => true,
-      dispatchReturns: {
-        panelTreeDetail: {
-          entity: { id: "entity:abc-current" },
-          slot: { slot_id: "panel:abc", current_entity_title: "Pinned title" },
-          currentHistory: { source: "browser:https://example.com/" },
-        },
-      },
-    });
-
-    const result = await svc.handler(makeCtx() as never, "panel.index", [
-      { id: "panel:abc", title: "Inferred title", path: "browser:https://example.com/" },
-    ]);
-
-    expect(calls).toEqual([{ method: "panelTreeDetail", args: ["panel:abc"] }]);
-    expect(presentationCalls).toEqual([
-      { method: "titlesForSlots", args: [["panel:abc"]] },
-      {
-        method: "indexPanel",
-        args: [
-          {
-            id: "panel:abc",
-            source: "browser:https://example.com/",
-            title: "Pinned title",
-            path: "browser:https://example.com/",
-          },
-          "entity:abc-current",
-        ],
-      },
-    ]);
-    expect(onPanelTitleChanged).not.toHaveBeenCalled();
-    expect(result).toBe("entity:abc-current");
-  });
-
-  it("fires onPanelTitleChanged with the resolved entity id on panel.updateTitle", async () => {
-    const onPanelTitleChanged = vi.fn();
-    const { svc } = makeService({
-      onPanelTitleChanged,
-      dispatchReturns: {
-        panelTreeDetail: { entity: { id: "entity:abc-current" } },
-      },
-    });
-    const result = await svc.handler(makeCtx() as never, "panel.updateTitle", [
-      "panel:abc",
-      "New title",
-    ]);
-    expect(onPanelTitleChanged).toHaveBeenCalledWith("entity:abc-current", "New title", false);
-    expect(result).toBe("entity:abc-current");
-  });
-
-  it("does not let an inferred title replace an explicit title", async () => {
-    const onPanelTitleChanged = vi.fn();
-    const { svc, calls } = makeService({
-      onPanelTitleChanged,
-      isEntityTitleExplicit: () => true,
-      dispatchReturns: {
-        panelTreeDetail: {
-          entity: { id: "panel:abc-current" },
-        },
-      },
-    });
-
-    const result = await svc.handler(makeCtx() as never, "panel.updateTitle", [
-      "panel:abc",
-      "Document title",
-    ]);
-
-    expect(result).toBe("panel:abc-current");
-    expect(calls.map(({ method }) => method)).toEqual(["panelTreeDetail"]);
-    expect(onPanelTitleChanged).not.toHaveBeenCalled();
-  });
-
-  it("does not fire onPanelTitleChanged when the slot has no current entity", async () => {
-    const onPanelTitleChanged = vi.fn();
-    const { svc } = makeService({
-      onPanelTitleChanged,
-      dispatchReturns: { panelTreeDetail: null },
-    });
-    const result = await svc.handler(makeCtx() as never, "panel.updateTitle", [
-      "panel:abc",
-      "Stale",
-    ]);
-    expect(onPanelTitleChanged).not.toHaveBeenCalled();
-    expect(result).toBeNull();
-  });
-
-  it("never fires onPanelTitleChanged for unrelated methods", async () => {
-    const onPanelTitleChanged = vi.fn();
-    const { svc } = makeService({ onPanelTitleChanged });
-    await svc.handler(makeCtx() as never, "panel.incrementAccess", ["panel:abc"]);
-    expect(onPanelTitleChanged).not.toHaveBeenCalled();
   });
 });
 
@@ -538,14 +403,10 @@ describe("workspaceStateService — slot-state change hook", () => {
     ["panelTree.page", [{ group: { kind: "roots", ownerUserId: null }, limit: 50 }]],
     ["panelTree.path", ["s1"]],
     ["panelTree.detail", ["s1"]],
-    ["panelTree.search", [{ query: "q" }]],
     ["slot.get", ["s1"]],
     ["slot.historyRelative", ["s1", -1]],
     ["entity.resolveActive", ["e1"]],
     ["entity.resolve", ["e1"]],
-    ["panel.search", ["q", 10]],
-    ["panel.sourceUsage", [20]],
-    ["panel.incrementAccess", ["e1"]],
   ];
 
   for (const [method, args] of reads) {
@@ -561,9 +422,7 @@ describe("workspaceStateService — slot-state change hook", () => {
                 nextCursor: null,
               },
             }
-          : method === "panelTree.search"
-            ? { panelTreeSearch: { revision: 1, hits: [], nextCursor: null } }
-            : undefined;
+          : undefined;
       const { svc } = makeService({
         onSlotStateChanged,
         ...(dispatchReturns ? { dispatchReturns } : {}),

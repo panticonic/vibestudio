@@ -1,12 +1,21 @@
-export { createBrowserDataClient } from "./client/browserDataClient.js";
-export type { BrowserDataClient, ImportPreview } from "./client/browserDataClient.js";
+export {
+  createBrowserDataClient,
+  type BrowserDataClient,
+  type BrowserPrivacySection,
+  type NonSensitiveBrowserImportDataType,
+  type NonSensitiveBrowserImportSelection,
+  type SensitiveBrowserImportDataType,
+  type SensitiveBrowserImportCount,
+  type SensitiveBrowserImportRequest,
+  type SensitiveBrowserImportPreview,
+  type SensitiveBrowserImportSelection,
+  type SensitiveBrowserImportStatus,
+} from "./client/browserDataClient.js";
+export type { ImportPreview } from "./client/browserDataClient.js";
 export type {
-  ApplyCookieMutationsRequest,
   BrowserImportSelection,
   BrowserDownloadRecord,
   BrowserImportSource,
-  FormFillSuggestionQuery,
-  FormFillValueInput,
   ImportCategoryBreakdown,
   ImportCategoryBreakdownGroup,
   ImportedBrowserOpenTab,
@@ -15,7 +24,6 @@ export type {
   PageFavicon,
 } from "./environment.js";
 export type {
-  ImportedPassword,
   OpenTabsAsPanelsRequest,
   OpenTabsPanelDestination,
   OpenTabsPanelGrouping,
@@ -25,10 +33,7 @@ export type {
 } from "./types.js";
 export type {
   StoredBookmark,
-  StoredCookie,
-  StoredFormFill,
   StoredHistory,
   StoredPageFavicon,
-  StoredPassword,
   StoredSearchEngine,
 } from "./storage/types.js";

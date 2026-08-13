@@ -40,14 +40,6 @@ export class BrowserVaultDO extends DurableObjectBase {
     super(ctx, env);
   }
 
-  protected override rpcSchemaCodeSource(): string | null {
-    const value = this.env["BROWSER_DATA_BROKER_SOURCE"];
-    if (typeof value !== "string" || value.length === 0) {
-      throw new Error("BrowserVaultDO requires BROWSER_DATA_BROKER_SOURCE");
-    }
-    return value;
-  }
-
   protected createTables(): void {
     this.executeSchema(BROWSER_VAULT_SCHEMA);
   }
@@ -66,13 +58,22 @@ export class BrowserVaultDO extends DurableObjectBase {
   // -- Passwords -----------------------------------------------------------
 
   @schemaRpc()
-  async getPasswords() {
+  async listPasswordSummaries() {
     return Promise.all(
       this.sql
         .exec(`SELECT * FROM passwords ORDER BY date_last_used DESC`)
         .toArray()
-        .map((row) => this.passwordRow(row))
+        .map((row) => this.passwordSummary(row))
     );
+  }
+
+  @schemaRpc()
+  async listPasswordSummariesPage(offset: number, limit: number) {
+    const total = Number(this.sql.exec(`SELECT COUNT(*) AS total FROM passwords`).one()["total"]);
+    const rows = this.sql
+      .exec(`SELECT * FROM passwords ORDER BY date_last_used DESC LIMIT ? OFFSET ?`, limit, offset)
+      .toArray();
+    return { items: await Promise.all(rows.map((row) => this.passwordSummary(row))), total };
   }
 
   @schemaRpc()
@@ -87,6 +88,15 @@ export class BrowserVaultDO extends DurableObjectBase {
       )
       .toArray();
     return Promise.all(rows.map((row) => this.passwordRow(row)));
+  }
+
+  @schemaRpc()
+  async listPasswordsPage(offset: number, limit: number) {
+    const total = Number(this.sql.exec(`SELECT COUNT(*) AS total FROM passwords`).one()["total"]);
+    const rows = this.sql
+      .exec(`SELECT * FROM passwords ORDER BY id LIMIT ? OFFSET ?`, limit, offset)
+      .toArray();
+    return { items: await Promise.all(rows.map((row) => this.passwordRow(row))), total };
   }
 
   @schemaRpc()
@@ -186,6 +196,22 @@ export class BrowserVaultDO extends DurableObjectBase {
   }
 
   @schemaRpc()
+  getNeverSaveOriginsPage(offset: number, limit: number) {
+    const total = Number(
+      this.sql.exec(`SELECT COUNT(*) AS total FROM password_never_save`).one()["total"]
+    );
+    const items = this.sql
+      .exec(
+        `SELECT origin FROM password_never_save ORDER BY origin LIMIT ? OFFSET ?`,
+        limit,
+        offset
+      )
+      .toArray()
+      .map((row) => String(row["origin"]));
+    return { items, total };
+  }
+
+  @schemaRpc()
   removeNeverSave(origin: string): void {
     const normalized = this.httpOrigin(origin);
     if (normalized) this.sql.exec(`DELETE FROM password_never_save WHERE origin = ?`, normalized);
@@ -232,6 +258,29 @@ export class BrowserVaultDO extends DurableObjectBase {
     return (
       prefix ? values.filter((entry) => entry.value.toLocaleLowerCase().startsWith(prefix)) : values
     ).slice(0, limit);
+  }
+
+  @schemaRpc()
+  async listFormFillValues() {
+    const rows = this.sql
+      .exec(`SELECT * FROM form_fill_values ORDER BY updated_at DESC, id DESC`)
+      .toArray();
+    return Promise.all(rows.map((row) => this.formFillRow(row)));
+  }
+
+  @schemaRpc()
+  async listFormFillValuesPage(offset: number, limit: number) {
+    const total = Number(
+      this.sql.exec(`SELECT COUNT(*) AS total FROM form_fill_values`).one()["total"]
+    );
+    const rows = this.sql
+      .exec(
+        `SELECT * FROM form_fill_values ORDER BY updated_at DESC, id DESC LIMIT ? OFFSET ?`,
+        limit,
+        offset
+      )
+      .toArray();
+    return { items: await Promise.all(rows.map((row) => this.formFillRow(row))), total };
   }
 
   @schemaRpc()
@@ -442,7 +491,55 @@ export class BrowserVaultDO extends DurableObjectBase {
   }
 
   @schemaRpc()
-  async getCookieSnapshot(_query: { sinceRevision?: number } = {}) {
+  listCookieOrigins(): { revision: number; origins: string[] } {
+    const origins = this.sql
+      .exec(
+        `SELECT DISTINCT domain FROM cookies
+         WHERE expiration_date IS NULL OR expiration_date > ?
+         ORDER BY domain`,
+        Date.now() / 1_000
+      )
+      .toArray()
+      .flatMap((row) => {
+        const host = String(row["domain"]).replace(/^\./u, "");
+        try {
+          return [new URL(`https://${host}/`).origin];
+        } catch {
+          return [];
+        }
+      });
+    return { revision: this.currentCookieRevision(), origins: [...new Set(origins)] };
+  }
+
+  @schemaRpc()
+  listCookieOriginsPage(offset: number, limit: number) {
+    const now = Date.now() / 1_000;
+    const domains = this.sql
+      .exec(
+        `SELECT DISTINCT domain FROM cookies WHERE expiration_date IS NULL OR expiration_date > ? ORDER BY domain LIMIT ? OFFSET ?`,
+        now,
+        limit,
+        offset
+      )
+      .toArray();
+    const total = Number(
+      this.sql
+        .exec(
+          `SELECT COUNT(DISTINCT domain) AS total FROM cookies WHERE expiration_date IS NULL OR expiration_date > ?`,
+          now
+        )
+        .one()["total"]
+    );
+    const items = domains.map(
+      (row) => new URL(`https://${String(row["domain"]).replace(/^\./u, "")}/`).origin
+    );
+    return { items, total, revision: this.currentCookieRevision() };
+  }
+
+  @schemaRpc()
+  async getCookiesForOrigin(origin: string): Promise<StoredCookie[]> {
+    const url = new URL(origin);
+    if (url.protocol !== "http:" && url.protocol !== "https:") return [];
     const now = Date.now() / 1_000;
     const rows = this.sql
       .exec(
@@ -451,19 +548,40 @@ export class BrowserVaultDO extends DurableObjectBase {
          ORDER BY domain, path, name, partition_key`,
         now
       )
-      .toArray();
-    const cookies = (await Promise.all(rows.map((row) => this.cookieRow(row)))).filter(
-      (cookie) => cookie.expirationDate === undefined || cookie.expirationDate > now
-    );
-    return { revision: this.currentCookieRevision(), cookies };
+      .toArray()
+      .filter((row) =>
+        this.cookieMatchesOrigin(
+          {
+            domain: String(row["domain"]),
+            hostOnly: Number(row["host_only"]) === 1,
+            secure: Number(row["secure"]) === 1,
+          },
+          url
+        )
+      );
+    return Promise.all(rows.map((row) => this.cookieRow(row)));
   }
 
   @schemaRpc()
-  async getCookiesForOrigin(origin: string): Promise<StoredCookie[]> {
-    const url = new URL(origin);
-    if (url.protocol !== "http:" && url.protocol !== "https:") return [];
-    const snapshot = await this.getCookieSnapshot();
-    return snapshot.cookies.filter((cookie) => this.cookieMatchesUrl(cookie, url));
+  async listCookiesPage(offset: number, limit: number) {
+    const now = Date.now() / 1_000;
+    const total = Number(
+      this.sql
+        .exec(
+          `SELECT COUNT(*) AS total FROM cookies WHERE expiration_date IS NULL OR expiration_date > ?`,
+          now
+        )
+        .one()["total"]
+    );
+    const rows = this.sql
+      .exec(
+        `SELECT * FROM cookies WHERE expiration_date IS NULL OR expiration_date > ? ORDER BY domain, path, name, partition_key LIMIT ? OFFSET ?`,
+        now,
+        limit,
+        offset
+      )
+      .toArray();
+    return { items: await Promise.all(rows.map((row) => this.cookieRow(row))), total };
   }
 
   @schemaRpc()
@@ -474,11 +592,10 @@ export class BrowserVaultDO extends DurableObjectBase {
       .exec(`SELECT name, domain, path, partition_key FROM cookies`)
       .toArray()
       .filter((row) =>
-        this.cookieMatchesUrl(
+        this.cookieMatchesOrigin(
           {
             domain: String(row["domain"]),
             hostOnly: !String(row["domain"]).startsWith("."),
-            path: String(row["path"]),
             secure: false,
           },
           url
@@ -511,11 +628,10 @@ export class BrowserVaultDO extends DurableObjectBase {
     return {
       origin: url.origin,
       cookieCount: rows.filter((row) =>
-        this.cookieMatchesUrl(
+        this.cookieMatchesOrigin(
           {
             domain: String(row["domain"]),
             hostOnly: Number(row["host_only"]) === 1,
-            path: String(row["path"]),
             secure: Number(row["secure"]) === 1,
           },
           url
@@ -663,8 +779,8 @@ export class BrowserVaultDO extends DurableObjectBase {
       ...cookie,
       encryptedValue,
       // Projection equality covers only attributes Chromium can materialize.
-      // Recompute at the trusted boundary so rows written by an older hash
-      // definition converge without a destructive data migration.
+      // Recompute at the trusted boundary because this digest is a derived
+      // projection, never persisted compatibility state.
       contentHash: await this.cookieContentHash(cookie),
       createdAt: Number(row["created_at"]),
       ...(row["last_accessed"] == null ? {} : { lastAccessed: Number(row["last_accessed"]) }),
@@ -672,8 +788,8 @@ export class BrowserVaultDO extends DurableObjectBase {
     };
   }
 
-  private cookieMatchesUrl(
-    cookie: Pick<BrowserCookieInput, "domain" | "hostOnly" | "path" | "secure">,
+  private cookieMatchesOrigin(
+    cookie: Pick<BrowserCookieInput, "domain" | "hostOnly" | "secure">,
     url: URL
   ): boolean {
     if (cookie.secure && url.protocol !== "https:") return false;
@@ -682,9 +798,7 @@ export class BrowserVaultDO extends DurableObjectBase {
     const domainMatches = cookie.hostOnly
       ? host === domain
       : host === domain || host.endsWith(`.${domain}`);
-    if (!domainMatches) return false;
-    const path = cookie.path || "/";
-    return url.pathname === path || url.pathname.startsWith(path.endsWith("/") ? path : `${path}/`);
+    return domainMatches;
   }
 
   private async cookieContentHash(cookie: BrowserCookieInput): Promise<string> {
@@ -753,6 +867,21 @@ export class BrowserVaultDO extends DurableObjectBase {
       origin_url: String(row["origin_url"]),
       username: await this.decryptText(String(row["username_encrypted"])),
       password: await this.decryptText(String(row["password_encrypted"])),
+      action_url: String(row["action_url"]),
+      realm: String(row["realm"]),
+      date_created: row["date_created"] == null ? null : Number(row["date_created"]),
+      date_last_used: row["date_last_used"] == null ? null : Number(row["date_last_used"]),
+      date_password_changed:
+        row["date_password_changed"] == null ? null : Number(row["date_password_changed"]),
+      times_used: Number(row["times_used"]),
+    };
+  }
+
+  private async passwordSummary(row: Record<string, unknown>) {
+    return {
+      id: Number(row["id"]),
+      origin_url: String(row["origin_url"]),
+      username: await this.decryptText(String(row["username_encrypted"])),
       action_url: String(row["action_url"]),
       realm: String(row["realm"]),
       date_created: row["date_created"] == null ? null : Number(row["date_created"]),

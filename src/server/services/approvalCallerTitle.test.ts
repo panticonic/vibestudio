@@ -24,7 +24,7 @@ function record(
 }
 
 describe("resolveApprovalCallerTitle", () => {
-  it("promotes the owning panel title for worker and DO callers", () => {
+  it("uses the owning panel source label for worker and DO callers", () => {
     const entityCache = new EntityCache();
     entityCache._onActivate(record("panel:nav-chat", "panel"));
     entityCache._onActivate(record("do:workers/agent:Agent:session", "do", "panel:nav-chat"));
@@ -37,37 +37,21 @@ describe("resolveApprovalCallerTitle", () => {
         "internal"
       )
     );
-    const titles = new Map([
-      ["panel:nav-chat", "Agentic Chat"],
-      ["do:vibestudio/internal:EvalDO:run-1", "EvalDO run-1"],
-    ]);
-
-    expect(
-      resolveApprovalCallerTitle(
-        { entityCache, getTitle: (id) => titles.get(id) },
-        "do:vibestudio/internal:EvalDO:run-1"
-      )
-    ).toBe("Agentic Chat");
+    expect(resolveApprovalCallerTitle({ entityCache }, "do:vibestudio/internal:EvalDO:run-1")).toBe(
+      "test"
+    );
   });
 
-  it("falls back to the caller title when there is no titled panel ancestor", () => {
+  it("uses the caller source label when there is no panel ancestor", () => {
     const entityCache = new EntityCache();
     entityCache._onActivate(record("worker:background", "worker"));
 
-    expect(
-      resolveApprovalCallerTitle(
-        {
-          entityCache,
-          getTitle: (id) => (id === "worker:background" ? "Background job" : undefined),
-        },
-        "worker:background"
-      )
-    ).toBe("Background job");
+    expect(resolveApprovalCallerTitle({ entityCache }, "worker:background")).toBe("test");
   });
 
   it("classifies extension callers even when they have no runtime entity record", () => {
     const requester = resolveApprovalRequester(
-      { entityCache: new EntityCache(), getTitle: () => undefined },
+      { entityCache: new EntityCache() },
       {
         callerId: "extension:@workspace-extensions/git-bridge",
         callerKind: "extension",
@@ -97,13 +81,8 @@ describe("resolveApprovalCallerTitle", () => {
       className: "EvalDO",
       stateArgs: { ownerPrincipalId: "do:workers/agent:AgentDO:session", subKey: "turn-17" },
     });
-    const titles = new Map([
-      ["panel:nav-chat", "Agentic Chat"],
-      ["do:workers/agent:AgentDO:session", "Research Agent"],
-    ]);
-
     const requester = resolveApprovalRequester(
-      { entityCache, getTitle: (id) => titles.get(id) },
+      { entityCache },
       {
         callerId: "do:vibestudio/internal:EvalDO:run-1",
         callerKind: "do",
@@ -114,8 +93,8 @@ describe("resolveApprovalCallerTitle", () => {
 
     expect(requester).toMatchObject({
       category: "eval",
-      title: "Agentic Chat",
-      panel: { id: "panel:nav-chat", title: "Agentic Chat" },
+      title: "test",
+      panel: { id: "panel:nav-chat", title: "test" },
       stableIdentityKey: "do:workers/agent:AgentDO:session",
       eval: {
         ownerId: "do:workers/agent:AgentDO:session",
@@ -123,8 +102,8 @@ describe("resolveApprovalCallerTitle", () => {
       },
     });
     expect(requester.breadcrumbs.map((crumb) => [crumb.category, crumb.label])).toEqual([
-      ["panel", "Agentic Chat"],
-      ["agent", "Research Agent"],
+      ["panel", "test"],
+      ["agent", "test"],
       ["eval", "Eval turn-17"],
     ]);
   });

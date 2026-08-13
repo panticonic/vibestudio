@@ -10,6 +10,13 @@ import { browserVaultMethods } from "@vibestudio/service-schemas/browserData";
 import { BrowserVaultDO } from "./BrowserVaultDO.js";
 
 describe("BrowserVaultDO schema", () => {
+  it("admits protected material only to the host principal", () => {
+    for (const method of Object.values(browserVaultMethods)) {
+      expect(method.authority).toEqual({ principals: ["host"] });
+      expect(method.agentFacing).toBe(false);
+    }
+  });
+
   it("has one typed declaration for every exposed data method", () => {
     const db = new DatabaseSync(":memory:");
     const instance = createBrowserVaultDO(db);
@@ -42,9 +49,7 @@ describe("BrowserVaultDO schema", () => {
 
   it("enforces tier, sensitivity, and principals from the typed method table", () => {
     const db = new DatabaseSync(":memory:");
-    const instance = createBrowserVaultDO(db, {
-      BROWSER_DATA_BROKER_SOURCE: "extensions/browser-data",
-    });
+    const instance = createBrowserVaultDO(db);
     const resolve = (
       method: keyof typeof browserVaultMethods
     ): import("@vibestudio/rpc").ResolvedRpcAuthority | null =>
@@ -57,7 +62,12 @@ describe("BrowserVaultDO schema", () => {
         }
       ).rpcAuthorityDeclaration(method, browserVaultMethods[method]!);
 
-    expect(resolve("getPasswords")).toMatchObject({
+    expect(resolve("listPasswordSummaries")).toMatchObject({
+      tier: "gated",
+      sensitivity: "read",
+      effect: { kind: "host-capability", capability: "browser-data.read" },
+    });
+    expect(resolve("getCookiesForOrigin")).toMatchObject({
       tier: "gated",
       sensitivity: "read",
       effect: { kind: "host-capability", capability: "browser-data.read" },
@@ -67,23 +77,7 @@ describe("BrowserVaultDO schema", () => {
       sensitivity: "destructive",
       effect: { kind: "host-capability", capability: "browser-data.delete" },
     });
-    expect(resolve("getPasswords")).toMatchObject({
-      requires: {
-        kind: "any",
-        requirements: expect.arrayContaining([
-          {
-            kind: "all",
-            requirements: expect.arrayContaining([
-              {
-                kind: "relationship",
-                name: "code-source",
-                value: "extensions/browser-data",
-              },
-            ]),
-          },
-        ]),
-      },
-    });
+    expect(resolve("listPasswordSummaries")).toMatchObject({ principals: ["host"] });
     db.close();
   });
 });
@@ -166,7 +160,7 @@ describe("BrowserVaultDO partitioned cookies", () => {
       value: "one",
       domain: ".embedded.example",
       hostOnly: false,
-      path: "/",
+      path: "/embedded/app",
       secure: true,
       httpOnly: true,
       sameSite: "no_restriction" as const,
@@ -200,24 +194,22 @@ describe("BrowserVaultDO partitioned cookies", () => {
       ],
     });
 
-    await expect(store.getCookieSnapshot()).resolves.toMatchObject({
-      cookies: [
-        {
-          value: "one",
-          partitionKey: {
-            topLevelSite: "https://one.example",
-            hasCrossSiteAncestor: true,
-          },
+    await expect(store.getCookiesForOrigin("https://embedded.example")).resolves.toMatchObject([
+      {
+        value: "one",
+        partitionKey: {
+          topLevelSite: "https://one.example",
+          hasCrossSiteAncestor: true,
         },
-        {
-          value: "two",
-          partitionKey: {
-            topLevelSite: "https://two.example",
-            hasCrossSiteAncestor: true,
-          },
+      },
+      {
+        value: "two",
+        partitionKey: {
+          topLevelSite: "https://two.example",
+          hasCrossSiteAncestor: true,
         },
-      ],
-    });
+      },
+    ]);
     db.close();
   });
 });

@@ -27,8 +27,6 @@ import type {
   WorkspacePanelTreePlacement,
   WorkspacePanelTreeRootGroupPage,
   WorkspacePanelTreeRootGroupPageInput,
-  WorkspacePanelTreeSearchInput,
-  WorkspacePanelTreeSearchPage,
   WorkspacePanelTreeSlot,
 } from "@vibestudio/shared/panel/workspaceStateSnapshot";
 
@@ -83,7 +81,6 @@ export interface WorkspaceStateClient {
   getPanelTreePage(input: WorkspacePanelTreePageInput): Promise<WorkspacePanelTreePage>;
   getPanelTreePath(slotId: PanelSlotId): Promise<WorkspacePanelTreePath | null>;
   getPanelDetail(slotId: PanelSlotId): Promise<WorkspacePanelDetail | null>;
-  searchPanelTree(input: WorkspacePanelTreeSearchInput): Promise<WorkspacePanelTreeSearchPage>;
   getSlot(slotId: PanelSlotId): Promise<SlotRow | null>;
   getRelativeSlotHistory(slotId: PanelSlotId, delta: -1 | 1): Promise<SlotHistoryRow | null>;
   resolveActiveEntity(id: string): Promise<EntityRecord | null>;
@@ -136,7 +133,6 @@ export function createWorkspaceStateClient(callService: ShellServiceCall): Works
     getPanelTreePage: (input) => call("panelTree.page", [input]),
     getPanelTreePath: (slotId) => call("panelTree.path", [slotId]),
     getPanelDetail: (slotId) => call("panelTree.detail", [slotId]),
-    searchPanelTree: (input) => call("panelTree.search", [input]),
     getSlot: (slotId) => call("slot.get", [slotId]),
     getRelativeSlotHistory: (slotId, delta) => call("slot.historyRelative", [slotId, delta]),
     resolveActiveEntity: (id) => call("entity.resolveActive", [id]),

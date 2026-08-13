@@ -3,12 +3,7 @@
  */
 
 import type { CreateChildOptions } from "@vibestudio/types";
-import type {
-  Panel,
-  PanelNavigationState,
-  PanelSnapshot,
-  StateArgsValue,
-} from "../types.js";
+import type { Panel, PanelNavigationState, PanelSnapshot, StateArgsValue } from "../types.js";
 
 /**
  * Get the current snapshot for a panel.
@@ -114,10 +109,6 @@ export function updatePanelNavigationState(panel: Panel, state: PanelNavigationS
     ...(panel.navigation ?? {}),
     ...state,
   };
-
-  if (state.pageTitle !== undefined) {
-    panel.title = state.pageTitle;
-  }
 }
 
 /**

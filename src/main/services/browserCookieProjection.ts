@@ -9,6 +9,7 @@ import type {
   BrowserEnvironmentIdentity,
   StoredCookie,
 } from "@vibestudio/browser-data";
+import type { BrowserVaultNativeClient } from "./browserVaultNativeClient.js";
 import {
   browserCookiePartitionStorageKey,
   normalizeCookieExpirationSeconds,
@@ -129,6 +130,7 @@ export interface BrowserCookieProjectionApi {
 
 export function createBrowserCookieProjectionService(deps: {
   browserDataClient: BrowserDataClient;
+  browserVault: BrowserVaultNativeClient;
   serverClient: ServerClient;
   hostId: string;
   outboxRoot: string;
@@ -171,7 +173,7 @@ export function createBrowserCookieProjectionService(deps: {
       const partition = browserEnvironmentPartition(identity.environmentKey);
       const cookieJar = deps.createCookieJar?.(partition) ?? new ChromiumCookieJar(partition);
       candidate = new BrowserCookieProjection({
-        browserDataClient: deps.browserDataClient,
+        browserVault: deps.browserVault,
         cookieJar,
         identity,
         partition,
@@ -188,10 +190,7 @@ export function createBrowserCookieProjectionService(deps: {
       // operation used by reconciliation and keep the projection in its
       // existing background-attach retry path instead of attaching a broken
       // projection and emitting a reconciliation warning on every startup.
-      await retryWhileExtensionUnavailable(
-        () => deps.browserDataClient.getCookieSnapshot(),
-        signal
-      );
+      await retryWhileExtensionUnavailable(() => deps.browserVault.listCookieOrigins(), signal);
       await candidate.start();
       if (signal.aborted) throw abortError(signal);
 
@@ -341,7 +340,7 @@ class BrowserCookieProjection {
 
   constructor(
     private readonly deps: {
-      browserDataClient: BrowserDataClient;
+      browserVault: BrowserVaultNativeClient;
       cookieJar: BrowserCookieJar;
       identity: BrowserEnvironmentIdentity;
       partition: string;
@@ -500,7 +499,7 @@ class BrowserCookieProjection {
     while (this.outbox.length > 0) {
       const batch = this.outbox.slice(0, 250);
       try {
-        await this.deps.browserDataClient.applyCookieMutations({
+        await this.deps.browserVault.applyCookieMutations({
           mutations: batch.map((entry) => entry.mutation),
         });
       } catch (error) {
@@ -517,12 +516,8 @@ class BrowserCookieProjection {
 
   private async reconcileNow(origins?: string[]): Promise<void> {
     try {
-      const snapshot = await this.deps.browserDataClient.getCookieSnapshot();
-      const canonical = origins?.length
-        ? snapshot.cookies.filter((cookie) =>
-            origins.some((origin) => cookieAppliesToOrigin(cookie, origin))
-          )
-        : snapshot.cookies;
+      const snapshot = await this.readCanonicalCookies(origins);
+      const canonical = snapshot.cookies;
       const current = (await this.deps.cookieJar.snapshot()).cookies;
       const scopedCurrent = origins?.length
         ? current.filter((cookie) =>
@@ -601,6 +596,28 @@ class BrowserCookieProjection {
       this.lastError = `Cookie reconciliation failed: ${messageOf(error)}`;
       this.warnOnce(this.lastError);
     }
+  }
+
+  private async readCanonicalCookies(
+    requestedOrigins?: string[]
+  ): Promise<{ revision: number; cookies: StoredCookie[] }> {
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const before = await this.deps.browserVault.listCookieOrigins();
+      const origins = requestedOrigins?.length ? requestedOrigins : before.origins;
+      const cookies = (
+        await Promise.all(
+          [...new Set(origins)].map((origin) => this.deps.browserVault.getCookiesForOrigin(origin))
+        )
+      ).flat();
+      const after = await this.deps.browserVault.listCookieOrigins();
+      if (before.revision === after.revision) {
+        const unique = new Map(
+          cookies.map((cookie) => [cookieKeyString(cookieKey(cookie)), cookie])
+        );
+        return { revision: after.revision, cookies: [...unique.values()] };
+      }
+    }
+    throw new Error("Cookie state changed while reading origin-scoped projection inputs");
   }
 
   private queueOperation(run: () => Promise<void>): Promise<void> {

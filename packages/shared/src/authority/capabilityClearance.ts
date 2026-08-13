@@ -57,7 +57,6 @@ const CONTEXTUAL_KEYS: readonly string[] = [
   "incoming-pair-links",
   "mobile.provision",
   "connections.approve",
-  "connected-client.transport",
   "remote-client.connect",
 
   // Cross-user or protected data.

@@ -478,6 +478,7 @@ export const panelMetadataSchema = z
   .object({
     source: z.string(),
     title: z.string(),
+    icon: z.string().max(256).optional(),
     description: z.string().optional(),
     hiddenInLauncher: z.boolean(),
     stateArgs: z.unknown().optional(),

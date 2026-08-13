@@ -3,7 +3,7 @@
 import { z } from "zod";
 import type { MethodAccessDescriptor } from "@vibestudio/shared/serviceAuthority";
 import type { ServiceAuthorityPolicy } from "@vibestudio/shared/serviceAuthority";
-import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
+import { defineReceiverServiceMethods } from "@vibestudio/shared/typedServiceClient";
 
 const readAccess: MethodAccessDescriptor = { sensitivity: "read" };
 const adminAccess: MethodAccessDescriptor = { sensitivity: "admin" };
@@ -105,7 +105,7 @@ export const PhoneProvisionArgsSchema = z
   .strict();
 export type PhoneProvisionArgs = z.infer<typeof PhoneProvisionArgsSchema>;
 
-export const phoneProvisioningMethods = defineServiceMethods({
+export const phoneProvisioningMethods = defineReceiverServiceMethods({
   providers: {
     description:
       "List account-scoped desktop capability providers that can access phones attached to them.",

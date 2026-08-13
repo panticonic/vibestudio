@@ -57,6 +57,9 @@ importers:
       '@tanstack/react-virtual':
         specifier: ^3.13.0
         version: 3.13.18(react-dom@19.0.0(react@19.0.0))(react@19.0.0)
+      '@vibestudio/browser-contracts':
+        specifier: workspace:*
+        version: link:packages/browser-contracts
       '@vibestudio/browser-data':
         specifier: workspace:*
         version: link:packages/browser-data
@@ -90,6 +93,9 @@ importers:
       '@vibestudio/identity':
         specifier: workspace:*
         version: link:packages/identity
+      '@vibestudio/mobile-webrtc':
+        specifier: workspace:*
+        version: link:packages/mobile-webrtc
       '@vibestudio/process-adapter':
         specifier: workspace:*
         version: link:packages/process-adapter
@@ -120,6 +126,9 @@ importers:
       '@vibestudio/unit-host':
         specifier: workspace:*
         version: link:packages/unit-host
+      '@vibestudio/vcs-path-policy':
+        specifier: workspace:*
+        version: link:packages/vcs-path-policy
       '@vibestudio/workspace':
         specifier: workspace:*
         version: link:packages/workspace
@@ -777,16 +786,6 @@ importers:
       typescript:
         specifier: 7.0.2
         version: 7.0.2
-
-  packages/panel-host-protocol:
-    dependencies:
-      zod:
-        specifier: ^3.24.1
-        version: 3.25.76
-    devDependencies:
-      vitest:
-        specifier: ^3.2.4
-        version: 3.2.4(@types/debug@4.1.12)(@types/node@24.10.9)(@vitest/browser@3.2.4)(jiti@2.7.0)(jsdom@29.0.1(@noble/hashes@2.2.0))(terser@5.46.1)(tsx@4.21.0)(yaml@2.9.0)
 
   packages/process-adapter:
     devDependencies:

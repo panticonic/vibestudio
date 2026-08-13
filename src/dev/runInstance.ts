@@ -201,10 +201,12 @@ async function main(): Promise<void> {
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     NODE_ENV: "development",
+    VIBESTUDIO_APP_ROOT: repoRoot,
     VIBESTUDIO_INSTANCE_ROOT: root,
     VIBESTUDIO_INSTANCE: id,
-    // Exactly one developer instance is coupled to the checkout template.
-    // Every named/ephemeral peer owns only its copied workspace state.
+    // Exactly one persistent developer instance may opt into checkout-host
+    // co-development. Every named/ephemeral peer owns only its materialized
+    // semantic workspace state.
     VIBESTUDIO_SOURCE_INSTANCE: id === "source" && !disposable ? "1" : "0",
   };
   process.env["VIBESTUDIO_INSTANCE_ROOT"] = root;

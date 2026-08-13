@@ -135,35 +135,7 @@ describe("UnitAdmissionStore", () => {
     expect(new UnitAdmissionStore({ statePath: root }).has(identity)).toBe(false);
   });
 
-  it("removes the all-or-nothing state at cutover instead of reading it", () => {
-    const legacy = stateLayout(root).authority.approvedUnitVersionsFile;
-    fs.mkdirSync(path.dirname(legacy), { recursive: true });
-    fs.writeFileSync(
-      legacy,
-      JSON.stringify({
-        schemaVersion: 1,
-        approvals: [
-          {
-            repoPath: "panels/example",
-            effectiveVersion: "ev-1",
-            authorityDigest: "0".repeat(64),
-            approvedAt: 1,
-          },
-        ],
-      })
-    );
-
-    const store = new UnitAdmissionStore({ statePath: root });
-
-    expect(fs.existsSync(legacy)).toBe(false);
-    expect(store.has(identity)).toBe(false);
-  });
-
-  it("discards an older admission file rather than reading trust it cannot honour", () => {
-    // Cutover, not migration: an older file records admissions taken when
-    // admission still implied blanket authority. Re-reading it would leave
-    // units admitted and ungranted — running, but asking for things they were
-    // already allowed. Starting empty re-offers the creation review instead.
+  it("rejects an admission file from another system epoch", () => {
     const filePath = path.join(stateLayout(root).authority.root, "admitted-unit-versions.json");
     fs.mkdirSync(path.dirname(filePath), { recursive: true });
     fs.writeFileSync(
@@ -182,10 +154,10 @@ describe("UnitAdmissionStore", () => {
       })
     );
 
-    const store = new UnitAdmissionStore({ statePath: root });
-    expect(store.isEmpty()).toBe(true);
-    expect(store.has(identity)).toBe(false);
-    expect(fs.existsSync(filePath)).toBe(false);
+    expect(() => new UnitAdmissionStore({ statePath: root })).toThrow(
+      /not from the current system epoch/
+    );
+    expect(fs.existsSync(filePath)).toBe(true);
   });
 
   // `hasVersion` is what keeps the creation review answerable: the surfaces that

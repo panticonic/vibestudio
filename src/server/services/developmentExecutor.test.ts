@@ -21,8 +21,16 @@ import type { ExactRepositorySnapshotPlan } from "../vcsHost/workspaceVcs.js";
 
 const roots: string[] = [];
 const digest = (character: string): string => character.repeat(64);
+const pair = {
+  kind: "combined" as const,
+  hostRepositoryId: "repository:vibestudio",
+  baseRepositoryId: "repository:base",
+};
 
-function session(): DevelopmentSession {
+function session(
+  repositoryId = "repository:vibestudio",
+  repoPath = "projects/vibestudio"
+): DevelopmentSession {
   return {
     sessionId: "development-session",
     idempotencyKey: "open",
@@ -30,7 +38,7 @@ function session(): DevelopmentSession {
     mode: "semantic",
     nativeTool: null,
     native: null,
-    repository: { repositoryId: "repository:vibestudio", repoPath: "projects/vibestudio" },
+    repository: { repositoryId, repoPath },
     contextId: "context:development",
     parentContextId: "context:parent",
     basis: {
@@ -47,12 +55,15 @@ function session(): DevelopmentSession {
   };
 }
 
-function sourcePlan(): ExactRepositorySnapshotPlan {
+function sourcePlan(
+  repositoryId = "repository:vibestudio",
+  repoPath = "projects/vibestudio"
+): ExactRepositorySnapshotPlan {
   const base = {
     version: 1 as const,
     contextId: "context:development",
-    repositoryId: "repository:vibestudio",
-    repoPath: "projects/vibestudio",
+    repositoryId,
+    repoPath,
     sourceState: { kind: "application" as const, applicationId: "application:dirty" },
     contentRoot: `state:${digest("a")}`,
     repositoryManifestDigest: digest("b"),
@@ -60,8 +71,8 @@ function sourcePlan(): ExactRepositorySnapshotPlan {
     requiredFiles: [{ path: "pnpm-lock.yaml", contentHash: digest("d"), byteLength: 4 }],
     realization: {
       repository: {
-        repositoryId: "repository:vibestudio",
-        repoPath: "projects/vibestudio",
+        repositoryId,
+        repoPath,
         presence: "present" as const,
         fileManifestId: "manifest:dirty",
         source: { kind: "content-root" as const, contentRoot: `state:${digest("a")}` },
@@ -108,13 +119,28 @@ async function manualPlan(runId: string, pnpmCliPath: string): Promise<PreparedD
     version: 1,
     sessionId: "development-session",
     contextId: "context:development",
-    repositoryId: "repository:vibestudio",
-    repoPath: "projects/vibestudio",
-    repositoryState: { kind: "application", applicationId: "application:dirty" },
-    repositoryManifestDigest: digest("b"),
-    materializedTreeDigest: digest("c"),
-    contentRoot: `state:${digest("a")}`,
-    sourcePlanDigest: digest("f"),
+    pair: {
+      kind: "combined",
+      host: {
+        repositoryId: "repository:vibestudio",
+        repoPath: "projects/vibestudio",
+        repositoryState: { kind: "application", applicationId: "application:dirty" },
+        repositoryManifestDigest: digest("b"),
+        materializedTreeDigest: digest("c"),
+        contentRoot: `state:${digest("a")}`,
+        sourcePlanDigest: digest("f"),
+      },
+      base: {
+        repositoryId: "repository:base",
+        repoPath: "templates/base",
+        repositoryState: { kind: "application", applicationId: "application:base" },
+        repositoryManifestDigest: digest("3"),
+        materializedTreeDigest: digest("4"),
+        contentRoot: `state:${digest("5")}`,
+        sourcePlanDigest: digest("0"),
+      },
+      pairDigest: digest("e"),
+    },
     recipeDigest: digest("1"),
     toolchain: {
       executorId: digest("2"),
@@ -138,7 +164,10 @@ async function manualPlan(runId: string, pnpmCliPath: string): Promise<PreparedD
   return {
     version: 1,
     runId,
-    sourcePlan: sourcePlan(),
+    sourcePlans: {
+      host: sourcePlan(),
+      base: sourcePlan("repository:base", "templates/base"),
+    },
     snapshot,
     recipe,
     executables: {
@@ -183,7 +212,11 @@ describe("DevelopmentExecutor exact private execution", () => {
   });
 
   it("prepares stable exact identities without creating a run root or process", async () => {
-    const planSource = vi.fn(async () => sourcePlan());
+    const planSource = vi.fn(async (input: { repositoryId: string }) =>
+      input.repositoryId === "repository:base"
+        ? sourcePlan("repository:base", "templates/base")
+        : sourcePlan()
+    );
     const executor = new DevelopmentExecutor({
       workspaceId: "workspace:test",
       hostExecutionDigest: digest("9"),
@@ -197,11 +230,13 @@ describe("DevelopmentExecutor exact private execution", () => {
       session: session(),
       runId: "run-one",
       recipe,
+      pair,
     });
     const second = await executor.prepareExact({
       session: session(),
       runId: "run-two",
       recipe,
+      pair,
     });
 
     expect(first.snapshot.toolchain).toEqual(second.snapshot.toolchain);
@@ -211,8 +246,45 @@ describe("DevelopmentExecutor exact private execution", () => {
     expect(first.snapshot.declaredEnvironment).toEqual({ CI: "1", NODE_ENV: "production" });
     expect(first.snapshot.declaredEnvironment).not.toHaveProperty("HOME");
     expect(first.snapshot.declaredEnvironment).not.toHaveProperty("PATH");
-    expect(planSource).toHaveBeenCalledTimes(2);
+    expect(first.snapshot.pair.kind).toBe("combined");
+    expect(first.snapshot.pair.pairDigest).toMatch(/^[a-f0-9]{64}$/u);
+    expect(planSource).toHaveBeenCalledTimes(4);
     await expect(fsp.stat(path.join(root, "runs"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("binds host-only, Base-only, and combined pairs to the session-owned candidate", async () => {
+    const executor = new DevelopmentExecutor({
+      workspaceId: "workspace:test",
+      hostExecutionDigest: digest("9"),
+      root: path.join(root, "runs"),
+      planSource: async ({ repositoryId }) =>
+        repositoryId === "repository:base"
+          ? sourcePlan("repository:base", "templates/base")
+          : sourcePlan(),
+      materializeSource: vi.fn(),
+    });
+    const recipe = developmentRecipeFixture(process.platform, process.arch);
+    for (const kind of ["host-only", "base-only", "combined"] as const) {
+      const selected =
+        kind === "base-only" ? session("repository:base", "templates/base") : session();
+      const plan = await executor.prepareExact({
+        session: selected,
+        runId: `run-${kind}`,
+        recipe,
+        pair: { ...pair, kind },
+      });
+      expect(plan.snapshot.pair.kind).toBe(kind);
+      expect(plan.snapshot.pair.host.repositoryId).toBe("repository:vibestudio");
+      expect(plan.snapshot.pair.base.repositoryId).toBe("repository:base");
+    }
+    await expect(
+      executor.prepareExact({
+        session: session(),
+        runId: "run-wrong-base-owner",
+        recipe,
+        pair: { ...pair, kind: "base-only" },
+      })
+    ).rejects.toMatchObject({ code: "EIDENTITYDRIFT" });
   });
 
   it("builds only inside the marker-owned root, strips ambient secrets, redacts logs, and publishes artifacts", async () => {
@@ -237,6 +309,7 @@ describe("DevelopmentExecutor exact private execution", () => {
             "fs.writeFileSync('dist/environment.json', JSON.stringify({",
             "  cwd: process.cwd(),",
             "  declared: process.env.NODE_ENV,",
+            "  base: process.env.VIBESTUDIO_USERLAND_ROOT,",
             "  ambient: process.env.DEVELOPMENT_EXECUTOR_SECRET ?? null",
             "}));",
           ].join("\n")
@@ -252,13 +325,14 @@ describe("DevelopmentExecutor exact private execution", () => {
     const stored = getBuild(plan.snapshot.snapshotDigest);
 
     expect(artifact.buildKey).toBe(plan.snapshot.snapshotDigest);
-    expect(stored?.metadata.sourceStateHash).toBe(plan.snapshot.contentRoot);
-    expect(stored?.metadata.sourceState).toEqual(plan.snapshot.repositoryState);
+    expect(stored?.metadata.sourceStateHash).toBe(plan.snapshot.pair.host.contentRoot);
+    expect(stored?.metadata.sourceState).toEqual(plan.snapshot.pair.host.repositoryState);
     const environment = stored?.artifacts.find((entry) => entry.path === "dist/environment.json");
     expect(environment?.encoding).toBe("utf8");
     expect(JSON.parse(environment?.content ?? "{}")).toEqual({
       cwd: path.join(root, "runs", plan.runId, "source"),
       declared: "production",
+      base: path.join(root, "runs", plan.runId, "base"),
       ambient: null,
     });
     expect(logs).toContain("[REDACTED]");

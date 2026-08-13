@@ -17,6 +17,10 @@ import { sha256 } from "@vibestudio/shared/execution/identity";
 
 const TEST_STATE = `state:${"a".repeat(64)}`;
 
+function buildRoots(workspaceRoot: string) {
+  return { appRoot: process.cwd(), dependencyWorkspaceRoot: workspaceRoot };
+}
+
 function fakeWorkspaceSource(workspaceRoot: string): WorkspaceStateSource & BuildSourceProvider {
   return {
     workspaceId: "workspace:test",
@@ -149,7 +153,7 @@ describe("BuildSystemV2 startup", () => {
     const materializeForBuild = vi.fn(async () => ({ sourceRoot: workspaceRoot }));
     const source = { ...base, readFile, materializeForBuild };
     const { initBuildSystemV2 } = await import("./index.js");
-    buildSystem = await initBuildSystemV2(workspaceRoot, source, []);
+    buildSystem = await initBuildSystemV2(workspaceRoot, source, [], buildRoots(workspaceRoot));
     materializeForBuild.mockClear();
 
     const [first, concurrent] = await Promise.all([
@@ -211,7 +215,7 @@ describe("BuildSystemV2 startup", () => {
     const materializeForBuild = vi.spyOn(source, "materializeForBuild");
     const { initBuildSystemV2 } = await import("./index.js");
     const builder = await import("./builder.js");
-    buildSystem = await initBuildSystemV2(workspaceRoot, source, []);
+    buildSystem = await initBuildSystemV2(workspaceRoot, source, [], buildRoots(workspaceRoot));
     materializeForBuild.mockClear();
 
     const first = await buildSystem.resolveWorkspaceRpcCatalog(
@@ -251,6 +255,7 @@ describe("BuildSystemV2 startup", () => {
 
     const { initBuildSystemV2 } = await import("./index.js");
     buildSystem = await initBuildSystemV2(workspaceRoot, fakeWorkspaceSource(workspaceRoot), [], {
+      ...buildRoots(workspaceRoot),
       workspaceAuthorityEnvironmentAt,
     });
 
@@ -285,7 +290,10 @@ describe("BuildSystemV2 startup", () => {
       return { ...actual, typecheckProgramForUnit: vi.fn(async () => ({ mocked: true })) };
     });
     const source = fakeWorkspaceSource(workspaceRoot);
-    const options = { workspaceAuthorityEnvironmentAt: async () => ({ services: [] }) };
+    const options = {
+      ...buildRoots(workspaceRoot),
+      workspaceAuthorityEnvironmentAt: async () => ({ services: [] }),
+    };
     const { initBuildSystemV2 } = await import("./index.js");
     // The analyzer now runs inside the analysis worker, so the compiler pass is
     // observable from this thread only at the worker boundary.
@@ -333,6 +341,7 @@ describe("BuildSystemV2 startup", () => {
     const { AuthorityAnalysisWorkerClient } = await import("./authorityAnalysisWorkerClient.js");
     const compilerSnapshot = vi.spyOn(AuthorityAnalysisWorkerClient.prototype, "compilerSnapshot");
     buildSystem = await initBuildSystemV2(workspaceRoot, source, [], {
+      ...buildRoots(workspaceRoot),
       workspaceAuthorityEnvironmentAt: async () => ({ services: [] }),
     });
 
@@ -359,6 +368,7 @@ describe("BuildSystemV2 startup", () => {
 
     const { initBuildSystemV2 } = await import("./index.js");
     buildSystem = await initBuildSystemV2(workspaceRoot, fakeWorkspaceSource(workspaceRoot), [], {
+      ...buildRoots(workspaceRoot),
       executionRootProviders: [
         ...(
           [
@@ -446,6 +456,7 @@ describe("BuildSystemV2 startup", () => {
       source,
       [path.join(process.cwd(), "node_modules")],
       {
+        ...buildRoots(workspaceRoot),
         executionRootProviders: providerIds.map((id) => ({
           id,
           mandatory: true,
@@ -487,6 +498,7 @@ describe("BuildSystemV2 startup", () => {
 
     const { initBuildSystemV2 } = await import("./index.js");
     buildSystem = await initBuildSystemV2(workspaceRoot, fakeWorkspaceSource(workspaceRoot), [], {
+      ...buildRoots(workspaceRoot),
       executionRootProviders: [
         ...(
           [
@@ -570,9 +582,12 @@ describe("BuildSystemV2 startup", () => {
     const source = fakeWorkspaceSource(workspaceRoot);
     const ensureFresh = vi.spyOn(source, "ensureFresh");
     const { initBuildSystemV2 } = await import("./index.js");
-    buildSystem = await initBuildSystemV2(workspaceRoot, source, [
-      path.join(process.cwd(), "node_modules"),
-    ]);
+    buildSystem = await initBuildSystemV2(
+      workspaceRoot,
+      source,
+      [path.join(process.cwd(), "node_modules")],
+      buildRoots(workspaceRoot)
+    );
 
     const first = await buildSystem.bindRuntimeImage("panels/cached");
     const callsAfterFirstBinding = ensureFresh.mock.calls.length;
@@ -605,9 +620,12 @@ describe("BuildSystemV2 startup", () => {
 
     const { initBuildSystemV2 } = await import("./index.js");
     const { rebindSourceState } = await import("./buildStore.js");
-    buildSystem = await initBuildSystemV2(workspaceRoot, fakeWorkspaceSource(workspaceRoot), [
-      path.join(process.cwd(), "node_modules"),
-    ]);
+    buildSystem = await initBuildSystemV2(
+      workspaceRoot,
+      fakeWorkspaceSource(workspaceRoot),
+      [path.join(process.cwd(), "node_modules")],
+      buildRoots(workspaceRoot)
+    );
 
     const first = await buildSystem.bindRuntimeImage("panels/rebound-cache");
     const build = buildSystem.getBuildByKey(first.artifact.buildKey);
@@ -652,9 +670,12 @@ describe("BuildSystemV2 startup", () => {
     const source = fakeWorkspaceSource(workspaceRoot);
     const { initBuildSystemV2 } = await import("./index.js");
     const { primaryTextArtifactContent } = await import("./buildStore.js");
-    buildSystem = await initBuildSystemV2(workspaceRoot, source, [
-      path.join(process.cwd(), "node_modules"),
-    ]);
+    buildSystem = await initBuildSystemV2(
+      workspaceRoot,
+      source,
+      [path.join(process.cwd(), "node_modules")],
+      buildRoots(workspaceRoot)
+    );
 
     const warmBinding = await buildSystem.bindRuntimeImage("workers/retained", TEST_STATE);
     const warmBuild = buildSystem.getBuildByKey(warmBinding.artifact.buildKey);
@@ -672,9 +693,12 @@ describe("BuildSystemV2 startup", () => {
     const { initBuildSystemV2: initColdBuildSystem } = await import("./index.js");
     const { primaryTextArtifactContent: coldPrimaryTextArtifactContent } =
       await import("./buildStore.js");
-    buildSystem = await initColdBuildSystem(workspaceRoot, fakeWorkspaceSource(workspaceRoot), [
-      path.join(process.cwd(), "node_modules"),
-    ]);
+    buildSystem = await initColdBuildSystem(
+      workspaceRoot,
+      fakeWorkspaceSource(workspaceRoot),
+      [path.join(process.cwd(), "node_modules")],
+      buildRoots(workspaceRoot)
+    );
 
     const coldBinding = await buildSystem.bindRuntimeImage("workers/retained", TEST_STATE);
     const coldBuild = buildSystem.getBuildByKey(coldBinding.artifact.buildKey);
@@ -715,9 +739,12 @@ describe("BuildSystemV2 startup", () => {
       missing: [`source content root ${stateHash}`],
     }));
     const { initBuildSystemV2 } = await import("./index.js");
-    buildSystem = await initBuildSystemV2(workspaceRoot, source, [
-      path.join(process.cwd(), "node_modules"),
-    ]);
+    buildSystem = await initBuildSystemV2(
+      workspaceRoot,
+      source,
+      [path.join(process.cwd(), "node_modules")],
+      buildRoots(workspaceRoot)
+    );
     const binding = await buildSystem.bindRuntimeImage("workers/missing-source", TEST_STATE);
     const build = buildSystem.getBuildByKey(binding.artifact.buildKey);
     const executionDigest = build?.metadata.execution?.executionDigest;
@@ -751,9 +778,12 @@ describe("BuildSystemV2 startup", () => {
     fs.writeFileSync(path.join(workerDir, "worker.ts"), "export class SharedOnlyWorker {}\n");
 
     const { initBuildSystemV2 } = await import("./index.js");
-    buildSystem = await initBuildSystemV2(workspaceRoot, fakeWorkspaceSource(workspaceRoot), [
-      path.join(process.cwd(), "node_modules"),
-    ]);
+    buildSystem = await initBuildSystemV2(
+      workspaceRoot,
+      fakeWorkspaceSource(workspaceRoot),
+      [path.join(process.cwd(), "node_modules")],
+      buildRoots(workspaceRoot)
+    );
     const binding = await buildSystem.bindRuntimeImage("workers/shared-only", TEST_STATE);
     const localBuild = buildSystem.getBuildByKey(binding.artifact.buildKey);
     const artifact = localBuild?.metadata.execution;
@@ -782,6 +812,7 @@ describe("BuildSystemV2 startup", () => {
       source,
       [path.join(process.cwd(), "node_modules")],
       {
+        ...buildRoots(workspaceRoot),
         executionRootProviders: providerIds.map((id) => ({
           id,
           mandatory: true,
@@ -834,7 +865,7 @@ describe("BuildSystemV2 startup", () => {
     const discoverGraph = vi.spyOn(source, "discoverGraph");
     const unitHashes = vi.spyOn(source, "unitHashes");
     const { initBuildSystemV2 } = await import("./index.js");
-    buildSystem = await initBuildSystemV2(workspaceRoot, source, []);
+    buildSystem = await initBuildSystemV2(workspaceRoot, source, [], buildRoots(workspaceRoot));
 
     const resolutions = await buildSystem.resolveBuildUnits(
       ["panels/first", "panels/second"],
@@ -866,7 +897,7 @@ describe("BuildSystemV2 startup", () => {
     const discoverGraph = vi.spyOn(source, "discoverGraph");
     const unitHashes = vi.spyOn(source, "unitHashes");
     const { initBuildSystemV2 } = await import("./index.js");
-    buildSystem = await initBuildSystemV2(workspaceRoot, source, []);
+    buildSystem = await initBuildSystemV2(workspaceRoot, source, [], buildRoots(workspaceRoot));
 
     const [first, second] = await Promise.all([
       buildSystem.resolveBuildUnit("panels/context", "ctx:first"),

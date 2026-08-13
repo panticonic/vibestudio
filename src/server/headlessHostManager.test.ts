@@ -12,21 +12,30 @@ import {
 
 describe("resolveHeadlessHostEntryPath", () => {
   it("uses the single app-root build contract", () => {
-    expect(
-      resolveHeadlessHostEntryPath(
-        { VIBESTUDIO_APP_ROOT: "/opt/vibestudio" },
-        "/unrelated-working-directory"
-      )
-    ).toBe("/opt/vibestudio/dist/headless-host/main.js");
+    expect(resolveHeadlessHostEntryPath({ VIBESTUDIO_APP_ROOT: "/opt/vibestudio" })).toBe(
+      "/opt/vibestudio/dist/headless-host/main.js"
+    );
   });
 
-  it("allows an explicit entry override for tests and operators", () => {
+  it("allows an exact absolute entry override for tests and operators", () => {
     expect(
-      resolveHeadlessHostEntryPath(
-        { VIBESTUDIO_HEADLESS_HOST_ENTRY: "./fixtures/headless.js" },
-        "/repo"
-      )
+      resolveHeadlessHostEntryPath({ VIBESTUDIO_HEADLESS_HOST_ENTRY: "/repo/fixtures/headless.js" })
     ).toBe("/repo/fixtures/headless.js");
+  });
+
+  it("rejects a relative entry override instead of resolving it from cwd", () => {
+    expect(() =>
+      resolveHeadlessHostEntryPath({
+        VIBESTUDIO_APP_ROOT: "/opt/vibestudio",
+        VIBESTUDIO_HEADLESS_HOST_ENTRY: "./fixtures/headless.js",
+      })
+    ).toThrow("must be an absolute executable path");
+  });
+
+  it("does not infer the host artifact from cwd", () => {
+    expect(() => resolveHeadlessHostEntryPath({})).toThrow(
+      "process working directory is not an execution input"
+    );
   });
 });
 

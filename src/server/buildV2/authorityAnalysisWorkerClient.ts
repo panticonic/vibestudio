@@ -30,18 +30,14 @@ const WORKER_BOOTSTRAP_RELATIVE_PATH =
  * Packaged builds resolve the emitted bundle. Running from source, the entry
  * lives beside this module in the server tree — which is not necessarily
  * `appRoot`: that option points at the build dependency workspace and is a
- * temporary directory in tests and embedded hosts. Source processes are
- * launched with the checkout as cwd; packaged processes use the emitted entry
- * injected by build.mjs and never enter this resolver.
+ * temporary directory in tests and embedded hosts. Packaged processes use the
+ * emitted entry injected by build.mjs and never enter this resolver.
  */
 export function resolveAuthorityAnalysisWorkerEntry(appRoot: string): string {
-  const roots = [appRoot, process.env["VIBESTUDIO_APP_ROOT"], process.cwd()].filter(
-    (root): root is string => typeof root === "string" && root.length > 0
-  );
-  const candidates = roots.map((root) => path.join(root, WORKER_BOOTSTRAP_RELATIVE_PATH));
-  const source = candidates.find((candidate) => fs.existsSync(candidate));
+  const candidate = path.join(appRoot, WORKER_BOOTSTRAP_RELATIVE_PATH);
+  const source = fs.existsSync(candidate) ? candidate : undefined;
   if (source) return source;
-  throw new Error(`Authority analysis worker entry is missing; looked in ${candidates.join(", ")}`);
+  throw new Error(`Authority analysis worker entry is missing at ${candidate}`);
 }
 
 function workerEntry(appRoot: string): { filename: string; execArgv?: string[] } {
@@ -55,7 +51,7 @@ export class AuthorityAnalysisWorkerClient {
   private nextId = 1;
   private readonly pending = new Map<number, Pending>();
 
-  constructor(private readonly appRoot = process.cwd()) {}
+  constructor(private readonly appRoot: string) {}
 
   private ensureWorker(): Worker {
     if (this.worker) return this.worker;

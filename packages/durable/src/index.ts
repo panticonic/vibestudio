@@ -204,17 +204,30 @@ export abstract class DurableObjectBase {
     const tier = wireMethod.tier;
     const sensitivity = wireMethod.access?.sensitivity;
     const methodCapability = wireMethod.capability;
-    if (!authority || !tier || !sensitivity || !methodCapability) {
+    if (!authority || !tier || !sensitivity) {
       throw new Error(
         `${this.constructor.name}.${method} has an incomplete typed receiver authority declaration`
       );
     }
-    const effect = wireMethod.directEffect ?? {
-      kind: "host-capability" as const,
-      capability: methodCapability,
-      resource: { kind: "receiver-object" as const },
-    };
+    const effect = wireMethod.directEffect;
+    if (!effect && !methodCapability) {
+      throw new Error(
+        `${this.constructor.name}.${method} has an incomplete typed receiver authority declaration`
+      );
+    }
+    const resolvedEffect =
+      effect ??
+      ({
+        kind: "host-capability" as const,
+        capability: methodCapability!,
+        resource: { kind: "receiver-object" as const },
+      } as const);
     if (!("principals" in authority)) {
+      if (!methodCapability) {
+        throw new Error(
+          `${this.constructor.name}.${method} has an incomplete typed receiver authority declaration`
+        );
+      }
       if (authority.additional?.length || authority.prepared) {
         throw new Error(
           `${this.constructor.name}.${method} uses host-service-only prepared authority`
@@ -222,7 +235,7 @@ export abstract class DurableObjectBase {
       }
       return {
         requires: bindMethodCapability(authority.requirement, methodCapability),
-        effect,
+        effect: resolvedEffect,
         tier: tier.tier,
         sensitivity,
         ...(tier.session === "codeOnly" ? { codeOnly: true } : {}),
@@ -232,13 +245,18 @@ export abstract class DurableObjectBase {
     if (!codeSource || !authority.principals.includes("code")) {
       return {
         principals: authority.principals,
-        effect,
+        effect: resolvedEffect,
         tier: tier.tier,
         sensitivity,
         ...(tier.session === "codeOnly" ? { codeOnly: true } : {}),
       };
     }
     const unconstrained = authority.principals.filter((principal) => principal !== "code");
+    if (!methodCapability) {
+      throw new Error(
+        `${this.constructor.name}.${method} has an incomplete typed receiver authority declaration`
+      );
+    }
     return {
       requires: anyOf(
         ...unconstrained.map((principal) => capability(principal, methodCapability)),
@@ -248,7 +266,7 @@ export abstract class DurableObjectBase {
           value: codeSource,
         })
       ),
-      effect,
+      effect: resolvedEffect,
       tier: tier.tier,
       sensitivity,
       ...(tier.session === "codeOnly" ? { codeOnly: true } : {}),

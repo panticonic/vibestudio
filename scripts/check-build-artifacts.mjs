@@ -83,6 +83,39 @@ const contracts = [
     ],
   },
   {
+    path: "packages/shared/src/npmInstaller.ts",
+    runtime: "runtime npm installer",
+    forbidden: [
+      {
+        pattern: "process.cwd()",
+        reason:
+          "The bundled npm CLI must resolve from the exact application root, not the launch directory.",
+      },
+    ],
+  },
+  {
+    path: "packages/process-adapter/src/index.ts",
+    runtime: "runtime process adapter",
+    forbidden: [
+      {
+        pattern: "process.cwd()",
+        reason:
+          "Optional runtime peers must resolve from the installed adapter, not the launch directory.",
+      },
+    ],
+  },
+  {
+    path: "src/server/headlessHostManager.ts",
+    runtime: "headless-host launcher",
+    forbidden: [
+      {
+        pattern: "process.cwd()",
+        reason:
+          "Headless-host artifacts and overrides must be exact paths, not launch-directory-relative paths.",
+      },
+    ],
+  },
+  {
     path: "dist/internal-do.bundle.mjs",
     runtime: "workerd/browser Durable Object bundle",
     format: "esm",
@@ -121,6 +154,29 @@ const contracts = [
     ],
   },
   {
+    path: "dist/browserPrivacyPreload.cjs",
+    runtime: "host-owned browser privacy preload",
+    format: "cjs",
+    mustContain: ["vibestudio:browser-privacy:call", "contextBridge"],
+    forbidden: [
+      {
+        pattern: "nodeIntegration: true",
+        reason: "The protected-data presentation must remain a narrow context-bridge surface.",
+      },
+    ],
+  },
+  {
+    path: "dist/browserPrivacy.html",
+    runtime: "host-owned browser privacy document",
+    mustContain: ['id="content"', 'id="confirm"'],
+    forbidden: [
+      {
+        pattern: "<script",
+        reason: "The protected-data document executes only its packaged sandboxed preload.",
+      },
+    ],
+  },
+  {
     path: "packages/extension-host/dist/index.js",
     runtime: "Node ESM package",
     format: "esm",
@@ -152,7 +208,7 @@ const contracts = [
     path: "packages/process-adapter/dist/index.js",
     runtime: "Node ESM package",
     format: "esm",
-    mustContain: ['createRequire(path.join(process.cwd(), "package.json"))'],
+    mustContain: ["createRequire(process.execPath)"],
   },
 ];
 

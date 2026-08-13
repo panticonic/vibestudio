@@ -32,6 +32,24 @@ describe("createBrowserDataClient", () => {
     ]);
   });
 
+  it("does not expose protected browser material to workspace clients", () => {
+    const rpc = makeRpc();
+    const client = createBrowserDataClient(rpc);
+
+    for (const method of [
+      "listPasswordSummaries",
+      "getPasswordForSite",
+      "getFormFillSuggestions",
+      "listCookieOrigins",
+      "getCookiesForOrigin",
+      "exportPasswords",
+      "exportCookies",
+    ]) {
+      expect(client).not.toHaveProperty(method);
+    }
+    expect(rpc.callService).not.toHaveBeenCalled();
+  });
+
   it("keeps native import brokerage on the extension contract", async () => {
     const rpc = makeRpc();
     const client = createBrowserDataClient(rpc);
@@ -48,6 +66,53 @@ describe("createBrowserDataClient", () => {
       "resolveService",
       expect.anything()
     );
+  });
+
+  it("keeps sensitive preview and durable control on the sealed provider contract", async () => {
+    const rpc = makeRpc();
+    const client = createBrowserDataClient(rpc);
+    const request = {
+      hostId: "desktop:one",
+      sourceId: "profile:one",
+      dataTypes: ["passwords" as const],
+      operationId: "import-sensitive-1",
+    };
+
+    await client.previewSensitiveImport({
+      hostId: request.hostId,
+      sourceId: request.sourceId,
+      dataTypes: request.dataTypes,
+    });
+    await client.startSensitiveImport(request);
+    await client.observeSensitiveImport(request.operationId);
+    await client.cancelSensitiveImport(request.operationId);
+    await client.openBrowserPrivacyManager("credentials");
+
+    expect(rpc.callService).toHaveBeenNthCalledWith(1, "extensions", "invokeProvider", [
+      "browserData",
+      "previewSensitiveImport",
+      [{ hostId: request.hostId, sourceId: request.sourceId, dataTypes: request.dataTypes }],
+    ]);
+    expect(rpc.callService).toHaveBeenNthCalledWith(2, "extensions", "invokeProvider", [
+      "browserData",
+      "startSensitiveImport",
+      [request],
+    ]);
+    expect(rpc.callService).toHaveBeenNthCalledWith(3, "extensions", "invokeProvider", [
+      "browserData",
+      "observeSensitiveImport",
+      [request.operationId],
+    ]);
+    expect(rpc.callService).toHaveBeenNthCalledWith(4, "extensions", "invokeProvider", [
+      "browserData",
+      "cancelSensitiveImport",
+      [request.operationId],
+    ]);
+    expect(rpc.callService).toHaveBeenNthCalledWith(5, "extensions", "invokeProvider", [
+      "browserData",
+      "openBrowserPrivacyManager",
+      ["credentials"],
+    ]);
   });
 
   it("routes Electron-native browser effects directly to their resident service", async () => {

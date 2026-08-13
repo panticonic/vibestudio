@@ -6,7 +6,8 @@ import {
   createPairedMobileConnection,
   createRoutedMobileConnection,
   type ShellCredential,
-  type ShellPairing,
+  type FreshShellPairing,
+  type StoredShellPairing,
   type StoredMobileConnection,
 } from "./storedCredential.js";
 
@@ -15,11 +16,11 @@ export interface CompleteFreshMobilePairingOptions {
   controlConnection: WebRtcConnection;
   credential: ShellCredential | null;
   pairingContext: PairingContext | null;
-  controlPairing: ShellPairing;
+  controlPairing: FreshShellPairing;
   persistConnection(connection: StoredMobileConnection): Promise<void>;
   /** Open the actual workspace pipe after the durable route is committed. */
   connectWorkspace(
-    workspacePairing: ShellPairing,
+    workspacePairing: StoredShellPairing,
     credential: ShellCredential
   ): Promise<WebRtcConnection>;
 }

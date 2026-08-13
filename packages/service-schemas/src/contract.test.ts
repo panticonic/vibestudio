@@ -13,6 +13,9 @@ import { autofillMethods } from "./autofill.js";
 import { blobstoreMethods } from "./blobstore.js";
 import { browserDataMethods } from "./browserData.js";
 import { browserEnvironmentMethods } from "./browserEnvironment.js";
+import { browserPrivacyPresentationMethods } from "./browserPrivacyPresentation.js";
+import { desktopBrowserPrivacyPresentationMethods } from "./desktopBrowserPrivacyPresentation.js";
+import { browserVaultNativeMethods } from "./browserVaultNative.js";
 import { browserPermissionsMethods } from "./browserPermissions.js";
 import { buildMethods } from "./build.js";
 import { channelMethods } from "./channel.js";
@@ -39,6 +42,7 @@ import { serverLogMethods } from "./serverLog.js";
 import { menuMethods } from "./menu.js";
 import { mirrorMethods } from "./mirror.js";
 import { missionsMethods } from "./missions.js";
+import { shellBrowserPrivacyMethods } from "./shellBrowserPrivacy.js";
 import { notificationMethods } from "./notification.js";
 import { panelMethods } from "./panel.js";
 import { panelLogMethods } from "./panelLog.js";
@@ -46,7 +50,7 @@ import { panelRuntimeMethods } from "./panelRuntime.js";
 import { pushMethods, PushRegisterRequestSchema } from "./push.js";
 import { permissionsMethods } from "./permissions.js";
 import { phoneProvisioningMethods } from "./phoneProvisioning.js";
-import { connectedClientTransportMethods } from "./connectedClientTransport.js";
+import { phoneNativeEndpointMethods } from "./phoneNativeEndpoint.js";
 import { remoteCredMethods } from "./remoteCred.js";
 import { reviewedClosureMethods } from "./reviewedClosure.js";
 import { runtimeMethods } from "./runtime.js";
@@ -87,9 +91,24 @@ const serviceTables: ServiceTable[] = [
   { service: "blobstore", file: "blobstore.ts", methods: blobstoreMethods },
   { service: "browserData", file: "browserData.ts", methods: browserDataMethods },
   {
+    service: "browserVaultNative",
+    file: "browserVaultNative.ts",
+    methods: browserVaultNativeMethods,
+  },
+  {
     service: "browserEnvironment",
     file: "browserEnvironment.ts",
     methods: browserEnvironmentMethods,
+  },
+  {
+    service: "browserPrivacyPresentation",
+    file: "browserPrivacyPresentation.ts",
+    methods: browserPrivacyPresentationMethods,
+  },
+  {
+    service: "desktopBrowserPrivacyPresentation",
+    file: "desktopBrowserPrivacyPresentation.ts",
+    methods: desktopBrowserPrivacyPresentationMethods,
   },
   {
     service: "browserPermissions",
@@ -132,6 +151,11 @@ const serviceTables: ServiceTable[] = [
   { service: "menu", file: "menu.ts", methods: menuMethods },
   { service: "mirror", file: "mirror.ts", methods: mirrorMethods },
   { service: "missions", file: "missions.ts", methods: missionsMethods },
+  {
+    service: "shellBrowserPrivacy",
+    file: "shellBrowserPrivacy.ts",
+    methods: shellBrowserPrivacyMethods,
+  },
   { service: "notification", file: "notification.ts", methods: notificationMethods },
   { service: "panel", file: "panel.ts", methods: panelMethods },
   { service: "panelLog", file: "panelLog.ts", methods: panelLogMethods },
@@ -143,9 +167,9 @@ const serviceTables: ServiceTable[] = [
     methods: phoneProvisioningMethods,
   },
   {
-    service: "connectedClientTransport",
-    file: "connectedClientTransport.ts",
-    methods: connectedClientTransportMethods,
+    service: "phoneNativeEndpoint",
+    file: "phoneNativeEndpoint.ts",
+    methods: phoneNativeEndpointMethods,
   },
   { service: "push", file: "push.ts", methods: pushMethods },
   { service: "remoteCred", file: "remoteCred.ts", methods: remoteCredMethods },
@@ -401,6 +425,7 @@ describe("service schema contracts", () => {
           file.endsWith(".ts") &&
           !file.endsWith(".test.ts") &&
           file !== "productBuiltinServices.ts" &&
+          file !== "browserPrivacy.ts" &&
           !file.startsWith("progressSemantics")
       )
       .sort();

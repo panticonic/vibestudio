@@ -13,8 +13,7 @@ import {
   PAIRING_PROTOCOL_VERSION,
   PAIRING_ROOM_PATTERN,
   parseSignalingEndpoint,
-  type ConnectPairing,
-  type TurnPolicy,
+  type ReconnectReach,
 } from "@vibestudio/shared/connect";
 import { isDeviceId, isDeviceRefreshToken, isServerId } from "@vibestudio/shared/deviceCredentials";
 import { getCentralDataPath } from "@vibestudio/env-paths";
@@ -26,10 +25,7 @@ import {
 
 export type { StoreCipher };
 
-export type StoredPairing = Omit<ConnectPairing, "code" | "v" | "ice"> & {
-  v: typeof PAIRING_PROTOCOL_VERSION;
-  ice: TurnPolicy;
-};
+export type StoredPairing = ReconnectReach;
 
 interface DeviceCredentialBase {
   serverId: string;

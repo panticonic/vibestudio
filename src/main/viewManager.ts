@@ -28,6 +28,7 @@ import {
   shell,
   webContents as electronWebContents,
 } from "electron";
+import { randomUUID } from "node:crypto";
 
 import { createDevLogger } from "@vibestudio/dev-log";
 import { ShellOverlayView, type ShellOverlayOptions } from "./shellOverlayView.js";
@@ -40,6 +41,14 @@ import type { AppCapability } from "@vibestudio/shared/unitManifest";
 import { isAuthorizedChromeAppCaller } from "@vibestudio/shared/chromeTrust";
 import { CompositorRecovery } from "./compositorRecovery.js";
 import type { CapabilityScope } from "@vibestudio/rpc";
+import {
+  NATIVE_PANEL_SURFACE_PROTOCOL_VERSION,
+  type NativePanelAdapterHandshakeResult,
+  type NativePanelAdapterHello,
+  type NativePanelApplyResult,
+  type NativePanelDesiredSnapshot,
+  type NativePanelObservedSnapshot,
+} from "@vibestudio/service-schemas/view";
 
 export interface HostedCodeIdentity {
   source?: string;
@@ -225,6 +234,10 @@ interface NativePanelSlotModel {
   hostedShellGeneration: number;
   latestOperations: Map<string, { bindingSequence: number; operationSequence: number }>;
   desiredRevision: number;
+  desiredFingerprint: string | null;
+  hostGeneration: string;
+  shellGeneration: string | null;
+  observationRevision: number;
 }
 
 /**
@@ -281,6 +294,10 @@ export class ViewManager {
     hostedShellGeneration: 0,
     latestOperations: new Map(),
     desiredRevision: 0,
+    desiredFingerprint: null,
+    hostGeneration: `electron:${randomUUID()}`,
+    shellGeneration: null,
+    observationRevision: 0,
   };
   private readonly hidePanelViewsUntilHostedShellReady: boolean;
   /**
@@ -956,6 +973,145 @@ export class ViewManager {
     this.applyBoundsToVisiblePanel();
   }
 
+  connectNativePanelAdapter(
+    ownerViewId: string,
+    hello: NativePanelAdapterHello
+  ): NativePanelAdapterHandshakeResult {
+    const owner = this.views.get(ownerViewId);
+    if (!owner || owner.type !== "app" || !owner.hostChrome) {
+      throw new Error(`Panel host owner is not an active panel-hosting app: ${ownerViewId}`);
+    }
+    if (hello.sealedLaunchIdentity !== ownerViewId) {
+      throw new Error("Panel host launch identity does not match the authenticated caller");
+    }
+    if (!hello.supportedProtocolVersions.includes(NATIVE_PANEL_SURFACE_PROTOCOL_VERSION)) {
+      return { accepted: false, reason: "unsupported-protocol" };
+    }
+    const shellGeneration = `shell:${randomUUID()}`;
+    this.setHostedShellReady(ownerViewId, true, shellGeneration);
+    this.nativePanelSlots.shellGeneration = shellGeneration;
+    this.nativePanelSlots.desiredFingerprint = null;
+    this.nativePanelSlots.observationRevision += 1;
+    return {
+      accepted: true,
+      handshake: {
+        protocolVersion: NATIVE_PANEL_SURFACE_PROTOCOL_VERSION,
+        hostGeneration: this.nativePanelSlots.hostGeneration,
+        shellGeneration,
+        sealedLaunchIdentity: ownerViewId,
+      },
+    };
+  }
+
+  async applyNativePanelSurfaces(
+    ownerViewId: string,
+    snapshot: NativePanelDesiredSnapshot
+  ): Promise<NativePanelApplyResult> {
+    const rejection = this.nativePanelEnvelopeRejection(snapshot);
+    if (rejection) return { accepted: false, reason: rejection };
+    if (this.nativePanelSlots.activeHostedShellViewId !== ownerViewId) {
+      return { accepted: false, reason: "stale-shell-generation" };
+    }
+    if (snapshot.revision < this.nativePanelSlots.desiredRevision) {
+      return { accepted: false, reason: "stale-revision" };
+    }
+    const normalized = [...snapshot.surfaces].sort((left, right) =>
+      left.surfaceId.localeCompare(right.surfaceId)
+    );
+    const surfaceIds = new Set<string>();
+    const panelIds = new Set<string>();
+    let focusedSurfaces = 0;
+    for (const surface of normalized) {
+      if (
+        !surfaceIds.add(surface.surfaceId) ||
+        !surface.materialization ||
+        !panelIds.add(surface.materialization.runtimeEntityId) ||
+        !surface.bounds
+      ) {
+        return { accepted: false, reason: "invalid-desired-state" };
+      }
+      if (surface.focused && ++focusedSurfaces > 1) {
+        return { accepted: false, reason: "invalid-desired-state" };
+      }
+    }
+    const fingerprint = JSON.stringify(normalized);
+    if (snapshot.revision === this.nativePanelSlots.desiredRevision) {
+      return this.nativePanelSlots.desiredFingerprint === fingerprint
+        ? { accepted: true, observation: this.observeNativePanelSurfaces(ownerViewId) }
+        : { accepted: false, reason: "revision-conflict" };
+    }
+
+    this.syncPanelSlots(ownerViewId, {
+      rendererInstanceId: snapshot.shellGeneration,
+      revision: snapshot.revision,
+      slots: normalized.map((surface) => ({
+        nativeSlotId: surface.surfaceId,
+        bindingId: surface.materialization!.leaseConnectionId,
+        bindingSequence: snapshot.revision,
+        panelId: surface.materialization!.runtimeEntityId,
+        bounds: surface.bounds!,
+        focused: surface.focused,
+      })),
+    });
+    for (const surface of normalized) {
+      this.setViewVisible(surface.materialization!.runtimeEntityId, surface.visible);
+    }
+    this.nativePanelSlots.desiredFingerprint = fingerprint;
+    this.nativePanelSlots.observationRevision += 1;
+    return { accepted: true, observation: this.observeNativePanelSurfaces(ownerViewId) };
+  }
+
+  private observeNativePanelSurfaces(ownerViewId: string): NativePanelObservedSnapshot {
+    if (this.nativePanelSlots.activeHostedShellViewId !== ownerViewId) {
+      throw new Error("Caller does not own the active panel-host generation");
+    }
+    const surfaces = [...this.nativePanelSlots.activeSlots.values()]
+      .map((slot) => {
+        const managed = this.views.get(slot.panelId);
+        if (!managed || managed.type !== "panel" || managed.view.webContents.isDestroyed()) {
+          return null;
+        }
+        return {
+          surfaceId: slot.nativeSlotId,
+          nativeSurfaceId: `webContents:${managed.view.webContents.id}`,
+          materialization: {
+            runtimeEntityId: slot.panelId,
+            leaseConnectionId: slot.bindingId,
+          },
+          visible: managed.visible,
+          focused: slot.focused,
+          bounds: { ...slot.bounds },
+        };
+      })
+      .filter((surface): surface is NonNullable<typeof surface> => surface !== null)
+      .sort((left, right) => left.surfaceId.localeCompare(right.surfaceId));
+    return {
+      protocolVersion: NATIVE_PANEL_SURFACE_PROTOCOL_VERSION,
+      hostGeneration: this.nativePanelSlots.hostGeneration,
+      shellGeneration: this.nativePanelSlots.shellGeneration ?? "unclaimed",
+      desiredRevision: this.nativePanelSlots.desiredRevision,
+      observationRevision: this.nativePanelSlots.observationRevision,
+      surfaces,
+    };
+  }
+
+  private nativePanelEnvelopeRejection(envelope: {
+    protocolVersion: number;
+    hostGeneration: string;
+    shellGeneration: string;
+  }): "unsupported-protocol" | "foreign-host-generation" | "stale-shell-generation" | null {
+    if (envelope.protocolVersion !== NATIVE_PANEL_SURFACE_PROTOCOL_VERSION) {
+      return "unsupported-protocol";
+    }
+    if (envelope.hostGeneration !== this.nativePanelSlots.hostGeneration) {
+      return "foreign-host-generation";
+    }
+    if (envelope.shellGeneration !== this.nativePanelSlots.shellGeneration) {
+      return "stale-shell-generation";
+    }
+    return null;
+  }
+
   setHostedShellReady(ownerViewId: string, ready: boolean, rendererInstanceId?: string): void {
     const owner = this.views.get(ownerViewId);
     if (!owner || owner.type !== "app" || !owner.hostChrome) {
@@ -991,6 +1147,7 @@ export class ViewManager {
       );
       this.clearAllPanelSlots();
       this.nativePanelSlots.desiredRevision = 0;
+      this.nativePanelSlots.desiredFingerprint = null;
       this.nativePanelSlots.activeHostedShellViewId = ownerViewId;
       this.nativePanelSlots.activeHostedShellInstanceId = rendererInstanceId ?? null;
       this.nativePanelSlots.hostedShellReady = true;
@@ -1028,6 +1185,8 @@ export class ViewManager {
     this.nativePanelSlots.hostedShellReady = false;
     this.clearAllPanelSlots();
     this.nativePanelSlots.desiredRevision = 0;
+    this.nativePanelSlots.desiredFingerprint = null;
+    this.nativePanelSlots.shellGeneration = null;
     this.nativePanelSlots.activeHostedShellInstanceId = null;
     owner.visible = false;
     owner.view.setVisible(false);
@@ -1039,10 +1198,10 @@ export class ViewManager {
     ownerViewId: string,
     request: {
       nativeSlotId: string;
-      rendererInstanceId?: string;
+      rendererInstanceId: string;
       bindingId: string;
-      bindingSequence?: number;
-      operationSequence?: number;
+      bindingSequence: number;
+      operationSequence: number;
       panelId: string;
       bounds: NativePanelSlotBounds;
       focused?: boolean;
@@ -1176,10 +1335,10 @@ export class ViewManager {
     ownerViewId: string,
     request: {
       nativeSlotId: string;
-      rendererInstanceId?: string;
+      rendererInstanceId: string;
       bindingId: string;
-      bindingSequence?: number;
-      operationSequence?: number;
+      bindingSequence: number;
+      operationSequence: number;
       bounds?: NativePanelSlotBounds;
       focused?: boolean;
     }
@@ -1242,10 +1401,10 @@ export class ViewManager {
     ownerViewId: string,
     nativeSlotId: string,
     bindingId: string,
-    ordering?: {
-      rendererInstanceId?: string;
-      bindingSequence?: number;
-      operationSequence?: number;
+    ordering: {
+      rendererInstanceId: string;
+      bindingSequence: number;
+      operationSequence: number;
     }
   ): boolean {
     this.assertActiveHostedShellOwner(ownerViewId);
@@ -1634,27 +1793,17 @@ export class ViewManager {
     }
   }
 
-  /**
-   * Linearize renderer operations independently of async RPC dispatch. Legacy
-   * direct callers without ordering metadata remain supported for host tests;
-   * the wire schema requires both fields.
-   */
+  /** Linearize the complete snapshot reconciliation's internal slot operations. */
   private acceptNativeSlotOperation(
     nativeSlotId: string,
-    request?: {
-      rendererInstanceId?: string;
-      bindingSequence?: number;
-      operationSequence?: number;
+    request: {
+      rendererInstanceId: string;
+      bindingSequence: number;
+      operationSequence: number;
     }
   ): boolean {
-    if (
-      request?.rendererInstanceId &&
-      request.rendererInstanceId !== this.nativePanelSlots.activeHostedShellInstanceId
-    ) {
+    if (request.rendererInstanceId !== this.nativePanelSlots.activeHostedShellInstanceId) {
       return false;
-    }
-    if (request?.bindingSequence === undefined || request.operationSequence === undefined) {
-      return true;
     }
     const next = {
       bindingSequence: request.bindingSequence,

@@ -24,6 +24,7 @@ function readHostExecutionDigest(repoRoot: string): string {
 }
 
 export interface DevelopmentNativeBootstrapDeps {
+  appRoot: string;
   container: Pick<ServiceContainer, "registerManaged">;
   workspaceId: string;
   workspaceVcs: WorkspaceVcs;
@@ -95,7 +96,8 @@ export async function wireDevelopmentNative(deps: DevelopmentNativeBootstrapDeps
     name: "developmentNative",
     dependencies: ["developmentClientExecutor", "attachedHosts"],
     async start() {
-      const hostExecutionDigest = readHostExecutionDigest(process.cwd());
+      const hostExecutionDigest = readHostExecutionDigest(deps.appRoot);
+      const semantic = createNativeDevelopmentSemanticAdapter(deps.workspaceVcs);
       const appendLog = (runId: string, stream: "stdout" | "stderr", line: string, origin = "") => {
         const current = logs.get(runId) ?? [];
         current.push({ stream, line });
@@ -115,7 +117,7 @@ export async function wireDevelopmentNative(deps: DevelopmentNativeBootstrapDeps
         executorId: `local:${hostExecutionDigest}`,
         root: deps.layout.development.nativeSessionsDir,
         blobsDir: deps.layout.blobsDir,
-        semantic: createNativeDevelopmentSemanticAdapter(deps.workspaceVcs),
+        semantic,
         planSource: ({ developmentContextId, repositoryId }) =>
           deps.workspaceVcs.planExactContextRepository({
             contextId: developmentContextId,
@@ -127,8 +129,18 @@ export async function wireDevelopmentNative(deps: DevelopmentNativeBootstrapDeps
       });
       const { createDevelopmentNativeService } =
         await import("../services/developmentNativeService.js");
+      const { TemplateRepositoryExchangeExecutor } =
+        await import("../services/templateRepositoryExchangeExecutor.js");
+      const templateExchange = new TemplateRepositoryExchangeExecutor({
+        root: path.join(deps.layout.development.root, "template-exchanges"),
+        blobsDir: deps.layout.blobsDir,
+        semantic,
+        planSource: (input) => deps.workspaceVcs.planExactContextRepository(input),
+        materializeSource: (plan, destination) =>
+          deps.workspaceVcs.materializeExactRepositoryPlan(plan, destination),
+      });
       const isolatedExecutor = new IsolatedDevelopmentHostExecutor({
-        controlRepoRoot: process.cwd(),
+        controlRepoRoot: deps.appRoot,
         parentGatewayUrl: deps.getLocalGatewayUrl("attached development host callback"),
         buildExecutor: developmentExecutor,
         onLog: (runId, stream, line) => appendLog(runId, stream, line, "isolated:"),
@@ -143,6 +155,7 @@ export async function wireDevelopmentNative(deps: DevelopmentNativeBootstrapDeps
         executor: developmentExecutor,
         isolatedExecutor,
         clientExecutors,
+        templateExchange,
         mintCurrentHostInvite: (input) => deps.workspaceChildHub.mintDeviceInvite(input),
         resolveClientExecutorRuntime: (ctx) => {
           for (const caller of [ctx.caller, ctx.authorizingCaller, ctx.transportCaller]) {

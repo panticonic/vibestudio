@@ -685,8 +685,20 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
   }
 
   async updatePanelTitle(panelId: string, title: string): Promise<void> {
-    if (this.runtime.isTitleExplicit(panelId)) return;
-    await this.shellCore.updateTitle(asPanelSlotId(panelId), title);
+    const entityId = await this.shellCore.getCurrentEntityId(asPanelSlotId(panelId));
+    const service = (await this.serverClient.call("workers", "resolveService", [
+      "vibestudio.workspace-presentation.v1",
+      null,
+    ])) as { kind: string; targetId?: string };
+    if (service.kind !== "durable-object" || !service.targetId) {
+      throw new Error("workspace.presentation must be Durable Object-backed");
+    }
+    await this.serverClient.callTarget(service.targetId, "updatePanelTitle", [
+      panelId,
+      entityId,
+      title,
+      { explicit: false },
+    ]);
   }
 
   async updatePanelState(panelId: string, state: PanelNavigationState): Promise<void> {
@@ -1124,14 +1136,6 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
 
   async syncRuntimeLeaseSnapshot(): Promise<void> {
     await this.runtime.syncLeaseSnapshot();
-  }
-
-  applyServerPanelTitleUpdate(update: {
-    panelId: string;
-    title: string | null;
-    explicit?: boolean;
-  }): Promise<void> {
-    return this.runtime.applyServerPanelTitleUpdate(update);
   }
 
   applyServerPanelStateArgsUpdate(update: {

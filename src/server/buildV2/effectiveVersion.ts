@@ -267,8 +267,8 @@ export interface RootDependencyFingerprintFile {
 export interface RootDependencyFingerprintInfo {
   /** Resolved app root the fingerprint was computed against. */
   root: string;
-  /** How the app root was resolved (for diagnosing cwd-dependence). */
-  rootSource: "env" | "injected" | "cwd";
+  /** The root is always an explicit construction input. */
+  rootSource: "injected";
   /** Full SHA-256 fingerprint folded into computeBuildKey. */
   value: string;
   /** Per-input observability (paths + presence + per-file content hash). */
@@ -277,9 +277,8 @@ export interface RootDependencyFingerprintInfo {
 
 /**
  * App root injected at build-system construction (see setBuildRootConfig).
- * Makes the fingerprint's file inputs explicit instead of cwd-guessing. The
- * VIBESTUDIO_APP_ROOT env var still overrides this; process.cwd() remains a
- * last-resort fallback when neither is set.
+ * Makes the fingerprint's file inputs explicit instead of cwd-guessing. There
+ * is deliberately no environment or cwd fallback.
  */
 let injectedAppRoot: string | null = null;
 let injectedWorkspaceRoot: string | null = null;
@@ -292,8 +291,7 @@ let localPackageFingerprintCache: { root: string; files: RootDependencyFingerpri
  * dependency fingerprint inputs. Call once from the build system's construction
  * with explicit roots — this removes the fragile process.cwd() dependence from
  * the build-cache identity. Passing `null` clears the injected values (used by
- * tests). The VIBESTUDIO_APP_ROOT env var, when set, still takes precedence for the
- * host app root.
+ * tests).
  */
 export function setBuildRootConfig(
   config: { appRoot: string; workspaceRoot?: string } | null
@@ -304,10 +302,8 @@ export function setBuildRootConfig(
 }
 
 function resolveAppRoot(): { root: string; source: RootDependencyFingerprintInfo["rootSource"] } {
-  const envRoot = process.env["VIBESTUDIO_APP_ROOT"];
-  if (envRoot) return { root: envRoot, source: "env" };
   if (injectedAppRoot) return { root: injectedAppRoot, source: "injected" };
-  return { root: process.cwd(), source: "cwd" };
+  throw new Error("Build dependency roots were not configured");
 }
 
 function fullHash(data: crypto.BinaryLike): string {

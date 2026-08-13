@@ -263,6 +263,12 @@ export function createSignalingClient(options: SignalingClientOptions): Signalin
   });
 
   ws.addEventListener("error", (ev) => {
+    // `ws` emits an ErrorEvent when an intentionally closed socket had not yet
+    // completed its opening handshake. The client has already reported its
+    // explicit `client-closed` lifecycle through `fireClosed`; logging the
+    // transport's expected teardown exception only obscures real signaling
+    // failures during ordered shutdown.
+    if (closed && closeReason === "client-closed") return;
     console.warn(`${log} websocket error`, ev);
     if (!opened) rejectOpen(new Error("Signaling websocket failed before open"));
   });
@@ -455,12 +461,12 @@ export function createSignalingClient(options: SignalingClientOptions): Signalin
 
     close(): void {
       closeReason = closeReason ?? "client-closed";
+      fireClosed(closeReason);
       try {
         ws.close(1000, "client-closed");
       } catch {
         /* already closing */
       }
-      fireClosed(closeReason);
     },
   };
 }

@@ -11,6 +11,7 @@ describe("hubControlHostService", () => {
       room: `room_${"i".repeat(24)}`,
       fp: "AA".repeat(32),
       code: "C".repeat(32),
+      exp: 2_000_000_000_000,
       sig: "wss://sig.example/",
       v: 2 as const,
       ice: "all" as const,

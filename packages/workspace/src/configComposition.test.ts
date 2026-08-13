@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { WORKSPACE_SYSTEM_EPOCH } from "@vibestudio/shared/vcs/systemEpoch";
 import type { WorkspaceConfig } from "@vibestudio/workspace-contracts/types";
 import {
   ManifestEntryConflictError,
@@ -9,7 +10,8 @@ import {
   type WorkspaceConfigFragmentLayer,
 } from "./configComposition.js";
 
-const top = (extra = "") => parseWorkspaceConfigTopLayer(`systemEpoch: 58\n${extra}`);
+const top = (extra = "") =>
+  parseWorkspaceConfigTopLayer(`systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}\n${extra}`);
 
 function layer(
   nodeId: string,
@@ -21,7 +23,7 @@ function layer(
     nodeId,
     alias,
     ancestors,
-    config: parseWorkspaceConfigFragment(`systemEpoch: 58\n${yaml}`, nodeId),
+    config: parseWorkspaceConfigFragment(`systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}\n${yaml}`, nodeId),
   };
 }
 
@@ -70,9 +72,7 @@ describe("workspace template manifest composition", () => {
   it("applies disable before workspace redeclarations", () => {
     const config = composeWorkspaceConfig(
       top('disable: ["apps/apps/shell"]\napps:\n  - source: apps/history\n'),
-      [
-        layer("t-a", "base", "apps:\n  - source: apps/shell\n"),
-      ],
+      [layer("t-a", "base", "apps:\n  - source: apps/shell\n")],
       "ws"
     );
     expect(config.apps?.map((entry) => entry.source)).toEqual(["apps/history"]);
@@ -80,11 +80,14 @@ describe("workspace template manifest composition", () => {
 
   it("rejects template trust and provider grants at the fragment boundary", () => {
     expect(() =>
-      parseWorkspaceConfigFragment("systemEpoch: 58\ntrust:\n  chromeApps: [apps/shell]\n", "t-a")
+      parseWorkspaceConfigFragment(
+        `systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}\ntrust:\n  chromeApps: [apps/shell]\n`,
+        "t-a"
+      )
     ).toThrow();
     expect(() =>
       parseWorkspaceConfigFragment(
-        "systemEpoch: 58\nproviders:\n  gitInterop: { extension: extensions/git }\n",
+        `systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}\nproviders:\n  gitInterop: { extension: extensions/git }\n`,
         "t-a"
       )
     ).toThrow();

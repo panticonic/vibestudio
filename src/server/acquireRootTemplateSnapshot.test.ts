@@ -7,6 +7,7 @@ import type { GitClient } from "@vibestudio/git";
 import type { WorkspaceTemplatePin } from "@vibestudio/workspace-contracts/types";
 import {
   acquireRootTemplateSnapshot,
+  discoverAndSeedRootTemplateSnapshotFromCheckout,
   seedRootTemplateSnapshotFromCheckout,
 } from "./acquireRootTemplateSnapshot.js";
 
@@ -20,7 +21,7 @@ describe("acquireRootTemplateSnapshot", () => {
   it("reuses an atomically published exact checkout after restart", async () => {
     const statePath = await fsp.mkdtemp(path.join(os.tmpdir(), "root-template-cache-"));
     roots.push(statePath);
-    const bytes = new TextEncoder().encode("systemEpoch: 58\n");
+    const bytes = new TextEncoder().encode("systemEpoch: 59\n");
     const contentHash = sha256Hex(bytes);
     const commit = "a".repeat(40);
     const pin: WorkspaceTemplatePin = {
@@ -74,7 +75,7 @@ describe("acquireRootTemplateSnapshot", () => {
     roots.push(statePath);
     const checkout = path.join(statePath, "unpublished-base");
     await fsp.mkdir(path.join(checkout, ".git"), { recursive: true });
-    const bytes = new TextEncoder().encode("systemEpoch: 58\n");
+    const bytes = new TextEncoder().encode("systemEpoch: 59\n");
     const commit = "c".repeat(40);
     const snapshot = canonicalSnapshotDigest([
       {
@@ -125,5 +126,70 @@ describe("acquireRootTemplateSnapshot", () => {
 
     expect(acquired).toMatchObject({ commit, snapshot });
     expect(clone).not.toHaveBeenCalled();
+  });
+
+  it("derives an unpushed branch checkpoint, excludes untracked files, and rejects tracked edits", async () => {
+    const statePath = await fsp.mkdtemp(path.join(os.tmpdir(), "root-template-local-discovery-"));
+    roots.push(statePath);
+    const checkout = path.join(statePath, "candidate-base");
+    await fsp.mkdir(path.join(checkout, ".git"), { recursive: true });
+    const bytes = new TextEncoder().encode("systemEpoch: 59\n");
+    const commit = "e".repeat(40);
+    const status = vi.fn(async () => ({
+      branch: "candidate",
+      commit,
+      dirty: true,
+      files: [{ path: "notes.txt", status: "untracked", staged: false, unstaged: true }],
+    }));
+    const git = {
+      status,
+      getCurrentCommit: vi.fn(async () => commit),
+      readCommitTree: vi.fn(async () => [
+        {
+          path: "meta/template.yml",
+          mode: 0o100644,
+          type: "blob",
+          oid: "f".repeat(40),
+          bytes,
+        },
+      ]),
+    } as unknown as GitClient;
+    const sink = {
+      put: vi.fn(async (value: Uint8Array) => ({
+        digest: sha256Hex(value),
+        size: value.byteLength,
+      })),
+    };
+
+    const discovered = await discoverAndSeedRootTemplateSnapshotFromCheckout({
+      statePath,
+      checkout,
+      url: "git+https://example.test/workspace-base.git",
+      git,
+      sink,
+    });
+
+    expect(discovered.pin).toMatchObject({
+      ref: "refs/heads/candidate",
+      commit,
+    });
+    expect(discovered.untrackedPaths).toEqual(["notes.txt"]);
+    expect(discovered.snapshot.snapshot).toBe(discovered.pin.snapshot);
+
+    status.mockResolvedValueOnce({
+      branch: "candidate",
+      commit,
+      dirty: true,
+      files: [{ path: "meta/template.yml", status: "modified", staged: false, unstaged: true }],
+    });
+    await expect(
+      discoverAndSeedRootTemplateSnapshotFromCheckout({
+        statePath: path.join(statePath, "other-state"),
+        checkout,
+        url: "git+https://example.test/workspace-base.git",
+        git,
+        sink,
+      })
+    ).rejects.toThrow("tracked worktree changes: meta/template.yml");
   });
 });

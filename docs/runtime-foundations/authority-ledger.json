@@ -12,9 +12,7 @@
         "owner": "packages/builtin/src/browser-data/BrowserVaultDO.ts"
       },
       "authorityPrincipals": [
-        "code",
-        "host",
-        "user"
+        "host"
       ],
       "sensitivity": "write",
       "tier": "gated",
@@ -56,9 +54,7 @@
         "owner": "packages/builtin/src/browser-data/BrowserVaultDO.ts"
       },
       "authorityPrincipals": [
-        "code",
-        "host",
-        "user"
+        "host"
       ],
       "sensitivity": "write",
       "tier": "gated",
@@ -100,9 +96,7 @@
         "owner": "packages/builtin/src/browser-data/BrowserVaultDO.ts"
       },
       "authorityPrincipals": [
-        "code",
-        "host",
-        "user"
+        "host"
       ],
       "sensitivity": "write",
       "tier": "gated",
@@ -144,9 +138,7 @@
         "owner": "packages/builtin/src/browser-data/BrowserVaultDO.ts"
       },
       "authorityPrincipals": [
-        "code",
-        "host",
-        "user"
+        "host"
       ],
       "sensitivity": "write",
       "tier": "gated",
@@ -188,9 +180,7 @@
         "owner": "packages/builtin/src/browser-data/BrowserVaultDO.ts"
       },
       "authorityPrincipals": [
-        "code",
-        "host",
-        "user"
+        "host"
       ],
       "sensitivity": "write",
       "tier": "gated",
@@ -232,9 +222,7 @@
         "owner": "packages/builtin/src/browser-data/BrowserVaultDO.ts"
       },
       "authorityPrincipals": [
-        "code",
-        "host",
-        "user"
+        "host"
       ],
       "sensitivity": "write",
       "tier": "gated",
@@ -276,9 +264,7 @@
         "owner": "packages/builtin/src/browser-data/BrowserVaultDO.ts"
       },
       "authorityPrincipals": [
-        "code",
-        "host",
-        "user"
+        "host"
       ],
       "sensitivity": "write",
       "tier": "gated",
@@ -320,9 +306,7 @@
         "owner": "packages/builtin/src/browser-data/BrowserVaultDO.ts"
       },
       "authorityPrincipals": [
-        "code",
-        "host",
-        "user"
+        "host"
       ],
       "sensitivity": "destructive",
       "tier": "gated",
@@ -364,9 +348,7 @@
         "owner": "packages/builtin/src/browser-data/BrowserVaultDO.ts"
       },
       "authorityPrincipals": [
-        "code",
-        "host",
-        "user"
+        "host"
       ],
       "sensitivity": "destructive",
       "tier": "gated",
@@ -408,9 +390,7 @@
         "owner": "packages/builtin/src/browser-data/BrowserVaultDO.ts"
       },
       "authorityPrincipals": [
-        "code",
-        "host",
-        "user"
+        "host"
       ],
       "sensitivity": "destructive",
       "tier": "gated",
@@ -452,9 +432,7 @@
         "owner": "packages/builtin/src/browser-data/BrowserVaultDO.ts"
       },
       "authorityPrincipals": [
-        "code",
-        "host",
-        "user"
+        "host"
       ],
       "sensitivity": "destructive",
       "tier": "gated",
@@ -496,9 +474,7 @@
         "owner": "packages/builtin/src/browser-data/BrowserVaultDO.ts"
       },
       "authorityPrincipals": [
-        "code",
-        "host",
-        "user"
+        "host"
       ],
       "sensitivity": "destructive",
       "tier": "gated",
@@ -540,9 +516,7 @@
         "owner": "packages/builtin/src/browser-data/BrowserVaultDO.ts"
       },
       "authorityPrincipals": [
-        "code",
-        "host",
-        "user"
+        "host"
       ],
       "sensitivity": "destructive",
       "tier": "gated",
@@ -584,12 +558,10 @@
         "owner": "packages/builtin/src/browser-data/BrowserVaultDO.ts"
       },
       "authorityPrincipals": [
-        "code",
-        "host",
-        "user"
+        "host"
       ],
       "sensitivity": "read",
-      "tier": "open",
+      "tier": "gated",
       "sessionAdmission": "family",
       "capability": "browser-data.read",
       "authenticatedFacts": [
@@ -612,8 +584,8 @@
       ],
       "r3aRequirement": "catalog-schema",
       "r3b": {
-        "review": "schema-authority",
-        "change": null
+        "review": "host-only-exact-origin-cookie-read",
+        "change": "The host-owned cookie projection and credential-session adapter may read one canonical origin after deriving the vault from the authenticated user/workspace. Workspace code has no receiver or host-service route to plaintext cookies."
       },
       "parityAssertion": "generated-census:direct-authority"
     },
@@ -628,53 +600,7 @@
         "owner": "packages/builtin/src/browser-data/BrowserVaultDO.ts"
       },
       "authorityPrincipals": [
-        "code",
-        "host",
-        "user"
-      ],
-      "sensitivity": "read",
-      "tier": "open",
-      "sessionAdmission": "family",
-      "capability": "browser-data.read",
-      "authenticatedFacts": [
-        "session",
-        "acting-user-relay",
-        "runtime-entity",
-        "exact-code-artifact",
-        "owner-chain",
-        "agent-binding",
-        "audience-bound-attestation"
-      ],
-      "currentOutcomes": {
-        "allowed": "schema-declared direct-RPC requirement satisfied",
-        "denied": "missing attested facts or requirement failure is EACCES"
-      },
-      "predicates": [
-        "live-owner-service-relationship",
-        "exact-resource-scope",
-        "next-dispatch-revocation"
-      ],
-      "r3aRequirement": "catalog-schema",
-      "r3b": {
-        "review": "schema-authority",
-        "change": null
-      },
-      "parityAssertion": "generated-census:direct-authority"
-    },
-    {
-      "id": "direct:packages/builtin/src/browser-data/BrowserVaultDO.ts:getCookieSnapshot",
-      "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/browser-data/BrowserVaultDO.ts",
-      "source": "vibestudio/internal",
-      "method": "getCookieSnapshot",
-      "resourceDerivation": {
-        "kind": "direct-target",
-        "owner": "packages/builtin/src/browser-data/BrowserVaultDO.ts"
-      },
-      "authorityPrincipals": [
-        "code",
-        "host",
-        "user"
+        "host"
       ],
       "sensitivity": "read",
       "tier": "open",
@@ -716,9 +642,7 @@
         "owner": "packages/builtin/src/browser-data/BrowserVaultDO.ts"
       },
       "authorityPrincipals": [
-        "code",
-        "host",
-        "user"
+        "host"
       ],
       "sensitivity": "read",
       "tier": "gated",
@@ -760,9 +684,49 @@
         "owner": "packages/builtin/src/browser-data/BrowserVaultDO.ts"
       },
       "authorityPrincipals": [
-        "code",
-        "host",
-        "user"
+        "host"
+      ],
+      "sensitivity": "read",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "capability": "browser-data.read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user-relay",
+        "runtime-entity",
+        "exact-code-artifact",
+        "owner-chain",
+        "agent-binding",
+        "audience-bound-attestation"
+      ],
+      "currentOutcomes": {
+        "allowed": "schema-declared direct-RPC requirement satisfied",
+        "denied": "missing attested facts or requirement failure is EACCES"
+      },
+      "predicates": [
+        "live-owner-service-relationship",
+        "exact-resource-scope",
+        "next-dispatch-revocation"
+      ],
+      "r3aRequirement": "catalog-schema",
+      "r3b": {
+        "review": "schema-authority",
+        "change": null
+      },
+      "parityAssertion": "generated-census:direct-authority"
+    },
+    {
+      "id": "direct:packages/builtin/src/browser-data/BrowserVaultDO.ts:getNeverSaveOriginsPage",
+      "rpcPlane": "workspace-do",
+      "owner": "packages/builtin/src/browser-data/BrowserVaultDO.ts",
+      "source": "vibestudio/internal",
+      "method": "getNeverSaveOriginsPage",
+      "resourceDerivation": {
+        "kind": "direct-target",
+        "owner": "packages/builtin/src/browser-data/BrowserVaultDO.ts"
+      },
+      "authorityPrincipals": [
+        "host"
       ],
       "sensitivity": "read",
       "tier": "open",
@@ -804,53 +768,7 @@
         "owner": "packages/builtin/src/browser-data/BrowserVaultDO.ts"
       },
       "authorityPrincipals": [
-        "code",
-        "host",
-        "user"
-      ],
-      "sensitivity": "read",
-      "tier": "gated",
-      "sessionAdmission": "family",
-      "capability": "browser-data.read",
-      "authenticatedFacts": [
-        "session",
-        "acting-user-relay",
-        "runtime-entity",
-        "exact-code-artifact",
-        "owner-chain",
-        "agent-binding",
-        "audience-bound-attestation"
-      ],
-      "currentOutcomes": {
-        "allowed": "schema-declared direct-RPC requirement satisfied",
-        "denied": "missing attested facts or requirement failure is EACCES"
-      },
-      "predicates": [
-        "live-owner-service-relationship",
-        "exact-resource-scope",
-        "next-dispatch-revocation"
-      ],
-      "r3aRequirement": "catalog-schema",
-      "r3b": {
-        "review": "schema-authority",
-        "change": null
-      },
-      "parityAssertion": "generated-census:direct-authority"
-    },
-    {
-      "id": "direct:packages/builtin/src/browser-data/BrowserVaultDO.ts:getPasswords",
-      "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/browser-data/BrowserVaultDO.ts",
-      "source": "vibestudio/internal",
-      "method": "getPasswords",
-      "resourceDerivation": {
-        "kind": "direct-target",
-        "owner": "packages/builtin/src/browser-data/BrowserVaultDO.ts"
-      },
-      "authorityPrincipals": [
-        "code",
-        "host",
-        "user"
+        "host"
       ],
       "sensitivity": "read",
       "tier": "gated",
@@ -892,12 +810,346 @@
         "owner": "packages/builtin/src/browser-data/BrowserVaultDO.ts"
       },
       "authorityPrincipals": [
-        "code",
-        "host",
-        "user"
+        "host"
       ],
       "sensitivity": "read",
       "tier": "open",
+      "sessionAdmission": "family",
+      "capability": "browser-data.read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user-relay",
+        "runtime-entity",
+        "exact-code-artifact",
+        "owner-chain",
+        "agent-binding",
+        "audience-bound-attestation"
+      ],
+      "currentOutcomes": {
+        "allowed": "schema-declared direct-RPC requirement satisfied",
+        "denied": "missing attested facts or requirement failure is EACCES"
+      },
+      "predicates": [
+        "live-owner-service-relationship",
+        "exact-resource-scope",
+        "next-dispatch-revocation"
+      ],
+      "r3aRequirement": "catalog-schema",
+      "r3b": {
+        "review": "schema-authority",
+        "change": null
+      },
+      "parityAssertion": "generated-census:direct-authority"
+    },
+    {
+      "id": "direct:packages/builtin/src/browser-data/BrowserVaultDO.ts:listCookieOrigins",
+      "rpcPlane": "workspace-do",
+      "owner": "packages/builtin/src/browser-data/BrowserVaultDO.ts",
+      "source": "vibestudio/internal",
+      "method": "listCookieOrigins",
+      "resourceDerivation": {
+        "kind": "direct-target",
+        "owner": "packages/builtin/src/browser-data/BrowserVaultDO.ts"
+      },
+      "authorityPrincipals": [
+        "host"
+      ],
+      "sensitivity": "read",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "capability": "browser-data.read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user-relay",
+        "runtime-entity",
+        "exact-code-artifact",
+        "owner-chain",
+        "agent-binding",
+        "audience-bound-attestation"
+      ],
+      "currentOutcomes": {
+        "allowed": "schema-declared direct-RPC requirement satisfied",
+        "denied": "missing attested facts or requirement failure is EACCES"
+      },
+      "predicates": [
+        "live-owner-service-relationship",
+        "exact-resource-scope",
+        "next-dispatch-revocation"
+      ],
+      "r3aRequirement": "catalog-schema",
+      "r3b": {
+        "review": "host-only-cookie-projection-inventory",
+        "change": "Only the Electron cookie projection can enumerate canonical origins. No workspace provider, panel, worker, or extension can use this inventory to walk protected cookie material."
+      },
+      "parityAssertion": "generated-census:direct-authority"
+    },
+    {
+      "id": "direct:packages/builtin/src/browser-data/BrowserVaultDO.ts:listCookieOriginsPage",
+      "rpcPlane": "workspace-do",
+      "owner": "packages/builtin/src/browser-data/BrowserVaultDO.ts",
+      "source": "vibestudio/internal",
+      "method": "listCookieOriginsPage",
+      "resourceDerivation": {
+        "kind": "direct-target",
+        "owner": "packages/builtin/src/browser-data/BrowserVaultDO.ts"
+      },
+      "authorityPrincipals": [
+        "host"
+      ],
+      "sensitivity": "read",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "capability": "browser-data.read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user-relay",
+        "runtime-entity",
+        "exact-code-artifact",
+        "owner-chain",
+        "agent-binding",
+        "audience-bound-attestation"
+      ],
+      "currentOutcomes": {
+        "allowed": "schema-declared direct-RPC requirement satisfied",
+        "denied": "missing attested facts or requirement failure is EACCES"
+      },
+      "predicates": [
+        "live-owner-service-relationship",
+        "exact-resource-scope",
+        "next-dispatch-revocation"
+      ],
+      "r3aRequirement": "catalog-schema",
+      "r3b": {
+        "review": "schema-authority",
+        "change": null
+      },
+      "parityAssertion": "generated-census:direct-authority"
+    },
+    {
+      "id": "direct:packages/builtin/src/browser-data/BrowserVaultDO.ts:listCookiesPage",
+      "rpcPlane": "workspace-do",
+      "owner": "packages/builtin/src/browser-data/BrowserVaultDO.ts",
+      "source": "vibestudio/internal",
+      "method": "listCookiesPage",
+      "resourceDerivation": {
+        "kind": "direct-target",
+        "owner": "packages/builtin/src/browser-data/BrowserVaultDO.ts"
+      },
+      "authorityPrincipals": [
+        "host"
+      ],
+      "sensitivity": "read",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "capability": "browser-data.read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user-relay",
+        "runtime-entity",
+        "exact-code-artifact",
+        "owner-chain",
+        "agent-binding",
+        "audience-bound-attestation"
+      ],
+      "currentOutcomes": {
+        "allowed": "schema-declared direct-RPC requirement satisfied",
+        "denied": "missing attested facts or requirement failure is EACCES"
+      },
+      "predicates": [
+        "live-owner-service-relationship",
+        "exact-resource-scope",
+        "next-dispatch-revocation"
+      ],
+      "r3aRequirement": "catalog-schema",
+      "r3b": {
+        "review": "schema-authority",
+        "change": null
+      },
+      "parityAssertion": "generated-census:direct-authority"
+    },
+    {
+      "id": "direct:packages/builtin/src/browser-data/BrowserVaultDO.ts:listFormFillValues",
+      "rpcPlane": "workspace-do",
+      "owner": "packages/builtin/src/browser-data/BrowserVaultDO.ts",
+      "source": "vibestudio/internal",
+      "method": "listFormFillValues",
+      "resourceDerivation": {
+        "kind": "direct-target",
+        "owner": "packages/builtin/src/browser-data/BrowserVaultDO.ts"
+      },
+      "authorityPrincipals": [
+        "host"
+      ],
+      "sensitivity": "read",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "capability": "browser-data.read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user-relay",
+        "runtime-entity",
+        "exact-code-artifact",
+        "owner-chain",
+        "agent-binding",
+        "audience-bound-attestation"
+      ],
+      "currentOutcomes": {
+        "allowed": "schema-declared direct-RPC requirement satisfied",
+        "denied": "missing attested facts or requirement failure is EACCES"
+      },
+      "predicates": [
+        "live-owner-service-relationship",
+        "exact-resource-scope",
+        "next-dispatch-revocation"
+      ],
+      "r3aRequirement": "catalog-schema",
+      "r3b": {
+        "review": "schema-authority",
+        "change": null
+      },
+      "parityAssertion": "generated-census:direct-authority"
+    },
+    {
+      "id": "direct:packages/builtin/src/browser-data/BrowserVaultDO.ts:listFormFillValuesPage",
+      "rpcPlane": "workspace-do",
+      "owner": "packages/builtin/src/browser-data/BrowserVaultDO.ts",
+      "source": "vibestudio/internal",
+      "method": "listFormFillValuesPage",
+      "resourceDerivation": {
+        "kind": "direct-target",
+        "owner": "packages/builtin/src/browser-data/BrowserVaultDO.ts"
+      },
+      "authorityPrincipals": [
+        "host"
+      ],
+      "sensitivity": "read",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "capability": "browser-data.read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user-relay",
+        "runtime-entity",
+        "exact-code-artifact",
+        "owner-chain",
+        "agent-binding",
+        "audience-bound-attestation"
+      ],
+      "currentOutcomes": {
+        "allowed": "schema-declared direct-RPC requirement satisfied",
+        "denied": "missing attested facts or requirement failure is EACCES"
+      },
+      "predicates": [
+        "live-owner-service-relationship",
+        "exact-resource-scope",
+        "next-dispatch-revocation"
+      ],
+      "r3aRequirement": "catalog-schema",
+      "r3b": {
+        "review": "schema-authority",
+        "change": null
+      },
+      "parityAssertion": "generated-census:direct-authority"
+    },
+    {
+      "id": "direct:packages/builtin/src/browser-data/BrowserVaultDO.ts:listPasswordsPage",
+      "rpcPlane": "workspace-do",
+      "owner": "packages/builtin/src/browser-data/BrowserVaultDO.ts",
+      "source": "vibestudio/internal",
+      "method": "listPasswordsPage",
+      "resourceDerivation": {
+        "kind": "direct-target",
+        "owner": "packages/builtin/src/browser-data/BrowserVaultDO.ts"
+      },
+      "authorityPrincipals": [
+        "host"
+      ],
+      "sensitivity": "read",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "capability": "browser-data.read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user-relay",
+        "runtime-entity",
+        "exact-code-artifact",
+        "owner-chain",
+        "agent-binding",
+        "audience-bound-attestation"
+      ],
+      "currentOutcomes": {
+        "allowed": "schema-declared direct-RPC requirement satisfied",
+        "denied": "missing attested facts or requirement failure is EACCES"
+      },
+      "predicates": [
+        "live-owner-service-relationship",
+        "exact-resource-scope",
+        "next-dispatch-revocation"
+      ],
+      "r3aRequirement": "catalog-schema",
+      "r3b": {
+        "review": "schema-authority",
+        "change": null
+      },
+      "parityAssertion": "generated-census:direct-authority"
+    },
+    {
+      "id": "direct:packages/builtin/src/browser-data/BrowserVaultDO.ts:listPasswordSummaries",
+      "rpcPlane": "workspace-do",
+      "owner": "packages/builtin/src/browser-data/BrowserVaultDO.ts",
+      "source": "vibestudio/internal",
+      "method": "listPasswordSummaries",
+      "resourceDerivation": {
+        "kind": "direct-target",
+        "owner": "packages/builtin/src/browser-data/BrowserVaultDO.ts"
+      },
+      "authorityPrincipals": [
+        "host"
+      ],
+      "sensitivity": "read",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "capability": "browser-data.read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user-relay",
+        "runtime-entity",
+        "exact-code-artifact",
+        "owner-chain",
+        "agent-binding",
+        "audience-bound-attestation"
+      ],
+      "currentOutcomes": {
+        "allowed": "schema-declared direct-RPC requirement satisfied",
+        "denied": "missing attested facts or requirement failure is EACCES"
+      },
+      "predicates": [
+        "live-owner-service-relationship",
+        "exact-resource-scope",
+        "next-dispatch-revocation"
+      ],
+      "r3aRequirement": "catalog-schema",
+      "r3b": {
+        "review": "host-only-protected-password-inventory",
+        "change": "The vault receiver now admits only host principals. Workspace code cannot enumerate even password metadata; Electron uses this method only behind its host-owned credential UI and origin-bound autofill controller."
+      },
+      "parityAssertion": "generated-census:direct-authority"
+    },
+    {
+      "id": "direct:packages/builtin/src/browser-data/BrowserVaultDO.ts:listPasswordSummariesPage",
+      "rpcPlane": "workspace-do",
+      "owner": "packages/builtin/src/browser-data/BrowserVaultDO.ts",
+      "source": "vibestudio/internal",
+      "method": "listPasswordSummariesPage",
+      "resourceDerivation": {
+        "kind": "direct-target",
+        "owner": "packages/builtin/src/browser-data/BrowserVaultDO.ts"
+      },
+      "authorityPrincipals": [
+        "host"
+      ],
+      "sensitivity": "read",
+      "tier": "gated",
       "sessionAdmission": "family",
       "capability": "browser-data.read",
       "authenticatedFacts": [
@@ -936,9 +1188,7 @@
         "owner": "packages/builtin/src/browser-data/BrowserVaultDO.ts"
       },
       "authorityPrincipals": [
-        "code",
-        "host",
-        "user"
+        "host"
       ],
       "sensitivity": "write",
       "tier": "gated",
@@ -980,9 +1230,7 @@
         "owner": "packages/builtin/src/browser-data/BrowserVaultDO.ts"
       },
       "authorityPrincipals": [
-        "code",
-        "host",
-        "user"
+        "host"
       ],
       "sensitivity": "destructive",
       "tier": "gated",
@@ -1024,9 +1272,7 @@
         "owner": "packages/builtin/src/browser-data/BrowserVaultDO.ts"
       },
       "authorityPrincipals": [
-        "code",
-        "host",
-        "user"
+        "host"
       ],
       "sensitivity": "write",
       "tier": "gated",
@@ -1068,9 +1314,7 @@
         "owner": "packages/builtin/src/browser-data/BrowserVaultDO.ts"
       },
       "authorityPrincipals": [
-        "code",
-        "host",
-        "user"
+        "host"
       ],
       "sensitivity": "write",
       "tier": "gated",
@@ -1112,9 +1356,7 @@
         "owner": "packages/builtin/src/browser-data/BrowserVaultDO.ts"
       },
       "authorityPrincipals": [
-        "code",
-        "host",
-        "user"
+        "host"
       ],
       "sensitivity": "write",
       "tier": "gated",
@@ -7432,23 +7674,22 @@
       "parityAssertion": "generated-census:host-authority"
     },
     {
-      "id": "host:browserEnvironment.flushCookieProjection",
+      "id": "host:browserEnvironment.cancelSensitiveImport",
       "rpcPlane": "host-service",
       "owner": "browserEnvironment",
-      "method": "flushCookieProjection",
+      "method": "cancelSensitiveImport",
       "tier": "open",
       "sessionAdmission": "family",
       "residency": "native-effect",
-      "mechanismFamily": "browserEnvironment.control",
-      "reviewRationale": "Host maintenance proceeds directly; installed code requires the method's gated browser-environment capability.",
+      "mechanismFamily": "browserEnvironment.retire",
+      "reviewRationale": "Records durable cancellation and stops the active host import reader.",
       "resourceDerivation": {
         "kind": "literal",
-        "key": "service:browserEnvironment.flushCookieProjection"
+        "key": "service:browserEnvironment.cancelSensitiveImport"
       },
       "authorityPrincipals": [
-        "code",
         "host",
-        "session"
+        "code"
       ],
       "sensitivity": "write",
       "authenticatedFacts": [
@@ -7469,142 +7710,12 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"service:browserEnvironment.flushCookieProjection\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"service:browserEnvironment.flushCookieProjection\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"service:browserEnvironment.flushCookieProjection\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
+      "r3aRequirement": "anyOf(capability(host,service:browserEnvironment.cancelSensitiveImport),allOf(capability(code,service:browserEnvironment.cancelSensitiveImport),workspace-member))",
       "r3b": {
-        "review": "unchanged-parity",
-        "change": null
+        "review": "reviewed-provider-sensitive-import-retirement",
+        "change": "Lets only the exact installed and reviewed browser-data provider durably cancel its selected operation. The host stops the active native reader and returns only aggregate terminal status; cancellation cannot address or reveal protected records."
       },
-      "capability": "service:browserEnvironment.flushCookieProjection",
-      "parityAssertion": "generated-census:host-authority"
-    },
-    {
-      "id": "host:browserEnvironment.flushCookieProjection#capability:service:browserEnvironment.flushCookieProjection",
-      "rpcPlane": "host-service",
-      "owner": "browserEnvironment",
-      "method": "flushCookieProjection",
-      "tier": "gated",
-      "sessionAdmission": "family",
-      "residency": "native-effect",
-      "mechanismFamily": "browserEnvironment.control",
-      "reviewRationale": "Host maintenance proceeds directly; installed code requires the method's gated browser-environment capability.",
-      "capability": "service:browserEnvironment.flushCookieProjection",
-      "resourceDerivation": {
-        "kind": "prepared",
-        "resolver": "browserEnvironment.broker.flushCookieProjection"
-      },
-      "authorityPrincipals": [
-        "code"
-      ],
-      "sensitivity": "write",
-      "authenticatedFacts": [
-        "session",
-        "acting-user",
-        "runtime-entity",
-        "exact-code-artifact-when-code-originated",
-        "schema-owned-authority-preparation"
-      ],
-      "currentOutcomes": {
-        "allowed": "prepared authority leaf selected and satisfied",
-        "denied": "missing prepared authority leaf fails before handler entry"
-      },
-      "predicates": [
-        "live-session",
-        "exact-prepared-resource",
-        "registered-preparer"
-      ],
-      "r3aRequirement": "{\"kind\":\"selected\",\"principals\":[\"code\"]}",
-      "r3b": {
-        "review": "schema-owned-prepared-leaf",
-        "change": null
-      },
-      "parityAssertion": "generated-census:host-authority"
-    },
-    {
-      "id": "host:browserEnvironment.getCookieProjectionDiagnostics",
-      "rpcPlane": "host-service",
-      "owner": "browserEnvironment",
-      "method": "getCookieProjectionDiagnostics",
-      "tier": "open",
-      "sessionAdmission": "family",
-      "residency": "native-effect",
-      "mechanismFamily": "browserEnvironment.read",
-      "reviewRationale": "Host diagnostics proceed directly; installed code requires the method's gated browser-environment capability.",
-      "resourceDerivation": {
-        "kind": "literal",
-        "key": "service:browserEnvironment.getCookieProjectionDiagnostics"
-      },
-      "authorityPrincipals": [
-        "code",
-        "host",
-        "session"
-      ],
-      "sensitivity": "read",
-      "authenticatedFacts": [
-        "session",
-        "acting-user",
-        "device",
-        "runtime-entity",
-        "exact-code-artifact-when-code-originated",
-        "workspace-membership",
-        "agent-binding-when-agent-originated"
-      ],
-      "currentOutcomes": {
-        "allowed": "declared caller scenarios retain their existing allow/approval flow",
-        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
-      },
-      "predicates": [
-        "live-session",
-        "live-workspace-membership",
-        "exact-resource-scope"
-      ],
-      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"service:browserEnvironment.getCookieProjectionDiagnostics\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"service:browserEnvironment.getCookieProjectionDiagnostics\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"service:browserEnvironment.getCookieProjectionDiagnostics\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
-      "r3b": {
-        "review": "unchanged-parity",
-        "change": null
-      },
-      "capability": "service:browserEnvironment.getCookieProjectionDiagnostics",
-      "parityAssertion": "generated-census:host-authority"
-    },
-    {
-      "id": "host:browserEnvironment.getCookieProjectionDiagnostics#capability:service:browserEnvironment.getCookieProjectionDiagnostics",
-      "rpcPlane": "host-service",
-      "owner": "browserEnvironment",
-      "method": "getCookieProjectionDiagnostics",
-      "tier": "gated",
-      "sessionAdmission": "family",
-      "residency": "native-effect",
-      "mechanismFamily": "browserEnvironment.read",
-      "reviewRationale": "Host diagnostics proceed directly; installed code requires the method's gated browser-environment capability.",
-      "capability": "service:browserEnvironment.getCookieProjectionDiagnostics",
-      "resourceDerivation": {
-        "kind": "prepared",
-        "resolver": "browserEnvironment.broker.getCookieProjectionDiagnostics"
-      },
-      "authorityPrincipals": [
-        "code"
-      ],
-      "sensitivity": "read",
-      "authenticatedFacts": [
-        "session",
-        "acting-user",
-        "runtime-entity",
-        "exact-code-artifact-when-code-originated",
-        "schema-owned-authority-preparation"
-      ],
-      "currentOutcomes": {
-        "allowed": "prepared authority leaf selected and satisfied",
-        "denied": "missing prepared authority leaf fails before handler entry"
-      },
-      "predicates": [
-        "live-session",
-        "exact-prepared-resource",
-        "registered-preparer"
-      ],
-      "r3aRequirement": "{\"kind\":\"selected\",\"principals\":[\"code\"]}",
-      "r3b": {
-        "review": "schema-owned-prepared-leaf",
-        "change": null
-      },
+      "capability": "service:browserEnvironment.cancelSensitiveImport",
       "parityAssertion": "generated-census:host-authority"
     },
     {
@@ -8048,6 +8159,51 @@
       "parityAssertion": "generated-census:host-authority"
     },
     {
+      "id": "host:browserEnvironment.observeSensitiveImport",
+      "rpcPlane": "host-service",
+      "owner": "browserEnvironment",
+      "method": "observeSensitiveImport",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "browserEnvironment.read",
+      "reviewRationale": "Reads aggregate progress from the durable host import ledger.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:browserEnvironment.observeSensitiveImport"
+      },
+      "authorityPrincipals": [
+        "host",
+        "code"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:browserEnvironment.observeSensitiveImport),allOf(capability(code,service:browserEnvironment.observeSensitiveImport),workspace-member))",
+      "r3b": {
+        "review": "reviewed-provider-sensitive-import-recovery-read",
+        "change": "Lets only the exact installed and reviewed browser-data provider observe bounded aggregate progress or a terminal receipt for its caller-minted operation ID. It exposes neither source records nor vault contents and adds no independent prompt beyond the provider-owned workflow."
+      },
+      "capability": "service:browserEnvironment.observeSensitiveImport",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
       "id": "host:browserEnvironment.openDownload",
       "rpcPlane": "host-service",
       "owner": "browserEnvironment",
@@ -8309,6 +8465,51 @@
         "review": "schema-owned-prepared-leaf",
         "change": null
       },
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:browserEnvironment.previewSensitiveImport",
+      "rpcPlane": "host-service",
+      "owner": "browserEnvironment",
+      "method": "previewSensitiveImport",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "browserEnvironment.control",
+      "reviewRationale": "Returns aggregate review counts for protected browser categories without returning records or values.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:browserEnvironment.previewSensitiveImport"
+      },
+      "authorityPrincipals": [
+        "host",
+        "code"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:browserEnvironment.previewSensitiveImport),allOf(capability(code,service:browserEnvironment.previewSensitiveImport),workspace-member))",
+      "r3b": {
+        "review": "reviewed-provider-aggregate-sensitive-import-preview",
+        "change": "Lets only the exact installed and reviewed browser-data provider request aggregate counts for protected import categories. Native parsing and protected rows remain inside Electron, no values or records cross the service, and the provider's public review flow owns the user-facing policy."
+      },
+      "capability": "service:browserEnvironment.previewSensitiveImport",
       "parityAssertion": "generated-census:host-authority"
     },
     {
@@ -8576,6 +8777,51 @@
       "parityAssertion": "generated-census:host-authority"
     },
     {
+      "id": "host:browserEnvironment.startSensitiveImport",
+      "rpcPlane": "host-service",
+      "owner": "browserEnvironment",
+      "method": "startSensitiveImport",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "browserEnvironment.create",
+      "reviewRationale": "Runs credential-bearing browser import entirely in the trusted host and returns aggregate counts only; gated by authority principals.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:browserEnvironment.startSensitiveImport"
+      },
+      "authorityPrincipals": [
+        "host",
+        "code"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:browserEnvironment.startSensitiveImport),allOf(capability(code,service:browserEnvironment.startSensitiveImport),workspace-member))",
+      "r3b": {
+        "review": "sealed-sensitive-browser-import",
+        "change": "The reviewed Base broker selects an opaque source and exact sensitive categories, while Electron reads and stores plaintext entirely inside the host. The operation is idempotent by caller-minted operation ID and returns aggregate counts only; the ordinary frame channel rejects sensitive categories."
+      },
+      "capability": "service:browserEnvironment.startSensitiveImport",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
       "id": "host:browserPermissions.request",
       "rpcPlane": "host-service",
       "owner": "browserPermissions",
@@ -8705,6 +8951,1502 @@
         "change": "Replaces an unusable host-only read with a verified-user read of that same user's exact-origin browser grants in the current workspace environment. Code and anonymous principals remain excluded."
       },
       "capability": "service:browserPermissions.snapshot",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:browserPrivacyPresentation.open",
+      "rpcPlane": "host-service",
+      "owner": "browserPrivacyPresentation",
+      "method": "open",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "browserPrivacyPresentation.open",
+      "reviewRationale": "Routes one reviewed provider intent to the exact host-verified shell that owns the initiating panel; the route carries no protected data and has no independent user gate.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:browserPrivacyPresentation.open"
+      },
+      "authorityPrincipals": [
+        "code"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "allOf(capability(code,service:browserPrivacyPresentation.open),workspace-member)",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:browserPrivacyPresentation.open",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:browserVaultNative.addCookiesBatch",
+      "rpcPlane": "host-service",
+      "owner": "browserVaultNative",
+      "method": "addCookiesBatch",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "browserVaultNative.host",
+      "reviewRationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:browserVaultNative.addCookiesBatch"
+      },
+      "authorityPrincipals": [
+        "host"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "capability(host,service:browserVaultNative.addCookiesBatch)",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:browserVaultNative.addCookiesBatch",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:browserVaultNative.addFormFillBatch",
+      "rpcPlane": "host-service",
+      "owner": "browserVaultNative",
+      "method": "addFormFillBatch",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "browserVaultNative.host",
+      "reviewRationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:browserVaultNative.addFormFillBatch"
+      },
+      "authorityPrincipals": [
+        "host"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "capability(host,service:browserVaultNative.addFormFillBatch)",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:browserVaultNative.addFormFillBatch",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:browserVaultNative.addFormFillValue",
+      "rpcPlane": "host-service",
+      "owner": "browserVaultNative",
+      "method": "addFormFillValue",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "browserVaultNative.host",
+      "reviewRationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:browserVaultNative.addFormFillValue"
+      },
+      "authorityPrincipals": [
+        "host"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "capability(host,service:browserVaultNative.addFormFillValue)",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:browserVaultNative.addFormFillValue",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:browserVaultNative.addNeverSave",
+      "rpcPlane": "host-service",
+      "owner": "browserVaultNative",
+      "method": "addNeverSave",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "browserVaultNative.host",
+      "reviewRationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:browserVaultNative.addNeverSave"
+      },
+      "authorityPrincipals": [
+        "host"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "capability(host,service:browserVaultNative.addNeverSave)",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:browserVaultNative.addNeverSave",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:browserVaultNative.addPassword",
+      "rpcPlane": "host-service",
+      "owner": "browserVaultNative",
+      "method": "addPassword",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "browserVaultNative.host",
+      "reviewRationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:browserVaultNative.addPassword"
+      },
+      "authorityPrincipals": [
+        "host"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "capability(host,service:browserVaultNative.addPassword)",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:browserVaultNative.addPassword",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:browserVaultNative.addPasswordsBatch",
+      "rpcPlane": "host-service",
+      "owner": "browserVaultNative",
+      "method": "addPasswordsBatch",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "browserVaultNative.host",
+      "reviewRationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:browserVaultNative.addPasswordsBatch"
+      },
+      "authorityPrincipals": [
+        "host"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "capability(host,service:browserVaultNative.addPasswordsBatch)",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:browserVaultNative.addPasswordsBatch",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:browserVaultNative.applyCookieMutations",
+      "rpcPlane": "host-service",
+      "owner": "browserVaultNative",
+      "method": "applyCookieMutations",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "browserVaultNative.host",
+      "reviewRationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:browserVaultNative.applyCookieMutations"
+      },
+      "authorityPrincipals": [
+        "host"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "capability(host,service:browserVaultNative.applyCookieMutations)",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:browserVaultNative.applyCookieMutations",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:browserVaultNative.clearAllCookies",
+      "rpcPlane": "host-service",
+      "owner": "browserVaultNative",
+      "method": "clearAllCookies",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "browserVaultNative.host",
+      "reviewRationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:browserVaultNative.clearAllCookies"
+      },
+      "authorityPrincipals": [
+        "host"
+      ],
+      "sensitivity": "destructive",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "capability(host,service:browserVaultNative.clearAllCookies)",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:browserVaultNative.clearAllCookies",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:browserVaultNative.clearCookiesForOrigin",
+      "rpcPlane": "host-service",
+      "owner": "browserVaultNative",
+      "method": "clearCookiesForOrigin",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "browserVaultNative.host",
+      "reviewRationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:browserVaultNative.clearCookiesForOrigin"
+      },
+      "authorityPrincipals": [
+        "host"
+      ],
+      "sensitivity": "destructive",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "capability(host,service:browserVaultNative.clearCookiesForOrigin)",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:browserVaultNative.clearCookiesForOrigin",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:browserVaultNative.clearFormFillValues",
+      "rpcPlane": "host-service",
+      "owner": "browserVaultNative",
+      "method": "clearFormFillValues",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "browserVaultNative.host",
+      "reviewRationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:browserVaultNative.clearFormFillValues"
+      },
+      "authorityPrincipals": [
+        "host"
+      ],
+      "sensitivity": "destructive",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "capability(host,service:browserVaultNative.clearFormFillValues)",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:browserVaultNative.clearFormFillValues",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:browserVaultNative.deleteFormFillValue",
+      "rpcPlane": "host-service",
+      "owner": "browserVaultNative",
+      "method": "deleteFormFillValue",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "browserVaultNative.host",
+      "reviewRationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:browserVaultNative.deleteFormFillValue"
+      },
+      "authorityPrincipals": [
+        "host"
+      ],
+      "sensitivity": "destructive",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "capability(host,service:browserVaultNative.deleteFormFillValue)",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:browserVaultNative.deleteFormFillValue",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:browserVaultNative.deletePassword",
+      "rpcPlane": "host-service",
+      "owner": "browserVaultNative",
+      "method": "deletePassword",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "browserVaultNative.host",
+      "reviewRationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:browserVaultNative.deletePassword"
+      },
+      "authorityPrincipals": [
+        "host"
+      ],
+      "sensitivity": "destructive",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "capability(host,service:browserVaultNative.deletePassword)",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:browserVaultNative.deletePassword",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:browserVaultNative.endBrowserSession",
+      "rpcPlane": "host-service",
+      "owner": "browserVaultNative",
+      "method": "endBrowserSession",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "browserVaultNative.host",
+      "reviewRationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:browserVaultNative.endBrowserSession"
+      },
+      "authorityPrincipals": [
+        "host"
+      ],
+      "sensitivity": "destructive",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "capability(host,service:browserVaultNative.endBrowserSession)",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:browserVaultNative.endBrowserSession",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:browserVaultNative.getCookiesForOrigin",
+      "rpcPlane": "host-service",
+      "owner": "browserVaultNative",
+      "method": "getCookiesForOrigin",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "browserVaultNative.host",
+      "reviewRationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:browserVaultNative.getCookiesForOrigin"
+      },
+      "authorityPrincipals": [
+        "host"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "capability(host,service:browserVaultNative.getCookiesForOrigin)",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:browserVaultNative.getCookiesForOrigin",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:browserVaultNative.getCookieSiteSummary",
+      "rpcPlane": "host-service",
+      "owner": "browserVaultNative",
+      "method": "getCookieSiteSummary",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "browserVaultNative.host",
+      "reviewRationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:browserVaultNative.getCookieSiteSummary"
+      },
+      "authorityPrincipals": [
+        "host"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "capability(host,service:browserVaultNative.getCookieSiteSummary)",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:browserVaultNative.getCookieSiteSummary",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:browserVaultNative.getFormFillSuggestions",
+      "rpcPlane": "host-service",
+      "owner": "browserVaultNative",
+      "method": "getFormFillSuggestions",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "browserVaultNative.host",
+      "reviewRationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:browserVaultNative.getFormFillSuggestions"
+      },
+      "authorityPrincipals": [
+        "host"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "capability(host,service:browserVaultNative.getFormFillSuggestions)",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:browserVaultNative.getFormFillSuggestions",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:browserVaultNative.getNeverSaveOrigins",
+      "rpcPlane": "host-service",
+      "owner": "browserVaultNative",
+      "method": "getNeverSaveOrigins",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "browserVaultNative.host",
+      "reviewRationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:browserVaultNative.getNeverSaveOrigins"
+      },
+      "authorityPrincipals": [
+        "host"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "capability(host,service:browserVaultNative.getNeverSaveOrigins)",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:browserVaultNative.getNeverSaveOrigins",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:browserVaultNative.getNeverSaveOriginsPage",
+      "rpcPlane": "host-service",
+      "owner": "browserVaultNative",
+      "method": "getNeverSaveOriginsPage",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "browserVaultNative.host",
+      "reviewRationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:browserVaultNative.getNeverSaveOriginsPage"
+      },
+      "authorityPrincipals": [
+        "host"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "capability(host,service:browserVaultNative.getNeverSaveOriginsPage)",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:browserVaultNative.getNeverSaveOriginsPage",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:browserVaultNative.getPasswordForSite",
+      "rpcPlane": "host-service",
+      "owner": "browserVaultNative",
+      "method": "getPasswordForSite",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "browserVaultNative.host",
+      "reviewRationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:browserVaultNative.getPasswordForSite"
+      },
+      "authorityPrincipals": [
+        "host"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "capability(host,service:browserVaultNative.getPasswordForSite)",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:browserVaultNative.getPasswordForSite",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:browserVaultNative.isNeverSave",
+      "rpcPlane": "host-service",
+      "owner": "browserVaultNative",
+      "method": "isNeverSave",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "browserVaultNative.host",
+      "reviewRationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:browserVaultNative.isNeverSave"
+      },
+      "authorityPrincipals": [
+        "host"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "capability(host,service:browserVaultNative.isNeverSave)",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:browserVaultNative.isNeverSave",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:browserVaultNative.listCookieOrigins",
+      "rpcPlane": "host-service",
+      "owner": "browserVaultNative",
+      "method": "listCookieOrigins",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "browserVaultNative.host",
+      "reviewRationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:browserVaultNative.listCookieOrigins"
+      },
+      "authorityPrincipals": [
+        "host"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "capability(host,service:browserVaultNative.listCookieOrigins)",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:browserVaultNative.listCookieOrigins",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:browserVaultNative.listCookieOriginsPage",
+      "rpcPlane": "host-service",
+      "owner": "browserVaultNative",
+      "method": "listCookieOriginsPage",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "browserVaultNative.host",
+      "reviewRationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:browserVaultNative.listCookieOriginsPage"
+      },
+      "authorityPrincipals": [
+        "host"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "capability(host,service:browserVaultNative.listCookieOriginsPage)",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:browserVaultNative.listCookieOriginsPage",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:browserVaultNative.listCookiesPage",
+      "rpcPlane": "host-service",
+      "owner": "browserVaultNative",
+      "method": "listCookiesPage",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "browserVaultNative.host",
+      "reviewRationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:browserVaultNative.listCookiesPage"
+      },
+      "authorityPrincipals": [
+        "host"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "capability(host,service:browserVaultNative.listCookiesPage)",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:browserVaultNative.listCookiesPage",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:browserVaultNative.listFormFillValues",
+      "rpcPlane": "host-service",
+      "owner": "browserVaultNative",
+      "method": "listFormFillValues",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "browserVaultNative.host",
+      "reviewRationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:browserVaultNative.listFormFillValues"
+      },
+      "authorityPrincipals": [
+        "host"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "capability(host,service:browserVaultNative.listFormFillValues)",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:browserVaultNative.listFormFillValues",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:browserVaultNative.listFormFillValuesPage",
+      "rpcPlane": "host-service",
+      "owner": "browserVaultNative",
+      "method": "listFormFillValuesPage",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "browserVaultNative.host",
+      "reviewRationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:browserVaultNative.listFormFillValuesPage"
+      },
+      "authorityPrincipals": [
+        "host"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "capability(host,service:browserVaultNative.listFormFillValuesPage)",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:browserVaultNative.listFormFillValuesPage",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:browserVaultNative.listPasswordsPage",
+      "rpcPlane": "host-service",
+      "owner": "browserVaultNative",
+      "method": "listPasswordsPage",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "browserVaultNative.host",
+      "reviewRationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:browserVaultNative.listPasswordsPage"
+      },
+      "authorityPrincipals": [
+        "host"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "capability(host,service:browserVaultNative.listPasswordsPage)",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:browserVaultNative.listPasswordsPage",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:browserVaultNative.listPasswordSummaries",
+      "rpcPlane": "host-service",
+      "owner": "browserVaultNative",
+      "method": "listPasswordSummaries",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "browserVaultNative.host",
+      "reviewRationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:browserVaultNative.listPasswordSummaries"
+      },
+      "authorityPrincipals": [
+        "host"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "capability(host,service:browserVaultNative.listPasswordSummaries)",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:browserVaultNative.listPasswordSummaries",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:browserVaultNative.listPasswordSummariesPage",
+      "rpcPlane": "host-service",
+      "owner": "browserVaultNative",
+      "method": "listPasswordSummariesPage",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "browserVaultNative.host",
+      "reviewRationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:browserVaultNative.listPasswordSummariesPage"
+      },
+      "authorityPrincipals": [
+        "host"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "capability(host,service:browserVaultNative.listPasswordSummariesPage)",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:browserVaultNative.listPasswordSummariesPage",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:browserVaultNative.markFormFillValueUsed",
+      "rpcPlane": "host-service",
+      "owner": "browserVaultNative",
+      "method": "markFormFillValueUsed",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "browserVaultNative.host",
+      "reviewRationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:browserVaultNative.markFormFillValueUsed"
+      },
+      "authorityPrincipals": [
+        "host"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "capability(host,service:browserVaultNative.markFormFillValueUsed)",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:browserVaultNative.markFormFillValueUsed",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:browserVaultNative.removeNeverSave",
+      "rpcPlane": "host-service",
+      "owner": "browserVaultNative",
+      "method": "removeNeverSave",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "browserVaultNative.host",
+      "reviewRationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:browserVaultNative.removeNeverSave"
+      },
+      "authorityPrincipals": [
+        "host"
+      ],
+      "sensitivity": "destructive",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "capability(host,service:browserVaultNative.removeNeverSave)",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:browserVaultNative.removeNeverSave",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:browserVaultNative.updateFormFillValue",
+      "rpcPlane": "host-service",
+      "owner": "browserVaultNative",
+      "method": "updateFormFillValue",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "browserVaultNative.host",
+      "reviewRationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:browserVaultNative.updateFormFillValue"
+      },
+      "authorityPrincipals": [
+        "host"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "capability(host,service:browserVaultNative.updateFormFillValue)",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:browserVaultNative.updateFormFillValue",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:browserVaultNative.updateLastUsed",
+      "rpcPlane": "host-service",
+      "owner": "browserVaultNative",
+      "method": "updateLastUsed",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "browserVaultNative.host",
+      "reviewRationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:browserVaultNative.updateLastUsed"
+      },
+      "authorityPrincipals": [
+        "host"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "capability(host,service:browserVaultNative.updateLastUsed)",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:browserVaultNative.updateLastUsed",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:browserVaultNative.updatePassword",
+      "rpcPlane": "host-service",
+      "owner": "browserVaultNative",
+      "method": "updatePassword",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "browserVaultNative.host",
+      "reviewRationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:browserVaultNative.updatePassword"
+      },
+      "authorityPrincipals": [
+        "host"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "capability(host,service:browserVaultNative.updatePassword)",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:browserVaultNative.updatePassword",
       "parityAssertion": "generated-census:host-authority"
     },
     {
@@ -9441,96 +11183,6 @@
         "change": null
       },
       "capability": "service:build.recompute",
-      "parityAssertion": "generated-census:host-authority"
-    },
-    {
-      "id": "host:connectedClientTransport.invoke",
-      "rpcPlane": "host-service",
-      "owner": "connectedClientTransport",
-      "method": "invoke",
-      "tier": "gated",
-      "sessionAdmission": "family",
-      "residency": "transport",
-      "mechanismFamily": "connectedClientTransport.control",
-      "reviewRationale": "Carries one authenticated RPC frame to an exact live client endpoint on the caller's account; endpoint policy remains at the receiving client.",
-      "resourceDerivation": {
-        "kind": "literal",
-        "key": "service:connectedClientTransport.invoke"
-      },
-      "authorityPrincipals": [
-        "code",
-        "host"
-      ],
-      "sensitivity": "write",
-      "authenticatedFacts": [
-        "session",
-        "acting-user",
-        "device",
-        "runtime-entity",
-        "exact-code-artifact-when-code-originated",
-        "workspace-membership",
-        "agent-binding-when-agent-originated"
-      ],
-      "currentOutcomes": {
-        "allowed": "declared caller scenarios retain their existing allow/approval flow",
-        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
-      },
-      "predicates": [
-        "live-session",
-        "live-workspace-membership",
-        "exact-resource-scope"
-      ],
-      "r3aRequirement": "anyOf(capability(host,service:connectedClientTransport.invoke),allOf(capability(code,service:connectedClientTransport.invoke),workspace-member))",
-      "r3b": {
-        "review": "unchanged-parity",
-        "change": null
-      },
-      "capability": "service:connectedClientTransport.invoke",
-      "parityAssertion": "generated-census:host-authority"
-    },
-    {
-      "id": "host:connectedClientTransport.list",
-      "rpcPlane": "host-service",
-      "owner": "connectedClientTransport",
-      "method": "list",
-      "tier": "gated",
-      "sessionAdmission": "family",
-      "residency": "transport",
-      "mechanismFamily": "connectedClientTransport.read",
-      "reviewRationale": "Enumerates only live transport endpoints bound to the authenticated caller's account.",
-      "resourceDerivation": {
-        "kind": "literal",
-        "key": "service:connectedClientTransport.list"
-      },
-      "authorityPrincipals": [
-        "code",
-        "host"
-      ],
-      "sensitivity": "read",
-      "authenticatedFacts": [
-        "session",
-        "acting-user",
-        "device",
-        "runtime-entity",
-        "exact-code-artifact-when-code-originated",
-        "workspace-membership",
-        "agent-binding-when-agent-originated"
-      ],
-      "currentOutcomes": {
-        "allowed": "declared caller scenarios retain their existing allow/approval flow",
-        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
-      },
-      "predicates": [
-        "live-session",
-        "live-workspace-membership",
-        "exact-resource-scope"
-      ],
-      "r3aRequirement": "anyOf(capability(host,service:connectedClientTransport.list),allOf(capability(code,service:connectedClientTransport.list),workspace-member))",
-      "r3b": {
-        "review": "unchanged-parity",
-        "change": null
-      },
-      "capability": "service:connectedClientTransport.list",
       "parityAssertion": "generated-census:host-authority"
     },
     {
@@ -11214,6 +12866,56 @@
       "parityAssertion": "generated-census:host-authority"
     },
     {
+      "id": "host:developmentNative.applyTemplateExchange",
+      "rpcPlane": "host-service",
+      "owner": "developmentNative",
+      "method": "applyTemplateExchange",
+      "tier": "gated",
+      "sessionAdmission": "codeOnly",
+      "residency": "native-effect",
+      "mechanismFamily": "development-native.template-exchange",
+      "reviewRationale": "Applies only a prior exact plan and returns external and semantic receipts",
+      "resourceDerivation": {
+        "kind": "argument",
+        "index": 0,
+        "path": [
+          "checkout"
+        ],
+        "prefix": "template-checkout:"
+      },
+      "authorityPrincipals": [
+        "code",
+        "host",
+        "session"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"development.native.execute\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"development.native.execute\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"development.native.execute\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
+      "r3b": {
+        "review": "reviewed-exact-template-exchange-effect",
+        "change": "Adds the gated native application of one exact prior exchange plan. Export writes only the declared projection to the selected checkout; import enters through the ordinary atomic semantic snapshot ingress; terminal receipts make retries idempotent without a second storage path."
+      },
+      "capability": "service:developmentNative.applyTemplateExchange",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
       "id": "host:developmentNative.beginBuild",
       "rpcPlane": "host-service",
       "owner": "developmentNative",
@@ -11672,6 +13374,56 @@
         "change": null
       },
       "capability": "service:developmentNative.prepareBuild",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:developmentNative.prepareTemplateExchange",
+      "rpcPlane": "host-service",
+      "owner": "developmentNative",
+      "method": "prepareTemplateExchange",
+      "tier": "gated",
+      "sessionAdmission": "codeOnly",
+      "residency": "native-effect",
+      "mechanismFamily": "development-native.template-exchange",
+      "reviewRationale": "Reads only the explicitly selected sibling checkout and an exact semantic snapshot",
+      "resourceDerivation": {
+        "kind": "argument",
+        "index": 0,
+        "path": [
+          "checkout"
+        ],
+        "prefix": "template-checkout:"
+      },
+      "authorityPrincipals": [
+        "code",
+        "host",
+        "session"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"development.native.execute\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"development.native.execute\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"development.native.execute\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
+      "r3b": {
+        "review": "reviewed-explicit-checkout-exchange-plan",
+        "change": "Adds a gated, path-scoped native effect that reads one explicitly selected Git checkout and one exact semantic repository snapshot to produce a conflict-preserving three-way plan. It performs no write and discovers no ambient sibling checkout."
+      },
+      "capability": "service:developmentNative.prepareTemplateExchange",
       "parityAssertion": "generated-census:host-authority"
     },
     {
@@ -17716,6 +19468,182 @@
       "parityAssertion": "generated-census:host-authority"
     },
     {
+      "id": "host:phoneNativeEndpoint.desktops",
+      "rpcPlane": "host-service",
+      "owner": "phoneNativeEndpoint",
+      "method": "desktops",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "transport",
+      "mechanismFamily": "phoneNativeEndpoint.transport",
+      "reviewRationale": "Typed account-bound phone transport available only to the exact approved Base phone provider; the provider's public mobile capability is the sole user-facing gate.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:phoneNativeEndpoint.desktops"
+      },
+      "authorityPrincipals": [
+        "code"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "allOf(capability(code,service:phoneNativeEndpoint.desktops),workspace-member)",
+      "r3b": {
+        "review": "exact-base-phone-provider-desktop-discovery",
+        "change": "Replaces generic connected-client enumeration with a typed, account-bound desktop projection admitted only for the exact approved workers/phone-provisioning Durable Object. It carries no independent user gate and exposes no arbitrary client method transport."
+      },
+      "capability": "service:phoneNativeEndpoint.desktops",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:phoneNativeEndpoint.devices",
+      "rpcPlane": "host-service",
+      "owner": "phoneNativeEndpoint",
+      "method": "devices",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "transport",
+      "mechanismFamily": "phoneNativeEndpoint.transport",
+      "reviewRationale": "Typed account-bound phone transport available only to the exact approved Base phone provider; the provider's public mobile capability is the sole user-facing gate.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:phoneNativeEndpoint.devices"
+      },
+      "authorityPrincipals": [
+        "code"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "allOf(capability(code,service:phoneNativeEndpoint.devices),workspace-member)",
+      "r3b": {
+        "review": "exact-base-phone-provider-device-read",
+        "change": "Forwards only the typed desktopPhoneProvider.devices query to one live account-owned desktop. The public Base provider's mobile.devices.read authority remains the sole user-facing gate."
+      },
+      "capability": "service:phoneNativeEndpoint.devices",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:phoneNativeEndpoint.providers",
+      "rpcPlane": "host-service",
+      "owner": "phoneNativeEndpoint",
+      "method": "providers",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "transport",
+      "mechanismFamily": "phoneNativeEndpoint.transport",
+      "reviewRationale": "Typed account-bound phone transport available only to the exact approved Base phone provider; the provider's public mobile capability is the sole user-facing gate.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:phoneNativeEndpoint.providers"
+      },
+      "authorityPrincipals": [
+        "code"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "allOf(capability(code,service:phoneNativeEndpoint.providers),workspace-member)",
+      "r3b": {
+        "review": "exact-base-phone-provider-capability-read",
+        "change": "Forwards only the fixed desktopPhoneProvider.providers receiver method to one live desktop selected from the initiating user's account. Exact approved provider identity is checked before routing, and no caller-supplied method or argument vector exists."
+      },
+      "capability": "service:phoneNativeEndpoint.providers",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:phoneNativeEndpoint.provision",
+      "rpcPlane": "host-service",
+      "owner": "phoneNativeEndpoint",
+      "method": "provision",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "transport",
+      "mechanismFamily": "phoneNativeEndpoint.transport",
+      "reviewRationale": "Typed account-bound phone transport available only to the exact approved Base phone provider; the provider's public mobile capability is the sole user-facing gate.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:phoneNativeEndpoint.provision"
+      },
+      "authorityPrincipals": [
+        "code"
+      ],
+      "sensitivity": "admin",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "allOf(capability(code,service:phoneNativeEndpoint.provision),workspace-member)",
+      "r3b": {
+        "review": "exact-base-phone-provider-native-provision-effect",
+        "change": "Forwards only the typed desktopPhoneProvider.provision input to one live account-owned desktop after exact approved provider verification. The public Base provider's mobile.provision decision is the sole user-facing gate; no generic connected-client conduit remains."
+      },
+      "capability": "service:phoneNativeEndpoint.provision",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
       "id": "host:presence.getPanelActiveOwner",
       "rpcPlane": "host-service",
       "owner": "presence",
@@ -21204,6 +23132,666 @@
       "parityAssertion": "generated-census:host-authority"
     },
     {
+      "id": "host:shellBrowserPrivacy.addFormFillValue",
+      "rpcPlane": "host-service",
+      "owner": "shellBrowserPrivacy",
+      "method": "addFormFillValue",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "shellBrowserPrivacy.manager",
+      "reviewRationale": "The authenticated human shell manages its own workspace browser vault through a narrow typed surface.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:shellBrowserPrivacy.addFormFillValue"
+      },
+      "authorityPrincipals": [
+        "user"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "allOf(capability(user,service:shellBrowserPrivacy.addFormFillValue),workspace-member)",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:shellBrowserPrivacy.addFormFillValue",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:shellBrowserPrivacy.clearAllCookies",
+      "rpcPlane": "host-service",
+      "owner": "shellBrowserPrivacy",
+      "method": "clearAllCookies",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "shellBrowserPrivacy.manager",
+      "reviewRationale": "The authenticated human shell manages its own workspace browser vault through a narrow typed surface.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:shellBrowserPrivacy.clearAllCookies"
+      },
+      "authorityPrincipals": [
+        "user"
+      ],
+      "sensitivity": "destructive",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "allOf(capability(user,service:shellBrowserPrivacy.clearAllCookies),workspace-member)",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:shellBrowserPrivacy.clearAllCookies",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:shellBrowserPrivacy.clearCookiesForOrigin",
+      "rpcPlane": "host-service",
+      "owner": "shellBrowserPrivacy",
+      "method": "clearCookiesForOrigin",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "shellBrowserPrivacy.manager",
+      "reviewRationale": "The authenticated human shell manages its own workspace browser vault through a narrow typed surface.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:shellBrowserPrivacy.clearCookiesForOrigin"
+      },
+      "authorityPrincipals": [
+        "user"
+      ],
+      "sensitivity": "destructive",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "allOf(capability(user,service:shellBrowserPrivacy.clearCookiesForOrigin),workspace-member)",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:shellBrowserPrivacy.clearCookiesForOrigin",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:shellBrowserPrivacy.clearFormFillValues",
+      "rpcPlane": "host-service",
+      "owner": "shellBrowserPrivacy",
+      "method": "clearFormFillValues",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "shellBrowserPrivacy.manager",
+      "reviewRationale": "The authenticated human shell manages its own workspace browser vault through a narrow typed surface.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:shellBrowserPrivacy.clearFormFillValues"
+      },
+      "authorityPrincipals": [
+        "user"
+      ],
+      "sensitivity": "destructive",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "allOf(capability(user,service:shellBrowserPrivacy.clearFormFillValues),workspace-member)",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:shellBrowserPrivacy.clearFormFillValues",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:shellBrowserPrivacy.deleteFormFillValue",
+      "rpcPlane": "host-service",
+      "owner": "shellBrowserPrivacy",
+      "method": "deleteFormFillValue",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "shellBrowserPrivacy.manager",
+      "reviewRationale": "The authenticated human shell manages its own workspace browser vault through a narrow typed surface.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:shellBrowserPrivacy.deleteFormFillValue"
+      },
+      "authorityPrincipals": [
+        "user"
+      ],
+      "sensitivity": "destructive",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "allOf(capability(user,service:shellBrowserPrivacy.deleteFormFillValue),workspace-member)",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:shellBrowserPrivacy.deleteFormFillValue",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:shellBrowserPrivacy.deletePassword",
+      "rpcPlane": "host-service",
+      "owner": "shellBrowserPrivacy",
+      "method": "deletePassword",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "shellBrowserPrivacy.manager",
+      "reviewRationale": "The authenticated human shell manages its own workspace browser vault through a narrow typed surface.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:shellBrowserPrivacy.deletePassword"
+      },
+      "authorityPrincipals": [
+        "user"
+      ],
+      "sensitivity": "destructive",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "allOf(capability(user,service:shellBrowserPrivacy.deletePassword),workspace-member)",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:shellBrowserPrivacy.deletePassword",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:shellBrowserPrivacy.endBrowserSession",
+      "rpcPlane": "host-service",
+      "owner": "shellBrowserPrivacy",
+      "method": "endBrowserSession",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "shellBrowserPrivacy.manager",
+      "reviewRationale": "The authenticated human shell manages its own workspace browser vault through a narrow typed surface.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:shellBrowserPrivacy.endBrowserSession"
+      },
+      "authorityPrincipals": [
+        "user"
+      ],
+      "sensitivity": "destructive",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "allOf(capability(user,service:shellBrowserPrivacy.endBrowserSession),workspace-member)",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:shellBrowserPrivacy.endBrowserSession",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:shellBrowserPrivacy.getCookieSiteSummary",
+      "rpcPlane": "host-service",
+      "owner": "shellBrowserPrivacy",
+      "method": "getCookieSiteSummary",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "shellBrowserPrivacy.manager",
+      "reviewRationale": "The authenticated human shell manages its own workspace browser vault through a narrow typed surface.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:shellBrowserPrivacy.getCookieSiteSummary"
+      },
+      "authorityPrincipals": [
+        "user"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "allOf(capability(user,service:shellBrowserPrivacy.getCookieSiteSummary),workspace-member)",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:shellBrowserPrivacy.getCookieSiteSummary",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:shellBrowserPrivacy.getNeverSaveOriginsPage",
+      "rpcPlane": "host-service",
+      "owner": "shellBrowserPrivacy",
+      "method": "getNeverSaveOriginsPage",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "shellBrowserPrivacy.manager",
+      "reviewRationale": "The authenticated human shell manages its own workspace browser vault through a narrow typed surface.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:shellBrowserPrivacy.getNeverSaveOriginsPage"
+      },
+      "authorityPrincipals": [
+        "user"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "allOf(capability(user,service:shellBrowserPrivacy.getNeverSaveOriginsPage),workspace-member)",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:shellBrowserPrivacy.getNeverSaveOriginsPage",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:shellBrowserPrivacy.getPasswordCountForSite",
+      "rpcPlane": "host-service",
+      "owner": "shellBrowserPrivacy",
+      "method": "getPasswordCountForSite",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "shellBrowserPrivacy.manager",
+      "reviewRationale": "The authenticated human shell manages its own workspace browser vault through a narrow typed surface.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:shellBrowserPrivacy.getPasswordCountForSite"
+      },
+      "authorityPrincipals": [
+        "user"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "allOf(capability(user,service:shellBrowserPrivacy.getPasswordCountForSite),workspace-member)",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:shellBrowserPrivacy.getPasswordCountForSite",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:shellBrowserPrivacy.listCookieOriginsPage",
+      "rpcPlane": "host-service",
+      "owner": "shellBrowserPrivacy",
+      "method": "listCookieOriginsPage",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "shellBrowserPrivacy.manager",
+      "reviewRationale": "The authenticated human shell manages its own workspace browser vault through a narrow typed surface.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:shellBrowserPrivacy.listCookieOriginsPage"
+      },
+      "authorityPrincipals": [
+        "user"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "allOf(capability(user,service:shellBrowserPrivacy.listCookieOriginsPage),workspace-member)",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:shellBrowserPrivacy.listCookieOriginsPage",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:shellBrowserPrivacy.listFormFillValuesPage",
+      "rpcPlane": "host-service",
+      "owner": "shellBrowserPrivacy",
+      "method": "listFormFillValuesPage",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "shellBrowserPrivacy.manager",
+      "reviewRationale": "The authenticated human shell manages its own workspace browser vault through a narrow typed surface.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:shellBrowserPrivacy.listFormFillValuesPage"
+      },
+      "authorityPrincipals": [
+        "user"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "allOf(capability(user,service:shellBrowserPrivacy.listFormFillValuesPage),workspace-member)",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:shellBrowserPrivacy.listFormFillValuesPage",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:shellBrowserPrivacy.listPasswordSummariesPage",
+      "rpcPlane": "host-service",
+      "owner": "shellBrowserPrivacy",
+      "method": "listPasswordSummariesPage",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "shellBrowserPrivacy.manager",
+      "reviewRationale": "The authenticated human shell manages its own workspace browser vault through a narrow typed surface.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:shellBrowserPrivacy.listPasswordSummariesPage"
+      },
+      "authorityPrincipals": [
+        "user"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "allOf(capability(user,service:shellBrowserPrivacy.listPasswordSummariesPage),workspace-member)",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:shellBrowserPrivacy.listPasswordSummariesPage",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:shellBrowserPrivacy.removeNeverSave",
+      "rpcPlane": "host-service",
+      "owner": "shellBrowserPrivacy",
+      "method": "removeNeverSave",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "shellBrowserPrivacy.manager",
+      "reviewRationale": "The authenticated human shell manages its own workspace browser vault through a narrow typed surface.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:shellBrowserPrivacy.removeNeverSave"
+      },
+      "authorityPrincipals": [
+        "user"
+      ],
+      "sensitivity": "destructive",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "allOf(capability(user,service:shellBrowserPrivacy.removeNeverSave),workspace-member)",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:shellBrowserPrivacy.removeNeverSave",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:shellBrowserPrivacy.updateFormFillValue",
+      "rpcPlane": "host-service",
+      "owner": "shellBrowserPrivacy",
+      "method": "updateFormFillValue",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "shellBrowserPrivacy.manager",
+      "reviewRationale": "The authenticated human shell manages its own workspace browser vault through a narrow typed surface.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:shellBrowserPrivacy.updateFormFillValue"
+      },
+      "authorityPrincipals": [
+        "user"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "allOf(capability(user,service:shellBrowserPrivacy.updateFormFillValue),workspace-member)",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:shellBrowserPrivacy.updateFormFillValue",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
       "id": "host:shellPresence.heartbeat",
       "rpcPlane": "host-service",
       "owner": "shellPresence",
@@ -22308,6 +24896,51 @@
       "parityAssertion": "generated-census:host-authority"
     },
     {
+      "id": "host:view.applyNativePanelSurfaces",
+      "rpcPlane": "host-service",
+      "owner": "view",
+      "method": "applyNativePanelSurfaces",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "view.mutate",
+      "reviewRationale": "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:view.applyNativePanelSurfaces"
+      },
+      "authorityPrincipals": [
+        "user",
+        "code"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(allOf(capability(user,service:view.applyNativePanelSurfaces),workspace-member),allOf(capability(code,service:view.applyNativePanelSurfaces),workspace-member))",
+      "r3b": {
+        "review": "trusted-shell-complete-native-surface-projection",
+        "change": "Replaces incremental native-slot synchronization with one complete, revisioned shell projection of Electron-local panel surfaces. The receiver serializes snapshots, rejects stale generations and revisions, applies only bounded native geometry and visibility for the authenticated shell, and returns the exact observed projection without creating a second panel lifecycle channel."
+      },
+      "capability": "service:view.applyNativePanelSurfaces",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
       "id": "host:view.browserForceReload",
       "rpcPlane": "host-service",
       "owner": "view",
@@ -22620,6 +25253,51 @@
         "change": "Replaces the compound canonical-plus-native site-data operation with Electron session storage deletion only. Workspace chrome owns canonical cookie deletion and projection flushing; the receiver clears native cookies, cache, local storage, IndexedDB, and service workers only while the selected panel still displays the supplied origin."
       },
       "capability": "service:view.clearNativeBrowserSiteData",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:view.connectNativePanelAdapter",
+      "rpcPlane": "host-service",
+      "owner": "view",
+      "method": "connectNativePanelAdapter",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "view.control",
+      "reviewRationale": "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:view.connectNativePanelAdapter"
+      },
+      "authorityPrincipals": [
+        "user",
+        "code"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(allOf(capability(user,service:view.connectNativePanelAdapter),workspace-member),allOf(capability(code,service:view.connectNativePanelAdapter),workspace-member))",
+      "r3b": {
+        "review": "trusted-shell-native-panel-adapter-generation",
+        "change": "Replaces the legacy ready toggle with one authenticated shell-to-Electron generation handshake. The receiver admits only trusted panel-hosting chrome, binds one exact shell generation to one native adapter generation, and grants no panel lease, lifecycle, navigation, or cross-client authority."
+      },
+      "capability": "service:view.connectNativePanelAdapter",
       "parityAssertion": "generated-census:host-authority"
     },
     {
@@ -23568,51 +26246,6 @@
       "parityAssertion": "generated-census:host-authority"
     },
     {
-      "id": "host:view.setHostedShellReady",
-      "rpcPlane": "host-service",
-      "owner": "view",
-      "method": "setHostedShellReady",
-      "tier": "open",
-      "sessionAdmission": "family",
-      "residency": "native-effect",
-      "mechanismFamily": "view.mutate",
-      "reviewRationale": "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family",
-      "resourceDerivation": {
-        "kind": "literal",
-        "key": "service:view.setHostedShellReady"
-      },
-      "authorityPrincipals": [
-        "user",
-        "code"
-      ],
-      "sensitivity": "write",
-      "authenticatedFacts": [
-        "session",
-        "acting-user",
-        "device",
-        "runtime-entity",
-        "exact-code-artifact-when-code-originated",
-        "workspace-membership",
-        "agent-binding-when-agent-originated"
-      ],
-      "currentOutcomes": {
-        "allowed": "declared caller scenarios retain their existing allow/approval flow",
-        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
-      },
-      "predicates": [
-        "live-session",
-        "live-workspace-membership",
-        "exact-resource-scope"
-      ],
-      "r3aRequirement": "anyOf(allOf(capability(user,service:view.setHostedShellReady),workspace-member),allOf(capability(code,service:view.setHostedShellReady),workspace-member))",
-      "r3b": {
-        "review": "unchanged-parity",
-        "change": null
-      },
-      "capability": "service:view.setHostedShellReady",
-      "parityAssertion": "generated-census:host-authority"
-    },
-    {
       "id": "host:view.setNativeBrowserZoom",
       "rpcPlane": "host-service",
       "owner": "view",
@@ -23970,51 +26603,6 @@
         "change": null
       },
       "capability": "service:view.stopFindInPage",
-      "parityAssertion": "generated-census:host-authority"
-    },
-    {
-      "id": "host:view.syncNativePanelSlots",
-      "rpcPlane": "host-service",
-      "owner": "view",
-      "method": "syncNativePanelSlots",
-      "tier": "open",
-      "sessionAdmission": "family",
-      "residency": "native-effect",
-      "mechanismFamily": "view.control",
-      "reviewRationale": "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family",
-      "resourceDerivation": {
-        "kind": "literal",
-        "key": "service:view.syncNativePanelSlots"
-      },
-      "authorityPrincipals": [
-        "user",
-        "code"
-      ],
-      "sensitivity": "write",
-      "authenticatedFacts": [
-        "session",
-        "acting-user",
-        "device",
-        "runtime-entity",
-        "exact-code-artifact-when-code-originated",
-        "workspace-membership",
-        "agent-binding-when-agent-originated"
-      ],
-      "currentOutcomes": {
-        "allowed": "declared caller scenarios retain their existing allow/approval flow",
-        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
-      },
-      "predicates": [
-        "live-session",
-        "live-workspace-membership",
-        "exact-resource-scope"
-      ],
-      "r3aRequirement": "anyOf(allOf(capability(user,service:view.syncNativePanelSlots),workspace-member),allOf(capability(code,service:view.syncNativePanelSlots),workspace-member))",
-      "r3b": {
-        "review": "unchanged-parity",
-        "change": null
-      },
-      "capability": "service:view.syncNativePanelSlots",
       "parityAssertion": "generated-census:host-authority"
     },
     {
@@ -25303,327 +27891,6 @@
       "parityAssertion": "generated-census:host-authority"
     },
     {
-      "id": "host:workspace-state.panel.incrementAccess",
-      "rpcPlane": "host-service",
-      "owner": "workspace-state",
-      "method": "panel.incrementAccess",
-      "tier": "gated",
-      "sessionAdmission": "family",
-      "residency": "supervision",
-      "mechanismFamily": "workspace-state.lifecycle",
-      "reviewRationale": "G5: host infrastructure plumbing; §2 default {code, session} family",
-      "resourceDerivation": {
-        "kind": "literal",
-        "key": "service:workspace-state.panel.incrementAccess"
-      },
-      "authorityPrincipals": [
-        "user",
-        "code",
-        "host"
-      ],
-      "sensitivity": "write",
-      "authenticatedFacts": [
-        "session",
-        "acting-user",
-        "device",
-        "runtime-entity",
-        "exact-code-artifact-when-code-originated",
-        "workspace-membership",
-        "agent-binding-when-agent-originated"
-      ],
-      "currentOutcomes": {
-        "allowed": "declared caller scenarios retain their existing allow/approval flow",
-        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
-      },
-      "predicates": [
-        "live-session",
-        "live-workspace-membership",
-        "exact-resource-scope"
-      ],
-      "r3aRequirement": "anyOf(capability(host,service:workspace-state.panel.incrementAccess),allOf(capability(user,service:workspace-state.panel.incrementAccess),workspace-member),allOf(capability(code,service:workspace-state.panel.incrementAccess),workspace-member))",
-      "r3b": {
-        "review": "unchanged-parity",
-        "change": null
-      },
-      "capability": "service:workspace-state.panel.incrementAccess",
-      "parityAssertion": "generated-census:host-authority"
-    },
-    {
-      "id": "host:workspace-state.panel.index",
-      "rpcPlane": "host-service",
-      "owner": "workspace-state",
-      "method": "panel.index",
-      "tier": "gated",
-      "sessionAdmission": "family",
-      "residency": "supervision",
-      "mechanismFamily": "workspace-state.lifecycle",
-      "reviewRationale": "G5: host infrastructure plumbing; §2 default {code, session} family",
-      "resourceDerivation": {
-        "kind": "literal",
-        "key": "service:workspace-state.panel.index"
-      },
-      "authorityPrincipals": [
-        "user",
-        "code",
-        "host"
-      ],
-      "sensitivity": "write",
-      "authenticatedFacts": [
-        "session",
-        "acting-user",
-        "device",
-        "runtime-entity",
-        "exact-code-artifact-when-code-originated",
-        "workspace-membership",
-        "agent-binding-when-agent-originated"
-      ],
-      "currentOutcomes": {
-        "allowed": "declared caller scenarios retain their existing allow/approval flow",
-        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
-      },
-      "predicates": [
-        "live-session",
-        "live-workspace-membership",
-        "exact-resource-scope"
-      ],
-      "r3aRequirement": "anyOf(capability(host,service:workspace-state.panel.index),allOf(capability(user,service:workspace-state.panel.index),workspace-member),allOf(capability(code,service:workspace-state.panel.index),workspace-member))",
-      "r3b": {
-        "review": "unchanged-parity",
-        "change": null
-      },
-      "capability": "service:workspace-state.panel.index",
-      "parityAssertion": "generated-census:host-authority"
-    },
-    {
-      "id": "host:workspace-state.panel.rebuildIndex",
-      "rpcPlane": "host-service",
-      "owner": "workspace-state",
-      "method": "panel.rebuildIndex",
-      "tier": "gated",
-      "sessionAdmission": "family",
-      "residency": "supervision",
-      "mechanismFamily": "workspace-state.lifecycle",
-      "reviewRationale": "G5: host infrastructure plumbing; §2 default {code, session} family",
-      "resourceDerivation": {
-        "kind": "literal",
-        "key": "service:workspace-state.panel.rebuildIndex"
-      },
-      "authorityPrincipals": [
-        "user",
-        "code",
-        "host"
-      ],
-      "sensitivity": "write",
-      "authenticatedFacts": [
-        "session",
-        "acting-user",
-        "device",
-        "runtime-entity",
-        "exact-code-artifact-when-code-originated",
-        "workspace-membership",
-        "agent-binding-when-agent-originated"
-      ],
-      "currentOutcomes": {
-        "allowed": "declared caller scenarios retain their existing allow/approval flow",
-        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
-      },
-      "predicates": [
-        "live-session",
-        "live-workspace-membership",
-        "exact-resource-scope"
-      ],
-      "r3aRequirement": "anyOf(capability(host,service:workspace-state.panel.rebuildIndex),allOf(capability(user,service:workspace-state.panel.rebuildIndex),workspace-member),allOf(capability(code,service:workspace-state.panel.rebuildIndex),workspace-member))",
-      "r3b": {
-        "review": "unchanged-parity",
-        "change": null
-      },
-      "capability": "service:workspace-state.panel.rebuildIndex",
-      "parityAssertion": "generated-census:host-authority"
-    },
-    {
-      "id": "host:workspace-state.panel.search",
-      "rpcPlane": "host-service",
-      "owner": "workspace-state",
-      "method": "panel.search",
-      "tier": "open",
-      "sessionAdmission": "family",
-      "residency": "supervision",
-      "mechanismFamily": "workspace-state.lifecycle",
-      "reviewRationale": "Workspace-member panel-index read; no C1-C4 or G1-G5 rule applies",
-      "resourceDerivation": {
-        "kind": "literal",
-        "key": "service:workspace-state.panel.search"
-      },
-      "authorityPrincipals": [
-        "user",
-        "code",
-        "host"
-      ],
-      "sensitivity": "read",
-      "authenticatedFacts": [
-        "session",
-        "acting-user",
-        "device",
-        "runtime-entity",
-        "exact-code-artifact-when-code-originated",
-        "workspace-membership",
-        "agent-binding-when-agent-originated"
-      ],
-      "currentOutcomes": {
-        "allowed": "declared caller scenarios retain their existing allow/approval flow",
-        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
-      },
-      "predicates": [
-        "live-session",
-        "live-workspace-membership",
-        "exact-resource-scope"
-      ],
-      "r3aRequirement": "anyOf(capability(host,service:workspace-state.panel.search),allOf(capability(user,service:workspace-state.panel.search),workspace-member),allOf(capability(code,service:workspace-state.panel.search),workspace-member))",
-      "r3b": {
-        "review": "unchanged-parity",
-        "change": null
-      },
-      "capability": "service:workspace-state.panel.search",
-      "parityAssertion": "generated-census:host-authority"
-    },
-    {
-      "id": "host:workspace-state.panel.sourceUsage",
-      "rpcPlane": "host-service",
-      "owner": "workspace-state",
-      "method": "panel.sourceUsage",
-      "tier": "open",
-      "sessionAdmission": "family",
-      "residency": "supervision",
-      "mechanismFamily": "workspace-state.lifecycle",
-      "reviewRationale": "Workspace-member aggregate panel usage read; no C1-C4 or G1-G5 rule applies",
-      "resourceDerivation": {
-        "kind": "literal",
-        "key": "service:workspace-state.panel.sourceUsage"
-      },
-      "authorityPrincipals": [
-        "user",
-        "code",
-        "host"
-      ],
-      "sensitivity": "read",
-      "authenticatedFacts": [
-        "session",
-        "acting-user",
-        "device",
-        "runtime-entity",
-        "exact-code-artifact-when-code-originated",
-        "workspace-membership",
-        "agent-binding-when-agent-originated"
-      ],
-      "currentOutcomes": {
-        "allowed": "declared caller scenarios retain their existing allow/approval flow",
-        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
-      },
-      "predicates": [
-        "live-session",
-        "live-workspace-membership",
-        "exact-resource-scope"
-      ],
-      "r3aRequirement": "anyOf(capability(host,service:workspace-state.panel.sourceUsage),allOf(capability(user,service:workspace-state.panel.sourceUsage),workspace-member),allOf(capability(code,service:workspace-state.panel.sourceUsage),workspace-member))",
-      "r3b": {
-        "review": "bounded-aggregate-panel-source-usage-read",
-        "change": "Adds an open workspace-member read of at most 200 aggregate panel source usage rows for launcher ranking. The projection contains only source identity, access count, and last-access time; it exposes no panel contents, owner identity, slot state, or mutation path."
-      },
-      "capability": "service:workspace-state.panel.sourceUsage",
-      "parityAssertion": "generated-census:host-authority"
-    },
-    {
-      "id": "host:workspace-state.panel.updateTitle",
-      "rpcPlane": "host-service",
-      "owner": "workspace-state",
-      "method": "panel.updateTitle",
-      "tier": "gated",
-      "sessionAdmission": "family",
-      "residency": "transport",
-      "mechanismFamily": "workspace-state.builtin-rpc",
-      "reviewRationale": "Exact typed proxy to the builtin topology owner for one slot-bound presentation update",
-      "resourceDerivation": {
-        "kind": "literal",
-        "key": "workspace.runtime-state.manage"
-      },
-      "authorityPrincipals": [
-        "user",
-        "code",
-        "host"
-      ],
-      "sensitivity": "write",
-      "authenticatedFacts": [
-        "session",
-        "acting-user",
-        "device",
-        "runtime-entity",
-        "exact-code-artifact-when-code-originated",
-        "workspace-membership",
-        "agent-binding-when-agent-originated"
-      ],
-      "currentOutcomes": {
-        "allowed": "declared caller scenarios retain their existing allow/approval flow",
-        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
-      },
-      "predicates": [
-        "live-session",
-        "live-workspace-membership",
-        "exact-resource-scope"
-      ],
-      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"workspace.runtime-state.manage\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"workspace.runtime-state.manage\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"workspace.runtime-state.manage\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"workspace.runtime-state.manage\"}]}",
-      "r3b": {
-        "review": "unchanged-parity",
-        "change": null
-      },
-      "capability": "service:workspace-state.panel.updateTitle",
-      "parityAssertion": "generated-census:host-authority"
-    },
-    {
-      "id": "host:workspace-state.panel.updateTitle#capability:context.boundary",
-      "rpcPlane": "host-service",
-      "owner": "workspace-state",
-      "method": "panel.updateTitle",
-      "tier": "gated",
-      "sessionAdmission": "family",
-      "residency": "transport",
-      "mechanismFamily": "workspace-state.builtin-rpc",
-      "reviewRationale": "Exact typed proxy to the builtin topology owner for one slot-bound presentation update",
-      "capability": "context.boundary",
-      "resourceDerivation": {
-        "kind": "prepared",
-        "resolver": "workspace-state.panel.updateTitle.contextBoundary"
-      },
-      "authorityPrincipals": [
-        "code",
-        "host",
-        "session",
-        "user"
-      ],
-      "sensitivity": "write",
-      "authenticatedFacts": [
-        "session",
-        "acting-user",
-        "runtime-entity",
-        "exact-code-artifact-when-code-originated",
-        "schema-owned-authority-preparation"
-      ],
-      "currentOutcomes": {
-        "allowed": "prepared authority leaf selected and satisfied",
-        "denied": "missing prepared authority leaf fails before handler entry"
-      },
-      "predicates": [
-        "live-session",
-        "exact-prepared-resource",
-        "registered-preparer"
-      ],
-      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"context.boundary\"},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]}]}",
-      "r3b": {
-        "review": "schema-owned-prepared-leaf",
-        "change": null
-      },
-      "parityAssertion": "generated-census:host-authority"
-    },
-    {
       "id": "host:workspace-state.panelTree.detail",
       "rpcPlane": "host-service",
       "owner": "workspace-state",
@@ -25851,52 +28118,6 @@
         "change": "Adds an open, read-only keyset page over roots owned by the server-verified caller subject, or the ownerless workspace band for subjectless infrastructure. The request is capped at 200 rows, accepts no owner identity, returns only tree-list metadata, and leaves the existing cross-owner root discovery and explicit owner query path unchanged."
       },
       "capability": "service:workspace-state.panelTree.rootsForCaller",
-      "parityAssertion": "generated-census:host-authority"
-    },
-    {
-      "id": "host:workspace-state.panelTree.search",
-      "rpcPlane": "host-service",
-      "owner": "workspace-state",
-      "method": "panelTree.search",
-      "tier": "open",
-      "sessionAdmission": "family",
-      "residency": "transport",
-      "mechanismFamily": "workspace-state.builtin-rpc",
-      "reviewRationale": "Exact typed proxy to the builtin topology owner for one bounded indexed presentation query",
-      "resourceDerivation": {
-        "kind": "literal",
-        "key": "service:workspace-state.panelTree.search"
-      },
-      "authorityPrincipals": [
-        "user",
-        "code",
-        "host"
-      ],
-      "sensitivity": "read",
-      "authenticatedFacts": [
-        "session",
-        "acting-user",
-        "device",
-        "runtime-entity",
-        "exact-code-artifact-when-code-originated",
-        "workspace-membership",
-        "agent-binding-when-agent-originated"
-      ],
-      "currentOutcomes": {
-        "allowed": "declared caller scenarios retain their existing allow/approval flow",
-        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
-      },
-      "predicates": [
-        "live-session",
-        "live-workspace-membership",
-        "exact-resource-scope"
-      ],
-      "r3aRequirement": "anyOf(capability(host,service:workspace-state.panelTree.search),allOf(capability(user,service:workspace-state.panelTree.search),workspace-member),allOf(capability(code,service:workspace-state.panelTree.search),workspace-member))",
-      "r3b": {
-        "review": "bounded-panel-title-search",
-        "change": "Adds an open, read-only keyset title search capped at 200 hits with bounded ancestor breadcrumbs. It exposes panel-list metadata and performs no mutation."
-      },
-      "capability": "service:workspace-state.panelTree.search",
       "parityAssertion": "generated-census:host-authority"
     },
     {

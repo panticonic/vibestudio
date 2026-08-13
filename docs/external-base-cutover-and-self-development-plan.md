@@ -1,6 +1,8 @@
 # External Base cutover and host/system self-development
 
-Status: implementation plan, revised 2026-08-12 for a pre-release clean cut
+Status: implementation and cutover checklist, updated 2026-08-13. The code
+cut is present in the integration worktree; release and operational acceptance
+remain provisional until the final gates below pass.
 
 This plan completes step 9 of
 `docs/official-template-repositories-plan.md`: publish a clean, root-capable
@@ -105,47 +107,43 @@ managed workspace
   <semantic repositories>           authoritative current content
 ```
 
-## Current state and concrete gaps
+## Implementation checkpoint and remaining gates
 
-The optional-feature extraction is complete. Examples, News, Spectrolite, and
-Google Workspace have published releases and are promoted in the verified
-registry. Their existing releases belong to the old pre-release generation and
-will be republished during the coordinated cut; no compatibility with those
-releases is retained.
+The integration worktree now contains the architectural cut described here:
 
-The remaining gaps are:
+- tracked `workspace/` and `workspace-template/` source are absent;
+- bootstrap, development startup, packaging, and dependency projection take an
+  explicit external Base or semantic source rather than an ambient directory;
+- the current-only root and installed-layer contracts initialize the complete
+  Composer state atomically;
+- Base membership comes only from `meta/template.yml`;
+- the generic template checkout exchange supports root and contribution
+  repositories without inventing a Base-specific mode;
+- inside-system development binds exact host and Base inputs and supports
+  host-only, Base-only, and combined candidate pairs; and
+- the host owns sealed materialization, process, semantic-import, and cleanup
+  effects while Base owns the development workflow.
 
-1. `build-resources/base-template-release.json` points at Base candidate
-   `8a1027e6708e12c6d3fed4b0a9b3044f4064186d`, which still contains extracted
-   Google/Gmail files and lacks the final flattened runtime manifest.
-2. Fresh creation still discovers and copies `workspace-template/` or
-   `<appRoot>/workspace`.
-3. Electron and npm packaging still stage the in-tree workspace.
-4. The source developer instance still writes protected publications toward a
-   hard-coded `<appRoot>/workspace` destination.
-5. Host generation, validation, tests, and dependency resolution still contain
-   ambient `workspace/**` assumptions.
-6. Runtime dependency resolution currently prefers the bundled template over
-   the active semantic workspace, so an exact-pair test can accidentally use
-   unrelated checkout bytes.
-7. Composer stores relationship state separately from sanitized per-node
-   fragments. Observation substitutes an empty layer when a fragment is
-   missing, reclassifying Base-owned configuration as workspace-local.
-8. Root initialization does not construct the complete Composer installed
-   layer before publishing the first semantic main state.
-9. A locally committed, unpushed sibling Base `HEAD` cannot use the normal
-   acquisition miss path because that path requires remote reachability.
-10. Mirroring every repository named by workspace publications into Base would
-    leak optional templates and user repositories.
-11. Inside-system development can build exact semantic host source, but cannot
-    yet bind that host execution snapshot to an exact candidate Base snapshot.
-12. The host-owned Development domain contains product workflow that should not
-    grow merely to support exact host/Base pairs.
+`build-resources/base-template-release.json` currently stages exact Base tag
+`v0.3.8` at commit `edf9506eff02fbbf18b42c8ce05cf9f28b5f5a4a` and snapshot
+`v1-sha256:a49db6d6ff6203e18855c153fc21ca415614731019f7333228b9020bdf07e8b6`.
+That identity is a **provisional candidate**, not final promotion evidence.
+Do not describe v0.3.8 as the accepted Base release until all of these finish:
 
-Publishing Base without a valid creation path creates a dead release. Deleting
-`workspace/` before replacing development and build inputs destroys the
-product's own development loop. The work packages below therefore land as one
-ordered cutover, even though individual commits remain reviewable.
+1. review and regenerate the combined authority/catalog evidence after all
+   concurrent host changes settle;
+2. pass the final host and exact-Base typechecks and focused integration suites;
+3. pass the packaged artifact and no-ambient-workspace boundary checks;
+4. provision one fresh managed instance from the exact candidate, run the
+   smallest end-to-end creation and self-development proofs, and clean it up;
+5. republish and compose every selectable official optional template at the
+   current epoch, then promote one verified registry snapshot; and
+6. perform the destructive pre-release fleet recreation and record the final
+   host, Base, registry, template, epoch, and exact-pair evidence.
+
+The code cut and the operational cut are intentionally distinct checkpoints.
+No compatibility reader or fallback may bridge them: until the operational
+gates pass, the candidate remains unaccepted rather than partially promoted.
 
 ## Terminology
 
@@ -373,18 +371,17 @@ root schema and exact epoch, and boots it or fails.
 
 ### Publication receipt
 
-The Base publisher returns evidence rather than creating another durable input:
+Base uses the ordinary strict template-publication receipt. Its operation ID,
+destination, remote and web URLs, canonical template URL, immutable tag, exact
+commit, exact snapshot, and projected parts are returned only after Git Bridge
+reads the published commit back and verifies its tree. The host pointer
+generator parses that actual receipt and accepts only the canonical Base URL;
+it does not trust a second hand-written wrapper or boolean verification flags.
 
-- source semantic event and manifest digest;
-- exact projected file inventory and snapshot digest;
-- remote commit/tag/readback facts;
-- flattened-manifest digest;
-- exact epoch;
-- standalone Base build result; and
-- host execution digest, Base snapshot, and pair digest for the tested pair.
-
-The host pointer is updated only from a verified receipt. Pair evidence proves
-what was tested; it is not a startup admission protocol.
+Source-event, manifest, flattened-root, epoch, standalone-build, host-build,
+and exact-pair evidence remain in the publication and release evidence packet.
+They prove what was tested but are neither copied into the startup pointer nor
+turned into an admission protocol.
 
 ### Official registry snapshot
 
@@ -402,11 +399,11 @@ them back to Base.
 
 For the coordinated cut, start from each exact published external commit:
 
-| Template | Source commit |
-| --- | --- |
-| Examples | `bc4b1ec5ecf6bbb4b3584db2f3e6d651da693aca` |
-| News | `090e1ba17abcd01a426b914a41d0a0218579b0ff` |
-| Spectrolite | `e6ddffbea9f28fef8988b6b612e017c8348917a0` |
+| Template         | Source commit                              |
+| ---------------- | ------------------------------------------ |
+| Examples         | `bc4b1ec5ecf6bbb4b3584db2f3e6d651da693aca` |
+| News             | `090e1ba17abcd01a426b914a41d0a0218579b0ff` |
+| Spectrolite      | `e6ddffbea9f28fef8988b6b612e017c8348917a0` |
 | Google Workspace | `8bdccc9d5195da9cdb6123396a499f7986a2935b` |
 
 Acquire that tree into an ordinary clean checkout or exact semantic authoring
@@ -498,6 +495,12 @@ generic operation journal; it does not mutate or repair the semantic result.
 
 Base is selected by its manifest, not by mirroring the whole workspace.
 
+The exchange and snapshot-acquisition adapters solve different problems. The
+local committed-tree adapter seeds an exact immutable Git `HEAD` for bootstrap
+or execution. The checkout exchange deliberately compares the mutable declared
+projection so reviewed dirty authoring work can cross the semantic boundary.
+It never turns that worktree into bootstrap authority.
+
 An explicit export:
 
 1. reads one exact semantic context;
@@ -513,6 +516,24 @@ An explicit export:
 An import performs the inverse comparison and publishes reviewed changes into
 semantic VCS. Optional-template and user repositories never leak merely because
 they exist or changed.
+
+For a dependency-free root, the exchange projects the declared repositories
+and support files plus the generated flattened `meta/vibestudio.yml`. For a
+contribution template, it projects only the declared contribution and
+`meta/template.yml`; it neither requires nor manufactures a flattened runtime
+manifest. Root capability remains derived from the manifest dependency graph.
+
+The exchange engine derives an exact operation ID. The standalone CLI prints it
+during planning and requires it during a later apply; apply recomputes current
+facts and rejects a mismatch. Both roots are physically canonicalized before
+overlap checks, so symlink aliases cannot bypass tree separation. Inside
+Vibestudio, Base passes the reviewed ID to the narrow native effect together
+with an exact context, repository, working head, and selected checkout. Import
+scans an owned materialization and uses the canonical atomic semantic snapshot
+ingress; it never writes the live semantic projection directly. A terminal
+receipt remains available for lost-response retry, while the large owned
+materialization is removed and old completed operation records are reaped with
+bounded retention.
 
 ## Inside-system host/Base co-development
 
@@ -544,6 +565,31 @@ The workflow is:
 The stable parent remains available throughout. An external checkout and an
 inside-system semantic context enter through different snapshot adapters but
 share the same acquisition, build, launch, and receipt path.
+
+### Developer entry points after the cut
+
+`pnpm dev` is the ordinary product-development path. Its launcher binds the
+current host checkout as the exact application root, builds that host, and asks
+the hub to create the disposable `dev` workspace from the host's one promoted
+`base-template-release.json` pointer. It does not read a sibling checkout or
+substitute a local Base when the pointer is absent, stale, or belongs to another
+epoch. A host/Base epoch mismatch is therefore a release-coordination failure,
+not a cue to add a development fallback.
+
+Host/Base co-development is a different, explicit operation. Base owns the
+host-only, Base-only, or combined candidate-pair choice and invokes the narrow
+native Development effects. The local committed-tree adapter resolves a named
+sibling branch at its committed `HEAD`, rejects tracked worktree differences,
+reports and excludes untracked paths, derives the canonical snapshot digest,
+seeds that exact pin in the ordinary acquisition store, and then uses normal
+root acquisition. No push is required for the checkpoint.
+
+These are the only two development paths. A launcher must not seed or replace a
+managed workspace's semantic source tree directly. In particular, a local Base
+checkpoint enters through Development's verified committed-tree adapter and
+ordinary root acquisition; adding or exchanging template source enters through
+the reviewed semantic exchange effect. Both paths produce the same exact
+receipts and preserve Composer's complete installed-layer contract.
 
 ## Work packages
 
@@ -582,7 +628,7 @@ Exit: no later pair test can pass using unrelated checkout bytes.
     or preserve migration chains. Build V2 still proves the exact fresh schema.
 11. Delete old schema parsers and converters; tests assert rejection.
 12. Retain exact `systemEpoch` equality and remove any planned host API revision,
-   range, or negotiation.
+    range, or negotiation.
 
 Exit: every component has one reader and one writer for one current format.
 
@@ -631,8 +677,9 @@ Exit: every new workspace starts from the exact external Base or fails visibly.
 ### WP5. Complete external and inside-system co-development
 
 1. Add one generic template-repository sibling-checkout import/export using the
-   WP2 local adapter and manifest-declared projection; use it for Base and
-   optional templates.
+   manifest-declared projection; use it for Base and optional templates. Keep
+   this mutable checkout exchange distinct from WP2's immutable committed-tree
+   acquisition adapter.
 2. Move pair workflow, retries, and presentation into Base userland.
 3. Keep only exact native effects and generic receipts in the host.
 4. Support host-only, Base-only, and combined candidate pairs.
@@ -672,6 +719,35 @@ Exit: `git ls-files workspace` is empty and no generated alias contains Base.
 
 Exit: the running fleet contains only freshly created current-generation
 workspaces. There is no legacy-state recovery path to test or maintain.
+
+## Work-package execution record
+
+This table records the current integration checkpoint. “Implemented” means the
+candidate code and focused local evidence exist; it does not mean the release
+or fleet cut has been accepted.
+
+| Package | Current checkpoint                                                                                                                                                                                          | Still required                                                                                                  |
+| ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| WP0     | Implemented in the candidate: explicit Base/source inputs, no tracked in-tree Base, and boundary/package checks exist.                                                                                      | Run the final combined no-ambient and packaged-artifact gates.                                                  |
+| WP1     | Implemented in the candidate: current-only contracts, exact epoch, complete inline installed state, and obsolete migration/fragment paths removed.                                                          | Final source census and combined generated-evidence review.                                                     |
+| WP2     | Implemented in the candidate: exact snapshot acquisition/local seeding and atomic root initialization.                                                                                                      | Fresh managed remote, retained-store, and unpushed-commit proofs.                                               |
+| WP3     | Base v0.3.8 is staged as a provisional exact candidate.                                                                                                                                                     | Final candidate gates plus current-epoch publication/composition/promotion of every official optional template. |
+| WP4     | Exact external-root creation is implemented in the candidate.                                                                                                                                               | Fresh packaged/headless/development managed-instance proof from the staged pin.                                 |
+| WP5     | Implemented: reviewed two-invocation external exchange, realpath-safe roots, explicit conflict preservation, exact pair kinds, Base-owned workflow, narrow host effects, receipt replay, and owned cleanup. | Run final managed child lifecycle and end-to-end external plus inside-system authoring proofs.                  |
+| WP6     | Candidate source tree has no tracked `workspace/` or `workspace-template/`.                                                                                                                                 | Final package/source census proving no copied fallback bytes or ambient reads.                                  |
+| WP7     | Not performed.                                                                                                                                                                                              | Coordinated registry promotion, destructive pre-release recreation, and final release record.                   |
+
+Focused WP5 evidence recorded on 2026-08-13:
+
+- host exchange, executor, pair, isolated-executor, and service-authority tests:
+  5 files, 20 tests passed;
+- exact external Base `DevelopmentDO` and self-development tests: 2 files,
+  16 tests passed; and
+- `git diff --check` passed in both the host and Base trees.
+
+These are focused implementation checks. They do not replace the final
+typecheck, package, managed-system, registry, or publication gates, and they do
+not make the provisional v0.3.8 identity final.
 
 ## Failure and recovery
 

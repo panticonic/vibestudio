@@ -12,6 +12,14 @@ const pairing = {
   v: 2 as const,
   ice: "all" as const,
   code: "C".repeat(32),
+  exp: 2_000_000_000_000,
+};
+const reconnectReach = {
+  room: pairing.room,
+  fp: pairing.fp,
+  sig: pairing.sig,
+  v: pairing.v,
+  ice: pairing.ice,
 };
 const DEVICE_ID = `dev_${"d".repeat(24)}`;
 const REFRESH_TOKEN = "r".repeat(43);
@@ -47,7 +55,11 @@ describe("mobile stored shell credential", () => {
       "ws-one",
       123
     );
-    const stored = createRoutedMobileConnection(paired, issuerPairing);
+    const stored = createRoutedMobileConnection(paired, {
+      ...reconnectReach,
+      fp: issuerPairing.fp,
+      sig: issuerPairing.sig,
+    });
     expect(stored).not.toHaveProperty("controlPairing.code");
     expect(stored).not.toHaveProperty("workspacePairing.code");
     expect(stored.workspacePairing).toMatchObject({
@@ -72,7 +84,7 @@ describe("mobile stored shell credential", () => {
         "ws-one",
         123
       ),
-      pairing
+      reconnectReach
     );
     for (const stale of [
       { ...current, schemaVersion: undefined },
@@ -132,7 +144,7 @@ describe("mobile stored shell credential", () => {
           "unused",
           123
         ),
-        pairing
+        reconnectReach
       ).workspacePairing,
       pairedAt: 123,
     };

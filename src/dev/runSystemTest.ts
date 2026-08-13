@@ -5,12 +5,33 @@ import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import {
   ensureSystemTestInstance,
+  isLocalSystemTestHelpCommand,
   parseSystemTestLauncherArgs,
   stopManagedSystemTestInstance,
 } from "./systemTestInstance.js";
 
 const require = createRequire(import.meta.url);
 const tsxCli = require.resolve("tsx/cli");
+
+const HELP = `Usage: pnpm system-test [--instance ID] [--bootstrap-workspace NAME] COMMAND [ARGS...]
+
+Self-provisions one isolated Vibestudio server for headless agentic acceptance.
+
+Commands:
+  doctor                         Provision, pair, and check infrastructure
+  list --json                    List tests from the live system-test runner
+  run TEST_NAME                  Run one exact test
+  inspect RUN_ID --json          Inspect a bounded failed-run packet
+  trajectory RUN_ID TEST --full --json
+                                 Inspect the full trajectory when needed
+  rerun RUN_ID                   Rerun the still-relevant tests from a run
+  stop                           Stop only this launcher's managed instance
+
+Options:
+  --instance ID                  Stable unique instance name (default: system-test)
+  --bootstrap-workspace NAME     Use a named persistent bootstrap workspace
+  -h, --help                     Show this help without starting infrastructure
+`;
 
 function runCli(instanceId: string, command: readonly string[]): Promise<number> {
   return new Promise((resolve, reject) => {
@@ -105,6 +126,10 @@ function pairedWorkspaceId(instanceRoot: string): string {
 async function main(): Promise<void> {
   const repoRoot = path.resolve(process.cwd());
   const parsed = parseSystemTestLauncherArgs(process.argv.slice(2));
+  if (isLocalSystemTestHelpCommand(parsed.command)) {
+    process.stdout.write(HELP);
+    return;
+  }
   if (parsed.command[0] === "stop") {
     if (parsed.command.length !== 1)
       throw new Error("usage: pnpm system-test [--instance ID] stop");

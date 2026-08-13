@@ -13,6 +13,8 @@ const controlPairing = {
   sig: "wss://signal.example/",
   v: 2 as const,
   ice: "all" as const,
+  code: "A".repeat(32),
+  exp: 4_000_000_000_000,
 };
 const workspacePairing = {
   room: "workspace-2222",

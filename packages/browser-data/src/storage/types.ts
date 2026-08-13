@@ -54,6 +54,10 @@ export interface StoredPassword {
   times_used: number;
 }
 
+/** Secret-free inventory row. Password material is available only through an
+ * exact origin read at the protected vault boundary. */
+export type StoredPasswordSummary = Omit<StoredPassword, "password">;
+
 /** Decrypted only at the trusted service boundary. */
 export interface StoredCookie extends BrowserCookieRecord {
   value: string;

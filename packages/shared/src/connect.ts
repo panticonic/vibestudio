@@ -24,21 +24,24 @@ export type SignalingResolutionSource = "flag" | "env" | "default";
  * The exact WebRTC pairing payload carried in the QR / deep link. The shell
  * joins a signaling room and pins the server's DTLS fingerprint.
  */
-export interface ConnectPairing {
+export interface ReconnectReach {
   /** Unguessable signaling rendezvous room id. */
   room: string;
   /** Pinned server DTLS SHA-256 fingerprint (the QR `fp`). */
   fp: string;
-  /** Pairing secret proving QR possession. */
-  code: string;
   /** Signaling endpoint (decouples us from a hard-coded host). */
   sig: string;
   /** Exact current protocol version. */
   v: typeof PAIRING_PROTOCOL_VERSION;
   /** TURN policy — `relay` forces TURN-over-TLS:443 validation. */
   ice: TurnPolicy;
-  /** Invite expiry in epoch milliseconds; clients reject stale QR links immediately. */
-  exp?: number;
+}
+
+export interface ConnectPairing extends ReconnectReach {
+  /** Pairing secret proving QR possession. */
+  code: string;
+  /** Invite expiry in epoch milliseconds; stale one-time links are rejected locally. */
+  exp: number;
 }
 
 export type ConnectLink = ({ kind: "ok" } & ConnectPairing) | { kind: "error"; reason: string };
@@ -82,7 +85,7 @@ function encodeConnectParams(pairing: ConnectPairing): string {
     `v=${encodeURIComponent(String(pairing.v))}`,
     `ice=${encodeURIComponent(pairing.ice)}`,
   ];
-  if (pairing.exp) params.push(`exp=${encodeURIComponent(String(pairing.exp))}`);
+  params.push(`exp=${encodeURIComponent(String(pairing.exp))}`);
   return params.join("&");
 }
 
@@ -230,14 +233,16 @@ export function parseConnectLink(raw: string): ConnectLink {
       reason: `Old or unsupported pairing protocol version (expected v=${PAIRING_PROTOCOL_VERSION}); re-pair this device with a fresh link`,
     };
   }
-
   const room = params.values.get("room");
   const fp = params.values.get("fp");
   const code = params.values.get("code");
   const sig = params.values.get("sig");
   const ice = params.values.get("ice");
   if (!room || !fp || !code || !sig || !ice) {
-    return { kind: "error", reason: "Deep link is missing `room`, `fp`, `code`, `sig`, or `ice`" };
+    return {
+      kind: "error",
+      reason: "Deep link is missing `room`, `fp`, `code`, `sig`, or `ice`",
+    };
   }
 
   if (!PAIRING_ROOM_PATTERN.test(room)) {
@@ -257,7 +262,7 @@ export function parseConnectLink(raw: string): ConnectLink {
   }
   const expRaw = params.values.get("exp");
   const exp = expRaw ? Number(expRaw) : undefined;
-  if (expRaw && (!Number.isFinite(exp) || (exp ?? 0) <= 0)) {
+  if (exp === undefined || !Number.isSafeInteger(exp) || exp <= 0) {
     return { kind: "error", reason: "Pairing link expiry has an unexpected format" };
   }
   if (exp !== undefined && exp <= Date.now()) {
@@ -275,7 +280,7 @@ export function parseConnectLink(raw: string): ConnectLink {
     sig: sigParsed.url,
     v: PAIRING_PROTOCOL_VERSION,
     ice,
-    ...(exp !== undefined ? { exp } : {}),
+    exp,
   };
 }
 

@@ -47,7 +47,19 @@ export { BrowserDataError } from "./errors.js";
 export type { BrowserDataErrorCode } from "./errors.js";
 
 export { createBrowserDataClient } from "./client/browserDataClient.js";
-export type { BrowserDataClient, ImportPreview } from "./client/browserDataClient.js";
+export type {
+  BrowserDataClient,
+  BrowserPrivacySection,
+  ImportPreview,
+  NonSensitiveBrowserImportDataType,
+  NonSensitiveBrowserImportSelection,
+  SensitiveBrowserImportDataType,
+  SensitiveBrowserImportCount,
+  SensitiveBrowserImportRequest,
+  SensitiveBrowserImportPreview,
+  SensitiveBrowserImportSelection,
+  SensitiveBrowserImportStatus,
+} from "./client/browserDataClient.js";
 export {
   BROWSER_PRODUCT_SCHEMA,
   BROWSER_VAULT_SCHEMA,
@@ -140,6 +152,7 @@ export type {
   StoredHistory,
   StoredVisit,
   StoredPassword,
+  StoredPasswordSummary,
   StoredCookie,
   StoredFormFill,
   StoredSearchEngine,

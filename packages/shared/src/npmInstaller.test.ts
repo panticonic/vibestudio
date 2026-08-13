@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 const getSharedDerivedDataPath = vi.hoisted(() => vi.fn<() => string>());
 vi.mock("@vibestudio/env-paths", () => ({ getSharedDerivedDataPath }));
 
-import { runNpmInstall } from "./npmInstaller.js";
+import { resolveBundledNpmCliPath, runNpmInstall } from "./npmInstaller.js";
 
 const tempDirs: string[] = [];
 
@@ -18,6 +18,12 @@ afterEach(() => {
 });
 
 describe("runNpmInstall", () => {
+  it("refuses to resolve npm from the ambient launch directory", () => {
+    expect(() => resolveBundledNpmCliPath(undefined)).toThrow(
+      "requires the exact Vibestudio application root"
+    );
+  });
+
   it("uses a Vibestudio-owned cache instead of the user's npm cache", async () => {
     const fixture = createFakeNpmFixture();
     const sharedDerivedDataPath = path.join(fixture.root, "shared-derived-data");

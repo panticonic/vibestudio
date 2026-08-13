@@ -4,8 +4,7 @@ import {
   PAIRING_ROOM_PATTERN,
   parseSignalingEndpoint,
   selectedWorkspacePath,
-  type ConnectPairing,
-  type TurnPolicy,
+  type ReconnectReach,
 } from "./connect.js";
 import { isDeviceId, isDeviceRefreshToken, isServerId } from "./deviceCredentials.js";
 
@@ -26,10 +25,7 @@ export function parseAgentToken(token: string): ParsedAgentToken | null {
   return match?.[1] && match[2] ? { agentId: match[1], secret: match[2] } : null;
 }
 
-export type CliStoredPairing = Omit<ConnectPairing, "code" | "v" | "ice"> & {
-  v: typeof PAIRING_PROTOCOL_VERSION;
-  ice: TurnPolicy;
-};
+export type CliStoredPairing = ReconnectReach;
 
 export interface CliDeviceCredentials {
   schemaVersion: 4;

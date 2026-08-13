@@ -4,26 +4,18 @@ import {
   PAIRING_PROTOCOL_VERSION,
   PAIRING_ROOM_PATTERN,
   parseSignalingEndpoint,
-  type TurnPolicy,
+  type ConnectPairing,
+  type ReconnectReach,
 } from "@vibestudio/shared/connect";
 import { isDeviceId, isDeviceRefreshToken } from "@vibestudio/shared/deviceCredentials";
 
-export interface ShellPairing {
-  room: string;
-  fp: string;
-  sig: string;
-  ice: TurnPolicy;
-  v: typeof PAIRING_PROTOCOL_VERSION;
-  /** Present only while redeeming a fresh invite; never persisted. */
-  code?: string;
-}
+export type FreshShellPairing = ConnectPairing;
+export type StoredShellPairing = ReconnectReach;
 
 export interface ShellCredential {
   deviceId: string;
   refreshToken: string;
 }
-
-export type StoredShellPairing = Omit<ShellPairing, "code">;
 
 interface StoredMobileConnectionBase {
   schemaVersion: 4;
@@ -46,7 +38,7 @@ export type StoredMobileConnection = StoredPairedMobileConnection | StoredRouted
 
 const CREDENTIAL_KEYS = new Set(["deviceId", "refreshToken"]);
 const PAIRING_KEYS = new Set(["room", "fp", "sig", "v", "ice"]);
-const FRESH_PAIRING_KEYS = new Set([...PAIRING_KEYS, "code"]);
+const FRESH_PAIRING_KEYS = new Set([...PAIRING_KEYS, "code", "exp"]);
 const PAIRED_STORED_KEYS = new Set([
   "schemaVersion",
   "phase",
@@ -70,12 +62,11 @@ function isCurrentShellCredential(value: unknown): value is ShellCredential {
   return isDeviceId(value["deviceId"]) && isDeviceRefreshToken(value["refreshToken"]);
 }
 
-function isCurrentPairing(
+function isCurrentStoredPairing(
   value: unknown,
-  allowCode: boolean,
   requireCanonical: boolean
-): value is ShellPairing {
-  if (!isRecord(value) || !hasOnlyKeys(value, allowCode ? FRESH_PAIRING_KEYS : PAIRING_KEYS)) {
+): value is StoredShellPairing {
+  if (!isRecord(value) || !hasOnlyKeys(value, PAIRING_KEYS)) {
     return false;
   }
   const fingerprint = typeof value["fp"] === "string" ? normalizeFingerprint(value["fp"]) : null;
@@ -95,16 +86,32 @@ function isCurrentPairing(
   ) {
     return false;
   }
+  return true;
+}
+
+function isCurrentFreshPairing(value: unknown): value is FreshShellPairing {
+  if (!isRecord(value) || !hasOnlyKeys(value, FRESH_PAIRING_KEYS)) return false;
+  const reach = {
+    room: value["room"],
+    fp: value["fp"],
+    sig: value["sig"],
+    v: PAIRING_PROTOCOL_VERSION,
+    ice: value["ice"],
+  };
   return (
-    !allowCode ||
-    value["code"] === undefined ||
-    (typeof value["code"] === "string" && PAIRING_CODE_PATTERN.test(value["code"]))
+    isCurrentStoredPairing(reach, false) &&
+    value["v"] === PAIRING_PROTOCOL_VERSION &&
+    typeof value["code"] === "string" &&
+    PAIRING_CODE_PATTERN.test(value["code"]) &&
+    typeof value["exp"] === "number" &&
+    Number.isSafeInteger(value["exp"]) &&
+    value["exp"] > 0
   );
 }
 
-function describePairingValidationFailure(value: unknown, allowCode: boolean): string {
+function describePairingValidationFailure(value: unknown): string {
   if (!isRecord(value)) return "is not an object";
-  const allowedKeys = allowCode ? FRESH_PAIRING_KEYS : PAIRING_KEYS;
+  const allowedKeys = FRESH_PAIRING_KEYS;
   const unexpectedKeys = Object.keys(value).filter((key) => !allowedKeys.has(key));
   if (unexpectedKeys.length > 0) {
     return `contains unexpected field(s): ${unexpectedKeys.sort().join(", ")}`;
@@ -122,21 +129,32 @@ function describePairingValidationFailure(value: unknown, allowCode: boolean): s
   if (value["ice"] !== "all" && value["ice"] !== "relay") {
     return "has an invalid ICE transport policy";
   }
-  if (
-    allowCode &&
-    value["code"] !== undefined &&
-    (typeof value["code"] !== "string" || !PAIRING_CODE_PATTERN.test(value["code"]))
-  ) {
+  if (typeof value["code"] !== "string" || !PAIRING_CODE_PATTERN.test(value["code"])) {
     return "has an invalid pairing code";
   }
   return "is not a current WebRTC pairing";
 }
 
-function canonicalizePairing(pairing: ShellPairing, label: string): StoredShellPairing {
-  if (!isCurrentPairing(pairing, true, false)) {
+function canonicalizeFreshPairing(pairing: FreshShellPairing, label: string): StoredShellPairing {
+  if (!isCurrentFreshPairing(pairing)) {
     throw new Error(
-      `Cannot persist the ${label} WebRTC pairing: ${describePairingValidationFailure(pairing, true)}`
+      `Cannot persist the ${label} WebRTC pairing: ${describePairingValidationFailure(pairing)}`
     );
+  }
+  const signaling = parseSignalingEndpoint(pairing.sig);
+  if (signaling.kind === "error") throw new Error("Cannot persist a non-canonical WebRTC pairing");
+  return {
+    room: pairing.room,
+    fp: normalizeFingerprint(pairing.fp),
+    sig: signaling.url,
+    v: PAIRING_PROTOCOL_VERSION,
+    ice: pairing.ice,
+  };
+}
+
+function canonicalizeStoredPairing(pairing: StoredShellPairing, label: string): StoredShellPairing {
+  if (!isCurrentStoredPairing(pairing, false)) {
+    throw new Error(`Cannot persist the ${label} WebRTC pairing: invalid reconnect reach`);
   }
   const signaling = parseSignalingEndpoint(pairing.sig);
   if (signaling.kind === "error") throw new Error("Cannot persist a non-canonical WebRTC pairing");
@@ -173,7 +191,7 @@ function validateCredentialAndTimestamp(credential: ShellCredential, pairedAt: n
 
 export function createPairedMobileConnection(
   credential: ShellCredential,
-  controlPairing: ShellPairing,
+  controlPairing: FreshShellPairing,
   selectedWorkspaceId: string,
   pairedAt = Date.now()
 ): StoredPairedMobileConnection {
@@ -183,7 +201,7 @@ export function createPairedMobileConnection(
     schemaVersion: 4,
     phase: "paired",
     credential: { ...credential },
-    controlPairing: canonicalizePairing(controlPairing, "control"),
+    controlPairing: canonicalizeFreshPairing(controlPairing, "control"),
     selectedWorkspaceId,
     pairedAt,
   };
@@ -191,12 +209,12 @@ export function createPairedMobileConnection(
 
 export function createRoutedMobileConnection(
   paired: StoredPairedMobileConnection,
-  workspacePairing: ShellPairing
+  workspacePairing: StoredShellPairing
 ): StoredRoutedMobileConnection {
   return {
     ...paired,
     phase: "routed",
-    workspacePairing: canonicalizePairing(workspacePairing, "workspace"),
+    workspacePairing: canonicalizeStoredPairing(workspacePairing, "workspace"),
   };
 }
 
@@ -225,8 +243,8 @@ export function parseStoredMobileConnection(
     const pairedAt = parsed["pairedAt"];
     if (
       !isCurrentShellCredential(credential) ||
-      !isCurrentPairing(controlPairing, false, true) ||
-      (phase === "routed" && !isCurrentPairing(workspacePairing, false, true)) ||
+      !isCurrentStoredPairing(controlPairing, true) ||
+      (phase === "routed" && !isCurrentStoredPairing(workspacePairing, true)) ||
       (phase !== "paired" && phase !== "routed") ||
       typeof selectedWorkspaceId !== "string" ||
       !selectedWorkspaceId ||

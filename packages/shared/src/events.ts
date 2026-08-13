@@ -33,7 +33,6 @@ export type EventName =
   | "panel:executionActivated"
   | "panel:executionFailed"
   | "panel:stateArgsChanged"
-  | "panel-title-updated"
   | "panel-presentation-changed"
   | "panel-local-presentation-changed"
   | "panel:snapshot"
@@ -255,7 +254,6 @@ export interface EventPayloads {
     panelId: string;
     stateArgs: Record<string, unknown>;
   };
-  "panel-title-updated": { panelId: string; title: string | null; explicit?: boolean };
   "panel-presentation-changed": { revision: number; panelIds: string[] };
   "panel-local-presentation-changed": PanelPresentationSnapshot;
   "panel:snapshot": PanelRecoverySnapshot;
@@ -464,7 +462,6 @@ export const VALID_EVENT_NAMES: EventName[] = [
   "panel:executionActivated",
   "panel:executionFailed",
   "panel:stateArgsChanged",
-  "panel-title-updated",
   "panel-presentation-changed",
   "panel-local-presentation-changed",
   "panel:snapshot",
@@ -519,7 +516,6 @@ export function isValidEventName(name: string): name is EventName {
   if (name === "panel:executionActivated") return true;
   if (name === "panel:executionFailed") return true;
   if (name === "panel:stateArgsChanged") return true;
-  if (name === "panel-title-updated") return true;
   if (name === "panel:snapshot") return true;
   return VALID_EVENT_NAMES.includes(name as EventName);
 }

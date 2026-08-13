@@ -740,7 +740,7 @@ describe("WorkspaceDO slot operations", () => {
       limit: 2,
     });
     expect(first.nodes.map((node) => node.slotId)).toEqual(["slot-newest", "slot-middle"]);
-    expect(first.nodes.map((node) => node.kind)).toEqual(["workspace", "workspace"]);
+    expect(first.nodes.every((node) => !("kind" in node) && !("title" in node))).toBe(true);
     expect(first.nextCursor).not.toBeNull();
 
     const second = instance.panelTreePage({
@@ -828,14 +828,11 @@ describe("WorkspaceDO slot operations", () => {
       group: { kind: "roots", ownerUserId: null },
       limit: 10,
     });
-    expect(page.nodes.map(({ slotId, kind }) => ({ slotId, kind }))).toEqual([
-      { slotId: "browser-slot", kind: "browser" },
-      { slotId: "workspace-slot", kind: "workspace" },
-    ]);
+    expect(page.nodes.map(({ slotId }) => slotId)).toEqual(["browser-slot", "workspace-slot"]);
+    expect(page.nodes.every((node) => !("kind" in node) && !("title" in node))).toBe(true);
     expect(instance.panelTreePath("browser-slot")?.nodes.at(-1)).toMatchObject({
       slotId: "browser-slot",
       source: "browser:https://example.com",
-      kind: "browser",
       contextId: "ctx-1",
       runtimeEntityId: browserEntity.id,
     });

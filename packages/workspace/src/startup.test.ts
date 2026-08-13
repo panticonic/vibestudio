@@ -3,7 +3,6 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CentralDataManager } from "@vibestudio/shared/centralData";
-import { WORKSPACE_SYSTEM_EPOCH } from "@vibestudio/shared/vcs/systemEpoch";
 import { initWorkspace } from "./loader.js";
 import { resolveLocalWorkspaceStartup } from "./startup.js";
 
@@ -22,12 +21,6 @@ function setup() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-startup-"));
   tempRoots.push(root);
   process.env["XDG_CONFIG_HOME"] = path.join(root, "xdg");
-  const templateDir = path.join(root, "workspace");
-  fs.mkdirSync(path.join(templateDir, "meta"), { recursive: true });
-  fs.writeFileSync(
-    path.join(templateDir, "meta", "vibestudio.yml"),
-    `systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}\ninitPanels: []\n`
-  );
   fs.mkdirSync(path.join(root, "build-resources"), { recursive: true });
   fs.writeFileSync(
     path.join(root, "build-resources", "base-template-release.json"),
@@ -47,10 +40,32 @@ function setup() {
   });
   const workspaceDir = (name: string) =>
     path.join(process.env["XDG_CONFIG_HOME"]!, "vibestudio", "workspaces", name);
-  return { root, templateDir, centralData, workspaceDir };
+  return { root, centralData, workspaceDir };
 }
 
 describe("resolveLocalWorkspaceStartup current lifecycle", () => {
+  it("uses the hub-owned identity when creating a child workspace disk", () => {
+    const { root, workspaceDir } = setup();
+
+    const result = resolveLocalWorkspaceStartup({
+      appRoot: root,
+      name: "dev-child",
+      init: true,
+      workspaceId: "ws_hub_owned",
+      requireExplicitSelection: true,
+    });
+
+    expect(result.resolved.created).toBe(true);
+    expect(
+      JSON.parse(
+        fs.readFileSync(
+          path.join(workspaceDir("dev-child"), "state", "workspace-creation", "v1.json"),
+          "utf8"
+        )
+      )
+    ).toMatchObject({ workspaceId: "ws_hub_owned" });
+  });
+
   it("creates and registers a selected workspace as one compensated operation", () => {
     const { root, centralData, workspaceDir } = setup();
     try {
@@ -70,9 +85,17 @@ describe("resolveLocalWorkspaceStartup current lifecycle", () => {
   });
 
   it("rejects an unregistered directory instead of adopting it", () => {
-    const { root, templateDir, centralData, workspaceDir } = setup();
+    const { root, centralData, workspaceDir } = setup();
     try {
-      initWorkspace("orphan", { templateDir });
+      initWorkspace("orphan", {
+        rootTemplate: {
+          url: "git+https://example.test/base.git",
+          ref: "refs/tags/v1",
+          commit: "a".repeat(40),
+          snapshot: `v1-sha256:${"b".repeat(64)}`,
+        },
+        workspaceId: "ws_orphan",
+      });
 
       expect(() =>
         resolveLocalWorkspaceStartup({

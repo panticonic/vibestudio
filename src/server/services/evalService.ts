@@ -46,6 +46,13 @@ interface EvalSandboxRecoveryInput {
 
 export type EvalShutdown = (deadlineMs?: number) => Promise<void>;
 
+export const evalServiceDocumentation = {
+  name: "eval",
+  description: "Owner-scoped sandbox eval backed by a per-owner internal EvalDO",
+  authority: { principals: ["code", "user", "host"] },
+  methods: evalMethods,
+} satisfies Omit<ServiceDefinition, "handler">;
+
 interface ActiveEvalRun {
   evalDoRef: { source: string; className: string; objectKey: string };
   runId: string;
@@ -903,10 +910,7 @@ export function createEvalService(deps: {
   }
 
   return {
-    name: "eval",
-    description: "Owner-scoped sandbox eval backed by a per-owner internal EvalDO",
-    authority: { principals: ["code", "user", "host"] },
-    methods: evalMethods,
+    ...evalServiceDocumentation,
     handler: defineServiceHandler("eval", evalMethods, {
       start: async (ctx, [runArgs]) => {
         if (shutdownRequested) {

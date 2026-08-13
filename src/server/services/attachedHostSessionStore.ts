@@ -59,7 +59,7 @@ export class AttachedHostSessionStore implements AttachedHostProtocolStore {
       CREATE INDEX IF NOT EXISTS attached_host_challenge_state
         ON attached_host_challenges(session_id, state);
     `);
-    this.ensureChallengeAuditColumns();
+    this.assertCurrentChallengeSchema();
   }
 
   close(): void {
@@ -352,16 +352,15 @@ export class AttachedHostSessionStore implements AttachedHostProtocolStore {
     }
   }
 
-  private ensureChallengeAuditColumns(): void {
+  private assertCurrentChallengeSchema(): void {
     const columns = this.db.prepare("PRAGMA table_info(attached_host_challenges)").all() as Array<{
       name: string;
     }>;
     const names = new Set(columns.map((column) => column.name));
-    if (!names.has("challenged_at")) {
-      this.db.exec("ALTER TABLE attached_host_challenges ADD COLUMN challenged_at INTEGER");
-    }
-    if (!names.has("decided_at")) {
-      this.db.exec("ALTER TABLE attached_host_challenges ADD COLUMN decided_at INTEGER");
+    if (!names.has("challenged_at") || !names.has("decided_at")) {
+      throw new Error(
+        "Attached-host session state is not from the current system epoch; recreate this pre-release instance"
+      );
     }
   }
 }

@@ -113,6 +113,9 @@ class FakeClientWS implements WebSocketLike {
   deliver(data: string): void {
     this.emit("message", { data });
   }
+  fireError(error: Error): void {
+    this.emit("error", { error, message: error.message });
+  }
   fireClose(code: number, reason: string): void {
     if (this.readyState === 3) return;
     this.readyState = 3;
@@ -162,6 +165,9 @@ class ControllableWS implements WebSocketLike {
   }
   deliver(data: string): void {
     this.emit("message", { data });
+  }
+  fireError(error: Error): void {
+    this.emit("error", { error, message: error.message });
   }
   private emit(type: string, ev: unknown): void {
     for (const handler of this.listeners.get(type) ?? []) handler(ev);
@@ -473,6 +479,25 @@ describe("createSignalingClient", () => {
     await flush();
     expect(calls).toBe(1);
     expect(reason).toBe("client-closed");
+  });
+
+  it("does not log the expected socket error when an unopened client is explicitly closed", () => {
+    const { WS, instances } = controllableWsCtor();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const client = createSignalingClient({
+      room: "close-before-open",
+      sig: "https://sig.test",
+      role: "answerer",
+      WebSocketImpl: WS,
+      fetchImpl: okIceFetch([]),
+    });
+
+    client.close();
+    instances[0]!.fireError(
+      new Error("WebSocket was closed before the connection was established")
+    );
+
+    expect(warn).not.toHaveBeenCalled();
   });
 
   it("pings on the keepalive interval and stays open while pongs arrive", () => {

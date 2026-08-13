@@ -43,7 +43,7 @@ import type {
 } from "@vibestudio/rpc/transports/webrtcPeer";
 import { authMethods } from "@vibestudio/service-schemas/auth";
 import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
-import type { ConnectPairing } from "@vibestudio/shared/connect";
+import type { ReconnectReach } from "@vibestudio/shared/connect";
 import type {
   ConnectionStatus,
   HostServiceHandler,
@@ -56,7 +56,7 @@ import { exposeServerOriginatedHostMethod } from "./serverClient.js";
 
 export interface WebRtcServerClientArgs {
   /** The parsed pairing link (room/fp/sig/ice). */
-  pairing: ConnectPairing;
+  pairing: ReconnectReach;
   /** The shell's caller id, e.g. `shell:<deviceId>`. */
   callerId: string;
   /**

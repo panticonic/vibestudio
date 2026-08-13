@@ -137,7 +137,10 @@ function authorityPrincipals(authority) {
 }
 
 function pairedCliCallable(def) {
-  return authorityPrincipals(def.authority).includes("user");
+  return Object.values(def.methods).some((method) => {
+    if (method.agentFacing === false) return false;
+    return authorityPrincipals(method.authority ?? def.authority).includes("user");
+  });
 }
 
 function escapeTableCell(value) {

@@ -1,9 +1,13 @@
 import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import type { BuildPerformanceProfileWire } from "@vibestudio/service-schemas/build";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createBuildService } from "./buildService.js";
 import type { BuildSystemV2 } from "../buildV2/index.js";
+import { setBuildRootConfig } from "../buildV2/effectiveVersion.js";
+
+beforeEach(() => setBuildRootConfig({ appRoot: process.cwd(), workspaceRoot: process.cwd() }));
+afterEach(() => setBuildRootConfig(null));
 
 function buildTrigger(path: string) {
   const repoPath = path.split("/").slice(0, 2).join("/");

@@ -358,6 +358,7 @@ const preloadConfigs = [
   "browserPreload",
   "autofillPreload",
   "autofillOverlayPreload",
+  "browserPrivacyPreload",
   "shellOverlayPreload",
   "contentOverlayPreload",
 ].map(createPreloadConfig);
@@ -458,6 +459,7 @@ const bootstrapConfig = {
 
 function copyAssets() {
   fs.copyFileSync("src/bootstrap/index.html", "dist/index.html");
+  fs.copyFileSync("src/main/browserPrivacy.html", "dist/browserPrivacy.html");
   copyDirectoryRecursive("build-resources/brand", "dist/assets/brand");
   fs.mkdirSync("dist/baked-app", { recursive: true });
   // Bundled agent skill consumed by `vibestudio agent skill install|print`

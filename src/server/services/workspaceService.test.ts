@@ -252,11 +252,13 @@ describe("workspace service handler", () => {
     });
     await expect(
       service.handler(panelCtx, "validateConfig", [
-        "systemEpoch: 58\ntemplates:\n  use:\n    - name: News\n      url: https://example.test/news.git\n      ref: refs/tags/v1\n      commit: '1111111111111111111111111111111111111111'\n      snapshot: v1-sha256:1111111111111111111111111111111111111111111111111111111111111111\n",
+        `systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}\ntemplates:\n  use:\n    - name: News\n      url: https://example.test/news.git\n      ref: refs/tags/v1\n      commit: '1111111111111111111111111111111111111111'\n      snapshot: v1-sha256:1111111111111111111111111111111111111111111111111111111111111111\n`,
       ])
     ).rejects.toThrow(/unknown.*templates/i);
     await expect(
-      service.handler(panelCtx, "validateConfig", ["systemEpoch: 58\ndefaultRepo: panels/chat\n"])
+      service.handler(panelCtx, "validateConfig", [
+        `systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}\ndefaultRepo: panels/chat\n`,
+      ])
     ).resolves.toEqual({ valid: true });
   });
 

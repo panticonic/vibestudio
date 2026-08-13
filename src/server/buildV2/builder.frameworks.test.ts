@@ -37,6 +37,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import { setUserDataPath } from "@vibestudio/env-paths";
 
 import { buildUnit, initBuilder } from "./builder.js";
+import { setBuildRootConfig } from "./effectiveVersion.js";
 import { setBuildSourceProvider, workingTreeSourceProvider } from "./buildSource.js";
 import { setBuildExecutionIdentityContext } from "./buildStore.js";
 beforeAll(() => setBuildSourceProvider(workingTreeSourceProvider()));
@@ -75,6 +76,7 @@ describe("buildUnit framework-agnostic panel builds", () => {
   beforeEach(() => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-frameworks-build-"));
     workspaceRoot = path.join(root, "workspace");
+    setBuildRootConfig({ appRoot: REPO_ROOT, workspaceRoot });
     setUserDataPath(path.join(root, "state"));
     setBuildExecutionIdentityContext({
       workspaceId: "workspace:test",
@@ -86,6 +88,7 @@ describe("buildUnit framework-agnostic panel builds", () => {
   });
 
   afterEach(() => {
+    setBuildRootConfig(null);
     fs.rmSync(root, { recursive: true, force: true });
   });
 

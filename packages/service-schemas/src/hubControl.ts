@@ -56,15 +56,26 @@ export const HubWorkspaceRouteSchema = z
   })
   .strict();
 
-export const HubPairingInviteSchema = HubReachSchema.extend({
-  code: z.string().regex(PAIRING_CODE_PATTERN),
-  deepLink: z.string().startsWith("vibestudio://connect?"),
-  pairUrl: z.string().startsWith("https://vibestudio.app/pair#"),
-  expiresInMs: z.number().int().positive(),
-  expiresAt: z.number().int().positive(),
-  serverId: z.string().regex(SERVER_ID_PATTERN),
-  serverBootId: z.string().regex(SERVER_BOOT_ID_PATTERN),
-})
+export const HubPairingInviteSchema = z
+  .object({
+    room: z.string().regex(PAIRING_ROOM_PATTERN),
+    fp: z.string().refine((value) => /^[0-9A-F]{64}$/.test(normalizeFingerprint(value)), {
+      message: "Expected a SHA-256 DTLS fingerprint",
+    }),
+    sig: z.string().refine((value) => parseSignalingEndpoint(value).kind === "ok", {
+      message: "Expected a secure signaling URL or a cleartext loopback URL",
+    }),
+    v: z.literal(PAIRING_PROTOCOL_VERSION),
+    ice: z.enum(["all", "relay"]),
+    code: z.string().regex(PAIRING_CODE_PATTERN),
+    exp: z.number().int().positive(),
+    deepLink: z.string().startsWith("vibestudio://connect?"),
+    pairUrl: z.string().startsWith("https://vibestudio.app/pair#"),
+    expiresInMs: z.number().int().positive(),
+    expiresAt: z.number().int().positive(),
+    serverId: z.string().regex(SERVER_ID_PATTERN),
+    serverBootId: z.string().regex(SERVER_BOOT_ID_PATTERN),
+  })
   .strict()
   .superRefine((invite, ctx) => {
     for (const [field, link] of [
@@ -84,7 +95,8 @@ export const HubPairingInviteSchema = HubReachSchema.extend({
         signaling.kind === "ok" &&
         parsed.sig === signaling.url &&
         parsed.v === invite.v &&
-        parsed.ice === invite.ice;
+        parsed.ice === invite.ice &&
+        parsed.exp === invite.expiresAt;
       if (!matches) {
         ctx.addIssue({
           code: "custom",
@@ -269,19 +281,14 @@ export const hubControlMethods = defineServiceMethods({
         verb: "act",
       },
     },
-    description:
-      "Create and register a workspace from the packaged default, a fork, or one exact external root template.",
+    description: "Create and register a workspace from one exact external root template.",
     args: z.tuple([
       z
         .object({
           workspace: z.string().min(1),
-          forkFrom: z.string().min(1).optional(),
           rootTemplate: WorkspaceTemplatePinSchema.optional(),
         })
-        .strict()
-        .refine((value) => !(value.forkFrom && value.rootTemplate), {
-          message: "forkFrom and rootTemplate are mutually exclusive",
-        }),
+        .strict(),
     ]),
     returns: HubWorkspaceEntrySchema,
     access: writeAccess,

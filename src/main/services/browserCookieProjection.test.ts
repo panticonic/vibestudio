@@ -49,6 +49,22 @@ function stored(partial: Partial<StoredCookie> = {}): StoredCookie {
   };
 }
 
+function originScopedReads(revision: number, cookies: StoredCookie[]) {
+  const origins = [
+    ...new Set(cookies.map((cookie) => `https://${cookie.domain.replace(/^\./u, "")}`)),
+  ];
+  return {
+    listCookieOrigins: vi.fn().mockResolvedValue({ revision, origins }),
+    getCookiesForOrigin: vi.fn().mockImplementation(async (origin: string) => {
+      const host = new URL(origin).hostname;
+      return cookies.filter((cookie) => {
+        const domain = cookie.domain.replace(/^\./u, "");
+        return cookie.hostOnly ? host === domain : host === domain || host.endsWith(`.${domain}`);
+      });
+    }),
+  };
+}
+
 function fakeCookieJar(initial: BrowserCookieInput[] = []) {
   let current = [...initial];
   let changed: (() => void) | undefined;
@@ -133,6 +149,7 @@ describe("canonical browser cookie projection", () => {
     const onReady = vi.fn();
     const service = createBrowserCookieProjectionService({
       browserDataClient: browserDataClient as never,
+      browserVault: browserDataClient as never,
       serverClient: { stream: vi.fn(), call: vi.fn() } as never,
       hostId: "desktop:test",
       outboxRoot: "/tmp/unused-browser-projection-test",
@@ -164,6 +181,7 @@ describe("canonical browser cookie projection", () => {
     const onUnavailable = vi.fn();
     const service = createBrowserCookieProjectionService({
       browserDataClient: browserDataClient as never,
+      browserVault: browserDataClient as never,
       serverClient: { stream: vi.fn(), call: vi.fn() } as never,
       hostId: "desktop:test",
       outboxRoot: "/tmp/unused-browser-projection-test",
@@ -191,12 +209,13 @@ describe("canonical browser cookie projection", () => {
           environmentKey: "environment-test",
         }),
       applyCookieMutations: vi.fn().mockResolvedValue(undefined),
-      getCookieSnapshot: vi.fn().mockResolvedValue({ revision: 1, cookies: [] }),
+      ...originScopedReads(1, []),
     };
     const onReady = vi.fn();
     const onStopped = vi.fn();
     const service = createBrowserCookieProjectionService({
       browserDataClient: browserDataClient as never,
+      browserVault: browserDataClient as never,
       serverClient: {
         stream: vi.fn(),
         call: vi.fn().mockResolvedValue(null),
@@ -240,11 +259,12 @@ describe("canonical browser cookie projection", () => {
         environmentKey: "environment-test",
       }),
       applyCookieMutations,
-      getCookieSnapshot: vi.fn().mockResolvedValue({ revision: 1, cookies: [desired] }),
+      ...originScopedReads(1, [desired]),
     };
     const onReady = vi.fn();
     const service = createBrowserCookieProjectionService({
       browserDataClient: browserDataClient as never,
+      browserVault: browserDataClient as never,
       serverClient: {
         stream: vi.fn(),
         call: vi.fn().mockResolvedValue(null),
@@ -298,6 +318,10 @@ describe("canonical browser cookie projection", () => {
     });
     const state = fakeCookieJar();
     const onReady = vi.fn();
+    const browserVault = {
+      applyCookieMutations: vi.fn().mockResolvedValue({ revision: 1 }),
+      ...originScopedReads(2, [first, second]),
+    };
     const service = createBrowserCookieProjectionService({
       browserDataClient: {
         getBrowserEnvironment: vi.fn().mockResolvedValue({
@@ -305,9 +329,8 @@ describe("canonical browser cookie projection", () => {
           ownerUserId: "user-test",
           environmentKey: "environment-test",
         }),
-        applyCookieMutations: vi.fn().mockResolvedValue({ revision: 1 }),
-        getCookieSnapshot: vi.fn().mockResolvedValue({ revision: 2, cookies: [first, second] }),
       } as never,
+      browserVault: browserVault as never,
       serverClient: {
         stream: vi.fn(),
         call: vi.fn().mockResolvedValue(null),
@@ -352,11 +375,12 @@ describe("canonical browser cookie projection", () => {
         environmentKey: "environment-test",
       }),
       applyCookieMutations: vi.fn().mockResolvedValue({ revision: 1 }),
-      getCookieSnapshot: vi.fn().mockResolvedValue({ revision: 4, cookies: [rejected, accepted] }),
+      ...originScopedReads(4, [rejected, accepted]),
     };
     const onReady = vi.fn();
     const service = createBrowserCookieProjectionService({
       browserDataClient: browserDataClient as never,
+      browserVault: browserDataClient as never,
       serverClient: {
         stream: vi.fn(),
         call: vi.fn().mockResolvedValue(null),
@@ -396,6 +420,10 @@ describe("canonical browser cookie projection", () => {
     const state = fakeCookieJar();
     const applyCookieMutations = vi.fn().mockResolvedValue({ revision: 1 });
     const onReady = vi.fn();
+    const browserVault = {
+      applyCookieMutations,
+      ...originScopedReads(0, []),
+    };
     const service = createBrowserCookieProjectionService({
       browserDataClient: {
         getBrowserEnvironment: vi.fn().mockResolvedValue({
@@ -403,9 +431,8 @@ describe("canonical browser cookie projection", () => {
           ownerUserId: "user-test",
           environmentKey: "environment-test",
         }),
-        applyCookieMutations,
-        getCookieSnapshot: vi.fn().mockResolvedValue({ revision: 0, cookies: [] }),
       } as never,
+      browserVault: browserVault as never,
       serverClient: {
         stream: vi.fn(),
         call: vi.fn().mockResolvedValue(null),
@@ -446,7 +473,7 @@ describe("canonical browser cookie projection", () => {
     vi.useFakeTimers();
     const tempRoot = await mkdtemp(path.join(os.tmpdir(), "browser-cookie-projection-"));
     const { jar } = fakeCookieJar();
-    const getCookieSnapshot = vi.fn().mockResolvedValue({ revision: 1, cookies: [] });
+    const reads = originScopedReads(1, []);
     const encoder = new TextEncoder();
     let watchController: ReadableStreamDefaultController<Uint8Array> | null = null;
     const stream = vi.fn(
@@ -471,6 +498,10 @@ describe("canonical browser cookie projection", () => {
       })
     );
     const onReady = vi.fn();
+    const browserVault = {
+      applyCookieMutations: vi.fn().mockResolvedValue(undefined),
+      ...reads,
+    };
     const service = createBrowserCookieProjectionService({
       browserDataClient: {
         getBrowserEnvironment: vi.fn().mockResolvedValue({
@@ -478,9 +509,8 @@ describe("canonical browser cookie projection", () => {
           ownerUserId: "user-test",
           environmentKey: "environment-test",
         }),
-        applyCookieMutations: vi.fn().mockResolvedValue(undefined),
-        getCookieSnapshot,
       } as never,
+      browserVault: browserVault as never,
       serverClient: { stream, call: vi.fn().mockResolvedValue(null) } as never,
       hostId: "desktop:test",
       outboxRoot: tempRoot,
@@ -503,17 +533,17 @@ describe("canonical browser cookie projection", () => {
     try {
       await service.start?.(() => undefined);
       await vi.waitFor(() => expect(onReady).toHaveBeenCalledOnce());
-      const initialReads = getCookieSnapshot.mock.calls.length;
+      const initialReads = reads.listCookieOrigins.mock.calls.length;
 
       pushHealth("restarting", 1);
       await vi.advanceTimersByTimeAsync(0);
       await vi.advanceTimersByTimeAsync(60_000);
-      expect(getCookieSnapshot).toHaveBeenCalledTimes(initialReads);
+      expect(reads.listCookieOrigins).toHaveBeenCalledTimes(initialReads);
 
       pushHealth("running", 2);
       await vi.advanceTimersByTimeAsync(0);
       await vi.waitFor(() =>
-        expect(getCookieSnapshot.mock.calls.length).toBeGreaterThan(initialReads)
+        expect(reads.listCookieOrigins.mock.calls.length).toBeGreaterThan(initialReads)
       );
     } finally {
       await service.stop?.(undefined);

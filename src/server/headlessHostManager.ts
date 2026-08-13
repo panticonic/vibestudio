@@ -18,6 +18,7 @@ import { createDevLogger } from "@vibestudio/dev-log";
 import type { ClientSession } from "@vibestudio/shared/panel/panelLease";
 import type { TokenManager } from "@vibestudio/shared/tokenManager";
 import type { PanelRuntimeCoordinator } from "./panelRuntimeCoordinator.js";
+import { resolveRequiredAppRoot } from "./appRoot.js";
 
 const log = createDevLogger("HeadlessHostManager");
 
@@ -79,19 +80,21 @@ export interface HeadlessHostManagerDeps {
   signalProcessGroup?: (pid: number, signal: NodeJS.Signals) => void;
 }
 
-export function resolveHeadlessHostEntryPath(
-  env: NodeJS.ProcessEnv = process.env,
-  cwd = process.cwd()
-): string {
+export function resolveHeadlessHostEntryPath(env: NodeJS.ProcessEnv = process.env): string {
   const override = env["VIBESTUDIO_HEADLESS_HOST_ENTRY"];
-  if (override) return path.resolve(cwd, override);
+  if (override) {
+    if (!path.isAbsolute(override)) {
+      throw new Error("VIBESTUDIO_HEADLESS_HOST_ENTRY must be an absolute executable path");
+    }
+    return path.normalize(override);
+  }
 
   // Root builds, source-server prerequisites, packaged desktop builds, and
   // staged npm packages all publish the same artifact beneath the app root.
-  // Launchers pin VIBESTUDIO_APP_ROOT for installed packages; source commands
-  // run at the repository root. Missing artifacts fail loud below rather than
-  // silently selecting a stale app-local build.
-  const appRoot = env["VIBESTUDIO_APP_ROOT"] || cwd;
+  // Every launcher pins the exact application root. An operator override is
+  // likewise an exact path; the process working directory is never artifact
+  // identity.
+  const appRoot = resolveRequiredAppRoot({ env });
   return path.resolve(appRoot, "dist", "headless-host", "main.js");
 }
 

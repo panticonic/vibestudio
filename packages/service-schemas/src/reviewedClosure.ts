@@ -103,6 +103,15 @@ export const reviewedClosureMethods = defineServiceMethods({
         "Kernel verifies and activates an exact compiled authority closure and atomically mints its standing grants.",
     },
     description: "Activate one digest-bound reviewed execution closure.",
+    capability: ACTIVATE,
+    presentation: {
+      title: "Activate reviewed automation",
+      action: "activate reviewed automation",
+      description:
+        "Allows {requesterKind} to activate the exact automation authority closure you reviewed.",
+      group: "runtime",
+      authorityCategory: { domain: "safety", verb: "manage" },
+    },
     args: z.tuple([reviewedClosureActivationSchema]),
     returns: reviewedClosureRecordSchema,
     authority: {
@@ -170,6 +179,14 @@ export const reviewedClosureMethods = defineServiceMethods({
   },
   bindSession: {
     capability: "reviewed-closure.bind-session",
+    presentation: {
+      title: "Use reviewed automation authority",
+      action: "use reviewed automation authority",
+      description:
+        "Allows {requesterKind} to bind a running automation to its exact reviewed authority closure.",
+      group: "runtime",
+      authorityCategory: { domain: "safety", verb: "manage" },
+    },
     tier: {
       tier: "open",
       session: "codeOnly",

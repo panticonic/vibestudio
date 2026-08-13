@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  createHostCaller,
   createVerifiedCaller,
   ServiceDispatcher,
   type ServiceContext,
@@ -18,6 +19,7 @@ const TEST_WORKSPACE_SERVICE_PRESENTATION = {
 };
 
 const panelCtx: ServiceContext = { caller: createVerifiedCaller("panel-test", "panel") };
+const hostCtx: ServiceContext = { caller: createHostCaller("shell-test", "shell") };
 const ownedPanelCtx: ServiceContext = {
   caller: createVerifiedCaller("panel-owned", "panel", null, null, {
     userId: "usr_alice",
@@ -376,18 +378,6 @@ describe("workerService workspace service resolution", () => {
           defaultObjectKey: null,
         },
         {
-          origin: "product",
-          name: "browser.vault",
-          title: "Browser vault",
-          description: "Use protected browser credentials and cookie material.",
-          presentation: { domain: "web", verb: "see" },
-          protocols: ["vibestudio.browser-vault.v1"],
-          source: "vibestudio/internal",
-          kind: "durable-object",
-          className: "BrowserVaultDO",
-          defaultObjectKey: null,
-        },
-        {
           origin: "workspace",
           name: "browser.data",
           title: "Browser data",
@@ -443,7 +433,7 @@ describe("workerService workspace service resolution", () => {
     });
 
     await expect(
-      dispatcher.dispatch(panelCtx, "workers", "resolveService", ["vibestudio.workspace-state.v1"])
+      dispatcher.dispatch(hostCtx, "workers", "resolveService", ["vibestudio.workspace-state.v1"])
     ).resolves.toMatchObject({
       origin: "product",
       kind: "durable-object",

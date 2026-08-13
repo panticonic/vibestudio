@@ -242,7 +242,6 @@ function readServiceAccount(env: NodeJS.ProcessEnv): Record<string, unknown> | n
   const candidatePaths = [
     env["VIBESTUDIO_FIREBASE_SERVICE_ACCOUNT_PATH"],
     env["GOOGLE_APPLICATION_CREDENTIALS"],
-    path.join(process.cwd(), "firebase-service-account.json"),
   ].filter((value): value is string => !!value);
 
   for (const candidate of candidatePaths) {

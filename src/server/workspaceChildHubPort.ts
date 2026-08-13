@@ -85,7 +85,6 @@ export const WorkspaceChildPresenceReportInputSchema = z
   })
   .strict();
 export const WorkspaceChildPresenceReportResultSchema = z.object({ updated: z.boolean() }).strict();
-
 export const WorkspaceChildGovernanceAppendInputSchema = z
   .object({ record: ApprovalRecordSchema.omit({ workspaceId: true }) })
   .strict();

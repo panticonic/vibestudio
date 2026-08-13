@@ -10,7 +10,6 @@ export function registerEntityUnitDrivers(input: {
   supervisor: UnitSupervisor;
   entityCache: EntityCache;
   diagnostics: RuntimeDiagnosticsStore;
-  titleFor(entityId: string): string | undefined;
   restartPanel(ctx: ServiceContext, entity: EntityRecord): Promise<void>;
   restartWorker(ctx: ServiceContext, entity: EntityRecord): Promise<void>;
   restartDurableObject(ctx: ServiceContext, entity: EntityRecord): Promise<void>;
@@ -45,7 +44,6 @@ export function registerEntityUnitDrivers(input: {
   };
   const common = {
     entityCache: input.entityCache,
-    titleFor: input.titleFor,
     logs,
     retire: input.retire,
   };

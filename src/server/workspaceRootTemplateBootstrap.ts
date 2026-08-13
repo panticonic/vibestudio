@@ -99,9 +99,8 @@ export class WorkspaceRootTemplateBootstrap {
    * materialization receipt exists, restart no longer depends on the original
    * remote template being reachable.
    */
-  async prepareSource(): Promise<WorkspaceTemplatePin | null> {
+  async prepareSource(): Promise<WorkspaceTemplatePin> {
     const descriptor = this.readDescriptor();
-    if (!descriptor) return null;
     if (this.preparedInitialization) return this.preparedInitialization.pin;
     if (this.validateMaterializedSource(descriptor.rootTemplate)) {
       return descriptor.rootTemplate;
@@ -111,9 +110,8 @@ export class WorkspaceRootTemplateBootstrap {
     return this.preparedInitialization.pin;
   }
 
-  async prepareInitialization(): Promise<PreparedRootTemplateInitialization | null> {
+  async prepareInitialization(): Promise<PreparedRootTemplateInitialization> {
     const pin = await this.prepareSource();
-    if (!pin) return null;
     if (!this.preparedInitialization) {
       // Crash recovery after source materialization but before the provider
       // recorded its initialization receipt still needs the exact repository
@@ -279,8 +277,12 @@ export class WorkspaceRootTemplateBootstrap {
    * pin — and only the parts of it a person can read: the URL and the human
    * ref. The commit stays here, in the descriptor, for audit.
    */
-  readDescriptor(): WorkspaceCreationDescriptor | null {
-    if (!fs.existsSync(this.descriptorPath)) return null;
+  readDescriptor(): WorkspaceCreationDescriptor {
+    if (!fs.existsSync(this.descriptorPath)) {
+      throw new Error(
+        `Workspace is missing its current creation descriptor at ${CREATION_DESCRIPTOR_PATH}`
+      );
+    }
     const descriptor = WorkspaceCreationDescriptorSchema.parse(
       JSON.parse(fs.readFileSync(this.descriptorPath, "utf8"))
     );

@@ -554,15 +554,7 @@ export const templatesMethods = defineServiceMethods({
       z
         .object({
           operationId: z.string(),
-          kind: z.enum([
-            "add",
-            "adopt",
-            "pull",
-            "remove",
-            "recompose",
-            "adopt-bootstrap",
-            "publish-authoring",
-          ]),
+          kind: z.enum(["add", "adopt", "pull", "remove", "recompose", "publish-authoring"]),
           contextId: z.string(),
           initiator: templateOperationInitiatorSchema,
           target: templateOperationTargetSchema.optional(),

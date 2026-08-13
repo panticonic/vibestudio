@@ -6,9 +6,11 @@
 import { fork as nodeFork } from "node:child_process";
 import type { Serializable } from "node:child_process";
 import { createRequire } from "node:module";
-import * as path from "node:path";
 
-const requireOptional = createRequire(path.join(process.cwd(), "package.json"));
+// Electron is supplied by the runtime executable rather than the workspace or
+// launch directory. Anchoring the require at that executable works in both the
+// package's native ESM build and the host's CommonJS production bundle.
+const requireOptional = createRequire(process.execPath);
 
 /**
  * Abstraction over Electron utilityProcess / Node.js child_process.

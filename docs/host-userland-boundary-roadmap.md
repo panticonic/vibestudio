@@ -1,11 +1,14 @@
 # Host/userland boundary roadmap
 
-Status: proposed pre-release architecture work, revised 2026-08-12 for clean cuts
+Status: implementation and acceptance roadmap, updated 2026-08-13. Candidate
+boundary cuts are present in the integration worktree; final combined evidence
+and pre-release promotion are still pending.
 
-This document describes the remaining high-value boundary work after the small
-host-surface extractions landed in August 2026. It assumes the external-Base
-cutover in `docs/external-base-cutover-and-self-development-plan.md` and the
-pre-release policy in `docs/agentic-upgrade-migrations-plan.md`.
+This document describes both the candidate boundary cuts landed in the current
+integration worktree and the remaining acceptance work. It assumes the
+external-Base cutover in
+`docs/external-base-cutover-and-self-development-plan.md` and the pre-release
+policy in `docs/agentic-upgrade-migrations-plan.md`.
 
 `docs/host-residency-redesign.md` is historical context, not the specification.
 
@@ -29,6 +32,31 @@ to become host kernel.
 The target is not a low method count for its own sake. Each host method must
 represent one irreducible authority fact or native effect, and ordinary product
 changes must not require a host release.
+
+## Implementation checkpoint
+
+The current candidate implements the intended ownership direction without a
+compatibility generation:
+
+- provider/catalog validation distinguishes host contracts from effective
+  workspace providers, including the phone-provisioning route;
+- the redundant generic `panel-host-protocol` package is removed in favor of
+  the existing `panelRuntime` lifecycle protocol plus the narrow Electron
+  native-view envelope;
+- workspace presentation is separated from the kernel topology/history spine;
+- reviewed immutable authority closures are separated from mission product
+  workflow;
+- browser product storage and client behavior are separated from the protected
+  browser vault surface; and
+- Base owns exact-pair development workflow while the host owns sealed native
+  materialization, execution, semantic-import, and cleanup effects.
+
+This is a code checkpoint, not release acceptance. Base v0.3.8 and the staged
+host pointer remain provisional until combined authority/catalog generation,
+host and exact-Base typechecks, focused boundary suites, packaged-boundary
+inspection, a fresh managed-instance proof, official-template promotion, and
+the destructive pre-release recreation all pass. No incomplete workstream may
+be hidden behind an old route or fallback while those gates are pending.
 
 ## Pre-release cut rule
 
@@ -190,7 +218,14 @@ mobile/headless paths, preload/event bridges, and workspace product code.
 Different transports carry overlapping semantics, and host-local persistence
 can become a second product state.
 
-### A0: convergent desired/observed envelope
+### A0: Electron-local convergent native-surface envelope
+
+`panelRuntime` is the one cross-client lifecycle and lease protocol used by
+Electron, mobile, and headless hosts. Do not layer another generic panel-host
+protocol over it. Electron alone has an additional mechanical boundary between
+the workspace shell renderer and main-process `WebContentsView` projection.
+That narrow boundary lives with the `view` service schemas; it is not a second
+product-state or lease channel.
 
 Define one generation-fenced protocol:
 
@@ -202,8 +237,10 @@ Define one generation-fenced protocol:
 - unsupported capabilities are absent negotiated endowments; and
 - native resource identities and leases remain adapter-owned.
 
-Build a conformance harness with in-memory, Electron, mobile, and headless
-adapters. Existing transports may carry the envelope only until the same
+Exercise this envelope against the real Electron adapter. Mobile and headless
+continue to converge the complete `panelRuntime` lease snapshot because they
+are themselves panel hosts, not workspace shells separated from an embedded
+native adapter. Existing transports may carry an envelope only until the same
 current release deletes their old semantic messages; there is never a runtime
 choice between protocols.
 
@@ -223,7 +260,8 @@ epoch release; recreate workspaces rather than importing old panel state.
 
 ### A2: consolidate mobile, headless, event, and preload paths
 
-- Mobile and headless implement the same envelope and endowments.
+- Mobile and headless implement the same complete `panelRuntime` lease
+  convergence; they do not imitate Electron's local native-surface envelope.
 - Preload exposes transport, not product policy.
 - Event projection is derived from observed protocol state.
 - Legacy event/message forms are deleted.
@@ -450,6 +488,27 @@ Recommended order:
 Each cut republishes the official template set and recreates controlled
 workspaces. It does not share a migration primitive because none exists.
 
+## Workstream execution record
+
+“Candidate implemented” below means the target code path and focused evidence
+surface exist in the integration worktree. Acceptance still requires the final
+combined gates and source/residency census.
+
+| Workstream   | Candidate checkpoint                                                                                                                              | Remaining acceptance                                                                                |
+| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| Foundation 0 | Provider/catalog distinction and exact effective-provider validation are implemented, including phone provisioning.                               | Fresh exact-Base route proof; missing/duplicate/deleted-provider cases; final catalog generation.   |
+| A            | The redundant generic panel protocol is removed; `panelRuntime` remains the lifecycle protocol and Electron uses the narrow native-view boundary. | Combined Electron, mobile, headless, reconnect, generation-fence, and legacy-message absence proof. |
+| B            | Workspace presentation delegation is implemented around the retained topology/history authority spine.                                            | Final table/method/source census and rebuild/reconnect proof.                                       |
+| C            | The reviewed-closure kernel service exists and mission authority activation is routed through immutable reviewed closures.                        | Final mission product-owner proof and absence census for old kernel CRUD/policy.                    |
+| D            | Protected browser-vault behavior and workspace browser product data are separated in the candidate.                                               | Final vault non-disclosure, product persistence, cross-store retry, and old-route absence proof.    |
+| E            | Recovery remains a narrow current-generation surface in the candidate architecture.                                                               | Explicit activation/teardown and old-epoch failure proof after A's final integration.               |
+| F            | Exact host/Base pair kinds, Base-owned workflow, narrow native effects, receipt replay, and owned cleanup are implemented.                        | Managed inside-system self-development and child cleanup proof from the final exact pair.           |
+
+Focused Workstream F evidence recorded on 2026-08-13 is 20 passing host tests
+across the exchange/pair/executor/authority surfaces and 16 passing exact-Base
+Development/self-development tests. This evidence is useful but deliberately
+smaller than release acceptance.
+
 ## Evidence and verification
 
 Every workstream produces:
@@ -471,6 +530,22 @@ Every workstream produces:
 Method and line-count reductions are evidence, not acceptance. The decisive
 facts are one product owner, co-located authority facts, one current protocol,
 and a host surface made only of irreducible authority and effects.
+
+Before changing either current release pointer, record one final evidence
+packet containing:
+
+- exact host commit, exact Base pin, epoch, and effective provider catalog;
+- generated host authority catalog and runtime census reviewed together after
+  all workstreams settle;
+- host and exact-Base typechecks plus the focused owner-boundary test list;
+- package inspection proving no in-tree or copied Base source;
+- one fresh managed-instance creation and exact-pair self-development run with
+  owned cleanup; and
+- exact optional-template and registry identities from the coordinated
+  current-generation promotion.
+
+Until that packet exists, the staged v0.3.8 pointer is a candidate coordinate,
+not evidence that the boundary program or external-Base cutover is complete.
 
 ## Explicit non-goals
 

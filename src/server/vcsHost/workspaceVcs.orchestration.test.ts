@@ -247,7 +247,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
       fsp.mkdir(path.join(workspaceRoot, "projects", "coordinates"), { recursive: true }),
     ]);
     await Promise.all([
-      fsp.writeFile(path.join(workspaceRoot, "meta", "vibestudio.yml"), "systemEpoch: 58\n"),
+      fsp.writeFile(path.join(workspaceRoot, "meta", "vibestudio.yml"), "systemEpoch: 59\n"),
       fsp.writeFile(
         path.join(workspaceRoot, "projects", "coordinates", "unicode.txt"),
         unicodeText
@@ -328,7 +328,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     const { root, deps } = await harness();
     const workspaceRoot = path.join(root, "source");
     await fsp.mkdir(path.join(workspaceRoot, "meta"), { recursive: true });
-    await fsp.writeFile(path.join(workspaceRoot, "meta", "vibestudio.yml"), "systemEpoch: 58\n");
+    await fsp.writeFile(path.join(workspaceRoot, "meta", "vibestudio.yml"), "systemEpoch: 59\n");
     const encoder = new TextEncoder();
     const subtreeDigest = `v1-sha256:${"b".repeat(64)}` as const;
     const pin = {
@@ -343,7 +343,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
       pin,
       config: {
         id: "workspace:test",
-        systemEpoch: 58,
+        systemEpoch: 59,
       },
       repositories: [
         {
@@ -366,6 +366,10 @@ describe("WorkspaceVcs semantic host orchestration", () => {
       prepareInitialization: vi.fn(async () => prepared),
     };
     const templateVcs = new WorkspaceVcs({ ...deps, rootTemplateBootstrap });
+    vi.spyOn(deps.refs, "readMainSemanticState").mockReturnValue({
+      kind: "event",
+      eventId: "event:template",
+    });
     vi.spyOn(templateVcs, "ensureContext").mockImplementation(async () => ({
       kind: "event",
       eventId: "event:genesis",

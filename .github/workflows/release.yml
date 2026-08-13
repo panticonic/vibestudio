@@ -57,13 +57,9 @@ jobs:
           cache: pnpm
           cache-dependency-path: |
             pnpm-lock.yaml
-            workspace/pnpm-lock.yaml
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
-
-      - name: Install workspace dependencies
-        run: pnpm --dir workspace install --frozen-lockfile
 
       - name: Set version from tag
         run: node scripts/set-version-from-tag.mjs "${GITHUB_REF_NAME}"
@@ -140,13 +136,9 @@ jobs:
           cache: pnpm
           cache-dependency-path: |
             pnpm-lock.yaml
-            workspace/pnpm-lock.yaml
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
-
-      - name: Install workspace dependencies
-        run: pnpm --dir workspace install --frozen-lockfile
 
       - name: Set version from tag
         run: node scripts/set-version-from-tag.mjs "${GITHUB_REF_NAME}"

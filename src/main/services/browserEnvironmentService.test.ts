@@ -1,13 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
+import { browserEnvironmentMethods } from "@vibestudio/service-schemas/browserEnvironment";
 import { createBrowserEnvironmentService } from "./browserEnvironmentService.js";
 
 function service() {
   return createBrowserEnvironmentService({
-    getProjection: () => null,
-    waitForProjection: async () => {
-      throw new Error("Browser cookie projection is unavailable");
-    },
     getDownloads: () => null,
     getImportProvider: () => null,
     browserDataBrokerRepoPath: "extensions/browser-data",
@@ -26,7 +23,7 @@ describe("browserEnvironment authority", () => {
       requested: [],
     });
     const prepare = definition.authorityPreparation?.["browserEnvironment.broker.startImportRead"];
-    expect(prepare?.({ caller }, ["source", ["passwords"]])).toEqual({
+    expect(prepare?.({ caller }, ["source", ["bookmarks"]])).toEqual({
       selections: [
         expect.objectContaining({
           capability: "service:browserEnvironment.startImportRead",
@@ -73,58 +70,127 @@ describe("browserEnvironment authority", () => {
     });
   });
 
+  it("keeps sensitive values out of the plaintext import-frame contract", () => {
+    expect(() =>
+      browserEnvironmentMethods["startImportRead"]!.args.parse(["source", ["passwords"]])
+    ).toThrow();
+    expect(() =>
+      browserEnvironmentMethods["nextImportFrame"]!.returns!.parse({
+        type: "batch",
+        dataType: "cookies",
+        batchIndex: 0,
+        items: [{ value: "secret" }],
+      })
+    ).toThrow();
+    expect(
+      browserEnvironmentMethods["startSensitiveImport"]!.args.parse([
+        "source",
+        ["cookies", "passwords", "formFill"],
+        "operation-id",
+      ])
+    ).toEqual(["source", ["cookies", "passwords", "formFill"], "operation-id"]);
+  });
+
+  it("routes sensitive imports to the sealed provider operation", async () => {
+    const startSensitiveImport = vi.fn(() => ({
+      operationId: "operation-id",
+      state: "running" as const,
+      counts: [{ dataType: "cookies" as const, read: 2, stored: 2, skipped: 0, errors: 0 }],
+    }));
+    const definition = createBrowserEnvironmentService({
+      getDownloads: () => null,
+      getImportProvider: () => ({ startSensitiveImport }) as never,
+      browserDataBrokerRepoPath: "extensions/browser-data",
+    });
+
+    const approvedCaller = createVerifiedCaller("extension-1", "extension", {
+      callerId: "extension-1",
+      callerKind: "extension",
+      repoPath: "extensions/browser-data",
+      effectiveVersion: "version-1",
+      executionDigest: "a".repeat(64),
+      requested: [],
+    });
+    approvedCaller.codeApproved = true;
+    await expect(
+      definition.handler({ caller: approvedCaller } as never, "startSensitiveImport", [
+        "source",
+        ["cookies"],
+        "operation-id",
+      ])
+    ).resolves.toEqual({
+      operationId: "operation-id",
+      state: "running",
+      counts: [{ dataType: "cookies", read: 2, stored: 2, skipped: 0, errors: 0 }],
+    });
+    expect(startSensitiveImport).toHaveBeenCalledWith("source", ["cookies"], "operation-id");
+  });
+
+  it("admits host-originated sensitive operations without a prepared prompt", async () => {
+    const startSensitiveImport = vi.fn(() => ({
+      operationId: "operation-id",
+      state: "running" as const,
+      counts: [{ dataType: "cookies" as const, read: 0, stored: 0, skipped: 0, errors: 0 }],
+    }));
+    const definition = createBrowserEnvironmentService({
+      getDownloads: () => null,
+      getImportProvider: () => ({ startSensitiveImport }) as never,
+      browserDataBrokerRepoPath: "extensions/browser-data",
+    });
+    const caller = createVerifiedCaller("shell:main", "shell");
+    caller.hostOriginated = true;
+    await expect(
+      definition.handler({ caller } as never, "startSensitiveImport", [
+        "source",
+        ["cookies"],
+        "operation-id",
+      ])
+    ).resolves.toMatchObject({ state: "running" });
+    expect(
+      definition.authorityPreparation?.["browserEnvironment.broker.startSensitiveImport"]
+    ).toBeUndefined();
+  });
+
+  it("rejects unapproved and wrong-source code from non-prompting sensitive endpoints", async () => {
+    const definition = createBrowserEnvironmentService({
+      getDownloads: () => null,
+      getImportProvider: () => ({ startSensitiveImport: vi.fn() }) as never,
+      browserDataBrokerRepoPath: "extensions/browser-data",
+    });
+    const unapproved = createVerifiedCaller("extension-1", "extension", {
+      callerId: "extension-1",
+      callerKind: "extension",
+      repoPath: "extensions/browser-data",
+      effectiveVersion: "version-1",
+      executionDigest: "a".repeat(64),
+      requested: [],
+    });
+    await expect(
+      definition.handler({ caller: unapproved } as never, "startSensitiveImport", [
+        "source",
+        ["cookies"],
+        "operation-id",
+      ])
+    ).rejects.toMatchObject({ code: "EACCES" });
+    const wrong = {
+      ...unapproved,
+      codeApproved: true as const,
+      code: { ...unapproved.code!, repoPath: "extensions/other" },
+    };
+    await expect(
+      definition.handler({ caller: wrong } as never, "startSensitiveImport", [
+        "source",
+        ["cookies"],
+        "operation-id",
+      ])
+    ).rejects.toMatchObject({ code: "EACCES" });
+  });
+
   it("adds no broker-source leaf to a host-originated call", () => {
     const definition = service();
     const prepare = definition.authorityPreparation?.["browserEnvironment.broker.nextImportFrame"];
     expect(
       prepare?.({ caller: createVerifiedCaller("shell:main", "shell") }, ["operation"])
     ).toEqual({ selections: [], payload: null });
-  });
-
-  it("waits for projection readiness before flushing imported cookies", async () => {
-    const flush = vi.fn(async () => ({ revision: 7 }));
-    let release!: () => void;
-    const ready = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    const waitForProjection = vi.fn(async () => {
-      await ready;
-      return { flush } as never;
-    });
-    const definition = createBrowserEnvironmentService({
-      getProjection: () => null,
-      waitForProjection,
-      getDownloads: () => null,
-      getImportProvider: () => null,
-      browserDataBrokerRepoPath: "extensions/browser-data",
-    });
-
-    let settled = false;
-    const result = definition
-      .handler(
-        {
-          caller: createVerifiedCaller("extension-1", "extension", {
-            callerId: "extension-1",
-            callerKind: "extension",
-            repoPath: "extensions/browser-data",
-            effectiveVersion: "version-1",
-            executionDigest: "a".repeat(64),
-            requested: [],
-          }),
-        } as never,
-        "flushCookieProjection",
-        [[]]
-      )
-      .then((value) => {
-        settled = true;
-        return value;
-      });
-    await Promise.resolve();
-    expect(settled).toBe(false);
-
-    release();
-    await expect(result).resolves.toEqual({ revision: 7 });
-    expect(waitForProjection).toHaveBeenCalledOnce();
-    expect(flush).toHaveBeenCalledWith([]);
   });
 });

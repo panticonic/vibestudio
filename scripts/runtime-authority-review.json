@@ -1,7 +1,23 @@
 {
   "version": 1,
-  "censusDigest": "sha256:8d5a8d3ea7541812e4a9c45325352cf638bb52292da6aaed92a3a56e24c7f666",
+  "censusDigest": "sha256:2be9daab4c737f34d728865b19d9085aef802c8f1b51969d9da11f63bd1eb417",
   "decisions": {
+    "host:phoneNativeEndpoint.desktops": {
+      "review": "exact-base-phone-provider-desktop-discovery",
+      "change": "Replaces generic connected-client enumeration with a typed, account-bound desktop projection admitted only for the exact approved workers/phone-provisioning Durable Object. It carries no independent user gate and exposes no arbitrary client method transport."
+    },
+    "host:phoneNativeEndpoint.providers": {
+      "review": "exact-base-phone-provider-capability-read",
+      "change": "Forwards only the fixed desktopPhoneProvider.providers receiver method to one live desktop selected from the initiating user's account. Exact approved provider identity is checked before routing, and no caller-supplied method or argument vector exists."
+    },
+    "host:phoneNativeEndpoint.devices": {
+      "review": "exact-base-phone-provider-device-read",
+      "change": "Forwards only the typed desktopPhoneProvider.devices query to one live account-owned desktop. The public Base provider's mobile.devices.read authority remains the sole user-facing gate."
+    },
+    "host:phoneNativeEndpoint.provision": {
+      "review": "exact-base-phone-provider-native-provision-effect",
+      "change": "Forwards only the typed desktopPhoneProvider.provision input to one live account-owned desktop after exact approved provider verification. The public Base provider's mobile.provision decision is the sole user-facing gate; no generic connected-client conduit remains."
+    },
     "host:view.getBrowserPageIdentity": {
       "review": "exact-native-browser-page-identity-read",
       "change": "Replaces the compound browser site-state facade with a bounded read of the selected Electron webContents URL, origin, transport security, and document title. Bookmark, cookie-summary, and zoom-preference reads no longer cross the host boundary through view; workspace chrome composes them from the browser-data provider."
@@ -21,10 +37,6 @@
     "host:fs.readText": {
       "review": "bounded-workspace-text-range-read",
       "change": "Adds the existing workspace-local fs.read authority to a bounded UTF-8 text-range transport. The receiver retains semantic path admission for managed files and scratch-root containment for disk files, caps each response at 10,000 lines and 1 MiB, returns continuation coordinates plus a content hash, and grants no write or path-enumeration authority."
-    },
-    "host:workspace-state.panel.sourceUsage": {
-      "review": "bounded-aggregate-panel-source-usage-read",
-      "change": "Adds an open workspace-member read of at most 200 aggregate panel source usage rows for launcher ranking. The projection contains only source identity, access count, and last-access time; it exposes no panel contents, owner identity, slot state, or mutation path."
     },
     "host:auth.mintAgentCredential": {
       "review": "reviewed-subagent-launch-agent-login",
@@ -145,10 +157,6 @@
     "host:workspace-state.panelTree.detail": {
       "review": "single-panel-runtime-detail-read",
       "change": "Adds an open, read-only lookup of one panel's current slot, history entry, and active entity. It performs no lifecycle or navigation mutation."
-    },
-    "host:workspace-state.panelTree.search": {
-      "review": "bounded-panel-title-search",
-      "change": "Adds an open, read-only keyset title search capped at 200 hits with bounded ancestor breadcrumbs. It exposes panel-list metadata and performs no mutation."
     },
     "host:vcs.finalizeExternalDelta": {
       "review": "context-bound-complete-external-delta-finalization",
@@ -389,6 +397,50 @@
     "host:developmentClientExecutor.consumeAttestation": {
       "review": "single-use-isolated-child-attestation-read",
       "change": "Lets only the exact bound isolated management shell consume one nonce-bound child runtime receipt. The inbox is short-lived and bounded, and no device credential, artifact path, or self-reported execution digest is returned."
+    },
+    "host:view.connectNativePanelAdapter": {
+      "review": "trusted-shell-native-panel-adapter-generation",
+      "change": "Replaces the legacy ready toggle with one authenticated shell-to-Electron generation handshake. The receiver admits only trusted panel-hosting chrome, binds one exact shell generation to one native adapter generation, and grants no panel lease, lifecycle, navigation, or cross-client authority."
+    },
+    "host:view.applyNativePanelSurfaces": {
+      "review": "trusted-shell-complete-native-surface-projection",
+      "change": "Replaces incremental native-slot synchronization with one complete, revisioned shell projection of Electron-local panel surfaces. The receiver serializes snapshots, rejects stale generations and revisions, applies only bounded native geometry and visibility for the authenticated shell, and returns the exact observed projection without creating a second panel lifecycle channel."
+    },
+    "direct:packages/builtin/src/browser-data/BrowserVaultDO.ts:listPasswordSummaries": {
+      "review": "host-only-protected-password-inventory",
+      "change": "The vault receiver now admits only host principals. Workspace code cannot enumerate even password metadata; Electron uses this method only behind its host-owned credential UI and origin-bound autofill controller."
+    },
+    "direct:packages/builtin/src/browser-data/BrowserVaultDO.ts:listCookieOrigins": {
+      "review": "host-only-cookie-projection-inventory",
+      "change": "Only the Electron cookie projection can enumerate canonical origins. No workspace provider, panel, worker, or extension can use this inventory to walk protected cookie material."
+    },
+    "direct:packages/builtin/src/browser-data/BrowserVaultDO.ts:getCookiesForOrigin": {
+      "review": "host-only-exact-origin-cookie-read",
+      "change": "The host-owned cookie projection and credential-session adapter may read one canonical origin after deriving the vault from the authenticated user/workspace. Workspace code has no receiver or host-service route to plaintext cookies."
+    },
+    "host:browserEnvironment.startSensitiveImport": {
+      "review": "sealed-sensitive-browser-import",
+      "change": "The reviewed Base broker selects an opaque source and exact sensitive categories, while Electron reads and stores plaintext entirely inside the host. The operation is idempotent by caller-minted operation ID and returns aggregate counts only; the ordinary frame channel rejects sensitive categories."
+    },
+    "host:browserEnvironment.previewSensitiveImport": {
+      "review": "reviewed-provider-aggregate-sensitive-import-preview",
+      "change": "Lets only the exact installed and reviewed browser-data provider request aggregate counts for protected import categories. Native parsing and protected rows remain inside Electron, no values or records cross the service, and the provider's public review flow owns the user-facing policy."
+    },
+    "host:browserEnvironment.observeSensitiveImport": {
+      "review": "reviewed-provider-sensitive-import-recovery-read",
+      "change": "Lets only the exact installed and reviewed browser-data provider observe bounded aggregate progress or a terminal receipt for its caller-minted operation ID. It exposes neither source records nor vault contents and adds no independent prompt beyond the provider-owned workflow."
+    },
+    "host:browserEnvironment.cancelSensitiveImport": {
+      "review": "reviewed-provider-sensitive-import-retirement",
+      "change": "Lets only the exact installed and reviewed browser-data provider durably cancel its selected operation. The host stops the active native reader and returns only aggregate terminal status; cancellation cannot address or reveal protected records."
+    },
+    "host:developmentNative.prepareTemplateExchange": {
+      "review": "reviewed-explicit-checkout-exchange-plan",
+      "change": "Adds a gated, path-scoped native effect that reads one explicitly selected Git checkout and one exact semantic repository snapshot to produce a conflict-preserving three-way plan. It performs no write and discovers no ambient sibling checkout."
+    },
+    "host:developmentNative.applyTemplateExchange": {
+      "review": "reviewed-exact-template-exchange-effect",
+      "change": "Adds the gated native application of one exact prior exchange plan. Export writes only the declared projection to the selected checkout; import enters through the ordinary atomic semantic snapshot ingress; terminal receipts make retries idempotent without a second storage path."
     }
   }
 }

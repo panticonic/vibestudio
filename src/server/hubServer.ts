@@ -12,6 +12,7 @@ import {
   deleteUnregisteredWorkspace,
   recoverStagedWorkspaceDeletions,
 } from "@vibestudio/workspace/loader";
+import { readBaseTemplateRelease } from "@vibestudio/workspace/baseTemplateRelease";
 import { EPHEMERAL_DEV_WORKSPACE_NAME } from "@vibestudio/workspace-contracts/ephemeral";
 import { WorkspaceTemplatePinSchema } from "@vibestudio/workspace-contracts/workspaceConfigSchema";
 import { CentralDataManager } from "@vibestudio/shared/centralData";
@@ -31,7 +32,7 @@ import {
   PAIRING_PROTOCOL_VERSION,
   selectedWorkspaceUrl,
   WORKSPACE_ROUTE_PREFIX,
-  type ConnectPairing,
+  type ReconnectReach,
 } from "@vibestudio/shared/connect";
 import {
   hubControlMethods,
@@ -196,7 +197,7 @@ export interface HubRuntimeState {
 
 interface HubControlTransport {
   ingress: import("./webrtcIngress.js").WebRtcIngress;
-  pairing: Omit<ConnectPairing, "code" | "room">;
+  pairing: Omit<ReconnectReach, "room">;
   rpcServer: import("./rpcServer.js").RpcServer;
   grantStore: import("./services/capabilityGrantStore.js").CapabilityGrantStore;
   inviteExpiryTimers: Map<string, NodeJS.Timeout>;
@@ -866,13 +867,7 @@ function pairingTtl(raw: unknown): number {
   return ttlMs;
 }
 
-interface ChildReach {
-  room: string;
-  fp: string;
-  sig: string;
-  v: typeof PAIRING_PROTOCOL_VERSION;
-  ice: "all" | "relay";
-}
+type ChildReach = ReconnectReach;
 
 function requireControlTransport(state: HubRuntimeState): HubControlTransport {
   if (!state.controlTransport) throw new Error("Hub control ingress is not ready");
@@ -1009,7 +1004,7 @@ async function armChildReach(
     room: body["room"],
     fp: body["fp"],
     sig: body["sig"],
-    v: PAIRING_PROTOCOL_VERSION,
+    v: PAIRING_PROTOCOL_VERSION as typeof PAIRING_PROTOCOL_VERSION,
     ice: body["ice"],
   };
 }
@@ -1020,7 +1015,15 @@ function pairingInviteFromReach(
   expiresAt: number,
   reach: ChildReach
 ): HubPairingInvite {
-  const pairing = { ...reach, code };
+  const pairing: import("@vibestudio/shared/connect").ConnectPairing = {
+    room: reach.room,
+    fp: reach.fp,
+    sig: reach.sig,
+    ice: reach.ice,
+    v: PAIRING_PROTOCOL_VERSION,
+    code,
+    exp: expiresAt,
+  };
   return {
     ...pairing,
     deepLink: createConnectDeepLink(pairing),
@@ -1331,9 +1334,9 @@ async function executeHubControl(
     const rootTemplate = opts["rootTemplate"]
       ? WorkspaceTemplatePinSchema.parse(opts["rootTemplate"])
       : undefined;
+    const selectedRoot = rootTemplate ?? readBaseTemplateRelease(state.appRoot).baseTemplate;
     const entry = createAndRegisterWorkspace(name, state.centralData, {
-      ...(typeof opts["forkFrom"] === "string" ? { forkFrom: opts["forkFrom"] } : {}),
-      ...(rootTemplate ? { rootTemplate } : {}),
+      rootTemplate: selectedRoot,
     });
     try {
       if (subject.role !== "root") {

@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import type {
   AttachedHostChallengeRecord,
@@ -88,6 +89,27 @@ function challengeRecord(): AttachedHostChallengeRecord {
 }
 
 describe("AttachedHostSessionStore", () => {
+  it("rejects challenge state from another system epoch", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "attached-host-store-"));
+    roots.push(root);
+    const file = path.join(root, "sessions.db");
+    const database = new DatabaseSync(file);
+    database.exec(`
+      CREATE TABLE attached_host_challenges (
+        session_id TEXT NOT NULL,
+        nonce TEXT NOT NULL,
+        challenge_json TEXT NOT NULL,
+        shown_presentation_digest TEXT,
+        state TEXT NOT NULL,
+        decision TEXT,
+        PRIMARY KEY (session_id, nonce)
+      );
+    `);
+    database.close();
+
+    expect(() => new AttachedHostSessionStore(file)).toThrow(/not from the current system epoch/);
+  });
+
   it("durably rejects duplicates while preserving out-of-order concurrent delivery", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "attached-host-store-"));
     roots.push(root);

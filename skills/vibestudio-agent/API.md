@@ -542,15 +542,6 @@ Authority principals: `code`, `host`, `user`
 | `vcs.listDirectory` | Page immediate visible children of one workspace directory with stable identities and attached name provenance. |
 | `vcs.listFiles` | Page the exact path-to-file manifest of one repository at one semantic state. |
 
-## `webhookIngress`
-
-Generic public webhook ingress subscriptions
-
-Authority principals: `code`, `host`, `user`
-
-| Method | Description |
-|--------|-------------|
-
 ## `workerdInspector`
 
 Approval-gated workerd V8 inspector access for profiling workers and DOs
@@ -609,15 +600,6 @@ Authority principals: `code`, `host`, `user`
 | `workspace.sourceTree` | Return the workspace source tree, annotating units, launchables, and skills. |
 | `workspace.ensureContextFolder` | Materialize a context's working folder on the server host (idempotent) and return its absolute path. Used by launch orchestrators (e.g. the shell extension) to place context-scoped terminal sessions inside a real VCS-branched working tree. |
 | `workspace.findUnitForPath` | Resolve a workspace-relative path to its owning unit and the path relative to that unit, or null if no unit owns it. |
-
-## `workspace-state`
-
-Workspace slot/entity state (WorkspaceDO).
-
-Authority principals: `code`, `host`, `user`
-
-| Method | Description |
-|--------|-------------|
 
 ## `workspacePresence`
 

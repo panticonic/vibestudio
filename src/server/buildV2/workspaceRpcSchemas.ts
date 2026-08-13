@@ -1,3 +1,8 @@
+import { browserProductMethods } from "@vibestudio/service-schemas/browserData";
+import { developmentBuiltinMethods } from "@vibestudio/service-schemas/development";
+import { missionsMethods } from "@vibestudio/service-schemas/missions";
+import { phoneProvisioningMethods } from "@vibestudio/service-schemas/phoneProvisioning";
+import { workspacePresentationMethods } from "@vibestudio/service-schemas/workspacePresentation";
 import { gadWireMethods } from "@vibestudio/service-schemas/workspaceSource";
 import type { MethodSchema, ServiceMethodSchemas } from "@vibestudio/shared/typedServiceClient";
 import { sha256Canonical } from "@vibestudio/shared/authority/invocationSnapshot";
@@ -8,7 +13,12 @@ import { sha256Canonical } from "@vibestudio/shared/authority/invocationSnapshot
  * dynamically import mutable workspace modules to discover authority.
  */
 const WORKSPACE_RPC_SCHEMAS = {
+  "vibestudio.browser-data.v1": browserProductMethods,
+  "vibestudio.development.v1": developmentBuiltinMethods,
   "vibestudio.gad.workspace.v1": gadWireMethods,
+  "vibestudio.missions.v1": missionsMethods,
+  "vibestudio.phone-provisioning.v1": phoneProvisioningMethods,
+  "vibestudio.workspace-presentation.v1": workspacePresentationMethods,
 } as const satisfies Record<string, ServiceMethodSchemas>;
 
 function schemaIdentity(value: unknown, seen = new Set<object>()): unknown {

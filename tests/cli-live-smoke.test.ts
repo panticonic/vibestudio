@@ -14,10 +14,7 @@ import type {
 } from "@vibestudio/shared/serviceDispatcher";
 import { TokenManager } from "@vibestudio/shared/tokenManager";
 import { EntityCache } from "@vibestudio/shared/runtime/entityCache";
-import {
-  createConnectDeepLink,
-  PAIRING_PROTOCOL_VERSION,
-} from "@vibestudio/shared/connect";
+import { createConnectDeepLink, PAIRING_PROTOCOL_VERSION } from "@vibestudio/shared/connect";
 import { CentralDataManager } from "@vibestudio/shared/centralData";
 import { IdentityDb } from "@vibestudio/identity/identityDb";
 import { UserStore } from "@vibestudio/identity/userStore";
@@ -241,6 +238,7 @@ describe("live CLI smoke", () => {
           room: invite.room,
           fp: cert.fingerprint,
           code: invite.code,
+          exp: invite.expiresAt,
           sig: CLI_SIGNAL_URL,
           v: PAIRING_PROTOCOL_VERSION,
           ice: "all",

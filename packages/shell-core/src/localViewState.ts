@@ -12,17 +12,6 @@ function parseLocalPanelViewState(serialized: string): LocalPanelViewState {
       ? parsed.collapsedIds.filter((id): id is string => typeof id === "string")
       : [],
     focusedPanelId: typeof parsed.focusedPanelId === "string" ? parsed.focusedPanelId : null,
-    panelTitles:
-      parsed.panelTitles && typeof parsed.panelTitles === "object"
-        ? Object.fromEntries(
-            Object.entries(parsed.panelTitles).filter(
-              (entry): entry is [string, { source: string; title: string }] => {
-                const value = entry[1] as { source?: unknown; title?: unknown };
-                return typeof value.source === "string" && typeof value.title === "string";
-              }
-            )
-          )
-        : {},
   };
 }
 
@@ -43,7 +32,6 @@ export function createLocalPanelViewStateStore(
         JSON.stringify({
           collapsedIds: state.collapsedIds,
           focusedPanelId: state.focusedPanelId ?? null,
-          panelTitles: state.panelTitles ?? {},
         })
       );
     },
