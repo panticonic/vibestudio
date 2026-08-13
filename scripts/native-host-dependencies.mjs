@@ -45,9 +45,10 @@ export function inspectHostNativeDependencies({
   });
 }
 
+/** Verify every contract, returning how many were confirmed. */
 export function assertHostNativeDependencies(options = {}) {
   const failures = inspectHostNativeDependencies(options).filter((result) => !result.ok);
-  if (failures.length === 0) return;
+  if (failures.length === 0) return dependencyContracts.length;
   throw new Error(
     `Host native dependencies are unavailable:\n${failures
       .map((failure) => `- ${failure.packageName}: ${failure.error}`)
@@ -63,7 +64,7 @@ export function ensureHostNativeDependencies({
 } = {}) {
   const failures = inspectHostNativeDependencies({ cwd, env, run }).filter((result) => !result.ok);
   if (failures.length === 0) {
-    log("[native-dependencies] 3 host runtime contracts verified.");
+    log(`[native-dependencies] ${dependencyContracts.length} host runtime contracts verified.`);
     return;
   }
 
@@ -89,8 +90,8 @@ async function main() {
   if (process.argv.includes("--repair")) {
     ensureHostNativeDependencies();
   } else {
-    assertHostNativeDependencies();
-    console.log("[native-dependencies] 3 host runtime contracts verified.");
+    const verified = assertHostNativeDependencies();
+    console.log(`[native-dependencies] ${verified} host runtime contracts verified.`);
   }
 }
 

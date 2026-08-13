@@ -277,6 +277,37 @@ describe("workerService workspace service resolution", () => {
     });
   });
 
+  it("asks about a workspace service in the provider's user-facing words", async () => {
+    const deps = createDeps();
+    const service = createWorkerService({
+      ...(deps as object),
+      assertUserlandServiceExposure: vi.fn(async () => {}),
+    } as never);
+    const dispatcher = createTestServiceDispatcher();
+    dispatcher.registerService(service);
+    dispatcher.markInitialized();
+
+    const describe = async (query: string, objectKey: string | null): Promise<string> => {
+      const prepared = await service.authorityPreparation?.[
+        "workers.resolveService.workspace-service"
+      ]?.(panelCtx, [query, objectKey]);
+      const selection = prepared?.selections[0] as unknown as
+        | { challenge: { description: string } }
+        | undefined;
+      if (!selection) throw new Error(`No authority selection prepared for ${query}`);
+      return selection.challenge.description;
+    };
+
+    // This provider declares both phrasings. The approval must read the one
+    // written for the person deciding, not "Own the workspace's semantic source
+    // and history." — someone answering this has to be able to tell what they
+    // are agreeing to.
+    expect(await describe("vibestudio.gad.workspace.v1", null)).toBe(
+      "Read or change semantic workspace state."
+    );
+    expect(await describe("example.store.v1", "chat")).toBe("Use the test service.");
+  });
+
   it("lists every launchable worker with its real manifest entry point", async () => {
     const deps = createDeps();
     const dispatcher = createTestServiceDispatcher();

@@ -5080,9 +5080,10 @@ export const HOST_AUTHORITY_METHODS = {
     },
     capability: "runtime.supervision.manage",
     presentation: {
-      title: "Start an executable release",
-      action: "start an executable release",
-      description: "Allows {requesterKind} to start one exact executable release.",
+      title: "Start a workspace component",
+      action: "start a workspace component",
+      description:
+        "Allows {requesterKind} to start one exact approved version of a workspace component.",
       group: "runtime",
       authorityCategory: {
         domain: "automation",
@@ -5158,9 +5159,10 @@ export const HOST_AUTHORITY_METHODS = {
     },
     capability: "runtime.supervision.manage",
     presentation: {
-      title: "Prepare an executable release",
-      action: "prepare an executable release",
-      description: "Allows {requesterKind} to prepare one exact executable release.",
+      title: "Prepare a new component version",
+      action: "prepare a new version of a workspace component",
+      description:
+        "Allows {requesterKind} to stage one exact new version of a workspace component without starting it.",
       group: "runtime",
       authorityCategory: {
         domain: "automation",
@@ -5244,9 +5246,10 @@ export const HOST_AUTHORITY_METHODS = {
     },
     capability: "runtime.supervision.manage",
     presentation: {
-      title: "Restore an executable release",
-      action: "restore an executable release",
-      description: "Allows {requesterKind} to restore one exact executable release.",
+      title: "Restore a previous version",
+      action: "restore a workspace component to an earlier version",
+      description:
+        "Allows {requesterKind} to restore one workspace component to an earlier retained version.",
       group: "runtime",
       authorityCategory: {
         domain: "automation",
@@ -8308,9 +8311,10 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
     },
   },
   "runtime.supervision.manage": {
-    title: "Start an executable release",
-    action: "start an executable release",
-    description: "Allows {requesterKind} to start one exact executable release.",
+    title: "Start a workspace component",
+    action: "start a workspace component",
+    description:
+      "Allows {requesterKind} to start one exact approved version of a workspace component.",
     group: "runtime",
     authorityCategory: {
       domain: "automation",

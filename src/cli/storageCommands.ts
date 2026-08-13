@@ -175,8 +175,11 @@ async function status(inv: ParsedInvocation): Promise<number> {
 async function prune(inv: ParsedInvocation): Promise<number> {
   const json = jsonMode(inv.flags["json"] === true);
   const dryRun = inv.flags["dry-run"] === true;
-  const maxBytes = gibibytes(inv.flags["max-gib"]);
   try {
+    // Inside the guard: a rejected --max-gib is a usage error, and reporting it
+    // through printError is what preserves the exit code and the --json error
+    // shape that scripted callers parse.
+    const maxBytes = gibibytes(inv.flags["max-gib"]);
     const results: Array<StorageRoot & DerivedCachePruneResult> = [];
     for (const root of cacheRoots().filter((candidate) => candidate.kind === "live-safe")) {
       const coordinator = new DerivedCacheCoordinator(derivedCacheDatabasePath(root.path));

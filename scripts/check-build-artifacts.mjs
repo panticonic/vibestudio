@@ -300,7 +300,7 @@ for (const smoke of executableSmokes) {
   runExecutableSmoke(smoke);
 }
 
-assertHostNativeDependencies({ cwd: repoRoot });
+const nativeContractCount = assertHostNativeDependencies({ cwd: repoRoot });
 
 if (process.env.NODE_ENV === "production") {
   const maps = fs
@@ -312,5 +312,5 @@ if (process.env.NODE_ENV === "production") {
 }
 
 console.log(
-  `[build-artifacts] ${contracts.length} contracts checked, ${importSmokes.length} import smokes, ${executableSmokes.length} executable smokes, and 3 host runtime contracts passed.`
+  `[build-artifacts] ${contracts.length} contracts checked, ${importSmokes.length} import smokes, ${executableSmokes.length} executable smokes, and ${nativeContractCount} host runtime contracts passed.`
 );

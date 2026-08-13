@@ -360,9 +360,13 @@ export function createWorkerService(deps: {
               requirement: requirementForPrincipals(service.authority.principals, capability),
               challenge: {
                 title: `Use ${serviceTitle}`,
-                description:
-                  service.description?.trim() ||
-                  `Use the ${serviceTitle} service provided by this workspace.`,
+                // The reviewed `action` is the provider's one user-facing
+                // phrase — "manage panel titles, search, and launcher usage".
+                // `description` is the developer summary of what the service
+                // stores, which tells a person deciding this nothing about what
+                // they are agreeing to. Read the action first and fall back
+                // only when a provider declares none.
+                description: serviceChallengeDescription(service, serviceTitle),
                 deniedReason: `${serviceTitle} access was not approved`,
                 dedupKey: `workspace-service:${service.name}:${resourceKey}`,
                 resource: { type: "workspace-service", label: "Service", value: serviceTitle },
@@ -691,6 +695,26 @@ export function createWorkerService(deps: {
     }
     return resolved.effectiveVersion;
   }
+}
+
+/**
+ * The sentence a person reads before granting a workspace service.
+ *
+ * Providers declare both an `action` written for the person deciding and a
+ * `description` written for whoever maintains the service. Only the first
+ * belongs on an approval.
+ */
+function serviceChallengeDescription(
+  service: { action?: string | undefined; description?: string | undefined },
+  serviceTitle: string
+): string {
+  const action = service.action?.trim();
+  if (action) {
+    return `${action[0]!.toUpperCase()}${action.slice(1)}${/[.!?]$/u.test(action) ? "" : "."}`;
+  }
+  return (
+    service.description?.trim() || `Use the ${serviceTitle} service provided by this workspace.`
+  );
 }
 
 function humanizeServiceName(name: string): string {
