@@ -38,6 +38,10 @@ import {
 } from "@vibestudio/shared/execution/retention";
 import { blobCasPath, centralBlobCasDir, putBlobBytes } from "../storage/blobCas.js";
 import { stateLayout } from "../stateLayout.js";
+import {
+  derivedCacheCoordinator,
+  scheduleDerivedCachePrune,
+} from "@vibestudio/shared/derivedCache";
 export { contentTypeForPath } from "@vibestudio/shared/contentType";
 
 // ---------------------------------------------------------------------------
@@ -244,14 +248,33 @@ function executionMetadataPath(dir: string, executionDigest: string): string {
   return path.join(dir, "executions", `${executionDigest}.json`);
 }
 
+interface StoredExecutionVariant {
+  version: 1;
+  sourceStateHash: string;
+  sourceState: ExecutionSourceStateRef;
+  execution: BuildExecutionIdentity;
+}
+
+function executionVariant(metadata: BuildMetadata): StoredExecutionVariant | null {
+  if (!metadata.execution || !metadata.sourceStateHash || !metadata.sourceState) return null;
+  return {
+    version: 1,
+    sourceStateHash: metadata.sourceStateHash,
+    sourceState: metadata.sourceState,
+    execution: metadata.execution,
+  };
+}
+
 async function writeExecutionMetadata(dir: string, metadata: BuildMetadata): Promise<void> {
   const digest = metadata.execution?.executionDigest;
   if (!digest) return;
+  const variant = executionVariant(metadata);
+  if (!variant) throw new Error(`Build ${metadata.buildKey} has incomplete execution metadata`);
   const target = executionMetadataPath(dir, digest);
   await fs.promises.mkdir(path.dirname(target), { recursive: true });
   const tmp = `${target}.tmp.${crypto.randomBytes(12).toString("hex")}`;
   try {
-    await fs.promises.writeFile(tmp, `${JSON.stringify(metadata, null, 2)}\n`);
+    await fs.promises.writeFile(tmp, `${JSON.stringify(variant, null, 2)}\n`);
     await fs.promises.rename(tmp, target);
   } catch (error) {
     try {
@@ -362,7 +385,13 @@ function linkBuildTreeSync(sourceDir: string, targetDir: string): void {
 
 async function publishSharedBuild(key: string, sourceDir: string): Promise<void> {
   const sharedDir = getSharedBuildDir(key);
-  if (!sharedDir || fs.existsSync(path.join(sharedDir, "metadata.json"))) return;
+  if (!sharedDir) return;
+  const cacheRoot = path.dirname(sharedDir);
+  const lease = derivedCacheCoordinator(cacheRoot).acquire(cacheRoot, key);
+  if (fs.existsSync(path.join(sharedDir, "metadata.json"))) {
+    lease.release();
+    return;
+  }
 
   const tmpDir = `${sharedDir}.tmp.${crypto.randomBytes(16).toString("hex")}`;
   try {
@@ -383,6 +412,13 @@ async function publishSharedBuild(key: string, sourceDir: string): Promise<void>
     console.warn(
       `[buildStore] Failed to publish shared build ${key}: ${error instanceof Error ? error.message : String(error)}`
     );
+  } finally {
+    lease.release();
+    void scheduleDerivedCachePrune(cacheRoot).catch((error) => {
+      console.warn(
+        `[buildStore] Shared cache prune failed: ${error instanceof Error ? error.message : String(error)}`
+      );
+    });
   }
 }
 
@@ -735,77 +771,90 @@ export function get(key: string): BuildResult | null {
 
   const sharedDir = getSharedBuildDir(key);
   if (!sharedDir) return null;
-  // A workspace GC tombstone is authoritative over the shared reconstruction
-  // cache. Without this check a successful sweep would immediately resurrect
-  // the same local record on the next lookup.
-  if (isRetiredBuildKey(key)) return null;
-  // The shared record's execution identity belongs to its source workspace;
-  // it is deliberately verified only after its provenance is rebound below.
-  const shared = readBuildDir(sharedDir, key, { verifyExecution: false });
-  if (shared) {
-    // Artifact bytes are globally shareable, but workspace build metadata is
-    // not. In particular, sourceState and execution commit to the workspace
-    // that materialized the build. Rebind that provenance to this workspace
-    // only when the exact source content is present here; otherwise this is a
-    // safe cache miss and the caller must rebuild from its own source.
-    let sharedMetadata = shared.metadata;
-    if (sharedMetadata.sourceStateHash !== null) {
-      const sourceState = activeExecutionIdentityContext?.executionStateForContent(
-        sharedMetadata.sourceStateHash
-      );
-      if (!sourceState) return null;
-      const reboundMetadata: BuildMetadata = { ...sharedMetadata, sourceState };
-      const execution = createBuildExecutionIdentity(reboundMetadata, shared.artifacts);
-      if (!execution) return null;
-      sharedMetadata = { ...reboundMetadata, execution };
-    }
-    // A shared result is only a reconstruction cache, never an authoritative
-    // workspace record. Materialize a local immutable link tree before it can
-    // be returned to an owner/publication path so workspace retention has one
-    // complete census and a different workspace's collector cannot break it.
-    const tmpDir = `${localDir}.tmp.${crypto.randomBytes(16).toString("hex")}`;
-    try {
-      fs.mkdirSync(path.dirname(localDir), { recursive: true });
-      linkBuildTreeSync(sharedDir, tmpDir);
-      if (sharedMetadata !== shared.metadata) {
-        fs.writeFileSync(
-          path.join(tmpDir, "metadata.json"),
-          `${JSON.stringify(sharedMetadata, null, 2)}\n`
+  const cacheRoot = path.dirname(sharedDir);
+  const lease = derivedCacheCoordinator(cacheRoot).acquire(cacheRoot, key);
+  try {
+    // A workspace GC tombstone is authoritative over the shared reconstruction
+    // cache. Without this check a successful sweep would immediately resurrect
+    // the same local record on the next lookup.
+    if (isRetiredBuildKey(key)) return null;
+    // The shared record's execution identity belongs to its source workspace;
+    // it is deliberately verified only after its provenance is rebound below.
+    const shared = readBuildDir(sharedDir, key, { verifyExecution: false });
+    if (shared) {
+      // Artifact bytes are globally shareable, but workspace build metadata is
+      // not. In particular, sourceState and execution commit to the workspace
+      // that materialized the build. Rebind that provenance to this workspace
+      // only when the exact source content is present here; otherwise this is a
+      // safe cache miss and the caller must rebuild from its own source.
+      let sharedMetadata = shared.metadata;
+      if (sharedMetadata.sourceStateHash !== null) {
+        const sourceState = activeExecutionIdentityContext?.executionStateForContent(
+          sharedMetadata.sourceStateHash
         );
+        if (!sourceState) return null;
+        const reboundMetadata: BuildMetadata = { ...sharedMetadata, sourceState };
+        const execution = createBuildExecutionIdentity(reboundMetadata, shared.artifacts);
+        if (!execution) return null;
+        sharedMetadata = { ...reboundMetadata, execution };
       }
-      // Execution metadata is workspace-owned provenance. Shared caches supply
-      // reusable bytes, never another workspace's semantic execution variants.
-      fs.rmSync(path.join(tmpDir, "executions"), { recursive: true, force: true });
-      // get() cannot await; preserve synchronous cache hydration metadata.
-      const executionDigest = sharedMetadata.execution?.executionDigest;
-      if (executionDigest) {
-        const target = executionMetadataPath(tmpDir, executionDigest);
-        fs.mkdirSync(path.dirname(target), { recursive: true });
-        fs.writeFileSync(target, `${JSON.stringify(sharedMetadata, null, 2)}\n`);
-      }
+      // A shared result is only a reconstruction cache, never an authoritative
+      // workspace record. Materialize a local immutable link tree before it can
+      // be returned to an owner/publication path so workspace retention has one
+      // complete census and a different workspace's collector cannot break it.
+      const tmpDir = `${localDir}.tmp.${crypto.randomBytes(16).toString("hex")}`;
       try {
-        fs.renameSync(tmpDir, localDir);
+        fs.mkdirSync(path.dirname(localDir), { recursive: true });
+        linkBuildTreeSync(sharedDir, tmpDir);
+        if (sharedMetadata !== shared.metadata) {
+          fs.writeFileSync(
+            path.join(tmpDir, "metadata.json"),
+            `${JSON.stringify(sharedMetadata, null, 2)}\n`
+          );
+        }
+        // Execution metadata is workspace-owned provenance. Shared caches supply
+        // reusable bytes, never another workspace's semantic execution variants.
+        fs.rmSync(path.join(tmpDir, "executions"), { recursive: true, force: true });
+        // get() cannot await; preserve synchronous cache hydration metadata.
+        const executionDigest = sharedMetadata.execution?.executionDigest;
+        if (executionDigest) {
+          const target = executionMetadataPath(tmpDir, executionDigest);
+          const variant = executionVariant(sharedMetadata);
+          if (!variant) throw new Error(`Build ${key} has incomplete execution metadata`);
+          fs.mkdirSync(path.dirname(target), { recursive: true });
+          fs.writeFileSync(target, `${JSON.stringify(variant, null, 2)}\n`);
+        }
+        try {
+          fs.renameSync(tmpDir, localDir);
+        } catch (error) {
+          if (!isFileSystemErrorCode(error, ["ENOTEMPTY", "EEXIST", "ENOTDIR"])) throw error;
+          fs.rmSync(tmpDir, { recursive: true, force: true });
+        }
       } catch (error) {
-        if (!isFileSystemErrorCode(error, ["ENOTEMPTY", "EEXIST", "ENOTDIR"])) throw error;
-        fs.rmSync(tmpDir, { recursive: true, force: true });
+        try {
+          fs.rmSync(tmpDir, { recursive: true, force: true });
+        } catch (cleanupError) {
+          warnCleanupFailure(tmpDir, cleanupError);
+        }
+        throw error;
       }
-    } catch (error) {
-      try {
-        fs.rmSync(tmpDir, { recursive: true, force: true });
-      } catch (cleanupError) {
-        warnCleanupFailure(tmpDir, cleanupError);
-      }
-      throw error;
     }
+    const materialized = readBuildDir(localDir, key);
+    if (materialized && !reportedSharedBuildHits.has(key)) {
+      reportedSharedBuildHits.add(key);
+      console.info(
+        `[BuildCache] Reused shared build ${materialized.metadata.name} (${key.slice(0, 12)})`
+      );
+    }
+    return materialized;
+  } finally {
+    lease.release();
+    void scheduleDerivedCachePrune(cacheRoot).catch((error) => {
+      console.warn(
+        `[buildStore] Shared cache prune failed: ${error instanceof Error ? error.message : String(error)}`
+      );
+    });
   }
-  const materialized = readBuildDir(localDir, key);
-  if (materialized && !reportedSharedBuildHits.has(key)) {
-    reportedSharedBuildHits.add(key);
-    console.info(
-      `[BuildCache] Reused shared build ${materialized.metadata.name} (${key.slice(0, 12)})`
-    );
-  }
-  return materialized;
 }
 
 /** Resolve one retained execution of reusable artifact bytes without rebinding
@@ -815,14 +864,17 @@ export function getByExecution(key: string, executionDigest: string): BuildResul
   if (!current) return null;
   if (current.metadata.execution?.executionDigest === executionDigest) return current;
   try {
-    const raw = JSON.parse(
+    const stored = JSON.parse(
       fs.readFileSync(executionMetadataPath(current.dir, executionDigest), "utf8")
-    ) as BuildMetadata;
-    const authority =
-      raw.authority === undefined
-        ? undefined
-        : parseUnitAuthorityManifest(raw.authority, `build ${key} retained execution authority`);
-    const metadata: BuildMetadata = { ...raw, ...(authority ? { authority } : {}) };
+    ) as StoredExecutionVariant | BuildMetadata;
+    const variant = retainedExecutionVariant(stored, key, executionDigest);
+    if (!variant) return null;
+    const metadata: BuildMetadata = {
+      ...current.metadata,
+      sourceStateHash: variant.sourceStateHash,
+      sourceState: variant.sourceState,
+      execution: variant.execution,
+    };
     if (
       metadata.buildKey !== key ||
       metadata.sourceStateHash === null ||
@@ -839,6 +891,30 @@ export function getByExecution(key: string, executionDigest: string): BuildResul
   } catch {
     return null;
   }
+}
+
+function retainedExecutionVariant(
+  stored: StoredExecutionVariant | BuildMetadata,
+  buildKey: string,
+  executionDigest: string
+): StoredExecutionVariant | null {
+  if ("version" in stored && stored.version === 1 && "execution" in stored) {
+    return stored as StoredExecutionVariant;
+  }
+  // One-time migration of the previous full-metadata record. The build store
+  // is authoritative for retained rollback executions, so upgrade it in place
+  // instead of discarding a live execution or retaining duplicate source text.
+  const legacy = stored as BuildMetadata;
+  if (legacy.buildKey !== buildKey || legacy.execution?.executionDigest !== executionDigest) {
+    return null;
+  }
+  const variant = executionVariant(legacy);
+  if (!variant) return null;
+  const target = executionMetadataPath(getBuildDir(buildKey), executionDigest);
+  const tmp = `${target}.tmp.${crypto.randomBytes(12).toString("hex")}`;
+  fs.writeFileSync(tmp, `${JSON.stringify(variant, null, 2)}\n`);
+  fs.renameSync(tmp, target);
+  return variant;
 }
 
 /**
@@ -1403,10 +1479,6 @@ export async function collectRetention(input: {
     }
 
     const sourceDir = getBuildDir(key);
-    const sourceBuild = readBuildDir(sourceDir, key);
-    const artifactIntegrities = (sourceBuild?.artifacts ?? [])
-      .map((artifact) => artifact.integrity)
-      .filter((integrity): integrity is string => typeof integrity === "string");
     const trashDir = path.join(
       stateLayout(getUserDataPath()).executionRetention.buildTrashDir,
       `${key}.${input.epoch}.${crypto.randomBytes(8).toString("hex")}`
@@ -1424,44 +1496,8 @@ export async function collectRetention(input: {
       record.deletedAtEpoch = input.epoch;
       saveBuildGcState({ version: 1, quarantined: [...byKey.values()] });
       result.deleted += 1;
-      let sharedTrashDir: string | null = null;
-      const sharedDir = getSharedBuildDir(key);
-      if (sharedDir) {
-        try {
-          const metadataStat = fs.statSync(path.join(sharedDir, "metadata.json"));
-          // One link belongs to the shared cache and one to the local record
-          // just moved to trash. More links prove another workspace has
-          // materialized the artifact and still owns its local lifecycle.
-          if (metadataStat.nlink <= 2) {
-            sharedTrashDir = `${sharedDir}.gc.${crypto.randomBytes(8).toString("hex")}`;
-            fs.renameSync(sharedDir, sharedTrashDir);
-          }
-        } catch (error) {
-          if (!isFileSystemErrorCode(error, ["ENOENT"])) {
-            result.cleanupFailures.push({
-              buildKey: key,
-              error: error instanceof Error ? error.message : String(error),
-            });
-          }
-        }
-      }
       try {
         await fs.promises.rm(trashDir, { recursive: true, force: true });
-        if (sharedTrashDir) {
-          await fs.promises.rm(sharedTrashDir, { recursive: true, force: true });
-        }
-        const poolDir = getSharedArtifactPoolDir();
-        if (!poolDir) continue;
-        for (const integrity of artifactIntegrities) {
-          const blobPath = artifactBlobPath(poolDir, integrity);
-          if (!blobPath) continue;
-          try {
-            const stat = await fs.promises.stat(blobPath);
-            if (stat.nlink === 1) await fs.promises.unlink(blobPath);
-          } catch (error) {
-            if (!isFileSystemErrorCode(error, ["ENOENT"])) throw error;
-          }
-        }
       } catch (error) {
         result.cleanupFailures.push({
           buildKey: key,

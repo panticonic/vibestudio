@@ -44,6 +44,7 @@ import { connectModelProvider } from "./modelConnect.js";
 import { createModelCommands } from "./modelCommands.js";
 import { panelCommands } from "./panelCommands.js";
 import { systemTestCommands } from "./systemTestCommands.js";
+import { storageCommands } from "./storageCommands.js";
 import { templatesCommands } from "./templatesCommands.js";
 import { remoteHost } from "./remoteHeadlessHost.js";
 import { NOT_PAIRED_GUIDANCE } from "./pairingGuidance.js";
@@ -994,6 +995,7 @@ const commandRegistry: CliCommand[] = [
   ...contextCommands,
   ...panelCommands,
   ...systemTestCommands,
+  ...storageCommands,
 ];
 
 const GROUP_ORDER = [
@@ -1011,6 +1013,7 @@ const GROUP_ORDER = [
   "context",
   "panel",
   "system-test",
+  "storage",
 ];
 
 export async function main(argv: string[]): Promise<number> {

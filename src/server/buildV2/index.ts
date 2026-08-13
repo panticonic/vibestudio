@@ -1537,40 +1537,44 @@ export async function initBuildSystemV2(
         sourceRoot,
         appNodeModuleRoots
       );
-      let authorityEnvironment: ExactWorkspaceAuthorityEnvironment | undefined;
       try {
-        authorityEnvironment = await authorityEnvironmentAt(
-          viewStateHash,
-          graphAtView,
-          (await viewAt(viewStateHash)).evMap
-        );
-      } catch (error) {
-        reusable = false;
-        diagnostics.push({
-          source: "authority",
-          severity: "error",
-          file: `${node.relativePath}/package.json`,
-          line: 1,
-          column: 1,
-          message: `Authority analysis could not resolve the exact provider catalog: ${error instanceof Error ? error.message : String(error)}`,
-        });
-      }
-      const tsc = await typecheckUnit(
-        node.relativePath,
-        sourceRoot,
-        internalDeps.map((u) => ({ name: u.name, relativePath: u.relativePath })),
-        dependencyEnvironment.nodePaths,
-        {
-          manifest: {
-            ...node.manifest,
-            authority: node.manifest.authority ?? { requests: [], provides: [] },
-          },
-          ...(authorityEnvironment ? { environment: authorityEnvironment } : {}),
-          workspaceId: source.workspaceId,
-          executableModules: built?.metadata.executableModules,
+        let authorityEnvironment: ExactWorkspaceAuthorityEnvironment | undefined;
+        try {
+          authorityEnvironment = await authorityEnvironmentAt(
+            viewStateHash,
+            graphAtView,
+            (await viewAt(viewStateHash)).evMap
+          );
+        } catch (error) {
+          reusable = false;
+          diagnostics.push({
+            source: "authority",
+            severity: "error",
+            file: `${node.relativePath}/package.json`,
+            line: 1,
+            column: 1,
+            message: `Authority analysis could not resolve the exact provider catalog: ${error instanceof Error ? error.message : String(error)}`,
+          });
         }
-      );
-      diagnostics = [...diagnostics, ...tsc];
+        const tsc = await typecheckUnit(
+          node.relativePath,
+          sourceRoot,
+          internalDeps.map((u) => ({ name: u.name, relativePath: u.relativePath })),
+          dependencyEnvironment.nodePaths,
+          {
+            manifest: {
+              ...node.manifest,
+              authority: node.manifest.authority ?? { requests: [], provides: [] },
+            },
+            ...(authorityEnvironment ? { environment: authorityEnvironment } : {}),
+            workspaceId: source.workspaceId,
+            executableModules: built?.metadata.executableModules,
+          }
+        );
+        diagnostics = [...diagnostics, ...tsc];
+      } finally {
+        dependencyEnvironment.release();
+      }
     } catch (err) {
       reusable = false;
       const message = err instanceof Error ? err.message : String(err);

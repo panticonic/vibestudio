@@ -58,7 +58,7 @@ import {
 import { computeBuildKey } from "./effectiveVersion.js";
 import {
   dependencyPatchesForExternalRoots,
-  ensureExternalDeps,
+  acquireExternalDeps,
   ensureExtensionRuntimeDeps,
   prepareExternalDependencyEnvironment,
   type ExternalDependencyPatch,
@@ -1899,25 +1899,31 @@ async function prepareBuildEnv(
   const { externalDeps, dependencyOverrides, dependencyPatches, nodeModulesDir, nodePaths } =
     dependencyEnvironment;
 
-  const resolveDir = pickResolveDir(nodePaths, workspaceRoot);
-
-  return {
-    outdir,
-    sourcePath,
-    nodePaths,
-    nodeModulesDir,
-    externalDeps,
-    dependencyOverrides,
-    dependencyPatches,
-    resolveDir,
-    cleanup: () => {
-      try {
-        fs.rmSync(outdir, { recursive: true, force: true });
-      } catch {
-        // Ignore
-      }
-    },
-  };
+  try {
+    const resolveDir = pickResolveDir(nodePaths, workspaceRoot);
+    return {
+      outdir,
+      sourcePath,
+      nodePaths,
+      nodeModulesDir,
+      externalDeps,
+      dependencyOverrides,
+      dependencyPatches,
+      resolveDir,
+      cleanup: () => {
+        dependencyEnvironment.release();
+        try {
+          fs.rmSync(outdir, { recursive: true, force: true });
+        } catch {
+          // Ignore
+        }
+      },
+    };
+  } catch (error) {
+    dependencyEnvironment.release();
+    fs.rmSync(outdir, { recursive: true, force: true });
+    throw error;
+  }
 }
 
 /**
@@ -3564,83 +3570,89 @@ async function buildExtension(
       env.dependencyOverrides,
       runtimeDependencyPatches
     );
-    if (runtimeDeps.nodeModulesDir) {
-      linkExtensionRuntimeDeps(outdir, runtimeDeps.nodeModulesDir, node.name);
-    }
+    try {
+      if (runtimeDeps.nodeModulesDir) {
+        materializeExtensionRuntimeDeps(outdir, runtimeDeps.nodeModulesDir, node.name);
+      }
 
-    const bundlePath = path.join(outdir, "bundle.js");
-    const bundle = fs.readFileSync(bundlePath, "utf-8");
-    const extensionArtifacts = bundleArtifacts(bundle);
-    const iconArtifact = manifestIconArtifact(extractedManifest, extensionSourcePath);
-    if (iconArtifact) extensionArtifacts.entries.push(iconArtifact);
-    const smokeArtifacts: BuildArtifactWithContent[] = extensionArtifacts.entries.map((entry) => ({
-      ...entry,
-      encoding: entry.encoding ?? "utf8",
-    }));
-    fs.writeFileSync(path.join(outdir, "package.json"), '{"type":"module"}');
-    const smokeResult: BuildResult = {
-      dir: outdir,
-      buildKey,
-      sourceStateHash,
-      metadata: {
-        kind: "extension",
-        name: node.name,
+      const bundlePath = path.join(outdir, "bundle.js");
+      const bundle = fs.readFileSync(bundlePath, "utf-8");
+      const extensionArtifacts = bundleArtifacts(bundle);
+      const iconArtifact = manifestIconArtifact(extractedManifest, extensionSourcePath);
+      if (iconArtifact) extensionArtifacts.entries.push(iconArtifact);
+      const smokeArtifacts: BuildArtifactWithContent[] = extensionArtifacts.entries.map(
+        (entry) => ({
+          ...entry,
+          encoding: entry.encoding ?? "utf8",
+        })
+      );
+      fs.writeFileSync(path.join(outdir, "package.json"), '{"type":"module"}');
+      const smokeResult: BuildResult = {
+        dir: outdir,
         buildKey,
-        sourcePath: node.relativePath,
-        ev,
         sourceStateHash,
-        sourcemap: true,
+        metadata: {
+          kind: "extension",
+          name: node.name,
+          buildKey,
+          sourcePath: node.relativePath,
+          ev,
+          sourceStateHash,
+          sourcemap: true,
+          authority,
+          details: {
+            kind: "extension",
+            runtimeDepsKey: runtimeDeps.key,
+            runtimeAbi: EXTENSION_RUNTIME_ABI_VERSION,
+            providerContracts,
+            methodAuthority,
+            dependencyMode,
+            externalDeps: runtimeExternalDeps,
+            dependencyOverrides: env.dependencyOverrides,
+            dependencyPatches: runtimeDependencyPatches,
+            classifiedDeps,
+          },
+          builtAt: new Date().toISOString(),
+        },
+        artifacts: smokeArtifacts,
+      };
+      await smokeTestExtensionBuild(smokeResult, node, {
+        dependencyDiagnostics,
+      });
+
+      const result = await storeSimpleBuild(
+        buildKey,
+        bundle,
+        node,
+        ev,
+        true,
+        sourceStateHash,
         authority,
-        details: {
-          kind: "extension",
-          runtimeDepsKey: runtimeDeps.key,
-          runtimeAbi: EXTENSION_RUNTIME_ABI_VERSION,
-          providerContracts,
-          methodAuthority,
-          dependencyMode,
-          externalDeps: runtimeExternalDeps,
-          dependencyOverrides: env.dependencyOverrides,
-          dependencyPatches: runtimeDependencyPatches,
-          classifiedDeps,
+        {
+          details: {
+            kind: "extension",
+            runtimeDepsKey: runtimeDeps.key,
+            runtimeAbi: EXTENSION_RUNTIME_ABI_VERSION,
+            providerContracts,
+            methodAuthority,
+            dependencyMode,
+            externalDeps: runtimeExternalDeps,
+            dependencyOverrides: env.dependencyOverrides,
+            dependencyPatches: runtimeDependencyPatches,
+            classifiedDeps,
+            smokeTest: { mode: "child-process", passed: true },
+          },
         },
-        builtAt: new Date().toISOString(),
-      },
-      artifacts: smokeArtifacts,
-    };
-    await smokeTestExtensionBuild(smokeResult, node, {
-      dependencyDiagnostics,
-    });
+        extensionArtifacts
+      );
+      if (runtimeDeps.nodeModulesDir) {
+        materializeExtensionRuntimeDeps(result.dir, runtimeDeps.nodeModulesDir, node.name);
+      }
 
-    const result = await storeSimpleBuild(
-      buildKey,
-      bundle,
-      node,
-      ev,
-      true,
-      sourceStateHash,
-      authority,
-      {
-        details: {
-          kind: "extension",
-          runtimeDepsKey: runtimeDeps.key,
-          runtimeAbi: EXTENSION_RUNTIME_ABI_VERSION,
-          providerContracts,
-          methodAuthority,
-          dependencyMode,
-          externalDeps: runtimeExternalDeps,
-          dependencyOverrides: env.dependencyOverrides,
-          dependencyPatches: runtimeDependencyPatches,
-          classifiedDeps,
-          smokeTest: { mode: "child-process", passed: true },
-        },
-      },
-      extensionArtifacts
-    );
-    if (runtimeDeps.nodeModulesDir) {
-      linkExtensionRuntimeDeps(result.dir, runtimeDeps.nodeModulesDir, node.name);
+      return result;
+    } finally {
+      runtimeDeps.release();
     }
-
-    return result;
   } finally {
     env.cleanup();
   }
@@ -3828,15 +3840,19 @@ async function refreshCachedExtensionRuntimeDeps(result: BuildResult): Promise<v
     extensionDetails?.dependencyOverrides ?? {},
     extensionDetails?.dependencyPatches ?? []
   );
-  if (runtimeDeps.nodeModulesDir) {
-    linkExtensionRuntimeDeps(result.dir, runtimeDeps.nodeModulesDir, result.metadata.name);
-  }
-  if (extensionDetails && extensionDetails.runtimeDepsKey !== runtimeDeps.key) {
-    extensionDetails.runtimeDepsKey = runtimeDeps.key;
-    fs.writeFileSync(
-      path.join(result.dir, "metadata.json"),
-      JSON.stringify(result.metadata, null, 2)
-    );
+  try {
+    if (runtimeDeps.nodeModulesDir) {
+      materializeExtensionRuntimeDeps(result.dir, runtimeDeps.nodeModulesDir, result.metadata.name);
+    }
+    if (extensionDetails && extensionDetails.runtimeDepsKey !== runtimeDeps.key) {
+      extensionDetails.runtimeDepsKey = runtimeDeps.key;
+      fs.writeFileSync(
+        path.join(result.dir, "metadata.json"),
+        JSON.stringify(result.metadata, null, 2)
+      );
+    }
+  } finally {
+    runtimeDeps.release();
   }
 }
 
@@ -3853,7 +3869,7 @@ function extensionRuntimeDepsResolvable(bundlePath: string, deps: string[]): boo
   }
 }
 
-function linkExtensionRuntimeDeps(
+function materializeExtensionRuntimeDeps(
   buildDir: string,
   nodeModulesDir: string,
   extensionName: string
@@ -3865,33 +3881,41 @@ function linkExtensionRuntimeDeps(
   }
   const link = path.join(buildDir, "node_modules");
   try {
-    let existing: fs.Stats | null = null;
-    try {
-      existing = fs.lstatSync(link);
-    } catch {
-      existing = null;
-    }
-    if (existing) {
-      const currentTarget = existing.isSymbolicLink() ? fs.readlinkSync(link) : null;
-      const resolvedCurrent = currentTarget
-        ? path.resolve(path.dirname(link), currentTarget)
-        : null;
-      if (resolvedCurrent === nodeModulesDir && fs.existsSync(link)) {
-        return;
-      }
-      if (existing.isSymbolicLink()) {
-        fs.unlinkSync(link);
-      } else {
-        fs.rmSync(link, { recursive: true, force: true });
-      }
-    }
-    fs.symlinkSync(nodeModulesDir, link, "junction");
+    fs.rmSync(link, { recursive: true, force: true });
+    materializeImmutableTree(nodeModulesDir, link);
   } catch (err) {
     throw new Error(
-      `Failed to link extension runtime dependencies for ${extensionName}: ${
+      `Failed to materialize extension runtime dependencies for ${extensionName}: ${
         err instanceof Error ? err.message : String(err)
       }`
     );
+  }
+}
+
+function materializeImmutableTree(source: string, target: string): void {
+  const stat = fs.lstatSync(source);
+  if (stat.isSymbolicLink()) {
+    fs.symlinkSync(fs.readlinkSync(source), target);
+    return;
+  }
+  if (stat.isDirectory()) {
+    fs.mkdirSync(target, { recursive: true, mode: stat.mode });
+    for (const child of fs.readdirSync(source)) {
+      materializeImmutableTree(path.join(source, child), path.join(target, child));
+    }
+    return;
+  }
+  if (!stat.isFile()) throw new Error(`Unsupported runtime dependency entry: ${source}`);
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  try {
+    fs.linkSync(source, target);
+  } catch (error) {
+    if (
+      !["EXDEV", "EPERM", "EACCES", "EMLINK"].includes((error as NodeJS.ErrnoException).code ?? "")
+    ) {
+      throw error;
+    }
+    fs.copyFileSync(source, target, fs.constants.COPYFILE_FICLONE);
   }
 }
 
@@ -4131,7 +4155,8 @@ async function doNpmBuild(
 
   try {
     const deps: Record<string, string> = { [specifier]: version };
-    const nodeModulesDir = await ensureExternalDeps(deps);
+    const borrowedDeps = await acquireExternalDeps(deps);
+    const nodeModulesDir = borrowedDeps.nodeModulesDir;
 
     if (!nodeModulesDir) {
       throw new Error(`Failed to install npm package: ${specifier}@${version}`);
@@ -4189,6 +4214,7 @@ async function doNpmBuild(
       };
       return buildStore.put(buildKey, bundleArtifacts(bundleContent), metadata);
     } finally {
+      borrowedDeps.release();
       try {
         fs.rmSync(outdir, { recursive: true, force: true });
       } catch {

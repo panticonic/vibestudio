@@ -19,11 +19,15 @@ These paths are determined by `getUserDataPath()` from `@vibestudio/env-paths`.
 Complete immutable build results shared by managed workspaces and addressed by
 the normal Build V2 key. Artifact files are hardlinks into `cas/`; the small
 manifest and metadata files make a cached result immediately activatable in a
-new workspace without rebuilding it.
+new workspace without rebuilding it. This is a regenerable reconstruction
+cache, not an execution-retention root. Readers and publishers hold
+cross-process leases; unleased entries are pruned by byte-bounded LRU. Named
+developer instances own a separate `build-cache/` below their instance root.
 
 ### `cas/`
 
-Global physical SHA-256 content store shared by all managed workspaces. Workspace
+Global physical SHA-256 content store shared by all managed workspaces in one
+instance. Workspace
 blob namespaces and build artifact files hardlink into this store, so identical
 bytes occupy one inode even when several workspaces reference them. The CAS is
 not itself an authorization namespace: services continue to check the
@@ -43,7 +47,7 @@ Content-addressed build store. Each build is stored immutably at `{userData}/bui
   └── metadata.json   (sentinel — kind, name, ev, sourcemap, builtAt)
 ```
 
-The build key is a hash of `BUILD_CACHE_VERSION + unitName + effectiveVersion + rootDepsFingerprint + sourcemap`. No LRU or TTL — garbage collection prunes entries not referenced by any active unit.
+The build key is a hash of `BUILD_CACHE_VERSION + unitName + effectiveVersion + rootDepsFingerprint + sourcemap`. Workspace-local builds are retained by execution reachability—not LRU—including active, pinned, rollback, in-flight, and retained-result owners. A coordinated quarantine collector removes unreferenced builds.
 
 Build metadata and manifests remain per-workspace, while immutable artifact
 payloads are hardlinks into the global `cas/`. This preserves workspace-specific
@@ -79,13 +83,59 @@ workspace's git-replacement system) remains responsible for tracking workspace
 reachability and calling `blobstore.delete(digest)`. See
 [`docs/architecture/storage.md`](docs/architecture/storage.md#blobstore-content-addressable-objects).
 
-### `external-deps/`
+### `derived-cache/`
+
+OS-user-shared, regenerable data reused by independent Vibestudio instances.
+The default location is beneath the profile data directory; tests and tools may
+select an isolated root with `VIBESTUDIO_SHARED_DERIVED_CACHE_DIR`.
+
+Cache entries have cross-process active-use leases and coarsely recorded access
+times. Automatic collection removes only unleased entries, uses atomic
+rename-to-trash as its commit point, and targets both a byte ceiling and a
+filesystem free-space floor. `vibestudio storage status` reports declared cache
+roots; `vibestudio storage prune --dry-run` previews the live-safe collector.
+When upgrading from a version without leases, restart every Vibestudio process
+that shares the profile before the first live prune; an older process cannot
+advertise the cache entry it is reading.
+
+### `derived-cache/external-deps/`
 
 Stores external dependency installs (npm `node_modules`) for panels and workers, keyed by a hash of the merged dependency set. Extension runtime dependencies that may run lifecycle scripts are stored separately under `extension-runtime-deps/`.
 
-### `extension-runtime-deps/`
+The dependency environment is leased for the complete bundle or typecheck, not
+only while npm installs it. A cache entry therefore cannot disappear while
+esbuild or TypeScript is resolving packages from it.
 
-Stores extension runtime dependency installs for packages esbuild leaves external, keyed by dependency hash plus platform, architecture, and Node ABI. Unlike `external-deps/`, this cache may run package lifecycle scripts because extension install/update approval grants native-code trust.
+### `derived-cache/extension-runtime-deps/`
+
+Stores extension runtime dependency installations for packages esbuild leaves
+external, keyed by dependency hash plus platform, architecture, and Node ABI.
+Unlike `external-deps/`, this cache may run package lifecycle scripts because
+extension install/update approval grants native-code trust. A completed
+extension build materializes the exact dependency tree into its workspace-local
+immutable build before releasing the shared installation, so activation and
+rollback do not depend on this cache remaining present.
+
+### `derived-cache/npm-cache/`
+
+The npm download/content cache. It is regenerable but is not yet live-pruned;
+only dependency installation directories and reconstruction build results have
+the scoped reader leases required for deletion while Vibestudio is running.
+
+### Cache policy
+
+Each live-safe cache root defaults to a 10 GiB ceiling and collection also
+attempts to preserve at least 10 GiB of filesystem free space. Using a cache
+root starts an unreferenced periodic tuner for that root. It makes an immediate
+opportunistic pass, then checks every fifteen minutes while the process remains
+live. A SQLite maintenance lease and persisted last-pass time coalesce those
+checks across every Vibestudio process sharing the profile, so only one process
+walks a root in each interval. Manual `storage prune` bypasses that cadence.
+Persistent developer instances additionally prune their central build cache
+before startup and after shutdown, then remove instance-CAS blobs whose pool
+link is the only remaining hardlink. The offline boundary is deliberate:
+central CAS and unconverted npm/analysis caches are never recursively deleted
+by the live collector.
 
 ### `workspaces/{name}/state/git-checkouts/`
 

@@ -16,6 +16,12 @@ import * as crypto from "crypto";
 import { applyPatch, parsePatch } from "diff";
 import { getSharedDerivedDataPath } from "@vibestudio/env-paths";
 import { NpmResolutionError, runNpmInstall } from "@vibestudio/shared/npmInstaller";
+import {
+  derivedCacheCoordinator,
+  derivedCacheUnderPressure,
+  scheduleDerivedCachePrune,
+  type DerivedCacheLease,
+} from "@vibestudio/shared/derivedCache";
 import type { PackageGraph, GraphNode } from "./packageGraph.js";
 import { BuildRequestError } from "./diagnostics.js";
 
@@ -778,19 +784,64 @@ function isReusableExternalDepsCache(cacheDir: string): boolean {
   }
 }
 
-/**
- * Get or install external dependencies. Returns the path to the
- * node_modules directory.
- */
-export async function ensureExternalDeps(
+export interface ExternalDependencyBorrow {
+  key: string | null;
+  nodeModulesDir: string;
+  release(): void;
+}
+
+async function acquireDependencyCache(
+  deps: Record<string, string>,
+  options: EnsureDepsOptions
+): Promise<ExternalDependencyBorrow> {
+  if (Object.keys(deps).length === 0) {
+    return { key: null, nodeModulesDir: "", release() {} };
+  }
+  const lease = derivedCacheCoordinator(options.baseDir).acquire(options.baseDir, options.key);
+  try {
+    if (derivedCacheUnderPressure(options.baseDir)) {
+      await derivedCacheCoordinator(options.baseDir).prune(options.baseDir);
+    }
+    const nodeModulesDir = await ensureDepsInstalled(deps, options);
+    return borrowedDependencyEnvironment(options.baseDir, options.key, nodeModulesDir, lease);
+  } catch (error) {
+    lease.release();
+    throw error;
+  }
+}
+
+function borrowedDependencyEnvironment(
+  baseDir: string,
+  key: string,
+  nodeModulesDir: string,
+  lease: DerivedCacheLease
+): ExternalDependencyBorrow {
+  let released = false;
+  return {
+    key,
+    nodeModulesDir,
+    release() {
+      if (released) return;
+      released = true;
+      lease.release();
+      void scheduleDerivedCachePrune(baseDir).catch((error) => {
+        console.warn(
+          `[externalDeps] Cache prune failed: ${error instanceof Error ? error.message : String(error)}`
+        );
+      });
+    },
+  };
+}
+
+export async function acquireExternalDeps(
   deps: Record<string, string>,
   dependencyOverrides: Record<string, string> = {},
   options: { patches?: readonly ExternalDependencyPatch[] } = {}
-): Promise<string> {
+): Promise<ExternalDependencyBorrow> {
   const overrides = { ...dependencyOverrides };
   const patches = validateDependencyPatches(options.patches ?? []);
   assertDependencyPatchRootsPresent(patches, deps);
-  return ensureDepsInstalled(deps, {
+  return acquireDependencyCache(deps, {
     baseDir: getExternalDepsBaseDir(),
     key: hashDeps(deps, overrides, patches),
     ignoreScripts: true,
@@ -805,6 +856,7 @@ export interface ExternalDependencyEnvironment {
   externalDeps: Record<string, string>;
   dependencyOverrides: Record<string, string>;
   dependencyPatches: ExternalDependencyPatch[];
+  release(): void;
 }
 
 /**
@@ -827,15 +879,16 @@ export async function prepareExternalDependencyEnvironment(
     appNodeModules
   );
   const dependencyPatches = collectTransitiveDependencyPatches(unit, graph, sourceRoot);
-  const nodeModulesDir = await ensureExternalDeps(externalDeps, dependencyOverrides, {
+  const borrowed = await acquireExternalDeps(externalDeps, dependencyOverrides, {
     patches: dependencyPatches,
   });
   return {
-    nodeModulesDir,
-    nodePaths: [...(nodeModulesDir ? [nodeModulesDir] : []), ...appNodeModules],
+    nodeModulesDir: borrowed.nodeModulesDir,
+    nodePaths: [...(borrowed.nodeModulesDir ? [borrowed.nodeModulesDir] : []), ...appNodeModules],
     externalDeps,
     dependencyOverrides,
     dependencyPatches,
+    release: () => borrowed.release(),
   };
 }
 
@@ -843,11 +896,11 @@ export async function ensureExtensionRuntimeDeps(
   deps: Record<string, string>,
   dependencyOverrides: Record<string, string> = {},
   patches: readonly ExternalDependencyPatch[] = []
-): Promise<{ key: string | null; nodeModulesDir: string }> {
+): Promise<ExternalDependencyBorrow> {
   const validatedPatches = validateDependencyPatches(patches);
   assertDependencyPatchRootsPresent(validatedPatches, deps);
   if (Object.keys(deps).length === 0) {
-    return { key: null, nodeModulesDir: "" };
+    return { key: null, nodeModulesDir: "", release() {} };
   }
   const overrides = { ...dependencyOverrides };
   const key = [
@@ -856,14 +909,13 @@ export async function ensureExtensionRuntimeDeps(
     process.arch,
     `abi${process.versions.modules ?? "unknown"}`,
   ].join("-");
-  const nodeModulesDir = await ensureDepsInstalled(deps, {
+  return acquireDependencyCache(deps, {
     baseDir: getExtensionRuntimeDepsBaseDir(),
     key,
     ignoreScripts: false,
     overrides,
     patches: validatedPatches,
   });
-  return { key, nodeModulesDir };
 }
 
 type EnsureDepsOptions = {

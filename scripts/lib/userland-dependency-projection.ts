@@ -4,7 +4,7 @@ import {
   collectTransitiveDependencyOverrides,
   collectTransitiveDependencyPatches,
   collectTransitiveExternalDeps,
-  ensureExternalDeps,
+  acquireExternalDeps,
   mergeExternalDependencySpecs,
   type ExternalDependencyPatch,
 } from "../../src/server/buildV2/externalDeps.js";
@@ -21,6 +21,7 @@ export interface UserlandDependencyProjection {
   dependencyOverrides: Readonly<Record<string, string>>;
   dependencyPatches: ReadonlyArray<ExternalDependencyPatch>;
   nodeModulesDir: string;
+  release(): void;
 }
 
 export interface PrepareUserlandDependencyProjectionOptions {
@@ -96,14 +97,15 @@ export async function prepareUserlandDependencyProjection(
   const patches = [...dependencyPatches.values()].sort((left, right) =>
     left.selector.localeCompare(right.selector)
   );
-  const nodeModulesDir = await ensureExternalDeps(dependencies, dependencyOverrides, { patches });
+  const borrowed = await acquireExternalDeps(dependencies, dependencyOverrides, { patches });
   return {
     graph,
     units,
     dependencies,
     dependencyOverrides,
     dependencyPatches: patches,
-    nodeModulesDir,
+    nodeModulesDir: borrowed.nodeModulesDir,
+    release: () => borrowed.release(),
   };
 }
 
