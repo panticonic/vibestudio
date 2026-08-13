@@ -6,9 +6,9 @@ and release packaging. It is trusted host code and changes only with a native
 app release.
 
 The hot-updatable React Native product UI lives separately in
-[`workspace/apps/mobile`](../../workspace/apps/mobile/README.md). The server
-builds that workspace app from content-addressed workspace state and streams it
-through this native host after pairing. Keep product screens and workspace
+the exact external Base release selected by the server. The server builds that
+workspace app from content-addressed workspace state and streams it through
+this native host after pairing. Keep product screens and workspace
 services there; keep OS integration and recovery code here.
 
 ## Pairing And Install

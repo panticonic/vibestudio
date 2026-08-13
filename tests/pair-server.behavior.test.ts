@@ -260,17 +260,17 @@ describe("pair-server runner", () => {
     child.emit("exit", 0, null);
   });
 
-  it("rejects raw server flag forwarding", () => {
-    expect(() =>
+  it("rejects raw server flag forwarding", async () => {
+    await expect(
       runPairServer(config, ["--", "--workspace", "dev"], {
         spawnServer() {
           throw new Error("should not spawn");
         },
       })
-    ).toThrow(/Raw server flag forwarding is unsupported/);
+    ).rejects.toThrow(/Raw server flag forwarding is unsupported/);
   });
 
-  it("rejects every retired pairing-server flag as an unknown argument", () => {
+  it("rejects every retired pairing-server flag as an unknown argument", async () => {
     for (const argv of [
       ["--gateway-port", "3456"],
       ["--ephemeral"],
@@ -282,17 +282,17 @@ describe("pair-server runner", () => {
       ["--require-public-url"],
       ["--no-init"],
     ]) {
-      expect(() =>
+      await expect(
         runPairServer(config, argv, {
           spawnServer() {
             throw new Error("should not spawn");
           },
         })
-      ).toThrow(/^(?:Unknown argument:|.*no longer supported)/);
+      ).rejects.toThrow(/^(?:Unknown argument:|.*no longer supported)/);
     }
   });
 
-  it("uses the hosted signaling endpoint when no signaling flag/env/config is present", () => {
+  it("uses the hosted signaling endpoint when no signaling flag/env/config is present", async () => {
     vi.stubEnv("VIBESTUDIO_WEBRTC_SIGNAL_URL", "");
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
     const child = new FakeChild();
@@ -301,12 +301,16 @@ describe("pair-server runner", () => {
       return child;
     });
 
-    runPairServer(config, ["--port", "3456"], { spawnServer, onChildExit: () => true });
-    expect(spawnServer).toHaveBeenCalledTimes(1);
+    const operation = runPairServer(config, ["--port", "3456"], {
+      spawnServer,
+      onChildExit: () => true,
+    });
+    await vi.waitFor(() => expect(spawnServer).toHaveBeenCalledTimes(1));
     expect(logSpy.mock.calls.map((call) => String(call[0])).join("\n")).toContain(
       "Signaling: wss://signal.vibestudio.app/ (default)"
     );
     child.emit("exit", 0, null);
+    await operation;
   });
 
   it("passes the validated signaling endpoint through to the server env", () => {
@@ -361,14 +365,14 @@ describe("pair-server runner", () => {
     });
   });
 
-  it("rejects non-loopback cleartext signaling before spawning", () => {
+  it("rejects non-loopback cleartext signaling before spawning", async () => {
     const spawnServer = vi.fn(() => new FakeChild());
 
-    expect(() =>
+    await expect(
       runPairServer(config, ["--port", "3456", "--signal-url", "http://example.org"], {
         spawnServer,
       })
-    ).toThrow(/Cleartext signaling is only allowed for loopback/);
+    ).rejects.toThrow(/Cleartext signaling is only allowed for loopback/);
     expect(spawnServer).not.toHaveBeenCalled();
   });
 

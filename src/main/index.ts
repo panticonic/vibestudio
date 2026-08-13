@@ -168,7 +168,6 @@ import { corsApprovalMethods } from "@vibestudio/service-schemas/corsApproval";
 import { externalOpenMethods } from "@vibestudio/service-schemas/externalOpen";
 import { PanelOrchestrator } from "./panelOrchestrator.js";
 import { PanelPinStore } from "./panelPinStore.js";
-import { PanelLayoutStore } from "./panelLayoutStore.js";
 import { PANEL_UI_IDLE_UNLOAD_MS, PANEL_UI_MAX_LOADED_DESKTOP } from "@vibestudio/shared/constants";
 import type { PanelView } from "./panelView.js";
 import type { AppAvailableEvent } from "./appOrchestrator.js";
@@ -2347,7 +2346,6 @@ app.on("ready", async () => {
 
     const { createElectronShellCore } = await import("./shellCore/createElectronShellCore.js");
     shellCore = createElectronShellCore({
-      statePath: serverSession.statePath,
       workspaceId: serverSession.workspaceId,
       workspacePath: serverSession.workspacePath,
       // A LOCAL server owns the workspace tree on this host (manifests present, so
@@ -2428,11 +2426,6 @@ app.on("ready", async () => {
     const panelPinStore = IS_HEADLESS_HOST
       ? undefined
       : new PanelPinStore(path.join(clientLocalStateDir, "panel-pins.json"));
-    // Per-device panel layout persistence (multi-column plan §3.3): same
-    // client-local directory as pins, one file per (workspace, account).
-    const panelLayoutStore = IS_HEADLESS_HOST
-      ? undefined
-      : new PanelLayoutStore(clientLocalStateDir);
 
     // Create PanelOrchestrator
     panelOrchestrator = new PanelOrchestrator({
@@ -2715,17 +2708,6 @@ app.on("ready", async () => {
         onWorkspaceRoute: handleWorkspaceRoute,
       })
     );
-    // The layout store is keyed main-side by (workspace, signed-in account);
-    // the shell never passes identity (§3.3). The account subject is stable
-    // for the life of this authenticated connection, so resolve it lazily once.
-    let cachedAccountUserId: string | null = null;
-    const getAccountUserId = async (): Promise<string> => {
-      if (cachedAccountUserId) return cachedAccountUserId;
-      const profile = (await sc.call("account", "getProfile", [])) as { userId?: string } | null;
-      if (!profile?.userId) throw new Error("Signed-in account user id unavailable");
-      cachedAccountUserId = profile.userId;
-      return cachedAccountUserId;
-    };
     electronContainer.registerRpc(
       createViewService({
         panelOrchestrator,
@@ -2734,9 +2716,6 @@ app.on("ready", async () => {
           return getPanelView();
         },
         getViewManager,
-        panelLayoutStore,
-        getWorkspaceId: () => conn.workspaceConfig.id,
-        getAccountUserId,
       })
     );
     electronContainer.registerRpc(

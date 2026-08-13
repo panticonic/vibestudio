@@ -23,12 +23,12 @@ function makeDispatch(): FakeDispatch {
     // The real DODispatch has more on it; the service only uses .dispatch.
     dispatch: vi.fn(async (_ref: DORef, method: string, ...args: unknown[]) => {
       calls.push({ method, args });
-      if (method === "entitySetDisplayTitle") {
+      if (method === "setEntityTitle") {
         const [entityId, title] = args as [string, string | null];
         storedTitles.set(entityId, title);
         return undefined;
       }
-      if (method === "entityListDisplayTitles") {
+      if (method === "listEntityTitles") {
         return hydrateResponse;
       }
       return undefined;
@@ -53,8 +53,8 @@ function svcWithDispatch(): {
     active = next;
   };
   const svc = createEntityTitleService({
-    getDoDispatch: () => active,
-    workspaceRef,
+    getPresentationDispatch: () =>
+      active ? (method, args) => active!.dispatch(workspaceRef, method, ...args) : null,
   });
   return { svc, dispatch: active as FakeDispatch, setDispatch };
 }
@@ -65,7 +65,7 @@ describe("createEntityTitleService", () => {
     await svc.setTitle("panel:abc", "Hello world");
     expect(svc.getTitle("panel:abc")).toBe("Hello world");
     expect(dispatch.calls).toContainEqual({
-      method: "entitySetDisplayTitle",
+      method: "setEntityTitle",
       args: ["panel:abc", "Hello world"],
     });
   });
@@ -89,7 +89,7 @@ describe("createEntityTitleService", () => {
     expect(svc.getTitle("worker:1")).toBe("Hello world");
     // The DO sees the sanitized value, not the raw input.
     expect(dispatch.calls[dispatch.calls.length - 1]).toEqual({
-      method: "entitySetDisplayTitle",
+      method: "setEntityTitle",
       args: ["worker:1", "Hello world"],
     });
   });
@@ -101,7 +101,7 @@ describe("createEntityTitleService", () => {
     expect(svc.getTitle("worker:1")).toBeUndefined();
     // The DO receives null (not the empty string) so it can drop the row.
     expect(dispatch.calls[dispatch.calls.length - 1]).toEqual({
-      method: "entitySetDisplayTitle",
+      method: "setEntityTitle",
       args: ["worker:1", null],
     });
   });
@@ -136,7 +136,7 @@ describe("createEntityTitleService", () => {
     await svc.clear("do:1");
     expect(svc.getTitle("do:1")).toBeUndefined();
     expect(dispatch.calls[dispatch.calls.length - 1]).toEqual({
-      method: "entitySetDisplayTitle",
+      method: "setEntityTitle",
       args: ["do:1", null],
     });
   });
@@ -198,8 +198,8 @@ describe("createEntityTitleService", () => {
       { id: "worker:1", title: "Restored worker" }
     );
     const svc = createEntityTitleService({
-      getDoDispatch: () => dispatch,
-      workspaceRef,
+      getPresentationDispatch: () => (method, args) =>
+        dispatch.dispatch(workspaceRef, method, ...args),
     });
     await svc.hydrate();
     expect(svc.getTitle("panel:1")).toBe("Restored panel");
@@ -209,8 +209,8 @@ describe("createEntityTitleService", () => {
   it("getTitle still works before doDispatch is online (cache-only path)", async () => {
     let active: DODispatch | null = null;
     const svc = createEntityTitleService({
-      getDoDispatch: () => active,
-      workspaceRef,
+      getPresentationDispatch: () =>
+        active ? (method, args) => active!.dispatch(workspaceRef, method, ...args) : null,
     });
     // setTitle without a dispatcher updates the cache and returns. The DO
     // write is silently dropped; the next setter will land in the DO once
@@ -220,7 +220,7 @@ describe("createEntityTitleService", () => {
     active = makeDispatch();
     await svc.setTitle("panel:early", "Pre-boot title 2");
     expect((active as FakeDispatch).calls).toContainEqual({
-      method: "entitySetDisplayTitle",
+      method: "setEntityTitle",
       args: ["panel:early", "Pre-boot title 2"],
     });
   });

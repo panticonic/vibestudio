@@ -2608,23 +2608,6 @@
       ]
     },
     "methods": {
-      "bindNativePanelSlot": {
-        "authority": {
-          "inherits": true
-        },
-        "access": {
-          "sensitivity": "write"
-        },
-        "tier": {
-          "tier": "open",
-          "session": "family",
-          "residency": "native-effect",
-          "family": "view.control",
-          "rationale": "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family"
-        },
-        "capability": null,
-        "presentation": null
-      },
       "browserForceReload": {
         "authority": {
           "inherits": true
@@ -2744,23 +2727,6 @@
         "capability": null,
         "presentation": null
       },
-      "clearNativePanelSlot": {
-        "authority": {
-          "inherits": true
-        },
-        "access": {
-          "sensitivity": "write"
-        },
-        "tier": {
-          "tier": "open",
-          "session": "family",
-          "residency": "native-effect",
-          "family": "view.control",
-          "rationale": "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family"
-        },
-        "capability": null,
-        "presentation": null
-      },
       "createPanel": {
         "authority": {
           "principals": [
@@ -2797,23 +2763,6 @@
           "residency": "native-effect",
           "family": "panel.control",
           "rationale": "Materializes a resident panel on the caller's native host without changing shell layout focus"
-        },
-        "capability": null,
-        "presentation": null
-      },
-      "expandPanelIds": {
-        "authority": {
-          "inherits": true
-        },
-        "access": {
-          "sensitivity": "write"
-        },
-        "tier": {
-          "tier": "open",
-          "session": "family",
-          "residency": "native-effect",
-          "family": "view.local-panel-state",
-          "rationale": "Expands exact nodes in this client's local panel presentation state"
         },
         "capability": null,
         "presentation": null
@@ -2906,23 +2855,6 @@
         "capability": null,
         "presentation": null
       },
-      "getCollapsedPanelIds": {
-        "authority": {
-          "inherits": true
-        },
-        "access": {
-          "sensitivity": "read"
-        },
-        "tier": {
-          "tier": "open",
-          "session": "family",
-          "residency": "native-effect",
-          "family": "view.local-panel-state",
-          "rationale": "Reads collapsed nodes from this client's local panel presentation state"
-        },
-        "capability": null,
-        "presentation": null
-      },
       "getFocusedPanelId": {
         "authority": {
           "inherits": true
@@ -2953,23 +2885,6 @@
           "residency": "native-effect",
           "family": "panel.read",
           "rationale": "Trusted panel chrome reads Electron's canonical local presentation state"
-        },
-        "capability": null,
-        "presentation": null
-      },
-      "getPanelLayout": {
-        "authority": {
-          "inherits": true
-        },
-        "access": {
-          "sensitivity": "read"
-        },
-        "tier": {
-          "tier": "open",
-          "session": "family",
-          "residency": "native-effect",
-          "family": "panel.read",
-          "rationale": "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family"
         },
         "capability": null,
         "presentation": null
@@ -3147,23 +3062,6 @@
         "capability": null,
         "presentation": null
       },
-      "savePanelLayout": {
-        "authority": {
-          "inherits": true
-        },
-        "access": {
-          "sensitivity": "write"
-        },
-        "tier": {
-          "tier": "open",
-          "session": "family",
-          "residency": "native-effect",
-          "family": "panel.control",
-          "rationale": "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family"
-        },
-        "capability": null,
-        "presentation": null
-      },
       "setBounds": {
         "authority": {
           "inherits": true
@@ -3228,23 +3126,6 @@
           "residency": "native-effect",
           "family": "panel.mutate",
           "rationale": "Applies an already-selected zoom factor to the exact Electron browser webContents."
-        },
-        "capability": null,
-        "presentation": null
-      },
-      "setPanelCollapsed": {
-        "authority": {
-          "inherits": true
-        },
-        "access": {
-          "sensitivity": "write"
-        },
-        "tier": {
-          "tier": "open",
-          "session": "family",
-          "residency": "native-effect",
-          "family": "view.local-panel-state",
-          "rationale": "Persists one collapsed-node choice in this client's local presentation state"
         },
         "capability": null,
         "presentation": null
@@ -3368,6 +3249,23 @@
         "capability": null,
         "presentation": null
       },
+      "syncNativePanelSlots": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "view.control",
+          "rationale": "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family"
+        },
+        "capability": null,
+        "presentation": null
+      },
       "togglePin": {
         "authority": {
           "inherits": true
@@ -3386,23 +3284,6 @@
         "presentation": null
       },
       "updateContentOverlay": {
-        "authority": {
-          "inherits": true
-        },
-        "access": {
-          "sensitivity": "write"
-        },
-        "tier": {
-          "tier": "open",
-          "session": "family",
-          "residency": "native-effect",
-          "family": "view.mutate",
-          "rationale": "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family"
-        },
-        "capability": null,
-        "presentation": null
-      },
-      "updateNativePanelSlot": {
         "authority": {
           "inherits": true
         },

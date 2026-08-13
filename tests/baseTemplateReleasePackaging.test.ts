@@ -11,9 +11,8 @@ describe("base-template release packaging", () => {
       stageBaseTemplateRelease(root);
       const staged = path.join(root, "build-resources", "base-template-release.json");
       expect(JSON.parse(fs.readFileSync(staged, "utf8"))).toMatchObject({
-        version: 1,
+        format: "vibestudio-base-release/1",
         baseTemplate: { commit: expect.stringMatching(/^[0-9a-f]{40}$/u) },
-        systemNotes: [],
       });
     } finally {
       fs.rmSync(root, { recursive: true, force: true });

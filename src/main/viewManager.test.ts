@@ -487,6 +487,51 @@ describe("ViewManager", () => {
       expect(vm.getHostedShellWebContents()).toBe(hostView.webContents);
     });
 
+    it("converges complete desired snapshots and rejects stale revisions", () => {
+      vm.createView({
+        id: "@workspace-apps/shell",
+        type: "app",
+        hostChrome: true,
+        appCapabilities: ["panel-hosting"],
+      });
+      vm.createView({ id: "panel-1", type: "panel" });
+      vm.setHostedShellReady("@workspace-apps/shell", true, "renderer-1");
+
+      expect(
+        vm.syncPanelSlots("@workspace-apps/shell", {
+          rendererInstanceId: "renderer-1",
+          revision: 1,
+          slots: [
+            {
+              nativeSlotId: "slot-1",
+              bindingId: "binding-1",
+              bindingSequence: 1,
+              panelId: "panel-1",
+              bounds: { x: 10, y: 20, width: 300, height: 200 },
+              focused: true,
+            },
+          ],
+        })
+      ).toEqual({ revision: 1, slots: { "slot-1": { status: "bound" } } });
+      expect(vm.isPanelSlotted("panel-1")).toBe(true);
+
+      expect(
+        vm.syncPanelSlots("@workspace-apps/shell", {
+          rendererInstanceId: "renderer-1",
+          revision: 2,
+          slots: [],
+        })
+      ).toEqual({ revision: 2, slots: {} });
+      expect(vm.isPanelSlotted("panel-1")).toBe(false);
+      expect(() =>
+        vm.syncPanelSlots("@workspace-apps/shell", {
+          rendererInstanceId: "renderer-1",
+          revision: 1,
+          slots: [],
+        })
+      ).toThrow(/stale native panel snapshot revision/);
+    });
+
     it("keeps an unbound panel hidden until hosted shell binds its measured slot", () => {
       const panelView = vm.createView({ id: "panel-1", type: "panel" });
       vm.setViewVisible("panel-1", true);

@@ -1,6 +1,5 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { resolveWorkspaceTemplateDir } from "@vibestudio/workspace/loader";
 
 export function hasDependencyWorkspaceMetadata(dir: string): boolean {
   return (
@@ -10,12 +9,9 @@ export function hasDependencyWorkspaceMetadata(dir: string): boolean {
   );
 }
 
-export function resolveDependencyWorkspaceRoot(
-  appRoot: string,
-  activeWorkspacePath: string
-): string {
-  const templateDir = resolveWorkspaceTemplateDir(appRoot);
-  if (templateDir && hasDependencyWorkspaceMetadata(templateDir)) return templateDir;
+export function resolveDependencyWorkspaceRoot(activeWorkspacePath: string): string {
   if (hasDependencyWorkspaceMetadata(activeWorkspacePath)) return activeWorkspacePath;
-  return templateDir ?? activeWorkspacePath;
+  throw new Error(
+    `Active semantic workspace ${activeWorkspacePath} has no dependency workspace metadata`
+  );
 }

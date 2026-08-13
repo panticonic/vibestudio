@@ -4,7 +4,11 @@ import { fileURLToPath } from "node:url";
 import { parseUnitAuthorityManifest } from "../packages/shared/src/authorityManifest.ts";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const workspaceRoot = path.join(root, "workspace");
+const userlandRootArgument = process.env.VIBESTUDIO_USERLAND_ROOT;
+if (!userlandRootArgument) {
+  throw new Error("VIBESTUDIO_USERLAND_ROOT must name the exact Base checkout to inspect");
+}
+const workspaceRoot = path.resolve(userlandRootArgument);
 const executableRoots = new Set(["about", "apps", "extensions", "panels", "workers"]);
 const failures = [];
 

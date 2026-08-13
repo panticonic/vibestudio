@@ -6,7 +6,9 @@ import {
   type CanonicalSnapshotDigest,
 } from "@vibestudio/content-addressing";
 import type { ExactGitSnapshot, ExactSnapshotFile } from "@vibestudio/git";
+import type { SnapshotContentSink } from "@vibestudio/git";
 import { parseWorkspaceConfigContentWithId } from "@vibestudio/workspace/configParser";
+import { prepareRootTemplateMetadata } from "@vibestudio/workspace/rootTemplate";
 import { WorkspaceCreationDescriptorSchema } from "@vibestudio/workspace-contracts/workspaceConfigSchema";
 import type {
   WorkspaceCreationDescriptor,
@@ -35,6 +37,8 @@ export interface WorkspaceRootTemplateBootstrapDeps {
   statePath: string;
   sourcePath: string;
   acquire(pin: WorkspaceTemplatePin): Promise<ExactGitSnapshot>;
+  sink: SnapshotContentSink;
+  expectedSystemEpoch: number;
 }
 
 function repositorySnapshot(files: readonly ExactSnapshotFile[]): CanonicalSnapshotDigest {
@@ -84,6 +88,7 @@ export class WorkspaceRootTemplateBootstrap {
   private readonly descriptorPath: string;
   private preparedInitialization: PreparedRootTemplateInitialization | null = null;
   private acquiredSnapshot: ExactGitSnapshot | null = null;
+  private generatedSourceFiles = new Map<string, Uint8Array>();
 
   constructor(private readonly deps: WorkspaceRootTemplateBootstrapDeps) {
     this.descriptorPath = path.join(deps.statePath, CREATION_DESCRIPTOR_PATH);
@@ -137,6 +142,40 @@ export class WorkspaceRootTemplateBootstrap {
     if (!repositories.some((repository) => repository.repoPath === "meta")) {
       throw new Error(`Root template has no importable meta repository`);
     }
+    for (const file of snapshot.files) {
+      if (
+        file.path === "meta/templates.state.yml" ||
+        file.path === "meta/templates.lock.yml" ||
+        file.path.startsWith("meta/templates/")
+      ) {
+        throw new Error(`Root release contains installed workspace state at ${file.path}`);
+      }
+    }
+    const metadata = prepareRootTemplateMetadata({
+      pin,
+      workspaceId: this.deps.workspaceId,
+      expectedSystemEpoch: this.deps.expectedSystemEpoch,
+      readFile: (filePath) => snapshot.readFile(filePath),
+      snapshotPaths: snapshot.files.map((file) => file.path),
+      repositories,
+    });
+    this.generatedSourceFiles = new Map([
+      ["meta/templates/workspace.yml", new TextEncoder().encode(metadata.sourceYaml)],
+      ["meta/templates.state.yml", new TextEncoder().encode(metadata.stateYaml)],
+    ]);
+    const meta = repositories.find((repository) => repository.repoPath === "meta")!;
+    for (const [filePath, bytes] of this.generatedSourceFiles) {
+      const stored = await this.deps.sink.put(bytes);
+      const relativePath = filePath.slice("meta/".length);
+      meta.files.push({
+        path: relativePath,
+        contentHash: stored.digest,
+        size: stored.size,
+        mode: 0o644,
+      });
+    }
+    meta.files.sort((left, right) => compareUtf16CodeUnits(left.path, right.path));
+    meta.snapshot = repositorySnapshot(meta.files);
     this.acquiredSnapshot = snapshot;
     return {
       pin,
@@ -190,6 +229,11 @@ export class WorkspaceRootTemplateBootstrap {
         mode: file.mode === 0o755 ? 0o755 : 0o644,
         flag: "wx",
       });
+    }
+    for (const [filePath, bytes] of this.generatedSourceFiles) {
+      const destination = safeSnapshotDestination(staging, filePath);
+      fs.mkdirSync(path.dirname(destination), { recursive: true });
+      fs.writeFileSync(destination, bytes, { mode: 0o644, flag: "wx" });
     }
     parseWorkspaceConfigContentWithId(
       fs.readFileSync(path.join(staging, WORKSPACE_MANIFEST_PATH), "utf8"),

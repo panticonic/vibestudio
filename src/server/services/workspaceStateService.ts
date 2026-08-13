@@ -11,6 +11,7 @@ import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import type { EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
 import type { PanelSearchResult, PanelSourceUsage } from "@vibestudio/shared/panelSearchTypes";
 import type {
+  WorkspacePanelCloseCleanupPage,
   WorkspacePanelDetail,
   WorkspacePanelTreePage,
   WorkspacePanelTreePath,
@@ -48,6 +49,8 @@ export type SlotStateChange =
 export interface WorkspaceStateServiceDeps {
   doDispatch: DoDispatcher;
   workspaceId: string;
+  /** Mechanical transport to Base's single workspace-presentation owner. */
+  presentationDispatch(method: string, args: unknown[]): Promise<unknown>;
   /** Resolve canonical presentation metadata from the server-owned workspace source. */
   getUnitIcon?: (source: string) => string | undefined;
   /**
@@ -83,12 +86,42 @@ export function createWorkspaceStateService(deps: WorkspaceStateServiceDeps): Se
     const icon = node.source ? deps.getUnitIcon?.(node.source) : undefined;
     return icon ? { ...node, icon } : node;
   };
-  const withPageIcons = (page: WorkspacePanelTreePage): WorkspacePanelTreePage => ({
+  const titlesForSlots = (slotIds: string[]) =>
+    slotIds.length === 0
+      ? Promise.resolve({} as Record<string, string>)
+      : (deps.presentationDispatch("titlesForSlots", [slotIds]) as Promise<Record<string, string>>);
+  const withNodePresentation = async <T extends { slotId: string; title: string; source?: string }>(
+    nodes: T[]
+  ): Promise<T[]> => {
+    const titles = await titlesForSlots(nodes.map((node) => node.slotId));
+    return nodes.map((node) =>
+      withNodeIcon({ ...node, title: titles[node.slotId] ?? node.slotId } as T)
+    );
+  };
+  const withPagePresentation = async (
+    page: WorkspacePanelTreePage
+  ): Promise<WorkspacePanelTreePage> => ({
     ...page,
-    nodes: page.nodes.map(withNodeIcon),
+    nodes: await withNodePresentation(page.nodes),
   });
+  const withDetailPresentation = async (
+    detail: WorkspacePanelDetail | null
+  ): Promise<WorkspacePanelDetail | null> => {
+    if (!detail) return null;
+    const slotId = detail.slot.slot_id;
+    const titles = slotId ? await titlesForSlots([slotId]) : {};
+    const title = (slotId ? titles[slotId] : undefined) ?? detail.slot.current_entity_title ?? null;
+    const icon = deps.getUnitIcon?.(detail.currentHistory.source);
+    return {
+      ...detail,
+      slot: { ...detail.slot, current_entity_title: title },
+      ...(icon ? { icon } : {}),
+    };
+  };
   const panelTarget = async (slotId: string): Promise<PanelAccessPermissionTarget> => {
-    const detail = await dispatch<WorkspacePanelDetail | null>("panelTreeDetail", [slotId]);
+    const detail = await withDetailPresentation(
+      await dispatch<WorkspacePanelDetail | null>("panelTreeDetail", [slotId])
+    );
     if (!detail) return { id: slotId };
     return {
       id: slotId,
@@ -169,7 +202,7 @@ export function createWorkspaceStateService(deps: WorkspaceStateServiceDeps): Se
       "panelTree.rootGroups": (_ctx, [input]) =>
         dispatch<WorkspacePanelTreeRootGroupPage>("panelTreeRootGroups", [input]),
       "panelTree.rootsForCaller": async (ctx, [input]) =>
-        withPageIcons(
+        withPagePresentation(
           await dispatch<WorkspacePanelTreePage>("panelTreePage", [
             {
               group: {
@@ -181,26 +214,42 @@ export function createWorkspaceStateService(deps: WorkspaceStateServiceDeps): Se
           ])
         ),
       "panelTree.page": async (_ctx, [input]) =>
-        withPageIcons(await dispatch<WorkspacePanelTreePage>("panelTreePage", [input])),
+        withPagePresentation(await dispatch<WorkspacePanelTreePage>("panelTreePage", [input])),
       "panelTree.path": async (_ctx, [slotId]) => {
         const path = await dispatch<WorkspacePanelTreePath | null>("panelTreePath", [slotId]);
-        return path ? { ...path, nodes: path.nodes.map(withNodeIcon) } : null;
+        return path ? { ...path, nodes: await withNodePresentation(path.nodes) } : null;
       },
-      "panelTree.detail": async (_ctx, [slotId]) => {
-        const detail = await dispatch<WorkspacePanelDetail | null>("panelTreeDetail", [slotId]);
-        if (!detail) return null;
-        const icon = deps.getUnitIcon?.(detail.currentHistory.source);
-        return icon ? { ...detail, icon } : detail;
-      },
+      "panelTree.detail": async (_ctx, [slotId]) =>
+        withDetailPresentation(
+          await dispatch<WorkspacePanelDetail | null>("panelTreeDetail", [slotId])
+        ),
       "panelTree.search": async (_ctx, [input]) => {
-        const page = await dispatch<WorkspacePanelTreeSearchPage>("panelTreeSearch", [input]);
+        const search = (await deps.presentationDispatch("search", [
+          input.query,
+          input.limit,
+          input.cursor,
+        ])) as { results: PanelSearchResult[]; nextCursor: string | null };
+        let revision = 0;
+        const hits: WorkspacePanelTreeSearchPage["hits"] = [];
+        for (const result of search.results) {
+          const path = await dispatch<WorkspacePanelTreePath | null>("panelTreePath", [result.id]);
+          if (!path) continue;
+          revision = path.revision;
+          const nodes = await withNodePresentation(path.nodes);
+          const node = nodes.at(-1);
+          if (!node) continue;
+          const ancestorCount = Math.max(0, nodes.length - 1);
+          const ancestors = nodes.slice(Math.max(0, ancestorCount - 12), -1);
+          hits.push({
+            node,
+            ancestors,
+            ...(ancestorCount > ancestors.length ? { ancestorsTruncated: true } : {}),
+          });
+        }
         return {
-          ...page,
-          hits: page.hits.map((hit) => ({
-            ...hit,
-            node: withNodeIcon(hit.node),
-            ancestors: hit.ancestors.map(withNodeIcon),
-          })),
+          revision,
+          hits,
+          nextCursor: search.nextCursor,
         };
       },
       "slot.get": (_ctx, [slotId]) => dispatch<unknown>("slotGet", [slotId]),
@@ -217,6 +266,13 @@ export function createWorkspaceStateService(deps: WorkspaceStateServiceDeps): Se
         await dispatch<undefined>("slotCreate", [
           { ...input, ...(ctx.caller.subject ? { ownerUserId: ctx.caller.subject.userId } : {}) },
         ]);
+        if (input.initialEntry) {
+          await deps.presentationDispatch("bindSlot", [
+            input.slotId,
+            input.initialEntry.entityId,
+            input.initialEntry.source,
+          ]);
+        }
         deps.onSlotStateChanged?.(
           input.initialEntry
             ? {
@@ -236,6 +292,16 @@ export function createWorkspaceStateService(deps: WorkspaceStateServiceDeps): Se
           "slotCommitPreparedNavigation",
           [input]
         );
+        const detail = await dispatch<WorkspacePanelDetail | null>("panelTreeDetail", [
+          input.slotId,
+        ]);
+        if (detail) {
+          await deps.presentationDispatch("bindSlot", [
+            input.slotId,
+            detail.entity.id,
+            detail.currentHistory.source,
+          ]);
+        }
         deps.onSlotStateChanged?.({
           kind: "current-entity",
           slotId: input.slotId,
@@ -257,33 +323,61 @@ export function createWorkspaceStateService(deps: WorkspaceStateServiceDeps): Se
         deps.onSlotStateChanged?.();
       },
       "slot.close": async (_ctx, [slotId]) => {
-        const result = await dispatch<unknown>("slotClose", [slotId]);
+        const result = await dispatch<{ closeId: string; closedCount: number }>("slotClose", [
+          slotId,
+        ]);
+        const removed: string[] = [];
+        let cursor: string | undefined;
+        do {
+          const page = await dispatch<WorkspacePanelCloseCleanupPage>("slotCloseCleanupPage", [
+            { closeId: result.closeId, cursor, limit: 200 },
+          ]);
+          removed.push(...page.items.map((item) => item.slotId));
+          cursor = page.nextCursor ?? undefined;
+        } while (cursor);
+        if (removed.length > 0) await deps.presentationDispatch("removeSlots", [removed]);
         deps.onSlotStateChanged?.();
         return result;
       },
       "slot.closeCleanupPage": (_ctx, [input]) =>
         dispatch<unknown>("slotCloseCleanupPage", [input]),
       "slot.closeOwnedRoots": async (_ctx, [ownerUserId]) => {
-        const result = await dispatch<unknown>("slotCloseOwnedRoots", [ownerUserId]);
+        const result = await dispatch<{ rootIds: string[]; closedIds: string[] }>(
+          "slotCloseOwnedRoots",
+          [ownerUserId]
+        );
+        if (result.closedIds.length > 0) {
+          await deps.presentationDispatch("removeSlots", [result.closedIds]);
+        }
         deps.onSlotStateChanged?.();
         return result;
       },
       "slot.closeCleanupAck": (_ctx, [slotIds]) =>
         dispatch<undefined>("slotCloseCleanupAck", [slotIds]),
       "panel.search": (_ctx, [query, limit]) =>
-        dispatch<PanelSearchResult[]>("panelSearch", [query, limit]),
+        deps
+          .presentationDispatch("search", [query, limit])
+          .then((value) => (value as { results: PanelSearchResult[] }).results),
       "panel.sourceUsage": (_ctx, [limit]) =>
-        dispatch<PanelSourceUsage[]>("panelSourceUsage", [limit]),
+        deps.presentationDispatch("sourceUsage", [limit]) as Promise<PanelSourceUsage[]>,
       "panel.index": async (_ctx, [input]) => {
-        const detail = await dispatch<WorkspacePanelDetail | null>("panelTreeDetail", [input.id]);
+        const detail = await withDetailPresentation(
+          await dispatch<WorkspacePanelDetail | null>("panelTreeDetail", [input.id])
+        );
+        if (!detail) return null;
         const hasExplicitTitle = Boolean(
-          detail?.entity.id && deps.isEntityTitleExplicit?.(detail.entity.id)
+          detail.entity.id && deps.isEntityTitleExplicit?.(detail.entity.id)
         );
         const indexedInput =
-          hasExplicitTitle && detail?.slot.current_entity_title
-            ? { ...input, title: detail.slot.current_entity_title }
-            : input;
-        const entityId = await dispatch<string | null>("panelIndex", [indexedInput]);
+          hasExplicitTitle && detail.slot.current_entity_title
+            ? {
+                ...input,
+                source: detail.currentHistory.source,
+                title: detail.slot.current_entity_title,
+              }
+            : { ...input, source: detail.currentHistory.source };
+        const entityId = detail.entity.id;
+        await deps.presentationDispatch("indexPanel", [indexedInput, entityId]);
         if (entityId && input?.title && !hasExplicitTitle) {
           deps.onPanelTitleChanged?.(entityId, input.title, false);
         }
@@ -298,15 +392,18 @@ export function createWorkspaceStateService(deps: WorkspaceStateServiceDeps): Se
         ) {
           return detail.entity.id;
         }
-        const entityId = await dispatch<string | null>("panelUpdateTitle", [slotId, title]);
+        const entityId = detail?.entity.id ?? null;
+        if (entityId) {
+          await deps.presentationDispatch("updatePanelTitle", [slotId, entityId, title]);
+        }
         if (entityId) deps.onPanelTitleChanged?.(entityId, title, options?.explicit === true);
         return entityId;
       },
-      "panel.incrementAccess": async (_ctx, [entityId]) => {
-        await dispatch<undefined>("panelIncrementAccess", [entityId]);
+      "panel.incrementAccess": async (_ctx, [slotId]) => {
+        await deps.presentationDispatch("incrementAccess", [slotId]);
       },
       "panel.rebuildIndex": async () => {
-        await dispatch<undefined>("panelRebuildIndex", []);
+        await deps.presentationDispatch("rebuildIndex", []);
       },
       lifecycleLeaseUpsert: async (_ctx, [input]) => {
         assertOwnLifecycleKey(_ctx.caller, input, "upsert a lifecycle lease for");

@@ -1,6 +1,7 @@
 import { defineConfig } from "vitest/config";
 import path from "node:path";
 import { vitestSharedConfig } from "./vitest.sharedConfig";
+import { exactPairTests } from "./vitest.exactPairTests";
 
 export default defineConfig({
   ...vitestSharedConfig,
@@ -24,6 +25,11 @@ export default defineConfig({
       "apps/**/*.test.ts",
       "apps/**/*.test.tsx",
     ],
-    exclude: [...vitestSharedConfig.test.exclude, "workspace/**", "tests/workspace-integration/**"],
+    exclude: [
+      ...vitestSharedConfig.test.exclude,
+      "workspace/**",
+      "tests/workspace-integration/**",
+      ...exactPairTests,
+    ],
   },
 });

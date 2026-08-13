@@ -55,40 +55,6 @@ describe("template recovery contracts", () => {
     ).toThrow();
   });
 
-  it("carries migration facets on a retained repair operation", () => {
-    expect(
-      templatesMethods.operations.returns.parse([
-        {
-          operationId: "pull-base",
-          kind: "pull",
-          contextId: "template-composer-operation-base",
-          initiator: "host-release",
-          target: { alias: "base", ref: "refs/tags/v2" },
-          state: "repairing",
-          fingerprint: `v1-sha256:${"a".repeat(64)}`,
-          migration: {
-            facets: ["system"],
-            notes: [
-              {
-                path: "migrations/system/current-contract.md",
-                title: "Current contract",
-                degradedOk: false,
-              },
-            ],
-          },
-          repair: {
-            contextId: "template-composer-operation-base",
-            failures: [],
-          },
-        },
-      ])[0]
-    ).toMatchObject({
-      initiator: "host-release",
-      target: { alias: "base", ref: "refs/tags/v2" },
-      migration: { facets: ["system"] },
-    });
-  });
-
   it("accepts an exact host-shipped target on the ordinary pull method", () => {
     const pin = {
       url: "git+https://example.test/base.git",
@@ -219,7 +185,7 @@ describe("template authoring contracts", () => {
     requiredParts: ["packages/shared"],
     dependencyParts: [],
     overlapParts: [],
-    manifest: "systemEpoch: 57\n",
+    manifest: "systemEpoch: 58\n",
     manifestDigest: `v1-sha256:${"a".repeat(64)}`,
     fingerprint: `v1-sha256:${"b".repeat(64)}`,
   };
@@ -297,7 +263,7 @@ describe("template authoring contracts", () => {
     const catalog = {
       version: 1 as const,
       revision: "2026-08-09.1",
-      systemEpoch: 57,
+      systemEpoch: 58,
       entries: [],
       coordinates: {
         url: "git+https://example.test/template-registry.git",

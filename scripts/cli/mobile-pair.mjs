@@ -2,7 +2,7 @@
 import { runPairServer } from "./lib/pair-server.mjs";
 
 try {
-  runPairServer({
+  await runPairServer({
     commandName: "vibestudio mobile pair",
     logPrefix: "mobile-pair",
     portEnv: ["VIBESTUDIO_MOBILE_PORT"],

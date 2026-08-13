@@ -192,7 +192,7 @@ by clients after pairing.
 `);
 }
 
-export function runPairServer(config, argv = process.argv.slice(2), hooks = {}) {
+export async function runPairServer(config, argv = process.argv.slice(2), hooks = {}) {
   const options = parsePairArgs(argv, config);
   if (options.help) {
     printPairHelp(config);
@@ -236,7 +236,7 @@ export function runPairServer(config, argv = process.argv.slice(2), hooks = {}) 
     serverArgs = [...serverArgs, "--ready-file", readyFile];
   }
 
-  hooks.beforeStart?.({ options, serverArgs });
+  await hooks.beforeStart?.({ options, serverArgs });
 
   console.log(`[${config.logPrefix}] Loopback host: ${LOOPBACK_HOST}`);
   console.log(`[${config.logPrefix}] Gateway port: ${options.port}`);

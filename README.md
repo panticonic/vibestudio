@@ -92,7 +92,7 @@ Identity lives in one hub-owned database (`server-auth/identity.db`); the flow i
    are members of; inside a workspace, all members are mutually trusted.
 
 See [docs/cli.md](docs/cli.md#users--membership-multi-user) for the commands and
-[workspace/skills/remote-access/SKILL.md](workspace/skills/remote-access/SKILL.md)
+[Base remote-access skill](https://github.com/panticonic/vibestudio-workspace-base/blob/main/skills/remote-access/SKILL.md)
 for the operational runbook.
 
 The real-client smoke tests use that deployed route, the normal `remote serve`

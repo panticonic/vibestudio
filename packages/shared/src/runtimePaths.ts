@@ -65,25 +65,6 @@ export function getExistingAppNodeModulesRoots(appRoot: string): string[] {
   return dedupePaths(candidates).filter((p) => fs.existsSync(p));
 }
 
-export function getWorkspaceTemplateCandidates(appRoot: string): string[] {
-  const layout = createRuntimeLayout(appRoot);
-  return dedupePaths([
-    path.join(layout.resourcesRoot, "workspace-template"),
-    path.join(layout.appRoot, "workspace"),
-  ]);
-}
-
-export function getExistingWorkspaceTemplateDir(
-  appRoot: string,
-  configFile: string
-): string | null {
-  for (const candidate of getWorkspaceTemplateCandidates(appRoot)) {
-    if (fs.existsSync(path.join(candidate, configFile))) {
-      return candidate;
-    }
-  }
-  return null;
-}
 
 export function getPlatformPackageBinaryPath(
   appRoot: string,

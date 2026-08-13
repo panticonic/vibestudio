@@ -11,9 +11,10 @@ import { setBuildExecutionIdentityContext } from "./buildStore.js";
 beforeAll(() => setBuildSourceProvider(workingTreeSourceProvider()));
 afterAll(() => setBuildSourceProvider(null));
 import { discoverPackageGraph } from "./packageGraph.js";
+import { exactUserlandRoot } from "../../../tests/exactUserlandRoot";
 
 const REPO_ROOT = process.cwd();
-const REAL_SHIM = path.join(REPO_ROOT, "workspace", "packages", "terminal-shim");
+const REAL_SHIM = path.join(exactUserlandRoot, "packages", "terminal-shim");
 const SOURCE_STATE_HASH = `state:${"c".repeat(64)}`;
 
 function git(cwd: string, args: string[]): void {

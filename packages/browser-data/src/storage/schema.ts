@@ -19,7 +19,7 @@ CREATE TABLE IF NOT EXISTS page_favicons (
   updated_at INTEGER NOT NULL
 );`;
 
-export const BROWSER_DATA_SCHEMA = `
+const BROWSER_PRODUCT_SCHEMA_PREFIX = `
 ${PAGE_FAVICONS_TABLE_SQL}
 CREATE INDEX IF NOT EXISTS idx_page_favicons_origin ON page_favicons(origin);
 
@@ -85,6 +85,11 @@ CREATE TRIGGER IF NOT EXISTS history_au AFTER UPDATE ON history BEGIN
   VALUES('delete', old.id, old.url, old.title);
   INSERT INTO history_fts(rowid, url, title) VALUES (new.id, new.url, new.title);
 END;
+
+`;
+
+/** Host-owned protected browser secrets. */
+export const BROWSER_VAULT_SCHEMA = `
 
 CREATE TABLE IF NOT EXISTS passwords (
   id INTEGER PRIMARY KEY,
@@ -161,6 +166,10 @@ CREATE TABLE IF NOT EXISTS form_fill_values (
 CREATE INDEX IF NOT EXISTS idx_form_fill_values_type ON form_fill_values(type);
 CREATE INDEX IF NOT EXISTS idx_form_fill_values_field_key ON form_fill_values(field_key);
 
+`;
+
+const BROWSER_PRODUCT_SCHEMA_SUFFIX = `
+
 CREATE TABLE IF NOT EXISTS search_engines (
   id INTEGER PRIMARY KEY,
   name TEXT NOT NULL,
@@ -219,3 +228,6 @@ CREATE TABLE IF NOT EXISTS downloads (
 CREATE INDEX IF NOT EXISTS idx_downloads_host_updated
   ON downloads(host_id, updated_at DESC);
 `;
+
+/** Workspace-owned durable browser product state. */
+export const BROWSER_PRODUCT_SCHEMA = BROWSER_PRODUCT_SCHEMA_PREFIX + BROWSER_PRODUCT_SCHEMA_SUFFIX;

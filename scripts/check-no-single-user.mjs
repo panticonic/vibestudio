@@ -31,7 +31,7 @@ import { pathToFileURL } from "node:url";
 
 const DEFAULT_ROOT = process.cwd();
 
-const SCANNED_ROOTS = ["src", "packages", "apps", "scripts", "skills", "workspace"];
+const SCANNED_ROOTS = ["src", "packages", "apps", "scripts", "skills"];
 const SCANNED_FILES = [
   "build.mjs",
   "README.md",

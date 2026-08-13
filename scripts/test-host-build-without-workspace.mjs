@@ -8,23 +8,6 @@ const temporaryParent = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-host-o
 const checkout = path.join(temporaryParent, "checkout");
 const omitted = new Set([".git", "dist", "node_modules", "workspace"]);
 
-function workspaceImplementationRoots() {
-  const workspaceRoot = path.join(repositoryRoot, "workspace");
-  const roots = [];
-  const visit = (directory) => {
-    if (path.basename(directory) === "node_modules") return;
-    if (directory !== workspaceRoot && fs.existsSync(path.join(directory, "package.json"))) {
-      roots.push(directory);
-      return;
-    }
-    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
-      if (entry.isDirectory()) visit(path.join(directory, entry.name));
-    }
-  };
-  visit(workspaceRoot);
-  return roots;
-}
-
 function linkInstalledDependencies(checkoutRoot) {
   const installedRoot = path.join(repositoryRoot, "node_modules");
   const targetRoot = path.join(checkoutRoot, "node_modules");
@@ -71,10 +54,6 @@ try {
   });
   linkInstalledDependencies(checkout);
 
-  const environment = {
-    ...process.env,
-    VIBESTUDIO_FORBIDDEN_USERLAND_ROOTS: workspaceImplementationRoots().join(path.delimiter),
-  };
   const checks = [
     { label: "production build", command: process.execPath, args: ["build.mjs"] },
     {
@@ -100,7 +79,7 @@ try {
   for (const check of checks) {
     const result = spawnSync(check.command, check.args, {
       cwd: checkout,
-      env: environment,
+      env: process.env,
       stdio: "inherit",
     });
     if (result.error) throw result.error;

@@ -5,14 +5,14 @@ import * as path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { discoverPackageGraph } from "./packageGraph.js";
 import { setBuildSourceProvider, workingTreeSourceProvider } from "./buildSource.js";
+import { exactUserlandRoot } from "../../../tests/exactUserlandRoot";
 
 beforeAll(() => setBuildSourceProvider(workingTreeSourceProvider()));
 afterAll(() => setBuildSourceProvider(null));
 
 describe("canonical CDP client build", () => {
   it("keeps the canonical CDP client free of any vendored browser engine", () => {
-    const workspaceRoot = path.resolve("workspace");
-    const graph = discoverPackageGraph(workspaceRoot);
+    const graph = discoverPackageGraph(exactUserlandRoot);
     const client = graph.get("@workspace/cdp-client");
 
     expect(client.dependencies).not.toHaveProperty("@workspace/playwright-core");
@@ -24,12 +24,13 @@ describe("canonical CDP client build", () => {
     try {
       const outfile = path.join(tempDir, "bundle.js");
       await esbuild.build({
-        entryPoints: [path.resolve("workspace/packages/cdp-client/src/index.ts")],
+        entryPoints: [path.join(exactUserlandRoot, "packages/cdp-client/src/index.ts")],
         outfile,
         bundle: true,
         format: "esm",
         platform: "browser",
         conditions: ["vibestudio-panel", "browser", "import", "default"],
+        external: ["@vibestudio/*"],
         logLevel: "silent",
       });
 

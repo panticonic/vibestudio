@@ -33,6 +33,7 @@ function stateYaml(
           snapshot: `v1-sha256:${"b".repeat(64)}` as const,
         },
         parents: [],
+        fragment: "version: 1\n",
         ...(presentation ? { presentation } : {}),
         suggestions: {},
       },
@@ -64,6 +65,7 @@ function overlappingStateYaml(repoPath: string): string {
       snapshot: `v1-sha256:${digest.repeat(64)}` as const,
     },
     parents: [],
+    fragment: "version: 1\n",
     suggestions: {},
   });
   const state = {

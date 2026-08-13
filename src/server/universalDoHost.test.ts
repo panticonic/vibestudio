@@ -117,7 +117,6 @@ export class SchemaProbeDO extends DurableObject {
     )]);
     return Response.json({
       className: "SchemaProbeDO", version: 1, freshSchemaFingerprint: shape,
-      baseline: { version: 1, name: "schema-probe-v1" }, migrations: [], fixtureObjectKeys: [],
     });
   }
 }
@@ -328,157 +327,9 @@ describe("UniversalDO facet host (real workerd)", () => {
     expect(descriptor).toMatchObject({
       className: "SchemaProbeDO",
       version: 1,
-      baseline: { version: 1, name: "schema-probe-v1" },
-      migrations: [],
     });
     expect(descriptor.freshSchemaFingerprint).toContain("cards_title");
   });
-
-  it("captures published representative data and gates candidate migrations against it", async () => {
-    const source = "workers/schema-fixture";
-    const v1 = `import { DurableObject } from "cloudflare:workers";
-export class BoardDO extends DurableObject {
-  constructor(ctx, env) { super(ctx, env); this.ctx = ctx; this.env = env;
-    this.ctx.storage.sql.exec("CREATE TABLE IF NOT EXISTS cards (id TEXT PRIMARY KEY, title TEXT NOT NULL)"); }
-  async fetch(request) { const method = new URL(request.url).pathname.split("/").filter(Boolean).slice(1).join("/");
-    if (method === "seed") this.ctx.storage.sql.exec("INSERT OR REPLACE INTO cards VALUES ('1', 'captured row')");
-    const shape = JSON.stringify([...this.ctx.storage.sql.exec("SELECT type, name, tbl_name, sql FROM sqlite_master WHERE name IN ('cards', 'cards_archived') ORDER BY type, name")]);
-    if (this.env.VIBESTUDIO_SCHEMA_PROBE === true) return Response.json({ className: "BoardDO", version: 1,
-      freshSchemaFingerprint: shape, baseline: { version: 1, name: "board-v1" }, migrations: [],
-      fixtureObjectKeys: ["representative"] });
-    return Response.json({ result: true }); }
-}
-export default { fetch() { return new Response("v1"); } };`;
-    const v2 = `import { DurableObject } from "cloudflare:workers";
-const retained = { version: 2, name: "add-archive", validateSource: (sql) => sql.exec("SELECT id FROM cards LIMIT 1"),
-  migrate: (sql) => sql.exec("ALTER TABLE cards ADD COLUMN archived INTEGER NOT NULL DEFAULT 0") };
-export class BoardDO extends DurableObject {
-  schemaMigrations() { return [{ version: 2, name: "add-archive", validateSource: (sql) => sql.exec("SELECT id FROM cards LIMIT 1"),
-    migrate: (sql) => sql.exec("ALTER TABLE cards ADD COLUMN archived INTEGER NOT NULL DEFAULT 0") }]; }
-  constructor(ctx, env) { super(ctx, env); this.ctx = ctx; this.env = env;
-    const tables = [...this.ctx.storage.sql.exec("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'cards'")];
-    if (tables.length === 0) this.ctx.storage.sql.exec("CREATE TABLE cards (id TEXT PRIMARY KEY, title TEXT NOT NULL, archived INTEGER NOT NULL DEFAULT 0)");
-    else if ([...this.ctx.storage.sql.exec("PRAGMA table_info(cards)")].every((row) => row.name !== "archived")) retained.migrate(this.ctx.storage.sql);
-    this.ctx.storage.sql.exec("CREATE INDEX IF NOT EXISTS cards_archived ON cards(archived)"); }
-  async fetch() { const shape = JSON.stringify([...this.ctx.storage.sql.exec("SELECT type, name, tbl_name, sql FROM sqlite_master WHERE name IN ('cards', 'cards_archived') ORDER BY type, name")]);
-    return Response.json({ className: "BoardDO", version: 2, freshSchemaFingerprint: shape,
-      baseline: { version: 1, name: "board-v1" }, migrations: [{ version: 2, name: "add-archive" }],
-      fixtureObjectKeys: ["representative"] }); }
-}
-export default { fetch() { return new Response("v2"); } };`;
-    const oldBuild = doBuild(source, "ev-v1", v1);
-    const candidateBuild = doBuild(source, "ev-v2", v2);
-    active = await createHarness({ [source]: oldBuild });
-    await active.manager.ensureDOClass(source, "BoardDO");
-    await active.dispatch({ source, className: "BoardDO", objectKey: "representative" }, "seed");
-
-    const oldDescriptor = await active.manager.probeDurableObjectSchema(
-      source,
-      "BoardDO",
-      oldBuild
-    );
-    expect(
-      active.manager.validateAndStageDurableObjectSchemas("state:v1", [
-        {
-          source,
-          effectiveVersion: oldBuild.metadata.ev,
-          descriptor: oldDescriptor,
-        },
-      ])
-    ).toEqual([]);
-    active.manager.commitDurableObjectSchemas("state:v1");
-
-    const freshCandidate = await active.manager.probeDurableObjectSchema(
-      source,
-      "BoardDO",
-      candidateBuild
-    );
-    await expect(
-      active.manager.validateDurableObjectSchemaFixtures({
-        source,
-        build: candidateBuild,
-        descriptor: freshCandidate,
-      })
-    ).resolves.toEqual([]);
-
-    const divergentSource = v2.replace(
-      'this.ctx.storage.sql.exec("CREATE INDEX IF NOT EXISTS cards_archived ON cards(archived)");',
-      'if (tables.length === 0) this.ctx.storage.sql.exec("CREATE INDEX IF NOT EXISTS cards_archived ON cards(archived)");'
-    );
-    const divergentBuild = doBuild(source, "ev-v2-divergent", divergentSource);
-    const divergentFresh = await active.manager.probeDurableObjectSchema(
-      source,
-      "BoardDO",
-      divergentBuild
-    );
-    await expect(
-      active.manager.validateDurableObjectSchemaFixtures({
-        source,
-        build: divergentBuild,
-        descriptor: divergentFresh,
-      })
-    ).resolves.toEqual([expect.stringContaining("different from a fresh v2 install")]);
-  }, 30_000);
-
-  it("lets a raised baseline retire migrations while refusing rewinds and stranding", async () => {
-    active = await createHarness({ "workers/board": doBuild("workers/board", "ev-1") });
-    const { manager } = active;
-    const source = "workers/board";
-    const descriptor = (
-      overrides: Partial<import("./workerdManager.js").DurableObjectPublishedSchemaDescriptor>
-    ): import("./workerdManager.js").DurableObjectPublishedSchemaDescriptor => ({
-      className: "BoardDO",
-      version: 2,
-      freshSchemaFingerprint: "fp-v2",
-      baseline: { version: 1, name: "board-v1" },
-      migrations: [{ version: 2, name: "m2", definitionDigest: "d2" }],
-      fixtureObjectKeys: ["rep"],
-      ...overrides,
-    });
-
-    expect(
-      manager.validateAndStageDurableObjectSchemas("state:base", [
-        { source, effectiveVersion: "ev-1", descriptor: descriptor({}) },
-      ])
-    ).toEqual([]);
-    manager.commitDurableObjectSchemas("state:base");
-
-    // Raising the baseline to the installed version retires migration v2:
-    // dropping it (with its digest) is allowed, not "removed, renamed, or edited".
-    expect(
-      manager.validateAndStageDurableObjectSchemas("state:raise", [
-        {
-          source,
-          effectiveVersion: "ev-2",
-          descriptor: descriptor({ baseline: { version: 2, name: "board-v2" }, migrations: [] }),
-        },
-      ])
-    ).toEqual([]);
-    manager.commitDurableObjectSchemas("state:raise");
-
-    // Rewinding the baseline is refused even with the old migration restored.
-    expect(
-      manager.validateAndStageDurableObjectSchemas("state:rewind", [
-        { source, effectiveVersion: "ev-3", descriptor: descriptor({}) },
-      ])
-    ).toEqual([expect.stringContaining("production baseline decreased")]);
-
-    // Raising the baseline beyond the installed version strands deployed data.
-    expect(
-      manager.validateAndStageDurableObjectSchemas("state:strand", [
-        {
-          source,
-          effectiveVersion: "ev-4",
-          descriptor: descriptor({
-            version: 3,
-            freshSchemaFingerprint: "fp-v3",
-            baseline: { version: 3, name: "board-v3" },
-            migrations: [],
-          }),
-        },
-      ])
-    ).toContainEqual(expect.stringContaining("exceeds the installed schema v2"));
-  }, 30_000);
 
   ledgerTest(
     "execution.ensure-durable-object",

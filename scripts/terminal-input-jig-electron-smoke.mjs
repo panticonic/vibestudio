@@ -7,7 +7,9 @@ import { fileURLToPath } from "node:url";
 
 const require = createRequire(import.meta.url);
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const sourceDir = path.join(root, "workspace/panels/terminal");
+const userlandRoot = process.env.VIBESTUDIO_USERLAND_ROOT;
+if (!userlandRoot) throw new Error("VIBESTUDIO_USERLAND_ROOT must name the exact Base checkout");
+const sourceDir = path.join(path.resolve(userlandRoot), "panels/terminal");
 const outDir = path.join(root, ".tmp/terminal-input-jig-smoke");
 const mainPath = path.join(outDir, "electron-main.mjs");
 

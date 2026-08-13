@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-import { readFileSync } from "node:fs";
 
 import { createHostCaller, createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import { createTestServiceDispatcher } from "@vibestudio/shared/serviceDispatcherTestUtils";
@@ -58,26 +57,16 @@ function makeService() {
 }
 
 function appCaller() {
-  const manifest = JSON.parse(
-    readFileSync(new URL("../../../workspace/apps/shell/package.json", import.meta.url), "utf8")
-  ) as {
-    vibestudio: {
-      authority: {
-        provides: [];
-        requests: Array<{
-          capability: string;
-          resource: { kind: "exact"; key: string } | { kind: "prefix"; prefix: string };
-        }>;
-      };
-    };
-  };
   return createVerifiedCaller("@workspace-apps/shell", "app", {
     callerId: "@workspace-apps/shell",
     callerKind: "app",
     repoPath: "apps/shell",
     effectiveVersion: "ev-shell",
     executionDigest: "a".repeat(64),
-    requested: manifest.vibestudio.authority.requests,
+    requested: ["external.open", "open-external", "panel-hosting"].map((capability) => ({
+      capability,
+      resource: { kind: "prefix" as const, prefix: "" },
+    })),
   });
 }
 

@@ -821,7 +821,7 @@ export const workspaceStateMethods = defineServiceMethods({
       rationale: "G5: host infrastructure plumbing; §2 default {code, session} family",
     },
     args: z.tuple([z.string()]),
-    description: "Bump the access counter for a panel entity.",
+    description: "Bump the access counter for a panel slot.",
     authority: WORKSPACE_STATE_WRITE_POLICY,
     access: { sensitivity: "write" },
     returns: z.void(),

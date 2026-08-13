@@ -26,6 +26,11 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const userlandRootArgument = process.env.VIBESTUDIO_USERLAND_ROOT;
+if (!userlandRootArgument) {
+  throw new Error("VIBESTUDIO_USERLAND_ROOT must name the exact Base checkout to update");
+}
+const userlandRoot = path.resolve(userlandRootArgument);
 const check = process.argv.includes("--check");
 
 const { productSeedSourceDigest, writeProductSeedSourceRecord } = await import(
@@ -34,12 +39,12 @@ const { productSeedSourceDigest, writeProductSeedSourceRecord } = await import(
 
 const SEED_RECORD_FILE = ".vibestudio-seed.json";
 /** Only the live workspace tree; `release/` holds packaged copies, not sources. */
-const SEARCH_ROOTS = ["workspace/apps", "workspace/extensions"];
+const SEARCH_ROOTS = ["apps", "extensions"];
 
 function seededUnitDirs() {
   const dirs = [];
   for (const searchRoot of SEARCH_ROOTS) {
-    const absolute = path.join(root, searchRoot);
+    const absolute = path.join(userlandRoot, searchRoot);
     if (!fs.existsSync(absolute)) continue;
     for (const entry of fs.readdirSync(absolute, { withFileTypes: true })) {
       if (!entry.isDirectory()) continue;
@@ -55,7 +60,7 @@ let verified = 0;
 
 for (const unitDir of seededUnitDirs()) {
   const record = JSON.parse(fs.readFileSync(path.join(unitDir, SEED_RECORD_FILE), "utf-8"));
-  const repoPath = path.relative(path.join(root, "workspace"), unitDir).split(path.sep).join("/");
+  const repoPath = path.relative(userlandRoot, unitDir).split(path.sep).join("/");
   // Compared directly rather than through the runtime verifier: the runtime
   // deliberately does not hold a development checkout to its recorded digest
   // (see `inspectProductSeedSource`), and this script's whole job is to notice

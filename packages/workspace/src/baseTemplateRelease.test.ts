@@ -8,40 +8,19 @@ const pin = {
   snapshot: `v1-sha256:${"b".repeat(64)}`,
 };
 
-describe("base template release artifact", () => {
-  it("keeps host rescue notes verbatim and validates their contract", () => {
-    const markdown = `---
-degraded-ok: false
-verify: pnpm type-check
----
-
-# Current host contract
-`;
+describe("Base release pointer", () => {
+  it("accepts the one current exact format", () => {
     expect(
       parseBaseTemplateReleaseArtifact({
-        version: 1,
+        format: "vibestudio-base-release/1",
         baseTemplate: pin,
-        systemNotes: [{ path: "migrations/system/host-contract.md", markdown }],
       })
-    ).toMatchObject({
-      baseTemplate: pin,
-      systemNotes: [{ markdown }],
-      parsedSystemNotes: [{ facet: "system", degradedOk: false }],
-    });
+    ).toEqual({ format: "vibestudio-base-release/1", baseTemplate: pin });
   });
 
-  it("does not accept a third-party facet as a host rescue input", () => {
+  it("rejects legacy notes and version fields", () => {
     expect(() =>
-      parseBaseTemplateReleaseArtifact({
-        version: 1,
-        baseTemplate: pin,
-        systemNotes: [
-          {
-            path: "migrations/news/contract.md",
-            markdown: "---\ndegraded-ok: true\nverify: test\n---\n\n# Contract\n",
-          },
-        ],
-      })
-    ).toThrow("non-system note");
+      parseBaseTemplateReleaseArtifact({ version: 1, baseTemplate: pin, systemNotes: [] })
+    ).toThrow();
   });
 });

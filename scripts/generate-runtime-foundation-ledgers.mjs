@@ -16,7 +16,6 @@ import {
   productBuiltinByIdentity,
   productBuiltinMethodCapability,
 } from "../packages/shared/src/productBuiltinCatalog.node.generated.mjs";
-import { gadWireMethods } from "../packages/service-schemas/src/workspaceSource.ts";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const output = path.join(root, "docs", "runtime-foundations");
@@ -235,10 +234,7 @@ for (const [service, entry] of Object.entries(serviceAuthority).sort(([a], [b]) 
 
 const directRoots = [
   path.join(root, "packages", "builtin"),
-  path.join(root, "workspace", "workers"),
-  path.join(root, "workspace", "packages"),
 ];
-const schemaRpcCatalog = new Map([["vibestudio.gad.workspace.v1", gadWireMethods]]);
 const directSource = (file) => {
   const sealedPackagesRoot = path.join(root, "packages");
   if (file.startsWith(sealedPackagesRoot)) {
@@ -250,15 +246,6 @@ const directSource = (file) => {
       if (directory === sealedPackagesRoot) break;
       directory = path.dirname(directory);
     }
-  }
-  let directory = path.dirname(file);
-  const workspaceRoot = path.join(root, "workspace");
-  while (directory.startsWith(workspaceRoot)) {
-    if (fs.existsSync(path.join(directory, "package.json"))) {
-      return path.relative(workspaceRoot, directory).replaceAll(path.sep, "/");
-    }
-    if (directory === workspaceRoot) break;
-    directory = path.dirname(directory);
   }
   throw new Error(`Direct RPC source ${path.relative(root, file)} has no owning package`);
 };
@@ -486,104 +473,6 @@ for (const file of directRoots.flatMap(walk).sort()) {
   }
 }
 
-const workspacePackageRoots = [
-  path.join(root, "workspace", "workers"),
-  path.join(root, "workspace", "packages"),
-];
-const walkPackageManifests = (directory) => {
-  if (!fs.existsSync(directory)) return [];
-  const manifests = [];
-  for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
-    const absolute = path.join(directory, entry.name);
-    if (entry.isDirectory()) manifests.push(...walkPackageManifests(absolute));
-    else if (entry.isFile() && entry.name === "package.json") manifests.push(absolute);
-  }
-  return manifests;
-};
-const workspacePackageManifests = workspacePackageRoots.flatMap(walkPackageManifests);
-for (const manifestPath of workspacePackageManifests.sort()) {
-  const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
-  const packageDirectory = path.dirname(manifestPath);
-  const entry = manifest.vibestudio?.entry;
-  const durableClasses = manifest.vibestudio?.durable?.classes ?? [];
-  if (typeof entry !== "string" || durableClasses.length === 0) continue;
-  const sourceFile = path.join(packageDirectory, entry);
-  const source = fs.readFileSync(sourceFile, "utf8");
-  const exposed = [
-    ...source.matchAll(
-      /@schemaRpc\(\)\s+(?:async\s+)?(?:["']([^"']+)["']|([A-Za-z_$][\w$]*))\s*\(/g
-    ),
-  ].map((match) => match[1] ?? match[2]);
-  for (const durableClass of durableClasses) {
-    const schemaId = durableClass.rpcSchema;
-    if (typeof schemaId !== "string") continue;
-    const methods = schemaRpcCatalog.get(schemaId);
-    if (!methods) throw new Error(`Unknown workspace RPC schema ${schemaId} in ${manifestPath}`);
-    if (!source.includes(`class ${durableClass.className}`)) {
-      throw new Error(`${manifestPath} declares missing durable class ${durableClass.className}`);
-    }
-    const declared = Object.keys(methods);
-    const missing = declared.filter((method) => !exposed.includes(method));
-    const undeclared = exposed.filter((method) => !declared.includes(method));
-    if (missing.length > 0 || undeclared.length > 0) {
-      throw new Error(
-        `${durableClass.className} schema RPC exposure differs from ${schemaId}: ` +
-          `missing=[${missing.join(",")}], undeclared=[${undeclared.join(",")}]`
-      );
-    }
-    const owner = path.relative(root, sourceFile).replaceAll(path.sep, "/");
-    const sourceName = path
-      .relative(path.join(root, "workspace"), packageDirectory)
-      .replaceAll(path.sep, "/");
-    for (const method of declared) {
-      const policy = methods[method];
-      const principals = [...(policy.authority?.principals ?? [])].sort();
-      const sensitivity = policy.access?.sensitivity;
-      const tier = policy.tier?.tier;
-      if (!sensitivity || !tier || principals.length === 0 || !policy.capability) {
-        throw new Error(`${schemaId}.${method} has incomplete schema-owned authority`);
-      }
-      authorityRows.push({
-        id: `direct:${owner}:${method}`,
-        rpcPlane: "workspace-do",
-        owner,
-        source: sourceName,
-        method,
-        resourceDerivation: { kind: "direct-target", owner },
-        authorityPrincipals: principals,
-        sensitivity,
-        tier,
-        sessionAdmission: policy.tier.session,
-        capability: policy.capability,
-        authenticatedFacts: [
-          "session",
-          "acting-user-relay",
-          "runtime-entity",
-          "exact-code-artifact",
-          "owner-chain",
-          "agent-binding",
-          "audience-bound-attestation",
-        ],
-        currentOutcomes: {
-          allowed: "schema-declared direct-RPC requirement satisfied",
-          denied: "missing attested facts or requirement failure is EACCES",
-        },
-        predicates: [
-          "live-owner-service-relationship",
-          "exact-resource-scope",
-          "next-dispatch-revocation",
-        ],
-        r3aRequirement:
-          policy.directEffect?.kind === "open"
-            ? "schema-open"
-            : principalExpression(principals, policy.capability),
-        r3b: { review: "schema-authority", change: null },
-        evidence: generatedCensusEvidence("direct-authority"),
-      });
-    }
-  }
-}
-
 for (const builtin of PRODUCT_BUILTIN_CATALOG) {
   if (!builtin.directMethods) continue;
   const file = path.join(root, builtin.sourceFile);
@@ -694,7 +583,9 @@ if (authorityReview.censusDigest !== censusDigest) {
   );
 }
 const rowsById = new Map(authorityRows.map((row) => [row.id, row]));
-const unknownReviewRows = Object.keys(authorityReview.decisions).filter((id) => !rowsById.has(id));
+const unknownReviewRows = Object.keys(authorityReview.decisions).filter(
+  (id) => !rowsById.has(id)
+);
 if (unknownReviewRows.length > 0) {
   throw new Error(`Runtime authority review names unknown rows: ${unknownReviewRows.join(", ")}`);
 }
@@ -743,18 +634,11 @@ const executionRows = [
   ],
   ["eval-do", "exact-product-seed", "new-eval-incarnation", "execution.eval-do"],
   ["vcs-store", "exact-product-seed", "bootstrap-manifest", "execution.vcs-store"],
-  ["agent-spawn", "resolved-exact-artifact", "launch", "execution.agent-spawn"],
   ["panel", "selected-source-ref", "explicit-reload-or-navigation", "execution.panel"],
   ["electron-app", "resolved-exact-artifact", "load-update", "execution.electron-app"],
   ["react-native-app", "resolved-exact-artifact", "mobile-install", "execution.react-native-app"],
   ["terminal-app", "resolved-exact-artifact", "process-restart", "execution.terminal-app"],
   ["extension", "resolved-exact-artifact", "supervised-restart", "execution.extension"],
-  [
-    "claude-code",
-    "host-plugin-plus-context-state",
-    "managed-process-launch",
-    "execution.claude-code",
-  ],
 ].map(([surface, selector, adoption, testId]) => ({
   surface,
   selector,
@@ -768,43 +652,7 @@ const executionRows = [
   evidence: testEvidence(testId),
 }));
 
-const channelRows = [
-  [
-    "ordinary-subscribe",
-    "workspace-authorized identity may atomically initialize ordinary channel context and config; invitation membership is not an ACL",
-    "channel.ordinary.authenticated-admission",
-  ],
-  [
-    "invitation",
-    "durable per-user discovery metadata for explicitly invited workspace members; no fabricated presence",
-    "channel.invitation.discovery-metadata",
-  ],
-  [
-    "presence",
-    "one authenticated human identity may own multiple live delivery sessions without duplicating roster presence",
-    "channel.presence.canonical-human",
-  ],
-  [
-    "fork-clone",
-    "a fork gets a fresh context and retains the parent log prefix as explicit origin",
-    "channel.fork.context-and-log-origin",
-  ],
-  [
-    "reconnect",
-    "transport reconnection re-establishes the authenticated subscription and does not create authority",
-    "channel.reconnect.authority-neutral",
-  ],
-  [
-    "locked-admission",
-    "host initializes one immutable exact-principal policy; subscribe verifies canonical participant identity and active durable-object incarnation",
-    "channel.locked.exact-admission",
-  ],
-].map(([behavior, contract, testId]) => ({
-  behavior,
-  contract,
-  policyChange: null,
-  evidence: testEvidence(testId),
-}));
+const channelRows = [];
 
 const bootstrap = {
   version: 1,

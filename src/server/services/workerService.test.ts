@@ -33,6 +33,11 @@ function createDeps() {
         className: "GadWorkspaceDO",
         key: "workspace",
       },
+      {
+        source: "workers/browser-data",
+        className: "BrowserDataDO",
+        key: "browser-data",
+      },
     ]),
     services: [
       {
@@ -45,6 +50,17 @@ function createDeps() {
         protocols: ["vibestudio.gad.workspace.v1", "vibestudio.workspace-source.v1"],
         authority: { principals: ["host", "user", "code"] },
         durableObject: { className: "GadWorkspaceDO" },
+      },
+      {
+        source: "workers/browser-data",
+        name: "browser.data",
+        title: "Browser data",
+        description: "Use the current user's durable browser data.",
+        action: "use browser history, bookmarks, preferences, and imports",
+        presentation: { domain: "web", verb: "see" },
+        protocols: ["vibestudio.browser-data.v1"],
+        authority: { principals: ["host", "user", "code"] },
+        durableObject: { className: "BrowserDataDO" },
       },
       {
         source: "workers/example-store",
@@ -81,6 +97,14 @@ function createDeps() {
     ],
   };
   const workerNodes = [
+    {
+      kind: "worker",
+      name: "browser-data",
+      relativePath: "workers/browser-data",
+      manifest: {
+        durable: { classes: [{ className: "BrowserDataDO" }] },
+      },
+    },
     {
       kind: "worker",
       name: "workspace-source",
@@ -259,6 +283,11 @@ describe("workerService workspace service resolution", () => {
 
     await expect(dispatcher.dispatch(panelCtx, "workers", "listSources", [])).resolves.toEqual([
       expect.objectContaining({
+        name: "browser-data",
+        source: "workers/browser-data",
+        classes: [{ className: "BrowserDataDO" }],
+      }),
+      expect.objectContaining({
         name: "workspace-source",
         source: "workers/workspace-source",
         classes: [{ className: "GadWorkspaceDO" }],
@@ -348,15 +377,29 @@ describe("workerService workspace service resolution", () => {
         },
         {
           origin: "product",
+          name: "browser.vault",
+          title: "Browser vault",
+          description: "Use protected browser credentials and cookie material.",
+          presentation: { domain: "web", verb: "see" },
+          protocols: ["vibestudio.browser-vault.v1"],
+          source: "vibestudio/internal",
+          kind: "durable-object",
+          className: "BrowserVaultDO",
+          defaultObjectKey: null,
+        },
+        {
+          origin: "workspace",
           name: "browser.data",
           title: "Browser data",
           description: "Use the current user's durable browser data.",
+          action: "use browser history, bookmarks, preferences, and imports",
           presentation: { domain: "web", verb: "see" },
           protocols: ["vibestudio.browser-data.v1"],
-          source: "vibestudio/internal",
+          source: "workers/browser-data",
           kind: "durable-object",
           className: "BrowserDataDO",
-          defaultObjectKey: null,
+          defaultObjectKey: "browser-data",
+          docsId: "workspace:browser.data",
         },
         expect.objectContaining({
           origin: "workspace",
@@ -416,14 +459,14 @@ describe("workerService workspace service resolution", () => {
         "vibestudio.browser-data.v1",
       ])
     ).resolves.toMatchObject({
-      origin: "product",
+      origin: "workspace",
       kind: "durable-object",
       name: "browser.data",
       protocol: "vibestudio.browser-data.v1",
-      source: "vibestudio/internal",
+      source: "workers/browser-data",
       className: "BrowserDataDO",
-      objectKey: expect.stringMatching(/^v1_[A-Za-z0-9_-]+$/),
-      targetId: expect.stringMatching(/^do:vibestudio\/internal:BrowserDataDO:v1_[A-Za-z0-9_-]+$/),
+      objectKey: "browser-data",
+      targetId: "do:workers/browser-data:BrowserDataDO:browser-data",
     });
 
     await expect(
@@ -615,7 +658,7 @@ describe("workerService workspace service resolution", () => {
     ).rejects.toThrow("No Durable Object class registered");
   });
 
-  it("does not expose BrowserDataDO through the raw internal resolver", async () => {
+  it("does not expose BrowserVaultDO through the raw internal resolver", async () => {
     const dispatcher = createProductionAuthorityDispatcher(createDeps());
     const caller = browserDataExtensionCaller();
     const authorizingCaller = createVerifiedCaller("shell:dev_alice", "shell", null, null, {
@@ -626,7 +669,7 @@ describe("workerService workspace service resolution", () => {
     await expect(
       dispatcher.dispatch({ caller, authorizingCaller }, "workers", "resolveDurableObject", [
         "vibestudio/internal",
-        "BrowserDataDO",
+        "BrowserVaultDO",
         "browser-environment",
       ])
     ).rejects.toThrow("No Durable Object class registered");
@@ -650,7 +693,7 @@ describe("workerService workspace service resolution", () => {
     await expect(
       dispatcher.dispatch({ caller: user }, "workers", "resolveDurableObject", [
         "vibestudio/internal",
-        "BrowserDataDO",
+        "BrowserVaultDO",
         "browser-environment",
       ])
     ).rejects.toThrow("No Durable Object class registered");

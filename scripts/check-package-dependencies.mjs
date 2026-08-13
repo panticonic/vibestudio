@@ -12,7 +12,7 @@ import { builtinModules } from "node:module";
 import { parseSync } from "@babel/core";
 
 const repositoryRoot = path.resolve(import.meta.dirname, "..");
-const workspaceRoots = ["packages", "apps", "workspace"].map((part) =>
+const workspaceRoots = ["packages", "apps"].map((part) =>
   path.join(repositoryRoot, part)
 );
 const sourceExtensions = [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs", ".css"];

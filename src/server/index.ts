@@ -47,7 +47,6 @@ import {
   sealAndDrainDurableObjectRelays,
 } from "./workerdRpcRelay.js";
 import { resolveHttpRuntimeCaller } from "./httpRuntimeIdentity.js";
-import { mirrorDevTemplatePublication } from "./devTemplateMirror.js";
 import { getProductBootManifest } from "./internalDOs/productBootManifest.js";
 import {
   AppliedWorkspaceUnitDeclarations,
@@ -66,6 +65,7 @@ import { templateGitTransportUrl } from "@vibestudio/workspace/templateCoordinat
 import { productBuiltinDirectAuthority } from "./services/productBuiltinDirectAuthority.js";
 import { callerControlsContextTransition } from "./services/lifecycleContextControl.js";
 import { startEventLoopResponsivenessMonitor } from "../eventLoopResponsiveness.js";
+import { WORKSPACE_SYSTEM_EPOCH } from "@vibestudio/shared/vcs/systemEpoch";
 
 // __filename is available natively in CJS and via the esbuild banner shim in ESM.
 declare const __filename: string;
@@ -611,7 +611,7 @@ async function main() {
         env["EVAL_CDP_CLIENT_SOURCE"] = providers.cdpClient.source.trim();
       return env;
     }
-    if (className === "BrowserDataDO") {
+    if (className === "BrowserVaultDO") {
       const declared = workspaceConfig.providers?.browserData?.extension;
       return declared ? { BROWSER_DATA_BROKER_SOURCE: workspaceExtensionRepoPath(declared) } : {};
     }
@@ -956,39 +956,25 @@ async function main() {
     }
   );
   let resolvedDoDispatchForTitles: import("./doDispatch.js").DODispatch | null = null;
+  let presentationDispatch: ((method: string, args: unknown[]) => Promise<unknown>) | null = null;
+  let developmentDispatch: ((method: string, args: unknown[]) => Promise<unknown>) | null = null;
   developmentRunRootProvider.bind({
     id: "development-run",
     mandatory: true,
     async snapshotRoots(epoch) {
-      const doDispatch = resolvedDoDispatchForTitles;
-      if (!doDispatch) throw new Error("Development builtin is not reachable for retention");
-      return (await doDispatch.dispatch(
-        {
-          source: "vibestudio/internal",
-          className: "DevelopmentDO",
-          objectKey: workspaceId,
-        },
-        "snapshotExecutionRoots",
-        { epoch }
-      )) as import("@vibestudio/shared/execution/retention").ExecutionRoot[];
+      if (!developmentDispatch) {
+        throw new Error("Base development service is not reachable for retention");
+      }
+      return (await developmentDispatch("snapshotExecutionRoots", [
+        { epoch },
+      ])) as import("@vibestudio/shared/execution/retention").ExecutionRoot[];
     },
   });
-  // EntityTitleService: source-of-truth for display titles lives in the
-  // WorkspaceDO (entities.display_title). The cache here is populated at
-  // boot via `hydrate()` and updated on every write. The lazy doDispatch
-  // resolver lets approval-queue consumers read the cache immediately,
-  // while DO writes only start landing once the container has spun up
-  // `doDispatch` (registered alongside workerdManager).
+  // EntityTitleService is a synchronous host projection of Base-owned titles.
+  // Its single durable writer is installed when workspace-presentation starts.
   const { createEntityTitleService } = await import("./services/entityTitleService.js");
-  const { INTERNAL_DO_SOURCE: ENTITY_TITLE_INTERNAL_DO_SOURCE } =
-    await import("./internalDOs/internalDoLoader.js");
   const entityTitleService = createEntityTitleService({
-    getDoDispatch: () => resolvedDoDispatchForTitles,
-    workspaceRef: {
-      source: ENTITY_TITLE_INTERNAL_DO_SOURCE,
-      className: "WorkspaceDO",
-      objectKey: workspaceId,
-    },
+    getPresentationDispatch: () => presentationDispatch,
   });
   const { createApprovalQueue } = await import("./services/approvalQueue.js");
   const { resolveApprovalCallerTitle, resolveApprovalRequester } =
@@ -1361,28 +1347,7 @@ async function main() {
       },
     });
   };
-  // The supervisor designates exactly one source-coupled developer instance.
-  // Its committed workspace changes are mirrored back to `<appRoot>/workspace`
-  // so interactive source development persists. Named and ephemeral peers are
-  // isolated test/runtime instances: their publications must never mutate the
-  // checkout template or leak into another hub's next bootstrap.
-  const templateDir = path.join(appRoot, "workspace");
-  const isPnpmDevMode = process.env["NODE_ENV"] === "development";
-  const hasDevTemplate = fs.existsSync(path.join(templateDir, "meta", "vibestudio.yml"));
-  const templateDiffersFromActive =
-    templateDir !== workspacePath && !workspacePath.startsWith(templateDir + path.sep);
-  // pnpm dev mode: mirror protected workspace publications back to the
-  // template source checkout. Hooked onto publication effects below.
-  const devTemplateMirrorDir =
-    isPnpmDevMode &&
-    process.env["VIBESTUDIO_SOURCE_INSTANCE"] === "1" &&
-    process.env["VIBESTUDIO_DISABLE_DEV_TEMPLATE_MIRROR"] !== "1" &&
-    workspaceIsEphemeral &&
-    hasDevTemplate &&
-    templateDiffersFromActive
-      ? templateDir
-      : null;
-  const buildDependencyWorkspaceRoot = resolveDependencyWorkspaceRoot(appRoot, workspacePath);
+  const buildDependencyWorkspaceRoot = resolveDependencyWorkspaceRoot(workspacePath);
   if (process.env["VIBESTUDIO_DOGFOOD"] === "1") {
     console.warn(
       "[Dogfood] VIBESTUDIO_DOGFOOD git-fast-forward mirroring is unavailable under the GAD vcs; " +
@@ -1414,8 +1379,7 @@ async function main() {
   // through it); the approval gate is late-bound below once the main-advance
   // approval machinery exists — advances before that point fail closed.
   const { createProtectedRefStore } = await import("./services/protectedRefStore.js");
-  const { collectTreeReachableDigests, getBytes, putBytes } =
-    await import("./services/blobstoreService.js");
+  const { collectTreeReachableDigests, putBytes } = await import("./services/blobstoreService.js");
   let mainRefGate: import("./services/protectedRefStore.js").RefGate | null = null;
   const protectedRefStore = createProtectedRefStore({
     statePath: layout.refsDir,
@@ -1465,6 +1429,10 @@ async function main() {
     workspaceId,
     statePath,
     sourcePath: workspacePath,
+    expectedSystemEpoch: WORKSPACE_SYSTEM_EPOCH,
+    sink: {
+      put: (bytes) => putBytes(layout.blobsDir, Buffer.from(bytes)),
+    },
     acquire: async (pin) => {
       return acquireRootTemplateSnapshot({
         statePath,
@@ -1511,14 +1479,7 @@ async function main() {
     // Public context bindings contain durable identities only. Reachability is
     // resolved from the caller's current hub/session credential.
     workspaceId,
-    // Dev extraction gate (Phase-2 revision §3): project a push-to-`main` OUT to
-    // the source dir only when there is a persistent dev source to extract to.
-    // `devTemplateMirrorDir` is the existing signal (pnpm dev + a real
-    // `<appRoot>/workspace` template); the guarded publication mirror below
-    // independently persists the same exact changes to that checkout. Off in
-    // production ephemeral workspaces, which have no source dir. Computed just
-    // above this block.
-    extractMainToSource: devTemplateMirrorDir !== null,
+    extractMainToSource: false,
   });
   // Set only by the trusted one-time import from the host-shipped workspace
   // template. Protected main is mutable and must never be substituted here.
@@ -1534,40 +1495,6 @@ async function main() {
     const file = await workspaceVcs.readFile(stateHash, filePath);
     if (!file || file.content.kind !== "text") return null;
     return file.content.text;
-  };
-  let baseTemplateReleasePullCoordinator:
-    | import("./baseTemplateRelease.js").BaseTemplateReleasePullCoordinator
-    | null = null;
-  const initiateShippedBaseTemplatePull = async (): Promise<void> => {
-    const { baseTemplatePullForRelease, readBaseTemplateRelease } =
-      await import("./baseTemplateRelease.js");
-    const release = readBaseTemplateRelease(appRoot);
-    if (!release) {
-      throw new Error("This host build has no base-template release artifact");
-    }
-    const { stateHash } = await workspaceVcs.ensureFresh();
-    const stateText = await readWorkspaceFileAtState(stateHash, "meta/templates.state.yml");
-    if (!stateText) return;
-    const [{ default: YAML }, { parseTemplateState }] = await Promise.all([
-      import("yaml"),
-      import("@vibestudio/workspace/templateState"),
-    ]);
-    const pull: ReturnType<typeof baseTemplatePullForRelease> = baseTemplatePullForRelease(
-      release,
-      parseTemplateState(YAML.parse(stateText) as unknown)
-    );
-    if (!pull) return;
-    const host = container.get<import("@vibestudio/extension-host").ExtensionHost>("extensionHost");
-    const result = await host.invoke(
-      { caller: rootTemplateCaller },
-      "@workspace-extensions/template-composer",
-      "pull",
-      [pull]
-    );
-    console.info("[Templates] Opened the shipped base-template release operation", {
-      commandId: pull.commandId,
-      result,
-    });
   };
   {
     // Origin is the axis every unit review is organized on, and it is the one
@@ -1902,7 +1829,6 @@ async function main() {
   //  - any change invalidates the tree scanner cache
   //  - pnpm dev mode persists protected publications back to the template
   //    checkout through an exact previous-state guard
-  let devMirrorQueue = Promise.resolve();
   let initialWorkspaceUnitReconcileComplete = false;
   let pendingStartupMetaConfigReload = false;
   let latestMetaConfigReloadSeq = 0;
@@ -1942,61 +1868,6 @@ async function main() {
           }
         })();
       });
-    }
-    if (devTemplateMirrorDir) {
-      // Preserve publication order: each event expects the checkout state left
-      // by its predecessor. A divergent repository is never overwritten.
-      devMirrorQueue = devMirrorQueue
-        .then(async () => {
-          const result = await mirrorDevTemplatePublication({
-            destinationRoot: devTemplateMirrorDir,
-            publication: event,
-            inspectRepository: async (repoPath) => {
-              const repositoryRoot = path.join(devTemplateMirrorDir, ...repoPath.split("/"));
-              try {
-                const stat = await fs.promises.lstat(repositoryRoot);
-                if (!stat.isDirectory()) {
-                  return { files: [], skippedPaths: [repoPath] };
-                }
-              } catch (error) {
-                if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-                  return { files: [], skippedPaths: [] };
-                }
-                throw error;
-              }
-              const inspected = await workspaceVcs.contentProjection.localState(repositoryRoot, {
-                exact: true,
-              });
-              return {
-                files: inspected.files.map((file) => ({
-                  path: file.path,
-                  contentHash: file.contentHash,
-                  executable: (file.mode & 0o111) !== 0,
-                })),
-                skippedPaths: inspected.skipped.map((entry) => entry.path),
-              };
-            },
-            readState: async (stateHash) =>
-              (await workspaceVcs.contentProjection.listStateFiles(stateHash)).map((file) => ({
-                path: file.path,
-                contentHash: file.content_hash,
-                executable: (file.mode & 0o111) !== 0,
-              })),
-            readBlob: (contentHash) => getBytes(layout.blobsDir, contentHash),
-          });
-          if (result.conflicts.length > 0) {
-            console.warn(
-              "[DevMirror] checkout changed concurrently; publication was not written back:",
-              result.conflicts
-            );
-          }
-        })
-        .catch((error: unknown) => {
-          console.warn(
-            "[DevMirror] publication write-back failed:",
-            error instanceof Error ? error.message : String(error)
-          );
-        });
     }
   });
   // ===========================================================================
@@ -2114,22 +1985,15 @@ async function main() {
   const attachedHostController = new AttachedHostController(
     attachedHostParentEndpoint,
     ({ sessionId, developmentRunId, childGenerationId: lostGenerationId }) => {
-      const doDispatch = resolvedDoDispatchForTitles;
-      if (!doDispatch) return;
-      void doDispatch.dispatch(
-        {
-          source: "vibestudio/internal",
-          className: "DevelopmentDO",
-          objectKey: workspaceId,
-        },
-        "nativeRunEvent",
+      if (!developmentDispatch) return;
+      void developmentDispatch("nativeRunEvent", [
         {
           kind: "attached-route-lost",
           runId: developmentRunId,
           sessionId,
           childGenerationId: lostGenerationId,
-        }
-      );
+        },
+      ]);
     }
   );
 
@@ -2946,29 +2810,8 @@ async function main() {
             const schemaCandidates = probeResults.flatMap((result) =>
               result.candidate ? [result.candidate] : []
             );
-            const schemaFixtureFailures = (
-              await Promise.all(
-                schemaCandidates.map(async (candidate) => {
-                  const report = schemaReports.find((entry) => entry.repoPath === candidate.source);
-                  const buildKey = report?.builds.find(
-                    (entry) => entry.target === "runtime"
-                  )?.buildKey;
-                  const build = buildKey ? buildSystem.getBuildByKey(buildKey) : null;
-                  if (!build) {
-                    return [
-                      `${candidate.source}:${candidate.descriptor.className} fixture gate lost its candidate build`,
-                    ];
-                  }
-                  return await manager.validateDurableObjectSchemaFixtures({
-                    ...candidate,
-                    build,
-                  });
-                })
-              )
-            ).flat();
             const schemaFailures = [
               ...probeResults.flatMap((result) => (result.failure ? [result.failure] : [])),
-              ...schemaFixtureFailures,
               ...(schemaCandidates.length > 0
                 ? manager.validateAndStageDurableObjectSchemas(stateHash, schemaCandidates)
                 : []),
@@ -3573,11 +3416,41 @@ async function main() {
       | null = null;
     container.registerManaged({
       name: "workspace-state",
-      dependencies: ["workerdWorkspace", "doDispatch"],
+      dependencies: ["workerdWorkspace", "workerdManager", "doDispatch"],
       async start(resolve) {
         const doDispatch = assertPresent(
           resolve<import("./doDispatch.js").DODispatch>("doDispatch")
         );
+        const workerdManagerInst = assertPresent(
+          resolve<import("./workerdManager.js").WorkerdManager>("workerdManager")
+        );
+        const { resolveWorkspaceService } = await import("./workspaceServices.js");
+        const presentation = resolveWorkspaceService(
+          workspaceDecls,
+          "vibestudio.workspace-presentation.v1"
+        );
+        if (presentation.kind !== "durable-object") {
+          throw new Error("workspace.presentation must be Durable Object-backed");
+        }
+        let presentationReady: Promise<void> | null = null;
+        const dispatchPresentation = async (method: string, args: unknown[]) => {
+          presentationReady ??= activateDurableObjectEntity(doDispatch, workerdManagerInst, {
+            source: presentation.source,
+            className: presentation.className,
+            objectKey: presentation.objectKey,
+          });
+          await presentationReady;
+          return doDispatch.dispatch(
+            {
+              source: presentation.source,
+              className: presentation.className,
+              objectKey: presentation.objectKey,
+            },
+            method,
+            ...args
+          );
+        };
+        presentationDispatch = dispatchPresentation;
         // Now that doDispatch is up, the title cache can talk to the DO.
         // Hydrate so synchronous getTitle() lookups (used by approvalQueue
         // when building a PendingApproval) see existing titles from previous
@@ -3588,6 +3461,7 @@ async function main() {
         workspaceStateDefinition = createWorkspaceStateService({
           doDispatch,
           workspaceId,
+          presentationDispatch: dispatchPresentation,
           getUnitIcon: getWorkspaceUnitIcon,
           panelAccess: (
             await import("./services/createPanelAccessPermissionDeps.js")
@@ -3597,9 +3471,8 @@ async function main() {
             lifecycleContextStore,
             getAppHost: () => appHostForGateway,
           }),
-          // The DO already writes display_title in the same transaction as
-          // searchable_title (see workspaceDO.panelIndex / panelUpdateTitle),
-          // so the callback only needs to mirror into the in-memory cache.
+          // Base owns durable titles. This callback mirrors an accepted write
+          // into the host's short-lived authority/presentation cache.
           onPanelTitleChanged: (entityId, title, explicit) => {
             entityTitleService.mirrorCachedTitle(entityId, title, { explicit });
           },
@@ -4014,9 +3887,8 @@ async function main() {
     });
   }
 
-  // Browser data is reached through its declared extension provider; direct
-  // package invocation is not a provider route. The extension proxies to the
-  // BrowserDataDO via unified RPC, so storage stays in workerd unchanged.
+  // Browser product data is reached through its declared Base provider. The
+  // extension coordinates that service with the narrow host BrowserVaultDO.
 
   // ── Generic public webhook ingress ──
   {
@@ -4570,6 +4442,7 @@ async function main() {
                   }
                 : {}),
               methodTier,
+              ...(catalogMethod?.execution ? { methodExecution: catalogMethod.execution } : {}),
               presentation: service.presentation,
               title: service.title ?? service.name,
               action: service.action,
@@ -5338,6 +5211,28 @@ async function main() {
         const doDispatch = assertPresent(
           resolve<import("./doDispatch.js").DODispatch>("doDispatch")
         );
+        const development = resolveWorkspaceService(workspaceDecls, "vibestudio.development.v1");
+        if (development.kind !== "durable-object") {
+          throw new Error("development service must be Durable Object-backed");
+        }
+        let developmentReady: Promise<void> | null = null;
+        developmentDispatch = async (method, args) => {
+          developmentReady ??= activateDurableObjectEntity(doDispatch, workerdManagerInst, {
+            source: development.source,
+            className: development.className,
+            objectKey: development.objectKey,
+          });
+          await developmentReady;
+          return doDispatch.dispatch(
+            {
+              source: development.source,
+              className: development.className,
+              objectKey: development.objectKey,
+            },
+            method,
+            ...args
+          );
+        };
         workerServiceDef = createWorkerService({
           buildSystem: buildSystemInst,
           workspaceDecls,
@@ -6777,36 +6672,6 @@ async function main() {
       // publishPending starts the queue entries synchronously; its promise is the
       // later human decision/application and therefore remains detached.
       await Promise.resolve(startupExtensionStaging);
-      // The host release unit moves independently of userland. Retry only until
-      // Composer records the canonical durable operation; from there Composer
-      // owns every review, repair, and publication transition.
-      const { startBaseTemplateReleasePullCoordinator } = await import("./baseTemplateRelease.js");
-      baseTemplateReleasePullCoordinator = startBaseTemplateReleasePullCoordinator({
-        attempt: initiateShippedBaseTemplatePull,
-        reportFailure: (error, retryInMs) => {
-          const message = error instanceof Error ? error.message : String(error);
-          console.warn("[Templates] Failed to open the shipped base-template release operation", {
-            error: message,
-            retryInMs,
-          });
-          eventService.emit("notification:show", {
-            id: "host-base-template-release-initiation-failed",
-            type: "error",
-            title: "Workspace update could not start",
-            message: "Vibestudio will keep retrying the required base workspace update.",
-            ttl: 0,
-            details: [
-              { label: "Failure", value: message },
-              { label: "Retry", value: `in ${Math.ceil(retryInMs / 1_000)} seconds` },
-            ],
-          });
-        },
-        reportReady: () => {
-          eventService.emit("notification:dismiss", {
-            id: "host-base-template-release-initiation-failed",
-          });
-        },
-      });
       void unitInstallReviewCoordinator
         .publishPending("startup")
         .catch((err: unknown) => console.warn("[Units] Failed to publish startup approvals:", err));
@@ -6955,8 +6820,6 @@ async function main() {
     }, 8000);
 
     cleanupReaper.stop();
-    baseTemplateReleasePullCoordinator?.stop();
-    baseTemplateReleasePullCoordinator = null;
 
     // Stop scheduling admission before asking activations to release. A
     // scheduler-owned __alarm may be awaiting a long model/tool effect; cancel

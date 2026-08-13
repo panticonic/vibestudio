@@ -1,5 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { exactUserlandRoot } from "./exactUserlandRoot";
+import { join } from "node:path";
 
 const android = readFileSync(
   new URL(
@@ -16,10 +18,7 @@ const tcpPatch = readFileSync(
   new URL("../patches/react-native-tcp-socket.patch", import.meta.url),
   "utf8"
 );
-const facade = readFileSync(
-  new URL("../workspace/apps/mobile/src/services/panelAssetFacade.ts", import.meta.url),
-  "utf8"
-);
+const facade = readFileSync(join(exactUserlandRoot, "apps/mobile/src/services/panelAssetFacade.ts"), "utf8");
 
 describe("native mobile asset store contract", () => {
   it.each([

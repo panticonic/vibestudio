@@ -224,6 +224,7 @@ interface NativePanelSlotModel {
   activeHostedShellInstanceId: string | null;
   hostedShellGeneration: number;
   latestOperations: Map<string, { bindingSequence: number; operationSequence: number }>;
+  desiredRevision: number;
 }
 
 /**
@@ -279,6 +280,7 @@ export class ViewManager {
     activeHostedShellInstanceId: null,
     hostedShellGeneration: 0,
     latestOperations: new Map(),
+    desiredRevision: 0,
   };
   private readonly hidePanelViewsUntilHostedShellReady: boolean;
   /**
@@ -988,6 +990,7 @@ export class ViewManager {
         ` Hosted shell ready: ${ownerViewId} (gen ${this.nativePanelSlots.hostedShellGeneration}); clearing ${this.nativePanelSlots.activeSlots.size} slot(s)`
       );
       this.clearAllPanelSlots();
+      this.nativePanelSlots.desiredRevision = 0;
       this.nativePanelSlots.activeHostedShellViewId = ownerViewId;
       this.nativePanelSlots.activeHostedShellInstanceId = rendererInstanceId ?? null;
       this.nativePanelSlots.hostedShellReady = true;
@@ -1024,6 +1027,7 @@ export class ViewManager {
     );
     this.nativePanelSlots.hostedShellReady = false;
     this.clearAllPanelSlots();
+    this.nativePanelSlots.desiredRevision = 0;
     this.nativePanelSlots.activeHostedShellInstanceId = null;
     owner.visible = false;
     owner.view.setVisible(false);
@@ -1086,9 +1090,86 @@ export class ViewManager {
       ownerGeneration: this.nativePanelSlots.hostedShellGeneration,
     };
     this.declaredPanelSlots.set(panelId, declaration);
+    this.attachDeclaredPanelSlot(panelId);
     log.trace(` Declare native panel slot ${nativeSlotId} -> ${panelId}`);
     this.reconcileNativeLayerOrder();
     return { status: "bound" };
+  }
+
+  syncPanelSlots(
+    ownerViewId: string,
+    request: {
+      rendererInstanceId: string;
+      revision: number;
+      slots: Array<{
+        nativeSlotId: string;
+        bindingId: string;
+        bindingSequence: number;
+        panelId: string;
+        bounds: NativePanelSlotBounds;
+        focused: boolean;
+      }>;
+    }
+  ): { revision: number; slots: Record<string, NativePanelSlotSyncResult> } {
+    this.assertActiveHostedShellOwner(ownerViewId);
+    if (request.rendererInstanceId !== this.nativePanelSlots.activeHostedShellInstanceId) {
+      throw new Error("stale hosted-shell generation");
+    }
+    if (request.revision <= this.nativePanelSlots.desiredRevision) {
+      throw new Error(`stale native panel snapshot revision ${request.revision}`);
+    }
+    const desiredIds = new Set<string>();
+    const desiredPanels = new Set<string>();
+    for (const slot of request.slots) {
+      if (!desiredIds.add(slot.nativeSlotId)) {
+        throw new Error(`duplicate native slot ${slot.nativeSlotId}`);
+      }
+      if (!desiredPanels.add(slot.panelId)) {
+        throw new Error(`panel ${slot.panelId} appears in more than one native slot`);
+      }
+    }
+    this.nativePanelSlots.desiredRevision = request.revision;
+
+    for (const [nativeSlotId] of [...this.nativePanelSlots.activeSlots]) {
+      if (desiredIds.has(nativeSlotId)) continue;
+      this.clearPanelSlotInternal(nativeSlotId);
+      this.nativePanelSlots.latestOperations.delete(nativeSlotId);
+    }
+    for (const [panelId, existing] of [...this.declaredPanelSlots]) {
+      if (desiredIds.has(existing.nativeSlotId)) continue;
+      this.declaredPanelSlots.delete(panelId);
+      this.clearPanelSlotInternal(existing.nativeSlotId);
+      this.nativePanelSlots.latestOperations.delete(existing.nativeSlotId);
+    }
+
+    const observed: Record<string, NativePanelSlotSyncResult> = {};
+    for (const slot of request.slots) {
+      const existing =
+        this.nativePanelSlots.activeSlots.get(slot.nativeSlotId) ??
+        [...this.declaredPanelSlots.values()].find(
+          (candidate) => candidate.nativeSlotId === slot.nativeSlotId
+        );
+      const ordering = {
+        rendererInstanceId: request.rendererInstanceId,
+        bindingSequence: slot.bindingSequence,
+        operationSequence: request.revision,
+      };
+      observed[slot.nativeSlotId] =
+        existing?.bindingId === slot.bindingId && existing.panelId === slot.panelId
+          ? this.updatePanelSlot(ownerViewId, {
+              ...ordering,
+              nativeSlotId: slot.nativeSlotId,
+              bindingId: slot.bindingId,
+              bounds: slot.bounds,
+              focused: slot.focused,
+            })
+          : this.bindPanelSlot(ownerViewId, {
+              ...ordering,
+              ...slot,
+            });
+    }
+    this.reconcileNativeLayerOrder();
+    return { revision: request.revision, slots: observed };
   }
 
   updatePanelSlot(

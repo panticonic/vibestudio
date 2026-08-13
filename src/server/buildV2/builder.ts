@@ -1789,7 +1789,8 @@ async function doBuild(
           : (options.externals ?? []),
         options.libraryEntrySubpath ?? ".",
         conditionsForLibraryTarget(options.libraryTarget),
-        authority
+        authority,
+        options.libraryTarget
       );
     } else if (node.kind === "worker") {
       return await buildWorker(
@@ -3904,7 +3905,8 @@ async function buildLibraryBundle(
   externals: string[],
   entrySubpath = ".",
   conditions: readonly string[],
-  authority: UnitAuthorityManifest
+  authority: UnitAuthorityManifest,
+  target: LibraryBuildTarget
 ): Promise<BuildResult> {
   const env = await prepareBuildEnv(node, buildKey, graph, workspaceRoot, sourceRoot);
 
@@ -3927,7 +3929,10 @@ async function buildLibraryBundle(
       target: "es2022",
       outfile,
       write: true,
-      external: externals,
+      external:
+        target === "worker"
+          ? [...new Set([...externals, ...WORKER_NODE_BUILTIN_EXTERNALS])]
+          : externals,
       // Apply the execution target to third-party dependencies too. The
       // workspace resolver below already uses these conditions for local
       // packages, but without esbuild's top-level conditions npm dependencies
@@ -3946,6 +3951,7 @@ async function buildLibraryBundle(
         createFsShimPlugin({ runtimeBacked: true, resolveDir: env.resolveDir }),
         createPathShimPlugin(env.resolveDir),
         createWorkerBufferShimPlugin(env.resolveDir),
+        ...(target === "worker" ? [createWorkerNodeStubPlugin()] : []),
       ],
       nodePaths: env.nodePaths,
       loader: LIBRARY_ASSET_LOADERS,

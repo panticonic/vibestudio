@@ -59,14 +59,11 @@ react {
 }
 
 // React Native's bundle task tracks `react.root` (apps/mobile) by default, but
-// Metro deliberately resolves @vibestudio/* to this monorepo's package source
-// and loads the workspace-owned mobile app from outside that root. Without
-// declaring those same source roots to Gradle, `assembleInternal` can reinstall
-// a stale JS bundle after a shared transport or mobile-workspace edit. Extend
-// the canonical RN task's inputs; do not force unrelated native tasks to rerun.
+// Metro resolves the native host's @vibestudio/* contracts to this monorepo's
+// package source. Workspace product bundles are acquired and activated at
+// runtime, so they are deliberately not native build inputs.
 def vibestudioMetroSourceTrees = [
     rootProject.file("../../../packages"),
-    rootProject.file("../../../workspace/apps/mobile"),
 ].collect { sourceRoot ->
     fileTree(sourceRoot) {
         include "**/*.js", "**/*.jsx", "**/*.ts", "**/*.tsx", "**/*.json"

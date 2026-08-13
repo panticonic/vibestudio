@@ -247,7 +247,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
       fsp.mkdir(path.join(workspaceRoot, "projects", "coordinates"), { recursive: true }),
     ]);
     await Promise.all([
-      fsp.writeFile(path.join(workspaceRoot, "meta", "vibestudio.yml"), "systemEpoch: 57\n"),
+      fsp.writeFile(path.join(workspaceRoot, "meta", "vibestudio.yml"), "systemEpoch: 58\n"),
       fsp.writeFile(
         path.join(workspaceRoot, "projects", "coordinates", "unicode.txt"),
         unicodeText
@@ -328,7 +328,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     const { root, deps } = await harness();
     const workspaceRoot = path.join(root, "source");
     await fsp.mkdir(path.join(workspaceRoot, "meta"), { recursive: true });
-    await fsp.writeFile(path.join(workspaceRoot, "meta", "vibestudio.yml"), "systemEpoch: 57\n");
+    await fsp.writeFile(path.join(workspaceRoot, "meta", "vibestudio.yml"), "systemEpoch: 58\n");
     const encoder = new TextEncoder();
     const subtreeDigest = `v1-sha256:${"b".repeat(64)}` as const;
     const pin = {
@@ -343,7 +343,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
       pin,
       config: {
         id: "workspace:test",
-        systemEpoch: 57,
+        systemEpoch: 58,
       },
       repositories: [
         {

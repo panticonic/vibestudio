@@ -3,15 +3,18 @@ import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { parseWorkspaceConfigContentWithId } from "@vibestudio/workspace/configParser";
+import { exactUserlandRoot } from "./exactUserlandRoot";
+
+const basePath = (...parts: string[]) => path.join(exactUserlandRoot, ...parts);
 
 describe("shipped first-run workspace", () => {
   it("is valid against the canonical workspace configuration contract", () => {
-    const source = fs.readFileSync(path.resolve("workspace/meta/vibestudio.yml"), "utf8");
+    const source = fs.readFileSync(basePath("meta/vibestudio.yml"), "utf8");
     expect(() => parseWorkspaceConfigContentWithId(source, "shipped-template")).not.toThrow();
   });
 
   it("automatically starts the single state-aware onboarding chat", () => {
-    const source = fs.readFileSync(path.resolve("workspace/meta/vibestudio.yml"), "utf8");
+    const source = fs.readFileSync(basePath("meta/vibestudio.yml"), "utf8");
     const manifest = parse(source) as {
       initPanels?: Array<{ source?: string; stateArgs?: Record<string, unknown> }>;
     };
@@ -52,21 +55,21 @@ describe("shipped first-run workspace", () => {
   });
 
   it("keeps onboarding in the inline transcript instead of a pinned action bar", () => {
-    expect(fs.existsSync(path.resolve("workspace/skills/onboarding/ActionBar.tsx"))).toBe(false);
+    expect(fs.existsSync(basePath("skills/onboarding/ActionBar.tsx"))).toBe(false);
 
     for (const relativePath of [
-      "workspace/skills/onboarding/SKILL.md",
-      "workspace/skills/onboarding/GETTING_STARTED.md",
-      "workspace/meta/vibestudio.yml",
+      "skills/onboarding/SKILL.md",
+      "skills/onboarding/GETTING_STARTED.md",
+      "meta/vibestudio.yml",
     ]) {
-      const text = fs.readFileSync(path.resolve(relativePath), "utf8");
+      const text = fs.readFileSync(basePath(relativePath), "utf8");
       expect(text).not.toMatch(/Common starting points|pinned action bar.*choice list/iu);
       expect(text).not.toContain("Preparing setup overview");
     }
   });
 
   it("does not retain the retired Hello Vanilla seed declaration or local source", () => {
-    const source = fs.readFileSync(path.resolve("workspace/meta/vibestudio.yml"), "utf8");
+    const source = fs.readFileSync(basePath("meta/vibestudio.yml"), "utf8");
     const manifest = parse(source) as {
       git?: {
         remotes?: Record<string, Record<string, Record<string, { url?: string; branch?: string }>>>;
@@ -84,7 +87,7 @@ describe("shipped first-run workspace", () => {
       };
     };
 
-    expect(fs.existsSync(path.resolve("workspace/panels/hello-vanilla"))).toBe(false);
+    expect(fs.existsSync(basePath("panels/hello-vanilla"))).toBe(false);
     expect(manifest.git?.remotes?.["panels"]?.["hello-vanilla"]).toBeUndefined();
     expect(manifest.git?.upstreams?.["panels"]?.["hello-vanilla"]).toBeUndefined();
   });

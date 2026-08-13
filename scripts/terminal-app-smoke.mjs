@@ -11,16 +11,7 @@ import { createServerInvocation, serverEntryArg } from "./cli/lib/server-entry.m
 import { parseHubReadyPayload } from "./cli/lib/hub-ready.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const REMOTE_CLI = readWorkspacePackageName("apps", "remote-cli");
-
-function readWorkspacePackageName(...segments) {
-  const pkgPath = path.join(repoRoot, "workspace", ...segments, "package.json");
-  const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
-  if (typeof pkg.name !== "string" || !pkg.name) {
-    throw new Error(`Workspace package at ${pkgPath} is missing a package name`);
-  }
-  return pkg.name;
-}
+const REMOTE_CLI = "@workspace-apps/remote-cli";
 
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));

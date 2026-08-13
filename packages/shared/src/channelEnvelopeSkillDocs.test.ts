@@ -1,6 +1,7 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { exactUserlandRoot } from "../../../tests/exactUserlandRoot";
 
 const RETIRED_CHANNEL_ENVELOPE_METHODS = [
   "getChannelReplayWindow",
@@ -19,7 +20,7 @@ function markdownFiles(root: string): string[] {
 
 describe("channel envelope skill documentation", () => {
   it("uses only the unified paging API", () => {
-    const roots = [join(process.cwd(), "workspace/skills"), join(process.cwd(), "skills")];
+    const roots = [join(exactUserlandRoot, "skills"), join(process.cwd(), "skills")];
     const stale = roots.flatMap(markdownFiles).flatMap((path) => {
       const contents = readFileSync(path, "utf8");
       return RETIRED_CHANNEL_ENVELOPE_METHODS.filter((method) => contents.includes(method)).map(

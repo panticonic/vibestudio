@@ -1,0 +1,21 @@
+/** Host tests whose subject is the exact host/Base composition, not either repository alone. */
+export const exactPairTests = [
+  "tests/dogfood-server.test.ts",
+  "tests/invocation-terminal-outcome.test.ts",
+  "tests/mobile-native-asset-store.test.ts",
+  "tests/mobile-script-ux.test.ts",
+  "tests/onboardingTemplate.test.ts",
+  "tests/remote-overhaul-skill-guard.test.ts",
+  "tests/typed-service-client-guard.test.ts",
+  "tests/vcs-skill-release-generator.test.ts",
+  "tests/workspace-boundary.test.ts",
+  "tests/workspace-global-access.guard.test.ts",
+  "tests/workspacePackageGraph.test.ts",
+  "packages/typecheck/src/userland-policy.test.ts",
+  "packages/shared/src/channelEnvelopeSkillDocs.test.ts",
+  "src/server/productConduitPolicy.test.ts",
+  "src/server/mobileMetroNativeBoundary.test.ts",
+  "src/server/buildV2/builder.terminalWorker.test.ts",
+  "src/server/buildV2/cdpClientBuild.test.ts",
+  "src/server/buildV2/index.librarySubpath.test.ts",
+] as const;

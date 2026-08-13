@@ -10,9 +10,6 @@ import { docsMethods } from "@vibestudio/service-schemas/docs";
 import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
 
 export class LifecycleProbeDO extends DurableObjectBase {
-  protected schemaProductionBaseline() {
-    return { version: 1, name: "lifecycle-probe-v1" } as const;
-  }
   protected createTables(): void {
     this.sql.exec(`
       CREATE TABLE IF NOT EXISTS lifecycle_probe_events (

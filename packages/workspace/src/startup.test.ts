@@ -28,6 +28,19 @@ function setup() {
     path.join(templateDir, "meta", "vibestudio.yml"),
     `systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}\ninitPanels: []\n`
   );
+  fs.mkdirSync(path.join(root, "build-resources"), { recursive: true });
+  fs.writeFileSync(
+    path.join(root, "build-resources", "base-template-release.json"),
+    JSON.stringify({
+      format: "vibestudio-base-release/1",
+      baseTemplate: {
+        url: "git+https://example.test/base.git",
+        ref: "refs/tags/v1",
+        commit: "a".repeat(40),
+        snapshot: `v1-sha256:${"b".repeat(64)}`,
+      },
+    })
+  );
   const centralData = new CentralDataManager({
     databasePath: path.join(root, "identity.db"),
     now: () => 123,

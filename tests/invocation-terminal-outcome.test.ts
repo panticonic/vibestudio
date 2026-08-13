@@ -3,17 +3,18 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import * as ts from "typescript/unstable/ast";
 import { usingTypeScriptProject } from "@vibestudio/typecheck";
+import { exactUserlandRoot } from "./exactUserlandRoot";
 
 const ROOTS = [
-  "workspace/packages/harness/src",
-  "workspace/packages/agentic-chat",
-  "workspace/packages/agentic-core",
-  "workspace/packages/agentic-do",
-  "workspace/packages/agentic-protocol",
-  "workspace/packages/pubsub/src",
-  "workspace/workers/workspace-source",
-  "workspace/workers/pubsub-channel",
-  "workspace/workers/test-agent",
+  "packages/harness/src",
+  "packages/agentic-chat",
+  "packages/agentic-core",
+  "packages/agentic-do",
+  "packages/agentic-protocol",
+  "packages/pubsub/src",
+  "workers/workspace-source",
+  "workers/pubsub-channel",
+  "workers/test-agent",
 ] as const;
 
 const TERMINAL_KIND_OUTCOMES = {
@@ -114,7 +115,7 @@ describe("invocation terminal event literals", () => {
   // suite can exceed Vitest's 5s default.
   it("carry a typed terminal outcome matching their exact event kind", () => {
     const misses: string[] = [];
-    const sources = ROOTS.flatMap((root) => tsFiles(join(process.cwd(), root))).map((fileName) => ({
+    const sources = ROOTS.flatMap((root) => tsFiles(join(exactUserlandRoot, root))).map((fileName) => ({
       fileName,
       content: readFileSync(fileName, "utf8"),
     }));
@@ -135,7 +136,7 @@ describe("invocation terminal event literals", () => {
                 const line = sourceFile.getLineAndCharacterOfPosition(
                   node.getStart(sourceFile)
                 ).line;
-                misses.push(`${relative(process.cwd(), file)}:${line + 1}`);
+                misses.push(`${relative(exactUserlandRoot, file)}:${line + 1}`);
               }
             }
           }

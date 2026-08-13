@@ -28,9 +28,6 @@ const VIEW_THEME_ACCESS: MethodAccessDescriptor = {
 const VIEW_SLOT_BIND_ACCESS: MethodAccessDescriptor = {
   sensitivity: "write",
 };
-const VIEW_SLOT_CLEAR_ACCESS: MethodAccessDescriptor = {
-  sensitivity: "write",
-};
 const VIEW_SHELL_READY_ACCESS: MethodAccessDescriptor = {
   sensitivity: "write",
 };
@@ -168,7 +165,7 @@ export const coreViewMethods = defineServiceMethods({
     returns: z.void(),
     access: VIEW_THEME_ACCESS,
   },
-  bindNativePanelSlot: {
+  syncNativePanelSlots: {
     tier: {
       tier: "open",
       session: "family",
@@ -178,95 +175,34 @@ export const coreViewMethods = defineServiceMethods({
         "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family",
     },
     description:
-      "Bind a panel into a native slot owned by the calling host view at the given bounds; returns the slot sync status.",
+      "Converge the native adapter to one complete, generation-fenced workspace-shell snapshot.",
     args: z.tuple([
-      z.object({
-        nativeSlotId: z.string().describe("Caller-chosen identifier for the native slot."),
-        rendererInstanceId: z.string().min(1).describe("Hosted shell document incarnation."),
-        bindingId: z
-          .string()
-          .describe("Unique incarnation of this mounted slot binding; stale releases are ignored."),
-        bindingSequence: z
-          .number()
-          .int()
-          .nonnegative()
-          .describe("Renderer-monotonic claim sequence for this slot owner."),
-        operationSequence: z
-          .number()
-          .int()
-          .positive()
-          .describe("Monotonic operation sequence within the binding incarnation."),
-        panelId: z.string().describe("Panel to place into the slot."),
-        bounds: ViewBoundsSchema.describe("Window-relative bounds the panel should occupy."),
-        focused: z.boolean().optional().describe("Whether the slot should receive focus."),
-      }),
+      z
+        .object({
+          rendererInstanceId: z.string().min(1).describe("Hosted shell document incarnation."),
+          revision: z.number().int().positive().describe("Monotonic desired-state revision."),
+          slots: z.array(
+            z
+              .object({
+                nativeSlotId: z.string().min(1),
+                bindingId: z.string().min(1),
+                bindingSequence: z.number().int().nonnegative(),
+                panelId: z.string().min(1),
+                bounds: ViewBoundsSchema,
+                focused: z.boolean(),
+              })
+              .strict()
+          ),
+        })
+        .strict(),
     ]),
-    returns: NativePanelSlotSyncResultSchema,
+    returns: z
+      .object({
+        revision: z.number().int().positive(),
+        slots: z.record(z.string(), NativePanelSlotSyncResultSchema),
+      })
+      .strict(),
     access: VIEW_SLOT_BIND_ACCESS,
-    examples: [
-      {
-        args: [
-          {
-            nativeSlotId: "slot-main",
-            rendererInstanceId: "shell-document-1",
-            bindingId: "binding-main-1",
-            bindingSequence: 1,
-            operationSequence: 1,
-            panelId: "panel-chat",
-            bounds: { x: 0, y: 0, width: 400, height: 600 },
-          },
-        ],
-      },
-    ],
-  },
-  updateNativePanelSlot: {
-    tier: {
-      tier: "open",
-      session: "family",
-      residency: "native-effect",
-      family: "view.mutate",
-      rationale:
-        "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family",
-    },
-    description:
-      "Update the bounds and/or focus of an already-bound native panel slot; returns the slot sync status.",
-    args: z.tuple([
-      z.object({
-        nativeSlotId: z.string().describe("Identifier of the previously bound native slot."),
-        rendererInstanceId: z.string().min(1),
-        bindingId: z.string().describe("Incarnation returned by the corresponding bind lifecycle."),
-        bindingSequence: z.number().int().nonnegative(),
-        operationSequence: z.number().int().positive(),
-        bounds: ViewBoundsSchema.optional().describe("New window-relative bounds, if changing."),
-        focused: z.boolean().optional().describe("New focus state, if changing."),
-      }),
-    ]),
-    returns: NativePanelSlotSyncResultSchema,
-    access: VIEW_SLOT_BIND_ACCESS,
-  },
-  clearNativePanelSlot: {
-    tier: {
-      tier: "open",
-      session: "family",
-      residency: "native-effect",
-      family: "view.control",
-      rationale:
-        "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family",
-    },
-    description: "Unbind and remove a native panel slot owned by the calling host view.",
-    args: z.tuple([
-      z.object({
-        nativeSlotId: z.string().describe("Identifier of the native slot to clear."),
-        rendererInstanceId: z.string().min(1),
-        bindingId: z
-          .string()
-          .describe("Incarnation to release; a stale incarnation cannot clear a newer binding."),
-        bindingSequence: z.number().int().nonnegative(),
-        operationSequence: z.number().int().positive(),
-      }),
-    ]),
-    returns: z.void(),
-    access: VIEW_SLOT_CLEAR_ACCESS,
   },
   setHostedShellReady: {
     tier: {

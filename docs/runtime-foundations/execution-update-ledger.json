@@ -128,24 +128,6 @@
       "parityAssertion": "test:execution.vcs-store"
     },
     {
-      "surface": "agent-spawn",
-      "selector": "resolved-exact-artifact",
-      "executableIdentity": "full-execution-digest",
-      "adoption": "launch",
-      "rollback": "last-good-remains-authoritative",
-      "inFlightWork": "preserved-until-surface-boundary",
-      "durableStorage": "stable-logical-entity-namespace",
-      "visibleProgress": "surface-specific-existing-loading-or-status",
-      "provenance": [
-        "source-state",
-        "recipe",
-        "build-key",
-        "artifact-digest",
-        "execution-digest"
-      ],
-      "parityAssertion": "test:execution.agent-spawn"
-    },
-    {
       "surface": "panel",
       "selector": "selected-source-ref",
       "executableIdentity": "full-execution-digest",
@@ -234,24 +216,6 @@
         "execution-digest"
       ],
       "parityAssertion": "test:execution.extension"
-    },
-    {
-      "surface": "claude-code",
-      "selector": "host-plugin-plus-context-state",
-      "executableIdentity": "full-execution-digest",
-      "adoption": "managed-process-launch",
-      "rollback": "last-good-remains-authoritative",
-      "inFlightWork": "preserved-until-surface-boundary",
-      "durableStorage": "stable-logical-entity-namespace",
-      "visibleProgress": "surface-specific-existing-loading-or-status",
-      "provenance": [
-        "source-state",
-        "recipe",
-        "build-key",
-        "artifact-digest",
-        "execution-digest"
-      ],
-      "parityAssertion": "test:execution.claude-code"
     }
   ]
 }

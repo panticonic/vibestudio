@@ -47,27 +47,23 @@ function providerNode(root: string, manifestAuthority: ReturnType<typeof authori
 }
 
 describe("exact userland provider catalogs", () => {
-  it("includes product builtins in the same exact service resolver universe", async () => {
+  it("does not synthesize product providers outside the exact workspace catalog", async () => {
     const environment = createExactWorkspaceAuthorityEnvironment({
       stateHash: "state:catalog",
       services: [],
       resolveCatalog: async () => {
-        throw new Error("A product builtin must not use the workspace catalog resolver");
+        throw new Error("No undeclared service should resolve a catalog");
       },
     });
 
     const development = await environment.resolveService("vibestudio.development.v1");
-    expect(development).toMatchObject({
-      kind: "resolved",
-      service: {
-        binding: { name: "development", source: "vibestudio/internal" },
-        catalog: {
-          provider: { unitName: "@panticonic/builtin/development" },
-          digest: expect.any(String),
-        },
-      },
+    expect(development).toEqual({
+      kind: "missing",
+      query: "vibestudio.development.v1",
     });
-    expect(environment.services.some((service) => service.name === "missions")).toBe(true);
+    expect(
+      environment.services.some((service) => ["development", "missions"].includes(service.name))
+    ).toBe(false);
   });
 
   it("projects the exact materialized provider and coalesces identical extraction", async () => {

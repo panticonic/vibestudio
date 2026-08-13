@@ -34,7 +34,7 @@ describe("userland package-manager boundary", () => {
   it("accepts Build V2-owned dependency policy", () => {
     const root = makeCheckout();
     try {
-      expect(collectUserlandPackageManagerBoundaryErrors(root)).toEqual([]);
+      expect(collectUserlandPackageManagerBoundaryErrors(root, path.join(root, "workspace"))).toEqual([]);
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
@@ -50,7 +50,7 @@ describe("userland package-manager boundary", () => {
       },
     });
     try {
-      const errors = collectUserlandPackageManagerBoundaryErrors(root);
+      const errors = collectUserlandPackageManagerBoundaryErrors(root, path.join(root, "workspace"));
       expect(errors).toEqual(
         expect.arrayContaining([
           expect.stringContaining("reaches into userland"),
@@ -70,7 +70,7 @@ describe("userland package-manager boundary", () => {
       manifest.pnpm = { patchedDependencies: { "external@1.0.0": "patches/external.patch" } };
       fs.writeFileSync(manifestPath, JSON.stringify(manifest));
 
-      expect(collectUserlandPackageManagerBoundaryErrors(root)).toEqual([
+      expect(collectUserlandPackageManagerBoundaryErrors(root, path.join(root, "workspace"))).toEqual([
         expect.stringContaining("declares package-manager resolution policy"),
       ]);
     } finally {

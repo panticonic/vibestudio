@@ -5322,18 +5322,6 @@ export const HOST_AUTHORITY_METHODS = {
     capability: null,
     presentation: null,
   },
-  "view.bindNativePanelSlot": {
-    tier: {
-      tier: "open",
-      session: "family",
-      residency: "native-effect",
-      family: "view.control",
-      rationale:
-        "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family",
-    },
-    capability: null,
-    presentation: null,
-  },
   "view.browserForceReload": {
     tier: {
       tier: "open",
@@ -5418,18 +5406,6 @@ export const HOST_AUTHORITY_METHODS = {
     capability: null,
     presentation: null,
   },
-  "view.clearNativePanelSlot": {
-    tier: {
-      tier: "open",
-      session: "family",
-      residency: "native-effect",
-      family: "view.control",
-      rationale:
-        "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family",
-    },
-    capability: null,
-    presentation: null,
-  },
   "view.createPanel": {
     tier: {
       tier: "open",
@@ -5450,17 +5426,6 @@ export const HOST_AUTHORITY_METHODS = {
       family: "panel.control",
       rationale:
         "Materializes a resident panel on the caller's native host without changing shell layout focus",
-    },
-    capability: null,
-    presentation: null,
-  },
-  "view.expandPanelIds": {
-    tier: {
-      tier: "open",
-      session: "family",
-      residency: "native-effect",
-      family: "view.local-panel-state",
-      rationale: "Expands exact nodes in this client's local panel presentation state",
     },
     capability: null,
     presentation: null,
@@ -5525,17 +5490,6 @@ export const HOST_AUTHORITY_METHODS = {
     capability: null,
     presentation: null,
   },
-  "view.getCollapsedPanelIds": {
-    tier: {
-      tier: "open",
-      session: "family",
-      residency: "native-effect",
-      family: "view.local-panel-state",
-      rationale: "Reads collapsed nodes from this client's local panel presentation state",
-    },
-    capability: null,
-    presentation: null,
-  },
   "view.getFocusedPanelId": {
     tier: {
       tier: "open",
@@ -5554,18 +5508,6 @@ export const HOST_AUTHORITY_METHODS = {
       residency: "native-effect",
       family: "panel.read",
       rationale: "Trusted panel chrome reads Electron's canonical local presentation state",
-    },
-    capability: null,
-    presentation: null,
-  },
-  "view.getPanelLayout": {
-    tier: {
-      tier: "open",
-      session: "family",
-      residency: "native-effect",
-      family: "panel.read",
-      rationale:
-        "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family",
     },
     capability: null,
     presentation: null,
@@ -5689,18 +5631,6 @@ export const HOST_AUTHORITY_METHODS = {
     capability: null,
     presentation: null,
   },
-  "view.savePanelLayout": {
-    tier: {
-      tier: "open",
-      session: "family",
-      residency: "native-effect",
-      family: "panel.control",
-      rationale:
-        "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family",
-    },
-    capability: null,
-    presentation: null,
-  },
   "view.setBounds": {
     tier: {
       tier: "open",
@@ -5745,17 +5675,6 @@ export const HOST_AUTHORITY_METHODS = {
       family: "panel.mutate",
       rationale:
         "Applies an already-selected zoom factor to the exact Electron browser webContents.",
-    },
-    capability: null,
-    presentation: null,
-  },
-  "view.setPanelCollapsed": {
-    tier: {
-      tier: "open",
-      session: "family",
-      residency: "native-effect",
-      family: "view.local-panel-state",
-      rationale: "Persists one collapsed-node choice in this client's local presentation state",
     },
     capability: null,
     presentation: null,
@@ -5844,6 +5763,18 @@ export const HOST_AUTHORITY_METHODS = {
     capability: null,
     presentation: null,
   },
+  "view.syncNativePanelSlots": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "view.control",
+      rationale:
+        "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family",
+    },
+    capability: null,
+    presentation: null,
+  },
   "view.togglePin": {
     tier: {
       tier: "open",
@@ -5857,18 +5788,6 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: null,
   },
   "view.updateContentOverlay": {
-    tier: {
-      tier: "open",
-      session: "family",
-      residency: "native-effect",
-      family: "view.mutate",
-      rationale:
-        "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family",
-    },
-    capability: null,
-    presentation: null,
-  },
-  "view.updateNativePanelSlot": {
     tier: {
       tier: "open",
       session: "family",

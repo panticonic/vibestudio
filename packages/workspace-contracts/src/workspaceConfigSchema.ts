@@ -139,7 +139,6 @@ export const WorkspaceTemplatesConfigSchema = z
     use: z.array(WorkspaceTemplateDeclarationSchema),
     overrides: z.record(WorkspaceTemplatePinSchema).optional(),
     registry: WorkspaceTemplateRegistryDeclarationSchema.optional(),
-    bootstrapAdopted: WorkspaceTemplatePinSchema.optional(),
     suggestionDecisions: z
       .record(
         z
@@ -449,6 +448,7 @@ const WorkspaceTemplateStateNodeSchema = z
     alias: z.string().trim().min(1),
     pin: WorkspaceTemplatePinSchema,
     parents: z.array(z.string().regex(/^t-[0-9a-f]+$/)),
+    fragment: z.string().min(1),
     /**
      * The node's self-given name and sentence, already sanitized.
      *

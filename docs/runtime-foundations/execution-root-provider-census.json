@@ -44,7 +44,6 @@
     {
       "id": "development-run",
       "backingSources": [
-        "packages/builtin/src/development/DevelopmentDO.ts",
         "src/server/services/developmentClientExecutorService.ts",
         "src/main/currentHostDevelopmentClientExecutor.ts"
       ],

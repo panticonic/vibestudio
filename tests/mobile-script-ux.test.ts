@@ -17,6 +17,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { exactUserlandRoot } from "./exactUserlandRoot";
 
 class FakeChild extends EventEmitter {
   exitCode: number | null = null;
@@ -71,13 +72,13 @@ describe("mobile script platform and relay guarantees", () => {
     expect(resolveAdbInstallTarget(devices, "emulator-5554")).toBe("emulator-5554");
   });
 
-  it("tracks monorepo and workspace Metro sources in the Android bundle task", () => {
+  it("tracks host package sources without ambient Base inputs in the Android bundle task", () => {
     const gradle = fs.readFileSync(
       path.join(process.cwd(), "apps/mobile/android/app/build.gradle"),
       "utf8"
     );
     expect(gradle).toContain('rootProject.file("../../../packages")');
-    expect(gradle).toContain('rootProject.file("../../../workspace/apps/mobile")');
+    expect(gradle).not.toContain("workspace/apps/mobile");
     expect(gradle).toContain('task.name.startsWith("createBundle")');
     expect(gradle).toContain('withPropertyName("vibestudioMetroSources")');
     expect(gradle).toContain("PathSensitivity.RELATIVE");
@@ -89,7 +90,7 @@ describe("mobile script platform and relay guarantees", () => {
 
   it("keeps managed panel artifacts warm across ordinary background transitions", () => {
     const webView = fs.readFileSync(
-      path.join(process.cwd(), "workspace/apps/mobile/src/components/PanelWebView.tsx"),
+      path.join(exactUserlandRoot, "apps/mobile/src/components/PanelWebView.tsx"),
       "utf8"
     );
     expect(webView).toContain("cacheEnabled\n");
@@ -97,7 +98,7 @@ describe("mobile script platform and relay guarantees", () => {
     expect(webView).not.toContain("LOAD_NO_CACHE");
 
     const lifecycle = fs.readFileSync(
-      path.join(process.cwd(), "workspace/apps/mobile/src/hooks/useAppLifecycle.ts"),
+      path.join(exactUserlandRoot, "apps/mobile/src/hooks/useAppLifecycle.ts"),
       "utf8"
     );
     expect(lifecycle.match(/shellClient\.trimMemory\(\)/gu)).toHaveLength(1);
@@ -107,7 +108,7 @@ describe("mobile script platform and relay guarantees", () => {
 
   it("gives the shell recovery coordinator sole ownership of panel refresh", () => {
     const main = fs.readFileSync(
-      path.join(process.cwd(), "workspace/apps/mobile/src/components/MainScreen.tsx"),
+      path.join(exactUserlandRoot, "apps/mobile/src/components/MainScreen.tsx"),
       "utf8"
     );
     const reconnectBlock = main.match(
@@ -121,7 +122,7 @@ describe("mobile script platform and relay guarantees", () => {
 
   it("bounds one-shot Metro builds and preserves its content cache", () => {
     const source = fs.readFileSync(
-      path.join(process.cwd(), "workspace/extensions/react-native/index.ts"),
+      path.join(exactUserlandRoot, "extensions/react-native/index.ts"),
       "utf8"
     );
     expect(source).toContain('"--max-workers"');
@@ -133,7 +134,7 @@ describe("mobile script platform and relay guarantees", () => {
 
   it("advances mobile panel projections on the server's execution activation edge", () => {
     const source = fs.readFileSync(
-      path.join(process.cwd(), "workspace/apps/mobile/src/services/shellClient.ts"),
+      path.join(exactUserlandRoot, "apps/mobile/src/services/shellClient.ts"),
       "utf8"
     );
     expect(source).toContain('this.events.on("panel:executionActivated"');
@@ -240,7 +241,7 @@ describe("mobile script platform and relay guarantees", () => {
     expect(source).not.toContain("serverRestartStoreHitCount");
 
     const mainScreen = fs.readFileSync(
-      path.join(process.cwd(), "workspace/apps/mobile/src/components/MainScreen.tsx"),
+      path.join(exactUserlandRoot, "apps/mobile/src/components/MainScreen.tsx"),
       "utf8"
     );
     expect(mainScreen.indexOf("phase=workspace-panel-ready")).toBeLessThan(

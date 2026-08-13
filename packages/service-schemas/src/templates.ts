@@ -43,24 +43,6 @@ export const templateContributionSchema = z
   })
   .strict();
 
-export const templateMigrationSchema = z
-  .object({
-    /** Template-owned note facets carried by this exact incoming change. */
-    facets: z.array(z.string().trim().min(1)).min(1),
-    /** Current living notes from the exact incoming releases, for honest
-     * presentation. Verification still happens by reading them in-context. */
-    notes: z.array(
-      z
-        .object({
-          path: z.string().trim().min(1),
-          title: z.string().trim().min(1),
-          degradedOk: z.boolean(),
-        })
-        .strict()
-    ),
-  })
-  .strict();
-
 export const templateOperationInitiatorSchema = z.enum(["user", "host-release"]);
 
 export const templateOperationTargetSchema = z
@@ -176,7 +158,6 @@ export const templateOperationSchema = z
     planFingerprint: digest.optional(),
     review: templateReviewSchema.optional(),
     contribution: templateContributionSchema.optional(),
-    migration: templateMigrationSchema.optional(),
     blocker: templateRecoveryBlockerSchema.optional(),
     /** A retained semantic context which an agent may edit with the ordinary
      * workspace/VCS tools before calling resume. */
@@ -567,7 +548,7 @@ export const templatesMethods = defineServiceMethods({
   },
   operations: {
     description:
-      "Discover retained pending, reviewing, or repairing semantic template operations with their initiator, human target, living migration-note summaries, and exact stored context handles.",
+      "Discover retained pending, reviewing, or repairing semantic template operations with their initiator, human target, and exact stored context handles.",
     args: z.tuple([]),
     returns: z.array(
       z
@@ -587,7 +568,6 @@ export const templatesMethods = defineServiceMethods({
           target: templateOperationTargetSchema.optional(),
           state: z.enum(["pending", "reviewing", "repairing"]),
           fingerprint: digest,
-          migration: templateMigrationSchema.optional(),
           review: templateReviewSchema.optional(),
           repair: z
             .object({

@@ -1,20 +1,22 @@
 import { describe, expect, it } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
+import { exactUserlandRoot } from "./exactUserlandRoot";
 
 const REQUIRED_SKILLS = [
-  "workspace/skills/remote-access/SKILL.md",
-  "workspace/apps/mobile/SKILL.md",
-  "workspace/apps/shell/SKILL.md",
-  "workspace/extensions/mobile-debug/SKILL.md",
-  "workspace/extensions/react-native/SKILL.md",
-  "workspace/extensions/git-bridge/SKILL.md",
+  "skills/remote-access/SKILL.md",
+  "apps/mobile/SKILL.md",
+  "apps/shell/SKILL.md",
+  "extensions/mobile-debug/SKILL.md",
+  "extensions/react-native/SKILL.md",
+  "extensions/git-bridge/SKILL.md",
 ] as const;
 
 const NON_SOURCE_DIRECTORIES = new Set(["node_modules", "dist", "coverage", ".vite"]);
 
 function read(file: string): string {
-  return fs.readFileSync(path.join(process.cwd(), file), "utf8");
+  const root = file.startsWith("apps/mobile/") ? process.cwd() : exactUserlandRoot;
+  return fs.readFileSync(path.join(root, file), "utf8");
 }
 
 function skillFiles(dir: string): string[] {
@@ -30,14 +32,16 @@ function skillFiles(dir: string): string[] {
 
 describe("remote/mobile overhaul skill coverage", () => {
   it("keeps the full-system smoke command wired", () => {
-    const pkg = JSON.parse(read("package.json")) as { scripts?: Record<string, string> };
+    const pkg = JSON.parse(fs.readFileSync(path.join(process.cwd(), "package.json"), "utf8")) as {
+      scripts?: Record<string, string>;
+    };
     expect(pkg.scripts?.["smoke:full"]).toBe("node scripts/full-system-smoke.mjs");
     expect(fs.existsSync(path.join(process.cwd(), "scripts/full-system-smoke.mjs"))).toBe(true);
   });
 
   it("ships repo-local skills for touched app and extension units", () => {
     for (const file of REQUIRED_SKILLS) {
-      expect(fs.existsSync(path.join(process.cwd(), file)), file).toBe(true);
+      expect(fs.existsSync(path.join(exactUserlandRoot, file)), file).toBe(true);
     }
   });
 
@@ -70,10 +74,10 @@ describe("remote/mobile overhaul skill coverage", () => {
       ["webrtc", "-", "remote", ".json"].join(""),
     ];
     const misses: string[] = [];
-    for (const file of skillFiles(path.join(process.cwd(), "workspace"))) {
+    for (const file of skillFiles(exactUserlandRoot)) {
       const text = fs.readFileSync(file, "utf8");
       for (const term of forbidden) {
-        if (text.includes(term)) misses.push(`${path.relative(process.cwd(), file)}: ${term}`);
+        if (text.includes(term)) misses.push(`${path.relative(exactUserlandRoot, file)}: ${term}`);
       }
     }
     expect(misses).toEqual([]);

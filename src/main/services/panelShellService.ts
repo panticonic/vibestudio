@@ -1,6 +1,5 @@
 import type { ServiceContext, ServiceHandler } from "@vibestudio/shared/serviceDispatcher";
 import type { PanelOrchestrator } from "../panelOrchestrator.js";
-import type { PanelLayoutStoreApi } from "../panelLayoutStore.js";
 import type { PanelRegistry } from "@vibestudio/shared/panelRegistry";
 import type { PanelView } from "../panelView.js";
 import type { ViewManager } from "../viewManager.js";
@@ -39,9 +38,6 @@ export interface PanelViewMethodDeps {
   panelRegistry: PanelRegistry;
   panelView: PanelView;
   getViewManager: () => ViewManager;
-  panelLayoutStore?: PanelLayoutStoreApi | null;
-  getWorkspaceId?: () => string;
-  getAccountUserId?: () => Promise<string>;
 }
 
 async function readPanelPresentation(deps: PanelViewMethodDeps, panelId: string) {
@@ -248,18 +244,6 @@ export function buildPanelViewHandler(deps: PanelViewMethodDeps): ServiceHandler
       requirePanelHostingAppCapability(ctx, deps.getViewManager(), "listPinnedPanelIds");
       return deps.panelOrchestrator.listPinnedPanelIds();
     },
-    getPanelLayout: async (ctx) => {
-      requirePanelHostingAppCapability(ctx, deps.getViewManager(), "getPanelLayout");
-      const store = deps.panelLayoutStore;
-      if (!store || !deps.getWorkspaceId || !deps.getAccountUserId) return null;
-      return store.get(deps.getWorkspaceId(), await deps.getAccountUserId());
-    },
-    savePanelLayout: async (ctx, [layout]) => {
-      requirePanelHostingAppCapability(ctx, deps.getViewManager(), "savePanelLayout");
-      const store = deps.panelLayoutStore;
-      if (!store || !deps.getWorkspaceId || !deps.getAccountUserId) return;
-      store.set(deps.getWorkspaceId(), await deps.getAccountUserId(), layout);
-    },
     getFocusedPanelId: (ctx) => {
       requirePanelHostingChrome(ctx, deps.getViewManager(), "getFocusedPanelId");
       return deps.panelOrchestrator.getFocusedPanelId();
@@ -267,18 +251,6 @@ export function buildPanelViewHandler(deps: PanelViewMethodDeps): ServiceHandler
     setFocusedPanelId: (ctx, [panelId]) => {
       requirePanelHostingAppCapability(ctx, deps.getViewManager(), "setFocusedPanelId");
       return deps.panelOrchestrator.setFocusedPanelId(panelId);
-    },
-    getCollapsedPanelIds: async (ctx) => {
-      requirePanelHostingAppCapability(ctx, deps.getViewManager(), "getCollapsedPanelIds");
-      return deps.panelOrchestrator.getCollapsedIds();
-    },
-    setPanelCollapsed: async (ctx, [panelId, collapsed]) => {
-      requirePanelHostingAppCapability(ctx, deps.getViewManager(), "setPanelCollapsed");
-      await deps.panelOrchestrator.setCollapsed(panelId, collapsed);
-    },
-    expandPanelIds: async (ctx, [panelIds]) => {
-      requirePanelHostingAppCapability(ctx, deps.getViewManager(), "expandPanelIds");
-      await deps.panelOrchestrator.expandIds(panelIds);
     },
     openPanelDevTools: (ctx, [panelId, mode]) => {
       const viewManager = deps.getViewManager();

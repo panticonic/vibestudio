@@ -190,7 +190,7 @@ export function createBrowserDataClient(rpc: BrowserDataRpc): BrowserDataClient 
     callExtension("invokeProvider", "browserData", method, args);
   const callBrowserEnvironment = <T>(method: BrowserEnvironmentMethod, ...args: unknown[]) =>
     rpc.callService("browserEnvironment", method, args) as Promise<T>;
-  // BrowserDataDO deliberately admits only its installed broker extension as
+  // BrowserVaultDO deliberately admits only its installed broker extension as
   // a code caller. Panels therefore use the same broker for live and imported
   // data; resolving the DO and relaying to it directly would lose that
   // receiver relationship and fail with EACCES for panel principals.

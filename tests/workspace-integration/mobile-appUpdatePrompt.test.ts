@@ -4,13 +4,12 @@ vi.mock("react-native", () => ({
   Alert: { alert: vi.fn() },
 }));
 
-vi.mock("../../workspace/apps/mobile/src/services/appBootstrap", () => ({
+vi.mock("@exact-userland/apps/mobile/src/services/appBootstrap", () => ({
   ensureNativeWorkspaceAppBundle: vi.fn(async () => ({ reloading: true })),
 }));
 
-const { handleMobileAppLifecycleEvent } = await import(
-  "../../workspace/apps/mobile/src/services/appUpdatePrompt"
-);
+const { handleMobileAppLifecycleEvent } =
+  await import("@exact-userland/apps/mobile/src/services/appUpdatePrompt");
 
 describe("mobile app update prompt", () => {
   it("prompts once for a mobile app update and installs on request", async () => {
@@ -21,7 +20,7 @@ describe("mobile app update prompt", () => {
 
     handleMobileAppLifecycleEvent(
       { type: "update-available", appId: "apps/mobile", buildKey: "rn-2", canRollback: false },
-      { shellClient, pushToast, prompted: new Set(), alert, ensureBundle },
+      { shellClient, pushToast, prompted: new Set(), alert, ensureBundle }
     );
 
     const buttons = alert.mock.calls[0]?.[2] as Array<{ text: string; onPress?: () => void }>;
@@ -40,7 +39,7 @@ describe("mobile app update prompt", () => {
 
     handleMobileAppLifecycleEvent(
       { type: "update-available", appId: "apps/mobile", buildKey: "rn-2", canRollback: true },
-      { shellClient, pushToast, prompted: new Set(), alert, ensureBundle },
+      { shellClient, pushToast, prompted: new Set(), alert, ensureBundle }
     );
 
     const buttons = alert.mock.calls[0]?.[2] as Array<{ text: string; onPress?: () => void }>;
@@ -64,7 +63,7 @@ describe("mobile app update prompt", () => {
 
     handleMobileAppLifecycleEvent(
       { type: "update-available", appId: "apps/mobile", buildKey: "rn-2", canRollback: true },
-      { shellClient, pushToast, prompted: new Set(), alert, ensureBundle },
+      { shellClient, pushToast, prompted: new Set(), alert, ensureBundle }
     );
     const buttons = alert.mock.calls[0]?.[2] as Array<{ text: string; onPress?: () => void }>;
     buttons.find((button) => button.text === "Install")?.onPress?.();
@@ -72,14 +71,18 @@ describe("mobile app update prompt", () => {
     await Promise.resolve();
     await Promise.resolve();
 
-    expect(pushToast).toHaveBeenCalledWith(expect.objectContaining({
-      title: "Update failed",
-      message: "bundle failed",
-    }));
-    expect(pushToast).toHaveBeenCalledWith(expect.objectContaining({
-      title: "Rollback failed",
-      message: "rollback failed",
-    }));
+    expect(pushToast).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: "Update failed",
+        message: "bundle failed",
+      })
+    );
+    expect(pushToast).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: "Rollback failed",
+        message: "rollback failed",
+      })
+    );
   });
 
   it("ignores updates for non-mobile app targets", () => {
@@ -96,7 +99,7 @@ describe("mobile app update prompt", () => {
         buildKey: "desktop-2",
         canRollback: true,
       },
-      { shellClient, pushToast, prompted: new Set(), alert },
+      { shellClient, pushToast, prompted: new Set(), alert }
     );
 
     expect(alert).not.toHaveBeenCalled();

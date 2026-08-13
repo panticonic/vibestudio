@@ -9,7 +9,7 @@ import {
   type WorkspaceConfigFragmentLayer,
 } from "./configComposition.js";
 
-const top = (extra = "") => parseWorkspaceConfigTopLayer(`systemEpoch: 57\n${extra}`);
+const top = (extra = "") => parseWorkspaceConfigTopLayer(`systemEpoch: 58\n${extra}`);
 
 function layer(
   nodeId: string,
@@ -21,7 +21,7 @@ function layer(
     nodeId,
     alias,
     ancestors,
-    config: parseWorkspaceConfigFragment(`systemEpoch: 57\n${yaml}`, nodeId),
+    config: parseWorkspaceConfigFragment(`systemEpoch: 58\n${yaml}`, nodeId),
   };
 }
 
@@ -80,11 +80,11 @@ describe("workspace template manifest composition", () => {
 
   it("rejects template trust and provider grants at the fragment boundary", () => {
     expect(() =>
-      parseWorkspaceConfigFragment("systemEpoch: 57\ntrust:\n  chromeApps: [apps/shell]\n", "t-a")
+      parseWorkspaceConfigFragment("systemEpoch: 58\ntrust:\n  chromeApps: [apps/shell]\n", "t-a")
     ).toThrow();
     expect(() =>
       parseWorkspaceConfigFragment(
-        "systemEpoch: 57\nproviders:\n  gitInterop: { extension: extensions/git }\n",
+        "systemEpoch: 58\nproviders:\n  gitInterop: { extension: extensions/git }\n",
         "t-a"
       )
     ).toThrow();

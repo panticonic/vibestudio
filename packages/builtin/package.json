@@ -11,11 +11,7 @@
     "./workspace-state": "./src/workspace-state/index.ts",
     "./workspace-state/test-fixture": "./src/workspace-state/testFixture.ts",
     "./eval-engine": "./src/eval-engine/index.ts",
-    "./webhook-engine": "./src/webhook-engine/index.ts",
-    "./missions": "./src/missions/index.ts",
-    "./phone-provisioning": "./src/phone-provisioning/index.ts",
-    "./development": "./src/development/index.ts",
-    "./development/recipes": "./src/development/recipes.ts"
+    "./webhook-engine": "./src/webhook-engine/index.ts"
   },
   "dependencies": {
     "@vibestudio/browser-data": "workspace:*",

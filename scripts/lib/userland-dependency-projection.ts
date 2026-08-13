@@ -24,8 +24,10 @@ export interface UserlandDependencyProjection {
 }
 
 export interface PrepareUserlandDependencyProjectionOptions {
-  /** Repository root containing package.json and workspace/. */
+  /** Host repository root supplying native build dependencies. */
   appRoot: string;
+  /** Explicit semantic or exact-snapshot workspace source. */
+  workspaceRoot: string;
   /** Include test/build-only requirements declared by userland units. */
   includeDevelopmentDependencies?: boolean;
   /** Units deliberately validated by a separate toolchain. */
@@ -49,7 +51,7 @@ export async function prepareUserlandDependencyProjection(
   options: PrepareUserlandDependencyProjectionOptions
 ): Promise<UserlandDependencyProjection> {
   const appRoot = path.resolve(options.appRoot);
-  const workspaceRoot = path.join(appRoot, "workspace");
+  const workspaceRoot = path.resolve(options.workspaceRoot);
   const appNodeModules = [path.join(appRoot, "node_modules")];
   const excluded = options.excludedUnitPaths ?? DEFAULT_EXCLUDED_UNIT_PATHS;
   const graph = discoverPackageGraph(workspaceRoot);

@@ -62,16 +62,10 @@ describe("multi-user cutover regression rules", () => {
     expect(ruleIds('record["hubUrl"]', cliFile)).toContain("nested-hub-credential");
   });
 
-  it("scans userland source and current documentation", () => {
+  it("scans the supplied source root and current documentation", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "no-single-user-check-"));
     temporaryRoots.push(root);
-    fs.mkdirSync(path.join(root, "workspace", "skills", "example"), { recursive: true });
     fs.mkdirSync(path.join(root, "skills", "agent"), { recursive: true });
-    fs.writeFileSync(
-      path.join(root, "workspace", "skills", "example", "SKILL.md"),
-      "Run `vibestudio remote invite`.",
-      "utf8"
-    );
     fs.writeFileSync(
       path.join(root, "skills", "agent", "RECIPES.md"),
       "Run `vibestudio remote invite`.",
@@ -81,10 +75,6 @@ describe("multi-user cutover regression rules", () => {
 
     expect(scanRepository(root)).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({
-          file: "workspace/skills/example/SKILL.md",
-          rule: "generic-device-invite",
-        }),
         expect.objectContaining({
           file: "skills/agent/RECIPES.md",
           rule: "generic-device-invite",

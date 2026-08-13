@@ -89,52 +89,24 @@ export function createViewService(
       vm.setThemeCss(css);
       return;
     },
-    bindNativePanelSlot: (ctx, [request]) => {
+    syncNativePanelSlots: (ctx, [request]) => {
       const vm = deps.getViewManager();
       assertNativePanelSlotHost(
         vm,
         ctx.caller.runtime.id,
         ctx.caller.runtime.kind,
-        "bindNativePanelSlot"
+        "syncNativePanelSlots"
       );
-      const result = vm.bindPanelSlot(ctx.caller.runtime.id, request);
-      deps.panelOrchestrator?.onNativeSlotDeclared(request.panelId);
-      return result;
-    },
-    updateNativePanelSlot: (ctx, [request]) => {
-      const vm = deps.getViewManager();
-      assertNativePanelSlotHost(
-        vm,
-        ctx.caller.runtime.id,
-        ctx.caller.runtime.kind,
-        "updateNativePanelSlot"
-      );
-      const result = vm.updatePanelSlot(ctx.caller.runtime.id, request);
-      if (result.status === "updated") {
-        const panelId = vm.getPanelIdForNativeSlot(request.nativeSlotId);
-        if (panelId) deps.panelOrchestrator?.onNativeSlotDeclared(panelId);
+      const previousPanelIds = new Set(vm.getDeclaredPanelSlotIds());
+      const result = vm.syncPanelSlots(ctx.caller.runtime.id, request);
+      const currentPanelIds = new Set(vm.getDeclaredPanelSlotIds());
+      for (const panelId of previousPanelIds) {
+        if (!currentPanelIds.has(panelId)) deps.panelOrchestrator?.onNativeSlotCleared(panelId);
+      }
+      for (const panelId of currentPanelIds) {
+        if (!previousPanelIds.has(panelId)) deps.panelOrchestrator?.onNativeSlotDeclared(panelId);
       }
       return result;
-    },
-    clearNativePanelSlot: (ctx, [request]) => {
-      const vm = deps.getViewManager();
-      assertNativePanelSlotHost(
-        vm,
-        ctx.caller.runtime.id,
-        ctx.caller.runtime.kind,
-        "clearNativePanelSlot"
-      );
-      const panelId = vm.getPanelIdForNativeSlot(request.nativeSlotId);
-      const cleared = vm.clearPanelSlot(
-        ctx.caller.runtime.id,
-        request.nativeSlotId,
-        request.bindingId,
-        request
-      );
-      if (cleared && panelId && !vm.getDeclaredPanelSlotIds().includes(panelId)) {
-        deps.panelOrchestrator?.onNativeSlotCleared(panelId);
-      }
-      return;
     },
     setHostedShellReady: (ctx, [request]) => {
       const vm = deps.getViewManager();

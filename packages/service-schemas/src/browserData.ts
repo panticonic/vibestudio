@@ -1,5 +1,9 @@
 import { z } from "zod";
-import { defineServiceMethods, type MethodSchema } from "@vibestudio/shared/typedServiceClient";
+import {
+  defineServiceMethods,
+  type MethodSchema,
+  type ServiceMethodSchemas,
+} from "@vibestudio/shared/typedServiceClient";
 
 const voidResult = z.void();
 const id = z.number().int().nonnegative();
@@ -661,3 +665,46 @@ export const browserDataMethods = defineServiceMethods({
     "Import a favicon batch."
   ),
 });
+
+const BROWSER_VAULT_METHOD_NAMES = new Set([
+  "getPasswords",
+  "getPasswordForSite",
+  "addPassword",
+  "updatePassword",
+  "deletePassword",
+  "addNeverSave",
+  "isNeverSave",
+  "getNeverSaveOrigins",
+  "removeNeverSave",
+  "updateLastUsed",
+  "getFormFillSuggestions",
+  "addFormFillValue",
+  "updateFormFillValue",
+  "markFormFillValueUsed",
+  "deleteFormFillValue",
+  "clearFormFillValues",
+  "applyCookieMutations",
+  "getCookieSnapshot",
+  "getCookiesForOrigin",
+  "clearCookiesForOrigin",
+  "clearAllCookies",
+  "endBrowserSession",
+  "getCookieSiteSummary",
+  "addCookiesBatch",
+  "addPasswordsBatch",
+  "addFormFillBatch",
+]);
+
+function selectBrowserMethods(vault: boolean): ServiceMethodSchemas {
+  return Object.fromEntries(
+    Object.entries(browserDataMethods).filter(
+      ([name]) => BROWSER_VAULT_METHOD_NAMES.has(name) === vault
+    )
+  );
+}
+
+/** Host-owned protected credential and cookie effects. */
+export const browserVaultMethods = selectBrowserMethods(true);
+
+/** Workspace-owned durable browser product state. */
+export const browserProductMethods = selectBrowserMethods(false);

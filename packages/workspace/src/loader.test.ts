@@ -32,6 +32,22 @@ function writeConfig(sourceRoot: string, content: string): void {
   );
 }
 
+function writeBaseRelease(appRoot: string): void {
+  fs.mkdirSync(path.join(appRoot, "build-resources"), { recursive: true });
+  fs.writeFileSync(
+    path.join(appRoot, "build-resources", "base-template-release.json"),
+    JSON.stringify({
+      format: "vibestudio-base-release/1",
+      baseTemplate: {
+        url: "git+https://example.test/base.git",
+        ref: "refs/tags/v1",
+        commit: "a".repeat(40),
+        snapshot: `v1-sha256:${"b".repeat(64)}`,
+      },
+    })
+  );
+}
+
 afterEach(() => {
   if (originalXdgConfigHome === undefined) {
     delete process.env["XDG_CONFIG_HOME"];
@@ -880,6 +896,7 @@ describe("resolveOrCreateWorkspace", () => {
 
       const templateRoot = path.join(root, "workspace-template");
       writeConfig(templateRoot, "initPanels: []\n");
+      writeBaseRelease(root);
 
       const emptyWorkspace = path.join(
         process.env["XDG_CONFIG_HOME"],

@@ -47,17 +47,8 @@ const defaultReadyFile = path.join(
   `vibestudio-desktop-smoke-ready-${process.pid}.json`
 );
 const screenshotDir = path.join(repoRoot, "test-results", "desktop-pairing-smoke");
-const HOSTED_SHELL_APP = readWorkspacePackageName("apps", "shell");
+const HOSTED_SHELL_APP = "@workspace-apps/shell";
 const ELECTRON_EVALUATE_TIMEOUT_MS = 5_000;
-
-function readWorkspacePackageName(...segments) {
-  const pkgPath = path.join(repoRoot, "workspace", ...segments, "package.json");
-  const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
-  if (typeof pkg.name !== "string" || !pkg.name) {
-    throw new Error(`Workspace package at ${pkgPath} is missing a package name`);
-  }
-  return pkg.name;
-}
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));

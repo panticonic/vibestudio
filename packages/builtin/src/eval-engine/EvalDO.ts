@@ -2,7 +2,6 @@ import {
   DurableObjectBase,
   schemaRpc,
   type DurableObjectContext,
-  type DurableObjectSchemaMigration,
   type LifecyclePrepareInput,
   type LifecycleResumeInput,
 } from "@vibestudio/durable";
@@ -70,7 +69,7 @@ import { createPrivateGuestGlobal } from "@vibestudio/shared/evalConfinement";
 /**
  * EvalDO — the blessed, per-owner unsafe-eval kernel.
  *
- * An internal Durable Object (alongside WorkspaceDO/BrowserDataDO) that runs the agent
+ * An internal Durable Object (alongside WorkspaceDO/BrowserVaultDO) that runs the agent
  * `eval` capability server-side. It:
  *  - dynamically loads the manifest-declared eval engine + runtime units at runtime
  *    (meta/vibestudio.yml `providers.evalEngine` / `providers.evalRuntime`, injected as
@@ -457,33 +456,6 @@ interface KernelLeaseState {
 export class EvalDO extends DurableObjectBase {
   static override rpcMethods = evalEngineMethods;
   static override schemaVersion = 3;
-
-  protected override schemaProductionBaseline() {
-    return { version: 2, name: "eval-engine-v2" } as const;
-  }
-
-  protected override schemaMigrations(): readonly DurableObjectSchemaMigration[] {
-    return [
-      {
-        version: 3,
-        name: "resident-channel-membership-catalog",
-        validateSource: (sql) => {
-          const runs = sql
-            .exec(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'runs'`)
-            .toArray();
-          if (runs.length === 0) throw new Error("EvalDO v2 source is missing runs");
-        },
-        migrate: (sql) => {
-          sql.exec(`
-            CREATE TABLE resident_channel_memberships (
-              channel_id TEXT PRIMARY KEY,
-              registered_at INTEGER NOT NULL
-            )
-          `);
-        },
-      },
-    ];
-  }
 
   private engine: EvalEngine | null = null;
   private scopeManager: ScopeManagerLike | null = null;

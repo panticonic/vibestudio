@@ -9,6 +9,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import * as YAML from "yaml";
+import { exactUserlandRoot } from "./exactUserlandRoot";
 
 const tempRoots: string[] = [];
 
@@ -80,13 +81,16 @@ describe("dogfood server supervisor", () => {
     expect(env.VIBESTUDIO_GATEWAY_ALIASES).toBe(JSON.stringify(["http://127.0.0.1:3456"]));
   });
 
-  it("bootstraps a dogfood project with an explicit network upstream", () => {
+  it("bootstraps a dogfood project with an explicit network upstream", async () => {
     const configRoot = tmpRoot();
     vi.stubEnv("XDG_CONFIG_HOME", configRoot);
     vi.spyOn(console, "log").mockImplementation(() => undefined);
     const remoteUrl = "https://example.com/vibestudio.git";
 
-    const wsDir = bootstrapWorkspace("dogfood-test", { gitRemoteUrl: remoteUrl });
+    const wsDir = await bootstrapWorkspace("dogfood-test", {
+      gitRemoteUrl: remoteUrl,
+      baseCheckout: exactUserlandRoot,
+    });
     const projectDir = path.join(wsDir, "source", "projects", "vibestudio");
 
     expect(wsDir).toBe(workspaceDir("dogfood-test"));
@@ -101,12 +105,12 @@ describe("dogfood server supervisor", () => {
     expect(dogfoodMeta.gitRemoteUrl).toBe(remoteUrl);
   });
 
-  it("preserves the reviewed template upstream without publishing the local checkout", () => {
+  it("preserves the reviewed template upstream without publishing the local checkout", async () => {
     const configRoot = tmpRoot();
     vi.stubEnv("XDG_CONFIG_HOME", configRoot);
     vi.spyOn(console, "log").mockImplementation(() => undefined);
 
-    const wsDir = bootstrapWorkspace("dogfood-test");
+    const wsDir = await bootstrapWorkspace("dogfood-test", { baseCheckout: exactUserlandRoot });
     const workspaceConfig = YAML.parse(
       fs.readFileSync(path.join(wsDir, "source", "meta", "vibestudio.yml"), "utf8")
     );
@@ -128,17 +132,17 @@ describe("dogfood server supervisor", () => {
     expect(dogfoodMeta.gitRemoteUrl).toBeNull();
   });
 
-  it("replaces the generated source snapshot while preserving the dogfood project", () => {
+  it("replaces the generated source snapshot while preserving the dogfood project", async () => {
     const configRoot = tmpRoot();
     vi.stubEnv("XDG_CONFIG_HOME", configRoot);
     vi.spyOn(console, "log").mockImplementation(() => undefined);
 
-    const wsDir = bootstrapWorkspace("dogfood-test");
+    const wsDir = await bootstrapWorkspace("dogfood-test", { baseCheckout: exactUserlandRoot });
     const ghost = path.join(wsDir, "source", "workers", "removed-worker.ts");
     const projectDir = path.join(wsDir, "source", "projects", "vibestudio");
     fs.writeFileSync(ghost, "export {};\n", "utf8");
 
-    bootstrapWorkspace("dogfood-test");
+    await bootstrapWorkspace("dogfood-test", { baseCheckout: exactUserlandRoot });
 
     expect(fs.existsSync(ghost)).toBe(false);
     expect(fs.existsSync(path.join(projectDir, ".git"))).toBe(true);

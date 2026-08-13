@@ -9,9 +9,10 @@ its onboarding contribution is discovered from the installed skill. Those
 five source units have consequently been removed from the bundled Base
 candidate. The public verified registry is configured in the bundled workspace
 and now promotes all four optional outcomes, including Google Workspace
-v0.1.1. Cutting workspace creation over to an external Base remains a separate
-distribution step. Publishing a standalone npm SDK is explicitly not an
-extraction prerequisite.
+v0.1.1. Those are pre-release extraction proofs, not compatibility commitments.
+The external-Base clean cut republishes Base and all four optional templates at
+one exact epoch and promotes only that complete generation. Publishing a
+standalone npm SDK is explicitly not an extraction prerequisite.
 
 ## Outcome
 
@@ -138,17 +139,15 @@ what it is about to run and must fail closed. It is deliberately the only
 _declared_ compatibility contract — template ↔ template compatibility is not
 declared at all under D1; it is built. Keep exact equality.
 
-Consequences: epoch bumps are batched, rare, coordinated re-tags of base and
-every feature repository. Ordinary base releases force nothing — a feature
-absorbs them as long as it still builds, proven by registry CI at promotion.
-The registry records each entry's validated epoch and refuses promotion on
-mismatch with the current base release. A workspace on an older epoch gets
-the explicit upgrade-required error, not a parse failure.
+Consequences: before the supported release, an epoch bump is a coordinated
+republication of Base and every official feature repository. Registry CI
+records each entry's validated epoch, composes the exact current set, and
+refuses mixed-generation promotion. Controlled workspaces on the old epoch are
+deleted and recreated; the current host does not parse or upgrade them.
 
-If coordinated re-tags prove too expensive, the fallback is a
-`minSystemEpoch`/`maxSystemEpoch` range — but that decision must be made
-**before the first repository is cut** (migration step 6), because every tag
-afterwards bakes the contract in.
+There is deliberately no `minSystemEpoch`/`maxSystemEpoch` range, additive API
+revision, or negotiation fallback. Exact equality plus an exact composed build
+is the whole contract.
 
 ### D3. Templates cannot ship trust; accepting suggestions is part of the flow
 
@@ -260,11 +259,11 @@ made each release self-contained by including every required repository from
 the observed protected workspace state. This is intentional overlap, not a
 temporary ownership workaround.
 
-| Template    | Published repository                         | Immutable release  | Commit                                     | Snapshot                                                                     |
-| ----------- | -------------------------------------------- | ------------------ | ------------------------------------------ | ---------------------------------------------------------------------------- |
-| Examples    | `panticonic/vibestudio-template-examples`    | `refs/tags/v1.0.3` | `bc4b1ec5ecf6bbb4b3584db2f3e6d651da693aca` | `v1-sha256:159d39fc9223c186b2a50e07fad15aaf40087cbe1ca8349d13bf91725381544e` |
-| News        | `panticonic/vibestudio-template-news`        | `refs/tags/v1.0.2` | `090e1ba17abcd01a426b914a41d0a0218579b0ff` | `v1-sha256:f6ad5837333dd3defb49f2cf334c1a551d4abacbef50acbbc48a3f649165bbdc` |
-| Spectrolite | `panticonic/vibestudio-template-spectrolite` | `refs/tags/v1.0.3` | `e6ddffbea9f28fef8988b6b612e017c8348917a0` | `v1-sha256:27b61de2e6abc3fb952293be22e09acb4649b470406141c79b7f13eeafad824d` |
+| Template         | Published repository                              | Immutable release  | Commit                                     | Snapshot                                                                     |
+| ---------------- | ------------------------------------------------- | ------------------ | ------------------------------------------ | ---------------------------------------------------------------------------- |
+| Examples         | `panticonic/vibestudio-template-examples`         | `refs/tags/v1.0.3` | `bc4b1ec5ecf6bbb4b3584db2f3e6d651da693aca` | `v1-sha256:159d39fc9223c186b2a50e07fad15aaf40087cbe1ca8349d13bf91725381544e` |
+| News             | `panticonic/vibestudio-template-news`             | `refs/tags/v1.0.2` | `090e1ba17abcd01a426b914a41d0a0218579b0ff` | `v1-sha256:f6ad5837333dd3defb49f2cf334c1a551d4abacbef50acbbc48a3f649165bbdc` |
+| Spectrolite      | `panticonic/vibestudio-template-spectrolite`      | `refs/tags/v1.0.3` | `e6ddffbea9f28fef8988b6b612e017c8348917a0` | `v1-sha256:27b61de2e6abc3fb952293be22e09acb4649b470406141c79b7f13eeafad824d` |
 | Google Workspace | `panticonic/vibestudio-template-google-workspace` | `refs/tags/v0.1.1` | `8bdccc9d5195da9cdb6123396a499f7986a2935b` | `v1-sha256:83602476a3d46139181c23427128e1da30dd0cf79e9a55a2cc32a5186731b6fb` |
 
 Google Workspace completed the same composer path with requested and included
@@ -303,6 +302,15 @@ without requiring shared Git history with the template repositories. The
 semantic event protects the inspected workspace state; Git Bridge constructs
 the next repository commit from exact protected snapshots and uses the durable
 operation ID to recognize its own prior commit on retry.
+
+That workspace-source publication was the extraction path, not the permanent
+source-of-truth model. Once an outcome is removed from Base, its external
+template repository is authoritative for later releases. A later release
+starts from the exact external commit, is edited in a normal checkout or an
+explicitly imported isolated semantic context, and publishes a new immutable
+commit/tag. It is never reconstructed by looking for the deleted paths in host
+`workspace/`. The external-Base plan generalizes the same manifest-projected
+checkout exchange for Base and optional template repositories.
 
 This update run exercised partial-publication recovery concretely. News's main
 commit landed before the tag push lost network connectivity. Replaying the same
@@ -351,10 +359,10 @@ entries:
 - `promoted` carries an exact commit and snapshot; promotion is the review
   gate, so "latest" can never mean "whatever landed a minute ago" — this is
   what makes lock-first resolution safe as the default.
-- Promotion CI verifies the snapshot digest and epoch and composes the
-  candidate in one maintained representative workspace. That is useful
-  release evidence, not an exact-base compatibility claim. Every consumer
-  still checks its own composed result and receives repairable diagnostics.
+- Promotion CI verifies the snapshot digest and exact epoch and composes the
+  candidate against the exact promoted Base. Every current consumer still
+  checks its own composed result and receives ordinary build/merge diagnostics;
+  no check admits an older generation.
 - The manifest remains the source of dependency truth; the registry records
   what an entry resolved to, never what it depends on. Registry CI enforces a
   unique id ↔ URL mapping.
@@ -431,14 +439,14 @@ versioned host SDK package set is not a blocker. The gates are instead:
 pnpm build` of one optional repository is neither required nor presented as
    meaningful validation.
 
-## Migration sequence
+## Delivery sequence
 
 Done (verified in-tree): responsibility inversion — the composer package,
 extension, and skill exist; the host has no template service; CLI routes
 through the extension broker; the exact-pin creation path and bootstrap
 adoption inspection exist.
 
-Current migration state:
+Current delivery state:
 
 1. **Done:** userland GAD, receiver-enforced capabilities, clone-first
    bootstrap, package residency, deletion, and host-without-workspace gates.
@@ -468,8 +476,12 @@ Current migration state:
    contract rather than a checked-in fallback catalog.
 9. Separately cut over workspace creation to an externally published base
    snapshot, delete the in-tree `workspace/` source, and prove that production
-   builds and fresh workspace creation have no checkout-relative fallback.
-   This does not republish or revalidate feature templates against that base.
+   builds and fresh workspace creation have no checkout-relative fallback. As
+   part of that pre-release clean cut, republish and revalidate all four
+   official feature templates at the same exact epoch and promote only the
+   complete generation. The implementation sequence, root-release contract,
+   external checkout workflow, and inside-system self-development path are
+   specified in `docs/external-base-cutover-and-self-development-plan.md`.
 10. **Done:** onboarding
     presents recommended entries from the verified composer catalog and hands
     the reviewed registry coordinates to the ordinary template-install flow.
@@ -480,13 +492,13 @@ Current migration state:
 
 The split is closed-world for this release:
 
-| Repository                             | Content rule                                                                                                                                                                                                                                                                                                                                                        |
-| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Repository                             | Content rule                                                                                                                                                                                                                                                                                                               |
+| -------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `vibestudio-workspace-base`            | Everything retained in the default distribution for this cut, including root metadata, onboarding, GitHub, local models, mobile, template composer/registry client, shell, browser, terminal, and system-test infrastructure. It may overlap the feature rows, but no longer bundles the four extracted optional outcomes. |
-| `vibestudio-template-examples`         | Example/demo repositories and their declarations only                                                                                                                                                                                                                                                                                                               |
-| `vibestudio-template-news`             | News panel/agent and direct dependencies                                                                                                                                                                                                                                                                                                                            |
-| `vibestudio-template-spectrolite`      | Spectrolite panel and direct dependencies                                                                                                                                                                                                                                                                                                                           |
-| `vibestudio-template-google-workspace` | Google Workspace credential/API implementation, Gmail package and agent, and Google owner skills.                                                                                                                                                                                                                                                                   |
+| `vibestudio-template-examples`         | Example/demo repositories and their declarations only                                                                                                                                                                                                                                                                      |
+| `vibestudio-template-news`             | News panel/agent and direct dependencies                                                                                                                                                                                                                                                                                   |
+| `vibestudio-template-spectrolite`      | Spectrolite panel and direct dependencies                                                                                                                                                                                                                                                                                  |
+| `vibestudio-template-google-workspace` | Google Workspace credential/API implementation, Gmail package and agent, and Google owner skills.                                                                                                                                                                                                                          |
 
 Selections are produced and validated by the authoring inventory/closure API.
 The table names outcomes; it is not a hand-maintained file list or an ownership
@@ -528,7 +540,8 @@ Run before step 9 changes how workspaces are created:
 - A repository becoming overlapping, ceasing to overlap, and changing in two
   templates across updates.
 - A file at a container-section root fails the template repository's own CI
-  lint (D4); epoch mismatch produces the explicit upgrade error.
+  lint (D4); epoch mismatch produces an unsupported-generation error and no
+  migration path.
 - The host does no composition: with the composer removed, template
   operations fail cleanly — there is no second implementation.
 

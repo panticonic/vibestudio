@@ -11,8 +11,8 @@ What you must NEVER do is patch around the wall to comply with my words: a flag,
 ## Performance investigations
 
 For Vibestudio panel, app, worker, build, startup, and agent-workflow performance,
-use the repository's native profiling system documented in
-`workspace/skills/performance/SKILL.md`. It measures the real panel lifecycle,
+use the native profiling system documented in the exact Base checkout at
+`$VIBESTUDIO_USERLAND_ROOT/skills/performance/SKILL.md`. It measures the real panel lifecycle,
 runtime builds, Electron/CDP pages, services, and managed system-test instances.
 Do not use the generic `web-perf` skill for these tasks: its conventional website
 and Chrome DevTools MCP workflow does not model Vibestudio's materialization and
@@ -65,7 +65,7 @@ command.
    bugs by over-specifying prompts.
 6. Implement the fix and run focused conventional tests/type checks. Restarting
    the current source server is sufficient for host-code-only changes. Changes
-   under `workspace/` are workspace source: a named `--bootstrap-workspace`
+   in the external Base checkout are workspace source: a named `--bootstrap-workspace`
    preserves its semantic state across restarts and does not reread the checkout
    template. Stop the managed test instance with
    `pnpm system-test [--instance ID] stop`, then rerun doctor to provision a

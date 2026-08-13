@@ -13,14 +13,15 @@
     "./contextProjections": "./src/contextProjections.ts",
     "./gitCheckouts": "./src/gitCheckouts.ts",
     "./loader": "./src/loader.ts",
-    "./migrationNotes": "./src/migrationNotes.ts",
     "./pathPolicy": "./src/pathPolicy.ts",
     "./preparedConfig": "./src/preparedConfig.ts",
     "./remoteUrl": "./src/remoteUrl.ts",
     "./remotes": "./src/remotes.ts",
+    "./rootTemplate": "./src/rootTemplate.ts",
     "./singletonRegistry": "./src/singletonRegistry.ts",
     "./startup": "./src/startup.ts",
     "./templateCoordinates": "./src/templateCoordinates.ts",
+    "./templateManifest": "./src/templateManifest.ts",
     "./templateState": "./src/templateState.ts"
   },
   "scripts": {

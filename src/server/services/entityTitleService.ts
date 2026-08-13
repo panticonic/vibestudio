@@ -1,11 +1,9 @@
 /**
  * Server-controlled display titles for runtime entities (panels, workers, DOs).
  *
- * Architecture: titles live on the `entities.display_title` column in the
- * WorkspaceDO — alongside the rest of the entity's identity. This module is
- * a thin server-side adapter: it owns an in-memory cache for synchronous
- * lookups on the hot path (e.g. building a `PendingApproval`) and writes
- * through to the DO on every change.
+ * Titles are product facts owned by Base's workspace-presentation service.
+ * This module keeps only the synchronous in-process projection required while
+ * rendering host approval facts, and writes through the single product owner.
  *
  * Population:
  * - Panels: `workspace-state.panel.index` and `panel.updateTitle` route
@@ -18,7 +16,6 @@
  *   update the cache eagerly.
  */
 
-import type { DoDispatcher, DORef } from "@vibestudio/shared/doDispatcher";
 import { normalizePanelTitle } from "@vibestudio/shared/panel/title";
 
 export type EntityTitleChangeOrigin = "set" | "set-explicit" | "mirror" | "clear";
@@ -61,20 +58,14 @@ export interface EntityTitleService {
 }
 
 export interface EntityTitleServiceOptions {
-  /**
-   * Lazy resolver for the workspace dispatcher. `doDispatch` is registered
-   * deep in the bootstrap sequence (after workerd is up), but consumers of
-   * the title cache exist much earlier. The resolver pattern lets us share
-   * a single instance whose getter-side reads are immediately useful and
-   * whose setter-side writes start landing in the DO once dispatch comes
-   * online.
-   */
-  getDoDispatch: () => DoDispatcher | null | undefined;
-  workspaceRef: DORef;
+  getPresentationDispatch: () =>
+    | ((method: string, args: unknown[]) => Promise<unknown>)
+    | null
+    | undefined;
 }
 
 export function createEntityTitleService(options: EntityTitleServiceOptions): EntityTitleService {
-  const { getDoDispatch, workspaceRef } = options;
+  const { getPresentationDispatch } = options;
   const titles = new Map<string, string>();
   const listeners = new Set<
     (entityId: string, title: string | undefined, origin: EntityTitleChangeOrigin) => void
@@ -129,7 +120,7 @@ export function createEntityTitleService(options: EntityTitleServiceOptions): En
   }
 
   async function writeThrough(entityId: string, title: string | null): Promise<boolean> {
-    const dispatch = getDoDispatch();
+    const dispatch = getPresentationDispatch();
     if (!dispatch) {
       // Bootstrap hasn't wired the workspace dispatcher yet. The cache is
       // still updated by the caller, so an early-boot setter just delays
@@ -138,7 +129,7 @@ export function createEntityTitleService(options: EntityTitleServiceOptions): En
       return false;
     }
     try {
-      await dispatch.dispatch(workspaceRef, "entitySetDisplayTitle", entityId, title);
+      await dispatch("setEntityTitle", [entityId, title]);
       return true;
     } catch (error) {
       console.warn("[entityTitleService] DO write failed:", error);
@@ -206,10 +197,10 @@ export function createEntityTitleService(options: EntityTitleServiceOptions): En
     },
 
     async hydrate() {
-      const dispatch = getDoDispatch();
+      const dispatch = getPresentationDispatch();
       if (!dispatch) return;
       try {
-        const rows = (await dispatch.dispatch(workspaceRef, "entityListDisplayTitles")) as
+        const rows = (await dispatch("listEntityTitles", [])) as
           | Array<{ id: string; title: string }>
           | undefined;
         if (!Array.isArray(rows)) return;

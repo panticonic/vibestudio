@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
+import { exactUserlandRoot } from "./exactUserlandRoot";
 
 const repoRoot = process.cwd();
 
@@ -8,8 +9,8 @@ const migrationRoots = [
   "src",
   "packages/shared/src",
   "packages/extension/src",
-  "workspace/apps/mobile/src",
-  "workspace/apps/shell",
+  "apps/mobile/src",
+  "apps/shell",
 ];
 
 const approvedRawMainCalls = new Set([
@@ -55,8 +56,9 @@ describe("typed service client guard", () => {
     const violations: string[] = [];
 
     for (const root of migrationRoots) {
-      for (const file of walk(join(repoRoot, root))) {
-        const rel = relative(repoRoot, file);
+      const sourceRoot = root.startsWith("apps/") ? exactUserlandRoot : repoRoot;
+      for (const file of walk(join(sourceRoot, root))) {
+        const rel = relative(sourceRoot, file);
         const text = readFileSync(file, "utf8");
         for (const match of text.matchAll(rawMainCallPattern)) {
           const serviceMethod = `${match[1]}.${match[2]}`;

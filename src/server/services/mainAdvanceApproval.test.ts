@@ -19,6 +19,7 @@ import {
   templateAliasFromUrl,
 } from "@vibestudio/workspace/templateCoordinates";
 import type { WorkspaceTemplateState } from "@vibestudio/workspace-contracts/types";
+import { WORKSPACE_SYSTEM_EPOCH } from "@vibestudio/shared/vcs/systemEpoch";
 import {
   createMainAdvanceApprovalGate,
   createMainRefAdvanceGate,
@@ -541,6 +542,7 @@ describe("createMainAdvanceApprovalGate", () => {
           snapshot: `v1-sha256:${"a".repeat(64)}`,
         },
         parents: input.parents ?? [],
+        fragment: `systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}\n`,
         ...(input.presentation ? { presentation: input.presentation } : {}),
         suggestions: {},
       };

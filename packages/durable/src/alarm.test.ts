@@ -5,9 +5,6 @@ import { DurableObjectBase, rpc, type AlarmSchedule } from "./index.js";
 import { createTestDO, createTestDirectAuthority } from "./test-utils.js";
 
 class AlarmProbeDO extends DurableObjectBase {
-  protected schemaProductionBaseline() {
-    return { version: 1, name: "alarm-probe-v1" } as const;
-  }
   nextAlarm: AlarmSchedule | null = null;
   releaseDeferred!: () => void;
   deferredOutbound: Promise<unknown> | null = null;

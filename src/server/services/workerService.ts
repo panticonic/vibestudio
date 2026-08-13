@@ -90,9 +90,9 @@ const WorkerSourceSchema = z
   .strict();
 
 /**
- * Internal (framework-owned) DO storage is host-managed: its schema evolves
- * through in-repo migrations, and its reset/restore path is the manager-level
- * journaled maintenance flow, never the userland workers API.
+ * Internal (framework-owned) DO storage is host-managed and current-only. Its
+ * reset/restore path is the manager-level journaled maintenance flow, never the
+ * userland workers API.
  */
 function assertUserlandStorageMaintenanceTarget(source: string): void {
   if (source === INTERNAL_DO_SOURCE) {
@@ -293,7 +293,7 @@ export function createWorkerService(deps: {
     resetStorage: {
       ...storageMaintenancePolicy,
       description:
-        "Back up, integrity-check, and reset one exact Durable Object storage target. Intent is required audit context; use migrations for retained data.",
+        "Back up, integrity-check, and reset one exact disposable Durable Object storage target. Intent is required audit context; this is not an upgrade path.",
       args: z.tuple([ExactDurableObjectTargetSchema, z.string().trim().min(1).max(500)]),
       returns: z.object({ operationId: z.string() }).strict(),
     },
@@ -598,6 +598,15 @@ export function createWorkerService(deps: {
     query: string,
     objectKey: string | null | undefined
   ): Promise<ScopedDeclarations & { service: ResolvedWorkspaceService }> {
+    try {
+      return {
+        service: resolveWorkspaceService(workspaceDecls, query, objectKey),
+        decls: workspaceDecls,
+        scope: "main",
+      };
+    } catch (err) {
+      if (!isMissingServiceError(err, query)) throw err;
+    }
     const builtin = findProductBuiltinService(query);
     if (builtin) {
       const requestedObjectKey = objectKey ?? "";
@@ -629,16 +638,6 @@ export function createWorkerService(deps: {
         } as ResolvedWorkspaceService,
       };
     }
-    try {
-      return {
-        service: resolveWorkspaceService(workspaceDecls, query, objectKey),
-        decls: workspaceDecls,
-        scope: "main",
-      };
-    } catch (err) {
-      if (!isMissingServiceError(err, query)) throw err;
-    }
-
     const scoped = await declarationsForCallerContext(ctx);
     if (!scoped) throw new Error(`No workspace service registered for ${query}`);
     return {

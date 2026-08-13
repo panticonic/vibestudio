@@ -2,10 +2,10 @@ import {
   createAndRegisterWorkspace,
   recoverStagedWorkspaceDeletions,
   resolveOrCreateWorkspace,
-  resolveWorkspaceTemplateDir,
   type ResolvedWorkspace,
 } from "./loader.js";
 import type { CentralDataManager } from "@vibestudio/shared/centralData";
+import { readBaseTemplateRelease } from "./baseTemplateRelease.js";
 
 export interface ResolveLocalWorkspaceStartupOpts {
   appRoot: string;
@@ -110,8 +110,8 @@ function resolveRegisteredWorkspace(
     throw new Error(`Workspace "${name}" is not registered`);
   }
 
-  const templateDir = resolveWorkspaceTemplateDir(appRoot);
-  createAndRegisterWorkspace(name, centralData, templateDir ? { templateDir } : undefined);
+  const release = readBaseTemplateRelease(appRoot);
+  createAndRegisterWorkspace(name, centralData, { rootTemplate: release.baseTemplate });
   const resolved = resolveOrCreateWorkspace({ name, appRoot, init: false });
   return { ...resolved, created: true };
 }

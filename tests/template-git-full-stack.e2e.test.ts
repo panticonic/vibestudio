@@ -506,7 +506,7 @@ async function createManagedText(
 async function writeTemplateFixture(worktree: string, revision: "v1" | "v2"): Promise<void> {
   await fs.mkdir(path.join(worktree, "meta"), { recursive: true });
   await fs.mkdir(path.join(worktree, "packages", templateAlias), { recursive: true });
-  await fs.writeFile(path.join(worktree, "meta", "template.yml"), "systemEpoch: 57\n");
+  await fs.writeFile(path.join(worktree, "meta", "template.yml"), "systemEpoch: 58\n");
   await fs.writeFile(
     path.join(worktree, "packages", templateAlias, "package.json"),
     JSON.stringify({ name: `@fixture/${templateAlias}`, private: true, type: "module" }, null, 2) +
@@ -586,7 +586,7 @@ async function promoteTemplate(
     YAML.stringify({
       version: 1,
       revision,
-      systemEpoch: 57,
+      systemEpoch: 58,
       entries: [
         {
           id: templateAlias,

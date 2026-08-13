@@ -1,9 +1,10 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
+import { exactUserlandRoot } from "./exactUserlandRoot";
 
 const repoRoot = path.resolve(__dirname, "..");
-const workspaceRoot = path.join(repoRoot, "workspace");
+const workspaceRoot = exactUserlandRoot;
 
 function walk(dir: string): string[] {
   const out: string[] = [];

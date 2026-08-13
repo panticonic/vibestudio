@@ -67,7 +67,7 @@ export function buildWorkspaceContext(contextId: string): WorkspaceContext {
 /** Flat sections: the section dir itself is one repo (single-segment repoPath). */
 export const FLAT_SECTIONS = new Set<string>(["meta"]);
 /** Content-only container sections (no build unit; pushes are ungated). */
-export const CONTENT_SECTIONS = new Set<string>(["skills", "templates", "migrations", "projects"]);
+export const CONTENT_SECTIONS = new Set<string>(["skills", "templates", "projects"]);
 /**
  * Workspace source dirs that are NOT part of the repo taxonomy: present in the
  * source tree but neither a flat repo nor a container of per-name repos.

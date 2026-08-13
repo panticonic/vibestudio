@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
+import { exactUserlandRoot } from "./exactUserlandRoot";
 
 interface WorkspaceManifest {
   name: string;
@@ -73,8 +74,8 @@ function findDependencyCycle(manifests: WorkspaceManifest[]): string[] | null {
 describe("workspace package graph", () => {
   it("keeps runtime workspace-package dependencies acyclic", () => {
     const manifests: WorkspaceManifest[] = [];
-    for (const root of ["packages", "apps", "workspace"]) {
-      collectManifests(path.resolve(root), manifests);
+    for (const root of [path.resolve("packages"), path.resolve("apps"), exactUserlandRoot]) {
+      collectManifests(root, manifests);
     }
     const duplicateNames = manifests
       .map((manifest) => manifest.name)

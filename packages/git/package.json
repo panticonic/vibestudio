@@ -30,7 +30,7 @@
     "@vibestudio/types": "workspace:*",
     "@vibestudio/vcs-path-policy": "workspace:*",
     "diff": "^7.0.0",
-    "isomorphic-git": "^1.36.1"
+    "isomorphic-git": "1.36.3"
   },
   "devDependencies": {
     "@types/diff": "^7.0.2",

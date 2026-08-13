@@ -142,7 +142,7 @@ export type { PanelHandle } from "@workspace/runtime";
 ```
 
 The full, always-current surface is generated from the runtime manifest into
-[`workspace/skills/sandbox/RUNTIME_API.md`](workspace/skills/sandbox/RUNTIME_API.md)
+[`skills/sandbox/RUNTIME_API.md` in Base](https://github.com/panticonic/vibestudio-workspace-base/blob/main/skills/sandbox/RUNTIME_API.md)
 (CI-checked via `pnpm check:runtime-docs`); call `await help()` at runtime for the
 live surface. Identity, theme, lifecycle, and state args live under the `panel.*`
 namespace — they are **not** flat top-level exports.

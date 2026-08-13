@@ -23,9 +23,6 @@ interface WebhookIngressSubscriptionRow {
 export class WebhookStoreDO extends DurableObjectBase {
   static override schemaVersion = 1;
 
-  protected override schemaProductionBaseline() {
-    return { version: 1, name: "webhook-store-v1" } as const;
-  }
   static override rpcMethods = webhookEngineMethods;
 
   constructor(ctx: DurableObjectContext, env: unknown) {

@@ -9,10 +9,11 @@ import {
   validateRepositoryReleaseGate,
   validateSchemaFixtures,
 } from "../scripts/generate-vcs-skill-release.mjs";
+import { exactUserlandRoot } from "./exactUserlandRoot";
 
 describe("VCS skill release generator", () => {
   it("keeps the generated contract and compact skill package manifest fresh", () => {
-    expect(() => runReleaseGate({ checkOnly: true })).not.toThrow();
+    expect(() => runReleaseGate({ userlandRoot: exactUserlandRoot, checkOnly: true })).not.toThrow();
   });
 
   it("derives exactly the small public contract from the sole registry", () => {
@@ -31,14 +32,14 @@ describe("VCS skill release generator", () => {
   });
 
   it("validates focused call shapes and the canonical skill", () => {
-    expect(() => validateSchemaFixtures()).not.toThrow();
-    expect(() => validateRepositoryReleaseGate()).not.toThrow();
+    expect(() => validateSchemaFixtures(exactUserlandRoot)).not.toThrow();
+    expect(() => validateRepositoryReleaseGate(exactUserlandRoot)).not.toThrow();
   });
 
   it("hashes the actual skill package without a recursive repository inventory", () => {
-    const artifacts = buildGeneratedArtifacts();
+    const artifacts = buildGeneratedArtifacts(exactUserlandRoot);
     const manifest = JSON.parse(
-      artifacts.get("workspace/skills/vibestudio-vcs/content-manifest.json")!
+      artifacts.get("skills/vibestudio-vcs/content-manifest.json")!
     ) as ReturnType<typeof buildContentManifest>;
 
     expect(manifest.schemaVersion).toBe(2);

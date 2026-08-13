@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-import { readFileSync } from "node:fs";
 import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import { createTestServiceDispatcher } from "@vibestudio/shared/serviceDispatcherTestUtils";
 import { createAdblockService } from "./adblockService.js";
@@ -31,26 +30,18 @@ function createManager() {
 }
 
 function adblockPanelCaller() {
-  const manifest = JSON.parse(
-    readFileSync(new URL("../../../workspace/about/adblock/package.json", import.meta.url), "utf8")
-  ) as {
-    vibestudio: {
-      authority: {
-        provides: [];
-        requests: Array<{
-          capability: string;
-          resource: { kind: "exact"; key: string } | { kind: "prefix"; prefix: string };
-        }>;
-      };
-    };
-  };
   return createVerifiedCaller("panel:about-adblock", "panel", {
     callerId: "panel:about-adblock",
     callerKind: "panel",
     repoPath: "about/adblock",
     effectiveVersion: "test-version",
     executionDigest: "a".repeat(64),
-    requested: manifest.vibestudio.authority.requests,
+    requested: [
+      {
+        capability: "adblock.manage",
+        resource: { kind: "prefix", prefix: "" },
+      },
+    ],
   });
 }
 

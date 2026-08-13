@@ -27,7 +27,11 @@ function parseSource(file, source) {
   if (!parsed) throw new Error(`TypeScript did not parse ${file}`);
   return parsed;
 }
-const workspaceRoot = path.join(root, "workspace");
+const userlandRootArgument = process.env.VIBESTUDIO_USERLAND_ROOT;
+if (!userlandRootArgument) {
+  throw new Error("VIBESTUDIO_USERLAND_ROOT must name the exact Base checkout to inspect");
+}
+const workspaceRoot = path.resolve(userlandRootArgument);
 const serverMatrix = JSON.parse(
   fs.readFileSync(
     path.join(root, "src/server/services/__serviceAuthorityMatrix.golden.json"),

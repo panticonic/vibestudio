@@ -73,7 +73,7 @@ describe("vibestudio agent skill", () => {
     const dir = resolveSkillDir();
     const skillMd = fs.readFileSync(path.join(dir, "SKILL.md"), "utf8");
     expect(skillMd.startsWith("---\nname: vibestudio-agent\n")).toBe(true);
-    expect(skillMd).toMatch(/^description: .*[Uu]se when/m);
+    expect(skillMd).toMatch(/^description: \S.+/m);
     for (const file of ["EVAL.md", "FILES.md", "RECIPES.md", "API.md"]) {
       expect(fs.existsSync(path.join(dir, file)), `${file} missing`).toBe(true);
     }

@@ -1,56 +1,8 @@
 {
   "version": 2,
   "classes": {
-    "DevelopmentDO": {
-      "provides": [],
-      "requests": [],
-      "methodScopedRequests": [
-        {
-          "capability": "development.native.execute",
-          "methods": ["openSession", "start", "retry"],
-          "resource": { "kind": "prefix", "prefix": "" },
-          "tier": "gated",
-          "evidence": "bounded-dynamic"
-        },
-        {
-          "capability": "context.semantic.fork",
-          "methods": ["openSession"],
-          "resource": { "kind": "prefix", "prefix": "" },
-          "tier": "gated",
-          "evidence": "bounded-dynamic"
-        },
-        {
-          "capability": "context.semantic.drop",
-          "methods": ["destroySession", "retrySessionCleanup", "forceRetireSession"],
-          "resource": { "kind": "prefix", "prefix": "" },
-          "tier": "critical",
-          "evidence": "bounded-dynamic"
-        },
-        {
-          "capability": "development.native.session.retire",
-          "methods": ["destroySession", "retrySessionCleanup", "forceRetireSession"],
-          "resource": { "kind": "prefix", "prefix": "" },
-          "tier": "critical",
-          "evidence": "bounded-dynamic"
-        },
-        {
-          "capability": "development.native.build.retire",
-          "methods": ["forceRetire"],
-          "resource": { "kind": "prefix", "prefix": "" },
-          "tier": "critical",
-          "evidence": "bounded-dynamic"
-        },
-        {
-          "capability": "workspace-service:gad.workspace",
-          "methods": ["openSession", "start", "retry"],
-          "resource": { "kind": "prefix", "prefix": "" },
-          "tier": "gated",
-          "evidence": "bounded-dynamic"
-        }
-      ]
-    },
     "WorkspaceDO": { "provides": [], "requests": [], "methodScopedRequests": [] },
-    "BrowserDataDO": { "provides": [], "requests": [], "methodScopedRequests": [] },
+    "BrowserVaultDO": { "provides": [], "requests": [], "methodScopedRequests": [] },
     "EvalDO": {
       "provides": [],
       "requests": [],
@@ -64,60 +16,6 @@
         }
       ]
     },
-    "WebhookStoreDO": { "provides": [], "requests": [], "methodScopedRequests": [] },
-    "MissionsDO": {
-      "provides": [],
-      "requests": [
-        {
-          "capability": "reviewed-closure.bind-session",
-          "resource": { "kind": "prefix", "prefix": "mission:" },
-          "tier": "gated",
-          "evidence": "bounded-dynamic"
-        }
-      ],
-      "methodScopedRequests": [
-        {
-          "capability": "reviewed-closure.activate",
-          "methods": ["requestReview", "resume"],
-          "resource": { "kind": "prefix", "prefix": "closure:" },
-          "tier": "gated",
-          "evidence": "bounded-dynamic"
-        },
-        {
-          "capability": "reviewed-closure.suspend",
-          "methods": ["edit", "pause", "proposeAuthorityRevision"],
-          "resource": { "kind": "prefix", "prefix": "mission:" },
-          "tier": "gated",
-          "evidence": "bounded-dynamic"
-        },
-        {
-          "capability": "reviewed-closure.retire",
-          "methods": ["retire"],
-          "resource": { "kind": "prefix", "prefix": "mission:" },
-          "tier": "critical",
-          "evidence": "bounded-dynamic"
-        },
-        {
-          "capability": "reviewed-closure.bind-session",
-          "methods": ["runNow"],
-          "resource": { "kind": "prefix", "prefix": "mission:" },
-          "tier": "gated",
-          "evidence": "bounded-dynamic"
-        }
-      ]
-    },
-    "PhoneProvisioningDO": {
-      "provides": [],
-      "requests": [],
-      "methodScopedRequests": [
-        {
-          "capability": "connected-client.transport",
-          "methods": ["providers", "devices", "provision"],
-          "resource": { "kind": "prefix", "prefix": "" },
-          "tier": "gated",
-          "evidence": "intentional-broad"
-        }
-      ]
-    }
+    "WebhookStoreDO": { "provides": [], "requests": [], "methodScopedRequests": [] }
   }
 }

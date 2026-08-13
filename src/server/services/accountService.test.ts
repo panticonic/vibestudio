@@ -71,7 +71,7 @@ describe("accountService", () => {
       updateAccountProfile({ userStore }, { userId: member.id, handle: "9bad" })
     ).toThrow(/must match/);
     expect(() =>
-      updateAccountProfile({ userStore }, { userId: member.id, handle: "grep" })
+      updateAccountProfile({ userStore }, { userId: member.id, handle: "system" })
     ).toThrow(/reserved/);
     expect(() =>
       updateAccountProfile({ userStore }, { userId: member.id, handle: "werg" })
@@ -84,7 +84,7 @@ describe("accountService", () => {
     const { userStore, root, member } = makeStores();
     expect(() =>
       userStore.inviteUser({
-        handle: "GREP",
+        handle: "SYSTEM",
         displayName: "Reserved",
         role: "member",
         createdBy: root.id,

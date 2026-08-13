@@ -2,22 +2,32 @@ import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { prepareUserlandDependencyProjection } from "./lib/userland-dependency-projection.js";
+import {
+  prepareUserlandDependencyProjection,
+  type UserlandDependencyProjection,
+} from "./lib/userland-dependency-projection.js";
 
 const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const workspaceRoot = path.join(appRoot, "workspace");
+const workspaceArgumentIndex = process.argv.indexOf("--workspace-root");
+const workspaceArgument =
+  workspaceArgumentIndex >= 0 ? process.argv[workspaceArgumentIndex + 1] : undefined;
+if (!workspaceArgument) {
+  throw new Error("type-check-userland requires --workspace-root DIR");
+}
+const workspaceRoot = path.resolve(workspaceArgument);
 const compiler = path.join(appRoot, "node_modules", "typescript", "bin", "tsc");
 const projection = await prepareUserlandDependencyProjection({
   appRoot,
+  workspaceRoot,
   includeDevelopmentDependencies: true,
 });
-const temporaryParent = path.join(workspaceRoot, ".cache");
+const temporaryParent = path.join(appRoot, ".cache");
 fs.mkdirSync(temporaryParent, { recursive: true });
 const temporaryRoot = fs.mkdtempSync(path.join(temporaryParent, "checkout-typecheck-"));
 let failed = false;
 
 try {
-  projectCheckoutSource(temporaryRoot);
+  projectCheckoutSource(temporaryRoot, projection.units);
   projectNodeModules(temporaryRoot, [
     path.join(appRoot, "node_modules"),
     projection.nodeModulesDir,
@@ -36,7 +46,7 @@ try {
         stdio: "pipe",
         maxBuffer: 64 * 1024 * 1024,
       });
-      console.log(`✓ workspace/${configName}`);
+      console.log(`✓ ${path.relative(appRoot, workspaceRoot)}/${configName}`);
     } catch (error) {
       failed = true;
       const result = error as { stdout?: string; stderr?: string };
@@ -55,7 +65,10 @@ if (failed) {
   console.log("✓ Userland typecheck passed using the semantic dependency projection.");
 }
 
-function projectCheckoutSource(targetRoot: string): void {
+function projectCheckoutSource(
+  targetRoot: string,
+  units: UserlandDependencyProjection["units"]
+): void {
   const projectedWorkspace = path.join(targetRoot, "workspace");
   fs.mkdirSync(projectedWorkspace, { recursive: true });
   for (const entry of fs.readdirSync(workspaceRoot, { withFileTypes: true })) {
@@ -65,11 +78,66 @@ function projectCheckoutSource(targetRoot: string): void {
     if (entry.isDirectory()) linkDirectory(source, target);
     else if (entry.name.startsWith("tsconfig") && entry.name.endsWith(".json")) {
       fs.copyFileSync(source, target);
+      addDiscoveredPackagePaths(target, units);
     }
   }
   for (const entry of ["apps", "packages", "src", "tests"]) {
     linkDirectory(path.join(appRoot, entry), path.join(targetRoot, entry));
   }
+}
+
+interface UnitManifest {
+  exports?: Record<string, unknown> | string;
+}
+
+/**
+ * TypeScript's root wildcard is only a convenience for conventional package
+ * entrypoints. Exact semantic packages are authoritative for their own export
+ * map, including exports introduced by a contribution template. Derive those
+ * paths from the discovered graph instead of teaching Base about every future
+ * package name.
+ */
+function addDiscoveredPackagePaths(
+  configPath: string,
+  units: UserlandDependencyProjection["units"]
+): void {
+  const config = JSON.parse(fs.readFileSync(configPath, "utf8")) as {
+    compilerOptions?: { paths?: Record<string, string[]> };
+  };
+  if (!config.compilerOptions?.paths) return;
+  const paths = { ...(config.compilerOptions?.paths ?? {}) };
+  paths["@exact-userland/*"] = ["./*"];
+  for (const unit of units) {
+    const manifest = JSON.parse(
+      fs.readFileSync(path.join(unit.path, "package.json"), "utf8")
+    ) as UnitManifest;
+    for (const [subpath, target] of normalizedExports(manifest.exports)) {
+      const specifier = subpath === "." ? unit.name : `${unit.name}/${subpath.slice(2)}`;
+      paths[specifier] = [`./${unit.relativePath}/${target.replace(/^\.\//, "")}`];
+    }
+  }
+  config.compilerOptions = { ...(config.compilerOptions ?? {}), paths };
+  fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
+}
+
+function normalizedExports(exports: UnitManifest["exports"]): Array<[string, string]> {
+  if (typeof exports === "string") return [[".", exports]];
+  if (!exports) return [];
+  return Object.entries(exports).flatMap(([subpath, value]) => {
+    const target = exportTarget(value);
+    return target && (subpath === "." || subpath.startsWith("./")) ? [[subpath, target]] : [];
+  });
+}
+
+function exportTarget(value: unknown): string | null {
+  if (typeof value === "string") return value;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const conditions = value as Record<string, unknown>;
+  for (const condition of ["types", "browser", "import", "default"]) {
+    const target = exportTarget(conditions[condition]);
+    if (target) return target;
+  }
+  return null;
 }
 
 function projectNodeModules(targetRoot: string, sourceRoots: string[]): void {

@@ -1,12 +1,9 @@
 import type { ServiceMethodSchemas } from "@vibestudio/shared/typedServiceClient";
-import { browserDataMethods } from "./browserData.js";
+import { browserVaultMethods } from "./browserData.js";
 import { workspaceStateMethods } from "./workspaceState.js";
 import { webhookEngineMethods } from "./webhookEngine.js";
 import { evalEngineMethods } from "./evalEngine.js";
 import { workspaceStateEngineMethods } from "./workspaceStateEngine.js";
-import { missionsMethods } from "./missions.js";
-import { phoneProvisioningMethods } from "./phoneProvisioning.js";
-import { developmentBuiltinMethods } from "./development.js";
 // BUILTIN_SCAFFOLD_IMPORTS
 
 export type BuiltinBecause = "feeds-authority" | "durable-data" | "recovery-path";
@@ -70,79 +67,6 @@ export const PRODUCT_BUILTINS = [
   {
     kind: "service",
     source: "vibestudio/internal",
-    name: "development",
-    title: "Development",
-    description: "Own exact semantic development sessions and reviewed build runs.",
-    action: "manage development sessions",
-    presentation: { domain: "automation", verb: "manage" },
-    principals: ["host", "user", "code"],
-    protocols: ["vibestudio.development.v1"],
-    className: "DevelopmentDO",
-    implementation: "@panticonic/builtin/development",
-    sourceFile: "packages/builtin/src/development/DevelopmentDO.ts",
-    builtinBecause: "durable-data",
-    methods: developmentBuiltinMethods,
-    directMethods: developmentBuiltinMethods,
-    durableObject: {
-      keyVersion: 1,
-      objectKey: "workspace",
-      keyMode: "workspace-scoped",
-    },
-    workerd: {
-      injectWorkspaceId: true,
-      bootstrapPhase: "normal",
-      staticAuthorityProjection: true,
-      unsafeEval: false,
-    },
-    residentCapabilityRequests: [],
-    hostCapabilityRequests: [
-      {
-        capability: "development.native.execute",
-        methods: ["openSession", "start", "retry"],
-        resource: { kind: "prefix", prefix: "" },
-        tier: "gated",
-        evidence: "bounded-dynamic",
-      },
-      {
-        capability: "context.semantic.fork",
-        methods: ["openSession"],
-        resource: { kind: "prefix", prefix: "" },
-        tier: "gated",
-        evidence: "bounded-dynamic",
-      },
-      {
-        capability: "context.semantic.drop",
-        methods: ["destroySession", "retrySessionCleanup", "forceRetireSession"],
-        resource: { kind: "prefix", prefix: "" },
-        tier: "critical",
-        evidence: "bounded-dynamic",
-      },
-      {
-        capability: "development.native.session.retire",
-        methods: ["destroySession", "retrySessionCleanup", "forceRetireSession"],
-        resource: { kind: "prefix", prefix: "" },
-        tier: "critical",
-        evidence: "bounded-dynamic",
-      },
-      {
-        capability: "development.native.build.retire",
-        methods: ["forceRetire"],
-        resource: { kind: "prefix", prefix: "" },
-        tier: "critical",
-        evidence: "bounded-dynamic",
-      },
-      {
-        capability: "workspace-service:gad.workspace",
-        methods: ["openSession", "start", "retry"],
-        resource: { kind: "prefix", prefix: "" },
-        tier: "gated",
-        evidence: "bounded-dynamic",
-      },
-    ],
-  },
-  {
-    kind: "service",
-    source: "vibestudio/internal",
     name: "workspace.state",
     title: "Workspace state",
     description: "Use the product-owned durable workspace state service.",
@@ -169,19 +93,19 @@ export const PRODUCT_BUILTINS = [
   {
     kind: "service",
     source: "vibestudio/internal",
-    name: "browser.data",
-    title: "Browser data",
-    description: "Use the current user's durable browser data.",
-    action: "use browser data",
+    name: "browser.vault",
+    title: "Browser vault",
+    description: "Use protected browser credentials and cookie material.",
+    action: "use protected browser credentials",
     presentation: { domain: "web", verb: "see" },
     principals: ["host", "user", "code"],
-    protocols: ["vibestudio.browser-data.v1"],
-    className: "BrowserDataDO",
+    protocols: ["vibestudio.browser-vault.v1"],
+    className: "BrowserVaultDO",
     implementation: "@panticonic/builtin/browser-data",
-    sourceFile: "packages/builtin/src/browser-data/BrowserDataDO.ts",
-    builtinBecause: "durable-data",
-    methods: browserDataMethods,
-    directMethods: browserDataMethods,
+    sourceFile: "packages/builtin/src/browser-data/BrowserVaultDO.ts",
+    builtinBecause: "recovery-path",
+    methods: browserVaultMethods,
+    directMethods: browserVaultMethods,
     durableObject: {
       keyVersion: 1,
       objectKey: "browser-environment",
@@ -241,110 +165,6 @@ export const PRODUCT_BUILTINS = [
     residentCapabilityRequests: [],
     hostCapabilityRequests: [],
     directMethods: webhookEngineMethods,
-  },
-  {
-    kind: "service",
-    source: "vibestudio/internal",
-    name: "missions",
-    title: "Automations",
-    description: "Author and run reviewed workspace automations.",
-    action: "manage reviewed automations",
-    presentation: { domain: "automation", verb: "manage" },
-    principals: ["host", "user", "code"],
-    protocols: ["vibestudio.missions.v1"],
-    className: "MissionsDO",
-    implementation: "@panticonic/builtin/missions",
-    sourceFile: "packages/builtin/src/missions/MissionsDO.ts",
-    builtinBecause: "feeds-authority",
-    methods: missionsMethods,
-    directMethods: missionsMethods,
-    durableObject: {
-      keyVersion: 1,
-      objectKey: "workspace",
-      keyMode: "workspace-scoped",
-    },
-    workerd: {
-      injectWorkspaceId: true,
-      bootstrapPhase: "normal",
-      staticAuthorityProjection: true,
-      unsafeEval: false,
-    },
-    residentCapabilityRequests: [
-      {
-        capability: "reviewed-closure.bind-session",
-        resource: { kind: "prefix", prefix: "mission:" },
-        tier: "gated",
-        evidence: "bounded-dynamic",
-      },
-    ],
-    hostCapabilityRequests: [
-      {
-        capability: "reviewed-closure.activate",
-        methods: ["requestReview", "resume"],
-        resource: { kind: "prefix", prefix: "closure:" },
-        tier: "gated",
-        evidence: "bounded-dynamic",
-      },
-      {
-        capability: "reviewed-closure.suspend",
-        methods: ["edit", "pause", "proposeAuthorityRevision"],
-        resource: { kind: "prefix", prefix: "mission:" },
-        tier: "gated",
-        evidence: "bounded-dynamic",
-      },
-      {
-        capability: "reviewed-closure.retire",
-        methods: ["retire"],
-        resource: { kind: "prefix", prefix: "mission:" },
-        tier: "critical",
-        evidence: "bounded-dynamic",
-      },
-      {
-        capability: "reviewed-closure.bind-session",
-        methods: ["runNow"],
-        resource: { kind: "prefix", prefix: "mission:" },
-        tier: "gated",
-        evidence: "bounded-dynamic",
-      },
-    ],
-  },
-  {
-    kind: "service",
-    source: "vibestudio/internal",
-    name: "phone.provisioning",
-    title: "Phone provisioning",
-    description: "Discover, install, and pair phones through a connected desktop.",
-    action: "manage connected phones",
-    presentation: { domain: "people", verb: "manage" },
-    principals: ["host", "user", "code"],
-    protocols: ["vibestudio.phone-provisioning.v1"],
-    className: "PhoneProvisioningDO",
-    implementation: "@panticonic/builtin/phone-provisioning",
-    sourceFile: "packages/builtin/src/phone-provisioning/PhoneProvisioningDO.ts",
-    builtinBecause: "feeds-authority",
-    methods: phoneProvisioningMethods,
-    directMethods: phoneProvisioningMethods,
-    durableObject: {
-      keyVersion: 1,
-      objectKey: "workspace",
-      keyMode: "workspace-scoped",
-    },
-    workerd: {
-      injectWorkspaceId: true,
-      bootstrapPhase: "normal",
-      staticAuthorityProjection: true,
-      unsafeEval: false,
-    },
-    residentCapabilityRequests: [],
-    hostCapabilityRequests: [
-      {
-        capability: "connected-client.transport",
-        methods: ["providers", "devices", "provision"],
-        resource: { kind: "prefix", prefix: "" },
-        tier: "gated",
-        evidence: "intentional-broad",
-      },
-    ],
   },
   // BUILTIN_SCAFFOLD_ENTRIES
 ] as const satisfies readonly ProductBuiltinEntry[];

@@ -4,8 +4,8 @@
  * skill owns procedure. This script only keeps those two surfaces in sync.
  *
  * Usage:
- *   node --import tsx scripts/generate-vcs-skill-release.mjs
- *   node --import tsx scripts/generate-vcs-skill-release.mjs --check
+ *   node --import tsx scripts/generate-vcs-skill-release.mjs --userland-root PATH
+ *   node --import tsx scripts/generate-vcs-skill-release.mjs --userland-root PATH --check
  */
 import { createHash } from "node:crypto";
 import fs from "node:fs";
@@ -25,7 +25,7 @@ import {
 const scriptPath = fileURLToPath(import.meta.url);
 export const repoRoot = path.resolve(path.dirname(scriptPath), "..");
 
-const ROOT = "workspace/skills/vibestudio-vcs";
+const ROOT = "skills/vibestudio-vcs";
 const SKILL_PATH = `${ROOT}/SKILL.md`;
 const CONTRACT_JSON_PATH = `${ROOT}/references/public-contract.json`;
 const CONTRACT_MD_PATH = `${ROOT}/references/public-contract.md`;
@@ -34,12 +34,17 @@ const FIXTURES_PATH = `${ROOT}/evaluations/schema-fixtures.json`;
 const GENERATOR_PATH = "scripts/generate-vcs-skill-release.mjs";
 const CONTRACT_SOURCE = "packages/service-schemas/src/vcs.ts";
 
-function absolute(relativePath) {
-  return path.join(repoRoot, relativePath);
+function requireUserlandRoot(userlandRoot) {
+  if (!userlandRoot) throw new Error("An exact userlandRoot is required");
+  return path.resolve(userlandRoot);
 }
 
-function read(relativePath, overrides = new Map()) {
-  return overrides.get(relativePath) ?? fs.readFileSync(absolute(relativePath), "utf8");
+function absolute(userlandRoot, relativePath) {
+  return path.join(requireUserlandRoot(userlandRoot), relativePath);
+}
+
+function read(userlandRoot, relativePath, overrides = new Map()) {
+  return overrides.get(relativePath) ?? fs.readFileSync(absolute(userlandRoot, relativePath), "utf8");
 }
 
 function stableJson(value, compact = false) {
@@ -137,10 +142,10 @@ Provenance is walked through typed nodes with \`inspect\`, \`neighbors\`,
 `;
 }
 
-function listSkillFiles() {
+function listSkillFiles(userlandRoot) {
   const files = [];
   const visit = (dir) => {
-    for (const entry of fs.readdirSync(absolute(dir), { withFileTypes: true })) {
+    for (const entry of fs.readdirSync(absolute(userlandRoot, dir), { withFileTypes: true })) {
       const relativePath = `${dir}/${entry.name}`;
       if (entry.isDirectory()) visit(relativePath);
       else if (entry.isFile() && relativePath !== MANIFEST_PATH) files.push(relativePath);
@@ -150,10 +155,10 @@ function listSkillFiles() {
   return files.sort();
 }
 
-export function buildContentManifest(overrides = new Map()) {
-  const files = listSkillFiles().map((relativePath) => ({
+export function buildContentManifest(userlandRoot, overrides = new Map()) {
+  const files = listSkillFiles(userlandRoot).map((relativePath) => ({
     path: relativePath.slice(ROOT.length + 1),
-    sha256: sha256(read(relativePath, overrides)),
+    sha256: sha256(read(userlandRoot, relativePath, overrides)),
   }));
   return {
     schemaVersion: 2,
@@ -165,12 +170,12 @@ export function buildContentManifest(overrides = new Map()) {
   };
 }
 
-function parseJson(relativePath) {
-  return JSON.parse(read(relativePath));
+function parseJson(userlandRoot, relativePath) {
+  return JSON.parse(read(userlandRoot, relativePath));
 }
 
-export function validateSchemaFixtures() {
-  const document = parseJson(FIXTURES_PATH);
+export function validateSchemaFixtures(userlandRoot) {
+  const document = parseJson(userlandRoot, FIXTURES_PATH);
   if (document.schemaVersion !== 2 || !Array.isArray(document.fixtures)) {
     throw new Error(`${FIXTURES_PATH}: expected schemaVersion 2 fixtures`);
   }
@@ -197,8 +202,8 @@ export function validateSchemaFixtures() {
   }
 }
 
-function validateCanonicalSkill() {
-  const skill = read(SKILL_PATH);
+function validateCanonicalSkill(userlandRoot) {
+  const skill = read(userlandRoot, SKILL_PATH);
   if (!skill.includes("(references/public-contract.md)")) {
     throw new Error(`${SKILL_PATH}: must link the generated public contract`);
   }
@@ -216,7 +221,7 @@ function validateCanonicalSkill() {
     }
   }
 
-  const canonicalFiles = listSkillFiles().filter(
+  const canonicalFiles = listSkillFiles(userlandRoot).filter(
     (relativePath) =>
       /\.(?:json|md|yaml|yml)$/u.test(relativePath) &&
       !relativePath.startsWith(`${ROOT}/evaluations/`)
@@ -234,7 +239,7 @@ function validateCanonicalSkill() {
   const failures = [];
   for (const relativePath of canonicalFiles) {
     if (relativePath === CONTRACT_JSON_PATH) continue;
-    const content = read(relativePath);
+    const content = read(userlandRoot, relativePath);
     for (const symbol of deletedSymbols) {
       if (content.includes(symbol)) failures.push(`${relativePath}: ${symbol}`);
     }
@@ -244,7 +249,7 @@ function validateCanonicalSkill() {
   }
 }
 
-export function buildGeneratedArtifacts() {
+export function buildGeneratedArtifacts(userlandRoot) {
   const contract = buildPublicContract();
   const contractJson = stableJson(contract, true);
   const contractMarkdown = renderPublicContractMarkdown(contract);
@@ -252,7 +257,7 @@ export function buildGeneratedArtifacts() {
     [CONTRACT_JSON_PATH, contractJson],
     [CONTRACT_MD_PATH, contractMarkdown],
   ]);
-  const manifest = buildContentManifest(overrides);
+  const manifest = buildContentManifest(userlandRoot, overrides);
   return new Map([
     [CONTRACT_JSON_PATH, contractJson],
     [CONTRACT_MD_PATH, contractMarkdown],
@@ -260,16 +265,17 @@ export function buildGeneratedArtifacts() {
   ]);
 }
 
-export function validateRepositoryReleaseGate() {
-  validateCanonicalSkill();
-  validateSchemaFixtures();
+export function validateRepositoryReleaseGate(userlandRoot) {
+  validateCanonicalSkill(userlandRoot);
+  validateSchemaFixtures(userlandRoot);
 }
 
-export function runReleaseGate({ checkOnly = false } = {}) {
-  const artifacts = buildGeneratedArtifacts();
+export function runReleaseGate({ userlandRoot, checkOnly = false } = {}) {
+  userlandRoot = requireUserlandRoot(userlandRoot);
+  const artifacts = buildGeneratedArtifacts(userlandRoot);
   const stale = [];
   for (const [relativePath, content] of artifacts) {
-    const fullPath = absolute(relativePath);
+    const fullPath = absolute(userlandRoot, relativePath);
     const current = fs.existsSync(fullPath) ? fs.readFileSync(fullPath, "utf8") : null;
     if (current === content) continue;
     if (checkOnly) stale.push(relativePath);
@@ -278,13 +284,18 @@ export function runReleaseGate({ checkOnly = false } = {}) {
   if (stale.length > 0) {
     throw new Error(`stale VCS skill artifacts: ${stale.join(", ")}`);
   }
-  validateRepositoryReleaseGate();
+  validateRepositoryReleaseGate(userlandRoot);
   console.log(`VCS skill release gate passed (${Object.keys(vcsMethods).length} methods)`);
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   try {
-    runReleaseGate({ checkOnly: process.argv.includes("--check") });
+    const rootFlag = process.argv.indexOf("--userland-root");
+    runReleaseGate({
+      userlandRoot:
+        rootFlag >= 0 ? process.argv[rootFlag + 1] : process.env.VIBESTUDIO_USERLAND_ROOT,
+      checkOnly: process.argv.includes("--check"),
+    });
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
     process.exitCode = 1;

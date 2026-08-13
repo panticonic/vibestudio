@@ -1,5 +1,5 @@
 import * as fs from "node:fs";
-import * as asyncHooks from "node:async_hooks";
+import { createRequire } from "node:module";
 import * as os from "node:os";
 import * as path from "node:path";
 import vm, { Script } from "node:vm";
@@ -15,8 +15,10 @@ import { initBuildSystemV2, type BuildSystemV2 } from "./index.js";
 import type { BuildSourceProvider } from "./buildSource.js";
 import type { WorkspaceStateSource } from "./stateTrigger.js";
 import { discoverPackageGraph } from "./packageGraph.js";
+import { exactUserlandRoot } from "../../../tests/exactUserlandRoot";
 
 const APP_NODE_MODULES = [path.resolve(__dirname, "../../../node_modules")];
+const requireNodeBuiltin = createRequire(import.meta.url);
 const TEST_STATE = `state:${"a".repeat(64)}`;
 const CONTEXT_STATE = `state:${"b".repeat(64)}`;
 const RESOLVE_CONTEXT_STATE = `state:${"c".repeat(64)}`;
@@ -261,7 +263,7 @@ describe("BuildSystemV2 library package subpaths", () => {
   });
 
   it("builds the real agentic runtime package with async transitive dependencies for eval", async () => {
-    const actualWorkspaceRoot = path.resolve(__dirname, "../../../workspace");
+    const actualWorkspaceRoot = exactUserlandRoot;
     buildSystem = await initBuildSystemV2(
       actualWorkspaceRoot,
       fakeWorkspaceSource(() => actualWorkspaceRoot),
@@ -297,7 +299,7 @@ describe("BuildSystemV2 library package subpaths", () => {
     ) => Promise<void>;
     await execute(
       (specifier) => {
-        if (specifier === "node:async_hooks") return asyncHooks as never;
+        if (specifier.startsWith("node:")) return requireNodeBuiltin(specifier) as never;
         throw new Error(`unexpected external dependency ${specifier}`);
       },
       module.exports,
@@ -320,7 +322,7 @@ describe("BuildSystemV2 library package subpaths", () => {
   }, 90_000);
 
   it("loads the real hosted runtime without ambient network authority", async () => {
-    const actualWorkspaceRoot = path.resolve(__dirname, "../../../workspace");
+    const actualWorkspaceRoot = exactUserlandRoot;
     buildSystem = await initBuildSystemV2(
       actualWorkspaceRoot,
       fakeWorkspaceSource(() => actualWorkspaceRoot),

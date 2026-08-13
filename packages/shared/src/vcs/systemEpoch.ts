@@ -1,10 +1,6 @@
 /**
- * Compatibility epoch for the workspace source/runtime ABI. It prevents a
- * checkout authored for one host contract from running against another.
- *
- * This is deliberately separate from authoritative persistence versions:
- * every durable store owns a production baseline and ordered migrations. A
- * manifest mismatch requires a supported workspace-source upgrade; it never
- * authorizes resetting persisted state.
+ * Exact current-generation workspace source/runtime ABI. A different value is
+ * rejected and the pre-release workspace must be recreated from the promoted
+ * external Base; the host carries no source or persistence compatibility path.
  */
-export const WORKSPACE_SYSTEM_EPOCH = 57 as const;
+export const WORKSPACE_SYSTEM_EPOCH = 58 as const;

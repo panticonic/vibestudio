@@ -22,7 +22,7 @@ export interface ConnectedClientTransportDeps {
 }
 
 function requireUserId(ctx: ServiceContext): string {
-  // PhoneProvisioningDO is the authenticated user's reviewed deputy. The
+  // The workspace phone-provisioning provider is the authenticated user's reviewed deputy. The
   // immediate transport caller is therefore a system-owned DO, while the
   // dispatcher carries the host-verified human origin as authorizingCaller.
   // Never infer account routing from the deputy's synthetic subject.

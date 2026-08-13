@@ -26,12 +26,6 @@ import {
   parseUnitAuthorityManifest,
   type UnitAuthorityManifest,
 } from "@vibestudio/shared/authorityManifest";
-import type {
-  IndexablePanel,
-  PanelSearchResult,
-  PanelSourceUsage,
-} from "@vibestudio/shared/panelSearchTypes";
-import { normalizePanelTitle } from "@vibestudio/shared/panel/title";
 import { isBrowserPanelSource } from "@vibestudio/shared/panelChrome";
 import { SlotIdentityCollisionError } from "@vibestudio/shared/panelIdUtils";
 import { canonicalJson } from "@vibestudio/shared/canonicalJson";
@@ -51,8 +45,6 @@ import type {
   WorkspacePanelTreePlacement,
   WorkspacePanelTreeRootGroupPage,
   WorkspacePanelTreeRootGroupPageInput,
-  WorkspacePanelTreeSearchInput,
-  WorkspacePanelTreeSearchPage,
 } from "@vibestudio/shared/panel/workspaceStateSnapshot";
 
 const PANEL_TREE_ORDER_STEP = 1_024;
@@ -93,7 +85,6 @@ interface DbSlotRow {
   slot_id: string;
   parent_slot_id: string | null;
   current_entity_id: string | null;
-  current_entity_title?: string | null;
   current_entry_key: string | null;
   current_history_cursor?: number | null;
   history_count?: number;
@@ -216,7 +207,6 @@ const WORKSPACE_REQUIRED_TABLES = [
   "entities",
   "slots",
   "slot_history",
-  "panel_search_metadata",
   "workspace_meta",
   "lifecycle_epochs",
   "lifecycle_leases",
@@ -271,7 +261,6 @@ const WORKSPACE_ENTITY_COLUMNS = [
   "retired_at",
   "cleanup_complete",
   "error",
-  "display_title",
 ] as const;
 const WORKSPACE_ALARM_COLUMNS = [
   "source",
@@ -318,11 +307,7 @@ function assertWorkspaceAlarmColumns(sql: SchemaSqlStorage, label: string): void
 
 export class WorkspaceDO extends DurableObjectBase {
   static override rpcMethods = workspaceStateEngineMethods;
-  static override schemaVersion = 31;
-
-  protected override schemaProductionBaseline() {
-    return { version: 31, name: "workspace-state-v31" } as const;
-  }
+  static override schemaVersion = 32;
 
   constructor(ctx: DurableObjectContext, env: unknown) {
     super(ctx, env);
@@ -359,7 +344,6 @@ export class WorkspaceDO extends DurableObjectBase {
         retired_at INTEGER,
         cleanup_complete INTEGER NOT NULL DEFAULT 1,
         error TEXT,
-        display_title TEXT,
         CHECK (agent_entity_id IS NULL OR agent_channel_id IS NOT NULL)
       )
     `);
@@ -442,76 +426,6 @@ export class WorkspaceDO extends DurableObjectBase {
     this.sql.exec(`CREATE INDEX IF NOT EXISTS idx_history_entity ON slot_history(entity_id)`);
     this.sql.exec(`CREATE INDEX IF NOT EXISTS idx_history_entry ON slot_history(entry_key)`);
 
-    // panel_search_metadata is an FTS5 staging table — per-slot, holds the
-    // text we want indexed. `searchable_title` is intentionally a
-    // denormalization of `entities.display_title` (the canonical source of
-    // truth for titles, accessed via the slot's current_entity_id). The
-    // denormalization exists because FTS5 external-content tables require
-    // their content columns to live on a regular table, and contentless
-    // FTS5 doesn't support the upsert-by-rowid pattern we'd need under
-    // workerd. All writes to `searchable_title` flow through one site
-    // (`entitySetDisplayTitle`), so there is no second code path that can
-    // diverge from the source.
-    this.sql.exec(`
-      CREATE TABLE IF NOT EXISTS panel_search_metadata (
-        slot_id TEXT PRIMARY KEY,
-        searchable_title TEXT NOT NULL DEFAULT '',
-        searchable_path TEXT,
-        manifest_description TEXT,
-        manifest_dependencies TEXT,
-        tags TEXT,
-        keywords TEXT,
-        access_count INTEGER NOT NULL DEFAULT 0,
-        last_indexed_at INTEGER NOT NULL
-      )
-    `);
-    this.sql.exec(`
-      CREATE TABLE IF NOT EXISTS panel_source_usage (
-        source TEXT PRIMARY KEY,
-        access_count INTEGER NOT NULL DEFAULT 0,
-        last_accessed_at INTEGER NOT NULL DEFAULT 0
-      )
-    `);
-    this.sql.exec(`
-      CREATE VIRTUAL TABLE IF NOT EXISTS panel_fts USING fts5(
-        searchable_title,
-        searchable_path,
-        manifest_description,
-        manifest_dependencies,
-        tags,
-        keywords,
-        content='panel_search_metadata',
-        content_rowid='rowid'
-      )
-    `);
-    this.sql.exec(`
-      CREATE TRIGGER IF NOT EXISTS panel_fts_insert AFTER INSERT ON panel_search_metadata BEGIN
-        INSERT INTO panel_fts(rowid, searchable_title, searchable_path,
-          manifest_description, manifest_dependencies, tags, keywords)
-        VALUES (NEW.rowid, NEW.searchable_title, NEW.searchable_path,
-          NEW.manifest_description, NEW.manifest_dependencies, NEW.tags, NEW.keywords);
-      END
-    `);
-    this.sql.exec(`
-      CREATE TRIGGER IF NOT EXISTS panel_fts_delete AFTER DELETE ON panel_search_metadata BEGIN
-        INSERT INTO panel_fts(panel_fts, rowid, searchable_title, searchable_path,
-          manifest_description, manifest_dependencies, tags, keywords)
-        VALUES ('delete', OLD.rowid, OLD.searchable_title, OLD.searchable_path,
-          OLD.manifest_description, OLD.manifest_dependencies, OLD.tags, OLD.keywords);
-      END
-    `);
-    this.sql.exec(`
-      CREATE TRIGGER IF NOT EXISTS panel_fts_update AFTER UPDATE ON panel_search_metadata BEGIN
-        INSERT INTO panel_fts(panel_fts, rowid, searchable_title, searchable_path,
-          manifest_description, manifest_dependencies, tags, keywords)
-        VALUES ('delete', OLD.rowid, OLD.searchable_title, OLD.searchable_path,
-          OLD.manifest_description, OLD.manifest_dependencies, OLD.tags, OLD.keywords);
-        INSERT INTO panel_fts(rowid, searchable_title, searchable_path,
-          manifest_description, manifest_dependencies, tags, keywords)
-        VALUES (NEW.rowid, NEW.searchable_title, NEW.searchable_path,
-          NEW.manifest_description, NEW.manifest_dependencies, NEW.tags, NEW.keywords);
-      END
-    `);
     this.sql.exec(`
       CREATE TABLE IF NOT EXISTS workspace_meta (
         key TEXT PRIMARY KEY,
@@ -1874,7 +1788,7 @@ export class WorkspaceDO extends DurableObjectBase {
         .exec(
           `SELECT s.slot_id, s.parent_slot_id, s.owner_user_id, s.sort_key, s.created_at,
                   history.options,
-                  COALESCE(e.display_title, s.slot_id) AS title,
+                  s.slot_id AS title,
                   history.source AS source,
                   CASE
                     WHEN history.source LIKE 'browser:%' THEN 'browser'
@@ -2026,7 +1940,7 @@ export class WorkspaceDO extends DurableObjectBase {
             WHERE parent.closed_at IS NULL
          )
          SELECT path.slot_id, path.parent_slot_id, path.owner_user_id, path.created_at,
-                path.depth, COALESCE(entity.display_title, path.slot_id) AS title,
+                path.depth, path.slot_id AS title,
                 history.options, history.source,
                 CASE
                   WHEN history.source LIKE 'browser:%' THEN 'browser'
@@ -2132,8 +2046,7 @@ export class WorkspaceDO extends DurableObjectBase {
     return this.ctx.storage.transactionSync(() => {
       const slot = this.sql
         .exec(
-          `SELECT s.*, entity.display_title AS current_entity_title,
-                  history.cursor AS current_history_cursor,
+          `SELECT s.*, history.cursor AS current_history_cursor,
                   (SELECT COUNT(*) FROM slot_history all_history
                     WHERE all_history.slot_id = s.slot_id) AS history_count
              FROM slots s
@@ -2511,7 +2424,6 @@ export class WorkspaceDO extends DurableObjectBase {
         target.entryKey,
         input.slotId
       );
-      this.refreshSlotSearchableTitle(input.slotId);
       return {
         previousEntityId,
         currentEntityId: target.entityId,
@@ -2692,17 +2604,6 @@ export class WorkspaceDO extends DurableObjectBase {
              FROM slots child JOIN subtree ON child.parent_slot_id = subtree.slot_id
             WHERE child.closed_at IS NULL
          )
-         DELETE FROM panel_search_metadata WHERE slot_id IN (SELECT slot_id FROM subtree)`,
-        slotId
-      );
-      this.sql.exec(
-        `WITH RECURSIVE subtree(slot_id) AS (
-           SELECT slot_id FROM slots WHERE slot_id = ? AND closed_at IS NULL
-           UNION ALL
-           SELECT child.slot_id
-             FROM slots child JOIN subtree ON child.parent_slot_id = subtree.slot_id
-            WHERE child.closed_at IS NULL
-         )
          UPDATE slots
             SET closed_at = ?, current_entity_id = NULL, current_entry_key = NULL
           WHERE slot_id IN (SELECT slot_id FROM subtree)`,
@@ -2798,9 +2699,8 @@ export class WorkspaceDO extends DurableObjectBase {
   slotGet(slotId: string): DbSlotRow | null {
     const row = this.sql
       .exec(
-        `SELECT s.*, e.display_title AS current_entity_title
+        `SELECT s.*
          FROM slots s
-         LEFT JOIN entities e ON s.current_entity_id = e.id
          WHERE s.slot_id = ?`,
         slotId
       )
@@ -2840,405 +2740,6 @@ export class WorkspaceDO extends DurableObjectBase {
         )
         .toArray()[0] as DbSlotHistoryRow | undefined) ?? null
     );
-  }
-
-  // ─────────────────────────────────────────────────────────────
-  // panel search (FTS5 over panel_search_metadata)
-  // ─────────────────────────────────────────────────────────────
-
-  /**
-   * Upsert the slot-static search metadata for a panel and stamp the initial
-   * title onto the slot's current entity (the canonical title store).
-   * Returns the slot's current entity id when one is bound, so callers (the
-   * workspace-state RPC handler) can refresh their entity-keyed caches.
-   */
-  @schemaRpc()
-  panelIndex(input: IndexablePanel): string | null {
-    const now = Date.now();
-    let resolvedEntityId: string | null = null;
-    this.ctx.storage.transactionSync(() => {
-      const normalizedTitle = normalizePanelTitle(input.title);
-      const slot = this.sql
-        .exec(`SELECT current_entity_id FROM slots WHERE slot_id = ?`, input.id)
-        .toArray()[0];
-      const entityIdFromSlot = slot?.["current_entity_id"];
-      const currentTitle =
-        typeof entityIdFromSlot === "string" && entityIdFromSlot.length > 0
-          ? ((this.sql
-              .exec(`SELECT display_title FROM entities WHERE id = ?`, entityIdFromSlot)
-              .toArray()[0]?.["display_title"] as string | null | undefined) ?? "")
-          : "";
-      const ftsTitle = normalizedTitle ?? currentTitle;
-
-      const existing = this.sql
-        .exec(`SELECT rowid FROM panel_search_metadata WHERE slot_id = ?`, input.id)
-        .toArray()[0];
-      if (existing) {
-        this.sql.exec(
-          `UPDATE panel_search_metadata SET
-            searchable_title = ?, searchable_path = ?, manifest_description = ?,
-            manifest_dependencies = ?, tags = ?, keywords = ?, last_indexed_at = ?
-          WHERE slot_id = ?`,
-          ftsTitle,
-          input.path ?? null,
-          input.manifestDescription ?? null,
-          input.manifestDependencies ? JSON.stringify(input.manifestDependencies) : null,
-          input.tags ? JSON.stringify(input.tags) : null,
-          input.keywords ? JSON.stringify(input.keywords) : null,
-          now,
-          input.id
-        );
-      } else {
-        this.sql.exec(
-          `INSERT INTO panel_search_metadata (
-            slot_id, searchable_title, searchable_path, manifest_description,
-            manifest_dependencies, tags, keywords, access_count, last_indexed_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)`,
-          input.id,
-          ftsTitle,
-          input.path ?? null,
-          input.manifestDescription ?? null,
-          input.manifestDependencies ? JSON.stringify(input.manifestDependencies) : null,
-          input.tags ? JSON.stringify(input.tags) : null,
-          input.keywords ? JSON.stringify(input.keywords) : null,
-          now
-        );
-      }
-      // The canonical title lives on the entity row. Stamp the manifest
-      // title there so approval UIs (which look up by entity id) and the
-      // FTS denormalization above agree from the moment the panel exists.
-      if (
-        normalizedTitle !== undefined &&
-        typeof entityIdFromSlot === "string" &&
-        entityIdFromSlot.length > 0
-      ) {
-        this.sql.exec(
-          `UPDATE entities SET display_title = ? WHERE id = ?`,
-          normalizedTitle,
-          entityIdFromSlot
-        );
-        resolvedEntityId = entityIdFromSlot;
-      }
-    });
-    return resolvedEntityId;
-  }
-
-  /**
-   * Update a panel's title by slot id. The shell-side `searchIndex.updateTitle`
-   * API is keyed by slot id (the caller never has the per-entity id at hand),
-   * so this is the surface that bridges to the entity-keyed source of truth.
-   *
-   * Resolves the slot's current entity and delegates to
-   * `entitySetDisplayTitle`. Returns the resolved entity id (or null when
-   * the slot is empty / closed) so callers can mirror the change into their
-   * entity-keyed caches without a second round-trip.
-   */
-  @schemaRpc()
-  panelUpdateTitle(slotId: string, title: string): string | null {
-    const row = this.sql
-      .exec(`SELECT current_entity_id FROM slots WHERE slot_id = ?`, slotId)
-      .toArray()[0];
-    const entityId = row?.["current_entity_id"];
-    if (typeof entityId !== "string" || entityId.length === 0) return null;
-    this.entitySetDisplayTitle(entityId, title);
-    return entityId;
-  }
-
-  @schemaRpc()
-  panelIncrementAccess(slotId: string): void {
-    this.ctx.storage.transactionSync(() => {
-      this.sql.exec(
-        `UPDATE panel_search_metadata SET access_count = access_count + 1 WHERE slot_id = ?`,
-        slotId
-      );
-      const row = this.sql
-        .exec(`SELECT searchable_path FROM panel_search_metadata WHERE slot_id = ?`, slotId)
-        .toArray()[0];
-      const source = row?.["searchable_path"];
-      if (typeof source !== "string" || source.length === 0) return;
-      this.sql.exec(
-        `INSERT INTO panel_source_usage (source, access_count, last_accessed_at)
-         VALUES (?, 1, ?)
-         ON CONFLICT(source) DO UPDATE SET
-           access_count = panel_source_usage.access_count + 1,
-           last_accessed_at = excluded.last_accessed_at`,
-        source,
-        Date.now()
-      );
-    });
-  }
-
-  @schemaRpc()
-  panelSourceUsage(limit = 200): PanelSourceUsage[] {
-    const boundedLimit = Math.max(1, Math.min(200, limit));
-    const rows = this.sql
-      .exec(
-        `SELECT source, access_count, last_accessed_at
-           FROM panel_source_usage
-          ORDER BY access_count DESC, last_accessed_at DESC, source ASC
-          LIMIT ?`,
-        boundedLimit
-      )
-      .toArray() as Array<{
-      source: string;
-      access_count: number;
-      last_accessed_at: number;
-    }>;
-    return rows.map((row) => ({
-      source: row.source,
-      accessCount: row.access_count,
-      lastAccessedAt: row.last_accessed_at,
-    }));
-  }
-
-  /**
-   * Set the display title for an entity. This is the canonical write site
-   * for titles — both `entities.display_title` (the source of truth) and
-   * the FTS denormalization in `panel_search_metadata.searchable_title`
-   * (for panel entities that are currently bound to a slot) are updated in
-   * one transaction.
-   *
-   * Pass null or an empty string to clear the entity title; we keep the
-   * FTS staging row's title alone in that case (rather than blanking it) so
-   * the panel stays findable in search.
-   */
-  @schemaRpc()
-  entitySetDisplayTitle(entityId: string, title: string | null): void {
-    const stored = normalizePanelTitle(title) ?? null;
-    this.ctx.storage.transactionSync(() => {
-      this.sql.exec(`UPDATE entities SET display_title = ? WHERE id = ?`, stored, entityId);
-      if (stored === null) return;
-      const slot = this.sql
-        .exec(
-          `SELECT slot_id FROM slots WHERE current_entity_id = ? AND closed_at IS NULL`,
-          entityId
-        )
-        .toArray()[0];
-      if (slot && typeof slot["slot_id"] === "string") {
-        this.sql.exec(
-          `UPDATE panel_search_metadata SET searchable_title = ?, last_indexed_at = ? WHERE slot_id = ?`,
-          stored,
-          Date.now(),
-          slot["slot_id"]
-        );
-      }
-    });
-  }
-
-  /**
-   * Return every active entity that has a non-empty display_title. Used to
-   * seed the server-side in-process cache at boot so synchronous title
-   * lookups (e.g. when building a pending approval) don't have to round-trip
-   * to the DO on the hot path.
-   */
-  @schemaRpc()
-  entityListDisplayTitles(): Array<{ id: string; title: string }> {
-    return this.sql
-      .exec(
-        `SELECT id, display_title
-         FROM entities
-         WHERE status = 'active' AND display_title IS NOT NULL AND display_title != ''`
-      )
-      .toArray() as Array<{ id: string; title: string }>;
-  }
-
-  /**
-   * Pull the current title from the slot's current entity into the FTS
-   * staging column. Used when history navigation swaps the current entity
-   * (the new entity may have a different display_title). No-op when the
-   * slot has no metadata row or no current entity.
-   */
-  private refreshSlotSearchableTitle(slotId: string): void {
-    const row = this.sql
-      .exec(
-        `SELECT e.display_title AS title
-         FROM slots s
-         JOIN entities e ON s.current_entity_id = e.id
-         WHERE s.slot_id = ?`,
-        slotId
-      )
-      .toArray()[0] as { title: string | null } | undefined;
-    if (!row) return;
-    const title = (row.title ?? "").toString();
-    this.sql.exec(
-      `UPDATE panel_search_metadata SET searchable_title = ?, last_indexed_at = ? WHERE slot_id = ?`,
-      title,
-      Date.now(),
-      slotId
-    );
-  }
-
-  @schemaRpc()
-  panelSearch(query: string, limit = 50): PanelSearchResult[] {
-    const safeQuery = this.sanitizeSearchQuery(query);
-    if (!safeQuery) return [];
-    // The displayable title is sourced from entities.display_title (the
-    // canonical store) via the slot's current_entity_id. The FTS index
-    // itself is built over panel_search_metadata.searchable_title, which is
-    // a denormalization maintained by entitySetDisplayTitle.
-    const rows = this.sql
-      .exec(
-        `SELECT m.slot_id AS id,
-                COALESCE(e.display_title, m.searchable_title) AS title,
-                m.access_count AS access_count,
-                bm25(panel_fts) AS relevance
-         FROM panel_fts
-         JOIN panel_search_metadata m ON panel_fts.rowid = m.rowid
-         JOIN slots s ON m.slot_id = s.slot_id
-         LEFT JOIN entities e ON s.current_entity_id = e.id
-         WHERE panel_fts MATCH ? AND s.closed_at IS NULL
-         ORDER BY relevance, m.access_count DESC
-         LIMIT ?`,
-        safeQuery,
-        limit
-      )
-      .toArray() as Array<{
-      id: string;
-      title: string;
-      access_count: number;
-      relevance: number;
-    }>;
-    return rows.map((row) => ({
-      id: row.id,
-      title: row.title,
-      relevance: row.relevance,
-      accessCount: row.access_count,
-    }));
-  }
-
-  @schemaRpc()
-  panelTreeSearch(input: WorkspacePanelTreeSearchInput): WorkspacePanelTreeSearchPage {
-    const safeQuery = this.sanitizeSearchQuery(input.query);
-    const limit = Math.max(1, Math.min(200, input.limit ?? 50));
-    let cursor: [number, string] | null = null;
-    if (input.cursor) {
-      const parsed = JSON.parse(input.cursor) as unknown;
-      if (
-        !Array.isArray(parsed) ||
-        parsed.length !== 2 ||
-        typeof parsed[0] !== "number" ||
-        !Number.isFinite(parsed[0]) ||
-        typeof parsed[1] !== "string"
-      ) {
-        throw new Error("Invalid panel-tree search cursor");
-      }
-      cursor = [parsed[0], parsed[1]];
-    }
-    if (!safeQuery) {
-      return { revision: this.panelTreeRevision(), hits: [], nextCursor: null };
-    }
-    const rows = this.sql
-      .exec(
-        `SELECT * FROM (
-           SELECT m.slot_id, bm25(panel_fts) AS rank
-             FROM panel_fts
-             JOIN panel_search_metadata m ON panel_fts.rowid = m.rowid
-             JOIN slots s ON s.slot_id = m.slot_id
-            WHERE panel_fts MATCH ? AND s.closed_at IS NULL
-         ) matches
-         WHERE (? IS NULL OR rank > ? OR (rank = ? AND slot_id > ?))
-         ORDER BY rank, slot_id
-         LIMIT ?`,
-        safeQuery,
-        cursor === null ? null : 1,
-        cursor?.[0] ?? 0,
-        cursor?.[0] ?? 0,
-        cursor?.[1] ?? "",
-        limit + 1
-      )
-      .toArray() as Array<{ slot_id: string; rank: number }>;
-    const hasMore = rows.length > limit;
-    const visible = hasMore ? rows.slice(0, limit) : rows;
-    const hits = visible.flatMap((row) => {
-      const path = this.panelTreePath(row.slot_id);
-      if (!path) return [];
-      const node = path.nodes.at(-1);
-      if (!node) return [];
-      const ancestorCount = Math.max(0, path.nodes.length - 1);
-      const ancestors = path.nodes.slice(Math.max(0, ancestorCount - 12), -1);
-      return [
-        {
-          node,
-          ancestors,
-          ...(ancestorCount > ancestors.length ? { ancestorsTruncated: true } : {}),
-        },
-      ];
-    });
-    const last = visible.at(-1);
-    return {
-      revision: this.panelTreeRevision(),
-      hits,
-      nextCursor: hasMore && last ? JSON.stringify([last.rank, last.slot_id]) : null,
-    };
-  }
-
-  @schemaRpc()
-  panelRebuildIndex(): void {
-    this.ctx.storage.transactionSync(() => {
-      this.sql.exec(`DELETE FROM panel_search_metadata`);
-      // Rebuild from open slots + their current entity. Title is sourced
-      // from entities.display_title; when no title was ever stamped (panel
-      // existed before this feature, or the agent never called set_title)
-      // we backfill from stateArgs.title → entity key → slot id, then
-      // mirror that into the FTS staging column.
-      const rows = this.sql
-        .exec(
-          `SELECT s.slot_id AS slot_id, e.id AS entity_id, e.state_args AS state_args,
-                  e.source_repo_path AS source_repo_path, e.key AS key,
-                  e.display_title AS display_title
-           FROM slots s
-           LEFT JOIN entities e ON s.current_entity_id = e.id
-           WHERE s.closed_at IS NULL`
-        )
-        .toArray() as Array<{
-        slot_id: string;
-        entity_id: string | null;
-        state_args: string | null;
-        source_repo_path: string | null;
-        key: string | null;
-        display_title: string | null;
-      }>;
-      const now = Date.now();
-      for (const row of rows) {
-        let title: string = row.display_title ?? "";
-        if (!title && row.entity_id) {
-          // Backfill a best-effort title onto the entity row.
-          if (row.state_args) {
-            try {
-              const args = JSON.parse(row.state_args) as { title?: string };
-              if (typeof args?.title === "string" && args.title.trim().length > 0) {
-                title = args.title;
-              }
-            } catch {
-              // ignore — fall through to other fallbacks
-            }
-          }
-          if (!title) title = row.key || row.slot_id;
-          this.sql.exec(`UPDATE entities SET display_title = ? WHERE id = ?`, title, row.entity_id);
-        }
-        this.sql.exec(
-          `INSERT INTO panel_search_metadata (
-            slot_id, searchable_title, searchable_path, manifest_description,
-            manifest_dependencies, tags, keywords, access_count, last_indexed_at
-          ) VALUES (?, ?, ?, NULL, NULL, NULL, NULL, 0, ?)`,
-          row.slot_id,
-          title,
-          row.source_repo_path,
-          now
-        );
-      }
-    });
-  }
-
-  private sanitizeSearchQuery(query: string): string {
-    const trimmed = query.trim();
-    if (!trimmed) return "";
-    return trimmed
-      .replace(/["*():^]/g, " ")
-      .split(/\s+/)
-      .filter(Boolean)
-      .map((token) => `"${token}"*`)
-      .join(" AND ");
   }
 
   // ─────────────────────────────────────────────────────────────

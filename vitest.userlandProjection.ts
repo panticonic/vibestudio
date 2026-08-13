@@ -12,26 +12,76 @@ function escapeRegex(value: string): string {
  * dependency projection used by checkout typechecking. Source aliases remain
  * separate because workspace packages come from semantic source, not npm.
  */
-export async function userlandDependencyAliases(appRoot: string): Promise<Alias[]> {
+export async function userlandDependencyAliases(
+  appRoot: string,
+  workspaceRoot: string
+): Promise<Alias[]> {
   const projection = await prepareUserlandDependencyProjection({
     appRoot,
+    workspaceRoot,
     includeDevelopmentDependencies: true,
   });
   if (!projection.nodeModulesDir) return [];
 
   return Object.keys(projection.dependencies)
-    .filter(
-      (packageName) =>
-        !fs.existsSync(
-          path.join(appRoot, "node_modules", ...packageName.split("/"), "package.json")
-        )
-    )
-    .sort((a, b) => b.length - a.length || a.localeCompare(b))
-    .map((packageName): Alias => {
+    .flatMap((packageName): Alias[] => {
       const packageDir = path.join(projection.nodeModulesDir, ...packageName.split("/"));
-      return {
-        find: new RegExp(`^${escapeRegex(packageName)}($|/)`, "u"),
-        replacement: `${packageDir}$1`,
-      };
-    });
+      const manifest = JSON.parse(
+        fs.readFileSync(path.join(packageDir, "package.json"), "utf8")
+      ) as { exports?: string | Record<string, unknown>; main?: string; module?: string };
+      const exported = normalizedExports(manifest.exports).map(([subpath, target]): Alias => {
+        const specifier = subpath === "." ? packageName : `${packageName}/${subpath.slice(2)}`;
+        if (!specifier.includes("*")) {
+          return { find: specifier, replacement: path.resolve(packageDir, target) };
+        }
+        return {
+          find: new RegExp(`^${escapeRegex(specifier).replace("\\*", "(.+)")}$`, "u"),
+          replacement: path.resolve(packageDir, target).replace("*", "$1"),
+        };
+      });
+      if (exported.length > 0) return exported;
+      const entry = manifest.module ?? manifest.main;
+      return entry
+        ? [
+            {
+              find: new RegExp(`^${escapeRegex(packageName)}/(.+)$`, "u"),
+              replacement: `${packageDir}/$1`,
+            },
+            { find: packageName, replacement: path.resolve(packageDir, entry) },
+          ]
+        : [
+            {
+              find: new RegExp(`^${escapeRegex(packageName)}($|/)`, "u"),
+              replacement: `${packageDir}$1`,
+            },
+          ];
+    })
+    .sort((left, right) => String(right.find).length - String(left.find).length);
+}
+
+function normalizedExports(exports: string | Record<string, unknown> | undefined): Array<[string, string]> {
+  if (typeof exports === "string") return [[".", exports]];
+  if (!exports) return [];
+  return Object.entries(exports).flatMap(([subpath, value]) => {
+    const target = exportTarget(value);
+    return target && (subpath === "." || subpath.startsWith("./")) ? [[subpath, target]] : [];
+  });
+}
+
+function exportTarget(value: unknown): string | null {
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) {
+    for (const candidate of value) {
+      const target = exportTarget(candidate);
+      if (target) return target;
+    }
+    return null;
+  }
+  if (!value || typeof value !== "object") return null;
+  const conditions = value as Record<string, unknown>;
+  for (const condition of ["import", "default", "browser", "require", "types"]) {
+    const target = exportTarget(conditions[condition]);
+    if (target) return target;
+  }
+  return null;
 }

@@ -25,6 +25,12 @@ const defaultResultsRoot = path.join(repoRoot, "test-results", "full-system-smok
 const wranglerBin = path.join(repoRoot, "node_modules", ".bin", "wrangler");
 const signalingDir = path.join(repoRoot, "apps", "signaling");
 
+function requireExactUserlandRoot() {
+  const value = process.env.VIBESTUDIO_USERLAND_ROOT;
+  if (!value) throw new Error("VIBESTUDIO_USERLAND_ROOT must name the exact Base checkout");
+  return path.resolve(value);
+}
+
 function parseArgs(argv) {
   const options = {
     skipBuild: false,
@@ -910,16 +916,14 @@ async function main() {
       "channel-contracts",
       "pnpm",
       [
-        "--dir",
-        "workspace",
-        "exec",
         "vitest",
         "run",
-        "--root",
-        "..",
         "--config",
         "vitest.userland.config.ts",
-        "workspace/workers/pubsub-channel/channel-do.test.ts",
+        path.join(
+          requireExactUserlandRoot(),
+          "workers/pubsub-channel/channel-do.test.ts"
+        ),
       ],
       { resultsDir }
     );

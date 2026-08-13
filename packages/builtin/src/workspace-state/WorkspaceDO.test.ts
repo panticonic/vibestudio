@@ -15,13 +15,14 @@ const WORKSPACE_TABLES = [
   "slots",
   "panel_close_cleanup",
   "slot_history",
-  "panel_search_metadata",
   "workspace_meta",
   "lifecycle_epochs",
   "lifecycle_leases",
   "lifecycle_ops",
   "do_alarms",
+  "do_alarm_test_policies",
   "durable_work_owners",
+  "context_edges",
 ];
 const CURRENT_SCHEMA_VERSION = WorkspaceDO.schemaVersion;
 const ACTIVE_AUTHORITY: UnitAuthorityManifest = {
@@ -91,10 +92,10 @@ function activateAlarmKey(
 }
 
 describe("WorkspaceDO schema", () => {
-  it("requires a fresh database for the v31 automation cutover schema", async () => {
+  it("requires a fresh database for the current topology schema", async () => {
     const db = await createPreEngineDatabase();
     await expect(createTestDO(WorkspaceDOTestable, undefined, { db })).rejects.toThrow(
-      /no schema identity/u
+      /no current schema identity/u
     );
   });
 
@@ -126,12 +127,9 @@ describe("WorkspaceDO schema", () => {
       "dispatch_generation",
       "dispatch_owner",
     ]);
-    expect(
-      sql.exec(`SELECT singleton, version, installed_version FROM _vibestudio_schema`).one()
-    ).toEqual({
+    expect(sql.exec(`SELECT singleton, version FROM _vibestudio_schema`).one()).toEqual({
       singleton: 1,
       version: CURRENT_SCHEMA_VERSION,
-      installed_version: CURRENT_SCHEMA_VERSION,
     });
   });
 
@@ -144,7 +142,7 @@ describe("WorkspaceDO schema", () => {
       CURRENT_SCHEMA_VERSION,
     ]);
     await expect(createTestDO(WorkspaceDOTestable, undefined, { db })).rejects.toThrow(
-      /no schema identity and migration ledger/
+      /schema identity table is malformed/
     );
   });
 });
@@ -735,7 +733,6 @@ describe("WorkspaceDO slot operations", () => {
           contextId: "ctx-1",
         },
       });
-      instance.entitySetDisplayTitle(entity.id, `${index} title`);
     }
 
     const first = instance.panelTreePage({
@@ -941,12 +938,10 @@ describe("WorkspaceDO slot operations", () => {
     expect(instance.slotHistoryRelative("snapshot-slot", -1)?.entity_id).toBe(entryA.id);
 
     instance.slotUpdateCurrentStateArgs("snapshot-slot", { step: "updated" });
-    instance.entitySetDisplayTitle(entryB.id, "Snapshot title");
     const updated = instance.panelTreeDetail("snapshot-slot");
     expect(updated).not.toBeNull();
     if (!updated) throw new Error("expected updated detail");
     expect(updated.revision).toBeGreaterThan(navigated.revision);
-    expect(updated.slot.current_entity_title).toBe("Snapshot title");
     expect(updated.currentHistory.state_args).toBe(JSON.stringify({ step: "updated" }));
     expect(updated.entity.stateArgs).toEqual({ step: "updated" });
   });
@@ -1592,174 +1587,5 @@ describe("WorkspaceDO lifecycle registry", () => {
         limit: 1,
       })
     ).toEqual([]);
-  });
-});
-
-describe("WorkspaceDO panel search metadata (FTS5-free fallback)", () => {
-  // sql.js (the test fixture) lacks FTS5, so the panel_fts virtual table is
-  // omitted by WorkspaceDOTestable. These tests cover the metadata-only path
-  // that the real FTS5 virtual table reads from; the full search query is
-  // covered by the workerd integration test.
-  let instance: WorkspaceDO;
-  beforeEach(async () => {
-    ({ instance } = await createTestDO(WorkspaceDOTestable));
-  });
-
-  function readMetadata(slotId: string): Record<string, unknown> | undefined {
-    return (
-      (
-        instance as unknown as {
-          sql: { exec(s: string, ...b: unknown[]): { toArray(): unknown[] } };
-        }
-      ).sql
-        .exec(`SELECT * FROM panel_search_metadata WHERE slot_id = ?`, slotId)
-        .toArray() as Array<Record<string, unknown>>
-    )[0];
-  }
-
-  // Helper: stand up an entity + slot pair so the title-flow methods have
-  // something to bind to. Returns the entity id (= what
-  // `panelIndex`/`panelUpdateTitle` will return when they stamp a title).
-  function bindSlotToEntity(slotId: string, entityKey: string): string {
-    const entity = instance.entityActivate({
-      kind: "panel",
-      source: { repoPath: "panels/test", effectiveVersion: "ev-1" },
-      contextId: "ctx",
-      key: entityKey,
-    });
-    instance.slotCreate({
-      slotId,
-      parentSlotId: null,
-      initialEntry: {
-        entryKey: "entry-1",
-        entityId: entity.id,
-        source: "panels/test",
-        contextId: "ctx",
-      },
-    });
-    return entity.id;
-  }
-
-  function readEntityTitle(entityId: string): string | null {
-    const sql = (
-      instance as unknown as {
-        sql: { exec(s: string, ...b: unknown[]): { toArray(): unknown[] } };
-      }
-    ).sql;
-    const row = sql
-      .exec(`SELECT display_title FROM entities WHERE id = ?`, entityId)
-      .toArray()[0] as { display_title: string | null } | undefined;
-    return row?.display_title ?? null;
-  }
-
-  it("panelIndex stamps the title onto the slot's current entity, then panelUpdateTitle routes through entitySetDisplayTitle", () => {
-    const entityId = bindSlotToEntity("slot-1", "key-1");
-
-    const returned = instance.panelIndex({
-      id: "slot-1",
-      title: "Initial Title",
-      path: "/projects/foo",
-      manifestDescription: "test panel",
-      tags: ["x", "y"],
-      keywords: ["alpha"],
-    });
-    expect(returned).toBe(entityId);
-    expect(readEntityTitle(entityId)).toBe("Initial Title");
-
-    const inserted = readMetadata("slot-1");
-    // panel_search_metadata.searchable_title is a documented FTS
-    // denormalization of entities.display_title; both should agree.
-    expect(inserted).toMatchObject({
-      slot_id: "slot-1",
-      searchable_title: "Initial Title",
-      searchable_path: "/projects/foo",
-      manifest_description: "test panel",
-      access_count: 0,
-    });
-    expect(JSON.parse(inserted!["tags"] as string)).toEqual(["x", "y"]);
-    expect(JSON.parse(inserted!["keywords"] as string)).toEqual(["alpha"]);
-
-    const renamed = instance.panelUpdateTitle("slot-1", "Renamed Title");
-    expect(renamed).toBe(entityId);
-    expect(readEntityTitle(entityId)).toBe("Renamed Title");
-    // The FTS denormalization on panel_search_metadata moves in lockstep.
-    expect(readMetadata("slot-1")?.["searchable_title"]).toBe("Renamed Title");
-
-    instance.panelIncrementAccess("slot-1");
-    instance.panelIncrementAccess("slot-1");
-    instance.panelIncrementAccess("slot-1");
-    expect(readMetadata("slot-1")?.["access_count"]).toBe(3);
-    expect(instance.panelSourceUsage()).toEqual([
-      {
-        source: "/projects/foo",
-        accessCount: 3,
-        lastAccessedAt: expect.any(Number),
-      },
-    ]);
-  });
-
-  it("entitySetDisplayTitle works for non-panel entities and clears with null/empty", () => {
-    const worker = instance.entityActivate({
-      kind: "worker",
-      source: { repoPath: "workers/agent", effectiveVersion: "ev-1" },
-      contextId: "ctx",
-      key: "agent-key",
-    });
-    instance.entitySetDisplayTitle(worker.id, "Agent Title");
-    expect(readEntityTitle(worker.id)).toBe("Agent Title");
-
-    instance.entitySetDisplayTitle(worker.id, "");
-    expect(readEntityTitle(worker.id)).toBeNull();
-
-    instance.entitySetDisplayTitle(worker.id, "Back");
-    instance.entitySetDisplayTitle(worker.id, null);
-    expect(readEntityTitle(worker.id)).toBeNull();
-  });
-
-  it("entityListDisplayTitles returns only active entities with titles", () => {
-    const a = instance.entityActivate({
-      kind: "worker",
-      source: { repoPath: "workers/a", effectiveVersion: "ev" },
-      contextId: "ctx",
-      key: "a",
-    });
-    const b = instance.entityActivate({
-      kind: "worker",
-      source: { repoPath: "workers/b", effectiveVersion: "ev" },
-      contextId: "ctx",
-      key: "b",
-    });
-    instance.entitySetDisplayTitle(a.id, "Alpha");
-    // b has no title — it should be absent from the list.
-    expect(
-      instance
-        .entityListDisplayTitles()
-        .map((r) => r.id)
-        .sort()
-    ).toEqual([a.id]);
-    // Retired entities drop out.
-    instance.entitySetDisplayTitle(b.id, "Bravo");
-    instance.entityRetire(b.id);
-    expect(
-      instance
-        .entityListDisplayTitles()
-        .map((r) => r.id)
-        .sort()
-    ).toEqual([a.id]);
-  });
-
-  it("panelIndex is idempotent — re-indexing the same slot_id updates in place rather than inserting a duplicate", () => {
-    bindSlotToEntity("slot-2", "key-2");
-    instance.panelIndex({ id: "slot-2", title: "First" });
-    instance.panelIndex({ id: "slot-2", title: "Second", path: "/p" });
-
-    const rows = (
-      instance as unknown as { sql: { exec(s: string, ...b: unknown[]): { toArray(): unknown[] } } }
-    ).sql
-      .exec(`SELECT * FROM panel_search_metadata WHERE slot_id = ?`, "slot-2")
-      .toArray() as Array<Record<string, unknown>>;
-    expect(rows).toHaveLength(1);
-    expect(rows[0]?.["searchable_title"]).toBe("Second");
-    expect(rows[0]?.["searchable_path"]).toBe("/p");
   });
 });

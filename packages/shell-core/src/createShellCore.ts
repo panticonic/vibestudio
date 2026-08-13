@@ -23,7 +23,7 @@ export {
 export function createShellCore(deps: {
   registry: PanelRegistry;
   call: ShellServiceCall;
-  viewState: LocalPanelViewStateStore;
+  viewState?: LocalPanelViewStateStore;
   serverInfo: PanelManagerServerInfo;
   workspacePath: string;
   workspaceConfig?: WorkspaceConfig;

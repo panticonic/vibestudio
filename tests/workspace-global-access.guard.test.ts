@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { exactUserlandRoot } from "./exactUserlandRoot";
 
 /**
  * Guard: no userland workspace package may grab a host module via the per-isolate global
@@ -31,7 +32,7 @@ const ALLOWLIST = new Set([
 // strings that name the symbol don't trip the guard.
 const ACCESS = /\[\s*['"]__vibestudioRequire__['"]\s*\]/;
 
-const PACKAGES_ROOT = path.resolve(__dirname, "../workspace/packages");
+const PACKAGES_ROOT = path.join(exactUserlandRoot, "packages");
 
 function tsFiles(dir: string, out: string[] = []): string[] {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {

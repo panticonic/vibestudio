@@ -8,16 +8,9 @@ import { afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import { TokenManager } from "../../packages/shared/src/tokenManager.js";
 import { SingletonRegistry } from "@vibestudio/workspace/singletonRegistry";
-import type { WorkspaceServiceDecl } from "@vibestudio/workspace-contracts/types";
 import { DODispatch } from "./doDispatch.js";
-const WORKSPACE_SOURCE_PROVIDER = {
-  source: "workers/workspace-source",
-  className: "GadWorkspaceDO",
-  objectKey: "workspace",
-} as const;
 import { INTERNAL_DO_SOURCE, type InternalDOBundle } from "./internalDOs/internalDoLoader.js";
-import { postToDurableObject, streamFromDurableObject, type DORef } from "./workerdRpcRelay.js";
-import { readChannelSubscriptionRecords } from "@vibestudio/service-schemas/channel";
+import { postToDurableObject, type DORef } from "./workerdRpcRelay.js";
 import {
   WorkerdManager,
   type WorkerdManagerDeps,
@@ -25,8 +18,6 @@ import {
 } from "./workerdManager.js";
 import { LifecycleDriver } from "./services/lifecycleDriver.js";
 import { AlarmDriver } from "./services/alarmDriver.js";
-import { attestWorkspaceDoRpc } from "./services/authorityRuntime.js";
-import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import {
   executionArtifactDigest,
   executionSourceClosureDigest,
@@ -49,7 +40,6 @@ import {
 
 let compiledWorkerdPrograms: WorkerdProgramSources;
 let compiledInternalDOBundle: InternalDOBundle;
-let compiledWorkspaceSourceBuild: BuildResult;
 
 function runtimeArtifact(source: string, ref = "main"): ExecutionArtifactRefV1 {
   const contentRoots = [
@@ -75,17 +65,8 @@ function runtimeArtifact(source: string, ref = "main"): ExecutionArtifactRefV1 {
   });
 }
 
-const PUBSUB_WORKSPACE_SERVICE = {
-  source: "workers/pubsub-channel",
-  name: "pubsub.channel.v1",
-  action: "send and receive conversation messages",
-  presentation: { domain: "sharing", verb: "act" },
-  authority: { principals: ["host", "user", "code", "session"] },
-  durableObject: { className: "PubSubChannel" },
-} satisfies WorkspaceServiceDecl;
-
 beforeAll(async () => {
-  const [internalDoBuild, programs, workspaceSourceBuild] = await Promise.all([
+  const [internalDoBuild, programs] = await Promise.all([
     esbuild.build({
       entryPoints: ["src/server/internalDOs/index.ts"],
       bundle: true,
@@ -99,11 +80,6 @@ beforeAll(async () => {
       write: false,
     }),
     buildWorkerdPrograms({ write: false }),
-    bundleWorker(
-      WORKSPACE_SOURCE_PROVIDER.source,
-      "workspace/workers/workspace-source/index.ts",
-      "workspace-source-test"
-    ),
   ]);
   const bundle = internalDoBuild.outputFiles?.[0]?.text;
   if (!bundle) throw new Error("Internal DO test bundle did not produce an in-memory output");
@@ -112,7 +88,6 @@ beforeAll(async () => {
     buildKey: createHash("sha256").update(bundle).digest("hex"),
   };
   compiledWorkerdPrograms = programs;
-  compiledWorkspaceSourceBuild = workspaceSourceBuild;
 });
 
 // Loader gateway servers started by harnesses; closed in afterEach. Userland
@@ -179,7 +154,7 @@ async function createWorkerdHarness(
     getManifestDoClasses: () => [],
     singletonRegistry: new SingletonRegistry([]),
     getInternalDoEnv: (className): Record<string, string> => {
-      if (className === "BrowserDataDO") {
+      if (className === "BrowserVaultDO") {
         return { BROWSER_DATA_BROKER_SOURCE: "extensions/browser-data" };
       }
       return {};
@@ -189,7 +164,7 @@ async function createWorkerdHarness(
   const attestHostDoCall = createHostDoAuthorityAttester({
     manager,
     workspaceId: "workspace:internal-workerd-test",
-    services: [PUBSUB_WORKSPACE_SERVICE],
+    services: [],
     callerId: "internal-workerd-test",
     callerSubject: {
       userId: "internal-workerd-test-user",
@@ -351,7 +326,7 @@ function createDODispatch(
     createHostDoAuthorityAttester({
       manager,
       workspaceId: "workspace:internal-workerd-test",
-      services: [PUBSUB_WORKSPACE_SERVICE],
+      services: [],
       callerId: "internal-workerd-test",
     })
   );
@@ -474,26 +449,8 @@ describe("internal storage DOs under workerd", () => {
     }
   });
 
-  it("activates and reads a fresh BrowserDataDO through real host authority", async () => {
-    const harness = await createWorkerdHarness();
-    manager = harness.manager;
-    await manager.registerAllDOClasses([
-      { source: INTERNAL_DO_SOURCE, className: "BrowserDataDO" },
-    ]);
-    const doDispatch = createDODispatch(manager, harness.tokenManager, harness.attachDurableObject);
-    const ref = {
-      source: INTERNAL_DO_SOURCE,
-      className: "BrowserDataDO",
-      objectKey: "fresh-browser-environment",
-    };
-
-    await expect(doDispatch.dispatch(ref, "durableWorkCapabilities")).resolves.toEqual([]);
-    await expect(doDispatch.dispatch(ref, "listImportJobs")).resolves.toEqual([]);
-    await expect(doDispatch.dispatch(ref, "getBookmarks", "/")).resolves.toEqual([]);
-  }, 30_000);
-
   it("resets and restores internal DO storage through a graceful workerd stop", async () => {
-    // BrowserDataDO writes are host-capability attested, which requires the
+    // BrowserVaultDO writes are host-capability attested, which requires the
     // installed product identity; synthesize one for this process the same way
     // a packaged build ships it.
     if (!process.env["VIBESTUDIO_APP_ROOT"]) {
@@ -509,28 +466,34 @@ describe("internal storage DOs under workerd", () => {
     const harness = await createWorkerdHarness();
     manager = harness.manager;
     await manager.registerAllDOClasses([
-      { source: INTERNAL_DO_SOURCE, className: "BrowserDataDO" },
+      { source: INTERNAL_DO_SOURCE, className: "BrowserVaultDO" },
     ]);
     const doDispatch = createDODispatch(manager, harness.tokenManager, harness.attachDurableObject);
     const ref = {
       source: INTERNAL_DO_SOURCE,
-      className: "BrowserDataDO",
+      className: "BrowserVaultDO",
       objectKey: "resettable-browser-environment",
     };
 
-    await doDispatch.dispatch(ref, "addBookmark", { title: "keep me", url: "https://example.com" });
-    expect((await doDispatch.dispatch(ref, "getBookmarks", "/")) as unknown[]).toHaveLength(1);
+    await doDispatch.dispatch(ref, "addPassword", {
+      url: "https://example.com/login",
+      username: "ada",
+      password: "keep me",
+      actionUrl: "https://example.com/session",
+      realm: "",
+    });
+    expect((await doDispatch.dispatch(ref, "getPasswords")) as unknown[]).toHaveLength(1);
 
     // Internal quiesce is a graceful workerd stop (no per-facet abort exists);
     // the next dispatch lazily restarts workerd against fresh storage.
     const reset = await manager.resetDOStorage(ref, "exercise internal maintenance");
-    expect((await doDispatch.dispatch(ref, "getBookmarks", "/")) as unknown[]).toHaveLength(0);
+    expect((await doDispatch.dispatch(ref, "getPasswords")) as unknown[]).toHaveLength(0);
     expect(await manager.listDOStorageBackups(ref)).toEqual([
       expect.objectContaining({ operationId: reset.operationId }),
     ]);
 
-    await manager.restoreDOStorageBackup(ref, reset.operationId, "restore the bookmark");
-    expect((await doDispatch.dispatch(ref, "getBookmarks", "/")) as unknown[]).toHaveLength(1);
+    await manager.restoreDOStorageBackup(ref, reset.operationId, "restore the password");
+    expect((await doDispatch.dispatch(ref, "getPasswords")) as unknown[]).toHaveLength(1);
   }, 60_000);
 
   // Manual empirical probe (~37s; opt-in via `.only` or removing `.skip`) behind
@@ -702,7 +665,7 @@ describe("internal storage DOs under workerd", () => {
     // Regression: the EvalDO binding was emitted as `unsafeEval = ()` (empty
     // struct), which workerd rejects with "Type mismatch; expected Void", so the
     // whole runtime failed to boot once EvalDO was registered. Other workerd tests
-    // register only WorkspaceDO/BrowserDataDO, so they never exercised this binding.
+    // register only WorkspaceDO/BrowserVaultDO, so they never exercised this binding.
     const harness = await createWorkerdHarness();
     manager = harness.manager;
     // registerAllDOClasses writes the capnp config and (re)starts workerd; a
@@ -1000,697 +963,14 @@ describe("internal storage DOs under workerd", () => {
     }
   }, 30_000);
 
-  it("lets a real PubSubChannel alarm read the semantic log through the nested DO relay", async () => {
-    const pubsubBuild = await bundleWorker(
-      "workers/pubsub-channel",
-      "workspace/workers/pubsub-channel/index.ts",
-      "pubsub-alarm-relay-test"
-    );
-    const gadRef = {
-      source: WORKSPACE_SOURCE_PROVIDER.source,
-      className: "GadWorkspaceDO",
-      objectKey: WORKSPACE_SOURCE_PROVIDER.objectKey,
-    };
-    const gadTarget = `do:${gadRef.source}:${gadRef.className}:${gadRef.objectKey}`;
-    let doDispatch: DODispatch | null = null;
-    const harness = await createWorkerdHarness({
-      getBuild: async (source: string) => {
-        if (source === "workers/pubsub-channel") return pubsubBuild;
-        if (source === WORKSPACE_SOURCE_PROVIDER.source) return compiledWorkspaceSourceBuild;
-        throw new Error(`unexpected build source ${source}`);
-      },
-      mainRpc: async (method, args, target) => {
-        if (target === "main" && method === "workers.resolveService") {
-          return {
-            kind: "durable-object",
-            source: gadRef.source,
-            className: gadRef.className,
-            objectKey: gadRef.objectKey,
-            targetId: gadTarget,
-          };
-        }
-        if (target === gadTarget) {
-          if (!doDispatch) throw new Error("DO dispatcher is not ready");
-          return doDispatch.dispatch(gadRef, method, ...args);
-        }
-        throw new Error(`unexpected nested RPC ${target}.${method}`);
-      },
-    });
-    manager = harness.manager;
-    doDispatch = createDODispatch(manager, harness.tokenManager, harness.attachDurableObject);
-    const channelRef = {
-      source: "workers/pubsub-channel",
-      className: "PubSubChannel",
-      objectKey: "alarm-relay-channel",
-    };
-
-    await manager.registerAllDOClasses([
-      { source: WORKSPACE_SOURCE_PROVIDER.source, className: "GadWorkspaceDO" },
-      { source: channelRef.source, className: channelRef.className },
-    ]);
-    await harness.attachDurableObject(gadRef);
-    await harness.attachDurableObject(channelRef);
-
-    await expect(doDispatch.dispatchAlarm(channelRef)).resolves.toEqual({ nextAlarm: null });
-  }, 30_000);
-
-  it("streams a real PubSubChannel subscription ACK through the DO relay", async () => {
-    const pubsubBuild = await bundleWorker(
-      "workers/pubsub-channel",
-      "workspace/workers/pubsub-channel/index.ts",
-      "pubsub-subscription-relay-test"
-    );
-    const gadRef = {
-      source: WORKSPACE_SOURCE_PROVIDER.source,
-      className: "GadWorkspaceDO",
-      objectKey: WORKSPACE_SOURCE_PROVIDER.objectKey,
-    };
-    const gadTarget = `do:${gadRef.source}:${gadRef.className}:${gadRef.objectKey}`;
-    let doDispatch: DODispatch | null = null;
-    const harness = await createWorkerdHarness({
-      getBuild: async (source: string) => {
-        if (source === "workers/pubsub-channel") return pubsubBuild;
-        if (source === WORKSPACE_SOURCE_PROVIDER.source) return compiledWorkspaceSourceBuild;
-        throw new Error(`unexpected build source ${source}`);
-      },
-      mainRpc: async (method, args, target) => {
-        if (target === "main" && method === "workers.resolveService") {
-          return {
-            kind: "durable-object",
-            source: gadRef.source,
-            className: gadRef.className,
-            objectKey: gadRef.objectKey,
-            targetId: gadTarget,
-          };
-        }
-        if (
-          target === "main" &&
-          (method === "runtime.setTitle" ||
-            method === "workspace-state.alarmSet" ||
-            method === "workspace-state.alarmClear")
-        ) {
-          return undefined;
-        }
-        if (target === gadTarget) {
-          if (!doDispatch) throw new Error("DO dispatcher is not ready");
-          return doDispatch.dispatch(gadRef, method, ...args);
-        }
-        throw new Error(`unexpected nested RPC ${target}.${method}`);
-      },
-    });
-    manager = harness.manager;
-    doDispatch = createDODispatch(manager, harness.tokenManager, harness.attachDurableObject);
-    const channelRef = {
-      source: "workers/pubsub-channel",
-      className: "PubSubChannel",
-      objectKey: "subscription-relay-channel",
-    };
-
-    await manager.registerAllDOClasses([
-      { source: WORKSPACE_SOURCE_PROVIDER.source, className: "GadWorkspaceDO" },
-      { source: channelRef.source, className: channelRef.className },
-    ]);
-    await harness.attachDurableObject(gadRef);
-    await harness.attachDurableObject(channelRef);
-
-    const controller = new AbortController();
-    let response: Response | null = null;
-    let records: AsyncIterator<unknown> | null = null;
-    try {
-      const port = manager.getPort();
-      if (!port) throw new Error("workerd port is not available");
-      response = await streamFromDurableObject(
-        channelRef,
-        "subscribe",
-        ["panel-delivery", { contextId: "context:test", replay: false }],
-        {
-          workerdUrl: `http://127.0.0.1:${port}`,
-          workerdGatewayToken: manager.getWorkerdGatewayToken(),
-          workerdDispatchSecret: manager.getDispatchSecret(),
-          callerId: "panel-delivery",
-          callerKind: "panel",
-          callerPanelId: "panel-delivery",
-          userId: "user-1",
-          authorization: (() => {
-            const methodAuthority = manager!.resolveDoRpcMethodAuthority(
-              channelRef.source,
-              channelRef.className,
-              channelRef.objectKey,
-              "subscribe"
-            );
-            if (!methodAuthority)
-              throw new Error("subscribe is absent from the exact build catalog");
-            return attestWorkspaceDoRpc({
-              caller: createVerifiedCaller("panel-delivery", "panel", null, null, {
-                userId: "user-1",
-                handle: "user1",
-              }),
-              source: channelRef.source,
-              className: channelRef.className,
-              objectKey: channelRef.objectKey,
-              method: "subscribe",
-              workspaceId: "workspace:internal-workerd-test",
-              workspaceMember: true,
-              sessionId: "test:subscribe",
-              service: {
-                name: PUBSUB_WORKSPACE_SERVICE.name,
-                principals: PUBSUB_WORKSPACE_SERVICE.authority.principals,
-              },
-              methodAuthority: {
-                effect: methodAuthority.effect,
-                ...(methodAuthority.userlandCapability
-                  ? { capability: methodAuthority.userlandCapability.canonicalCapability }
-                  : {}),
-                tier: methodAuthority.access?.tier ?? "open",
-              },
-            });
-          })(),
-        },
-        controller.signal
-      );
-      if (!response.ok) {
-        throw new Error(`subscription relay failed (${response.status}): ${await response.text()}`);
-      }
-      records = readChannelSubscriptionRecords(response)[Symbol.asyncIterator]();
-      const first = await records.next();
-      expect(first.done).toBe(false);
-      expect(first.value).toMatchObject({
-        kind: "subscribed",
-        result: { ok: true, participantId: "user:user-1" },
-      });
-      // The test owns this live subscription response. End the subscription,
-      // observe its response EOF, and dispose the raw body before the harness
-      // asks workerd to exit; an ACK alone is not a terminal stream state.
-      await doDispatch.dispatch(channelRef, "adminUnsubscribeParticipant", "user:user-1");
-      await expect(records.next()).resolves.toMatchObject({ done: true });
-      await records.return?.();
-      records = null;
-      if (response.body && !response.body.locked) {
-        await response.body.cancel();
-      }
-      response = null;
-      const participants = (await doDispatch.dispatch(channelRef, "getParticipants")) as Array<{
-        id: string;
-      }>;
-      expect(participants).not.toContainEqual(expect.objectContaining({ id: "user:user-1" }));
-    } finally {
-      await records?.return?.();
-      if (response?.body && !response.body.locked) {
-        await response.body.cancel();
-      }
-      controller.abort();
-    }
-  }, 30_000);
-
-  it("indexes panels into FTS5 and returns matches via WorkspaceDO.panelSearch under real workerd storage", async () => {
-    const harness = await createWorkerdHarness();
-    manager = harness.manager;
-    await manager.registerAllDOClasses([{ source: INTERNAL_DO_SOURCE, className: "WorkspaceDO" }]);
-    const ref = {
-      source: INTERNAL_DO_SOURCE,
-      className: "WorkspaceDO",
-      objectKey: "workspace-fts5",
-    };
-
-    // Production order is slotCreate → panelIndex: the slot needs to exist
-    // and bind to a current entity before panelIndex can stamp the title
-    // onto entities.display_title (the new source of truth for titles).
-    for (const key of ["entry-a", "entry-b"]) {
-      await harness.callDurableObject(ref, "entityActivate", {
-        kind: "panel",
-        source: { repoPath: "panels/example", effectiveVersion: "v1" },
-        contextId: "ctx-1",
-        key,
-      });
-    }
-    await harness.callDurableObject(ref, "slotCreate", {
-      slotId: "slot-alpha",
-      parentSlotId: null,
-      initialEntry: {
-        entryKey: "entry-a",
-        entityId: "panel:entry-a",
-        source: "panels/example",
-        contextId: "ctx-1",
-      },
-    });
-    await harness.callDurableObject(ref, "slotCreate", {
-      slotId: "slot-beta",
-      parentSlotId: null,
-      initialEntry: {
-        entryKey: "entry-b",
-        entityId: "panel:entry-b",
-        source: "panels/example",
-        contextId: "ctx-1",
-      },
-    });
-    await harness.callDurableObject(ref, "panelIndex", {
-      id: "slot-alpha",
-      title: "Alpha chat panel",
-      path: "about/browser-import-inspector",
-      manifestDescription: "primary chat workspace",
-      keywords: ["chat", "alpha"],
-    });
-    await harness.callDurableObject(ref, "panelIndex", {
-      id: "slot-beta",
-      title: "Beta notes panel",
-      manifestDescription: "scratchpad for notes",
-      keywords: ["notes"],
-    });
-
-    const matches = (await harness.callDurableObject(ref, "panelSearch", "chat", 10)) as Array<{
-      id: string;
-      title: string;
-    }>;
-    expect(matches.map((m) => m.id)).toContain("slot-alpha");
-    expect(matches.find((m) => m.id === "slot-alpha")?.title).toBe("Alpha chat panel");
-    expect(matches.find((m) => m.id === "slot-beta")).toBeUndefined();
-
-    const treeMatches = (await harness.callDurableObject(ref, "panelTreeSearch", {
-      query: "browser-import-inspector",
-      limit: 10,
-    })) as { hits: Array<{ node: { slotId: string } }> };
-    expect(treeMatches.hits.map((hit) => hit.node.slotId)).toEqual(["slot-alpha"]);
-  }, 30_000);
-
-  it("supports BrowserDataDO history FTS5 search in real workerd storage", async () => {
+  it("returns affected counts for BrowserVaultDO cookie clears", async () => {
     const harness = await createWorkerdHarness();
     manager = harness.manager;
     await manager.registerAllDOClasses([
-      { source: INTERNAL_DO_SOURCE, className: "BrowserDataDO" },
+      { source: INTERNAL_DO_SOURCE, className: "BrowserVaultDO" },
     ]);
 
-    const ref = { source: INTERNAL_DO_SOURCE, className: "BrowserDataDO", objectKey: "global" };
-    const historyBatch = [
-      {
-        url: "https://example.com/docs/storage",
-        title: "Durable storage guide",
-        visitCount: 3,
-        typedCount: 1,
-        firstVisitTime: 100,
-        lastVisitTime: 200,
-        visits: [
-          { visitTime: 100, transition: "typed", typed: true },
-          { visitTime: 150, transition: "link" },
-          { visitTime: 200, transition: "reload" },
-        ],
-      },
-    ];
-    const importMeta = { sourceId: "chrome:test-source" };
-    await harness.callDurableObject(ref, "addHistoryBatch", historyBatch, importMeta);
-    await harness.callDurableObject(ref, "addHistoryBatch", historyBatch, importMeta);
-    const aggregateOnlyHistoryBatch = [
-      {
-        url: "https://aggregate.example.com/docs",
-        title: "Aggregate history entry",
-        visitCount: 5,
-        typedCount: 2,
-        firstVisitTime: 300,
-        lastVisitTime: 700,
-      },
-    ];
-    await harness.callDurableObject(ref, "addHistoryBatch", aggregateOnlyHistoryBatch, importMeta);
-    await harness.callDurableObject(ref, "addHistoryBatch", aggregateOnlyHistoryBatch, importMeta);
-
-    await expect(
-      harness.callDurableObject(ref, "searchHistory", "durable", 10)
-    ).resolves.toMatchObject([
-      {
-        url: "https://example.com/docs/storage",
-        title: "Durable storage guide",
-        visit_count: 3,
-        typed_count: 1,
-        first_visit: 100,
-        last_visit: 200,
-      },
-    ]);
-    await expect(
-      harness.callDurableObject(ref, "searchHistory", "aggregate", 10)
-    ).resolves.toMatchObject([
-      {
-        url: "https://aggregate.example.com/docs",
-        title: "Aggregate history entry",
-        visit_count: 5,
-        typed_count: 2,
-        first_visit: 300,
-        last_visit: 700,
-      },
-    ]);
-    await expect(harness.callDurableObject(ref, "deleteHistoryRange", 100, 200)).resolves.toBe(1);
-    await expect(harness.callDurableObject(ref, "searchHistory", "durable", 10)).resolves.toEqual(
-      []
-    );
-  }, 30_000);
-
-  it("persists the GAD trajectory ledger through real workerd DO dispatch", async () => {
-    const harness = await createWorkerdHarness({
-      getBuild: async (source: string) => {
-        if (source === WORKSPACE_SOURCE_PROVIDER.source) return compiledWorkspaceSourceBuild;
-        throw new Error(`unexpected build source ${source}`);
-      },
-    });
-    manager = harness.manager;
-    await manager.registerAllDOClasses([
-      {
-        source: WORKSPACE_SOURCE_PROVIDER.source,
-        className: WORKSPACE_SOURCE_PROVIDER.className,
-      },
-    ]);
-
-    const ref = { ...WORKSPACE_SOURCE_PROVIDER };
-    const userMessageId = "01900000-0000-7000-8000-000000000001";
-    await harness.callDurableObject(ref, "appendLogEvent", {
-      logId: "trajectory-live",
-      head: "branch-live",
-      logKind: "trajectory",
-      owner: { kind: "agent", id: "test" },
-      events: [
-        {
-          envelopeId: userMessageId,
-          actor: { kind: "user", id: "user" },
-          payloadKind: "message.completed",
-          causality: { messageId: userMessageId },
-          payload: {
-            protocol: "agentic.trajectory.v1",
-            role: "user",
-            blocks: [
-              { blockId: `${userMessageId}:block:0`, type: "text", content: "write the file" },
-            ],
-            outcome: "completed",
-          },
-          appendedAt: new Date(1).toISOString(),
-        },
-      ],
-    });
-    const status = (await harness.callDurableObject(ref, "getStatus")) as Array<{
-      metric: string;
-      value: number;
-    }>;
-    expect(status.find((row) => row.metric === "Log heads")?.value).toBe(1);
-    expect(status.find((row) => row.metric === "Log events")?.value).toBe(1);
-    const events = (await harness.callDurableObject(ref, "readLog", {
-      logId: "trajectory-live",
-      head: "branch-live",
-    })) as Array<{
-      envelopeId: string;
-      actor: { kind: string; id: string };
-      payloadKind: string;
-    }>;
-    expect(events).toEqual([
-      expect.objectContaining({
-        envelopeId: userMessageId,
-        actor: { kind: "user", id: "user" },
-        payloadKind: "message.completed",
-      }),
-    ]);
-    // Semantic workspace/file provenance traversal is exercised through the
-    // canonical VCS inspect/neighbors/history tests. This storage integration
-    // test only proves that the normalized trajectory ledger survives real
-    // workerd dispatch; it must not recreate a parallel provenance API.
-  }, 30_000);
-
-  it("records BrowserDataDO history visits and title updates without double-counting", async () => {
-    const harness = await createWorkerdHarness();
-    manager = harness.manager;
-    await manager.registerAllDOClasses([
-      { source: INTERNAL_DO_SOURCE, className: "BrowserDataDO" },
-    ]);
-
-    const ref = {
-      source: INTERNAL_DO_SOURCE,
-      className: "BrowserDataDO",
-      objectKey: "global-record",
-    };
-    await harness.callDurableObject(ref, "recordHistoryVisit", {
-      url: "https://example.com/app",
-      title: "Example App",
-      transition: "typed",
-      typed: true,
-      visitTime: 100,
-      panelId: "panel-a",
-    });
-    await harness.callDurableObject(ref, "updateHistoryTitle", {
-      url: "https://example.com/app",
-      title: "Example App Updated",
-      observedAt: 150,
-    });
-    await expect(
-      harness.callDurableObject(ref, "searchHistoryForAutocomplete", {
-        query: "updated",
-        limit: 10,
-      })
-    ).resolves.toMatchObject([
-      {
-        url: "https://example.com/app",
-        title: "Example App Updated",
-        visit_count: 1,
-        typed_count: 1,
-        first_visit: 100,
-        last_visit: 100,
-      },
-    ]);
-    await harness.callDurableObject(ref, "recordHistoryVisit", {
-      url: "https://example.com/app",
-      transition: "back_forward",
-      typed: false,
-      visitTime: 200,
-      panelId: "panel-a",
-    });
-
-    await expect(
-      harness.callDurableObject(ref, "searchHistoryForAutocomplete", {
-        query: "updated",
-        limit: 10,
-      })
-    ).resolves.toMatchObject([
-      {
-        url: "https://example.com/app",
-        title: "Example App Updated",
-        visit_count: 2,
-        typed_count: 1,
-        first_visit: 100,
-        last_visit: 200,
-      },
-    ]);
-  }, 30_000);
-
-  it("deletes BrowserDataDO history ranges per visit and recomputes URL summaries", async () => {
-    const harness = await createWorkerdHarness();
-    manager = harness.manager;
-    await manager.registerAllDOClasses([
-      { source: INTERNAL_DO_SOURCE, className: "BrowserDataDO" },
-    ]);
-
-    const ref = {
-      source: INTERNAL_DO_SOURCE,
-      className: "BrowserDataDO",
-      objectKey: "global-history-range",
-    };
-    for (const visit of [
-      { visitTime: 100, transition: "typed", typed: true },
-      { visitTime: 200, transition: "link", typed: false },
-      { visitTime: 300, transition: "reload", typed: false },
-    ]) {
-      await harness.callDurableObject(ref, "recordHistoryVisit", {
-        url: "https://example.com/app",
-        title: "Range App",
-        panelId: "panel-a",
-        ...visit,
-      });
-    }
-    await harness.callDurableObject(ref, "recordHistoryVisit", {
-      url: "https://example.com/other",
-      title: "Range Other",
-      transition: "link",
-      visitTime: 220,
-      panelId: "panel-b",
-    });
-
-    await expect(harness.callDurableObject(ref, "deleteHistoryRange", 150, 250)).resolves.toBe(2);
-    await expect(
-      harness.callDurableObject(ref, "getHistory", { limit: 10 })
-    ).resolves.toMatchObject([
-      {
-        url: "https://example.com/app",
-        title: "Range App",
-        visit_count: 2,
-        typed_count: 1,
-        first_visit: 100,
-        last_visit: 300,
-      },
-    ]);
-    await expect(harness.callDurableObject(ref, "searchHistory", "other", 10)).resolves.toEqual([]);
-
-    await expect(harness.callDurableObject(ref, "deleteHistoryRange", 50, 150)).resolves.toBe(1);
-    await expect(
-      harness.callDurableObject(ref, "getHistory", { limit: 10 })
-    ).resolves.toMatchObject([
-      {
-        url: "https://example.com/app",
-        visit_count: 1,
-        typed_count: 0,
-        first_visit: 300,
-        last_visit: 300,
-      },
-    ]);
-
-    await expect(harness.callDurableObject(ref, "deleteHistoryRange", 250, 350)).resolves.toBe(1);
-    await expect(harness.callDurableObject(ref, "getHistory", { limit: 10 })).resolves.toEqual([]);
-  }, 30_000);
-
-  it("keeps BrowserDataDO browser-data imports incremental across repeated runs", async () => {
-    const harness = await createWorkerdHarness();
-    manager = harness.manager;
-    await manager.registerAllDOClasses([
-      { source: INTERNAL_DO_SOURCE, className: "BrowserDataDO" },
-    ]);
-
-    const ref = {
-      source: INTERNAL_DO_SOURCE,
-      className: "BrowserDataDO",
-      objectKey: "global-import-idempotency",
-    };
-    const meta = { sourceId: "chrome:test-source" };
-
-    await harness.callDurableObject(
-      ref,
-      "addBookmarksBatch",
-      [
-        {
-          title: "Docs",
-          url: "https://example.com/docs",
-          folder: ["Bookmarks Bar"],
-          dateAdded: 100,
-          sourceId: "bookmark-1",
-        },
-      ],
-      meta
-    );
-    await harness.callDurableObject(
-      ref,
-      "addBookmarksBatch",
-      [
-        {
-          title: "Docs Updated",
-          url: "https://example.com/docs",
-          folder: ["Bookmarks Bar"],
-          dateAdded: 100,
-          dateModified: 200,
-          sourceId: "bookmark-1",
-        },
-      ],
-      meta
-    );
-
-    await expect(harness.callDurableObject(ref, "getAllBookmarks")).resolves.toMatchObject([
-      {
-        title: "Docs Updated",
-        url: "https://example.com/docs",
-        folder_path: "/Bookmarks Bar",
-        date_added: 100,
-        date_modified: 200,
-      },
-    ]);
-
-    await harness.callDurableObject(
-      ref,
-      "addSearchEnginesBatch",
-      [
-        {
-          name: "Example Search",
-          keyword: "ex",
-          searchUrl: "https://example.com/search?q={searchTerms}",
-          isDefault: false,
-          sourceId: "search-1",
-        },
-      ],
-      meta
-    );
-    await harness.callDurableObject(
-      ref,
-      "addSearchEnginesBatch",
-      [
-        {
-          name: "Example Search Updated",
-          keyword: "ex",
-          searchUrl: "https://example.com/search?q={searchTerms}",
-          suggestUrl: "https://example.com/suggest?q={searchTerms}",
-          isDefault: true,
-          sourceId: "search-1",
-        },
-      ],
-      meta
-    );
-    await expect(harness.callDurableObject(ref, "getSearchEngines")).resolves.toMatchObject([
-      {
-        name: "Example Search Updated",
-        keyword: "ex",
-        is_default: 1,
-      },
-    ]);
-
-    await harness.callDurableObject(
-      ref,
-      "addFormFillBatch",
-      [
-        {
-          fieldName: "email_address",
-          type: "email",
-          value: "me@example.com",
-          useCount: 3,
-          updatedAt: 100,
-        },
-      ],
-      meta
-    );
-    await harness.callDurableObject(
-      ref,
-      "addFormFillBatch",
-      [
-        {
-          fieldName: "email",
-          type: "email",
-          value: "me@example.com",
-          useCount: 3,
-          updatedAt: 100,
-        },
-      ],
-      meta
-    );
-    await harness.callDurableObject(
-      ref,
-      "addFormFillBatch",
-      [
-        {
-          fieldName: "contact-email",
-          type: "email",
-          value: "me@example.com",
-          useCount: 5,
-          updatedAt: 200,
-        },
-      ],
-      meta
-    );
-    await expect(
-      harness.callDurableObject(ref, "getFormFillSuggestions", { type: "email" })
-    ).resolves.toMatchObject([
-      {
-        fieldName: "email_address",
-        type: "email",
-        value: "me@example.com",
-        useCount: 5,
-        updatedAt: 200,
-      },
-    ]);
-  }, 30_000);
-
-  it("returns affected counts for BrowserDataDO cookie clears", async () => {
-    const harness = await createWorkerdHarness();
-    manager = harness.manager;
-    await manager.registerAllDOClasses([
-      { source: INTERNAL_DO_SOURCE, className: "BrowserDataDO" },
-    ]);
-
-    const ref = { source: INTERNAL_DO_SOURCE, className: "BrowserDataDO", objectKey: "global" };
+    const ref = { source: INTERNAL_DO_SOURCE, className: "BrowserVaultDO", objectKey: "global" };
     await harness.callDurableObject(ref, "addCookiesBatch", {
       jobId: "cookie-clear-job",
       batchIndex: 0,
@@ -1728,14 +1008,14 @@ describe("internal storage DOs under workerd", () => {
     await expect(harness.callDurableObject(ref, "clearAllCookies")).resolves.toBe(1);
   }, 30_000);
 
-  it("round-trips BrowserDataDO encrypted passwords in real workerd storage", async () => {
+  it("round-trips BrowserVaultDO encrypted passwords in real workerd storage", async () => {
     const harness = await createWorkerdHarness();
     manager = harness.manager;
     await manager.registerAllDOClasses([
-      { source: INTERNAL_DO_SOURCE, className: "BrowserDataDO" },
+      { source: INTERNAL_DO_SOURCE, className: "BrowserVaultDO" },
     ]);
 
-    const ref = { source: INTERNAL_DO_SOURCE, className: "BrowserDataDO", objectKey: "global" };
+    const ref = { source: INTERNAL_DO_SOURCE, className: "BrowserVaultDO", objectKey: "global" };
     const id = await harness.callDurableObject(ref, "addPassword", {
       url: "https://example.com/login",
       username: "ada",
@@ -1762,14 +1042,14 @@ describe("internal storage DOs under workerd", () => {
     ]);
   }, 30_000);
 
-  it("supports BrowserDataDO autofill password lookup semantics in real workerd storage", async () => {
+  it("supports BrowserVaultDO autofill password lookup semantics in real workerd storage", async () => {
     const harness = await createWorkerdHarness();
     manager = harness.manager;
     await manager.registerAllDOClasses([
-      { source: INTERNAL_DO_SOURCE, className: "BrowserDataDO" },
+      { source: INTERNAL_DO_SOURCE, className: "BrowserVaultDO" },
     ]);
 
-    const ref = { source: INTERNAL_DO_SOURCE, className: "BrowserDataDO", objectKey: "global" };
+    const ref = { source: INTERNAL_DO_SOURCE, className: "BrowserVaultDO", objectKey: "global" };
     const id = (await harness.callDurableObject(ref, "addPassword", {
       url: "https://example.com/login",
       username: "ada",
@@ -1804,14 +1084,14 @@ describe("internal storage DOs under workerd", () => {
     ]);
   }, 30_000);
 
-  it("upserts duplicate BrowserDataDO password batch imports in real workerd storage", async () => {
+  it("upserts duplicate BrowserVaultDO password batch imports in real workerd storage", async () => {
     const harness = await createWorkerdHarness();
     manager = harness.manager;
     await manager.registerAllDOClasses([
-      { source: INTERNAL_DO_SOURCE, className: "BrowserDataDO" },
+      { source: INTERNAL_DO_SOURCE, className: "BrowserVaultDO" },
     ]);
 
-    const ref = { source: INTERNAL_DO_SOURCE, className: "BrowserDataDO", objectKey: "global" };
+    const ref = { source: INTERNAL_DO_SOURCE, className: "BrowserVaultDO", objectKey: "global" };
     const password = {
       url: "https://example.com/login",
       username: "ada",

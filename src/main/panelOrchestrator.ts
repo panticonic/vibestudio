@@ -1211,22 +1211,6 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
     }
   }
 
-  // =========================================================================
-  // Persistence delegation (server-first)
-  // =========================================================================
-
-  async setCollapsed(panelId: string, collapsed: boolean): Promise<void> {
-    await this.shellCore.setCollapsed(asPanelSlotId(panelId), collapsed);
-  }
-
-  async expandIds(panelIds: string[]): Promise<void> {
-    await this.shellCore.expandIds(panelIds);
-  }
-
-  async getCollapsedIds(): Promise<string[]> {
-    return this.shellCore.getCollapsedIds();
-  }
-
   persistFocusedPath(panelId: string): void {
     void this.shellCore
       .notifyFocused(asPanelSlotId(panelId))

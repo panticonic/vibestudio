@@ -16,7 +16,7 @@ import {
   hashDevelopmentPackageClosure,
   type PreparedDevelopmentBuild,
 } from "./developmentExecutor.js";
-import { developmentRecipes } from "@panticonic/builtin/development/recipes";
+import { developmentRecipeFixture } from "./developmentRecipeFixture.test-helper.js";
 import type { ExactRepositorySnapshotPlan } from "../vcsHost/workspaceVcs.js";
 
 const roots: string[] = [];
@@ -99,7 +99,7 @@ function runFor(plan: PreparedDevelopmentBuild): DevelopmentRun {
 }
 
 async function manualPlan(runId: string, pnpmCliPath: string): Promise<PreparedDevelopmentBuild> {
-  const recipe = developmentRecipes(process.platform, process.arch)[0]!;
+  const recipe = developmentRecipeFixture(process.platform, process.arch);
   const pnpmRootPath = path.dirname(pnpmCliPath);
   const nodeDigest = createHash("sha256")
     .update(await fsp.readFile(process.execPath))
@@ -192,7 +192,7 @@ describe("DevelopmentExecutor exact private execution", () => {
       materializeSource: vi.fn(),
     });
 
-    const recipe = developmentRecipes(process.platform, process.arch)[0]!;
+    const recipe = developmentRecipeFixture(process.platform, process.arch);
     const first = await executor.prepareExact({
       session: session(),
       runId: "run-one",

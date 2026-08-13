@@ -5,12 +5,16 @@ const { createNativeBoundary } = require("./metroNativeBoundary.cjs");
 
 const projectRoot = __dirname;
 const monorepoRoot = path.resolve(projectRoot, "..", "..");
+const exactUserlandRoot = process.env.VIBESTUDIO_USERLAND_ROOT;
+if (!exactUserlandRoot) {
+  throw new Error("VIBESTUDIO_USERLAND_ROOT must name the exact Base checkout Metro will bundle");
+}
 const workspaceAppRoot = process.env.VIBESTUDIO_WORKSPACE_APP_ROOT
   ? path.resolve(process.env.VIBESTUDIO_WORKSPACE_APP_ROOT)
-  : path.resolve(monorepoRoot, "workspace", "apps", "mobile");
+  : path.resolve(exactUserlandRoot, "apps", "mobile");
 const workspaceNodeModules = process.env.VIBESTUDIO_WORKSPACE_NODE_MODULES
   ? path.resolve(process.env.VIBESTUDIO_WORKSPACE_NODE_MODULES)
-  : path.resolve(monorepoRoot, "workspace", "node_modules");
+  : path.resolve(exactUserlandRoot, "node_modules");
 const nativeBoundary = createNativeBoundary(workspaceAppRoot);
 
 /**

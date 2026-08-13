@@ -6,6 +6,13 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import * as YAML from "yaml";
 import { printPairHelp, runPairServer } from "./cli/lib/pair-server.mjs";
 import { cliConfigRoot } from "./cli/lib/config-paths.mjs";
+import { GitClient } from "@vibestudio/git";
+import { sha256Hex } from "@vibestudio/content-addressing";
+import { readBaseTemplateRelease } from "@vibestudio/workspace/baseTemplateRelease";
+import {
+  acquireRootTemplateSnapshot,
+  seedRootTemplateSnapshotFromCheckout,
+} from "../src/server/acquireRootTemplateSnapshot.ts";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const projectPath = process.env.VIBESTUDIO_DOGFOOD_PROJECT || "projects/vibestudio";
@@ -43,19 +50,26 @@ function tryRun(command, args, options = {}) {
   return result.status === 0 ? (result.stdout ?? "") : null;
 }
 
-function copyWorkspaceTemplate(wsDir) {
+async function copyWorkspaceTemplate(wsDir, opts = {}) {
   const sourceRoot = path.join(wsDir, "source");
-  const candidates = [
-    path.join(repoRoot, "workspace-template"),
-    path.join(repoRoot, "resources", "workspace-template"),
-    path.join(repoRoot, "workspace"),
-  ];
-  const templateDir = candidates.find((candidate) =>
-    fs.existsSync(path.join(candidate, "meta", "vibestudio.yml"))
+  const pin = readBaseTemplateRelease(repoRoot).baseTemplate;
+  const checkout = path.resolve(
+    opts.baseCheckout ?? process.env.VIBESTUDIO_BASE_CHECKOUT ?? ""
   );
-  if (!templateDir) {
-    throw new Error(`Workspace template not found under ${repoRoot}`);
+  if (!opts.baseCheckout && !process.env.VIBESTUDIO_BASE_CHECKOUT) {
+    throw new Error(
+      "VIBESTUDIO_BASE_CHECKOUT must name the committed Base checkout used for self-development"
+    );
   }
+  const statePath = path.join(wsDir, "state");
+  const git = new GitClient();
+  const sink = {
+    async put(bytes) {
+      return { digest: sha256Hex(bytes), size: bytes.byteLength };
+    },
+  };
+  await seedRootTemplateSnapshotFromCheckout({ statePath, checkout, pin, git, sink });
+  const snapshot = await acquireRootTemplateSnapshot({ statePath, pin, git, sink });
 
   const existingProject = path.join(sourceRoot, projectPath);
   const heldProject = path.join(wsDir, ".dogfood-project-sync");
@@ -76,13 +90,13 @@ function copyWorkspaceTemplate(wsDir) {
   fs.rmSync(sourceRoot, { recursive: true, force: true });
   fs.mkdirSync(sourceRoot, { recursive: true });
   try {
-    fs.cpSync(templateDir, sourceRoot, {
-      recursive: true,
-      filter: (src) => {
-        const name = path.basename(src);
-        return name !== ".git" && name !== "node_modules" && name !== ".cache";
-      },
-    });
+    for (const file of snapshot.files) {
+      const target = path.join(sourceRoot, file.path);
+      const bytes = snapshot.readFile(file.path);
+      if (!bytes) throw new Error(`Verified Base snapshot omitted ${file.path}`);
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.writeFileSync(target, bytes, { mode: file.mode });
+    }
     if (fs.existsSync(heldProject)) {
       const restoredProject = path.join(sourceRoot, projectPath);
       fs.rmSync(restoredProject, { recursive: true, force: true });
@@ -166,13 +180,13 @@ function writeDogfoodRemoteConfig(wsDir, remoteUrl) {
   fs.renameSync(tmpPath, configPath);
 }
 
-export function bootstrapWorkspace(name, opts = {}) {
+export async function bootstrapWorkspace(name, opts = {}) {
   const wsDir = workspaceDir(name);
   const configPath = path.join(wsDir, "source", "meta", "vibestudio.yml");
   if (!fs.existsSync(configPath)) {
     console.log(`[dogfood] Creating workspace "${name}" at ${wsDir}`);
   }
-  copyWorkspaceTemplate(wsDir);
+  await copyWorkspaceTemplate(wsDir, opts);
   const projectDir = path.join(wsDir, "source", projectPath);
   if (fs.existsSync(projectDir)) {
     if (!fs.existsSync(path.join(projectDir, ".git"))) {
@@ -258,13 +272,13 @@ export function createDogfoodPairHooks({ workspaceName }) {
   const restartTimes = [];
 
   return {
-    beforeStart({ options }) {
+    async beforeStart({ options }) {
       if (options.dev) {
         throw new Error(
           "dogfood-server always uses a persistent managed workspace; --dev is not supported"
         );
       }
-      bootstrapWorkspace(workspaceName);
+      await bootstrapWorkspace(workspaceName);
       printDirtyWarning();
       buildServer();
     },
@@ -332,7 +346,7 @@ export function createDogfoodPairHooks({ workspaceName }) {
   };
 }
 
-export function runDogfoodServer(argv = process.argv.slice(2)) {
+export async function runDogfoodServer(argv = process.argv.slice(2)) {
   const config = {
     commandName: "dogfood-server",
     logPrefix: "dogfood",
@@ -352,12 +366,12 @@ export function runDogfoodServer(argv = process.argv.slice(2)) {
     return;
   }
   const workspaceName = process.env.VIBESTUDIO_DOGFOOD_WORKSPACE || "dogfood";
-  runPairServer(config, argv, createDogfoodPairHooks({ workspaceName }));
+  await runPairServer(config, argv, createDogfoodPairHooks({ workspaceName }));
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   try {
-    runDogfoodServer();
+    await runDogfoodServer();
   } catch (error) {
     console.error(`[dogfood] ${error instanceof Error ? error.message : String(error)}`);
     process.exit(1);

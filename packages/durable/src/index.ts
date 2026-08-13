@@ -52,8 +52,6 @@ import {
   durableObjectSchemaDescriptor,
   installDurableObjectSchema,
   validateDurableObjectSchemaIndexes,
-  type DurableObjectSchemaBaseline,
-  type DurableObjectSchemaMigration,
 } from "./schema.js";
 import { InvocationContext } from "./invocation-context.js";
 import { DurableWorkReadiness } from "./durable-work-readiness.js";
@@ -102,11 +100,7 @@ export interface DORef {
   objectKey: string;
 }
 
-export type {
-  DurableObjectSchemaBaseline,
-  DurableObjectSchemaMigration,
-  SchemaSqlStorage,
-} from "./schema.js";
+export type { SchemaSqlStorage } from "./schema.js";
 export { InvocationContext } from "./invocation-context.js";
 
 export interface LifecyclePrepareInput {
@@ -188,19 +182,6 @@ export abstract class DurableObjectBase {
   }
 
   protected abstract createTables(): void;
-
-  /** Exact oldest deployed shape this build deliberately supports. */
-  protected abstract schemaProductionBaseline(): DurableObjectSchemaBaseline;
-
-  /** Retained, contiguous forward migrations after the production baseline. */
-  protected schemaMigrations(): readonly DurableObjectSchemaMigration[] {
-    return [];
-  }
-
-  /** Exact representative object keys captured and replayed by publication diagnostics. */
-  protected schemaMigrationFixtureObjectKeys(): readonly string[] {
-    return [];
-  }
 
   /** Activation-local initialization that requires the committed schema. */
   protected afterSchemaReady(): void {}
@@ -316,8 +297,6 @@ export abstract class DurableObjectBase {
       version: (this.constructor as typeof DurableObjectBase).schemaVersion,
       storage: this.ctx.storage,
       schemaTables: this.requiredTables(),
-      productionBaseline: this.schemaProductionBaseline(),
-      migrations: this.schemaMigrations(),
       createSchema: () => this.createTables(),
       validateSchema: () => this.validateSchema(),
     });
@@ -338,14 +317,10 @@ export abstract class DurableObjectBase {
       version: (this.constructor as typeof DurableObjectBase).schemaVersion,
       storage: this.ctx.storage,
       schemaTables: this.requiredTables(),
-      productionBaseline: this.schemaProductionBaseline(),
-      migrations: this.schemaMigrations(),
       createSchema: () => this.createTables(),
       validateSchema: () => this.validateSchema(),
     };
-    return Response.json(
-      durableObjectSchemaDescriptor(definition, this.schemaMigrationFixtureObjectKeys())
-    );
+    return Response.json(durableObjectSchemaDescriptor(definition));
   }
 
   protected getStateValue(key: string): string | null {
@@ -705,7 +680,7 @@ export abstract class DurableObjectBase {
           }
           // Live module replacement may update the class schema while this
           // activation retains its previous schemaReady cache. Lifecycle is the
-          // generation boundary, so transactionally refresh migrations here.
+          // generation boundary, so revalidate the one current schema here.
           this.ensureSchema();
           const result =
             method === "__lifecycle/prepare"

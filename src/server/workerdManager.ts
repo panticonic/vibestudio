@@ -57,7 +57,6 @@ import {
   RUNTIME_IMAGE_UNAVAILABLE_ERROR_CODE,
   RUNTIME_IMAGE_WARMING_ERROR_CODE,
 } from "./runtimeReadinessError.js";
-import { migrationDefinitionSourceDigest } from "./buildV2/durableObjectSchemaSource.js";
 import type { WorkerdPerformanceSnapshot } from "@vibestudio/service-schemas/hostPerformance";
 
 const log = createDevLogger("WorkerdManager");
@@ -105,37 +104,14 @@ export interface DurableObjectPublishedSchemaDescriptor {
   className: string;
   version: number;
   freshSchemaFingerprint: string;
-  baseline: { version: number; name: string };
-  migrations: Array<{
-    version: number;
-    name: string;
-    definitionDigest: string;
-  }>;
-  fixtureObjectKeys?: string[];
 }
 
-interface DurableObjectRuntimeSchemaDescriptor extends Omit<
-  DurableObjectPublishedSchemaDescriptor,
-  "migrations"
-> {
-  migrations: Array<{ version: number; name: string }>;
-}
+type DurableObjectRuntimeSchemaDescriptor = DurableObjectPublishedSchemaDescriptor;
 
 interface SchemaProbeBuild {
   source: string;
   className: string;
   build: BuildResult;
-}
-
-interface DurableObjectSchemaFixtureManifest {
-  source: string;
-  className: string;
-  objectKey: string;
-  effectiveVersion: string;
-  schemaVersion: number;
-  sourceHash: string;
-  files: string[];
-  capturedAt: number;
 }
 
 /** Diagnostic env vars forwarded from the host process into every worker's
@@ -626,7 +602,6 @@ export class WorkerdManager {
     const layout = stateLayout(this.deps.statePath).databases;
     fs.mkdirSync(layout.root, { recursive: true });
     fs.mkdirSync(layout.durableObjectBackupsDir, { recursive: true });
-    fs.mkdirSync(layout.durableObjectSchemaFixturesDir, { recursive: true, mode: 0o700 });
     this.doMaintenanceDb = new DatabaseSync(layout.durableObjectMaintenanceDb);
     this.doMaintenanceDb.exec(`
       PRAGMA journal_mode = WAL;
@@ -698,14 +673,6 @@ export class WorkerdManager {
         class_name TEXT NOT NULL,
         effective_version TEXT NOT NULL,
         PRIMARY KEY (state_hash, source, class_name)
-      );
-      CREATE TABLE IF NOT EXISTS do_schema_fixtures (
-        source TEXT NOT NULL,
-        class_name TEXT NOT NULL,
-        effective_version TEXT NOT NULL,
-        object_key TEXT NOT NULL,
-        manifest_json TEXT NOT NULL,
-        PRIMARY KEY (source, class_name, effective_version, object_key)
       );
     `);
     const open = this.readOpenDurableObjectMaintenance();
@@ -2247,7 +2214,7 @@ export class WorkerdManager {
 
       // Manifest-declared provider bindings for this internal DO class
       // (meta/vibestudio.yml `providers.*` → e.g. EVAL_ENGINE_SOURCE for EvalDO,
-      // BROWSER_DATA_BROKER_SOURCE for BrowserDataDO). Injected here so internal
+      // BROWSER_DATA_BROKER_SOURCE for BrowserVaultDO). Injected here so internal
       // DOs consume workspace unit identities only through the manifest.
       const internalEnv = this.requireWorkspaceProvider(
         `internal Durable Object environment for ${className}`
@@ -3540,169 +3507,12 @@ export class WorkerdManager {
     );
   }
 
-  private migrationDefinitionDigest(
-    build: BuildResult,
-    className: string,
-    migration: { version: number; name: string }
-  ): string {
-    return migrationDefinitionSourceDigest(build.metadata.executableModules ?? [], {
-      className,
-      ...migration,
-    });
-  }
-
-  private durableObjectSchemaFixtureDir(
-    manifest: Pick<
-      DurableObjectSchemaFixtureManifest,
-      "source" | "className" | "effectiveVersion" | "objectKey"
-    >
-  ): string {
-    const fixtureId = crypto
-      .createHash("sha256")
-      .update(
-        canonicalJson({
-          source: manifest.source,
-          className: manifest.className,
-          effectiveVersion: manifest.effectiveVersion,
-          objectKey: manifest.objectKey,
-        })
-      )
-      .digest("hex");
-    return path.join(
-      stateLayout(this.deps.statePath).databases.durableObjectSchemaFixturesDir,
-      fixtureId
-    );
-  }
-
-  private async verifyDurableObjectSchemaFixture(
-    manifest: DurableObjectSchemaFixtureManifest
-  ): Promise<void> {
-    const fixtureDir = this.durableObjectSchemaFixtureDir(manifest);
-    if (manifest.files.length === 0) throw new Error("captured fixture contains no storage files");
-    for (const file of manifest.files) {
-      if (path.basename(file) !== file || !file.startsWith(`${manifest.sourceHash}.`)) {
-        throw new Error(`captured fixture contains an unexpected storage file ${file}`);
-      }
-      if (!file.endsWith(".sqlite")) continue;
-      const db = new DatabaseSync(path.join(fixtureDir, file), { readOnly: true });
-      try {
-        const result = db.prepare(`PRAGMA integrity_check`).get() as Record<string, unknown>;
-        if (!Object.values(result).includes("ok")) {
-          throw new Error(`captured fixture ${file} failed SQLite integrity_check`);
-        }
-      } finally {
-        db.close();
-      }
-    }
-  }
-
-  private async captureDurableObjectSchemaFixture(
-    input: Omit<DurableObjectSchemaFixtureManifest, "sourceHash" | "files" | "capturedAt">
-  ): Promise<DurableObjectSchemaFixtureManifest> {
-    const existing = this.doSchemaDescriptorDb
-      .prepare(
-        `SELECT manifest_json FROM do_schema_fixtures
-         WHERE source = ? AND class_name = ? AND effective_version = ? AND object_key = ?`
-      )
-      .get(input.source, input.className, input.effectiveVersion, input.objectKey) as
-      | { manifest_json: string }
-      | undefined;
-    if (existing) {
-      const manifest = JSON.parse(existing.manifest_json) as DurableObjectSchemaFixtureManifest;
-      await this.verifyDurableObjectSchemaFixture(manifest);
-      return manifest;
-    }
-
-    const ref = {
-      source: input.source,
-      className: input.className,
-      objectKey: input.objectKey,
-    };
-    if (isInternalDOSource(ref.source)) {
-      throw new Error("publication fixtures currently require userland UniversalDO storage");
-    }
-    const targetId = this.durableObjectTargetId(ref);
-    const sealOwnerId = `schema-fixture:${crypto.randomUUID()}`;
-    await sealAndDrainDurableObjectRelays(targetId, sealOwnerId, {
-      code: "DO_MAINTENANCE_IN_PROGRESS",
-      message: `Durable Object ${targetId} is being captured as schema migration evidence`,
-      errorData: { operation: "schema-fixture-capture", ...ref },
-    });
-    try {
-      await this.quiesceDurableObjectStorage(ref);
-      const storageDir = this.universalDoStorageDir();
-      const sourceHash = this.universalHostHash(ref);
-      const files = (await fs.promises.readdir(storageDir).catch(() => [] as string[])).filter(
-        (file) => file.startsWith(`${sourceHash}.`)
-      );
-      if (files.length === 0) {
-        throw new Error(
-          `${input.source}:${input.className}/${input.objectKey} has no published storage to capture`
-        );
-      }
-      const manifest: DurableObjectSchemaFixtureManifest = {
-        ...input,
-        sourceHash,
-        files,
-        capturedAt: Date.now(),
-      };
-      const fixtureDir = this.durableObjectSchemaFixtureDir(manifest);
-      await fs.promises.mkdir(fixtureDir, { recursive: true, mode: 0o700 });
-      for (const file of files) {
-        const destination = path.join(fixtureDir, file);
-        await fs.promises.copyFile(path.join(storageDir, file), destination);
-        await fs.promises.chmod(destination, 0o600);
-      }
-      await fs.promises.writeFile(
-        path.join(fixtureDir, "manifest.json"),
-        JSON.stringify(manifest, null, 2),
-        { mode: 0o600 }
-      );
-      await this.verifyDurableObjectSchemaFixture(manifest);
-      this.doSchemaDescriptorDb
-        .prepare(
-          `INSERT INTO do_schema_fixtures
-           (source, class_name, effective_version, object_key, manifest_json)
-           VALUES (?, ?, ?, ?, ?)`
-        )
-        .run(
-          input.source,
-          input.className,
-          input.effectiveVersion,
-          input.objectKey,
-          canonicalJson(manifest)
-        );
-      return manifest;
-    } finally {
-      releaseDurableObjectRelaySeal(targetId, sealOwnerId);
-    }
-  }
-
-  private async seedDurableObjectSchemaProbe(
-    ref: DORef,
-    manifest: DurableObjectSchemaFixtureManifest
-  ): Promise<void> {
-    await this.verifyDurableObjectSchemaFixture(manifest);
-    const fixtureDir = this.durableObjectSchemaFixtureDir(manifest);
-    const storageDir = this.universalDoStorageDir();
-    const targetHash = this.universalHostHash(ref);
-    await fs.promises.mkdir(storageDir, { recursive: true });
-    for (const file of manifest.files) {
-      const suffix = file.slice(manifest.sourceHash.length);
-      await fs.promises.copyFile(
-        path.join(fixtureDir, file),
-        path.join(storageDir, `${targetHash}${suffix}`)
-      );
-    }
-  }
-
   /** Run schema installation in the serving workerd, over an isolated disposable facet. */
   async probeDurableObjectSchema(
     source: string,
     className: string,
     build: BuildResult,
-    timeoutMs = 10_000,
-    fixture?: DurableObjectSchemaFixtureManifest
+    timeoutMs = 10_000
   ): Promise<DurableObjectPublishedSchemaDescriptor> {
     if (build.metadata.kind !== "worker" || build.metadata.sourcePath !== source) {
       throw new Error(`Schema probe build does not belong to worker source ${source}`);
@@ -3711,7 +3521,6 @@ export class WorkerdManager {
     const ref = { source, className, objectKey };
     this.schemaProbeBuilds.set(objectKey, { source, className, build });
     try {
-      if (fixture) await this.seedDurableObjectSchemaProbe(ref, fixture);
       await this.ensureWorkerdRunning();
       const key = encodeUniversalKey(ref);
       const response = await fetch(
@@ -3735,20 +3544,11 @@ export class WorkerdManager {
         descriptor.className !== className ||
         !Number.isSafeInteger(descriptor.version) ||
         descriptor.version < 1 ||
-        typeof descriptor.freshSchemaFingerprint !== "string" ||
-        !descriptor.baseline ||
-        !Array.isArray(descriptor.migrations) ||
-        !Array.isArray(descriptor.fixtureObjectKeys)
+        typeof descriptor.freshSchemaFingerprint !== "string"
       ) {
         throw new Error(`${source}:${className} returned a malformed schema descriptor`);
       }
-      return {
-        ...descriptor,
-        migrations: descriptor.migrations.map((migration) => ({
-          ...migration,
-          definitionDigest: this.migrationDefinitionDigest(build, className, migration),
-        })),
-      };
+      return descriptor;
     } finally {
       await this.abortUserlandDOFacet(ref, "__vibestudio_retire").catch(() => undefined);
       this.schemaProbeBuilds.delete(objectKey);
@@ -3759,161 +3559,7 @@ export class WorkerdManager {
     }
   }
 
-  private schemaCompatibilityFailures(
-    source: string,
-    previous: DurableObjectPublishedSchemaDescriptor,
-    candidate: DurableObjectPublishedSchemaDescriptor
-  ): string[] {
-    const identity = `${source}:${candidate.className}`;
-    const failures: string[] = [];
-    if (candidate.version < previous.version) {
-      failures.push(
-        `${identity} schema version decreased from v${previous.version} to v${candidate.version}`
-      );
-      return failures;
-    }
-    if (
-      candidate.version === previous.version &&
-      candidate.freshSchemaFingerprint !== previous.freshSchemaFingerprint
-    ) {
-      failures.push(
-        `${identity} fresh schema changed without a schemaVersion bump (v${candidate.version})`
-      );
-    }
-    if (candidate.baseline.version < previous.baseline.version) {
-      failures.push(
-        `${identity} production baseline decreased from v${previous.baseline.version} to v${candidate.baseline.version}; ` +
-          `re-supporting an older shape requires restoring its migrations, not rewinding the baseline`
-      );
-    }
-    if (candidate.baseline.version > previous.version) {
-      failures.push(
-        `${identity} production baseline v${candidate.baseline.version} exceeds the installed schema v${previous.version}; ` +
-          `this would strand every deployed database — migrate or reset them before raising the baseline this far`
-      );
-    }
-    const candidateMigrations = new Map(
-      candidate.migrations.map((migration) => [migration.version, migration])
-    );
-    for (const retained of previous.migrations) {
-      // A raised baseline retires migrations at or below it (the engine treats
-      // their ledger rows as permanent history); only still-supported
-      // migrations must survive verbatim.
-      if (retained.version <= candidate.baseline.version) continue;
-      const next = candidateMigrations.get(retained.version);
-      if (
-        !next ||
-        next.name !== retained.name ||
-        next.definitionDigest !== retained.definitionDigest
-      ) {
-        failures.push(
-          `${identity} retained migration v${retained.version} (${retained.name}) was removed, renamed, or edited`
-        );
-      }
-    }
-    if (candidate.version > previous.version) {
-      if ((candidate.fixtureObjectKeys ?? []).length === 0) {
-        failures.push(
-          `${identity} schemaVersion advanced to v${candidate.version} without a declared representative schema migration fixture`
-        );
-      }
-      for (let version = previous.version + 1; version <= candidate.version; version += 1) {
-        if (!candidateMigrations.has(version)) {
-          failures.push(
-            `${identity} schemaVersion advanced to v${candidate.version} without contiguous migration v${version}`
-          );
-        }
-      }
-    }
-    return failures;
-  }
-
-  /**
-   * Capture the installed release's declared representative objects and run
-   * every retained supported fixture through the candidate in real workerd.
-   */
-  async validateDurableObjectSchemaFixtures(input: {
-    source: string;
-    build: BuildResult;
-    descriptor: DurableObjectPublishedSchemaDescriptor;
-  }): Promise<string[]> {
-    const installed = this.doSchemaDescriptorDb
-      .prepare(
-        `SELECT i.effective_version, d.descriptor_json
-         FROM do_schema_installed i
-         JOIN do_schema_descriptors d
-           ON d.source = i.source AND d.class_name = i.class_name
-          AND d.effective_version = i.effective_version
-         WHERE i.source = ? AND i.class_name = ?`
-      )
-      .get(input.source, input.descriptor.className) as
-      | { effective_version: string; descriptor_json: string }
-      | undefined;
-    // The first publication establishes lineage; there is no published
-    // predecessor from which trustworthy fixtures can be captured.
-    if (!installed) return [];
-
-    const previous = JSON.parse(
-      installed.descriptor_json
-    ) as DurableObjectPublishedSchemaDescriptor;
-    const fixtureKeys = [
-      ...new Set([
-        ...(previous.fixtureObjectKeys ?? []),
-        ...(input.descriptor.fixtureObjectKeys ?? []),
-      ]),
-    ].sort();
-    const failures: string[] = [];
-    for (const objectKey of fixtureKeys) {
-      try {
-        await this.captureDurableObjectSchemaFixture({
-          source: input.source,
-          className: input.descriptor.className,
-          objectKey,
-          effectiveVersion: installed.effective_version,
-          schemaVersion: previous.version,
-        });
-      } catch (error) {
-        failures.push(
-          `${input.source}:${input.descriptor.className}/${objectKey} fixture capture failed: ${errorMessage(error)}`
-        );
-      }
-    }
-    if (failures.length > 0) return failures;
-
-    const fixtureRows = this.doSchemaDescriptorDb
-      .prepare(
-        `SELECT manifest_json FROM do_schema_fixtures
-         WHERE source = ? AND class_name = ? ORDER BY effective_version, object_key`
-      )
-      .all(input.source, input.descriptor.className) as Array<{ manifest_json: string }>;
-    for (const row of fixtureRows) {
-      const fixture = JSON.parse(row.manifest_json) as DurableObjectSchemaFixtureManifest;
-      if (fixture.schemaVersion < input.descriptor.baseline.version) continue;
-      try {
-        const migrated = await this.probeDurableObjectSchema(
-          input.source,
-          input.descriptor.className,
-          input.build,
-          10_000,
-          fixture
-        );
-        if (migrated.freshSchemaFingerprint !== input.descriptor.freshSchemaFingerprint) {
-          failures.push(
-            `${input.source}:${input.descriptor.className}/${fixture.objectKey} fixture from schema v${fixture.schemaVersion} ` +
-              `migrated to a shape different from a fresh v${input.descriptor.version} install`
-          );
-        }
-      } catch (error) {
-        failures.push(
-          `${input.source}:${input.descriptor.className}/${fixture.objectKey} fixture from schema v${fixture.schemaVersion} ` +
-            `failed candidate migration: ${errorMessage(error)}`
-        );
-      }
-    }
-    return failures;
-  }
-
-  /** Compare candidate descriptors to this workspace's installed lineage and stage them. */
+  /** Stage exact current-candidate descriptors; no prior generation is admitted. */
   validateAndStageDurableObjectSchemas(
     stateHash: string,
     candidates: ReadonlyArray<{
@@ -3937,27 +3583,6 @@ export class WorkerdManager {
         .prepare(`DELETE FROM do_schema_candidates WHERE state_hash = ?`)
         .run(stateHash);
       for (const candidate of candidates) {
-        const installed = this.doSchemaDescriptorDb
-          .prepare(
-            `SELECT d.descriptor_json
-             FROM do_schema_installed i
-             JOIN do_schema_descriptors d
-               ON d.source = i.source AND d.class_name = i.class_name
-              AND d.effective_version = i.effective_version
-             WHERE i.source = ? AND i.class_name = ?`
-          )
-          .get(candidate.source, candidate.descriptor.className) as
-          | { descriptor_json: string }
-          | undefined;
-        if (installed) {
-          failures.push(
-            ...this.schemaCompatibilityFailures(
-              candidate.source,
-              JSON.parse(installed.descriptor_json) as DurableObjectPublishedSchemaDescriptor,
-              candidate.descriptor
-            )
-          );
-        }
         insertDescriptor.run(
           candidate.source,
           candidate.effectiveVersion,

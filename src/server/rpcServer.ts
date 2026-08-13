@@ -670,6 +670,7 @@ export class RpcServer {
                 provider: string;
               };
               methodTier: "open" | "gated" | "critical";
+              methodExecution?: { harness: "attested-system-test" };
               principals: readonly import("@vibestudio/rpc").PrincipalKind[];
               presentation: {
                 domain: import("@vibestudio/shared/authority/authorityDomains").AuthorityDomainId;
@@ -704,6 +705,7 @@ export class RpcServer {
               provider: string;
             };
             methodTier: "open" | "gated" | "critical";
+            methodExecution?: { harness: "attested-system-test" };
             principals: readonly import("@vibestudio/rpc").PrincipalKind[];
             presentation: {
               domain: import("@vibestudio/shared/authority/authorityDomains").AuthorityDomainId;
@@ -3411,7 +3413,8 @@ export class RpcServer {
       input.method
     );
     if (
-      productPolicy?.execution?.harness === "attested-system-test" &&
+      (productPolicy?.execution?.harness === "attested-system-test" ||
+        workspaceAuthority?.methodExecution?.harness === "attested-system-test") &&
       !this.deps.isAttestedSystemTestHarness?.(input.caller)
     ) {
       throw createRelayError(`${input.method} requires an attested system-test harness`, "EACCES");

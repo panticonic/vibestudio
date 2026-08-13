@@ -9,6 +9,11 @@ import { zodToJsonSchema as convertZodToJsonSchema } from "zod-to-json-schema";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "..");
+const userlandRootArgument = process.env.VIBESTUDIO_USERLAND_ROOT;
+if (!userlandRootArgument) {
+  throw new Error("VIBESTUDIO_USERLAND_ROOT must name the exact Base checkout to update");
+}
+const userlandRoot = path.resolve(userlandRootArgument);
 const gadCatalogPath = path.join(
   repoRoot,
   "packages/service-schemas/src/runtime/generated/gadRuntimeCatalog.json"
@@ -85,8 +90,8 @@ function replaceBlock(contents, marker, replacement) {
   return contents.replace(pattern, `${begin}\n${replacement}\n${end}`);
 }
 
-function updateDoc(relativePath, replacements, checkOnly) {
-  const filePath = path.join(repoRoot, relativePath);
+function updateDoc(root, relativePath, replacements, checkOnly) {
+  const filePath = path.join(root, relativePath);
   const current = fs.readFileSync(filePath, "utf8");
   let next = current;
 
@@ -163,13 +168,15 @@ const workerSurface = loadRuntimeSurface(
 );
 
 updateDoc(
-  "workspace/skills/sandbox/RUNTIME_API.md",
+  userlandRoot,
+  "skills/sandbox/RUNTIME_API.md",
   [["panel-runtime-surface", renderSurfaceTable(panelSurface)]],
   checkOnly
 );
 
 updateDoc(
-  "workspace/skills/workspace-dev/WORKERS.md",
+  userlandRoot,
+  "skills/workspace-dev/WORKERS.md",
   [["worker-runtime-surface", renderSurfaceTable(workerSurface)]],
   checkOnly
 );

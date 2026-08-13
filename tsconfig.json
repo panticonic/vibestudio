@@ -67,16 +67,7 @@
       "@vibestudio/unit-host": ["./packages/unit-host/src/index.ts"],
       "@vibestudio/types": ["./packages/types/src/index.ts"],
       "@vibestudio/workspace/*": ["./packages/workspace/src/*"],
-      "@vibestudio/workspace-contracts/*": ["./packages/workspace-contracts/src/*"],
-      "@workspace/agentic-protocol": ["./workspace/packages/agentic-protocol/src/index.ts"],
-      "@workspace/agentic-protocol/*": ["./workspace/packages/agentic-protocol/src/*"],
-      "@workspace/vcs-engine": ["./workspace/packages/vcs-engine/src/index.ts"],
-      "@workspace/runtime": ["./workspace/packages/runtime/src/panel/index.ts"],
-      "@workspace/runtime/panel-runtime": [
-        "./workspace/packages/runtime/src/shared/panelRuntime.ts"
-      ],
-      "@workspace/runtime/*": ["./workspace/packages/runtime/src/*"],
-      "@workspace/cdp-client": ["./workspace/packages/cdp-client/index.d.ts"]
+      "@vibestudio/workspace-contracts/*": ["./packages/workspace-contracts/src/*"]
     }
   },
   "include": ["src/**/*", "packages/**/*"],

@@ -146,8 +146,6 @@ export interface WorkspaceTemplatesConfig {
   overrides?: Record<string, WorkspaceTemplatePin>;
   /** Presentation/promotion registry source; never part of installed relationship state. */
   registry?: WorkspaceTemplateRegistryDeclaration;
-  /** Exact bootstrap root already adopted into the ordinary template graph. */
-  bootstrapAdopted?: WorkspaceTemplatePin;
   /** Reviewed exact excluded-section decisions keyed by `<nodeId>:<section>`. */
   suggestionDecisions?: Record<
     string,
@@ -175,6 +173,8 @@ export interface WorkspaceTemplateStateNode {
   pin: WorkspaceTemplatePin;
   /** Direct parent node ids. Parents precede children in `nodes`. */
   parents: string[];
+  /** Complete sanitized installed layer used for future semantic recomposition. */
+  fragment: string;
   /**
    * What this template says it is called and what it says it does — sanitized,
    * self-asserted, and unverified. It may head a card as a title; it is never

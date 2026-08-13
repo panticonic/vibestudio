@@ -9,6 +9,7 @@ import {
 } from "@vibestudio/content-addressing";
 import type { ExactGitSnapshot } from "@vibestudio/git";
 import { WORKSPACE_SYSTEM_EPOCH } from "@vibestudio/shared/vcs/systemEpoch";
+import { canonicalTemplateYaml } from "@vibestudio/workspace/templateManifest";
 import {
   WorkspaceRootTemplateBootstrap,
   enumerateRootTemplateRepositories,
@@ -77,21 +78,36 @@ function fixture(rootSnapshot: ExactGitSnapshot) {
       statePath,
       sourcePath,
       acquire,
+      expectedSystemEpoch: WORKSPACE_SYSTEM_EPOCH,
+      sink: {
+        put: async (bytes) => ({ digest: sha256Hex(bytes), size: bytes.byteLength }),
+      },
     }),
   };
 }
 
 describe("WorkspaceRootTemplateBootstrap", () => {
-  it("acquires exactly the pinned root and exposes its repositories without composition", async () => {
+  it("acquires the pin and creates complete installed lineage before initialization", async () => {
+    const runtime = canonicalTemplateYaml({
+      systemEpoch: WORKSPACE_SYSTEM_EPOCH,
+      extensions: [{ source: "extensions/template-composer" }],
+    });
     const rootSnapshot = snapshot([
       {
         path: "meta/vibestudio.yml",
-        text: `systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}\nextensions:\n  - source: extensions/template-composer\n`,
+        text: runtime,
       },
       {
-        // Bootstrap imports this opaque userland source but never parses it.
         path: "meta/template.yml",
-        text: "not: [valid",
+        text: canonicalTemplateYaml({
+          systemEpoch: WORKSPACE_SYSTEM_EPOCH,
+          template: {
+            name: "Base",
+            repositories: ["extensions/template-composer"],
+            files: ["README.md"],
+          },
+          extensions: [{ source: "extensions/template-composer" }],
+        }),
       },
       { path: "extensions/template-composer/package.json", text: "{}" },
       { path: "extensions/template-composer/index.ts", text: "export {};" },
@@ -107,11 +123,23 @@ describe("WorkspaceRootTemplateBootstrap", () => {
       ],
     });
     expect(fx.acquire).toHaveBeenCalledExactlyOnceWith(fx.pin);
+    expect(fs.existsSync(path.join(fx.sourcePath, "meta/templates.state.yml"))).toBe(true);
+    expect(fs.existsSync(path.join(fx.sourcePath, "meta/templates/workspace.yml"))).toBe(true);
   });
 
   it("rejects container-root files instead of inventing an owner", () => {
     const rootSnapshot = snapshot([
-      { path: "meta/vibestudio.yml", text: `systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}\n` },
+      {
+        path: "meta/vibestudio.yml",
+        text: canonicalTemplateYaml({ systemEpoch: WORKSPACE_SYSTEM_EPOCH }),
+      },
+      {
+        path: "meta/template.yml",
+        text: canonicalTemplateYaml({
+          systemEpoch: WORKSPACE_SYSTEM_EPOCH,
+          template: { repositories: [], files: [] },
+        }),
+      },
       { path: "packages/tsconfig.json", text: "{}" },
     ]);
     expect(() => enumerateRootTemplateRepositories(rootSnapshot)).toThrow(
@@ -121,7 +149,17 @@ describe("WorkspaceRootTemplateBootstrap", () => {
 
   it("fails closed when the acquired snapshot differs from the exact descriptor", async () => {
     const rootSnapshot = snapshot([
-      { path: "meta/vibestudio.yml", text: `systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}\n` },
+      {
+        path: "meta/vibestudio.yml",
+        text: canonicalTemplateYaml({ systemEpoch: WORKSPACE_SYSTEM_EPOCH }),
+      },
+      {
+        path: "meta/template.yml",
+        text: canonicalTemplateYaml({
+          systemEpoch: WORKSPACE_SYSTEM_EPOCH,
+          template: { repositories: [], files: [] },
+        }),
+      },
     ]);
     const fx = fixture(rootSnapshot);
     fx.acquire.mockResolvedValue({ ...rootSnapshot, commit: "b".repeat(40) });
@@ -133,7 +171,17 @@ describe("WorkspaceRootTemplateBootstrap", () => {
 
   it("restarts from the local materialization receipt without reacquiring the remote root", async () => {
     const rootSnapshot = snapshot([
-      { path: "meta/vibestudio.yml", text: `systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}\n` },
+      {
+        path: "meta/vibestudio.yml",
+        text: canonicalTemplateYaml({ systemEpoch: WORKSPACE_SYSTEM_EPOCH }),
+      },
+      {
+        path: "meta/template.yml",
+        text: canonicalTemplateYaml({
+          systemEpoch: WORKSPACE_SYSTEM_EPOCH,
+          template: { repositories: [], files: [] },
+        }),
+      },
     ]);
     const fx = fixture(rootSnapshot);
     await fx.bootstrap.prepareSource();
@@ -146,6 +194,10 @@ describe("WorkspaceRootTemplateBootstrap", () => {
       statePath: fx.statePath,
       sourcePath: fx.sourcePath,
       acquire: unavailableAcquire,
+      expectedSystemEpoch: WORKSPACE_SYSTEM_EPOCH,
+      sink: {
+        put: async (bytes) => ({ digest: sha256Hex(bytes), size: bytes.byteLength }),
+      },
     });
 
     await expect(restarted.prepareSource()).resolves.toEqual(fx.pin);
@@ -156,7 +208,9 @@ describe("WorkspaceRootTemplateBootstrap", () => {
     const rootSnapshot = snapshot([
       {
         path: "meta/template.yml",
-        text: `systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}\ntemplates:\n  use: []\n`,
+        text:
+          `systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}\n` +
+          `template:\n  repositories: []\n  files: []\n`,
       },
     ]);
     const fx = fixture(rootSnapshot);

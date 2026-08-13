@@ -41,6 +41,7 @@ export interface WorkspaceRpcMethodDoc {
     sensitivity?: "read" | "write" | "admin" | "destructive";
     codeOnly?: boolean;
   };
+  execution?: { harness: "attested-system-test" };
   inputContractDigest: string;
   producesHandle?: {
     localName: string;
@@ -305,6 +306,7 @@ export async function collectWorkspaceRpcCatalog(
             const label = `${path.relative(absoluteWorkerSourcePath, file)}:${name}`;
             let access: WorkspaceRpcMethodDoc["access"];
             let effect: WorkspaceRpcMethodDoc["effect"];
+            let execution: WorkspaceRpcMethodDoc["execution"];
             let handleProduction: { capability: string } | undefined;
             if (decorator.kind === "schemaRpc") {
               const schema = input.rpcSchemas?.[node.name.text]?.[name];
@@ -329,6 +331,7 @@ export async function collectWorkspaceRpcCatalog(
                 ...(schema.tier.session === "codeOnly" ? { codeOnly: true } : {}),
               };
               effect = schema.directEffect;
+              execution = schema.execution;
             } else {
               access = accessOf(decorator.call);
               effect = effectOf(decorator.call, label);
@@ -345,6 +348,7 @@ export async function collectWorkspaceRpcCatalog(
               ...(handleProduction ? { _handleCapability: handleProduction.capability } : {}),
               ...(description ? { description } : {}),
               ...(access ? { access } : {}),
+              ...(execution ? { execution } : {}),
             });
           }
         }

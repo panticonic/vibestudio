@@ -1,1 +1,1 @@
-export { BrowserDataDO } from "./BrowserDataDO.js";
+export { BrowserVaultDO } from "./BrowserVaultDO.js";

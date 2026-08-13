@@ -18,6 +18,8 @@
     "resolveJsonModule": true,
     "moduleResolution": "bundler",
     "allowImportingTsExtensions": true,
+    "allowJs": true,
+    "checkJs": false,
     "isolatedModules": true,
     "types": ["node", "react", "react-native"],
     "paths": {
@@ -37,13 +39,6 @@
       "@vibestudio/types": ["../../packages/types/src/index.ts"]
     }
   },
-  "include": ["../../workspace/apps/mobile/**/*", "src/**/*"],
-  "exclude": [
-    "node_modules",
-    "ios",
-    "android",
-    "../../workspace/apps/mobile/jest.setup.ts",
-    "../../workspace/apps/mobile/**/*.test.ts",
-    "../../workspace/apps/mobile/**/*.test.tsx"
-  ]
+  "include": ["*.js"],
+  "exclude": ["node_modules", "ios", "android"]
 }

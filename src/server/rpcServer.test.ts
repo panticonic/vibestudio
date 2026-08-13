@@ -1499,7 +1499,7 @@ describe("RpcServer relay behavior", () => {
 
   it("uses extension code authority with the initiating panel's verified subject", async () => {
     const { server, entityCache } = createServer();
-    const targetId = "do:vibestudio/internal:BrowserDataDO:browser-data";
+    const targetId = "do:vibestudio/internal:BrowserVaultDO:browser-data";
     entityCache._onActivate(makeRecord(targetId, "do"));
     server.setWorkerdUrl("http://127.0.0.1:1111");
     server.setWorkerdGatewayToken("gateway-token");
@@ -1529,7 +1529,7 @@ describe("RpcServer relay behavior", () => {
         requested: [
           {
             capability: "browser-data.read",
-            resource: { kind: "prefix", prefix: "do:vibestudio/internal:BrowserDataDO:" },
+            resource: { kind: "prefix", prefix: "do:vibestudio/internal:BrowserVaultDO:" },
           },
         ],
       }
@@ -2963,7 +2963,7 @@ describe("RpcServer relay behavior", () => {
     );
   });
 
-  it("admits hidden builtin test seams only for an attested system-test harness", async () => {
+  it("admits hidden workspace-service test seams only for an attested system-test harness", async () => {
     const capability = "service:development.faultFailBuildAfterSnapshotRetained";
     const caller = createVerifiedCaller(
       "do:vibestudio/internal:EvalDO:test-development-fault",
@@ -2974,11 +2974,14 @@ describe("RpcServer relay behavior", () => {
         repoPath: "workers/system-test-runner",
         effectiveVersion: "ev-runner",
         executionDigest: "c".repeat(64),
-        requested: [{ capability, resource: { kind: "prefix", prefix: "" } }],
+        requested: [
+          { capability, resource: { kind: "prefix", prefix: "" } },
+          { capability: "workspace-service:development", resource: { kind: "prefix", prefix: "" } },
+        ],
       }
     );
     const ref = {
-      source: "vibestudio/internal",
+      source: "workers/development",
       className: "DevelopmentDO",
       objectKey: "workspace",
     };
@@ -2995,12 +2998,35 @@ describe("RpcServer relay behavior", () => {
       ],
     } as const;
 
-    const denied = createServer({ isAttestedSystemTestHarness: () => false }).server;
+    const workspaceAuthority = {
+      capability: "workspace-service:development",
+      serviceBinding: "declared" as const,
+      methodEffect: {
+        kind: "host-capability" as const,
+        capability,
+        resource: { kind: "receiver-object" as const },
+      },
+      methodCapability: capability,
+      methodTier: "open" as const,
+      methodExecution: { harness: "attested-system-test" as const },
+      principals: ["code" as const],
+      presentation: { domain: "computer" as const, verb: "manage" as const },
+      title: "System development",
+      action: "manage development sessions",
+      declaredBy: "workers/development",
+    };
+    const denied = createServer({
+      isAttestedSystemTestHarness: () => false,
+      resolveWorkspaceDirectAuthority: async () => [workspaceAuthority],
+    }).server;
     await expect(testServer(denied).directDOAuthorization(invocation)).rejects.toMatchObject({
       code: "EACCES",
     });
 
-    const admitted = createServer({ isAttestedSystemTestHarness: () => true }).server;
+    const admitted = createServer({
+      isAttestedSystemTestHarness: () => true,
+      resolveWorkspaceDirectAuthority: async () => [workspaceAuthority],
+    }).server;
     await expect(testServer(admitted).directDOAuthorization(invocation)).resolves.toMatchObject({
       capability,
     });
@@ -3126,7 +3152,7 @@ describe("RpcServer relay behavior", () => {
 
   it("retains the verified initiator only for the exact active receiver invocation", () => {
     const { server } = createServer();
-    const receiver = "do:vibestudio/internal:DevelopmentDO:workspace";
+    const receiver = "do:workers/development:DevelopmentDO:workspace";
     const initiator = createVerifiedCaller("shell:device-one", "shell", null, null, {
       userId: "user-1",
       handle: "user1",
@@ -3147,7 +3173,7 @@ describe("RpcServer relay behavior", () => {
     );
     expect(() =>
       testServer(server).authorityParentFor(
-        "do:vibestudio/internal:DevelopmentDO:another-workspace",
+        "do:workers/development:DevelopmentDO:another-workspace",
         nonce
       )
     ).toThrow(/another runtime/);

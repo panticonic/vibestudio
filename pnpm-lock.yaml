@@ -728,7 +728,7 @@ importers:
         specifier: ^7.0.0
         version: 7.0.0
       isomorphic-git:
-        specifier: ^1.36.1
+        specifier: 1.36.3
         version: 1.36.3
     devDependencies:
       '@types/diff':
@@ -1025,18 +1025,6 @@ importers:
     devDependencies:
       vitest:
         specifier: ^3.2.4
-        version: 3.2.4(@types/debug@4.1.12)(@types/node@24.10.9)(@vitest/browser@3.2.4)(jiti@2.7.0)(jsdom@29.0.1(@noble/hashes@2.2.0))(terser@5.46.1)(tsx@4.21.0)(yaml@2.9.0)
-
-  workspace:
-    devDependencies:
-      '@types/node':
-        specifier: ^24.10.1
-        version: 24.10.9
-      typescript:
-        specifier: 7.0.2
-        version: 7.0.2
-      vitest:
-        specifier: ^3.2.2
         version: 3.2.4(@types/debug@4.1.12)(@types/node@24.10.9)(@vitest/browser@3.2.4)(jiti@2.7.0)(jsdom@29.0.1(@noble/hashes@2.2.0))(terser@5.46.1)(tsx@4.21.0)(yaml@2.9.0)
 
 packages:

@@ -121,7 +121,7 @@ describe("server notification service", () => {
       emitToUser: vi.fn(() => true),
     };
     const service = createNotificationService({ eventService: eventService as never }).definition;
-    const caller = createVerifiedCaller("do:vibestudio/internal:MissionsDO:workspace", "do");
+    const caller = createVerifiedCaller("do:workers/missions:MissionsDO:workspace", "do");
 
     const id = await service.handler({ caller }, "showToUser", [
       "usr_alice",

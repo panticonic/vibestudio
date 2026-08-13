@@ -708,7 +708,7 @@ describe("authority runtime", () => {
     const attestation = attestDirectRpc({
       caller: createHostCaller("main"),
       source: "vibestudio/internal",
-      className: "BrowserDataDO",
+      className: "BrowserVaultDO",
       objectKey: "environment-1",
       method: "durableWorkCapabilities",
       workspaceId: "ws-1",

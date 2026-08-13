@@ -2,11 +2,12 @@ import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { PRODUCT_CONDUIT_UNITS } from "./productConduitPolicy.js";
+import { exactUserlandRoot } from "../../tests/exactUserlandRoot";
 
 describe("product conduit policy", () => {
   it("references only worker units shipped in the first-run workspace snapshot", () => {
     for (const repoPath of PRODUCT_CONDUIT_UNITS) {
-      const packagePath = path.join(process.cwd(), "workspace", repoPath, "package.json");
+      const packagePath = path.join(exactUserlandRoot, repoPath, "package.json");
       expect(
         fs.existsSync(packagePath),
         `${repoPath} must be present in the shipped snapshot`

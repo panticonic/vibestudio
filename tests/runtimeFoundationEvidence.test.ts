@@ -67,14 +67,14 @@ describe("runtime-foundation evidence contract", () => {
           tests: {},
           sourceContracts: {
             "channel.missing-export": {
-              path: "workspace/workers/pubsub-channel/types.ts",
+              path: "packages/service-schemas/src/vcs.ts",
               exportName: "NotAnExport",
             },
           },
         },
       })
     ).toThrow(
-      'runtime-foundation-evidence: source contract "channel.missing-export" cannot find export "NotAnExport" in workspace/workers/pubsub-channel/types.ts'
+      'runtime-foundation-evidence: source contract "channel.missing-export" cannot find export "NotAnExport" in packages/service-schemas/src/vcs.ts'
     );
   });
 

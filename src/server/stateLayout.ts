@@ -68,7 +68,6 @@ export function stateLayout(statePath: string) {
       workerdUniversalDoDir: path.join(databases, "workerd-universal-do"),
       durableObjectMaintenanceDb: path.join(databases, "do-maintenance.db"),
       durableObjectSchemaDescriptorsDb: path.join(databases, "do-schema-descriptors.db"),
-      durableObjectSchemaFixturesDir: path.join(databases, "do-schema-fixtures"),
       durableObjectBackupsDir: path.join(databases, "do-backups"),
     },
   } as const;

@@ -5,7 +5,9 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const sourceDir = path.join(root, "workspace/panels/terminal");
+const userlandRoot = process.env.VIBESTUDIO_USERLAND_ROOT;
+if (!userlandRoot) throw new Error("VIBESTUDIO_USERLAND_ROOT must name the exact Base checkout");
+const sourceDir = path.join(path.resolve(userlandRoot), "panels/terminal");
 const outDir = path.join(root, ".tmp/terminal-input-jig");
 const port = Number(process.env.PORT || 49321);
 

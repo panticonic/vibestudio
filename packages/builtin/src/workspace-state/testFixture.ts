@@ -75,7 +75,6 @@ export class WorkspaceDOTestable extends WorkspaceDO {
         retired_at INTEGER,
         cleanup_complete INTEGER NOT NULL DEFAULT 1,
         error TEXT,
-        display_title TEXT,
         CHECK (agent_entity_id IS NULL OR agent_channel_id IS NOT NULL)
       )
     `);
@@ -141,26 +140,6 @@ export class WorkspaceDOTestable extends WorkspaceDO {
     `);
     sql.exec(`CREATE INDEX IF NOT EXISTS idx_history_entity ON slot_history(entity_id)`);
     sql.exec(`CREATE INDEX IF NOT EXISTS idx_history_entry ON slot_history(entry_key)`);
-    sql.exec(`
-      CREATE TABLE IF NOT EXISTS panel_search_metadata (
-        slot_id TEXT PRIMARY KEY,
-        searchable_title TEXT NOT NULL DEFAULT '',
-        searchable_path TEXT,
-        manifest_description TEXT,
-        manifest_dependencies TEXT,
-        tags TEXT,
-        keywords TEXT,
-        access_count INTEGER NOT NULL DEFAULT 0,
-        last_indexed_at INTEGER NOT NULL
-      )
-    `);
-    sql.exec(`
-      CREATE TABLE IF NOT EXISTS panel_source_usage (
-        source TEXT PRIMARY KEY,
-        access_count INTEGER NOT NULL DEFAULT 0,
-        last_accessed_at INTEGER NOT NULL DEFAULT 0
-      )
-    `);
     sql.exec(`
       CREATE TABLE IF NOT EXISTS workspace_meta (
         key TEXT PRIMARY KEY,

@@ -2,6 +2,7 @@ import { createRequire } from "node:module";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
+import { exactUserlandRoot } from "../../tests/exactUserlandRoot";
 
 const require = createRequire(import.meta.url);
 const { createNativeBoundary } = require("../../apps/mobile/metroNativeBoundary.cjs") as {
@@ -11,7 +12,7 @@ const { createNativeBoundary } = require("../../apps/mobile/metroNativeBoundary.
 };
 
 describe("mobile Metro native capability boundary", () => {
-  const workspaceAppRoot = path.resolve("workspace/apps/mobile");
+  const workspaceAppRoot = path.join(exactUserlandRoot, "apps/mobile");
   const boundary = createNativeBoundary(workspaceAppRoot);
 
   it("rejects direct native module imports from arbitrary workspace app files", () => {

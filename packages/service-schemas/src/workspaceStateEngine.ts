@@ -415,7 +415,6 @@ const rawWorkspaceStateEngineMethods = defineServiceMethods({
   panelTreePage: { ...workspaceStateMethods["panelTree.page"] },
   panelTreePath: { ...workspaceStateMethods["panelTree.path"] },
   panelTreeDetail: { ...workspaceStateMethods["panelTree.detail"] },
-  panelTreeSearch: { ...workspaceStateMethods["panelTree.search"] },
   slotCreate: { ...workspaceStateMethods["slot.create"] },
   slotCommitPreparedNavigation: {
     ...workspaceStateMethods["slot.commitPreparedNavigation"],
@@ -431,22 +430,6 @@ const rawWorkspaceStateEngineMethods = defineServiceMethods({
   slotGet: { ...workspaceStateMethods["slot.get"] },
   slotHistoryRelative: { ...workspaceStateMethods["slot.historyRelative"] },
   slotHistoryEntry: { ...workspaceStateMethods["slot.historyEntry"] },
-  panelIndex: { ...workspaceStateMethods["panel.index"] },
-  panelUpdateTitle: { ...workspaceStateMethods["panel.updateTitle"] },
-  panelIncrementAccess: { ...workspaceStateMethods["panel.incrementAccess"] },
-  entitySetDisplayTitle: {
-    ...internal("write"),
-    args: z.tuple([z.string().min(1), z.string().nullable()]),
-    returns: z.void(),
-  },
-  entityListDisplayTitles: {
-    ...internal("read"),
-    args: z.tuple([]),
-    returns: z.array(z.object({ id: z.string().min(1), title: z.string() }).strict()),
-  },
-  panelSearch: { ...workspaceStateMethods["panel.search"] },
-  panelSourceUsage: { ...workspaceStateMethods["panel.sourceUsage"] },
-  panelRebuildIndex: { ...workspaceStateMethods["panel.rebuildIndex"] },
 });
 
 export const workspaceStateEngineMethods = Object.fromEntries(

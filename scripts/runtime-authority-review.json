@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "censusDigest": "sha256:7d0961bfc366424c95f5dac7545a6da36e0b056a3e2db1e999f7fce5c06051b2",
+  "censusDigest": "sha256:8d5a8d3ea7541812e4a9c45325352cf638bb52292da6aaed92a3a56e24c7f666",
   "decisions": {
     "host:view.getBrowserPageIdentity": {
       "review": "exact-native-browser-page-identity-read",
@@ -25,10 +25,6 @@
     "host:workspace-state.panel.sourceUsage": {
       "review": "bounded-aggregate-panel-source-usage-read",
       "change": "Adds an open workspace-member read of at most 200 aggregate panel source usage rows for launcher ranking. The projection contains only source identity, access count, and last-access time; it exposes no panel contents, owner identity, slot state, or mutation path."
-    },
-    "direct:workspace/workers/pubsub-channel/channel-do.ts:markMethodCallExecutionStarted": {
-      "review": "participant-bound-current-provider-claim-observation",
-      "change": "Adds an open code-principal write that records the execution boundary for one exact method call. The receiver derives caller identity from the runtime, requires it to equal the claimed provider participant, and updates only that participant's current claim generation once; it grants no call, result, or cross-participant authority."
     },
     "host:auth.mintAgentCredential": {
       "review": "reviewed-subagent-launch-agent-login",
@@ -71,16 +67,16 @@
       "change": "Adds a code-and-host-only transient notification effect for durable background work whose authenticated user is recorded in receiver-owned state rather than present on the alarm dispatch. The notification remains attributed to the verified runtime caller, is delivered only to the exact addressed account's live sessions, and grants no inbox mutation, navigation, or user action without an explicit click in trusted shell chrome."
     },
     "host:runtime.recoverExecution": {
-      "review": "interactive-chrome-exact-execution-recovery",
-      "change": "Opens only the transport for exact execution recovery and admits code principals so the trusted Shell app can carry the user's notification action without a self-referential grant. The receiver requires live interactive panel-hosting chrome, binds the entity and expected execution digest, and rejects stale or ordinary installed-app calls."
+      "review": "trusted-exact-runtime-execution-recovery",
+      "change": "Adds gated recovery of one exact active Durable Object execution under the trusted runtime host. Expected execution digests fence stale requests, and the receiver either rematerializes the retained immutable build or performs the explicitly selected replacement strategy without changing durable ownership."
     },
     "host:shellApproval.listPending": {
       "review": "root-presenter-independent-approval-read",
       "change": "Opens approval-queue rehydration while selecting a prepared approvals.read leaf for non-chrome code. Trusted panel-hosting presenters and host principals select no leaf, so the surface that renders authority requests never depends on the grant it must present."
     },
     "host:shellApproval.getWorkspaceCreationReviewState": {
-      "review": "root-presenter-independent-startup-review-read",
-      "change": "Opens startup-review state discovery while selecting a prepared approvals.read leaf for non-chrome code. Trusted presenters can always render the launch decision; other installed presenters retain ordinary approvals.read enforcement."
+      "review": "bounded-workspace-review-readiness-read",
+      "change": "Adds a read-only projection of whether the host-owned workspace creation review is pending, ready, or resolved. It exposes no approval contents, authority grants, or mutation path and remains under the existing approvals.read capability."
     },
     "host:shellApproval.resolve": {
       "review": "root-presenter-independent-approval-decision",
@@ -91,8 +87,8 @@
       "change": "Opens exact mission-review resolution for trusted presenters while retaining a prepared approvals.decide leaf for non-chrome code and the receiver's authenticated-human requirement."
     },
     "host:shellApproval.resolveInstallReview": {
-      "review": "root-presenter-independent-install-review-decision",
-      "change": "Opens exact install-review resolution for trusted presenters while retaining a prepared approvals.decide leaf for non-chrome code, selected-row validation, admission recording, and clearance minting in the receiver."
+      "review": "install-review-typed-resolution",
+      "change": "Adds the typed resolution for a queued install review, replacing the all-or-nothing unit-batch decision. Same gated approvals.decide capability and same trusted-chrome principals as resolve/resolveMissionReview; the server derives the offerable rows itself and rejects any identity or permission the review did not offer, so a client cannot ask for more than it was shown."
     },
     "host:shellApproval.resolveBootstrap": {
       "review": "root-presenter-independent-bootstrap-decision",
@@ -174,34 +170,6 @@
       "review": "read-only-exact-workspace-routing",
       "change": "Narrows exact workspace route discovery from write sensitivity to read sensitivity. The method returns only the selected child's reach and performs no registration or lifecycle mutation."
     },
-    "direct:packages/builtin/src/missions/MissionsDO.ts:getRun": {
-      "review": "owner-scoped-exact-automation-tick-read",
-      "change": "Adds an open read of one exact automation run for authenticated users and their agents. MissionsDO derives the caller's owner scope, returns only a bounded ledger record with status, conversation coordinates, final message or error, and exposes no eval source, credentials, authority mutation, or cross-owner run discovery."
-    },
-    "direct:packages/builtin/src/missions/MissionsDO.ts:edit": {
-      "review": "agent-requestable-inert-automation-revision",
-      "change": "Allows an authenticated agent session to request edits through the existing gated missions.edit decision. The receiver resolves the owner-scoped mission, suspends its reviewed closure, increments and digests the complete charter and authority revision, clears scheduling, and leaves the result inert until a human reviews the exact new closure."
-    },
-    "direct:packages/builtin/src/missions/MissionsDO.ts:runNow": {
-      "review": "agent-requestable-reviewed-automation-run",
-      "change": "Allows an authenticated agent session to request one manual tick through the existing gated missions.run decision. The receiver accepts only an active mission with a digest-consistent reviewed closure, binds one non-overlapping run session to that exact subject, and does not let the caller replace the charter, target, code, prompt, or standing authority."
-    },
-    "direct:packages/builtin/src/missions/MissionsDO.ts:pause": {
-      "review": "agent-requestable-reviewed-automation-suspension",
-      "change": "Allows an authenticated agent session to request pause through the existing gated missions.pause decision. The receiver requires the caller's active owner-scoped mission, suspends its exact reviewed-closure subject, and clears its next scheduled tick without editing or replacing the reviewed charter."
-    },
-    "direct:packages/builtin/src/missions/MissionsDO.ts:resume": {
-      "review": "agent-requestable-unchanged-automation-resume",
-      "change": "Allows an authenticated agent session to request resume through the existing gated missions.pause decision. The receiver admits only a paused owner-scoped mission whose recomputed complete closure digest still equals the reviewed digest, reactivates that same closure, and derives the next tick from its reviewed cadence."
-    },
-    "direct:packages/builtin/src/missions/MissionsDO.ts:retire": {
-      "review": "agent-requestable-confirmed-automation-retirement",
-      "change": "Allows an authenticated agent session to request permanent retirement through the critical missions.retire decision, which retains fresh user confirmation. The receiver retires the exact reviewed-closure subject when present, marks only the owner-scoped mission retired, and clears future scheduling without deleting its run ledger or conversation history."
-    },
-    "direct:workspace/packages/agentic-do/src/agent-vessel.ts:runAutomationEval": {
-      "review": "reviewed-model-free-agent-eval-ingress",
-      "change": "Adds the code-and-host orchestration ingress that journals one exact automation eval as an ordinary visible tool invocation in the addressed AgentDO. The caller must reach that exact runtime target; execution uses only the agent's existing EvalDO, identity, tool exposure, and pregranted authority, while durable mission provenance and the recorded executor bind terminal settlement to the originating run."
-    },
     "direct:packages/builtin/src/eval-engine/EvalDO.ts:appendAuthorityEvent": {
       "review": "host-only-eval-authority-event-ingress",
       "change": "Adds the typed host-only write used to append one already receiver-bound authority lifecycle event to an exact eval run. It cannot choose another owner, execute code, or grant authority."
@@ -221,14 +189,6 @@
     "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:entityListExecutionRoots": {
       "review": "host-only-active-entity-execution-root-census",
       "change": "Adds a host-only bounded read of exact execution identities held by active workspace entities for the mandatory retention provider. It exposes no entity payload and performs no lifecycle mutation."
-    },
-    "direct:workspace/workers/workspace-source/GadWorkspaceDO.ts:vcsIsStateDescendant": {
-      "review": "bounded-semantic-state-ancestry-read",
-      "change": "Adds an open read-only causal ancestry check between two exact semantic state references. The receiver traverses bounded semantic history and performs no source mutation or filesystem projection."
-    },
-    "direct:workspace/workers/workspace-source/GadWorkspaceDO.ts:vcsSemanticHostReadAck": {
-      "review": "host-only-exact-merge-content-continuation",
-      "change": "Adds the host-only acknowledgement that resumes one exact compare or merge after the host returns the content hashes named by the engine. The receiver binds the operation, input digest, causal ingress, and complete hash set; it cannot select different content, mutate another context, or bypass ordinary VCS authorization."
     },
     "host:attachedHosts.attachClient": {
       "review": "owner-scoped-attached-host-client-open",
@@ -362,42 +322,6 @@
       "review": "user-approved-emergency-authority-barrier",
       "change": "Adds the critical control that durably blocks protected agent authority workspace-wide before interrupting live agent transports. Releasing the barrier uses the same reviewed critical capability."
     },
-    "direct:workspace/packages/agentic-do/src/agent-vessel.ts:interruptAllChannels": {
-      "review": "host-only-agent-transport-barrier",
-      "change": "Adds a host-only lifecycle operation that enumerates the exact agent vessel's subscribed channels and interrupts their active transports while flushing deferred work; no user, code, or entity principal can invoke it directly."
-    },
-    "direct:workspace/packages/agentic-do/src/agent-vessel.ts:getAgentSettings": {
-      "review": "bounded-agent-settings-read",
-      "change": "Restores the reviewed open read used by child-agent launch verification and agent settings UI. It returns only effective model routing, effort, approval level, and response policy for the exact addressed agent; it exposes no credential, prompt content, transcript, or mutation path."
-    },
-    "direct:workspace/workers/workspace-source/GadWorkspaceDO.ts:diagnoseInvocation": {
-      "review": "bounded-read-only-causal-diagnostics",
-      "change": "Adds an open, read-only exact-coordinate projection over existing trajectory, semantic command, effect-intent, and receipt authorities; every collection is bounded and reports truncation, and the method performs no mutation."
-    },
-    "direct:workspace/workers/workspace-source/GadWorkspaceDO.ts:resolveTrajectoryForkPoint": {
-      "review": "bounded-channel-trajectory-fork-coordinate-read",
-      "change": "Adds an open, read-only aggregate that resolves one trajectory sequence from exact trajectory, branch, channel, and channel-sequence coordinates. It returns only a non-negative sequence number, exposes no generic SQL or payload content, and performs no mutation."
-    },
-    "direct:workspace/workers/workspace-source/GadWorkspaceDO.ts:adoptDurableWorkWorker": {
-      "review": "host-only-publication-worker-fencing",
-      "change": "Adds host-only adoption of one exact workspace publication queue generation. A new activation releases only leases held by the previous host worker and grants no access to publication payloads or workspace content."
-    },
-    "direct:workspace/workers/workspace-source/GadWorkspaceDO.ts:claimReadyWork": {
-      "review": "host-only-bounded-publication-claim",
-      "change": "Adds bounded, generation-fenced claims over committed channel-publication outbox rows. Claims expose only exact channel and stored-envelope coordinates required by the durable delivery driver."
-    },
-    "direct:workspace/workers/workspace-source/GadWorkspaceDO.ts:durableWorkStatus": {
-      "review": "host-only-publication-readiness-summary",
-      "change": "Adds a bounded host read of publication queue readiness and its next recovery time without exposing message payloads, channel history, or workspace source state."
-    },
-    "direct:workspace/workers/workspace-source/GadWorkspaceDO.ts:failReadyWork": {
-      "review": "host-only-publication-claim-failure",
-      "change": "Records bounded retry state only for the exact publication item, worker identity, and lease generation; stale hosts cannot alter a newer claim or discard delivery."
-    },
-    "direct:workspace/workers/workspace-source/GadWorkspaceDO.ts:settleReadyWork": {
-      "review": "host-only-publication-claim-settlement",
-      "change": "Deletes a publication outbox row only after the exact worker and lease generation report a complete stored-envelope broadcast; missing, partial, duplicate, and stale settlements fail closed."
-    },
     "host:contextIntegrity.explain": {
       "review": "own-session-verified-lineage-explanation",
       "change": "Adds a read-only agent-bound explanation of a lineage coordinate already present in the caller's own session. The receiver derives session identity, verifies aggregate content addressing, and returns bounded opaque-cursor pages."
@@ -405,18 +329,6 @@
     "host:app.openShellSurface": {
       "review": "bounded-first-party-shell-navigation",
       "change": "Adds open navigation to an enumerated first-party shell management surface in the current client; it neither opens an external system nor changes managed state, and the receiver rejects unknown targets."
-    },
-    "direct:workspace/packages/agentic-do/src/agent-vessel.ts:onAuthorityChanged": {
-      "review": "host-authority-redrive-hint",
-      "change": "Adds a host-only, open runtime-intrinsic wake hint after an authority acquisition settles. Durable effect outbox state remains the continuation and ordinary alarms recover a lost hint."
-    },
-    "direct:workspace/packages/agentic-do/src/agent-vessel.ts:attachChannel": {
-      "review": "host-lifecycle-attachment",
-      "change": "Adds a host-only lifecycle operation that attaches an existing exact agent entity to a channel; the channel independently authenticates the subscribing Durable Object identity."
-    },
-    "direct:workspace/workers/pubsub-channel/channel-do.ts:initializeLockedChannel": {
-      "review": "host-locked-membership-initialization",
-      "change": "Adds host-only atomic initialization of an immutable exact-participant channel boundary; user and code callers cannot create, replace, or widen the locked membership policy."
     },
     "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:alarmAdoptWorker": {
       "review": "host-only-alarm-worker-generation-adoption",
@@ -437,98 +349,6 @@
     "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:durableWorkOwnerRegister": {
       "review": "host-only-durable-owner-registration",
       "change": "Adds idempotent host registration of an exact active Durable Object and its enumerated work queues for recovery scanning."
-    },
-    "direct:workspace/packages/runtime/src/worker/durable-base.ts:durableWorkCapabilities": {
-      "review": "host-only-static-work-capability-read",
-      "change": "Exposes only the receiver's fixed supported durable-work queue names to the host activation hook; it reads no semantic or user data."
-    },
-    "direct:workspace/packages/agentic-do/src/agent-vessel.ts:adoptDurableWorkWorker": {
-      "review": "host-only-durable-worker-generation-adoption",
-      "change": "Installs the exact host durable-work worker generation on one concrete agent vessel and releases only claims owned by the positively superseded generation. No user or code principal is admitted, and elapsed time cannot transfer ownership."
-    },
-    "direct:workspace/packages/agentic-do/src/agent-vessel.ts:acceptChannelDelivery": {
-      "review": "host-only-idempotent-channel-recipient-transition",
-      "change": "Replaces the former host-only batch-to-inbox relay with one finite transition on the exact addressed vessel. The receiver validates immutable delivery coordinates, its durable channel relationship, and a versioned at-sequence decision context, then retains one outcome by deterministic delivery ID; no user or code principal is admitted."
-    },
-    "direct:workspace/packages/runtime/src/worker/durable-base.ts:acceptChannelDelivery": {
-      "review": "host-only-finite-resident-session-delivery",
-      "change": "Adds the common host-only finite delivery entrypoint used after the durable-work host has resolved the exact recipient entity. It forwards one addressed envelope only to that receiver's explicit resident execution session and creates no channel membership, stream, or authority."
-    },
-    "direct:workspace/packages/agentic-do/src/agent-vessel.ts:cancelSubagentExecution": {
-      "review": "parent-owned-exact-child-cancellation",
-      "change": "Allows code to request cancellation only on the exact child vessel whose durable subagent identity records the verified caller as parent and whose run and task-channel coordinates match. It commits a terminal intent and aborts that run; it cannot cancel a sibling, revive a terminal run, or delete retained state."
-    },
-    "direct:workspace/workers/pubsub-channel/channel-do.ts:adoptDurableWorkWorker": {
-      "review": "host-only-durable-worker-generation-adoption",
-      "change": "Installs the exact host durable-work worker generation on one concrete channel and releases only claims owned by the positively superseded generation. No user or code principal is admitted, and elapsed time cannot transfer ownership."
-    },
-    "direct:workspace/packages/agentic-do/src/agent-vessel.ts:claimReadyWork": {
-      "review": "host-only-agent-work-claim",
-      "change": "Adds bounded generation-fenced claims over the exact vessel's local inbox and effect projections; no code or user principal is admitted."
-    },
-    "direct:workspace/packages/agentic-do/src/agent-vessel.ts:durableWorkStatus": {
-      "review": "host-only-agent-readiness-summary",
-      "change": "Adds a bounded host read of queue readiness and next recovery time without exposing descriptors or transcript content."
-    },
-    "direct:workspace/packages/agentic-do/src/agent-vessel.ts:executeEffectClaim": {
-      "review": "host-only-held-agent-effect",
-      "change": "Executes only an already generation-fenced effect claim on the exact vessel; live authority is re-evaluated by the narrow executor ports."
-    },
-    "direct:workspace/packages/agentic-do/src/agent-vessel.ts:executeWakeClaim": {
-      "review": "host-only-held-agent-wake-transition",
-      "change": "Executes only an existing generation-fenced local wake claim on the exact vessel. Wake payloads are closed internal variants; terminal publication remains idempotent and subsequent remote effects retain their own receiver-side authority checks."
-    },
-    "direct:workspace/packages/agentic-do/src/agent-vessel.ts:failReadyWork": {
-      "review": "host-only-agent-claim-failure",
-      "change": "Records retry state only when worker identity and worker generation match the exact local claim."
-    },
-    "direct:workspace/packages/agentic-do/src/agent-vessel.ts:settleReadyWork": {
-      "review": "host-only-agent-claim-settlement",
-      "change": "Settles only the exact worker and generation; stale hosts cannot mutate a newer inbox or effect claim."
-    },
-    "direct:workspace/workers/pubsub-channel/channel-do.ts:claimReadyWork": {
-      "review": "host-only-channel-work-claim",
-      "change": "Adds bounded generation-fenced claims over exact recipient-incarnation batches and channel recovery items."
-    },
-    "direct:workspace/workers/pubsub-channel/channel-do.ts:durableWorkStatus": {
-      "review": "host-only-channel-readiness-summary",
-      "change": "Adds a bounded host read of channel work readiness and recovery time without exposing message payloads."
-    },
-    "direct:workspace/workers/pubsub-channel/channel-do.ts:getLineageHeads": {
-      "review": "bounded-root-lineage-head-read",
-      "change": "Adds an open read of at most 500 exact channel head sequences from the addressed lineage root. The receiver rejects reads from fork nodes, returns no message content, participant data, context state, or subscription identity, and performs no semantic mutation; code callers use it only to reconcile persisted fork unread cursors."
-    },
-    "direct:workspace/workers/pubsub-channel/channel-do.ts:join": {
-      "review": "self-authenticated-finite-entity-membership-open",
-      "change": "Replaces executable-entity streaming subscription with a finite durable relationship write. The receiver requires the caller to be the asserted participant, the endpoint to be that same Durable Object identity, the entity to be currently active, the locked-channel allowlist to admit it, and revisions to be monotone."
-    },
-    "direct:workspace/workers/pubsub-channel/channel-do.ts:leave": {
-      "review": "self-authenticated-finite-entity-membership-end",
-      "change": "Ends only the verified caller's own durable channel relationship at the exact next revision. It cannot remove another participant or bypass the receiver's pending-delivery derivation before departure."
-    },
-    "direct:workspace/workers/pubsub-channel/channel-do.ts:recordReceipt": {
-      "review": "self-authenticated-monotone-read-projection",
-      "change": "Lets a verified participant advance only its own read projection for one message. The operation appends no canonical event and creates no agent mailbox work; its optional live emission is a disposable presentation signal to connected external sessions."
-    },
-    "direct:workspace/workers/pubsub-channel/channel-do.ts:relationshipState": {
-      "review": "self-authenticated-exact-relationship-read",
-      "change": "Returns only the verified caller participant's own active flag and monotone relationship revision after bringing the disposable projection current. It exposes no roster, message content, or foreign membership."
-    },
-    "direct:workspace/workers/pubsub-channel/channel-do.ts:executeChannelMaintenanceClaim": {
-      "review": "host-only-held-channel-recovery",
-      "change": "Moves exact invite-index, call-deadline, and fork recovery items out of alarm activations and executes only an existing generation-fenced claim."
-    },
-    "direct:workspace/workers/pubsub-channel/channel-do.ts:failReadyWork": {
-      "review": "host-only-channel-claim-failure",
-      "change": "Records bounded retry state only for the exact channel worker and worker generation."
-    },
-    "direct:workspace/workers/pubsub-channel/channel-do.ts:settleReadyWork": {
-      "review": "host-only-channel-claim-settlement",
-      "change": "Requires exact worker/generation settlement and a complete gap-free per-row acknowledgement for recipient batches."
-    },
-    "direct:packages/builtin/src/development/DevelopmentDO.ts:listClientExecutors": {
-      "review": "user-owned-client-executor-discovery",
-      "change": "Adds a read-only typed discovery surface for live reviewed Electron executors owned by the authenticated user. It exposes opaque executor coordinates and platform metadata, not credentials, process handles, or authority."
     },
     "host:developmentNative.listClientExecutors": {
       "review": "user-owned-native-executor-discovery",
@@ -569,18 +389,6 @@
     "host:developmentClientExecutor.consumeAttestation": {
       "review": "single-use-isolated-child-attestation-read",
       "change": "Lets only the exact bound isolated management shell consume one nonce-bound child runtime receipt. The inbox is short-lived and bounded, and no device credential, artifact path, or self-reported execution digest is returned."
-    },
-    "host:shellApproval.resolveInstallReview": {
-      "review": "install-review-typed-resolution",
-      "change": "Adds the typed resolution for a queued install review, replacing the all-or-nothing unit-batch decision. Same gated approvals.decide capability and same trusted-chrome principals as resolve/resolveMissionReview; the server derives the offerable rows itself and rejects any identity or permission the review did not offer, so a client cannot ask for more than it was shown."
-    },
-    "host:runtime.recoverExecution": {
-      "review": "trusted-exact-runtime-execution-recovery",
-      "change": "Adds gated recovery of one exact active Durable Object execution under the trusted runtime host. Expected execution digests fence stale requests, and the receiver either rematerializes the retained immutable build or performs the explicitly selected replacement strategy without changing durable ownership."
-    },
-    "host:shellApproval.getWorkspaceCreationReviewState": {
-      "review": "bounded-workspace-review-readiness-read",
-      "change": "Adds a read-only projection of whether the host-owned workspace creation review is pending, ready, or resolved. It exposes no approval contents, authority grants, or mutation path and remains under the existing approvals.read capability."
     }
   }
 }

@@ -40,18 +40,29 @@ function makeService(opts: {
    * `panelIndex` / `panelUpdateTitle`).
    */
   dispatchReturns?: Record<string, unknown>;
+  presentationReturns?: Record<string, unknown>;
   panelAccess?: Partial<PanelAccessPermissionDeps>;
 }) {
   const calls: Array<{ method: string; args: unknown[] }> = [];
+  const presentationCalls: Array<{ method: string; args: unknown[] }> = [];
   const doDispatch = {
     dispatch: async (_ref: unknown, method: string, ...args: unknown[]) => {
       calls.push({ method, args });
+      if (method === "slotClose") return { closeId: String(args[0]), closedCount: 0 };
+      if (method === "slotCloseCleanupPage") return { items: [], nextCursor: null };
       return opts.dispatchReturns?.[method];
     },
   };
   const svc = createWorkspaceStateService({
     doDispatch: doDispatch as never,
     workspaceId: "test-workspace",
+    presentationDispatch: async (method, args) => {
+      presentationCalls.push({ method, args });
+      if (method === "titlesForSlots") return {};
+      if (method === "search") return { results: [], nextCursor: null };
+      if (method === "sourceUsage") return [];
+      return opts.presentationReturns?.[method];
+    },
     ...(opts.getUnitIcon ? { getUnitIcon: opts.getUnitIcon } : {}),
     panelAccess: {
       contextExists: () => false,
@@ -65,7 +76,7 @@ function makeService(opts: {
     ...(opts.isEntityTitleExplicit ? { isEntityTitleExplicit: opts.isEntityTitleExplicit } : {}),
     ...(opts.onSlotStateChanged ? { onSlotStateChanged: opts.onSlotStateChanged } : {}),
   });
-  return { svc, calls };
+  return { svc, calls, presentationCalls };
 }
 
 describe("workspaceStateService — title mirror hooks", () => {
@@ -73,7 +84,7 @@ describe("workspaceStateService — title mirror hooks", () => {
     const { svc } = makeService({
       dispatchReturns: {
         panelTreeDetail: {
-          slot: { current_entity_title: "Target" },
+          slot: { slot_id: "panel:target", current_entity_title: "Target" },
           currentHistory: { source: "panels/target", context_id: "ctx-target" },
           entity: { id: "panel:target" },
         },
@@ -157,7 +168,7 @@ describe("workspaceStateService — title mirror hooks", () => {
   it("enriches panel detail from the server-owned unit manifest", async () => {
     const detail = {
       revision: 1,
-      slot: { current_entity_title: "Chat" },
+      slot: { slot_id: "panel:chat", current_entity_title: "Chat" },
       currentHistory: { source: "panels/chat", context_id: "ctx-chat" },
       entity: { id: "panel:chat" },
     };
@@ -199,7 +210,7 @@ describe("workspaceStateService — title mirror hooks", () => {
       ])
     ).resolves.toEqual({
       ...page,
-      nodes: [{ ...page.nodes[0], icon: "💬" }],
+      nodes: [{ ...page.nodes[0], title: "panel:chat", icon: "💬" }],
     });
   });
 
@@ -274,9 +285,13 @@ describe("workspaceStateService — title mirror hooks", () => {
     const onPanelTitleChanged = vi.fn();
     const { svc } = makeService({
       onPanelTitleChanged,
-      // WorkspaceDO returns the slot's current entity id when it stamped a
-      // title — the service should pass THAT (not the slot id) to the hook.
-      dispatchReturns: { panelIndex: "entity:abc-current" },
+      dispatchReturns: {
+        panelTreeDetail: {
+          slot: { slot_id: "panel:abc" },
+          currentHistory: { source: "panels/chat" },
+          entity: { id: "entity:abc-current" },
+        },
+      },
     });
     const result = await svc.handler(makeCtx() as never, "panel.index", [
       { id: "panel:abc", title: "Spectrolite — README" },
@@ -293,7 +308,7 @@ describe("workspaceStateService — title mirror hooks", () => {
     const onPanelTitleChanged = vi.fn();
     const { svc } = makeService({
       onPanelTitleChanged,
-      dispatchReturns: { panelIndex: null },
+      dispatchReturns: { panelTreeDetail: null },
     });
     await svc.handler(makeCtx() as never, "panel.index", [{ id: "panel:abc", title: "" }]);
     expect(onPanelTitleChanged).not.toHaveBeenCalled();
@@ -301,15 +316,15 @@ describe("workspaceStateService — title mirror hooks", () => {
 
   it("indexes source metadata without replacing an existing explicit title", async () => {
     const onPanelTitleChanged = vi.fn();
-    const { svc, calls } = makeService({
+    const { svc, calls, presentationCalls } = makeService({
       onPanelTitleChanged,
       isEntityTitleExplicit: () => true,
       dispatchReturns: {
         panelTreeDetail: {
           entity: { id: "entity:abc-current" },
-          slot: { current_entity_title: "Pinned title" },
+          slot: { slot_id: "panel:abc", current_entity_title: "Pinned title" },
+          currentHistory: { source: "browser:https://example.com/" },
         },
-        panelIndex: "entity:abc-current",
       },
     });
 
@@ -317,16 +332,19 @@ describe("workspaceStateService — title mirror hooks", () => {
       { id: "panel:abc", title: "Inferred title", path: "browser:https://example.com/" },
     ]);
 
-    expect(calls).toEqual([
-      { method: "panelTreeDetail", args: ["panel:abc"] },
+    expect(calls).toEqual([{ method: "panelTreeDetail", args: ["panel:abc"] }]);
+    expect(presentationCalls).toEqual([
+      { method: "titlesForSlots", args: [["panel:abc"]] },
       {
-        method: "panelIndex",
+        method: "indexPanel",
         args: [
           {
             id: "panel:abc",
+            source: "browser:https://example.com/",
             title: "Pinned title",
             path: "browser:https://example.com/",
           },
+          "entity:abc-current",
         ],
       },
     ]);
@@ -338,7 +356,9 @@ describe("workspaceStateService — title mirror hooks", () => {
     const onPanelTitleChanged = vi.fn();
     const { svc } = makeService({
       onPanelTitleChanged,
-      dispatchReturns: { panelUpdateTitle: "entity:abc-current" },
+      dispatchReturns: {
+        panelTreeDetail: { entity: { id: "entity:abc-current" } },
+      },
     });
     const result = await svc.handler(makeCtx() as never, "panel.updateTitle", [
       "panel:abc",
@@ -374,7 +394,7 @@ describe("workspaceStateService — title mirror hooks", () => {
     const onPanelTitleChanged = vi.fn();
     const { svc } = makeService({
       onPanelTitleChanged,
-      dispatchReturns: { panelUpdateTitle: null },
+      dispatchReturns: { panelTreeDetail: null },
     });
     const result = await svc.handler(makeCtx() as never, "panel.updateTitle", [
       "panel:abc",

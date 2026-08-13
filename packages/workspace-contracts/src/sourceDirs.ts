@@ -9,7 +9,6 @@ export const WORKSPACE_SOURCE_DIRS = [
   "skills",
   "about",
   "templates",
-  "migrations",
   "projects",
 ] as const;
 
@@ -27,7 +26,6 @@ export const WORKSPACE_IMPORT_PARENT_DIRS = [
   "skills",
   "about",
   "templates",
-  "migrations",
   "projects",
 ] as const;
 

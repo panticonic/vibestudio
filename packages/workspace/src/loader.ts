@@ -24,6 +24,7 @@ import { createDevLogger } from "@vibestudio/dev-log";
 import { parseWorkspaceConfigContentWithId, resolveWorkspaceTrustGrants } from "./configParser.js";
 import { setWorkspaceAppTrust } from "@vibestudio/shared/chromeTrust";
 import { currentContextProjectionsPath } from "./contextProjections.js";
+import { readBaseTemplateRelease } from "./baseTemplateRelease.js";
 export {
   resolveDeclaredApps,
   resolveDeclaredExtensions,
@@ -48,10 +49,6 @@ import type {
   CentralDataManager,
   EphemeralWorkspaceCleanupRecord,
 } from "@vibestudio/shared/centralData";
-import {
-  getExistingWorkspaceTemplateDir,
-  getWorkspaceTemplateCandidates,
-} from "@vibestudio/shared/runtimePaths";
 import {
   WORKSPACE_SOURCE_DIRS,
   WORKSPACE_STATE_DIRS,
@@ -296,32 +293,10 @@ function validateWorkspaceName(name: string): void {
 }
 
 /**
- * Resolve the workspace template directory for first-run workspace creation.
- *
- * Packaged builds ship workspace-template/ as an Electron resource. Dev uses
- * workspace/ at the app root. The candidate selection is shared with the rest
- * of runtime path resolution so dev and packaged follow the same contract.
- *
- * Returns null if no template directory exists.
- */
-export function resolveWorkspaceTemplateDir(appRoot: string): string | null {
-  const debug = process.env["VIBESTUDIO_DEBUG_PATHS"] === "1";
-  const templateDir = getExistingWorkspaceTemplateDir(appRoot, WORKSPACE_CONFIG_FILE);
-  if (debug) {
-    console.log(
-      `[Workspace] resolveWorkspaceTemplateDir appRoot=${appRoot} candidates=${JSON.stringify(
-        getWorkspaceTemplateCandidates(appRoot)
-      )} selected=${templateDir ?? "(none)"}`
-    );
-  }
-  return templateDir;
-}
-
-/**
  * Initialize a new managed workspace directory.
  *
  * Source options (mutually exclusive, exactly one):
- * - `templateDir`: Copy source dirs from a local directory (e.g., the shipped workspace template)
+ * - `templateDir`: Import source dirs from an explicitly selected local directory
  * - `forkFrom`:   Copy source dirs from another managed workspace by name
  * - `rootTemplate`: Persist one exact root pin for pre-userland bootstrap
  *
@@ -700,10 +675,13 @@ export function resolveOrCreateWorkspace(opts: ResolveWorkspaceOpts): ResolvedWo
       // to exist, so remove only this proven-empty shell before scaffolding it.
       fs.rmdirSync(wsDir);
     }
-    const templateDir = opts.appRoot ? resolveWorkspaceTemplateDir(opts.appRoot) : null;
-    initWorkspace(name, templateDir ? { templateDir } : undefined);
+    if (!opts.appRoot) {
+      throw new Error("External-root workspace creation requires the host app root");
+    }
+    const { baseTemplate } = readBaseTemplateRelease(opts.appRoot);
+    initWorkspace(name, { rootTemplate: baseTemplate, workspaceId: createWorkspaceId() });
     created = true;
-    log.info(`[Workspace] Created "${name}"${templateDir ? " from template" : ""}`);
+    log.info(`[Workspace] Created "${name}" from exact external Base ${baseTemplate.commit}`);
   }
 
   const workspace = createWorkspace(wsDir);
@@ -1009,9 +987,5 @@ function readWorkspaceDeletionMarker(trashRoot: string): WorkspaceDeletionMarker
 function resolveWorkspaceCreationOpts(opts?: WorkspaceCreationOptions): WorkspaceCreationOptions {
   if (opts?.templateDir || opts?.forkFrom || opts?.rootTemplate) return opts;
   const appRoot = process.env["VIBESTUDIO_APP_ROOT"] ?? process.cwd();
-  const templateDir = resolveWorkspaceTemplateDir(appRoot);
-  if (!templateDir) {
-    throw new Error("Workspace creation requires a template, but no workspace template was found");
-  }
-  return { templateDir };
+  return { rootTemplate: readBaseTemplateRelease(appRoot).baseTemplate };
 }

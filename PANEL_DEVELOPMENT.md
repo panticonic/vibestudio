@@ -402,7 +402,7 @@ console.log(`published ${result.eventId} as main ${result.mainEventId}`);
 ```
 
 Read the canonical
-[Vibestudio VCS skill](workspace/skills/vibestudio-vcs/SKILL.md) for
+[Vibestudio VCS skill](https://github.com/panticonic/vibestudio-workspace-base/blob/main/skills/vibestudio-vcs/SKILL.md) for
 compare/merge decisions, complete-chain commit, move/copy provenance,
 typed recovery, and protected publication.
 

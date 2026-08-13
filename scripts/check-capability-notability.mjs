@@ -16,6 +16,11 @@ import path from "node:path";
 import { parse as parseYaml } from "yaml";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const userlandRootArgument = process.env.VIBESTUDIO_USERLAND_ROOT;
+if (!userlandRootArgument) {
+  throw new Error("VIBESTUDIO_USERLAND_ROOT must name the exact Base checkout to inspect");
+}
+const userlandRoot = path.resolve(userlandRootArgument);
 
 const { reviewedCapabilityNotability } = await import(
   path.join(root, "packages/shared/src/authority/capabilityNotability.ts")
@@ -73,17 +78,17 @@ function visitPackageManifests(directory) {
   }
 }
 
-visitPackageManifests(path.join(root, "workspace"));
+visitPackageManifests(userlandRoot);
 
 // Dynamic workspace-service envelopes are authored by the workspace, so their
 // review classification belongs beside the service's action and presentation.
 // This is the same declaration the live build and install review consume.
 const workspaceServiceDeclarationGaps = [];
 for (const relativeConfigPath of [
-  "workspace/meta/template.yml",
-  "workspace/meta/vibestudio.yml",
+  "meta/template.yml",
+  "meta/vibestudio.yml",
 ]) {
-  const workspaceConfigPath = path.join(root, relativeConfigPath);
+  const workspaceConfigPath = path.join(userlandRoot, relativeConfigPath);
   const workspaceConfig = parseYaml(fs.readFileSync(workspaceConfigPath, "utf8"));
   for (const service of workspaceConfig.services ?? []) {
     const capability = `workspace-service:${service.name}`;

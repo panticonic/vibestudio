@@ -72,25 +72,6 @@ export const BrowserNavigationIntentSchema = z.object({
     .describe("True if the user typed the destination into the address bar."),
 });
 
-// Wire shape of the per-device persisted panel layout (multi-column layout
-// plan §3.3). The shell owns deep validation/pruning; this is the structural
-// envelope so the RPC contract stays typed.
-const PersistedPanelLayoutSchema = z.object({
-  version: z.literal(1),
-  workspaceId: z.string(),
-  layout: z.object({
-    columns: z.array(
-      z.object({
-        id: z.string(),
-        widthFr: z.number(),
-        panes: z.array(z.object({ id: z.string(), heightFr: z.number(), panelId: z.string() })),
-      })
-    ),
-    focusedPaneId: z.string().nullable(),
-  }),
-  updatedAt: z.string(),
-});
-
 const READ_ACCESS: MethodAccessDescriptor = {
   sensitivity: "read",
 };
@@ -498,36 +479,6 @@ export const panelMethods = defineServiceMethods({
     returns: z.array(z.string()),
     access: READ_ACCESS,
   },
-  getPanelLayout: {
-    tier: {
-      tier: "open",
-      session: "family",
-      residency: "native-effect",
-      family: "panel.read",
-      rationale:
-        "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family",
-    },
-    description:
-      "Return the client-local persisted panel layout for the active workspace and signed-in account, or null. The shell re-validates and prunes against the live tree on restore.",
-    args: z.tuple([]),
-    returns: PersistedPanelLayoutSchema.nullable(),
-    access: READ_ACCESS,
-  },
-  savePanelLayout: {
-    tier: {
-      tier: "open",
-      session: "family",
-      residency: "native-effect",
-      family: "panel.control",
-      rationale:
-        "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family",
-    },
-    description:
-      "Persist the client-local panel layout for the active workspace and signed-in account. Stored on this device only; never synced.",
-    args: z.tuple([PersistedPanelLayoutSchema]),
-    returns: z.void(),
-    access: WRITE_ACCESS,
-  },
   getFocusedPanelId: {
     tier: {
       tier: "open",
@@ -552,45 +503,6 @@ export const panelMethods = defineServiceMethods({
     },
     description: "Persist this client's focused panel id without loading or navigating the panel.",
     args: z.tuple([z.string()]),
-    returns: z.void(),
-    access: WRITE_ACCESS,
-  },
-  getCollapsedPanelIds: {
-    tier: {
-      tier: "open",
-      session: "family",
-      residency: "native-effect",
-      family: "view.local-panel-state",
-      rationale: "Reads collapsed nodes from this client's local panel presentation state",
-    },
-    description: "Return this client's collapsed panel ids.",
-    args: z.tuple([]),
-    returns: z.array(z.string()),
-    access: READ_ACCESS,
-  },
-  setPanelCollapsed: {
-    tier: {
-      tier: "open",
-      session: "family",
-      residency: "native-effect",
-      family: "view.local-panel-state",
-      rationale: "Persists one collapsed-node choice in this client's local presentation state",
-    },
-    description: "Set one panel's collapsed state on this client.",
-    args: z.tuple([z.string(), z.boolean()]),
-    returns: z.void(),
-    access: WRITE_ACCESS,
-  },
-  expandPanelIds: {
-    tier: {
-      tier: "open",
-      session: "family",
-      residency: "native-effect",
-      family: "view.local-panel-state",
-      rationale: "Expands exact nodes in this client's local panel presentation state",
-    },
-    description: "Expand panel ids on this client.",
-    args: z.tuple([z.array(z.string())]),
     returns: z.void(),
     access: WRITE_ACCESS,
   },

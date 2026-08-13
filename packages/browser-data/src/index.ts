@@ -48,7 +48,11 @@ export type { BrowserDataErrorCode } from "./errors.js";
 
 export { createBrowserDataClient } from "./client/browserDataClient.js";
 export type { BrowserDataClient, ImportPreview } from "./client/browserDataClient.js";
-export { BROWSER_DATA_SCHEMA, PAGE_FAVICONS_TABLE_SQL } from "./storage/index.js";
+export {
+  BROWSER_PRODUCT_SCHEMA,
+  BROWSER_VAULT_SCHEMA,
+  PAGE_FAVICONS_TABLE_SQL,
+} from "./storage/index.js";
 export {
   FAVICON_MIME_TYPES,
   MAX_PAGE_FAVICON_BYTES,

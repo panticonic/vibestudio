@@ -34,9 +34,18 @@ function makeViewManager(capabilities: string[] = [], opts: { id?: string; sourc
         : null
     ),
     setHostedShellReady: vi.fn(),
-    bindPanelSlot: vi.fn(() => ({ status: "bound" as const })),
-    updatePanelSlot: vi.fn(),
-    clearPanelSlot: vi.fn(() => true),
+    syncPanelSlots: vi.fn(
+      (
+        _: string,
+        request: { revision: number; slots: unknown[] }
+      ): {
+        revision: number;
+        slots: Record<string, { status: "bound" }>;
+      } => ({
+        revision: request.revision,
+        slots: { "panel-stack:primary": { status: "bound" } },
+      })
+    ),
     getPanelIdForNativeSlot: vi.fn(() => "panel-1"),
     getDeclaredPanelSlotIds: vi.fn((): string[] => []),
     setThemeCss: vi.fn(),
@@ -60,29 +69,36 @@ describe("view service", () => {
     expect(vm.setThemeCss).not.toHaveBeenCalled();
   });
 
-  it("allows a panel-hosting workspace app to bind native panel slots", async () => {
+  it("allows a panel-hosting workspace app to converge one desired snapshot", async () => {
     const vm = makeViewManager(["panel-hosting"]);
     const service = createViewService({ getViewManager: () => vm as never });
     const request = {
-      nativeSlotId: "panel-stack:primary",
       rendererInstanceId: "renderer-test",
-      bindingId: "binding-test",
-      bindingSequence: 1,
-      operationSequence: 1,
-      panelId: "panel-1",
-      bounds: { x: 10, y: 20, width: 300, height: 200 },
-      focused: true,
+      revision: 1,
+      slots: [
+        {
+          nativeSlotId: "panel-stack:primary",
+          bindingId: "binding-test",
+          bindingSequence: 1,
+          panelId: "panel-1",
+          bounds: { x: 10, y: 20, width: 300, height: 200 },
+          focused: true,
+        },
+      ],
     };
 
     await expect(
       service.handler(
         { caller: createVerifiedCaller("@workspace-apps/shell", "app") },
-        "bindNativePanelSlot",
+        "syncNativePanelSlots",
         [request]
       )
-    ).resolves.toEqual({ status: "bound" });
+    ).resolves.toEqual({
+      revision: 1,
+      slots: { "panel-stack:primary": { status: "bound" } },
+    });
 
-    expect(vm.bindPanelSlot).toHaveBeenCalledWith("@workspace-apps/shell", request);
+    expect(vm.syncPanelSlots).toHaveBeenCalledWith("@workspace-apps/shell", request);
   });
 
   it("rejects unauthorized panel-hosting app sources for native panel slots", async () => {
@@ -94,80 +110,62 @@ describe("view service", () => {
     const service = createViewService({ getViewManager: () => vm as never });
 
     await expect(
-      service.handler({ caller: createVerifiedCaller(callerId, "app") }, "bindNativePanelSlot", [
+      service.handler({ caller: createVerifiedCaller(callerId, "app") }, "syncNativePanelSlots", [
         {
-          nativeSlotId: "panel-stack:primary",
           rendererInstanceId: "renderer-test",
-          bindingId: "binding-test",
-          bindingSequence: 1,
-          operationSequence: 1,
-          panelId: "panel-1",
-          bounds: { x: 10, y: 20, width: 300, height: 200 },
+          revision: 1,
+          slots: [],
         },
       ])
     ).rejects.toThrow(/cannot place native panel slots/);
 
-    expect(vm.bindPanelSlot).not.toHaveBeenCalled();
+    expect(vm.syncPanelSlots).not.toHaveBeenCalled();
   });
 
-  it("returns native panel slot update acknowledgements to the hosted shell", async () => {
+  it("returns revisioned observed state to the hosted shell", async () => {
     const vm = makeViewManager(["panel-hosting"]);
-    vm.updatePanelSlot.mockReturnValue({
-      status: "missing",
-      reason: "unknown native panel slot: panel-stack:primary",
-    });
+    vm.syncPanelSlots.mockReturnValue({ revision: 2, slots: {} });
     const service = createViewService({ getViewManager: () => vm as never });
     const request = {
-      nativeSlotId: "panel-stack:primary",
       rendererInstanceId: "renderer-test",
-      bindingId: "binding-test",
-      bindingSequence: 1,
-      operationSequence: 2,
-      bounds: { x: 10, y: 20, width: 300, height: 200 },
+      revision: 2,
+      slots: [],
     };
 
     await expect(
       service.handler(
         { caller: createVerifiedCaller("@workspace-apps/shell", "app") },
-        "updateNativePanelSlot",
+        "syncNativePanelSlots",
         [request]
       )
-    ).resolves.toEqual({
-      status: "missing",
-      reason: "unknown native panel slot: panel-stack:primary",
-    });
+    ).resolves.toEqual({ revision: 2, slots: {} });
 
-    expect(vm.updatePanelSlot).toHaveBeenCalledWith("@workspace-apps/shell", request);
+    expect(vm.syncPanelSlots).toHaveBeenCalledWith("@workspace-apps/shell", request);
   });
 
-  it("does not revoke readiness for a stale native-slot cleanup", async () => {
+  it("does not project a stale desired snapshot", async () => {
     const vm = makeViewManager(["panel-hosting"]);
-    vm.clearPanelSlot.mockReturnValue(false);
+    vm.syncPanelSlots.mockImplementation(() => {
+      throw new Error("stale native panel snapshot revision 1");
+    });
     const onNativeSlotCleared = vi.fn();
     const service = createViewService({
       getViewManager: () => vm as never,
       panelOrchestrator: { onNativeSlotCleared } as never,
     });
     const request = {
-      nativeSlotId: "panel-stack:primary",
       rendererInstanceId: "renderer-test",
-      bindingId: "binding-stale",
-      bindingSequence: 1,
-      operationSequence: 2,
+      revision: 1,
+      slots: [],
     };
 
-    await service.handler(
-      { caller: createVerifiedCaller("@workspace-apps/shell", "app") },
-      "clearNativePanelSlot",
-      [request]
-    );
-
-    expect(vm.clearPanelSlot).toHaveBeenCalledWith(
-      "@workspace-apps/shell",
-      request.nativeSlotId,
-      request.bindingId,
-      request
-    );
+    await expect(
+      service.handler(
+        { caller: createVerifiedCaller("@workspace-apps/shell", "app") },
+        "syncNativePanelSlots",
+        [request]
+      )
+    ).rejects.toThrow(/stale native panel snapshot/);
     expect(onNativeSlotCleared).not.toHaveBeenCalled();
   });
 

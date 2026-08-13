@@ -1,41 +1,4 @@
 {
   "version": 1,
-  "rows": [
-    {
-      "behavior": "ordinary-subscribe",
-      "contract": "workspace-authorized identity may atomically initialize ordinary channel context and config; invitation membership is not an ACL",
-      "policyChange": null,
-      "parityAssertion": "test:channel.ordinary.authenticated-admission"
-    },
-    {
-      "behavior": "invitation",
-      "contract": "durable per-user discovery metadata for explicitly invited workspace members; no fabricated presence",
-      "policyChange": null,
-      "parityAssertion": "test:channel.invitation.discovery-metadata"
-    },
-    {
-      "behavior": "presence",
-      "contract": "one authenticated human identity may own multiple live delivery sessions without duplicating roster presence",
-      "policyChange": null,
-      "parityAssertion": "test:channel.presence.canonical-human"
-    },
-    {
-      "behavior": "fork-clone",
-      "contract": "a fork gets a fresh context and retains the parent log prefix as explicit origin",
-      "policyChange": null,
-      "parityAssertion": "test:channel.fork.context-and-log-origin"
-    },
-    {
-      "behavior": "reconnect",
-      "contract": "transport reconnection re-establishes the authenticated subscription and does not create authority",
-      "policyChange": null,
-      "parityAssertion": "test:channel.reconnect.authority-neutral"
-    },
-    {
-      "behavior": "locked-admission",
-      "contract": "host initializes one immutable exact-principal policy; subscribe verifies canonical participant identity and active durable-object incarnation",
-      "policyChange": null,
-      "parityAssertion": "test:channel.locked.exact-admission"
-    }
-  ]
+  "rows": []
 }
