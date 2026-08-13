@@ -1,8 +1,10 @@
 import type { EntityRecord } from "../runtime/entitySpec.js";
 import type { PanelEntityId, PanelSlotId } from "./ids.js";
 import type {
+  PanelTreePage,
   PanelTreePageInput,
   PanelTreeNode,
+  PanelTreePath,
   PanelTreePlacement,
   PanelTreeRootGroupPage,
   PanelTreeRootGroupPageInput,
@@ -15,6 +17,7 @@ export interface WorkspacePanelTreeSlot {
   slot_id: PanelSlotId;
   parent_slot_id: PanelSlotId | null;
   current_entity_id: PanelEntityId | null;
+  current_entity_title?: string | null;
   current_entry_key: string | null;
   current_history_cursor?: number | null;
   history_count?: number;
@@ -40,6 +43,7 @@ export interface WorkspacePanelTreeHistoryRow {
 /** Addressed runtime detail for one panel; bounded independently of tree size/history length. */
 export interface WorkspacePanelDetail {
   revision: number;
+  icon?: string;
   slot: WorkspacePanelTreeSlot;
   currentHistory: WorkspacePanelTreeHistoryRow;
   entity: EntityRecord;
@@ -62,22 +66,28 @@ export interface WorkspacePanelCloseCleanupPageInput {
   limit?: number;
 }
 
-/** Query-first tree contracts exposed by durable workspace state. */
-export type WorkspacePanelTreeNode = Omit<
+/** Raw durable topology produced by WorkspaceDO before Base presentation composition. */
+export type WorkspacePanelTopologyNode = Omit<
   PanelTreeNode,
   "title" | "icon" | "kind" | "ref" | "placement"
 > & { options?: string | null };
-export interface WorkspacePanelTreePage {
+/** @deprecated Internal raw topology alias retained for the Base presentation composer. */
+export type WorkspacePanelTreeNode = WorkspacePanelTopologyNode;
+export interface WorkspacePanelTopologyPage {
   revision: number;
   group: import("./treeIndex.js").PanelTreeGroup;
-  nodes: WorkspacePanelTreeNode[];
+  nodes: WorkspacePanelTopologyNode[];
   nextCursor: string | null;
 }
-export type WorkspacePanelTreePageInput = PanelTreePageInput;
-export interface WorkspacePanelTreePath {
+export interface WorkspacePanelTopologyPath {
   revision: number;
-  nodes: WorkspacePanelTreeNode[];
+  nodes: WorkspacePanelTopologyNode[];
 }
+
+/** Query-first tree contracts composed at the workspace-state service boundary. */
+export type WorkspacePanelTreePage = PanelTreePage;
+export type WorkspacePanelTreePageInput = PanelTreePageInput;
+export type WorkspacePanelTreePath = PanelTreePath;
 export type WorkspacePanelTreeRootGroupPage = PanelTreeRootGroupPage;
 export type WorkspacePanelTreeRootGroupPageInput = PanelTreeRootGroupPageInput;
 export type WorkspacePanelTreeSearchInput = PanelTreeSearchInput;

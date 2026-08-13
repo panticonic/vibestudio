@@ -100,20 +100,29 @@ export const AlarmSetSchema = LifecycleKeySchema.extend({
   wakeAt: z.number(),
 });
 
-export const SlotRowSchema = z
+export const PanelSearchResultSchema = z
   .object({
-    slot_id: z.string(),
-    parent_slot_id: z.string().nullable(),
-    current_entity_id: z.string().nullable(),
-    current_entry_key: z.string().nullable(),
-    current_history_cursor: z.number().int().nonnegative().nullable().optional(),
-    history_count: z.number().int().nonnegative().optional(),
-    sort_key: z.number().int(),
-    owner_user_id: z.string().nullable().optional(),
-    created_at: z.number(),
-    closed_at: z.number().nullable(),
+    id: z.string(),
+    title: z.string(),
+    relevance: z.number(),
+    accessCount: z.number(),
+    matchContext: z.string().optional(),
   })
   .strict();
+
+export const SlotRowSchema = z.object({
+  slot_id: z.string(),
+  parent_slot_id: z.string().nullable(),
+  current_entity_id: z.string().nullable(),
+  current_entity_title: z.string().nullable().optional(),
+  current_entry_key: z.string().nullable(),
+  current_history_cursor: z.number().int().nonnegative().nullable().optional(),
+  history_count: z.number().int().nonnegative().optional(),
+  sort_key: z.number().int(),
+  owner_user_id: z.string().nullable().optional(),
+  created_at: z.number(),
+  closed_at: z.number().nullable(),
+});
 
 export const SlotHistoryRowSchema = z.object({
   slot_id: z.string(),
@@ -153,6 +162,7 @@ export const EntityRecordSchema = z.object({
 export const PanelDetailSchema = z
   .object({
     revision: z.number().int().nonnegative(),
+    icon: z.string().max(256).optional(),
     slot: SlotRowSchema,
     currentHistory: SlotHistoryRowSchema,
     entity: EntityRecordSchema,
@@ -169,14 +179,33 @@ const PanelTreeNodeSchema = z
     slotId: z.string(),
     parentSlotId: z.string().nullable(),
     ownerUserId: z.string().nullable(),
+    title: z.string(),
+    icon: z.string().max(256).optional(),
     createdAt: z.number(),
     childCount: z.number().int().nonnegative(),
     source: z.string().optional(),
+    kind: z.enum(["workspace", "browser"]).optional(),
     contextId: z.string().optional(),
     runtimeEntityId: z.string().nullable().optional(),
     effectiveVersion: z.string().nullable().optional(),
     buildKey: z.string().nullable().optional(),
-    options: z.string().nullable().optional(),
+    ref: z.string().nullable().optional(),
+    placement: z
+      .object({
+        disposition: z.enum(["side", "side-if-room", "replace", "split-below"]).optional(),
+        preferredWidth: z.number().positive().optional(),
+        minWidth: z.number().positive().optional(),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict();
+
+const PanelSourceUsageSchema = z
+  .object({
+    source: z.string(),
+    accessCount: z.number().int().nonnegative(),
+    lastAccessedAt: z.number().nonnegative(),
   })
   .strict();
 
@@ -223,6 +252,30 @@ export const PanelTreePathSchema = z
   .object({
     revision: z.number().int().nonnegative(),
     nodes: z.array(PanelTreeNodeSchema),
+  })
+  .strict();
+
+export const PanelTreeSearchInputSchema = z
+  .object({
+    query: z.string().trim().min(1).max(2_000),
+    cursor: z.string().optional(),
+    limit: z.number().int().positive().max(200).optional(),
+  })
+  .strict();
+
+export const PanelTreeSearchPageSchema = z
+  .object({
+    revision: z.number().int().nonnegative(),
+    hits: z.array(
+      z
+        .object({
+          node: PanelTreeNodeSchema,
+          ancestors: z.array(PanelTreeNodeSchema),
+          ancestorsTruncated: z.boolean().optional(),
+        })
+        .strict()
+    ),
+    nextCursor: z.string().nullable(),
   })
   .strict();
 
@@ -326,6 +379,23 @@ export const workspaceStateMethods = defineServiceMethods({
     authority: WORKSPACE_STATE_READ_POLICY,
     access: { sensitivity: "read" },
     returns: PanelDetailSchema.nullable(),
+  },
+  "panelTree.search": {
+    agentFacing: false,
+    capability: "workspace.runtime-state.inspect",
+    presentation: WORKSPACE_RUNTIME_STATE_INSPECT_PRESENTATION,
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "transport",
+      family: "workspace-state.builtin-rpc",
+      rationale: "Bounded presentation search routed through the existing workspace-state boundary",
+    },
+    args: z.tuple([PanelTreeSearchInputSchema]),
+    description: "Keyset-page full-text title matches with their ancestor breadcrumbs.",
+    authority: WORKSPACE_STATE_READ_POLICY,
+    access: { sensitivity: "read" },
+    returns: PanelTreeSearchPageSchema,
   },
   "slot.get": {
     agentFacing: false,
@@ -646,6 +716,130 @@ export const workspaceStateMethods = defineServiceMethods({
     description: "Acknowledge successfully completed post-close cleanup items.",
     authority: WORKSPACE_STATE_WRITE_POLICY,
     access: { sensitivity: "destructive" },
+    returns: z.void(),
+  },
+  "panel.search": {
+    agentFacing: false,
+    capability: "workspace.runtime-state.inspect",
+    presentation: WORKSPACE_RUNTIME_STATE_INSPECT_PRESENTATION,
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "supervision",
+      family: "workspace-state.lifecycle",
+      rationale: "Workspace-member panel-index read routed to the Base presentation owner",
+    },
+    args: z.tuple([z.string(), z.number().optional()]),
+    description: "FTS5 search over panel entities.",
+    authority: WORKSPACE_STATE_READ_POLICY,
+    access: { sensitivity: "read" },
+    returns: z.array(PanelSearchResultSchema),
+  },
+  "panel.sourceUsage": {
+    agentFacing: false,
+    capability: "workspace.runtime-state.inspect",
+    presentation: WORKSPACE_RUNTIME_STATE_INSPECT_PRESENTATION,
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "supervision",
+      family: "workspace-state.lifecycle",
+      rationale:
+        "Workspace-member aggregate panel usage read routed to the Base presentation owner",
+    },
+    args: z.tuple([z.number().int().positive().max(200).optional()]),
+    description: "Durable source-level panel launch frequency for launcher ranking.",
+    authority: WORKSPACE_STATE_READ_POLICY,
+    access: { sensitivity: "read" },
+    returns: z.array(PanelSourceUsageSchema),
+  },
+  "panel.index": {
+    agentFacing: false,
+    capability: "workspace.runtime-state.manage",
+    presentation: WORKSPACE_RUNTIME_STATE_PRESENTATION,
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "supervision",
+      family: "workspace-state.lifecycle",
+      rationale: "Panel lifecycle bookkeeping on the already-authorized workspace-state operation",
+    },
+    args: z.tuple([
+      z.object({
+        id: z.string(),
+        title: z.string(),
+        path: z.string().optional(),
+        manifestDescription: z.string().optional(),
+        manifestDependencies: z.array(z.string()).optional(),
+        tags: z.array(z.string()).optional(),
+        keywords: z.array(z.string()).optional(),
+      }),
+    ]),
+    description: "Upsert a panel's search-metadata row.",
+    authority: WORKSPACE_STATE_WRITE_POLICY,
+    access: { sensitivity: "write" },
+    returns: z.string().nullable(),
+  },
+  "panel.updateTitle": {
+    agentFacing: false,
+    capability: "workspace.runtime-state.manage",
+    presentation: WORKSPACE_RUNTIME_STATE_PRESENTATION,
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "transport",
+      family: "workspace-state.builtin-rpc",
+      rationale: "Slot-bound presentation update routed to the Base presentation owner",
+    },
+    args: z.tuple([
+      z.string(),
+      z.string(),
+      z.object({ explicit: z.boolean().optional() }).strict().optional(),
+    ]),
+    description: "Update the searchable title for a panel entity.",
+    authority: contextBoundaryAuthority({
+      service: "workspace-state",
+      method: "panel.updateTitle",
+      primaryCapability: "workspace.runtime-state.manage",
+      principals: ["user", "code", "host"],
+      operation: "updatePanelState",
+      tier: "gated",
+    }),
+    access: { sensitivity: "write" },
+    returns: z.string().nullable(),
+  },
+  "panel.incrementAccess": {
+    agentFacing: false,
+    capability: "workspace.runtime-state.manage",
+    presentation: WORKSPACE_RUNTIME_STATE_PRESENTATION,
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "supervision",
+      family: "workspace-state.lifecycle",
+      rationale: "Panel access bookkeeping routed to the Base presentation owner",
+    },
+    args: z.tuple([z.string()]),
+    description: "Bump the access counter for a panel slot.",
+    authority: WORKSPACE_STATE_WRITE_POLICY,
+    access: { sensitivity: "write" },
+    returns: z.void(),
+  },
+  "panel.rebuildIndex": {
+    agentFacing: false,
+    capability: "workspace.runtime-state.manage",
+    presentation: WORKSPACE_RUNTIME_STATE_PRESENTATION,
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "supervision",
+      family: "workspace-state.lifecycle",
+      rationale: "Presentation index rebuild routed to the Base presentation owner",
+    },
+    args: z.tuple([]),
+    description: "Rebuild the panel-search index from active panel entities.",
+    authority: WORKSPACE_STATE_WRITE_POLICY,
+    access: { sensitivity: "write" },
     returns: z.void(),
   },
   lifecycleLeaseUpsert: {

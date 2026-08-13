@@ -3661,6 +3661,8 @@ async function main() {
         workspaceStateDefinition = createWorkspaceStateService({
           doDispatch,
           workspaceId,
+          presentationDispatch: dispatchPresentation,
+          getUnitIcon: getWorkspaceUnitIcon,
           panelAccess: (
             await import("./services/createPanelAccessPermissionDeps.js")
           ).createPanelAccessPermissionDeps({

@@ -163,6 +163,7 @@ function createWorkspaceMemory() {
       const visible = matching.slice(0, limit);
       const nodes = visible.map((slot) => ({
         slotId: slot.slot_id,
+        title: slot.slot_id,
         parentSlotId: slot.parent_slot_id,
         ownerUserId: slot.owner_user_id,
         source:
@@ -187,6 +188,7 @@ function createWorkspaceMemory() {
       while (current?.closed_at === null) {
         path.unshift({
           slotId: current.slot_id,
+          title: current.slot_id,
           parentSlotId: current.parent_slot_id,
           ownerUserId: current.owner_user_id,
           createdAt: current.created_at,

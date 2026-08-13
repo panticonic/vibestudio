@@ -38,8 +38,11 @@ function makeService(opts: {
    */
   dispatchReturns?: Record<string, unknown>;
   panelAccess?: Partial<PanelAccessPermissionDeps>;
+  presentationDispatch?: (method: string, args: unknown[]) => Promise<unknown>;
+  getUnitIcon?: (source: string) => string | undefined;
 }) {
   const calls: Array<{ method: string; args: unknown[] }> = [];
+  const presentationCalls: Array<{ method: string; args: unknown[] }> = [];
   const doDispatch = {
     dispatch: async (_ref: unknown, method: string, ...args: unknown[]) => {
       calls.push({ method, args });
@@ -51,6 +54,19 @@ function makeService(opts: {
   const svc = createWorkspaceStateService({
     doDispatch: doDispatch as never,
     workspaceId: "test-workspace",
+    presentationDispatch: async (method, args) => {
+      presentationCalls.push({ method, args });
+      return (
+        opts.presentationDispatch ??
+        (async (requestedMethod) => {
+          if (requestedMethod === "titlesForSlots") return {};
+          if (requestedMethod === "search") return { results: [], nextCursor: null };
+          if (requestedMethod === "isEntityTitleExplicit") return false;
+          return undefined;
+        })
+      )(method, args);
+    },
+    ...(opts.getUnitIcon ? { getUnitIcon: opts.getUnitIcon } : {}),
     panelAccess: {
       contextExists: () => false,
       resolveCallerContext: async () => null,
@@ -61,7 +77,7 @@ function makeService(opts: {
     },
     ...(opts.onSlotStateChanged ? { onSlotStateChanged: opts.onSlotStateChanged } : {}),
   });
-  return { svc, calls };
+  return { svc, calls, presentationCalls };
 }
 
 describe("workspaceStateService — topology authority", () => {
@@ -154,7 +170,7 @@ describe("workspaceStateService — topology authority", () => {
     ]);
   });
 
-  it("returns raw panel detail without host presentation composition", async () => {
+  it("composes Base-owned titles into addressed panel detail", async () => {
     const detail = {
       revision: 1,
       slot: { slot_id: "panel:chat" },
@@ -163,14 +179,19 @@ describe("workspaceStateService — topology authority", () => {
     };
     const { svc } = makeService({
       dispatchReturns: { panelTreeDetail: detail },
+      presentationDispatch: async (method) =>
+        method === "titlesForSlots" ? { "panel:chat": "Chat" } : undefined,
     });
 
     await expect(
       svc.handler(makeCtx() as never, "panelTree.detail", ["panel:chat"])
-    ).resolves.toEqual(detail);
+    ).resolves.toEqual({
+      ...detail,
+      slot: { ...detail.slot, current_entity_title: "Chat" },
+    });
   });
 
-  it("returns raw tree rows without host presentation composition", async () => {
+  it("composes Base-owned titles and product kind into bounded tree rows", async () => {
     const page = {
       revision: 1,
       group: { kind: "roots" as const, ownerUserId: null },
@@ -179,7 +200,6 @@ describe("workspaceStateService — topology authority", () => {
           slotId: "panel:chat",
           parentSlotId: null,
           ownerUserId: null,
-          title: "Chat",
           source: "panels/chat",
           createdAt: 1,
           childCount: 0,
@@ -189,13 +209,90 @@ describe("workspaceStateService — topology authority", () => {
     };
     const { svc } = makeService({
       dispatchReturns: { panelTreePage: page },
+      presentationDispatch: async (method) =>
+        method === "titlesForSlots" ? { "panel:chat": "Chat" } : undefined,
     });
 
     await expect(
       svc.handler(makeCtx() as never, "panelTree.page", [
         { group: { kind: "roots", ownerUserId: null } },
       ])
-    ).resolves.toEqual(page);
+    ).resolves.toEqual({
+      ...page,
+      nodes: [{ ...page.nodes[0], title: "Chat", kind: "workspace" }],
+    });
+  });
+
+  it("composes fresh icons and strict current placement at the one service boundary", async () => {
+    const page = {
+      revision: 1,
+      group: { kind: "roots" as const, ownerUserId: null },
+      nodes: [
+        {
+          slotId: "panel:chat",
+          parentSlotId: null,
+          ownerUserId: null,
+          source: "panels/chat",
+          options: JSON.stringify({
+            ref: "ctx:chat",
+            placement: { disposition: "side", preferredWidth: 420 },
+          }),
+          createdAt: 1,
+          childCount: 0,
+        },
+      ],
+      nextCursor: null,
+    };
+    const { svc } = makeService({
+      dispatchReturns: { panelTreePage: page },
+      presentationDispatch: async (method) =>
+        method === "titlesForSlots" ? { "panel:chat": "Agentic Chat" } : undefined,
+      getUnitIcon: () => "./assets/chat.svg",
+    });
+
+    await expect(
+      svc.handler(makeCtx() as never, "panelTree.page", [
+        { group: { kind: "roots", ownerUserId: null } },
+      ])
+    ).resolves.toMatchObject({
+      nodes: [
+        {
+          title: "Agentic Chat",
+          icon: "./assets/chat.svg",
+          ref: "ctx:chat",
+          placement: { disposition: "side", preferredWidth: 420 },
+        },
+      ],
+    });
+  });
+
+  it("rejects malformed current presentation options instead of hiding them", async () => {
+    const { svc } = makeService({
+      dispatchReturns: {
+        panelTreePage: {
+          revision: 1,
+          group: { kind: "roots" as const, ownerUserId: null },
+          nodes: [
+            {
+              slotId: "panel:chat",
+              parentSlotId: null,
+              ownerUserId: null,
+              source: "panels/chat",
+              options: "{",
+              createdAt: 1,
+              childCount: 0,
+            },
+          ],
+          nextCursor: null,
+        },
+      },
+    });
+
+    await expect(
+      svc.handler(makeCtx() as never, "panelTree.page", [
+        { group: { kind: "roots", ownerUserId: null } },
+      ])
+    ).rejects.toThrow("Workspace panel options are not valid current JSON");
   });
 
   it("exposes lifecycle lease methods to DO callers", async () => {
@@ -265,19 +362,59 @@ describe("workspaceStateService — topology authority", () => {
     expect(calls).toEqual([{ method: "alarmClear", args: [key] }]);
   });
 
-  it("exposes no product presentation methods", () => {
+  it("keeps presentation behind the existing workspace-state service boundary", () => {
     const { svc } = makeService({});
-    expect(Object.keys(svc.methods)).not.toEqual(
-      expect.arrayContaining([
-        "panelTree.search",
-        "panel.search",
-        "panel.sourceUsage",
-        "panel.index",
-        "panel.updateTitle",
-        "panel.incrementAccess",
-        "panel.rebuildIndex",
-      ])
+    expect(Object.keys(svc.methods)).toEqual(
+      expect.arrayContaining(["panelTree.search", "panel.index", "panel.updateTitle"])
     );
+  });
+
+  it("indexes and titles through the Base owner without asking panel callers to resolve it", async () => {
+    const onSlotStateChanged = vi.fn();
+    const detail = {
+      revision: 1,
+      slot: { slot_id: "panel:chat" },
+      currentHistory: { source: "panels/chat", context_id: "ctx-chat" },
+      entity: { id: "panel:nav-chat" },
+    };
+    const { svc, presentationCalls } = makeService({
+      onSlotStateChanged,
+      dispatchReturns: { panelTreeDetail: detail },
+    });
+
+    await expect(
+      svc.handler(makeCtx() as never, "panel.index", [
+        { id: "panel:chat", title: "Agentic Chat", path: "panels/chat" },
+      ])
+    ).resolves.toBe("panel:nav-chat");
+    await expect(
+      svc.handler(makeCtx() as never, "panel.updateTitle", [
+        "panel:chat",
+        "Renamed chat",
+        { explicit: true },
+      ])
+    ).resolves.toBe("panel:nav-chat");
+
+    expect(presentationCalls).toEqual([
+      { method: "isEntityTitleExplicit", args: ["panel:nav-chat"] },
+      {
+        method: "indexPanel",
+        args: [
+          {
+            id: "panel:chat",
+            title: "Agentic Chat",
+            path: "panels/chat",
+            source: "panels/chat",
+          },
+          "panel:nav-chat",
+        ],
+      },
+      {
+        method: "updatePanelTitle",
+        args: ["panel:chat", "panel:nav-chat", "Renamed chat", { explicit: true }],
+      },
+    ]);
+    expect(onSlotStateChanged).toHaveBeenCalledTimes(2);
   });
 });
 

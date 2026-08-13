@@ -39,9 +39,9 @@ import type {
   WorkspacePanelCloseCleanupPage,
   WorkspacePanelCloseCleanupPageInput,
   WorkspacePanelCloseResult,
-  WorkspacePanelTreePage,
+  WorkspacePanelTopologyPage,
   WorkspacePanelTreePageInput,
-  WorkspacePanelTreePath,
+  WorkspacePanelTopologyPath,
   WorkspacePanelTreePlacement,
   WorkspacePanelTreeRootGroupPage,
   WorkspacePanelTreeRootGroupPageInput,
@@ -1731,7 +1731,7 @@ export class WorkspaceDO extends DurableObjectBase {
   // slot.* operations
   // ─────────────────────────────────────────────────────────────
 
-  private queryPanelTreePage(input: WorkspacePanelTreePageInput): WorkspacePanelTreePage {
+  private queryPanelTreePage(input: WorkspacePanelTreePageInput): WorkspacePanelTopologyPage {
     const limit = Math.max(1, Math.min(200, input.limit ?? 50));
     let cursor: [number, number, string] | null = null;
     if (input.cursor) {
@@ -1830,9 +1830,9 @@ export class WorkspaceDO extends DurableObjectBase {
         group: input.group,
         nodes: visible.map((row) => {
           return {
-            slotId: row.slot_id as WorkspacePanelTreePage["nodes"][number]["slotId"],
+            slotId: row.slot_id as WorkspacePanelTopologyPage["nodes"][number]["slotId"],
             parentSlotId:
-              row.parent_slot_id as WorkspacePanelTreePage["nodes"][number]["parentSlotId"],
+              row.parent_slot_id as WorkspacePanelTopologyPage["nodes"][number]["parentSlotId"],
             ownerUserId: row.owner_user_id,
             createdAt: row.created_at,
             childCount: row.child_count,
@@ -1913,12 +1913,12 @@ export class WorkspaceDO extends DurableObjectBase {
   }
 
   @schemaRpc()
-  panelTreePage(input: WorkspacePanelTreePageInput): WorkspacePanelTreePage {
+  panelTreePage(input: WorkspacePanelTreePageInput): WorkspacePanelTopologyPage {
     return this.queryPanelTreePage(input);
   }
 
   @schemaRpc()
-  panelTreePath(slotId: string): WorkspacePanelTreePath | null {
+  panelTreePath(slotId: string): WorkspacePanelTopologyPath | null {
     const rows = this.sql
       .exec(
         `WITH RECURSIVE path(slot_id, parent_slot_id, owner_user_id, created_at, depth) AS (
@@ -1965,9 +1965,9 @@ export class WorkspaceDO extends DurableObjectBase {
       revision: this.panelTreeRevision(),
       nodes: rows.map((row) => {
         return {
-          slotId: row.slot_id as WorkspacePanelTreePath["nodes"][number]["slotId"],
+          slotId: row.slot_id as WorkspacePanelTopologyPath["nodes"][number]["slotId"],
           parentSlotId:
-            row.parent_slot_id as WorkspacePanelTreePath["nodes"][number]["parentSlotId"],
+            row.parent_slot_id as WorkspacePanelTopologyPath["nodes"][number]["parentSlotId"],
           ownerUserId: row.owner_user_id,
           createdAt: row.created_at,
           childCount: row.child_count,

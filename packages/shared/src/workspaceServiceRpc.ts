@@ -57,7 +57,7 @@ export const VCS_SERVICE_PROTOCOL = "vibestudio.vcs.v1";
  * RPC argument into an explicit (and usually invalid) value. Preserve the
  * JavaScript call contract by removing only omitted trailing arguments before
  * crossing the wire; interior positions remain exact. */
-function omitTrailingUndefined(args: unknown[]): unknown[] {
+export function omitTrailingUndefined(args: unknown[]): unknown[] {
   let length = args.length;
   while (length > 0 && args[length - 1] === undefined) length -= 1;
   return length === args.length ? args : args.slice(0, length);
