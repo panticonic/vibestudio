@@ -124,6 +124,7 @@ const controlledDynamicImportPlugin: PluginObj = {
  * for workspace-linked packages that electron-builder stores in the archive.
  */
 let _appNodeModules: string[] = [];
+let _appRoot = "";
 let _transformModulesCommonJs: PluginItem | null = null;
 
 function createHostRequire(nodeModulesRoot: string): NodeJS.Require {
@@ -163,8 +164,9 @@ function getTransformModulesCommonJs(): PluginItem {
  * Initialize the builder with the app's node_modules paths.
  * Must be called once before any buildUnit() calls.
  */
-export function initBuilder(appNodeModules: string | string[]): void {
+export function initBuilder(appNodeModules: string | string[], appRoot: string): void {
   _appNodeModules = Array.isArray(appNodeModules) ? appNodeModules : [appNodeModules];
+  _appRoot = path.resolve(appRoot);
   _transformModulesCommonJs = null;
 }
 
@@ -1894,6 +1896,7 @@ async function prepareBuildEnv(
     graph,
     workspaceRoot,
     sourceRoot,
+    _appRoot,
     _appNodeModules
   );
   const { externalDeps, dependencyOverrides, dependencyPatches, nodeModulesDir, nodePaths } =
@@ -3566,6 +3569,7 @@ async function buildExtension(
     });
 
     const runtimeDeps = await ensureExtensionRuntimeDeps(
+      _appRoot,
       runtimeExternalDeps,
       env.dependencyOverrides,
       runtimeDependencyPatches
@@ -3836,6 +3840,7 @@ async function refreshCachedExtensionRuntimeDeps(result: BuildResult): Promise<v
   if (extensionRuntimeDepsResolvable(primaryArtifactFilePath(result), Object.keys(deps))) return;
 
   const runtimeDeps = await ensureExtensionRuntimeDeps(
+    _appRoot,
     deps,
     extensionDetails?.dependencyOverrides ?? {},
     extensionDetails?.dependencyPatches ?? []
@@ -4155,7 +4160,7 @@ async function doNpmBuild(
 
   try {
     const deps: Record<string, string> = { [specifier]: version };
-    const borrowedDeps = await acquireExternalDeps(deps);
+    const borrowedDeps = await acquireExternalDeps(deps, {}, { appRoot: _appRoot });
     const nodeModulesDir = borrowedDeps.nodeModulesDir;
 
     if (!nodeModulesDir) {

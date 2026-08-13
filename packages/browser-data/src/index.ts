@@ -81,6 +81,7 @@ export {
   BrowserCookiePartitionKeySchema,
   BrowserCookieMutationSchema,
   BrowserEnvironmentIdentitySchema,
+  BROWSER_ENVIRONMENT_KEY_VERSION,
   BrowserImportDataTypeSchema,
   BrowserImportSelectionSchema,
   BrowserImportSourceSchema,
@@ -97,6 +98,7 @@ export {
   NON_PERSISTABLE_FORM_FILL_TYPES,
   PageFaviconSchema,
   isPersistableFormFillType,
+  browserEnvironmentKeyMaterial,
 } from "./environment.js";
 export {
   BrowserImportCoordinator,

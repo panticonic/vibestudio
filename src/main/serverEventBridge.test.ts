@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { asPanelEntityId, asPanelSlotId } from "@vibestudio/shared/panel/ids";
+import type { PanelTreeInvalidation } from "@vibestudio/shared/panel/treeIndex";
 import {
   bindHostDirectServerEvents,
   createServerEventBridge,
@@ -13,6 +14,7 @@ function createHarness(
       payload: Record<string, unknown>
     ) => Promise<Record<string, unknown>>;
     onNotificationAction?: (id: string, actionId: string) => void | Promise<void>;
+    onPanelTreeInvalidated?: (event: PanelTreeInvalidation) => void;
   } = {}
 ) {
   const eventService = { emit: vi.fn() };
@@ -25,9 +27,7 @@ function createHarness(
     recoverShellSnapshot: vi.fn(async () => undefined),
     createBrowserUrlPanel: vi.fn(async () => ({ panelId: "panel:tree/browser" })),
   };
-  const appOrchestrator = {
-    applyAppAvailable: vi.fn(async () => {}),
-  };
+  const applyAppAvailable = vi.fn(async () => {});
   const serverClient = {
     call: vi.fn(async (_service: string, _method: string, _args: unknown[]) => undefined),
   };
@@ -36,20 +36,21 @@ function createHarness(
   const handle = createServerEventBridge({
     eventService: eventService as never,
     getPanelOrchestrator: () => panelOrchestrator as never,
-    getAppOrchestrator: () => appOrchestrator as never,
+    applyAppAvailable,
     getServerClient: () => serverClient as never,
     openExternal: vi.fn(async () => {}),
     onAppHostTargetChanged,
     resolveAppAvailableEvent: opts.resolveAppAvailableEvent,
     onCredentialCaptureRequest: opts.onCredentialCaptureRequest,
     onNotificationAction: opts.onNotificationAction,
+    onPanelTreeInvalidated: opts.onPanelTreeInvalidated,
     warn,
   });
   return {
     handle,
     eventService,
     panelOrchestrator,
-    appOrchestrator,
+    applyAppAvailable,
     serverClient,
     onAppHostTargetChanged,
     warn,
@@ -271,7 +272,10 @@ describe("createServerEventBridge", () => {
   });
 
   it("forwards panel-tree invalidations without reconstructing the tree", async () => {
-    const { handle, eventService, panelOrchestrator } = createHarness();
+    const onPanelTreeInvalidated = vi.fn();
+    const { handle, eventService, panelOrchestrator } = createHarness({
+      onPanelTreeInvalidated,
+    });
     const snapshot = {
       revision: 2,
       reset: true,
@@ -284,6 +288,7 @@ describe("createServerEventBridge", () => {
     await Promise.resolve();
 
     expect(panelOrchestrator.recoverShellSnapshot).not.toHaveBeenCalled();
+    expect(onPanelTreeInvalidated).toHaveBeenCalledWith(snapshot);
     expect(eventService.emit).toHaveBeenCalledWith("panel-tree-invalidated", snapshot);
   });
 
@@ -330,7 +335,7 @@ describe("createServerEventBridge", () => {
   });
 
   it("applies app availability locally and still forwards the app event to shell UI", async () => {
-    const { handle, eventService, appOrchestrator, onAppHostTargetChanged } = createHarness();
+    const { handle, eventService, applyAppAvailable, onAppHostTargetChanged } = createHarness();
     const payload = {
       appId: "@workspace-apps/shell",
       target: "electron",
@@ -341,7 +346,7 @@ describe("createServerEventBridge", () => {
     handle("apps:available", payload);
     await Promise.resolve();
 
-    expect(appOrchestrator.applyAppAvailable).toHaveBeenCalledWith(payload);
+    expect(applyAppAvailable).toHaveBeenCalledWith(payload);
     expect(onAppHostTargetChanged).toHaveBeenCalledWith({ event: "apps:available", payload });
     expect(eventService.emit).toHaveBeenCalledWith("apps:available", payload);
   });
@@ -354,7 +359,7 @@ describe("createServerEventBridge", () => {
       url: "http://127.0.0.1:39479/_a/app/index.html",
       adoptionPolicy: "prompt",
     };
-    const { handle, eventService, appOrchestrator, onAppHostTargetChanged } = createHarness({
+    const { handle, eventService, applyAppAvailable, onAppHostTargetChanged } = createHarness({
       resolveAppAvailableEvent: () => resolvedPayload,
     });
     const payload = {
@@ -367,7 +372,7 @@ describe("createServerEventBridge", () => {
     handle("apps:available", payload);
     await Promise.resolve();
 
-    expect(appOrchestrator.applyAppAvailable).toHaveBeenCalledWith(resolvedPayload);
+    expect(applyAppAvailable).toHaveBeenCalledWith(resolvedPayload);
     expect(onAppHostTargetChanged).toHaveBeenCalledWith({
       event: "apps:available",
       payload: resolvedPayload,
@@ -376,7 +381,7 @@ describe("createServerEventBridge", () => {
   });
 
   it("drops app availability rejected by the local resolver", async () => {
-    const { handle, eventService, appOrchestrator, onAppHostTargetChanged } = createHarness({
+    const { handle, eventService, applyAppAvailable, onAppHostTargetChanged } = createHarness({
       resolveAppAvailableEvent: () => null,
     });
 
@@ -387,7 +392,7 @@ describe("createServerEventBridge", () => {
     });
     await Promise.resolve();
 
-    expect(appOrchestrator.applyAppAvailable).not.toHaveBeenCalled();
+    expect(applyAppAvailable).not.toHaveBeenCalled();
     expect(onAppHostTargetChanged).not.toHaveBeenCalled();
     expect(eventService.emit).not.toHaveBeenCalled();
   });

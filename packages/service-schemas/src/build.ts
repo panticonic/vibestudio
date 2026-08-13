@@ -478,7 +478,11 @@ export const panelMetadataSchema = z
   .object({
     source: z.string(),
     title: z.string(),
-    icon: z.string().max(256).optional(),
+    // Manifest emoji and data images are returned verbatim. File-backed icons
+    // are resolved by the workspace build service into a data URI so every
+    // shell sees the same immutable bytes without depending on a co-located
+    // workspace HTTP gateway.
+    icon: z.string().max(1_500_000).optional(),
     description: z.string().optional(),
     hiddenInLauncher: z.boolean(),
     stateArgs: z.unknown().optional(),

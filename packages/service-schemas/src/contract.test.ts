@@ -313,6 +313,12 @@ function weakReturnRootPaths(
 }
 
 describe("service schema contracts", () => {
+  it("declares workspace presentation receiver effects explicitly", () => {
+    for (const definition of Object.values(workspacePresentationMethods)) {
+      expect(definition.directEffect).toEqual({ kind: "open" });
+    }
+  });
+
   it("indexes every contract-declared progress semantic without service-specific lookup code", () => {
     const declared = Object.fromEntries(
       serviceTables.flatMap(({ service, methods }) =>

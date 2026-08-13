@@ -34,7 +34,7 @@ describe("runNpmInstall", () => {
     });
 
     try {
-      await runNpmInstall(fixture.installDir);
+      await runNpmInstall(fixture.installDir, { appRoot: fixture.appRoot });
     } finally {
       restoreEnv();
     }
@@ -56,6 +56,7 @@ describe("runNpmInstall", () => {
 
     try {
       await runNpmInstall(fixture.installDir, {
+        appRoot: fixture.appRoot,
         timeout: 5_000,
         ignoreScripts: false,
         cacheDir: primaryCache,
@@ -83,6 +84,7 @@ describe("runNpmInstall", () => {
     try {
       await expect(
         runNpmInstall(fixture.installDir, {
+          appRoot: fixture.appRoot,
           timeout: 5_000,
           cacheDir: path.join(fixture.root, "primary-cache"),
         })
@@ -105,6 +107,7 @@ describe("runNpmInstall", () => {
     try {
       await expect(
         runNpmInstall(fixture.installDir, {
+          appRoot: fixture.appRoot,
           timeout: 5_000,
           cacheDir: path.join(fixture.root, "primary-cache"),
         })
@@ -130,6 +133,7 @@ describe("runNpmInstall", () => {
     try {
       await expect(
         runNpmInstall(fixture.installDir, {
+          appRoot: fixture.appRoot,
           timeout: 5_000,
           cacheDir: path.join(fixture.root, "primary-cache"),
         })
@@ -154,7 +158,7 @@ describe("runNpmInstall", () => {
     vi.spyOn(console, "warn").mockImplementation(() => undefined);
 
     try {
-      await runNpmInstall(fixture.installDir, { timeout: 5_000 });
+      await runNpmInstall(fixture.installDir, { appRoot: fixture.appRoot, timeout: 5_000 });
     } finally {
       restoreEnv();
     }
@@ -174,7 +178,7 @@ describe("runNpmInstall", () => {
     try {
       // Leave enough time for a cold Node process to start and persist its
       // first-attempt marker before exercising the install deadline.
-      await runNpmInstall(fixture.installDir, { timeout: 500 });
+      await runNpmInstall(fixture.installDir, { appRoot: fixture.appRoot, timeout: 500 });
     } finally {
       restoreEnv();
     }

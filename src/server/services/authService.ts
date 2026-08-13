@@ -311,6 +311,7 @@ export function createAuthService(deps: {
   };
   getServerBootId: () => string;
   getWorkspaceId: () => string;
+  resolveUser: (userId: string) => User | null;
   getConnectionInfo: () => AuthConnectionInfo;
   connectionGrants?: ConnectionGrantService;
   auditLog?: Pick<AuditLog, "append">;
@@ -401,7 +402,9 @@ export function createAuthService(deps: {
         // projection; resolveRuntimeEntity reads through the durable store and
         // repairs that cache entry before ConnectionGrantService validates it.
         await deps.resolveRuntimeEntity?.(principalId);
-        return deps.connectionGrants.grant(principalId, ctx.caller.runtime.id);
+        return deps.connectionGrants.grant(principalId, ctx.caller.runtime.id, {
+          ...(ctx.caller.subject ? { subject: ctx.caller.subject } : {}),
+        });
       },
       getConnectionInfo: (ctx) => ({
         ...connectionInfoResponse(deps),

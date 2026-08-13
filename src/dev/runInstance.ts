@@ -96,9 +96,14 @@ function removeRetiredInstanceCaches(root: string, instanceId: string): void {
   }
 }
 
-function extractInstance(argv: string[]): { instanceId?: string; forwarded: string[] } {
+function extractInstance(argv: string[]): {
+  instanceId?: string;
+  baseCheckout?: string;
+  forwarded: string[];
+} {
   const forwarded: string[] = [];
   let instanceId: string | undefined;
+  let baseCheckout: string | undefined;
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index]!;
     if (arg === "--instance") {
@@ -115,9 +120,47 @@ function extractInstance(argv: string[]): { instanceId?: string; forwarded: stri
       if (!instanceId) throw new Error("--instance requires an id");
       continue;
     }
+    if (arg === "--base-checkout") {
+      const value = argv[index + 1];
+      if (!value) throw new Error("--base-checkout requires a path");
+      if (baseCheckout) throw new Error("--base-checkout may only be specified once");
+      baseCheckout = value;
+      index += 1;
+      continue;
+    }
+    if (arg.startsWith("--base-checkout=")) {
+      if (baseCheckout) throw new Error("--base-checkout may only be specified once");
+      baseCheckout = arg.slice("--base-checkout=".length);
+      if (!baseCheckout) throw new Error("--base-checkout requires a path");
+      continue;
+    }
     forwarded.push(arg);
   }
-  return { ...(instanceId ? { instanceId } : {}), forwarded };
+  return {
+    ...(instanceId ? { instanceId } : {}),
+    ...(baseCheckout ? { baseCheckout } : {}),
+    forwarded,
+  };
+}
+
+async function inspectDevelopmentBase(checkoutArgument: string, repoRoot: string) {
+  const checkout = fs.realpathSync(path.resolve(checkoutArgument));
+  const { readBaseTemplateRelease } = await import("@vibestudio/workspace/baseTemplateRelease");
+  const { GitClient } = await import("@vibestudio/git");
+  const { sha256Hex } = await import("@vibestudio/content-addressing");
+  const { inspectRootTemplateCheckout } = await import("../server/acquireRootTemplateSnapshot.js");
+  const url = readBaseTemplateRelease(repoRoot).baseTemplate.url;
+  const inspected = await inspectRootTemplateCheckout({
+    checkout,
+    url,
+    git: new GitClient(),
+    sink: {
+      async put(bytes) {
+        return { digest: sha256Hex(bytes), size: bytes.byteLength };
+      },
+    },
+  });
+  return { checkout, ...inspected };
 }
 
 function hasFlag(argv: readonly string[], name: string): boolean {
@@ -248,6 +291,8 @@ async function main(): Promise<void> {
   --instance <id>  Use a named persistent isolated instance (default: source)
   --ephemeral      Use an isolated temporary instance; combine with --instance
                    to give parallel CLI commands a stable target
+  --base-checkout <path>
+                   Boot a fresh dev workspace from this checkout's committed HEAD
 `);
     const env = { ...process.env, NODE_ENV: "development" };
     await run(process.execPath, ["build.mjs", "--source-server-prereqs"], { env });
@@ -261,6 +306,10 @@ async function main(): Promise<void> {
   const disposable = hasFlag(parsed.forwarded, "--ephemeral");
   const id = parsed.instanceId ?? (disposable ? generatedInstanceId(mode) : "source");
   const root = disposable ? createEphemeralInstanceRoot(id) : persistentInstanceRoot(repoRoot, id);
+  const baseCheckout = parsed.baseCheckout ?? process.env["VIBESTUDIO_USERLAND_ROOT"]?.trim();
+  const developmentBase = baseCheckout
+    ? await inspectDevelopmentBase(baseCheckout, repoRoot)
+    : undefined;
   fs.mkdirSync(root, { recursive: true, mode: 0o700 });
   const instance = registerDevInstance({
     id,
@@ -285,6 +334,12 @@ async function main(): Promise<void> {
     // co-development. Every named/ephemeral peer owns only its materialized
     // semantic workspace state.
     VIBESTUDIO_SOURCE_INSTANCE: id === "source" && !disposable ? "1" : "0",
+    ...(developmentBase
+      ? {
+          VIBESTUDIO_DEV_ROOT_TEMPLATE: JSON.stringify(developmentBase.pin),
+          VIBESTUDIO_DEV_ROOT_TEMPLATE_CHECKOUT: developmentBase.checkout,
+        }
+      : {}),
   };
   process.env["VIBESTUDIO_INSTANCE_ROOT"] = root;
   process.env["VIBESTUDIO_INSTANCE"] = id;
@@ -292,6 +347,16 @@ async function main(): Promise<void> {
 
   console.log(`[instance:${id}] ${instance.lifecycle} ${mode} state: ${root}`);
   console.log(`[instance:${id}] CLI: pnpm cli --instance ${id} <command>`);
+  if (developmentBase) {
+    console.log(
+      `[instance:${id}] Base candidate: ${developmentBase.pin.commit} from ${developmentBase.checkout}`
+    );
+    if (developmentBase.untrackedPaths.length > 0) {
+      console.log(
+        `[instance:${id}] Base candidate excludes ${developmentBase.untrackedPaths.length} untracked path(s).`
+      );
+    }
+  }
   if (!disposable) {
     removeRetiredInstanceCaches(root, id);
     await prunePersistentInstanceBuildCache(root, id);

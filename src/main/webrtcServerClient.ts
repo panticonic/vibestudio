@@ -295,6 +295,10 @@ export async function createWebRtcServerClient(
       const client = await getScopedClient(caller);
       return client.rpc.call("main", `${service}.${method}`, callArgs, options);
     },
+    async sendAs(caller, envelope): Promise<void> {
+      const client = await getScopedClient(caller);
+      await client.session.send(envelope);
+    },
     async streamAs(
       caller,
       service,

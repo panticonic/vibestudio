@@ -214,6 +214,32 @@ export class IpcDispatcher {
       if (caller.callerKind === "app") {
         this.ensureAppMessageBridge(caller.callerId);
       }
+      if (envelope.target !== "main") {
+        if (caller.callerKind !== "app") {
+          this.rejectRequestEnvelope(
+            event.sender,
+            envelope,
+            "Only a hosted workspace app can address workspace runtime targets."
+          );
+          return;
+        }
+        void this.deps.serverClient
+          .sendAs(
+            { callerId: caller.callerId, callerKind: caller.callerKind },
+            stampEnvelopeCaller(envelope, {
+              callerId: caller.callerId,
+              callerKind: caller.callerKind,
+            })
+          )
+          .catch((error: unknown) => {
+            this.rejectRequestEnvelope(
+              event.sender,
+              envelope,
+              error instanceof Error ? error.message : String(error)
+            );
+          });
+        return;
+      }
       this.handleEnvelope(event.sender, caller.callerId, caller.callerKind, envelope);
     });
 
@@ -671,6 +697,20 @@ export class IpcDispatcher {
 
   private rejectRequestEnvelope(sender: WebContents, envelope: RpcEnvelope, error: string): void {
     const message = envelope.message;
+    if (message?.type === "stream-request") {
+      // A stream has no response envelope, so silence here would strand the
+      // renderer's pending reader forever. Fail it the same way an in-flight
+      // stream failure does.
+      if (sender.isDestroyed()) return;
+      this.sendStreamFrame(
+        sender,
+        envelope,
+        (message as RpcStreamRequest).requestId,
+        FRAME_ERROR,
+        JSON.stringify({ status: 403, message: error, errorKind: "access" })
+      );
+      return;
+    }
     if (message?.type !== "request") return;
     this.sendResponse(sender, envelope, {
       type: "response",

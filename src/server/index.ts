@@ -67,9 +67,41 @@ import { productBuiltinDirectAuthority } from "./services/productBuiltinDirectAu
 import { callerControlsContextTransition } from "./services/lifecycleContextControl.js";
 import { startEventLoopResponsivenessMonitor } from "../eventLoopResponsiveness.js";
 import { WORKSPACE_SYSTEM_EPOCH } from "@vibestudio/shared/vcs/systemEpoch";
+import { WorkspaceTemplatePinSchema } from "@vibestudio/workspace-contracts/workspaceConfigSchema";
+import type { WorkspaceTemplatePin } from "@vibestudio/workspace-contracts/types";
 
 // __filename is available natively in CJS and via the esbuild banner shim in ESM.
 declare const __filename: string;
+
+function developmentRootTemplateSelection(): {
+  pin: WorkspaceTemplatePin;
+  checkout: string;
+} | null {
+  const rawPin = process.env["VIBESTUDIO_DEV_ROOT_TEMPLATE"]?.trim();
+  const rawCheckout = process.env["VIBESTUDIO_DEV_ROOT_TEMPLATE_CHECKOUT"]?.trim();
+  if (!rawPin && !rawCheckout) return null;
+  if (process.env["NODE_ENV"] !== "development") {
+    throw new Error("Local root-template selection is available only in development launches");
+  }
+  if (!rawPin || !rawCheckout) {
+    throw new Error("Local root-template selection requires both an exact pin and checkout path");
+  }
+  const checkout = fs.realpathSync(path.resolve(rawCheckout));
+  return {
+    pin: WorkspaceTemplatePinSchema.parse(JSON.parse(rawPin)) as WorkspaceTemplatePin,
+    checkout,
+  };
+}
+
+function sameRootTemplatePin(left: WorkspaceTemplatePin, right: WorkspaceTemplatePin): boolean {
+  return (
+    left.url === right.url &&
+    left.ref === right.ref &&
+    left.commit === right.commit &&
+    left.snapshot === right.snapshot &&
+    left.credential === right.credential
+  );
+}
 
 // =============================================================================
 // Phase A: Synchronous preamble — parse CLI args OR inherit env vars
@@ -386,6 +418,7 @@ async function main() {
   // intentionally mutable, so it must never be consulted as an identity
   // source after startup.
   const workspaceId = childWorkspaceId;
+  const developmentRootTemplate = developmentRootTemplateSelection();
 
   let workspace: import("@vibestudio/workspace-contracts/types").Workspace;
   let workspaceName: string;
@@ -398,6 +431,7 @@ async function main() {
       init: args.init,
       requireExplicitSelection: isWorkspaceServer,
       workspaceId,
+      ...(developmentRootTemplate ? { rootTemplate: developmentRootTemplate.pin } : {}),
     });
     // Managed directory names are storage coordinates, not workspace
     // identities. In particular, ephemeral children use a randomized disk
@@ -955,6 +989,7 @@ async function main() {
   );
   let resolvedDoDispatchForTitles: import("./doDispatch.js").DODispatch | null = null;
   let presentationDispatch: ((method: string, args: unknown[]) => Promise<unknown>) | null = null;
+  let workspacePresentationRevision = 0;
   const dispatchWorkspacePresentation = (method: string, args: unknown[]): Promise<unknown> => {
     if (!presentationDispatch) {
       throw new Error("workspace.presentation is not available");
@@ -1402,7 +1437,8 @@ async function main() {
   const { gitCredentialRequirement } = await import("./gitCredentialRequirements.js");
   const { createHostGitReadClient } = await import("./services/hostGitHttpClient.js");
   const rootTemplateCaller = createHostCaller("server", "server", SYSTEM_SUBJECT);
-  const { acquireRootTemplateSnapshot } = await import("./acquireRootTemplateSnapshot.js");
+  const { acquireRootTemplateSnapshot, seedRootTemplateSnapshotFromCheckout } =
+    await import("./acquireRootTemplateSnapshot.js");
   const { WorkspaceRootTemplateBootstrap } = await import("./workspaceRootTemplateBootstrap.js");
   const createRootTemplateGitClient = (pin: { url: string; credential?: string }) => {
     const remoteUrl = templateGitTransportUrl(pin.url);
@@ -1432,6 +1468,17 @@ async function main() {
       put: (bytes) => putBytes(layout.blobsDir, Buffer.from(bytes)),
     },
     acquire: async (pin) => {
+      if (developmentRootTemplate && sameRootTemplatePin(developmentRootTemplate.pin, pin)) {
+        return seedRootTemplateSnapshotFromCheckout({
+          statePath,
+          checkout: developmentRootTemplate.checkout,
+          pin,
+          git: createRootTemplateGitClient(pin),
+          sink: {
+            put: (bytes) => putBytes(layout.blobsDir, Buffer.from(bytes)),
+          },
+        });
+      }
       return acquireRootTemplateSnapshot({
         statePath,
         pin,
@@ -1597,6 +1644,16 @@ async function main() {
     await Promise.all(
       [...groups.entries()].map(async ([batchKey, group]) => {
         const origins = await resolveUnitOrigins(group.units.map((unit) => unit.source.repo));
+        // Selecting an exact local Base checkout is the developer's trust
+        // decision for that committed candidate. Requiring the ordinary
+        // launch review here would make every local Base commit unbootable
+        // until a fresh modal was answered, defeating host/Base co-development.
+        // The preapproval is still exact-version bound and exists only in this
+        // isolated development workspace.
+        if (developmentRootTemplate) {
+          await input.applyApproved(group.units, group.identityKeys, origins);
+          return;
+        }
         void unitInstallReviewCoordinator
           .enqueue({
             entries: group.units,
@@ -1712,6 +1769,14 @@ async function main() {
                 })
               );
             }
+
+            // Planning is the authority transaction that makes reconciliation
+            // eligible to classify these exact builds as trusted. Start the
+            // background pass only after that transaction has either staged
+            // the ordinary review or committed the explicit local-checkout
+            // preapproval. Running both concurrently lets reconciliation see
+            // the old trust state and publish a second, stale launch review.
+            await Promise.all(tasks);
           }
           const reconcileAll = () =>
             appliedExtensionDeclarations.apply(declarationFingerprint, () =>
@@ -3863,6 +3928,18 @@ async function main() {
               title ?? null,
               options ?? {},
             ]);
+            const slotId = (await dispatcher.dispatch(
+              { caller: createHostCaller("server") },
+              "workspace-state",
+              "slot.resolveByEntity",
+              [entityId]
+            )) as string | null;
+            if (slotId) {
+              eventService.emit("panel-presentation-changed", {
+                revision: ++workspacePresentationRevision,
+                panelIds: [slotId],
+              });
+            }
           },
           onExecutionRecovery: (event) => {
             const active = entityCache.resolveActive(event.entityId);
@@ -6012,6 +6089,7 @@ async function main() {
           },
           getServerBootId: () => serverBootId,
           getWorkspaceId: () => workspaceId,
+          resolveUser: (userId) => userStore.getUser(userId),
           getConnectionInfo: () => {
             const gatewayPort = getResolvedGatewayPort("auth connection info");
             const protocol = gatewayProtocol();
@@ -6583,6 +6661,23 @@ async function main() {
         const origins = await resolveUnitOrigins(
           creationReview.units.map((unit) => unit.source.repo)
         );
+        // The explicit local checkout selection also covers the panels and
+        // workers landed by that exact root. Record the normal admission
+        // transaction without publishing a redundant human review; ordinary
+        // published roots continue through the review queue below.
+        if (developmentRootTemplate) {
+          buildUnitChangeApprovalProvider.acceptPreapprovedTrust(
+            creationReview.identityKeys,
+            "workspace-creation",
+            undefined,
+            origins
+          );
+          creationReviewUnits = new Set();
+          creationReviewOwed = false;
+          workspaceCreationReview.resolve();
+          workspaceCreationReviewState = { status: "resolved" };
+          return;
+        }
         const rootOrigin =
           [...origins.values()].find((origin) => origin.isWorkspaceRoot === true) ?? null;
         const decisionPromise = approvalQueue.request({

@@ -155,6 +155,8 @@ export type EntityActivateInput = EntityActivationInput;
 export interface SlotCreateInput {
   slotId: string;
   parentSlotId: string | null;
+  /** Host-verified owner for a root slot. Child slots inherit their root owner. */
+  ownerUserId?: string;
   placement?: WorkspacePanelTreePlacement;
   initialEntry?: {
     entryKey: string;
@@ -2124,7 +2126,7 @@ export class WorkspaceDO extends DurableObjectBase {
       const existing = this.sql
         .exec(
           `SELECT s.slot_id, s.parent_slot_id, s.current_entity_id, s.current_entry_key,
-                  s.closed_at, h.source, h.context_id, h.state_args, h.options
+                  s.owner_user_id, s.closed_at, h.source, h.context_id, h.state_args, h.options
              FROM slots s
              LEFT JOIN slot_history h
                ON h.slot_id = s.slot_id AND h.entry_key = s.current_entry_key
@@ -2137,6 +2139,7 @@ export class WorkspaceDO extends DurableObjectBase {
             parent_slot_id: string | null;
             current_entity_id: string | null;
             current_entry_key: string | null;
+            owner_user_id: string | null;
             closed_at: number | null;
             source: string | null;
             context_id: string | null;
@@ -2156,7 +2159,7 @@ export class WorkspaceDO extends DurableObjectBase {
       const now = Date.now();
       const ownerUserId =
         input.parentSlotId === null
-          ? (this.slotCreationOwnerUserId() ?? null)
+          ? (input.ownerUserId ?? null)
           : this.rootOwnerOf(input.parentSlotId);
       const sortKey = this.allocatePanelTreeOrderKey(
         input.parentSlotId,
@@ -2185,6 +2188,7 @@ export class WorkspaceDO extends DurableObjectBase {
       parent_slot_id: string | null;
       current_entity_id: string | null;
       current_entry_key: string | null;
+      owner_user_id: string | null;
       closed_at: number | null;
       source: string | null;
       context_id: string | null;
@@ -2206,6 +2210,13 @@ export class WorkspaceDO extends DurableObjectBase {
         field: "parentSlotId",
         existing: existing.parent_slot_id,
         attempted: input.parentSlotId,
+      });
+    }
+    if (input.parentSlotId === null && existing.owner_user_id !== (input.ownerUserId ?? null)) {
+      throw new SlotIdentityCollisionError(slotId, {
+        field: "ownerUserId",
+        existing: existing.owner_user_id,
+        attempted: input.ownerUserId ?? null,
       });
     }
     if (existing.current_entry_key !== (input.initialEntry?.entryKey ?? null)) {
@@ -2262,10 +2273,6 @@ export class WorkspaceDO extends DurableObjectBase {
       return existing === attempted;
     }
     return canonicalJson(existing) === canonicalJson(attempted);
-  }
-
-  protected slotCreationOwnerUserId(): string | undefined {
-    return this.caller?.userId;
   }
 
   /**

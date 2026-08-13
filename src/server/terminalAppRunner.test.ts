@@ -79,11 +79,10 @@ describe("TerminalAppRunner", () => {
       build: tempBuild(),
     });
 
-    expect(grants.grant).toHaveBeenCalledWith(
-      "@workspace-apps/remote-cli",
-      "server",
-      expect.any(Number)
-    );
+    expect(grants.grant).toHaveBeenCalledWith("@workspace-apps/remote-cli", "server", {
+      ttlMs: 24 * 60 * 60 * 1000,
+      subject: { userId: "system", handle: "system" },
+    });
     expect(processMocks.createProcessAdapter).toHaveBeenCalledWith(
       expect.stringMatching(/index\.mjs$/),
       expect.objectContaining({

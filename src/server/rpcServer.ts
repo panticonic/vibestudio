@@ -1574,7 +1574,7 @@ export class RpcServer {
       resolvedFromTokenManager = !connectionGrant && entry !== null;
       if (entry?.agentBinding) agentBinding = entry.agentBinding;
       if (connectionGrant && entry?.callerKind === "app") {
-        subject = this.subjectForGrantIssuer(connectionGrant.issuedBy) ?? undefined;
+        subject = connectionGrant.subject;
       }
     } catch {
       entry = null;
@@ -2136,20 +2136,6 @@ export class RpcServer {
   private callerKindForRuntimePrincipal(principalId: string): CallerKind {
     const kind = this.deps.entityCache?.resolve(principalId)?.kind;
     return callerKindForPrincipalKind(kind);
-  }
-
-  private subjectForGrantIssuer(issuedBy: string): UserSubject | null {
-    if (issuedBy === "server") return SYSTEM_SUBJECT;
-    if (
-      issuedBy === "electron-main" ||
-      issuedBy === "headless-host" ||
-      issuedBy.startsWith("shell:")
-    ) {
-      return this.resolveSubject(issuedBy, "shell");
-    }
-    const kind = this.deps.entityCache?.resolveActive(issuedBy)?.kind;
-    if (!kind) return null;
-    return this.resolveSubject(issuedBy, callerKindForPrincipalKind(kind));
   }
 
   private handleMessage(client: WsClientState, data: Buffer | ArrayBuffer | Buffer[]): void {

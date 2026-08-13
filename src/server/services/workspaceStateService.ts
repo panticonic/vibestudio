@@ -30,6 +30,7 @@ import type {
   PanelAccessPermissionTarget,
 } from "./panelAccessPermission.js";
 import { preparePanelAccessAuthority } from "./panelAccessPermission.js";
+import { verifiedInitiatingUserId } from "@vibestudio/shared/serviceDispatcher";
 
 export const WORKSPACE_DO_CLASS = "WorkspaceDO";
 
@@ -151,7 +152,7 @@ export function createWorkspaceStateService(deps: WorkspaceStateServiceDeps): Se
           {
             group: {
               kind: "roots",
-              ownerUserId: ctx.caller.subject?.userId ?? null,
+              ownerUserId: verifiedInitiatingUserId(ctx) ?? null,
             },
             ...input,
           },
@@ -173,8 +174,9 @@ export function createWorkspaceStateService(deps: WorkspaceStateServiceDeps): Se
       "slot.resolveByEntity": (_ctx, [entityId]) =>
         dispatch<string | null>("slotResolveByEntity", [entityId]),
       "slot.create": async (ctx, [input]) => {
+        const ownerUserId = verifiedInitiatingUserId(ctx);
         await dispatch<undefined>("slotCreate", [
-          { ...input, ...(ctx.caller.subject ? { ownerUserId: ctx.caller.subject.userId } : {}) },
+          { ...input, ...(ownerUserId ? { ownerUserId } : {}) },
         ]);
         deps.onSlotStateChanged?.(
           input.initialEntry
@@ -211,7 +213,7 @@ export function createWorkspaceStateService(deps: WorkspaceStateServiceDeps): Se
       "slot.move": async (ctx, [slotId, parentSlotId, placement]) => {
         // Ownership attribution comes from the verified caller, never a
         // caller-supplied fourth wire argument.
-        const ownerUserId = ctx.caller.subject?.userId;
+        const ownerUserId = verifiedInitiatingUserId(ctx);
         await dispatch<undefined>("slotMove", [slotId, parentSlotId, placement, ownerUserId]);
         deps.onSlotStateChanged?.();
       },

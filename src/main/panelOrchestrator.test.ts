@@ -1869,7 +1869,8 @@ describe("PanelOrchestrator.initializePanelTree", () => {
       } as never,
     });
 
-    await orchestrator.initializePanelTree();
+    const shellApp = { callerId: "@workspace-apps/shell", callerKind: "app" as const };
+    await orchestrator.initializePanelTree({}, shellApp);
 
     expect(shellCore.createExecution).toHaveBeenNthCalledWith(
       1,
@@ -1879,7 +1880,7 @@ describe("PanelOrchestrator.initializePanelTree", () => {
         addAsRoot: true,
         stateArgs: { initialPrompt: "first" },
       }),
-      undefined
+      expect.objectContaining({ workspaceState: expect.any(Object), runtime: expect.any(Object) })
     );
     expect(shellCore.createExecution).toHaveBeenNthCalledWith(
       2,
@@ -1889,7 +1890,7 @@ describe("PanelOrchestrator.initializePanelTree", () => {
         addAsRoot: true,
         stateArgs: { initialPrompt: "second" },
       }),
-      undefined
+      expect.objectContaining({ workspaceState: expect.any(Object), runtime: expect.any(Object) })
     );
     for (const panel of registry.getRootPanels()) {
       await orchestrator.applyPanelExecutionActivated({
@@ -1907,6 +1908,16 @@ describe("PanelOrchestrator.initializePanelTree", () => {
       );
     });
     expect(shellCore.hasRootPanelSource).toHaveBeenCalledTimes(2);
+    expect(shellCore.hasRootPanelSource).toHaveBeenNthCalledWith(
+      1,
+      "panels/chat",
+      expect.objectContaining({ workspaceState: expect.any(Object), runtime: expect.any(Object) })
+    );
+    expect(shellCore.hasRootPanelSource).toHaveBeenNthCalledWith(
+      2,
+      "panels/terminal",
+      expect.objectContaining({ workspaceState: expect.any(Object), runtime: expect.any(Object) })
+    );
   });
 
   it("keeps a headless renderer passive without hydrating the tree", async () => {

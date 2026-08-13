@@ -79,6 +79,7 @@ function makeDispatcher(opts: {
   getShellWebContents?: () => ReturnType<typeof makeWebContents> | null;
   call?: ReturnType<typeof vi.fn>;
   callAs?: ReturnType<typeof vi.fn>;
+  sendAs?: ReturnType<typeof vi.fn>;
   stream?: ReturnType<typeof vi.fn>;
   streamAs?: ReturnType<typeof vi.fn>;
   addMessageListener?: ReturnType<typeof vi.fn>;
@@ -105,6 +106,7 @@ function makeDispatcher(opts: {
     call: opts.call ?? vi.fn(async () => ({ ok: "shell" })),
     callTarget: vi.fn(async () => ({ ok: "target" })),
     callAs: opts.callAs ?? vi.fn(async () => ({ ok: "app" })),
+    sendAs: opts.sendAs ?? vi.fn(async () => undefined),
     stream: opts.stream ?? vi.fn(async () => new Response()),
     streamAs: opts.streamAs ?? vi.fn(async () => new Response()),
     addMessageListener: opts.addMessageListener ?? vi.fn(() => vi.fn()),
@@ -261,6 +263,45 @@ describe("IpcDispatcher", () => {
         result: { workspace: "ok" },
       });
     });
+  });
+
+  it("relays app runtime-target envelopes over the app-scoped server session", async () => {
+    const appWc = makeWebContents(11);
+    const sendAs = vi.fn(async () => undefined);
+    makeDispatcher({
+      resolve: () => ({ callerId: "@workspace-apps/shell", callerKind: "app" }),
+      getWebContentsForCaller: () => appWc,
+      sendAs,
+    });
+    const request = rpcEnvelope(
+      "shell",
+      "app",
+      {
+        type: "request",
+        requestId: "runtime-target-1",
+        fromId: "shell",
+        method: "titlesForSlots",
+        args: [["panel-1"]],
+      },
+      undefined,
+      "do:workers/workspace-presentation:WorkspacePresentationDO:workspace-presentation"
+    );
+
+    ipcHandlers.get("vibestudio:rpc:send")?.({ sender: appWc } as never, request as never);
+
+    await vi.waitFor(() =>
+      expect(sendAs).toHaveBeenCalledWith(
+        { callerId: "@workspace-apps/shell", callerKind: "app" },
+        expect.objectContaining({
+          from: "@workspace-apps/shell",
+          target:
+            "do:workers/workspace-presentation:WorkspacePresentationDO:workspace-presentation",
+          delivery: expect.objectContaining({
+            caller: { callerId: "@workspace-apps/shell", callerKind: "app" },
+          }),
+        })
+      )
+    );
   });
 
   it("preserves structured server errors across the app IPC boundary", async () => {

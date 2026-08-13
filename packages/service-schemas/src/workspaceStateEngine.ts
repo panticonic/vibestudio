@@ -6,6 +6,7 @@ import { AuthorityResourceScopeSchema, UnitAuthorityManifestSchema } from "./bui
 import {
   LifecycleKeySchema,
   LifecycleLeaseSchema,
+  SlotCreateInputSchema,
   workspaceStateMethods,
 } from "./workspaceState.js";
 
@@ -39,6 +40,14 @@ const agentBindingSchema = z
     channelId: z.string().min(1),
   })
   .strict();
+const internalSlotCreateInputSchema = SlotCreateInputSchema.extend({
+  /**
+   * The public workspace-state service derives this from its authenticated
+   * initiator. It is deliberately absent from the public request schema and
+   * present only on the host-to-WorkspaceDO command.
+   */
+  ownerUserId: z.string().min(1).optional(),
+}).strict();
 const entityActivationSchema = z
   .object({
     kind: entityKindSchema,
@@ -415,7 +424,10 @@ const rawWorkspaceStateEngineMethods = defineServiceMethods({
   panelTreePage: { ...workspaceStateMethods["panelTree.page"] },
   panelTreePath: { ...workspaceStateMethods["panelTree.path"] },
   panelTreeDetail: { ...workspaceStateMethods["panelTree.detail"] },
-  slotCreate: { ...workspaceStateMethods["slot.create"] },
+  slotCreate: {
+    ...workspaceStateMethods["slot.create"],
+    args: z.tuple([internalSlotCreateInputSchema]),
+  },
   slotCommitPreparedNavigation: {
     ...workspaceStateMethods["slot.commitPreparedNavigation"],
   },

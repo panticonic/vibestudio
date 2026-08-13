@@ -60,15 +60,16 @@ export function resolveBundledNpmCliPath(appRoot: string | undefined): string {
 export async function runNpmInstall(
   cwd: string,
   options: {
+    appRoot: string;
     timeout?: number;
     ignoreScripts?: boolean;
     cacheDir?: string;
-  } = {}
+  }
 ): Promise<void> {
   const timeout = options.timeout ?? DEFAULT_NPM_INSTALL_TIMEOUT_MS;
   const ignoreScripts = options.ignoreScripts ?? true;
   const cacheDir = options.cacheDir ?? path.join(getSharedDerivedDataPath(), "npm-cache");
-  const npmCli = resolveBundledNpmCliPath(process.env["VIBESTUDIO_APP_ROOT"]);
+  const npmCli = resolveBundledNpmCliPath(options.appRoot);
 
   const discardPartialInstall = (): void => {
     // npm may leave a structurally plausible but only partly extracted tree

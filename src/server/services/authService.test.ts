@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import type { User } from "@vibestudio/identity/types";
 import { TokenManager } from "@vibestudio/shared/tokenManager";
 import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import { createTestServiceDispatcher } from "@vibestudio/shared/serviceDispatcherTestUtils";
@@ -114,10 +115,23 @@ const getConnectionInfo = () => ({
   gatewayPort: 3030,
 });
 
+/**
+ * Device refresh resolves the owning account before minting a grant. Tests that
+ * do not exercise revocation still need a live owner, so resolve every id.
+ */
+const testResolveUser = (userId: string): User => ({
+  id: userId,
+  handle: userId,
+  displayName: userId,
+  role: "root",
+  createdAt: 0,
+});
+
 describe("workspace child auth clean cutover", () => {
   it("exposes only refresh and runtime credential routes", () => {
     const identity = makeIdentity({ withRoot: true });
     const service = createAuthService({
+      resolveUser: testResolveUser,
       tokenManager: new TokenManager(),
       deviceAuthStore: identity.deviceAuthStore,
       roleOf: (userId) => identity.userStore.getUser(userId)?.role ?? null,
@@ -171,6 +185,7 @@ describe("workspace child auth clean cutover", () => {
     const tokenManager = new TokenManager();
     const identity = makeIdentity({ withRoot: true });
     const service = createAuthService({
+      resolveUser: testResolveUser,
       tokenManager,
       deviceAuthStore: identity.deviceAuthStore,
       getServerBootId: () => "boot_test",
@@ -230,6 +245,7 @@ describe("auth service connection grants", () => {
     const entityCache = new EntityCache();
     const connectionGrants = new ConnectionGrantService({ entityCache });
     const service = createAuthService({
+      resolveUser: testResolveUser,
       tokenManager: new TokenManager(),
       deviceAuthStore: makeAuthStore(),
       getServerBootId: () => "boot_test",
@@ -253,6 +269,7 @@ describe("auth service connection grants", () => {
     entityCache._onActivate(makePanelRecord("panel:one"));
     const connectionGrants = new ConnectionGrantService({ entityCache });
     const service = createAuthService({
+      resolveUser: testResolveUser,
       tokenManager: new TokenManager(),
       deviceAuthStore: makeAuthStore(),
       getServerBootId: () => "boot_test",
@@ -261,8 +278,9 @@ describe("auth service connection grants", () => {
       connectionGrants,
     });
 
+    const subject = { userId: "usr_test", handle: "test" };
     const granted = (await service.definition.handler(
-      { caller: createVerifiedCaller("shell:test", "shell") },
+      { caller: createVerifiedCaller("shell:test", "shell", null, null, subject) },
       "grantConnection",
       ["panel:one"]
     )) as { token: string; expiresAt: number };
@@ -271,6 +289,7 @@ describe("auth service connection grants", () => {
     expect(connectionGrants.redeem(granted.token)).toEqual({
       principalId: "panel:one",
       issuedBy: "shell:test",
+      subject,
     });
     connectionGrants.stop();
   });
@@ -285,6 +304,7 @@ describe("auth service connection grants", () => {
       return active;
     });
     const service = createAuthService({
+      resolveUser: testResolveUser,
       tokenManager: new TokenManager(),
       deviceAuthStore: makeAuthStore(),
       getServerBootId: () => "boot_test",
@@ -310,6 +330,7 @@ describe("auth service connection grants", () => {
     entityCache._onActivate(makePanelRecord("panel:mobile"));
     const connectionGrants = new ConnectionGrantService({ entityCache });
     const service = createAuthService({
+      resolveUser: testResolveUser,
       tokenManager: new TokenManager(),
       deviceAuthStore: makeAuthStore(),
       getServerBootId: () => "boot_test",
@@ -343,6 +364,7 @@ describe("auth service connection grants", () => {
     entityCache._onActivate(makePanelRecord("panel:mobile"));
     const connectionGrants = new ConnectionGrantService({ entityCache });
     const service = createAuthService({
+      resolveUser: testResolveUser,
       tokenManager: new TokenManager(),
       deviceAuthStore: makeAuthStore(),
       getServerBootId: () => "boot_test",
@@ -414,6 +436,7 @@ describe("auth service connection grants", () => {
       },
     ] satisfies PendingUnitInstallReviewApproval[];
     const authService = createAuthService({
+      resolveUser: testResolveUser,
       tokenManager,
       deviceAuthStore: authStore,
       agentCredentialWriter: {
@@ -493,6 +516,7 @@ describe("auth.mintAgentCredential / revokeAgentCredential policy (§3.2)", () =
     const authStore = makeAuthStore();
     const records = new Map<string, EntityRecord>();
     const authService = createAuthService({
+      resolveUser: testResolveUser,
       tokenManager,
       deviceAuthStore: authStore,
       agentCredentialWriter: {

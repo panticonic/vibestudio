@@ -214,6 +214,7 @@ import {
 import { createServerEventSubscriptionBridge } from "./serverEventSubscriptionBridge.js";
 import { createApprovalAttention, type ApprovalAttention } from "./approvalAttention.js";
 import type { PendingApproval } from "@vibestudio/shared/approvals";
+import type { PanelTreeInvalidation } from "@vibestudio/shared/panel/treeIndex";
 import { filterBootstrapApprovalsForTarget } from "@vibestudio/shared/bootstrapApprovals";
 import { RuntimeDiagnosticsStore } from "../server/runtimeDiagnosticsStore.js";
 
@@ -389,10 +390,12 @@ function shouldAutoPairPendingDevWebRtcLink(): boolean {
 }
 
 let appliedElectronHostTargetKey: string | null = null;
+let appliedElectronHostAppId: string | null = null;
 let electronHostTargetApplicationTail: Promise<void> = Promise.resolve();
 const electronHostTargetApplications = new Map<string, Promise<boolean>>();
 let electronHostLaunchLastStatusKey: string | null = null;
-let panelTreeInitializationStarted = false;
+let panelTreeInitializationPromise: Promise<void> | null = null;
+let latestPanelTreeInvalidation: PanelTreeInvalidation | undefined;
 let shellCore: ReturnType<
   typeof import("./shellCore/createElectronShellCore.js").createElectronShellCore
 > | null = null;
@@ -452,9 +455,10 @@ const applicationWindow = new ApplicationWindowController({
   drainPendingReadyElectronLaunch,
   initializePanelTreeOnce,
   onWindowClosed: () => {
-    panelTreeInitializationStarted = false;
+    panelTreeInitializationPromise = null;
     clearPanelInitializationFailure();
     appliedElectronHostTargetKey = null;
+    appliedElectronHostAppId = null;
     electronHostTargetApplications.clear();
     electronHostTargetApplicationTail = Promise.resolve();
     electronHostLaunchLastStatusKey = null;
@@ -1093,10 +1097,10 @@ async function handleCredentialSessionCaptureRequest(
 
 async function applyReadyElectronLaunchEvent(event: AppAvailableEvent): Promise<boolean> {
   const appOrchestrator = applicationWindow.appOrchestrator;
-  if (!appOrchestrator) {
+  if (!appOrchestrator || !panelOrchestrator) {
     pendingReadyElectronLaunch = event;
     log.info(
-      `[apps] Holding ready Electron host target until app host is initialized: ${event.appId}`
+      `[apps] Holding ready Electron host target until app and panel hosts are initialized: ${event.appId}`
     );
     return false;
   }
@@ -1111,10 +1115,17 @@ async function applyReadyElectronLaunchEvent(event: AppAvailableEvent): Promise<
     .catch(() => undefined)
     .then(async () => {
       if (appliedElectronHostTargetKey === launchKey) return true;
+      // The shell's first tree query is its durable startup snapshot. Seed the
+      // manifest roots before exposing the shell so startup never depends on
+      // observing an edge emitted between its first query and event watch.
+      await initializePanelTreeOnce("electron-host-ready", {
+        callerId: event.appId,
+        callerKind: "app",
+      });
       log.info(`[apps] Applying ready Electron host target: ${event.appId}`);
       await appOrchestrator.applyAppAvailable(event);
       appliedElectronHostTargetKey = launchKey;
-      initializePanelTreeOnce("electron-host-ready");
+      appliedElectronHostAppId = event.appId;
       return true;
     });
   electronHostTargetApplications.set(launchKey, application);
@@ -1249,25 +1260,29 @@ async function drainPendingReadyElectronLaunch(): Promise<void> {
   pendingReadyElectronLaunch = null;
 }
 
-function initializePanelTreeOnce(reason: string): void {
-  if (panelTreeInitializationStarted) return;
+function initializePanelTreeOnce(
+  reason: string,
+  caller?: import("./serverClient.js").ScopedServerCaller
+): Promise<void> {
+  if (panelTreeInitializationPromise) return panelTreeInitializationPromise;
   const orchestrator = panelOrchestrator;
-  if (!orchestrator) return;
-  panelTreeInitializationStarted = true;
+  if (!orchestrator) return Promise.resolve();
   clearPanelInitializationFailure();
   log.info(`[panels] Initializing panel tree after ${reason}`);
-  orchestrator.initializePanelTree({ seedInitialPanels: !IS_HEADLESS_HOST }).then(
-    () => clearPanelInitializationFailure(),
-    (error) => {
-      panelTreeInitializationStarted = false;
+  panelTreeInitializationPromise = orchestrator
+    .initializePanelTree({ seedInitialPanels: !IS_HEADLESS_HOST }, caller)
+    .then(() => clearPanelInitializationFailure())
+    .catch((error) => {
+      panelTreeInitializationPromise = null;
       const failure = recordPanelInitializationFailure(reason, error);
       console.error("[App] Failed to initialize panel tree:", error);
       eventService.emit("panel-initialization-error", {
         path: "",
         error: failure.message,
       });
-    }
-  );
+      throw error;
+    });
+  return panelTreeInitializationPromise;
 }
 
 function stopElectronHostTargetLaunchLoop(): void {
@@ -2077,7 +2092,7 @@ app.on("ready", async () => {
   const handleServerEvent = createServerEventBridge({
     eventService,
     getPanelOrchestrator: () => panelOrchestrator,
-    getAppOrchestrator: () => applicationWindow.appOrchestrator,
+    applyAppAvailable: applyReadyElectronLaunchEvent,
     getServerClient: () => serverClientRef,
     openExternal: (url) => shell.openExternal(url),
     warn: (message) => log.warn(message),
@@ -2092,6 +2107,9 @@ app.on("ready", async () => {
     },
     onAttentionRequired: handleAttentionRequired,
     onAppHostTargetChanged: retryElectronHostTargetLaunchAfterAppEvent,
+    onPanelTreeInvalidated: (event) => {
+      latestPanelTreeInvalidation = event;
+    },
     resolveAppAvailableEvent: resolveElectronAppAvailablePayload,
     onApprovalPendingChanged: (pending) => {
       approvalAttention?.handlePendingChanged(pending);
@@ -2305,6 +2323,7 @@ app.on("ready", async () => {
       "external-open:open",
       "browser-panel:open",
       "panel-tree-invalidated",
+      "panel-presentation-changed",
       "panel:runtimeLeaseChanged",
       "shell-approval:pending-changed",
       "credential:capture-request",
@@ -2480,7 +2499,16 @@ app.on("ready", async () => {
     });
 
     await panelOrchestrator.registerRuntimeClient();
-    initializePanelTreeOnce("panel-orchestrator-ready");
+    if (IS_HEADLESS_HOST) {
+      await initializePanelTreeOnce("panel-orchestrator-ready");
+    } else if (pendingReadyElectronLaunch) {
+      await drainPendingReadyElectronLaunch();
+    } else if (appliedElectronHostAppId) {
+      await initializePanelTreeOnce("panel-orchestrator-ready", {
+        callerId: appliedElectronHostAppId,
+        callerKind: "app",
+      });
+    }
 
     // Batch panel warn/error + lifecycle diagnostics into `panelLog.append`
     // so panel failures land in the server's per-unit diagnostics store
@@ -2940,7 +2968,13 @@ app.on("ready", async () => {
       electronContainer.registerRpc(
         createDesktopEventsService({
           eventService,
-          snapshots: {},
+          // Tree invalidation is level-triggered state, not an edge. A shell
+          // can render and issue its first empty query while the host seeds the
+          // manifest roots. Replaying the latest reset when its watch opens
+          // closes that startup race without duplicating tree state in main.
+          snapshots: {
+            "panel-tree-invalidated": () => latestPanelTreeInvalidation,
+          },
           onWatchOpened: (events, ctx) => {
             if (!shouldForwardServerEvents(ctx.caller)) return undefined;
             return serverEventSubscriptions.retainMany(events);

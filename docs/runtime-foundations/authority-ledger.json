@@ -9005,14 +9005,15 @@
       "tier": "open",
       "sessionAdmission": "family",
       "residency": "native-effect",
-      "mechanismFamily": "browserVaultNative.host",
-      "reviewRationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service.",
+      "mechanismFamily": "browserVaultNative.trusted-shell",
+      "reviewRationale": "Protected browser material is reachable only by the product host or its authenticated human shell; workspace code has no route to this service.",
       "resourceDerivation": {
         "kind": "literal",
         "key": "service:browserVaultNative.addCookiesBatch"
       },
       "authorityPrincipals": [
-        "host"
+        "host",
+        "user"
       ],
       "sensitivity": "write",
       "authenticatedFacts": [
@@ -9033,7 +9034,7 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "capability(host,service:browserVaultNative.addCookiesBatch)",
+      "r3aRequirement": "anyOf(capability(host,service:browserVaultNative.addCookiesBatch),allOf(capability(user,service:browserVaultNative.addCookiesBatch),workspace-member))",
       "r3b": {
         "review": "unchanged-parity",
         "change": null
@@ -9049,14 +9050,15 @@
       "tier": "open",
       "sessionAdmission": "family",
       "residency": "native-effect",
-      "mechanismFamily": "browserVaultNative.host",
-      "reviewRationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service.",
+      "mechanismFamily": "browserVaultNative.trusted-shell",
+      "reviewRationale": "Protected browser material is reachable only by the product host or its authenticated human shell; workspace code has no route to this service.",
       "resourceDerivation": {
         "kind": "literal",
         "key": "service:browserVaultNative.addFormFillBatch"
       },
       "authorityPrincipals": [
-        "host"
+        "host",
+        "user"
       ],
       "sensitivity": "write",
       "authenticatedFacts": [
@@ -9077,7 +9079,7 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "capability(host,service:browserVaultNative.addFormFillBatch)",
+      "r3aRequirement": "anyOf(capability(host,service:browserVaultNative.addFormFillBatch),allOf(capability(user,service:browserVaultNative.addFormFillBatch),workspace-member))",
       "r3b": {
         "review": "unchanged-parity",
         "change": null
@@ -9093,14 +9095,15 @@
       "tier": "open",
       "sessionAdmission": "family",
       "residency": "native-effect",
-      "mechanismFamily": "browserVaultNative.host",
-      "reviewRationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service.",
+      "mechanismFamily": "browserVaultNative.trusted-shell",
+      "reviewRationale": "Protected browser material is reachable only by the product host or its authenticated human shell; workspace code has no route to this service.",
       "resourceDerivation": {
         "kind": "literal",
         "key": "service:browserVaultNative.addFormFillValue"
       },
       "authorityPrincipals": [
-        "host"
+        "host",
+        "user"
       ],
       "sensitivity": "write",
       "authenticatedFacts": [
@@ -9121,7 +9124,7 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "capability(host,service:browserVaultNative.addFormFillValue)",
+      "r3aRequirement": "anyOf(capability(host,service:browserVaultNative.addFormFillValue),allOf(capability(user,service:browserVaultNative.addFormFillValue),workspace-member))",
       "r3b": {
         "review": "unchanged-parity",
         "change": null
@@ -9137,14 +9140,15 @@
       "tier": "open",
       "sessionAdmission": "family",
       "residency": "native-effect",
-      "mechanismFamily": "browserVaultNative.host",
-      "reviewRationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service.",
+      "mechanismFamily": "browserVaultNative.trusted-shell",
+      "reviewRationale": "Protected browser material is reachable only by the product host or its authenticated human shell; workspace code has no route to this service.",
       "resourceDerivation": {
         "kind": "literal",
         "key": "service:browserVaultNative.addNeverSave"
       },
       "authorityPrincipals": [
-        "host"
+        "host",
+        "user"
       ],
       "sensitivity": "write",
       "authenticatedFacts": [
@@ -9165,7 +9169,7 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "capability(host,service:browserVaultNative.addNeverSave)",
+      "r3aRequirement": "anyOf(capability(host,service:browserVaultNative.addNeverSave),allOf(capability(user,service:browserVaultNative.addNeverSave),workspace-member))",
       "r3b": {
         "review": "unchanged-parity",
         "change": null
@@ -9181,14 +9185,15 @@
       "tier": "open",
       "sessionAdmission": "family",
       "residency": "native-effect",
-      "mechanismFamily": "browserVaultNative.host",
-      "reviewRationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service.",
+      "mechanismFamily": "browserVaultNative.trusted-shell",
+      "reviewRationale": "Protected browser material is reachable only by the product host or its authenticated human shell; workspace code has no route to this service.",
       "resourceDerivation": {
         "kind": "literal",
         "key": "service:browserVaultNative.addPassword"
       },
       "authorityPrincipals": [
-        "host"
+        "host",
+        "user"
       ],
       "sensitivity": "write",
       "authenticatedFacts": [
@@ -9209,7 +9214,7 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "capability(host,service:browserVaultNative.addPassword)",
+      "r3aRequirement": "anyOf(capability(host,service:browserVaultNative.addPassword),allOf(capability(user,service:browserVaultNative.addPassword),workspace-member))",
       "r3b": {
         "review": "unchanged-parity",
         "change": null
@@ -9225,14 +9230,15 @@
       "tier": "open",
       "sessionAdmission": "family",
       "residency": "native-effect",
-      "mechanismFamily": "browserVaultNative.host",
-      "reviewRationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service.",
+      "mechanismFamily": "browserVaultNative.trusted-shell",
+      "reviewRationale": "Protected browser material is reachable only by the product host or its authenticated human shell; workspace code has no route to this service.",
       "resourceDerivation": {
         "kind": "literal",
         "key": "service:browserVaultNative.addPasswordsBatch"
       },
       "authorityPrincipals": [
-        "host"
+        "host",
+        "user"
       ],
       "sensitivity": "write",
       "authenticatedFacts": [
@@ -9253,7 +9259,7 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "capability(host,service:browserVaultNative.addPasswordsBatch)",
+      "r3aRequirement": "anyOf(capability(host,service:browserVaultNative.addPasswordsBatch),allOf(capability(user,service:browserVaultNative.addPasswordsBatch),workspace-member))",
       "r3b": {
         "review": "unchanged-parity",
         "change": null
@@ -9269,14 +9275,15 @@
       "tier": "open",
       "sessionAdmission": "family",
       "residency": "native-effect",
-      "mechanismFamily": "browserVaultNative.host",
-      "reviewRationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service.",
+      "mechanismFamily": "browserVaultNative.trusted-shell",
+      "reviewRationale": "Protected browser material is reachable only by the product host or its authenticated human shell; workspace code has no route to this service.",
       "resourceDerivation": {
         "kind": "literal",
         "key": "service:browserVaultNative.applyCookieMutations"
       },
       "authorityPrincipals": [
-        "host"
+        "host",
+        "user"
       ],
       "sensitivity": "write",
       "authenticatedFacts": [
@@ -9297,7 +9304,7 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "capability(host,service:browserVaultNative.applyCookieMutations)",
+      "r3aRequirement": "anyOf(capability(host,service:browserVaultNative.applyCookieMutations),allOf(capability(user,service:browserVaultNative.applyCookieMutations),workspace-member))",
       "r3b": {
         "review": "unchanged-parity",
         "change": null
@@ -9313,14 +9320,15 @@
       "tier": "open",
       "sessionAdmission": "family",
       "residency": "native-effect",
-      "mechanismFamily": "browserVaultNative.host",
-      "reviewRationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service.",
+      "mechanismFamily": "browserVaultNative.trusted-shell",
+      "reviewRationale": "Protected browser material is reachable only by the product host or its authenticated human shell; workspace code has no route to this service.",
       "resourceDerivation": {
         "kind": "literal",
         "key": "service:browserVaultNative.clearAllCookies"
       },
       "authorityPrincipals": [
-        "host"
+        "host",
+        "user"
       ],
       "sensitivity": "destructive",
       "authenticatedFacts": [
@@ -9341,7 +9349,7 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "capability(host,service:browserVaultNative.clearAllCookies)",
+      "r3aRequirement": "anyOf(capability(host,service:browserVaultNative.clearAllCookies),allOf(capability(user,service:browserVaultNative.clearAllCookies),workspace-member))",
       "r3b": {
         "review": "unchanged-parity",
         "change": null
@@ -9357,14 +9365,15 @@
       "tier": "open",
       "sessionAdmission": "family",
       "residency": "native-effect",
-      "mechanismFamily": "browserVaultNative.host",
-      "reviewRationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service.",
+      "mechanismFamily": "browserVaultNative.trusted-shell",
+      "reviewRationale": "Protected browser material is reachable only by the product host or its authenticated human shell; workspace code has no route to this service.",
       "resourceDerivation": {
         "kind": "literal",
         "key": "service:browserVaultNative.clearCookiesForOrigin"
       },
       "authorityPrincipals": [
-        "host"
+        "host",
+        "user"
       ],
       "sensitivity": "destructive",
       "authenticatedFacts": [
@@ -9385,7 +9394,7 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "capability(host,service:browserVaultNative.clearCookiesForOrigin)",
+      "r3aRequirement": "anyOf(capability(host,service:browserVaultNative.clearCookiesForOrigin),allOf(capability(user,service:browserVaultNative.clearCookiesForOrigin),workspace-member))",
       "r3b": {
         "review": "unchanged-parity",
         "change": null
@@ -9401,14 +9410,15 @@
       "tier": "open",
       "sessionAdmission": "family",
       "residency": "native-effect",
-      "mechanismFamily": "browserVaultNative.host",
-      "reviewRationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service.",
+      "mechanismFamily": "browserVaultNative.trusted-shell",
+      "reviewRationale": "Protected browser material is reachable only by the product host or its authenticated human shell; workspace code has no route to this service.",
       "resourceDerivation": {
         "kind": "literal",
         "key": "service:browserVaultNative.clearFormFillValues"
       },
       "authorityPrincipals": [
-        "host"
+        "host",
+        "user"
       ],
       "sensitivity": "destructive",
       "authenticatedFacts": [
@@ -9429,7 +9439,7 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "capability(host,service:browserVaultNative.clearFormFillValues)",
+      "r3aRequirement": "anyOf(capability(host,service:browserVaultNative.clearFormFillValues),allOf(capability(user,service:browserVaultNative.clearFormFillValues),workspace-member))",
       "r3b": {
         "review": "unchanged-parity",
         "change": null
@@ -9445,14 +9455,15 @@
       "tier": "open",
       "sessionAdmission": "family",
       "residency": "native-effect",
-      "mechanismFamily": "browserVaultNative.host",
-      "reviewRationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service.",
+      "mechanismFamily": "browserVaultNative.trusted-shell",
+      "reviewRationale": "Protected browser material is reachable only by the product host or its authenticated human shell; workspace code has no route to this service.",
       "resourceDerivation": {
         "kind": "literal",
         "key": "service:browserVaultNative.deleteFormFillValue"
       },
       "authorityPrincipals": [
-        "host"
+        "host",
+        "user"
       ],
       "sensitivity": "destructive",
       "authenticatedFacts": [
@@ -9473,7 +9484,7 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "capability(host,service:browserVaultNative.deleteFormFillValue)",
+      "r3aRequirement": "anyOf(capability(host,service:browserVaultNative.deleteFormFillValue),allOf(capability(user,service:browserVaultNative.deleteFormFillValue),workspace-member))",
       "r3b": {
         "review": "unchanged-parity",
         "change": null
@@ -9489,14 +9500,15 @@
       "tier": "open",
       "sessionAdmission": "family",
       "residency": "native-effect",
-      "mechanismFamily": "browserVaultNative.host",
-      "reviewRationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service.",
+      "mechanismFamily": "browserVaultNative.trusted-shell",
+      "reviewRationale": "Protected browser material is reachable only by the product host or its authenticated human shell; workspace code has no route to this service.",
       "resourceDerivation": {
         "kind": "literal",
         "key": "service:browserVaultNative.deletePassword"
       },
       "authorityPrincipals": [
-        "host"
+        "host",
+        "user"
       ],
       "sensitivity": "destructive",
       "authenticatedFacts": [
@@ -9517,7 +9529,7 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "capability(host,service:browserVaultNative.deletePassword)",
+      "r3aRequirement": "anyOf(capability(host,service:browserVaultNative.deletePassword),allOf(capability(user,service:browserVaultNative.deletePassword),workspace-member))",
       "r3b": {
         "review": "unchanged-parity",
         "change": null
@@ -9533,14 +9545,15 @@
       "tier": "open",
       "sessionAdmission": "family",
       "residency": "native-effect",
-      "mechanismFamily": "browserVaultNative.host",
-      "reviewRationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service.",
+      "mechanismFamily": "browserVaultNative.trusted-shell",
+      "reviewRationale": "Protected browser material is reachable only by the product host or its authenticated human shell; workspace code has no route to this service.",
       "resourceDerivation": {
         "kind": "literal",
         "key": "service:browserVaultNative.endBrowserSession"
       },
       "authorityPrincipals": [
-        "host"
+        "host",
+        "user"
       ],
       "sensitivity": "destructive",
       "authenticatedFacts": [
@@ -9561,7 +9574,7 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "capability(host,service:browserVaultNative.endBrowserSession)",
+      "r3aRequirement": "anyOf(capability(host,service:browserVaultNative.endBrowserSession),allOf(capability(user,service:browserVaultNative.endBrowserSession),workspace-member))",
       "r3b": {
         "review": "unchanged-parity",
         "change": null
@@ -9577,14 +9590,15 @@
       "tier": "open",
       "sessionAdmission": "family",
       "residency": "native-effect",
-      "mechanismFamily": "browserVaultNative.host",
-      "reviewRationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service.",
+      "mechanismFamily": "browserVaultNative.trusted-shell",
+      "reviewRationale": "Protected browser material is reachable only by the product host or its authenticated human shell; workspace code has no route to this service.",
       "resourceDerivation": {
         "kind": "literal",
         "key": "service:browserVaultNative.getCookiesForOrigin"
       },
       "authorityPrincipals": [
-        "host"
+        "host",
+        "user"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -9605,7 +9619,7 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "capability(host,service:browserVaultNative.getCookiesForOrigin)",
+      "r3aRequirement": "anyOf(capability(host,service:browserVaultNative.getCookiesForOrigin),allOf(capability(user,service:browserVaultNative.getCookiesForOrigin),workspace-member))",
       "r3b": {
         "review": "unchanged-parity",
         "change": null
@@ -9621,14 +9635,15 @@
       "tier": "open",
       "sessionAdmission": "family",
       "residency": "native-effect",
-      "mechanismFamily": "browserVaultNative.host",
-      "reviewRationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service.",
+      "mechanismFamily": "browserVaultNative.trusted-shell",
+      "reviewRationale": "Protected browser material is reachable only by the product host or its authenticated human shell; workspace code has no route to this service.",
       "resourceDerivation": {
         "kind": "literal",
         "key": "service:browserVaultNative.getCookieSiteSummary"
       },
       "authorityPrincipals": [
-        "host"
+        "host",
+        "user"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -9649,7 +9664,7 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "capability(host,service:browserVaultNative.getCookieSiteSummary)",
+      "r3aRequirement": "anyOf(capability(host,service:browserVaultNative.getCookieSiteSummary),allOf(capability(user,service:browserVaultNative.getCookieSiteSummary),workspace-member))",
       "r3b": {
         "review": "unchanged-parity",
         "change": null
@@ -9665,14 +9680,15 @@
       "tier": "open",
       "sessionAdmission": "family",
       "residency": "native-effect",
-      "mechanismFamily": "browserVaultNative.host",
-      "reviewRationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service.",
+      "mechanismFamily": "browserVaultNative.trusted-shell",
+      "reviewRationale": "Protected browser material is reachable only by the product host or its authenticated human shell; workspace code has no route to this service.",
       "resourceDerivation": {
         "kind": "literal",
         "key": "service:browserVaultNative.getFormFillSuggestions"
       },
       "authorityPrincipals": [
-        "host"
+        "host",
+        "user"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -9693,7 +9709,7 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "capability(host,service:browserVaultNative.getFormFillSuggestions)",
+      "r3aRequirement": "anyOf(capability(host,service:browserVaultNative.getFormFillSuggestions),allOf(capability(user,service:browserVaultNative.getFormFillSuggestions),workspace-member))",
       "r3b": {
         "review": "unchanged-parity",
         "change": null
@@ -9709,14 +9725,15 @@
       "tier": "open",
       "sessionAdmission": "family",
       "residency": "native-effect",
-      "mechanismFamily": "browserVaultNative.host",
-      "reviewRationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service.",
+      "mechanismFamily": "browserVaultNative.trusted-shell",
+      "reviewRationale": "Protected browser material is reachable only by the product host or its authenticated human shell; workspace code has no route to this service.",
       "resourceDerivation": {
         "kind": "literal",
         "key": "service:browserVaultNative.getNeverSaveOrigins"
       },
       "authorityPrincipals": [
-        "host"
+        "host",
+        "user"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -9737,7 +9754,7 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "capability(host,service:browserVaultNative.getNeverSaveOrigins)",
+      "r3aRequirement": "anyOf(capability(host,service:browserVaultNative.getNeverSaveOrigins),allOf(capability(user,service:browserVaultNative.getNeverSaveOrigins),workspace-member))",
       "r3b": {
         "review": "unchanged-parity",
         "change": null
@@ -9753,14 +9770,15 @@
       "tier": "open",
       "sessionAdmission": "family",
       "residency": "native-effect",
-      "mechanismFamily": "browserVaultNative.host",
-      "reviewRationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service.",
+      "mechanismFamily": "browserVaultNative.trusted-shell",
+      "reviewRationale": "Protected browser material is reachable only by the product host or its authenticated human shell; workspace code has no route to this service.",
       "resourceDerivation": {
         "kind": "literal",
         "key": "service:browserVaultNative.getNeverSaveOriginsPage"
       },
       "authorityPrincipals": [
-        "host"
+        "host",
+        "user"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -9781,7 +9799,7 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "capability(host,service:browserVaultNative.getNeverSaveOriginsPage)",
+      "r3aRequirement": "anyOf(capability(host,service:browserVaultNative.getNeverSaveOriginsPage),allOf(capability(user,service:browserVaultNative.getNeverSaveOriginsPage),workspace-member))",
       "r3b": {
         "review": "unchanged-parity",
         "change": null
@@ -9797,14 +9815,15 @@
       "tier": "open",
       "sessionAdmission": "family",
       "residency": "native-effect",
-      "mechanismFamily": "browserVaultNative.host",
-      "reviewRationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service.",
+      "mechanismFamily": "browserVaultNative.trusted-shell",
+      "reviewRationale": "Protected browser material is reachable only by the product host or its authenticated human shell; workspace code has no route to this service.",
       "resourceDerivation": {
         "kind": "literal",
         "key": "service:browserVaultNative.getPasswordForSite"
       },
       "authorityPrincipals": [
-        "host"
+        "host",
+        "user"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -9825,7 +9844,7 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "capability(host,service:browserVaultNative.getPasswordForSite)",
+      "r3aRequirement": "anyOf(capability(host,service:browserVaultNative.getPasswordForSite),allOf(capability(user,service:browserVaultNative.getPasswordForSite),workspace-member))",
       "r3b": {
         "review": "unchanged-parity",
         "change": null
@@ -9841,14 +9860,15 @@
       "tier": "open",
       "sessionAdmission": "family",
       "residency": "native-effect",
-      "mechanismFamily": "browserVaultNative.host",
-      "reviewRationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service.",
+      "mechanismFamily": "browserVaultNative.trusted-shell",
+      "reviewRationale": "Protected browser material is reachable only by the product host or its authenticated human shell; workspace code has no route to this service.",
       "resourceDerivation": {
         "kind": "literal",
         "key": "service:browserVaultNative.isNeverSave"
       },
       "authorityPrincipals": [
-        "host"
+        "host",
+        "user"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -9869,7 +9889,7 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "capability(host,service:browserVaultNative.isNeverSave)",
+      "r3aRequirement": "anyOf(capability(host,service:browserVaultNative.isNeverSave),allOf(capability(user,service:browserVaultNative.isNeverSave),workspace-member))",
       "r3b": {
         "review": "unchanged-parity",
         "change": null
@@ -9885,14 +9905,15 @@
       "tier": "open",
       "sessionAdmission": "family",
       "residency": "native-effect",
-      "mechanismFamily": "browserVaultNative.host",
-      "reviewRationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service.",
+      "mechanismFamily": "browserVaultNative.trusted-shell",
+      "reviewRationale": "Protected browser material is reachable only by the product host or its authenticated human shell; workspace code has no route to this service.",
       "resourceDerivation": {
         "kind": "literal",
         "key": "service:browserVaultNative.listCookieOrigins"
       },
       "authorityPrincipals": [
-        "host"
+        "host",
+        "user"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -9913,7 +9934,7 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "capability(host,service:browserVaultNative.listCookieOrigins)",
+      "r3aRequirement": "anyOf(capability(host,service:browserVaultNative.listCookieOrigins),allOf(capability(user,service:browserVaultNative.listCookieOrigins),workspace-member))",
       "r3b": {
         "review": "unchanged-parity",
         "change": null
@@ -9929,14 +9950,15 @@
       "tier": "open",
       "sessionAdmission": "family",
       "residency": "native-effect",
-      "mechanismFamily": "browserVaultNative.host",
-      "reviewRationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service.",
+      "mechanismFamily": "browserVaultNative.trusted-shell",
+      "reviewRationale": "Protected browser material is reachable only by the product host or its authenticated human shell; workspace code has no route to this service.",
       "resourceDerivation": {
         "kind": "literal",
         "key": "service:browserVaultNative.listCookieOriginsPage"
       },
       "authorityPrincipals": [
-        "host"
+        "host",
+        "user"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -9957,7 +9979,7 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "capability(host,service:browserVaultNative.listCookieOriginsPage)",
+      "r3aRequirement": "anyOf(capability(host,service:browserVaultNative.listCookieOriginsPage),allOf(capability(user,service:browserVaultNative.listCookieOriginsPage),workspace-member))",
       "r3b": {
         "review": "unchanged-parity",
         "change": null
@@ -9973,14 +9995,15 @@
       "tier": "open",
       "sessionAdmission": "family",
       "residency": "native-effect",
-      "mechanismFamily": "browserVaultNative.host",
-      "reviewRationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service.",
+      "mechanismFamily": "browserVaultNative.trusted-shell",
+      "reviewRationale": "Protected browser material is reachable only by the product host or its authenticated human shell; workspace code has no route to this service.",
       "resourceDerivation": {
         "kind": "literal",
         "key": "service:browserVaultNative.listCookiesPage"
       },
       "authorityPrincipals": [
-        "host"
+        "host",
+        "user"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -10001,7 +10024,7 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "capability(host,service:browserVaultNative.listCookiesPage)",
+      "r3aRequirement": "anyOf(capability(host,service:browserVaultNative.listCookiesPage),allOf(capability(user,service:browserVaultNative.listCookiesPage),workspace-member))",
       "r3b": {
         "review": "unchanged-parity",
         "change": null
@@ -10017,14 +10040,15 @@
       "tier": "open",
       "sessionAdmission": "family",
       "residency": "native-effect",
-      "mechanismFamily": "browserVaultNative.host",
-      "reviewRationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service.",
+      "mechanismFamily": "browserVaultNative.trusted-shell",
+      "reviewRationale": "Protected browser material is reachable only by the product host or its authenticated human shell; workspace code has no route to this service.",
       "resourceDerivation": {
         "kind": "literal",
         "key": "service:browserVaultNative.listFormFillValues"
       },
       "authorityPrincipals": [
-        "host"
+        "host",
+        "user"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -10045,7 +10069,7 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "capability(host,service:browserVaultNative.listFormFillValues)",
+      "r3aRequirement": "anyOf(capability(host,service:browserVaultNative.listFormFillValues),allOf(capability(user,service:browserVaultNative.listFormFillValues),workspace-member))",
       "r3b": {
         "review": "unchanged-parity",
         "change": null
@@ -10061,14 +10085,15 @@
       "tier": "open",
       "sessionAdmission": "family",
       "residency": "native-effect",
-      "mechanismFamily": "browserVaultNative.host",
-      "reviewRationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service.",
+      "mechanismFamily": "browserVaultNative.trusted-shell",
+      "reviewRationale": "Protected browser material is reachable only by the product host or its authenticated human shell; workspace code has no route to this service.",
       "resourceDerivation": {
         "kind": "literal",
         "key": "service:browserVaultNative.listFormFillValuesPage"
       },
       "authorityPrincipals": [
-        "host"
+        "host",
+        "user"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -10089,7 +10114,7 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "capability(host,service:browserVaultNative.listFormFillValuesPage)",
+      "r3aRequirement": "anyOf(capability(host,service:browserVaultNative.listFormFillValuesPage),allOf(capability(user,service:browserVaultNative.listFormFillValuesPage),workspace-member))",
       "r3b": {
         "review": "unchanged-parity",
         "change": null
@@ -10105,14 +10130,15 @@
       "tier": "open",
       "sessionAdmission": "family",
       "residency": "native-effect",
-      "mechanismFamily": "browserVaultNative.host",
-      "reviewRationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service.",
+      "mechanismFamily": "browserVaultNative.trusted-shell",
+      "reviewRationale": "Protected browser material is reachable only by the product host or its authenticated human shell; workspace code has no route to this service.",
       "resourceDerivation": {
         "kind": "literal",
         "key": "service:browserVaultNative.listPasswordsPage"
       },
       "authorityPrincipals": [
-        "host"
+        "host",
+        "user"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -10133,7 +10159,7 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "capability(host,service:browserVaultNative.listPasswordsPage)",
+      "r3aRequirement": "anyOf(capability(host,service:browserVaultNative.listPasswordsPage),allOf(capability(user,service:browserVaultNative.listPasswordsPage),workspace-member))",
       "r3b": {
         "review": "unchanged-parity",
         "change": null
@@ -10149,14 +10175,15 @@
       "tier": "open",
       "sessionAdmission": "family",
       "residency": "native-effect",
-      "mechanismFamily": "browserVaultNative.host",
-      "reviewRationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service.",
+      "mechanismFamily": "browserVaultNative.trusted-shell",
+      "reviewRationale": "Protected browser material is reachable only by the product host or its authenticated human shell; workspace code has no route to this service.",
       "resourceDerivation": {
         "kind": "literal",
         "key": "service:browserVaultNative.listPasswordSummaries"
       },
       "authorityPrincipals": [
-        "host"
+        "host",
+        "user"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -10177,7 +10204,7 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "capability(host,service:browserVaultNative.listPasswordSummaries)",
+      "r3aRequirement": "anyOf(capability(host,service:browserVaultNative.listPasswordSummaries),allOf(capability(user,service:browserVaultNative.listPasswordSummaries),workspace-member))",
       "r3b": {
         "review": "unchanged-parity",
         "change": null
@@ -10193,14 +10220,15 @@
       "tier": "open",
       "sessionAdmission": "family",
       "residency": "native-effect",
-      "mechanismFamily": "browserVaultNative.host",
-      "reviewRationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service.",
+      "mechanismFamily": "browserVaultNative.trusted-shell",
+      "reviewRationale": "Protected browser material is reachable only by the product host or its authenticated human shell; workspace code has no route to this service.",
       "resourceDerivation": {
         "kind": "literal",
         "key": "service:browserVaultNative.listPasswordSummariesPage"
       },
       "authorityPrincipals": [
-        "host"
+        "host",
+        "user"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -10221,7 +10249,7 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "capability(host,service:browserVaultNative.listPasswordSummariesPage)",
+      "r3aRequirement": "anyOf(capability(host,service:browserVaultNative.listPasswordSummariesPage),allOf(capability(user,service:browserVaultNative.listPasswordSummariesPage),workspace-member))",
       "r3b": {
         "review": "unchanged-parity",
         "change": null
@@ -10237,14 +10265,15 @@
       "tier": "open",
       "sessionAdmission": "family",
       "residency": "native-effect",
-      "mechanismFamily": "browserVaultNative.host",
-      "reviewRationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service.",
+      "mechanismFamily": "browserVaultNative.trusted-shell",
+      "reviewRationale": "Protected browser material is reachable only by the product host or its authenticated human shell; workspace code has no route to this service.",
       "resourceDerivation": {
         "kind": "literal",
         "key": "service:browserVaultNative.markFormFillValueUsed"
       },
       "authorityPrincipals": [
-        "host"
+        "host",
+        "user"
       ],
       "sensitivity": "write",
       "authenticatedFacts": [
@@ -10265,7 +10294,7 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "capability(host,service:browserVaultNative.markFormFillValueUsed)",
+      "r3aRequirement": "anyOf(capability(host,service:browserVaultNative.markFormFillValueUsed),allOf(capability(user,service:browserVaultNative.markFormFillValueUsed),workspace-member))",
       "r3b": {
         "review": "unchanged-parity",
         "change": null
@@ -10281,14 +10310,15 @@
       "tier": "open",
       "sessionAdmission": "family",
       "residency": "native-effect",
-      "mechanismFamily": "browserVaultNative.host",
-      "reviewRationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service.",
+      "mechanismFamily": "browserVaultNative.trusted-shell",
+      "reviewRationale": "Protected browser material is reachable only by the product host or its authenticated human shell; workspace code has no route to this service.",
       "resourceDerivation": {
         "kind": "literal",
         "key": "service:browserVaultNative.removeNeverSave"
       },
       "authorityPrincipals": [
-        "host"
+        "host",
+        "user"
       ],
       "sensitivity": "destructive",
       "authenticatedFacts": [
@@ -10309,7 +10339,7 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "capability(host,service:browserVaultNative.removeNeverSave)",
+      "r3aRequirement": "anyOf(capability(host,service:browserVaultNative.removeNeverSave),allOf(capability(user,service:browserVaultNative.removeNeverSave),workspace-member))",
       "r3b": {
         "review": "unchanged-parity",
         "change": null
@@ -10325,14 +10355,15 @@
       "tier": "open",
       "sessionAdmission": "family",
       "residency": "native-effect",
-      "mechanismFamily": "browserVaultNative.host",
-      "reviewRationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service.",
+      "mechanismFamily": "browserVaultNative.trusted-shell",
+      "reviewRationale": "Protected browser material is reachable only by the product host or its authenticated human shell; workspace code has no route to this service.",
       "resourceDerivation": {
         "kind": "literal",
         "key": "service:browserVaultNative.updateFormFillValue"
       },
       "authorityPrincipals": [
-        "host"
+        "host",
+        "user"
       ],
       "sensitivity": "write",
       "authenticatedFacts": [
@@ -10353,7 +10384,7 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "capability(host,service:browserVaultNative.updateFormFillValue)",
+      "r3aRequirement": "anyOf(capability(host,service:browserVaultNative.updateFormFillValue),allOf(capability(user,service:browserVaultNative.updateFormFillValue),workspace-member))",
       "r3b": {
         "review": "unchanged-parity",
         "change": null
@@ -10369,14 +10400,15 @@
       "tier": "open",
       "sessionAdmission": "family",
       "residency": "native-effect",
-      "mechanismFamily": "browserVaultNative.host",
-      "reviewRationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service.",
+      "mechanismFamily": "browserVaultNative.trusted-shell",
+      "reviewRationale": "Protected browser material is reachable only by the product host or its authenticated human shell; workspace code has no route to this service.",
       "resourceDerivation": {
         "kind": "literal",
         "key": "service:browserVaultNative.updateLastUsed"
       },
       "authorityPrincipals": [
-        "host"
+        "host",
+        "user"
       ],
       "sensitivity": "write",
       "authenticatedFacts": [
@@ -10397,7 +10429,7 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "capability(host,service:browserVaultNative.updateLastUsed)",
+      "r3aRequirement": "anyOf(capability(host,service:browserVaultNative.updateLastUsed),allOf(capability(user,service:browserVaultNative.updateLastUsed),workspace-member))",
       "r3b": {
         "review": "unchanged-parity",
         "change": null
@@ -10413,14 +10445,15 @@
       "tier": "open",
       "sessionAdmission": "family",
       "residency": "native-effect",
-      "mechanismFamily": "browserVaultNative.host",
-      "reviewRationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service.",
+      "mechanismFamily": "browserVaultNative.trusted-shell",
+      "reviewRationale": "Protected browser material is reachable only by the product host or its authenticated human shell; workspace code has no route to this service.",
       "resourceDerivation": {
         "kind": "literal",
         "key": "service:browserVaultNative.updatePassword"
       },
       "authorityPrincipals": [
-        "host"
+        "host",
+        "user"
       ],
       "sensitivity": "write",
       "authenticatedFacts": [
@@ -10441,7 +10474,7 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "capability(host,service:browserVaultNative.updatePassword)",
+      "r3aRequirement": "anyOf(capability(host,service:browserVaultNative.updatePassword),allOf(capability(user,service:browserVaultNative.updatePassword),workspace-member))",
       "r3b": {
         "review": "unchanged-parity",
         "change": null

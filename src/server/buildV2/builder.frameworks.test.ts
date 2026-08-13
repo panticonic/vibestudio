@@ -84,7 +84,7 @@ describe("buildUnit framework-agnostic panel builds", () => {
     });
     // Resolve esbuild-svelte / svelte (and any other npm deps) from the repo's
     // real node_modules instead of a fresh install.
-    initBuilder([path.join(REPO_ROOT, "node_modules")]);
+    initBuilder([path.join(REPO_ROOT, "node_modules")], REPO_ROOT);
   });
 
   afterEach(() => {

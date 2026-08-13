@@ -4,14 +4,16 @@ import {
   type ServiceContext,
   type VerifiedCaller,
 } from "@vibestudio/shared/serviceDispatcher";
+import {
+  BROWSER_ENVIRONMENT_KEY_VERSION,
+  browserEnvironmentKeyMaterial,
+} from "@vibestudio/browser-data";
 
 export interface BrowserEnvironmentIdentity {
   workspaceId: string;
   ownerUserId: string;
   environmentKey: string;
 }
-
-const ENVIRONMENT_KEY_VERSION = "v1";
 
 /**
  * Resolve the one browser environment owned by a verified account in a
@@ -22,21 +24,12 @@ export function browserEnvironmentIdentity(
   workspaceId: string,
   caller: Pick<VerifiedCaller, "subject">
 ): BrowserEnvironmentIdentity {
-  const normalizedWorkspaceId = workspaceId.trim();
-  if (!normalizedWorkspaceId) {
-    throw new Error("Browser environment resolution requires a workspace id");
-  }
-  const ownerUserId = caller.subject?.userId.trim();
-  if (!ownerUserId || ownerUserId === "system") {
-    throw new Error("Browser environment resolution requires a verified user");
-  }
-  const digest = createHash("sha256")
-    .update(`${ENVIRONMENT_KEY_VERSION}\x00${normalizedWorkspaceId}\x00${ownerUserId}`)
-    .digest("base64url");
+  const normalized = browserEnvironmentKeyMaterial(workspaceId, caller.subject?.userId ?? "");
+  const digest = createHash("sha256").update(normalized.material).digest("base64url");
   return {
-    workspaceId: normalizedWorkspaceId,
-    ownerUserId,
-    environmentKey: `${ENVIRONMENT_KEY_VERSION}_${digest}`,
+    workspaceId: normalized.workspaceId,
+    ownerUserId: normalized.ownerUserId,
+    environmentKey: `${BROWSER_ENVIRONMENT_KEY_VERSION}_${digest}`,
   };
 }
 

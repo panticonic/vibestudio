@@ -836,7 +836,7 @@ function borrowedDependencyEnvironment(
 export async function acquireExternalDeps(
   deps: Record<string, string>,
   dependencyOverrides: Record<string, string> = {},
-  options: { patches?: readonly ExternalDependencyPatch[] } = {}
+  options: { appRoot: string; patches?: readonly ExternalDependencyPatch[] }
 ): Promise<ExternalDependencyBorrow> {
   const overrides = { ...dependencyOverrides };
   const patches = validateDependencyPatches(options.patches ?? []);
@@ -845,6 +845,7 @@ export async function acquireExternalDeps(
     baseDir: getExternalDepsBaseDir(),
     key: hashDeps(deps, overrides, patches),
     ignoreScripts: true,
+    appRoot: options.appRoot,
     overrides,
     patches,
   });
@@ -869,6 +870,7 @@ export async function prepareExternalDependencyEnvironment(
   graph: PackageGraph,
   workspaceRoot: string,
   sourceRoot: string,
+  appRoot: string,
   appNodeModules: string[] = []
 ): Promise<ExternalDependencyEnvironment> {
   const externalDeps = collectTransitiveExternalDeps(unit, graph, workspaceRoot, appNodeModules);
@@ -880,6 +882,7 @@ export async function prepareExternalDependencyEnvironment(
   );
   const dependencyPatches = collectTransitiveDependencyPatches(unit, graph, sourceRoot);
   const borrowed = await acquireExternalDeps(externalDeps, dependencyOverrides, {
+    appRoot,
     patches: dependencyPatches,
   });
   return {
@@ -893,6 +896,7 @@ export async function prepareExternalDependencyEnvironment(
 }
 
 export async function ensureExtensionRuntimeDeps(
+  appRoot: string,
   deps: Record<string, string>,
   dependencyOverrides: Record<string, string> = {},
   patches: readonly ExternalDependencyPatch[] = []
@@ -913,6 +917,7 @@ export async function ensureExtensionRuntimeDeps(
     baseDir: getExtensionRuntimeDepsBaseDir(),
     key,
     ignoreScripts: false,
+    appRoot,
     overrides,
     patches: validatedPatches,
   });
@@ -922,6 +927,7 @@ type EnsureDepsOptions = {
   baseDir: string;
   key: string;
   ignoreScripts: boolean;
+  appRoot: string;
   overrides?: Record<string, string>;
   patches?: readonly ExternalDependencyPatch[];
 };
@@ -993,7 +999,10 @@ async function ensureDepsInstalledOnce(
   fs.writeFileSync(path.join(tmpDir, "package.json"), JSON.stringify(pkgJson, null, 2));
 
   try {
-    await runNpmInstall(tmpDir, { ignoreScripts: options.ignoreScripts });
+    await runNpmInstall(tmpDir, {
+      appRoot: options.appRoot,
+      ignoreScripts: options.ignoreScripts,
+    });
 
     const patchedFiles = applyExternalDependencyPatches(tmpDir, options.patches ?? []);
 

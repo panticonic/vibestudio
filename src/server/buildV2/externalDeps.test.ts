@@ -72,7 +72,10 @@ async function ensureExternalDeps(
   dependencyOverrides: Record<string, string> = {},
   options: { patches?: readonly ExternalDependencyPatch[] } = {}
 ): Promise<string> {
-  const borrowed = await acquireExternalDeps(deps, dependencyOverrides, options);
+  const borrowed = await acquireExternalDeps(deps, dependencyOverrides, {
+    appRoot: process.cwd(),
+    ...options,
+  });
   borrowed.release();
   return borrowed.nodeModulesDir;
 }

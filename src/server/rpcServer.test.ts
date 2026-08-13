@@ -4246,7 +4246,9 @@ describe("RpcServer caller identity", () => {
     const membershipGate = vi.fn((subject) => subject?.userId === "system");
     const { server, connectionGrants, entityCache } = createServer({ membershipGate });
     entityCache._onActivate(makeRecord("@workspace-apps/remote-cli", "app"));
-    const grant = connectionGrants.grant("@workspace-apps/remote-cli", "server").token;
+    const grant = connectionGrants.grant("@workspace-apps/remote-cli", "server", {
+      subject: { userId: "system", handle: "system" },
+    }).token;
     const ws = createTestWs();
 
     testServer(server).handleAuth(ws, grant, "terminal-app");

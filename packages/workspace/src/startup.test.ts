@@ -44,6 +44,34 @@ function setup() {
 }
 
 describe("resolveLocalWorkspaceStartup current lifecycle", () => {
+  it("writes an explicitly selected development root into a fresh child descriptor", () => {
+    const { root, workspaceDir } = setup();
+    const candidate = {
+      url: "git+https://example.test/base.git",
+      ref: "refs/heads/candidate",
+      commit: "c".repeat(40),
+      snapshot: `v1-sha256:${"d".repeat(64)}` as const,
+    };
+
+    resolveLocalWorkspaceStartup({
+      appRoot: root,
+      name: "candidate-child",
+      init: true,
+      workspaceId: "ws_candidate",
+      requireExplicitSelection: true,
+      rootTemplate: candidate,
+    });
+
+    expect(
+      JSON.parse(
+        fs.readFileSync(
+          path.join(workspaceDir("candidate-child"), "state", "workspace-creation", "v1.json"),
+          "utf8"
+        )
+      )
+    ).toMatchObject({ workspaceId: "ws_candidate", rootTemplate: candidate });
+  });
+
   it("uses the hub-owned identity when creating a child workspace disk", () => {
     const { root, workspaceDir } = setup();
 

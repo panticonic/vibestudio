@@ -977,7 +977,11 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
   // Tree initialization
   // =========================================================================
 
-  async initializePanelTree(options: { seedInitialPanels?: boolean } = {}): Promise<void> {
+  async initializePanelTree(
+    options: { seedInitialPanels?: boolean } = {},
+    caller?: ScopedServerCaller
+  ): Promise<void> {
+    const clients = this.operationClients(caller);
     if (options.seedInitialPanels !== false) {
       const initialPanels = this.deps.workspaceConfig?.initPanels ?? [];
       for (const [index, initial] of initialPanels.entries()) {
@@ -986,7 +990,7 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
         // otherwise each process creates another copy of the manifest root.
         const existing =
           this.registry.getRootPanels().some((panel) => getPanelSource(panel) === initial.source) ||
-          (await this.shellCore.hasRootPanelSource(initial.source));
+          (await this.shellCore.hasRootPanelSource(initial.source, clients));
         if (existing) continue;
         await this.createViaProductRuntime(
           { surface: "code", source: initial.source },
@@ -994,7 +998,8 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
             stateArgs: initial.stateArgs,
             initialLoad: "eager",
             focus: index === 0,
-          }
+          },
+          caller
         );
       }
     }

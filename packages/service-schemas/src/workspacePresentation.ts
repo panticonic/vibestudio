@@ -6,6 +6,7 @@ const productPolicy: ServiceAuthorityPolicy = { principals: ["host", "user", "co
 const method = (sensitivity: "read" | "write") => ({
   authority: productPolicy,
   access: { sensitivity },
+  directEffect: { kind: "open" as const },
   tier: {
     tier: "open" as const,
     session: "family" as const,

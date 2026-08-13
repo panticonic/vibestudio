@@ -2,6 +2,7 @@ import { createServer } from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
 import { WebSocketServer } from "ws";
 import { envelopeFromMessage, type RpcEnvelope, type RpcResponse } from "@vibestudio/rpc";
+import { FRAME_DATA, FRAME_END, FRAME_HEAD } from "@vibestudio/rpc/protocol/streamCodec";
 import { createServerClient } from "./serverClient.js";
 
 const cleanup: Array<() => Promise<void> | void> = [];
@@ -38,8 +39,17 @@ async function startRpcHarness() {
   const wss = new WebSocketServer({ noServer: true });
   const grantRequests: unknown[][] = [];
   const scopedRequests: Array<{ callerId: string; callerKind: string; method: string }> = [];
+  const scopedEnvelopes: Array<{
+    callerId: string;
+    callerKind: string;
+    envelope: RpcEnvelope;
+  }> = [];
   let shellSocket: import("ws").WebSocket | undefined;
+  let appSocket: import("ws").WebSocket | undefined;
   let panelSocket: import("ws").WebSocket | undefined;
+  let appGrantSequence = 0;
+  let appConnectionCount = 0;
+  const redeemedAppGrants = new Set<string>();
   let reverseSequence = 0;
   const reverseCalls = new Map<
     string,
@@ -69,9 +79,11 @@ async function startRpcHarness() {
           };
         };
         if (msg.type === "ws:auth") {
-          const credential = admissionCredentials.get(msg.token ?? "");
+          const credential = admissionCredentials.get(msg.token ?? "") ?? "";
           const shell = credential === "shell-token";
-          const app = credential === "app-grant";
+          const appGrant = credential.startsWith("app-grant-");
+          const app = appGrant && !redeemedAppGrants.has(credential);
+          if (app) redeemedAppGrants.add(credential);
           const panel = credential === "panel-grant";
           // A pairing code redeems into a shell principal and rides the freshly
           // issued device credential back on the auth-result (rpcServer.handleAuth).
@@ -87,6 +99,10 @@ async function startRpcHarness() {
                   : "";
           callerKind = shell || pairing ? "shell" : app ? "app" : panel ? "panel" : "";
           if (shell) shellSocket = ws;
+          if (app) {
+            appSocket = ws;
+            appConnectionCount += 1;
+          }
           if (panel) panelSocket = ws;
           const success = shell || app || panel || pairing;
           ws.send(
@@ -133,7 +149,8 @@ async function startRpcHarness() {
         }
         const envelope = msg.envelope as RpcEnvelope | undefined;
         const message = envelope?.message;
-        if (msg.type !== "ws:rpc" || !message || !envelope) return;
+        if ((msg.type !== "ws:rpc" && msg.type !== "ws:route") || !message || !envelope) return;
+        if (callerKind === "app") scopedEnvelopes.push({ callerId, callerKind, envelope });
         if (message.type === "response") {
           const pending = reverseCalls.get(message.requestId);
           if (!pending) return;
@@ -158,6 +175,25 @@ async function startRpcHarness() {
             })
           );
         };
+        if (callerKind === "app" && envelope.target.startsWith("do:") && method === "direct.echo") {
+          ws.send(
+            JSON.stringify({
+              type: "ws:routed",
+              envelope: envelopeFromMessage({
+                selfId: envelope.target,
+                from: envelope.target,
+                target: envelope.from,
+                callerKind: "do",
+                message: {
+                  type: "response",
+                  requestId,
+                  result: { args, target: envelope.target },
+                },
+              }),
+            })
+          );
+          return;
+        }
         if (callerKind === "shell" && method === "auth.grantConnection") {
           grantRequests.push(args);
           const principalId = String(args[0] ?? "");
@@ -165,7 +201,9 @@ async function startRpcHarness() {
             type: "response",
             requestId,
             result: {
-              token: principalId.startsWith("panel:") ? "panel-grant" : "app-grant",
+              token: principalId.startsWith("panel:")
+                ? "panel-grant"
+                : `app-grant-${++appGrantSequence}`,
             },
           });
           return;
@@ -221,13 +259,25 @@ async function startRpcHarness() {
     if (!panelSocket) throw new Error("Panel is not connected");
     panelSocket.send(JSON.stringify({ type: "ws:rpc", envelope }));
   };
+  const sendAppEnvelope = (envelope: RpcEnvelope): void => {
+    if (!appSocket) throw new Error("App is not connected");
+    appSocket.send(JSON.stringify({ type: "ws:routed", envelope }));
+  };
+  const dropAppConnection = (): void => {
+    if (!appSocket) throw new Error("App is not connected");
+    appSocket.terminate();
+  };
   return {
     port,
     grantRequests,
     scopedRequests,
+    scopedEnvelopes,
     admissionPlatforms,
     callShell,
     sendPanelEnvelope,
+    sendAppEnvelope,
+    dropAppConnection,
+    appConnectionCount: () => appConnectionCount,
   };
 }
 
@@ -286,6 +336,206 @@ describe("ServerClient scoped runtime callers", () => {
       },
     ]);
     await expect.poll(() => events).toEqual([{ callerId: "@workspace-apps/shell" }]);
+  });
+
+  it("relays the complete direct-target envelope protocol over one app-scoped session", async () => {
+    const harness = await startRpcHarness();
+    const client = await createServerClient(harness.port, "shell-token");
+    cleanup.push(() => client.close());
+    const caller = { callerId: "@workspace-apps/shell", callerKind: "app" as const };
+    const received: RpcEnvelope[] = [];
+    client.addMessageListener(caller, (envelope) => received.push(envelope));
+    const target =
+      "do:workers/workspace-presentation:WorkspacePresentationDO:workspace-presentation";
+    const request: RpcEnvelope = {
+      from: caller.callerId,
+      target,
+      delivery: { caller },
+      provenance: [caller],
+      message: {
+        type: "request",
+        requestId: "direct-request-1",
+        fromId: caller.callerId,
+        method: "direct.echo",
+        args: ["panel-1"],
+      },
+    };
+
+    await client.sendAs(caller, request);
+    await expect
+      .poll(() =>
+        received.find(
+          (envelope) =>
+            envelope.message.type === "response" &&
+            envelope.message.requestId === "direct-request-1"
+        )
+      )
+      .toMatchObject({
+        from: target,
+        target: caller.callerId,
+        message: {
+          type: "response",
+          requestId: "direct-request-1",
+          result: { args: ["panel-1"], target },
+        },
+      });
+
+    const directEvent = envelopeFromMessage({
+      selfId: target,
+      from: target,
+      target: caller.callerId,
+      callerKind: "do",
+      message: {
+        type: "event",
+        fromId: target,
+        event: "presentation:changed",
+        payload: { slotId: "panel-1" },
+      },
+    });
+    harness.sendAppEnvelope(directEvent);
+    await expect.poll(() => received).toContainEqual(directEvent);
+
+    const streamRequest: RpcEnvelope = {
+      ...request,
+      message: {
+        type: "stream-request",
+        requestId: "direct-stream-1",
+        fromId: caller.callerId,
+        method: "direct.watch",
+        args: [],
+      },
+    };
+    const streamCancel: RpcEnvelope = {
+      ...request,
+      message: {
+        type: "stream-cancel",
+        requestId: "direct-stream-1",
+        fromId: caller.callerId,
+      },
+    };
+    const requestCancel: RpcEnvelope = {
+      ...request,
+      message: {
+        type: "request-cancel",
+        requestId: "direct-request-2",
+        fromId: caller.callerId,
+      },
+    };
+    await client.sendAs(caller, streamRequest);
+    const streamFrames = [
+      {
+        frameType: FRAME_HEAD,
+        payload: JSON.stringify({ status: 200, statusText: "OK", headerPairs: [], finalUrl: "" }),
+      },
+      { frameType: FRAME_DATA, payload: "aGVsbG8=" },
+      { frameType: FRAME_END, payload: JSON.stringify({ bytesIn: 5 }) },
+    ].map(({ frameType, payload }) =>
+      envelopeFromMessage({
+        selfId: target,
+        from: target,
+        target: caller.callerId,
+        callerKind: "do",
+        message: {
+          type: "stream-frame",
+          requestId: "direct-stream-1",
+          fromId: target,
+          frameType,
+          payload,
+        },
+      })
+    );
+    for (const frame of streamFrames) harness.sendAppEnvelope(frame);
+    await expect.poll(() => received).toEqual(expect.arrayContaining(streamFrames));
+
+    const incomingRequest = envelopeFromMessage({
+      selfId: target,
+      from: target,
+      target: caller.callerId,
+      callerKind: "do",
+      message: {
+        type: "request",
+        requestId: "incoming-request-1",
+        fromId: target,
+        method: "host.refresh",
+        args: [],
+      },
+    });
+    harness.sendAppEnvelope(incomingRequest);
+    await expect.poll(() => received).toContainEqual(incomingRequest);
+    const outgoingResponse: RpcEnvelope = {
+      from: caller.callerId,
+      target,
+      delivery: { caller },
+      provenance: [caller],
+      message: {
+        type: "response",
+        requestId: "incoming-request-1",
+        result: { refreshed: true },
+      },
+    };
+    await client.sendAs(caller, outgoingResponse);
+    await client.sendAs(caller, streamCancel);
+    await client.sendAs(caller, requestCancel);
+
+    await expect
+      .poll(() => harness.scopedEnvelopes.map(({ envelope }) => envelope))
+      .toEqual(
+        expect.arrayContaining([
+          request,
+          streamRequest,
+          outgoingResponse,
+          streamCancel,
+          requestCancel,
+        ])
+      );
+    expect(harness.grantRequests).toEqual([[caller.callerId]]);
+  });
+
+  it("reconnects the app-scoped session with a fresh one-shot grant", async () => {
+    const harness = await startRpcHarness();
+    const client = await createServerClient(harness.port, "shell-token");
+    cleanup.push(() => client.close());
+    const caller = { callerId: "@workspace-apps/shell", callerKind: "app" as const };
+    const received: RpcEnvelope[] = [];
+    client.addMessageListener(caller, (envelope) => received.push(envelope));
+    const target = "do:workers/example:ExampleDO:singleton";
+    const makeRequest = (requestId: string): RpcEnvelope => ({
+      from: caller.callerId,
+      target,
+      delivery: { caller },
+      provenance: [caller],
+      message: {
+        type: "request",
+        requestId,
+        fromId: caller.callerId,
+        method: "direct.echo",
+        args: [requestId],
+      },
+    });
+
+    await client.sendAs(caller, makeRequest("before-drop"));
+    await expect
+      .poll(() =>
+        received.some(
+          ({ message }) => message.type === "response" && message.requestId === "before-drop"
+        )
+      )
+      .toBe(true);
+
+    harness.dropAppConnection();
+    await expect.poll(() => harness.appConnectionCount(), { timeout: 5_000 }).toBe(2);
+    await expect
+      .poll(() => harness.grantRequests, { timeout: 5_000 })
+      .toEqual([[caller.callerId], [caller.callerId]]);
+
+    await client.sendAs(caller, makeRequest("after-reconnect"));
+    await expect
+      .poll(() =>
+        received.some(
+          ({ message }) => message.type === "response" && message.requestId === "after-reconnect"
+        )
+      )
+      .toBe(true);
   });
 
   it("surfaces the auth-result deviceCredential via onPaired (pairing-code bootstrap)", async () => {

@@ -1,12 +1,13 @@
 import type { EventService } from "@vibestudio/shared/eventsService";
 import type { EventName } from "@vibestudio/shared/events";
 import type { PanelRuntimeLeaseChangedEvent } from "@vibestudio/shared/panel/panelLease";
+import type { PanelTreeInvalidation } from "@vibestudio/shared/panel/treeIndex";
 import type { PendingApproval } from "@vibestudio/shared/approvals";
 import { credentialsMethods } from "@vibestudio/service-schemas/credentials";
 import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
 import type { ServerClient } from "./serverClient.js";
 import type { PanelOrchestrator } from "./panelOrchestrator.js";
-import type { AppOrchestrator, AppAvailableEvent } from "./appOrchestrator.js";
+import type { AppAvailableEvent } from "./appOrchestrator.js";
 import {
   handleExternalOpenPayload,
   type ExternalOpenPayload,
@@ -15,7 +16,8 @@ import {
 export interface ServerEventBridgeDeps {
   eventService: EventService;
   getPanelOrchestrator(): PanelOrchestrator | null;
-  getAppOrchestrator?(): AppOrchestrator | null;
+  /** Apply an Electron app through the host's single launch/adoption coordinator. */
+  applyAppAvailable?(event: AppAvailableEvent): Promise<void | boolean>;
   getServerClient(): ServerClient | null;
   openExternal(url: string): Promise<void>;
   warn(message: string): void;
@@ -25,6 +27,8 @@ export interface ServerEventBridgeDeps {
   onApprovalPendingChanged?(pending: PendingApproval[]): void;
   /** Host-target apps changed state; desktop bootstrap can retry launch. */
   onAppHostTargetChanged?(event: ServerHostTargetChangeEvent): void;
+  /** Retain the latest level-triggered tree reset for newly opened shell watches. */
+  onPanelTreeInvalidated?(event: PanelTreeInvalidation): void;
   /** Resolve server app artifact route references for this Electron connection. */
   resolveAppAvailableEvent?(payload: unknown): unknown | null;
   /**
@@ -106,7 +110,6 @@ export function createServerEventBridge(
 
   return function handleServerEvent(bareEvent: EventName, payload: unknown): void {
     const panelOrchestrator = deps.getPanelOrchestrator();
-    const appOrchestrator = deps.getAppOrchestrator?.() ?? null;
 
     if (bareEvent === "build:complete") {
       const { source, error } = payload as { source?: unknown; error?: unknown };
@@ -320,13 +323,11 @@ export function createServerEventBridge(
         : payload;
       if (appPayload === null) return;
       deps.onAppHostTargetChanged?.({ event: "apps:available", payload: appPayload });
-      void appOrchestrator
-        ?.applyAppAvailable(appPayload as AppAvailableEvent)
-        .catch((err: unknown) => {
-          const message = err instanceof Error ? err.message : String(err);
-          deps.warn(`[apps] failed to apply app availability: ${message}`);
-          deps.notifyError?.("App availability could not be updated", message);
-        });
+      void deps.applyAppAvailable?.(appPayload as AppAvailableEvent).catch((err: unknown) => {
+        const message = err instanceof Error ? err.message : String(err);
+        deps.warn(`[apps] failed to apply app availability: ${message}`);
+        deps.notifyError?.("App availability could not be updated", message);
+      });
       emitNormalized(bareEvent, appPayload);
       return;
     }
@@ -349,6 +350,7 @@ export function createServerEventBridge(
     }
 
     if (bareEvent === "panel-tree-invalidated") {
+      deps.onPanelTreeInvalidated?.(payload as PanelTreeInvalidation);
       emitNormalized(bareEvent, payload);
       return;
     }

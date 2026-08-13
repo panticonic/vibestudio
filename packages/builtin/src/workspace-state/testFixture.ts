@@ -13,22 +13,11 @@
 import { WorkspaceDO } from "./WorkspaceDO.js";
 
 export class WorkspaceDOTestable extends WorkspaceDO {
-  private testOwnerUserId: string | undefined;
-
   slotCreateAs(
     ownerUserId: string | undefined,
     input: Parameters<WorkspaceDO["slotCreate"]>[0]
   ): void {
-    this.testOwnerUserId = ownerUserId;
-    try {
-      this.slotCreate(input);
-    } finally {
-      this.testOwnerUserId = undefined;
-    }
-  }
-
-  protected override slotCreationOwnerUserId(): string | undefined {
-    return this.testOwnerUserId;
+    this.slotCreate({ ...input, ...(ownerUserId ? { ownerUserId } : {}) });
   }
 
   protected override schemaIndexDefinitions(): readonly string[] {

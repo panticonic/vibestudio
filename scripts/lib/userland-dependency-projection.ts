@@ -97,7 +97,10 @@ export async function prepareUserlandDependencyProjection(
   const patches = [...dependencyPatches.values()].sort((left, right) =>
     left.selector.localeCompare(right.selector)
   );
-  const borrowed = await acquireExternalDeps(dependencies, dependencyOverrides, { patches });
+  const borrowed = await acquireExternalDeps(dependencies, dependencyOverrides, {
+    appRoot,
+    patches,
+  });
   return {
     graph,
     units,

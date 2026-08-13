@@ -3,11 +3,14 @@ import { callerKindForPrincipalKind, isCodeIdentityCallerKind } from "./principa
 import type { EntityCache } from "./runtime/entityCache.js";
 import type { EntityRecord } from "./runtime/entitySpec.js";
 import type { CallerKind } from "./serviceDispatcher.js";
+import type { UserSubject } from "@vibestudio/identity/types";
 
 export interface ConnectionGrant {
   token: string;
   principalId: string;
   issuedBy: string;
+  /** Authenticated human bound to the issuing connection, when one exists. */
+  subject?: UserSubject;
   expiresAt: number;
   /** Exact executable incarnation this credential was minted for. */
   executionDigest?: string;
@@ -18,6 +21,7 @@ export interface ConnectionGrantValidation {
   principalId: string;
   principalKind: CallerKind;
   issuedBy: string;
+  subject?: UserSubject;
 }
 
 function hasSealedExecutableIncarnation(record: EntityRecord): boolean {
@@ -77,7 +81,7 @@ export class ConnectionGrantService {
   grant(
     principalId: string,
     issuedBy: string,
-    ttlMs: number = 60_000
+    options: { ttlMs?: number; subject?: UserSubject } = {}
   ): { token: string; expiresAt: number } {
     const record = this.entityCache.resolveActive(principalId);
     if (!record) {
@@ -85,18 +89,19 @@ export class ConnectionGrantService {
     }
     const executionDigest = connectableExecutionDigest(record);
     const token = randomBytes(32).toString("hex");
-    const expiresAt = Date.now() + ttlMs;
+    const expiresAt = Date.now() + (options.ttlMs ?? 60_000);
     this.grants.set(token, {
       token,
       principalId,
       issuedBy,
       expiresAt,
+      ...(options.subject ? { subject: options.subject } : {}),
       ...(executionDigest ? { executionDigest } : {}),
     });
     return { token, expiresAt };
   }
 
-  redeem(token: string): { principalId: string; issuedBy: string } | null {
+  redeem(token: string): { principalId: string; issuedBy: string; subject?: UserSubject } | null {
     const grant = this.grants.get(token);
     if (!grant) return null;
     if (grant.redeemed) return null;
@@ -117,7 +122,11 @@ export class ConnectionGrantService {
     }
     grant.redeemed = true;
     this.pruneRedeemedForPrincipal(grant.principalId);
-    return { principalId: grant.principalId, issuedBy: grant.issuedBy };
+    return {
+      principalId: grant.principalId,
+      issuedBy: grant.issuedBy,
+      ...(grant.subject ? { subject: grant.subject } : {}),
+    };
   }
 
   /**
@@ -159,6 +168,7 @@ export class ConnectionGrantService {
       principalId: grant.principalId,
       principalKind,
       issuedBy: grant.issuedBy,
+      ...(grant.subject ? { subject: grant.subject } : {}),
     };
   }
 

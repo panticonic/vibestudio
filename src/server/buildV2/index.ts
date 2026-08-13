@@ -1136,7 +1136,7 @@ export async function initBuildSystemV2(
   });
 
   // Declare where @vibestudio/* platform packages live (workspace:* deps).
-  initBuilder(appNodeModuleRoots);
+  initBuilder(appNodeModuleRoots, rootOptions.appRoot);
   setBuildSourceProvider(source);
   buildStore.setBuildExecutionIdentityContext({
     workspaceId: source.workspaceId,
@@ -1535,6 +1535,7 @@ export async function initBuildSystemV2(
         graphAtView,
         workspaceRoot,
         sourceRoot,
+        rootOptions.appRoot,
         appNodeModuleRoots
       );
       try {

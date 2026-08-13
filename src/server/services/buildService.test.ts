@@ -70,6 +70,7 @@ function makeBuildSystem(): BuildSystemV2 {
           }
         : null
     ),
+    getUnitIcon: vi.fn(async () => null),
     getBuildReport: vi.fn(async () => ({
       repoPath: "extensions/example",
       unitName: "@workspace-extensions/example",
@@ -233,6 +234,43 @@ describe("build service extension diagnostics", () => {
       title: "Hello Svelte",
     });
     expect(buildSystem.listBuildUnits).toHaveBeenCalledWith("ctx:feature", ["panel"]);
+  });
+
+  it("returns declared file-backed icons as transport-stable data images", async () => {
+    const buildSystem = makeBuildSystem();
+    vi.mocked(buildSystem.listBuildUnits).mockResolvedValue([
+      {
+        unitName: "@workspace-panels/hello-svelte",
+        unitPath: "panels/hello-svelte",
+        kind: "panel",
+        stateHash: "state:panel",
+        effectiveVersion: "ev-panel",
+        manifest: { title: "Hello Svelte", icon: "./assets/icon.svg" },
+      },
+    ]);
+    vi.mocked(buildSystem.getUnitIcon).mockResolvedValue({
+      source: "panels/hello-svelte",
+      path: "assets/icon.svg",
+      stateHash: `state:${"a".repeat(64)}`,
+      effectiveVersion: "ev-1",
+      contentHash: "icon-hash",
+      contentType: "image/svg+xml",
+      body: Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"/>'),
+    });
+    const service = createBuildService({ buildSystem, listUnits: () => [] });
+
+    await expect(
+      service.handler({ caller: createVerifiedCaller("shell", "shell") }, "getPanelMetadata", [
+        "panels/hello-svelte",
+        "ctx:feature",
+      ])
+    ).resolves.toMatchObject({
+      source: "panels/hello-svelte",
+      icon: `data:image/svg+xml;base64,${Buffer.from(
+        '<svg xmlns="http://www.w3.org/2000/svg"/>'
+      ).toString("base64")}`,
+    });
+    expect(buildSystem.getUnitIcon).toHaveBeenCalledWith("panels/hello-svelte", "assets/icon.svg");
   });
 
   it("runs retention diagnostics without accepting caller-maintained roots", async () => {

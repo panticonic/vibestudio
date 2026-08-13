@@ -782,6 +782,25 @@ state.
 - Paths outside the Base projection are untouched.
 - Unknown paths require semantic classification, not a new hard-coded category.
 
+### Daily host/Base development
+
+`pnpm dev` boots the local host against the exact published Base pointer. Host
+changes that preserve the current contract require no Base publication. To test
+an unpublished Base-only or coordinated host/Base checkpoint, commit the Base
+checkout and launch explicitly with:
+
+```sh
+pnpm dev -- --base-checkout /absolute/path/to/vibestudio-workspace-base
+```
+
+`VIBESTUDIO_USERLAND_ROOT` selects the same explicit checkout for automation.
+Startup derives the exact committed HEAD pin, rejects tracked worktree changes,
+excludes reported untracked files, writes that pin into the fresh development
+workspace descriptor, and seeds the ordinary immutable acquisition coordinate
+from the local Git object database. The downstream bootstrap is identical to a
+remote release. Publication is therefore a promotion step after pair evidence,
+not part of the edit/test loop.
+
 ### Isolated child lifecycle
 
 - Parent state remains intact.

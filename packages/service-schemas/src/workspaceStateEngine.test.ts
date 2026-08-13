@@ -21,4 +21,22 @@ describe("workspace state entity source identity", () => {
       },
     ]);
   });
+
+  it("keeps host-derived root ownership on the internal slot-create command", () => {
+    expect(
+      workspaceStateEngineMethods.slotCreate.args.parse([
+        {
+          slotId: "panel:root",
+          parentSlotId: null,
+          ownerUserId: "user-verified",
+        },
+      ])
+    ).toEqual([
+      {
+        slotId: "panel:root",
+        parentSlotId: null,
+        ownerUserId: "user-verified",
+      },
+    ]);
+  });
 });

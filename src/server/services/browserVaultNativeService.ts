@@ -9,7 +9,7 @@ import { INTERNAL_DO_SOURCE } from "../internalDOs/internalDoLoader.js";
 const SERVICE = "browserVaultNative";
 
 /**
- * Host-only entry to protected browser material.
+ * Native-host entry to protected browser material.
  *
  * Workspace code never resolves BrowserVaultDO and never receives this service.
  * Electron binds calls to the active WebContents/origin before using this
@@ -21,6 +21,19 @@ export function createBrowserVaultNativeService(deps: {
   workspaceId: string;
 }): ServiceDefinition {
   const call = <T>(ctx: ServiceContext, method: string, args: unknown[]): Promise<T> => {
+    // `shell` is already the native-host caller kind: the literal id "shell" is
+    // refused over WebSocket, and every admitted shell principal — the desktop
+    // console (`electron-main`, `headless-host`) as much as a paired
+    // `shell:<device>` credential — carries a hub-resolved human subject.
+    // Matching on the id prefix instead would lock the desktop app itself out
+    // of its own password, cookie, and autofill storage.
+    const trustedShell =
+      ctx.caller.runtime.kind === "shell" &&
+      !!ctx.caller.subject?.userId &&
+      ctx.caller.subject.userId !== "system";
+    if (ctx.caller.hostOriginated !== true && !trustedShell) {
+      throw new Error("Protected browser storage requires the product host or authenticated shell");
+    }
     const identity = browserEnvironmentIdentityFromContext(deps.workspaceId, ctx);
     return deps.doDispatch.dispatch(
       {
@@ -35,8 +48,8 @@ export function createBrowserVaultNativeService(deps: {
 
   return {
     name: SERVICE,
-    description: "Host-only origin-bound access to protected browser material",
-    authority: { principals: ["host"] },
+    description: "Native-host access to protected browser material",
+    authority: { principals: ["host", "user"] },
     methods: browserVaultNativeMethods,
     handler: defineServiceHandler(SERVICE, browserVaultNativeMethods, {
       listPasswordSummaries: (ctx, args) => call(ctx, "listPasswordSummaries", args),

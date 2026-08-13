@@ -286,17 +286,18 @@ export class PanelManager {
   }
 
   /** Whether durable query state already contains a root for this source. */
-  async hasRootPanelSource(source: string): Promise<boolean> {
+  async hasRootPanelSource(source: string, clients?: PanelOperationClients): Promise<boolean> {
+    const workspaceState = clients?.workspaceState ?? this.workspaceState;
     let groupCursor: string | undefined;
     do {
-      const groups = await this.workspaceState.getPanelTreeRootGroups({
+      const groups = await workspaceState.getPanelTreeRootGroups({
         cursor: groupCursor,
         limit: 200,
       });
       for (const group of groups.groups) {
         let nodeCursor: string | undefined;
         do {
-          const page = await this.workspaceState.getPanelTreePage({
+          const page = await workspaceState.getPanelTreePage({
             group: { kind: "roots", ownerUserId: group.ownerUserId },
             cursor: nodeCursor,
             limit: 200,

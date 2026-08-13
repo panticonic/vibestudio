@@ -139,6 +139,28 @@ export async function discoverAndSeedRootTemplateSnapshotFromCheckout(input: {
   snapshot: ExactGitSnapshot;
   untrackedPaths: string[];
 }> {
+  const discovered = await inspectRootTemplateCheckout(input);
+  const snapshot = await seedRootTemplateSnapshotFromCheckout({
+    statePath: input.statePath,
+    checkout: input.checkout,
+    pin: discovered.pin,
+    git: input.git,
+    sink: input.sink,
+    ...(input.fs ? { fs: input.fs } : {}),
+  });
+  return { ...discovered, snapshot };
+}
+
+/** Resolve an explicitly selected checkout HEAD without publishing or seeding it. */
+export async function inspectRootTemplateCheckout(input: {
+  checkout: string;
+  url: string;
+  git: GitClient;
+  sink: SnapshotContentSink;
+}): Promise<{
+  pin: WorkspaceTemplatePin;
+  untrackedPaths: string[];
+}> {
   const checkout = path.resolve(input.checkout);
   const status = await input.git.status(checkout);
   if (!status.commit) throw new Error(`Local root template checkout ${checkout} has no commit`);
@@ -171,13 +193,5 @@ export async function discoverAndSeedRootTemplateSnapshotFromCheckout(input: {
     commit: observed.commit,
     snapshot: observed.snapshot,
   }) as WorkspaceTemplatePin;
-  const snapshot = await seedRootTemplateSnapshotFromCheckout({
-    statePath: input.statePath,
-    checkout,
-    pin,
-    git: input.git,
-    sink: input.sink,
-    ...(input.fs ? { fs: input.fs } : {}),
-  });
-  return { pin, snapshot, untrackedPaths };
+  return { pin, untrackedPaths };
 }

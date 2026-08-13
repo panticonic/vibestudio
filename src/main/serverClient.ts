@@ -113,6 +113,8 @@ export interface ServerClient {
     args: unknown[],
     options?: RpcCallOptions
   ): Promise<unknown>;
+  /** Relay one already-formed envelope over an app principal's scoped session. */
+  sendAs(caller: ScopedServerCaller, envelope: RpcEnvelope): Promise<void>;
   /** Forward server-originated messages for an Electron-hosted runtime principal. */
   addMessageListener(caller: ScopedServerCaller, listener: ServerMessageListener): () => void;
   /**
@@ -263,7 +265,10 @@ export async function createServerClient(
   const scopedKey = (caller: ScopedServerCaller): string =>
     `${caller.callerKind}\x00${caller.callerId}`;
 
-  const createScopedClient = async (caller: ScopedServerCaller): Promise<ScopedClient> => {
+  const createScopedClient = async (
+    caller: ScopedServerCaller,
+    onUnrecoverable: () => void
+  ): Promise<ScopedClient> => {
     // Only app principals get a scoped runtime connection. A panel authenticates
     // its own direct connection, which holds the panel lease; a second
     // host-opened connection for the same panel is rejected by the lease gate.
@@ -272,15 +277,33 @@ export async function createServerClient(
     if (caller.callerKind !== "app") {
       throw new Error(`Scoped server RPC is not available for ${caller.callerKind} callers`);
     }
-    const grant = await authClient.grantConnection(caller.callerId);
+    let activeGrantToken = (await authClient.grantConnection(caller.callerId)).token;
     const scopedTransport = wsClientTransport({
       selfId: caller.callerId,
       getWsUrl,
-      reconnect: false,
+      // The renderer owns pending direct-target RPC state. Keep its exact
+      // authenticated app session alive across a transient socket loss so the
+      // server's routed response replay can settle those calls. Connection
+      // grants are one-shot, therefore every reopen obtains a fresh grant.
+      reconnect: true,
       logPrefix: `ServerClient:${caller.callerId}`,
       adapter: {
         now: () => Date.now(),
-        getAuthToken: async () => grant.token,
+        getAuthToken: async () => activeGrantToken,
+        refreshAuthToken: async () => {
+          try {
+            activeGrantToken = (await authClient.grantConnection(caller.callerId)).token;
+            return activeGrantToken;
+          } catch (error) {
+            // The transport stops reconnecting once a refresh fails, so this
+            // session is finished for good. Drop it from the cache now: a
+            // principal that cannot mint a grant this instant may well be
+            // mintable after the next app registration, and without this the
+            // wedged socket would be reused for the rest of the process.
+            onUnrecoverable();
+            throw error;
+          }
+        },
         createSocket: (url, protocols) => new NodeWsLike(new WebSocket(url, protocols)),
       },
     });
@@ -288,9 +311,6 @@ export async function createServerClient(
       selfId: caller.callerId,
       callerKind: caller.callerKind,
       transport: scopedTransport,
-    });
-    scopedTransport.onStatusChange?.((status) => {
-      if (status === "disconnected") scopedClients.delete(scopedKey(caller));
     });
     scopedTransport.onMessage((envelope) => {
       for (const listener of scopedListeners.get(scopedKey(caller)) ?? []) {
@@ -308,16 +328,18 @@ export async function createServerClient(
   const getScopedClient = async (caller: ScopedServerCaller): Promise<ScopedClient> => {
     const key = scopedKey(caller);
     const existing = scopedClients.get(key);
-    if (existing) {
-      const client = await existing;
-      if (client.transport.status?.() === "connected") return client;
-      scopedClients.delete(key);
-      void client.close();
-    }
-    const next = createScopedClient(caller).catch((err) => {
-      scopedClients.delete(key);
+    if (existing) return existing;
+    let entry: Promise<ScopedClient> | null = null;
+    // Only ever evict this exact session; a later call may already have
+    // installed a healthy replacement under the same key.
+    const evict = (): void => {
+      if (entry && scopedClients.get(key) === entry) scopedClients.delete(key);
+    };
+    const next = createScopedClient(caller, evict).catch((err) => {
+      evict();
       throw err;
     });
+    entry = next;
     scopedClients.set(key, next);
     return next;
   };
@@ -366,6 +388,10 @@ export async function createServerClient(
       // there is no shell→runtime proxy.
       const client = await getScopedClient(caller);
       return client.rpc.call("main", `${service}.${method}`, args, options);
+    },
+    async sendAs(caller: ScopedServerCaller, envelope: RpcEnvelope): Promise<void> {
+      const client = await getScopedClient(caller);
+      await client.transport.send(envelope);
     },
     async streamAs(
       caller: ScopedServerCaller,

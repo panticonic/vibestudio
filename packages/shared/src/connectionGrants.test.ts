@@ -120,11 +120,32 @@ describe("ConnectionGrantService", () => {
     grants.stop();
   });
 
+  it("retains the authenticated human bound by the grant issuer", () => {
+    const entityCache = new EntityCache();
+    entityCache._onActivate(makePanelRecord("panel:one"));
+    const grants = new ConnectionGrantService({ entityCache });
+    const subject = { userId: "usr_one", handle: "one" };
+    const { token } = grants.grant("panel:one", "shell:test", { subject });
+
+    expect(grants.redeem(token)).toEqual({
+      principalId: "panel:one",
+      issuedBy: "shell:test",
+      subject,
+    });
+    expect(grants.validate(token)).toEqual({
+      principalId: "panel:one",
+      principalKind: "panel",
+      issuedBy: "shell:test",
+      subject,
+    });
+    grants.stop();
+  });
+
   it("keeps redeemed grants valid for the active principal until revocation", async () => {
     const entityCache = new EntityCache();
     entityCache._onActivate(makePanelRecord("panel:one"));
     const grants = new ConnectionGrantService({ entityCache });
-    const { token } = grants.grant("panel:one", "shell:test", 10);
+    const { token } = grants.grant("panel:one", "shell:test", { ttlMs: 10 });
 
     expect(grants.redeem(token)).toEqual({ principalId: "panel:one", issuedBy: "shell:test" });
     expect(grants.validate(token)).toEqual({
@@ -215,7 +236,7 @@ describe("ConnectionGrantService", () => {
     const entityCache = new EntityCache();
     entityCache._onActivate(makePanelRecord("panel:one"));
     const grants = new ConnectionGrantService({ entityCache });
-    const { token } = grants.grant("panel:one", "shell:test", 1);
+    const { token } = grants.grant("panel:one", "shell:test", { ttlMs: 1 });
     await new Promise((resolve) => setTimeout(resolve, 5));
 
     expect(grants.redeem(token)).toBeNull();

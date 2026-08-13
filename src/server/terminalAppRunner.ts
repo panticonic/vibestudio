@@ -87,11 +87,10 @@ export class TerminalAppRunner {
     );
     if (!artifact) throw new Error(`Terminal app ${launch.appId} has no primary artifact`);
     const entryPath = artifactFilePath(launch.build, artifact);
-    const rpcGrant = this.deps.connectionGrants.grant(
-      launch.appId,
-      "server",
-      TERMINAL_APP_CONNECTION_GRANT_TTL_MS
-    );
+    const rpcGrant = this.deps.connectionGrants.grant(launch.appId, "server", {
+      ttlMs: TERMINAL_APP_CONNECTION_GRANT_TTL_MS,
+      subject: { userId: "system", handle: "system" },
+    });
     const connectionId = `terminal:${launch.appId}:${launch.buildKey}`;
     const proc = createProcessAdapter(
       entryPath,

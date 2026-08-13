@@ -140,7 +140,8 @@ describe("mobile script platform and relay guarantees", () => {
     expect(source).toContain('this.events.on("panel:executionActivated"');
     expect(source).toContain('this.events.subscribe("panel:executionActivated")');
     expect(source).toContain("handleExecutionActivated");
-    expect(source).not.toContain('this.events.subscribe("panel-presentation-changed")');
+    expect(source).toContain('this.events.subscribe("panel-presentation-changed")');
+    expect(source).toContain("refreshPresentations");
   });
 
   it("keeps observing launch approval resolved by the desktop or server", () => {

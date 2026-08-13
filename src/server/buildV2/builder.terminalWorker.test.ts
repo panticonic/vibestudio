@@ -59,7 +59,7 @@ describe("buildUnit terminal worker builds", () => {
       executionStateForContent: (stateHash) => ({ kind: "event", eventId: `event:${stateHash}` }),
     });
     // Resolve external npm deps (yoga-layout) from the repo's real node_modules.
-    initBuilder([path.join(REPO_ROOT, "node_modules")]);
+    initBuilder([path.join(REPO_ROOT, "node_modules")], REPO_ROOT);
   });
 
   afterEach(() => {

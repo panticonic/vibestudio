@@ -6,6 +6,7 @@ import {
 } from "./loader.js";
 import type { CentralDataManager } from "@vibestudio/shared/centralData";
 import { readBaseTemplateRelease } from "./baseTemplateRelease.js";
+import type { WorkspaceTemplatePin } from "@vibestudio/workspace-contracts/types";
 
 export interface ResolveLocalWorkspaceStartupOpts {
   appRoot: string;
@@ -16,6 +17,8 @@ export interface ResolveLocalWorkspaceStartupOpts {
   requireExplicitSelection?: boolean;
   /** Authoritative hub identity for a child workspace created on this disk. */
   workspaceId?: string;
+  /** Explicit exact root for a newly created child; existing workspaces ignore it. */
+  rootTemplate?: WorkspaceTemplatePin;
 }
 
 export interface LocalWorkspaceStartup {
@@ -54,6 +57,7 @@ export function resolveLocalWorkspaceStartup(
       appRoot: opts.appRoot,
       init: opts.init,
       workspaceId: opts.workspaceId,
+      ...(opts.rootTemplate ? { rootTemplate: opts.rootTemplate } : {}),
     });
     return {
       resolved,
@@ -69,6 +73,7 @@ export function resolveLocalWorkspaceStartup(
           appRoot: opts.appRoot,
           init: opts.init,
           workspaceId: opts.workspaceId,
+          ...(opts.rootTemplate ? { rootTemplate: opts.rootTemplate } : {}),
         });
     return { resolved, isEphemeral: false };
   }
@@ -94,6 +99,7 @@ export function resolveLocalWorkspaceStartup(
       appRoot: opts.appRoot,
       init: true,
       workspaceId: opts.workspaceId,
+      ...(opts.rootTemplate ? { rootTemplate: opts.rootTemplate } : {}),
     }),
     isEphemeral: false,
   };

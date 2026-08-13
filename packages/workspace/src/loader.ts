@@ -461,6 +461,8 @@ export interface ResolveWorkspaceOpts {
   init?: boolean;
   /** Hub-allocated opaque identity for a newly created managed workspace. */
   workspaceId?: string;
+  /** Explicit exact root selected by a development or management caller. */
+  rootTemplate?: WorkspaceTemplatePin;
 }
 
 export interface ResolvedWorkspace {
@@ -522,7 +524,7 @@ export function resolveOrCreateWorkspace(opts: ResolveWorkspaceOpts): ResolvedWo
     if (!opts.appRoot) {
       throw new Error("External-root workspace creation requires the host app root");
     }
-    const { baseTemplate } = readBaseTemplateRelease(opts.appRoot);
+    const baseTemplate = opts.rootTemplate ?? readBaseTemplateRelease(opts.appRoot).baseTemplate;
     initWorkspace(name, {
       rootTemplate: baseTemplate,
       workspaceId: opts.workspaceId ?? createWorkspaceId(),

@@ -11,7 +11,10 @@ import { setBuildRootConfig } from "./effectiveVersion.js";
 import { setBuildSourceProvider, workingTreeSourceProvider } from "./buildSource.js";
 import { setBuildExecutionIdentityContext } from "./buildStore.js";
 beforeAll(() => {
-  initBuilder(path.resolve(__dirname, "../../../node_modules"));
+  initBuilder(
+    path.resolve(__dirname, "../../../node_modules"),
+    path.resolve(__dirname, "../../..")
+  );
   setBuildSourceProvider(workingTreeSourceProvider());
 });
 afterAll(() => setBuildSourceProvider(null));
@@ -326,7 +329,7 @@ describe("buildUnit app builds", () => {
       JSON.stringify({ name: "@platform/fake", version: "0.1.0", type: "module" })
     );
     fs.writeFileSync(path.join(platformPackage, "src", "index.ts"), "export const fake = true;\n");
-    initBuilder(testNodeModules);
+    initBuilder(testNodeModules, path.dirname(testNodeModules));
     const appDir = path.join(workspaceRoot, "apps", "mobile");
     fs.mkdirSync(appDir, { recursive: true });
     fs.writeFileSync(
@@ -406,7 +409,10 @@ describe("buildUnit app builds", () => {
         SOURCE_STATE_HASH
       );
     } finally {
-      initBuilder(path.resolve(__dirname, "../../../node_modules"));
+      initBuilder(
+        path.resolve(__dirname, "../../../node_modules"),
+        path.resolve(__dirname, "../../..")
+      );
     }
 
     expect(result.metadata).toMatchObject({

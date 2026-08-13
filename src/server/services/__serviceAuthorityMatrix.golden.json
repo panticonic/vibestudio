@@ -949,14 +949,16 @@
   "browserVaultNative": {
     "service": {
       "principals": [
-        "host"
+        "host",
+        "user"
       ]
     },
     "methods": {
       "addCookiesBatch": {
         "authority": {
           "principals": [
-            "host"
+            "host",
+            "user"
           ]
         },
         "access": {
@@ -966,8 +968,8 @@
           "tier": "open",
           "session": "family",
           "residency": "native-effect",
-          "family": "browserVaultNative.host",
-          "rationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service."
+          "family": "browserVaultNative.trusted-shell",
+          "rationale": "Protected browser material is reachable only by the product host or its authenticated human shell; workspace code has no route to this service."
         },
         "capability": null,
         "presentation": null
@@ -975,7 +977,8 @@
       "addFormFillBatch": {
         "authority": {
           "principals": [
-            "host"
+            "host",
+            "user"
           ]
         },
         "access": {
@@ -985,8 +988,8 @@
           "tier": "open",
           "session": "family",
           "residency": "native-effect",
-          "family": "browserVaultNative.host",
-          "rationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service."
+          "family": "browserVaultNative.trusted-shell",
+          "rationale": "Protected browser material is reachable only by the product host or its authenticated human shell; workspace code has no route to this service."
         },
         "capability": null,
         "presentation": null
@@ -994,7 +997,8 @@
       "addFormFillValue": {
         "authority": {
           "principals": [
-            "host"
+            "host",
+            "user"
           ]
         },
         "access": {
@@ -1004,8 +1008,8 @@
           "tier": "open",
           "session": "family",
           "residency": "native-effect",
-          "family": "browserVaultNative.host",
-          "rationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service."
+          "family": "browserVaultNative.trusted-shell",
+          "rationale": "Protected browser material is reachable only by the product host or its authenticated human shell; workspace code has no route to this service."
         },
         "capability": null,
         "presentation": null
@@ -1013,7 +1017,8 @@
       "addNeverSave": {
         "authority": {
           "principals": [
-            "host"
+            "host",
+            "user"
           ]
         },
         "access": {
@@ -1023,8 +1028,8 @@
           "tier": "open",
           "session": "family",
           "residency": "native-effect",
-          "family": "browserVaultNative.host",
-          "rationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service."
+          "family": "browserVaultNative.trusted-shell",
+          "rationale": "Protected browser material is reachable only by the product host or its authenticated human shell; workspace code has no route to this service."
         },
         "capability": null,
         "presentation": null
@@ -1032,7 +1037,8 @@
       "addPassword": {
         "authority": {
           "principals": [
-            "host"
+            "host",
+            "user"
           ]
         },
         "access": {
@@ -1042,8 +1048,8 @@
           "tier": "open",
           "session": "family",
           "residency": "native-effect",
-          "family": "browserVaultNative.host",
-          "rationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service."
+          "family": "browserVaultNative.trusted-shell",
+          "rationale": "Protected browser material is reachable only by the product host or its authenticated human shell; workspace code has no route to this service."
         },
         "capability": null,
         "presentation": null
@@ -1051,7 +1057,8 @@
       "addPasswordsBatch": {
         "authority": {
           "principals": [
-            "host"
+            "host",
+            "user"
           ]
         },
         "access": {
@@ -1061,8 +1068,8 @@
           "tier": "open",
           "session": "family",
           "residency": "native-effect",
-          "family": "browserVaultNative.host",
-          "rationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service."
+          "family": "browserVaultNative.trusted-shell",
+          "rationale": "Protected browser material is reachable only by the product host or its authenticated human shell; workspace code has no route to this service."
         },
         "capability": null,
         "presentation": null
@@ -1070,7 +1077,8 @@
       "applyCookieMutations": {
         "authority": {
           "principals": [
-            "host"
+            "host",
+            "user"
           ]
         },
         "access": {
@@ -1080,8 +1088,8 @@
           "tier": "open",
           "session": "family",
           "residency": "native-effect",
-          "family": "browserVaultNative.host",
-          "rationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service."
+          "family": "browserVaultNative.trusted-shell",
+          "rationale": "Protected browser material is reachable only by the product host or its authenticated human shell; workspace code has no route to this service."
         },
         "capability": null,
         "presentation": null
@@ -1089,7 +1097,8 @@
       "clearAllCookies": {
         "authority": {
           "principals": [
-            "host"
+            "host",
+            "user"
           ]
         },
         "access": {
@@ -1099,8 +1108,8 @@
           "tier": "open",
           "session": "family",
           "residency": "native-effect",
-          "family": "browserVaultNative.host",
-          "rationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service."
+          "family": "browserVaultNative.trusted-shell",
+          "rationale": "Protected browser material is reachable only by the product host or its authenticated human shell; workspace code has no route to this service."
         },
         "capability": null,
         "presentation": null
@@ -1108,7 +1117,8 @@
       "clearCookiesForOrigin": {
         "authority": {
           "principals": [
-            "host"
+            "host",
+            "user"
           ]
         },
         "access": {
@@ -1118,8 +1128,8 @@
           "tier": "open",
           "session": "family",
           "residency": "native-effect",
-          "family": "browserVaultNative.host",
-          "rationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service."
+          "family": "browserVaultNative.trusted-shell",
+          "rationale": "Protected browser material is reachable only by the product host or its authenticated human shell; workspace code has no route to this service."
         },
         "capability": null,
         "presentation": null
@@ -1127,7 +1137,8 @@
       "clearFormFillValues": {
         "authority": {
           "principals": [
-            "host"
+            "host",
+            "user"
           ]
         },
         "access": {
@@ -1137,8 +1148,8 @@
           "tier": "open",
           "session": "family",
           "residency": "native-effect",
-          "family": "browserVaultNative.host",
-          "rationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service."
+          "family": "browserVaultNative.trusted-shell",
+          "rationale": "Protected browser material is reachable only by the product host or its authenticated human shell; workspace code has no route to this service."
         },
         "capability": null,
         "presentation": null
@@ -1146,7 +1157,8 @@
       "deleteFormFillValue": {
         "authority": {
           "principals": [
-            "host"
+            "host",
+            "user"
           ]
         },
         "access": {
@@ -1156,8 +1168,8 @@
           "tier": "open",
           "session": "family",
           "residency": "native-effect",
-          "family": "browserVaultNative.host",
-          "rationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service."
+          "family": "browserVaultNative.trusted-shell",
+          "rationale": "Protected browser material is reachable only by the product host or its authenticated human shell; workspace code has no route to this service."
         },
         "capability": null,
         "presentation": null
@@ -1165,7 +1177,8 @@
       "deletePassword": {
         "authority": {
           "principals": [
-            "host"
+            "host",
+            "user"
           ]
         },
         "access": {
@@ -1175,8 +1188,8 @@
           "tier": "open",
           "session": "family",
           "residency": "native-effect",
-          "family": "browserVaultNative.host",
-          "rationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service."
+          "family": "browserVaultNative.trusted-shell",
+          "rationale": "Protected browser material is reachable only by the product host or its authenticated human shell; workspace code has no route to this service."
         },
         "capability": null,
         "presentation": null
@@ -1184,7 +1197,8 @@
       "endBrowserSession": {
         "authority": {
           "principals": [
-            "host"
+            "host",
+            "user"
           ]
         },
         "access": {
@@ -1194,8 +1208,8 @@
           "tier": "open",
           "session": "family",
           "residency": "native-effect",
-          "family": "browserVaultNative.host",
-          "rationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service."
+          "family": "browserVaultNative.trusted-shell",
+          "rationale": "Protected browser material is reachable only by the product host or its authenticated human shell; workspace code has no route to this service."
         },
         "capability": null,
         "presentation": null
@@ -1203,7 +1217,8 @@
       "getCookiesForOrigin": {
         "authority": {
           "principals": [
-            "host"
+            "host",
+            "user"
           ]
         },
         "access": {
@@ -1213,8 +1228,8 @@
           "tier": "open",
           "session": "family",
           "residency": "native-effect",
-          "family": "browserVaultNative.host",
-          "rationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service."
+          "family": "browserVaultNative.trusted-shell",
+          "rationale": "Protected browser material is reachable only by the product host or its authenticated human shell; workspace code has no route to this service."
         },
         "capability": null,
         "presentation": null
@@ -1222,7 +1237,8 @@
       "getCookieSiteSummary": {
         "authority": {
           "principals": [
-            "host"
+            "host",
+            "user"
           ]
         },
         "access": {
@@ -1232,8 +1248,8 @@
           "tier": "open",
           "session": "family",
           "residency": "native-effect",
-          "family": "browserVaultNative.host",
-          "rationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service."
+          "family": "browserVaultNative.trusted-shell",
+          "rationale": "Protected browser material is reachable only by the product host or its authenticated human shell; workspace code has no route to this service."
         },
         "capability": null,
         "presentation": null
@@ -1241,7 +1257,8 @@
       "getFormFillSuggestions": {
         "authority": {
           "principals": [
-            "host"
+            "host",
+            "user"
           ]
         },
         "access": {
@@ -1251,8 +1268,8 @@
           "tier": "open",
           "session": "family",
           "residency": "native-effect",
-          "family": "browserVaultNative.host",
-          "rationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service."
+          "family": "browserVaultNative.trusted-shell",
+          "rationale": "Protected browser material is reachable only by the product host or its authenticated human shell; workspace code has no route to this service."
         },
         "capability": null,
         "presentation": null
@@ -1260,7 +1277,8 @@
       "getNeverSaveOrigins": {
         "authority": {
           "principals": [
-            "host"
+            "host",
+            "user"
           ]
         },
         "access": {
@@ -1270,8 +1288,8 @@
           "tier": "open",
           "session": "family",
           "residency": "native-effect",
-          "family": "browserVaultNative.host",
-          "rationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service."
+          "family": "browserVaultNative.trusted-shell",
+          "rationale": "Protected browser material is reachable only by the product host or its authenticated human shell; workspace code has no route to this service."
         },
         "capability": null,
         "presentation": null
@@ -1279,7 +1297,8 @@
       "getNeverSaveOriginsPage": {
         "authority": {
           "principals": [
-            "host"
+            "host",
+            "user"
           ]
         },
         "access": {
@@ -1289,8 +1308,8 @@
           "tier": "open",
           "session": "family",
           "residency": "native-effect",
-          "family": "browserVaultNative.host",
-          "rationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service."
+          "family": "browserVaultNative.trusted-shell",
+          "rationale": "Protected browser material is reachable only by the product host or its authenticated human shell; workspace code has no route to this service."
         },
         "capability": null,
         "presentation": null
@@ -1298,7 +1317,8 @@
       "getPasswordForSite": {
         "authority": {
           "principals": [
-            "host"
+            "host",
+            "user"
           ]
         },
         "access": {
@@ -1308,8 +1328,8 @@
           "tier": "open",
           "session": "family",
           "residency": "native-effect",
-          "family": "browserVaultNative.host",
-          "rationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service."
+          "family": "browserVaultNative.trusted-shell",
+          "rationale": "Protected browser material is reachable only by the product host or its authenticated human shell; workspace code has no route to this service."
         },
         "capability": null,
         "presentation": null
@@ -1317,7 +1337,8 @@
       "isNeverSave": {
         "authority": {
           "principals": [
-            "host"
+            "host",
+            "user"
           ]
         },
         "access": {
@@ -1327,8 +1348,8 @@
           "tier": "open",
           "session": "family",
           "residency": "native-effect",
-          "family": "browserVaultNative.host",
-          "rationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service."
+          "family": "browserVaultNative.trusted-shell",
+          "rationale": "Protected browser material is reachable only by the product host or its authenticated human shell; workspace code has no route to this service."
         },
         "capability": null,
         "presentation": null
@@ -1336,7 +1357,8 @@
       "listCookieOrigins": {
         "authority": {
           "principals": [
-            "host"
+            "host",
+            "user"
           ]
         },
         "access": {
@@ -1346,8 +1368,8 @@
           "tier": "open",
           "session": "family",
           "residency": "native-effect",
-          "family": "browserVaultNative.host",
-          "rationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service."
+          "family": "browserVaultNative.trusted-shell",
+          "rationale": "Protected browser material is reachable only by the product host or its authenticated human shell; workspace code has no route to this service."
         },
         "capability": null,
         "presentation": null
@@ -1355,7 +1377,8 @@
       "listCookieOriginsPage": {
         "authority": {
           "principals": [
-            "host"
+            "host",
+            "user"
           ]
         },
         "access": {
@@ -1365,8 +1388,8 @@
           "tier": "open",
           "session": "family",
           "residency": "native-effect",
-          "family": "browserVaultNative.host",
-          "rationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service."
+          "family": "browserVaultNative.trusted-shell",
+          "rationale": "Protected browser material is reachable only by the product host or its authenticated human shell; workspace code has no route to this service."
         },
         "capability": null,
         "presentation": null
@@ -1374,7 +1397,8 @@
       "listCookiesPage": {
         "authority": {
           "principals": [
-            "host"
+            "host",
+            "user"
           ]
         },
         "access": {
@@ -1384,8 +1408,8 @@
           "tier": "open",
           "session": "family",
           "residency": "native-effect",
-          "family": "browserVaultNative.host",
-          "rationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service."
+          "family": "browserVaultNative.trusted-shell",
+          "rationale": "Protected browser material is reachable only by the product host or its authenticated human shell; workspace code has no route to this service."
         },
         "capability": null,
         "presentation": null
@@ -1393,7 +1417,8 @@
       "listFormFillValues": {
         "authority": {
           "principals": [
-            "host"
+            "host",
+            "user"
           ]
         },
         "access": {
@@ -1403,8 +1428,8 @@
           "tier": "open",
           "session": "family",
           "residency": "native-effect",
-          "family": "browserVaultNative.host",
-          "rationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service."
+          "family": "browserVaultNative.trusted-shell",
+          "rationale": "Protected browser material is reachable only by the product host or its authenticated human shell; workspace code has no route to this service."
         },
         "capability": null,
         "presentation": null
@@ -1412,7 +1437,8 @@
       "listFormFillValuesPage": {
         "authority": {
           "principals": [
-            "host"
+            "host",
+            "user"
           ]
         },
         "access": {
@@ -1422,8 +1448,8 @@
           "tier": "open",
           "session": "family",
           "residency": "native-effect",
-          "family": "browserVaultNative.host",
-          "rationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service."
+          "family": "browserVaultNative.trusted-shell",
+          "rationale": "Protected browser material is reachable only by the product host or its authenticated human shell; workspace code has no route to this service."
         },
         "capability": null,
         "presentation": null
@@ -1431,7 +1457,8 @@
       "listPasswordsPage": {
         "authority": {
           "principals": [
-            "host"
+            "host",
+            "user"
           ]
         },
         "access": {
@@ -1441,8 +1468,8 @@
           "tier": "open",
           "session": "family",
           "residency": "native-effect",
-          "family": "browserVaultNative.host",
-          "rationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service."
+          "family": "browserVaultNative.trusted-shell",
+          "rationale": "Protected browser material is reachable only by the product host or its authenticated human shell; workspace code has no route to this service."
         },
         "capability": null,
         "presentation": null
@@ -1450,7 +1477,8 @@
       "listPasswordSummaries": {
         "authority": {
           "principals": [
-            "host"
+            "host",
+            "user"
           ]
         },
         "access": {
@@ -1460,8 +1488,8 @@
           "tier": "open",
           "session": "family",
           "residency": "native-effect",
-          "family": "browserVaultNative.host",
-          "rationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service."
+          "family": "browserVaultNative.trusted-shell",
+          "rationale": "Protected browser material is reachable only by the product host or its authenticated human shell; workspace code has no route to this service."
         },
         "capability": null,
         "presentation": null
@@ -1469,7 +1497,8 @@
       "listPasswordSummariesPage": {
         "authority": {
           "principals": [
-            "host"
+            "host",
+            "user"
           ]
         },
         "access": {
@@ -1479,8 +1508,8 @@
           "tier": "open",
           "session": "family",
           "residency": "native-effect",
-          "family": "browserVaultNative.host",
-          "rationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service."
+          "family": "browserVaultNative.trusted-shell",
+          "rationale": "Protected browser material is reachable only by the product host or its authenticated human shell; workspace code has no route to this service."
         },
         "capability": null,
         "presentation": null
@@ -1488,7 +1517,8 @@
       "markFormFillValueUsed": {
         "authority": {
           "principals": [
-            "host"
+            "host",
+            "user"
           ]
         },
         "access": {
@@ -1498,8 +1528,8 @@
           "tier": "open",
           "session": "family",
           "residency": "native-effect",
-          "family": "browserVaultNative.host",
-          "rationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service."
+          "family": "browserVaultNative.trusted-shell",
+          "rationale": "Protected browser material is reachable only by the product host or its authenticated human shell; workspace code has no route to this service."
         },
         "capability": null,
         "presentation": null
@@ -1507,7 +1537,8 @@
       "removeNeverSave": {
         "authority": {
           "principals": [
-            "host"
+            "host",
+            "user"
           ]
         },
         "access": {
@@ -1517,8 +1548,8 @@
           "tier": "open",
           "session": "family",
           "residency": "native-effect",
-          "family": "browserVaultNative.host",
-          "rationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service."
+          "family": "browserVaultNative.trusted-shell",
+          "rationale": "Protected browser material is reachable only by the product host or its authenticated human shell; workspace code has no route to this service."
         },
         "capability": null,
         "presentation": null
@@ -1526,7 +1557,8 @@
       "updateFormFillValue": {
         "authority": {
           "principals": [
-            "host"
+            "host",
+            "user"
           ]
         },
         "access": {
@@ -1536,8 +1568,8 @@
           "tier": "open",
           "session": "family",
           "residency": "native-effect",
-          "family": "browserVaultNative.host",
-          "rationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service."
+          "family": "browserVaultNative.trusted-shell",
+          "rationale": "Protected browser material is reachable only by the product host or its authenticated human shell; workspace code has no route to this service."
         },
         "capability": null,
         "presentation": null
@@ -1545,7 +1577,8 @@
       "updateLastUsed": {
         "authority": {
           "principals": [
-            "host"
+            "host",
+            "user"
           ]
         },
         "access": {
@@ -1555,8 +1588,8 @@
           "tier": "open",
           "session": "family",
           "residency": "native-effect",
-          "family": "browserVaultNative.host",
-          "rationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service."
+          "family": "browserVaultNative.trusted-shell",
+          "rationale": "Protected browser material is reachable only by the product host or its authenticated human shell; workspace code has no route to this service."
         },
         "capability": null,
         "presentation": null
@@ -1564,7 +1597,8 @@
       "updatePassword": {
         "authority": {
           "principals": [
-            "host"
+            "host",
+            "user"
           ]
         },
         "access": {
@@ -1574,8 +1608,8 @@
           "tier": "open",
           "session": "family",
           "residency": "native-effect",
-          "family": "browserVaultNative.host",
-          "rationale": "Protected browser material is reachable only by authenticated host code; workspace code has no route to this service."
+          "family": "browserVaultNative.trusted-shell",
+          "rationale": "Protected browser material is reachable only by the product host or its authenticated human shell; workspace code has no route to this service."
         },
         "capability": null,
         "presentation": null

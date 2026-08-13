@@ -1,6 +1,7 @@
 import type { ConnectionGrantService } from "@vibestudio/shared/connectionGrants";
 import type { DeviceAuthStore } from "../deviceAuthStore.js";
 import { authError } from "./errors.js";
+import type { User } from "@vibestudio/identity/types";
 
 export type PrincipalGrantTarget = "react-native-app";
 
@@ -20,6 +21,7 @@ export async function refreshPrincipalGrantResponse(
     deviceAuthStore: DeviceAuthStore;
     getServerBootId: () => string;
     getWorkspaceId: () => string;
+    resolveUser: (userId: string) => User | null;
     connectionGrants?: ConnectionGrantService;
     ensureMobileAppReady?: (source?: string | null) => Promise<{
       ready: boolean;
@@ -54,6 +56,10 @@ export async function refreshPrincipalGrantResponse(
     );
   }
   const device = deps.deviceAuthStore.validateRefresh(body.deviceId, body.refreshToken);
+  const user = deps.resolveUser(device.userId);
+  if (!user || user.revokedAt !== undefined) {
+    throw authError("INVALID_DEVICE", "The device owner is unavailable", 401);
+  }
   const readiness = await deps.ensureMobileAppReady?.(body.source ?? null);
   if (readiness && !readiness.ready) {
     throw authError(
@@ -73,7 +79,9 @@ export async function refreshPrincipalGrantResponse(
       503
     );
   }
-  const granted = deps.connectionGrants.grant(callerId, `native-mobile:${body.deviceId}`);
+  const granted = deps.connectionGrants.grant(callerId, `native-mobile:${body.deviceId}`, {
+    subject: { userId: user.id, handle: user.handle },
+  });
   return {
     connectionGrant: granted.token,
     expiresAt: granted.expiresAt,

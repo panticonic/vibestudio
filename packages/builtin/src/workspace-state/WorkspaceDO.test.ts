@@ -637,6 +637,26 @@ describe("WorkspaceDO slot operations", () => {
     expect(instance.slotHistoryRelative("retry-slot", 1)).toBeNull();
   });
 
+  it("binds root ownership into the resumable slot identity", () => {
+    const input = {
+      slotId: "owned-retry-slot",
+      parentSlotId: null,
+      ownerUserId: "user-a",
+    };
+
+    instance.slotCreate(input);
+    expect(() => instance.slotCreate(input)).not.toThrow();
+    expect(() => instance.slotCreate({ ...input, ownerUserId: "user-b" })).toThrow(/ownerUserId/);
+    expect(
+      instance
+        .panelTreePage({
+          group: { kind: "roots", ownerUserId: "user-a" },
+          limit: 10,
+        })
+        .nodes.map((node) => node.slotId)
+    ).toEqual(["owned-retry-slot"]);
+  });
+
   it("treats equivalent JSON with different property order as the same retry", () => {
     const entity = instance.entityActivate(preparedPanelInput({ key: "canonical-entry" }));
     const base = {

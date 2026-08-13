@@ -121,7 +121,7 @@ describe("workspaceStateService — topology authority", () => {
     });
   });
 
-  it("derives current roots from the verified caller instead of caller input", async () => {
+  it("derives current roots from the verified human behind an app caller", async () => {
     const { svc, calls } = makeService({
       dispatchReturns: {
         panelTreePage: {
@@ -132,8 +132,12 @@ describe("workspaceStateService — topology authority", () => {
         },
       },
     });
-    const ctx = makeCtx();
-    ctx.caller.subject = { userId: "usr-current" };
+    const ctx = {
+      caller: {
+        runtime: { kind: "app", id: "@workspace-apps/shell" },
+        subject: { userId: "usr-current" },
+      },
+    };
 
     await svc.handler(ctx as never, "panelTree.rootsForCaller", [{ limit: 50 }]);
 
@@ -278,11 +282,11 @@ describe("workspaceStateService — topology authority", () => {
 });
 
 describe("workspaceStateService — slot-state change hook", () => {
-  it("derives slot.create ownership from the verified caller subject", async () => {
+  it("derives slot.create ownership from the verified human behind an app caller", async () => {
     const { svc, calls } = makeService({});
     const ctx = {
       caller: {
-        runtime: { kind: "shell", id: "shell" },
+        runtime: { kind: "app", id: "@workspace-apps/shell" },
         subject: { userId: "user-verified", username: "verified" },
       },
     };
@@ -301,11 +305,11 @@ describe("workspaceStateService — slot-state change hook", () => {
     });
   });
 
-  it("derives slot.move ownership from the verified caller subject", async () => {
+  it("derives slot.move ownership from the verified human behind an app caller", async () => {
     const { svc, calls } = makeService({});
     const ctx = {
       caller: {
-        runtime: { kind: "shell", id: "shell" },
+        runtime: { kind: "app", id: "@workspace-apps/shell" },
         subject: { userId: "user-verified", username: "verified" },
       },
     };

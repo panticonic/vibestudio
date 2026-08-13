@@ -205,10 +205,16 @@ export function createBuildService(deps: {
           (candidate) => candidate.unitName === unit || candidate.unitPath === unit
         );
         if (!node) return null;
+        const declaredIcon = node.manifest.icon;
+        const resolvedIcon = declaredIcon?.startsWith("./")
+          ? await deps.buildSystem.getUnitIcon(node.unitPath, declaredIcon.slice(2))
+          : null;
         return {
           source: node.unitPath,
           title: node.manifest.title ?? node.unitName,
-          icon: node.manifest.icon,
+          icon: resolvedIcon
+            ? `data:${resolvedIcon.contentType};base64,${resolvedIcon.body.toString("base64")}`
+            : declaredIcon,
           description: node.manifest.description,
           hiddenInLauncher: node.manifest.hiddenInLauncher ?? false,
           stateArgs: node.manifest.stateArgs,

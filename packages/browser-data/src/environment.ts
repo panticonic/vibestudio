@@ -37,6 +37,35 @@ export interface BrowserEnvironmentIdentity {
   environmentKey: string;
 }
 
+export const BROWSER_ENVIRONMENT_KEY_VERSION = "v1";
+
+/**
+ * Canonical, privacy-preserving browser-environment identity material.
+ *
+ * The host and the workspace browser-data provider both hash these exact
+ * bytes. Keeping normalization here prevents either side from inventing an
+ * object key while still leaving the synchronous SHA-256 implementation with
+ * its native runtime.
+ */
+export function browserEnvironmentKeyMaterial(
+  workspaceId: string,
+  ownerUserId: string
+): { workspaceId: string; ownerUserId: string; material: string } {
+  const normalizedWorkspaceId = workspaceId.trim();
+  if (!normalizedWorkspaceId) {
+    throw new Error("Browser environment resolution requires a workspace id");
+  }
+  const normalizedOwnerUserId = ownerUserId.trim();
+  if (!normalizedOwnerUserId || normalizedOwnerUserId === "system") {
+    throw new Error("Browser environment resolution requires a verified user");
+  }
+  return {
+    workspaceId: normalizedWorkspaceId,
+    ownerUserId: normalizedOwnerUserId,
+    material: `${BROWSER_ENVIRONMENT_KEY_VERSION}\x00${normalizedWorkspaceId}\x00${normalizedOwnerUserId}`,
+  };
+}
+
 export const BrowserEnvironmentIdentitySchema = z
   .object({
     workspaceId: z.string().min(1),
