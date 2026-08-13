@@ -477,7 +477,7 @@ export const blobstoreMethods = defineServiceMethods({
     presentation: {
       title: "Restore a stored folder tree",
       action: "restore a stored folder tree",
-      description: "Allows {requesterKind} to restore a stored folder tree.",
+      description: "Recreate a previously stored folder on your computer.",
       group: "files",
       authorityCategory: {
         domain: "files",
@@ -508,7 +508,7 @@ export const blobstoreMethods = defineServiceMethods({
     presentation: {
       title: "Delete stored workspace data",
       action: "delete stored workspace data",
-      description: "Allows {requesterKind} to delete stored workspace data.",
+      description: "Permanently remove stored workspace data.",
       group: "files",
       authorityCategory: {
         domain: "files",

@@ -27,7 +27,7 @@ export const autofillMethods = defineServiceMethods({
       title: "Save this password choice",
       action: "save this password choice",
       description:
-        "Allows {requesterKind} to save a password or remember that password saving is disabled for this site.",
+        "Save a password, or remember not to ask again for this site.",
       group: "credentials",
       authorityCategory: {
         domain: "accounts",
@@ -55,7 +55,7 @@ export const autofillMethods = defineServiceMethods({
       title: "Save form-fill values",
       action: "save personal form-fill values",
       description:
-        "Allows {requesterKind} to save the personal form values shown in a browser submission prompt.",
+        "Save the personal form values you just submitted.",
       group: "credentials",
       authorityCategory: {
         domain: "accounts",

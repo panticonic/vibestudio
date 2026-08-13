@@ -89,7 +89,7 @@ export const serverLogMethods = defineServiceMethods({
     presentation: {
       title: "View server logs",
       action: "view server logs",
-      description: "Allows {requesterKind} to view server logs.",
+      description: "Read the workspace server's recent activity logs.",
       group: "host",
       authorityCategory: {
         domain: "computer",
@@ -119,7 +119,7 @@ export const serverLogMethods = defineServiceMethods({
     presentation: {
       title: "Follow new server log entries",
       action: "follow new server log entries",
-      description: "Allows {requesterKind} to follow new server log entries.",
+      description: "Watch server log entries as they happen in real time.",
       group: "host",
       authorityCategory: {
         domain: "computer",
@@ -145,7 +145,7 @@ export const serverLogMethods = defineServiceMethods({
     presentation: {
       title: "View server log statistics",
       action: "view server log statistics",
-      description: "Allows {requesterKind} to view server log statistics.",
+      description: "See a summary of server log volume and activity.",
       group: "host",
       authorityCategory: {
         domain: "computer",

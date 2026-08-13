@@ -154,7 +154,7 @@ export const browserEnvironmentMethods = defineServiceMethods({
     ...brokerPolicy("getImportHost", {
       title: "Access browser import details",
       action: "access browser import details",
-      description: "Allows {requesterKind} to inspect the available browser import provider.",
+      description: "Check which browser can provide data for import.",
       group: "network",
       authorityCategory: { domain: "web", verb: "see" },
     }),
@@ -175,7 +175,7 @@ export const browserEnvironmentMethods = defineServiceMethods({
     ...brokerPolicy("listImportSources", {
       title: "Find browser profiles to import",
       action: "find browser profiles to import",
-      description: "Allows {requesterKind} to find browser profiles available for import.",
+      description: "Find browser profiles that have data you can import.",
       group: "network",
       authorityCategory: { domain: "web", verb: "see" },
     }),
@@ -200,7 +200,7 @@ export const browserEnvironmentMethods = defineServiceMethods({
     ...brokerPolicy("previewImportSource", {
       title: "Preview browser data for import",
       action: "preview browser data for import",
-      description: "Allows {requesterKind} to preview browser data available for import.",
+      description: "Preview what browser data is available before importing it.",
       group: "network",
       authorityCategory: { domain: "web", verb: "see" },
     }),
@@ -240,7 +240,7 @@ export const browserEnvironmentMethods = defineServiceMethods({
     ...brokerPolicy("startImportRead", {
       title: "Read browser data for import",
       action: "read browser data for import",
-      description: "Allows {requesterKind} to read browser data selected for import.",
+      description: "Read the browser data you selected for import.",
       group: "network",
       authorityCategory: { domain: "web", verb: "see" },
     }),
@@ -304,7 +304,7 @@ export const browserEnvironmentMethods = defineServiceMethods({
     ...brokerPolicy("nextImportFrame", {
       title: "Continue reading browser data",
       action: "continue reading browser data for import",
-      description: "Allows {requesterKind} to continue a browser data import read.",
+      description: "Continue reading browser data during an import.",
       group: "network",
       authorityCategory: { domain: "web", verb: "see" },
     }),
@@ -324,7 +324,7 @@ export const browserEnvironmentMethods = defineServiceMethods({
     ...brokerPolicy("cancelImportRead", {
       title: "Cancel browser data reading",
       action: "cancel browser data reading",
-      description: "Allows {requesterKind} to cancel an active browser data import read.",
+      description: "Stop an in-progress browser data import.",
       group: "network",
       authorityCategory: { domain: "web", verb: "manage" },
     }),
@@ -345,7 +345,7 @@ export const browserEnvironmentMethods = defineServiceMethods({
     ...brokerPolicy("listImportOpenTabs", {
       title: "View browser tabs available to import",
       action: "view browser tabs available to import",
-      description: "Allows {requesterKind} to view browser tabs available for import.",
+      description: "See which browser tabs can be imported.",
       group: "network",
       authorityCategory: { domain: "web", verb: "see" },
     }),
@@ -366,7 +366,7 @@ export const browserEnvironmentMethods = defineServiceMethods({
     ...brokerPolicy("listDownloads", {
       title: "View browser downloads",
       action: "view browser downloads",
-      description: "Allows {requesterKind} to view current and recent browser downloads.",
+      description: "See your current and recent browser downloads.",
       group: "network",
       authorityCategory: { domain: "web", verb: "see" },
     }),
@@ -387,7 +387,7 @@ export const browserEnvironmentMethods = defineServiceMethods({
     ...brokerPolicy("pauseDownload", {
       title: "Pause browser downloads",
       action: "pause browser downloads",
-      description: "Allows {requesterKind} to pause active browser downloads.",
+      description: "Pause downloads that are currently in progress.",
       group: "network",
       authorityCategory: { domain: "web", verb: "manage" },
     }),
@@ -408,7 +408,7 @@ export const browserEnvironmentMethods = defineServiceMethods({
     ...brokerPolicy("resumeDownload", {
       title: "Resume browser downloads",
       action: "resume browser downloads",
-      description: "Allows {requesterKind} to resume paused browser downloads.",
+      description: "Resume downloads that were paused.",
       group: "network",
       authorityCategory: { domain: "web", verb: "manage" },
     }),
@@ -429,7 +429,7 @@ export const browserEnvironmentMethods = defineServiceMethods({
     ...brokerPolicy("cancelDownload", {
       title: "Cancel browser downloads",
       action: "cancel browser downloads",
-      description: "Allows {requesterKind} to cancel active browser downloads.",
+      description: "Cancel downloads that are currently in progress.",
       group: "network",
       authorityCategory: { domain: "web", verb: "manage" },
     }),
@@ -450,7 +450,7 @@ export const browserEnvironmentMethods = defineServiceMethods({
     ...brokerPolicy("openDownload", {
       title: "Open downloaded files",
       action: "open downloaded files",
-      description: "Allows {requesterKind} to open downloaded files on this computer.",
+      description: "Open a downloaded file on this computer.",
       group: "network",
       authorityCategory: { domain: "computer", verb: "act" },
     }),
@@ -471,7 +471,7 @@ export const browserEnvironmentMethods = defineServiceMethods({
     ...brokerPolicy("revealDownload", {
       title: "Show downloaded files",
       action: "show downloaded files on this computer",
-      description: "Allows {requesterKind} to reveal downloaded files in the file manager.",
+      description: "Show a downloaded file in your file manager.",
       group: "network",
       authorityCategory: { domain: "computer", verb: "act" },
     }),

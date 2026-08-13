@@ -57,7 +57,7 @@ export const remoteCredMethods = defineServiceMethods({
     presentation: {
       title: "View the current remote connection",
       action: "view the current remote connection",
-      description: "Allows {requesterKind} to view the current remote connection.",
+      description: "See whether your remote connection is active and which device is paired.",
       group: "credentials",
       authorityCategory: {
         domain: "people",
@@ -82,7 +82,7 @@ export const remoteCredMethods = defineServiceMethods({
     presentation: {
       title: "Pair a remote connection",
       action: "pair a remote connection",
-      description: "Allows {requesterKind} to pair a remote connection.",
+      description: "Set up a new remote connection by pairing with another device.",
       group: "credentials",
       authorityCategory: {
         domain: "people",
@@ -106,7 +106,7 @@ export const remoteCredMethods = defineServiceMethods({
     presentation: {
       title: "Reconnect now",
       action: "reconnect now",
-      description: "Allows {requesterKind} to reconnect now.",
+      description: "Try reconnecting to the remote device right now.",
       group: "credentials",
       authorityCategory: {
         domain: "people",
@@ -131,7 +131,7 @@ export const remoteCredMethods = defineServiceMethods({
     presentation: {
       title: "Clear a remote connection",
       action: "clear a remote connection",
-      description: "Allows {requesterKind} to clear a remote connection.",
+      description: "Remove the saved remote connection so you can pair a different device.",
       group: "credentials",
       authorityCategory: {
         domain: "people",
@@ -155,7 +155,7 @@ export const remoteCredMethods = defineServiceMethods({
     presentation: {
       title: "Restart the remote connection",
       action: "restart the remote connection",
-      description: "Allows {requesterKind} to restart the remote connection.",
+      description: "Restart Vibestudio so a connection change takes effect.",
       group: "credentials",
       authorityCategory: {
         domain: "people",

@@ -893,7 +893,7 @@ export const runtimeMethods = defineServiceMethods({
     presentation: {
       title: "Copy another task's workspace",
       action: "copy another task's workspace",
-      description: "Allows {requesterKind} to copy another task's workspace.",
+      description: "Make a copy of another task's workspace to work from.",
       group: "runtime",
       authorityCategory: {
         domain: "files",
@@ -1409,7 +1409,7 @@ export const runtimeMethods = defineServiceMethods({
       title: "Restore a previous version",
       action: "restore a workspace component to an earlier version",
       description:
-        "Allows {requesterKind} to restore one workspace component to an earlier retained version.",
+        "Roll back a workspace app or service to an earlier saved version.",
       group: "runtime",
       authorityCategory: { domain: "automation", verb: "manage" },
     },

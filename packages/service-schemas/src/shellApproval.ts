@@ -921,7 +921,7 @@ export const shellApprovalMethods = defineServiceMethods({
     presentation: {
       title: "Respond to a workspace request",
       action: "respond to a workspace request",
-      description: "Allows {requesterKind} to respond to a workspace request.",
+      description: "Choose how to handle a request from your workspace.",
       group: "approvals",
       authorityCategory: {
         domain: "safety",
@@ -949,7 +949,7 @@ export const shellApprovalMethods = defineServiceMethods({
     presentation: {
       title: "Respond to an automation plan",
       action: "respond to an automation plan",
-      description: "Allows {requesterKind} to respond to a queued automation plan.",
+      description: "Review and approve or dismiss a queued automation plan.",
       group: "approvals",
       authorityCategory: {
         domain: "safety",
@@ -997,7 +997,7 @@ export const shellApprovalMethods = defineServiceMethods({
     presentation: {
       title: "Add or update parts of this workspace",
       action: "add or update parts of this workspace",
-      description: "Allows {requesterKind} to answer a queued review of arriving parts.",
+      description: "Review and accept or cancel new parts arriving in your workspace.",
       group: "approvals",
       authorityCategory: {
         domain: "safety",
@@ -1028,7 +1028,7 @@ export const shellApprovalMethods = defineServiceMethods({
     presentation: {
       title: "Approve initial workspace access",
       action: "approve initial workspace access",
-      description: "Allows {requesterKind} to approve initial workspace access.",
+      description: "Grant or deny the permissions a workspace needs when it first starts.",
       group: "approvals",
       authorityCategory: {
         domain: "safety",
@@ -1063,7 +1063,7 @@ export const shellApprovalMethods = defineServiceMethods({
     presentation: {
       title: "Submit account-provider settings",
       action: "submit account-provider settings",
-      description: "Allows {requesterKind} to submit account-provider settings.",
+      description: "Save account-provider settings you entered.",
       group: "approvals",
       authorityCategory: {
         domain: "accounts",
@@ -1091,7 +1091,7 @@ export const shellApprovalMethods = defineServiceMethods({
     presentation: {
       title: "Submit account details",
       action: "submit account details",
-      description: "Allows {requesterKind} to submit account details.",
+      description: "Save account details you entered.",
       group: "approvals",
       authorityCategory: {
         domain: "accounts",
@@ -1119,7 +1119,7 @@ export const shellApprovalMethods = defineServiceMethods({
     presentation: {
       title: "Submit a protected value",
       action: "submit a protected value",
-      description: "Allows {requesterKind} to submit a protected value.",
+      description: "Save a sensitive value you entered, like a password or token.",
       group: "approvals",
       authorityCategory: {
         domain: "accounts",
@@ -1147,7 +1147,7 @@ export const shellApprovalMethods = defineServiceMethods({
     presentation: {
       title: "View requests awaiting your decision",
       action: "view requests awaiting your decision",
-      description: "Allows {requesterKind} to view requests awaiting your decision.",
+      description: "See which requests are waiting for you to decide.",
       group: "approvals",
       authorityCategory: {
         domain: "safety",
@@ -1174,7 +1174,7 @@ export const shellApprovalMethods = defineServiceMethods({
     presentation: {
       title: "View requests awaiting your decision",
       action: "view requests awaiting your decision",
-      description: "Allows {requesterKind} to view requests awaiting your decision.",
+      description: "See which requests are waiting for you to decide.",
       group: "approvals",
       authorityCategory: {
         domain: "safety",

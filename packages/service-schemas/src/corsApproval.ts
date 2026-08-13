@@ -70,7 +70,7 @@ export const corsApprovalMethods = defineServiceMethods({
     presentation: {
       title: "Let workspace apps read website responses",
       action: "let workspace apps read website responses",
-      description: "Allows {requesterKind} to let workspace apps read website responses.",
+      description: "Allow a workspace app to read data from another website.",
       group: "network",
       authorityCategory: {
         domain: "web",

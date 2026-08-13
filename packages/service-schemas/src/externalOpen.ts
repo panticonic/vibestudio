@@ -63,7 +63,7 @@ export const externalOpenMethods = defineServiceMethods({
     presentation: {
       title: "Open links in other applications",
       action: "open links in other applications",
-      description: "Allows {requesterKind} to open links in other applications.",
+      description: "Open a link in your browser or another application on this computer.",
       group: "network",
       authorityCategory: {
         domain: "sharing",

@@ -95,7 +95,7 @@ export const authMethods = defineServiceMethods({
     presentation: {
       title: "Allow a new client connection",
       action: "allow a new client connection",
-      description: "Allows {requesterKind} to allow a new client connection.",
+      description: "Grant a new app or panel access to connect to your workspace.",
       group: "accounts",
       authorityCategory: {
         domain: "computer",
@@ -138,7 +138,7 @@ export const authMethods = defineServiceMethods({
       title: "Launch an external subagent",
       action: "launch an external subagent",
       description:
-        "Allows {requesterKind} to launch an external subagent that can act on your behalf in this workspace.",
+        "Launch an external helper agent that can work on your behalf in this workspace.",
       group: "automation",
       authorityCategory: {
         domain: "automation",

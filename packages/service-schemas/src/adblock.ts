@@ -56,7 +56,7 @@ export const adblockMethods = defineServiceMethods({
     presentation: {
       title: "Turn ad blocking on or off",
       action: "turn ad blocking on or off",
-      description: "Allows {requesterKind} to turn ad blocking on or off.",
+      description: "Turn ad blocking on or off for the whole workspace.",
       group: "network",
       authorityCategory: { domain: "web", verb: "manage" },
     },
@@ -78,7 +78,7 @@ export const adblockMethods = defineServiceMethods({
     presentation: {
       title: "Turn an ad-blocking list on or off",
       action: "turn an ad-blocking list on or off",
-      description: "Allows {requesterKind} to turn an ad-blocking list on or off.",
+      description: "Turn a specific ad-blocking filter list on or off.",
       group: "network",
       authorityCategory: { domain: "web", verb: "manage" },
     },
@@ -100,7 +100,7 @@ export const adblockMethods = defineServiceMethods({
     presentation: {
       title: "Add a custom ad-blocking list",
       action: "add a custom ad-blocking list",
-      description: "Allows {requesterKind} to add a custom ad-blocking list.",
+      description: "Add a custom filter list for ad blocking.",
       group: "network",
       authorityCategory: { domain: "web", verb: "manage" },
     },
@@ -122,7 +122,7 @@ export const adblockMethods = defineServiceMethods({
     presentation: {
       title: "Remove a custom ad-blocking list",
       action: "remove a custom ad-blocking list",
-      description: "Allows {requesterKind} to remove a custom ad-blocking list.",
+      description: "Remove a custom filter list from ad blocking.",
       group: "network",
       authorityCategory: { domain: "web", verb: "manage" },
     },
@@ -158,7 +158,7 @@ export const adblockMethods = defineServiceMethods({
     presentation: {
       title: "Resume blocking ads on a website",
       action: "resume blocking ads on a website",
-      description: "Allows {requesterKind} to resume blocking ads on a website.",
+      description: "Start blocking ads again on a website you previously allowed.",
       group: "network",
       authorityCategory: { domain: "web", verb: "manage" },
     },
@@ -195,7 +195,7 @@ export const adblockMethods = defineServiceMethods({
     presentation: {
       title: "Clear ad-blocking statistics",
       action: "clear ad-blocking statistics",
-      description: "Allows {requesterKind} to clear ad-blocking statistics.",
+      description: "Reset the ad-blocking statistics to zero.",
       group: "network",
       authorityCategory: { domain: "web", verb: "manage" },
     },
@@ -217,7 +217,7 @@ export const adblockMethods = defineServiceMethods({
     presentation: {
       title: "Refresh ad blocking",
       action: "refresh ad blocking",
-      description: "Allows {requesterKind} to refresh ad blocking.",
+      description: "Rebuild the ad blocker with the latest filter lists.",
       group: "network",
       authorityCategory: { domain: "web", verb: "manage" },
     },
@@ -281,7 +281,7 @@ export const adblockMethods = defineServiceMethods({
     presentation: {
       title: "Change ad blocking for a panel",
       action: "change ad blocking for a panel",
-      description: "Allows {requesterKind} to change ad blocking for a panel.",
+      description: "Turn ad blocking on or off for a specific panel.",
       group: "network",
       authorityCategory: { domain: "web", verb: "manage" },
     },
@@ -304,7 +304,7 @@ export const adblockMethods = defineServiceMethods({
     presentation: {
       title: "Clear a panel's ad-blocking statistics",
       action: "clear a panel's ad-blocking statistics",
-      description: "Allows {requesterKind} to clear a panel's ad-blocking statistics.",
+      description: "Reset a specific panel's ad-blocking statistics to zero.",
       group: "network",
       authorityCategory: { domain: "web", verb: "manage" },
     },

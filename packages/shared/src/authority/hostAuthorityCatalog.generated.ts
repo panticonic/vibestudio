@@ -614,7 +614,7 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: {
       title: "Allow a new client connection",
       action: "allow a new client connection",
-      description: "Allows {requesterKind} to allow a new client connection.",
+      description: "Grant a new app or panel access to connect to your workspace.",
       group: "accounts",
       authorityCategory: {
         domain: "computer",
@@ -636,7 +636,7 @@ export const HOST_AUTHORITY_METHODS = {
       title: "Launch an external subagent",
       action: "launch an external subagent",
       description:
-        "Allows {requesterKind} to launch an external subagent that can act on your behalf in this workspace.",
+        "Launch an external helper agent that can work on your behalf in this workspace.",
       group: "automation",
       authorityCategory: {
         domain: "automation",
@@ -736,7 +736,7 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: {
       title: "Delete stored workspace data",
       action: "delete stored workspace data",
-      description: "Allows {requesterKind} to delete stored workspace data.",
+      description: "Permanently remove stored workspace data.",
       group: "files",
       authorityCategory: {
         domain: "files",
@@ -877,7 +877,7 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: {
       title: "Restore a stored folder tree",
       action: "restore a stored folder tree",
-      description: "Allows {requesterKind} to restore a stored folder tree.",
+      description: "Recreate a previously stored folder on your computer.",
       group: "files",
       authorityCategory: {
         domain: "files",
@@ -1719,8 +1719,7 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: {
       title: "Inspect build cache retention",
       action: "inspect build cache retention",
-      description:
-        "Allows {requesterKind} to inspect retained and unreferenced build files without removing them.",
+      description: "View cached build files and check which ones are still in use.",
       group: "workspace",
       authorityCategory: {
         domain: "automation",
@@ -2051,7 +2050,7 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: {
       title: "Let workspace apps read website responses",
       action: "let workspace apps read website responses",
-      description: "Allows {requesterKind} to let workspace apps read website responses.",
+      description: "Allow a workspace app to read data from another website.",
       group: "network",
       authorityCategory: {
         domain: "web",
@@ -2071,7 +2070,7 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: {
       title: "View connected-account activity",
       action: "view connected-account activity",
-      description: "Allows {requesterKind} to view connected-account activity.",
+      description: "See the activity log for your connected accounts.",
       group: "credentials",
       authorityCategory: {
         domain: "safety",
@@ -2091,7 +2090,7 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: {
       title: "Cancel account sign-in",
       action: "cancel account sign-in",
-      description: "Allows {requesterKind} to cancel account sign-in.",
+      description: "Cancel an in-progress account sign-in.",
       group: "credentials",
       authorityCategory: {
         domain: "accounts",
@@ -2111,7 +2110,7 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: {
       title: "Save submitted account details",
       action: "save submitted account details",
-      description: "Allows {requesterKind} to save submitted account details.",
+      description: "Save the account details you just entered.",
       group: "credentials",
       authorityCategory: {
         domain: "accounts",
@@ -2132,7 +2131,7 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: {
       title: "Configure an account provider",
       action: "configure an account provider",
-      description: "Allows {requesterKind} to configure an account provider.",
+      description: "Set up the settings needed to connect to an account provider.",
       group: "credentials",
       authorityCategory: {
         domain: "accounts",
@@ -2152,7 +2151,7 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: {
       title: "Connect an account",
       action: "connect an account",
-      description: "Allows {requesterKind} to connect an account.",
+      description: "Sign in to an account and save the connection for future use.",
       group: "credentials",
       authorityCategory: {
         domain: "accounts",
@@ -2173,7 +2172,8 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: {
       title: "Delete account-provider settings",
       action: "delete account-provider settings",
-      description: "Allows {requesterKind} to delete account-provider settings.",
+      description:
+        "Remove saved account-provider settings so new connections can no longer use them.",
       group: "credentials",
       authorityCategory: {
         domain: "accounts",
@@ -2193,7 +2193,7 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: {
       title: "Complete account sign-in",
       action: "complete account sign-in",
-      description: "Allows {requesterKind} to complete account sign-in.",
+      description: "Finish the sign-in process after you approve the account connection.",
       group: "credentials",
       authorityCategory: {
         domain: "accounts",
@@ -2225,7 +2225,7 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: {
       title: "View which connected accounts are stored",
       action: "view which connected accounts are stored",
-      description: "Allows {requesterKind} to view which connected accounts are stored.",
+      description: "See which connected accounts are saved and how they are being used.",
       group: "credentials",
       authorityCategory: {
         domain: "safety",
@@ -2282,7 +2282,7 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: {
       title: "Ask for account details",
       action: "ask for account details",
-      description: "Allows {requesterKind} to ask for account details.",
+      description: "Ask you to enter account details like an API key or token.",
       group: "credentials",
       authorityCategory: {
         domain: "accounts",
@@ -2315,7 +2315,7 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: {
       title: "Disconnect an account",
       action: "disconnect an account",
-      description: "Allows {requesterKind} to disconnect an account.",
+      description: "Disconnect an account and revoke its saved sign-in.",
       group: "credentials",
       authorityCategory: {
         domain: "accounts",
@@ -2335,7 +2335,7 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: {
       title: "Save a connected account",
       action: "save a connected account",
-      description: "Allows {requesterKind} to save a connected account.",
+      description: "Save sign-in details for a connected account.",
       group: "credentials",
       authorityCategory: {
         domain: "accounts",
@@ -2506,8 +2506,7 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: {
       title: "Build exact workspace source",
       action: "build exact workspace source",
-      description:
-        "Allows {requesterKind} to install frozen dependencies and execute one reviewed build closure.",
+      description: "Install dependencies and run the reviewed build for your workspace changes.",
       group: "runtime",
       authorityCategory: {
         domain: "automation",
@@ -2604,8 +2603,7 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: {
       title: "Launch a native development tool",
       action: "launch a native development tool",
-      description:
-        "Allows {requesterKind} to run one reviewed tool in an exact private source tree.",
+      description: "Run a reviewed development tool in a private workspace copy.",
       group: "runtime",
       authorityCategory: {
         domain: "automation",
@@ -2691,8 +2689,7 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: {
       title: "Retire a development build",
       action: "retire a development build",
-      description:
-        "Allows {requesterKind} to remove the private execution root proven by one exact run.",
+      description: "Clean up a development build's private files after the build is finished.",
       group: "runtime",
       authorityCategory: {
         domain: "computer",
@@ -2713,8 +2710,7 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: {
       title: "Retire a native development tool",
       action: "retire a native development tool",
-      description:
-        "Allows {requesterKind} to remove the proven process and private tree for one exact tool.",
+      description: "Stop a running development tool and clean up its private files.",
       group: "runtime",
       authorityCategory: {
         domain: "computer",
@@ -2919,7 +2915,7 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: {
       title: "Reset the code runner",
       action: "reset the code runner",
-      description: "Allows {requesterKind} to reset the code runner.",
+      description: "Clear the code runner and start fresh.",
       group: "runtime",
       authorityCategory: {
         domain: "automation",
@@ -3070,7 +3066,7 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: {
       title: "Open links in other applications",
       action: "open links in other applications",
-      description: "Allows {requesterKind} to open links in other applications.",
+      description: "Open a link in your browser or another application on this computer.",
       group: "network",
       authorityCategory: {
         domain: "sharing",
@@ -3503,7 +3499,7 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: {
       title: "Shut down the workspace host",
       action: "shut down the workspace host",
-      description: "Allows {requesterKind} to shut down the workspace host.",
+      description: "Shut down the workspace server, closing all running tasks.",
       group: "host",
       authorityCategory: {
         domain: "computer",
@@ -4299,7 +4295,7 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: {
       title: "View saved site permissions",
       action: "view saved site permissions",
-      description: "Allows {requesterKind} to view saved site permissions.",
+      description: "See which site permissions have been saved.",
       group: "approvals",
       authorityCategory: {
         domain: "safety",
@@ -4319,7 +4315,7 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: {
       title: "View saved agent choices",
       action: "view saved agent choices",
-      description: "Allows {requesterKind} to view saved choices for agents.",
+      description: "See what choices have been saved for agents.",
       group: "approvals",
       authorityCategory: {
         domain: "safety",
@@ -4339,7 +4335,7 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: {
       title: "Remove a saved site permission",
       action: "remove a saved site permission",
-      description: "Allows {requesterKind} to remove a saved site permission.",
+      description: "Remove a saved site permission so it will be asked again.",
       group: "approvals",
       authorityCategory: {
         domain: "safety",
@@ -4401,7 +4397,7 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: {
       title: "Change saved agent choices",
       action: "change saved agent choices",
-      description: "Allows {requesterKind} to restore or remove saved choices for agents.",
+      description: "Restore or remove saved choices for agents.",
       group: "approvals",
       authorityCategory: {
         domain: "safety",
@@ -4529,7 +4525,7 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: {
       title: "View devices registered for notifications",
       action: "view devices registered for notifications",
-      description: "Allows {requesterKind} to view devices registered for notifications.",
+      description: "See which devices are set up to receive push notifications.",
       group: "notifications",
       authorityCategory: {
         domain: "people",
@@ -4549,7 +4545,7 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: {
       title: "Enable notifications on a device",
       action: "enable notifications on a device",
-      description: "Allows {requesterKind} to enable notifications on a device.",
+      description: "Register a device to receive push notifications.",
       group: "notifications",
       authorityCategory: {
         domain: "people",
@@ -4569,7 +4565,7 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: {
       title: "Send a notification",
       action: "send a notification",
-      description: "Allows {requesterKind} to send a notification.",
+      description: "Deliver a push notification to a registered device.",
       group: "notifications",
       authorityCategory: {
         domain: "sharing",
@@ -4590,7 +4586,7 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: {
       title: "Disable notifications on a device",
       action: "disable notifications on a device",
-      description: "Allows {requesterKind} to disable notifications on a device.",
+      description: "Stop sending push notifications to a device.",
       group: "notifications",
       authorityCategory: {
         domain: "people",
@@ -4818,7 +4814,7 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: {
       title: "Copy another task's workspace",
       action: "copy another task's workspace",
-      description: "Allows {requesterKind} to copy another task's workspace.",
+      description: "Make a copy of another task's workspace to work from.",
       group: "runtime",
       authorityCategory: {
         domain: "files",
@@ -5238,8 +5234,7 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: {
       title: "Restore a previous version",
       action: "restore a workspace component to an earlier version",
-      description:
-        "Allows {requesterKind} to restore one workspace component to an earlier retained version.",
+      description: "Roll back a workspace app or service to an earlier saved version.",
       group: "runtime",
       authorityCategory: {
         domain: "automation",
@@ -5270,7 +5265,7 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: {
       title: "View server logs",
       action: "view server logs",
-      description: "Allows {requesterKind} to view server logs.",
+      description: "Read the workspace server's recent activity logs.",
       group: "host",
       authorityCategory: {
         domain: "computer",
@@ -5290,7 +5285,7 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: {
       title: "View server log statistics",
       action: "view server log statistics",
-      description: "Allows {requesterKind} to view server log statistics.",
+      description: "See a summary of server log volume and activity.",
       group: "host",
       authorityCategory: {
         domain: "computer",
@@ -5310,7 +5305,7 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: {
       title: "Follow new server log entries",
       action: "follow new server log entries",
-      description: "Allows {requesterKind} to follow new server log entries.",
+      description: "Watch server log entries as they happen in real time.",
       group: "host",
       authorityCategory: {
         domain: "computer",
@@ -5331,7 +5326,7 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: {
       title: "View requests awaiting your decision",
       action: "view requests awaiting your decision",
-      description: "Allows {requesterKind} to view requests awaiting your decision.",
+      description: "See which requests are waiting for you to decide.",
       group: "approvals",
       authorityCategory: {
         domain: "safety",
@@ -5352,7 +5347,7 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: {
       title: "View requests awaiting your decision",
       action: "view requests awaiting your decision",
-      description: "Allows {requesterKind} to view requests awaiting your decision.",
+      description: "See which requests are waiting for you to decide.",
       group: "approvals",
       authorityCategory: {
         domain: "safety",
@@ -5373,7 +5368,7 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: {
       title: "Respond to a workspace request",
       action: "respond to a workspace request",
-      description: "Allows {requesterKind} to respond to a workspace request.",
+      description: "Choose how to handle a request from your workspace.",
       group: "approvals",
       authorityCategory: {
         domain: "safety",
@@ -5394,7 +5389,7 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: {
       title: "Approve initial workspace access",
       action: "approve initial workspace access",
-      description: "Allows {requesterKind} to approve initial workspace access.",
+      description: "Grant or deny the permissions a workspace needs when it first starts.",
       group: "approvals",
       authorityCategory: {
         domain: "safety",
@@ -5415,7 +5410,7 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: {
       title: "Add or update parts of this workspace",
       action: "add or update parts of this workspace",
-      description: "Allows {requesterKind} to answer a queued review of arriving parts.",
+      description: "Review and accept or cancel new parts arriving in your workspace.",
       group: "approvals",
       authorityCategory: {
         domain: "safety",
@@ -5436,7 +5431,7 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: {
       title: "Respond to an automation plan",
       action: "respond to an automation plan",
-      description: "Allows {requesterKind} to respond to a queued automation plan.",
+      description: "Review and approve or dismiss a queued automation plan.",
       group: "approvals",
       authorityCategory: {
         domain: "safety",
@@ -5457,7 +5452,7 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: {
       title: "Submit account-provider settings",
       action: "submit account-provider settings",
-      description: "Allows {requesterKind} to submit account-provider settings.",
+      description: "Save account-provider settings you entered.",
       group: "approvals",
       authorityCategory: {
         domain: "accounts",
@@ -5478,7 +5473,7 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: {
       title: "Submit account details",
       action: "submit account details",
-      description: "Allows {requesterKind} to submit account details.",
+      description: "Save account details you entered.",
       group: "approvals",
       authorityCategory: {
         domain: "accounts",
@@ -5499,7 +5494,7 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: {
       title: "Submit a protected value",
       action: "submit a protected value",
-      description: "Allows {requesterKind} to submit a protected value.",
+      description: "Save a sensitive value you entered, like a password or token.",
       group: "approvals",
       authorityCategory: {
         domain: "accounts",
@@ -6500,7 +6495,7 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: {
       title: "Accept incoming web requests",
       action: "accept incoming web requests",
-      description: "Allows {requesterKind} to accept incoming web requests.",
+      description: "Let your workspace receive requests from external websites or services.",
       group: "network",
       authorityCategory: {
         domain: "sharing",
@@ -6521,7 +6516,7 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: {
       title: "View incoming web connections",
       action: "view incoming web connections",
-      description: "Allows {requesterKind} to view incoming web connections.",
+      description: "See which external web connections your workspace is listening on.",
       group: "network",
       authorityCategory: {
         domain: "sharing",
@@ -6542,7 +6537,7 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: {
       title: "Stop accepting an incoming web connection",
       action: "stop accepting an incoming web connection",
-      description: "Allows {requesterKind} to stop accepting an incoming web connection.",
+      description: "Disconnect an incoming web connection so it no longer reaches your workspace.",
       group: "network",
       authorityCategory: {
         domain: "sharing",
@@ -6563,7 +6558,7 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: {
       title: "Replace an incoming web connection's secret",
       action: "replace an incoming web connection's secret",
-      description: "Allows {requesterKind} to replace an incoming web connection's secret.",
+      description: "Generate a new secret key for an incoming web connection.",
       group: "network",
       authorityCategory: {
         domain: "sharing",
@@ -7351,7 +7346,7 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: {
       title: "Apply workspace configuration",
       action: "apply workspace configuration",
-      description: "Allows {requesterKind} to apply an exact reviewed workspace configuration.",
+      description: "Apply a reviewed workspace configuration change.",
       group: "workspace",
       authorityCategory: {
         domain: "automation",
@@ -7372,7 +7367,7 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: {
       title: "Prepare a task workspace folder",
       action: "prepare a task workspace folder",
-      description: "Allows {requesterKind} to prepare a task workspace folder.",
+      description: "Set up a folder for a task to work in.",
       group: "workspace",
       authorityCategory: {
         domain: "files",
@@ -7470,7 +7465,7 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: {
       title: "Change workspace settings",
       action: "change workspace settings",
-      description: "Allows {requesterKind} to change workspace settings.",
+      description: "Change a workspace setting.",
       group: "workspace",
       authorityCategory: {
         domain: "automation",
@@ -7491,7 +7486,7 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: {
       title: "Change startup panels",
       action: "change startup panels",
-      description: "Allows {requesterKind} to change startup panels.",
+      description: "Choose which panels open when this workspace starts.",
       group: "workspace",
       authorityCategory: {
         domain: "automation",
@@ -7937,7 +7932,7 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
   "account-providers.configure": {
     title: "Configure an account provider",
     action: "configure an account provider",
-    description: "Allows {requesterKind} to configure an account provider.",
+    description: "Set up the settings needed to connect to an account provider.",
     group: "credentials",
     authorityCategory: {
       domain: "accounts",
@@ -7947,7 +7942,8 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
   "account-providers.delete": {
     title: "Delete account-provider settings",
     action: "delete account-provider settings",
-    description: "Allows {requesterKind} to delete account-provider settings.",
+    description:
+      "Remove saved account-provider settings so new connections can no longer use them.",
     group: "credentials",
     authorityCategory: {
       domain: "accounts",
@@ -7977,7 +7973,7 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
   "accounts.connect": {
     title: "Cancel account sign-in",
     action: "cancel account sign-in",
-    description: "Allows {requesterKind} to cancel account sign-in.",
+    description: "Cancel an in-progress account sign-in.",
     group: "credentials",
     authorityCategory: {
       domain: "accounts",
@@ -7987,7 +7983,7 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
   "accounts.disconnect": {
     title: "Disconnect an account",
     action: "disconnect an account",
-    description: "Allows {requesterKind} to disconnect an account.",
+    description: "Disconnect an account and revoke its saved sign-in.",
     group: "credentials",
     authorityCategory: {
       domain: "accounts",
@@ -8007,7 +8003,7 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
   "application.shutdown": {
     title: "Shut down the workspace host",
     action: "shut down the workspace host",
-    description: "Allows {requesterKind} to shut down the workspace host.",
+    description: "Shut down the workspace server, closing all running tasks.",
     group: "host",
     authorityCategory: {
       domain: "computer",
@@ -8027,7 +8023,7 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
   "approvals.decide": {
     title: "Respond to a workspace request",
     action: "respond to a workspace request",
-    description: "Allows {requesterKind} to respond to a workspace request.",
+    description: "Choose how to handle a request from your workspace.",
     group: "approvals",
     authorityCategory: {
       domain: "safety",
@@ -8037,7 +8033,7 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
   "approvals.read": {
     title: "View requests awaiting your decision",
     action: "view requests awaiting your decision",
-    description: "Allows {requesterKind} to view requests awaiting your decision.",
+    description: "See which requests are waiting for you to decide.",
     group: "approvals",
     authorityCategory: {
       domain: "safety",
@@ -8069,7 +8065,7 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
   "code-runner.reset": {
     title: "Reset the code runner",
     action: "reset the code runner",
-    description: "Allows {requesterKind} to reset the code runner.",
+    description: "Clear the code runner and start fresh.",
     group: "runtime",
     authorityCategory: {
       domain: "automation",
@@ -8079,7 +8075,7 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
   "connections.approve": {
     title: "Allow a new client connection",
     action: "allow a new client connection",
-    description: "Allows {requesterKind} to allow a new client connection.",
+    description: "Grant a new app or panel access to connect to your workspace.",
     group: "accounts",
     authorityCategory: {
       domain: "computer",
@@ -8109,7 +8105,7 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
   "context.clone": {
     title: "Copy another task's workspace",
     action: "copy another task's workspace",
-    description: "Allows {requesterKind} to copy another task's workspace.",
+    description: "Make a copy of another task's workspace to work from.",
     group: "runtime",
     authorityCategory: {
       domain: "files",
@@ -8119,7 +8115,7 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
   "context.materialize": {
     title: "Prepare a task workspace folder",
     action: "prepare a task workspace folder",
-    description: "Allows {requesterKind} to prepare a task workspace folder.",
+    description: "Set up a folder for a task to work in.",
     group: "workspace",
     authorityCategory: {
       domain: "files",
@@ -8159,7 +8155,7 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
   "credentials.audit.read": {
     title: "View connected-account activity",
     action: "view connected-account activity",
-    description: "Allows {requesterKind} to view connected-account activity.",
+    description: "See the activity log for your connected accounts.",
     group: "credentials",
     authorityCategory: {
       domain: "safety",
@@ -8169,8 +8165,7 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
   "development.native.build.retire": {
     title: "Retire a development build",
     action: "retire a development build",
-    description:
-      "Allows {requesterKind} to remove the private execution root proven by one exact run.",
+    description: "Clean up a development build's private files after the build is finished.",
     group: "runtime",
     authorityCategory: {
       domain: "computer",
@@ -8190,8 +8185,7 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
   "development.native.session.retire": {
     title: "Retire a native development tool",
     action: "retire a native development tool",
-    description:
-      "Allows {requesterKind} to remove the proven process and private tree for one exact tool.",
+    description: "Stop a running development tool and clean up its private files.",
     group: "runtime",
     authorityCategory: {
       domain: "computer",
@@ -8231,7 +8225,7 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
   "external.open": {
     title: "Open links in other applications",
     action: "open links in other applications",
-    description: "Allows {requesterKind} to open links in other applications.",
+    description: "Open a link in your browser or another application on this computer.",
     group: "network",
     authorityCategory: {
       domain: "sharing",
@@ -8251,7 +8245,7 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
   "network.response.read": {
     title: "Let workspace apps read website responses",
     action: "let workspace apps read website responses",
-    description: "Allows {requesterKind} to let workspace apps read website responses.",
+    description: "Allow a workspace app to read data from another website.",
     group: "network",
     authorityCategory: {
       domain: "web",
@@ -8291,7 +8285,7 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
   "permissions.read": {
     title: "View saved site permissions",
     action: "view saved site permissions",
-    description: "Allows {requesterKind} to view saved site permissions.",
+    description: "See which site permissions have been saved.",
     group: "approvals",
     authorityCategory: {
       domain: "safety",
@@ -8301,7 +8295,7 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
   "permissions.revoke": {
     title: "Remove a saved site permission",
     action: "remove a saved site permission",
-    description: "Allows {requesterKind} to remove a saved site permission.",
+    description: "Remove a saved site permission so it will be asked again.",
     group: "approvals",
     authorityCategory: {
       domain: "safety",
@@ -8321,7 +8315,7 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
   "protected-input.submit": {
     title: "Submit account-provider settings",
     action: "submit account-provider settings",
-    description: "Allows {requesterKind} to submit account-provider settings.",
+    description: "Save account-provider settings you entered.",
     group: "approvals",
     authorityCategory: {
       domain: "accounts",
@@ -8331,7 +8325,7 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
   "push.manage": {
     title: "View devices registered for notifications",
     action: "view devices registered for notifications",
-    description: "Allows {requesterKind} to view devices registered for notifications.",
+    description: "See which devices are set up to receive push notifications.",
     group: "notifications",
     authorityCategory: {
       domain: "people",
@@ -8341,7 +8335,7 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
   "push.send": {
     title: "Send a notification",
     action: "send a notification",
-    description: "Allows {requesterKind} to send a notification.",
+    description: "Deliver a push notification to a registered device.",
     group: "notifications",
     authorityCategory: {
       domain: "sharing",
@@ -8461,7 +8455,7 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
   "server-logs.read": {
     title: "View server logs",
     action: "view server logs",
-    description: "Allows {requesterKind} to view server logs.",
+    description: "Read the workspace server's recent activity logs.",
     group: "host",
     authorityCategory: {
       domain: "computer",
@@ -8601,8 +8595,7 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
   "subagents.create": {
     title: "Launch an external subagent",
     action: "launch an external subagent",
-    description:
-      "Allows {requesterKind} to launch an external subagent that can act on your behalf in this workspace.",
+    description: "Launch an external helper agent that can work on your behalf in this workspace.",
     group: "automation",
     authorityCategory: {
       domain: "automation",
@@ -8622,7 +8615,7 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
   "webhooks.manage": {
     title: "Accept incoming web requests",
     action: "accept incoming web requests",
-    description: "Allows {requesterKind} to accept incoming web requests.",
+    description: "Let your workspace receive requests from external websites or services.",
     group: "network",
     authorityCategory: {
       domain: "sharing",
@@ -8642,8 +8635,7 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
   "workspace.build-cache.manage": {
     title: "Inspect build cache retention",
     action: "inspect build cache retention",
-    description:
-      "Allows {requesterKind} to inspect retained and unreferenced build files without removing them.",
+    description: "View cached build files and check which ones are still in use.",
     group: "workspace",
     authorityCategory: {
       domain: "automation",
@@ -8653,7 +8645,7 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
   "workspace.config.apply": {
     title: "Apply workspace configuration",
     action: "apply workspace configuration",
-    description: "Allows {requesterKind} to apply an exact reviewed workspace configuration.",
+    description: "Apply a reviewed workspace configuration change.",
     group: "workspace",
     authorityCategory: {
       domain: "automation",
@@ -8663,7 +8655,7 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
   "workspace.configure": {
     title: "Change workspace settings",
     action: "change workspace settings",
-    description: "Allows {requesterKind} to change workspace settings.",
+    description: "Change a workspace setting.",
     group: "workspace",
     authorityCategory: {
       domain: "automation",
@@ -8743,7 +8735,7 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
   "workspace.storage.delete": {
     title: "Delete stored workspace data",
     action: "delete stored workspace data",
-    description: "Allows {requesterKind} to delete stored workspace data.",
+    description: "Permanently remove stored workspace data.",
     group: "files",
     authorityCategory: {
       domain: "files",
@@ -8753,7 +8745,7 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
   "workspace.storage.materialize": {
     title: "Restore a stored folder tree",
     action: "restore a stored folder tree",
-    description: "Allows {requesterKind} to restore a stored folder tree.",
+    description: "Recreate a previously stored folder on your computer.",
     group: "files",
     authorityCategory: {
       domain: "files",

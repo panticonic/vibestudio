@@ -175,7 +175,7 @@ export const workspaceMethods = defineServiceMethods({
     presentation: {
       title: "Change startup panels",
       action: "change startup panels",
-      description: "Allows {requesterKind} to change startup panels.",
+      description: "Choose which panels open when this workspace starts.",
       group: "workspace",
       authorityCategory: {
         domain: "automation",
@@ -217,7 +217,7 @@ export const workspaceMethods = defineServiceMethods({
     presentation: {
       title: "Change workspace settings",
       action: "change workspace settings",
-      description: "Allows {requesterKind} to change workspace settings.",
+      description: "Change a workspace setting.",
       group: "workspace",
       authorityCategory: {
         domain: "automation",
@@ -248,7 +248,7 @@ export const workspaceMethods = defineServiceMethods({
     presentation: {
       title: "Apply workspace configuration",
       action: "apply workspace configuration",
-      description: "Allows {requesterKind} to apply an exact reviewed workspace configuration.",
+      description: "Apply a reviewed workspace configuration change.",
       group: "workspace",
       authorityCategory: { domain: "automation", verb: "manage" },
     },
@@ -383,7 +383,7 @@ export const workspaceMethods = defineServiceMethods({
     presentation: {
       title: "Prepare a task workspace folder",
       action: "prepare a task workspace folder",
-      description: "Allows {requesterKind} to prepare a task workspace folder.",
+      description: "Set up a folder for a task to work in.",
       group: "workspace",
       authorityCategory: {
         domain: "files",

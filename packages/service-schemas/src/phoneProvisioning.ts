@@ -11,14 +11,14 @@ const USER_CODE_HOST: ServiceAuthorityPolicy = { principals: ["user", "code", "h
 const MOBILE_DEVICES_PRESENTATION = {
   title: "View available mobile devices",
   action: "view available mobile devices",
-  description: "Allows {requesterKind} to view available mobile devices.",
+  description: "See which phones and tablets are connected and ready to use.",
   group: "accounts",
   authorityCategory: { domain: "people", verb: "see" },
 } as const;
 const MOBILE_PROVISION_PRESENTATION = {
   title: "Install and pair a mobile device",
   action: "install and pair a mobile device",
-  description: "Allows {requesterKind} to install and pair a mobile device.",
+  description: "Set up a phone or tablet so it works with your workspace.",
   group: "accounts",
   authorityCategory: { domain: "people", verb: "manage" },
 } as const;

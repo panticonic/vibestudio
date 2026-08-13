@@ -26,10 +26,9 @@ export const PRODUCT_BUILTIN_CATALOG = [
         sensitivity: "read",
         principals: ["user", "code", "host"],
         presentation: {
-          title: "Inspect running workspace services",
-          action:
-            "inspect apps, panels, background tasks, and scheduled work that's currently running",
-          description: "Read the current structure and status of running workspace services",
+          title: "View running apps and tasks",
+          action: "view apps, panels, and scheduled tasks that are currently running",
+          description: "See what apps and tasks are currently running in your workspace",
           group: "workspace",
           authorityCategory: {
             domain: "automation",
@@ -51,10 +50,9 @@ export const PRODUCT_BUILTIN_CATALOG = [
         sensitivity: "read",
         principals: ["user", "code", "host"],
         presentation: {
-          title: "Inspect running workspace services",
-          action:
-            "inspect apps, panels, background tasks, and scheduled work that's currently running",
-          description: "Read the current structure and status of running workspace services",
+          title: "View running apps and tasks",
+          action: "view apps, panels, and scheduled tasks that are currently running",
+          description: "See what apps and tasks are currently running in your workspace",
           group: "workspace",
           authorityCategory: {
             domain: "automation",
@@ -76,10 +74,9 @@ export const PRODUCT_BUILTIN_CATALOG = [
         sensitivity: "read",
         principals: ["user", "code", "host"],
         presentation: {
-          title: "Inspect running workspace services",
-          action:
-            "inspect apps, panels, background tasks, and scheduled work that's currently running",
-          description: "Read the current structure and status of running workspace services",
+          title: "View running apps and tasks",
+          action: "view apps, panels, and scheduled tasks that are currently running",
+          description: "See what apps and tasks are currently running in your workspace",
           group: "workspace",
           authorityCategory: {
             domain: "automation",
@@ -101,10 +98,9 @@ export const PRODUCT_BUILTIN_CATALOG = [
         sensitivity: "read",
         principals: ["user", "code", "host"],
         presentation: {
-          title: "Inspect running workspace services",
-          action:
-            "inspect apps, panels, background tasks, and scheduled work that's currently running",
-          description: "Read the current structure and status of running workspace services",
+          title: "View running apps and tasks",
+          action: "view apps, panels, and scheduled tasks that are currently running",
+          description: "See what apps and tasks are currently running in your workspace",
           group: "workspace",
           authorityCategory: {
             domain: "automation",
@@ -126,10 +122,9 @@ export const PRODUCT_BUILTIN_CATALOG = [
         sensitivity: "read",
         principals: ["user", "code", "host"],
         presentation: {
-          title: "Inspect running workspace services",
-          action:
-            "inspect apps, panels, background tasks, and scheduled work that's currently running",
-          description: "Read the current structure and status of running workspace services",
+          title: "View running apps and tasks",
+          action: "view apps, panels, and scheduled tasks that are currently running",
+          description: "See what apps and tasks are currently running in your workspace",
           group: "workspace",
           authorityCategory: {
             domain: "automation",
@@ -151,10 +146,9 @@ export const PRODUCT_BUILTIN_CATALOG = [
         sensitivity: "read",
         principals: ["user", "code", "host"],
         presentation: {
-          title: "Inspect running workspace services",
-          action:
-            "inspect apps, panels, background tasks, and scheduled work that's currently running",
-          description: "Read the current structure and status of running workspace services",
+          title: "View running apps and tasks",
+          action: "view apps, panels, and scheduled tasks that are currently running",
+          description: "See what apps and tasks are currently running in your workspace",
           group: "workspace",
           authorityCategory: {
             domain: "automation",
@@ -176,10 +170,9 @@ export const PRODUCT_BUILTIN_CATALOG = [
         sensitivity: "read",
         principals: ["user", "code", "host"],
         presentation: {
-          title: "Inspect running workspace services",
-          action:
-            "inspect apps, panels, background tasks, and scheduled work that's currently running",
-          description: "Read the current structure and status of running workspace services",
+          title: "View running apps and tasks",
+          action: "view apps, panels, and scheduled tasks that are currently running",
+          description: "See what apps and tasks are currently running in your workspace",
           group: "workspace",
           authorityCategory: {
             domain: "automation",
@@ -201,10 +194,9 @@ export const PRODUCT_BUILTIN_CATALOG = [
         sensitivity: "read",
         principals: ["user", "code", "host"],
         presentation: {
-          title: "Inspect running workspace services",
-          action:
-            "inspect apps, panels, background tasks, and scheduled work that's currently running",
-          description: "Read the current structure and status of running workspace services",
+          title: "View running apps and tasks",
+          action: "view apps, panels, and scheduled tasks that are currently running",
+          description: "See what apps and tasks are currently running in your workspace",
           group: "workspace",
           authorityCategory: {
             domain: "automation",
@@ -226,10 +218,9 @@ export const PRODUCT_BUILTIN_CATALOG = [
         sensitivity: "read",
         principals: ["user", "code", "host"],
         presentation: {
-          title: "Inspect running workspace services",
-          action:
-            "inspect apps, panels, background tasks, and scheduled work that's currently running",
-          description: "Read the current structure and status of running workspace services",
+          title: "View running apps and tasks",
+          action: "view apps, panels, and scheduled tasks that are currently running",
+          description: "See what apps and tasks are currently running in your workspace",
           group: "workspace",
           authorityCategory: {
             domain: "automation",
@@ -251,10 +242,9 @@ export const PRODUCT_BUILTIN_CATALOG = [
         sensitivity: "read",
         principals: ["user", "code", "host"],
         presentation: {
-          title: "Inspect running workspace services",
-          action:
-            "inspect apps, panels, background tasks, and scheduled work that's currently running",
-          description: "Read the current structure and status of running workspace services",
+          title: "View running apps and tasks",
+          action: "view apps, panels, and scheduled tasks that are currently running",
+          description: "See what apps and tasks are currently running in your workspace",
           group: "workspace",
           authorityCategory: {
             domain: "automation",
@@ -276,10 +266,9 @@ export const PRODUCT_BUILTIN_CATALOG = [
         sensitivity: "read",
         principals: ["user", "code", "host"],
         presentation: {
-          title: "Inspect running workspace services",
-          action:
-            "inspect apps, panels, background tasks, and scheduled work that's currently running",
-          description: "Read the current structure and status of running workspace services",
+          title: "View running apps and tasks",
+          action: "view apps, panels, and scheduled tasks that are currently running",
+          description: "See what apps and tasks are currently running in your workspace",
           group: "workspace",
           authorityCategory: {
             domain: "automation",
@@ -301,10 +290,9 @@ export const PRODUCT_BUILTIN_CATALOG = [
         sensitivity: "read",
         principals: ["user", "code", "host"],
         presentation: {
-          title: "Inspect running workspace services",
-          action:
-            "inspect apps, panels, background tasks, and scheduled work that's currently running",
-          description: "Read the current structure and status of running workspace services",
+          title: "View running apps and tasks",
+          action: "view apps, panels, and scheduled tasks that are currently running",
+          description: "See what apps and tasks are currently running in your workspace",
           group: "workspace",
           authorityCategory: {
             domain: "automation",
@@ -326,11 +314,9 @@ export const PRODUCT_BUILTIN_CATALOG = [
         sensitivity: "write",
         principals: ["user", "code", "host"],
         presentation: {
-          title: "Manage running workspace services",
-          action:
-            "manage apps, panels, background tasks, and scheduled work that's currently running",
-          description:
-            "Maintain running workspace apps, panels, background tasks, and scheduled work",
+          title: "Manage running apps and tasks",
+          action: "manage apps, panels, and scheduled tasks that are currently running",
+          description: "Start, stop, or check on apps and tasks running in your workspace",
           group: "workspace",
           authorityCategory: {
             domain: "automation",
@@ -418,11 +404,9 @@ export const PRODUCT_BUILTIN_CATALOG = [
         sensitivity: "write",
         principals: ["user", "code", "host"],
         presentation: {
-          title: "Manage running workspace services",
-          action:
-            "manage apps, panels, background tasks, and scheduled work that's currently running",
-          description:
-            "Maintain running workspace apps, panels, background tasks, and scheduled work",
+          title: "Manage running apps and tasks",
+          action: "manage apps, panels, and scheduled tasks that are currently running",
+          description: "Start, stop, or check on apps and tasks running in your workspace",
           group: "workspace",
           authorityCategory: {
             domain: "automation",
@@ -525,11 +509,9 @@ export const PRODUCT_BUILTIN_CATALOG = [
         sensitivity: "write",
         principals: ["user", "code", "host"],
         presentation: {
-          title: "Manage running workspace services",
-          action:
-            "manage apps, panels, background tasks, and scheduled work that's currently running",
-          description:
-            "Maintain running workspace apps, panels, background tasks, and scheduled work",
+          title: "Manage running apps and tasks",
+          action: "manage apps, panels, and scheduled tasks that are currently running",
+          description: "Start, stop, or check on apps and tasks running in your workspace",
           group: "workspace",
           authorityCategory: {
             domain: "automation",
@@ -616,11 +598,9 @@ export const PRODUCT_BUILTIN_CATALOG = [
         sensitivity: "write",
         principals: ["user", "code", "host"],
         presentation: {
-          title: "Manage running workspace services",
-          action:
-            "manage apps, panels, background tasks, and scheduled work that's currently running",
-          description:
-            "Maintain running workspace apps, panels, background tasks, and scheduled work",
+          title: "Manage running apps and tasks",
+          action: "manage apps, panels, and scheduled tasks that are currently running",
+          description: "Start, stop, or check on apps and tasks running in your workspace",
           group: "workspace",
           authorityCategory: {
             domain: "automation",
@@ -707,11 +687,9 @@ export const PRODUCT_BUILTIN_CATALOG = [
         sensitivity: "destructive",
         principals: ["user", "code", "host"],
         presentation: {
-          title: "Manage running workspace services",
-          action:
-            "manage apps, panels, background tasks, and scheduled work that's currently running",
-          description:
-            "Maintain running workspace apps, panels, background tasks, and scheduled work",
+          title: "Manage running apps and tasks",
+          action: "manage apps, panels, and scheduled tasks that are currently running",
+          description: "Start, stop, or check on apps and tasks running in your workspace",
           group: "workspace",
           authorityCategory: {
             domain: "automation",
@@ -798,11 +776,9 @@ export const PRODUCT_BUILTIN_CATALOG = [
         sensitivity: "destructive",
         principals: ["user", "code", "host"],
         presentation: {
-          title: "Manage running workspace services",
-          action:
-            "manage apps, panels, background tasks, and scheduled work that's currently running",
-          description:
-            "Maintain running workspace apps, panels, background tasks, and scheduled work",
+          title: "Manage running apps and tasks",
+          action: "manage apps, panels, and scheduled tasks that are currently running",
+          description: "Start, stop, or check on apps and tasks running in your workspace",
           group: "workspace",
           authorityCategory: {
             domain: "automation",
@@ -824,11 +800,9 @@ export const PRODUCT_BUILTIN_CATALOG = [
         sensitivity: "destructive",
         principals: ["host"],
         presentation: {
-          title: "Manage running workspace services",
-          action:
-            "manage apps, panels, background tasks, and scheduled work that's currently running",
-          description:
-            "Maintain running workspace apps, panels, background tasks, and scheduled work",
+          title: "Manage running apps and tasks",
+          action: "manage apps, panels, and scheduled tasks that are currently running",
+          description: "Start, stop, or check on apps and tasks running in your workspace",
           group: "workspace",
           authorityCategory: {
             domain: "automation",
@@ -850,11 +824,9 @@ export const PRODUCT_BUILTIN_CATALOG = [
         sensitivity: "destructive",
         principals: ["user", "code", "host"],
         presentation: {
-          title: "Manage running workspace services",
-          action:
-            "manage apps, panels, background tasks, and scheduled work that's currently running",
-          description:
-            "Maintain running workspace apps, panels, background tasks, and scheduled work",
+          title: "Manage running apps and tasks",
+          action: "manage apps, panels, and scheduled tasks that are currently running",
+          description: "Start, stop, or check on apps and tasks running in your workspace",
           group: "workspace",
           authorityCategory: {
             domain: "automation",
@@ -876,10 +848,9 @@ export const PRODUCT_BUILTIN_CATALOG = [
         sensitivity: "read",
         principals: ["user", "code", "host"],
         presentation: {
-          title: "Inspect running workspace services",
-          action:
-            "inspect apps, panels, background tasks, and scheduled work that's currently running",
-          description: "Read the current structure and status of running workspace services",
+          title: "View running apps and tasks",
+          action: "view apps, panels, and scheduled tasks that are currently running",
+          description: "See what apps and tasks are currently running in your workspace",
           group: "workspace",
           authorityCategory: {
             domain: "automation",
@@ -901,10 +872,9 @@ export const PRODUCT_BUILTIN_CATALOG = [
         sensitivity: "read",
         principals: ["user", "code", "host"],
         presentation: {
-          title: "Inspect running workspace services",
-          action:
-            "inspect apps, panels, background tasks, and scheduled work that's currently running",
-          description: "Read the current structure and status of running workspace services",
+          title: "View running apps and tasks",
+          action: "view apps, panels, and scheduled tasks that are currently running",
+          description: "See what apps and tasks are currently running in your workspace",
           group: "workspace",
           authorityCategory: {
             domain: "automation",
@@ -926,11 +896,9 @@ export const PRODUCT_BUILTIN_CATALOG = [
         sensitivity: "write",
         principals: ["user", "code", "host"],
         presentation: {
-          title: "Manage running workspace services",
-          action:
-            "manage apps, panels, background tasks, and scheduled work that's currently running",
-          description:
-            "Maintain running workspace apps, panels, background tasks, and scheduled work",
+          title: "Manage running apps and tasks",
+          action: "manage apps, panels, and scheduled tasks that are currently running",
+          description: "Start, stop, or check on apps and tasks running in your workspace",
           group: "workspace",
           authorityCategory: {
             domain: "automation",
@@ -952,11 +920,9 @@ export const PRODUCT_BUILTIN_CATALOG = [
         sensitivity: "write",
         principals: ["user", "code", "host"],
         presentation: {
-          title: "Manage running workspace services",
-          action:
-            "manage apps, panels, background tasks, and scheduled work that's currently running",
-          description:
-            "Maintain running workspace apps, panels, background tasks, and scheduled work",
+          title: "Manage running apps and tasks",
+          action: "manage apps, panels, and scheduled tasks that are currently running",
+          description: "Start, stop, or check on apps and tasks running in your workspace",
           group: "workspace",
           authorityCategory: {
             domain: "automation",
@@ -1043,11 +1009,9 @@ export const PRODUCT_BUILTIN_CATALOG = [
         sensitivity: "write",
         principals: ["user", "code", "host"],
         presentation: {
-          title: "Manage running workspace services",
-          action:
-            "manage apps, panels, background tasks, and scheduled work that's currently running",
-          description:
-            "Maintain running workspace apps, panels, background tasks, and scheduled work",
+          title: "Manage running apps and tasks",
+          action: "manage apps, panels, and scheduled tasks that are currently running",
+          description: "Start, stop, or check on apps and tasks running in your workspace",
           group: "workspace",
           authorityCategory: {
             domain: "automation",
@@ -1069,11 +1033,9 @@ export const PRODUCT_BUILTIN_CATALOG = [
         sensitivity: "write",
         principals: ["user", "code", "host"],
         presentation: {
-          title: "Manage running workspace services",
-          action:
-            "manage apps, panels, background tasks, and scheduled work that's currently running",
-          description:
-            "Maintain running workspace apps, panels, background tasks, and scheduled work",
+          title: "Manage running apps and tasks",
+          action: "manage apps, panels, and scheduled tasks that are currently running",
+          description: "Start, stop, or check on apps and tasks running in your workspace",
           group: "workspace",
           authorityCategory: {
             domain: "automation",
@@ -1095,11 +1057,9 @@ export const PRODUCT_BUILTIN_CATALOG = [
         sensitivity: "write",
         principals: ["host", "code"],
         presentation: {
-          title: "Manage running workspace services",
-          action:
-            "manage apps, panels, background tasks, and scheduled work that's currently running",
-          description:
-            "Maintain running workspace apps, panels, background tasks, and scheduled work",
+          title: "Manage running apps and tasks",
+          action: "manage apps, panels, and scheduled tasks that are currently running",
+          description: "Start, stop, or check on apps and tasks running in your workspace",
           group: "workspace",
           authorityCategory: {
             domain: "automation",
@@ -1121,11 +1081,9 @@ export const PRODUCT_BUILTIN_CATALOG = [
         sensitivity: "destructive",
         principals: ["host", "code"],
         presentation: {
-          title: "Manage running workspace services",
-          action:
-            "manage apps, panels, background tasks, and scheduled work that's currently running",
-          description:
-            "Maintain running workspace apps, panels, background tasks, and scheduled work",
+          title: "Manage running apps and tasks",
+          action: "manage apps, panels, and scheduled tasks that are currently running",
+          description: "Start, stop, or check on apps and tasks running in your workspace",
           group: "workspace",
           authorityCategory: {
             domain: "automation",
@@ -1147,11 +1105,9 @@ export const PRODUCT_BUILTIN_CATALOG = [
         sensitivity: "write",
         principals: ["host", "code"],
         presentation: {
-          title: "Manage running workspace services",
-          action:
-            "manage apps, panels, background tasks, and scheduled work that's currently running",
-          description:
-            "Maintain running workspace apps, panels, background tasks, and scheduled work",
+          title: "Manage running apps and tasks",
+          action: "manage apps, panels, and scheduled tasks that are currently running",
+          description: "Start, stop, or check on apps and tasks running in your workspace",
           group: "workspace",
           authorityCategory: {
             domain: "automation",
@@ -1173,11 +1129,9 @@ export const PRODUCT_BUILTIN_CATALOG = [
         sensitivity: "destructive",
         principals: ["host", "code"],
         presentation: {
-          title: "Manage running workspace services",
-          action:
-            "manage apps, panels, background tasks, and scheduled work that's currently running",
-          description:
-            "Maintain running workspace apps, panels, background tasks, and scheduled work",
+          title: "Manage running apps and tasks",
+          action: "manage apps, panels, and scheduled tasks that are currently running",
+          description: "Start, stop, or check on apps and tasks running in your workspace",
           group: "workspace",
           authorityCategory: {
             domain: "automation",
@@ -1379,10 +1333,9 @@ export const PRODUCT_BUILTIN_CATALOG = [
         sensitivity: "read",
         principals: ["user", "code", "host"],
         presentation: {
-          title: "Inspect running workspace services",
-          action:
-            "inspect apps, panels, background tasks, and scheduled work that's currently running",
-          description: "Read the current structure and status of running workspace services",
+          title: "View running apps and tasks",
+          action: "view apps, panels, and scheduled tasks that are currently running",
+          description: "See what apps and tasks are currently running in your workspace",
           group: "workspace",
           authorityCategory: {
             domain: "automation",
@@ -1794,10 +1747,9 @@ export const PRODUCT_BUILTIN_CATALOG = [
         sensitivity: "read",
         principals: ["user", "code", "host"],
         presentation: {
-          title: "Inspect running workspace services",
-          action:
-            "inspect apps, panels, background tasks, and scheduled work that's currently running",
-          description: "Read the current structure and status of running workspace services",
+          title: "View running apps and tasks",
+          action: "view apps, panels, and scheduled tasks that are currently running",
+          description: "See what apps and tasks are currently running in your workspace",
           group: "workspace",
           authorityCategory: {
             domain: "automation",
@@ -1819,10 +1771,9 @@ export const PRODUCT_BUILTIN_CATALOG = [
         sensitivity: "read",
         principals: ["user", "code", "host"],
         presentation: {
-          title: "Inspect running workspace services",
-          action:
-            "inspect apps, panels, background tasks, and scheduled work that's currently running",
-          description: "Read the current structure and status of running workspace services",
+          title: "View running apps and tasks",
+          action: "view apps, panels, and scheduled tasks that are currently running",
+          description: "See what apps and tasks are currently running in your workspace",
           group: "workspace",
           authorityCategory: {
             domain: "automation",
@@ -1844,10 +1795,9 @@ export const PRODUCT_BUILTIN_CATALOG = [
         sensitivity: "read",
         principals: ["user", "code", "host"],
         presentation: {
-          title: "Inspect running workspace services",
-          action:
-            "inspect apps, panels, background tasks, and scheduled work that's currently running",
-          description: "Read the current structure and status of running workspace services",
+          title: "View running apps and tasks",
+          action: "view apps, panels, and scheduled tasks that are currently running",
+          description: "See what apps and tasks are currently running in your workspace",
           group: "workspace",
           authorityCategory: {
             domain: "automation",
@@ -1869,10 +1819,9 @@ export const PRODUCT_BUILTIN_CATALOG = [
         sensitivity: "read",
         principals: ["user", "code", "host"],
         presentation: {
-          title: "Inspect running workspace services",
-          action:
-            "inspect apps, panels, background tasks, and scheduled work that's currently running",
-          description: "Read the current structure and status of running workspace services",
+          title: "View running apps and tasks",
+          action: "view apps, panels, and scheduled tasks that are currently running",
+          description: "See what apps and tasks are currently running in your workspace",
           group: "workspace",
           authorityCategory: {
             domain: "automation",
@@ -1894,11 +1843,9 @@ export const PRODUCT_BUILTIN_CATALOG = [
         sensitivity: "write",
         principals: ["user", "code", "host"],
         presentation: {
-          title: "Manage running workspace services",
-          action:
-            "manage apps, panels, background tasks, and scheduled work that's currently running",
-          description:
-            "Maintain running workspace apps, panels, background tasks, and scheduled work",
+          title: "Manage running apps and tasks",
+          action: "manage apps, panels, and scheduled tasks that are currently running",
+          description: "Start, stop, or check on apps and tasks running in your workspace",
           group: "workspace",
           authorityCategory: {
             domain: "automation",
@@ -1986,11 +1933,9 @@ export const PRODUCT_BUILTIN_CATALOG = [
         sensitivity: "write",
         principals: ["user", "code", "host"],
         presentation: {
-          title: "Manage running workspace services",
-          action:
-            "manage apps, panels, background tasks, and scheduled work that's currently running",
-          description:
-            "Maintain running workspace apps, panels, background tasks, and scheduled work",
+          title: "Manage running apps and tasks",
+          action: "manage apps, panels, and scheduled tasks that are currently running",
+          description: "Start, stop, or check on apps and tasks running in your workspace",
           group: "workspace",
           authorityCategory: {
             domain: "automation",
@@ -2093,11 +2038,9 @@ export const PRODUCT_BUILTIN_CATALOG = [
         sensitivity: "write",
         principals: ["user", "code", "host"],
         presentation: {
-          title: "Manage running workspace services",
-          action:
-            "manage apps, panels, background tasks, and scheduled work that's currently running",
-          description:
-            "Maintain running workspace apps, panels, background tasks, and scheduled work",
+          title: "Manage running apps and tasks",
+          action: "manage apps, panels, and scheduled tasks that are currently running",
+          description: "Start, stop, or check on apps and tasks running in your workspace",
           group: "workspace",
           authorityCategory: {
             domain: "automation",
@@ -2184,11 +2127,9 @@ export const PRODUCT_BUILTIN_CATALOG = [
         sensitivity: "write",
         principals: ["user", "code", "host"],
         presentation: {
-          title: "Manage running workspace services",
-          action:
-            "manage apps, panels, background tasks, and scheduled work that's currently running",
-          description:
-            "Maintain running workspace apps, panels, background tasks, and scheduled work",
+          title: "Manage running apps and tasks",
+          action: "manage apps, panels, and scheduled tasks that are currently running",
+          description: "Start, stop, or check on apps and tasks running in your workspace",
           group: "workspace",
           authorityCategory: {
             domain: "automation",
@@ -2275,11 +2216,9 @@ export const PRODUCT_BUILTIN_CATALOG = [
         sensitivity: "destructive",
         principals: ["user", "code", "host"],
         presentation: {
-          title: "Manage running workspace services",
-          action:
-            "manage apps, panels, background tasks, and scheduled work that's currently running",
-          description:
-            "Maintain running workspace apps, panels, background tasks, and scheduled work",
+          title: "Manage running apps and tasks",
+          action: "manage apps, panels, and scheduled tasks that are currently running",
+          description: "Start, stop, or check on apps and tasks running in your workspace",
           group: "workspace",
           authorityCategory: {
             domain: "automation",
@@ -2366,11 +2305,9 @@ export const PRODUCT_BUILTIN_CATALOG = [
         sensitivity: "destructive",
         principals: ["host"],
         presentation: {
-          title: "Manage running workspace services",
-          action:
-            "manage apps, panels, background tasks, and scheduled work that's currently running",
-          description:
-            "Maintain running workspace apps, panels, background tasks, and scheduled work",
+          title: "Manage running apps and tasks",
+          action: "manage apps, panels, and scheduled tasks that are currently running",
+          description: "Start, stop, or check on apps and tasks running in your workspace",
           group: "workspace",
           authorityCategory: {
             domain: "automation",
@@ -2392,11 +2329,9 @@ export const PRODUCT_BUILTIN_CATALOG = [
         sensitivity: "destructive",
         principals: ["user", "code", "host"],
         presentation: {
-          title: "Manage running workspace services",
-          action:
-            "manage apps, panels, background tasks, and scheduled work that's currently running",
-          description:
-            "Maintain running workspace apps, panels, background tasks, and scheduled work",
+          title: "Manage running apps and tasks",
+          action: "manage apps, panels, and scheduled tasks that are currently running",
+          description: "Start, stop, or check on apps and tasks running in your workspace",
           group: "workspace",
           authorityCategory: {
             domain: "automation",
@@ -2418,11 +2353,9 @@ export const PRODUCT_BUILTIN_CATALOG = [
         sensitivity: "destructive",
         principals: ["user", "code", "host"],
         presentation: {
-          title: "Manage running workspace services",
-          action:
-            "manage apps, panels, background tasks, and scheduled work that's currently running",
-          description:
-            "Maintain running workspace apps, panels, background tasks, and scheduled work",
+          title: "Manage running apps and tasks",
+          action: "manage apps, panels, and scheduled tasks that are currently running",
+          description: "Start, stop, or check on apps and tasks running in your workspace",
           group: "workspace",
           authorityCategory: {
             domain: "automation",
@@ -2444,10 +2377,9 @@ export const PRODUCT_BUILTIN_CATALOG = [
         sensitivity: "read",
         principals: ["user", "code", "host"],
         presentation: {
-          title: "Inspect running workspace services",
-          action:
-            "inspect apps, panels, background tasks, and scheduled work that's currently running",
-          description: "Read the current structure and status of running workspace services",
+          title: "View running apps and tasks",
+          action: "view apps, panels, and scheduled tasks that are currently running",
+          description: "See what apps and tasks are currently running in your workspace",
           group: "workspace",
           authorityCategory: {
             domain: "automation",
@@ -2469,10 +2401,9 @@ export const PRODUCT_BUILTIN_CATALOG = [
         sensitivity: "read",
         principals: ["user", "code", "host"],
         presentation: {
-          title: "Inspect running workspace services",
-          action:
-            "inspect apps, panels, background tasks, and scheduled work that's currently running",
-          description: "Read the current structure and status of running workspace services",
+          title: "View running apps and tasks",
+          action: "view apps, panels, and scheduled tasks that are currently running",
+          description: "See what apps and tasks are currently running in your workspace",
           group: "workspace",
           authorityCategory: {
             domain: "automation",
@@ -2494,10 +2425,9 @@ export const PRODUCT_BUILTIN_CATALOG = [
         sensitivity: "read",
         principals: ["user", "code", "host"],
         presentation: {
-          title: "Inspect running workspace services",
-          action:
-            "inspect apps, panels, background tasks, and scheduled work that's currently running",
-          description: "Read the current structure and status of running workspace services",
+          title: "View running apps and tasks",
+          action: "view apps, panels, and scheduled tasks that are currently running",
+          description: "See what apps and tasks are currently running in your workspace",
           group: "workspace",
           authorityCategory: {
             domain: "automation",

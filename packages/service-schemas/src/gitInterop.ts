@@ -764,7 +764,7 @@ export const gitInteropMethods = defineServiceMethods({
     presentation: {
       title: "Push changes to the upstream Git repository",
       action: "push changes to the upstream Git repository",
-      description: "Allows {requesterKind} to push changes to the upstream Git repository.",
+      description: "Send your saved changes to the upstream Git repository.",
       group: "files",
       authorityCategory: {
         domain: "sharing",
@@ -797,7 +797,7 @@ export const gitInteropMethods = defineServiceMethods({
     presentation: {
       title: "Pull changes from the upstream Git repository",
       action: "pull changes from the upstream Git repository",
-      description: "Allows {requesterKind} to pull changes from the upstream Git repository.",
+      description: "Download changes from the upstream Git repository into your workspace.",
       group: "files",
       authorityCategory: {
         domain: "files",
@@ -830,7 +830,7 @@ export const gitInteropMethods = defineServiceMethods({
     presentation: {
       title: "Publish workspace changes",
       action: "publish workspace changes",
-      description: "Allows {requesterKind} to publish workspace changes.",
+      description: "Publish your workspace changes to an online repository.",
       group: "files",
       authorityCategory: {
         domain: "sharing",
@@ -878,7 +878,7 @@ export const gitInteropMethods = defineServiceMethods({
     presentation: {
       title: "Import a Git project",
       action: "import a Git project",
-      description: "Allows {requesterKind} to import a Git project.",
+      description: "Download and add a Git project to your workspace.",
       group: "files",
       authorityCategory: {
         domain: "files",

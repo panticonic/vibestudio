@@ -98,7 +98,7 @@ export const appMethods = defineServiceMethods({
     presentation: {
       title: "Open a link in another application",
       action: "open a link in another application",
-      description: "Allows {requesterKind} to open a link in another application.",
+      description: "Open a web link in your default browser or another app.",
       group: "host",
       authorityCategory: {
         domain: "sharing",
@@ -153,7 +153,7 @@ export const appMethods = defineServiceMethods({
     presentation: {
       title: "Clear cached build files",
       action: "clear cached build files",
-      description: "Allows {requesterKind} to clear cached build files.",
+      description: "Remove cached build files so apps rebuild fresh next time.",
       group: "host",
       authorityCategory: {
         domain: "automation",
@@ -193,7 +193,7 @@ export const appMethods = defineServiceMethods({
     presentation: {
       title: "Install an application update",
       action: "install an application update",
-      description: "Allows {requesterKind} to install an application update.",
+      description: "Install a pending application update.",
       group: "host",
       authorityCategory: {
         domain: "computer",

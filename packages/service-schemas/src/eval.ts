@@ -450,7 +450,7 @@ export const evalMethods = defineServiceMethods({
     presentation: {
       title: "Reset the code runner",
       action: "reset the code runner",
-      description: "Allows {requesterKind} to reset the code runner.",
+      description: "Clear the code runner and start fresh.",
       group: "runtime",
       authorityCategory: {
         domain: "automation",

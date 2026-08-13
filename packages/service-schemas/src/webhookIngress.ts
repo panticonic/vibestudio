@@ -303,7 +303,7 @@ export const webhookIngressMethods = defineServiceMethods({
     presentation: {
       title: "Accept incoming web requests",
       action: "accept incoming web requests",
-      description: "Allows {requesterKind} to accept incoming web requests.",
+      description: "Let your workspace receive requests from external websites or services.",
       group: "network",
       authorityCategory: {
         domain: "sharing",
@@ -329,7 +329,7 @@ export const webhookIngressMethods = defineServiceMethods({
     presentation: {
       title: "View incoming web connections",
       action: "view incoming web connections",
-      description: "Allows {requesterKind} to view incoming web connections.",
+      description: "See which external web connections your workspace is listening on.",
       group: "network",
       authorityCategory: {
         domain: "sharing",
@@ -356,7 +356,7 @@ export const webhookIngressMethods = defineServiceMethods({
     presentation: {
       title: "Stop accepting an incoming web connection",
       action: "stop accepting an incoming web connection",
-      description: "Allows {requesterKind} to stop accepting an incoming web connection.",
+      description: "Disconnect an incoming web connection so it no longer reaches your workspace.",
       group: "network",
       authorityCategory: {
         domain: "sharing",
@@ -382,7 +382,7 @@ export const webhookIngressMethods = defineServiceMethods({
     presentation: {
       title: "Replace an incoming web connection's secret",
       action: "replace an incoming web connection's secret",
-      description: "Allows {requesterKind} to replace an incoming web connection's secret.",
+      description: "Generate a new secret key for an incoming web connection.",
       group: "network",
       authorityCategory: {
         domain: "sharing",

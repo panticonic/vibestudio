@@ -373,7 +373,7 @@ export const missionsMethods = defineReceiverServiceMethods({
     presentation: {
       title: "Create an automation draft",
       action: "create an automation draft",
-      description: "Allows {requesterKind} to create an automation draft.",
+      description: "Create a new automated task draft for review before it can run.",
       group: "runtime",
       authorityCategory: { domain: "safety", verb: "manage" },
     },
@@ -396,7 +396,7 @@ export const missionsMethods = defineReceiverServiceMethods({
     presentation: {
       title: "Change an automation",
       action: "change an automation",
-      description: "Allows {requesterKind} to change an automation.",
+      description: "Edit an automated task; changes will need to be reviewed again.",
       group: "runtime",
       authorityCategory: { domain: "safety", verb: "manage" },
     },
@@ -470,7 +470,7 @@ export const missionsMethods = defineReceiverServiceMethods({
     presentation: {
       title: "Remove an automation",
       action: "remove an automation",
-      description: "Allows {requesterKind} to remove an automation.",
+      description: "Permanently remove an automated task and stop any future runs.",
       group: "runtime",
       authorityCategory: { domain: "safety", verb: "manage" },
     },
@@ -547,7 +547,7 @@ function lifecycleMethod(title: string, action: string, capability: string) {
     presentation: {
       title: `${title} an automation`,
       action: `${action} an automation`,
-      description: `Allows {requesterKind} to ${action} an automation.`,
+      description: `${title} an automated task without changing what it does.`,
       group: "runtime" as const,
       authorityCategory: { domain: "safety" as const, verb: "manage" as const },
     },

@@ -625,7 +625,7 @@ export const developmentMethods = defineReceiverServiceMethods({
       title: "Destroy a development workspace",
       action: "permanently destroy a development workspace",
       description:
-        "Allows {requesterKind} to permanently destroy this isolated semantic working copy.",
+        "Permanently remove a development workspace and all its files.",
       group: "runtime",
       authorityCategory: {
         domain: "files",
@@ -651,7 +651,7 @@ export const developmentMethods = defineReceiverServiceMethods({
       title: "Retry development-workspace cleanup",
       action: "retry permanent cleanup of a development workspace",
       description:
-        "Allows {requesterKind} to retry the previously requested cleanup of this isolated semantic working copy.",
+        "Try again to clean up a development workspace that failed to remove.",
       group: "runtime",
       authorityCategory: {
         domain: "files",
@@ -817,7 +817,7 @@ export const developmentMethods = defineReceiverServiceMethods({
       title: "Build the current workspace source",
       action: "run a reviewed build of the current workspace source",
       description:
-        "Allows {requesterKind} to install frozen dependencies and run the reviewed build for one exact workspace snapshot.",
+        "Install dependencies and run the reviewed build for your current workspace changes.",
       group: "runtime",
       authorityCategory: {
         domain: "automation",
@@ -989,7 +989,7 @@ export const developmentMethods = defineReceiverServiceMethods({
       title: "Retry a development build",
       action: "retry a reviewed build of the exact workspace source",
       description:
-        "Allows {requesterKind} to run the reviewed build again with the same exact prepared native authority.",
+        "Run the same reviewed build again after a previous attempt failed.",
       group: "runtime",
       authorityCategory: {
         domain: "automation",
@@ -1035,7 +1035,7 @@ export const developmentMethods = defineReceiverServiceMethods({
       title: "Abandon development-build recovery",
       action: "permanently abandon recovery of a development build",
       description:
-        "Allows {requesterKind} to permanently retire a development run whose remaining native effects can no longer be proven.",
+        "Give up on recovering a failed development build and clean up what's left.",
       group: "runtime",
       authorityCategory: {
         domain: "computer",
@@ -1060,7 +1060,7 @@ export const developmentMethods = defineReceiverServiceMethods({
       title: "Abandon development-workspace recovery",
       action: "permanently abandon recovery of a development workspace",
       description:
-        "Allows {requesterKind} to retire an isolated semantic working copy whose ownership can no longer be proven.",
+        "Give up on recovering a broken development workspace and clean up what's left.",
       group: "runtime",
       authorityCategory: {
         domain: "files",

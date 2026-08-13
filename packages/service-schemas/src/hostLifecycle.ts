@@ -26,7 +26,7 @@ export const hostLifecycleMethods = defineServiceMethods({
     presentation: {
       title: "Shut down the workspace host",
       action: "shut down the workspace host",
-      description: "Allows {requesterKind} to shut down the workspace host.",
+      description: "Shut down the workspace server, closing all running tasks.",
       group: "host",
       authorityCategory: {
         domain: "computer",

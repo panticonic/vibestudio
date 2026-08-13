@@ -223,7 +223,7 @@ export const hubControlMethods = defineServiceMethods({
     presentation: {
       title: "View available workspaces",
       action: "view available workspaces",
-      description: "Allows {requesterKind} to view available workspaces.",
+      description: "See which workspaces are available to open.",
       group: "accounts",
       authorityCategory: {
         domain: "files",
@@ -248,7 +248,7 @@ export const hubControlMethods = defineServiceMethods({
     presentation: {
       title: "Connect to a workspace",
       action: "connect to a workspace",
-      description: "Allows {requesterKind} to connect to a workspace.",
+      description: "Open a connection to a workspace so you can use it.",
       group: "accounts",
       authorityCategory: {
         domain: "files",
@@ -274,7 +274,7 @@ export const hubControlMethods = defineServiceMethods({
     presentation: {
       title: "Create a workspace",
       action: "create a workspace",
-      description: "Allows {requesterKind} to create a workspace.",
+      description: "Set up a new workspace from scratch or from a template.",
       group: "accounts",
       authorityCategory: {
         domain: "automation",
@@ -306,7 +306,7 @@ export const hubControlMethods = defineServiceMethods({
     presentation: {
       title: "Prepare a temporary workspace",
       action: "prepare a temporary workspace",
-      description: "Allows {requesterKind} to prepare a temporary workspace.",
+      description: "Create a temporary workspace for quick experiments or testing.",
       group: "accounts",
       authorityCategory: {
         domain: "automation",
@@ -331,7 +331,7 @@ export const hubControlMethods = defineServiceMethods({
     presentation: {
       title: "Delete a workspace",
       action: "delete a workspace",
-      description: "Allows {requesterKind} to delete a workspace.",
+      description: "Permanently remove a workspace and all its data.",
       group: "accounts",
       authorityCategory: {
         domain: "automation",
@@ -356,7 +356,7 @@ export const hubControlMethods = defineServiceMethods({
     presentation: {
       title: "Add a workspace member",
       action: "add a workspace member",
-      description: "Allows {requesterKind} to add a workspace member.",
+      description: "Give someone access to a workspace.",
       group: "accounts",
       authorityCategory: {
         domain: "people",
@@ -388,7 +388,7 @@ export const hubControlMethods = defineServiceMethods({
     presentation: {
       title: "Remove a workspace member",
       action: "remove a workspace member",
-      description: "Allows {requesterKind} to remove a workspace member.",
+      description: "Remove someone's access to a workspace.",
       group: "accounts",
       authorityCategory: {
         domain: "people",
@@ -418,7 +418,7 @@ export const hubControlMethods = defineServiceMethods({
     presentation: {
       title: "View workspace members",
       action: "view workspace members",
-      description: "Allows {requesterKind} to view workspace members.",
+      description: "See who has access to a workspace.",
       group: "accounts",
       authorityCategory: {
         domain: "people",
@@ -447,7 +447,7 @@ export const hubControlMethods = defineServiceMethods({
     presentation: {
       title: "View who is currently active",
       action: "view who is currently active",
-      description: "Allows {requesterKind} to view who is currently active.",
+      description: "See who is currently using a workspace.",
       group: "accounts",
       authorityCategory: {
         domain: "people",
@@ -472,7 +472,7 @@ export const hubControlMethods = defineServiceMethods({
     presentation: {
       title: "Invite someone to the workspace",
       action: "invite someone to the workspace",
-      description: "Allows {requesterKind} to invite someone to the workspace.",
+      description: "Create an account and send an invite so someone new can join.",
       group: "accounts",
       authorityCategory: {
         domain: "people",
@@ -511,7 +511,7 @@ export const hubControlMethods = defineServiceMethods({
     presentation: {
       title: "Pair a device",
       action: "pair a device",
-      description: "Allows {requesterKind} to pair a device.",
+      description: "Connect another device to your account so you can use it to access workspaces.",
       group: "accounts",
       authorityCategory: {
         domain: "people",
@@ -546,7 +546,7 @@ export const hubControlMethods = defineServiceMethods({
     presentation: {
       title: "View connected devices",
       action: "view connected devices",
-      description: "Allows {requesterKind} to view connected devices.",
+      description: "See which devices are connected to your account.",
       group: "accounts",
       authorityCategory: {
         domain: "people",
@@ -570,7 +570,7 @@ export const hubControlMethods = defineServiceMethods({
     presentation: {
       title: "Disconnect a device",
       action: "disconnect a device",
-      description: "Allows {requesterKind} to disconnect a device.",
+      description: "Remove a device's access so it can no longer connect.",
       group: "accounts",
       authorityCategory: {
         domain: "people",
@@ -594,7 +594,7 @@ export const hubControlMethods = defineServiceMethods({
     presentation: {
       title: "Revoke a user's access",
       action: "revoke a user's access",
-      description: "Allows {requesterKind} to revoke a user's access.",
+      description: "Remove a person's account and disconnect all their devices.",
       group: "accounts",
       authorityCategory: {
         domain: "people",
@@ -627,7 +627,7 @@ export const hubControlMethods = defineServiceMethods({
     presentation: {
       title: "Change a workspace member's role",
       action: "change a workspace member's role",
-      description: "Allows {requesterKind} to change a workspace member's role.",
+      description: "Change what a workspace member is allowed to do (e.g. admin or member).",
       group: "accounts",
       authorityCategory: {
         domain: "people",
@@ -661,7 +661,7 @@ export const hubControlMethods = defineServiceMethods({
     presentation: {
       title: "Change an account profile",
       action: "change an account profile",
-      description: "Allows {requesterKind} to change an account profile.",
+      description: "Update an account's name, picture, or other profile details.",
       group: "accounts",
       authorityCategory: {
         domain: "accounts",
@@ -696,7 +696,7 @@ export const hubControlMethods = defineServiceMethods({
     presentation: {
       title: "View an account profile",
       action: "view an account profile",
-      description: "Allows {requesterKind} to view an account profile.",
+      description: "See an account's name, picture, and role.",
       group: "accounts",
       authorityCategory: {
         domain: "accounts",

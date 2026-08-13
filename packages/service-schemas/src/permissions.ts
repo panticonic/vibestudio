@@ -109,7 +109,7 @@ export const permissionsMethods = defineServiceMethods({
     presentation: {
       title: "View saved site permissions",
       action: "view saved site permissions",
-      description: "Allows {requesterKind} to view saved site permissions.",
+      description: "See which site permissions have been saved.",
       group: "approvals",
       authorityCategory: {
         domain: "safety",
@@ -133,7 +133,7 @@ export const permissionsMethods = defineServiceMethods({
     presentation: {
       title: "Remove a saved site permission",
       action: "remove a saved site permission",
-      description: "Allows {requesterKind} to remove a saved site permission.",
+      description: "Remove a saved site permission so it will be asked again.",
       group: "approvals",
       authorityCategory: {
         domain: "safety",
@@ -164,7 +164,7 @@ export const permissionsMethods = defineServiceMethods({
     presentation: {
       title: "View saved agent choices",
       action: "view saved agent choices",
-      description: "Allows {requesterKind} to view saved choices for agents.",
+      description: "See what choices have been saved for agents.",
       group: "approvals",
       authorityCategory: {
         domain: "safety",
@@ -216,7 +216,7 @@ export const permissionsMethods = defineServiceMethods({
     presentation: {
       title: "Change saved agent choices",
       action: "change saved agent choices",
-      description: "Allows {requesterKind} to restore or remove saved choices for agents.",
+      description: "Restore or remove saved choices for agents.",
       group: "approvals",
       authorityCategory: {
         domain: "safety",

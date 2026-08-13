@@ -898,7 +898,7 @@ export const buildMethods = defineServiceMethods({
       title: "Inspect build cache retention",
       action: "inspect build cache retention",
       description:
-        "Allows {requesterKind} to inspect retained and unreferenced build files without removing them.",
+        "View cached build files and check which ones are still in use.",
       group: "workspace",
       authorityCategory: {
         domain: "automation",

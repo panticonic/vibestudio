@@ -69,7 +69,7 @@ export const pushMethods = defineServiceMethods({
     presentation: {
       title: "Enable notifications on a device",
       action: "enable notifications on a device",
-      description: "Allows {requesterKind} to enable notifications on a device.",
+      description: "Register a device to receive push notifications.",
       group: "notifications",
       authorityCategory: {
         domain: "people",
@@ -101,7 +101,7 @@ export const pushMethods = defineServiceMethods({
     presentation: {
       title: "Disable notifications on a device",
       action: "disable notifications on a device",
-      description: "Allows {requesterKind} to disable notifications on a device.",
+      description: "Stop sending push notifications to a device.",
       group: "notifications",
       authorityCategory: {
         domain: "people",
@@ -127,7 +127,7 @@ export const pushMethods = defineServiceMethods({
     presentation: {
       title: "Send a notification",
       action: "send a notification",
-      description: "Allows {requesterKind} to send a notification.",
+      description: "Deliver a push notification to a registered device.",
       group: "notifications",
       authorityCategory: {
         domain: "sharing",
@@ -153,7 +153,7 @@ export const pushMethods = defineServiceMethods({
     presentation: {
       title: "View devices registered for notifications",
       action: "view devices registered for notifications",
-      description: "Allows {requesterKind} to view devices registered for notifications.",
+      description: "See which devices are set up to receive push notifications.",
       group: "notifications",
       authorityCategory: {
         domain: "people",

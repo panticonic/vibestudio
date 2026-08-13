@@ -232,7 +232,7 @@ export const developmentNativeMethods = defineServiceMethods({
       title: "Launch a native development tool",
       action: "launch a native development tool",
       description:
-        "Allows {requesterKind} to run one reviewed tool in an exact private source tree.",
+        "Run a reviewed development tool in a private workspace copy.",
       group: "runtime",
       authorityCategory: { domain: "automation", verb: "act" },
     },
@@ -339,7 +339,7 @@ export const developmentNativeMethods = defineServiceMethods({
       title: "Retire a native development tool",
       action: "retire a native development tool",
       description:
-        "Allows {requesterKind} to remove the proven process and private tree for one exact tool.",
+        "Stop a running development tool and clean up its private files.",
       group: "runtime",
       authorityCategory: { domain: "computer", verb: "manage" },
     },
@@ -533,7 +533,7 @@ export const developmentNativeMethods = defineServiceMethods({
       title: "Build exact workspace source",
       action: "build exact workspace source",
       description:
-        "Allows {requesterKind} to install frozen dependencies and execute one reviewed build closure.",
+        "Install dependencies and run the reviewed build for your workspace changes.",
       group: "runtime",
       authorityCategory: { domain: "automation", verb: "act" },
     },
@@ -643,7 +643,7 @@ export const developmentNativeMethods = defineServiceMethods({
       title: "Retire a development build",
       action: "retire a development build",
       description:
-        "Allows {requesterKind} to remove the private execution root proven by one exact run.",
+        "Clean up a development build's private files after the build is finished.",
       group: "runtime",
       authorityCategory: { domain: "computer", verb: "manage" },
     },

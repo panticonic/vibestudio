@@ -1102,7 +1102,7 @@ export const credentialsMethods = defineServiceMethods({
     presentation: {
       title: "Save a connected account",
       action: "save a connected account",
-      description: "Allows {requesterKind} to save a connected account.",
+      description: "Save sign-in details for a connected account.",
       group: "credentials",
       authorityCategory: {
         domain: "accounts",
@@ -1141,7 +1141,7 @@ export const credentialsMethods = defineServiceMethods({
     presentation: {
       title: "Connect an account",
       action: "connect an account",
-      description: "Allows {requesterKind} to connect an account.",
+      description: "Sign in to an account and save the connection for future use.",
       group: "credentials",
       authorityCategory: {
         domain: "accounts",
@@ -1167,7 +1167,7 @@ export const credentialsMethods = defineServiceMethods({
     presentation: {
       title: "Configure an account provider",
       action: "configure an account provider",
-      description: "Allows {requesterKind} to configure an account provider.",
+      description: "Set up the settings needed to connect to an account provider.",
       group: "credentials",
       authorityCategory: {
         domain: "accounts",
@@ -1209,7 +1209,7 @@ export const credentialsMethods = defineServiceMethods({
     presentation: {
       title: "Ask for account details",
       action: "ask for account details",
-      description: "Allows {requesterKind} to ask for account details.",
+      description: "Ask you to enter account details like an API key or token.",
       group: "credentials",
       authorityCategory: {
         domain: "accounts",
@@ -1269,7 +1269,7 @@ export const credentialsMethods = defineServiceMethods({
     presentation: {
       title: "Delete account-provider settings",
       action: "delete account-provider settings",
-      description: "Allows {requesterKind} to delete account-provider settings.",
+      description: "Remove saved account-provider settings so new connections can no longer use them.",
       group: "credentials",
       authorityCategory: {
         domain: "accounts",
@@ -1299,7 +1299,7 @@ export const credentialsMethods = defineServiceMethods({
     presentation: {
       title: "Complete account sign-in",
       action: "complete account sign-in",
-      description: "Allows {requesterKind} to complete account sign-in.",
+      description: "Finish the sign-in process after you approve the account connection.",
       group: "credentials",
       authorityCategory: {
         domain: "accounts",
@@ -1324,7 +1324,7 @@ export const credentialsMethods = defineServiceMethods({
     presentation: {
       title: "Cancel account sign-in",
       action: "cancel account sign-in",
-      description: "Allows {requesterKind} to cancel account sign-in.",
+      description: "Cancel an in-progress account sign-in.",
       group: "credentials",
       authorityCategory: {
         domain: "accounts",
@@ -1380,7 +1380,7 @@ export const credentialsMethods = defineServiceMethods({
     presentation: {
       title: "View which connected accounts are stored",
       action: "view which connected accounts are stored",
-      description: "Allows {requesterKind} to view which connected accounts are stored.",
+      description: "See which connected accounts are saved and how they are being used.",
       group: "credentials",
       authorityCategory: {
         domain: "safety",
@@ -1406,7 +1406,7 @@ export const credentialsMethods = defineServiceMethods({
     presentation: {
       title: "Disconnect an account",
       action: "disconnect an account",
-      description: "Allows {requesterKind} to disconnect an account.",
+      description: "Disconnect an account and revoke its saved sign-in.",
       group: "credentials",
       authorityCategory: {
         domain: "accounts",
@@ -1488,7 +1488,7 @@ export const credentialsMethods = defineServiceMethods({
     presentation: {
       title: "Save submitted account details",
       action: "save submitted account details",
-      description: "Allows {requesterKind} to save submitted account details.",
+      description: "Save the account details you just entered.",
       group: "credentials",
       authorityCategory: {
         domain: "accounts",
@@ -1513,7 +1513,7 @@ export const credentialsMethods = defineServiceMethods({
     presentation: {
       title: "View connected-account activity",
       action: "view connected-account activity",
-      description: "Allows {requesterKind} to view connected-account activity.",
+      description: "See the activity log for your connected accounts.",
       group: "credentials",
       authorityCategory: {
         domain: "safety",
