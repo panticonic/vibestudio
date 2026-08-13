@@ -760,6 +760,43 @@ describe("PanelOrchestrator local presentation", () => {
     });
   });
 
+  it("acknowledges reload navigation without waiting on unbounded renderer boot", async () => {
+    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const panel = makePanel("panel:tree/reload-booting");
+    registry.addPanel(panel, null, { addAsRoot: true });
+    const { orchestrator, panelView } = createOrchestrator(registry, vi.fn(), {
+      getNativeBinding: () => ({ nativeSlotId: "pane:primary" }),
+      getBootObservation: vi.fn(async () => ({ kind: "unavailable" as const })),
+    });
+    const loaded = new Set<string>();
+    panelView.hasView.mockImplementation((panelId: string) => loaded.has(panelId));
+    panelView.createViewForPanel.mockImplementation(async (panelId: string) => {
+      loaded.add(panelId);
+    });
+    panelView.getWebContents.mockReturnValue({
+      id: 48,
+      isDestroyed: () => false,
+      getURL: () => "http://127.0.0.1:1234/panels/reload/",
+      isLoading: () => false,
+    });
+
+    await orchestrator.ensureLoaded(panel.id);
+    const connection = orchestrator.getPanelRuntimeConnection(panel.id);
+    orchestrator.onPanelBoot(panel.id, 48, {
+      phase: "ready",
+      runtimeEntityId: connection?.runtimeEntityId,
+    });
+
+    await expect(orchestrator.reloadPanel(panel.id)).resolves.toMatchObject({
+      operation: "reload",
+      reloaded: true,
+    });
+    expect(orchestrator.getLocalPresentation(panel.id).presentation).toMatchObject({
+      state: "loading",
+      stage: "booting",
+    });
+  });
+
   it("reattaches an already-ready view without reacquiring or navigating", async () => {
     const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
     const panel = makePanel("panel:tree/presentation-reattach");

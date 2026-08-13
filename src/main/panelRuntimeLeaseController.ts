@@ -665,8 +665,19 @@ export class PanelPresentationController {
       await this.runPresentationAttempt(attempt, getCurrentSnapshot(panel), "acquire");
     })();
     this.trackProgress(panelId, progress);
-    const result = await attempt.completion;
-    return result.state === "ready";
+    // Reload acknowledgement owns the native navigation, not the renderer's
+    // unbounded boot lifecycle. Boot evidence continues to settle `attempt`
+    // asynchronously and is observed through the panel handle/session. Waiting
+    // for `attempt.completion` here deadlocked the host-command response when a
+    // renderer remained in booting, until CdpBridge's unrelated 30s transport
+    // timeout fired.
+    await progress;
+    const presentation = this.getPresentation(panelId).presentation;
+    return (
+      Boolean(this.deps.getPanelView()?.hasView(panelId)) &&
+      presentation.state !== "failed" &&
+      presentation.state !== "unavailable"
+    );
   }
 
   async present(

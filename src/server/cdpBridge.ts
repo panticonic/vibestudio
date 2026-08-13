@@ -25,6 +25,7 @@ import { CDP_INTERNAL_GRANT_HEADER, CdpGrantService } from "@vibestudio/shared/c
 import type { PanelRuntimeLeaseChangedEvent } from "@vibestudio/shared/panel/panelLease";
 import { createDevLogger } from "@vibestudio/dev-log";
 import { parseWebSocketAuthProtocol } from "@vibestudio/rpc/protocol/webSocketAuthProtocol";
+import { RpcBoundaryError } from "@vibestudio/rpc";
 
 const log = createDevLogger("CdpBridge");
 
@@ -372,7 +373,25 @@ export class CdpBridge {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pendingNavCommands.delete(requestId);
-        reject(new Error(`Host command timed out: ${action}`));
+        reject(
+          new RpcBoundaryError(
+            `Host command timed out: ${action}`,
+            "transport",
+            "host_command_timeout",
+            undefined,
+            {
+              code: "host_command_timeout",
+              failureKind: "infrastructure",
+              targetId,
+              action,
+              recovery: {
+                action: "reobserve",
+                instruction:
+                  "Observe the current panel lifecycle before deciding whether another host command is needed.",
+              },
+            }
+          )
+        );
       }, NAV_COMMAND_TIMEOUT_MS);
 
       this.pendingNavCommands.set(requestId, {
