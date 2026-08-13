@@ -25,6 +25,7 @@ export { MobileConnectionAggregateError } from "./connectionPair.js";
 export {
   createPairedMobileConnection,
   createRoutedMobileConnection,
+  selectMobileConnectionWorkspace,
   parseStoredMobileConnection,
   replaceMobileConnectionCredential,
 } from "./storedCredential.js";

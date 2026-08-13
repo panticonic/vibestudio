@@ -207,6 +207,35 @@ export function createPairedMobileConnection(
   };
 }
 
+/**
+ * Point an already-paired device at a different workspace.
+ *
+ * Switching workspaces is a routing change, not a new pairing. The device keeps
+ * the credential and control reach it was paired with, so the person switching
+ * never has to rescan a pairing code. Passing the stored connection through the
+ * fresh-pairing constructor instead cannot work: a stored pairing has no `code`
+ * or `exp` precisely because it has already been consumed.
+ *
+ * The previous workspace's reach is dropped rather than carried over — it
+ * addresses the workspace being left — so the caller must route again before
+ * the connection is usable, which is what the `paired` phase means.
+ */
+export function selectMobileConnectionWorkspace(
+  connection: StoredMobileConnection,
+  selectedWorkspaceId: string
+): StoredPairedMobileConnection {
+  validateCredentialAndTimestamp(connection.credential, connection.pairedAt);
+  validateSelectedWorkspaceId(selectedWorkspaceId);
+  return {
+    schemaVersion: 4,
+    phase: "paired",
+    credential: { ...connection.credential },
+    controlPairing: canonicalizeStoredPairing(connection.controlPairing, "control"),
+    selectedWorkspaceId,
+    pairedAt: connection.pairedAt,
+  };
+}
+
 export function createRoutedMobileConnection(
   paired: StoredPairedMobileConnection,
   workspacePairing: StoredShellPairing

@@ -3,6 +3,7 @@ import {
   createPairedMobileConnection,
   createRoutedMobileConnection,
   parseStoredMobileConnection,
+  selectMobileConnectionWorkspace,
 } from "./storedCredential.js";
 
 const pairing = {
@@ -25,6 +26,46 @@ const DEVICE_ID = `dev_${"d".repeat(24)}`;
 const REFRESH_TOKEN = "r".repeat(43);
 
 describe("mobile stored shell credential", () => {
+  it("switches workspaces without a fresh pairing code", () => {
+    const routed = createRoutedMobileConnection(
+      createPairedMobileConnection(
+        { deviceId: DEVICE_ID, refreshToken: REFRESH_TOKEN },
+        pairing,
+        "ws-one",
+        123
+      ),
+      reconnectReach
+    );
+
+    // The stored pairing has no `code` or `exp` — it was consumed at pairing
+    // time — so switching must not route back through the fresh-pairing path.
+    const switched = selectMobileConnectionWorkspace(routed, "ws-two");
+
+    expect(switched).toEqual({
+      schemaVersion: 4,
+      phase: "paired",
+      credential: { deviceId: DEVICE_ID, refreshToken: REFRESH_TOKEN },
+      controlPairing: routed.controlPairing,
+      selectedWorkspaceId: "ws-two",
+      pairedAt: 123,
+    });
+    // The reach that addressed the workspace being left must not survive.
+    expect(switched).not.toHaveProperty("workspacePairing");
+    // A round trip through storage still parses, so the switch is persistable.
+    expect(parseStoredMobileConnection(JSON.stringify(switched))).toEqual(switched);
+  });
+
+  it("keeps switching idempotent for the already-selected workspace", () => {
+    const paired = createPairedMobileConnection(
+      { deviceId: DEVICE_ID, refreshToken: REFRESH_TOKEN },
+      pairing,
+      "ws-one",
+      123
+    );
+
+    expect(selectMobileConnectionWorkspace(paired, "ws-one")).toEqual(paired);
+  });
+
   it("round-trips the paired checkpoint without accepting a workspace reach", () => {
     const paired = createPairedMobileConnection(
       { deviceId: DEVICE_ID, refreshToken: REFRESH_TOKEN },
