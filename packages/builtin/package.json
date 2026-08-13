@@ -20,8 +20,6 @@
     "@vibestudio/rpc": "workspace:*",
     "@vibestudio/service-schemas": "workspace:*",
     "@vibestudio/shared": "workspace:*",
-    "@vibestudio/trajectory-identity": "workspace:*",
-    "@vibestudio/workspace-contracts": "workspace:*",
     "sql.js": "^1.14.0"
   },
   "devDependencies": {

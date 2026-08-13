@@ -105,9 +105,6 @@
     "dev": "tsc --project tsconfig.build.json --watch",
     "test": "cd ../.. && vitest run packages/rpc/src"
   },
-  "dependencies": {
-    "@vibestudio/types": "workspace:*"
-  },
   "devDependencies": {
     "typescript": "7.0.2"
   }
