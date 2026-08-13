@@ -14,7 +14,15 @@ const userAuthority = {
   principals: ["user"],
 } satisfies NonNullable<MethodSchema["authority"]>;
 
-function direct<T extends MethodSchema>(receiver: T) {
+/**
+ * Re-declare one receiver method as a direct shell method.
+ *
+ * `returns` must be constrained to a present schema, not merely inherited from
+ * MethodSchema where it is optional: MethodResult degrades `ZodType | undefined`
+ * to `unknown`, which silently untyped every method on this client and left the
+ * mobile privacy manager reading `.items` off `unknown`.
+ */
+function direct<T extends MethodSchema & { returns: z.ZodType }>(receiver: T) {
   return {
     description: receiver.description,
     args: receiver.args,

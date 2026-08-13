@@ -379,12 +379,18 @@ const importedHistorySchema = z
   })
   .strict();
 
-function browserDataMethod(
-  args: z.ZodType<unknown[]>,
-  returns: z.ZodType,
+/**
+ * Generic in both schemas, and deliberately not annotated `: MethodSchema`.
+ * Widening the return type here erases every method's args and returns, and
+ * MethodResult turns an optional `returns` into `unknown` — which silently
+ * untyped every typed client built over this table.
+ */
+function browserDataMethod<A extends z.ZodType<unknown[]>, R extends z.ZodType>(
+  args: A,
+  returns: R,
   sensitivity: "read" | "write" | "destructive",
   options: { secret?: boolean; description: string }
-): MethodSchema {
+) {
   const capability =
     sensitivity === "read"
       ? "browser-data.read"
@@ -407,19 +413,25 @@ function browserDataMethod(
           : "Credential-bearing, persistent, or destructive browser-data operation.",
     },
     access: { sensitivity },
-  };
+  } satisfies MethodSchema;
 }
 
-const read = (
-  args: z.ZodType<unknown[]>,
-  returns: z.ZodType,
+const read = <A extends z.ZodType<unknown[]>, R extends z.ZodType>(
+  args: A,
+  returns: R,
   description: string,
   secret = false
 ) => browserDataMethod(args, returns, "read", { description, secret });
-const write = (args: z.ZodType<unknown[]>, returns: z.ZodType, description: string) =>
-  browserDataMethod(args, returns, "write", { description });
-const destroy = (args: z.ZodType<unknown[]>, returns: z.ZodType, description: string) =>
-  browserDataMethod(args, returns, "destructive", { description });
+const write = <A extends z.ZodType<unknown[]>, R extends z.ZodType>(
+  args: A,
+  returns: R,
+  description: string
+) => browserDataMethod(args, returns, "write", { description });
+const destroy = <A extends z.ZodType<unknown[]>, R extends z.ZodType>(
+  args: A,
+  returns: R,
+  description: string
+) => browserDataMethod(args, returns, "destructive", { description });
 
 /**
  * Canonical wire table for the product-owned browser data store. Native import,
