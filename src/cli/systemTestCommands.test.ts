@@ -308,6 +308,91 @@ describe("system-test startup preparation", () => {
     expect(result.ok).toBe(true);
     expect(reads).toBe(2);
   });
+
+  it("waits when an approved provider is still building in structured unit status", async () => {
+    let reads = 0;
+    const result = await settleSystemTestStartup(
+      async () => {
+        reads += 1;
+        return reads === 1
+          ? {
+              ok: false,
+              checks: [
+                {
+                  name: "required-extensions",
+                  ok: true,
+                  detail: "declared workspace extensions are approved and build-ready",
+                  data: [
+                    {
+                      source: "extensions/claude-code",
+                      name: "@workspace-extensions/claude-code",
+                      status: "building",
+                    },
+                  ],
+                },
+                {
+                  name: "claude-code-extension",
+                  ok: false,
+                  detail:
+                    "Extension is not installed: @workspace-extensions/claude-code. Current registry status: building. It has no active approved build.",
+                },
+              ],
+            }
+          : { ok: true, checks: [] };
+      },
+      {
+        getWorkspaceCreationReviewState: async () => ({ status: "resolved" }),
+        listPending: async () => [],
+        resolveInstallReview: async () => undefined,
+      },
+      { deadlineMs: 1_000, pollMs: 0 }
+    );
+
+    expect(result.doctor.ok).toBe(true);
+    expect(reads).toBe(2);
+  });
+
+  it("does not mask a terminal provider failure merely because another extension is building", async () => {
+    const result = {
+      ok: false,
+      checks: [
+        {
+          name: "required-extensions",
+          ok: true,
+          detail: "declared workspace extensions are approved and build-ready",
+          data: [
+            {
+              source: "extensions/file-tools",
+              name: "@workspace-extensions/file-tools",
+              status: "building",
+            },
+            {
+              source: "extensions/claude-code",
+              name: "@workspace-extensions/claude-code",
+              status: "error",
+            },
+          ],
+        },
+        {
+          name: "claude-code-extension",
+          ok: false,
+          detail: "Extension is not installed: @workspace-extensions/claude-code",
+        },
+      ],
+    };
+    let reads = 0;
+
+    await expect(
+      settleSystemTestDoctor(
+        async () => {
+          reads += 1;
+          return result;
+        },
+        { deadlineMs: 1_000, pollMs: 0 }
+      )
+    ).resolves.toBe(result);
+    expect(reads).toBe(1);
+  });
 });
 
 describe("system-test durable driver lifecycle", () => {

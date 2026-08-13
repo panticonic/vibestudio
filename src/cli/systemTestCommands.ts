@@ -1476,12 +1476,44 @@ function doctorIsWaitingForApprovedBuilds(
   const transientStates = options.allowMissing
     ? /\b(?:missing|pending-approval|approval-required|building)\b/
     : /\b(?:pending-approval|approval-required|building)\b/;
-  const requiredExtensions = failures.find((check) => check.name === "required-extensions");
-  if (!requiredExtensions || !transientStates.test(requiredExtensions.detail)) return false;
+  const requiredExtensions = (result.checks ?? []).find(
+    (check) => check.name === "required-extensions"
+  );
+  if (!requiredExtensions) return false;
+  const structuredStatuses = Array.isArray(requiredExtensions.data)
+    ? requiredExtensions.data.flatMap((entry) => {
+        if (!entry || typeof entry !== "object" || Array.isArray(entry)) return [];
+        const record = entry as Record<string, unknown>;
+        return typeof record["status"] === "string"
+          ? [
+              {
+                source: typeof record["source"] === "string" ? record["source"] : "",
+                name: typeof record["name"] === "string" ? record["name"] : "",
+                status: record["status"],
+              },
+            ]
+          : [];
+      })
+    : [];
+  const requiredExtensionsWaiting =
+    (!requiredExtensions.ok && transientStates.test(requiredExtensions.detail)) ||
+    structuredStatuses.some(({ status }) => transientStates.test(status));
+  if (!requiredExtensionsWaiting) return false;
+  const claudeCodeWaiting =
+    structuredStatuses.some(
+      ({ source, name, status }) =>
+        (source === "extensions/claude-code" || name === "@workspace-extensions/claude-code") &&
+        transientStates.test(status)
+    ) ||
+    (!requiredExtensions.ok &&
+      /claude-code[^,;]*(?:missing|pending-approval|approval-required|building)/u.test(
+        requiredExtensions.detail
+      ));
   return failures.every(
     (check) =>
       check === requiredExtensions ||
       (check.name === "claude-code-extension" &&
+        claudeCodeWaiting &&
         /(?:pending-approval|approval-required|not installed|no active approved build)/u.test(
           check.detail
         ))

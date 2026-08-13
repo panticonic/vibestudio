@@ -9,6 +9,10 @@ import {
   parseSystemTestLauncherArgs,
   stopManagedSystemTestInstance,
 } from "./systemTestInstance.js";
+import {
+  assertSystemTestPreparationResult,
+  systemTestPreparationFailureDetail,
+} from "./systemTestPreparation.js";
 
 const require = createRequire(import.meta.url);
 const tsxCli = require.resolve("tsx/cli");
@@ -81,30 +85,15 @@ function prepareFreshInstance(instanceId: string, expectedWorkspaceId: string): 
       } else if (code !== 0) {
         reject(
           new Error(
-            `system-test startup preparation failed${diagnostics.trim() ? `: ${diagnostics.trim()}` : ""}`
+            `system-test startup preparation failed:\n${systemTestPreparationFailureDetail(
+              output,
+              diagnostics
+            )}`
           )
         );
       } else {
         try {
-          const line = output
-            .trim()
-            .split(/\r?\n/u)
-            .reverse()
-            .find((candidate) => candidate.trim().startsWith("{"));
-          const result = line ? (JSON.parse(line) as Record<string, unknown>) : null;
-          const checks = Array.isArray(result?.["checks"])
-            ? (result["checks"] as Array<Record<string, unknown>>)
-            : [];
-          const server = checks.find((check) => check["name"] === "server");
-          const data =
-            server?.["data"] && typeof server["data"] === "object"
-              ? (server["data"] as Record<string, unknown>)
-              : null;
-          if (data?.["workspaceId"] !== expectedWorkspaceId) {
-            throw new Error(
-              `system-test startup preparation reached workspace ${String(data?.["workspaceId"] ?? "unknown")}; expected ${expectedWorkspaceId}`
-            );
-          }
+          assertSystemTestPreparationResult(output, expectedWorkspaceId);
           resolve();
         } catch (error) {
           reject(error);
