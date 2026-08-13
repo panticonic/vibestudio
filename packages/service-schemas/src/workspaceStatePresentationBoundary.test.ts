@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { PanelTreePageSchema, SlotRowSchema } from "./workspaceState.js";
+import {
+  PanelTreePageSchema,
+  RawPanelTreePageSchema,
+  RawSlotRowSchema,
+  SlotRowSchema,
+} from "./workspaceState.js";
 
 const slot = {
   slot_id: "panel:one",
@@ -12,13 +17,16 @@ const slot = {
 };
 
 describe("workspace-state presentation boundary", () => {
-  it("rejects entity titles on raw slot rows", () => {
+  it("separates raw durable slot rows from composed service rows", () => {
+    expect(
+      RawSlotRowSchema.safeParse({ ...slot, current_entity_title: "Owned by Base" }).success
+    ).toBe(false);
     expect(
       SlotRowSchema.safeParse({ ...slot, current_entity_title: "Owned by Base" }).success
-    ).toBe(false);
+    ).toBe(true);
   });
 
-  it("rejects composed title, icon, kind, ref, and placement on raw tree nodes", () => {
+  it("accepts topology only internally and presentation only at the service boundary", () => {
     const page = {
       revision: 1,
       group: { kind: "roots", ownerUserId: null },
@@ -34,7 +42,8 @@ describe("workspace-state presentation boundary", () => {
       ],
       nextCursor: null,
     };
-    expect(PanelTreePageSchema.safeParse(page).success).toBe(true);
+    expect(RawPanelTreePageSchema.safeParse(page).success).toBe(true);
+    expect(PanelTreePageSchema.safeParse(page).success).toBe(false);
     for (const productField of [
       { title: "Chat" },
       { icon: "chat" },
@@ -43,11 +52,17 @@ describe("workspace-state presentation boundary", () => {
       { placement: { disposition: "side" } },
     ]) {
       expect(
-        PanelTreePageSchema.safeParse({
+        RawPanelTreePageSchema.safeParse({
           ...page,
           nodes: [{ ...page.nodes[0], ...productField }],
         }).success
       ).toBe(false);
     }
+    expect(
+      PanelTreePageSchema.safeParse({
+        ...page,
+        nodes: [{ ...page.nodes[0], title: "Chat", icon: "chat", kind: "workspace" }],
+      }).success
+    ).toBe(true);
   });
 });

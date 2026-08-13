@@ -30,7 +30,7 @@ import {
   createVerifiedCaller,
   type VerifiedCodeIdentity,
 } from "@vibestudio/shared/serviceDispatcher";
-import { parseDoTargetId } from "@vibestudio/shared/workspaceServiceRpc";
+import { omitTrailingUndefined, parseDoTargetId } from "@vibestudio/shared/workspaceServiceRpc";
 import { isCallerKind } from "@vibestudio/shared/principalKinds";
 import { registerBuildProvider, unregisterBuildProvider } from "./buildV2/buildProviderRegistry.js";
 import { assertPresent, deleteDynamicProperty } from "../lintHelpers";
@@ -3653,7 +3653,7 @@ async function main() {
               objectKey: presentation.objectKey,
             },
             method,
-            ...args
+            ...omitTrailingUndefined(args)
           );
         };
         presentationDispatch = dispatchPresentation;

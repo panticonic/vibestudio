@@ -6,6 +6,10 @@ import { AuthorityResourceScopeSchema, UnitAuthorityManifestSchema } from "./bui
 import {
   LifecycleKeySchema,
   LifecycleLeaseSchema,
+  RawPanelDetailSchema,
+  RawPanelTreePageSchema,
+  RawPanelTreePathSchema,
+  RawSlotRowSchema,
   SlotCreateInputSchema,
   workspaceStateMethods,
 } from "./workspaceState.js";
@@ -421,9 +425,18 @@ const rawWorkspaceStateEngineMethods = defineServiceMethods({
     returns: z.void(),
   },
   panelTreeRootGroups: { ...workspaceStateMethods["panelTree.rootGroups"] },
-  panelTreePage: { ...workspaceStateMethods["panelTree.page"] },
-  panelTreePath: { ...workspaceStateMethods["panelTree.path"] },
-  panelTreeDetail: { ...workspaceStateMethods["panelTree.detail"] },
+  panelTreePage: {
+    ...workspaceStateMethods["panelTree.page"],
+    returns: RawPanelTreePageSchema,
+  },
+  panelTreePath: {
+    ...workspaceStateMethods["panelTree.path"],
+    returns: RawPanelTreePathSchema.nullable(),
+  },
+  panelTreeDetail: {
+    ...workspaceStateMethods["panelTree.detail"],
+    returns: RawPanelDetailSchema.nullable(),
+  },
   slotCreate: {
     ...workspaceStateMethods["slot.create"],
     args: z.tuple([internalSlotCreateInputSchema]),
@@ -439,7 +452,7 @@ const rawWorkspaceStateEngineMethods = defineServiceMethods({
   slotCloseOwnedRoots: { ...workspaceStateMethods["slot.closeOwnedRoots"] },
   slotCloseCleanupPage: { ...workspaceStateMethods["slot.closeCleanupPage"] },
   slotCloseCleanupAck: { ...workspaceStateMethods["slot.closeCleanupAck"] },
-  slotGet: { ...workspaceStateMethods["slot.get"] },
+  slotGet: { ...workspaceStateMethods["slot.get"], returns: RawSlotRowSchema.nullable() },
   slotHistoryRelative: { ...workspaceStateMethods["slot.historyRelative"] },
   slotHistoryEntry: { ...workspaceStateMethods["slot.historyEntry"] },
 });

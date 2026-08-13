@@ -16,17 +16,17 @@ import { UnitAuthorityManifestSchema } from "./build.js";
 import { contextBoundaryAuthority } from "./authority/contextBoundary.js";
 
 const WORKSPACE_RUNTIME_STATE_PRESENTATION = {
-  title: "Manage running workspace services",
-  action: "manage apps, panels, background tasks, and scheduled work that's currently running",
-  description: "Maintain running workspace apps, panels, background tasks, and scheduled work",
+  title: "Manage running apps and tasks",
+  action: "manage apps, panels, and scheduled tasks that are currently running",
+  description: "Start, stop, or check on apps and tasks running in your workspace",
   group: "workspace",
   authorityCategory: { domain: "automation", verb: "manage" },
 } as const;
 
 const WORKSPACE_RUNTIME_STATE_INSPECT_PRESENTATION = {
-  title: "Inspect running workspace services",
-  action: "inspect apps, panels, background tasks, and scheduled work that's currently running",
-  description: "Read the current structure and status of running workspace services",
+  title: "View running apps and tasks",
+  action: "view apps, panels, and scheduled tasks that are currently running",
+  description: "See what apps and tasks are currently running in your workspace",
   group: "workspace",
   authorityCategory: { domain: "automation", verb: "see" },
 } as const;
@@ -110,7 +110,22 @@ export const PanelSearchResultSchema = z
   })
   .strict();
 
-export const SlotRowSchema = z.object({
+export const RawSlotRowSchema = z
+  .object({
+    slot_id: z.string(),
+    parent_slot_id: z.string().nullable(),
+    current_entity_id: z.string().nullable(),
+    current_entry_key: z.string().nullable(),
+    current_history_cursor: z.number().int().nonnegative().nullable().optional(),
+    history_count: z.number().int().nonnegative().optional(),
+    sort_key: z.number().int(),
+    owner_user_id: z.string().nullable().optional(),
+    created_at: z.number(),
+    closed_at: z.number().nullable(),
+  })
+  .strict();
+
+export const SlotRowSchema = RawSlotRowSchema.extend({
   slot_id: z.string(),
   parent_slot_id: z.string().nullable(),
   current_entity_id: z.string().nullable(),
@@ -122,7 +137,7 @@ export const SlotRowSchema = z.object({
   owner_user_id: z.string().nullable().optional(),
   created_at: z.number(),
   closed_at: z.number().nullable(),
-});
+}).strict();
 
 export const SlotHistoryRowSchema = z.object({
   slot_id: z.string(),
@@ -159,6 +174,15 @@ export const EntityRecordSchema = z.object({
   error: z.string().optional(),
 });
 
+export const RawPanelDetailSchema = z
+  .object({
+    revision: z.number().int().nonnegative(),
+    slot: RawSlotRowSchema,
+    currentHistory: SlotHistoryRowSchema,
+    entity: EntityRecordSchema,
+  })
+  .strict();
+
 export const PanelDetailSchema = z
   .object({
     revision: z.number().int().nonnegative(),
@@ -174,21 +198,27 @@ const PanelTreeGroupSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("children"), parentSlotId: z.string() }).strict(),
 ]);
 
-const PanelTreeNodeSchema = z
+export const RawPanelTreeNodeSchema = z
   .object({
     slotId: z.string(),
     parentSlotId: z.string().nullable(),
     ownerUserId: z.string().nullable(),
-    title: z.string(),
-    icon: z.string().max(256).optional(),
     createdAt: z.number(),
     childCount: z.number().int().nonnegative(),
     source: z.string().optional(),
-    kind: z.enum(["workspace", "browser"]).optional(),
     contextId: z.string().optional(),
     runtimeEntityId: z.string().nullable().optional(),
     effectiveVersion: z.string().nullable().optional(),
     buildKey: z.string().nullable().optional(),
+    options: z.string().nullable().optional(),
+  })
+  .strict();
+
+const PanelTreeNodeSchema = RawPanelTreeNodeSchema.omit({ options: true })
+  .extend({
+    title: z.string(),
+    icon: z.string().max(256).optional(),
+    kind: z.enum(["workspace", "browser"]).optional(),
     ref: z.string().nullable().optional(),
     placement: z
       .object({
@@ -226,6 +256,15 @@ export const PanelTreePageSchema = z
   })
   .strict();
 
+export const RawPanelTreePageSchema = z
+  .object({
+    revision: z.number().int().nonnegative(),
+    group: PanelTreeGroupSchema,
+    nodes: z.array(RawPanelTreeNodeSchema),
+    nextCursor: z.string().nullable(),
+  })
+  .strict();
+
 export const PanelTreePageWindowSchema = z
   .object({
     cursor: z.string().optional(),
@@ -252,6 +291,13 @@ export const PanelTreePathSchema = z
   .object({
     revision: z.number().int().nonnegative(),
     nodes: z.array(PanelTreeNodeSchema),
+  })
+  .strict();
+
+export const RawPanelTreePathSchema = z
+  .object({
+    revision: z.number().int().nonnegative(),
+    nodes: z.array(RawPanelTreeNodeSchema),
   })
   .strict();
 
