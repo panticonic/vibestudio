@@ -425,12 +425,29 @@ describe("build artifact helpers", () => {
         kind: "event",
         eventId: "event:second",
       });
+      fs.writeFileSync(
+        path.join(root, "builds", buildKey, "executions", `${firstExecutionDigest}.json`),
+        JSON.stringify(first.metadata)
+      );
       expect(getByExecution(buildKey, firstExecutionDigest)?.metadata.execution).toEqual(
         first.metadata.execution
       );
       expect(
         getByExecution(buildKey, rebound.metadata.execution!.executionDigest)?.metadata.execution
       ).toEqual(rebound.metadata.execution);
+      const retained = JSON.parse(
+        fs.readFileSync(
+          path.join(root, "builds", buildKey, "executions", `${firstExecutionDigest}.json`),
+          "utf8"
+        )
+      ) as Record<string, unknown>;
+      expect(Object.keys(retained).sort()).toEqual([
+        "execution",
+        "sourceState",
+        "sourceStateHash",
+        "version",
+      ]);
+      expect(retained).not.toHaveProperty("executableModules");
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }

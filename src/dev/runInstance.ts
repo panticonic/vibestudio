@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import { DevInstanceSupervisor } from "./devInstanceSupervisor.js";
+import { DerivedCacheCoordinator, derivedCacheDatabasePath } from "@vibestudio/shared/derivedCache";
 import {
   clearDevInstanceReady,
   createEphemeralInstanceRoot,
@@ -20,6 +21,80 @@ const require = createRequire(import.meta.url);
 const tsxCli = require.resolve("tsx/cli");
 
 type Mode = DevInstanceRecord["kind"];
+
+async function prunePersistentInstanceBuildCache(root: string, instanceId: string): Promise<void> {
+  const buildCacheRoot = path.join(root, "build-cache");
+  const coordinator = new DerivedCacheCoordinator(derivedCacheDatabasePath(buildCacheRoot));
+  try {
+    const result = await coordinator.prune(buildCacheRoot);
+    if (result.removedEntries > 0) {
+      console.log(
+        `[instance:${instanceId}] pruned ${result.removedEntries} cached builds ` +
+          `(${(result.removedBytes / 1024 ** 3).toFixed(2)} GiB)`
+      );
+    }
+    const cas = pruneUnreferencedInstanceCas(path.join(root, "cas"));
+    if (cas.removedFiles > 0) {
+      console.log(
+        `[instance:${instanceId}] pruned ${cas.removedFiles} unreferenced CAS blobs ` +
+          `(${(cas.removedBytes / 1024 ** 3).toFixed(2)} GiB)`
+      );
+    }
+  } catch (error) {
+    console.warn(
+      `[instance:${instanceId}] build-cache pruning failed: ${error instanceof Error ? error.message : String(error)}`
+    );
+  } finally {
+    coordinator.close();
+  }
+}
+
+function pruneUnreferencedInstanceCas(root: string): {
+  removedFiles: number;
+  removedBytes: number;
+} {
+  const shaRoot = path.join(root, "sha256");
+  let removedFiles = 0;
+  let removedBytes = 0;
+  const pending = [shaRoot];
+  while (pending.length > 0) {
+    const directory = pending.pop()!;
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(directory, { withFileTypes: true });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+      throw error;
+    }
+    for (const entry of entries) {
+      const storedPath = path.join(directory, entry.name);
+      if (entry.isDirectory()) {
+        pending.push(storedPath);
+        continue;
+      }
+      if (!entry.isFile()) continue;
+      const stat = fs.statSync(storedPath);
+      if (stat.nlink !== 1) continue;
+      fs.unlinkSync(storedPath);
+      removedFiles += 1;
+      removedBytes += stat.blocks * 512 || stat.size;
+    }
+  }
+  return { removedFiles, removedBytes };
+}
+
+function removeRetiredInstanceCaches(root: string, instanceId: string): void {
+  const removed: string[] = [];
+  for (const name of ["external-deps", "extension-runtime-deps", "npm-cache"]) {
+    const retired = path.join(root, name);
+    if (!fs.existsSync(retired)) continue;
+    fs.rmSync(retired, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
+    removed.push(name);
+  }
+  if (removed.length > 0) {
+    console.log(`[instance:${instanceId}] removed retired caches: ${removed.join(", ")}`);
+  }
+}
 
 function extractInstance(argv: string[]): { instanceId?: string; forwarded: string[] } {
   const forwarded: string[] = [];
@@ -213,12 +288,17 @@ async function main(): Promise<void> {
 
   console.log(`[instance:${id}] ${instance.lifecycle} ${mode} state: ${root}`);
   console.log(`[instance:${id}] CLI: pnpm cli --instance ${id} <command>`);
+  if (!disposable) {
+    removeRetiredInstanceCaches(root, id);
+    await prunePersistentInstanceBuildCache(root, id);
+  }
   try {
     process.exitCode =
       mode === "server"
         ? await runServer(parsed.forwarded, env, instance)
         : await runDesktop(parsed.forwarded, env);
   } finally {
+    if (!disposable) await prunePersistentInstanceBuildCache(root, id);
     const cleanupError = disposable ? removeEphemeralInstanceRoot(root) : null;
     if (cleanupError) {
       // Preserve the registry record and root together: the stale supervisor

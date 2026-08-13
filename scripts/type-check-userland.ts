@@ -56,6 +56,7 @@ try {
   }
 } finally {
   fs.rmSync(temporaryRoot, { recursive: true, force: true });
+  projection.release();
 }
 
 if (failed) {

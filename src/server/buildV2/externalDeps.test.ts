@@ -62,9 +62,20 @@ import {
   collectTransitiveDependencyPatches,
   collectTransitiveExternalDeps,
   dependencyPatchesForExternalRoots,
-  ensureExternalDeps,
+  acquireExternalDeps,
+  type ExternalDependencyPatch,
 } from "./externalDeps.js";
 import { NpmResolutionError, runNpmInstall } from "@vibestudio/shared/npmInstaller";
+
+async function ensureExternalDeps(
+  deps: Record<string, string>,
+  dependencyOverrides: Record<string, string> = {},
+  options: { patches?: readonly ExternalDependencyPatch[] } = {}
+): Promise<string> {
+  const borrowed = await acquireExternalDeps(deps, dependencyOverrides, options);
+  borrowed.release();
+  return borrowed.nodeModulesDir;
+}
 
 /** Helper: create a minimal GraphNode. */
 function makeNode(

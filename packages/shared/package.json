@@ -46,6 +46,7 @@
     "./contextMiddleware": "./src/contextMiddleware.ts",
     "./contextPaths": "./src/contextPaths.ts",
     "./deviceCredentials": "./src/deviceCredentials.ts",
+    "./derivedCache": "./src/derivedCache.ts",
     "./directRpcEnforcement": "./src/directRpcEnforcement.ts",
     "./doDispatcher": "./src/doDispatcher.ts",
     "./durableWork": "./src/durableWork.ts",
