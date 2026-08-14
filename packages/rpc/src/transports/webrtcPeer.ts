@@ -54,7 +54,15 @@ export interface RtcIceServer {
 export interface RtcDataChannelLike {
   readonly label: string;
   readonly readyState: RtcDataChannelState;
-  /** Bytes queued but not yet sent — chunk under `maxMessageSize` and watch this. */
+  /**
+   * Bytes handed to `send` that have not reached the wire, INCLUDING the write
+   * that just returned. The frame scheduler's only backpressure signal: an
+   * implementation that reports zero for bytes it is still holding tells the
+   * pump there is room, and the pump keeps writing until something else breaks.
+   * An adapter whose platform reports this asynchronously must count its own
+   * sends and reconcile when the platform's number arrives, rather than
+   * publishing a stale figure.
+   */
   readonly bufferedAmount: number;
   bufferedAmountLowThreshold: number;
   /** Measured SCTP max message size (libdatachannel reports 256 KB — plan §11). */
@@ -65,6 +73,17 @@ export interface RtcDataChannelLike {
   onClose(handler: () => void): () => void;
   onError(handler: (error: Error) => void): () => void;
   onMessage(handler: (data: Uint8Array) => void): () => void;
+  /**
+   * Fire when `bufferedAmount <= bufferedAmountLowThreshold`, matching both the
+   * W3C condition ("to or below") and `awaitDrain`, which parks on exactly that
+   * predicate. The comparison must not be strict: a threshold of zero is legal
+   * and means "wait until empty", so `bufferedAmount < 0` would make the event
+   * unsatisfiable and park every writer forever.
+   *
+   * The event is an edge with no replay. A subscriber that samples the level
+   * before subscribing must re-read it after (see `awaitDrain`), because the
+   * edge it is waiting for may already have passed.
+   */
   onBufferedAmountLow(handler: () => void): () => void;
 }
 
