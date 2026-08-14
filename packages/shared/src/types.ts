@@ -514,6 +514,7 @@ export interface PanelAncestor {
   /** Workspace unit that owns a relative image icon. */
   source?: string;
   favicon?: PanelNavigationState["favicon"];
+  childCount: number;
   depth: number;
 }
 
