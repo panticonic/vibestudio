@@ -201,31 +201,79 @@ export async function probeCommandOverlay(
   return result.snapshot;
 }
 
+/**
+ * Run one script in the overlay document, never in anything else.
+ *
+ * Every call here is bounded twice: each `executeJavaScript` races a short
+ * timer, and discovery only runs when the cached web-contents id is stale.
+ * Without that, a helper that walks every web contents blocks on the first
+ * renderer busy compiling a unit — which is how "resume into the conversation"
+ * spent 420s hanging instead of failing an assertion. A hang is not a result.
+ */
+async function evaluateInOverlayDocument<T>(
+  testApp: TestApp,
+  script: string,
+  timeoutMs = 5_000
+): Promise<{ id: number; value: T } | null> {
+  const result = (await testApp.app.evaluate(
+    async ({ webContents }, request) => {
+      const run = async (contents: Electron.WebContents) =>
+        Promise.race([
+          contents.executeJavaScript(request.script, true),
+          new Promise((resolve) => setTimeout(() => resolve(undefined), request.timeoutMs)),
+        ]);
+
+      if (request.knownId !== null) {
+        const known = webContents.fromId(request.knownId);
+        if (known && !known.isDestroyed()) {
+          try {
+            const value = await run(known);
+            if (value !== undefined) return { id: request.knownId, value };
+          } catch {
+            // Fall through to rediscovery.
+          }
+        }
+      }
+      for (const contents of webContents.getAllWebContents()) {
+        if (contents.isDestroyed()) continue;
+        try {
+          const isOverlay = await Promise.race([
+            contents.executeJavaScript(
+              `!!(globalThis.__vibestudioContentOverlay && document.querySelector(".quickfire-card"))`,
+              true
+            ),
+            new Promise((resolve) => setTimeout(() => resolve(false), 1_000)),
+          ]);
+          if (!isOverlay) continue;
+          const value = await run(contents);
+          if (value !== undefined) return { id: contents.id, value };
+        } catch {
+          // Try the next web contents.
+        }
+      }
+      return null;
+    },
+    { script, timeoutMs, knownId: overlayContentsId }
+  )) as { id: number; value: T } | null;
+  if (result) overlayContentsId = result.id;
+  return result;
+}
+
 /** Type into the overlay's input and dispatch the events the surface listens for. */
 export async function typeIntoCommandOverlay(testApp: TestApp, value: string): Promise<boolean> {
-  return testApp.app.evaluate(async ({ webContents }, text) => {
-    for (const contents of webContents.getAllWebContents()) {
-      if (contents.isDestroyed()) continue;
-      try {
-        const typed = await contents.executeJavaScript(
-          `(() => {
-            const input = document.querySelector(".quickfire-input");
-            if (!input) return false;
-            const setter = Object.getOwnPropertyDescriptor(
-              window.HTMLInputElement.prototype, "value").set;
-            setter.call(input, ${JSON.stringify(text)});
-            input.dispatchEvent(new Event("input", { bubbles: true }));
-            return true;
-          })()`,
-          true
-        );
-        if (typed) return true;
-      } catch {
-        // Try the next webContents.
-      }
-    }
-    return false;
-  }, value);
+  const result = await evaluateInOverlayDocument<boolean>(
+    testApp,
+    `(() => {
+      const input = document.querySelector(".quickfire-input");
+      if (!input) return false;
+      const setter = Object.getOwnPropertyDescriptor(
+        window.HTMLInputElement.prototype, "value").set;
+      setter.call(input, ${JSON.stringify(value)});
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      return true;
+    })()`
+  );
+  return result?.value === true;
 }
 
 /** Press a key inside the overlay document, optionally after blurring the input. */
@@ -234,35 +282,23 @@ export async function pressInCommandOverlay(
   key: string,
   options: { blurInput?: boolean } = {}
 ): Promise<boolean> {
-  return testApp.app.evaluate(
-    async ({ webContents }, request) => {
-      for (const contents of webContents.getAllWebContents()) {
-        if (contents.isDestroyed()) continue;
-        try {
-          const pressed = await contents.executeJavaScript(
-            `(() => {
-              const card = document.querySelector(".quickfire-card");
-              if (!card) return false;
-              const input = document.querySelector(".quickfire-input");
-              const target = ${request.blurInput ? "(input && input.blur(), card)" : "(input ?? card)"};
-              target.dispatchEvent(new KeyboardEvent("keydown", {
-                key: ${JSON.stringify(request.key)},
-                bubbles: true,
-                cancelable: true,
-              }));
-              return true;
-            })()`,
-            true
-          );
-          if (pressed) return true;
-        } catch {
-          // Try the next webContents.
-        }
-      }
-      return false;
-    },
-    { key, blurInput: options.blurInput === true }
+  const target = options.blurInput === true ? "(input && input.blur(), card)" : "(input ?? card)";
+  const result = await evaluateInOverlayDocument<boolean>(
+    testApp,
+    `(() => {
+      const card = document.querySelector(".quickfire-card");
+      if (!card) return false;
+      const input = document.querySelector(".quickfire-input");
+      const target = ${target};
+      target.dispatchEvent(new KeyboardEvent("keydown", {
+        key: ${JSON.stringify(key)},
+        bubbles: true,
+        cancelable: true,
+      }));
+      return true;
+    })()`
   );
+  return result?.value === true;
 }
 
 /**

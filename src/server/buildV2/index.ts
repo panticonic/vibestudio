@@ -47,6 +47,7 @@ import {
 } from "./buildSource.js";
 import { validateBuildRef } from "./refs.js";
 import {
+  BuildDiagnosticsError,
   BuildRequestError,
   diagnosticsFromError,
   hasErrors,
@@ -1548,14 +1549,21 @@ export async function initBuildSystemV2(
           );
         } catch (error) {
           reusable = false;
-          diagnostics.push({
-            source: "authority",
-            severity: "error",
-            file: `${node.relativePath}/package.json`,
-            line: 1,
-            column: 1,
-            message: `Authority analysis could not resolve the exact provider catalog: ${error instanceof Error ? error.message : String(error)}`,
-          });
+          if (error instanceof BuildDiagnosticsError) {
+            // A structured provider-catalog failure (e.g. an unknown
+            // application rpcSchema with its repair) must reach the report
+            // intact rather than being flattened into prose.
+            diagnostics.push(...error.diagnostics);
+          } else {
+            diagnostics.push({
+              source: "authority",
+              severity: "error",
+              file: `${node.relativePath}/package.json`,
+              line: 1,
+              column: 1,
+              message: `Authority analysis could not resolve the exact provider catalog: ${error instanceof Error ? error.message : String(error)}`,
+            });
+          }
         }
         const tsc = await typecheckUnit(
           node.relativePath,

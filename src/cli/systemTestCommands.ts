@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import path from "node:path";
 import type { RuntimeEntityHandle } from "@vibestudio/shared/runtime/entitySpec";
 import {
   EVAL_RESULT_RETURN_PREVIEW_CHARS,
@@ -744,6 +745,7 @@ async function run(inv: ParsedInvocation): Promise<number> {
       if (await signalCancellation.ensureCancellation()) return 130;
       const value = resultValue(status);
       const artifact = writeSystemTestArtifact(stored.runId, "summary", value, stored.artifactDir);
+      await retainRunDiagnostics(scope, stored, value);
       printRun(value, json, artifact);
       return failedSummary(value) ? 1 : 0;
     } finally {
@@ -1103,10 +1105,84 @@ async function expandTruncatedReturn(
   }
 }
 
+/**
+ * Capture the diagnostics packet while the workspace that produced it still
+ * exists.
+ *
+ * `inspect` and `trajectory` read the run out of the *workspace*, so every
+ * failure's evidence dies with the instance that produced it. Since a change to
+ * workspace source only takes effect on reprovision, the ordinary repair loop —
+ * run, read the failure, fix, run again — destroys the evidence at exactly the
+ * moment it becomes worth reading. Persisting the packet at completion, next to
+ * the summary this command already retains, makes a failed run inspectable
+ * afterwards.
+ */
+async function retainRunDiagnostics(
+  scope: SessionScope,
+  stored: StoredSystemTestRun,
+  summary: unknown
+): Promise<void> {
+  if (!failedSummary(summary)) return;
+  try {
+    const result = await evalExecutorFor(scope)({
+      ...startRouting(scope, stored),
+      runId: randomUUID(),
+      source: {
+        kind: "inline",
+        code: readCode(stored.runId, "inspectSystemTestRun(record, {})"),
+        syntax: "typescript",
+      },
+      timeoutMs: SYSTEM_TEST_INSPECTION_TIMEOUT_MS,
+    });
+    if (!result.success) return;
+    const packet = await expandTruncatedReturn(scope, stored, result.returnValue);
+    writeSystemTestArtifact(stored.runId, "inspect", packet, stored.artifactDir);
+  } catch {
+    // Best effort: a run that cannot be inspected here is still reportable, and
+    // failing the run over its own post-mortem would be worse than the gap.
+  }
+}
+
+/**
+ * The retained packet, used only when the producing workspace is gone. A live
+ * workspace always answers first, so this never shadows fresher evidence.
+ */
+function retainedInspection(
+  inv: ParsedInvocation,
+  testName: string | undefined
+): { value: unknown; artifact: string } | null {
+  if (testName) return null;
+  let runId: string;
+  try {
+    runId = requireRunId(inv);
+  } catch {
+    return null;
+  }
+  const stored = loadSystemTestRun(runId);
+  const dir = storedArtifactDir(runId, stored);
+  const value = loadSystemTestArtifact(runId, "inspect", dir);
+  return value === null
+    ? null
+    : { value, artifact: path.join(systemTestArtifactDir(runId, dir), "inspect.json") };
+}
+
 async function inspect(inv: ParsedInvocation): Promise<number> {
   const json = jsonMode(inv.flags["json"] === true);
   try {
     const testName = typeof inv.flags["test"] === "string" ? inv.flags["test"] : undefined;
+    const retained = retainedInspection(inv, testName);
+    if (retained) {
+      printResult(retained.value, {
+        json,
+        human: () => {
+          console.log(JSON.stringify(retained.value, null, 2));
+          console.log(
+            `retained: ${retained.artifact} (the workspace that ran this no longer has it)`
+          );
+        },
+      });
+      return 0;
+    }
     const inspectExpression = `inspectSystemTestRun(record, ${
       testName ? `{ testName: ${JSON.stringify(testName)} }` : "{}"
     })`;
