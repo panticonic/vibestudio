@@ -20,7 +20,6 @@ import * as crypto from "crypto";
 import { fileURLToPath } from "url";
 import { createRequire } from "module";
 import { execFileSync } from "child_process";
-import { requireDevelopmentBaseCheckout } from "../../src/dev/developmentBaseConfig.js";
 import { getCentralDataPath } from "@vibestudio/env-paths";
 import {
   WORKSPACE_SOURCE_DIRS,
@@ -37,6 +36,11 @@ import {
   retryIdempotentAutomationRead,
 } from "./automationContext.js";
 import { registerRunCleanupPath, releaseRunCleanupPath } from "./e2eCleanupLedger.js";
+import {
+  requireE2eRootTemplate,
+  writeWorkspaceCreationDescriptor,
+  writeWorkspaceMaterializationReceipt,
+} from "./e2eRootTemplate.js";
 import { E2E_ARTIFACT_ROOT_ENV, E2E_TEMP_ROOT_ENV } from "./e2eRun.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -190,18 +194,6 @@ function getWorkspaceInfo(workspaceDir: string): ManagedWorkspaceInfo {
   };
 }
 
-function getWorkspaceTemplateDir(projectRoot: string): string {
-  // The workspace template is Base, which stopped living in this repo at the
-  // external-Base cutover. Resolve the selected checkout exactly as
-  // test:userland and type-check:userland do; looking for `<repo>/workspace`
-  // left the whole e2e suite unable to start.
-  const templateDir = requireDevelopmentBaseCheckout(projectRoot);
-  if (!fs.existsSync(path.join(templateDir, "meta/vibestudio.yml"))) {
-    throw new Error(`Workspace template not found at ${templateDir}`);
-  }
-  return templateDir;
-}
-
 function collectUnitDirs(root: string): string[] {
   const result: string[] = [];
   const visit = (dir: string) => {
@@ -242,12 +234,10 @@ function initializeUnitGitRepos(sourceRoot: string): void {
 
 export function createManagedTestWorkspace(
   options: {
-    projectRoot?: string;
     configureSource?: (sourceRoot: string) => void;
   } = {}
 ): string {
-  const resolvedProjectRoot = options.projectRoot ?? path.resolve(__dirname, "../..");
-  const templateDir = getWorkspaceTemplateDir(resolvedProjectRoot);
+  const rootTemplate = requireE2eRootTemplate();
   const runTempRoot = process.env[E2E_TEMP_ROOT_ENV];
   const testRoot = fs.mkdtempSync(
     runTempRoot ? path.join(runTempRoot, "case-") : path.join(os.tmpdir(), "vibestudio-e2e-")
@@ -271,20 +261,13 @@ export function createManagedTestWorkspace(
   fs.mkdirSync(sourceRoot, { recursive: true });
   fs.mkdirSync(stateRoot, { recursive: true });
 
+  // A workspace is its exact root plus what happened to it since. Copy the
+  // run's already-materialized root rather than assembling a lookalike from
+  // the developer's worktree, so the source on disk really is the tree the
+  // creation descriptor names.
+  fs.cpSync(rootTemplate.materializedSource, sourceRoot, { recursive: true });
   for (const dir of WORKSPACE_SOURCE_DIRS) {
-    const src = path.join(templateDir, dir);
-    const dest = path.join(sourceRoot, dir);
-    if (fs.existsSync(src)) {
-      fs.cpSync(src, dest, {
-        recursive: true,
-        filter: (candidate) => {
-          const name = path.basename(candidate);
-          return name !== ".git" && name !== "node_modules" && name !== ".cache";
-        },
-      });
-    } else {
-      fs.mkdirSync(dest, { recursive: true });
-    }
+    fs.mkdirSync(path.join(sourceRoot, dir), { recursive: true });
   }
 
   // Source customization belongs to workspace creation, before unit commits
@@ -301,7 +284,12 @@ export function createManagedTestWorkspace(
     databasePath: path.join(getCentralDataDirFromEnv(env), "server-auth", "identity.db"),
   });
   try {
-    centralData.addWorkspace(workspaceName);
+    const registered = centralData.addWorkspace(workspaceName);
+    // The runtime refuses to start a workspace that cannot say which exact
+    // root it was created from, and refuses to trust a source it has no
+    // materialization receipt for.
+    writeWorkspaceCreationDescriptor(stateRoot, registered.workspaceId, rootTemplate.pin);
+    writeWorkspaceMaterializationReceipt(stateRoot, rootTemplate.pin);
     // E2E owns the isolated hub lifecycle. Persist the explicit "stop" quit
     // policy in this fixture's private identity database so Electron can take
     // its normal graceful shutdown path without opening an interactive dialog.
@@ -344,7 +332,7 @@ export async function launchTestApp(options: LaunchOptions = {}): Promise<TestAp
   } = options;
 
   const projectRoot = path.resolve(__dirname, "../..");
-  const workspacePath = workspace ?? createManagedTestWorkspace({ projectRoot });
+  const workspacePath = workspace ?? createManagedTestWorkspace();
   const workspaceInfo = getWorkspaceInfo(workspacePath);
   const ownsWorkspace = workspace === undefined;
 
