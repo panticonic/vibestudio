@@ -379,22 +379,28 @@ describe("UniversalDO facet host (real workerd)", () => {
     active = await createHarness({ "workers/counter": doBuild("workers/counter", "ev-1") });
     const { manager, dispatch } = active;
     await manager.ensureDOClass("workers/counter", "CounterDO");
-    const ref = { source: "workers/counter", className: "CounterDO", objectKey: "bounded" };
-    await dispatch(ref, "incr");
+    const refs = Array.from({ length: 16 }, (_, index) => ({
+      source: "workers/counter",
+      className: "CounterDO",
+      objectKey: `bounded-${index}`,
+    }));
+    await dispatch(refs[0]!, "incr");
     const boot = manager.getBootGeneration();
 
     for (let index = 0; index < 15; index++) {
-      await manager.retireDOEntity(ref);
+      await dispatch(refs[index]!, "get");
+      await manager.retireDOEntity(refs[index]!);
       expect(manager.getBootGeneration()).toBe(boot);
     }
-    await manager.retireDOEntity(ref);
+    await dispatch(refs[15]!, "get");
+    await manager.retireDOEntity(refs[15]!);
     const internals = manager as unknown as {
       dynamicIsolateCompactionFlight: Promise<void> | null;
     };
     await internals.dynamicIsolateCompactionFlight;
 
     expect(manager.getBootGeneration()).toBeGreaterThan(boot);
-    expect(await dispatch(ref, "get")).toMatchObject({ count: 1, key: "bounded" });
+    expect(await dispatch(refs[0]!, "get")).toMatchObject({ count: 1, key: "bounded-0" });
   });
 
   it("clones facet storage to a new key (channel fork), independent, no restart", async () => {

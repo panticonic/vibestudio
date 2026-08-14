@@ -559,7 +559,7 @@ export class WorkerdManager {
   private lastWorkerdRssBytes: number | null = null;
   private workerdRssSamples: Array<{ at: number; rssBytes: number }> = [];
   private retiredDynamicIsolateGeneration: number | null = null;
-  private retiredDynamicIsolateCount = 0;
+  private readonly retiredDynamicIsolateIds = new Set<string>();
   private dynamicIsolateCompactionFlight: Promise<void> | null = null;
 
   // DO support: shared services (one per source)
@@ -1475,7 +1475,7 @@ export class WorkerdManager {
     }
     if (!isInternalDOSource(ref.source)) {
       this.retiredDynamicIsolateGeneration ??= this.bootGeneration;
-      this.retiredDynamicIsolateCount += 1;
+      this.retiredDynamicIsolateIds.add(targetId);
       const rssBytes = this.process?.pid ? this.readProcessRssBytes(this.process.pid) : null;
       this.maybeCompactRetiredDynamicIsolates(rssBytes);
     }
@@ -2569,6 +2569,7 @@ export class WorkerdManager {
         });
       }
       await this.stopWorkerd("idle");
+      this.clearRetiredDynamicIsolatePressure();
       return;
     }
 
@@ -2632,6 +2633,7 @@ export class WorkerdManager {
           ? transition.reason
           : "planned-restart"
     );
+    this.clearRetiredDynamicIsolatePressure();
 
     if (this.shuttingDown) return;
 
@@ -2931,7 +2933,7 @@ export class WorkerdManager {
     const retiredGeneration = this.retiredDynamicIsolateGeneration;
     if (
       retiredGeneration === null ||
-      (this.retiredDynamicIsolateCount < WORKERD_DYNAMIC_ISOLATE_COMPACTION_COUNT &&
+      (this.retiredDynamicIsolateIds.size < WORKERD_DYNAMIC_ISOLATE_COMPACTION_COUNT &&
         (rssBytes === null || rssBytes < WORKERD_DYNAMIC_ISOLATE_COMPACTION_RSS_BYTES)) ||
       this.dynamicIsolateCompactionFlight ||
       this.shuttingDown ||
@@ -2944,10 +2946,6 @@ export class WorkerdManager {
     this.dynamicIsolateCompactionFlight = flight;
     void flight
       .then(() => {
-        if (this.retiredDynamicIsolateGeneration === retiredGeneration) {
-          this.retiredDynamicIsolateGeneration = null;
-          this.retiredDynamicIsolateCount = 0;
-        }
         log.info(
           `Compacted workerd generation containing retired dynamic isolates` +
             (rssBytes === null ? "" : ` at ${Math.round(rssBytes / (1024 * 1024))} MiB RSS`)
@@ -2961,6 +2959,11 @@ export class WorkerdManager {
           this.dynamicIsolateCompactionFlight = null;
         }
       });
+  }
+
+  private clearRetiredDynamicIsolatePressure(): void {
+    this.retiredDynamicIsolateGeneration = null;
+    this.retiredDynamicIsolateIds.clear();
   }
 
   private stopWorkerdMemorySampling(): void {
