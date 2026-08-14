@@ -23,7 +23,7 @@ import {
   scheduleDerivedCachePrune,
   type DerivedCacheLease,
 } from "@vibestudio/shared/derivedCache";
-import type { PackageGraph, GraphNode } from "./packageGraph.js";
+import { optionalPeerNames, type PackageGraph, type GraphNode } from "./packageGraph.js";
 import { BuildRequestError } from "./diagnostics.js";
 
 // ---------------------------------------------------------------------------
@@ -43,6 +43,12 @@ import { BuildRequestError } from "./diagnostics.js";
 export interface ExternalDependencyClosure {
   dependencies: Record<string, string>;
   providedPeers: Record<string, string>;
+  /**
+   * Provided peers every declaring member marked optional. Installed and
+   * externalized like any other provided peer, but a runtime root is not
+   * required to own them.
+   */
+  optionalProvidedPeers: string[];
   /** Which closure members declared each provided peer, for actionable errors. */
   peerOwners: Record<string, string[]>;
   /** Everything the closure resolves: `dependencies` ∪ `providedPeers`. */
@@ -62,6 +68,8 @@ export function collectExternalDependencyClosure(
   const dependencies: Record<string, string> = {};
   const peers: Record<string, string> = {};
   const peerOwners = new Map<string, Set<string>>();
+  const requiredPeers = new Set<string>();
+  const optionalPeers = new Set<string>();
   const visited = new Set<string>();
   const visitedPackageJson = new Set<string>();
 
@@ -77,13 +85,18 @@ export function collectExternalDependencyClosure(
   function walkDeps(
     declarations: Record<string, string>,
     target: Record<string, string>,
-    options: { walkWorkspaceDeps: boolean; owner?: string }
+    options: { walkWorkspaceDeps: boolean; owner?: string; optional?: readonly string[] }
   ) {
     for (const [name, version] of Object.entries(declarations)) {
-      if (target === peers && options.owner) {
-        const owners = peerOwners.get(name) ?? new Set<string>();
-        owners.add(options.owner);
-        peerOwners.set(name, owners);
+      if (target === peers) {
+        if (options.owner) {
+          const owners = peerOwners.get(name) ?? new Set<string>();
+          owners.add(options.owner);
+          peerOwners.set(name, owners);
+        }
+        // Optional only where every declaring member said so: one member that
+        // genuinely needs the instance makes it required for the whole closure.
+        (options.optional?.includes(name) ? optionalPeers : requiredPeers).add(name);
       }
       if (graph.isInternal(name)) {
         const dep = graph.tryGet(name);
@@ -94,7 +107,14 @@ export function collectExternalDependencyClosure(
         const pkg = workspaceRoot
           ? readWorkspacePackageJson(workspaceRoot, name, packageRoots)
           : null;
-        if (pkg) walkPackageJson(pkg.path, pkg.dependencies, pkg.peerDependencies);
+        if (pkg) {
+          walkPackageJson(
+            pkg.path,
+            pkg.dependencies,
+            pkg.peerDependencies,
+            pkg.optionalPeerDependencies
+          );
+        }
         continue;
       }
       recordExternal(target, name, version);
@@ -104,19 +124,28 @@ export function collectExternalDependencyClosure(
   function walkPackageJson(
     packageJsonPath: string,
     packageDependencies: Record<string, string>,
-    packagePeers: Record<string, string>
+    packagePeers: Record<string, string>,
+    packageOptionalPeers: readonly string[]
   ) {
     if (visitedPackageJson.has(packageJsonPath)) return;
     visitedPackageJson.add(packageJsonPath);
     walkDeps(packageDependencies, dependencies, { walkWorkspaceDeps: false });
-    walkDeps(packagePeers, peers, { walkWorkspaceDeps: false, owner: packageJsonPath });
+    walkDeps(packagePeers, peers, {
+      walkWorkspaceDeps: false,
+      owner: packageJsonPath,
+      optional: packageOptionalPeers,
+    });
   }
 
   function walkNode(node: GraphNode) {
     if (visited.has(node.name)) return;
     visited.add(node.name);
     walkDeps(node.dependencies, dependencies, { walkWorkspaceDeps: true });
-    walkDeps(node.peerDependencies, peers, { walkWorkspaceDeps: true, owner: node.name });
+    walkDeps(node.peerDependencies, peers, {
+      walkWorkspaceDeps: true,
+      owner: node.name,
+      optional: node.optionalPeerDependencies,
+    });
     for (const dependency of node.internalDeps) {
       const child = graph.tryGet(dependency);
       if (child) walkNode(child);
@@ -137,6 +166,9 @@ export function collectExternalDependencyClosure(
   return {
     dependencies,
     providedPeers,
+    optionalProvidedPeers: Object.keys(providedPeers)
+      .filter((name) => optionalPeers.has(name) && !requiredPeers.has(name))
+      .sort(),
     peerOwners: Object.fromEntries(
       Object.keys(providedPeers).map((name) => [name, [...(peerOwners.get(name) ?? [])].sort()])
     ),
@@ -399,6 +431,7 @@ interface WorkspacePackageDeclarations {
   path: string;
   dependencies: Record<string, string>;
   peerDependencies: Record<string, string>;
+  optionalPeerDependencies: string[];
   dependencyOverrides: Record<string, string>;
 }
 
@@ -412,6 +445,7 @@ function readWorkspacePackageDeclarations(
       name?: string;
       dependencies?: Record<string, string>;
       peerDependencies?: Record<string, string>;
+      peerDependenciesMeta?: Record<string, { optional?: boolean }>;
       vibestudio?: { dependencyResolution?: { overrides?: unknown } };
     };
     if (pkg.name !== packageName) return null;
@@ -419,6 +453,7 @@ function readWorkspacePackageDeclarations(
       path: pkgJsonPath,
       dependencies: { ...pkg.dependencies },
       peerDependencies: { ...pkg.peerDependencies },
+      optionalPeerDependencies: optionalPeerNames(pkg),
       dependencyOverrides: normalizeSimpleOverrides(
         pkg.vibestudio?.dependencyResolution?.overrides
       ),
@@ -1010,6 +1045,8 @@ export interface ExternalDependencyEnvironment {
    * composes the unit supplies the live instance.
    */
   providedPeers: Record<string, string>;
+  /** Provided peers no closure member requires an instance of. */
+  optionalProvidedPeers: string[];
   /** Which closure members declared each provided peer. */
   peerOwners: Record<string, string[]>;
   dependencyOverrides: Record<string, string>;
@@ -1048,6 +1085,7 @@ export async function prepareExternalDependencyEnvironment(
     nodePaths: [...(borrowed.nodeModulesDir ? [borrowed.nodeModulesDir] : []), ...appNodeModules],
     externalDeps,
     providedPeers: closure.providedPeers,
+    optionalProvidedPeers: closure.optionalProvidedPeers,
     peerOwners: closure.peerOwners,
     dependencyOverrides,
     dependencyPatches,

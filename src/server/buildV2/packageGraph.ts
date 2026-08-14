@@ -43,6 +43,15 @@ export interface GraphNode {
    * is what keeps one React in a panel realm instead of one per guest.
    */
   peerDependencies: Record<string, string>;
+  /**
+   * Peers declared `optional` in `peerDependenciesMeta`: needed only by the
+   * part of this unit a given consumer may never reach. A type-only reference
+   * is the common case (`import type { ComponentType } from "react"` in a
+   * worker package that never renders). They are still installed so a
+   * typecheck resolves them and still external in a library build, but a
+   * runtime root is not made to own an instance it never uses.
+   */
+  optionalPeerDependencies: string[];
   /** Build V2 dependency overrides declared by this unit. */
   dependencyOverrides: Record<string, string>;
   /** Resolved internal dependency names */
@@ -189,6 +198,7 @@ interface PackageJson {
   version?: string;
   dependencies?: Record<string, string>;
   peerDependencies?: Record<string, string>;
+  peerDependenciesMeta?: Record<string, { optional?: boolean }>;
   devDependencies?: Record<string, string>;
   vibestudio?: PackageManifest;
   exports?: Record<string, unknown>;
@@ -221,6 +231,15 @@ function normalizeSimpleOverrides(value: unknown): Record<string, string> {
   return result;
 }
 
+export function optionalPeerNames(pkg: {
+  peerDependenciesMeta?: Record<string, { optional?: boolean }>;
+}): string[] {
+  return Object.entries(pkg.peerDependenciesMeta ?? {})
+    .filter(([, meta]) => meta?.optional === true)
+    .map(([name]) => name)
+    .sort();
+}
+
 function buildDependencyOverrides(pkg: PackageJson): Record<string, string> {
   return normalizeSimpleOverrides(pkg.vibestudio?.dependencyResolution?.overrides);
 }
@@ -251,6 +270,7 @@ function packageNodeFromJson(
 
   const dependencies = { ...pkg.dependencies };
   const peerDependencies = { ...pkg.peerDependencies };
+  const optionalPeerDependencies = optionalPeerNames(pkg);
   // Internal edges are structural: a peer on a workspace package still makes
   // that package part of this unit's source closure, so both declaration kinds
   // feed internal-dep discovery. Only the *external* treatment differs.
@@ -272,6 +292,7 @@ function packageNodeFromJson(
     kind,
     dependencies,
     peerDependencies,
+    optionalPeerDependencies,
     dependencyOverrides: buildDependencyOverrides(pkg),
     internalDeps,
     ...(partialNode.dependencyErrors ? { dependencyErrors: partialNode.dependencyErrors } : {}),
@@ -321,6 +342,7 @@ function templateNodeFromJson(
     kind: "template",
     dependencies: {},
     peerDependencies: {},
+    optionalPeerDependencies: [],
     dependencyOverrides: {},
     internalDeps: [],
     manifest: { framework: config.framework },

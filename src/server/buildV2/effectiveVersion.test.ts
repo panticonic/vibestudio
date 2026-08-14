@@ -33,6 +33,7 @@ function node(
     kind,
     dependencies: {},
     peerDependencies: {},
+    optionalPeerDependencies: [],
     dependencyOverrides: {},
     internalDeps,
     manifest: {},

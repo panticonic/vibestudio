@@ -38,6 +38,7 @@ function providerNode(root: string, manifestAuthority: ReturnType<typeof authori
     kind: "worker",
     dependencies: {},
     peerDependencies: {},
+    optionalPeerDependencies: [],
     dependencyOverrides: {},
     internalDeps: [],
     manifest: {

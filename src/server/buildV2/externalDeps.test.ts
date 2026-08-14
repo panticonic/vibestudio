@@ -95,6 +95,7 @@ function makeNode(
     kind: "package",
     dependencies,
     peerDependencies,
+    optionalPeerDependencies: [],
     dependencyOverrides: {},
     internalDeps,
     manifest: {},
@@ -124,6 +125,45 @@ describe("collectExternalDependencyClosure", () => {
     expect(closure.peerOwners).toEqual({ react: ["@workspace/ui"] });
     // Still installed: a typecheck of the skill needs React's declarations.
     expect(closure.installSet).toEqual({ "@radix-ui/themes": "3.3.0", react: "19.2.4" });
+  });
+
+  it("does not make a root own a peer every declaring member marked optional", () => {
+    const graph = new PackageGraph();
+    // Type-only use: the package names React so component types resolve, and
+    // marks it optional because a consumer that never renders needs no instance.
+    const evalPackage: GraphNode = {
+      ...makeNode("@workspace/eval", {}, [], { react: "19.2.4" }),
+      optionalPeerDependencies: ["react"],
+    };
+    const worker = makeNode("@workspace-workers/agent", { "@workspace/eval": "workspace:*" }, [
+      "@workspace/eval",
+    ]);
+    graph.addNode(evalPackage);
+    graph.addNode(worker);
+
+    const closure = collectExternalDependencyClosure(worker, graph);
+    expect(closure.providedPeers).toEqual({ react: "19.2.4" });
+    expect(closure.optionalProvidedPeers).toEqual(["react"]);
+  });
+
+  it("keeps a peer required when any declaring member needs the instance", () => {
+    const graph = new PackageGraph();
+    const evalPackage: GraphNode = {
+      ...makeNode("@workspace/eval", {}, [], { react: "19.2.4" }),
+      optionalPeerDependencies: ["react"],
+    };
+    const ui = makeNode("@workspace/ui", {}, [], { react: "19.2.4" });
+    const skill = makeNode(
+      "@workspace-skills/gmail",
+      { "@workspace/eval": "workspace:*", "@workspace/ui": "workspace:*" },
+      ["@workspace/eval", "@workspace/ui"]
+    );
+    graph.addNode(evalPackage);
+    graph.addNode(ui);
+    graph.addNode(skill);
+
+    const closure = collectExternalDependencyClosure(skill, graph);
+    expect(closure.optionalProvidedPeers).toEqual([]);
   });
 
   it("treats a peer as satisfied once a closure member owns it", () => {

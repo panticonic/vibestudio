@@ -1869,6 +1869,8 @@ interface BuildEnv {
   externalDeps: Record<string, string>;
   /** Closure externals the composing realm provides; never bundled into this unit. */
   providedPeers: Record<string, string>;
+  /** Provided peers no closure member requires an instance of. */
+  optionalProvidedPeers: string[];
   /** Which closure members declared each provided peer. */
   peerOwners: Record<string, string[]>;
   dependencyOverrides: Record<string, string>;
@@ -1919,6 +1921,7 @@ async function prepareBuildEnv(
   const {
     externalDeps,
     providedPeers,
+    optionalProvidedPeers,
     peerOwners,
     dependencyOverrides,
     dependencyPatches,
@@ -1926,10 +1929,13 @@ async function prepareBuildEnv(
     nodePaths,
   } = dependencyEnvironment;
 
-  if (composition === "runtime-root" && Object.keys(providedPeers).length > 0) {
+  const unownedPeers = Object.entries(providedPeers).filter(
+    ([name]) => !optionalProvidedPeers.includes(name)
+  );
+  if (composition === "runtime-root" && unownedPeers.length > 0) {
     dependencyEnvironment.release();
     fs.rmSync(outdir, { recursive: true, force: true });
-    const unmet = Object.entries(providedPeers)
+    const unmet = unownedPeers
       .map(([name, range]) => {
         const owners = peerOwners[name] ?? [];
         return `${name}@${range}${owners.length > 0 ? ` (required by ${owners.join(", ")})` : ""}`;
@@ -1950,6 +1956,7 @@ async function prepareBuildEnv(
       nodeModulesDir,
       externalDeps,
       providedPeers,
+      optionalProvidedPeers,
       peerOwners,
       dependencyOverrides,
       dependencyPatches,
@@ -4033,6 +4040,7 @@ async function buildLibraryBundle(
     // one realm, and hooks stop working. Refuse instead, naming both sides.
     const unprovidedPeers = Object.keys(env.providedPeers)
       .filter((name) => !externals.includes(name))
+      .filter((name) => !env.optionalProvidedPeers.includes(name))
       .sort();
     if (unprovidedPeers.length > 0) {
       throw new Error(

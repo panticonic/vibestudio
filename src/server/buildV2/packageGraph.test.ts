@@ -22,6 +22,7 @@ function makeNode(
     kind: "package",
     dependencies: {},
     peerDependencies: {},
+    optionalPeerDependencies: [],
     dependencyOverrides: {},
     internalDeps,
     manifest: {},
