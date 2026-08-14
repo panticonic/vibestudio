@@ -32,8 +32,17 @@ export interface GraphNode {
   packageVersion?: string;
   /** Unit kind */
   kind: "package" | "panel" | "worker" | "extension" | "app" | "template";
-  /** All dependencies from package.json (name → version) */
+  /** Dependencies this unit owns: installed into its closure and bundled into it. */
   dependencies: Record<string, string>;
+  /**
+   * Dependencies this unit expects the context that composes it to provide
+   * (name → version). A peer is never bundled into this unit: a runtime root
+   * (panel/app/worker/extension) must satisfy every peer in its closure from
+   * its own `dependencies`, and a library (package/skill) leaves unsatisfied
+   * peers external so the realm that loads it supplies its live instance. That
+   * is what keeps one React in a panel realm instead of one per guest.
+   */
+  peerDependencies: Record<string, string>;
   /** Build V2 dependency overrides declared by this unit. */
   dependencyOverrides: Record<string, string>;
   /** Resolved internal dependency names */
@@ -240,7 +249,12 @@ function packageNodeFromJson(
   }
   if (!pkg.name) return null;
 
-  const allDeps = { ...pkg.peerDependencies, ...pkg.dependencies };
+  const dependencies = { ...pkg.dependencies };
+  const peerDependencies = { ...pkg.peerDependencies };
+  // Internal edges are structural: a peer on a workspace package still makes
+  // that package part of this unit's source closure, so both declaration kinds
+  // feed internal-dep discovery. Only the *external* treatment differs.
+  const allDeps = { ...peerDependencies, ...dependencies };
   const internalDeps: string[] = [];
   const partialNode = { name: pkg.name, dependencyErrors: undefined as string[] | undefined };
   for (const [depName, depSpec] of Object.entries(allDeps)) {
@@ -256,7 +270,8 @@ function packageNodeFromJson(
     name: pkg.name,
     ...(typeof pkg.version === "string" ? { packageVersion: pkg.version } : {}),
     kind,
-    dependencies: allDeps,
+    dependencies,
+    peerDependencies,
     dependencyOverrides: buildDependencyOverrides(pkg),
     internalDeps,
     ...(partialNode.dependencyErrors ? { dependencyErrors: partialNode.dependencyErrors } : {}),
@@ -305,6 +320,7 @@ function templateNodeFromJson(
     name: `template:${path.posix.basename(relativePath)}`,
     kind: "template",
     dependencies: {},
+    peerDependencies: {},
     dependencyOverrides: {},
     internalDeps: [],
     manifest: { framework: config.framework },

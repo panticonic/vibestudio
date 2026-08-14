@@ -37,6 +37,7 @@ function providerNode(root: string, manifestAuthority: ReturnType<typeof authori
     name: "@workspace-workers/notes",
     kind: "worker",
     dependencies: {},
+    peerDependencies: {},
     dependencyOverrides: {},
     internalDeps: [],
     manifest: {

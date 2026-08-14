@@ -84,7 +84,23 @@ export async function runNpmInstall(
 
   const installWithCache = async (installCacheDir: string): Promise<void> => {
     fs.mkdirSync(installCacheDir, { recursive: true });
-    const args = [npmCli, "install", "--no-audit", "--no-fund", "--cache", installCacheDir];
+    const args = [
+      npmCli,
+      "install",
+      "--no-audit",
+      "--no-fund",
+      // A closure is a declared set. Since npm 7 an unmet peer of a declared
+      // package is installed on npm's own initiative at whatever version the
+      // registry serves today, which puts a package in the tree that no
+      // manifest names and no cache key describes -- and lets that invented
+      // version outrank a pinned one (an auto-installed react-dom whose peer
+      // range excludes the react the closure asked for). Callers declare every
+      // package they intend to resolve; anything missing must surface as an
+      // unresolved import naming its owner, not as a registry-latest guess.
+      "--legacy-peer-deps",
+      "--cache",
+      installCacheDir,
+    ];
     if (ignoreScripts) args.push("--ignore-scripts");
     await new Promise<void>((resolve, reject) => {
       let timedOut = false;

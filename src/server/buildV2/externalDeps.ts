@@ -14,6 +14,7 @@ import * as fs from "fs";
 import * as path from "path";
 import * as crypto from "crypto";
 import { applyPatch, parsePatch } from "diff";
+import semver from "semver";
 import { getSharedDerivedDataPath } from "@vibestudio/env-paths";
 import { NpmResolutionError, runNpmInstall } from "@vibestudio/shared/npmInstaller";
 import {
@@ -30,30 +31,60 @@ import { BuildRequestError } from "./diagnostics.js";
 // ---------------------------------------------------------------------------
 
 /**
+ * The external half of a unit's source closure, split by who owns the version.
+ *
+ * `dependencies` are the unit's own: installed and bundled into it.
+ * `providedPeers` are peers nobody in the closure declared as a dependency, so
+ * the context that composes the unit provides them. They are installed (a
+ * typecheck needs their declarations) but never bundled — a library resolves
+ * them from the loading realm's module map, which is what keeps a guest from
+ * carrying a second React into a panel that already has one.
+ */
+export interface ExternalDependencyClosure {
+  dependencies: Record<string, string>;
+  providedPeers: Record<string, string>;
+  /** Which closure members declared each provided peer, for actionable errors. */
+  peerOwners: Record<string, string[]>;
+  /** Everything the closure resolves: `dependencies` ∪ `providedPeers`. */
+  installSet: Record<string, string>;
+}
+
+/**
  * Collect all external (non-workspace) dependencies transitively
  * from a unit and all its internal dependencies.
  */
-export function collectTransitiveExternalDeps(
+export function collectExternalDependencyClosure(
   unit: GraphNode,
   graph: PackageGraph,
   workspaceRoot?: string,
   packageRoots: string[] = []
-): Record<string, string> {
-  const externals: Record<string, string> = {};
+): ExternalDependencyClosure {
+  const dependencies: Record<string, string> = {};
+  const peers: Record<string, string> = {};
+  const peerOwners = new Map<string, Set<string>>();
   const visited = new Set<string>();
   const visitedPackageJson = new Set<string>();
 
-  function recordExternal(name: string, version: string) {
+  function recordExternal(target: Record<string, string>, name: string, version: string): void {
     // Skip workspace:* deps — these are source packages resolved from the app
     // install or the package graph. Their own npm deps are collected by walking
     // the package.json when available.
     if (version.startsWith("workspace:")) return;
     // External dependency — take higher version if conflict
-    mergeExternalDependencySpecs(externals, { [name]: version });
+    mergeExternalDependencySpecs(target, { [name]: version });
   }
 
-  function walkDeps(dependencies: Record<string, string>, options: { walkWorkspaceDeps: boolean }) {
-    for (const [name, version] of Object.entries(dependencies)) {
+  function walkDeps(
+    declarations: Record<string, string>,
+    target: Record<string, string>,
+    options: { walkWorkspaceDeps: boolean; owner?: string }
+  ) {
+    for (const [name, version] of Object.entries(declarations)) {
+      if (target === peers && options.owner) {
+        const owners = peerOwners.get(name) ?? new Set<string>();
+        owners.add(options.owner);
+        peerOwners.set(name, owners);
+      }
       if (graph.isInternal(name)) {
         const dep = graph.tryGet(name);
         if (dep) walkNode(dep);
@@ -63,23 +94,29 @@ export function collectTransitiveExternalDeps(
         const pkg = workspaceRoot
           ? readWorkspacePackageJson(workspaceRoot, name, packageRoots)
           : null;
-        if (pkg) walkPackageJson(pkg.path, pkg.dependencies);
+        if (pkg) walkPackageJson(pkg.path, pkg.dependencies, pkg.peerDependencies);
         continue;
       }
-      recordExternal(name, version);
+      recordExternal(target, name, version);
     }
   }
 
-  function walkPackageJson(packageJsonPath: string, dependencies: Record<string, string>) {
+  function walkPackageJson(
+    packageJsonPath: string,
+    packageDependencies: Record<string, string>,
+    packagePeers: Record<string, string>
+  ) {
     if (visitedPackageJson.has(packageJsonPath)) return;
     visitedPackageJson.add(packageJsonPath);
-    walkDeps(dependencies, { walkWorkspaceDeps: false });
+    walkDeps(packageDependencies, dependencies, { walkWorkspaceDeps: false });
+    walkDeps(packagePeers, peers, { walkWorkspaceDeps: false, owner: packageJsonPath });
   }
 
   function walkNode(node: GraphNode) {
     if (visited.has(node.name)) return;
     visited.add(node.name);
-    walkDeps(node.dependencies, { walkWorkspaceDeps: true });
+    walkDeps(node.dependencies, dependencies, { walkWorkspaceDeps: true });
+    walkDeps(node.peerDependencies, peers, { walkWorkspaceDeps: true, owner: node.name });
     for (const dependency of node.internalDeps) {
       const child = graph.tryGet(dependency);
       if (child) walkNode(child);
@@ -87,7 +124,24 @@ export function collectTransitiveExternalDeps(
   }
 
   walkNode(unit);
-  return externals;
+
+  // A peer someone in the closure also owns as a dependency is satisfied here;
+  // only what remains has to come from outside.
+  const providedPeers: Record<string, string> = {};
+  for (const [name, version] of Object.entries(peers)) {
+    if (dependencies[name] === undefined) providedPeers[name] = version;
+  }
+
+  const installSet = { ...dependencies };
+  mergeExternalDependencySpecs(installSet, providedPeers);
+  return {
+    dependencies,
+    providedPeers,
+    peerOwners: Object.fromEntries(
+      Object.keys(providedPeers).map((name) => [name, [...(peerOwners.get(name) ?? [])].sort()])
+    ),
+    installSet,
+  };
 }
 
 export function collectTransitiveDependencyOverrides(
@@ -127,7 +181,13 @@ export function collectTransitiveDependencyOverrides(
         const pkg = workspaceRoot
           ? readWorkspacePackageJson(workspaceRoot, name, packageRoots)
           : null;
-        if (pkg) walkPackageJson(pkg.path, pkg.dependencies, pkg.dependencyOverrides);
+        if (pkg) {
+          walkPackageJson(
+            pkg.path,
+            { ...pkg.peerDependencies, ...pkg.dependencies },
+            pkg.dependencyOverrides
+          );
+        }
       }
     }
   }
@@ -147,7 +207,10 @@ export function collectTransitiveDependencyOverrides(
     if (visited.has(node.name)) return;
     visited.add(node.name);
     record(node.dependencyOverrides, node.name);
-    walkDeps(node.dependencies, { walkWorkspaceDeps: true });
+    // Override discovery is about which manifests the closure reaches, so both
+    // declaration kinds are traversed here; the peer/dependency split only
+    // decides how an *external* package is treated, not which owners are read.
+    walkDeps({ ...node.peerDependencies, ...node.dependencies }, { walkWorkspaceDeps: true });
     for (const dependency of node.internalDeps) {
       const child = graph.tryGet(dependency);
       if (child) walkNode(child);
@@ -332,65 +395,62 @@ function parsePatchedDependencySelector(selector: string): {
   return { packageName, version };
 }
 
+interface WorkspacePackageDeclarations {
+  path: string;
+  dependencies: Record<string, string>;
+  peerDependencies: Record<string, string>;
+  dependencyOverrides: Record<string, string>;
+}
+
+function readWorkspacePackageDeclarations(
+  pkgJsonPath: string,
+  packageName: string
+): WorkspacePackageDeclarations | null {
+  if (!fs.existsSync(pkgJsonPath)) return null;
+  try {
+    const pkg = JSON.parse(fs.readFileSync(pkgJsonPath, "utf-8")) as {
+      name?: string;
+      dependencies?: Record<string, string>;
+      peerDependencies?: Record<string, string>;
+      vibestudio?: { dependencyResolution?: { overrides?: unknown } };
+    };
+    if (pkg.name !== packageName) return null;
+    return {
+      path: pkgJsonPath,
+      dependencies: { ...pkg.dependencies },
+      peerDependencies: { ...pkg.peerDependencies },
+      dependencyOverrides: normalizeSimpleOverrides(
+        pkg.vibestudio?.dependencyResolution?.overrides
+      ),
+    };
+  } catch {
+    return null;
+  }
+}
+
 function readWorkspacePackageJson(
   workspaceRoot: string,
   packageName: string,
   packageRoots: string[] = []
-): {
-  path: string;
-  dependencies: Record<string, string>;
-  dependencyOverrides: Record<string, string>;
-} | null {
+): WorkspacePackageDeclarations | null {
   for (const pkgJsonPath of workspacePackageJsonCandidates(
     workspaceRoot,
     packageName,
     packageRoots
   )) {
-    if (!fs.existsSync(pkgJsonPath)) continue;
-    try {
-      const pkg = JSON.parse(fs.readFileSync(pkgJsonPath, "utf-8")) as {
-        name?: string;
-        dependencies?: Record<string, string>;
-        peerDependencies?: Record<string, string>;
-        vibestudio?: { dependencyResolution?: { overrides?: unknown } };
-      };
-      if (pkg.name !== packageName) continue;
-      return {
-        path: pkgJsonPath,
-        dependencies: { ...pkg.peerDependencies, ...pkg.dependencies },
-        dependencyOverrides: normalizeSimpleOverrides(
-          pkg.vibestudio?.dependencyResolution?.overrides
-        ),
-      };
-    } catch {
-      continue;
-    }
+    const declarations = readWorkspacePackageDeclarations(pkgJsonPath, packageName);
+    if (declarations) return declarations;
   }
 
   for (const baseDir of workspacePackageRoots(workspaceRoot)) {
     if (!fs.existsSync(baseDir)) continue;
     for (const entry of fs.readdirSync(baseDir, { withFileTypes: true })) {
       if (!entry.isDirectory() || entry.name.startsWith(".")) continue;
-      const pkgJsonPath = path.join(baseDir, entry.name, "package.json");
-      if (!fs.existsSync(pkgJsonPath)) continue;
-      try {
-        const pkg = JSON.parse(fs.readFileSync(pkgJsonPath, "utf-8")) as {
-          name?: string;
-          dependencies?: Record<string, string>;
-          peerDependencies?: Record<string, string>;
-          vibestudio?: { dependencyResolution?: { overrides?: unknown } };
-        };
-        if (pkg.name !== packageName) continue;
-        return {
-          path: pkgJsonPath,
-          dependencies: { ...pkg.peerDependencies, ...pkg.dependencies },
-          dependencyOverrides: normalizeSimpleOverrides(
-            pkg.vibestudio?.dependencyResolution?.overrides
-          ),
-        };
-      } catch {
-        continue;
-      }
+      const declarations = readWorkspacePackageDeclarations(
+        path.join(baseDir, entry.name, "package.json"),
+        packageName
+      );
+      if (declarations) return declarations;
     }
   }
   return null;
@@ -469,8 +529,31 @@ export function mergeExternalDependencySpecs(
 ): void {
   for (const [name, version] of Object.entries(source)) {
     const current = target[name];
-    if (!current || compareVersions(version, current) > 0) target[name] = version;
+    if (!current) {
+      target[name] = version;
+      continue;
+    }
+    const ordering = compareVersions(version, current);
+    if (ordering > 0) {
+      target[name] = version;
+      continue;
+    }
+    // Same floor, different breadth (`19.0.0` vs `^19.0.0`). One spec is
+    // installed for the whole target, so keeping the broader one lets the
+    // registry resolve a version no declaring unit asked for — and a unit that
+    // pinned exactly, because its runtime refuses anything else, silently gets
+    // something else. Traversal order must not decide that.
+    if (ordering === 0 && specBreadth(version) < specBreadth(current)) target[name] = version;
   }
+}
+
+/** How much room a requirement leaves the resolver above its floor. */
+function specBreadth(spec: string): number {
+  if (spec === "*" || spec.startsWith("workspace:")) return 3;
+  const operator = /^[\^~>=<]+/.exec(spec)?.[0];
+  if (!operator) return 0;
+  if (operator === "~") return 1;
+  return 2;
 }
 
 // ---------------------------------------------------------------------------
@@ -661,11 +744,64 @@ function sha256(value: string | Buffer): string {
   return crypto.createHash("sha256").update(value).digest("hex");
 }
 
+interface InstalledPackage {
+  version: string;
+  peerDependencies: Record<string, string>;
+  optionalPeers: Set<string>;
+}
+
+/**
+ * Resolve a peer the way Node would from the requiring package's location:
+ * nearest enclosing `node_modules` first, then outward to the install root.
+ */
+function resolveInstalledPeer(
+  installed: Map<string, InstalledPackage>,
+  requiredBy: string,
+  peerName: string
+): { location: string; installed: InstalledPackage } | null {
+  const segments = requiredBy.split("/");
+  for (let end = segments.length; end >= 0; end--) {
+    const prefix = segments.slice(0, end).join("/");
+    const location = prefix
+      ? `${prefix.replace(/\/node_modules\/[^/]+$/u, "")}/node_modules/${peerName}`
+      : `node_modules/${peerName}`;
+    const match = installed.get(location);
+    if (match) return { location, installed: match };
+  }
+  return null;
+}
+
+/**
+ * Peer ranges declared *between packages the closure actually installed* must
+ * hold. npm's own ERESOLVE check is off (see `runNpmInstall`) because it would
+ * rather invent an undeclared package than report a gap; this keeps the part of
+ * that check that is about the declared set, and stays silent about peers the
+ * closure deliberately leaves to the composing realm.
+ */
+function assertInstalledPeersSatisfied(installed: Map<string, InstalledPackage>): void {
+  for (const [location, record] of installed) {
+    for (const [peerName, range] of Object.entries(record.peerDependencies)) {
+      const resolved = resolveInstalledPeer(installed, location, peerName);
+      if (!resolved) continue; // provided by the composing realm, or unused here
+      if (record.optionalPeers.has(peerName)) continue;
+      if (semver.satisfies(resolved.installed.version, range, { includePrerelease: true })) {
+        continue;
+      }
+      throw new Error(
+        `installed dependency ${location}@${record.version} requires ${peerName}@${range}, ` +
+          `but the closure installed ${peerName}@${resolved.installed.version}. ` +
+          `Declare a ${peerName} version its dependents agree on.`
+      );
+    }
+  }
+}
+
 /**
  * Prove that npm produced a coherent immutable tree before publishing it.
  * The hidden lock describes the packages npm actually installed (unlike the
  * root lock, which may include platform-skipped optionals). Every registry
- * package must retain its integrity identity and matching package metadata.
+ * package must retain its integrity identity and matching package metadata,
+ * and every peer range between installed packages must hold.
  */
 function createExternalDepsReceipt(
   cacheDir: string,
@@ -685,6 +821,7 @@ function createExternalDepsReceipt(
   }
 
   let packageCount = 0;
+  const installed = new Map<string, InstalledPackage>();
   for (const [location, record] of Object.entries(lock.packages)) {
     if (!location.startsWith("node_modules/") || record.link === true) continue;
     packageCount += 1;
@@ -702,12 +839,24 @@ function createExternalDepsReceipt(
     const packageJsonPath = path.join(packageDir, "package.json");
     const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8")) as {
       version?: unknown;
+      peerDependencies?: Record<string, string>;
+      peerDependenciesMeta?: Record<string, { optional?: boolean }>;
     };
     if (packageJson.version !== record.version) {
       throw new Error(`installed dependency ${location} does not match its lock identity`);
     }
+    installed.set(location, {
+      version: record.version,
+      peerDependencies: { ...packageJson.peerDependencies },
+      optionalPeers: new Set(
+        Object.entries(packageJson.peerDependenciesMeta ?? {})
+          .filter(([, meta]) => meta?.optional === true)
+          .map(([name]) => name)
+      ),
+    });
   }
   if (packageCount === 0) throw new Error("installed dependency lock is empty");
+  assertInstalledPeersSatisfied(installed);
   return {
     version: EXTERNAL_DEPS_RECEIPT_VERSION,
     lockDigest: sha256(lockBytes),
@@ -855,6 +1004,14 @@ export interface ExternalDependencyEnvironment {
   nodeModulesDir: string;
   nodePaths: string[];
   externalDeps: Record<string, string>;
+  /**
+   * Closure externals nobody in the unit's own closure owns. Installed above
+   * (a typecheck needs their declarations) but never bundled: the realm that
+   * composes the unit supplies the live instance.
+   */
+  providedPeers: Record<string, string>;
+  /** Which closure members declared each provided peer. */
+  peerOwners: Record<string, string[]>;
   dependencyOverrides: Record<string, string>;
   dependencyPatches: ExternalDependencyPatch[];
   release(): void;
@@ -873,7 +1030,8 @@ export async function prepareExternalDependencyEnvironment(
   appRoot: string,
   appNodeModules: string[] = []
 ): Promise<ExternalDependencyEnvironment> {
-  const externalDeps = collectTransitiveExternalDeps(unit, graph, workspaceRoot, appNodeModules);
+  const closure = collectExternalDependencyClosure(unit, graph, workspaceRoot, appNodeModules);
+  const externalDeps = closure.installSet;
   const dependencyOverrides = collectTransitiveDependencyOverrides(
     unit,
     graph,
@@ -889,6 +1047,8 @@ export async function prepareExternalDependencyEnvironment(
     nodeModulesDir: borrowed.nodeModulesDir,
     nodePaths: [...(borrowed.nodeModulesDir ? [borrowed.nodeModulesDir] : []), ...appNodeModules],
     externalDeps,
+    providedPeers: closure.providedPeers,
+    peerOwners: closure.peerOwners,
     dependencyOverrides,
     dependencyPatches,
     release: () => borrowed.release(),

@@ -1,5 +1,5 @@
 /**
- * Tests for collectTransitiveExternalDeps from externalDeps.ts.
+ * Tests for collectExternalDependencyClosure from externalDeps.ts.
  */
 
 import * as fs from "node:fs";
@@ -60,9 +60,10 @@ import { PackageGraph, type GraphNode } from "./packageGraph.js";
 import {
   collectTransitiveDependencyOverrides,
   collectTransitiveDependencyPatches,
-  collectTransitiveExternalDeps,
+  collectExternalDependencyClosure,
   dependencyPatchesForExternalRoots,
   acquireExternalDeps,
+  mergeExternalDependencySpecs,
   type ExternalDependencyPatch,
 } from "./externalDeps.js";
 import { NpmResolutionError, runNpmInstall } from "@vibestudio/shared/npmInstaller";
@@ -84,7 +85,8 @@ async function ensureExternalDeps(
 function makeNode(
   name: string,
   dependencies: Record<string, string> = {},
-  internalDeps: string[] = []
+  internalDeps: string[] = [],
+  peerDependencies: Record<string, string> = {}
 ): GraphNode {
   return {
     path: `/ws/packages/${name}`,
@@ -92,6 +94,7 @@ function makeNode(
     name,
     kind: "package",
     dependencies,
+    peerDependencies,
     dependencyOverrides: {},
     internalDeps,
     manifest: {},
@@ -102,7 +105,43 @@ function patchDigest(content: string): string {
   return crypto.createHash("sha256").update(content).digest("hex");
 }
 
-describe("collectTransitiveExternalDeps", () => {
+describe("collectExternalDependencyClosure", () => {
+  it("keeps a peer nobody owns out of the unit's own dependencies", () => {
+    const graph = new PackageGraph();
+    // A shared UI package: it renders with React but does not own the instance.
+    const ui = makeNode("@workspace/ui", { "@radix-ui/themes": "3.3.0" }, [], {
+      react: "19.2.4",
+    });
+    const skill = makeNode("@workspace-skills/gmail", { "@workspace/ui": "workspace:*" }, [
+      "@workspace/ui",
+    ]);
+    graph.addNode(ui);
+    graph.addNode(skill);
+
+    const closure = collectExternalDependencyClosure(skill, graph);
+    expect(closure.dependencies).toEqual({ "@radix-ui/themes": "3.3.0" });
+    expect(closure.providedPeers).toEqual({ react: "19.2.4" });
+    expect(closure.peerOwners).toEqual({ react: ["@workspace/ui"] });
+    // Still installed: a typecheck of the skill needs React's declarations.
+    expect(closure.installSet).toEqual({ "@radix-ui/themes": "3.3.0", react: "19.2.4" });
+  });
+
+  it("treats a peer as satisfied once a closure member owns it", () => {
+    const graph = new PackageGraph();
+    const ui = makeNode("@workspace/ui", {}, [], { react: "19.2.4" });
+    const panel = makeNode(
+      "@workspace-panels/chat",
+      { "@workspace/ui": "workspace:*", react: "19.2.4", "react-dom": "19.2.4" },
+      ["@workspace/ui"]
+    );
+    graph.addNode(ui);
+    graph.addNode(panel);
+
+    const closure = collectExternalDependencyClosure(panel, graph);
+    expect(closure.providedPeers).toEqual({});
+    expect(closure.dependencies).toEqual({ react: "19.2.4", "react-dom": "19.2.4" });
+  });
+
   it("collects direct external deps from a leaf node", () => {
     const graph = new PackageGraph();
     const leaf = makeNode("@workspace/leaf", {
@@ -111,7 +150,7 @@ describe("collectTransitiveExternalDeps", () => {
     });
     graph.addNode(leaf);
 
-    const deps = collectTransitiveExternalDeps(leaf, graph);
+    const deps = collectExternalDependencyClosure(leaf, graph).installSet;
     expect(deps).toEqual({
       react: "^18.2.0",
       lodash: "^4.17.21",
@@ -135,7 +174,7 @@ describe("collectTransitiveExternalDeps", () => {
     graph.addNode(middle);
     graph.addNode(outer);
 
-    const deps = collectTransitiveExternalDeps(outer, graph);
+    const deps = collectExternalDependencyClosure(outer, graph).installSet;
     expect(deps).toHaveProperty("react", "^18.0.0");
     expect(deps).toHaveProperty("axios", "^1.0.0");
     expect(deps).toHaveProperty("zod", "^3.0.0");
@@ -157,7 +196,7 @@ describe("collectTransitiveExternalDeps", () => {
     graph.addNode(shared);
     graph.addNode(extension);
 
-    const deps = collectTransitiveExternalDeps(extension, graph);
+    const deps = collectExternalDependencyClosure(extension, graph).installSet;
     expect(deps).toEqual({
       "@silvia-odwyer/photon-node": "^0.3.4",
     });
@@ -186,7 +225,7 @@ describe("collectTransitiveExternalDeps", () => {
       });
       graph.addNode(extension);
 
-      const deps = collectTransitiveExternalDeps(extension, graph, workspaceRoot);
+      const deps = collectExternalDependencyClosure(extension, graph, workspaceRoot).installSet;
       expect(deps).toEqual({
         "@silvia-odwyer/photon-node": "^0.3.4",
       });
@@ -219,7 +258,9 @@ describe("collectTransitiveExternalDeps", () => {
       });
       graph.addNode(extension);
 
-      const deps = collectTransitiveExternalDeps(extension, graph, workspaceRoot, [appNodeModules]);
+      const deps = collectExternalDependencyClosure(extension, graph, workspaceRoot, [
+        appNodeModules,
+      ]).installSet;
       expect(deps).toEqual({
         "@silvia-odwyer/photon-node": "^0.3.4",
       });
@@ -236,7 +277,7 @@ describe("collectTransitiveExternalDeps", () => {
     });
     graph.addNode(packageUsingPatchedDep);
 
-    expect(collectTransitiveExternalDeps(packageUsingPatchedDep, graph)).toEqual({
+    expect(collectExternalDependencyClosure(packageUsingPatchedDep, graph).installSet).toEqual({
       "@earendil-works/pi-agent-core": "0.78.0",
       zod: "^3.25.0",
     });
@@ -252,7 +293,7 @@ describe("collectTransitiveExternalDeps", () => {
     // because version starts with "workspace:"
     graph.addNode(a);
 
-    const deps = collectTransitiveExternalDeps(a, graph);
+    const deps = collectExternalDependencyClosure(a, graph).installSet;
     expect(deps).toEqual({ react: "^18.0.0" });
   });
 
@@ -273,7 +314,7 @@ describe("collectTransitiveExternalDeps", () => {
     graph.addNode(b);
     graph.addNode(root);
 
-    const deps = collectTransitiveExternalDeps(root, graph);
+    const deps = collectExternalDependencyClosure(root, graph).installSet;
     // ^4.18.0 is the highest
     expect(deps["lodash"]).toBe("^4.18.0");
   });
@@ -294,7 +335,7 @@ describe("collectTransitiveExternalDeps", () => {
     graph.addNode(b);
     graph.addNode(root);
 
-    const deps = collectTransitiveExternalDeps(root, graph);
+    const deps = collectExternalDependencyClosure(root, graph).installSet;
     expect(deps["lodash"]).toBe("^4.17.21");
   });
 
@@ -319,7 +360,7 @@ describe("collectTransitiveExternalDeps", () => {
     graph.addNode(root);
 
     // Should work without infinite recursion and collect all externals
-    const deps = collectTransitiveExternalDeps(root, graph);
+    const deps = collectExternalDependencyClosure(root, graph).installSet;
     expect(deps).toHaveProperty("zod", "^3.0.0");
     expect(deps).toHaveProperty("react", "^18.0.0");
     expect(deps).toHaveProperty("axios", "^1.0.0");
@@ -616,5 +657,43 @@ describe("ensureExternalDeps", () => {
     };
     expect(repairedLock.packages["node_modules/leftpad"]?.integrity).toBe("sha512-test");
     expect(runNpmInstall).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("mergeExternalDependencySpecs", () => {
+  it("takes the higher floor when units disagree", () => {
+    const target: Record<string, string> = { react: "19.0.0" };
+    mergeExternalDependencySpecs(target, { react: "19.2.4" });
+    expect(target["react"]).toBe("19.2.4");
+
+    const reversed: Record<string, string> = { react: "19.2.4" };
+    mergeExternalDependencySpecs(reversed, { react: "19.0.0" });
+    expect(reversed["react"]).toBe("19.2.4");
+  });
+
+  it("keeps the narrowest requirement when two units share a floor", () => {
+    // A unit pins exactly because its runtime refuses anything else — the
+    // react-native renderer inside the installed APK is the live example. If
+    // the caret survives the merge, one install serves the whole target and
+    // npm resolves a newer patch that no declaring unit asked for.
+    const exactFirst: Record<string, string> = { react: "19.0.0" };
+    mergeExternalDependencySpecs(exactFirst, { react: "^19.0.0" });
+    expect(exactFirst["react"]).toBe("19.0.0");
+
+    const rangeFirst: Record<string, string> = { react: "^19.0.0" };
+    mergeExternalDependencySpecs(rangeFirst, { react: "19.0.0" });
+    expect(rangeFirst["react"]).toBe("19.0.0");
+  });
+
+  it("prefers a tilde over a caret at the same floor", () => {
+    const target: Record<string, string> = { left: "^1.2.3" };
+    mergeExternalDependencySpecs(target, { left: "~1.2.3" });
+    expect(target["left"]).toBe("~1.2.3");
+  });
+
+  it("does not let a wildcard displace a real requirement", () => {
+    const target: Record<string, string> = { left: "1.2.3" };
+    mergeExternalDependencySpecs(target, { left: "*" });
+    expect(target["left"]).toBe("1.2.3");
   });
 });

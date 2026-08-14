@@ -1867,11 +1867,27 @@ interface BuildEnv {
   nodePaths: string[];
   nodeModulesDir: string | null;
   externalDeps: Record<string, string>;
+  /** Closure externals the composing realm provides; never bundled into this unit. */
+  providedPeers: Record<string, string>;
+  /** Which closure members declared each provided peer. */
+  peerOwners: Record<string, string[]>;
   dependencyOverrides: Record<string, string>;
   dependencyPatches: ExternalDependencyPatch[];
   resolveDir: string;
   cleanup: () => void;
 }
+
+/**
+ * How the artifact under construction is composed, which decides who satisfies
+ * the closure's peers.
+ *
+ * A `runtime-root` (panel, app, worker, extension) is loaded on its own, so
+ * nothing exists above it to provide anything: every peer in its closure must
+ * be owned by one of its own dependencies. A `library` (package, skill) is
+ * always loaded *into* a realm, so its unsatisfied peers stay external and
+ * resolve to that realm's live instances.
+ */
+type BuildComposition = "runtime-root" | "library";
 
 /**
  * Prepare the common build environment shared by panel and worker builds.
@@ -1885,7 +1901,8 @@ async function prepareBuildEnv(
   buildKey: string,
   graph: PackageGraph,
   workspaceRoot: string,
-  sourceRoot: string
+  sourceRoot: string,
+  composition: BuildComposition
 ): Promise<BuildEnv> {
   const outdir = createBuildScratchDir(`build-${buildKey}`);
 
@@ -1899,8 +1916,30 @@ async function prepareBuildEnv(
     _appRoot,
     _appNodeModules
   );
-  const { externalDeps, dependencyOverrides, dependencyPatches, nodeModulesDir, nodePaths } =
-    dependencyEnvironment;
+  const {
+    externalDeps,
+    providedPeers,
+    peerOwners,
+    dependencyOverrides,
+    dependencyPatches,
+    nodeModulesDir,
+    nodePaths,
+  } = dependencyEnvironment;
+
+  if (composition === "runtime-root" && Object.keys(providedPeers).length > 0) {
+    dependencyEnvironment.release();
+    fs.rmSync(outdir, { recursive: true, force: true });
+    const unmet = Object.entries(providedPeers)
+      .map(([name, range]) => {
+        const owners = peerOwners[name] ?? [];
+        return `${name}@${range}${owners.length > 0 ? ` (required by ${owners.join(", ")})` : ""}`;
+      })
+      .sort();
+    throw new Error(
+      `${node.name} is loaded on its own, so nothing provides its closure's peers: ${unmet.join("; ")}. ` +
+        `Declare each as a dependency of ${node.name} at the version it should own.`
+    );
+  }
 
   try {
     const resolveDir = pickResolveDir(nodePaths, workspaceRoot);
@@ -1910,6 +1949,8 @@ async function prepareBuildEnv(
       nodePaths,
       nodeModulesDir,
       externalDeps,
+      providedPeers,
+      peerOwners,
       dependencyOverrides,
       dependencyPatches,
       resolveDir,
@@ -2170,7 +2211,14 @@ async function buildPanel(
   sourceStateHash: string,
   authority: UnitAuthorityManifest
 ): Promise<BuildResult> {
-  const env = await prepareBuildEnv(node, buildKey, graph, workspaceRoot, sourceRoot);
+  const env = await prepareBuildEnv(
+    node,
+    buildKey,
+    graph,
+    workspaceRoot,
+    sourceRoot,
+    "runtime-root"
+  );
   const { outdir, nodePaths } = env;
   const entryFile = resolveEntryPoint(node, env.sourcePath, {
     conditions: PANEL_CONDITIONS,
@@ -2882,7 +2930,14 @@ async function buildWorker(
   sourceStateHash: string,
   authority: UnitAuthorityManifest
 ): Promise<BuildResult> {
-  const env = await prepareBuildEnv(node, buildKey, graph, workspaceRoot, sourceRoot);
+  const env = await prepareBuildEnv(
+    node,
+    buildKey,
+    graph,
+    workspaceRoot,
+    sourceRoot,
+    "runtime-root"
+  );
   const { outdir, nodePaths, resolveDir } = env;
   const entryFile = resolveEntryPoint(node, env.sourcePath, {
     conditions: WORKER_CONDITIONS,
@@ -3122,7 +3177,14 @@ async function buildApp(
       ].join(":"),
       sourcemap
     );
-    const env = await prepareBuildEnv(node, providerBuildKey, graph, workspaceRoot, sourceRoot);
+    const env = await prepareBuildEnv(
+      node,
+      providerBuildKey,
+      graph,
+      workspaceRoot,
+      sourceRoot,
+      "runtime-root"
+    );
     try {
       const providerInput: BuildProviderInput = {
         target: "react-native",
@@ -3266,7 +3328,14 @@ async function buildTerminalApp(
   sourceStateHash: string,
   authority: UnitAuthorityManifest
 ): Promise<BuildResult> {
-  const env = await prepareBuildEnv(node, buildKey, graph, workspaceRoot, sourceRoot);
+  const env = await prepareBuildEnv(
+    node,
+    buildKey,
+    graph,
+    workspaceRoot,
+    sourceRoot,
+    "runtime-root"
+  );
   const { outdir, nodePaths, resolveDir, sourcePath } = env;
   const entry = appManifest["entry"];
   if (typeof entry !== "string" || entry.trim().length === 0) {
@@ -3494,7 +3563,14 @@ async function buildExtension(
   sourceStateHash: string,
   authority: UnitAuthorityManifest
 ): Promise<BuildResult> {
-  const env = await prepareBuildEnv(node, buildKey, graph, workspaceRoot, sourceRoot);
+  const env = await prepareBuildEnv(
+    node,
+    buildKey,
+    graph,
+    workspaceRoot,
+    sourceRoot,
+    "runtime-root"
+  );
   const { outdir, nodePaths, resolveDir } = env;
   const entryFile = resolveEntryPoint(node, env.sourcePath, {
     conditions: EXTENSION_CONDITIONS,
@@ -3946,9 +4022,31 @@ async function buildLibraryBundle(
   authority: UnitAuthorityManifest,
   target: LibraryBuildTarget
 ): Promise<BuildResult> {
-  const env = await prepareBuildEnv(node, buildKey, graph, workspaceRoot, sourceRoot);
+  const env = await prepareBuildEnv(node, buildKey, graph, workspaceRoot, sourceRoot, "library");
 
   try {
+    // A library's unsatisfied peers are supplied by the realm that loads it, so
+    // they are external here by construction. The caller's `externals` is that
+    // realm's inventory (a panel's module map, EvalDO's private map): a peer
+    // missing from it would be silently rebuilt into this bundle and become a
+    // second live instance of a package the realm already has -- two Reacts in
+    // one realm, and hooks stop working. Refuse instead, naming both sides.
+    const unprovidedPeers = Object.keys(env.providedPeers)
+      .filter((name) => !externals.includes(name))
+      .sort();
+    if (unprovidedPeers.length > 0) {
+      throw new Error(
+        `${node.name} expects its host realm to provide ${unprovidedPeers
+          .map((name) => {
+            const owners = env.peerOwners[name] ?? [];
+            return `${name}${owners.length > 0 ? ` (required by ${owners.join(", ")})` : ""}`;
+          })
+          .join(", ")}, but the realm loading it exposes ${
+          externals.length > 0 ? externals.join(", ") : "no modules"
+        }. Add the module to the host's vibestudio.exposeModules.`
+      );
+    }
+    const libraryExternals = [...new Set([...externals, ...Object.keys(env.providedPeers)])];
     const moduleUrl = `vibestudio-module://build/${buildKey}/${encodeURIComponent(node.name)}`;
     const outfile = path.join(env.outdir, "bundle.mjs");
     const entryFile = resolveEntryPoint(node, env.sourcePath, {
@@ -3969,8 +4067,8 @@ async function buildLibraryBundle(
       write: true,
       external:
         target === "worker"
-          ? [...new Set([...externals, ...WORKER_NODE_BUILTIN_EXTERNALS])]
-          : externals,
+          ? [...new Set([...libraryExternals, ...WORKER_NODE_BUILTIN_EXTERNALS])]
+          : libraryExternals,
       // Apply the execution target to third-party dependencies too. The
       // workspace resolver below already uses these conditions for local
       // packages, but without esbuild's top-level conditions npm dependencies
@@ -3984,7 +4082,7 @@ async function buildLibraryBundle(
         // too: esbuild's `external` option alone is bypassed because this plugin's
         // onResolve handles `@workspace/*` first. The host (EvalDO) provides those
         // externals at runtime via its module map.
-        createWorkspaceResolvePlugin(graph, sourceRoot, conditions, externals),
+        createWorkspaceResolvePlugin(graph, sourceRoot, conditions, libraryExternals),
         createTsExtensionPlugin(sourceRoot),
         createFsShimPlugin({ runtimeBacked: true, resolveDir: env.resolveDir }),
         createPathShimPlugin(env.resolveDir),

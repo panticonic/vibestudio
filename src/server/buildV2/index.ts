@@ -96,7 +96,7 @@ import {
 } from "./stateTrigger.js";
 import type { ProtectedPublicationEvent } from "@vibestudio/shared/protectedPublicationEvents";
 import {
-  collectTransitiveExternalDeps,
+  collectExternalDependencyClosure,
   prepareExternalDependencyEnvironment,
 } from "./externalDeps.js";
 import { ABOUT_SOURCE_PREFIX, isAboutSource } from "@vibestudio/workspace-contracts/aboutNamespace";
@@ -2121,7 +2121,12 @@ export async function initBuildSystemV2(
         manifest: node.manifest,
         packageVersion: node.packageVersion ?? null,
         dependencyEvs,
-        externalDeps: collectTransitiveExternalDeps(node, graph, workspaceRoot, appNodeModuleRoots),
+        externalDeps: collectExternalDependencyClosure(
+          node,
+          graph,
+          workspaceRoot,
+          appNodeModuleRoots
+        ).installSet,
         serviceBindings: await serviceBindingsForNode(
           node,
           rootOptions.workspaceAuthorityEnvironmentAt
@@ -2177,12 +2182,12 @@ export async function initBuildSystemV2(
               manifest: node.manifest,
               packageVersion: node.packageVersion ?? null,
               dependencyEvs,
-              externalDeps: collectTransitiveExternalDeps(
+              externalDeps: collectExternalDependencyClosure(
                 node,
                 graph,
                 workspaceRoot,
                 appNodeModuleRoots
-              ),
+              ).installSet,
               serviceBindings: await serviceBindingsForNode(node, environment),
             };
           })
@@ -2309,7 +2314,8 @@ export async function initBuildSystemV2(
       const { graph } = currentState();
       const node = resolveUnit(graph, unitName, workspaceRoot);
       if (!node) return {};
-      return collectTransitiveExternalDeps(node, graph, workspaceRoot, appNodeModuleRoots);
+      return collectExternalDependencyClosure(node, graph, workspaceRoot, appNodeModuleRoots)
+        .installSet;
     },
 
     getBuildProviderDetails(target: "react-native") {

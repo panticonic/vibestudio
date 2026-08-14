@@ -7,7 +7,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 
 import { discoverPackageGraph, PackageGraph, type GraphNode } from "./packageGraph.js";
-import { collectTransitiveExternalDeps } from "./externalDeps.js";
+import { collectExternalDependencyClosure } from "./externalDeps.js";
 
 /** Helper: create a minimal GraphNode for testing. */
 function makeNode(
@@ -21,6 +21,7 @@ function makeNode(
     name,
     kind: "package",
     dependencies: {},
+    peerDependencies: {},
     dependencyOverrides: {},
     internalDeps,
     manifest: {},
@@ -373,13 +374,25 @@ describe("discoverPackageGraph template framework closure", () => {
       expect(graph.get("@workspace/react").internalDeps).toContain("@workspace/ui");
       expect(graph.get("template:default").internalDeps).toContain("@workspace/react");
       expect(graph.get("@workspace-panels/board").internalDeps).toContain("template:default");
-      expect(
-        collectTransitiveExternalDeps(graph.get("@workspace-panels/board"), graph, root)
-      ).toMatchObject({
+      const closure = collectExternalDependencyClosure(
+        graph.get("@workspace-panels/board"),
+        graph,
+        root
+      );
+      expect(closure.installSet).toMatchObject({
         react: "^19.0.0",
         "react-dom": "^19.0.0",
         "@radix-ui/themes": "^3.2.1",
       });
+      // The panel owns react, which satisfies the framework module's peer on
+      // it. Nothing in the closure owns react-dom, so it stays a peer the
+      // composing context provides -- and a panel, having no context above it,
+      // must adopt it as its own dependency before it can build.
+      expect(closure.dependencies).toMatchObject({
+        react: "^19.0.0",
+        "@radix-ui/themes": "^3.2.1",
+      });
+      expect(closure.providedPeers).toEqual({ "react-dom": "^19.0.0" });
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
