@@ -55,6 +55,7 @@ import type {
   RtcSessionDescription,
 } from "@vibestudio/rpc/transports/webrtcPeer";
 import { DEFAULT_CHUNK_SIZE, parseSdpFingerprint } from "@vibestudio/rpc/transports/webrtcPeer";
+import { BufferedLevel } from "./bufferedLevel.js";
 
 /**
  * React Native's data-channel stack has corrupted frames above the conservative
@@ -374,7 +375,18 @@ class WrappedDataChannel implements RtcDataChannelLike {
   private readonly directSubscriptions: NativeEventSubscription[] = [];
   private usesDirectNativeEvents = false;
   private readyStateValue: RtcDataChannelState;
-  private bufferedAmountValue: number;
+  private readonly bufferedLevel: BufferedLevel;
+  /**
+   * Whether this adapter, rather than react-native-webrtc, tracks the buffered
+   * level and decides when it is low.
+   *
+   * react-native-webrtc emits `bufferedamountlow` on a strict `bufferedAmount <
+   * threshold`, but the contract (and awaitDrain) is "at or below", so its edge
+   * is missed at exact equality — and at a threshold of 0 it can never fire at
+   * all. We cannot fix their comparison, so where the native event is reachable
+   * we own the decision instead of forwarding theirs.
+   */
+  private ownsBufferedAmount = false;
 
   constructor(
     private readonly dc: NativeRtcDataChannel,
@@ -387,7 +399,7 @@ class WrappedDataChannel implements RtcDataChannelLike {
     this.messageFanout = new Fanout(log);
     this.lowFanout = new Fanout(log);
     this.readyStateValue = dc.readyState as RtcDataChannelState;
-    this.bufferedAmountValue = dc.bufferedAmount;
+    this.bufferedLevel = new BufferedLevel(dc.bufferedAmount);
     // Deliver binary as ArrayBuffer (react-native-webrtc only supports this mode).
     this.dc.binaryType = "arraybuffer";
     const reactTag = this.dc._reactTag;
@@ -407,15 +419,7 @@ class WrappedDataChannel implements RtcDataChannelLike {
           event.type === "binary" ? decodeBase64(event.data) : new TextEncoder().encode(event.data)
         );
       });
-      const bufferedSubscription = addDirectNativeListener(
-        "dataChannelDidChangeBufferedAmount",
-        (event) => {
-          if (event.reactTag !== reactTag || typeof event.bufferedAmount !== "number") return;
-          this.bufferedAmountValue = event.bufferedAmount;
-          if (this.bufferedAmountValue < this.bufferedAmountLowThreshold) this.lowFanout.emit();
-        }
-      );
-      for (const subscription of [stateSubscription, messageSubscription, bufferedSubscription]) {
+      for (const subscription of [stateSubscription, messageSubscription]) {
         if (subscription) this.directSubscriptions.push(subscription);
       }
     } else {
@@ -430,6 +434,25 @@ class WrappedDataChannel implements RtcDataChannelLike {
         if (data instanceof ArrayBuffer) this.messageFanout.emit(new Uint8Array(data));
         else if (typeof data === "string") this.messageFanout.emit(new TextEncoder().encode(data));
       });
+    }
+    // Buffered-amount tracking is decided independently of the event bridge
+    // above: whenever the native event is reachable we take it, on either path,
+    // because it carries the absolute level and lets us apply the correct
+    // "at or below" edge. Only a channel with no tag at all (mocks, older
+    // releases) falls back to forwarding react-native-webrtc's own emit.
+    const bufferedSubscription = reactTag
+      ? addDirectNativeListener("dataChannelDidChangeBufferedAmount", (event) => {
+          if (event.reactTag !== reactTag || typeof event.bufferedAmount !== "number") return;
+          this.bufferedLevel.applyNativeLevel(event.bufferedAmount);
+          if (this.bufferedLevel.isAtOrBelow(this.bufferedAmountLowThreshold)) {
+            this.lowFanout.emit();
+          }
+        })
+      : null;
+    if (bufferedSubscription) {
+      this.ownsBufferedAmount = true;
+      this.directSubscriptions.push(bufferedSubscription);
+    } else if (typeof dc.addEventListener === "function") {
       this.dc.addEventListener("bufferedamountlow", () => this.lowFanout.emit());
     }
   }
@@ -449,9 +472,7 @@ class WrappedDataChannel implements RtcDataChannelLike {
   }
 
   get bufferedAmount(): number {
-    // react-native-webrtc keeps its public value current on the standard
-    // EventTarget path. Only the direct-native fallback needs our own cache.
-    return this.usesDirectNativeEvents ? this.bufferedAmountValue : this.dc.bufferedAmount;
+    return this.ownsBufferedAmount ? this.bufferedLevel.value : this.dc.bufferedAmount;
   }
 
   get bufferedAmountLowThreshold(): number {
@@ -467,6 +488,11 @@ class WrappedDataChannel implements RtcDataChannelLike {
   }
 
   send(data: Uint8Array): void {
+    // Count the write before it leaves, so the next `bufferedAmount` sample
+    // includes it. The platform reports the level asynchronously, and a
+    // scheduler that samples between the write and the report would otherwise
+    // be told the channel is empty.
+    this.bufferedLevel.recordSend(data.byteLength);
     // react-native-webrtc's send(ArrayBufferView) re-slices with byteOffset +
     // byteLength, so the transport's `bytes.subarray(...)` views are sent exactly.
     this.dc.send(data);
