@@ -56,6 +56,7 @@ function parseArgs(argv) {
     noReset: false,
     noTap: false,
     realModel: false,
+    productionBase: false,
     localSignaling: false,
     requireTurn: false,
     signalUrl: null,
@@ -91,6 +92,8 @@ function parseArgs(argv) {
       options.noTap = true;
     } else if (arg === "--real-model") {
       options.realModel = true;
+    } else if (arg === "--production-base") {
+      options.productionBase = true;
     } else if (arg === "--local-signaling") {
       options.localSignaling = true;
     } else if (arg === "--require-turn") {
@@ -157,6 +160,8 @@ Runner options:
   --no-tap            Do not automate the Pair button tap.
   --real-model        Use the real model provider/credential path instead of
                        the deterministic E2E model stub.
+  --production-base   Create the workspace from the canonical pinned Base
+                       release instead of the selected development checkout.
   --signal-url <url>  Use a specific existing signaling service.
   --local-signaling   Start local Wrangler signaling (and coturn for an emulator)
                        instead of using the hosted production service.
@@ -322,6 +327,28 @@ function runCommandBuffer(command, args, options = {}) {
       else reject(new Error(`${command} ${args.join(" ")} failed with code ${code}\n${stderr}`));
     });
   });
+}
+
+/**
+ * Resolve the Base the workspace is created from, exactly as `pnpm dev` and the
+ * Electron E2E suite do.
+ *
+ * A source-checkout smoke rebuilds the phone from current code; pairing that
+ * against the last published Base is the same stale-artifact mistake as pairing
+ * it against a stale `dist`, and it fails outright once the host's workspace
+ * ABI moves ahead of that publication. Resolution is TypeScript, so it runs
+ * through the shared resolver rather than a second copy living here.
+ */
+async function resolveDevelopmentBase(checkpointTarget, productionBase) {
+  const { stdout } = await runCommandBuffer(process.execPath, [
+    "--import",
+    "tsx",
+    path.join(repoRoot, "scripts", "resolve-development-base.ts"),
+    "--checkpoint-target",
+    checkpointTarget,
+    ...(productionBase ? ["--production-base"] : []),
+  ]);
+  return JSON.parse(stdout.toString().trim());
 }
 
 async function adbCaptureBuffer(device, ...args) {
@@ -1675,6 +1702,25 @@ async function main() {
           }
         : {}),
     };
+    const developmentBase = await resolveDevelopmentBase(
+      path.join(tempRoot, "base-checkpoint"),
+      options.productionBase
+    );
+    if (developmentBase) {
+      serverEnv.VIBESTUDIO_DEV_ROOT_TEMPLATE = JSON.stringify(developmentBase.pin);
+      serverEnv.VIBESTUDIO_DEV_ROOT_TEMPLATE_CHECKOUT = developmentBase.checkout;
+      // Write-back belongs to the source development instance alone; a smoke
+      // must never publish back into the developer's Base checkout.
+      delete serverEnv.VIBESTUDIO_DEV_ROOT_TEMPLATE_WRITEBACK;
+      console.log(
+        `[mobile-smoke] Base:      ${developmentBase.pin.commit} from ${developmentBase.sourceCheckout}`
+      );
+    } else {
+      delete serverEnv.VIBESTUDIO_DEV_ROOT_TEMPLATE;
+      delete serverEnv.VIBESTUDIO_DEV_ROOT_TEMPLATE_CHECKOUT;
+      delete serverEnv.VIBESTUDIO_DEV_ROOT_TEMPLATE_WRITEBACK;
+      console.log("[mobile-smoke] Base:      canonical pinned production release");
+    }
     if (options.localSignaling || options.signalUrl) {
       serverEnv.VIBESTUDIO_WEBRTC_SIGNAL_URL = signalUrl;
     } else {
