@@ -242,9 +242,26 @@ export function createFrameScheduler(options: {
         try {
           channel.send(part);
         } catch {
-          // send() threw = the channel died under us; identical to not-open.
-          settleAll();
-          return;
+          // A throw with the channel still open and its buffer above the low
+          // threshold is the send buffer refusing more -- the very condition
+          // `awaitDrain` exists to wait out -- not the channel dying. Settling
+          // here would discard every queued key over one full buffer, which is
+          // how a burst of concurrent streams lost whole bodies while the pipe
+          // stayed up and later frames on the same streams went through. Put
+          // the part back and let this key's next turn drain first.
+          //
+          // A throw with room already in the buffer is not something draining
+          // can fix, so that stays fatal and cannot spin: after a drain the
+          // buffer is at or below the threshold, so a repeat throw lands here.
+          const backpressured =
+            channel.readyState === "open" &&
+            channel.bufferedAmount > channel.bufferedAmountLowThreshold;
+          if (!backpressured) {
+            settleAll();
+            return;
+          }
+          pushToRing(key);
+          continue;
         }
         batch.next += 1;
         live.bytes -= part.byteLength;

@@ -321,6 +321,53 @@ describe("frame scheduler", () => {
     await expect(partial).resolves.toBe("dropped");
   });
 
+  it("does not discard other keys' work when the send buffer refuses a part", async () => {
+    // The failure this reproduces: several streams in flight, the send buffer
+    // fills, one send throws — and every queued stream loses its body while the
+    // pipe stays up and later frames on those same streams go through.
+    const ch = new FakeChannel();
+    ch.bufferedAmountLowThreshold = 0;
+    let refuseNextSend = false;
+    const realSend = ch.send.bind(ch);
+    ch.send = (data: Uint8Array): void => {
+      if (refuseNextSend) {
+        refuseNextSend = false;
+        // A full SCTP queue: the channel is open, its buffer is above the
+        // low-water mark, and the write is refused.
+        ch.bufferedAmount = 4096;
+        throw new Error("send queue full");
+      }
+      realSend(data);
+    };
+
+    const s = createFrameScheduler({ getChannel: () => ch });
+    const a = s.enqueue("a", [part("a", 0)]);
+    const b = s.enqueue("b", [part("b", 0)]);
+    refuseNextSend = true;
+    await tick();
+
+    // Nothing settled as lost, and the refused part is still owed.
+    ch.drain();
+    await tick();
+    await expect(a).resolves.toBe("flushed");
+    await expect(b).resolves.toBe("flushed");
+    expect(ch.sent.map(label).sort()).toEqual(["a0", "b0"]);
+  });
+
+  it("still settles 'dropped' when a send fails with room in the buffer", async () => {
+    // Draining cannot fix a write the channel refuses while its buffer is
+    // empty, so that stays fatal rather than retrying forever.
+    const ch = new FakeChannel();
+    ch.bufferedAmountLowThreshold = 0;
+    ch.send = (): void => {
+      throw new Error("channel is unusable");
+    };
+    const s = createFrameScheduler({ getChannel: () => ch });
+    const queued = s.enqueue("a", [part("a", 0)]);
+    await expect(queued).resolves.toBe("dropped");
+    expect(ch.sent).toHaveLength(0);
+  });
+
   it("meters pendingBytes per key and in total while parts are queued", async () => {
     const ch = new FakeChannel();
     ch.bufferedAmount = 1;
