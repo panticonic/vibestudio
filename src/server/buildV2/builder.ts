@@ -295,6 +295,46 @@ function sourcePathForNode(node: GraphNode, sourceRoot: string): string {
 let runningBuilds = 0;
 const waitQueue: (() => void)[] = [];
 
+/**
+ * Narrate where a build actually is.
+ *
+ * A build that stops making progress leaves no evidence of its own: the event
+ * loop goes idle, no child process exists, and the coalescing map hands the
+ * same unsettled promise to every later request, so the symptom is silence
+ * that repeats. These lines name the stage a build entered and, if it stays
+ * there, keep saying so -- the difference between reading a stall and
+ * guessing at it.
+ */
+const STAGE_STALL_NOTICE_MS = 30_000;
+
+function traceBuildStages(label: string): { enter(stage: string): void; done(): void } {
+  const started = Date.now();
+  let stage = "queued";
+  let stageStarted = started;
+  const timer = setInterval(() => {
+    console.warn(
+      `[BuildV2] ${label} still in ${stage} after ` +
+        `${Math.round((Date.now() - stageStarted) / 1000)}s ` +
+        `(${Math.round((Date.now() - started) / 1000)}s total; ` +
+        `${runningBuilds}/${MAX_CONCURRENT_BUILDS} permits held, ${waitQueue.length} waiting)`
+    );
+  }, STAGE_STALL_NOTICE_MS);
+  timer.unref?.();
+  return {
+    enter(next: string): void {
+      console.log(`[BuildV2] ${label} ${stage} -> ${next} (${Date.now() - stageStarted}ms)`);
+      stage = next;
+      stageStarted = Date.now();
+    },
+    done(): void {
+      clearInterval(timer);
+      console.log(
+        `[BuildV2] ${label} left ${stage} after ${Math.round((Date.now() - started) / 1000)}s total`
+      );
+    },
+  };
+}
+
 async function acquireSemaphore(): Promise<void> {
   if (runningBuilds < MAX_CONCURRENT_BUILDS) {
     runningBuilds++;
@@ -1704,9 +1744,14 @@ export async function buildUnit(
     return cached;
   }
 
-  // Check for in-flight build (coalescing)
+  // Check for in-flight build (coalescing). An adopted promise is worth saying
+  // out loud: if the original never settles, every adopter inherits that, and
+  // this line is the only place the adoption is visible.
   const inFlight = inFlightBuilds.get(buildKey);
-  if (inFlight) return inFlight;
+  if (inFlight) {
+    console.log(`[BuildV2] ${node.name}: adopting in-flight build ${buildKey}`);
+    return inFlight;
+  }
 
   const buildPromise = doBuild(
     node,
@@ -1760,18 +1805,25 @@ async function doBuild(
   stateRef: string,
   options?: BuildUnitOptions
 ): Promise<BuildResult> {
+  const trace = traceBuildStages(`${node.name}@${buildKey.slice(0, 12)}`);
+  trace.enter("semaphore");
   await acquireSemaphore();
 
   try {
     // Materialize sources for the unit + its transitive internal deps at the
     // immutable workspace state. The provider caches per-state checkouts; no
     // per-build temp dir, no cleanup.
+    trace.enter("materialize");
     const extracted = await getBuildSourceProvider().materializeForBuild(
       collectTransitiveInternalDeps(node, graph),
       stateRef,
       workspaceRoot
     );
+    trace.enter("authority");
     const authority = authorityFromMaterializedSource(node, extracted.sourceRoot);
+    trace.enter(
+      options?.library ? `library:${options.libraryTarget ?? "?"}` : `build:${node.kind}`
+    );
 
     if (options?.library) {
       if (!options.libraryTarget) {
@@ -1854,6 +1906,7 @@ async function doBuild(
     }
   } finally {
     releaseSemaphore();
+    trace.done();
   }
 }
 
