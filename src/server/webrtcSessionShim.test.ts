@@ -1,17 +1,19 @@
 import { describe, expect, it } from "vitest";
-import { FRAME_DATA, FRAME_END } from "@vibestudio/rpc/protocol/streamCodec";
+import { FRAME_DATA, FRAME_END, FRAME_ERROR } from "@vibestudio/rpc/protocol/streamCodec";
 import {
   decodeControlFrame,
   type SessionControlFrame,
 } from "@vibestudio/rpc/protocol/sessionNegotiation";
 import type { WsClientMessage, WsServerMessage } from "@vibestudio/shared/ws/protocol";
 import { SessionWebSocketShim, type PipeChannels } from "./webrtcSessionShim.js";
+import type { EnqueueOutcome } from "@vibestudio/rpc/transports/webrtcAnswerer";
 
 interface BulkWrite {
   streamId: number;
   type: number;
   payload: Uint8Array;
-  resolve: () => void;
+  /** Settle this write; defaults to the frame reaching the channel. */
+  resolve: (outcome?: EnqueueOutcome) => void;
   reject: (error: Error) => void;
 }
 
@@ -34,8 +36,14 @@ function harness() {
     },
     writeBulkFrame: (streamId, type, payload) => {
       ops.push(`bulk:${type}`);
-      return new Promise<void>((resolve, reject) => {
-        bulk.push({ streamId, type, payload, resolve, reject });
+      return new Promise<EnqueueOutcome>((resolve, reject) => {
+        bulk.push({
+          streamId,
+          type,
+          payload,
+          resolve: (outcome = "flushed") => resolve(outcome),
+          reject,
+        });
       });
     },
     dropBulkStream: (streamId) => {
@@ -194,7 +202,7 @@ describe("SessionWebSocketShim — ws:* <-> session-frame translation", () => {
             resolve,
           });
         }),
-      writeBulkFrame: async () => undefined,
+      writeBulkFrame: async () => "flushed" as const,
       dropBulkStream: () => undefined,
       bulkPendingBytes: () => 0,
     };
@@ -269,6 +277,48 @@ describe("SessionWebSocketShim — bulk stream surface", () => {
     await expect(written as Promise<void>).rejects.toThrow("pipe down");
     await flush();
     expect(h.shim.bufferedAmount).toBe(0);
+  });
+
+  it("fails the stream instead of claiming bytes a dropped DATA frame never delivered", async () => {
+    const h = harness();
+    h.shim.registerStream("req-1", 77);
+
+    const body = h.shim.sendStreamFrame("req-1", FRAME_DATA, new Uint8Array(1000));
+    expect(body).not.toBe(false);
+    h.bulk[0]!.resolve("dropped"); // pipe down with the part unsent
+    await body;
+
+    // END would otherwise carry bytesIn for a body the receiver never got,
+    // leaving it to notice by counting: "expected 1000, received 0".
+    const end = h.shim.sendStreamFrame(
+      "req-1",
+      FRAME_END,
+      new TextEncoder().encode(JSON.stringify({ bytesIn: 1000 }))
+    );
+    expect(end).not.toBe(false);
+    expect(h.bulk[1]).toMatchObject({ streamId: 77, type: FRAME_ERROR });
+    const sent = JSON.parse(new TextDecoder().decode(h.bulk[1]!.payload)) as {
+      code: string;
+      status: number;
+    };
+    expect(sent).toMatchObject({ code: "STREAM_TRUNCATED", status: 502 });
+    h.bulk[1]!.resolve();
+    await end;
+
+    // The stream is reaped either way: a later frame finds no registration.
+    expect(h.shim.sendStreamFrame("req-1", FRAME_DATA, new Uint8Array(1))).toBe(false);
+  });
+
+  it("sends END normally when every DATA frame reached the channel", async () => {
+    const h = harness();
+    h.shim.registerStream("req-1", 77);
+    const body = h.shim.sendStreamFrame("req-1", FRAME_DATA, new Uint8Array(10));
+    h.bulk[0]!.resolve();
+    await body;
+    const end = h.shim.sendStreamFrame("req-1", FRAME_END, new Uint8Array(2));
+    expect(h.bulk[1]).toMatchObject({ streamId: 77, type: FRAME_END });
+    h.bulk[1]!.resolve();
+    await end;
   });
 
   it("sendStreamFrame writes RAW bytes for a registered request and returns the metered promise", async () => {

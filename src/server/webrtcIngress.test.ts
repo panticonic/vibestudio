@@ -51,7 +51,7 @@ function makeFakePipe(room: string): FakePipe {
         rejectConnect?.(new Error("pipe closed"));
       },
       writeControl: async () => {},
-      writeBulkFrame: async () => {},
+      writeBulkFrame: async () => "flushed" as const,
       dropBulkStream: () => {},
       bulkPendingBytes: () => 0,
       controlBufferedAmount: () => 0,

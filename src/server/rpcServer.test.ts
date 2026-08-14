@@ -850,7 +850,7 @@ describe("RpcServer stream-request emit path (§2.3 binary surface, §2.4 cancel
         },
         writeBulkFrame: (streamId, type, payload) => {
           bulk.push({ streamId, type, payload });
-          return Promise.resolve();
+          return Promise.resolve("flushed" as const);
         },
         dropBulkStream: () => {},
         bulkPendingBytes: () => 0,
@@ -992,7 +992,7 @@ describe("RpcServer stream-request emit path (§2.3 binary surface, §2.4 cancel
         return Promise.resolve();
       },
       // Never settles — the bulk backlog stays metered.
-      writeBulkFrame: () => new Promise<void>(() => {}),
+      writeBulkFrame: () => new Promise<never>(() => {}),
       dropBulkStream: () => {},
       bulkPendingBytes: () => 0,
     };

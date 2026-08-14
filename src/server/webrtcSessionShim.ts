@@ -21,6 +21,7 @@
  */
 
 import { FRAME_END, FRAME_ERROR } from "@vibestudio/rpc/protocol/streamCodec";
+import type { EnqueueOutcome } from "@vibestudio/rpc/transports/webrtcAnswerer";
 import type { StreamFrameType } from "@vibestudio/rpc/protocol/bulkMux";
 import { isTerminalCloseCode } from "@vibestudio/rpc/protocol/closeCodes";
 import {
@@ -54,9 +55,14 @@ export interface PipeChannels {
   /**
    * Enqueue one bulk mux frame. Resolves when the frame has been accepted and
    * sent — the pipe's queue is bounded, so this promise IS the backpressure
-   * signal a stream producer must await.
+   * signal a stream producer must await — and carries whether it reached the
+   * channel at all: `'dropped'` means the pipe went down with parts unsent.
    */
-  writeBulkFrame(streamId: number, type: StreamFrameType, payload: Uint8Array): Promise<void>;
+  writeBulkFrame(
+    streamId: number,
+    type: StreamFrameType,
+    payload: Uint8Array
+  ): Promise<EnqueueOutcome>;
   /** Discard any queued-but-unsent bulk frames for one stream (cancellation). */
   dropBulkStream(streamId: number): void;
   /** Bulk bytes accepted but not yet sent (whole pipe, or one stream). */
@@ -100,6 +106,8 @@ export class SessionWebSocketShim {
   // (session close / re-open) GC's its entries with it — no leak even if a panel
   // navigates away mid-stream before END/ERROR. A pipe-shared map would instead
   // grow unbounded over a long-lived pipe with churny panels.
+  /** Requests whose body lost a frame before the wire; their END becomes an error. */
+  private readonly truncatedStreams = new Set<string>();
   private readonly streams: StreamIdMaps = {
     idByRequest: new Map(),
     requestByStream: new Map(),
@@ -187,11 +195,36 @@ export class SessionWebSocketShim {
     if (this.state !== WS_OPEN) return false;
     const streamId = this.streams.idByRequest.get(requestId);
     if (streamId === undefined) return false;
+
+    // END carries the byte count the SENDER read, so claiming it after part of
+    // the body never reached the wire hands the receiver an integrity failure
+    // to discover by counting -- a length mismatch at the far end, naming
+    // nothing, arriving nowhere near the loss. If any DATA frame for this
+    // stream was dropped, say so where it happened instead.
+    if (frameType === FRAME_END && this.truncatedStreams.has(requestId)) {
+      this.truncatedStreams.delete(requestId);
+      const error = new TextEncoder().encode(
+        JSON.stringify({
+          status: 502,
+          message: `Stream ${String(streamId)} lost part of its body before it reached the transport`,
+          code: "STREAM_TRUNCATED",
+          errorKind: "protocol",
+        })
+      );
+      const failed = this.writeBulkMetered(streamId, FRAME_ERROR, error);
+      this.reapStream(requestId, streamId);
+      return failed.then(() => undefined);
+    }
+
     const written = this.writeBulkMetered(streamId, frameType, payload);
     if (frameType === FRAME_END || frameType === FRAME_ERROR) {
+      this.truncatedStreams.delete(requestId);
       this.reapStream(requestId, streamId);
+      return written.then(() => undefined);
     }
-    return written;
+    return written.then((outcome) => {
+      if (outcome === "dropped") this.truncatedStreams.add(requestId);
+    });
   }
 
   close(code?: number, reason?: string): void {
@@ -355,7 +388,7 @@ export class SessionWebSocketShim {
     streamId: number,
     type: StreamFrameType,
     payload: Uint8Array
-  ): Promise<void> {
+  ): Promise<EnqueueOutcome> {
     const size = payload.byteLength;
     this.pendingBulkBytes += size;
     const written = this.pipe.writeBulkFrame(streamId, type, payload);

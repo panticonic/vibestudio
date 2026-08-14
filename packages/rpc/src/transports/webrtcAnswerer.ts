@@ -62,7 +62,7 @@ import {
   DEFAULT_CHUNK_SIZE,
 } from "./webrtcPeer.js";
 import { createControlCodec } from "./controlFraming.js";
-import { createFrameScheduler } from "./frameScheduler.js";
+import { createFrameScheduler, type EnqueueOutcome } from "./frameScheduler.js";
 import {
   BULK_MUX_HEADER_BYTES,
   createBulkDemux,
@@ -83,6 +83,7 @@ import {
 } from "../protocol/sessionNegotiation.js";
 
 export type { StreamFrameType } from "../protocol/bulkMux.js";
+export type { EnqueueOutcome } from "./frameScheduler.js";
 
 // --- Wire/liveness constants (§1.1, §2.2) -----------------------------------
 
@@ -130,9 +131,18 @@ export interface WebRtcAnswererPipe {
    * Write one bulk frame: mux-encoded (§1.2) and chunked under the negotiated
    * size — DATA payloads split into independent DATA messages, oversized
    * HEAD/ERROR JSON continues via MORE. Scheduled round-robin per stream.
-   * Resolves when accepted under the queue caps AND sent.
+   *
+   * Resolves with the outcome: `'flushed'` = every part reached the channel;
+   * `'dropped'` = the pipe went down or the stream was dropped with parts
+   * unsent. A caller that goes on to claim a byte count for this stream MUST
+   * read that outcome -- an unread drop becomes a body the receiver can only
+   * discover is short by counting it.
    */
-  writeBulkFrame(streamId: number, type: StreamFrameType, payload: Uint8Array): Promise<void>;
+  writeBulkFrame(
+    streamId: number,
+    type: StreamFrameType,
+    payload: Uint8Array
+  ): Promise<EnqueueOutcome>;
   /** Discard everything still queued for a cancelled stream. */
   dropBulkStream(streamId: number): void;
   /** Queued-but-unsent bulk bytes — total, or for one stream (metering). */
@@ -1066,10 +1076,10 @@ export function createWebRtcAnswererPipe(options: WebRtcAnswererOptions): WebRtc
       streamId: number,
       type: StreamFrameType,
       payload: Uint8Array
-    ): Promise<void> {
+    ): Promise<EnqueueOutcome> {
       const parts = encodeBulkFrameParts(streamId, type, payload);
       const outcome = await bulkScheduler.enqueue(streamId, parts);
-      if (outcome !== "flushed") return;
+      if (outcome !== "flushed") return outcome;
       const stats = outboundBulkStats.get(streamId) ?? {
         dataFrames: 0,
         dataBytes: 0,
@@ -1089,6 +1099,7 @@ export function createWebRtcAnswererPipe(options: WebRtcAnswererOptions): WebRtc
       } else {
         outboundBulkStats.set(streamId, stats);
       }
+      return outcome;
     },
 
     dropBulkStream(streamId: number): void {
