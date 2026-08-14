@@ -209,6 +209,23 @@ export function createFrameScheduler(options: {
     }
   };
 
+  /** Discard everything queued for one key, settling its promises 'dropped'. */
+  const dropKey = (key: SchedulerKey): void => {
+    const q = queues.get(key);
+    if (q) {
+      queues.delete(key);
+      removeFromRing(key);
+      totalBytes -= q.bytes;
+      for (const batch of q.batches) batch.resolve("dropped");
+    }
+    // Also settle enqueues for this key still awaiting capacity — a producer
+    // parked on a cancelled stream must not wedge.
+    const dropped = waiters.filter((w) => w.key === key);
+    if (dropped.length > 0) waiters = waiters.filter((w) => w.key !== key);
+    for (const w of dropped) w.resolve("dropped");
+    admitWaiters(); // freed capacity may admit other keys' waiters
+  };
+
   /**
    * The single pump loop: one part per iteration, round-robin across keys,
    * drain-aware. Exits when idle (restarted by the next accept) or when the
@@ -242,25 +259,24 @@ export function createFrameScheduler(options: {
         try {
           channel.send(part);
         } catch {
-          // A throw with the channel still open and its buffer above the low
-          // threshold is the send buffer refusing more -- the very condition
-          // `awaitDrain` exists to wait out -- not the channel dying. Settling
-          // here would discard every queued key over one full buffer, which is
-          // how a burst of concurrent streams lost whole bodies while the pipe
-          // stayed up and later frames on the same streams went through. Put
-          // the part back and let this key's next turn drain first.
+          // A refused write says nothing about whether the message was sent.
+          // libdatachannel buffers a message it could not hand to SCTP and
+          // reports the failure anyway, so a part that "failed" may already be
+          // on the wire -- re-sending it delivers the same bytes twice, and
+          // under sustained backpressure, many times over. (Measured on a
+          // device: streams received exact integer multiples of their own
+          // payload, 3x to 13x, nothing missing anywhere.)
           //
-          // A throw with room already in the buffer is not something draining
-          // can fix, so that stays fatal and cannot spin: after a drain the
-          // buffer is at or below the threshold, so a repeat throw lands here.
-          const backpressured =
-            channel.readyState === "open" &&
-            channel.bufferedAmount > channel.bufferedAmountLowThreshold;
-          if (!backpressured) {
+          // So the part is never re-sent. What a throw does bound is the
+          // damage: a dead channel takes everything, while an open one that
+          // refuses one write costs only that write's stream, which then
+          // settles 'dropped' and is reported as a truncated stream rather
+          // than a body silently missing bytes.
+          if (channel.readyState !== "open") {
             settleAll();
             return;
           }
-          pushToRing(key);
+          dropKey(key);
           continue;
         }
         batch.next += 1;
@@ -293,21 +309,7 @@ export function createFrameScheduler(options: {
       });
     },
 
-    dropKey(key: SchedulerKey): void {
-      const q = queues.get(key);
-      if (q) {
-        queues.delete(key);
-        removeFromRing(key);
-        totalBytes -= q.bytes;
-        for (const batch of q.batches) batch.resolve("dropped");
-      }
-      // Also settle enqueues for this key still awaiting capacity — a producer
-      // parked on a cancelled stream must not wedge.
-      const dropped = waiters.filter((w) => w.key === key);
-      if (dropped.length > 0) waiters = waiters.filter((w) => w.key !== key);
-      for (const w of dropped) w.resolve("dropped");
-      admitWaiters(); // freed capacity may admit other keys' waiters
-    },
+    dropKey,
 
     pendingBytes(key?: SchedulerKey): number {
       if (key === undefined) return totalBytes;

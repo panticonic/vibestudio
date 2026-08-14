@@ -321,6 +321,39 @@ describe("frame scheduler", () => {
     await expect(partial).resolves.toBe("dropped");
   });
 
+  it("never re-sends a refused part (a refused write may already be on the wire)", async () => {
+    // Measured on a device: retrying a refused part delivered exact integer
+    // multiples of a stream's own payload — 3x, 7x, 13x — with nothing missing
+    // anywhere, because libdatachannel buffers a message it could not hand to
+    // SCTP and reports failure anyway. A "failed" send may have been sent.
+    const ch = new FakeChannel();
+    ch.bufferedAmountLowThreshold = 0;
+    let refuseNextSend = true;
+    const realSend = ch.send.bind(ch);
+    ch.send = (data: Uint8Array): void => {
+      if (refuseNextSend) {
+        refuseNextSend = false;
+        ch.bufferedAmount = 4096;
+        // The message goes out despite the throw — the case that produced
+        // duplicates when the part went back on the rotation.
+        realSend(data);
+        throw new Error("send queue full");
+      }
+      realSend(data);
+    };
+
+    const s = createFrameScheduler({ getChannel: () => ch });
+    const refused = s.enqueue("a", [part("a", 0)]);
+    await tick();
+    ch.drain();
+    await tick();
+
+    // Exactly one copy on the wire, and the stream is told it lost the frame
+    // rather than being told nothing and having the bytes arrive twice.
+    expect(ch.sent.map(label)).toEqual(["a0"]);
+    await expect(refused).resolves.toBe("dropped");
+  });
+
   it("does not discard other keys' work when the send buffer refuses a part", async () => {
     // The failure this reproduces: several streams in flight, the send buffer
     // fills, one send throws — and every queued stream loses its body while the
@@ -345,13 +378,15 @@ describe("frame scheduler", () => {
     const b = s.enqueue("b", [part("b", 0)]);
     refuseNextSend = true;
     await tick();
-
-    // Nothing settled as lost, and the refused part is still owed.
     ch.drain();
     await tick();
-    await expect(a).resolves.toBe("flushed");
+
+    // One refused write costs its own stream and nothing else: b is untouched.
+    // Before this, a single full buffer settled every queued key as dropped,
+    // which is how a burst of concurrent streams lost whole bodies at once.
+    await expect(a).resolves.toBe("dropped");
     await expect(b).resolves.toBe("flushed");
-    expect(ch.sent.map(label).sort()).toEqual(["a0", "b0"]);
+    expect(ch.sent.map(label)).toEqual(["b0"]);
   });
 
   it("still settles 'dropped' when a send fails with room in the buffer", async () => {
