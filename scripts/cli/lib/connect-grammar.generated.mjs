@@ -54,6 +54,10 @@ function createConnectLink(pairing, carrier = "scheme") {
   }
   return `vibestudio://connect?${params}`;
 }
+function connectPairingFromLink(link) {
+  const { kind: _kind, ...pairing } = link;
+  return pairing;
+}
 function createConnectDeepLink(pairing) {
   return createConnectLink(pairing, "scheme");
 }
@@ -299,6 +303,7 @@ export {
   PAIR_LINK_PATH,
   WORKSPACE_ROUTE_PREFIX,
   appendServerPath,
+  connectPairingFromLink,
   createConnectDeepLink,
   createConnectLink,
   createConnectPairUrl,

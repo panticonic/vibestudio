@@ -33,9 +33,9 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
           "host"
         ],
         "presentation": {
-          "title": "Inspect running workspace services",
-          "action": "inspect apps, panels, background tasks, and scheduled work that's currently running",
-          "description": "Read the current structure and status of running workspace services",
+          "title": "View running apps and tasks",
+          "action": "view apps, panels, and scheduled tasks that are currently running",
+          "description": "See what apps and tasks are currently running in your workspace",
           "group": "workspace",
           "authorityCategory": {
             "domain": "automation",
@@ -61,9 +61,9 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
           "host"
         ],
         "presentation": {
-          "title": "Inspect running workspace services",
-          "action": "inspect apps, panels, background tasks, and scheduled work that's currently running",
-          "description": "Read the current structure and status of running workspace services",
+          "title": "View running apps and tasks",
+          "action": "view apps, panels, and scheduled tasks that are currently running",
+          "description": "See what apps and tasks are currently running in your workspace",
           "group": "workspace",
           "authorityCategory": {
             "domain": "automation",
@@ -89,9 +89,9 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
           "host"
         ],
         "presentation": {
-          "title": "Inspect running workspace services",
-          "action": "inspect apps, panels, background tasks, and scheduled work that's currently running",
-          "description": "Read the current structure and status of running workspace services",
+          "title": "View running apps and tasks",
+          "action": "view apps, panels, and scheduled tasks that are currently running",
+          "description": "See what apps and tasks are currently running in your workspace",
           "group": "workspace",
           "authorityCategory": {
             "domain": "automation",
@@ -117,9 +117,9 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
           "host"
         ],
         "presentation": {
-          "title": "Inspect running workspace services",
-          "action": "inspect apps, panels, background tasks, and scheduled work that's currently running",
-          "description": "Read the current structure and status of running workspace services",
+          "title": "View running apps and tasks",
+          "action": "view apps, panels, and scheduled tasks that are currently running",
+          "description": "See what apps and tasks are currently running in your workspace",
           "group": "workspace",
           "authorityCategory": {
             "domain": "automation",
@@ -145,9 +145,37 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
           "host"
         ],
         "presentation": {
-          "title": "Inspect running workspace services",
-          "action": "inspect apps, panels, background tasks, and scheduled work that's currently running",
-          "description": "Read the current structure and status of running workspace services",
+          "title": "View running apps and tasks",
+          "action": "view apps, panels, and scheduled tasks that are currently running",
+          "description": "See what apps and tasks are currently running in your workspace",
+          "group": "workspace",
+          "authorityCategory": {
+            "domain": "automation",
+            "verb": "see"
+          }
+        },
+        "effect": {
+          "kind": "host-capability",
+          "capability": "workspace.runtime-state.inspect",
+          "resource": {
+            "kind": "receiver-object"
+          }
+        }
+      },
+      "panelTree.search": {
+        "capability": "workspace.runtime-state.inspect",
+        "tier": "open",
+        "session": "family",
+        "sensitivity": "read",
+        "principals": [
+          "user",
+          "code",
+          "host"
+        ],
+        "presentation": {
+          "title": "View running apps and tasks",
+          "action": "view apps, panels, and scheduled tasks that are currently running",
+          "description": "See what apps and tasks are currently running in your workspace",
           "group": "workspace",
           "authorityCategory": {
             "domain": "automation",
@@ -173,9 +201,9 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
           "host"
         ],
         "presentation": {
-          "title": "Inspect running workspace services",
-          "action": "inspect apps, panels, background tasks, and scheduled work that's currently running",
-          "description": "Read the current structure and status of running workspace services",
+          "title": "View running apps and tasks",
+          "action": "view apps, panels, and scheduled tasks that are currently running",
+          "description": "See what apps and tasks are currently running in your workspace",
           "group": "workspace",
           "authorityCategory": {
             "domain": "automation",
@@ -201,9 +229,9 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
           "host"
         ],
         "presentation": {
-          "title": "Inspect running workspace services",
-          "action": "inspect apps, panels, background tasks, and scheduled work that's currently running",
-          "description": "Read the current structure and status of running workspace services",
+          "title": "View running apps and tasks",
+          "action": "view apps, panels, and scheduled tasks that are currently running",
+          "description": "See what apps and tasks are currently running in your workspace",
           "group": "workspace",
           "authorityCategory": {
             "domain": "automation",
@@ -229,9 +257,9 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
           "host"
         ],
         "presentation": {
-          "title": "Inspect running workspace services",
-          "action": "inspect apps, panels, background tasks, and scheduled work that's currently running",
-          "description": "Read the current structure and status of running workspace services",
+          "title": "View running apps and tasks",
+          "action": "view apps, panels, and scheduled tasks that are currently running",
+          "description": "See what apps and tasks are currently running in your workspace",
           "group": "workspace",
           "authorityCategory": {
             "domain": "automation",
@@ -257,9 +285,9 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
           "host"
         ],
         "presentation": {
-          "title": "Inspect running workspace services",
-          "action": "inspect apps, panels, background tasks, and scheduled work that's currently running",
-          "description": "Read the current structure and status of running workspace services",
+          "title": "View running apps and tasks",
+          "action": "view apps, panels, and scheduled tasks that are currently running",
+          "description": "See what apps and tasks are currently running in your workspace",
           "group": "workspace",
           "authorityCategory": {
             "domain": "automation",
@@ -285,9 +313,9 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
           "host"
         ],
         "presentation": {
-          "title": "Inspect running workspace services",
-          "action": "inspect apps, panels, background tasks, and scheduled work that's currently running",
-          "description": "Read the current structure and status of running workspace services",
+          "title": "View running apps and tasks",
+          "action": "view apps, panels, and scheduled tasks that are currently running",
+          "description": "See what apps and tasks are currently running in your workspace",
           "group": "workspace",
           "authorityCategory": {
             "domain": "automation",
@@ -313,9 +341,9 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
           "host"
         ],
         "presentation": {
-          "title": "Inspect running workspace services",
-          "action": "inspect apps, panels, background tasks, and scheduled work that's currently running",
-          "description": "Read the current structure and status of running workspace services",
+          "title": "View running apps and tasks",
+          "action": "view apps, panels, and scheduled tasks that are currently running",
+          "description": "See what apps and tasks are currently running in your workspace",
           "group": "workspace",
           "authorityCategory": {
             "domain": "automation",
@@ -341,9 +369,9 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
           "host"
         ],
         "presentation": {
-          "title": "Manage running workspace services",
-          "action": "manage apps, panels, background tasks, and scheduled work that's currently running",
-          "description": "Maintain running workspace apps, panels, background tasks, and scheduled work",
+          "title": "Manage running apps and tasks",
+          "action": "manage apps, panels, and scheduled tasks that are currently running",
+          "description": "Start, stop, or check on apps and tasks running in your workspace",
           "group": "workspace",
           "authorityCategory": {
             "domain": "automation",
@@ -437,9 +465,9 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
           "host"
         ],
         "presentation": {
-          "title": "Manage running workspace services",
-          "action": "manage apps, panels, background tasks, and scheduled work that's currently running",
-          "description": "Maintain running workspace apps, panels, background tasks, and scheduled work",
+          "title": "Manage running apps and tasks",
+          "action": "manage apps, panels, and scheduled tasks that are currently running",
+          "description": "Start, stop, or check on apps and tasks running in your workspace",
           "group": "workspace",
           "authorityCategory": {
             "domain": "automation",
@@ -559,9 +587,9 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
           "host"
         ],
         "presentation": {
-          "title": "Manage running workspace services",
-          "action": "manage apps, panels, background tasks, and scheduled work that's currently running",
-          "description": "Maintain running workspace apps, panels, background tasks, and scheduled work",
+          "title": "Manage running apps and tasks",
+          "action": "manage apps, panels, and scheduled tasks that are currently running",
+          "description": "Start, stop, or check on apps and tasks running in your workspace",
           "group": "workspace",
           "authorityCategory": {
             "domain": "automation",
@@ -652,9 +680,9 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
           "host"
         ],
         "presentation": {
-          "title": "Manage running workspace services",
-          "action": "manage apps, panels, background tasks, and scheduled work that's currently running",
-          "description": "Maintain running workspace apps, panels, background tasks, and scheduled work",
+          "title": "Manage running apps and tasks",
+          "action": "manage apps, panels, and scheduled tasks that are currently running",
+          "description": "Start, stop, or check on apps and tasks running in your workspace",
           "group": "workspace",
           "authorityCategory": {
             "domain": "automation",
@@ -745,9 +773,9 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
           "host"
         ],
         "presentation": {
-          "title": "Manage running workspace services",
-          "action": "manage apps, panels, background tasks, and scheduled work that's currently running",
-          "description": "Maintain running workspace apps, panels, background tasks, and scheduled work",
+          "title": "Manage running apps and tasks",
+          "action": "manage apps, panels, and scheduled tasks that are currently running",
+          "description": "Start, stop, or check on apps and tasks running in your workspace",
           "group": "workspace",
           "authorityCategory": {
             "domain": "automation",
@@ -838,9 +866,9 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
           "host"
         ],
         "presentation": {
-          "title": "Manage running workspace services",
-          "action": "manage apps, panels, background tasks, and scheduled work that's currently running",
-          "description": "Maintain running workspace apps, panels, background tasks, and scheduled work",
+          "title": "Manage running apps and tasks",
+          "action": "manage apps, panels, and scheduled tasks that are currently running",
+          "description": "Start, stop, or check on apps and tasks running in your workspace",
           "group": "workspace",
           "authorityCategory": {
             "domain": "automation",
@@ -864,9 +892,9 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
           "host"
         ],
         "presentation": {
-          "title": "Manage running workspace services",
-          "action": "manage apps, panels, background tasks, and scheduled work that's currently running",
-          "description": "Maintain running workspace apps, panels, background tasks, and scheduled work",
+          "title": "Manage running apps and tasks",
+          "action": "manage apps, panels, and scheduled tasks that are currently running",
+          "description": "Start, stop, or check on apps and tasks running in your workspace",
           "group": "workspace",
           "authorityCategory": {
             "domain": "automation",
@@ -892,9 +920,242 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
           "host"
         ],
         "presentation": {
-          "title": "Manage running workspace services",
-          "action": "manage apps, panels, background tasks, and scheduled work that's currently running",
-          "description": "Maintain running workspace apps, panels, background tasks, and scheduled work",
+          "title": "Manage running apps and tasks",
+          "action": "manage apps, panels, and scheduled tasks that are currently running",
+          "description": "Start, stop, or check on apps and tasks running in your workspace",
+          "group": "workspace",
+          "authorityCategory": {
+            "domain": "automation",
+            "verb": "manage"
+          }
+        },
+        "effect": {
+          "kind": "host-capability",
+          "capability": "workspace.runtime-state.manage",
+          "resource": {
+            "kind": "receiver-object"
+          }
+        }
+      },
+      "panel.search": {
+        "capability": "workspace.runtime-state.inspect",
+        "tier": "open",
+        "session": "family",
+        "sensitivity": "read",
+        "principals": [
+          "user",
+          "code",
+          "host"
+        ],
+        "presentation": {
+          "title": "View running apps and tasks",
+          "action": "view apps, panels, and scheduled tasks that are currently running",
+          "description": "See what apps and tasks are currently running in your workspace",
+          "group": "workspace",
+          "authorityCategory": {
+            "domain": "automation",
+            "verb": "see"
+          }
+        },
+        "effect": {
+          "kind": "host-capability",
+          "capability": "workspace.runtime-state.inspect",
+          "resource": {
+            "kind": "receiver-object"
+          }
+        }
+      },
+      "panel.sourceUsage": {
+        "capability": "workspace.runtime-state.inspect",
+        "tier": "open",
+        "session": "family",
+        "sensitivity": "read",
+        "principals": [
+          "user",
+          "code",
+          "host"
+        ],
+        "presentation": {
+          "title": "View running apps and tasks",
+          "action": "view apps, panels, and scheduled tasks that are currently running",
+          "description": "See what apps and tasks are currently running in your workspace",
+          "group": "workspace",
+          "authorityCategory": {
+            "domain": "automation",
+            "verb": "see"
+          }
+        },
+        "effect": {
+          "kind": "host-capability",
+          "capability": "workspace.runtime-state.inspect",
+          "resource": {
+            "kind": "receiver-object"
+          }
+        }
+      },
+      "panel.index": {
+        "capability": "workspace.runtime-state.manage",
+        "tier": "gated",
+        "session": "family",
+        "sensitivity": "write",
+        "principals": [
+          "user",
+          "code",
+          "host"
+        ],
+        "presentation": {
+          "title": "Manage running apps and tasks",
+          "action": "manage apps, panels, and scheduled tasks that are currently running",
+          "description": "Start, stop, or check on apps and tasks running in your workspace",
+          "group": "workspace",
+          "authorityCategory": {
+            "domain": "automation",
+            "verb": "manage"
+          }
+        },
+        "effect": {
+          "kind": "host-capability",
+          "capability": "workspace.runtime-state.manage",
+          "resource": {
+            "kind": "receiver-object"
+          }
+        }
+      },
+      "panel.updateTitle": {
+        "capability": "workspace.runtime-state.manage",
+        "tier": "gated",
+        "session": "family",
+        "sensitivity": "write",
+        "principals": [
+          "user",
+          "code",
+          "host"
+        ],
+        "presentation": {
+          "title": "Manage running apps and tasks",
+          "action": "manage apps, panels, and scheduled tasks that are currently running",
+          "description": "Start, stop, or check on apps and tasks running in your workspace",
+          "group": "workspace",
+          "authorityCategory": {
+            "domain": "automation",
+            "verb": "manage"
+          }
+        },
+        "prepared": {
+          "resolver": "workspace-state.panel.updateTitle.contextBoundary",
+          "contextBoundary": {
+            "operation": "updatePanelState",
+            "targetArgument": 0
+          },
+          "leaves": [
+            {
+              "capability": "context.boundary",
+              "requirement": {
+                "kind": "any",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "host",
+                    "capability": "context.boundary"
+                  },
+                  {
+                    "kind": "all",
+                    "requirements": [
+                      {
+                        "kind": "capability",
+                        "principal": "user",
+                        "capability": "context.boundary"
+                      },
+                      {
+                        "kind": "relationship",
+                        "name": "workspace-member"
+                      }
+                    ]
+                  },
+                  {
+                    "kind": "all",
+                    "requirements": [
+                      {
+                        "kind": "capability",
+                        "principal": "code",
+                        "capability": "context.boundary"
+                      },
+                      {
+                        "kind": "relationship",
+                        "name": "workspace-member"
+                      }
+                    ]
+                  },
+                  {
+                    "kind": "all",
+                    "requirements": [
+                      {
+                        "kind": "capability",
+                        "principal": "session",
+                        "capability": "context.boundary"
+                      },
+                      {
+                        "kind": "relationship",
+                        "name": "workspace-member"
+                      }
+                    ]
+                  }
+                ]
+              },
+              "tier": "gated"
+            }
+          ]
+        },
+        "effect": {
+          "kind": "host-capability",
+          "capability": "workspace.runtime-state.manage",
+          "resource": {
+            "kind": "receiver-object"
+          }
+        }
+      },
+      "panel.incrementAccess": {
+        "capability": "workspace.runtime-state.manage",
+        "tier": "gated",
+        "session": "family",
+        "sensitivity": "write",
+        "principals": [
+          "user",
+          "code",
+          "host"
+        ],
+        "presentation": {
+          "title": "Manage running apps and tasks",
+          "action": "manage apps, panels, and scheduled tasks that are currently running",
+          "description": "Start, stop, or check on apps and tasks running in your workspace",
+          "group": "workspace",
+          "authorityCategory": {
+            "domain": "automation",
+            "verb": "manage"
+          }
+        },
+        "effect": {
+          "kind": "host-capability",
+          "capability": "workspace.runtime-state.manage",
+          "resource": {
+            "kind": "receiver-object"
+          }
+        }
+      },
+      "panel.rebuildIndex": {
+        "capability": "workspace.runtime-state.manage",
+        "tier": "gated",
+        "session": "family",
+        "sensitivity": "write",
+        "principals": [
+          "user",
+          "code",
+          "host"
+        ],
+        "presentation": {
+          "title": "Manage running apps and tasks",
+          "action": "manage apps, panels, and scheduled tasks that are currently running",
+          "description": "Start, stop, or check on apps and tasks running in your workspace",
           "group": "workspace",
           "authorityCategory": {
             "domain": "automation",
@@ -919,9 +1180,9 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
           "code"
         ],
         "presentation": {
-          "title": "Manage running workspace services",
-          "action": "manage apps, panels, background tasks, and scheduled work that's currently running",
-          "description": "Maintain running workspace apps, panels, background tasks, and scheduled work",
+          "title": "Manage running apps and tasks",
+          "action": "manage apps, panels, and scheduled tasks that are currently running",
+          "description": "Start, stop, or check on apps and tasks running in your workspace",
           "group": "workspace",
           "authorityCategory": {
             "domain": "automation",
@@ -946,9 +1207,9 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
           "code"
         ],
         "presentation": {
-          "title": "Manage running workspace services",
-          "action": "manage apps, panels, background tasks, and scheduled work that's currently running",
-          "description": "Maintain running workspace apps, panels, background tasks, and scheduled work",
+          "title": "Manage running apps and tasks",
+          "action": "manage apps, panels, and scheduled tasks that are currently running",
+          "description": "Start, stop, or check on apps and tasks running in your workspace",
           "group": "workspace",
           "authorityCategory": {
             "domain": "automation",
@@ -973,9 +1234,9 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
           "code"
         ],
         "presentation": {
-          "title": "Manage running workspace services",
-          "action": "manage apps, panels, background tasks, and scheduled work that's currently running",
-          "description": "Maintain running workspace apps, panels, background tasks, and scheduled work",
+          "title": "Manage running apps and tasks",
+          "action": "manage apps, panels, and scheduled tasks that are currently running",
+          "description": "Start, stop, or check on apps and tasks running in your workspace",
           "group": "workspace",
           "authorityCategory": {
             "domain": "automation",
@@ -1000,9 +1261,9 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
           "code"
         ],
         "presentation": {
-          "title": "Manage running workspace services",
-          "action": "manage apps, panels, background tasks, and scheduled work that's currently running",
-          "description": "Maintain running workspace apps, panels, background tasks, and scheduled work",
+          "title": "Manage running apps and tasks",
+          "action": "manage apps, panels, and scheduled tasks that are currently running",
+          "description": "Start, stop, or check on apps and tasks running in your workspace",
           "group": "workspace",
           "authorityCategory": {
             "domain": "automation",
@@ -1230,9 +1491,9 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
           "host"
         ],
         "presentation": {
-          "title": "Inspect running workspace services",
-          "action": "inspect apps, panels, background tasks, and scheduled work that's currently running",
-          "description": "Read the current structure and status of running workspace services",
+          "title": "View running apps and tasks",
+          "action": "view apps, panels, and scheduled tasks that are currently running",
+          "description": "See what apps and tasks are currently running in your workspace",
           "group": "workspace",
           "authorityCategory": {
             "domain": "automation",
@@ -1700,9 +1961,9 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
           "host"
         ],
         "presentation": {
-          "title": "Inspect running workspace services",
-          "action": "inspect apps, panels, background tasks, and scheduled work that's currently running",
-          "description": "Read the current structure and status of running workspace services",
+          "title": "View running apps and tasks",
+          "action": "view apps, panels, and scheduled tasks that are currently running",
+          "description": "See what apps and tasks are currently running in your workspace",
           "group": "workspace",
           "authorityCategory": {
             "domain": "automation",
@@ -1728,9 +1989,9 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
           "host"
         ],
         "presentation": {
-          "title": "Inspect running workspace services",
-          "action": "inspect apps, panels, background tasks, and scheduled work that's currently running",
-          "description": "Read the current structure and status of running workspace services",
+          "title": "View running apps and tasks",
+          "action": "view apps, panels, and scheduled tasks that are currently running",
+          "description": "See what apps and tasks are currently running in your workspace",
           "group": "workspace",
           "authorityCategory": {
             "domain": "automation",
@@ -1756,9 +2017,9 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
           "host"
         ],
         "presentation": {
-          "title": "Inspect running workspace services",
-          "action": "inspect apps, panels, background tasks, and scheduled work that's currently running",
-          "description": "Read the current structure and status of running workspace services",
+          "title": "View running apps and tasks",
+          "action": "view apps, panels, and scheduled tasks that are currently running",
+          "description": "See what apps and tasks are currently running in your workspace",
           "group": "workspace",
           "authorityCategory": {
             "domain": "automation",
@@ -1784,9 +2045,9 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
           "host"
         ],
         "presentation": {
-          "title": "Inspect running workspace services",
-          "action": "inspect apps, panels, background tasks, and scheduled work that's currently running",
-          "description": "Read the current structure and status of running workspace services",
+          "title": "View running apps and tasks",
+          "action": "view apps, panels, and scheduled tasks that are currently running",
+          "description": "See what apps and tasks are currently running in your workspace",
           "group": "workspace",
           "authorityCategory": {
             "domain": "automation",
@@ -1812,9 +2073,9 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
           "host"
         ],
         "presentation": {
-          "title": "Manage running workspace services",
-          "action": "manage apps, panels, background tasks, and scheduled work that's currently running",
-          "description": "Maintain running workspace apps, panels, background tasks, and scheduled work",
+          "title": "Manage running apps and tasks",
+          "action": "manage apps, panels, and scheduled tasks that are currently running",
+          "description": "Start, stop, or check on apps and tasks running in your workspace",
           "group": "workspace",
           "authorityCategory": {
             "domain": "automation",
@@ -1908,9 +2169,9 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
           "host"
         ],
         "presentation": {
-          "title": "Manage running workspace services",
-          "action": "manage apps, panels, background tasks, and scheduled work that's currently running",
-          "description": "Maintain running workspace apps, panels, background tasks, and scheduled work",
+          "title": "Manage running apps and tasks",
+          "action": "manage apps, panels, and scheduled tasks that are currently running",
+          "description": "Start, stop, or check on apps and tasks running in your workspace",
           "group": "workspace",
           "authorityCategory": {
             "domain": "automation",
@@ -2030,9 +2291,9 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
           "host"
         ],
         "presentation": {
-          "title": "Manage running workspace services",
-          "action": "manage apps, panels, background tasks, and scheduled work that's currently running",
-          "description": "Maintain running workspace apps, panels, background tasks, and scheduled work",
+          "title": "Manage running apps and tasks",
+          "action": "manage apps, panels, and scheduled tasks that are currently running",
+          "description": "Start, stop, or check on apps and tasks running in your workspace",
           "group": "workspace",
           "authorityCategory": {
             "domain": "automation",
@@ -2123,9 +2384,9 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
           "host"
         ],
         "presentation": {
-          "title": "Manage running workspace services",
-          "action": "manage apps, panels, background tasks, and scheduled work that's currently running",
-          "description": "Maintain running workspace apps, panels, background tasks, and scheduled work",
+          "title": "Manage running apps and tasks",
+          "action": "manage apps, panels, and scheduled tasks that are currently running",
+          "description": "Start, stop, or check on apps and tasks running in your workspace",
           "group": "workspace",
           "authorityCategory": {
             "domain": "automation",
@@ -2216,9 +2477,9 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
           "host"
         ],
         "presentation": {
-          "title": "Manage running workspace services",
-          "action": "manage apps, panels, background tasks, and scheduled work that's currently running",
-          "description": "Maintain running workspace apps, panels, background tasks, and scheduled work",
+          "title": "Manage running apps and tasks",
+          "action": "manage apps, panels, and scheduled tasks that are currently running",
+          "description": "Start, stop, or check on apps and tasks running in your workspace",
           "group": "workspace",
           "authorityCategory": {
             "domain": "automation",
@@ -2307,9 +2568,9 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
           "host"
         ],
         "presentation": {
-          "title": "Manage running workspace services",
-          "action": "manage apps, panels, background tasks, and scheduled work that's currently running",
-          "description": "Maintain running workspace apps, panels, background tasks, and scheduled work",
+          "title": "Manage running apps and tasks",
+          "action": "manage apps, panels, and scheduled tasks that are currently running",
+          "description": "Start, stop, or check on apps and tasks running in your workspace",
           "group": "workspace",
           "authorityCategory": {
             "domain": "automation",
@@ -2335,9 +2596,9 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
           "host"
         ],
         "presentation": {
-          "title": "Manage running workspace services",
-          "action": "manage apps, panels, background tasks, and scheduled work that's currently running",
-          "description": "Maintain running workspace apps, panels, background tasks, and scheduled work",
+          "title": "Manage running apps and tasks",
+          "action": "manage apps, panels, and scheduled tasks that are currently running",
+          "description": "Start, stop, or check on apps and tasks running in your workspace",
           "group": "workspace",
           "authorityCategory": {
             "domain": "automation",
@@ -2363,15 +2624,134 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
           "host"
         ],
         "presentation": {
-          "title": "Manage running workspace services",
-          "action": "manage apps, panels, background tasks, and scheduled work that's currently running",
-          "description": "Maintain running workspace apps, panels, background tasks, and scheduled work",
+          "title": "Manage running apps and tasks",
+          "action": "manage apps, panels, and scheduled tasks that are currently running",
+          "description": "Start, stop, or check on apps and tasks running in your workspace",
           "group": "workspace",
           "authorityCategory": {
             "domain": "automation",
             "verb": "manage"
           }
         },
+        "effect": {
+          "kind": "host-capability",
+          "capability": "workspace.runtime-state.manage",
+          "resource": {
+            "kind": "receiver-object"
+          }
+        }
+      },
+      "quickfireSessionGet": {
+        "capability": "workspace.runtime-state.manage",
+        "tier": "gated",
+        "session": "family",
+        "sensitivity": "read",
+        "principals": [
+          "host"
+        ],
+        "presentation": null,
+        "effect": {
+          "kind": "host-capability",
+          "capability": "workspace.runtime-state.manage",
+          "resource": {
+            "kind": "receiver-object"
+          }
+        }
+      },
+      "quickfireSessionBind": {
+        "capability": "workspace.runtime-state.manage",
+        "tier": "gated",
+        "session": "family",
+        "sensitivity": "write",
+        "principals": [
+          "host"
+        ],
+        "presentation": null,
+        "effect": {
+          "kind": "host-capability",
+          "capability": "workspace.runtime-state.manage",
+          "resource": {
+            "kind": "receiver-object"
+          }
+        }
+      },
+      "quickfireSessionClear": {
+        "capability": "workspace.runtime-state.manage",
+        "tier": "gated",
+        "session": "family",
+        "sensitivity": "destructive",
+        "principals": [
+          "host"
+        ],
+        "presentation": null,
+        "effect": {
+          "kind": "host-capability",
+          "capability": "workspace.runtime-state.manage",
+          "resource": {
+            "kind": "receiver-object"
+          }
+        }
+      },
+      "quickfireSessionPromote": {
+        "capability": "workspace.runtime-state.manage",
+        "tier": "gated",
+        "session": "family",
+        "sensitivity": "write",
+        "principals": [
+          "host"
+        ],
+        "presentation": null,
+        "effect": {
+          "kind": "host-capability",
+          "capability": "workspace.runtime-state.manage",
+          "resource": {
+            "kind": "receiver-object"
+          }
+        }
+      },
+      "quickfireSessionList": {
+        "capability": "workspace.runtime-state.manage",
+        "tier": "gated",
+        "session": "family",
+        "sensitivity": "read",
+        "principals": [
+          "host"
+        ],
+        "presentation": null,
+        "effect": {
+          "kind": "host-capability",
+          "capability": "workspace.runtime-state.manage",
+          "resource": {
+            "kind": "receiver-object"
+          }
+        }
+      },
+      "quickfireCleanupPage": {
+        "capability": "workspace.runtime-state.manage",
+        "tier": "gated",
+        "session": "family",
+        "sensitivity": "read",
+        "principals": [
+          "host"
+        ],
+        "presentation": null,
+        "effect": {
+          "kind": "host-capability",
+          "capability": "workspace.runtime-state.manage",
+          "resource": {
+            "kind": "receiver-object"
+          }
+        }
+      },
+      "quickfireCleanupAck": {
+        "capability": "workspace.runtime-state.manage",
+        "tier": "gated",
+        "session": "family",
+        "sensitivity": "destructive",
+        "principals": [
+          "host"
+        ],
+        "presentation": null,
         "effect": {
           "kind": "host-capability",
           "capability": "workspace.runtime-state.manage",
@@ -2391,9 +2771,9 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
           "host"
         ],
         "presentation": {
-          "title": "Inspect running workspace services",
-          "action": "inspect apps, panels, background tasks, and scheduled work that's currently running",
-          "description": "Read the current structure and status of running workspace services",
+          "title": "View running apps and tasks",
+          "action": "view apps, panels, and scheduled tasks that are currently running",
+          "description": "See what apps and tasks are currently running in your workspace",
           "group": "workspace",
           "authorityCategory": {
             "domain": "automation",
@@ -2419,9 +2799,9 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
           "host"
         ],
         "presentation": {
-          "title": "Inspect running workspace services",
-          "action": "inspect apps, panels, background tasks, and scheduled work that's currently running",
-          "description": "Read the current structure and status of running workspace services",
+          "title": "View running apps and tasks",
+          "action": "view apps, panels, and scheduled tasks that are currently running",
+          "description": "See what apps and tasks are currently running in your workspace",
           "group": "workspace",
           "authorityCategory": {
             "domain": "automation",
@@ -2447,9 +2827,9 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
           "host"
         ],
         "presentation": {
-          "title": "Inspect running workspace services",
-          "action": "inspect apps, panels, background tasks, and scheduled work that's currently running",
-          "description": "Read the current structure and status of running workspace services",
+          "title": "View running apps and tasks",
+          "action": "view apps, panels, and scheduled tasks that are currently running",
+          "description": "See what apps and tasks are currently running in your workspace",
           "group": "workspace",
           "authorityCategory": {
             "domain": "automation",

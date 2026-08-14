@@ -4101,6 +4101,27 @@ export const HOST_AUTHORITY_METHODS = {
     capability: null,
     presentation: null,
   },
+  "panelContext.describe": {
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "identity",
+      family: "panel-context.identity",
+      rationale:
+        "Bounded identity and lease projection for one exact panel target; conversation content and console bodies stay behind the separately gated CDP tools",
+    },
+    capability: "panel.inspect",
+    presentation: {
+      title: "Read a panel's identity and status",
+      action: "read a panel's identity and status",
+      description: "Allows {requesterKind} to read a panel's identity and status.",
+      group: "panels",
+      authorityCategory: {
+        domain: "computer",
+        verb: "see",
+      },
+    },
+  },
   "panelLog.append": {
     tier: {
       tier: "open",
@@ -4590,6 +4611,106 @@ export const HOST_AUTHORITY_METHODS = {
       group: "notifications",
       authorityCategory: {
         domain: "people",
+        verb: "manage",
+      },
+    },
+  },
+  "quickfire.clear": {
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "identity",
+      family: "quickfire.lifecycle",
+      rationale:
+        "Binds or releases one exact panel slot's conversation identity and the agent vessel that serves it",
+    },
+    capability: "workspace.runtime-state.manage",
+    presentation: {
+      title: "Manage panel quickfire conversations",
+      action: "manage the quickfire conversation attached to a panel",
+      description:
+        "Allows {requesterKind} to manage the quickfire conversation attached to a panel.",
+      group: "panels",
+      authorityCategory: {
+        domain: "automation",
+        verb: "manage",
+      },
+    },
+  },
+  "quickfire.drainCleanup": {
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "supervision",
+      family: "quickfire.cleanup",
+      rationale:
+        "Executes the durable archival work a closed slot already recorded, acknowledging only rows whose agent actually retired",
+    },
+    capability: "workspace.runtime-state.manage",
+    presentation: {
+      title: "Manage panel quickfire conversations",
+      action: "manage the quickfire conversation attached to a panel",
+      description:
+        "Allows {requesterKind} to manage the quickfire conversation attached to a panel.",
+      group: "panels",
+      authorityCategory: {
+        domain: "automation",
+        verb: "manage",
+      },
+    },
+  },
+  "quickfire.list": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "identity",
+      family: "quickfire.lifecycle",
+      rationale:
+        "Bounded durable enumeration of the workspace's own slot-to-conversation mappings; exposes no conversation content",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "quickfire.promote": {
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "identity",
+      family: "quickfire.lifecycle",
+      rationale:
+        "Binds or releases one exact panel slot's conversation identity and the agent vessel that serves it",
+    },
+    capability: "workspace.runtime-state.manage",
+    presentation: {
+      title: "Manage panel quickfire conversations",
+      action: "manage the quickfire conversation attached to a panel",
+      description:
+        "Allows {requesterKind} to manage the quickfire conversation attached to a panel.",
+      group: "panels",
+      authorityCategory: {
+        domain: "automation",
+        verb: "manage",
+      },
+    },
+  },
+  "quickfire.sessionFor": {
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "identity",
+      family: "quickfire.lifecycle",
+      rationale:
+        "Binds or releases one exact panel slot's conversation identity and the agent vessel that serves it",
+    },
+    capability: "workspace.runtime-state.manage",
+    presentation: {
+      title: "Manage panel quickfire conversations",
+      action: "manage the quickfire conversation attached to a panel",
+      description:
+        "Allows {requesterKind} to manage the quickfire conversation attached to a panel.",
+      group: "panels",
+      authorityCategory: {
+        domain: "automation",
         verb: "manage",
       },
     },
@@ -5885,6 +6006,18 @@ export const HOST_AUTHORITY_METHODS = {
     capability: null,
     presentation: null,
   },
+  "vcs.query": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "protected-write",
+      family: "vcs.control",
+      rationale:
+        "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+    },
+    capability: null,
+    presentation: null,
+  },
   "vcs.readFile": {
     tier: {
       tier: "open",
@@ -5945,6 +6078,18 @@ export const HOST_AUTHORITY_METHODS = {
     capability: null,
     presentation: null,
   },
+  "vcs.search": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "protected-write",
+      family: "vcs.control",
+      rationale:
+        "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+    },
+    capability: null,
+    presentation: null,
+  },
   "vcs.status": {
     tier: {
       tier: "open",
@@ -5958,6 +6103,18 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: null,
   },
   "vcs.supersedeExternalDelta": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "protected-write",
+      family: "vcs.control",
+      rationale:
+        "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "vcs.walk": {
     tier: {
       tier: "open",
       session: "family",
@@ -7554,6 +7711,7 @@ export const HOST_METHOD_MANIFEST_DEPENDENCIES = {
   "panelCdp.getCdpEndpoint": ["context.boundary"],
   "panelCdp.screenshot": ["context.boundary"],
   "panelCdp.stop": ["context.boundary"],
+  "panelContext.describe": ["context.boundary"],
   "reviewedClosure.activate": ["reviewed-closure.activate"],
   "runtime.cloneContext": ["context.boundary"],
   "runtime.createContext": ["context.boundary"],
@@ -8723,10 +8881,10 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
     },
   },
   "workspace.runtime-state.manage": {
-    title: "Manage running apps and tasks",
-    action: "manage apps, panels, and scheduled tasks that are currently running",
-    description: "Start, stop, or check on apps and tasks running in your workspace",
-    group: "workspace",
+    title: "Manage panel quickfire conversations",
+    action: "manage the quickfire conversation attached to a panel",
+    description: "Allows {requesterKind} to manage the quickfire conversation attached to a panel.",
+    group: "panels",
     authorityCategory: {
       domain: "automation",
       verb: "manage",
