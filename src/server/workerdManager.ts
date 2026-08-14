@@ -2938,7 +2938,8 @@ export class WorkerdManager {
       this.dynamicIsolateCompactionFlight ||
       this.shuttingDown ||
       !this.process ||
-      this.process.exitCode !== null
+      this.process.exitCode !== null ||
+      this.hasLiveUserlandExecutions()
     ) {
       return;
     }
@@ -2964,6 +2965,14 @@ export class WorkerdManager {
   private clearRetiredDynamicIsolatePressure(): void {
     this.retiredDynamicIsolateGeneration = null;
     this.retiredDynamicIsolateIds.clear();
+  }
+
+  private hasLiveUserlandExecutions(): boolean {
+    // Class-level runtime images remain registered so a future object can be
+    // created without rebuilding; they are not live executions. Only actual
+    // worker instances and object-specific DO bindings make a process restart
+    // user-visible.
+    return this.instances.size > 0 || this.doObjectBuilds.size > 0;
   }
 
   private stopWorkerdMemorySampling(): void {

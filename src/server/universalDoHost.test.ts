@@ -365,7 +365,20 @@ describe("UniversalDO facet host (real workerd)", () => {
       const internals = manager as unknown as {
         maybeCompactRetiredDynamicIsolates(rssBytes: number): void;
         dynamicIsolateCompactionFlight: Promise<void> | null;
+        doObjectBuilds: Map<string, unknown>;
       };
+      // The class-level fixture dispatch path above intentionally skips the
+      // production object-image registry. Model the live object binding at the
+      // manager boundary whose presence must veto a process restart.
+      internals.doObjectBuilds.set("workers/counter:CounterDO/k2", {});
+      internals.maybeCompactRetiredDynamicIsolates(768 * 1024 * 1024);
+      expect(internals.dynamicIsolateCompactionFlight).toBeNull();
+      expect(manager.getBootGeneration()).toBe(boot);
+
+      // Compaction is deferred while another userland runtime image is live;
+      // retiring the final live image opens a disruption-free process boundary.
+      await manager.retireDOEntity(ref2);
+      internals.doObjectBuilds.delete("workers/counter:CounterDO/k2");
       internals.maybeCompactRetiredDynamicIsolates(768 * 1024 * 1024);
       await internals.dynamicIsolateCompactionFlight;
       expect(manager.getBootGeneration()).toBeGreaterThan(boot);
