@@ -502,6 +502,12 @@ function workerdInspectorEnabled(): boolean {
   return process.env["VIBESTUDIO_DISABLE_WORKERD_INSPECTOR"] !== "1";
 }
 
+// WorkerLoader does not expose per-isolate disposal. Keep ordinary retirement
+// restart-free, but compact a generation once unreachable isolates contribute
+// to material sandbox pressure or reach a bounded cross-platform count.
+const WORKERD_DYNAMIC_ISOLATE_COMPACTION_RSS_BYTES = 768 * 1024 * 1024;
+const WORKERD_DYNAMIC_ISOLATE_COMPACTION_COUNT = 16;
+
 // ---------------------------------------------------------------------------
 // WorkerdManager
 // ---------------------------------------------------------------------------
@@ -552,6 +558,9 @@ export class WorkerdManager {
   private workerdMemorySamplePid: number | null = null;
   private lastWorkerdRssBytes: number | null = null;
   private workerdRssSamples: Array<{ at: number; rssBytes: number }> = [];
+  private retiredDynamicIsolateGeneration: number | null = null;
+  private retiredDynamicIsolateCount = 0;
+  private dynamicIsolateCompactionFlight: Promise<void> | null = null;
 
   // DO support: shared services (one per source)
   /** Shared DO services — keyed by `${source}:${className}`. Source-scoped: two workers CAN have same className if different source. */
@@ -1418,11 +1427,11 @@ export class WorkerdManager {
    * Aborting the live facet releases its object-owned state while deliberately
    * preserving durable storage for a later reattach. WorkerLoader has no
    * per-worker unload operation: its dynamically loaded isolate remains resident
-   * until the workerd process generation ends. Compact the generation after
-   * retirement so completed disposable work cannot accumulate isolates for the
-   * lifetime of a long-running workspace server. The existing transition owner
-   * coalesces concurrent retirements and restores every still-live entity from
-   * its sealed runtime identity.
+   * until the workerd process generation ends. Mark the generation reclaimable;
+   * the memory sampler compacts it under material RSS pressure, with a bounded
+   * retired-isolate count for platforms without process RSS sampling. This
+   * keeps ordinary create/delete UX restart-free while bounding accumulation
+   * during long-running build and system-test campaigns.
    */
   async retireDOEntity(ref: DORef): Promise<void> {
     const targetId = canonicalEntityId({
@@ -1464,12 +1473,11 @@ export class WorkerdManager {
         },
       });
     }
-    if (!isInternalDOSource(ref.source) && this.process?.exitCode === null) {
-      await this.restartWorkerd();
-      // Replacing the process is a stronger retirement boundary than the
-      // facet-local abort. If that best-effort request failed but compaction
-      // succeeded, no retired isolate or request can remain to clean up.
-      abortError = undefined;
+    if (!isInternalDOSource(ref.source)) {
+      this.retiredDynamicIsolateGeneration ??= this.bootGeneration;
+      this.retiredDynamicIsolateCount += 1;
+      const rssBytes = this.process?.pid ? this.readProcessRssBytes(this.process.pid) : null;
+      this.maybeCompactRetiredDynamicIsolates(rssBytes);
     }
     if (abortError) throw abortError;
   }
@@ -2910,12 +2918,49 @@ export class WorkerdManager {
       this.lastWorkerdRssBytes = rss;
       this.workerdRssSamples.push({ at: Date.now(), rssBytes: rss });
       if (this.workerdRssSamples.length > 120) this.workerdRssSamples.shift();
+      this.maybeCompactRetiredDynamicIsolates(rss);
     };
     recordSample();
     this.workerdMemorySampleTimer = setInterval(() => {
       recordSample();
     }, 5_000);
     this.workerdMemorySampleTimer.unref?.();
+  }
+
+  private maybeCompactRetiredDynamicIsolates(rssBytes: number | null): void {
+    const retiredGeneration = this.retiredDynamicIsolateGeneration;
+    if (
+      retiredGeneration === null ||
+      (this.retiredDynamicIsolateCount < WORKERD_DYNAMIC_ISOLATE_COMPACTION_COUNT &&
+        (rssBytes === null || rssBytes < WORKERD_DYNAMIC_ISOLATE_COMPACTION_RSS_BYTES)) ||
+      this.dynamicIsolateCompactionFlight ||
+      this.shuttingDown ||
+      !this.process ||
+      this.process.exitCode !== null
+    ) {
+      return;
+    }
+    const flight = this.restartWorkerd();
+    this.dynamicIsolateCompactionFlight = flight;
+    void flight
+      .then(() => {
+        if (this.retiredDynamicIsolateGeneration === retiredGeneration) {
+          this.retiredDynamicIsolateGeneration = null;
+          this.retiredDynamicIsolateCount = 0;
+        }
+        log.info(
+          `Compacted workerd generation containing retired dynamic isolates` +
+            (rssBytes === null ? "" : ` at ${Math.round(rssBytes / (1024 * 1024))} MiB RSS`)
+        );
+      })
+      .catch((error) => {
+        log.warn("workerd dynamic-isolate compaction failed", error);
+      })
+      .finally(() => {
+        if (this.dynamicIsolateCompactionFlight === flight) {
+          this.dynamicIsolateCompactionFlight = null;
+        }
+      });
   }
 
   private stopWorkerdMemorySampling(): void {

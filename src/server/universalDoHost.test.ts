@@ -356,11 +356,18 @@ describe("UniversalDO facet host (real workerd)", () => {
       expect(await dispatch(ref2, "incr")).toMatchObject({ count: 1, key: "k2" });
       expect(await dispatch(ref1, "get")).toMatchObject({ count: 2 });
 
-      // Runtime retirement aborts the live facet and compacts the workerd
-      // generation. WorkerLoader has no per-isolate unload primitive, so the
-      // process boundary is what guarantees that completed disposable objects
-      // do not accumulate loaded module graphs. Durable storage remains intact.
+      // Runtime retirement aborts the live facet without disrupting unrelated
+      // work. WorkerLoader has no per-isolate unload primitive, so a later
+      // pressure-triggered process compaction reclaims its loaded module graph.
+      // Durable storage remains intact across both boundaries.
       await manager.retireDOEntity(ref1);
+      expect(manager.getBootGeneration()).toBe(boot);
+      const internals = manager as unknown as {
+        maybeCompactRetiredDynamicIsolates(rssBytes: number): void;
+        dynamicIsolateCompactionFlight: Promise<void> | null;
+      };
+      internals.maybeCompactRetiredDynamicIsolates(768 * 1024 * 1024);
+      await internals.dynamicIsolateCompactionFlight;
       expect(manager.getBootGeneration()).toBeGreaterThan(boot);
       expect(await dispatch(ref1, "get")).toMatchObject({ count: 2, key: "k1" });
       expect(codeFetches.get("k1")).toBe(2);
