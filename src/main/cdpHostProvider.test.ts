@@ -523,6 +523,66 @@ describe("CdpHostProvider", () => {
     });
   });
 
+  it("serves the evaluate host command with the shared serialized result", async () => {
+    const { provider, socket, contents, debuggerApi } = createHarness();
+    provider.registerTarget("panel-1", 42);
+    provider.start();
+    socket.emit("open");
+    socket.emit("message", JSON.stringify({ type: "vibestudio:cdp-auth-ok" }));
+    // The harness mock is typed for the boot-observation expression; evaluate
+    // returns the shared serialized shape instead.
+    contents.executeJavaScript.mockImplementationOnce((async () => ({
+      ok: true,
+      type: "number",
+      value: "720",
+      error: null,
+      truncated: false,
+    })) as unknown as typeof contents.executeJavaScript);
+
+    await provider.handleProviderMessageForTest({
+      type: "host:command",
+      targetId: "panel-1",
+      requestId: "h9",
+      action: "evaluate",
+      args: ["innerWidth", { timeoutMs: 8_000 }],
+    });
+
+    // The wrapper is what runs in the page, never the caller's raw expression.
+    const [expression, userGesture] = contents.executeJavaScript.mock.calls[0] as unknown as [
+      string,
+      boolean,
+    ];
+    expect(expression).toContain(JSON.stringify("innerWidth"));
+    expect(userGesture).toBe(true);
+    expect(debuggerApi.sendCommand).not.toHaveBeenCalled();
+    expect(socket.sent.map((entry) => JSON.parse(entry))).toContainEqual({
+      type: "host:result",
+      targetId: "panel-1",
+      requestId: "h9",
+      result: { ok: true, type: "number", value: "720", error: null, truncated: false },
+    });
+  });
+
+  it("bounds a stranded evaluation instead of holding the command slot open", async () => {
+    vi.useFakeTimers();
+    const { provider, contents } = createHarness();
+    provider.registerTarget("panel-1", 42);
+    contents.executeJavaScript.mockImplementationOnce(() => new Promise<never>(() => undefined));
+
+    const evaluated = provider.evaluate("panel-1", "while (true) {}");
+    await vi.advanceTimersByTimeAsync(8_000);
+
+    // An RPC bound, not an authority expiry: the caller's permission to
+    // evaluate is untouched, only this one command gives up.
+    await expect(evaluated).resolves.toEqual({
+      ok: false,
+      type: "timeout",
+      value: null,
+      error: "Panel evaluation exceeded its 8000ms bound",
+      truncated: false,
+    });
+  });
+
   it("bounds a stranded panel page observation as unavailable", async () => {
     vi.useFakeTimers();
     const { provider, contents } = createHarness();

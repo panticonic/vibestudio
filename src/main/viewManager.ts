@@ -33,10 +33,10 @@ import { randomUUID } from "node:crypto";
 import { createDevLogger } from "@vibestudio/dev-log";
 import { ShellOverlayView, type ShellOverlayOptions } from "./shellOverlayView.js";
 import {
-  ShellContentOverlayView,
   type ContentOverlayShowOptions,
   type ContentOverlayUpdateOptions,
 } from "./shellContentOverlayView.js";
+import { ContentOverlayManager } from "./contentOverlayManager.js";
 import type { AppCapability } from "@vibestudio/shared/unitManifest";
 import { isAuthorizedChromeAppCaller } from "@vibestudio/shared/chromeTrust";
 import { CompositorRecovery } from "./compositorRecovery.js";
@@ -268,7 +268,7 @@ export class ViewManager {
    *  region is cleared from the shared BaseWindow (see show/hideBootstrapShell). */
   private bootstrapShellAttached = true;
   private nativeShellOverlay: ShellOverlayView;
-  private shellContentOverlay: ShellContentOverlayView;
+  private shellContentOverlay: ContentOverlayManager;
   private currentThemeCss: string | null = null;
   /** Per-view locks to prevent concurrent withViewVisible operations */
   private visibilityLocks = new Map<string, Promise<unknown>>();
@@ -364,7 +364,7 @@ export class ViewManager {
       }
     );
     this.nativeShellOverlay.setWindow(this.window);
-    this.shellContentOverlay = new ShellContentOverlayView(
+    this.shellContentOverlay = new ContentOverlayManager(
       options.contentOverlayPreload ?? options.shellPreload,
       () => {
         const wc = this.getShellChromeWebContents();
@@ -1633,12 +1633,12 @@ export class ViewManager {
     this.shellContentOverlay.show(options);
   }
 
-  updateContentOverlay(options: ContentOverlayUpdateOptions): void {
-    this.shellContentOverlay.update(options);
+  updateContentOverlay(surface: string, options: ContentOverlayUpdateOptions): void {
+    this.shellContentOverlay.update(surface, options);
   }
 
-  hideContentOverlay(): void {
-    this.shellContentOverlay.hide();
+  hideContentOverlay(surface: string): void {
+    this.shellContentOverlay.hide(surface);
   }
 
   private shouldHideUnslottedPanelView(managed: ManagedView): boolean {
@@ -2027,9 +2027,11 @@ export class ViewManager {
         }
       }
       if (alreadyOrdered) {
+        // The content overlays are a fixed-order group above every panel view
+        // (quickfire over the approval card, per ContentOverlayManager).
         const visibleShellOverlays = [
           this.nativeShellOverlay.getVisibleView(),
-          this.shellContentOverlay.getVisibleView(),
+          ...this.shellContentOverlay.getVisibleViews(),
         ].filter((view): view is Electron.WebContentsView => view !== null);
         for (const view of visibleShellOverlays) {
           const idx = childIndex.get(view);

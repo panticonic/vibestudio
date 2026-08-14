@@ -473,6 +473,35 @@ describe("HeadlessHost lifecycle guards", () => {
     expect(captureScreenshot).toHaveBeenCalledWith("panel:tree/panel-1", { format: "png" });
   });
 
+  it("serves the evaluate host command through the hosted page", async () => {
+    const host = new HeadlessHost(config());
+    const result = {
+      ok: true,
+      type: "string" as const,
+      value: "Sales Dashboard",
+      error: null,
+      truncated: false,
+    };
+    const evaluate = vi.fn(async () => result);
+    Object.assign(host as unknown as { pages: unknown }, { pages: { evaluate } });
+
+    await expect(
+      (
+        host as unknown as {
+          handleHostCommand(slotId: string, action: string, args: unknown[]): Promise<unknown>;
+        }
+      ).handleHostCommand("panel:tree/panel-1", "evaluate", [
+        "document.title",
+        { timeoutMs: 8_000 },
+      ])
+    ).resolves.toEqual(result);
+    // Symmetric with the Electron provider: same action name, same argument
+    // order, same bound travelling with the command.
+    expect(evaluate).toHaveBeenCalledWith("panel:tree/panel-1", "document.title", {
+      timeoutMs: 8_000,
+    });
+  });
+
   it("serves the canonical panel observation with lease provenance", async () => {
     const host = new HeadlessHost(config());
     const tracker = new LeaseTracker("headless-test");

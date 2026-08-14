@@ -113,6 +113,28 @@ const lifecycleOpResultSchema = LifecycleKeySchema.extend({
   updatedAt: z.number().int().nonnegative(),
 });
 
+/** Durable quickfire mapping row, as stored by WorkspaceDO (§2.4). */
+const quickfireSessionRowSchema = z
+  .object({
+    slotId: z.string().min(1),
+    channelId: z.string().min(1),
+    agentEntityId: z.string().min(1).nullable(),
+    contextId: z.string().min(1),
+    createdAt: z.number().int().nonnegative(),
+    clearedAt: z.number().int().nonnegative().nullable(),
+    promotedAt: z.number().int().nonnegative().nullable(),
+  })
+  .strict();
+
+const quickfireCleanupItemSchema = z
+  .object({
+    channelId: z.string().min(1),
+    slotId: z.string().min(1),
+    agentEntityId: z.string().min(1).nullable(),
+    contextId: z.string().min(1),
+  })
+  .strict();
+
 const durableWorkQueueSchema = z.enum(DURABLE_WORK_QUEUES);
 const durableWorkReadyHintSchema = z
   .object({
@@ -452,6 +474,71 @@ const rawWorkspaceStateEngineMethods = defineServiceMethods({
   slotCloseOwnedRoots: { ...workspaceStateMethods["slot.closeOwnedRoots"] },
   slotCloseCleanupPage: { ...workspaceStateMethods["slot.closeCleanupPage"] },
   slotCloseCleanupAck: { ...workspaceStateMethods["slot.closeCleanupAck"] },
+  quickfireSessionGet: {
+    ...internal("read"),
+    args: z.tuple([z.string().min(1)]),
+    returns: quickfireSessionRowSchema.nullable(),
+  },
+  quickfireSessionBind: {
+    ...internal("write"),
+    args: z.tuple([
+      z
+        .object({
+          slotId: z.string().min(1),
+          channelId: z.string().min(1),
+          agentEntityId: z.string().min(1).nullable().optional(),
+          contextId: z.string().min(1),
+          replace: z.boolean().optional(),
+        })
+        .strict(),
+    ]),
+    returns: z
+      .object({ session: quickfireSessionRowSchema, created: z.boolean() })
+      .strict(),
+  },
+  quickfireSessionClear: {
+    ...internal("destructive"),
+    args: z.tuple([z.string().min(1)]),
+    returns: quickfireSessionRowSchema.nullable(),
+  },
+  quickfireSessionRetarget: {
+    ...internal("write"),
+    args: z.tuple([z.string().min(1), z.string().min(1)]),
+    returns: quickfireSessionRowSchema.nullable(),
+  },
+  quickfireSessionPromote: {
+    ...internal("write"),
+    args: z.tuple([z.string().min(1)]),
+    returns: quickfireSessionRowSchema.nullable(),
+  },
+  quickfireSessionList: {
+    ...internal("read"),
+    args: z.tuple([]),
+    returns: z.array(quickfireSessionRowSchema),
+  },
+  quickfireCleanupPage: {
+    ...internal("read"),
+    args: z.tuple([
+      z
+        .object({
+          closeId: z.string().min(1).optional(),
+          cursor: z.string().min(1).optional(),
+          limit: z.number().int().positive().max(200).optional(),
+        })
+        .strict(),
+    ]),
+    returns: z
+      .object({
+        items: z.array(quickfireCleanupItemSchema),
+        nextCursor: z.string().nullable(),
+      })
+      .strict(),
+  },
+  quickfireCleanupAck: {
+    ...internal("destructive"),
+    args: z.tuple([z.array(z.string().min(1)).max(200)]),
+    returns: z.void(),
+  },
   slotGet: { ...workspaceStateMethods["slot.get"], returns: RawSlotRowSchema.nullable() },
   slotHistoryRelative: { ...workspaceStateMethods["slot.historyRelative"] },
   slotHistoryEntry: { ...workspaceStateMethods["slot.historyEntry"] },

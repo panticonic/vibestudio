@@ -402,10 +402,14 @@ export const coreViewMethods = defineServiceMethods({
         "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family",
     },
     description:
-      "Update the already-shown content overlay; every field is optional, so only the provided properties change.",
+      "Update one already-shown content overlay surface; apart from the surface key every field is optional, so only the provided properties change.",
     args: z.tuple([
       z.object({
-        surface: z.string().optional().describe("New surface key, if retargeting."),
+        surface: z
+          .string()
+          .describe(
+            "Registered overlay surface key identifying which instance to update. Surfaces are independent instances, so this never retargets one to another key."
+          ),
         bounds: ViewBoundsSchema.optional().describe("New anchor region, if changing."),
         props: z.unknown().optional().describe("Replacement props, if changing."),
         theme: ContentOverlayThemeSchema.optional().describe("New theme identity, if changing."),
@@ -424,8 +428,13 @@ export const coreViewMethods = defineServiceMethods({
       rationale:
         "P-panels: core mutually inspectable workspace UX; §2 default {code, session} family",
     },
-    description: "Hide the content overlay surface.",
-    args: z.tuple([]),
+    description:
+      "Hide one content overlay surface, leaving any other surface (e.g. the approval card) visible.",
+    args: z.tuple([
+      z.object({
+        surface: z.string().describe("Registered overlay surface key to hide."),
+      }),
+    ]),
     returns: z.void(),
     access: VIEW_OVERLAY_HIDE_ACCESS,
   },

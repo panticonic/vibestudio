@@ -495,6 +495,96 @@ describe("panelCdpService", () => {
     );
   });
 
+  it("evaluates an expression through deps.evaluate behind the same cdp gate", async () => {
+    const approvalQueue = approvalQueueMock("version");
+    const evaluated = {
+      ok: true,
+      type: "number",
+      value: "720",
+      error: null,
+      truncated: false,
+    };
+    const evaluate = vi.fn(async () => evaluated);
+    const recordContextIngestion = vi.fn();
+    const service = cdpService({
+      approvalQueue,
+      getTarget: () => ({
+        id: "target",
+        title: "Target",
+        kind: "browser",
+        source: "browser:https://docs.example.com/guide",
+        contextId: "ctx-target",
+      }),
+      getEndpoint: vi.fn(async () => ({ wsEndpoint: "ws://server/cdp/target" })),
+      evaluate,
+      recordContextIngestion,
+    });
+
+    await expect(
+      dispatchCdp(service, ctx(), "evaluate", ["target", "innerWidth", undefined])
+    ).resolves.toEqual(evaluated);
+    // Cross-context ⇒ the same context-boundary prompt as screenshot and raw CDP.
+    expect(approvalQueue.request).toHaveBeenCalledWith(
+      expect.objectContaining({ capability: CONTEXT_BOUNDARY_CAPABILITY })
+    );
+    expect(evaluate).toHaveBeenCalledWith("target", "panel:requester", "innerWidth", undefined);
+    expect(recordContextIngestion).toHaveBeenCalledWith(expect.anything(), {
+      key: "web:docs.example.com",
+      via: "panel-cdp:evaluate",
+      classification: "external",
+    });
+    expect(evaluate.mock.invocationCallOrder[0]).toBeLessThan(
+      recordContextIngestion.mock.invocationCallOrder[0]!
+    );
+  });
+
+  it("does not evaluate when approval is denied", async () => {
+    const evaluate = vi.fn();
+    const service = cdpService({
+      approvalQueue: approvalQueueMock("deny"),
+      getTarget: () => ({ id: "target", title: "Target", contextId: "ctx-target" }),
+      getEndpoint: vi.fn(async () => ({ wsEndpoint: "ws://server/cdp/target", token: "t" })),
+      evaluate,
+    });
+
+    await expect(
+      dispatchCdp(service, ctx(), "evaluate", ["target", "document.title", undefined])
+    ).rejects.toThrow(/denied/i);
+    expect(evaluate).not.toHaveBeenCalled();
+  });
+
+  it("reports a thrown expression as a result and still records ingestion", async () => {
+    const evaluate = vi.fn(async () => ({
+      ok: false,
+      type: "error",
+      value: null,
+      error: "TypeError: x is not a function",
+      truncated: false,
+    }));
+    const recordContextIngestion = vi.fn();
+    const service = cdpService({
+      approvalQueue: approvalQueueMock("version"),
+      // Same-context target: nothing to prompt for, so this isolates the
+      // outcome handling from the gate.
+      resolveCallerContext: vi.fn(async () => "ctx-target"),
+      getTarget: () => ({ id: "target", title: "Target", contextId: "ctx-target" }),
+      getEndpoint: vi.fn(async () => ({ wsEndpoint: "ws://server/cdp/target" })),
+      evaluate,
+      recordContextIngestion,
+    });
+
+    await expect(
+      dispatchCdp(service, ctx(), "evaluate", ["target", "x()", undefined])
+    ).resolves.toMatchObject({ ok: false, type: "error" });
+    // The expression read the page to decide it should throw, so the latch
+    // advances on the attempt rather than on the outcome.
+    expect(recordContextIngestion).toHaveBeenCalledWith(expect.anything(), {
+      key: "log:panel:target",
+      via: "panel-cdp:evaluate",
+      classification: "external",
+    });
+  });
+
   it("agent callers screenshot same-context panels freely via their credential binding", async () => {
     const approvalQueue = approvalQueueMock("deny");
     const shot = { data: "aGk=", mimeType: "image/png" as const, width: 1, height: 1 };

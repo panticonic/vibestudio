@@ -5621,6 +5621,144 @@
         "capability": null,
         "presentation": null
       },
+      "evaluate": {
+        "authority": {
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "service:panelCdp.evaluate"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "service:panelCdp.evaluate"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "user",
+                    "capability": "service:panelCdp.evaluate"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "service:panelCdp.evaluate"
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "service:panelCdp.evaluate"
+          },
+          "prepared": {
+            "resolver": "panelCdp.evaluate.contextBoundary",
+            "leaves": [
+              {
+                "capability": "context.boundary",
+                "requirement": {
+                  "kind": "any",
+                  "requirements": [
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "code",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "session",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "user",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "capability",
+                      "principal": "host",
+                      "capability": "context.boundary"
+                    }
+                  ]
+                },
+                "tier": {
+                  "selectedFrom": [
+                    "gated",
+                    "critical"
+                  ]
+                }
+              }
+            ]
+          }
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "cdp.native-effect",
+          "rationale": "Runs one bounded expression in the exact native view selected by receiver-bound target authority"
+        },
+        "capability": null,
+        "presentation": null
+      },
       "getCdpEndpoint": {
         "authority": {
           "requirement": {
@@ -6130,6 +6268,164 @@
         },
         "capability": null,
         "presentation": null
+      }
+    }
+  },
+  "panelContext": {
+    "service": {
+      "principals": [
+        "user",
+        "host",
+        "code"
+      ]
+    },
+    "methods": {
+      "describe": {
+        "authority": {
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "panel.inspect"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "panel.inspect"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "user",
+                    "capability": "panel.inspect"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "panel.inspect"
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "panel.inspect"
+          },
+          "prepared": {
+            "resolver": "panelContext.describe.contextBoundary",
+            "leaves": [
+              {
+                "capability": "context.boundary",
+                "requirement": {
+                  "kind": "any",
+                  "requirements": [
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "code",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "session",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "user",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "capability",
+                      "principal": "host",
+                      "capability": "context.boundary"
+                    }
+                  ]
+                },
+                "tier": {
+                  "selectedFrom": [
+                    "gated",
+                    "critical"
+                  ]
+                }
+              }
+            ]
+          }
+        },
+        "access": {
+          "sensitivity": "read"
+        },
+        "tier": {
+          "tier": "gated",
+          "session": "family",
+          "residency": "identity",
+          "family": "panel-context.identity",
+          "rationale": "Bounded identity and lease projection for one exact panel target; conversation content and console bodies stay behind the separately gated CDP tools"
+        },
+        "capability": "panel.inspect",
+        "presentation": {
+          "title": "Read a panel's identity and status",
+          "action": "read a panel's identity and status",
+          "description": "Allows {requesterKind} to read a panel's identity and status.",
+          "group": "panels",
+          "authorityCategory": {
+            "domain": "computer",
+            "verb": "see"
+          }
+        }
       }
     }
   },
@@ -6911,6 +7207,152 @@
           "group": "notifications",
           "authorityCategory": {
             "domain": "people",
+            "verb": "manage"
+          }
+        }
+      }
+    }
+  },
+  "quickfire": {
+    "service": {
+      "principals": [
+        "user",
+        "host"
+      ]
+    },
+    "methods": {
+      "clear": {
+        "authority": {
+          "principals": [
+            "user",
+            "host"
+          ]
+        },
+        "access": {
+          "sensitivity": "destructive"
+        },
+        "tier": {
+          "tier": "gated",
+          "session": "family",
+          "residency": "identity",
+          "family": "quickfire.lifecycle",
+          "rationale": "Binds or releases one exact panel slot's conversation identity and the agent vessel that serves it"
+        },
+        "capability": "workspace.runtime-state.manage",
+        "presentation": {
+          "title": "Manage panel quickfire conversations",
+          "action": "manage the quickfire conversation attached to a panel",
+          "description": "Allows {requesterKind} to manage the quickfire conversation attached to a panel.",
+          "group": "panels",
+          "authorityCategory": {
+            "domain": "automation",
+            "verb": "manage"
+          }
+        }
+      },
+      "drainCleanup": {
+        "authority": {
+          "principals": [
+            "user",
+            "host"
+          ]
+        },
+        "access": {
+          "sensitivity": "destructive"
+        },
+        "tier": {
+          "tier": "gated",
+          "session": "family",
+          "residency": "supervision",
+          "family": "quickfire.cleanup",
+          "rationale": "Executes the durable archival work a closed slot already recorded, acknowledging only rows whose agent actually retired"
+        },
+        "capability": "workspace.runtime-state.manage",
+        "presentation": {
+          "title": "Manage panel quickfire conversations",
+          "action": "manage the quickfire conversation attached to a panel",
+          "description": "Allows {requesterKind} to manage the quickfire conversation attached to a panel.",
+          "group": "panels",
+          "authorityCategory": {
+            "domain": "automation",
+            "verb": "manage"
+          }
+        }
+      },
+      "list": {
+        "authority": {
+          "principals": [
+            "user",
+            "host"
+          ]
+        },
+        "access": {
+          "sensitivity": "read"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "identity",
+          "family": "quickfire.lifecycle",
+          "rationale": "Bounded durable enumeration of the workspace's own slot-to-conversation mappings; exposes no conversation content"
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "promote": {
+        "authority": {
+          "principals": [
+            "user",
+            "host"
+          ]
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "gated",
+          "session": "family",
+          "residency": "identity",
+          "family": "quickfire.lifecycle",
+          "rationale": "Binds or releases one exact panel slot's conversation identity and the agent vessel that serves it"
+        },
+        "capability": "workspace.runtime-state.manage",
+        "presentation": {
+          "title": "Manage panel quickfire conversations",
+          "action": "manage the quickfire conversation attached to a panel",
+          "description": "Allows {requesterKind} to manage the quickfire conversation attached to a panel.",
+          "group": "panels",
+          "authorityCategory": {
+            "domain": "automation",
+            "verb": "manage"
+          }
+        }
+      },
+      "sessionFor": {
+        "authority": {
+          "principals": [
+            "user",
+            "host"
+          ]
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "gated",
+          "session": "family",
+          "residency": "identity",
+          "family": "quickfire.lifecycle",
+          "rationale": "Binds or releases one exact panel slot's conversation identity and the agent vessel that serves it"
+        },
+        "capability": "workspace.runtime-state.manage",
+        "presentation": {
+          "title": "Manage panel quickfire conversations",
+          "action": "manage the quickfire conversation attached to a panel",
+          "description": "Allows {requesterKind} to manage the quickfire conversation attached to a panel.",
+          "group": "panels",
+          "authorityCategory": {
+            "domain": "automation",
             "verb": "manage"
           }
         }
@@ -10580,6 +11022,23 @@
         "capability": null,
         "presentation": null
       },
+      "query": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "protected-write",
+          "family": "vcs.control",
+          "rationale": "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family"
+        },
+        "capability": null,
+        "presentation": null
+      },
       "readFile": {
         "authority": {
           "inherits": true
@@ -10665,6 +11124,23 @@
         "capability": null,
         "presentation": null
       },
+      "search": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "protected-write",
+          "family": "vcs.control",
+          "rationale": "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family"
+        },
+        "capability": null,
+        "presentation": null
+      },
       "status": {
         "authority": {
           "inherits": true
@@ -10688,6 +11164,23 @@
         },
         "access": {
           "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "protected-write",
+          "family": "vcs.control",
+          "rationale": "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family"
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "walk": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "read"
         },
         "tier": {
           "tier": "open",

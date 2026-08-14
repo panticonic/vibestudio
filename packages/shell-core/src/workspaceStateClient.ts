@@ -119,6 +119,27 @@ export interface RuntimeClient {
   retireEntity(id: string): Promise<void>;
 }
 
+/**
+ * Host-side executor for the quickfire archival the workspace DO only records.
+ * Optional on purpose: a shell without it still closes panels correctly, it
+ * just leaves the queued rows for the next drain that does have it.
+ */
+export interface QuickfireCleanupClient {
+  drainCleanup(input?: { closeId?: string }): Promise<{ archived: number; failed: number }>;
+}
+
+export function createQuickfireCleanupClient(
+  callService: ShellServiceCall
+): QuickfireCleanupClient {
+  return {
+    drainCleanup: (input) =>
+      callService("quickfire", "drainCleanup", input ? [input] : []) as Promise<{
+        archived: number;
+        failed: number;
+      }>,
+  };
+}
+
 export type ShellServiceCall = (
   service: string,
   method: string,

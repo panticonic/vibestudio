@@ -361,10 +361,21 @@ Authority principals: `code`, `host`, `user`
 | `panelCdp.getCdpEndpoint` | Return a single-use CDP WebSocket endpoint for an approved panel target. |
 | `panelCdp.stop` | Stop loading an approved panel target through its active CDP host. |
 | `panelCdp.consoleHistory` | Read console history from an approved panel target's active CDP host. |
+| `panelCdp.evaluate` | Evaluate one expression in an approved panel target through its active CDP host. The expression runs under a bounded wrapper (8s) and the result is serialized to a string, so no CDP WebSocket client is needed for the common inspect-and-poke case. |
 | `panelCdp.screenshot` | Capture a screenshot of an approved panel target through its active CDP host (force-paints hidden/unslotted panels). Returns base64 image data + mime type; no CDP WebSocket client needed. |
 | `panelCdp.hostProvider.open` | Internal shell/server transport: open a streamed CDP host-provider channel. |
 | `panelCdp.hostProvider.send` | Internal shell/server transport: deliver a CDP host-provider frame to the bridge. |
 | `panelCdp.hostProvider.close` | Internal shell/server transport: close a CDP host-provider channel. |
+
+## `panelContext`
+
+Aggregate panel identity, tree position, and presentation lease
+
+Authority principals: `code`, `host`, `user`
+
+| Method | Description |
+|--------|-------------|
+| `panelContext.describe` | Describe one panel: its slot and siblings, the code identity currently occupying it, and its presentation lease. Console counts and presentation-local address facts are reported as explicitly absent rather than guessed. |
 
 ## `panelLog`
 

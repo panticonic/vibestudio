@@ -14,6 +14,9 @@ import type {
 } from "./panelAccessPermission.js";
 import { preparePanelAccessAuthority } from "./panelAccessPermission.js";
 import type { ContextIngestionRecorder } from "./contextIntegrityStore.js";
+import type { PanelEvaluateOptions, PanelEvaluateResult } from "@vibestudio/shared/panel/evaluate";
+
+export type { PanelEvaluateOptions, PanelEvaluateResult };
 
 export interface CdpEndpoint {
   wsEndpoint: string;
@@ -88,6 +91,18 @@ export interface PanelCdpServiceDeps extends PanelAccessPermissionDeps {
     requesterEntityId: string,
     options?: PanelScreenshotOptions
   ): Promise<PanelScreenshotResult>;
+  /**
+   * One-RPC `Runtime.evaluate`: the registration layer routes this to the
+   * active CDP host's `evaluate` host command, which runs the caller's
+   * expression under a bounded wrapper and returns a serialized result. This
+   * exists so the common case never needs a raw CDP WebSocket endpoint.
+   */
+  evaluate?(
+    panelId: string,
+    requesterEntityId: string,
+    expression: string,
+    options?: PanelEvaluateOptions
+  ): Promise<PanelEvaluateResult>;
   stop?(panelId: string, requesterEntityId: string): Promise<unknown>;
   consoleHistory?(
     panelId: string,
@@ -129,6 +144,21 @@ const screenshotOptionsSchema = z
     quality: z.number().min(0).max(100).optional(),
   })
   .optional();
+
+const evaluateOptionsSchema = z
+  .object({
+    timeoutMs: z.number().positive().optional(),
+    valueLimit: z.number().positive().optional(),
+  })
+  .optional();
+
+const evaluateResultSchema = z.object({
+  ok: z.boolean(),
+  type: z.string(),
+  value: z.string().nullable(),
+  error: z.string().nullable(),
+  truncated: z.boolean(),
+});
 
 const screenshotResultSchema = z.object({
   data: z.string(),
@@ -213,6 +243,26 @@ const panelCdpMethods = defineServiceMethods({
     args: z.tuple([z.string(), consoleHistoryOptionsSchema]),
     authority: cdpBoundaryAuthority("consoleHistory"),
     access: { sensitivity: "read" },
+  },
+  evaluate: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "cdp.native-effect",
+      rationale:
+        "Runs one bounded expression in the exact native view selected by receiver-bound target authority",
+    },
+    description:
+      "Evaluate one expression in an approved panel target through its active CDP host. " +
+      "The expression runs under a bounded wrapper (8s) and the result is serialized to a " +
+      "string, so no CDP WebSocket client is needed for the common inspect-and-poke case.",
+    args: z.tuple([z.string(), z.string(), evaluateOptionsSchema]),
+    returns: evaluateResultSchema,
+    authority: cdpBoundaryAuthority("evaluate"),
+    // Arbitrary page script can mutate the document it runs in; this is not a
+    // read-only observation even when the caller only means to look.
+    access: { sensitivity: "write" },
   },
   screenshot: {
     tier: {
@@ -350,7 +400,7 @@ export function createPanelCdpService(deps: PanelCdpServiceDeps): ServiceDefinit
   async function recordCdpIngestion(
     ctx: ServiceContext,
     target: PanelAccessPermissionTarget,
-    method: "getCdpEndpoint" | "consoleHistory" | "screenshot"
+    method: "getCdpEndpoint" | "consoleHistory" | "screenshot" | "evaluate"
   ): Promise<void> {
     const browserUrl =
       typeof target.source === "string" ? browserUrlFromPanelSource(target.source) : null;
@@ -387,6 +437,7 @@ export function createPanelCdpService(deps: PanelCdpServiceDeps): ServiceDefinit
         ["getCdpEndpoint", "cdp"],
         ["consoleHistory", "cdp"],
         ["screenshot", "cdp"],
+        ["evaluate", "cdp"],
         ["stop", "stop"],
       ].map(([method, operation]) => [
         `panelCdp.${method}.contextBoundary`,
@@ -445,6 +496,15 @@ export function createPanelCdpService(deps: PanelCdpServiceDeps): ServiceDefinit
         if (!deps.screenshot) throw new Error("Panel screenshot is not available");
         const result = await deps.screenshot(panelId, ctx.caller.runtime.id, options);
         await recordCdpIngestion(ctx, target, "screenshot");
+        return result;
+      },
+      evaluate: async (ctx, [panelId, expression, options]) => {
+        const target = await recordCdpAccess(ctx, "evaluate", panelId);
+        if (!deps.evaluate) throw new Error("Panel evaluation is not available");
+        const result = await deps.evaluate(panelId, ctx.caller.runtime.id, expression, options);
+        // An expression that threw still read the page to decide it should
+        // throw, so the latch advances on the attempt, not on the outcome.
+        await recordCdpIngestion(ctx, target, "evaluate");
         return result;
       },
       stop: async (ctx, [panelId]) => {

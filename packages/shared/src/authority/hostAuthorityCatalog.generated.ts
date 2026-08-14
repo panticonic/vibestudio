@@ -72,7 +72,7 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: {
       title: "Add a custom ad-blocking list",
       action: "add a custom ad-blocking list",
-      description: "Allows {requesterKind} to add a custom ad-blocking list.",
+      description: "Add a custom filter list for ad blocking.",
       group: "network",
       authorityCategory: {
         domain: "web",
@@ -170,7 +170,7 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: {
       title: "Refresh ad blocking",
       action: "refresh ad blocking",
-      description: "Allows {requesterKind} to refresh ad blocking.",
+      description: "Rebuild the ad blocker with the latest filter lists.",
       group: "network",
       authorityCategory: {
         domain: "web",
@@ -191,7 +191,7 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: {
       title: "Remove a custom ad-blocking list",
       action: "remove a custom ad-blocking list",
-      description: "Allows {requesterKind} to remove a custom ad-blocking list.",
+      description: "Remove a custom filter list from ad blocking.",
       group: "network",
       authorityCategory: {
         domain: "web",
@@ -212,7 +212,7 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: {
       title: "Resume blocking ads on a website",
       action: "resume blocking ads on a website",
-      description: "Allows {requesterKind} to resume blocking ads on a website.",
+      description: "Start blocking ads again on a website you previously allowed.",
       group: "network",
       authorityCategory: {
         domain: "web",
@@ -233,7 +233,7 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: {
       title: "Clear ad-blocking statistics",
       action: "clear ad-blocking statistics",
-      description: "Allows {requesterKind} to clear ad-blocking statistics.",
+      description: "Reset the ad-blocking statistics to zero.",
       group: "network",
       authorityCategory: {
         domain: "web",
@@ -254,7 +254,7 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: {
       title: "Clear a panel's ad-blocking statistics",
       action: "clear a panel's ad-blocking statistics",
-      description: "Allows {requesterKind} to clear a panel's ad-blocking statistics.",
+      description: "Reset a specific panel's ad-blocking statistics to zero.",
       group: "network",
       authorityCategory: {
         domain: "web",
@@ -275,7 +275,7 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: {
       title: "Turn ad blocking on or off",
       action: "turn ad blocking on or off",
-      description: "Allows {requesterKind} to turn ad blocking on or off.",
+      description: "Turn ad blocking on or off for the whole workspace.",
       group: "network",
       authorityCategory: {
         domain: "web",
@@ -296,7 +296,7 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: {
       title: "Change ad blocking for a panel",
       action: "change ad blocking for a panel",
-      description: "Allows {requesterKind} to change ad blocking for a panel.",
+      description: "Turn ad blocking on or off for a specific panel.",
       group: "network",
       authorityCategory: {
         domain: "web",
@@ -317,7 +317,7 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: {
       title: "Turn an ad-blocking list on or off",
       action: "turn an ad-blocking list on or off",
-      description: "Allows {requesterKind} to turn an ad-blocking list on or off.",
+      description: "Turn a specific ad-blocking filter list on or off.",
       group: "network",
       authorityCategory: {
         domain: "web",
@@ -338,7 +338,7 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: {
       title: "Install an application update",
       action: "install an application update",
-      description: "Allows {requesterKind} to install an application update.",
+      description: "Install a pending application update.",
       group: "host",
       authorityCategory: {
         domain: "computer",
@@ -359,7 +359,7 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: {
       title: "Clear cached build files",
       action: "clear cached build files",
-      description: "Allows {requesterKind} to clear cached build files.",
+      description: "Remove cached build files so apps rebuild fresh next time.",
       group: "host",
       authorityCategory: {
         domain: "automation",
@@ -435,7 +435,7 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: {
       title: "Open a link in another application",
       action: "open a link in another application",
-      description: "Allows {requesterKind} to open a link in another application.",
+      description: "Open a web link in your default browser or another app.",
       group: "host",
       authorityCategory: {
         domain: "sharing",
@@ -693,8 +693,7 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: {
       title: "Save form-fill values",
       action: "save personal form-fill values",
-      description:
-        "Allows {requesterKind} to save the personal form values shown in a browser submission prompt.",
+      description: "Save the personal form values you just submitted.",
       group: "credentials",
       authorityCategory: {
         domain: "accounts",
@@ -714,8 +713,7 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: {
       title: "Save this password choice",
       action: "save this password choice",
-      description:
-        "Allows {requesterKind} to save a password or remember that password saving is disabled for this site.",
+      description: "Save a password, or remember not to ask again for this site.",
       group: "credentials",
       authorityCategory: {
         domain: "accounts",
@@ -958,7 +956,7 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: {
       title: "Cancel browser downloads",
       action: "cancel browser downloads",
-      description: "Allows {requesterKind} to cancel active browser downloads.",
+      description: "Cancel downloads that are currently in progress.",
       group: "network",
       authorityCategory: {
         domain: "web",
@@ -978,7 +976,7 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: {
       title: "Cancel browser data reading",
       action: "cancel browser data reading",
-      description: "Allows {requesterKind} to cancel an active browser data import read.",
+      description: "Stop an in-progress browser data import.",
       group: "network",
       authorityCategory: {
         domain: "web",
@@ -1010,7 +1008,7 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: {
       title: "Access browser import details",
       action: "access browser import details",
-      description: "Allows {requesterKind} to inspect the available browser import provider.",
+      description: "Check which browser can provide data for import.",
       group: "network",
       authorityCategory: {
         domain: "web",
@@ -1031,7 +1029,7 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: {
       title: "View browser downloads",
       action: "view browser downloads",
-      description: "Allows {requesterKind} to view current and recent browser downloads.",
+      description: "See your current and recent browser downloads.",
       group: "network",
       authorityCategory: {
         domain: "web",
@@ -1052,7 +1050,7 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: {
       title: "View browser tabs available to import",
       action: "view browser tabs available to import",
-      description: "Allows {requesterKind} to view browser tabs available for import.",
+      description: "See which browser tabs can be imported.",
       group: "network",
       authorityCategory: {
         domain: "web",
@@ -1073,7 +1071,7 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: {
       title: "Find browser profiles to import",
       action: "find browser profiles to import",
-      description: "Allows {requesterKind} to find browser profiles available for import.",
+      description: "Find browser profiles that have data you can import.",
       group: "network",
       authorityCategory: {
         domain: "web",
@@ -1093,7 +1091,7 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: {
       title: "Continue reading browser data",
       action: "continue reading browser data for import",
-      description: "Allows {requesterKind} to continue a browser data import read.",
+      description: "Continue reading browser data during an import.",
       group: "network",
       authorityCategory: {
         domain: "web",
@@ -1125,7 +1123,7 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: {
       title: "Open downloaded files",
       action: "open downloaded files",
-      description: "Allows {requesterKind} to open downloaded files on this computer.",
+      description: "Open a downloaded file on this computer.",
       group: "network",
       authorityCategory: {
         domain: "computer",
@@ -1146,7 +1144,7 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: {
       title: "Pause browser downloads",
       action: "pause browser downloads",
-      description: "Allows {requesterKind} to pause active browser downloads.",
+      description: "Pause downloads that are currently in progress.",
       group: "network",
       authorityCategory: {
         domain: "web",
@@ -1167,7 +1165,7 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: {
       title: "Preview browser data for import",
       action: "preview browser data for import",
-      description: "Allows {requesterKind} to preview browser data available for import.",
+      description: "Preview what browser data is available before importing it.",
       group: "network",
       authorityCategory: {
         domain: "web",
@@ -1200,7 +1198,7 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: {
       title: "Resume browser downloads",
       action: "resume browser downloads",
-      description: "Allows {requesterKind} to resume paused browser downloads.",
+      description: "Resume downloads that were paused.",
       group: "network",
       authorityCategory: {
         domain: "web",
@@ -1221,7 +1219,7 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: {
       title: "Show downloaded files",
       action: "show downloaded files on this computer",
-      description: "Allows {requesterKind} to reveal downloaded files in the file manager.",
+      description: "Show a downloaded file in your file manager.",
       group: "network",
       authorityCategory: {
         domain: "computer",
@@ -1242,7 +1240,7 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: {
       title: "Read browser data for import",
       action: "read browser data for import",
-      description: "Allows {requesterKind} to read browser data selected for import.",
+      description: "Read the browser data you selected for import.",
       group: "network",
       authorityCategory: {
         domain: "web",
@@ -3532,7 +3530,7 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: {
       title: "Add a workspace member",
       action: "add a workspace member",
-      description: "Allows {requesterKind} to add a workspace member.",
+      description: "Give someone access to a workspace.",
       group: "accounts",
       authorityCategory: {
         domain: "people",
@@ -3553,7 +3551,7 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: {
       title: "Create a workspace",
       action: "create a workspace",
-      description: "Allows {requesterKind} to create a workspace.",
+      description: "Set up a new workspace from scratch or from a template.",
       group: "accounts",
       authorityCategory: {
         domain: "automation",
@@ -3574,7 +3572,7 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: {
       title: "Delete a workspace",
       action: "delete a workspace",
-      description: "Allows {requesterKind} to delete a workspace.",
+      description: "Permanently remove a workspace and all its data.",
       group: "accounts",
       authorityCategory: {
         domain: "automation",
@@ -3595,7 +3593,7 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: {
       title: "Prepare a temporary workspace",
       action: "prepare a temporary workspace",
-      description: "Allows {requesterKind} to prepare a temporary workspace.",
+      description: "Create a temporary workspace for quick experiments or testing.",
       group: "accounts",
       authorityCategory: {
         domain: "automation",
@@ -3616,7 +3614,7 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: {
       title: "View an account profile",
       action: "view an account profile",
-      description: "Allows {requesterKind} to view an account profile.",
+      description: "See an account's name, picture, and role.",
       group: "accounts",
       authorityCategory: {
         domain: "accounts",
@@ -3637,7 +3635,7 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: {
       title: "Invite someone to the workspace",
       action: "invite someone to the workspace",
-      description: "Allows {requesterKind} to invite someone to the workspace.",
+      description: "Create an account and send an invite so someone new can join.",
       group: "accounts",
       authorityCategory: {
         domain: "people",
@@ -3658,7 +3656,7 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: {
       title: "View connected devices",
       action: "view connected devices",
-      description: "Allows {requesterKind} to view connected devices.",
+      description: "See which devices are connected to your account.",
       group: "accounts",
       authorityCategory: {
         domain: "people",
@@ -3679,7 +3677,7 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: {
       title: "View who is currently active",
       action: "view who is currently active",
-      description: "Allows {requesterKind} to view who is currently active.",
+      description: "See who is currently using a workspace.",
       group: "accounts",
       authorityCategory: {
         domain: "people",
@@ -3700,7 +3698,7 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: {
       title: "View workspace members",
       action: "view workspace members",
-      description: "Allows {requesterKind} to view workspace members.",
+      description: "See who has access to a workspace.",
       group: "accounts",
       authorityCategory: {
         domain: "people",
@@ -3721,7 +3719,7 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: {
       title: "View available workspaces",
       action: "view available workspaces",
-      description: "Allows {requesterKind} to view available workspaces.",
+      description: "See which workspaces are available to open.",
       group: "accounts",
       authorityCategory: {
         domain: "files",
@@ -3742,7 +3740,7 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: {
       title: "Pair a device",
       action: "pair a device",
-      description: "Allows {requesterKind} to pair a device.",
+      description: "Connect another device to your account so you can use it to access workspaces.",
       group: "accounts",
       authorityCategory: {
         domain: "people",
@@ -3762,7 +3760,7 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: {
       title: "Remove a workspace member",
       action: "remove a workspace member",
-      description: "Allows {requesterKind} to remove a workspace member.",
+      description: "Remove someone's access to a workspace.",
       group: "accounts",
       authorityCategory: {
         domain: "people",
@@ -3782,7 +3780,7 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: {
       title: "Disconnect a device",
       action: "disconnect a device",
-      description: "Allows {requesterKind} to disconnect a device.",
+      description: "Remove a device's access so it can no longer connect.",
       group: "accounts",
       authorityCategory: {
         domain: "people",
@@ -3802,7 +3800,7 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: {
       title: "Revoke a user's access",
       action: "revoke a user's access",
-      description: "Allows {requesterKind} to revoke a user's access.",
+      description: "Remove a person's account and disconnect all their devices.",
       group: "accounts",
       authorityCategory: {
         domain: "people",
@@ -3823,7 +3821,7 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: {
       title: "Connect to a workspace",
       action: "connect to a workspace",
-      description: "Allows {requesterKind} to connect to a workspace.",
+      description: "Open a connection to a workspace so you can use it.",
       group: "accounts",
       authorityCategory: {
         domain: "files",
@@ -3844,7 +3842,7 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: {
       title: "Change a workspace member's role",
       action: "change a workspace member's role",
-      description: "Allows {requesterKind} to change a workspace member's role.",
+      description: "Change what a workspace member is allowed to do (e.g. admin or member).",
       group: "accounts",
       authorityCategory: {
         domain: "people",
@@ -3865,7 +3863,7 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: {
       title: "Change an account profile",
       action: "change an account profile",
-      description: "Allows {requesterKind} to change an account profile.",
+      description: "Update an account's name, picture, or other profile details.",
       group: "accounts",
       authorityCategory: {
         domain: "accounts",
@@ -3990,6 +3988,18 @@ export const HOST_AUTHORITY_METHODS = {
       residency: "transport",
       family: "cdp.transport",
       rationale: "Returns a bounded observation from the exact authenticated native CDP provider",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "panelCdp.evaluate": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "cdp.native-effect",
+      rationale:
+        "Runs one bounded expression in the exact native view selected by receiver-bound target authority",
     },
     capability: null,
     presentation: null,
@@ -4728,7 +4738,7 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: {
       title: "Clear a remote connection",
       action: "clear a remote connection",
-      description: "Allows {requesterKind} to clear a remote connection.",
+      description: "Remove the saved remote connection so you can pair a different device.",
       group: "credentials",
       authorityCategory: {
         domain: "people",
@@ -4749,7 +4759,7 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: {
       title: "View the current remote connection",
       action: "view the current remote connection",
-      description: "Allows {requesterKind} to view the current remote connection.",
+      description: "See whether your remote connection is active and which device is paired.",
       group: "credentials",
       authorityCategory: {
         domain: "people",
@@ -4769,7 +4779,7 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: {
       title: "Pair a remote connection",
       action: "pair a remote connection",
-      description: "Allows {requesterKind} to pair a remote connection.",
+      description: "Set up a new remote connection by pairing with another device.",
       group: "credentials",
       authorityCategory: {
         domain: "people",
@@ -4789,7 +4799,7 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: {
       title: "Reconnect now",
       action: "reconnect now",
-      description: "Allows {requesterKind} to reconnect now.",
+      description: "Try reconnecting to the remote device right now.",
       group: "credentials",
       authorityCategory: {
         domain: "people",
@@ -4809,7 +4819,7 @@ export const HOST_AUTHORITY_METHODS = {
     presentation: {
       title: "Restart the remote connection",
       action: "restart the remote connection",
-      description: "Allows {requesterKind} to restart the remote connection.",
+      description: "Restart Vibestudio so a connection change takes effect.",
       group: "credentials",
       authorityCategory: {
         domain: "people",
@@ -7708,6 +7718,7 @@ export const HOST_METHOD_MANIFEST_DEPENDENCIES = {
   "credentials.resolveCredential": ["credential.use"],
   "externalOpen.openExternal": ["external.open"],
   "panelCdp.consoleHistory": ["context.boundary"],
+  "panelCdp.evaluate": ["context.boundary"],
   "panelCdp.getCdpEndpoint": ["context.boundary"],
   "panelCdp.screenshot": ["context.boundary"],
   "panelCdp.stop": ["context.boundary"],
@@ -8111,7 +8122,7 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
   "account.profile.read": {
     title: "View an account profile",
     action: "view an account profile",
-    description: "Allows {requesterKind} to view an account profile.",
+    description: "See an account's name, picture, and role.",
     group: "accounts",
     authorityCategory: {
       domain: "accounts",
@@ -8121,7 +8132,7 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
   "account.profile.update": {
     title: "Change an account profile",
     action: "change an account profile",
-    description: "Allows {requesterKind} to change an account profile.",
+    description: "Update an account's name, picture, or other profile details.",
     group: "accounts",
     authorityCategory: {
       domain: "accounts",
@@ -8151,7 +8162,7 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
   "adblock.manage": {
     title: "Add a custom ad-blocking list",
     action: "add a custom ad-blocking list",
-    description: "Allows {requesterKind} to add a custom ad-blocking list.",
+    description: "Add a custom filter list for ad blocking.",
     group: "network",
     authorityCategory: {
       domain: "web",
@@ -8171,7 +8182,7 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
   "application.update": {
     title: "Install an application update",
     action: "install an application update",
-    description: "Allows {requesterKind} to install an application update.",
+    description: "Install a pending application update.",
     group: "host",
     authorityCategory: {
       domain: "computer",
@@ -8201,8 +8212,7 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
   "browser-form-fill.manage": {
     title: "Save form-fill values",
     action: "save personal form-fill values",
-    description:
-      "Allows {requesterKind} to save the personal form values shown in a browser submission prompt.",
+    description: "Save the personal form values you just submitted.",
     group: "credentials",
     authorityCategory: {
       domain: "accounts",
@@ -8212,8 +8222,7 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
   "browser-passwords.manage": {
     title: "Save this password choice",
     action: "save this password choice",
-    description:
-      "Allows {requesterKind} to save a password or remember that password saving is disabled for this site.",
+    description: "Save a password, or remember not to ask again for this site.",
     group: "credentials",
     authorityCategory: {
       domain: "accounts",
@@ -8353,7 +8362,7 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
   "devices.pair": {
     title: "Pair a device",
     action: "pair a device",
-    description: "Allows {requesterKind} to pair a device.",
+    description: "Connect another device to your account so you can use it to access workspaces.",
     group: "accounts",
     authorityCategory: {
       domain: "people",
@@ -8363,7 +8372,7 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
   "devices.read": {
     title: "View connected devices",
     action: "view connected devices",
-    description: "Allows {requesterKind} to view connected devices.",
+    description: "See which devices are connected to your account.",
     group: "accounts",
     authorityCategory: {
       domain: "people",
@@ -8373,7 +8382,7 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
   "devices.revoke": {
     title: "Disconnect a device",
     action: "disconnect a device",
-    description: "Allows {requesterKind} to disconnect a device.",
+    description: "Remove a device's access so it can no longer connect.",
     group: "accounts",
     authorityCategory: {
       domain: "people",
@@ -8463,7 +8472,7 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
   "presence.read": {
     title: "View who is currently active",
     action: "view who is currently active",
-    description: "Allows {requesterKind} to view who is currently active.",
+    description: "See who is currently using a workspace.",
     group: "accounts",
     authorityCategory: {
       domain: "people",
@@ -8503,7 +8512,7 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
   "remote-client.clear": {
     title: "Clear a remote connection",
     action: "clear a remote connection",
-    description: "Allows {requesterKind} to clear a remote connection.",
+    description: "Remove the saved remote connection so you can pair a different device.",
     group: "credentials",
     authorityCategory: {
       domain: "people",
@@ -8513,7 +8522,7 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
   "remote-client.connect": {
     title: "Pair a remote connection",
     action: "pair a remote connection",
-    description: "Allows {requesterKind} to pair a remote connection.",
+    description: "Set up a new remote connection by pairing with another device.",
     group: "credentials",
     authorityCategory: {
       domain: "people",
@@ -8523,7 +8532,7 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
   "remote-client.read": {
     title: "View the current remote connection",
     action: "view the current remote connection",
-    description: "Allows {requesterKind} to view the current remote connection.",
+    description: "See whether your remote connection is active and which device is paired.",
     group: "credentials",
     authorityCategory: {
       domain: "people",
@@ -8623,7 +8632,7 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
   "service:browserEnvironment.cancelDownload": {
     title: "Cancel browser downloads",
     action: "cancel browser downloads",
-    description: "Allows {requesterKind} to cancel active browser downloads.",
+    description: "Cancel downloads that are currently in progress.",
     group: "network",
     authorityCategory: {
       domain: "web",
@@ -8633,7 +8642,7 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
   "service:browserEnvironment.cancelImportRead": {
     title: "Cancel browser data reading",
     action: "cancel browser data reading",
-    description: "Allows {requesterKind} to cancel an active browser data import read.",
+    description: "Stop an in-progress browser data import.",
     group: "network",
     authorityCategory: {
       domain: "web",
@@ -8643,7 +8652,7 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
   "service:browserEnvironment.getImportHost": {
     title: "Access browser import details",
     action: "access browser import details",
-    description: "Allows {requesterKind} to inspect the available browser import provider.",
+    description: "Check which browser can provide data for import.",
     group: "network",
     authorityCategory: {
       domain: "web",
@@ -8653,7 +8662,7 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
   "service:browserEnvironment.listDownloads": {
     title: "View browser downloads",
     action: "view browser downloads",
-    description: "Allows {requesterKind} to view current and recent browser downloads.",
+    description: "See your current and recent browser downloads.",
     group: "network",
     authorityCategory: {
       domain: "web",
@@ -8663,7 +8672,7 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
   "service:browserEnvironment.listImportOpenTabs": {
     title: "View browser tabs available to import",
     action: "view browser tabs available to import",
-    description: "Allows {requesterKind} to view browser tabs available for import.",
+    description: "See which browser tabs can be imported.",
     group: "network",
     authorityCategory: {
       domain: "web",
@@ -8673,7 +8682,7 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
   "service:browserEnvironment.listImportSources": {
     title: "Find browser profiles to import",
     action: "find browser profiles to import",
-    description: "Allows {requesterKind} to find browser profiles available for import.",
+    description: "Find browser profiles that have data you can import.",
     group: "network",
     authorityCategory: {
       domain: "web",
@@ -8683,7 +8692,7 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
   "service:browserEnvironment.nextImportFrame": {
     title: "Continue reading browser data",
     action: "continue reading browser data for import",
-    description: "Allows {requesterKind} to continue a browser data import read.",
+    description: "Continue reading browser data during an import.",
     group: "network",
     authorityCategory: {
       domain: "web",
@@ -8693,7 +8702,7 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
   "service:browserEnvironment.openDownload": {
     title: "Open downloaded files",
     action: "open downloaded files",
-    description: "Allows {requesterKind} to open downloaded files on this computer.",
+    description: "Open a downloaded file on this computer.",
     group: "network",
     authorityCategory: {
       domain: "computer",
@@ -8703,7 +8712,7 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
   "service:browserEnvironment.pauseDownload": {
     title: "Pause browser downloads",
     action: "pause browser downloads",
-    description: "Allows {requesterKind} to pause active browser downloads.",
+    description: "Pause downloads that are currently in progress.",
     group: "network",
     authorityCategory: {
       domain: "web",
@@ -8713,7 +8722,7 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
   "service:browserEnvironment.previewImportSource": {
     title: "Preview browser data for import",
     action: "preview browser data for import",
-    description: "Allows {requesterKind} to preview browser data available for import.",
+    description: "Preview what browser data is available before importing it.",
     group: "network",
     authorityCategory: {
       domain: "web",
@@ -8723,7 +8732,7 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
   "service:browserEnvironment.resumeDownload": {
     title: "Resume browser downloads",
     action: "resume browser downloads",
-    description: "Allows {requesterKind} to resume paused browser downloads.",
+    description: "Resume downloads that were paused.",
     group: "network",
     authorityCategory: {
       domain: "web",
@@ -8733,7 +8742,7 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
   "service:browserEnvironment.revealDownload": {
     title: "Show downloaded files",
     action: "show downloaded files on this computer",
-    description: "Allows {requesterKind} to reveal downloaded files in the file manager.",
+    description: "Show a downloaded file in your file manager.",
     group: "network",
     authorityCategory: {
       domain: "computer",
@@ -8743,7 +8752,7 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
   "service:browserEnvironment.startImportRead": {
     title: "Read browser data for import",
     action: "read browser data for import",
-    description: "Allows {requesterKind} to read browser data selected for import.",
+    description: "Read the browser data you selected for import.",
     group: "network",
     authorityCategory: {
       domain: "web",
@@ -8763,7 +8772,7 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
   "users.revoke": {
     title: "Revoke a user's access",
     action: "revoke a user's access",
-    description: "Allows {requesterKind} to revoke a user's access.",
+    description: "Remove a person's account and disconnect all their devices.",
     group: "accounts",
     authorityCategory: {
       domain: "people",
@@ -8843,7 +8852,7 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
   "workspace.members.manage": {
     title: "Add a workspace member",
     action: "add a workspace member",
-    description: "Allows {requesterKind} to add a workspace member.",
+    description: "Give someone access to a workspace.",
     group: "accounts",
     authorityCategory: {
       domain: "people",
@@ -8853,7 +8862,7 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
   "workspace.members.read": {
     title: "View workspace members",
     action: "view workspace members",
-    description: "Allows {requesterKind} to view workspace members.",
+    description: "See who has access to a workspace.",
     group: "accounts",
     authorityCategory: {
       domain: "people",
@@ -8863,7 +8872,7 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
   "workspace.members.remove": {
     title: "Remove a workspace member",
     action: "remove a workspace member",
-    description: "Allows {requesterKind} to remove a workspace member.",
+    description: "Remove someone's access to a workspace.",
     group: "accounts",
     authorityCategory: {
       domain: "people",
@@ -8913,7 +8922,7 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
   "workspaces.create": {
     title: "Create a workspace",
     action: "create a workspace",
-    description: "Allows {requesterKind} to create a workspace.",
+    description: "Set up a new workspace from scratch or from a template.",
     group: "accounts",
     authorityCategory: {
       domain: "automation",
@@ -8923,7 +8932,7 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
   "workspaces.delete": {
     title: "Delete a workspace",
     action: "delete a workspace",
-    description: "Allows {requesterKind} to delete a workspace.",
+    description: "Permanently remove a workspace and all its data.",
     group: "accounts",
     authorityCategory: {
       domain: "automation",
@@ -8933,7 +8942,7 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
   "workspaces.open": {
     title: "Connect to a workspace",
     action: "connect to a workspace",
-    description: "Allows {requesterKind} to connect to a workspace.",
+    description: "Open a connection to a workspace so you can use it.",
     group: "accounts",
     authorityCategory: {
       domain: "files",
@@ -8943,7 +8952,7 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
   "workspaces.read": {
     title: "View available workspaces",
     action: "view available workspaces",
-    description: "Allows {requesterKind} to view available workspaces.",
+    description: "See which workspaces are available to open.",
     group: "accounts",
     authorityCategory: {
       domain: "files",

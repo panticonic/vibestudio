@@ -37,6 +37,7 @@ import { asPanelEntityId, asPanelSlotId } from "@vibestudio/shared/panel/idValue
 import { normalizePanelTitle } from "@vibestudio/shared/panel/title";
 import type { PanelEntityId, PanelSlotId } from "@vibestudio/shared/panel/idValues";
 import type {
+  QuickfireCleanupClient,
   RuntimeClient,
   SlotHistoryRow,
   WorkspaceStateClient,
@@ -166,6 +167,11 @@ export interface PanelManagerDeps {
   workspaceConfig?: WorkspaceConfig;
   allowMissingManifests?: boolean;
   /**
+   * Executes the quickfire archival that slot close only records. Absent on
+   * hosts without the quickfire service; the rows simply stay queued.
+   */
+  quickfire?: QuickfireCleanupClient;
+  /**
    * Optional token issuer used to obtain a per-panel WS auth token when
    * building the bootstrap config delivered to a freshly mounted view.
    * Implementations should call into the shell's auth service.
@@ -176,6 +182,7 @@ export interface PanelManagerDeps {
 export interface PanelOperationClients {
   workspaceState: WorkspaceStateClient;
   runtime: RuntimeClient;
+  quickfire?: QuickfireCleanupClient;
 }
 
 // =============================================================================
@@ -201,6 +208,7 @@ export class PanelManager {
   private readonly registry: PanelRegistry;
   private readonly workspaceState: WorkspaceStateClient;
   private readonly runtime: RuntimeClient;
+  private readonly quickfire?: QuickfireCleanupClient;
   private readonly activationClient?: ActivationClient;
   private readonly viewState?: LocalPanelViewStateStore;
   private readonly serverInfo: PanelManagerServerInfo;
@@ -235,6 +243,7 @@ export class PanelManager {
     this.registry = deps.registry;
     this.workspaceState = deps.workspaceState;
     this.runtime = deps.runtime;
+    this.quickfire = deps.quickfire;
     this.activationClient = deps.activationClient;
     this.viewState = deps.viewState;
     this.serverInfo = deps.serverInfo;
@@ -278,6 +287,7 @@ export class PanelManager {
   }> {
     await this.ensureViewStateLoaded();
     await this.drainCloseCleanup({}, false);
+    await this.drainQuickfireCleanup({});
     return {
       collapsedIds: [...this.collapsedIds],
       revision: 0,
@@ -657,7 +667,32 @@ export class PanelManager {
     await this.drainCloseCleanup({}, false, clients);
     const closed = await workspaceState.closeSlot(slotId);
     await this.drainCloseCleanup({ closeId: closed.closeId }, options.strict === true, clients);
+    await this.drainQuickfireCleanup({ closeId: closed.closeId }, clients);
     return { closedCount: closed.closedCount };
+  }
+
+  /**
+   * Execute the quickfire archival recorded by the same close. Deliberately
+   * non-strict and separate from the panel drain: a conversation whose agent
+   * refuses to retire must not make closing a panel fail, and the row stays
+   * queued for the next drain. Promoted conversations were never queued — the
+   * chat panel owns them (§1.4).
+   */
+  private async drainQuickfireCleanup(
+    filter: { closeId?: string },
+    clients?: PanelOperationClients
+  ): Promise<void> {
+    const quickfire = clients?.quickfire ?? this.quickfire;
+    if (!quickfire) return;
+    try {
+      await quickfire.drainCleanup(filter);
+    } catch (error) {
+      log.warn(
+        `Failed to drain quickfire cleanup for close ${filter.closeId ?? "(all)"}: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+    }
   }
 
   private async drainCloseCleanup(
@@ -716,6 +751,7 @@ export class PanelManager {
     ownerUserId: string
   ): Promise<{ archivedRootCount: number; closedCount: number }> {
     await this.drainCloseCleanup({ ownerUserId }, true);
+    await this.drainQuickfireCleanup({});
     let archivedRootCount = 0;
     let closedCount = 0;
     let cursor: string | undefined;

@@ -4294,6 +4294,48 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:quickfireSessionRetarget",
+      "rpcPlane": "workspace-do",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "source": "vibestudio/internal",
+      "method": "quickfireSessionRetarget",
+      "resourceDerivation": {
+        "kind": "direct-target",
+        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+      },
+      "authorityPrincipals": [
+        "host"
+      ],
+      "sensitivity": "write",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "capability": "workspace.runtime-state.manage",
+      "authenticatedFacts": [
+        "session",
+        "acting-user-relay",
+        "runtime-entity",
+        "exact-code-artifact",
+        "owner-chain",
+        "agent-binding",
+        "audience-bound-attestation"
+      ],
+      "currentOutcomes": {
+        "allowed": "schema-declared direct-RPC requirement satisfied",
+        "denied": "missing attested facts or requirement failure is EACCES"
+      },
+      "predicates": [
+        "live-owner-service-relationship",
+        "exact-resource-scope",
+        "next-dispatch-revocation"
+      ],
+      "r3aRequirement": "catalog-schema",
+      "r3b": {
+        "review": "schema-authority",
+        "change": "Records that a live quickfire slot mapping now names a different context, after the host re-minted that conversation's authority for the new context. It moves no conversation and creates no mapping; the internal write policy is the same as quickfireSessionPromote."
+      },
+      "parityAssertion": "generated-census:direct-authority"
+    },
+    {
       "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:slotClose",
       "rpcPlane": "workspace-do",
       "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
@@ -18359,6 +18401,98 @@
         "user"
       ],
       "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "schema-owned-authority-preparation"
+      ],
+      "currentOutcomes": {
+        "allowed": "prepared authority leaf selected and satisfied",
+        "denied": "missing prepared authority leaf fails before handler entry"
+      },
+      "predicates": [
+        "live-session",
+        "exact-prepared-resource",
+        "registered-preparer"
+      ],
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"context.boundary\"}]}",
+      "r3b": {
+        "review": "schema-owned-prepared-leaf",
+        "change": null
+      },
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:panelCdp.evaluate",
+      "rpcPlane": "host-service",
+      "owner": "panelCdp",
+      "method": "evaluate",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "cdp.native-effect",
+      "reviewRationale": "Runs one bounded expression in the exact native view selected by receiver-bound target authority",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:panelCdp.evaluate"
+      },
+      "authorityPrincipals": [
+        "code",
+        "host",
+        "session",
+        "user"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"service:panelCdp.evaluate\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"service:panelCdp.evaluate\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"service:panelCdp.evaluate\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"service:panelCdp.evaluate\"}]}",
+      "r3b": {
+        "review": "receiver-bound-bounded-page-evaluation",
+        "change": "Adds a one-RPC Runtime.evaluate against the exact native view already selected by receiver-bound panel target authority, so the common inspect-and-poke case no longer needs a raw CDP WebSocket endpoint. The expression runs under a shared wrapper with an 8s RPC bound and a serialized result; the cross-context leaf and the external ingestion record are identical to panelCdp.screenshot."
+      },
+      "capability": "service:panelCdp.evaluate",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:panelCdp.evaluate#capability:context.boundary",
+      "rpcPlane": "host-service",
+      "owner": "panelCdp",
+      "method": "evaluate",
+      "tier": "gated|critical",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "cdp.native-effect",
+      "reviewRationale": "Runs one bounded expression in the exact native view selected by receiver-bound target authority",
+      "capability": "context.boundary",
+      "resourceDerivation": {
+        "kind": "prepared",
+        "resolver": "panelCdp.evaluate.contextBoundary"
+      },
+      "authorityPrincipals": [
+        "code",
+        "host",
+        "session",
+        "user"
+      ],
+      "sensitivity": "write",
       "authenticatedFacts": [
         "session",
         "acting-user",

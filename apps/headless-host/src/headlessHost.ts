@@ -348,6 +348,12 @@ export class HeadlessHost implements PanelHost {
           slotId,
           (args[0] ?? {}) as Parameters<PageHost["captureScreenshot"]>[1]
         );
+      case "evaluate":
+        return this.pages!.evaluate(
+          slotId,
+          String(args[0] ?? ""),
+          (args[1] ?? {}) as Parameters<PageHost["evaluate"]>[2]
+        );
       case "rebuildPanel": {
         const lease = this.tracker.heldLease(panelSlotId);
         if (!lease) throw new Error(`no lease held for panel ${slotId}`);

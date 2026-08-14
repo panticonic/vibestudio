@@ -948,6 +948,8 @@ async function main() {
         effectiveVersion: identity.ev,
       }),
   });
+  /** Blessed `workers/quickfire-agent` identity from the first-run snapshot (§6.5). */
+  let quickfireHarnessIdentity: { repoPath: string; effectiveVersion: string } | null = null;
   // Exact root bootstrap may run while services are starting, before the
   // dispatcher can be marked fully initialized. Install the one compositional
   // resolver as soon as all of its
@@ -2598,6 +2600,12 @@ async function main() {
         if (!conduitBlessingStore.isSeededFor(snapshotState)) {
           conduitBlessingStore.seedProductSnapshot(snapshotState, identities);
         }
+        // The quickfire reviewed closure names its harness by exact version, so
+        // the closure digest (and therefore the mission subject) moves whenever
+        // this build does. Capture the blessed identity here rather than
+        // re-resolving it later against a snapshot that may have advanced.
+        quickfireHarnessIdentity =
+          identities.find((identity) => identity.repoPath === "workers/quickfire-agent") ?? null;
       }
       return buildSystem;
     },
@@ -3680,6 +3688,258 @@ async function main() {
           throw new Error("workspace-state service not initialized");
         }
         return workspaceStateDefinition;
+      },
+    });
+  }
+
+  // ── quickfire service (panel-slot-scoped agent micro-sessions) ──
+  // Creates the conversation's backing exactly the way the chat path does:
+  // mint a channel id, create the agent vessel with `agentChannelId` (so the
+  // host derives every coordinate), then subscribe it. Archival is only ever
+  // executed here, never inside WorkspaceDO.
+  {
+    const { createQuickfireService } = await import("./services/quickfireService.js");
+    const QUICKFIRE_HARNESS = {
+      source: "workers/quickfire-agent",
+      className: "QuickfireAgentWorker",
+    } as const;
+    let quickfireDefinition:
+      | import("@vibestudio/shared/serviceDefinition").ServiceDefinition
+      | null = null;
+    container.registerManaged({
+      name: "quickfire",
+      dependencies: ["workerdWorkspace", "workerdManager", "doDispatch", "workspace-state"],
+      async start(resolve) {
+        const doDispatch = assertPresent(
+          resolve<import("./doDispatch.js").DODispatch>("doDispatch")
+        );
+        const hostCtx = { caller: createHostCaller("server") };
+        const vesselRef = (key: string) => ({
+          source: QUICKFIRE_HARNESS.source,
+          className: QUICKFIRE_HARNESS.className,
+          objectKey: key,
+        });
+        const vesselKeyOf = (entityId: string): string | null => {
+          const prefix = `do:${QUICKFIRE_HARNESS.source}:${QUICKFIRE_HARNESS.className}:`;
+          return entityId.startsWith(prefix) ? entityId.slice(prefix.length) : null;
+        };
+        // ── quickfire reviewed closure (§6.1) ──
+        // There is no product path that seeds reviewed closures: the
+        // `reviewedClosure.activate` RPC deliberately requires an admitted
+        // userland worker identity and rejects `vibestudio/internal`. A
+        // product-shipped closure therefore activates in-process here, against
+        // the registry directly, the way the other boot-time authority
+        // decisions (`admitSeedTrustedUnits`, `acceptLaunchGateUnits`) do.
+        const {
+          buildQuickfireClosureBody,
+          createQuickfireAuthorityBinder,
+          quickfireClosureSubject,
+          QUICKFIRE_CLOSURE_ISSUER,
+        } = await import("./services/quickfireAuthority.js");
+        const { reviewedExecutionClosureDigest } =
+          await import("@vibestudio/shared/authority/reviewedExecutionClosure");
+        let quickfireClosure: {
+          subject: import("@vibestudio/rpc").AuthorityGrantSubject;
+          digest: string;
+        } | null = null;
+        if (quickfireHarnessIdentity) {
+          const body = buildQuickfireClosureBody({
+            unit: quickfireHarnessIdentity.repoPath,
+            ev: quickfireHarnessIdentity.effectiveVersion,
+          });
+          const digest = reviewedExecutionClosureDigest(body);
+          try {
+            reviewedClosureRegistry.activate({
+              body,
+              closureDigest: digest,
+              publisher: QUICKFIRE_CLOSURE_ISSUER,
+              decidedBy: "user:workspace",
+            });
+            quickfireClosure = { subject: quickfireClosureSubject(digest), digest };
+          } catch (error) {
+            // A closure that will not activate means quickfire holds no
+            // pre-granted authority. That degrades the debug tools to ordinary
+            // prompting; it must never stop the workspace from booting.
+            console.warn("[Quickfire] reviewed closure activation failed", {
+              reason: error instanceof Error ? error.message : String(error),
+            });
+          }
+        }
+        const quickfireBinder = createQuickfireAuthorityBinder({
+          grantStore: capabilityGrantStore,
+          closure: quickfireClosure,
+          bindClosureSession: (input) =>
+            void reviewedClosureRegistry.bindSession({
+              ...input,
+              binderId: QUICKFIRE_CLOSURE_ISSUER,
+            }),
+          finishClosureSession: (sessionId) =>
+            reviewedClosureRegistry.finishSession(sessionId, QUICKFIRE_CLOSURE_ISSUER),
+          resolveSlotSource: async (slotId) => {
+            const detail = (await dispatcher.dispatch(
+              hostCtx,
+              "workspace-state",
+              "panelTree.detail",
+              [slotId]
+            )) as { currentHistory: { source: string } } | null;
+            return detail?.currentHistory.source ?? null;
+          },
+          confirmSevereBinding: async ({ slotId, source, targetContextId }) => {
+            // A privileged panel is not bound silently (§6.3). This is the one
+            // canonical approval card — the same surface every other gated
+            // request uses — and it is asked once per binding, not per tool
+            // call: the resulting grants persist for the conversation.
+            const decision = await approvalQueue.request({
+              kind: "capability",
+              capability: "panel.inspect",
+              callerId: "quickfire",
+              callerKind: "system",
+              repoPath: QUICKFIRE_HARNESS.source,
+              effectiveVersion: quickfireHarnessIdentity?.effectiveVersion ?? "",
+              severity: "severe",
+              dedupKey: `quickfire-bind:${slotId}`,
+              title: "Let Quickfire debug a privileged panel",
+              description:
+                `Quickfire will be able to screenshot ${source ?? slotId}, read its console, ` +
+                "and run expressions in it for the rest of this conversation. " +
+                "This panel can change workspace settings and permissions.",
+              resource: { type: "panel", label: "Panel", value: source ?? slotId },
+              grantResourceKey: targetContextId,
+              operation: {
+                kind: "panel",
+                verb: "Debug privileged panel",
+                object: { type: "panel", label: "Panel", value: source ?? slotId },
+              },
+              allowedDecisions: ["once", "deny"],
+            });
+            return decision === "once";
+          },
+          log: (message, detail) => console.warn(`[Quickfire] ${message}`, detail ?? {}),
+        });
+        quickfireDefinition = createQuickfireService({
+          doDispatch,
+          workspaceId,
+          harness: QUICKFIRE_HARNESS,
+          authority: quickfireBinder,
+          retargetSession: async ({ slotId, contextId }) => {
+            const { INTERNAL_DO_SOURCE } = await import("./internalDOs/internalDoLoader.js");
+            const { WORKSPACE_DO_CLASS } = await import("./services/workspaceStateService.js");
+            await doDispatch.dispatch(
+              {
+                source: INTERNAL_DO_SOURCE,
+                className: WORKSPACE_DO_CLASS,
+                objectKey: workspaceId,
+              },
+              "quickfireSessionRetarget",
+              slotId,
+              contextId
+            );
+          },
+          log: (message, detail) => console.warn(`[Quickfire] ${message}`, detail ?? {}),
+          resolveSlotContext: async (slotId) => {
+            const detail = (await dispatcher.dispatch(
+              hostCtx,
+              "workspace-state",
+              "panelTree.detail",
+              [slotId]
+            )) as { currentHistory: { context_id: string } } | null;
+            return detail?.currentHistory.context_id ?? null;
+          },
+          createAgent: async ({ slotId, channelId, contextId, harness }) => {
+            // A retired key is never released, so every conversation gets a
+            // fresh one — clearing and re-asking on the same slot must not try
+            // to resurrect a dead vessel.
+            const key = `quickfire-${slotId.replace(/[^A-Za-z0-9_-]/g, "-")}-${crypto
+              .randomUUID()
+              .slice(0, 8)}`;
+            const handle = (await dispatcher.dispatch(hostCtx, "runtime", "createEntity", [
+              {
+                kind: "do",
+                execution: { surface: "code", source: harness.source },
+                className: harness.className,
+                key,
+                contextId,
+                agentChannelId: channelId,
+                // The vessel needs to know which slot it is attached to so it
+                // can re-describe that panel on every model call (§5.1).
+                stateArgs: { quickfire: { slotId } },
+              },
+            ])) as { id: string; contextId: string };
+            try {
+              await doDispatch.dispatch(vesselRef(key), "subscribeChannel", {
+                channelId,
+                contextId: handle.contextId ?? contextId,
+                replay: true,
+              });
+            } catch (error) {
+              await dispatcher
+                .dispatch(hostCtx, "runtime", "retireEntity", [{ id: handle.id }])
+                .catch(() => undefined);
+              throw error;
+            }
+            return { entityId: handle.id, contextId: handle.contextId ?? contextId };
+          },
+          releaseAgent: async ({ agentEntityId, channelId }) => {
+            if (!agentEntityId) return;
+            const key = vesselKeyOf(agentEntityId);
+            if (key) {
+              // Stop a turn in flight before unsubscribing; both are advisory,
+              // the retire below is what actually ends the conversation.
+              await doDispatch
+                .dispatch(vesselRef(key), "interruptChannel", channelId, false)
+                .catch(() => undefined);
+              await doDispatch
+                .dispatch(vesselRef(key), "unsubscribeChannel", channelId)
+                .catch(() => undefined);
+            }
+            await dispatcher.dispatch(hostCtx, "runtime", "retireEntity", [
+              { id: agentEntityId, removeContext: false },
+            ]);
+          },
+          channelActivity: async (channelId) => {
+            const { resolveWorkspaceService } = await import("./workspaceServices.js");
+            const channel = resolveWorkspaceService(
+              workspaceDecls,
+              "vibestudio.channel.v1",
+              channelId
+            );
+            if (channel.kind !== "durable-object") {
+              throw new Error(`Channel ${channelId} is not a durable object`);
+            }
+            const envelope = (await doDispatch.dispatch(
+              {
+                source: channel.source,
+                className: channel.className,
+                objectKey: channel.objectKey,
+              },
+              "getReplayAfter",
+              { after: 0, limit: 1 }
+            )) as {
+              logEvents?: Array<{ ts?: number }>;
+              ready?: { snapshotLastSeq?: number };
+            };
+            const messageCount = envelope.ready?.snapshotLastSeq ?? null;
+            if (messageCount === null || messageCount === 0) {
+              return { messageCount: messageCount ?? null, lastActivityAt: null };
+            }
+            const tail = (await doDispatch.dispatch(
+              {
+                source: channel.source,
+                className: channel.className,
+                objectKey: channel.objectKey,
+              },
+              "getReplayBefore",
+              messageCount + 1,
+              1
+            )) as { logEvents?: Array<{ ts?: number }> } | Array<{ ts?: number }>;
+            const events = Array.isArray(tail) ? tail : (tail.logEvents ?? []);
+            return { messageCount, lastActivityAt: events.at(-1)?.ts ?? null };
+          },
+        });
+      },
+      getServiceDefinition() {
+        if (!quickfireDefinition) throw new Error("quickfire service not initialized");
+        return quickfireDefinition;
       },
     });
   }

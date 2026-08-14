@@ -23,6 +23,7 @@ import type { PanelManager } from "@vibestudio/shell-core/panelManager";
 import type { PanelOperationClients } from "@vibestudio/shell-core/panelManager";
 import {
   createRuntimeClient,
+  createQuickfireCleanupClient,
   createWorkspaceStateClient,
 } from "@vibestudio/shell-core/createShellCore";
 import type {
@@ -245,6 +246,7 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
     return {
       workspaceState: createWorkspaceStateClient(call),
       runtime: createRuntimeClient(call),
+      quickfire: createQuickfireCleanupClient(call),
     };
   }
 

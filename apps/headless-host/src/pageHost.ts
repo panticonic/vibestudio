@@ -16,6 +16,15 @@ import {
   parsePanelPageObservation,
   type PanelPageObservation,
 } from "@vibestudio/shared/panel/observation";
+import {
+  normalizePanelEvaluateResult,
+  panelEvaluateExpression,
+  panelEvaluateTimedOut,
+  panelEvaluateTimeoutMs,
+  panelEvaluateValueLimit,
+  type PanelEvaluateOptions,
+  type PanelEvaluateResult,
+} from "@vibestudio/shared/panel/evaluate";
 import { CdpConnection } from "./browser/cdpConnection.js";
 import {
   ConsoleHistoryStore,
@@ -479,6 +488,54 @@ export class PageHost {
       );
     }
     return parsePanelPageObservation(result.result?.value);
+  }
+
+  /**
+   * Run one caller expression in the page and return the shared serialized
+   * result (`packages/shared/src/panel/evaluate.ts`). Symmetric with the
+   * Electron provider: a thrown expression is a result, not an RPC error, and
+   * only a page that never answers reaches the bound.
+   */
+  async evaluate(
+    slotId: string,
+    expression: string,
+    options: PanelEvaluateOptions = {}
+  ): Promise<PanelEvaluateResult> {
+    const page = this.requirePage(slotId);
+    page.lastUsedAt = Date.now();
+    const timeoutMs = panelEvaluateTimeoutMs(options);
+    const timedOut = Symbol("panel-evaluate-timed-out");
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const raced = await Promise.race([
+      this.cdp.send(
+        "Runtime.evaluate",
+        {
+          expression: panelEvaluateExpression(expression, panelEvaluateValueLimit(options)),
+          returnByValue: true,
+          awaitPromise: true,
+        },
+        page.mgmtSessionId
+      ),
+      new Promise<typeof timedOut>((resolve) => {
+        timer = setTimeout(() => resolve(timedOut), timeoutMs);
+      }),
+    ]).finally(() => {
+      if (timer) clearTimeout(timer);
+    });
+    if (raced === timedOut) return panelEvaluateTimedOut(timeoutMs);
+    const result = raced as { result?: { value?: unknown }; exceptionDetails?: { text?: string } };
+    if (result.exceptionDetails) {
+      // The wrapper catches page-level throws itself, so an exception here means
+      // the wrapper could not run at all (detached document, CSP, syntax).
+      return {
+        ok: false,
+        type: "error",
+        value: null,
+        error: result.exceptionDetails.text ?? "Runtime.evaluate threw",
+        truncated: false,
+      };
+    }
+    return normalizePanelEvaluateResult(result.result?.value);
   }
 
   async captureScreenshot(

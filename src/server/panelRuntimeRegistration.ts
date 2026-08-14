@@ -21,6 +21,10 @@ import type { ApprovalQueue } from "./services/approvalQueue.js";
 import { assertPresent } from "../lintHelpers";
 import { isBrowserPanelSource } from "@vibestudio/shared/panelChrome";
 import { isPanelEntityId } from "@vibestudio/shared/panel/ids";
+import {
+  normalizePanelEvaluateResult,
+  panelEvaluateTimeoutMs,
+} from "@vibestudio/shared/panel/evaluate";
 import type { SlotRow } from "@vibestudio/shell-core/workspaceStateClient";
 import type { AppCapability } from "@vibestudio/shared/unitManifest";
 import type { ContextIngestionRecorder } from "./services/contextIntegrityStore.js";
@@ -461,6 +465,17 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
               import("./services/panelCdpService.js").PanelScreenshotResult
             >;
           },
+          evaluate: async (panelId, _requesterEntityId, expression, options) => {
+            await ensureCdpTargetReady(panelId);
+            // The bound travels with the command so both providers enforce the
+            // same one; it is an RPC bound on a host command slot, never an
+            // expiry on the authority that permitted the call.
+            const result = await bridge.sendHostCommand(panelId, "evaluate", [
+              expression,
+              { ...(options ?? {}), timeoutMs: panelEvaluateTimeoutMs(options) },
+            ]);
+            return normalizePanelEvaluateResult(result);
+          },
           hostProvider: hostProviderChannel,
           logAccess: (event) => {
             const message = event.denied ? "Panel CDP access denied" : "Panel CDP access";
@@ -552,6 +567,54 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
         return panelCdpDefinition;
       },
     });
+  }
+
+  {
+    // Server-resident panel identity for server-side callers (the quickfire
+    // agent's per-turn snapshot). The chrome owner keeps composing locally from
+    // `panel.getChromeState`; this exists for the agent path only (§5.2).
+    const { createPanelContextService } = await import("./services/panelContextService.js");
+    const serverCtx: ServiceContext = { caller: createHostCaller("server") };
+    container.registerRpc(
+      createPanelContextService({
+        ...panelGateDeps,
+        resolveRequesterPanel: resolveRequesterPanelMetadataForServices,
+        hasAppCapability: deps.hasAppCapability,
+        getTarget: (panelId) => requestPanelMetadataForServices(panelId),
+        getPanelDetail: async (panelId) =>
+          (await deps.dispatcher.dispatch(serverCtx, "workspace-state", "panelTree.detail", [
+            panelId,
+          ])) as
+            | import("@vibestudio/shared/panel/workspaceStateSnapshot").WorkspacePanelDetail
+            | null,
+        getSiblings: async (panelId, parentSlotId) => {
+          if (parentSlotId === null) return [];
+          const page = (await deps.dispatcher.dispatch(
+            serverCtx,
+            "workspace-state",
+            "panelTree.page",
+            [{ group: { kind: "children", parentSlotId }, limit: 50 }]
+          )) as { nodes: Array<{ slotId: string; title?: string | null }> };
+          return page.nodes
+            .filter((node) => node.slotId !== panelId)
+            .map((node) => ({ slotId: node.slotId, title: node.title ?? null }));
+        },
+        getLease: (panelId) => {
+          const observation = deps.panelRuntimeCoordinator?.observeSlotLifecycle(panelId);
+          const route = observation?.route;
+          const phase = observation?.attempt?.phase;
+          return {
+            state: phase === "ready" ? "ready" : route?.connectionId ? "loading" : "unavailable",
+            url: route?.view?.url ?? null,
+            surface: route?.platform ?? null,
+            hostConnectionId: route?.connectionId ?? null,
+            holderLabel: route?.holderLabel ?? null,
+            supportsCdp: route?.supportsCdp ?? false,
+            reachable: route?.reachable ?? false,
+          };
+        },
+      })
+    );
   }
 
   container.registerManaged({

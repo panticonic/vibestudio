@@ -33,6 +33,8 @@ export class WorkspaceDOTestable extends WorkspaceDO {
       `CREATE INDEX idx_slots_owner ON slots(owner_user_id) WHERE closed_at IS NULL`,
       `CREATE INDEX idx_panel_close_cleanup_page ON panel_close_cleanup(close_id, slot_id)`,
       `CREATE INDEX idx_panel_close_cleanup_owner_page ON panel_close_cleanup(owner_user_id, slot_id)`,
+      `CREATE INDEX idx_quickfire_sessions_channel ON quickfire_sessions(channel_id)`,
+      `CREATE INDEX idx_quickfire_close_cleanup_page ON quickfire_close_cleanup(close_id, channel_id)`,
       `CREATE INDEX idx_history_entity ON slot_history(entity_id)`,
       `CREATE INDEX idx_history_entry ON slot_history(entry_key)`,
       `CREATE INDEX idx_context_edges_owner ON context_edges(owner_context_id, kind)`,
@@ -112,6 +114,37 @@ export class WorkspaceDOTestable extends WorkspaceDO {
     sql.exec(
       `CREATE INDEX IF NOT EXISTS idx_panel_close_cleanup_owner_page
          ON panel_close_cleanup(owner_user_id, slot_id)`
+    );
+    // Keep in sync with WorkspaceDO.createTables() — this fixture hand-copies
+    // the durable schema so unit tests can run under sql.js.
+    sql.exec(`
+      CREATE TABLE IF NOT EXISTS quickfire_sessions (
+        slot_id TEXT PRIMARY KEY,
+        channel_id TEXT NOT NULL,
+        agent_entity_id TEXT,
+        context_id TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        cleared_at INTEGER,
+        promoted_at INTEGER
+      )
+    `);
+    sql.exec(
+      `CREATE INDEX IF NOT EXISTS idx_quickfire_sessions_channel
+         ON quickfire_sessions(channel_id)`
+    );
+    sql.exec(`
+      CREATE TABLE IF NOT EXISTS quickfire_close_cleanup (
+        channel_id TEXT PRIMARY KEY,
+        slot_id TEXT NOT NULL,
+        close_id TEXT NOT NULL,
+        agent_entity_id TEXT,
+        context_id TEXT NOT NULL,
+        queued_at INTEGER NOT NULL
+      )
+    `);
+    sql.exec(
+      `CREATE INDEX IF NOT EXISTS idx_quickfire_close_cleanup_page
+         ON quickfire_close_cleanup(close_id, channel_id)`
     );
     sql.exec(`
       CREATE TABLE IF NOT EXISTS slot_history (

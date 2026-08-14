@@ -7,6 +7,7 @@ export const PRODUCT_CONDUIT_UNITS = [
   "workers/agent-worker",
   "workers/explorer-agent",
   "workers/linked-agent",
+  "workers/quickfire-agent",
   "workers/silent-agent-worker",
   "workers/system-agent",
   "workers/system-test-runner",

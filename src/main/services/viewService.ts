@@ -158,13 +158,14 @@ export function createViewService(
     updateContentOverlay: (ctx, [options]) => {
       const vm = deps.getViewManager();
       assertViewHost(vm, ctx.caller.runtime.id, ctx.caller.runtime.kind, "updateContentOverlay");
-      vm.updateContentOverlay(options);
+      const { surface, ...rest } = options;
+      vm.updateContentOverlay(surface, rest);
       return;
     },
-    hideContentOverlay: (ctx) => {
+    hideContentOverlay: (ctx, [{ surface }]) => {
       const vm = deps.getViewManager();
       assertViewHost(vm, ctx.caller.runtime.id, ctx.caller.runtime.kind, "hideContentOverlay");
-      vm.hideContentOverlay();
+      vm.hideContentOverlay(surface);
       return;
     },
     browserNavigate: async (ctx, [browserId, url]) => {

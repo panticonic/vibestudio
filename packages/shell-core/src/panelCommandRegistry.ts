@@ -1,21 +1,69 @@
 import type { RpcEventContext } from "@vibestudio/rpc";
-import type { HostCommand } from "@vibestudio/shared/hostCommands";
+import type { HostCommand, HostCommandArg } from "@vibestudio/shared/hostCommands";
 
 export interface HostCommandContribution {
   panelId: string;
   commands: HostCommand[];
 }
 
+const ARG_TYPES = new Set(["string", "enum", "number", "url"]);
+
+function isArgOption(value: unknown): value is { value: string; label: string } {
+  const option = value as Partial<{ value: string; label: string }> | null;
+  return (
+    !!option &&
+    typeof option === "object" &&
+    typeof option.value === "string" &&
+    typeof option.label === "string"
+  );
+}
+
+/**
+ * Contributions arrive as serialized event payloads, so every field is
+ * untrusted input rather than a typed call. A malformed argument invalidates
+ * the whole contribution: a half-accepted command would prompt for something
+ * the contributing panel cannot answer.
+ */
+function isHostCommandArg(value: unknown): value is HostCommandArg {
+  const arg = value as Partial<HostCommandArg> | null;
+  if (!arg || typeof arg !== "object") return false;
+  if (typeof arg.name !== "string" || arg.name.length === 0) return false;
+  if (typeof arg.label !== "string") return false;
+  if (typeof arg.type !== "string" || !ARG_TYPES.has(arg.type)) return false;
+  if (typeof arg.required !== "boolean") return false;
+  if (arg.options !== undefined && (!Array.isArray(arg.options) || !arg.options.every(isArgOption))) {
+    return false;
+  }
+  // A pattern that cannot compile would silently reject every value the user
+  // types, so reject it here where the contributor can still be told why.
+  if (arg.pattern !== undefined) {
+    if (typeof arg.pattern !== "string") return false;
+    try {
+      new RegExp(arg.pattern, "u");
+    } catch {
+      return false;
+    }
+  }
+  return true;
+}
+
 function isHostCommand(value: unknown): value is HostCommand {
   const command = value as Partial<HostCommand> | null;
-  return (
-    !!command &&
-    typeof command === "object" &&
-    typeof command.id === "string" &&
-    typeof command.label === "string" &&
-    (command.description === undefined || typeof command.description === "string") &&
-    (command.group === undefined || typeof command.group === "string")
-  );
+  if (!command || typeof command !== "object") return false;
+  if (typeof command.id !== "string" || typeof command.label !== "string") return false;
+  if (command.description !== undefined && typeof command.description !== "string") return false;
+  if (command.group !== undefined && typeof command.group !== "string") return false;
+  if (command.requiresFocus !== undefined && typeof command.requiresFocus !== "boolean") {
+    return false;
+  }
+  if (command.danger !== undefined && typeof command.danger !== "boolean") return false;
+  if (command.args !== undefined) {
+    if (!Array.isArray(command.args) || !command.args.every(isHostCommandArg)) return false;
+    // Duplicate names would make the collected argument record lossy.
+    const names = new Set(command.args.map((arg) => arg.name));
+    if (names.size !== command.args.length) return false;
+  }
+  return true;
 }
 
 /**

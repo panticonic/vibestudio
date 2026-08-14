@@ -9,6 +9,15 @@ import {
   parsePanelPageObservation,
   type PanelBootProbeResult,
 } from "@vibestudio/shared/panel/observation";
+import {
+  normalizePanelEvaluateResult,
+  panelEvaluateExpression,
+  panelEvaluateTimedOut,
+  panelEvaluateTimeoutMs,
+  panelEvaluateValueLimit,
+  type PanelEvaluateOptions,
+  type PanelEvaluateResult,
+} from "@vibestudio/shared/panel/evaluate";
 import type { ViewManager } from "./viewManager.js";
 import type {
   RuntimeDiagnosticRecord,
@@ -285,6 +294,36 @@ export class CdpHostProvider {
   }
 
   /**
+   * Run one caller expression in the panel's document and return the shared
+   * serialized result (`packages/shared/src/panel/evaluate.ts`). The wrapper
+   * never rejects for page-level failures — a thrown expression is a result,
+   * not an RPC error — so only a stranded renderer reaches the bound.
+   */
+  async evaluate(
+    targetId: string,
+    expression: string,
+    options?: PanelEvaluateOptions
+  ): Promise<PanelEvaluateResult> {
+    const contents = this.requireTargetContents(targetId);
+    const timeoutMs = panelEvaluateTimeoutMs(options);
+    const timedOut = Symbol("panel-evaluate-timed-out");
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const result = await Promise.race([
+      contents.executeJavaScript(
+        panelEvaluateExpression(expression, panelEvaluateValueLimit(options)),
+        true
+      ),
+      new Promise<typeof timedOut>((resolve) => {
+        timer = setTimeout(() => resolve(timedOut), timeoutMs);
+      }),
+    ]).finally(() => {
+      if (timer) clearTimeout(timer);
+    });
+    if (result === timedOut) return panelEvaluateTimedOut(timeoutMs);
+    return normalizePanelEvaluateResult(result);
+  }
+
+  /**
    * Read the generated bootstrap state. A registered CDP target is not a
    * readiness signal: about:blank preparation views and failed bundles both
    * have a valid WebContents.
@@ -523,6 +562,9 @@ export class CdpHostProvider {
     }
     if (action === "captureScreenshot") {
       return this.captureScreenshot(targetId, normalizeScreenshotOptions(args[0]));
+    }
+    if (action === "evaluate") {
+      return this.evaluate(targetId, String(args[0] ?? ""), normalizeEvaluateOptions(args[1]));
     }
     throw new Error(`Unknown host command: ${action}`);
   }
@@ -925,6 +967,15 @@ function normalizeScreenshotOptions(value: unknown): { format?: string; quality?
   return {
     ...(record.format === "jpeg" || record.format === "png" ? { format: record.format } : {}),
     ...(typeof record.quality === "number" ? { quality: record.quality } : {}),
+  };
+}
+
+function normalizeEvaluateOptions(value: unknown): PanelEvaluateOptions {
+  if (!value || typeof value !== "object") return {};
+  const record = value as { timeoutMs?: unknown; valueLimit?: unknown };
+  return {
+    ...(typeof record.timeoutMs === "number" ? { timeoutMs: record.timeoutMs } : {}),
+    ...(typeof record.valueLimit === "number" ? { valueLimit: record.valueLimit } : {}),
   };
 }
 

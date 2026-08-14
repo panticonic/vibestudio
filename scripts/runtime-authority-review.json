@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "censusDigest": "sha256:072a0872581fee988c6dbef85f9d821798aac6b023ea92e7ccd5844221bb8d49",
+  "censusDigest": "sha256:212b816fc978c3af3afd4f2d57f3003372a7ef61990552658a82d7e3d62f20d3",
   "decisions": {
     "host:phoneNativeEndpoint.desktops": {
       "review": "exact-base-phone-provider-desktop-discovery",
@@ -441,6 +441,14 @@
     "host:developmentNative.applyTemplateExchange": {
       "review": "reviewed-exact-template-exchange-effect",
       "change": "Adds the gated native application of one exact prior exchange plan. Export writes only the declared projection to the selected checkout; import enters through the ordinary atomic semantic snapshot ingress; terminal receipts make retries idempotent without a second storage path."
+    },
+    "host:panelCdp.evaluate": {
+      "review": "receiver-bound-bounded-page-evaluation",
+      "change": "Adds a one-RPC Runtime.evaluate against the exact native view already selected by receiver-bound panel target authority, so the common inspect-and-poke case no longer needs a raw CDP WebSocket endpoint. The expression runs under a shared wrapper with an 8s RPC bound and a serialized result; the cross-context leaf and the external ingestion record are identical to panelCdp.screenshot."
+    },
+    "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:quickfireSessionRetarget": {
+      "review": "schema-authority",
+      "change": "Records that a live quickfire slot mapping now names a different context, after the host re-minted that conversation's authority for the new context. It moves no conversation and creates no mapping; the internal write policy is the same as quickfireSessionPromote."
     }
   }
 }

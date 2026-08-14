@@ -46,7 +46,9 @@ import { shellBrowserPrivacyMethods } from "./shellBrowserPrivacy.js";
 import { notificationMethods } from "./notification.js";
 import { panelMethods } from "./panel.js";
 import { panelLogMethods } from "./panelLog.js";
+import { panelContextMethods } from "./panelContext.js";
 import { panelRuntimeMethods } from "./panelRuntime.js";
+import { quickfireMethods } from "./quickfire.js";
 import { pushMethods, PushRegisterRequestSchema } from "./push.js";
 import { permissionsMethods } from "./permissions.js";
 import { phoneProvisioningMethods } from "./phoneProvisioning.js";
@@ -159,7 +161,9 @@ const serviceTables: ServiceTable[] = [
   { service: "notification", file: "notification.ts", methods: notificationMethods },
   { service: "panel", file: "panel.ts", methods: panelMethods },
   { service: "panelLog", file: "panelLog.ts", methods: panelLogMethods },
+  { service: "panelContext", file: "panelContext.ts", methods: panelContextMethods },
   { service: "panelRuntime", file: "panelRuntime.ts", methods: panelRuntimeMethods },
+  { service: "quickfire", file: "quickfire.ts", methods: quickfireMethods },
   { service: "permissions", file: "permissions.ts", methods: permissionsMethods },
   {
     service: "phoneProvisioning",

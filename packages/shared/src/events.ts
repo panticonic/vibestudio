@@ -42,6 +42,7 @@ export type EventName =
   | "open-workspace-switcher"
   | "open-connection-settings"
   | "open-command-palette"
+  | "open-quickfire"
   | "focus-approval-card"
   | "toggle-address-bar"
   | "focus-address-bar"
@@ -260,6 +261,8 @@ export interface EventPayloads {
   "open-workspace-switcher": undefined;
   "open-connection-settings": undefined;
   "open-command-palette": undefined;
+  /** Open the overlay straight into quickfire (`/`) mode over the focused panel. */
+  "open-quickfire": undefined;
   "focus-approval-card": undefined;
   "toggle-address-bar": undefined;
   "focus-address-bar": undefined;
@@ -468,6 +471,7 @@ export const VALID_EVENT_NAMES: EventName[] = [
   "open-workspace-switcher",
   "open-connection-settings",
   "open-command-palette",
+  "open-quickfire",
   "focus-approval-card",
   "toggle-address-bar",
   "focus-address-bar",

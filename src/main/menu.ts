@@ -201,7 +201,10 @@ export function buildHamburgerMenuTemplate(
   const reloadPanelAccelerator = isMac ? "Cmd+R" : "Ctrl+Shift+R";
   const forceReloadAccelerator = isMac ? "Cmd+Shift+R" : "Ctrl+Alt+R";
   const addressBarAccelerator = isMac ? "Cmd+L" : "Ctrl+Shift+L";
-  const commandPaletteAccelerator = isMac ? "Cmd+K" : "Ctrl+Shift+K";
+  // One key on every platform (spec §2.3). `Ctrl+Shift+K` off-mac was an
+  // accident of history; the quickfire accelerator now uses that slot.
+  const commandPaletteAccelerator = "CmdOrCtrl+K";
+  const quickfireAccelerator = "CmdOrCtrl+Shift+K";
   const redoAccelerator = isMac ? "Cmd+Shift+Z" : "Ctrl+Shift+Z";
 
   // Panel: everything acting on the panel in the focused pane.
@@ -335,6 +338,11 @@ export function buildHamburgerMenuTemplate(
       click: () => emitMenuEvent("open-command-palette"),
     },
     {
+      label: "Ask About This Panel…",
+      accelerator: quickfireAccelerator,
+      click: () => emitMenuEvent("open-quickfire"),
+    },
+    {
       label: "Keyboard Shortcuts",
       accelerator: "CmdOrCtrl+/",
       click: () => emitMenuEvent("navigate-about", { page: ABOUT_PAGES.KEYBOARD_SHORTCUTS }),
@@ -392,7 +400,10 @@ export function setupMenu(
   const forceReloadAccelerator = isMac ? "Cmd+Shift+R" : "Ctrl+Alt+R";
   const addressBarAccelerator = isMac ? "Cmd+L" : "Ctrl+Shift+L";
   const closePanelAccelerator = PANEL_KEYBOARD_ACCELERATORS.closePanel;
-  const commandPaletteAccelerator = isMac ? "Cmd+K" : "Ctrl+Shift+K";
+  // One key on every platform (spec §2.3). `Ctrl+Shift+K` off-mac was an
+  // accident of history; the quickfire accelerator now uses that slot.
+  const commandPaletteAccelerator = "CmdOrCtrl+K";
+  const quickfireAccelerator = "CmdOrCtrl+Shift+K";
   const redoAccelerator = isMac ? "Cmd+Shift+Z" : "Ctrl+Shift+Z";
   const viewSubmenu: MenuItemConstructorOptions[] = [];
 
@@ -448,6 +459,11 @@ export function setupMenu(
           label: "Command Palette...",
           accelerator: commandPaletteAccelerator,
           click: () => emitMenuEvent("open-command-palette"),
+        },
+        {
+          label: "Ask About This Panel...",
+          accelerator: quickfireAccelerator,
+          click: () => emitMenuEvent("open-quickfire"),
         },
         {
           label: "Focus Pending Approval",

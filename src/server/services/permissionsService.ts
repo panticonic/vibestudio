@@ -17,6 +17,7 @@ import {
 import { resourcePhrase } from "@vibestudio/shared/authority/authorityRows";
 import { parseCodePrincipal, type CodeIdentity } from "@vibestudio/shared/authority/codePrincipal";
 import type { CapabilityGrantStore } from "./capabilityGrantStore.js";
+import { QUICKFIRE_DECISION_SURFACE, QUICKFIRE_SUBJECT_PREFIX } from "./quickfireAuthority.js";
 import {
   credentialUseGrantId,
   type CredentialUseGrantStoreLike,
@@ -415,6 +416,13 @@ function authorityGrantOrigin(
   lookup?: UnitAdmissionProvenanceLookup
 ): string | undefined {
   if (grant.effect === "deny") return "You chose not to allow this";
+  // Quickfire's grants are not answers to a prompt — for an ordinary panel
+  // nothing was ever asked. Naming the surface is the only honest origin: the
+  // person opened the overlay over a panel, and that gesture is what this row
+  // records. Revoking it here shuts the debug tools off immediately.
+  if (grant.decisionSurface === QUICKFIRE_DECISION_SURFACE) {
+    return "Quickfire, when you opened it over a panel";
+  }
   if (grant.provenance !== "install") return "You allowed this when it was needed";
   const provenance = code ? lookup?.(code.repoPath, code.effectiveVersion) : null;
   // The template's own name when the admission recorded one — `Added with News
@@ -446,6 +454,9 @@ function authorityGrantOrigin(
 
 function authorityGrantReason(grant: AuthorityGrant): string {
   if (grant.effect === "deny") return "Remembers a decision not to allow this action.";
+  if (grant.decisionSurface === QUICKFIRE_DECISION_SURFACE) {
+    return "Lets the Quickfire conversation attached to one panel screenshot it, read its console, and run expressions in it.";
+  }
   if (grant.provenance === "install") {
     return "Provides the access declared and reviewed for this exact installed code version.";
   }
@@ -492,6 +503,7 @@ function authoritySubjectLabel(subject: AuthorityGrantSubject): string {
   if (code) return code.repoPath;
   if (subject.startsWith("session:")) return "This session";
   if (subject.startsWith("task:")) return "This task";
+  if (subject.startsWith(`${QUICKFIRE_SUBJECT_PREFIX}@`)) return "Quickfire";
   if (subject.startsWith("mission:")) return "This agent mission";
   if (subject.startsWith("agent:")) return "This agent";
   if (subject.startsWith("user:")) return "Your account";
