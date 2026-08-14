@@ -16,8 +16,7 @@ import {
   unregisterDevInstance,
   type DevInstanceRecord,
 } from "./instanceRegistry.js";
-import { selectDevelopmentBaseCheckout } from "./developmentBaseConfig.js";
-import { prepareDevelopmentBaseCheckpoint } from "./developmentBaseCheckpoint.js";
+import { resolveDevelopmentBaseSelection } from "./developmentBaseSelection.js";
 import { developmentInstanceEnvironment } from "./developmentInstanceEnvironment.js";
 
 const require = createRequire(import.meta.url);
@@ -152,35 +151,6 @@ function extractInstance(argv: string[]): {
     productionBase,
     forwarded,
   };
-}
-
-async function inspectDevelopmentBase(
-  checkoutArgument: string,
-  repoRoot: string,
-  checkpointTarget: string
-) {
-  const checkout = fs.realpathSync(path.resolve(checkoutArgument));
-  const { readBaseTemplateRelease } = await import("@vibestudio/workspace/baseTemplateRelease");
-  const { GitClient } = await import("@vibestudio/git");
-  const { sha256Hex } = await import("@vibestudio/content-addressing");
-  const { inspectRootTemplateCheckout } = await import("../server/acquireRootTemplateSnapshot.js");
-  const url = readBaseTemplateRelease(repoRoot).baseTemplate.url;
-  const checkpoint = await prepareDevelopmentBaseCheckpoint({
-    checkout,
-    target: checkpointTarget,
-    gitClient: new GitClient(),
-  });
-  const inspected = await inspectRootTemplateCheckout({
-    checkout: checkpoint.checkout,
-    url,
-    git: new GitClient(),
-    sink: {
-      async put(bytes) {
-        return { digest: sha256Hex(bytes), size: bytes.byteLength };
-      },
-    },
-  });
-  return { ...checkpoint, ...inspected };
 }
 
 function hasFlag(argv: readonly string[], name: string): boolean {
@@ -339,13 +309,13 @@ async function main(): Promise<void> {
   });
   const checkpointTarget = path.join(root, "development-base-checkpoints", instance.generationId);
   try {
-    const baseCheckout = selectDevelopmentBaseCheckout(repoRoot, {
-      ...(parsed.baseCheckout ? { explicitCheckout: parsed.baseCheckout } : {}),
-      productionBase: parsed.productionBase,
-    });
-    const developmentBase = baseCheckout
-      ? await inspectDevelopmentBase(baseCheckout, repoRoot, checkpointTarget)
-      : undefined;
+    const developmentBase =
+      (await resolveDevelopmentBaseSelection({
+        repoRoot,
+        checkpointTarget,
+        ...(parsed.baseCheckout ? { explicitCheckout: parsed.baseCheckout } : {}),
+        productionBase: parsed.productionBase,
+      })) ?? undefined;
     const sourceCoupled = id === "source" && !disposable;
     const env = developmentInstanceEnvironment({
       parent: process.env,
