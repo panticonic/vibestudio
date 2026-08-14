@@ -20,6 +20,7 @@ import * as crypto from "crypto";
 import { fileURLToPath } from "url";
 import { createRequire } from "module";
 import { execFileSync } from "child_process";
+import { requireDevelopmentBaseCheckout } from "../../src/dev/developmentBaseConfig.js";
 import { getCentralDataPath } from "@vibestudio/env-paths";
 import {
   WORKSPACE_SOURCE_DIRS,
@@ -190,7 +191,11 @@ function getWorkspaceInfo(workspaceDir: string): ManagedWorkspaceInfo {
 }
 
 function getWorkspaceTemplateDir(projectRoot: string): string {
-  const templateDir = path.join(projectRoot, "workspace");
+  // The workspace template is Base, which stopped living in this repo at the
+  // external-Base cutover. Resolve the selected checkout exactly as
+  // test:userland and type-check:userland do; looking for `<repo>/workspace`
+  // left the whole e2e suite unable to start.
+  const templateDir = requireDevelopmentBaseCheckout(projectRoot);
   if (!fs.existsSync(path.join(templateDir, "meta/vibestudio.yml"))) {
     throw new Error(`Workspace template not found at ${templateDir}`);
   }
@@ -379,6 +384,10 @@ export async function launchTestApp(options: LaunchOptions = {}): Promise<TestAp
       ...process.env,
       NODE_ENV: "development",
       VIBESTUDIO_TEST_MODE: "1",
+      // A development Electron start requires an explicit app root — getAppRoot
+      // stopped inferring one. Without it the shell renders a startup error
+      // instead of ever exposing the test API.
+      VIBESTUDIO_APP_ROOT: projectRoot,
       // Disable GPU acceleration for CI environments
       ELECTRON_DISABLE_GPU: "1",
       ELECTRON_DISABLE_SANDBOX: "1",
