@@ -26,6 +26,10 @@ export default defineConfig(async () => {
   const baseInline = baseDeps.inline;
   return {
     ...vitestSharedConfig,
+    // Userland is external source, not a package-manager/test-tool workspace.
+    // Keep Vite's derived cache in the host checkout so running focused Base
+    // tests can never add undeclared node_modules artifacts to a root template.
+    cacheDir: path.resolve(__dirname, ".cache/vite/userland"),
     server: {
       ...vitestSharedConfig.server,
       fs: {
