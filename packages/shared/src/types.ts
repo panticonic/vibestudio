@@ -418,6 +418,7 @@ export interface WorkspaceEntry {
 /** Actions available in panel context menus */
 export type PanelContextMenuAction =
   | "reload"
+  | "command-agent"
   | "reload-panel"
   | "reload-view"
   | "force-reload"

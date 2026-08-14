@@ -13,13 +13,26 @@ import { z } from "zod";
 import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
 import type { ServiceAuthorityPolicy } from "@vibestudio/shared/serviceAuthority";
 
-/** Quickfire is driven by an explicit user gesture in the shell, or by the host drain. */
-export const QUICKFIRE_POLICY: ServiceAuthorityPolicy = { principals: ["user", "host"] };
+/**
+ * Quickfire is driven by an explicit user gesture in the shell, or by the host
+ * drain.
+ *
+ * `code` is in the list because the shell chrome that carries that gesture *is*
+ * userland code: `QuickfireOwner` runs inside `apps/shell`, so its authorizing
+ * origin is `code:apps/shell@<ev>`, never `user`. Omitting it rejected every
+ * real caller ("no authority branch admits the code origin") and left only the
+ * host drain able to reach the service. Admitting code is not a widening of who
+ * may bind a conversation: the lifecycle methods stay gated on
+ * `workspace.runtime-state.manage`, which a unit only holds if it declared and
+ * was granted it at install review — the same gate `panel` uses for the shell's
+ * other chrome-driven mutations.
+ */
+export const QUICKFIRE_POLICY: ServiceAuthorityPolicy = { principals: ["user", "host", "code"] };
 
 const QUICKFIRE_PRESENTATION = {
-  title: "Manage panel quickfire conversations",
-  action: "manage the quickfire conversation attached to a panel",
-  description: "Allows {requesterKind} to manage the quickfire conversation attached to a panel.",
+  title: "Manage panel command agent conversations",
+  action: "manage the command agent conversation attached to a panel",
+  description: "Allows {requesterKind} to manage the command agent conversation attached to a panel.",
   group: "panels",
   // Must match every other schema that binds `workspace.runtime-state.manage`;
   // the generated host-authority catalog rejects a capability whose category

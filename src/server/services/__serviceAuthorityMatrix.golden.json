@@ -7217,7 +7217,8 @@
     "service": {
       "principals": [
         "user",
-        "host"
+        "host",
+        "code"
       ]
     },
     "methods": {
@@ -7225,7 +7226,8 @@
         "authority": {
           "principals": [
             "user",
-            "host"
+            "host",
+            "code"
           ]
         },
         "access": {
@@ -7240,9 +7242,9 @@
         },
         "capability": "workspace.runtime-state.manage",
         "presentation": {
-          "title": "Manage panel quickfire conversations",
-          "action": "manage the quickfire conversation attached to a panel",
-          "description": "Allows {requesterKind} to manage the quickfire conversation attached to a panel.",
+          "title": "Manage panel command agent conversations",
+          "action": "manage the command agent conversation attached to a panel",
+          "description": "Allows {requesterKind} to manage the command agent conversation attached to a panel.",
           "group": "panels",
           "authorityCategory": {
             "domain": "automation",
@@ -7254,7 +7256,8 @@
         "authority": {
           "principals": [
             "user",
-            "host"
+            "host",
+            "code"
           ]
         },
         "access": {
@@ -7269,9 +7272,9 @@
         },
         "capability": "workspace.runtime-state.manage",
         "presentation": {
-          "title": "Manage panel quickfire conversations",
-          "action": "manage the quickfire conversation attached to a panel",
-          "description": "Allows {requesterKind} to manage the quickfire conversation attached to a panel.",
+          "title": "Manage panel command agent conversations",
+          "action": "manage the command agent conversation attached to a panel",
+          "description": "Allows {requesterKind} to manage the command agent conversation attached to a panel.",
           "group": "panels",
           "authorityCategory": {
             "domain": "automation",
@@ -7283,7 +7286,8 @@
         "authority": {
           "principals": [
             "user",
-            "host"
+            "host",
+            "code"
           ]
         },
         "access": {
@@ -7303,7 +7307,8 @@
         "authority": {
           "principals": [
             "user",
-            "host"
+            "host",
+            "code"
           ]
         },
         "access": {
@@ -7318,9 +7323,9 @@
         },
         "capability": "workspace.runtime-state.manage",
         "presentation": {
-          "title": "Manage panel quickfire conversations",
-          "action": "manage the quickfire conversation attached to a panel",
-          "description": "Allows {requesterKind} to manage the quickfire conversation attached to a panel.",
+          "title": "Manage panel command agent conversations",
+          "action": "manage the command agent conversation attached to a panel",
+          "description": "Allows {requesterKind} to manage the command agent conversation attached to a panel.",
           "group": "panels",
           "authorityCategory": {
             "domain": "automation",
@@ -7332,7 +7337,8 @@
         "authority": {
           "principals": [
             "user",
-            "host"
+            "host",
+            "code"
           ]
         },
         "access": {
@@ -7347,9 +7353,9 @@
         },
         "capability": "workspace.runtime-state.manage",
         "presentation": {
-          "title": "Manage panel quickfire conversations",
-          "action": "manage the quickfire conversation attached to a panel",
-          "description": "Allows {requesterKind} to manage the quickfire conversation attached to a panel.",
+          "title": "Manage panel command agent conversations",
+          "action": "manage the command agent conversation attached to a panel",
+          "description": "Allows {requesterKind} to manage the command agent conversation attached to a panel.",
           "group": "panels",
           "authorityCategory": {
             "domain": "automation",

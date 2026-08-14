@@ -34,6 +34,7 @@ export type PanelContextPresentation = z.infer<typeof PanelContextPresentationSc
 
 export const PanelContextMenuActionSchema = z.enum([
   "reload",
+  "command-agent",
   "reload-panel",
   "reload-view",
   "force-reload",

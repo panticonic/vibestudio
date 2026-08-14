@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "censusDigest": "sha256:212b816fc978c3af3afd4f2d57f3003372a7ef61990552658a82d7e3d62f20d3",
+  "censusDigest": "sha256:01bf1ed97ff82a640780867268e5ce83c976896d499aecad733a675af58da39a",
   "decisions": {
     "host:phoneNativeEndpoint.desktops": {
       "review": "exact-base-phone-provider-desktop-discovery",

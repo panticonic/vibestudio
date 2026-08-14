@@ -20528,7 +20528,8 @@
       },
       "authorityPrincipals": [
         "user",
-        "host"
+        "host",
+        "code"
       ],
       "sensitivity": "destructive",
       "authenticatedFacts": [
@@ -20549,7 +20550,7 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(capability(host,service:quickfire.clear),allOf(capability(user,service:quickfire.clear),workspace-member))",
+      "r3aRequirement": "anyOf(capability(host,service:quickfire.clear),allOf(capability(user,service:quickfire.clear),workspace-member),allOf(capability(code,service:quickfire.clear),workspace-member))",
       "r3b": {
         "review": "unchanged-parity",
         "change": null
@@ -20573,7 +20574,8 @@
       },
       "authorityPrincipals": [
         "user",
-        "host"
+        "host",
+        "code"
       ],
       "sensitivity": "destructive",
       "authenticatedFacts": [
@@ -20594,7 +20596,7 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(capability(host,service:quickfire.drainCleanup),allOf(capability(user,service:quickfire.drainCleanup),workspace-member))",
+      "r3aRequirement": "anyOf(capability(host,service:quickfire.drainCleanup),allOf(capability(user,service:quickfire.drainCleanup),workspace-member),allOf(capability(code,service:quickfire.drainCleanup),workspace-member))",
       "r3b": {
         "review": "unchanged-parity",
         "change": null
@@ -20618,7 +20620,8 @@
       },
       "authorityPrincipals": [
         "user",
-        "host"
+        "host",
+        "code"
       ],
       "sensitivity": "read",
       "authenticatedFacts": [
@@ -20639,7 +20642,7 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(capability(host,service:quickfire.list),allOf(capability(user,service:quickfire.list),workspace-member))",
+      "r3aRequirement": "anyOf(capability(host,service:quickfire.list),allOf(capability(user,service:quickfire.list),workspace-member),allOf(capability(code,service:quickfire.list),workspace-member))",
       "r3b": {
         "review": "unchanged-parity",
         "change": null
@@ -20663,7 +20666,8 @@
       },
       "authorityPrincipals": [
         "user",
-        "host"
+        "host",
+        "code"
       ],
       "sensitivity": "write",
       "authenticatedFacts": [
@@ -20684,7 +20688,7 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(capability(host,service:quickfire.promote),allOf(capability(user,service:quickfire.promote),workspace-member))",
+      "r3aRequirement": "anyOf(capability(host,service:quickfire.promote),allOf(capability(user,service:quickfire.promote),workspace-member),allOf(capability(code,service:quickfire.promote),workspace-member))",
       "r3b": {
         "review": "unchanged-parity",
         "change": null
@@ -20708,7 +20712,8 @@
       },
       "authorityPrincipals": [
         "user",
-        "host"
+        "host",
+        "code"
       ],
       "sensitivity": "write",
       "authenticatedFacts": [
@@ -20729,7 +20734,7 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(capability(host,service:quickfire.sessionFor),allOf(capability(user,service:quickfire.sessionFor),workspace-member))",
+      "r3aRequirement": "anyOf(capability(host,service:quickfire.sessionFor),allOf(capability(user,service:quickfire.sessionFor),workspace-member),allOf(capability(code,service:quickfire.sessionFor),workspace-member))",
       "r3b": {
         "review": "unchanged-parity",
         "change": null

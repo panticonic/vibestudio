@@ -38,6 +38,7 @@ export function isPanelClosePointerButton(button: number): boolean {
 
 export type PanelCommandId =
   | "back"
+  | "command-agent"
   | "forward"
   | "reload-panel"
   | "reload-view"
@@ -63,6 +64,9 @@ export type PanelCommandId =
 export const PANEL_CONTEXT_MENU_SECTIONS = [
   ["back", "forward", "stop"],
   ["reload-panel"],
+  // The command agent is offered per panel because the conversation binds to
+  // the panel the user pointed at, not to whatever happens to be focused.
+  ["command-agent"],
   ["open-child-beside", "add-child", "add-child-below", "open-in-new-column", "duplicate"],
   ["copy-address", "open-external", "copy-panel-id"],
   ["toggle-pin", "close-pane", "archive"],
@@ -310,6 +314,14 @@ export function getPanelCommandDefinitions(
       id: "unload",
       label: "Unload",
       description: "Free memory; reload next time the panel opens",
+      visible: true,
+      enabled: Boolean(chrome),
+    },
+    {
+      id: "command-agent",
+      label: "Command Agent…",
+      description: "Ask the command agent about this panel",
+      shortcut: "Cmd/Ctrl+Shift+K",
       visible: true,
       enabled: Boolean(chrome),
     },

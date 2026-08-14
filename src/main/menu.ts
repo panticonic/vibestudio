@@ -338,7 +338,7 @@ export function buildHamburgerMenuTemplate(
       click: () => emitMenuEvent("open-command-palette"),
     },
     {
-      label: "Ask About This Panel…",
+      label: "Command Agent…",
       accelerator: quickfireAccelerator,
       click: () => emitMenuEvent("open-quickfire"),
     },
@@ -461,7 +461,7 @@ export function setupMenu(
           click: () => emitMenuEvent("open-command-palette"),
         },
         {
-          label: "Ask About This Panel...",
+          label: "Command Agent...",
           accelerator: quickfireAccelerator,
           click: () => emitMenuEvent("open-quickfire"),
         },

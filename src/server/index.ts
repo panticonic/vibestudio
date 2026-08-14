@@ -3798,9 +3798,9 @@ async function main() {
               effectiveVersion: quickfireHarnessIdentity?.effectiveVersion ?? "",
               severity: "severe",
               dedupKey: `quickfire-bind:${slotId}`,
-              title: "Let Quickfire debug a privileged panel",
+              title: "Let the command agent debug a privileged panel",
               description:
-                `Quickfire will be able to screenshot ${source ?? slotId}, read its console, ` +
+                `The command agent will be able to screenshot ${source ?? slotId}, read its console, ` +
                 "and run expressions in it for the rest of this conversation. " +
                 "This panel can change workspace settings and permissions.",
               resource: { type: "panel", label: "Panel", value: source ?? slotId },

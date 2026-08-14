@@ -129,9 +129,12 @@ function makeService(overrides: Partial<QuickfireServiceDeps> = {}) {
 }
 
 describe("quickfire service", () => {
-  it("declares the user/host principal contract and no agent-facing methods", () => {
+  // `code` is the shell chrome (`code:apps/shell@<ev>`), the origin that carries
+  // the user's gesture; agents never reach this surface (agentFacing is false
+  // on every method and there is no `agent` principal).
+  it("declares the user/host/code principal contract and no agent-facing methods", () => {
     const { definition } = makeService();
-    expect(definition.authority).toEqual({ principals: ["user", "host"] });
+    expect(definition.authority).toEqual({ principals: ["user", "host", "code"] });
     for (const [name, schema] of Object.entries(definition.methods)) {
       expect(schema.agentFacing, `${name} must stay out of the agent tool surface`).toBe(false);
     }

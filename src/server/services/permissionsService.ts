@@ -416,12 +416,12 @@ function authorityGrantOrigin(
   lookup?: UnitAdmissionProvenanceLookup
 ): string | undefined {
   if (grant.effect === "deny") return "You chose not to allow this";
-  // Quickfire's grants are not answers to a prompt — for an ordinary panel
+  // The command agent's grants are not answers to a prompt — for an ordinary panel
   // nothing was ever asked. Naming the surface is the only honest origin: the
   // person opened the overlay over a panel, and that gesture is what this row
   // records. Revoking it here shuts the debug tools off immediately.
   if (grant.decisionSurface === QUICKFIRE_DECISION_SURFACE) {
-    return "Quickfire, when you opened it over a panel";
+    return "The command agent, when you opened it over a panel";
   }
   if (grant.provenance !== "install") return "You allowed this when it was needed";
   const provenance = code ? lookup?.(code.repoPath, code.effectiveVersion) : null;
@@ -455,7 +455,7 @@ function authorityGrantOrigin(
 function authorityGrantReason(grant: AuthorityGrant): string {
   if (grant.effect === "deny") return "Remembers a decision not to allow this action.";
   if (grant.decisionSurface === QUICKFIRE_DECISION_SURFACE) {
-    return "Lets the Quickfire conversation attached to one panel screenshot it, read its console, and run expressions in it.";
+    return "Lets the command agent conversation attached to one panel screenshot it, read its console, and run expressions in it.";
   }
   if (grant.provenance === "install") {
     return "Provides the access declared and reviewed for this exact installed code version.";

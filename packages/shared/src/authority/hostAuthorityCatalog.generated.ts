@@ -4636,10 +4636,10 @@ export const HOST_AUTHORITY_METHODS = {
     },
     capability: "workspace.runtime-state.manage",
     presentation: {
-      title: "Manage panel quickfire conversations",
-      action: "manage the quickfire conversation attached to a panel",
+      title: "Manage panel command agent conversations",
+      action: "manage the command agent conversation attached to a panel",
       description:
-        "Allows {requesterKind} to manage the quickfire conversation attached to a panel.",
+        "Allows {requesterKind} to manage the command agent conversation attached to a panel.",
       group: "panels",
       authorityCategory: {
         domain: "automation",
@@ -4658,10 +4658,10 @@ export const HOST_AUTHORITY_METHODS = {
     },
     capability: "workspace.runtime-state.manage",
     presentation: {
-      title: "Manage panel quickfire conversations",
-      action: "manage the quickfire conversation attached to a panel",
+      title: "Manage panel command agent conversations",
+      action: "manage the command agent conversation attached to a panel",
       description:
-        "Allows {requesterKind} to manage the quickfire conversation attached to a panel.",
+        "Allows {requesterKind} to manage the command agent conversation attached to a panel.",
       group: "panels",
       authorityCategory: {
         domain: "automation",
@@ -4692,10 +4692,10 @@ export const HOST_AUTHORITY_METHODS = {
     },
     capability: "workspace.runtime-state.manage",
     presentation: {
-      title: "Manage panel quickfire conversations",
-      action: "manage the quickfire conversation attached to a panel",
+      title: "Manage panel command agent conversations",
+      action: "manage the command agent conversation attached to a panel",
       description:
-        "Allows {requesterKind} to manage the quickfire conversation attached to a panel.",
+        "Allows {requesterKind} to manage the command agent conversation attached to a panel.",
       group: "panels",
       authorityCategory: {
         domain: "automation",
@@ -4714,10 +4714,10 @@ export const HOST_AUTHORITY_METHODS = {
     },
     capability: "workspace.runtime-state.manage",
     presentation: {
-      title: "Manage panel quickfire conversations",
-      action: "manage the quickfire conversation attached to a panel",
+      title: "Manage panel command agent conversations",
+      action: "manage the command agent conversation attached to a panel",
       description:
-        "Allows {requesterKind} to manage the quickfire conversation attached to a panel.",
+        "Allows {requesterKind} to manage the command agent conversation attached to a panel.",
       group: "panels",
       authorityCategory: {
         domain: "automation",
@@ -8890,9 +8890,10 @@ export const HOST_SEMANTIC_PRESENTATIONS = {
     },
   },
   "workspace.runtime-state.manage": {
-    title: "Manage panel quickfire conversations",
-    action: "manage the quickfire conversation attached to a panel",
-    description: "Allows {requesterKind} to manage the quickfire conversation attached to a panel.",
+    title: "Manage panel command agent conversations",
+    action: "manage the command agent conversation attached to a panel",
+    description:
+      "Allows {requesterKind} to manage the command agent conversation attached to a panel.",
     group: "panels",
     authorityCategory: {
       domain: "automation",

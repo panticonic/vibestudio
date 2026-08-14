@@ -24,15 +24,13 @@ describe("overlay accelerators", () => {
     expect(find("Command Palette")?.accelerator).toBe("CmdOrCtrl+K");
   });
 
-  it("binds quickfire to CmdOrCtrl+Shift+K", () => {
-    expect(find("Ask About This Panel")?.accelerator).toBe("CmdOrCtrl+Shift+K");
+  it("binds the command agent to CmdOrCtrl+Shift+K", () => {
+    expect(find("Command Agent")?.accelerator).toBe("CmdOrCtrl+Shift+K");
   });
 
   it("offers exactly one item per overlay entry point", () => {
     expect(items().filter((item) => item.label?.startsWith("Command Palette"))).toHaveLength(1);
-    expect(items().filter((item) => item.label?.startsWith("Ask About This Panel"))).toHaveLength(
-      1
-    );
+    expect(items().filter((item) => item.label?.startsWith("Command Agent"))).toHaveLength(1);
   });
 });
 
