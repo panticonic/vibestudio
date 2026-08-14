@@ -240,8 +240,11 @@ describe("describeEvalMethod", () => {
       surface: "injected-runtime-method",
       description: "Author exact edits.",
       call: "await vcs.edit(input)",
-      arguments: [
-        '{ commandId: string; changes: ({ kind: "text-edit"; edits: ({ start: integer; end: integer; text: string })[] } | { kind: "file-delete"; fileId: string })[] }',
+      parameters: [
+        {
+          name: "input",
+          type: '{ commandId: string; changes: ({ kind: "text-edit"; edits: ({ start: integer; end: integer; text: string })[] } | { kind: "file-delete"; fileId: string })[] }',
+        },
       ],
       returns: "{ applicationId: string }",
       access: { sensitivity: "write" },
@@ -252,6 +255,82 @@ describe("describeEvalMethod", () => {
     expect(JSON.stringify(result)).not.toContain("Max depth exceeded");
     expect(result).not.toHaveProperty("argsSchema");
     expect(result).not.toHaveProperty("returnsSchema");
+  });
+
+  it("names parameters from argumentNames and renders examples as exact executable calls", () => {
+    const result = describeEvalMethod("docs.search", {
+      description: "Search the capability catalog.",
+      argumentNames: ["query", "options"],
+      examples: [
+        { args: ["store a blob and get a digest", { limit: 5 }] },
+        { args: ["panel tree"], note: "Options may be omitted." },
+      ],
+      argsSchema: {
+        type: "array",
+        items: [{ type: "string" }, { type: "object", properties: { limit: { type: "integer" } } }],
+      },
+    });
+
+    expect(result.call).toBe("await docs.search(query, options)");
+    expect(result.parameters).toEqual([
+      { name: "query", type: "string" },
+      { name: "options", type: "{ limit?: integer }" },
+    ]);
+    expect(result.examples).toEqual([
+      { call: 'await docs.search("store a blob and get a digest", {"limit":5})' },
+      { call: 'await docs.search("panel tree")', note: "Options may be omitted." },
+    ]);
+  });
+
+  it("keeps the input/arg fallback and omits examples when the schema declares neither", () => {
+    const twoArgs = describeEvalMethod("svc.op", {
+      argsSchema: { type: "array", items: [{ type: "string" }, { type: "number" }] },
+    });
+    expect(twoArgs.call).toBe("await svc.op(arg0, arg1)");
+    expect(twoArgs.parameters.map((parameter) => parameter.name)).toEqual(["arg0", "arg1"]);
+    expect(twoArgs).not.toHaveProperty("examples");
+  });
+
+  it("bounds rendered examples after skipping malformed entries", () => {
+    const result = describeEvalMethod("svc.op", {
+      argsSchema: { type: "array", items: [{ type: "string" }] },
+      examples: [
+        { args: ["a"] },
+        { note: "malformed, no args" },
+        { args: ["b"] },
+        { args: ["c"] },
+        { args: ["dropped by the bound"] },
+      ],
+    });
+    expect(result.examples).toEqual([
+      { call: 'await svc.op("a")' },
+      { call: 'await svc.op("b")' },
+      { call: 'await svc.op("c")' },
+    ]);
+  });
+
+  it("never shifts malformed argument-name metadata onto a later position", () => {
+    const result = describeEvalMethod("svc.op", {
+      argsSchema: {
+        type: "array",
+        items: [{ type: "string" }, { type: "number" }, { type: "boolean" }],
+      },
+      argumentNames: ["query", null, "enabled"],
+    });
+    expect(result.call).toBe("await svc.op(query, arg1, enabled)");
+    expect(result.parameters.map((parameter) => parameter.name)).toEqual([
+      "query",
+      "arg1",
+      "enabled",
+    ]);
+  });
+
+  it("omits a non-JSON example without failing live help", () => {
+    const result = describeEvalMethod("svc.op", {
+      argsSchema: { type: "array", items: [{ type: "unknown" }] },
+      examples: [{ args: [1n] }, { args: ["usable"] }],
+    });
+    expect(result.examples).toEqual([{ call: 'await svc.op("usable")' }]);
   });
 });
 

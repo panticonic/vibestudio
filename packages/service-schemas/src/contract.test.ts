@@ -2,8 +2,13 @@ import { readdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
-import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
+import { createTypedServiceClient, maxArgsArity } from "@vibestudio/shared/typedServiceClient";
 import type { ServiceMethodSchemas } from "@vibestudio/shared/typedServiceClient";
+import type { RuntimeSurfaceMethodDoc } from "@vibestudio/shared/runtimeSurface";
+import {
+  PANEL_TREE_METHOD_CATALOG,
+  WORKERS_RUNTIME_METHOD_CATALOG,
+} from "./runtime/runtimeSurface.portable.js";
 import { adblockMethods } from "./adblock.js";
 import { appMethods } from "./app.js";
 import { accountMethods } from "./account.js";
@@ -573,5 +578,52 @@ describe("service schema contracts", () => {
       expect(credentialsMethods[method].tier.tier).toBe("open");
       expect(credentialsMethods[method].access?.approval).toHaveLength(1);
     }
+  });
+});
+
+describe("argumentNames arity", () => {
+  it("matches every declared argumentNames list to its args tuple's maximum arity", () => {
+    const mismatches: string[] = [];
+    for (const { service, methods } of serviceTables) {
+      for (const [name, method] of Object.entries(methods)) {
+        if (!method.argumentNames) continue;
+        const arity = maxArgsArity(method.args);
+        if (arity === null) {
+          mismatches.push(`${service}.${name}: argumentNames on a non-tuple args schema`);
+        } else if (method.argumentNames.length !== arity) {
+          mismatches.push(
+            `${service}.${name}: ${method.argumentNames.length} names for arity ${arity}`
+          );
+        }
+      }
+    }
+    expect(mismatches).toEqual([]);
+  });
+
+  it("matches runtime method-catalog argumentNames to their JSON-schema tuples", () => {
+    const catalogs: Record<string, Record<string, RuntimeSurfaceMethodDoc>> = {
+      workers: WORKERS_RUNTIME_METHOD_CATALOG,
+      panelTree: PANEL_TREE_METHOD_CATALOG,
+    };
+    const mismatches: string[] = [];
+    for (const [namespace, catalog] of Object.entries(catalogs)) {
+      for (const [name, doc] of Object.entries(catalog)) {
+        if (!doc.argumentNames) continue;
+        const schema = doc.argsSchema as
+          | { prefixItems?: unknown[]; maxItems?: number }
+          | undefined;
+        const arity = Array.isArray(schema?.prefixItems)
+          ? schema.prefixItems.length
+          : (schema?.maxItems ?? null);
+        if (arity === null) {
+          mismatches.push(`${namespace}.${name}: argumentNames without a bounded args tuple`);
+        } else if (doc.argumentNames.length !== arity) {
+          mismatches.push(
+            `${namespace}.${name}: ${doc.argumentNames.length} names for arity ${arity}`
+          );
+        }
+      }
+    }
+    expect(mismatches).toEqual([]);
   });
 });

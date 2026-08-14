@@ -44,12 +44,14 @@ export const workspacePresentationMethods = defineReceiverServiceMethods({
     ...method("write"),
     description: "Bind a shell slot to the presented panel and entity.",
     args: z.tuple([z.string().min(1), z.string().min(1), z.string().min(1)]),
+    argumentNames: ["slotId", "entityId", "source"],
     returns: z.void(),
   },
   removeSlots: {
     ...method("write"),
     description: "Remove presentation bindings for closed shell slots.",
     args: z.tuple([z.array(z.string().min(1)).max(1_000)]),
+    argumentNames: ["slotIds"],
     returns: z.void(),
   },
   indexPanel: {
@@ -60,6 +62,7 @@ export const workspacePresentationMethods = defineReceiverServiceMethods({
       z.string().min(1).nullable(),
       z.object({ explicit: z.boolean().optional() }).strict().optional(),
     ]),
+    argumentNames: ["panel", "entityId", "options"],
     returns: z.string().min(1).nullable(),
   },
   updatePanelTitle: {
@@ -71,6 +74,7 @@ export const workspacePresentationMethods = defineReceiverServiceMethods({
       z.string(),
       z.object({ explicit: z.boolean().optional() }).strict().optional(),
     ]),
+    argumentNames: ["slotId", "entityId", "title", "options"],
     returns: z.string().min(1),
   },
   setEntityTitle: {
@@ -81,12 +85,14 @@ export const workspacePresentationMethods = defineReceiverServiceMethods({
       z.string().nullable(),
       z.object({ explicit: z.boolean().optional() }).strict().optional(),
     ]),
+    argumentNames: ["entityId", "title", "options"],
     returns: z.void(),
   },
   listEntityTitles: {
     ...method("read"),
     description: "List the workspace's explicit entity titles.",
     args: z.tuple([]),
+    argumentNames: [],
     returns: z.array(
       z.object({ id: z.string(), title: z.string(), explicit: z.boolean() }).strict()
     ),
@@ -95,24 +101,28 @@ export const workspacePresentationMethods = defineReceiverServiceMethods({
     ...method("read"),
     description: "Whether an entity title was explicitly selected by its owning runtime.",
     args: z.tuple([z.string().min(1)]),
+    argumentNames: ["entityId"],
     returns: z.boolean(),
   },
   titlesForSlots: {
     ...method("read"),
     description: "Resolve presented titles for shell slots.",
     args: z.tuple([z.array(z.string().min(1)).max(1_000)]),
+    argumentNames: ["slotIds"],
     returns: z.record(z.string(), z.string()),
   },
   incrementAccess: {
     ...method("write"),
     description: "Record access to a presented panel.",
     args: z.tuple([z.string().min(1)]),
+    argumentNames: ["slotId"],
     returns: z.void(),
   },
   sourceUsage: {
     ...method("read"),
     description: "Summarize recent panel usage by source.",
     args: z.tuple([z.number().int().positive().max(200).optional()]),
+    argumentNames: ["limit"],
     returns: z.array(
       z
         .object({
@@ -131,6 +141,7 @@ export const workspacePresentationMethods = defineReceiverServiceMethods({
       z.number().int().positive().max(200).optional(),
       z.string().optional(),
     ]),
+    argumentNames: ["query", "limit", "cursor"],
     returns: z
       .object({ results: z.array(searchResultSchema), nextCursor: z.string().nullable() })
       .strict(),
@@ -139,6 +150,7 @@ export const workspacePresentationMethods = defineReceiverServiceMethods({
     ...method("write"),
     description: "Rebuild the workspace panel search index.",
     args: z.tuple([]),
+    argumentNames: [],
     returns: z.void(),
   },
 });

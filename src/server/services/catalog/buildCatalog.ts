@@ -87,6 +87,7 @@ export function buildCatalog(deps: BuildCatalogDeps): CatalogEntry[] {
         access,
         argsSchema: ser.argsSchema,
         ...("returnsSchema" in ser ? { returnsSchema: ser.returnsSchema } : {}),
+        ...(method.argumentNames ? { argumentNames: method.argumentNames } : {}),
         ...(method.examples ? { examples: method.examples } : {}),
       });
     }
@@ -152,6 +153,9 @@ export function buildCatalog(deps: BuildCatalogDeps): CatalogEntry[] {
         ...(directSerialized?.returnsSchema
           ? { returnsSchema: directSerialized.returnsSchema }
           : {}),
+        ...(directSerialized?.argumentNames
+          ? { argumentNames: directSerialized.argumentNames }
+          : {}),
         ...(directSerialized?.examples ? { examples: directSerialized.examples } : {}),
       });
       // A schemaRef is an implementation-only bridge from an ergonomic runtime
@@ -176,6 +180,7 @@ export function buildCatalog(deps: BuildCatalogDeps): CatalogEntry[] {
             : { ...(serialized.access ?? {}), callers },
           ...(serialized.argsSchema ? { argsSchema: serialized.argsSchema } : {}),
           ...(serialized.returnsSchema ? { returnsSchema: serialized.returnsSchema } : {}),
+          ...(serialized.argumentNames ? { argumentNames: serialized.argumentNames } : {}),
           ...(serialized.examples ? { examples: serialized.examples } : {}),
         });
       }

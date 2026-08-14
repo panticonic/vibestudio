@@ -572,6 +572,17 @@ export async function authorityDiagnosticsForProgram(input: {
       column: origin.column,
       message: `Calling ${effect.serviceName ?? "the workspace service"}${effect.method ? `.${effect.method}` : ""} requires '${effect.capability}' at ${effect.tier} tier, but consumer '${consumerName}' does not request a covering authority scope${effect.packageName ? ` for dependency package '${effect.packageName}'` : ""}.`,
       suggestion: `Add ${JSON.stringify(suggestedRequest)} to package.json#vibestudio.authority.requests, or remove/narrow the call. A request is not a grant.`,
+      // The same narrow request this fold used to decide failure, as edit
+      // data. A request is a declaration for review — never a grant.
+      repair: {
+        code: "missing-authority-request",
+        file: `${input.unitRelativePath}/package.json`,
+        field: "vibestudio.authority.requests",
+        request: suggestedRequest,
+        docsId: effect.serviceName
+          ? `workspace:${effect.serviceName}`
+          : "runtime:workerRuntime.workers.resolveService",
+      },
     });
   }
   return [...hostDiagnostics, ...userlandDiagnostics];

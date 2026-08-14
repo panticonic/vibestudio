@@ -378,6 +378,50 @@ describe("ServiceDispatcher", () => {
     }
   });
 
+  it("names the failing parameter and carries structured issues when the method declares argumentNames", async () => {
+    const sd = createDispatcher();
+    sd.registerService({
+      name: "workspace",
+      authority: { principals: ["user"] },
+      methods: {
+        logs: {
+          args: z.tuple([z.string(), z.object({ limit: z.number() })]),
+          argumentNames: ["unit", "options"],
+        },
+      },
+      handler: async () => {},
+    });
+    sd.markInitialized();
+
+    try {
+      await sd.dispatch(ctx, "workspace", "logs", ["unit-1", { limit: "ten" }]);
+      expect.fail("should have thrown");
+    } catch (err: unknown) {
+      expect(err).toBeInstanceOf(ServiceError);
+      const serviceError = err as ServiceError;
+      expect(serviceError.message).toContain(
+        "invalid argument [1].limit (parameter `options.limit`) — expected number, received string"
+      );
+      // The structured issue list rides errorData — the one channel every
+      // relay (HTTP, IPC, DO dispatch, eval sandbox) preserves end to end.
+      expect(serviceError.errorData).toEqual({
+        code: "invalid-arguments",
+        method: "workspace.logs",
+        issues: [
+          {
+            code: "invalid_type",
+            path: [1, "limit"],
+            message: expect.any(String),
+            expected: "number",
+            received: "string",
+            parameter: "options",
+            parameterPath: ["options", "limit"],
+          },
+        ],
+      });
+    }
+  });
+
   it("normalizes wire args: pads omitted trailing optionals and maps null→undefined", async () => {
     const sd = createDispatcher();
     let seen: unknown[] = [];

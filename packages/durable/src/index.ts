@@ -46,7 +46,12 @@ import {
   type ResidentSessionReceiver,
 } from "@vibestudio/shared/residentSession";
 import { bindMethodCapability, allOf, anyOf, capability } from "@vibestudio/shared/authorization";
-import type { MethodSchema, ServiceMethodSchemas } from "@vibestudio/shared/typedServiceClient";
+import {
+  describeArgsValidationError,
+  invalidArgumentsErrorData,
+  type MethodSchema,
+  type ServiceMethodSchemas,
+} from "@vibestudio/shared/typedServiceClient";
 import {
   dispatchWithDurableObjectSchemaGuard,
   durableObjectSchemaDescriptor,
@@ -967,11 +972,16 @@ export abstract class DurableObjectBase {
         : args;
       const parsedArgs = wireMethod.args.safeParse(paddedArgs);
       if (!parsedArgs.success) {
+        // The one shared formatter: same summary and structured issue list as
+        // the main service dispatcher, so a direct receiver failure names the
+        // method parameter exactly like a host-service failure does.
+        const validation = describeArgsValidationError(parsedArgs.error, wireMethod);
         return {
           result: this.schemaDenialResponse(
             envelope,
             message,
-            `Invalid arguments for ${method}: ${parsedArgs.error.message}`
+            `Invalid arguments for ${method}: ${validation.summary}`,
+            invalidArgumentsErrorData(this.constructor.name, method, validation.issues)
           ),
           readyQueues: [],
         };
@@ -1073,7 +1083,8 @@ export abstract class DurableObjectBase {
   private schemaDenialResponse(
     envelope: RpcEnvelope,
     message: RpcRequest,
-    reason: string
+    reason: string,
+    errorData?: Record<string, unknown>
   ): RpcEnvelope {
     return {
       from: envelope.target,
@@ -1086,6 +1097,7 @@ export abstract class DurableObjectBase {
         error: reason,
         errorCode: "EINVAL",
         errorKind: "protocol",
+        ...(errorData ? { errorData } : {}),
       },
     } as RpcEnvelope;
   }

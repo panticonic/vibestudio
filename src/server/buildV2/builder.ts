@@ -89,7 +89,7 @@ import type {
   BuildProviderInput,
 } from "@vibestudio/shared/buildProvider";
 import { collectWorkspaceRpcCatalog } from "./workspaceRpcCatalog.js";
-import { unknownWorkspaceRpcSchemaMessage, workspaceRpcSchema } from "./workspaceRpcSchemas.js";
+import { unknownWorkspaceRpcSchemaError, workspaceRpcSchema } from "./workspaceRpcSchemas.js";
 import { createPanelBundleReport } from "./panelBundleReport.js";
 import { generatePanelEntry } from "./panelEntryProtocol.js";
 import { createSharedStyleDedupePlugin } from "./sharedStyleDedupe.js";
@@ -3040,13 +3040,11 @@ async function buildWorker(
       .map((entry: { className: string; rpcSchema: string }) => {
         const schema = workspaceRpcSchema(entry.rpcSchema);
         if (!schema) {
-          throw new Error(
-            unknownWorkspaceRpcSchemaMessage({
-              repoPath: node.relativePath,
-              className: entry.className,
-              rpcSchema: entry.rpcSchema,
-            })
-          );
+          throw unknownWorkspaceRpcSchemaError({
+            repoPath: node.relativePath,
+            className: entry.className,
+            rpcSchema: entry.rpcSchema,
+          });
         }
         return [entry.className, schema];
       })

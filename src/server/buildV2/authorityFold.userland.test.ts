@@ -320,6 +320,26 @@ describe("userland authority fold", () => {
         expect.objectContaining({ message: expect.stringContaining("notes.delete") }),
       ])
     );
+    // The structured repair carries the SAME narrow request the fold used to
+    // decide failure, described as a request (review decides), not a grant.
+    const admission = diagnostics.find(
+      (diagnostic) =>
+        diagnostic.repair?.code === "missing-authority-request" &&
+        diagnostic.repair.request.capability === "workspace-service:notes"
+    );
+    expect(admission?.repair).toEqual({
+      code: "missing-authority-request",
+      file: "./package.json",
+      field: "vibestudio.authority.requests",
+      request: {
+        capability: "workspace-service:notes",
+        resource: { kind: "exact", key: "do:workers/notes:NotesDO:main" },
+        tier: "gated",
+        evidence: "exact",
+      },
+      docsId: "workspace:notes",
+    });
+    expect(admission?.suggestion).toContain("A request is not a grant.");
   });
 
   it("accepts an exact service target and provider-bound capability family", async () => {

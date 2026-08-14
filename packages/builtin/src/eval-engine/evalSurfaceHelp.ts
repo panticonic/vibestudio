@@ -114,8 +114,9 @@ export interface InjectedSurfaceMethodDescription {
   surface: "injected-runtime-method";
   description?: string;
   call: string;
-  arguments: string[];
+  parameters: Array<{ name: string; type: string }>;
   returns?: string;
+  examples?: Array<{ call: string; returns?: unknown; note?: string }>;
   access?: unknown;
   errors?: unknown;
   seeAlso?: unknown;
@@ -185,6 +186,41 @@ function methodArgumentTypes(argsSchema: unknown): string[] {
   return [schemaType(schema)];
 }
 
+/** Bounded projection of MethodSchema.examples into exact executable calls. */
+const MAX_RENDERED_EXAMPLES = 3;
+
+function renderMethodExamples(
+  qualifiedName: string,
+  examples: unknown
+): Array<{ call: string; returns?: unknown; note?: string }> {
+  if (!Array.isArray(examples)) return [];
+  const rendered: Array<{ call: string; returns?: unknown; note?: string }> = [];
+  for (const example of examples) {
+    if (rendered.length >= MAX_RENDERED_EXAMPLES) break;
+    if (!example || typeof example !== "object") continue;
+    const { args, returns, note } = example as {
+      args?: unknown;
+      returns?: unknown;
+      note?: unknown;
+    };
+    if (!Array.isArray(args)) continue;
+    let renderedArgs: string[];
+    try {
+      renderedArgs = args.map((arg) => JSON.stringify(arg) ?? "undefined");
+    } catch {
+      // Method examples are pure catalog data. A non-JSON value must not make
+      // the whole live help request fail; omit only that malformed example.
+      continue;
+    }
+    rendered.push({
+      call: `await ${qualifiedName}(${renderedArgs.join(", ")})`,
+      ...(returns !== undefined ? { returns } : {}),
+      ...(typeof note === "string" ? { note } : {}),
+    });
+  }
+  return rendered;
+}
+
 /**
  * Project a method's machine JSON Schema into a shallow, faithful contract.
  *
@@ -199,7 +235,20 @@ export function describeEvalMethod(
 ): InjectedSurfaceMethodDescription {
   const source = method && typeof method === "object" ? (method as Record<string, unknown>) : {};
   const args = methodArgumentTypes(source["argsSchema"]);
-  const parameterNames = args.map((_, index) => (args.length === 1 ? "input" : `arg${index}`));
+  // Preserve positions. Filtering malformed metadata would shift every later
+  // name onto the wrong argument, which is worse than falling back to argN.
+  const declaredNames = Array.isArray(source["argumentNames"])
+    ? (source["argumentNames"] as unknown[])
+    : [];
+  const parameterNames = args.map((_, index) =>
+    typeof declaredNames[index] === "string" &&
+    /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(declaredNames[index] as string)
+      ? (declaredNames[index] as string)
+      : args.length === 1
+        ? "input"
+        : `arg${index}`
+  );
+  const examples = renderMethodExamples(qualifiedName, source["examples"]);
   return {
     name: qualifiedName,
     surface: "injected-runtime-method",
@@ -207,8 +256,9 @@ export function describeEvalMethod(
       ? { description: source["description"] as string }
       : {}),
     call: `await ${qualifiedName}(${parameterNames.join(", ")})`,
-    arguments: args,
+    parameters: args.map((type, index) => ({ name: parameterNames[index]!, type })),
     ...(source["returnsSchema"] ? { returns: schemaType(source["returnsSchema"]) } : {}),
+    ...(examples.length > 0 ? { examples } : {}),
     ...("access" in source ? { access: source["access"] } : {}),
     ...("errors" in source ? { errors: source["errors"] } : {}),
     ...("seeAlso" in source ? { seeAlso: source["seeAlso"] } : {}),

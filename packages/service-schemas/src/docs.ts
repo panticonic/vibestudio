@@ -37,6 +37,8 @@ export const catalogEntrySchema = z.object({
   access: catalogAccessSchema.optional(),
   argsSchema: z.record(z.unknown()).optional(),
   returnsSchema: z.record(z.unknown()).optional(),
+  /** Author-facing parameter names, positionally matching the args tuple. */
+  argumentNames: z.array(z.string()).optional(),
   /** Namespace member names (runtime surface entries). */
   members: z.array(z.string()).optional(),
   examples: z.array(z.unknown()).optional(),
@@ -84,6 +86,8 @@ export const serializedServiceMethodSchema = z.object({
   examples: z.array(z.unknown()).optional(),
   errors: z.array(z.unknown()).optional(),
   seeAlso: z.array(z.string()).optional(),
+  /** Author-facing parameter names, positionally matching the args tuple. */
+  argumentNames: z.array(z.string()).optional(),
   argsSchema: z.record(z.unknown()),
   returnsSchema: z.record(z.unknown()).optional(),
 });
@@ -109,6 +113,7 @@ export const docsMethods = defineServiceMethods({
     description:
       "Search the capability catalog (services and runtime APIs) by keyword. Results are filtered to what the calling kind may invoke. Use docs.describe(id) for the full typed schema, access rules, and examples.",
     args: z.tuple([z.string(), searchOptsSchema]),
+    argumentNames: ["query", "options"],
     returns: z.array(catalogHitSchema),
     access: READONLY_ACCESS,
     examples: [{ args: ["store a blob and get a digest", { limit: 5 }] }],
@@ -125,6 +130,7 @@ export const docsMethods = defineServiceMethods({
     description:
       "Return the full catalog entry for an id (typed args/returns schema, access/restrictedness, examples). Returns null if unknown or not visible to the caller.",
     args: z.tuple([z.string()]),
+    argumentNames: ["id"],
     returns: catalogEntrySchema.nullable(),
     access: READONLY_ACCESS,
     examples: [{ args: ["service:blobstore.putText"] }],
@@ -140,6 +146,7 @@ export const docsMethods = defineServiceMethods({
     },
     description: "Return just the args/returns JSON Schema for a catalog id.",
     args: z.tuple([z.string()]),
+    argumentNames: ["id"],
     returns: z
       .object({
         argsSchema: z.record(z.unknown()).optional(),
@@ -189,6 +196,7 @@ export const docsMethods = defineServiceMethods({
     description:
       "Describe one registered RPC service by name: its policy and every method the caller may invoke (with JSON-Schema args/returns). Returns null for an unknown service.",
     args: z.tuple([z.string()]),
+    argumentNames: ["name"],
     returns: serializedServiceSchema.nullable(),
     access: READONLY_ACCESS,
     examples: [{ args: ["blobstore"] }],

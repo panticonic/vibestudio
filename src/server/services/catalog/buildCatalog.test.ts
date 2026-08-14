@@ -23,6 +23,7 @@ const demo: ServiceDefinition = {
     get: {
       description: "Get a value.",
       args: z.tuple([z.string()]),
+      argumentNames: ["key"],
       returns: z.object({ v: z.number() }),
       tier: TEST_OPEN_TIER,
     },
@@ -372,8 +373,10 @@ describe("buildCatalog", () => {
     expect(get.argsSchema).toBeTruthy();
     expect(get.returnsSchema).toBeTruthy();
     expect(get.description).toBe("Get a value.");
+    expect(get.argumentNames).toEqual(["key"]);
     const wipe = byId(entries, "service:demo.admin.wipe");
     expect(wipe.returnsSchema).toBeUndefined();
+    expect(wipe.argumentNames).toBeUndefined();
   });
 
   it("derives authority principals with method > service precedence and includes reviewed tier", () => {

@@ -9,10 +9,17 @@
 import { z } from "zod";
 import type { PreparedAuthoritySelection, ServiceDefinition } from "./serviceDefinition.js";
 import {
+  describeArgsValidationError,
+  invalidArgumentsErrorData,
   preparedAuthoritySelectorKey,
   type MethodAuthorityDescriptor,
   type MethodSchema,
   type PreparedAuthorityRequirement,
+} from "./typedServiceClient.js";
+export {
+  describeArgsValidationError,
+  invalidArgumentsErrorData,
+  type InvalidArgumentIssue,
 } from "./typedServiceClient.js";
 import type { CallerKind, CodeIdentityCallerKind } from "./principalKinds.js";
 import {
@@ -101,12 +108,6 @@ export function normalizeServiceArgs(args: unknown[], schema: z.ZodType): unknow
 }
 
 /**
- * Render a ZodError from method-args tuple validation as a concise,
- * human-readable summary, e.g. `invalid argument [1].limit — expected number,
- * received string`. The leading tuple index is shown as `[n]`; deeper path
- * segments are dot-joined.
- */
-/**
  * Capabilities a caller needs in order to see and answer a pending review.
  *
  * These are exempt from the open-review short-circuit (U6). U6 exists to stop
@@ -125,24 +126,6 @@ function answersAnOpenReview(capability: string): boolean {
   return REVIEW_ANSWERING_CAPABILITIES.some(
     (key) => capability === key || capability.startsWith(`${key}:`)
   );
-}
-
-function formatArgsValidationError(error: z.ZodError): string {
-  const summaries = error.issues.map((issue) => {
-    const [head, ...rest] = issue.path;
-    const where =
-      typeof head === "number"
-        ? `[${head}]${rest.length > 0 ? `.${rest.join(".")}` : ""}`
-        : issue.path.length > 0
-          ? issue.path.join(".")
-          : "(args)";
-    const detail =
-      issue.code === "invalid_type"
-        ? `expected ${issue.expected}, received ${issue.received}`
-        : issue.message;
-    return `invalid argument ${where} — ${detail}`;
-  });
-  return summaries.join("; ");
 }
 
 function formatReturnValidationError(error: z.ZodError): string {
@@ -1034,14 +1017,18 @@ export class ServiceDispatcher {
         const normalized = normalizeServiceArgs(args, methodDef.args);
         const parsed = methodDef.args.safeParse(normalized);
         if (!parsed.success) {
-          const reason = formatArgsValidationError(parsed.error);
+          const validation = describeArgsValidationError(parsed.error, methodDef);
           // ServiceError prefixes the message with `[service.method]`, so the
           // full error reads e.g.:
           //   [workspace.logs] Invalid args: invalid argument [1].limit — expected number, received string
           throw new ServiceError(
             service,
             method,
-            `Invalid args: ${reason}${formatUsageHint(service, method, methodDef)}`
+            `Invalid args: ${validation.summary}${formatUsageHint(service, method, methodDef)}`,
+            undefined,
+            undefined,
+            "service",
+            invalidArgumentsErrorData(service, method, validation.issues)
           );
         }
         // Use normalized args so handlers see undefined (not null) for optional params
@@ -1119,10 +1106,15 @@ export class ServiceDispatcher {
     const normalized = normalizeServiceArgs(args, methodDef.args);
     const parsed = methodDef.args.safeParse(normalized);
     if (!parsed.success) {
+      const validation = describeArgsValidationError(parsed.error, methodDef);
       throw new ServiceError(
         service,
         method,
-        `Invalid args: ${formatArgsValidationError(parsed.error)}${formatUsageHint(service, method, methodDef)}`
+        `Invalid args: ${validation.summary}${formatUsageHint(service, method, methodDef)}`,
+        undefined,
+        undefined,
+        "service",
+        invalidArgumentsErrorData(service, method, validation.issues)
       );
     }
     return this.assessAuthority(
@@ -1152,10 +1144,15 @@ export class ServiceDispatcher {
     const normalized = normalizeServiceArgs(args, methodDef.args);
     const parsed = methodDef.args.safeParse(normalized);
     if (!parsed.success) {
+      const validation = describeArgsValidationError(parsed.error, methodDef);
       throw new ServiceError(
         service,
         method,
-        `Invalid args: ${formatArgsValidationError(parsed.error)}${formatUsageHint(service, method, methodDef)}`
+        `Invalid args: ${validation.summary}${formatUsageHint(service, method, methodDef)}`,
+        undefined,
+        undefined,
+        "service",
+        invalidArgumentsErrorData(service, method, validation.issues)
       );
     }
     await this.assessAuthority(

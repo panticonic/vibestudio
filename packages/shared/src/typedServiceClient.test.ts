@@ -1,9 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import {
+  argsPositionProvablyOptional,
   createTypedServiceClient,
   defineServiceMethods,
+  describeArgsValidationError,
   fixedPreparedAuthorityRequirement,
+  maxArgsArity,
   preparedAuthoritySelectorKey,
   selectedPreparedAuthorityRequirement,
 } from "./typedServiceClient.js";
@@ -197,5 +200,84 @@ describe("prepared authority constructors", () => {
       })
     ).toThrow(/contains capability 'workspace-service:other'/);
     expect(() => selectedPreparedAuthorityRequirement([])).toThrow(/at least one principal/);
+  });
+});
+
+describe("describeArgsValidationError (the one argument-validation formatter)", () => {
+  const indexPanelArgs = z.tuple([
+    z.object({ id: z.string() }).strict(),
+    z.string().nullable(),
+    z.object({ explicit: z.boolean().optional() }).strict().optional(),
+  ]);
+  const methodDef = { args: indexPanelArgs, argumentNames: ["panel", "entityId", "options"] };
+
+  it("names the failing parameter, keeps the machine path, and adds a proven omission hint", () => {
+    const parsed = indexPanelArgs.safeParse([{ id: "p" }, "e", null]);
+    expect(parsed.success).toBe(false);
+    if (parsed.success) return;
+    const { summary, issues } = describeArgsValidationError(parsed.error, methodDef);
+    expect(summary).toBe(
+      "invalid argument [2] (parameter `options`) — expected object, received null; " +
+        "omit the optional `options` or pass object"
+    );
+    expect(issues).toEqual([
+      {
+        code: "invalid_type",
+        path: [2],
+        message: expect.any(String),
+        expected: "object",
+        received: "null",
+        parameter: "options",
+        parameterPath: ["options"],
+      },
+    ]);
+  });
+
+  it("dot-joins nested paths under the parameter name while retaining the numeric path", () => {
+    const parsed = indexPanelArgs.safeParse([{ id: "p" }, "e", { explicit: "yes" }]);
+    expect(parsed.success).toBe(false);
+    if (parsed.success) return;
+    const { summary, issues } = describeArgsValidationError(parsed.error, methodDef);
+    expect(summary).toContain("invalid argument [2].explicit (parameter `options.explicit`)");
+    expect(summary).not.toContain("omit the optional");
+    expect(issues[0]).toMatchObject({
+      path: [2, "explicit"],
+      parameter: "options",
+      parameterPath: ["options", "explicit"],
+    });
+  });
+
+  it("keeps current behavior for methods without argumentNames", () => {
+    const parsed = indexPanelArgs.safeParse([{ id: "p" }, "e", 7]);
+    expect(parsed.success).toBe(false);
+    if (parsed.success) return;
+    const { summary, issues } = describeArgsValidationError(parsed.error, { args: indexPanelArgs });
+    expect(summary).toBe("invalid argument [2] — expected object, received number");
+    expect(issues[0]).not.toHaveProperty("parameter");
+    expect(issues[0]).not.toHaveProperty("parameterPath");
+  });
+
+  it("never adds the omission hint for a required position", () => {
+    const parsed = indexPanelArgs.safeParse([{ id: "p" }, undefined, {}]);
+    expect(parsed.success).toBe(false);
+    if (parsed.success) return;
+    const { summary } = describeArgsValidationError(parsed.error, methodDef);
+    expect(summary).toContain("parameter `entityId`");
+    expect(summary).not.toContain("omit the optional");
+  });
+
+  it("proves optionality across overload unions only when every option agrees", () => {
+    const overloaded = z.union([
+      z.tuple([z.string()]),
+      z.tuple([z.string(), z.number()]),
+    ]);
+    expect(argsPositionProvablyOptional(overloaded, 1)).toBe(false);
+    const agreeing = z.union([
+      z.tuple([z.string()]),
+      z.tuple([z.string(), z.number().optional()]),
+    ]);
+    expect(argsPositionProvablyOptional(agreeing, 1)).toBe(true);
+    expect(maxArgsArity(overloaded)).toBe(2);
+    expect(maxArgsArity(z.object({}))).toBe(null);
   });
 });

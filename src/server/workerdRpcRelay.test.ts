@@ -132,6 +132,36 @@ describe("workerdRpcRelay", () => {
     });
   });
 
+  it("relays enriched argument-validation issues (parameter names + machine paths) from a DO receiver", async () => {
+    // The exact errorData shape the shared argument-validation formatter emits
+    // (invalidArgumentsErrorData): both the original numeric path and the
+    // author-facing parameter name must reach the caller unchanged.
+    const errorData = {
+      code: "invalid-arguments",
+      method: "WorkspacePresentationDO.indexPanel",
+      issues: [
+        {
+          code: "invalid_type",
+          path: [2],
+          message: "Expected object, received null",
+          expected: "object",
+          received: "null",
+          parameter: "options",
+          parameterPath: ["options"],
+        },
+      ],
+    };
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(errorEnvelope(errorData)));
+    await expect(
+      postToDurableObject(
+        { source: "workers/presentation", className: "WorkspacePresentationDO", objectKey: "main" },
+        "indexPanel",
+        [{ id: "p" }, "e", null],
+        { workerdUrl: "http://127.0.0.1:8787", workerdGatewayToken: "gateway-token" }
+      )
+    ).rejects.toMatchObject({ name: "RemoteRpcError", errorData });
+  });
+
   it("preserves structured non-OK failures and appends the exact DO identity", async () => {
     vi.stubGlobal(
       "fetch",

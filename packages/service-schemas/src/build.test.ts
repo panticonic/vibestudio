@@ -113,6 +113,54 @@ describe("build method effects", () => {
     ).toMatchObject({ source: "schema", severity: "error" });
   });
 
+  it("carries bounded structured repairs on the public diagnostic wire", () => {
+    const protocolRepair = {
+      code: "application-protocol-declaration",
+      remove: {
+        file: "workers/board/package.json",
+        field: 'vibestudio.durable.classes[className="BoardDO"].rpcSchema',
+      },
+      declareAt: { file: "meta/vibestudio.yml", field: "services[].protocols" },
+      docsId: "runtime:workerRuntime.workers.resolveService",
+    };
+    const requestRepair = {
+      code: "missing-authority-request",
+      file: "panels/board/package.json",
+      field: "vibestudio.authority.requests",
+      request: {
+        capability: "workspace-service:board",
+        resource: { kind: "exact", key: "do:workers/board:BoardDO:main" },
+        tier: "gated",
+        evidence: "exact",
+      },
+      docsId: "workspace:board",
+    };
+    for (const repair of [protocolRepair, requestRepair]) {
+      const parsed = buildDiagnosticSchema.parse({
+        source: repair.code === "missing-authority-request" ? "authority" : "schema",
+        severity: "error",
+        file: "workers/board/package.json",
+        line: 1,
+        column: 1,
+        message: "declaration failure",
+        repair,
+      });
+      expect(parsed.repair).toEqual(repair);
+    }
+    // Strictness: an unknown repair code is rejected, not silently carried.
+    expect(
+      buildDiagnosticSchema.safeParse({
+        source: "schema",
+        severity: "error",
+        file: "x",
+        line: 0,
+        column: 0,
+        message: "m",
+        repair: { code: "made-up-repair" },
+      }).success
+    ).toBe(false);
+  });
+
   it("treats workspace compilation as read-only and external acquisition as write", () => {
     expect(buildMethods.getBuild.access).toEqual({ sensitivity: "read" });
     expect(buildMethods.getBuildReport.access).toEqual({ sensitivity: "read" });

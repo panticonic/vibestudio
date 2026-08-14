@@ -20,6 +20,7 @@ export function serializeMethod(method: MethodSchema) {
     ...(method.examples ? { examples: method.examples } : {}),
     ...(method.errors ? { errors: method.errors } : {}),
     ...(method.seeAlso ? { seeAlso: method.seeAlso } : {}),
+    ...(method.argumentNames ? { argumentNames: method.argumentNames } : {}),
     argsSchema: convertZodToJsonSchema(method.args, { target: "openApi3" }) as Record<
       string,
       unknown

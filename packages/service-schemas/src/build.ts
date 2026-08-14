@@ -368,6 +368,49 @@ export const buildChangeSetSchema = z
   .strict();
 
 /**
+ * Machine-readable repair for a diagnostic class the canonical analyzers can
+ * describe exactly. Derived by the analyzer that decided the failure — never
+ * recomputed or broadened downstream. It is edit DATA for the author: the
+ * harness must not apply it, grant the request, or rerun verification.
+ */
+export const agentDiagnosticRepairSchema = z.discriminatedUnion("code", [
+  z
+    .object({
+      // An application Durable Object declared `rpcSchema`, which is reserved
+      // for host-reviewed built-in contracts.
+      code: z.literal("application-protocol-declaration"),
+      /** The exact declaration to delete. */
+      remove: z.object({ file: z.string(), field: z.string() }).strict(),
+      /** The canonical place an application protocol is declared instead. */
+      declareAt: z
+        .object({
+          file: z.literal("meta/vibestudio.yml"),
+          field: z.literal("services[].protocols"),
+        })
+        .strict(),
+      /** Live docs catalog id documenting the canonical declaration path. */
+      docsId: z.string(),
+    })
+    .strict(),
+  z
+    .object({
+      // Installed code invokes an effect its manifest does not request. The
+      // attached request is the analyzer's narrow computation — a REQUEST the
+      // author declares and review decides, never a grant.
+      code: z.literal("missing-authority-request"),
+      /** The manifest file to edit. */
+      file: z.string(),
+      field: z.literal("vibestudio.authority.requests"),
+      /** The exact narrow request the authority fold used to decide failure. */
+      request: UnitAuthorityRequestSchema,
+      /** Live docs catalog id for the service/effect being requested. */
+      docsId: z.string(),
+    })
+    .strict(),
+]);
+export type AgentDiagnosticRepairWire = z.infer<typeof agentDiagnosticRepairSchema>;
+
+/**
  * Structured, agent-actionable build diagnostic. Reuses the typecheck service's
  * `BaseDiagnostic` shape (position + severity) so esbuild, TypeScript, and
  * authority diagnostics are one uniform type the agent parses. `source`
@@ -385,6 +428,7 @@ export const buildDiagnosticSchema = z
     message: z.string(),
     lineText: z.string().optional(),
     suggestion: z.string().optional(),
+    repair: agentDiagnosticRepairSchema.optional(),
   })
   .strict();
 export type BuildDiagnosticWire = z.infer<typeof buildDiagnosticSchema>;
@@ -690,8 +734,7 @@ export const buildMethods = defineServiceMethods({
     presentation: {
       title: "View installed software for an app or extension",
       action: "view installed software packages for an app, panel, or extension",
-      description:
-        "See what software libraries are installed for an app, panel, or extension.",
+      description: "See what software libraries are installed for an app, panel, or extension.",
       group: "workspace",
       authorityCategory: {
         domain: "automation",
@@ -751,6 +794,7 @@ export const buildMethods = defineServiceMethods({
           "Workspace state to build from: omitted = main HEAD, 'ctx:<contextId>' = that context's exact working head, or a 'state:…' hash."
         ),
     ]),
+    argumentNames: ["unit", "ref"],
     returns: unitBuildReportSchema,
     examples: [
       {
@@ -897,8 +941,7 @@ export const buildMethods = defineServiceMethods({
     presentation: {
       title: "Inspect build cache retention",
       action: "inspect build cache retention",
-      description:
-        "View cached build files and check which ones are still in use.",
+      description: "View cached build files and check which ones are still in use.",
       group: "workspace",
       authorityCategory: {
         domain: "automation",

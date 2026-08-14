@@ -9,6 +9,8 @@ export interface RuntimeSurfaceMethodDoc {
   access?: Record<string, unknown>;
   argsSchema?: Record<string, unknown>;
   returnsSchema?: Record<string, unknown>;
+  /** Author-facing parameter names, positionally matching argsSchema's tuple. */
+  argumentNames?: string[];
   examples?: Array<{ args: unknown[]; returns?: unknown }>;
 }
 

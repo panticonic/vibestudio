@@ -1,6 +1,27 @@
 # Agent tool and API discoverability handover
 
-Status: implementation-ready proposal, validated against the current host and
+Status: implemented 2026-08-14 (all four work packages; host + external Base).
+Notable outcomes beyond the plan text:
+
+- The one validation formatter lives in `typedServiceClient.ts`
+  (`describeArgsValidationError` + `invalidArgumentsErrorData`); the shared
+  dispatcher and the DO receiver both call it, and the structured issue list
+  crosses every relay via `errorData`.
+- Structured repairs ride a new strict `repair` field on
+  `buildDiagnosticSchema` (`agentDiagnosticRepairSchema`); the unknown-rpcSchema
+  call sites now throw `BuildDiagnosticsError` so the repair survives into the
+  canonical report from both the worker build and the provider-catalog path.
+- The scaffold acceptance suite
+  (`src/server/buildV2/scaffoldAcceptance.test.ts`, exact-pair) drives the REAL
+  `createProjects` output through the un-mocked canonical build report, and its
+  consumer case proves the repair loop end to end (apply the supplied request
+  verbatim → clean build). Its first run caught real drift: the durable-service
+  scaffold emitted `override schemaProductionBaseline()`, a hook that no longer
+  exists on `DurableObjectBase`; the scaffold no longer emits it.
+- The panel React pin is now the Base-owned `BASE_PANEL_REACT_VERSION`
+  constant, contract-tested against `packages/react` peers and the shell realm.
+
+Original proposal below, validated against the current host and
 external Base on 2026-08-14.
 
 ## Outcome

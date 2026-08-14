@@ -15,6 +15,7 @@
 import type * as esbuild from "esbuild";
 import * as path from "path";
 import { RpcBoundaryError } from "@vibestudio/rpc";
+import type { AgentDiagnosticRepairWire } from "@vibestudio/service-schemas/build";
 
 /**
  * A caller-correctable build request failure. The structured payload survives
@@ -28,6 +29,14 @@ export class BuildRequestError extends RpcBoundaryError {
   }
 }
 
+/**
+ * Machine-readable repair attached by the canonical analyzer that decided the
+ * failure (structural twin of the wire `agentDiagnosticRepairSchema`). Edit
+ * DATA for the author — nothing downstream applies it, grants the request, or
+ * reruns verification.
+ */
+export type AgentDiagnosticRepair = AgentDiagnosticRepairWire;
+
 export interface BuildDiagnostic {
   source: "esbuild" | "tsc" | "authority" | "schema";
   severity: "error" | "warning";
@@ -39,6 +48,7 @@ export interface BuildDiagnostic {
   message: string;
   lineText?: string;
   suggestion?: string;
+  repair?: AgentDiagnosticRepair;
 }
 
 export interface DiagnosticPathContext {

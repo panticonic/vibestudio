@@ -63,11 +63,12 @@ export const WORKERS_MEMBERS = [
  * `docs_search` and `help()` two projections of the same API instead of forcing
  * agents to guess the lower-level runtime transport.
  */
-const WORKERS_RUNTIME_METHOD_CATALOG = {
+export const WORKERS_RUNTIME_METHOD_CATALOG = {
   listSources: {
     signature: "listSources(): Promise<WorkerSourceInfo[]>",
     description:
       "List every launchable worker source with its manifest entry point and Durable Object classes. Use this to inspect runnable units; do not guess index.ts or class names.",
+    argumentNames: [],
     argsSchema: { type: "array", maxItems: 0, prefixItems: [] },
     examples: [{ args: [] }],
   },
@@ -75,6 +76,7 @@ const WORKERS_RUNTIME_METHOD_CATALOG = {
     signature: "create(source: string, options?: WorkerCreateOptions): Promise<WorkerEntityHandle>",
     description:
       "Launch a regular worker through the canonical entity lifecycle in the caller's current semantic workspace context. Pass contextId only to deliberately target another context; key, env, stateArgs, and ref are optional.",
+    argumentNames: ["source", "options"],
     argsSchema: {
       type: "array",
       prefixItems: [
@@ -99,6 +101,7 @@ const WORKERS_RUNTIME_METHOD_CATALOG = {
   list: {
     signature: "list(): Promise<WorkerEntityInfo[]>",
     description: "List live regular-worker instances and their canonical entity handles.",
+    argumentNames: [],
     argsSchema: { type: "array", maxItems: 0 },
     examples: [{ args: [] }],
   },
@@ -106,6 +109,7 @@ const WORKERS_RUNTIME_METHOD_CATALOG = {
     signature: "destroy(entity: RuntimeEntityReference): Promise<void>",
     description:
       "Retire a runtime entity through the canonical lifecycle. Pass the handle from workers.create, a disposable target from workers.resolveDurableObject, or either canonical id. Resolving a shared service does not transfer ownership; retire only entities whose lifecycle you own.",
+    argumentNames: ["entity"],
     argsSchema: {
       type: "array",
       prefixItems: [
@@ -134,6 +138,7 @@ const WORKERS_RUNTIME_METHOD_CATALOG = {
       "resetStorage(target: DurableObjectStorageTarget, intent: string): Promise<{ operationId: string }>",
     description:
       "Back up, integrity-check, and reset one exact Durable Object storage target. Reset only explicitly disposable state; retained product data must use its current product export/import surface.",
+    argumentNames: ["target", "intent"],
     argsSchema: { type: "array", minItems: 2, maxItems: 2 },
     examples: [
       {
@@ -148,6 +153,7 @@ const WORKERS_RUNTIME_METHOD_CATALOG = {
     signature:
       "listStorageBackups(target: DurableObjectStorageTarget): Promise<DurableObjectStorageBackup[]>",
     description: "List verified storage backups for one exact Durable Object target.",
+    argumentNames: ["target"],
     argsSchema: { type: "array", minItems: 1, maxItems: 1 },
     examples: [{ args: [{ source: "workers/notes", className: "NotesDO", objectKey: "scratch" }] }],
   },
@@ -156,6 +162,7 @@ const WORKERS_RUNTIME_METHOD_CATALOG = {
       "restoreStorageBackup(target: DurableObjectStorageTarget, operationId: string, intent: string): Promise<{ operationId: string }>",
     description:
       "Back up the current files and restore a verified named backup to the same exact target.",
+    argumentNames: ["target", "operationId", "intent"],
     argsSchema: { type: "array", minItems: 3, maxItems: 3 },
     examples: [
       {
@@ -171,6 +178,7 @@ const WORKERS_RUNTIME_METHOD_CATALOG = {
     signature: "listServices(): Promise<WorkspaceServiceInfo[]>",
     description:
       "List product and live workspace services visible in this exact semantic context. Workspace rows include docsId; open it with the agent docs_open tool for the live method contract.",
+    argumentNames: [],
     argsSchema: { type: "array", maxItems: 0, prefixItems: [] },
     examples: [{ args: [] }],
   },
@@ -179,6 +187,7 @@ const WORKERS_RUNTIME_METHOD_CATALOG = {
       "resolveService(query: string, objectKey?: string | null): Promise<ResolvedWorkspaceService>",
     description:
       "Resolve a manifest-declared service by name or protocol in the caller's exact semantic context. Installed callers must also declare the exact workspace-service:<name> capability in package.json; resolution never grants authority by itself.",
+    argumentNames: ["query", "objectKey"],
     argsSchema: {
       type: "array",
       prefixItems: [
@@ -201,6 +210,7 @@ const WORKERS_RUNTIME_METHOD_CATALOG = {
       "resolveDurableObject(source: string, className: string, objectKey: string): Promise<ResolvedDurableObjectTarget>",
     description:
       "Resolve and activate a concrete Durable Object target when no workspace service declaration exists. Prefer resolveService whenever a declared service is available. For a disposable object whose lifecycle you own, pass the returned target directly to workers.destroy after clearing any test data.",
+    argumentNames: ["source", "className", "objectKey"],
     argsSchema: {
       type: "array",
       prefixItems: [
@@ -218,6 +228,7 @@ const WORKERS_RUNTIME_METHOD_CATALOG = {
       "durableObjectService(query: string, objectKey?: string | null): DurableObjectServiceClient",
     description:
       "Create a lazy client that resolves a manifest-declared Durable Object service and calls it through unified RPC.",
+    argumentNames: ["query", "objectKey"],
     argsSchema: {
       type: "array",
       prefixItems: [{ type: "string" }, { type: ["string", "null"] }],
@@ -403,11 +414,13 @@ export const PANEL_TREE_METHOD_CATALOG = {
   self: {
     signature: "self(): PanelHandle",
     description: "Return a synchronous handle for the panel that owns this runtime.",
+    argumentNames: [],
     argsSchema: { type: "array", maxItems: 0, prefixItems: [] },
   },
   get: {
     signature: 'get(id: string, kind?: "workspace" | "browser"): PanelHandle',
     description: "Return a synchronous handle for an exact panel slot id.",
+    argumentNames: ["id", "kind"],
     argsSchema: {
       type: "array",
       prefixItems: [{ type: "string" }, { enum: ["workspace", "browser"] }],
@@ -419,6 +432,7 @@ export const PANEL_TREE_METHOD_CATALOG = {
     signature: "rootOwners(input?: PanelTreePageWindow): Promise<PanelRuntimeTreeRootOwnerPage>",
     description:
       "List visible root ownership bands for intentional cross-owner inspection. Iterate result.owners; the return value itself is not iterable.",
+    argumentNames: ["input"],
     argsSchema: {
       type: "array",
       prefixItems: [
@@ -456,6 +470,7 @@ export const PANEL_TREE_METHOD_CATALOG = {
     signature: "roots(input?: PanelTreePageWindow): Promise<PanelRuntimeTreePage>",
     description:
       "Read one bounded root-panel page for the current verified human subject. Ownership is host-derived; no owner id is accepted.",
+    argumentNames: ["input"],
     argsSchema: {
       type: "array",
       prefixItems: [
@@ -473,6 +488,7 @@ export const PANEL_TREE_METHOD_CATALOG = {
       "rootsForOwner(ownerUserId: string | null, input?: PanelTreePageWindow): Promise<PanelRuntimeTreePage>",
     description:
       "Read one bounded root-panel page for an ownership band returned by rootOwners(). Cross-owner workspace visibility is unchanged.",
+    argumentNames: ["ownerUserId", "input"],
     argsSchema: {
       type: "array",
       prefixItems: [
@@ -492,6 +508,7 @@ export const PANEL_TREE_METHOD_CATALOG = {
       "children(parentSlotId: string, input?: PanelTreePageWindow): Promise<PanelRuntimeTreePage>",
     description:
       "Read one bounded child-panel page for a parent slot. This is the ergonomic child traversal; no group discriminator is needed.",
+    argumentNames: ["parentSlotId", "input"],
     argsSchema: {
       type: "array",
       prefixItems: [
@@ -510,6 +527,7 @@ export const PANEL_TREE_METHOD_CATALOG = {
     signature: "page(input: PanelTreePageInput): Promise<PanelRuntimeTreePage>",
     description:
       "Advanced sibling-page primitive. Prefer roots(input?), rootsForOwner(ownerUserId, input?), or children(parentSlotId, input?). Direct calls require group: {kind:'roots', ownerUserId} or {kind:'children', parentSlotId}.",
+    argumentNames: ["input"],
     argsSchema: {
       type: "array",
       prefixItems: [
@@ -541,6 +559,7 @@ export const PANEL_TREE_METHOD_CATALOG = {
   },
   path: {
     signature: "path(id: string): Promise<PanelRuntimeTreePath | null>",
+    argumentNames: ["id"],
     argsSchema: { type: "array", prefixItems: [{ type: "string" }], minItems: 1, maxItems: 1 },
     returnsSchema: {
       type: "object",
@@ -557,6 +576,7 @@ export const PANEL_TREE_METHOD_CATALOG = {
     signature: "search(input: PanelTreeSearchInput): Promise<PanelRuntimeTreeSearchPage>",
     description:
       "Return a bounded page whose hits contain entry.node and entry.handle plus hydrated ancestor entries.",
+    argumentNames: ["input"],
     argsSchema: {
       type: "array",
       prefixItems: [
@@ -600,11 +620,13 @@ export const PANEL_TREE_METHOD_CATALOG = {
   parent: {
     signature: "parent(id: string): PanelHandle | null",
     description: "Return the cached parent handle, or explicit null for a root panel.",
+    argumentNames: ["id"],
     argsSchema: { type: "array", prefixItems: [{ type: "string" }], minItems: 1, maxItems: 1 },
   },
   navigate: {
     signature:
       "navigate(id: string, source: string, options?: PanelNavigateOptions): Promise<PanelObservation>",
+    argumentNames: ["id", "source", "options"],
     argsSchema: {
       type: "array",
       prefixItems: [{ type: "string" }, { type: "string" }, { type: "object" }],
@@ -616,6 +638,7 @@ export const PANEL_TREE_METHOD_CATALOG = {
     signature:
       "navigateHistory(id: string, delta: -1 | 1, options?: PanelWaitOptions): Promise<PanelObservation | null>",
     description: "Move an exact panel slot one step through its navigation history.",
+    argumentNames: ["id", "delta", "options"],
     argsSchema: {
       type: "array",
       prefixItems: [{ type: "string" }, { enum: [-1, 1] }, { type: "object" }],

@@ -222,6 +222,15 @@ export interface MethodSchema {
   /** Unified access & restrictedness descriptor (caller kinds, conditional
    *  restrictions, sensitivity, side-effects, approval/grant gates). */
   access?: MethodAccessDescriptor;
+  /**
+   * Author-facing parameter names, positionally matching the args tuple. A
+   * Zod tuple does not retain source parameter names, so this is the literate
+   * home for them: help()/docs render calls with these names and argument
+   * validation errors use them to name the failing parameter. Length must
+   * equal the maximum tuple arity (enforced by serialization tests); where
+   * absent, projections fall back to `input`/`arg0` naming.
+   */
+  argumentNames?: string[];
   /** Worked examples (catalog + JIT teaching). */
   examples?: MethodExample[];
   /** Documented error outcomes. */
@@ -277,6 +286,136 @@ export function defineReceiverServiceMethods<const M extends ServiceMethodSchema
       ];
     })
   ) as M;
+}
+
+/**
+ * The tuple options of a method args schema: a plain `z.tuple` is one option,
+ * a union of tuples (call overloads) is several. Returns null when the schema
+ * has no tuple shape at all — positional reasoning does not apply there.
+ */
+export function argsTupleOptions(schema: z.ZodType): z.ZodTuple[] | null {
+  // Compared as the literal strings the enum members hold (`ZodTuple`,
+  // `ZodUnion`): zod is imported type-only here, so naming
+  // z.ZodFirstPartyTypeKind reaches for a value that does not exist at runtime.
+  const def = (schema as unknown as { _def?: { typeName?: string; options?: z.ZodType[] } })._def;
+  if (def?.typeName === "ZodTuple") return [schema as unknown as z.ZodTuple];
+  if (def?.typeName === "ZodUnion") {
+    const tuples = (def.options ?? []).filter(
+      (option): option is z.ZodTuple =>
+        (option as unknown as { _def?: { typeName?: string } })._def?.typeName === "ZodTuple"
+    );
+    return tuples.length > 0 ? tuples : null;
+  }
+  return null;
+}
+
+/**
+ * Maximum positional arity of a method args schema (the longest tuple option),
+ * or null for non-tuple schemas. `argumentNames` must have exactly this length.
+ */
+export function maxArgsArity(schema: z.ZodType): number | null {
+  const options = argsTupleOptions(schema);
+  if (!options) return null;
+  return Math.max(...options.map((tuple) => tuple._def.items.length));
+}
+
+/**
+ * Whether the schema PROVES that the tuple position may be omitted: true only
+ * for a plain tuple whose element at `index` is optional (or beyond a shorter
+ * overload). Union overloads with conflicting shapes return false — callers
+ * must not guess an omission hint there.
+ */
+export function argsPositionProvablyOptional(schema: z.ZodType, index: number): boolean {
+  const options = argsTupleOptions(schema);
+  if (!options) return false;
+  return options.every((tuple) => {
+    const items = tuple._def.items as z.ZodType[];
+    if (index >= items.length) return true;
+    return items[index]!.isOptional();
+  });
+}
+
+/** One argument-validation issue, with the original machine path preserved and
+ *  the author-facing parameter name added when the method declares one. */
+export interface InvalidArgumentIssue {
+  code: string;
+  /** Original Zod path: leading tuple index, then nested segments. */
+  path: (string | number)[];
+  message: string;
+  expected?: string;
+  received?: string;
+  /** Author-facing name of the failing method parameter, when declared. */
+  parameter?: string;
+  /** `path` with the tuple index replaced by the parameter name. */
+  parameterPath?: (string | number)[];
+}
+
+/**
+ * The ONE argument-validation formatter (server, Electron, DO receiver, and
+ * eval all route here): a concise human summary plus the structured issue
+ * list that crosses the wire as errorData. When the method declares
+ * `argumentNames`, the leading tuple index is translated into the parameter
+ * name; the numeric machine path is always retained. An omission hint is added
+ * only when the tuple position is provably optional in the schema.
+ */
+export function describeArgsValidationError(
+  error: z.ZodError,
+  methodDef?: Pick<MethodSchema, "args" | "argumentNames">
+): { summary: string; issues: InvalidArgumentIssue[] } {
+  const names = methodDef?.argumentNames;
+  const issues = error.issues.map((issue): InvalidArgumentIssue => {
+    const [head, ...rest] = issue.path;
+    const parameter = typeof head === "number" ? names?.[head] : undefined;
+    const expected = "expected" in issue ? String(issue.expected) : undefined;
+    const received = "received" in issue ? String(issue.received) : undefined;
+    return {
+      code: issue.code,
+      path: [...issue.path],
+      message: issue.message,
+      ...(expected !== undefined ? { expected } : {}),
+      ...(received !== undefined ? { received } : {}),
+      ...(parameter !== undefined
+        ? { parameter, parameterPath: [parameter, ...rest] }
+        : {}),
+    };
+  });
+  const summaries = issues.map((issue) => {
+    const [head, ...rest] = issue.path;
+    const where =
+      typeof head === "number"
+        ? `[${head}]${rest.length > 0 ? `.${rest.join(".")}` : ""}`
+        : issue.path.length > 0
+          ? issue.path.join(".")
+          : "(args)";
+    const named = issue.parameter
+      ? ` (parameter \`${issue.parameterPath!.join(".")}\`)`
+      : "";
+    const detail =
+      issue.code === "invalid_type"
+        ? `expected ${issue.expected}, received ${issue.received}`
+        : issue.message;
+    const omissionHint =
+      issue.code === "invalid_type" &&
+      typeof head === "number" &&
+      rest.length === 0 &&
+      (issue.received === "null" || issue.received === "undefined") &&
+      methodDef !== undefined &&
+      argsPositionProvablyOptional(methodDef.args, head)
+        ? `; omit the optional ${issue.parameter ? `\`${issue.parameter}\`` : "value"} or pass ${issue.expected}`
+        : "";
+    return `invalid argument ${where}${named} — ${detail}${omissionHint}`;
+  });
+  return { summary: summaries.join("; "), issues };
+}
+
+/** Structured wire payload for an argument-validation failure. Services own
+ *  errorData's schema; every relay preserves it end to end. */
+export function invalidArgumentsErrorData(
+  service: string,
+  method: string,
+  issues: InvalidArgumentIssue[]
+): Record<string, unknown> {
+  return { code: "invalid-arguments", method: `${service}.${method}`, issues };
 }
 
 /**

@@ -6,6 +6,7 @@ import { workspacePresentationMethods } from "@vibestudio/service-schemas/worksp
 import { gadWireMethods } from "@vibestudio/service-schemas/workspaceSource";
 import type { MethodSchema, ServiceMethodSchemas } from "@vibestudio/shared/typedServiceClient";
 import { sha256Canonical } from "@vibestudio/shared/authority/invocationSnapshot";
+import { BuildDiagnosticsError } from "./diagnostics.js";
 
 /**
  * Host-reviewed typed receiver contracts available to workspace worker builds.
@@ -53,6 +54,42 @@ export function unknownWorkspaceRpcSchemaMessage(input: {
     "Application-defined protocols belong in meta/vibestudio.yml services[].protocols and must omit " +
     "package.json#vibestudio.durable.classes[].rpcSchema; rpcSchema is reserved for host-reviewed built-in contracts."
   );
+}
+
+/**
+ * The one structured diagnostic for the unknown-rpcSchema declaration mistake:
+ * the explanatory text above plus the exact removal field and the canonical
+ * workspace declaration location, so an agent repairs the source instead of
+ * re-deriving policy from prose. Both diagnostic call sites throw this.
+ */
+export function unknownWorkspaceRpcSchemaError(input: {
+  repoPath: string;
+  className: string;
+  rpcSchema: string;
+}): BuildDiagnosticsError {
+  const message = unknownWorkspaceRpcSchemaMessage(input);
+  return new BuildDiagnosticsError(message, [
+    {
+      source: "schema",
+      severity: "error",
+      file: `${input.repoPath}/package.json`,
+      line: 1,
+      column: 1,
+      message,
+      suggestion:
+        `Delete rpcSchema ${JSON.stringify(input.rpcSchema)} from the ${input.className} class ` +
+        "entry and declare the application protocol in meta/vibestudio.yml services[].protocols.",
+      repair: {
+        code: "application-protocol-declaration",
+        remove: {
+          file: `${input.repoPath}/package.json`,
+          field: `vibestudio.durable.classes[className=${JSON.stringify(input.className)}].rpcSchema`,
+        },
+        declareAt: { file: "meta/vibestudio.yml", field: "services[].protocols" },
+        docsId: "runtime:workerRuntime.workers.resolveService",
+      },
+    },
+  ]);
 }
 
 /** Digest the host-owned authority surface that affects static userland folds. */

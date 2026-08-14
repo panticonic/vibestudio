@@ -17,4 +17,5 @@ export const exactPairTests = [
   "src/server/buildV2/builder.terminalWorker.test.ts",
   "src/server/buildV2/cdpClientBuild.test.ts",
   "src/server/buildV2/index.librarySubpath.test.ts",
+  "src/server/buildV2/scaffoldAcceptance.test.ts",
 ] as const;
