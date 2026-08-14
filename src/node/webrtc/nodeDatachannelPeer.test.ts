@@ -6,6 +6,7 @@ import * as path from "node:path";
 import { X509Certificate, randomBytes } from "node:crypto";
 import {
   Fanout,
+  WrappedDataChannel,
   WrappedPeerConnection,
   canonicalizeFingerprint,
   candidateTypeFromPair,
@@ -88,6 +89,53 @@ describe("Uint8Array <-> Buffer conversion", () => {
   it("round-trips arbitrary bytes send->receive", () => {
     const bytes = new Uint8Array([255, 0, 128, 64, 1]);
     expect([...fromNodeMessage(toNodeBuffer(bytes))]).toEqual([...bytes]);
+  });
+});
+
+describe("WrappedDataChannel.send", () => {
+  /** The native surface the wrapper touches, with a scriptable send result. */
+  function fakeNative(sendResult: boolean) {
+    const sent: Buffer[] = [];
+    return {
+      sent,
+      dc: {
+        getLabel: () => "bulk",
+        isOpen: () => true,
+        close: () => {},
+        sendMessageBinary: (buffer: Buffer) => {
+          sent.push(buffer);
+          return sendResult;
+        },
+        bufferedAmount: () => 0,
+        setBufferedAmountLowThreshold: () => {},
+        maxMessageSize: () => 262144,
+        onOpen: () => {},
+        onClosed: () => {},
+        onError: () => {},
+        onMessage: () => {},
+        onBufferedAmountLow: () => {},
+      },
+    };
+  }
+
+  it("accepts a queued message: false means buffered, not failed", () => {
+    // libdatachannel returns false when it could not send immediately and
+    // queued the message instead; it goes out when the transport drains. A
+    // device measurement proved the point the hard way -- retrying a "failed"
+    // part delivered exact duplicates of it, so the message had been sent.
+    // Throwing here truncated bodies (callers discarded the rest of the queue)
+    // and then duplicated them (callers re-sent the part).
+    const native = fakeNative(false);
+    const channel = new WrappedDataChannel(native.dc, "bulk");
+    expect(() => channel.send(new Uint8Array([1, 2, 3]))).not.toThrow();
+    expect(native.sent).toHaveLength(1);
+  });
+
+  it("sends the exact logical bytes of a subarray view", () => {
+    const native = fakeNative(true);
+    const channel = new WrappedDataChannel(native.dc, "bulk");
+    channel.send(new Uint8Array([9, 8, 7, 6, 5]).subarray(1, 4));
+    expect([...(native.sent[0] ?? [])]).toEqual([8, 7, 6]);
   });
 });
 

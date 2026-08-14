@@ -397,7 +397,7 @@ function loadNodeDatachannel(): NodeDatachannelModule {
 // Wrappers — map the native single-handler surface onto the contract.
 // ===========================================================================
 
-class WrappedDataChannel implements RtcDataChannelLike {
+export class WrappedDataChannel implements RtcDataChannelLike {
   readonly label: string;
   private state: RtcDataChannelState;
   private lowThreshold = 0;
@@ -450,8 +450,20 @@ class WrappedDataChannel implements RtcDataChannelLike {
   }
 
   send(data: Uint8Array): void {
-    const sent = this.dc.sendMessageBinary(toNodeBuffer(data));
-    if (!sent) throw new Error(`data channel '${this.label}' rejected ${data.byteLength} bytes`);
+    // libdatachannel returns false when the message could not go out
+    // immediately and was QUEUED instead -- bufferedAmount rises by exactly
+    // this message and it goes on the wire when the transport drains. It is a
+    // backpressure signal, not a failure: a closed channel throws instead.
+    //
+    // Treating false as a failure is what produced every symptom of this bug.
+    // Discarding the stream's remaining queue on it truncated bodies whose
+    // earlier parts had gone out; re-sending the "failed" part delivered it
+    // twice. The device measurement settles which reading is right -- retrying
+    // a refused part produced exact integer duplicates of it on the wire, so
+    // the refused message had plainly been sent. Backpressure is honored by
+    // the caller, which drains before its next write (frameScheduler's pump,
+    // and on mobile down to an empty buffer).
+    this.dc.sendMessageBinary(toNodeBuffer(data));
   }
 
   close(): void {
