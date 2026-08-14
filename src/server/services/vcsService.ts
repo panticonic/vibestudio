@@ -374,7 +374,7 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
     // it already computes for per-reference authorization, so the caller
     // cannot widen the basis by supplying the field.
     if (VISIBILITY_SCOPED_METHODS.has(method) && isRecord(parsed.input)) {
-      parsed.input.visibilityContextIds = await reachableContextAuthorities(ctx, deps);
+      parsed.input["visibilityContextIds"] = await reachableContextAuthorities(ctx, deps);
     }
 
     const dispatchMethod = `vcs${method.charAt(0).toUpperCase()}${method.slice(1)}`;

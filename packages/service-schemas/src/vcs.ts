@@ -505,13 +505,10 @@ export const vcsWorkUnitSchema = z
         message: "Only import work units may carry an external snapshot",
       });
     }
-    if (value.intentSummary != null && value.triggerEvidence != null) {
-      context.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["triggerEvidence"],
-        message: "Stated intent and captured trigger evidence are mutually exclusive",
-      });
-    }
+    // Stated intent and trigger evidence deliberately coexist. Which rung the
+    // ladder resolves to is the resolver's decision, made from both; refusing
+    // to carry the statement whenever an author wrote a summary destroyed the
+    // requester's own words, which is the evidence abduction runs on.
   });
 export type VcsWorkUnit = z.infer<typeof vcsWorkUnitSchema>;
 
@@ -1809,6 +1806,16 @@ export const vcsWalkEntrySchema = z
     group: nonEmptyText.max(120).optional(),
     intent: vcsIntentEvidenceSchema.optional(),
     detail: nonEmptyText.max(600).optional(),
+    /**
+     * The requester's own words behind this entry, when the record captured
+     * them. A resolved intent may be the author's summary; abduction runs on
+     * the statement that summary interpreted, so the walk carries both rather
+     * than making the reader choose between them.
+     */
+    statement: z
+      .object({ text: nonEmptyText.max(2_000), sender: nonEmptyText.max(200) })
+      .strict()
+      .optional(),
     boundary: vcsWalkBoundarySchema.optional(),
   })
   .strict();
@@ -1819,7 +1826,11 @@ export const vcsWalkInputSchema = z
     contextId,
     walk: vcsWalkKindSchema,
     subject: vcsSemanticNodeRefSchema,
-    scope: vcsWalkScopeSchema.default("command"),
+    // One command is one tool call, so a command-scoped cohort is almost always
+    // the single coordinate the caller already had. The unit that corresponds
+    // to "one request" is the turn; `command` and `work-unit` remain available
+    // for narrowing.
+    scope: vcsWalkScopeSchema.default("turn"),
     cursor: cursor.optional(),
     limit: z.number().int().positive().max(200).default(50),
     visibilityContextIds: vcsVisibilityBasisSchema,
@@ -1858,6 +1869,7 @@ export const vcsQueryRefusalSchema = z
       "full-scan",
       "cartesian-join",
       "scan-budget",
+      "engine-error",
     ]),
     message: nonEmptyText.max(600),
     term: z.string().max(200).nullable(),
@@ -2023,6 +2035,13 @@ export const vcsReadMemoryResultSchema = z.discriminatedUnion("status", [
       coordinateKind: z.literal("utf16"),
       episodes: z.array(vcsReadMemoryEpisodeSchema).max(12),
       history: z.array(vcsHistoryEntrySchema).max(8),
+      /**
+       * Rejected work recorded at this coordinate and visible to this caller.
+       * A rejection is the strongest axiom evidence the record holds and the
+       * hardest to ask for, because an agent must suspect it exists first; the
+       * count travels with the bytes so the suspicion does not have to.
+       */
+      rejectionCount: z.number().int().nonnegative(),
       truncated: z.boolean(),
     })
     .strict(),

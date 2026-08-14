@@ -6809,6 +6809,442 @@
       "additionalProperties": false
     }
   },
+  "listAgentDirectory": {
+    "description": "List agent instances from the durable directory. Every entry carries the exact `agent:<handle>@<channelId>` ref that `notify` accepts.",
+    "access": {
+      "sensitivity": "read"
+    },
+    "argsSchema": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1,
+      "items": [
+        {
+          "type": "object",
+          "properties": {
+            "channelId": {
+              "type": "string",
+              "nullable": true
+            },
+            "workerId": {
+              "$ref": "#/items/0/properties/channelId"
+            },
+            "runId": {
+              "$ref": "#/items/0/properties/channelId"
+            },
+            "handle": {
+              "$ref": "#/items/0/properties/channelId"
+            },
+            "status": {
+              "type": "string",
+              "enum": [
+                "running",
+                "idle",
+                "hibernated",
+                "terminal"
+              ]
+            },
+            "includeTerminal": {
+              "type": "boolean"
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 0,
+              "nullable": true
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "returnsSchema": {
+      "type": "object",
+      "properties": {
+        "summary": {
+          "type": "object",
+          "properties": {
+            "rows": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "running": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "terminal": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "rows",
+            "running",
+            "terminal"
+          ],
+          "additionalProperties": false
+        },
+        "entries": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "instanceId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "ref": {
+                "type": "string",
+                "minLength": 1
+              },
+              "channelId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "participantId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "kind": {
+                "type": "string",
+                "nullable": true
+              },
+              "handle": {
+                "type": "string",
+                "nullable": true
+              },
+              "displayName": {
+                "type": "string",
+                "nullable": true
+              },
+              "description": {
+                "type": "string",
+                "nullable": true
+              },
+              "parentInstanceId": {
+                "type": "string",
+                "nullable": true
+              },
+              "runId": {
+                "type": "string",
+                "nullable": true
+              },
+              "workerId": {
+                "type": "string",
+                "nullable": true
+              },
+              "ownerUserId": {
+                "type": "string",
+                "nullable": true
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "running",
+                  "idle",
+                  "hibernated",
+                  "terminal"
+                ]
+              },
+              "statusEventId": {
+                "type": "string",
+                "nullable": true
+              },
+              "lastActivityAt": {
+                "type": "number",
+                "nullable": true
+              },
+              "summary": {
+                "type": "string",
+                "nullable": true
+              }
+            },
+            "required": [
+              "instanceId",
+              "ref",
+              "channelId",
+              "participantId",
+              "kind",
+              "handle",
+              "displayName",
+              "description",
+              "parentInstanceId",
+              "runId",
+              "workerId",
+              "ownerUserId",
+              "status",
+              "statusEventId",
+              "lastActivityAt",
+              "summary"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "summary",
+        "entries"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "searchAgentDirectory": {
+    "description": "Search the agent directory by purpose over handles, names, descriptions, and each instance's latest deliberate utterance.",
+    "access": {
+      "sensitivity": "read"
+    },
+    "argsSchema": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1,
+      "items": [
+        {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "minLength": 1
+            },
+            "includeTerminal": {
+              "type": "boolean"
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 0,
+              "nullable": true
+            }
+          },
+          "required": [
+            "query"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "returnsSchema": {
+      "type": "object",
+      "properties": {
+        "summary": {
+          "type": "object",
+          "properties": {
+            "rows": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "running": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "terminal": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "rows",
+            "running",
+            "terminal"
+          ],
+          "additionalProperties": false
+        },
+        "entries": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "instanceId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "ref": {
+                "type": "string",
+                "minLength": 1
+              },
+              "channelId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "participantId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "kind": {
+                "type": "string",
+                "nullable": true
+              },
+              "handle": {
+                "type": "string",
+                "nullable": true
+              },
+              "displayName": {
+                "type": "string",
+                "nullable": true
+              },
+              "description": {
+                "type": "string",
+                "nullable": true
+              },
+              "parentInstanceId": {
+                "type": "string",
+                "nullable": true
+              },
+              "runId": {
+                "type": "string",
+                "nullable": true
+              },
+              "workerId": {
+                "type": "string",
+                "nullable": true
+              },
+              "ownerUserId": {
+                "type": "string",
+                "nullable": true
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "running",
+                  "idle",
+                  "hibernated",
+                  "terminal"
+                ]
+              },
+              "statusEventId": {
+                "type": "string",
+                "nullable": true
+              },
+              "lastActivityAt": {
+                "type": "number",
+                "nullable": true
+              },
+              "summary": {
+                "type": "string",
+                "nullable": true
+              }
+            },
+            "required": [
+              "instanceId",
+              "ref",
+              "channelId",
+              "participantId",
+              "kind",
+              "handle",
+              "displayName",
+              "description",
+              "parentInstanceId",
+              "runId",
+              "workerId",
+              "ownerUserId",
+              "status",
+              "statusEventId",
+              "lastActivityAt",
+              "summary"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "summary",
+        "entries"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "describeChannels": {
+    "description": "Describe channels with their directory participants, envelope count, and last envelope time. Channel titles live in the channel DO's own config and are deliberately absent here.",
+    "access": {
+      "sensitivity": "read"
+    },
+    "argsSchema": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1,
+      "items": [
+        {
+          "type": "object",
+          "properties": {
+            "channelIds": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 0,
+              "nullable": true
+            }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "returnsSchema": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "channelId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "envelopeCount": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "lastEnvelopeAt": {
+            "type": "number",
+            "nullable": true
+          },
+          "participants": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "participantId": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "handle": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "kind": {
+                  "type": "string",
+                  "nullable": true
+                },
+                "status": {
+                  "type": "string",
+                  "enum": [
+                    "running",
+                    "idle",
+                    "hibernated",
+                    "terminal"
+                  ],
+                  "nullable": true
+                }
+              },
+              "required": [
+                "participantId",
+                "handle",
+                "kind",
+                "status"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "channelId",
+          "envelopeCount",
+          "lastEnvelopeAt",
+          "participants"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
   "validateGadHashes": {
     "description": "Validate content, manifest, and state hashes without mutating durable state.",
     "access": {

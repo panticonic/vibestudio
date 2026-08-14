@@ -757,6 +757,101 @@ export const InspectChannelRosterInputSchema = z
   .strict();
 export type InspectChannelRosterInput = z.infer<typeof InspectChannelRosterInputSchema>;
 
+/**
+ * Agent directory (messaging plan §4.4). `ref` is the whole point: it is the
+ * exact string `notify` accepts, so discovering an agent and addressing it are
+ * the same act rather than two vocabularies a caller must translate between.
+ */
+export const AgentDirectoryStatusSchema = z.enum(["running", "idle", "hibernated", "terminal"]);
+export type AgentDirectoryStatus = z.infer<typeof AgentDirectoryStatusSchema>;
+
+export const AgentDirectoryEntrySchema = z
+  .object({
+    instanceId: z.string().min(1),
+    /** `agent:<handle>@<channelId>` — paste straight into `notify`. */
+    ref: z.string().min(1),
+    channelId: z.string().min(1),
+    participantId: z.string().min(1),
+    kind: z.string().nullable(),
+    handle: z.string().nullable(),
+    displayName: z.string().nullable(),
+    description: z.string().nullable(),
+    parentInstanceId: z.string().nullable(),
+    runId: z.string().nullable(),
+    workerId: z.string().nullable(),
+    ownerUserId: z.string().nullable(),
+    status: AgentDirectoryStatusSchema,
+    /** The lifecycle event that set `status`. Status never moves on a clock. */
+    statusEventId: z.string().nullable(),
+    /** Informational only; it gates nothing. */
+    lastActivityAt: z.number().nullable(),
+    summary: z.string().nullable(),
+  })
+  .strict();
+export type AgentDirectoryEntry = z.infer<typeof AgentDirectoryEntrySchema>;
+
+export const AgentDirectoryListingSchema = z
+  .object({
+    summary: z
+      .object({
+        rows: z.number().int().nonnegative(),
+        running: z.number().int().nonnegative(),
+        terminal: z.number().int().nonnegative(),
+      })
+      .strict(),
+    entries: z.array(AgentDirectoryEntrySchema),
+  })
+  .strict();
+export type AgentDirectoryListing = z.infer<typeof AgentDirectoryListingSchema>;
+
+export const ListAgentDirectoryInputSchema = z
+  .object({
+    channelId: optionalString,
+    workerId: optionalString,
+    runId: optionalString,
+    handle: optionalString,
+    status: AgentDirectoryStatusSchema.optional(),
+    /** Terminal instances stay listed on request: their channels are durable,
+     *  so they are exactly the catalog of agents that can be woken. */
+    includeTerminal: z.boolean().optional(),
+    limit: optionalLimit,
+  })
+  .strict();
+export type ListAgentDirectoryInput = z.infer<typeof ListAgentDirectoryInputSchema>;
+
+export const SearchAgentDirectoryInputSchema = z
+  .object({
+    query: z.string().min(1),
+    includeTerminal: z.boolean().optional(),
+    limit: optionalLimit,
+  })
+  .strict();
+export type SearchAgentDirectoryInput = z.infer<typeof SearchAgentDirectoryInputSchema>;
+
+export const ChannelDescriptionSchema = z
+  .object({
+    channelId: z.string().min(1),
+    envelopeCount: z.number().int().nonnegative(),
+    lastEnvelopeAt: z.number().nullable(),
+    participants: z.array(
+      z
+        .object({
+          participantId: z.string().min(1),
+          handle: z.string().nullable(),
+          kind: z.string().nullable(),
+          status: AgentDirectoryStatusSchema.nullable(),
+        })
+        .strict()
+    ),
+  })
+  .strict();
+export type ChannelDescription = z.infer<typeof ChannelDescriptionSchema>;
+
+export const DescribeChannelsInputSchema = z
+  .object({ channelIds: z.array(z.string().min(1)).optional(), limit: optionalLimit })
+  .strict();
+export type DescribeChannelsInput = z.infer<typeof DescribeChannelsInputSchema>;
+
 export const InspectAgentHealthInputSchema = z
   .object({
     channelId: z.string(),
@@ -1029,6 +1124,27 @@ export const gadMethods = defineServiceMethods({
     returns: AgentHealthInspectionSchema,
     access: readAccess,
   },
+  listAgentDirectory: {
+    description:
+      "List agent instances from the durable directory. Every entry carries the exact `agent:<handle>@<channelId>` ref that `notify` accepts.",
+    args: z.tuple([ListAgentDirectoryInputSchema]),
+    returns: AgentDirectoryListingSchema,
+    access: readAccess,
+  },
+  searchAgentDirectory: {
+    description:
+      "Search the agent directory by purpose over handles, names, descriptions, and each instance's latest deliberate utterance.",
+    args: z.tuple([SearchAgentDirectoryInputSchema]),
+    returns: AgentDirectoryListingSchema,
+    access: readAccess,
+  },
+  describeChannels: {
+    description:
+      "Describe channels with their directory participants, envelope count, and last envelope time. Channel titles live in the channel DO's own config and are deliberately absent here.",
+    args: z.tuple([DescribeChannelsInputSchema]),
+    returns: z.array(ChannelDescriptionSchema),
+    access: readAccess,
+  },
   validateGadHashes: {
     description: "Validate content, manifest, and state hashes without mutating durable state.",
     args: z.tuple([z.object({}).strict().optional()]),
@@ -1197,6 +1313,9 @@ const semanticWireMethods = {
   vcsNeighbors: semanticWireMethod(vcsMethods.neighbors, "neighbors"),
   vcsHistory: semanticWireMethod(vcsMethods.history, "history"),
   vcsBlame: semanticWireMethod(vcsMethods.blame, "blame"),
+  vcsWalk: semanticWireMethod(vcsMethods.walk, "walk"),
+  vcsQuery: semanticWireMethod(vcsMethods.query, "query"),
+  vcsSearch: semanticWireMethod(vcsMethods.search, "search"),
   vcsReadMemory: semanticWireMethod(vcsMethods.readMemory, "read memory"),
   vcsResolveRepository: semanticWireMethod(vcsMethods.resolveRepository, "resolve repository"),
   vcsReadFile: semanticWireMethod(vcsMethods.readFile, "read file"),
@@ -2064,6 +2183,9 @@ const GAD_AUTHORITY_GROUPS: readonly GadAuthorityGroup[] = [
       "diagnoseInvocation",
       "inspectChannelRoster",
       "inspectAgentHealth",
+      "listAgentDirectory",
+      "searchAgentDirectory",
+      "describeChannels",
       "inspectStorageDiagnostics",
       "listStoredValueRefs",
       "getStatus",

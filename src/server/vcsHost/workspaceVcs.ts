@@ -86,6 +86,49 @@ import type { RpcCausalParent } from "@vibestudio/rpc";
 import { WorkspaceRepositories } from "./workspaceRepositories.js";
 import type { WorkspaceRootTemplateBootstrap } from "../workspaceRootTemplateBootstrap.js";
 
+/**
+ * The semantic wire surface, derived from the port rather than mirrored beside
+ * it. A hand-written dispatch switch let `vcs.walk`, `vcs.query`, and
+ * `vcs.search` ship with schemas, host authorization, and DO implementations
+ * while every call still failed at this hop, because nothing typed the two
+ * lists against each other. `satisfies` now makes an undispatched port method
+ * a compile error.
+ */
+type SemanticWireMethod = Extract<keyof WorkspaceSemanticPort, `vcs${string}`>;
+
+const SEMANTIC_WIRE_METHODS = {
+  vcsEdit: true,
+  vcsMove: true,
+  vcsCopy: true,
+  vcsMerge: true,
+  vcsRevert: true,
+  vcsCommit: true,
+  vcsDiscard: true,
+  vcsImportSnapshot: true,
+  vcsRegisterExternalDelta: true,
+  vcsSupersedeExternalDelta: true,
+  vcsFinalizeExternalDelta: true,
+  vcsPush: true,
+  vcsStatus: true,
+  vcsCompare: true,
+  vcsInspect: true,
+  vcsNeighbors: true,
+  vcsHistory: true,
+  vcsBlame: true,
+  vcsWalk: true,
+  vcsQuery: true,
+  vcsSearch: true,
+  vcsReadMemory: true,
+  vcsResolveRepository: true,
+  vcsReadFile: true,
+  vcsListDirectory: true,
+  vcsListFiles: true,
+} as const satisfies Record<SemanticWireMethod, true>;
+
+export function isSemanticWireMethod(method: string): method is SemanticWireMethod {
+  return Object.hasOwn(SEMANTIC_WIRE_METHODS, method);
+}
+
 const SYSTEM_ACTOR = { id: "system", kind: "system" } as const;
 const UTF8_DECODER = new TextDecoder("utf-8", { fatal: true });
 const BUILDS_LOG_ID = "builds:workspace";
@@ -481,57 +524,10 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     method: string,
     request: SemanticRequest
   ): Promise<WorkspaceSourceSemanticDispatchResult> {
-    const gad = this.gad();
-    switch (method) {
-      case "vcsEdit":
-        return gad.vcsEdit(request);
-      case "vcsMove":
-        return gad.vcsMove(request);
-      case "vcsCopy":
-        return gad.vcsCopy(request);
-      case "vcsMerge":
-        return gad.vcsMerge(request);
-      case "vcsRevert":
-        return gad.vcsRevert(request);
-      case "vcsCommit":
-        return gad.vcsCommit(request);
-      case "vcsDiscard":
-        return gad.vcsDiscard(request);
-      case "vcsImportSnapshot":
-        return gad.vcsImportSnapshot(request);
-      case "vcsRegisterExternalDelta":
-        return gad.vcsRegisterExternalDelta(request);
-      case "vcsSupersedeExternalDelta":
-        return gad.vcsSupersedeExternalDelta(request);
-      case "vcsFinalizeExternalDelta":
-        return gad.vcsFinalizeExternalDelta(request);
-      case "vcsPush":
-        return gad.vcsPush(request);
-      case "vcsStatus":
-        return gad.vcsStatus(request);
-      case "vcsCompare":
-        return gad.vcsCompare(request);
-      case "vcsInspect":
-        return gad.vcsInspect(request);
-      case "vcsNeighbors":
-        return gad.vcsNeighbors(request);
-      case "vcsHistory":
-        return gad.vcsHistory(request);
-      case "vcsBlame":
-        return gad.vcsBlame(request);
-      case "vcsReadMemory":
-        return gad.vcsReadMemory(request);
-      case "vcsResolveRepository":
-        return gad.vcsResolveRepository(request);
-      case "vcsReadFile":
-        return gad.vcsReadFile(request);
-      case "vcsListDirectory":
-        return gad.vcsListDirectory(request);
-      case "vcsListFiles":
-        return gad.vcsListFiles(request);
-      default:
-        throw new Error(`Invalid semantic VCS method ${JSON.stringify(method)}`);
+    if (!isSemanticWireMethod(method)) {
+      throw new Error(`Invalid semantic VCS method ${JSON.stringify(method)}`);
     }
+    return this.gad()[method](request);
   }
 
   semanticDirectCall<T>(method: string, input: unknown): Promise<T> {

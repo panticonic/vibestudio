@@ -34,6 +34,30 @@ vi.mock("./sessionContext.js", async (loadOriginal) => {
 });
 
 import { vcsCommands } from "./vcsCommands.js";
+import { vcsMethods } from "@vibestudio/service-schemas/vcs";
+
+/**
+ * Methods the CLI deliberately does not expose, each with the reason it is not
+ * an operator action. Anything else in the contract must have a command.
+ */
+const VCS_COMMAND_ALIASES: Record<string, string> = {
+  move: "move-file",
+  copy: "copy-file",
+  readFile: "read-file",
+  listFiles: "list-files",
+};
+
+const UNEXPOSED_VCS_METHODS = new Set([
+  // Delivered through `vcs git`, which owns the external-upstream workflow.
+  "registerExternalDelta",
+  "supersedeExternalDelta",
+  "finalizeExternalDelta",
+  // Read-time projections the agent tooling composes; no standalone operation.
+  "readMemory",
+  "resolveRepository",
+  // Delivered as `vibestudio fs ls`, which reads the session context directly.
+  "listDirectory",
+]);
 
 const working = { kind: "event" as const, eventId: "event:working" };
 
@@ -150,8 +174,23 @@ describe("canonical VCS CLI", () => {
       "neighbors",
       "history",
       "blame",
+      "walk",
+      "query",
+      "search",
     ]) {
       expect(names).toContain(expected);
+    }
+    // The CLI is the operator's only direct route into the semantic surface, so
+    // a method that exists in the contract and not here is not merely missing a
+    // convenience — it is an operation nobody can run without an agent. That is
+    // how `walk`, `query`, and `search` stayed unobservable while they were
+    // broken. Derive the expectation from the contract so the gap cannot reopen.
+    for (const method of Object.keys(vcsMethods)) {
+      if (UNEXPOSED_VCS_METHODS.has(method)) continue;
+      const expected =
+        VCS_COMMAND_ALIASES[method] ??
+        method.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`);
+      expect(names, `vcs.${method} has no CLI command`).toContain(expected);
     }
     for (const removed of [
       "plan-commit",

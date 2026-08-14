@@ -105,6 +105,9 @@ export interface WorkspaceSemanticPort {
   vcsNeighbors(input: WorkspaceSemanticRequest): Promise<WorkspaceSourceSemanticDispatchResult>;
   vcsHistory(input: WorkspaceSemanticRequest): Promise<WorkspaceSourceSemanticDispatchResult>;
   vcsBlame(input: WorkspaceSemanticRequest): Promise<WorkspaceSourceSemanticDispatchResult>;
+  vcsWalk(input: WorkspaceSemanticRequest): Promise<WorkspaceSourceSemanticDispatchResult>;
+  vcsQuery(input: WorkspaceSemanticRequest): Promise<WorkspaceSourceSemanticDispatchResult>;
+  vcsSearch(input: WorkspaceSemanticRequest): Promise<WorkspaceSourceSemanticDispatchResult>;
   vcsReadMemory(input: WorkspaceSemanticRequest): Promise<WorkspaceSourceSemanticDispatchResult>;
   vcsResolveRepository(
     input: WorkspaceSemanticRequest
@@ -191,6 +194,9 @@ export function createWorkspaceSemanticPort(
     vcsNeighbors: (input) => invoke("vcsNeighbors", input),
     vcsHistory: (input) => invoke("vcsHistory", input),
     vcsBlame: (input) => invoke("vcsBlame", input),
+    vcsWalk: (input) => invoke("vcsWalk", input),
+    vcsQuery: (input) => invoke("vcsQuery", input),
+    vcsSearch: (input) => invoke("vcsSearch", input),
     vcsReadMemory: (input) => invoke("vcsReadMemory", input),
     vcsResolveRepository: (input) => invoke("vcsResolveRepository", input),
     vcsReadFile: (input) => invoke("vcsReadFile", input),
