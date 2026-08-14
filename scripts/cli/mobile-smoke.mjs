@@ -904,15 +904,22 @@ function unescapeXmlAttribute(value) {
     .replace(/&amp;/g, "&");
 }
 
+/**
+ * Probe the durable turn state of whatever workspace the run actually created.
+ *
+ * The name is not the smoke's to choose: the workspace is created during
+ * pairing, from the phone, so naming a directory here is a guess. Guessing
+ * `default` is how this probe silently degraded — the run creates
+ * `workspaces/mobile-smoke`, so every lookup landed on a path that does not
+ * exist, reported "trajectory_turns table not found yet" forever, and timed the
+ * smoke out while the panel on screen plainly showed the completed turn. Scan
+ * the workspaces root instead; a missing directory then means no workspace, not
+ * a misspelled one.
+ */
 function createAgentTurnProbe(ready) {
-  const workspaceDir = typeof ready?.workspaceDir === "string" ? ready.workspaceDir : "";
-  const stateDirCandidates = [
-    workspaceDir ? path.join(path.dirname(workspaceDir), "state") : "",
-    workspaceDir ? path.join(workspaceDir, "state") : "",
-    workspaceDir.endsWith(`${path.sep}state`) ? workspaceDir : "",
-  ].filter(Boolean);
+  const workspacesRoot = typeof ready?.workspacesRoot === "string" ? ready.workspacesRoot : "";
   return {
-    stateDirCandidates: [...new Set(stateDirCandidates)],
+    workspacesRoot,
     sqliteFiles: null,
     tableDbs: new Map(),
     warned: false,
@@ -920,8 +927,8 @@ function createAgentTurnProbe(ready) {
 }
 
 async function probeInitialAgentTurn(probe) {
-  if (!probe?.stateDirCandidates?.length) {
-    return { kind: "unavailable", summary: "ready file did not include workspaceDir" };
+  if (!probe?.workspacesRoot) {
+    return { kind: "unavailable", summary: "ready file did not include workspacesRoot" };
   }
 
   const turnDbs = await getDatabasesWithTable(probe, "trajectory_turns");
@@ -1020,14 +1027,22 @@ async function getDatabasesWithTable(probe, table) {
 async function getSqliteFiles(probe) {
   if (probe.sqliteFiles?.length) return probe.sqliteFiles;
   const files = [];
-  for (const stateDir of probe.stateDirCandidates) {
-    files.push(...(await listSqliteFiles(path.join(stateDir, ".databases")).catch(() => [])));
-    if (files.length) break;
-    files.push(...(await listSqliteFiles(stateDir).catch(() => [])));
-    if (files.length) break;
+  for (const stateDir of await workspaceStateDirs(probe.workspacesRoot)) {
+    // `.databases` is the declared home for workspace SQLite (see stateLayout);
+    // fall back to the state root so an older on-disk layout still probes.
+    const databases = await listSqliteFiles(path.join(stateDir, ".databases")).catch(() => []);
+    files.push(...(databases.length ? databases : await listSqliteFiles(stateDir).catch(() => [])));
   }
   probe.sqliteFiles = [...new Set(files)];
   return probe.sqliteFiles;
+}
+
+/** Every workspace this server has on disk, named by the run rather than by us. */
+async function workspaceStateDirs(workspacesRoot) {
+  const entries = await fsp.readdir(workspacesRoot, { withFileTypes: true }).catch(() => []);
+  return entries
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => path.join(workspacesRoot, entry.name, "state"));
 }
 
 async function listSqliteFiles(root) {
@@ -1746,7 +1761,7 @@ async function main() {
     );
     readyInfo = {
       ...ready,
-      workspaceDir: path.join(serverConfig, "vibestudio", "workspaces", "default", "source"),
+      workspacesRoot: path.join(serverConfig, "vibestudio", "workspaces"),
     };
 
     const invite = await waitForRootInvite({
@@ -1964,7 +1979,7 @@ async function main() {
     );
     readyInfo = {
       ...restartedReady,
-      workspaceDir: path.join(serverConfig, "vibestudio", "workspaces", "default", "source"),
+      workspacesRoot: path.join(serverConfig, "vibestudio", "workspaces"),
     };
     await logcat.waitForPhaseAfter(
       "workspace-recovery-complete",

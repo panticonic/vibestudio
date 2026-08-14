@@ -3,7 +3,7 @@ import * as path from "node:path";
 import {
   collectTransitiveDependencyOverrides,
   collectTransitiveDependencyPatches,
-  collectTransitiveExternalDeps,
+  collectExternalDependencyClosure,
   acquireExternalDeps,
   mergeExternalDependencySpecs,
   type ExternalDependencyPatch,
@@ -66,7 +66,7 @@ export async function prepareUserlandDependencyProjection(
   for (const unit of units) {
     mergeExternalDependencySpecs(
       dependencies,
-      collectTransitiveExternalDeps(unit, graph, workspaceRoot, appNodeModules)
+      collectExternalDependencyClosure(unit, graph, workspaceRoot, appNodeModules).installSet
     );
     for (const [selector, version] of Object.entries(
       collectTransitiveDependencyOverrides(unit, graph, workspaceRoot, appNodeModules)
