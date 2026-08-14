@@ -81,6 +81,7 @@ import {
 import { resolveExportSubpath } from "@vibestudio/typecheck/workspace";
 import { assertPresent } from "../../lintHelpers";
 import { resolveBuildProvider } from "./buildProviderRegistry.js";
+import { peerConflictRefusal, unownedPeerRefusal } from "./dependencyAudit.js";
 import { createBuildScratchDir } from "./buildScratch.js";
 import type {
   BuildProvider,
@@ -2007,30 +2008,15 @@ async function prepareBuildEnv(
     nodePaths,
   } = dependencyEnvironment;
 
-  if (peerConflicts.length > 0) {
+  // The same rules `check:userland-dependencies` sweeps the workspace with, so
+  // a refusal reads identically whether it arrives at commit or at build.
+  const refusal =
+    peerConflictRefusal(node.name, dependencyEnvironment) ??
+    (composition === "runtime-root" ? unownedPeerRefusal(node.name, dependencyEnvironment) : null);
+  if (refusal) {
     dependencyEnvironment.release();
     fs.rmSync(outdir, { recursive: true, force: true });
-    throw new Error(
-      `${node.name} resolves a dependency its own closure rejects: ${peerConflicts.join("; ")}.`
-    );
-  }
-
-  const unownedPeers = Object.entries(providedPeers).filter(
-    ([name]) => !optionalProvidedPeers.includes(name)
-  );
-  if (composition === "runtime-root" && unownedPeers.length > 0) {
-    dependencyEnvironment.release();
-    fs.rmSync(outdir, { recursive: true, force: true });
-    const unmet = unownedPeers
-      .map(([name, range]) => {
-        const owners = peerOwners[name] ?? [];
-        return `${name}@${range}${owners.length > 0 ? ` (required by ${owners.join(", ")})` : ""}`;
-      })
-      .sort();
-    throw new Error(
-      `${node.name} is loaded on its own, so nothing provides its closure's peers: ${unmet.join("; ")}. ` +
-        `Declare each as a dependency of ${node.name} at the version it should own.`
-    );
+    throw new Error(refusal);
   }
 
   try {

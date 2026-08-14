@@ -121,8 +121,12 @@ export function collectExternalDependencyClosure(
           ? readWorkspacePackageJson(workspaceRoot, name, packageRoots)
           : null;
         if (pkg) {
+          // Attribute by package name, not by the path it was found at: the
+          // reader of a refusal edits a manifest, and a host checkout path
+          // names a file they do not have.
           walkPackageJson(
             pkg.path,
+            name,
             pkg.dependencies,
             pkg.peerDependencies,
             pkg.optionalPeerDependencies
@@ -136,6 +140,7 @@ export function collectExternalDependencyClosure(
 
   function walkPackageJson(
     packageJsonPath: string,
+    packageName: string,
     packageDependencies: Record<string, string>,
     packagePeers: Record<string, string>,
     packageOptionalPeers: readonly string[]
@@ -145,7 +150,7 @@ export function collectExternalDependencyClosure(
     walkDeps(packageDependencies, dependencies, { walkWorkspaceDeps: false });
     walkDeps(packagePeers, peers, {
       walkWorkspaceDeps: false,
-      owner: packageJsonPath,
+      owner: packageName,
       optional: packageOptionalPeers,
     });
   }
