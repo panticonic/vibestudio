@@ -24,6 +24,18 @@ export async function awaitDrain(channel: RtcDataChannelLike): Promise<void> {
     };
     offLow = channel.onBufferedAmountLow(done);
     offClose = channel.onClose(done);
-    if (channel.readyState !== "open") done();
+    // Re-read the state the subscriptions exist to observe. Both are edge
+    // events with no replay, so anything that happened between the check above
+    // and these subscriptions is lost — and the waiter is a serialized write
+    // loop that nothing else will restart, so a lost edge is not a delay, it is
+    // a permanent stall. The buffer emptying is the likely one: a pipe whose
+    // low-water mark is zero drains to empty constantly, so this window is hit
+    // often rather than rarely.
+    if (
+      channel.readyState !== "open" ||
+      channel.bufferedAmount <= channel.bufferedAmountLowThreshold
+    ) {
+      done();
+    }
   });
 }
