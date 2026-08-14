@@ -920,11 +920,34 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
           holderLabel: lease?.holderLabel,
         };
       }
+      // Lease repair may deliberately discard a renderer retained from a
+      // previous server incarnation when durable refresh proves its principal
+      // is not executable. Re-read native state instead of reporting the view
+      // that existed before repair as still loaded.
+      if (view.hasView(panelId)) {
+        return {
+          panelId,
+          status: "loaded",
+          focused: false,
+          loaded: true,
+        };
+      }
+      if (!this.runtime.hasExecutablePanel(panelId)) {
+        return {
+          panelId,
+          status: "preparing",
+          focused: false,
+          loaded: false,
+          message: "Panel runtime is preparing",
+        };
+      }
+      this.runtime.recordPanelViewFailure(panelId, "Panel view was not created");
       return {
         panelId,
-        status: "loaded",
+        status: "view_creation_failed",
         focused: false,
-        loaded: true,
+        loaded: false,
+        message: "Panel view was not created",
       };
     }
 

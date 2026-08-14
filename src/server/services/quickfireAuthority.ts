@@ -113,6 +113,12 @@ export const QUICKFIRE_EXPOSURE_PATTERNS = [
   "workers.listServices",
   "contextIntegrity.*",
   "probe.*",
+  // Model plumbing shared with the standard agent. Resolution returns only a
+  // summary after the credential service has matched the exact stored grant;
+  // connection remains an explicit user interaction when no usable credential
+  // exists. Keeping these exact avoids exposing credential administration.
+  "credentials.resolveCredential",
+  "credentials.connect",
 ] as const;
 
 /** The document this closure is a compilation of. */
@@ -123,7 +129,7 @@ const QUICKFIRE_SOURCE_DOCUMENT = {
 } as const;
 
 export interface QuickfireHarnessIdentity {
-  /** Userland unit path, e.g. `workers/quickfire-agent`. */
+  /** Standard agent unit path, e.g. `workers/agent-worker`. */
   unit: string;
   /** Exact blessed effective version from the first-run conduit snapshot. */
   ev: string;

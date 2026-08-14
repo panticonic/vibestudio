@@ -65,7 +65,7 @@ function boundContext(
   return {
     authorizingOrigin: { kind: "session", principal: `session:${sessionId}` },
     executingCode: {
-      principal: "code:workers/quickfire-agent@ev-1",
+      principal: "code:workers/agent-worker@ev-1",
       requested: [
         { capability: "context.boundary", resource: { kind: "prefix", prefix: "context" } },
       ],
@@ -163,9 +163,9 @@ describe("quickfire binding grants", () => {
     // Clearing and re-asking on the same slot builds a brand new vessel. The
     // requester half of the key is therefore volatile; the target half is not.
     for (const requester of [
-      "do:workers/quickfire-agent:QuickfireAgentWorker:quickfire-slot-a-1111",
-      "do:workers/quickfire-agent:QuickfireAgentWorker:quickfire-slot-a-2222",
-      "do:workers/quickfire-agent:QuickfireAgentWorker:quickfire-slot-a-3333",
+      "do:workers/agent-worker:QuickfireAgentWorker:quickfire-slot-a-1111",
+      "do:workers/agent-worker:QuickfireAgentWorker:quickfire-slot-a-2222",
+      "do:workers/agent-worker:QuickfireAgentWorker:quickfire-slot-a-3333",
     ]) {
       expect(boundaryAllows(grants, context, BOUND_CONTEXT, requester)).toBe(true);
     }
@@ -323,7 +323,7 @@ describe("quickfire binding severity", () => {
 });
 
 describe("quickfire reviewed closure", () => {
-  const harness = { unit: "workers/quickfire-agent", ev: "a".repeat(64) };
+  const harness = { unit: "workers/agent-worker", ev: "a".repeat(64) };
 
   it("declares only gated standing grants, as the registry requires", () => {
     for (const grant of buildQuickfireClosureBody(harness).grants) {
@@ -348,6 +348,8 @@ describe("quickfire reviewed closure", () => {
       "panelCdp.evaluate",
       "panelCdp.getCdpEndpoint",
       "panelContext.describe",
+      "credentials.resolveCredential",
+      "credentials.connect",
     ]) {
       expect(serviceMethods).toContain(method);
     }

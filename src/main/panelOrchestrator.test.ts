@@ -3,6 +3,7 @@ import { PanelRegistry } from "@vibestudio/shared/panelRegistry";
 import type { Panel } from "@vibestudio/shared/types";
 import { getCurrentSnapshot } from "@vibestudio/shared/panel/accessors";
 import { asPanelEntityId, asPanelSlotId } from "@vibestudio/shared/panel/ids";
+import { contextIdToPartition } from "@vibestudio/shared/contextIdToPartition";
 import type { PanelRuntimeLease } from "@vibestudio/shared/panel/panelLease";
 import { ledgerTest } from "../../tests/helpers/ledgerTest.js";
 import { PanelOrchestrator } from "./panelOrchestrator.js";
@@ -594,6 +595,58 @@ describe("PanelOrchestrator.ensureLoaded", () => {
       expect.stringContaining(`buildKey=${"b".repeat(64)}`),
       panel.snapshot.contextId
     );
+  });
+
+  it("drops a retained renderer when durable refresh says its principal is not executable", async () => {
+    const registry = new PanelRegistry({ onTreeUpdated: vi.fn() });
+    const panel = makePanel("panel:tree/stale-retained-principal", [], {
+      runtimeEntityId: "panel:nav-stale-retained-principal",
+      effectiveVersion: "stale-effective-version",
+      buildKey: "b".repeat(64),
+      executionDigest: "e".repeat(64),
+      authorityRequests: [],
+      artifacts: {
+        buildState: "ready",
+        htmlPath: "http://127.0.0.1:1234/panel/stale-retained-principal",
+        hostedRuntimeEntityId: "panel:nav-stale-retained-principal",
+      },
+    });
+    registry.addPanel(panel, null, { addAsRoot: true });
+    const { orchestrator, panelView, shellCore, cdpHost } = createOrchestrator(registry);
+    let retained = true;
+    panelView.hasView.mockImplementation(() => retained);
+    panelView.getViewPartition.mockReturnValue(contextIdToPartition(panel.snapshot.contextId));
+    panelView.destroyView.mockImplementation(() => {
+      retained = false;
+    });
+    shellCore.refreshPanel.mockImplementationOnce(async () => {
+      // The durable record is only reserved after workspace-server recovery;
+      // the old renderer and its cached artifacts belong to the prior process.
+      panel.effectiveVersion = null;
+      panel.buildKey = null;
+      panel.executionDigest = null;
+      panel.authorityRequests = undefined;
+      panel.artifacts.buildState = "building";
+      panel.artifacts.buildProgress = "Preparing panel runtime...";
+      return panel;
+    });
+
+    await expect(orchestrator.ensureLoaded(panel.id)).resolves.toMatchObject({
+      status: "preparing",
+      loaded: false,
+    });
+
+    expect(panelView.destroyView).toHaveBeenCalledWith(panel.id);
+    expect(panelView.updatePanelCodeIdentity).not.toHaveBeenCalled();
+    expect(cdpHost.cleanupPanelAccess).toHaveBeenCalledWith(panel.id);
+    expect(cdpHost.unregisterTarget).toHaveBeenCalledWith(panel.id);
+    expect(registry.getPanel(panel.id)?.artifacts).toMatchObject({
+      buildState: "building",
+      buildProgress: "Preparing panel runtime...",
+    });
+    expect(registry.getPanel(panel.id)?.artifacts.htmlPath).toBeUndefined();
+    expect(registry.getPanel(panel.id)?.artifacts.hostedRuntimeEntityId).toBeUndefined();
+    expect(orchestrator.getPanelRuntimeConnection(panel.id)).toBeUndefined();
   });
 
   it("rejoins durable state when activation beats the local slot projection", async () => {

@@ -6,7 +6,7 @@
  *  1. the durable slot ↔ conversation mapping (a `quickfire_sessions` row in
  *     `WorkspaceDO`, reached through `doDispatch` like every other builtin),
  *  2. lazy creation of the conversation's backing — a channel id plus an agent
- *     vessel running the `workers/quickfire-agent` harness, created exactly the
+ *     vessel running the standard agent unit's `QuickfireAgentWorker` class, created exactly the
  *     way the chat path does (`runtime.createEntity` with `agentChannelId`, then
  *     `subscribeChannel` on the vessel). The entity is host-managed: callers name
  *     a slot, never coordinates,
@@ -41,7 +41,7 @@ import type { QuickfireAuthorityBinder } from "./quickfireAuthority.js";
 
 /** Where a quickfire conversation's agent comes from. */
 export interface QuickfireHarness {
-  /** Userland unit path, e.g. `workers/quickfire-agent`. */
+  /** Userland unit path, e.g. `workers/agent-worker`. */
   source: string;
   /** Durable Object class the unit exports. */
   className: string;

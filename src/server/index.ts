@@ -948,7 +948,7 @@ async function main() {
         effectiveVersion: identity.ev,
       }),
   });
-  /** Blessed `workers/quickfire-agent` identity from the first-run snapshot (§6.5). */
+  /** Blessed command-agent class identity from the standard agent unit (§6.5). */
   let quickfireHarnessIdentity: { repoPath: string; effectiveVersion: string } | null = null;
   // Exact root bootstrap may run while services are starting, before the
   // dispatcher can be marked fully initialized. Install the one compositional
@@ -2635,7 +2635,7 @@ async function main() {
         // this build does. Capture the blessed identity here rather than
         // re-resolving it later against a snapshot that may have advanced.
         quickfireHarnessIdentity =
-          identities.find((identity) => identity.repoPath === "workers/quickfire-agent") ?? null;
+          identities.find((identity) => identity.repoPath === "workers/agent-worker") ?? null;
       }
       return buildSystem;
     },
@@ -3730,7 +3730,7 @@ async function main() {
   {
     const { createQuickfireService } = await import("./services/quickfireService.js");
     const QUICKFIRE_HARNESS = {
-      source: "workers/quickfire-agent",
+      source: "workers/agent-worker",
       className: "QuickfireAgentWorker",
     } as const;
     let quickfireDefinition:

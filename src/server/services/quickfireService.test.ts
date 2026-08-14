@@ -106,7 +106,7 @@ function makeService(overrides: Partial<QuickfireServiceDeps> = {}) {
   const store = fakeWorkspaceDo();
   const createAgent = vi.fn(
     async ({ channelId, contextId }: { channelId: string; contextId: string }) => ({
-      entityId: `do:workers/quickfire-agent:QuickfireAgentWorker:${channelId}`,
+      entityId: `do:workers/agent-worker:QuickfireAgentWorker:${channelId}`,
       contextId,
     })
   );
@@ -115,7 +115,7 @@ function makeService(overrides: Partial<QuickfireServiceDeps> = {}) {
   const definition = createQuickfireService({
     doDispatch: { dispatch: store.dispatch } as never,
     workspaceId: "ws",
-    harness: { source: "workers/quickfire-agent", className: "QuickfireAgentWorker" },
+    harness: { source: "workers/agent-worker", className: "QuickfireAgentWorker" },
     createAgent,
     releaseAgent,
     resolveSlotContext: async () => "ctx-panel",
@@ -154,7 +154,7 @@ describe("quickfire service", () => {
       createAgent: vi.fn(async ({ channelId, contextId }) => {
         order.push("createAgent");
         return {
-          entityId: `do:workers/quickfire-agent:QuickfireAgentWorker:${channelId}`,
+          entityId: `do:workers/agent-worker:QuickfireAgentWorker:${channelId}`,
           contextId,
         };
       }),
@@ -176,7 +176,7 @@ describe("quickfire service", () => {
     const fresh = await call<QuickfireSession>("sessionFor", [{ slotId: "slot-a" }]);
     expect(fresh.state).toBe("fresh");
     expect(fresh.channelId).toBe("quickfire-1");
-    expect(fresh.agentEntityId).toBe("do:workers/quickfire-agent:QuickfireAgentWorker:quickfire-1");
+    expect(fresh.agentEntityId).toBe("do:workers/agent-worker:QuickfireAgentWorker:quickfire-1");
     // A brand-new conversation reports a real zero, not "unknown".
     expect(fresh.messageCount).toBe(0);
 
@@ -197,14 +197,14 @@ describe("quickfire service", () => {
       store.sessions.set("slot-a", {
         slotId: "slot-a" as WorkspaceQuickfireSession["slotId"],
         channelId: "quickfire-winner",
-        agentEntityId: "do:workers/quickfire-agent:QuickfireAgentWorker:quickfire-winner",
+        agentEntityId: "do:workers/agent-worker:QuickfireAgentWorker:quickfire-winner",
         contextId: "ctx-panel",
         createdAt: 1,
         clearedAt: null,
         promotedAt: null,
       });
       return {
-        entityId: `do:workers/quickfire-agent:QuickfireAgentWorker:${channelId}`,
+        entityId: `do:workers/agent-worker:QuickfireAgentWorker:${channelId}`,
         contextId,
       };
     });
@@ -226,7 +226,7 @@ describe("quickfire service", () => {
     ]);
     expect(cleared).toEqual({ cleared: true, archived: 1 });
     expect(releaseAgent).toHaveBeenCalledWith({
-      agentEntityId: "do:workers/quickfire-agent:QuickfireAgentWorker:quickfire-1",
+      agentEntityId: "do:workers/agent-worker:QuickfireAgentWorker:quickfire-1",
       channelId: "quickfire-1",
       contextId: "ctx-panel",
     });
@@ -447,7 +447,7 @@ describe("quickfire authority lifecycle", () => {
     store.queue.set("quickfire-1", {
       channelId: "quickfire-1",
       slotId: "slot-a",
-      agentEntityId: "do:workers/quickfire-agent:QuickfireAgentWorker:quickfire-1",
+      agentEntityId: "do:workers/agent-worker:QuickfireAgentWorker:quickfire-1",
       contextId: "ctx-panel",
       closeId: "close-1",
     });
@@ -467,7 +467,7 @@ describe("quickfire authority lifecycle", () => {
     store.queue.set("quickfire-1", {
       channelId: "quickfire-1",
       slotId: "slot-a",
-      agentEntityId: "do:workers/quickfire-agent:QuickfireAgentWorker:quickfire-1",
+      agentEntityId: "do:workers/agent-worker:QuickfireAgentWorker:quickfire-1",
       contextId: "ctx-panel",
       closeId: "close-1",
     });

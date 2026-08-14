@@ -1301,7 +1301,7 @@ describe("WorkspaceDO quickfire mappings", () => {
     instance.quickfireSessionBind({
       slotId,
       channelId,
-      agentEntityId: `do:workers/quickfire-agent:QuickfireAgentWorker:${channelId}`,
+      agentEntityId: `do:workers/agent-worker:QuickfireAgentWorker:${channelId}`,
       contextId: `ctx-${channelId}`,
       ...(replace ? { replace: true } : {}),
     });
@@ -1339,7 +1339,7 @@ describe("WorkspaceDO quickfire mappings", () => {
       {
         channelId: "quickfire-a",
         slotId: "slot-q",
-        agentEntityId: "do:workers/quickfire-agent:QuickfireAgentWorker:quickfire-a",
+        agentEntityId: "do:workers/agent-worker:QuickfireAgentWorker:quickfire-a",
         contextId: "ctx-quickfire-a",
       },
     ]);

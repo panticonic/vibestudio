@@ -11,7 +11,7 @@ const NEW_PANEL_SOURCE = "about/new";
  * remains, and none of that can be warmed without creating a conversation the
  * user never asked for — binding one is a consent gesture, not a cache fill.
  */
-const COMMAND_AGENT_SOURCE = "workers/quickfire-agent";
+const COMMAND_AGENT_SOURCE = "workers/agent-worker";
 
 export interface PostReadyBuildWarmup {
   start(options?: { includeEvalLibraries?: boolean }): Promise<void>;

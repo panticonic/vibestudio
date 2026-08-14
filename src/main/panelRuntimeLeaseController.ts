@@ -301,6 +301,11 @@ export class PanelPresentationController {
   }
 
   getConnection(panelId: string): { runtimeEntityId: string; connectionId: string } | undefined {
+    // A server-side lease may intentionally exist while a code entity is only
+    // reserved/building. That lease assigns a host; it does not yet make the
+    // entity a connectable principal. Keep it out of the IPC session boundary
+    // until durable refresh/activation supplies a sealed execution identity.
+    if (!this.hasExecutablePanel(panelId)) return undefined;
     return this.connectionBySlot.get(panelId);
   }
 
@@ -1033,6 +1038,38 @@ export class PanelPresentationController {
     }
     if (attempt) this.setAttemptStage(attempt, "creating-view");
     const connection = this.connectionBySlot.get(panelId);
+    // A native view retained across a server/workspace restart is not evidence
+    // that its panel principal is still executable. `refreshPanel` above is the
+    // durable identity authority: when it reports a reserved or otherwise
+    // incomplete incarnation, keeping the old renderer alive lets that stale
+    // renderer request a connection grant for a principal which does not exist
+    // in the active entity set. Tear down the renderer and wait for the normal
+    // execution-activation event to present the newly sealed incarnation.
+    //
+    // This check must precede `retainedViewMatches`; matching nav ids only prove
+    // identity equality, not active executable status.
+    if (!snapshot.source.startsWith("browser:") && !this.hasCompleteExecutionIdentity(panel)) {
+      if (panel.artifacts.buildState === "error") {
+        throw new Error(
+          panel.artifacts.error ?? "Panel unavailable: its runtime image could not be prepared."
+        );
+      }
+      if (view.hasView(panelId)) {
+        this.deps.cdpHost.cleanupPanelAccess(panelId);
+        this.deps.cdpHost.unregisterTarget?.(panelId);
+        view.destroyView(panelId);
+        this.recordViewMutation();
+      }
+      this.deps.registry.updateArtifacts(panelId, {
+        ...panel.artifacts,
+        htmlPath: undefined,
+        hostedRuntimeEntityId: undefined,
+      });
+      this.deps.registry.notifyPanelTreeUpdate(panelId);
+      this.resources.track(panelId);
+      await this.resources.enforceCap(panelId);
+      return;
+    }
     const retainedViewMatches =
       view.hasView(panelId) &&
       connection?.runtimeEntityId === desiredRuntimeEntityId &&
@@ -1067,19 +1104,6 @@ export class PanelPresentationController {
       });
       this.deps.registry.notifyPanelTreeUpdate(panelId);
       await this.reportPanelViewTransition(panelId);
-      this.resources.track(panelId);
-      await this.resources.enforceCap(panelId);
-      return;
-    }
-
-    const preparedPanel = this.deps.registry.getPanel(panelId);
-    if (!this.hasCompleteExecutionIdentity(preparedPanel)) {
-      if (preparedPanel?.artifacts.buildState === "error") {
-        throw new Error(
-          preparedPanel.artifacts.error ??
-            "Panel unavailable: its runtime image could not be prepared."
-        );
-      }
       this.resources.track(panelId);
       await this.resources.enforceCap(panelId);
       return;

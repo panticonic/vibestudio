@@ -233,7 +233,7 @@ long-press on the tab strip.
 │  src/server/services/quickfireService.ts          ← NEW            │
 │  src/server/services/panelContextService.ts       ← NEW (§5.2)     │
 │  src/main/menu.ts                                 ← accelerators   │
-│  workers/quickfire-agent (Base repo userland unit) ← agent harness │
+│  workers/agent-worker:QuickfireAgentWorker ← command-agent class   │
 └────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -376,9 +376,12 @@ quickfire.list()                      // slots with live conversations (for
   archival (§1.4).
 - **Agent**: `quickfire.sessionFor` creates (per conversation) a channel and
   an agent vessel entity exactly as the chat path does, but with the
-  **`workers/quickfire-agent`** userland unit as harness (a thin
-  configuration of the standard harness: quickfire system prompt §5.1,
-  quickfire tool exposure §5.3, low default thinking). Entity is
+  **`QuickfireAgentWorker`** class in the standard `workers/agent-worker`
+  userland unit as harness (a thin configuration of the standard harness:
+  quickfire system prompt §5.1, quickfire tool exposure §5.3, low default
+  thinking). A distinct class selects those construction-time policies; the
+  shared unit/version identity deliberately reuses the normal agent's reviewed
+  model-credential grant. Entity is
   host-managed (`kind: "session"` semantics — callers cannot supply
   coordinates).
 - **Streaming to the overlay**: `QuickfireOwner` (chrome) subscribes to the
@@ -389,8 +392,9 @@ quickfire.list()                      // slots with live conversations (for
   local IPC; measure in P3 and, only if it visibly janks, add a dedicated
   `updateContentOverlay` patch op (partial props merge) to the view schema.
 - **Promotion**: owner calls `panel.createChild(parentSlot,
-  "panels/chat", { stateArgs: { channelName: <channelId> }, focus: true })`
-  — the chat panel already knows how to attach to an existing channel. The
+  "panels/chat", { contextId: <quickfireContextId>, stateArgs: {
+  channelName: <channelId> }, focus: true })` — the chat panel attaches to both
+  the existing channel and its existing semantic context. The
   quickfire mapping stays; the overlay and the panel are two views of one
   conversation.
 
@@ -403,7 +407,7 @@ system:
 |---|---|
 | Per-turn complete `ShellOverview` | Per-turn `PanelContextSnapshot` (§5.1) — same "re-describe, don't diff" principle, scoped to one panel |
 | Micro-session under mission subject | Quickfire conversation under `mission:quickfire@<closureDigest>` (§6) |
-| `workers/system-agent` reserved conduit slot | `workers/quickfire-agent` added to `PRODUCT_CONDUIT_UNITS` the same way |
+| `workers/system-agent` reserved conduit slot | No additional conduit unit: the sibling `QuickfireAgentWorker` class uses the standard agent unit's identity and conduit policy |
 | Log Watcher | Not built here; quickfire's console/log tools (§5.3) define the read surface the watcher will later share |
 
 When the full system agent lands, quickfire becomes its panel-scoped
@@ -716,7 +720,7 @@ success flash on the row instead, staying open for chained commands.
 
 ### 5.1 System prompt & per-turn context
 
-The `workers/quickfire-agent` harness composes the standard base prompt plus
+The `QuickfireAgentWorker` class in `workers/agent-worker` composes the standard base prompt plus
 a quickfire preamble (identity: "you are the quick inspector attached to one
 panel; bias to observation and small fixes; suggest promotion for large
 work") and — following the SA0 "complete overview per turn, no diffs"
@@ -805,7 +809,7 @@ Design — a reviewed closure + per-conversation grants:
 
 1. **Reviewed closure `quickfire`** (source document: this spec) with
    `subjectPrefix: mission:quickfire`, `harness: {unit:
-   "workers/quickfire-agent", ev: <blessed>}`, exposure = the §5.3 tool
+   "workers/agent-worker", ev: <blessed>}`, exposure = the §5.3 tool
    list, and `grants[]` = **`panel.inspect` only** (tier `gated`, resource
    exact). The `context.boundary` grant is deliberately *not* a standing
    closure grant: `<boundCtx>` is a runtime value a static document cannot
@@ -845,9 +849,9 @@ Design — a reviewed closure + per-conversation grants:
    lock apply. Context-integrity: every CDP read still records external
    ingestion, so a quickfire conversation that has looked at page content
    carries the latch like any agent session — no exemption.
-5. **Conduit**: add `workers/quickfire-agent` to `PRODUCT_CONDUIT_UNITS`
-   (exact-EV resolution from the first-run snapshot, same as the reserved
-   `workers/system-agent` slot).
+5. **Conduit**: use the existing `workers/agent-worker` conduit identity and
+   exact-EV resolution. The distinct durable-object class selects quickfire
+   behavior without creating a second code-version identity.
 
 What we explicitly do **not** do: no standing `code:` grant on the harness
 unit (product bootstrap policy forbids it and it would grant every
@@ -914,7 +918,8 @@ Each phase lands independently shippable; P1–P3 are the core deliverable.
   and operable simultaneously (e2e: resolve an approval while the palette
   stays open); open→arg→execute and focus restore covered.
 - **P3 — Quickfire sessions.** `quickfire` service + `quickfire_sessions`
-  table + `workers/quickfire-agent` harness unit + `panelContext.describe`.
+  table + `QuickfireAgentWorker` sibling class in the standard agent unit +
+  `panelContext.describe`.
   Overlay `/` mode with transcript, resume, clear, promote (with
   ownership transfer: `promoted_at`, cleanup-queue archival per §2.4).
   Tools limited to `panel_describe` + `say` (no CDP yet — conversations

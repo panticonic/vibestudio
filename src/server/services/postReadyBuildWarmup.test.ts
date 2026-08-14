@@ -35,7 +35,7 @@ describe("post-ready build warmup", () => {
     expect(calls).toEqual([
       "about/new",
       // A failed launcher build must not skip the command agent behind it.
-      "workers/quickfire-agent",
+      "workers/agent-worker",
       "packages/eval",
       "packages/runtime/hosted",
       "packages/runtime/panel-runtime",
@@ -91,7 +91,7 @@ describe("post-ready build warmup", () => {
     expect(calls).toEqual([
       "about/new",
       // A failed launcher build must not skip the units queued behind it.
-      "workers/quickfire-agent",
+      "workers/agent-worker",
       "packages/eval",
       "packages/runtime/hosted",
       "packages/runtime/panel-runtime",
@@ -116,7 +116,7 @@ describe("post-ready build warmup", () => {
     // the launcher, and the command agent one keystroke behind the overlay.
     expect(bindRuntimeImage.mock.calls.map(([source]) => source)).toEqual([
       "about/new",
-      "workers/quickfire-agent",
+      "workers/agent-worker",
     ]);
     expect(getBuild).not.toHaveBeenCalled();
   });
