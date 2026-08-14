@@ -80,4 +80,23 @@ describe("development Base checkpoint", () => {
     expect(git(checkout, ["rev-parse", "HEAD"])).toBe(sourceHead);
     expect(git(checkout, ["status", "--porcelain"]).split("\n").filter(Boolean)).toHaveLength(3);
   });
+
+  it("never promotes unignored dependency artifacts into template source", async () => {
+    const checkout = repository();
+    fs.mkdirSync(path.join(checkout, "node_modules", ".vite"), { recursive: true });
+    fs.writeFileSync(path.join(checkout, "node_modules", ".vite", "results.json"), "{}\n");
+    fs.writeFileSync(path.join(checkout, "source.ts"), "export const ready = true;\n");
+    const target = path.join(path.dirname(checkout), `${path.basename(checkout)}-checkpoint`);
+    temporaryRoots.add(target);
+
+    const result = await prepareDevelopmentBaseCheckpoint({
+      checkout,
+      target,
+      gitClient: new GitClient(),
+    });
+
+    expect(result.changedPaths).toEqual(["source.ts"]);
+    expect(fs.readFileSync(path.join(target, "source.ts"), "utf8")).toContain("ready");
+    expect(fs.existsSync(path.join(target, "node_modules"))).toBe(false);
+  });
 });

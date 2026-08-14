@@ -40,6 +40,10 @@ function copyWorktreePath(sourceRoot: string, targetRoot: string, relativePath: 
   fs.chmodSync(target, stat.mode & 0o777);
 }
 
+function isDependencyArtifactPath(relativePath: string): boolean {
+  return relativePath.split(/[\\/]/u).includes("node_modules");
+}
+
 export interface DevelopmentBaseCheckpoint {
   checkout: string;
   sourceCheckout: string;
@@ -53,7 +57,8 @@ export interface DevelopmentBaseCheckpoint {
  * Production acquisition still consumes one immutable commit. Development
  * satisfies that contract without mutating the developer's branch, index, or
  * worktree: a private local clone receives the current tracked and untracked
- * (non-ignored) files and owns the synthetic commit.
+ * source files and owns the synthetic commit. Package-manager dependency trees
+ * are never template source, even when a checkout lacks a local ignore rule.
  */
 export async function prepareDevelopmentBaseCheckpoint(input: {
   checkout: string;
@@ -67,7 +72,10 @@ export async function prepareDevelopmentBaseCheckpoint(input: {
     return { checkout: sourceCheckout, sourceCheckout, changedPaths: [], temporary: false };
   }
 
-  const changedPaths = status.files.map((file) => file.path).sort();
+  const changedPaths = status.files
+    .map((file) => file.path)
+    .filter((relativePath) => !isDependencyArtifactPath(relativePath))
+    .sort();
   const target = path.resolve(input.target);
   fs.rmSync(target, { recursive: true, force: true });
   fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
