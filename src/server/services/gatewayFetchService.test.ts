@@ -383,3 +383,63 @@ describe("gatewayFetchService — mobile native bootstrap exception", () => {
     expect(gateway.requests).toHaveLength(0);
   });
 });
+
+describe("gatewayFetchService — null-body upstream statuses", () => {
+  it("passes a 304 through instead of throwing on the Response constructor", async () => {
+    // A panel WebView revalidates its build chunks, so 304 is routine here.
+    // Attaching the upstream stream to one makes the constructor throw, the
+    // proxied fetch never resolves, and the dynamic import of that chunk
+    // fails — which the user sees as the panel crashing.
+    const gateway = await startFakeGateway((_req, res) => {
+      res.writeHead(304, { etag: '"abc"', "content-length": "4096" });
+      res.end();
+    });
+    const service = createGatewayFetchService({ getGatewayPort: () => gateway.port });
+
+    const response = (await service.handler(ctxWithBody(), "fetch", [
+      {
+        path: "/__vibestudio/panel-build/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/chunk-ABC.js",
+        gzip: true,
+      },
+    ])) as Response;
+
+    expect(response.status).toBe(304);
+    expect(response.body).toBeNull();
+    expect(response.headers.get("etag")).toBe('"abc"');
+    // Upstream describes the cached body; forwarding its framing onto a
+    // bodyless response is net::ERR_CONTENT_LENGTH_MISMATCH in the WebView.
+    expect(response.headers.get("content-length")).toBeNull();
+  });
+
+  it("passes a 204 through with no body", async () => {
+    const gateway = await startFakeGateway((_req, res) => {
+      res.writeHead(204);
+      res.end();
+    });
+    const service = createGatewayFetchService({ getGatewayPort: () => gateway.port });
+
+    const response = (await service.handler(ctxWithBody(), "fetch", [
+      { path: "/api/thing", method: "DELETE", gzip: true },
+    ])) as Response;
+
+    expect(response.status).toBe(204);
+    expect(response.body).toBeNull();
+  });
+
+  it("still streams a body for an ordinary 200", async () => {
+    const gateway = await startFakeGateway((_req, res) => {
+      res.writeHead(200, { "content-type": "text/javascript" });
+      res.end("export default 1;\n");
+    });
+    const service = createGatewayFetchService({ getGatewayPort: () => gateway.port });
+
+    const response = (await service.handler(ctxWithBody(), "fetch", [
+      {
+        path: "/__vibestudio/panel-build/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/chunk-ABC.js",
+      },
+    ])) as Response;
+
+    expect(response.status).toBe(200);
+    await expect(response.text()).resolves.toBe("export default 1;\n");
+  });
+});

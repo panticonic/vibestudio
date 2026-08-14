@@ -96,6 +96,16 @@ const HOP_BY_HOP_RESPONSE_HEADERS = new Set([
   "transfer-encoding",
   "upgrade",
 ]);
+/**
+ * Statuses the Response constructor refuses to pair with a body.
+ *
+ * A panel WebView revalidates its build chunks, so 304 is an ordinary answer
+ * on this path, not an edge case: attaching the (empty) upstream stream to one
+ * throws inside the constructor, the proxied fetch never resolves, and a
+ * dynamically imported chunk fails to load — which surfaces as the panel
+ * crashing rather than as anything about caching.
+ */
+const NULL_BODY_STATUSES = new Set([204, 205, 304]);
 
 function rawLoopbackFetch(
   port: number,
@@ -123,9 +133,28 @@ function rawLoopbackFetch(
             responseHeaders.append(name, value);
           }
         }
+        const status = incoming.statusCode ?? 502;
+        if (NULL_BODY_STATUSES.has(status)) {
+          // Upstream describes the body the client already has; carrying those
+          // framing headers onto a response that carries no bytes is what the
+          // WebView reports as net::ERR_CONTENT_LENGTH_MISMATCH.
+          responseHeaders.delete("content-length");
+          responseHeaders.delete("content-encoding");
+          // Nothing will read this stream, so let the socket go rather than
+          // leaving the upstream response half-consumed.
+          incoming.resume();
+          resolve(
+            new Response(null, {
+              status,
+              statusText: incoming.statusMessage,
+              headers: responseHeaders,
+            })
+          );
+          return;
+        }
         resolve(
           new Response(Readable.toWeb(incoming) as ReadableStream<Uint8Array>, {
-            status: incoming.statusCode ?? 502,
+            status,
             statusText: incoming.statusMessage,
             headers: responseHeaders,
           })
