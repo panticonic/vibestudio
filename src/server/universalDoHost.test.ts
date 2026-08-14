@@ -356,15 +356,14 @@ describe("UniversalDO facet host (real workerd)", () => {
       expect(await dispatch(ref2, "incr")).toMatchObject({ count: 1, key: "k2" });
       expect(await dispatch(ref1, "get")).toMatchObject({ count: 2 });
 
-      // Runtime retirement aborts the live facet (and releases its loaded module
-      // graph) without deleting durable storage. A later reattach starts a fresh
-      // facet incarnation over the same state.
+      // Runtime retirement aborts the live facet and compacts the workerd
+      // generation. WorkerLoader has no per-isolate unload primitive, so the
+      // process boundary is what guarantees that completed disposable objects
+      // do not accumulate loaded module graphs. Durable storage remains intact.
       await manager.retireDOEntity(ref1);
+      expect(manager.getBootGeneration()).toBeGreaterThan(boot);
       expect(await dispatch(ref1, "get")).toMatchObject({ count: 2, key: "k1" });
       expect(codeFetches.get("k1")).toBe(2);
-
-      // Registering the class never restarted workerd.
-      expect(manager.getBootGeneration()).toBe(boot);
     },
     30_000
   );

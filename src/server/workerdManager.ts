@@ -1415,9 +1415,14 @@ export class WorkerdManager {
 
   /**
    * Idempotent DO runtime teardown invoked by the runtime-service retire hook.
-   * Aborting the live facet releases its object-owned loaded module graph while
-   * deliberately preserving durable storage for a later reattach. Full context
-   * destruction separately reclaims that storage through destroyDO().
+   * Aborting the live facet releases its object-owned state while deliberately
+   * preserving durable storage for a later reattach. WorkerLoader has no
+   * per-worker unload operation: its dynamically loaded isolate remains resident
+   * until the workerd process generation ends. Compact the generation after
+   * retirement so completed disposable work cannot accumulate isolates for the
+   * lifetime of a long-running workspace server. The existing transition owner
+   * coalesces concurrent retirements and restores every still-live entity from
+   * its sealed runtime identity.
    */
   async retireDOEntity(ref: DORef): Promise<void> {
     const targetId = canonicalEntityId({
@@ -1458,6 +1463,13 @@ export class WorkerdManager {
           executionDigest: removedImage.artifact.executionDigest,
         },
       });
+    }
+    if (!isInternalDOSource(ref.source) && this.process?.exitCode === null) {
+      await this.restartWorkerd();
+      // Replacing the process is a stronger retirement boundary than the
+      // facet-local abort. If that best-effort request failed but compaction
+      // succeeded, no retired isolate or request can remain to clean up.
+      abortError = undefined;
     }
     if (abortError) throw abortError;
   }
