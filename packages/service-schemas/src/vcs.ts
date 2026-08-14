@@ -1768,6 +1768,164 @@ export const vcsBlameResultSchema = z
   .strict();
 export type VcsBlameResult = z.infer<typeof vcsBlameResultSchema>;
 
+// ---------------------------------------------------------------------------
+// Named walks, the relational contract, and content entry (provenance query
+// redesign). Walks compile to bounded server-side traversals; the query
+// surface runs caller-scoped SELECTs against versioned `prov_*` views; search
+// is one FTS index over prose the record already stores.
+// ---------------------------------------------------------------------------
+
+/**
+ * Host-injected reachable context authorities. The service boundary overwrites
+ * whatever a caller supplies with the exact set it already computes for
+ * per-reference authorization, so a query or walk can never widen its own
+ * visibility basis.
+ */
+export const vcsVisibilityBasisSchema = z
+  .array(id("Reachable context authority (host-injected)."))
+  .max(512)
+  .optional();
+
+export const vcsWalkKindSchema = z.enum(["cause", "cohort", "rejections"]);
+export type VcsWalkKind = z.infer<typeof vcsWalkKindSchema>;
+
+export const vcsWalkScopeSchema = z.enum(["work-unit", "command", "turn"]);
+export type VcsWalkScope = z.infer<typeof vcsWalkScopeSchema>;
+
+export const vcsWalkBoundarySchema = z.enum([
+  "human-statement",
+  "subagent-brief",
+  "external-delta",
+  "import-snapshot",
+  "outside-visibility",
+  "no-recorded-cause",
+]);
+
+export const vcsWalkEntrySchema = z
+  .object({
+    node: vcsSemanticNodeRefSchema.describe("Exact typed root; renderers expose it only as a ref."),
+    label: nonEmptyText.max(400).describe("Short human label without content-addressed ids."),
+    depth: z.number().int().nonnegative().max(64),
+    group: nonEmptyText.max(120).optional(),
+    intent: vcsIntentEvidenceSchema.optional(),
+    detail: nonEmptyText.max(600).optional(),
+    boundary: vcsWalkBoundarySchema.optional(),
+  })
+  .strict();
+export type VcsWalkEntry = z.infer<typeof vcsWalkEntrySchema>;
+
+export const vcsWalkInputSchema = z
+  .object({
+    contextId,
+    walk: vcsWalkKindSchema,
+    subject: vcsSemanticNodeRefSchema,
+    scope: vcsWalkScopeSchema.default("command"),
+    cursor: cursor.optional(),
+    limit: z.number().int().positive().max(200).default(50),
+    visibilityContextIds: vcsVisibilityBasisSchema,
+  })
+  .strict();
+export type VcsWalkInput = z.infer<typeof vcsWalkInputSchema>;
+
+export const vcsWalkResultSchema = z
+  .object({
+    walk: vcsWalkKindSchema,
+    scope: vcsWalkScopeSchema.nullable(),
+    subject: vcsSemanticNodeRefSchema,
+    entries: z.array(vcsWalkEntrySchema).max(300),
+    omitted: z
+      .array(
+        z
+          .object({ label: nonEmptyText.max(200), count: z.number().int().nonnegative() })
+          .strict()
+      )
+      .max(50),
+    notes: z.array(nonEmptyText.max(400)).max(20),
+    nextCursor: cursor.nullable(),
+  })
+  .strict();
+export type VcsWalkResult = z.infer<typeof vcsWalkResultSchema>;
+
+export const vcsQueryRefusalSchema = z
+  .object({
+    stage: z.enum(["validation", "plan", "execution"]),
+    code: z.enum([
+      "not-a-select",
+      "unknown-relation",
+      "forbidden-syntax",
+      "recursive-cte",
+      "plan-unavailable",
+      "full-scan",
+      "cartesian-join",
+      "scan-budget",
+    ]),
+    message: nonEmptyText.max(600),
+    term: z.string().max(200).nullable(),
+  })
+  .strict();
+export type VcsQueryRefusal = z.infer<typeof vcsQueryRefusalSchema>;
+
+export const vcsQueryInputSchema = z
+  .object({
+    contextId,
+    query: z.string().min(1).max(4_000),
+    limit: z.number().int().positive().max(200).default(50),
+    visibilityContextIds: vcsVisibilityBasisSchema,
+  })
+  .strict();
+export type VcsQueryInput = z.infer<typeof vcsQueryInputSchema>;
+
+const vcsQueryCellSchema = z.union([z.string().max(2_000), z.number(), z.boolean(), z.null()]);
+
+export const vcsQueryResultSchema = z
+  .object({
+    schemaVersion: z.number().int().positive(),
+    columns: z.array(nonEmptyText.max(120)).max(64),
+    rows: z.array(z.array(vcsQueryCellSchema).max(64)).max(200),
+    rowsRead: z.number().int().nonnegative(),
+    truncated: z.boolean(),
+    refusal: vcsQueryRefusalSchema.nullable(),
+  })
+  .strict();
+export type VcsQueryResult = z.infer<typeof vcsQueryResultSchema>;
+
+export const vcsSearchInputSchema = z
+  .object({
+    contextId,
+    text: nonEmptyText.max(400),
+    limit: z.number().int().positive().max(50).default(10),
+    visibilityContextIds: vcsVisibilityBasisSchema,
+  })
+  .strict();
+export type VcsSearchInput = z.infer<typeof vcsSearchInputSchema>;
+
+export const vcsSearchHitSchema = z
+  .object({
+    node: vcsSemanticNodeRefSchema,
+    subjectKind: z.enum([
+      "work-unit",
+      "decision",
+      "event",
+      "external-delta",
+      "trajectory-message",
+    ]),
+    label: nonEmptyText.max(400),
+    excerpt: nonEmptyText.max(600),
+    intent: vcsIntentEvidenceSchema.optional(),
+  })
+  .strict();
+export type VcsSearchHit = z.infer<typeof vcsSearchHitSchema>;
+
+export const vcsSearchResultSchema = z
+  .object({
+    text: nonEmptyText.max(400),
+    indexMode: z.enum(["fts", "scan"]),
+    hits: z.array(vcsSearchHitSchema).max(50),
+    truncated: z.boolean(),
+  })
+  .strict();
+export type VcsSearchResult = z.infer<typeof vcsSearchResultSchema>;
+
 const vcsReadMemoryRangeSchema = z
   .object({
     start: z.number().int().nonnegative(),
@@ -2599,6 +2757,63 @@ const vcsSemanticMethods = defineVcsMethods({
     references: [ref("node", "provenance-root", "root")],
     errors: READ_ERRORS,
     seeAlso: ["vcs.inspect", "vcs.neighbors"],
+  },
+  walk: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "protected-write",
+      family: "vcs.control",
+      rationale:
+        "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+    },
+    description:
+      "Run one curated multi-hop provenance traversal (cause, cohort, rejections) with server-owned depth and fan-out bounds.",
+    args: z.tuple([vcsWalkInputSchema]),
+    returns: vcsWalkResultSchema,
+    access: READ_ACCESS,
+    operationClass: "read",
+    references: [ref("context", "context", "contextId"), ref("node", "provenance-root", "subject")],
+    errors: READ_ERRORS,
+    seeAlso: ["vcs.neighbors", "vcs.query", "vcs.search"],
+  },
+  query: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "protected-write",
+      family: "vcs.control",
+      rationale:
+        "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+    },
+    description:
+      "Run one caller-scoped read-only SELECT against the versioned prov_* views; canonical tables stay private.",
+    args: z.tuple([vcsQueryInputSchema]),
+    returns: vcsQueryResultSchema,
+    access: READ_ACCESS,
+    operationClass: "read",
+    references: [ref("context", "context", "contextId")],
+    errors: READ_ERRORS,
+    seeAlso: ["vcs.walk", "vcs.search"],
+  },
+  search: {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "protected-write",
+      family: "vcs.control",
+      rationale:
+        "P-fs/VCS: workspace-local, version-protected operation; §2 default {code, session} family",
+    },
+    description:
+      "Find semantic subjects by their recorded prose (intents, rationales, event messages, trigger excerpts).",
+    args: z.tuple([vcsSearchInputSchema]),
+    returns: vcsSearchResultSchema,
+    access: READ_ACCESS,
+    operationClass: "read",
+    references: [ref("context", "context", "contextId")],
+    errors: READ_ERRORS,
+    seeAlso: ["vcs.walk", "vcs.query"],
   },
   blame: {
     tier: {

@@ -187,6 +187,9 @@ export const VCS_METHOD_NAMES = [
   "inspect",
   "neighbors",
   "history",
+  "walk",
+  "query",
+  "search",
   "blame",
   "readMemory",
   "resolveRepository",
@@ -355,5 +358,8 @@ export const VCS_CONTEXT_BOUND_METHOD_NAMES = [
   "finalizeExternalDelta",
   "push",
   "status",
+  "walk",
+  "query",
+  "search",
   "readMemory",
 ] as const;

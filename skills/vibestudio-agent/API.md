@@ -535,6 +535,9 @@ Authority principals: `code`, `host`, `user`
 | `vcs.inspect` | Inspect one typed semantic node and a bounded preview of its direct adjacency. |
 | `vcs.neighbors` | Page immediate typed provenance edges without persisting traversal state. |
 | `vcs.history` | Page event history in either direction or past file history from one exact state. |
+| `vcs.walk` | Run one curated multi-hop provenance traversal (cause, cohort, rejections) with server-owned depth and fan-out bounds. |
+| `vcs.query` | Run one caller-scoped read-only SELECT against the versioned prov_* views; canonical tables stay private. |
+| `vcs.search` | Find semantic subjects by their recorded prose (intents, rationales, event messages, trigger excerpts). |
 | `vcs.blame` | Trace an exact bounded file range through immediate content-coordinate mappings. |
 | `vcs.readMemory` | Project bounded blame-backed workspace memory for the exact text range and content hash returned by a managed file read. |
 | `vcs.resolveRepository` | Resolve one canonical repository path at one exact semantic state. |

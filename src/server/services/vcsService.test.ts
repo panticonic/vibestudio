@@ -105,7 +105,7 @@ describe("canonical vcsService", () => {
   it("exposes exactly the canonical public semantic methods", () => {
     const { definition } = service();
     expect(Object.keys(definition.methods).sort()).toEqual(Object.keys(vcsMethods).sort());
-    expect(Object.keys(definition.methods)).toHaveLength(23);
+    expect(Object.keys(definition.methods)).toHaveLength(26);
   });
 
   it("forwards only input and the exact per-call causal edge", async () => {
@@ -454,6 +454,73 @@ describe("canonical vcsService", () => {
         reference: EVENT,
       },
     });
+    expect(semanticCall).not.toHaveBeenCalled();
+  });
+
+  it("overwrites the declared visibility basis with the caller's reachable authorities", async () => {
+    const { definition, semanticCall } = service({
+      context: "context:own",
+      owned: [{ contextId: "context:child" }],
+    });
+    await definition.handler(workerContext(), "query", [
+      {
+        contextId: "context:own",
+        query: "SELECT work_unit_id FROM prov_work_units",
+        limit: 10,
+        // A caller cannot widen its own basis by declaring one.
+        visibilityContextIds: ["context:foreign"],
+      },
+    ]);
+    expect(semanticCall).toHaveBeenCalledWith(
+      "vcsQuery",
+      expect.objectContaining({
+        input: expect.objectContaining({
+          visibilityContextIds: ["context:child", "context:own"],
+        }),
+      })
+    );
+  });
+
+  it("scopes a walk and a search by the same reachable authorities", async () => {
+    const { definition, semanticCall } = service({ context: "context:own" });
+    await definition.handler(workerContext(), "walk", [
+      {
+        contextId: "context:own",
+        walk: "cause",
+        scope: "command",
+        subject: { kind: "work-unit", workUnitId: "work-unit:1" },
+        limit: 20,
+      },
+    ]);
+    await definition.handler(workerContext(), "search", [
+      { contextId: "context:own", text: "retries", limit: 5 },
+    ]);
+    for (const method of ["vcsWalk", "vcsSearch"]) {
+      expect(semanticCall).toHaveBeenCalledWith(
+        method,
+        expect.objectContaining({
+          input: expect.objectContaining({ visibilityContextIds: ["context:own"] }),
+        })
+      );
+    }
+  });
+
+  it("guards a walk subject outside the caller's reachable context graph", async () => {
+    const { definition, semanticCall } = service({
+      context: "context:own",
+      referencesReachable: false,
+    });
+    await expect(
+      definition.handler(workerContext(), "walk", [
+        {
+          contextId: "context:own",
+          walk: "cause",
+          scope: "command",
+          subject: { kind: "work-unit", workUnitId: "work-unit:foreign" },
+          limit: 20,
+        },
+      ])
+    ).rejects.toMatchObject({ code: "EINVAL", errorData: { code: "InvalidReference" } });
     expect(semanticCall).not.toHaveBeenCalled();
   });
 

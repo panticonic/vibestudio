@@ -188,6 +188,9 @@ function isCallerTrajectoryRoot(
   return reference.value["logId"] === own.logId && reference.value["head"] === own.head;
 }
 
+/** Read surfaces whose result set is scoped by the caller's visibility basis. */
+const VISIBILITY_SCOPED_METHODS = new Set<VcsMethodName>(["walk", "query", "search"]);
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -363,6 +366,15 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
           reference: reference.value,
         });
       }
+    }
+
+    // Caller-scoped execution for the set-oriented surfaces: the DO never
+    // trusts a query, walk, or search for identity. The host overwrites the
+    // declared visibility basis with the exact reachable context authorities
+    // it already computes for per-reference authorization, so the caller
+    // cannot widen the basis by supplying the field.
+    if (VISIBILITY_SCOPED_METHODS.has(method) && isRecord(parsed.input)) {
+      parsed.input.visibilityContextIds = await reachableContextAuthorities(ctx, deps);
     }
 
     const dispatchMethod = `vcs${method.charAt(0).toUpperCase()}${method.slice(1)}`;

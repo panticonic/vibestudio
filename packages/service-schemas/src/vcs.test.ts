@@ -95,13 +95,16 @@ const expectedMethods = [
   "move",
   "neighbors",
   "push",
+  "query",
   "readFile",
   "readMemory",
   "registerExternalDelta",
   "resolveRepository",
   "revert",
+  "search",
   "status",
   "supersedeExternalDelta",
+  "walk",
 ] as const;
 
 describe("minimal semantic VCS surface", () => {

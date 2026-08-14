@@ -71,6 +71,9 @@ function createSqlProxy(db: Database) {
         trimmed.startsWith("SELECT") ||
         trimmed.startsWith("WITH") ||
         trimmed.startsWith("PRAGMA") ||
+        // `EXPLAIN QUERY PLAN` returns rows like any other read; the query
+        // planner gate reads them, so the in-memory proxy must too.
+        trimmed.startsWith("EXPLAIN") ||
         /\bRETURNING\b/.test(trimmed);
 
       if (isQuery) {
