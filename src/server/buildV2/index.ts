@@ -1973,7 +1973,20 @@ export async function initBuildSystemV2(
 
     // Build on demand (buildUnit handles cache + coalescing internally)
     console.log(`[BuildV2] head library ${unitPath}: building ${node.name}`);
-    const build = await buildUnit(node, ev, headGraph, workspaceRoot, headStateHash, buildOptions);
+    let build: BuildResult;
+    try {
+      build = await buildUnit(node, ev, headGraph, workspaceRoot, headStateHash, buildOptions);
+    } catch (error) {
+      // The caller gets this as a rejection, and when the caller is a device
+      // over RPC the reason lands there and nowhere else -- leaving a host log
+      // that shows a build starting and then simply never finishing, which
+      // reads as a hang. A refusal is a result; say so where the build lives.
+      console.error(
+        `[BuildV2] head library ${unitPath}: build failed: ` +
+          `${error instanceof Error ? error.message : String(error)}`
+      );
+      throw error;
+    }
     console.log(`[BuildV2] head library ${unitPath}: build ready ${build.buildKey}`);
     return options?.library ? libraryBuildResult(build) : build;
   } as BuildSystemV2["getBuild"];

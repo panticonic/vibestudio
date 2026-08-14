@@ -14,6 +14,7 @@
  * match what the EV describes regardless of working tree state.
  */
 
+import { AsyncLocalStorage } from "node:async_hooks";
 import * as esbuild from "esbuild";
 import * as fs from "fs";
 import * as path from "path";
@@ -177,7 +178,11 @@ export function initBuilder(appNodeModules: string | string[], appRoot: string):
 function resolveMaxConcurrentBuilds(): number {
   const parsed = Number.parseInt(process.env["VIBESTUDIO_MAX_CONCURRENT_BUILDS"] ?? "", 10);
   if (Number.isFinite(parsed) && parsed > 0) return parsed;
-  return 8;
+  // Scale with the machine instead of a fixed 8. A build is mostly esbuild and
+  // a package manager -- work that is already parallel and largely IO-bound --
+  // so the useful ceiling is the machine, not a number chosen once. The budget
+  // is soft either way; `withBuildSlot` explains why.
+  return Math.max(4, os.cpus().length);
 }
 
 const MAX_CONCURRENT_BUILDS = resolveMaxConcurrentBuilds();
@@ -335,19 +340,37 @@ function traceBuildStages(label: string): { enter(stage: string): void; done(): 
   };
 }
 
-async function acquireSemaphore(): Promise<void> {
-  if (runningBuilds < MAX_CONCURRENT_BUILDS) {
-    runningBuilds++;
-    return;
-  }
-  await new Promise<void>((resolve) => waitQueue.push(resolve));
-  runningBuilds++;
-}
+/**
+ * Run one build against the concurrency budget.
+ *
+ * The budget is deliberately soft. It exists so a burst of builds does not
+ * thrash the machine, not because any count is correct: builds already
+ * parallelize internally, and a slot held a moment too long costs latency
+ * while a slot never returned costs the build system entirely. So the only
+ * way to occupy a slot is to run inside this function, which returns it in a
+ * `finally` -- there is no permit to forget, hand out twice, or return from a
+ * path that never took one.
+ *
+ * A build reached from inside another build rides its caller's slot rather
+ * than queueing behind it. Nesting does not happen today (all three callers
+ * are service entry points), but a nested acquire under a saturated budget is
+ * a deadlock with an idle event loop and nothing to read, which is far worse
+ * than briefly exceeding a number the budget never promised to hold exactly.
+ */
+const buildSlotHeld = new AsyncLocalStorage<true>();
 
-function releaseSemaphore(): void {
-  runningBuilds--;
-  const next = waitQueue.shift();
-  if (next) next();
+async function withBuildSlot<T>(run: () => Promise<T>): Promise<T> {
+  if (buildSlotHeld.getStore()) return run();
+  while (runningBuilds >= MAX_CONCURRENT_BUILDS) {
+    await new Promise<void>((resolve) => waitQueue.push(resolve));
+  }
+  runningBuilds++;
+  try {
+    return await buildSlotHeld.run(true, run);
+  } finally {
+    runningBuilds--;
+    waitQueue.shift()?.();
+  }
 }
 
 // Build coalescing: dedup concurrent builds of the same key
@@ -1807,105 +1830,104 @@ async function doBuild(
 ): Promise<BuildResult> {
   const trace = traceBuildStages(`${node.name}@${buildKey.slice(0, 12)}`);
   trace.enter("semaphore");
-  await acquireSemaphore();
-
   try {
-    // Materialize sources for the unit + its transitive internal deps at the
-    // immutable workspace state. The provider caches per-state checkouts; no
-    // per-build temp dir, no cleanup.
-    trace.enter("materialize");
-    const extracted = await getBuildSourceProvider().materializeForBuild(
-      collectTransitiveInternalDeps(node, graph),
-      stateRef,
-      workspaceRoot
-    );
-    trace.enter("authority");
-    const authority = authorityFromMaterializedSource(node, extracted.sourceRoot);
-    trace.enter(
-      options?.library ? `library:${options.libraryTarget ?? "?"}` : `build:${node.kind}`
-    );
+    return await withBuildSlot(async () => {
+      // Materialize sources for the unit + its transitive internal deps at the
+      // immutable workspace state. The provider caches per-state checkouts; no
+      // per-build temp dir, no cleanup.
+      trace.enter("materialize");
+      const extracted = await getBuildSourceProvider().materializeForBuild(
+        collectTransitiveInternalDeps(node, graph),
+        stateRef,
+        workspaceRoot
+      );
+      trace.enter("authority");
+      const authority = authorityFromMaterializedSource(node, extracted.sourceRoot);
+      trace.enter(
+        options?.library ? `library:${options.libraryTarget ?? "?"}` : `build:${node.kind}`
+      );
 
-    if (options?.library) {
-      if (!options.libraryTarget) {
+      if (options?.library) {
+        if (!options.libraryTarget) {
+          throw new Error(
+            `library build for ${node.name} requires an explicit libraryTarget ('panel' or 'worker')`
+          );
+        }
+        return await buildLibraryBundle(
+          node,
+          ev,
+          buildKey,
+          graph,
+          workspaceRoot,
+          extracted.sourceRoot,
+          stateRef,
+          options.libraryTarget === "worker"
+            ? [...new Set([...(options.externals ?? []), "node:async_hooks"])]
+            : (options.externals ?? []),
+          options.libraryEntrySubpath ?? ".",
+          conditionsForLibraryTarget(options.libraryTarget),
+          authority,
+          options.libraryTarget
+        );
+      } else if (node.kind === "worker") {
+        return await buildWorker(
+          node,
+          ev,
+          buildKey,
+          graph,
+          workspaceRoot,
+          sourcemap,
+          extracted.sourceRoot,
+          stateRef,
+          authority
+        );
+      } else if (node.kind === "extension") {
+        return await buildExtension(
+          node,
+          ev,
+          buildKey,
+          graph,
+          workspaceRoot,
+          extracted.sourceRoot,
+          stateRef,
+          authority
+        );
+      } else if (node.kind === "app") {
+        return await buildApp(
+          node,
+          ev,
+          buildKey,
+          graph,
+          workspaceRoot,
+          sourcemap,
+          extracted.sourceRoot,
+          stateRef,
+          authority
+        );
+      } else if (node.kind === "template") {
+        throw new Error(`Templates are not buildable: ${node.name}`);
+      } else if (node.kind === "package") {
+        // Packages have no standalone runtime artifact. They can be built
+        // explicitly as library bundles for panel/worker targets, but never as a
+        // panel. Falling through to buildPanel would produce a bogus artifact.
         throw new Error(
-          `library build for ${node.name} requires an explicit libraryTarget ('panel' or 'worker')`
+          `package ${node.name} cannot be built as a runtime unit; build it as a library (options.library + libraryTarget)`
+        );
+      } else {
+        return await buildPanel(
+          node,
+          ev,
+          buildKey,
+          graph,
+          workspaceRoot,
+          sourcemap,
+          extracted.sourceRoot,
+          stateRef,
+          authority
         );
       }
-      return await buildLibraryBundle(
-        node,
-        ev,
-        buildKey,
-        graph,
-        workspaceRoot,
-        extracted.sourceRoot,
-        stateRef,
-        options.libraryTarget === "worker"
-          ? [...new Set([...(options.externals ?? []), "node:async_hooks"])]
-          : (options.externals ?? []),
-        options.libraryEntrySubpath ?? ".",
-        conditionsForLibraryTarget(options.libraryTarget),
-        authority,
-        options.libraryTarget
-      );
-    } else if (node.kind === "worker") {
-      return await buildWorker(
-        node,
-        ev,
-        buildKey,
-        graph,
-        workspaceRoot,
-        sourcemap,
-        extracted.sourceRoot,
-        stateRef,
-        authority
-      );
-    } else if (node.kind === "extension") {
-      return await buildExtension(
-        node,
-        ev,
-        buildKey,
-        graph,
-        workspaceRoot,
-        extracted.sourceRoot,
-        stateRef,
-        authority
-      );
-    } else if (node.kind === "app") {
-      return await buildApp(
-        node,
-        ev,
-        buildKey,
-        graph,
-        workspaceRoot,
-        sourcemap,
-        extracted.sourceRoot,
-        stateRef,
-        authority
-      );
-    } else if (node.kind === "template") {
-      throw new Error(`Templates are not buildable: ${node.name}`);
-    } else if (node.kind === "package") {
-      // Packages have no standalone runtime artifact. They can be built
-      // explicitly as library bundles for panel/worker targets, but never as a
-      // panel. Falling through to buildPanel would produce a bogus artifact.
-      throw new Error(
-        `package ${node.name} cannot be built as a runtime unit; build it as a library (options.library + libraryTarget)`
-      );
-    } else {
-      return await buildPanel(
-        node,
-        ev,
-        buildKey,
-        graph,
-        workspaceRoot,
-        sourcemap,
-        extracted.sourceRoot,
-        stateRef,
-        authority
-      );
-    }
+    });
   } finally {
-    releaseSemaphore();
     trace.done();
   }
 }
@@ -4318,9 +4340,7 @@ async function doNpmBuild(
   externals: string[],
   buildKey: string
 ): Promise<BuildResult> {
-  await acquireSemaphore();
-
-  try {
+  return withBuildSlot(async () => {
     const deps: Record<string, string> = { [specifier]: version };
     const borrowedDeps = await acquireExternalDeps(deps, {}, { appRoot: _appRoot });
     const nodeModulesDir = borrowedDeps.nodeModulesDir;
@@ -4388,9 +4408,7 @@ async function doNpmBuild(
         // Ignore
       }
     }
-  } finally {
-    releaseSemaphore();
-  }
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -4437,9 +4455,7 @@ async function doPlatformBuild(
   externals: string[],
   buildKey: string
 ): Promise<BuildResult> {
-  await acquireSemaphore();
-
-  try {
+  return withBuildSlot(async () => {
     const outdir = createBuildScratchDir(`platform-${specifier.replace(/[/@]/g, "_")}`);
 
     const nodePaths = [..._appNodeModules];
@@ -4491,9 +4507,7 @@ async function doPlatformBuild(
         /* ignore */
       }
     }
-  } finally {
-    releaseSemaphore();
-  }
+  });
 }
 
 // ---------------------------------------------------------------------------
