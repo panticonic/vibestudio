@@ -373,7 +373,6 @@ class WrappedDataChannel implements RtcDataChannelLike {
   private readonly messageFanout: Fanout<[Uint8Array]>;
   private readonly lowFanout: Fanout<[]>;
   private readonly directSubscriptions: NativeEventSubscription[] = [];
-  private usesDirectNativeEvents = false;
   private readyStateValue: RtcDataChannelState;
   private readonly bufferedLevel: BufferedLevel;
   /**
@@ -408,7 +407,6 @@ class WrappedDataChannel implements RtcDataChannelLike {
     // ArrayBuffers before dispatching them. The direct native path is only a
     // compatibility fallback for channel-like objects without EventTarget.
     if (reactTag && typeof dc.addEventListener !== "function") {
-      this.usesDirectNativeEvents = true;
       const stateSubscription = addDirectNativeListener("dataChannelStateChanged", (event) => {
         if (event.reactTag !== reactTag || typeof event.state !== "string") return;
         this.setReadyState(event.state as RtcDataChannelState);
