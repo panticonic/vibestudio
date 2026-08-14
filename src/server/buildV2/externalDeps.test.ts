@@ -166,6 +166,47 @@ describe("collectExternalDependencyClosure", () => {
     expect(closure.optionalProvidedPeers).toEqual([]);
   });
 
+  it("reports a peer whose owner resolves outside its declared range", () => {
+    const graph = new PackageGraph();
+    // A shared package that runs against whatever React its consumer owns.
+    const shared = makeNode("@workspace/quickfire-core", {}, [], { react: "19.0.0" });
+    const app = makeNode(
+      "@workspace-apps/shell",
+      { "@workspace/quickfire-core": "workspace:*", react: "19.2.4" },
+      ["@workspace/quickfire-core"]
+    );
+    graph.addNode(shared);
+    graph.addNode(app);
+
+    // An exact pin is a claim about every consumer, and this one is false.
+    expect(collectExternalDependencyClosure(app, graph).peerConflicts).toEqual([
+      "react resolves to 19.2.4, which @workspace/quickfire-core does not accept (it requires 19.0.0)",
+    ]);
+
+    // Stated as the floor it actually is, both consumers satisfy it.
+    shared.peerDependencies = { react: "^19.0.0" };
+    expect(collectExternalDependencyClosure(app, graph).peerConflicts).toEqual([]);
+  });
+
+  it("checks each declaration rather than the merged spec", () => {
+    const graph = new PackageGraph();
+    // Merging keeps the highest spec, so a stricter sibling would mask this one.
+    const strict = makeNode("@workspace/strict", {}, [], { react: "19.2.4" });
+    const floor = makeNode("@workspace/floor", {}, [], { react: "19.0.0" });
+    const app = makeNode(
+      "@workspace-apps/shell",
+      { "@workspace/strict": "workspace:*", "@workspace/floor": "workspace:*", react: "19.2.4" },
+      ["@workspace/strict", "@workspace/floor"]
+    );
+    graph.addNode(strict);
+    graph.addNode(floor);
+    graph.addNode(app);
+
+    expect(collectExternalDependencyClosure(app, graph).peerConflicts).toEqual([
+      "react resolves to 19.2.4, which @workspace/floor does not accept (it requires 19.0.0)",
+    ]);
+  });
+
   it("treats a peer as satisfied once a closure member owns it", () => {
     const graph = new PackageGraph();
     const ui = makeNode("@workspace/ui", {}, [], { react: "19.2.4" });

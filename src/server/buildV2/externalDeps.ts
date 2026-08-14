@@ -51,6 +51,12 @@ export interface ExternalDependencyClosure {
   optionalProvidedPeers: string[];
   /** Which closure members declared each provided peer, for actionable errors. */
   peerOwners: Record<string, string[]>;
+  /**
+   * Peers a closure member owns at a version its declared range does not
+   * admit. Reported rather than thrown so unit *listing* stays total; the
+   * build refuses on them.
+   */
+  peerConflicts: string[];
   /** Everything the closure resolves: `dependencies` ∪ `providedPeers`. */
   installSet: Record<string, string>;
 }
@@ -70,6 +76,10 @@ export function collectExternalDependencyClosure(
   const peerOwners = new Map<string, Set<string>>();
   const requiredPeers = new Set<string>();
   const optionalPeers = new Set<string>();
+  // Every declaration, not the merged spec: merging keeps the highest range, so
+  // a lower floor declared elsewhere would be masked by a stricter sibling and
+  // its disagreement with the resolved version would never surface.
+  const peerDeclarations: Array<{ name: string; range: string; owner: string }> = [];
   const visited = new Set<string>();
   const visitedPackageJson = new Set<string>();
 
@@ -97,6 +107,9 @@ export function collectExternalDependencyClosure(
         // Optional only where every declaring member said so: one member that
         // genuinely needs the instance makes it required for the whole closure.
         (options.optional?.includes(name) ? optionalPeers : requiredPeers).add(name);
+        if (!version.startsWith("workspace:") && !graph.isInternal(name)) {
+          peerDeclarations.push({ name, range: version, owner: options.owner ?? name });
+        }
       }
       if (graph.isInternal(name)) {
         const dep = graph.tryGet(name);
@@ -155,10 +168,25 @@ export function collectExternalDependencyClosure(
   walkNode(unit);
 
   // A peer someone in the closure also owns as a dependency is satisfied here;
-  // only what remains has to come from outside.
+  // only what remains has to come from outside. "Satisfied" is a real question,
+  // not just a name match: an owner whose version the peer's range excludes is
+  // the same defect as no owner at all, and stays silent otherwise.
   const providedPeers: Record<string, string> = {};
-  for (const [name, version] of Object.entries(peers)) {
-    if (dependencies[name] === undefined) providedPeers[name] = version;
+  for (const [name, range] of Object.entries(peers)) {
+    if (dependencies[name] === undefined) providedPeers[name] = range;
+  }
+
+  // Whatever the closure will resolve for a peer -- an owner's version, or the
+  // merged spec the composing realm is asked for -- has to satisfy every
+  // member that declared it. A name match alone is not satisfaction.
+  const peerConflicts: string[] = [];
+  for (const { name, range, owner } of peerDeclarations) {
+    const resolved = dependencies[name] ?? providedPeers[name];
+    if (resolved === undefined) continue;
+    if (semver.subset(resolved, range, { includePrerelease: true })) continue;
+    peerConflicts.push(
+      `${name} resolves to ${resolved}, which ${owner} does not accept (it requires ${range})`
+    );
   }
 
   const installSet = { ...dependencies };
@@ -172,6 +200,7 @@ export function collectExternalDependencyClosure(
     peerOwners: Object.fromEntries(
       Object.keys(providedPeers).map((name) => [name, [...(peerOwners.get(name) ?? [])].sort()])
     ),
+    peerConflicts: peerConflicts.sort(),
     installSet,
   };
 }
@@ -1049,6 +1078,8 @@ export interface ExternalDependencyEnvironment {
   optionalProvidedPeers: string[];
   /** Which closure members declared each provided peer. */
   peerOwners: Record<string, string[]>;
+  /** Peers owned at a version their declared range does not admit. */
+  peerConflicts: string[];
   dependencyOverrides: Record<string, string>;
   dependencyPatches: ExternalDependencyPatch[];
   release(): void;
@@ -1087,6 +1118,7 @@ export async function prepareExternalDependencyEnvironment(
     providedPeers: closure.providedPeers,
     optionalProvidedPeers: closure.optionalProvidedPeers,
     peerOwners: closure.peerOwners,
+    peerConflicts: closure.peerConflicts,
     dependencyOverrides,
     dependencyPatches,
     release: () => borrowed.release(),

@@ -1873,6 +1873,8 @@ interface BuildEnv {
   optionalProvidedPeers: string[];
   /** Which closure members declared each provided peer. */
   peerOwners: Record<string, string[]>;
+  /** Peers owned at a version their declared range does not admit. */
+  peerConflicts: string[];
   dependencyOverrides: Record<string, string>;
   dependencyPatches: ExternalDependencyPatch[];
   resolveDir: string;
@@ -1923,11 +1925,20 @@ async function prepareBuildEnv(
     providedPeers,
     optionalProvidedPeers,
     peerOwners,
+    peerConflicts,
     dependencyOverrides,
     dependencyPatches,
     nodeModulesDir,
     nodePaths,
   } = dependencyEnvironment;
+
+  if (peerConflicts.length > 0) {
+    dependencyEnvironment.release();
+    fs.rmSync(outdir, { recursive: true, force: true });
+    throw new Error(
+      `${node.name} resolves a dependency its own closure rejects: ${peerConflicts.join("; ")}.`
+    );
+  }
 
   const unownedPeers = Object.entries(providedPeers).filter(
     ([name]) => !optionalProvidedPeers.includes(name)
@@ -1958,6 +1969,7 @@ async function prepareBuildEnv(
       providedPeers,
       optionalProvidedPeers,
       peerOwners,
+      peerConflicts,
       dependencyOverrides,
       dependencyPatches,
       resolveDir,
@@ -4032,28 +4044,15 @@ async function buildLibraryBundle(
   const env = await prepareBuildEnv(node, buildKey, graph, workspaceRoot, sourceRoot, "library");
 
   try {
-    // A library's unsatisfied peers are supplied by the realm that loads it, so
-    // they are external here by construction. The caller's `externals` is that
-    // realm's inventory (a panel's module map, EvalDO's private map): a peer
-    // missing from it would be silently rebuilt into this bundle and become a
-    // second live instance of a package the realm already has -- two Reacts in
-    // one realm, and hooks stop working. Refuse instead, naming both sides.
-    const unprovidedPeers = Object.keys(env.providedPeers)
-      .filter((name) => !externals.includes(name))
-      .filter((name) => !env.optionalProvidedPeers.includes(name))
-      .sort();
-    if (unprovidedPeers.length > 0) {
-      throw new Error(
-        `${node.name} expects its host realm to provide ${unprovidedPeers
-          .map((name) => {
-            const owners = env.peerOwners[name] ?? [];
-            return `${name}${owners.length > 0 ? ` (required by ${owners.join(", ")})` : ""}`;
-          })
-          .join(", ")}, but the realm loading it exposes ${
-          externals.length > 0 ? externals.join(", ") : "no modules"
-        }. Add the module to the host's vibestudio.exposeModules.`
-      );
-    }
+    // A library's provided peers belong to the realm that loads it, so they are
+    // external here whether or not this caller named them. `externals` is what
+    // the loading realm already has (a panel's module map, EvalDO's private
+    // map) and is empty when the build is only verifying the unit -- so absence
+    // from it says nothing. What matters is that the bundle never carries its
+    // own copy: a package the realm also has would become a second live
+    // instance, and two Reacts in one realm is where hooks stop working. Left
+    // external, an import the realm cannot satisfy fails at load naming the
+    // module, instead of silently resolving to a private duplicate.
     const libraryExternals = [...new Set([...externals, ...Object.keys(env.providedPeers)])];
     const moduleUrl = `vibestudio-module://build/${buildKey}/${encodeURIComponent(node.name)}`;
     const outfile = path.join(env.outdir, "bundle.mjs");
